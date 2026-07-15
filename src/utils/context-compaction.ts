@@ -1,4 +1,3 @@
-import { getEncoding, type Tiktoken } from 'js-tiktoken';
 import {
   buildSummarizationPrompt,
   extractFileOperations,
@@ -6,9 +5,72 @@ import {
   serializeConversation,
 } from '@/core/context-compaction';
 import type { AgentMessage } from '@/core/types';
+import type { CompletionOptions } from '@/models/litellm-client';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
+import { estimateTokens } from '@/utils/token-count';
+
+// Summarizer input sizing. A single pass reads at most SUMMARY_INPUT_CHARS; a
+// longer history is condensed by a bounded map-reduce (chunk → summarize each →
+// summarize the summaries) instead of the old silent slice(0, 8000) that
+// dropped everything past the first ~8 KB.
+const SUMMARY_INPUT_CHARS = 8000;
+const MAX_MAP_CHUNKS = 8;
+
+/**
+ * Condense a serialized conversation down to <= SUMMARY_INPUT_CHARS while
+ * keeping fidelity across the WHOLE history. Short input passes through
+ * unchanged (single-pass behavior). Longer input is chunked and each chunk
+ * summarized (map); the joined partial summaries become the reduce-pass input.
+ * Bounded to MAX_MAP_CHUNKS map calls; if the history still overflows that, the
+ * tail is dropped with a loud warning (fail loud — never a silent slice).
+ */
+async function condenseForSummary(
+  serialized: string,
+  summaryModel: string,
+  userId: string | undefined,
+): Promise<string> {
+  if (serialized.length <= SUMMARY_INPUT_CHARS) return serialized;
+
+  const client = getLiteLLMClient();
+  const chunks: string[] = [];
+  for (let i = 0; i < serialized.length && chunks.length < MAX_MAP_CHUNKS; i += SUMMARY_INPUT_CHARS) {
+    chunks.push(serialized.slice(i, i + SUMMARY_INPUT_CHARS));
+  }
+  const covered = chunks.length * SUMMARY_INPUT_CHARS;
+  if (serialized.length > covered) {
+    coreLogger.warn(
+      { totalChars: serialized.length, coveredChars: covered, maxChunks: MAX_MAP_CHUNKS },
+      'summarizer: history exceeds map-reduce cap — tail truncated (was a silent slice before)',
+    );
+  }
+
+  const mapOpts = (chunk: string): CompletionOptions => ({
+    model: summaryModel,
+    userId,
+    messages: [
+      {
+        role: 'system',
+        content:
+          'Summarize this conversation excerpt in a few factual sentences ' +
+          '(decisions, actions, outcomes). Do not continue the conversation.',
+        timestamp: new Date(),
+      },
+      { role: 'user', content: chunk, timestamp: new Date() },
+    ],
+    temperature: 0.3,
+    maxTokens: 250,
+  });
+
+  const partials = await Promise.all(
+    chunks.map(async (chunk, idx) => {
+      const res = await client.complete(mapOpts(chunk));
+      return `[Part ${idx + 1}] ${res.content}`;
+    }),
+  );
+  return partials.join('\n\n');
+}
 
 export type { CompactionResult } from '@/core/context-compaction';
 // Re-export for convenience
@@ -29,58 +91,9 @@ const DEFAULT_OPTIONS: CompactionOptions = {
   preserveRecentCount: 10,
 };
 
-// Real BPE tokenizer for budget estimation. o200k_base is the GPT-4o/o-series
-// vocabulary — the best single default across providers; true per-request
-// counts still come from provider `usage`. Lazily built (rank load is ~ms) and
-// memoized. Falls back to chars/4 if the encoder can't load (exotic runtime).
-let encoder: Tiktoken | null | undefined;
-function getEncoder(): Tiktoken | null {
-  if (encoder === undefined) {
-    try {
-      encoder = getEncoding('o200k_base');
-    } catch (err) {
-      coreLogger.warn({ err }, 'tiktoken encoder unavailable — falling back to chars/4');
-      encoder = null;
-    }
-  }
-  return encoder;
-}
-
-// calculateTotalTokens re-estimates the whole (append-only) history every agent
-// turn, so encoding is memoized by content string — unchanged prior messages
-// become cache hits and only new text is BPE-encoded. Bounded to cap memory;
-// evicts oldest on overflow.
-const tokenCache = new Map<string, number>();
-const TOKEN_CACHE_MAX = 4096;
-
-/**
- * Estimate token count for a string using the o200k_base tokenizer, with a
- * chars/4 fallback. Used for pre-flight budgeting/compaction only — provider
- * `usage` remains ground truth for billing.
- */
-export function estimateTokens(content: string): number {
-  if (!content) return 0;
-  const cached = tokenCache.get(content);
-  if (cached !== undefined) return cached;
-
-  let count: number;
-  const enc = getEncoder();
-  if (enc) {
-    try {
-      count = enc.encode(content).length;
-    } catch {
-      count = Math.ceil(content.length / 4);
-    }
-  } else {
-    count = Math.ceil(content.length / 4);
-  }
-
-  if (tokenCache.size >= TOKEN_CACHE_MAX) {
-    tokenCache.delete(tokenCache.keys().next().value as string);
-  }
-  tokenCache.set(content, count);
-  return count;
-}
+// Tokenizer lives in a standalone module so lighter call sites can reuse it;
+// re-exported here for the existing import surface.
+export { estimateTokens } from '@/utils/token-count';
 
 /**
  * Calculate total token count for messages
@@ -370,7 +383,10 @@ export async function createLLMSummary(
       : currentOps;
 
     const serialized = serializeConversation(removedMessages);
-    const prompt = buildSummarizationPrompt(serialized.slice(0, 8000), fileOps, {
+    // Map-reduce condense so long histories keep fidelity instead of losing
+    // everything past the first ~8 KB to a silent slice.
+    const condensed = await condenseForSummary(serialized, summaryModel, options?.userId);
+    const prompt = buildSummarizationPrompt(condensed, fileOps, {
       previousSummary: options?.previousSummary,
       userInstructions: options?.userInstructions,
     });

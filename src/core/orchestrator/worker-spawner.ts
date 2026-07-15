@@ -671,7 +671,8 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
       const memRows = await retrieveForContext({
         userId: context.userId,
         agentScope: agentRole,
-        limit: 8,
+        // Coarse candidate cap; renderMemoriesBlock trims to a token budget.
+        limit: 20,
       });
       const memBlock = renderMemoriesBlock(memRows);
       if (memBlock) volatileParts.push(memBlock);
