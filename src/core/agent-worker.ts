@@ -1533,6 +1533,7 @@ export class AgentWorker extends BaseAgentWorker {
       endpoint: model.endpoint || undefined,
       apiKey,
       userId: this.context.userId,
+      sessionId: this.context.sessionId,
       signal: this.abortController.signal,
     };
 
@@ -1688,6 +1689,7 @@ export class AgentWorker extends BaseAgentWorker {
         endpoint: model.endpoint || undefined,
         apiKey,
         userId: this.context.userId,
+        sessionId: this.context.sessionId,
       },
       getTopicConfig(this.context.topic),
     );

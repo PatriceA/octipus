@@ -9,9 +9,23 @@ import { repairTruncatedJson } from '@/utils/json-repair';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
-import { extractCachedTokens } from './usage';
+import { cacheAffinityKey, extractCachedTokens } from './usage';
 
 const GROK_BASE_URL = 'https://api.x.ai/v1';
+
+// Per-request options shared by complete() and stream(): the abort signal plus,
+// for Phase 2c, a stable per-session x-grok-conv-id that maximizes automatic
+// prompt-cache hit rate on the static prefix. Header — ignored by the server if
+// unrecognized, so it can't break a request.
+function grokReqOpts(
+  options: CompletionOptions
+): { signal?: AbortSignal; headers?: Record<string, string> } {
+  const reqOpts: { signal?: AbortSignal; headers?: Record<string, string> } = {};
+  if (options.signal) reqOpts.signal = options.signal;
+  const convId = cacheAffinityKey(options.sessionId, options.userId);
+  if (convId) reqOpts.headers = { 'x-grok-conv-id': convId };
+  return reqOpts;
+}
 
 // Reasoning streams may run minutes; vendor recommends ~3600s client timeout.
 // https://docs.x.ai/docs/guides/streaming-response
@@ -55,13 +69,15 @@ export class GrokProvider implements ModelProvider {
       Object.assign(params, options.extraBody);
     }
 
+    const reqOpts = grokReqOpts(options);
+
     modelLogger.debug(
       { model: params.model, messageCount: options.messages.length, provider: this.name },
       'Sending completion request to Grok'
     );
 
     try {
-      const response = await client.chat.completions.create(params);
+      const response = await client.chat.completions.create(params, reqOpts);
       const latencyMs = Date.now() - startTime;
       if (!response.choices?.length) {
         throw classifyError(new Error(`Provider returned empty response (no choices) for model ${params.model || options.model}`), 'grok');
@@ -158,7 +174,7 @@ export class GrokProvider implements ModelProvider {
 
     let stream;
     try {
-      stream = await client.chat.completions.create(params);
+      stream = await client.chat.completions.create(params, grokReqOpts(options));
     } catch (err) {
       throw classifyError(err, 'grok');
     }

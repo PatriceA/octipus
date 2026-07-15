@@ -173,8 +173,15 @@ export async function runOrchestrator(
   // scores, "yesterday"/"tomorrow" events, anything past its training cutoff —
   // as hallucinated future data, then discards correct results. Surface the
   // real date so it trusts what the arms return instead of second-guessing it.
+  // Stable-prefix ordering (Phase 2a): volatile per-turn blocks (date, session
+  // summary, recent history) are collected and appended LAST so the static
+  // instruction prefix (base + persona/hook + classification + expert index +
+  // workspace) stays cache-stable across turns. The date busted the cache every
+  // turn when injected here mid-prompt.
   const nowStamp = new Date();
-  systemPrompt += `\n\nCURRENT DATE & TIME: ${nowStamp.toUTCString()} (ISO ${nowStamp.toISOString()}). This is the real wall-clock time, authoritative over your training cutoff. Worker/tool results carrying dates at or before this are plausible by definition — do NOT dismiss them as hallucination merely because they are newer than what you remember. Events "yesterday"/"today"/"tomorrow" are relative to this timestamp.`;
+  const volatileParts: string[] = [
+    `\n\nCURRENT DATE & TIME: ${nowStamp.toUTCString()} (ISO ${nowStamp.toISOString()}). This is the real wall-clock time, authoritative over your training cutoff. Worker/tool results carrying dates at or before this are plausible by definition — do NOT dismiss them as hallucination merely because they are newer than what you remember. Events "yesterday"/"today"/"tomorrow" are relative to this timestamp.`,
+  ];
 
   // Fire the before-agent-start hook so extensions and built-in
   // modules (persona, project context) can mutate the system
@@ -210,7 +217,7 @@ export async function runOrchestrator(
   }
   const sources: string[] = [];
   if (sessionSummary) {
-    systemPrompt += `\n\nPrevious conversation summary:\n${sessionSummary}`;
+    volatileParts.push(`\n\nPrevious conversation summary:\n${sessionSummary}`);
     sources.push('session summary');
   }
 
@@ -226,7 +233,7 @@ export async function runOrchestrator(
     const historyLines = recentHistory.map(m =>
       `[${m.role}]: ${m.content.length > 500 ? m.content.slice(0, 500) + '...' : m.content}`
     );
-    systemPrompt += `\n\nRecent conversation history (last ${recentHistory.length} messages):\n${historyLines.join('\n\n')}`;
+    volatileParts.push(`\n\nRecent conversation history (last ${recentHistory.length} messages):\n${historyLines.join('\n\n')}`);
   }
 
   if (classification.topic) {
@@ -351,6 +358,10 @@ export async function runOrchestrator(
       systemPrompt += `\nWORKSPACE: ${wsRoot}`;
     }
   }
+
+  // Append the volatile per-turn context (date, summary, history) after the
+  // whole static/semi-static instruction block — keeps the prefix cacheable.
+  systemPrompt += volatileParts.join('');
 
   // Hook-triggered tasks get a longer timeout since they run unattended.
   const orchConfig = getConfig().orchestrator;

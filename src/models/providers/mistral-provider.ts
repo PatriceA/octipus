@@ -11,9 +11,16 @@ import type { AgentMessage } from '@/core/types';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, OcrDocument, OcrResult, ProviderHealthStatus } from './interface';
-import { extractCachedTokens } from './usage';
+import { cacheAffinityKey, extractCachedTokens } from './usage';
 
 const MISTRAL_BASE_URL = 'https://api.mistral.ai/v1';
+
+// Set Mistral's explicit prompt-cache opt-in key on a request body, shared by
+// complete() and stream() (Phase 2c). No-op when there's no session.
+function setMistralCacheKey(params: ChatCompletionCreateParams, options: CompletionOptions): void {
+  const cacheKey = cacheAffinityKey(options.sessionId, options.userId);
+  if (cacheKey) (params as unknown as Record<string, unknown>).prompt_cache_key = cacheKey;
+}
 
 // Magistral (Mistral's reasoning family) can think for a while. Mirror the
 // DeepSeek/Grok pattern: long timeout for reasoning, shorter for chat.
@@ -114,6 +121,10 @@ export class MistralProvider implements ModelProvider {
       Object.assign(params, options.extraBody);
     }
 
+    // Mistral prompt caching is explicit opt-in: a stable per-session key lets
+    // requests sharing the cached static prefix hit it (Phase 2c).
+    setMistralCacheKey(params, options);
+
     modelLogger.debug(
       { model: params.model, messageCount: options.messages.length, provider: this.name },
       'Sending completion request to Mistral'
@@ -198,6 +209,10 @@ export class MistralProvider implements ModelProvider {
     if (options.extraBody) {
       Object.assign(params, options.extraBody);
     }
+
+    // Same explicit prompt-cache opt-in as complete() — streaming is the hot
+    // interactive path and must not bypass the cache (Phase 2c).
+    setMistralCacheKey(params, options);
 
     modelLogger.debug({ model: params.model, provider: this.name }, 'Starting streaming completion via Mistral');
 

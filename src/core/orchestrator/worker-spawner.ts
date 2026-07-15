@@ -477,15 +477,25 @@ export async function spawnWorker(
 
   const startTime = Date.now();
 
-  let systemPrompt = overrides?.systemPrompt || expertPrompt || roleConfig.systemPromptTemplate;
+  // Stable-prefix assembly (docs/plans/llm-prompt-compression.md Phase 2a).
+  // Blocks are bucketed by volatility so the prompt is STATIC → SEMI-STATIC →
+  // VOLATILE. Providers with automatic prefix caching (OpenAI, DeepSeek, Grok,
+  // Gemini, Ollama KV) then get a stable cacheable prefix instead of one busted
+  // every turn by the date/memory/git blocks. SECURITY_PREAMBLE stays first (it
+  // heads `base`); all user/session-scoped data lands in `volatile`, after any
+  // cache breakpoint (security rule 4).
+  const base = overrides?.systemPrompt || expertPrompt || roleConfig.systemPromptTemplate;
+  const staticParts: string[] = [base];
+  const semiStaticParts: string[] = [];
+  const volatileParts: string[] = [];
 
   // Append topic-assigned skills (e.g. caveman mode) after the base prompt
   if (topicSkillFragment) {
-    systemPrompt += '\n\n# Topic Skills\n' + topicSkillFragment;
+    staticParts.push('\n\n# Topic Skills\n' + topicSkillFragment);
   }
 
-  // Inject current date/time context so agents know "today"
-  systemPrompt += `\n\nCURRENT DATE/TIME: ${formatDateTimeContext(new Date())}`;
+  // Inject current date/time context so agents know "today" (VOLATILE)
+  volatileParts.push(`\n\nCURRENT DATE/TIME: ${formatDateTimeContext(new Date())}`);
   // Determine if this is a dev mode session
   const session = await sessionRepository.findById(context.sessionId);
   const sessionCtx = session?.context as import('@/db/schema/sessions').SessionContext | undefined;
@@ -502,16 +512,15 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
 
   // The curated guide applies to dev-mode sessions (explicit project link).
   // Non-dev sessions read per-repo AGENTS.md on demand via the instruction above.
+  // Instruction text is static; the loaded AGENTS.md guide is per-project (semi-static).
+  staticParts.push(AGENTS_MD_INSTRUCTION);
   if (devProjectPath) {
     context.metadata.projectPath = devProjectPath;
-    systemPrompt += AGENTS_MD_INSTRUCTION;
     const agentsGuide = await loadAgentsMd(devProjectPath);
     if (agentsGuide) {
       const projectName = sessionCtx?.projectName || devProjectPath.split(/[/\\]/).pop() || 'project';
-      systemPrompt += `\n\n--- AGENTS.md (${projectName}) ---\n${agentsGuide}`;
+      semiStaticParts.push(`\n\n--- AGENTS.md (${projectName}) ---\n${agentsGuide}`);
     }
-  } else {
-    systemPrompt += AGENTS_MD_INSTRUCTION;
   }
 
   // Inject git status/diff for code-aware roles (gives agents awareness of pending changes)
@@ -523,9 +532,10 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
       const gitStatus = execSync('git status --short 2>/dev/null | head -20', { cwd: gitCwd, timeout: 5_000, encoding: 'utf-8' }).trim();
       const gitDiff = execSync('git diff --stat 2>/dev/null | tail -5', { cwd: gitCwd, timeout: 5_000, encoding: 'utf-8' }).trim();
       if (gitStatus || gitDiff) {
-        systemPrompt += '\n\n--- Git Status ---';
-        if (gitStatus) systemPrompt += `\n${gitStatus}`;
-        if (gitDiff) systemPrompt += `\n\nDiff summary:\n${gitDiff}`;
+        let git = '\n\n--- Git Status ---';
+        if (gitStatus) git += `\n${gitStatus}`;
+        if (gitDiff) git += `\n\nDiff summary:\n${gitDiff}`;
+        volatileParts.push(git);
       }
     } catch { /* not a git repo or git unavailable */ }
   }
@@ -540,7 +550,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
       const userProfile = await profileRepo.findUserProfile(context.userId);
       if (userProfile && (userProfile.facts as ProfileFact[])?.length > 0) {
         const facts = (userProfile.facts as ProfileFact[]).map(f => `- ${f.key}: ${f.value}`).join('\n');
-        systemPrompt += `\n\nUSER CONTEXT:\nName: ${userProfile.name}\n${facts}`;
+        volatileParts.push(`\n\nUSER CONTEXT:\nName: ${userProfile.name}\n${facts}`);
       }
 
       // For people-related queries, search for relevant profiles and inject matches.
@@ -575,7 +585,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
             const factsStr = facts.map(f => `  - ${f.key}: ${f.value}`).join('\n');
             return `**${p.name}** (${p.category || 'person'})${p.relationship ? ` — ${p.relationship}` : ''}\n${factsStr}`;
           });
-          systemPrompt += `\n\nRELEVANT PROFILES:\n${profileTexts.join('\n\n')}`;
+          volatileParts.push(`\n\nRELEVANT PROFILES:\n${profileTexts.join('\n\n')}`);
         }
       }
     } catch (err) { coreLogger.error({ err }, 'silent failure in worker-spawner'); }
@@ -607,7 +617,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
         const outStr = out ? ` → ${out.replace(/\s+/g, ' ').slice(0, 200)}` : '';
         return `- [${n.role}, ${n.status}] ${brief}${outStr}`;
       });
-      systemPrompt += `\n\nPRIOR ACTIONS THIS SESSION (sibling agents already ran these — do NOT repeat completed work, re-send the same message, or re-notify the user about the same thing):\n${lines.join('\n')}`;
+      volatileParts.push(`\n\nPRIOR ACTIONS THIS SESSION (sibling agents already ran these — do NOT repeat completed work, re-send the same message, or re-notify the user about the same thing):\n${lines.join('\n')}`);
     }
   } catch (err) { coreLogger.warn({ err }, 'prior-actions context injection failed'); }
 
@@ -624,7 +634,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     if (/\s/.test(octiRoot) || /\s/.test(devProjectPath)) {
       workspaceHint += `\nIMPORTANT: Paths contain spaces — ALWAYS wrap them in double quotes in shell commands (e.g. \`chmod +x "${devProjectPath}/file.sh"\`). Unquoted, the shell splits on spaces and the command fails.`;
     }
-    systemPrompt += workspaceHint;
+    semiStaticParts.push(workspaceHint);
   } else {
     // Normal mode: global workspace.
     // Advertise the SAME root the filesystem sandbox enforces. `WorkspaceFS.forAgent`
@@ -648,7 +658,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     if (/\s/.test(workspaceRoot) || /\s/.test(octiRoot)) {
       workspaceHint += `\nIMPORTANT: Paths contain spaces — ALWAYS wrap them in double quotes in shell commands (e.g. \`chmod +x "${workspaceRoot}/project/file.sh"\`). Unquoted, the shell splits on spaces and the command fails.`;
     }
-    systemPrompt += workspaceHint;
+    semiStaticParts.push(workspaceHint);
   }
 
   // Memory-redesign Phase D — surface role-scoped long-term memory.
@@ -664,21 +674,21 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
         limit: 8,
       });
       const memBlock = renderMemoriesBlock(memRows);
-      if (memBlock) systemPrompt += memBlock;
+      if (memBlock) volatileParts.push(memBlock);
     } catch (err) {
       coreLogger.debug({ err, role: agentRole }, 'specialist memory injection skipped (non-fatal)');
     }
   }
 
-  // Workers must return results to the orchestrator, not message the user directly
-  systemPrompt += `\n\nIMPORTANT: You are a worker agent. Return your findings and results as plain text in your final response. Do NOT use messaging tools (send_to_user, send_channel_message) to contact the user — the orchestrator handles all user communication. Just do your task and respond with the result.`;
+  // Workers must return results to the orchestrator, not message the user directly (STATIC)
+  staticParts.push(`\n\nIMPORTANT: You are a worker agent. Return your findings and results as plain text in your final response. Do NOT use messaging tools (send_to_user, send_channel_message) to contact the user — the orchestrator handles all user communication. Just do your task and respond with the result.`);
 
   // Knowledge-tool roles: point them at the auto-indexed product docs so
   // "how do I set up / configure / connect X" questions are answered from
   // the shipped manual instead of a guess. Small models get the leaner
   // surface (they tend to misfire on extra tool guidance).
   if (!isSmall && roleTools.some((t) => t.toolId === 'knowledge')) {
-    systemPrompt += `\n\nPRODUCT DOCS: Octipus's own product documentation (setup, channels, model providers, configuration) is indexed in the knowledge base (source "octipus-docs"). For any "how do I set up / configure / connect / enable X" question about Octipus itself, call search_knowledge FIRST and answer from the retrieved docs — cite the source file — rather than guessing.`;
+    staticParts.push(`\n\nPRODUCT DOCS: Octipus's own product documentation (setup, channels, model providers, configuration) is indexed in the knowledge base (source "octipus-docs"). For any "how do I set up / configure / connect / enable X" question about Octipus itself, call search_knowledge FIRST and answer from the retrieved docs — cite the source file — rather than guessing.`);
   }
 
   // Inform CLI agents about the Octipus MCP self-server.
@@ -699,15 +709,22 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   // mcp_call_tool handlers — no prompt guidance needed.
   const isCLIModel = finalModel?.startsWith('cli/');
   if (isCLIModel) {
-    systemPrompt += `\n\nOCTIPUS MCP TOOLS: You have access to the "octipus" MCP server which provides tools for:
+    staticParts.push(`\n\nOCTIPUS MCP TOOLS: You have access to the "octipus" MCP server which provides tools for:
 - **People & profiles**: Search/retrieve stored information about people the user knows (octipus_search_profiles, octipus_get_profile)
 - **Knowledge base**: Search the user's knowledge base (octipus_search_knowledge)
 - **Web search**: Search the web (octipus_search) and fetch pages (octipus_fetch_page)
 - **Messaging**: Send messages to the user's channels — Telegram, Slack, etc. (octipus_send_channel_message)
 - **Scheduling**: Create/manage scheduled tasks and automations (octipus_create_recurring_task)
 - **Documents**: Upload and index documents (octipus_upload_document)
-Use these MCP tools when the task benefits from them — especially for people-related questions, knowledge lookups, or cross-channel messaging.`;
+Use these MCP tools when the task benefits from them — especially for people-related questions, knowledge lookups, or cross-channel messaging.`);
   }
+
+  // Assemble the stable prefix: STATIC (cacheable) → SEMI-STATIC → VOLATILE.
+  // Ordering within a tier is unchanged; only cross-tier position moves. The
+  // last static index is the natural cache breakpoint for explicit-cache
+  // providers (Phase 2b).
+  const staticPrefix = staticParts.join('');
+  const systemPrompt = staticPrefix + semiStaticParts.join('') + volatileParts.join('');
 
   // ── Swarm wiring (pipeline stages) ──────────────────────────────
   // When a parent swarm node is supplied (currently only by pipeline
