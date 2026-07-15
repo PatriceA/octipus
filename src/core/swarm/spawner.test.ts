@@ -40,14 +40,18 @@ describe('composeChildMessage — date grounding', () => {
     expect(msg).toContain(Intl.DateTimeFormat().resolvedOptions().timeZone);
   });
 
-  test('brief no longer carries the static delegation policy (Phase 4 — hoisted to system prompt)', () => {
+  test('brief drops the ~1.5KB policy but keeps a compact high-salience reminder (Phase 4)', () => {
     const msg = composeChildMessage(brief, {
       availableToolNames: ['websearch__search'],
       canSpawnChildren: true,
     });
-    // The ~1.5KB policy moved to buildDelegationGuidance() → system prompt.
+    // The full policy moved to buildDelegationGuidance() → system prompt...
     expect(msg).not.toContain('DELEGATION POLICY');
     expect(msg).not.toContain('HOW SPAWNING WORKS');
+    // ...but a short trailing reminder remains so weak models still act on it.
+    expect(msg).toContain('spawn_child');
+    expect(msg).toContain('collect_children');
+    expect(msg.length).toBeLessThan(1200); // nowhere near the old ~1.5KB block
   });
 
   test('leaf subagents still get the no-delegation reminder in the brief', () => {

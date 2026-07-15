@@ -1356,8 +1356,19 @@ export function composeChildMessage(
 
   // Delegation guidance for depth-1 Agents is STATIC and now lives in the
   // child's (cacheable) system prompt (see buildDelegationGuidance / the spawn
-  // path), not re-sent per brief. Leaf subagents just get a one-line reminder.
-  if (!opts.canSpawnChildren) {
+  // path), not re-sent in full per brief. A compact reminder stays in the
+  // trailing (high-salience) user message so weak models — which under-weight
+  // system instructions — still act on the fan-out/collect rules at decision
+  // time. Leaf subagents get the no-delegation line instead.
+  if (opts.canSpawnChildren) {
+    parts.push(
+      'REMINDER: you can `spawn_child` to run 2+ INDEPENDENT units of work in ' +
+        'parallel (the full delegation policy + mechanics are in your ' +
+        'instructions above). First check if your own tools suffice — if so, ' +
+        'do it yourself. If you spawn, call `collect_children` BEFORE your ' +
+        'final answer.',
+    );
+  } else {
     parts.push(
       'You are a leaf subagent: no further delegation. Solve the task with ' +
         'your own tools and return the deliverable.',
