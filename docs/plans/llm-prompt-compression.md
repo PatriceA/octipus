@@ -333,3 +333,29 @@ and appended to this document.
 - DeepSeek context caching: https://api-docs.deepseek.com/guides/kv_cache
 - Mistral prompt caching: https://docs.mistral.ai/studio-api/conversations/advanced/prompt-caching
 - OpenRouter prompt caching: https://openrouter.ai/docs/features/prompt-caching
+
+---
+
+## Implementation status (2026-07-15)
+
+All five phases shipped to `main`, one PR + adversarial code-review each.
+Remaining work is tracked in a follow-up plan:
+**`docs/plans/llm-prompt-compression-followups.md`**.
+
+| Phase | PR | Shipped | Deferred (→ follow-up plan) |
+|---|---|---|---|
+| **1 — Measure** | #219 | `cost_log` cache columns (migration 0078) + provider-aware cached pricing; `octipus_llm_cached_tokens_total`; `extractCachedTokens` across OpenAI-compat providers; real o200k tokenizer for `estimateTokens` | — |
+| **2 — Caching** | #220, #224 | 2a stable prefix ordering (worker-spawner + orchestrator-runner); 2c Grok `x-grok-conv-id` + Mistral `prompt_cache_key`; **2b** `cache_control` on the Anthropic **native** path (`buildCachedSystem`, #224) | 2b: LiteLLM/OpenRouter Anthropic-family pass-through; native migration of the main OpenAI-compat `anthropic-provider` |
+| **3 — Structured handoffs** | #221 | Receipt in `<ChildResult>` envelope; `parseStructuredHandoff` (```handoff fence, per-field fallback); QA `confidence` enum | `responseFormat` enforcement on the child's final turn; delete `parseProseVerdict` once QA emits enforced JSON |
+| **4 — Dedup** | #222 | `buildDelegationGuidance` hoisted ~1.5 KB out of every brief into the cacheable system prompt (compact salience reminder kept) | Dense per-role prompt rewrites (`prompt.lite`-style, A/B per role). **Skill reference-by-ID was already implemented** (`list_skills`/`get_skill`) |
+| **5 — Token budgets** | #223, #225 | Standalone `token-count.ts`; token-budgeted memory (value-per-token, logs drops); map-reduce summarizer (gated, `allSettled`); **per-section** bound on the AGENTS.md guide (`truncateToTokens`, #225) | Per-section budgets for the expert index + repo map |
+
+**Deferred items are deferred for a reason**, not forgotten: each is either
+eval-gated (needs the CI-blocking `bun run eval` + red-team suite, which can't
+run locally without model credentials) or a cross-cutting change the plan's
+§Risks flagged. They are specified in the follow-up plan.
+
+Each phase's review caught real defects fixed before merge — notably the
+cache-token convention split (Anthropic `input_tokens` excludes cached, OpenAI
+includes), the `??`-doesn't-catch-empty-string handoff fallback, and an
+average-ratio truncation that could exceed the very budget it enforced.
