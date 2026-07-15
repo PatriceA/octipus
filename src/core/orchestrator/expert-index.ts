@@ -89,6 +89,8 @@ export async function buildExpertIndexBlock(userId: string): Promise<string> {
     `Custom experts (marked [custom]) are user-created specialists — prefer them over the generic system expert of the same role when their description matches the task. ` +
     `If no listed expert stands out, omit \`expertId\` and the role's default expert is used.\n` +
     lines.join('\n') +
-    (truncated ? `\n(…list truncated at ${lines.length} experts)` : '')
+    // "top N" (not "N total") so the model knows more experts exist beyond the
+    // budget/count cap and can still omit expertId to reach an unlisted one.
+    (truncated ? `\n(…list truncated — showing top ${lines.length} experts; more exist)` : '')
   );
 }

@@ -41,6 +41,13 @@ describe('truncateLinesToTokens', () => {
     expect(truncateLinesToTokens(lines, 1000)).toEqual({ lines, truncated: false });
   });
 
+  test('always keeps the first line even if it alone exceeds budget', () => {
+    const huge = `- expert (expertId: x) — ${'lorem '.repeat(2000)}`;
+    const { lines, truncated } = truncateLinesToTokens([huge, '- b (expertId: 2)'], 50);
+    expect(lines).toEqual([huge]); // never returns an empty list
+    expect(truncated).toBe(true);
+  });
+
   test('drops trailing lines and never cuts mid-line', () => {
     const lines = Array.from({ length: 50 }, (_, i) => `  - repo-${i} [service] /abs/path/to/repo-${i}`);
     const { lines: kept, truncated } = truncateLinesToTokens(lines, 40);

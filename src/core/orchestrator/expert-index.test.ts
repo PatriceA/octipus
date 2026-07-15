@@ -96,7 +96,7 @@ describe('buildExpertIndexBlock', () => {
       });
     }
     const block = await buildExpertIndexBlock(userA);
-    expect(block).toContain('list truncated at 50 experts');
+    expect(block).toContain('showing top 50 experts');
     // 50 entries max: count rendered bullet lines.
     const bullets = block.split('\n').filter((l) => l.startsWith('- '));
     expect(bullets.length).toBe(50);
@@ -117,8 +117,9 @@ describe('buildExpertIndexBlock', () => {
     }
     const block = await buildExpertIndexBlock(userB);
     const bullets = block.split('\n').filter((l) => l.startsWith('- '));
+    expect(bullets.length).toBeGreaterThan(0); // never collapses to zero
     expect(bullets.length).toBeLessThan(6); // token budget cut some
-    expect(block).toContain(`list truncated at ${bullets.length} experts`);
+    expect(block).toContain(`showing top ${bullets.length} experts`);
     // Every emitted line is whole — its expertId parenthetical is intact.
     bullets.forEach((l) => expect(l).toMatch(/expertId: [0-9a-f-]+\)/));
   });

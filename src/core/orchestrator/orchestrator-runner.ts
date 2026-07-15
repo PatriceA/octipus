@@ -331,7 +331,7 @@ export async function runOrchestrator(
         // instructions are appended AFTER the budget so they always survive.
         const { lines: shown, truncated } = truncateLinesToTokens(repoLines, REPO_SUITE_TOKEN_BUDGET);
         let suite = `\nWORKSPACE SUITE — ${repos.length} repos under ${wsRoot}:\n${shown.join('\n')}`;
-        if (truncated) suite += `\n  (…suite truncated at ${shown.length} repos)`;
+        if (truncated) suite += `\n  (…suite truncated — showing top ${shown.length} of ${repos.length} repos)`;
         suite += `\n\nUse the repo_registry tool (list_repos / get_repo / repo_dependents) to navigate this suite efficiently — read a repo's map before its files. Route each worker to a repo by its ABSOLUTE PATH and tell it to read that repo's AGENTS.md first. For a cross-repo change, call repo_dependents on a library before editing it and name every affected repo in the worker tasks.`;
         systemPrompt += suite;
         injectedSuite = true;
