@@ -86,6 +86,43 @@ export function buildSpawnRoleCatalog(): string {
 }
 
 /**
+ * Static delegation guidance for a depth-1 agent (one that can `spawn_child`).
+ * ~1.5 KB of policy + mechanics that is IDENTICAL for every such spawn — it
+ * belongs in the child's (cacheable) system prompt, NOT re-sent in every
+ * per-task brief (Phase 4). Only the spawnable-role catalog varies, and only
+ * when roles change. Kept out of `composeChildMessage` so briefs stay compact.
+ */
+export function buildDelegationGuidance(): string {
+  return (
+    'DELEGATION POLICY: you can spawn your OWN subagents with `spawn_child` ' +
+    '(pick a `role`, give a focused `taskBrief`). Decide with these rules:\n' +
+    '1. First check: can you do it with your own tools? If yes, just ' +
+    "do it — don't spawn.\n" +
+    '2. SPAWN when you have 2+ INDEPENDENT units of non-trivial work to run ' +
+    'in parallel (per-page research, per-file audit, per-endpoint probe), OR ' +
+    "a sub-topic needs a DIFFERENT specialist's toolset.\n" +
+    '3. Same-role fan-out is OK: e.g. you are a research agent → spawn three ' +
+    'research subagents, one per source.\n' +
+    "4. DON'T hand a single task to one same-role subagent — you ARE that " +
+    'specialist; do it yourself.\n\n' +
+    'Roles you can spawn (`role` — what it does):\n' +
+    buildSpawnRoleCatalog() +
+    '\n\nHOW SPAWNING WORKS: `spawn_child` returns IMMEDIATELY with a pending ' +
+    'handle — the child always runs in the background (there is no `mode` ' +
+    'parameter). So you can fire several siblings in one turn, keep working, ' +
+    'and pick up results later. Use it for DATAPOINTS you collect at the end ' +
+    '(scrape a page, probe an endpoint) — not for a DEPENDENCY you need before ' +
+    'your next step (for that, spawn it and immediately `collect_children` ' +
+    'before continuing).\n' +
+    'Rules: (1) at most 3 subagents pending at any time; (2) call ' +
+    '`collect_children` BEFORE your final answer, or the framework force-waits ' +
+    'with a hard timeout and you may run out of budget for synthesis; ' +
+    "(3) don't spawn trivial work (<30s) — just do it; (4) if you finalize " +
+    'without collecting, your pending children are cancelled.'
+  );
+}
+
+/**
  * Topic-name → role aliases. Orchestrator LLMs frequently pick natural
  * topic phrases ("database", "frontend", "machine-learning") that aren't
  * actual roles. Auto-mapping the obvious synonyms beats rejecting the

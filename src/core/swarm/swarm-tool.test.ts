@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { applyRoleFit, validateSpawnChildArgs, formatChildResult, createSpawnChildTool, buildSpawnRoleCatalog, SPAWN_CHILD_ROLES } from './swarm-tool';
+import { applyRoleFit, validateSpawnChildArgs, formatChildResult, createSpawnChildTool, buildSpawnRoleCatalog, buildDelegationGuidance, SPAWN_CHILD_ROLES } from './swarm-tool';
 import { LEVEL_DEFAULT, type AgentNode, type ChildResult } from './types';
 import { SwarmSpawner } from './spawner';
 
@@ -17,6 +17,16 @@ describe('buildSpawnRoleCatalog', () => {
       expect(line).not.toContain('undefined');
       expect((line as string).length).toBeGreaterThan(`- ${role} — `.length);
     }
+  });
+});
+
+describe('buildDelegationGuidance', () => {
+  test('carries the policy + mechanics + role catalog for depth-1 agents', () => {
+    const g = buildDelegationGuidance();
+    expect(g).toContain('DELEGATION POLICY');
+    expect(g).toContain('HOW SPAWNING WORKS');
+    // Includes the spawnable-role catalog so the agent knows what it can spawn.
+    expect(g).toContain(buildSpawnRoleCatalog());
   });
 });
 

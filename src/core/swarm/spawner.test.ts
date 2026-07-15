@@ -39,6 +39,21 @@ describe('composeChildMessage — date grounding', () => {
     // that could disagree with the local date near midnight.
     expect(msg).toContain(Intl.DateTimeFormat().resolvedOptions().timeZone);
   });
+
+  test('brief no longer carries the static delegation policy (Phase 4 — hoisted to system prompt)', () => {
+    const msg = composeChildMessage(brief, {
+      availableToolNames: ['websearch__search'],
+      canSpawnChildren: true,
+    });
+    // The ~1.5KB policy moved to buildDelegationGuidance() → system prompt.
+    expect(msg).not.toContain('DELEGATION POLICY');
+    expect(msg).not.toContain('HOW SPAWNING WORKS');
+  });
+
+  test('leaf subagents still get the no-delegation reminder in the brief', () => {
+    const msg = composeChildMessage(brief, { availableToolNames: [], canSpawnChildren: false });
+    expect(msg).toContain('leaf subagent');
+  });
 });
 
 // ── syncParentTokenUsage: node budget reflects live worker spend ──────

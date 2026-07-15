@@ -39,7 +39,7 @@ import {
   denialResult as denialResultFn,
 } from './spawn-validator';
 import { type Scorer, runScorers } from './scorers';
-import { applyRoleFit, buildSpawnRoleCatalog } from './swarm-tool';
+import { applyRoleFit, buildDelegationGuidance } from './swarm-tool';
 import { recordChildScope, buildSiblingScopeBrief } from './session-scope';
 import {
   type AgentNode,
@@ -370,10 +370,16 @@ export class SwarmSpawner {
     // User spec: "any agent should check tools and see if the task can be
     // done with the given ones."
     const availableToolNames = childTools.map((t) => t.name);
+    const canSpawnChildren = childDepth === 1;
     const childMessage = composeChildMessage(brief, {
       availableToolNames,
-      canSpawnChildren: childDepth === 1,
+      canSpawnChildren,
     });
+    // Delegation guidance is static, identical for every depth-1 spawn, so it
+    // lives in the (cacheable) system prompt instead of every brief (Phase 4).
+    const childSystemPrompt = canSpawnChildren
+      ? `${systemPrompt ?? ''}\n\n${buildDelegationGuidance()}`.trim()
+      : systemPrompt;
 
     // Context-window gate (RC7): warn if the child's first-turn input already
     // approaches the model's context window — it will truncate or fail before
@@ -384,7 +390,7 @@ export class SwarmSpawner {
     try {
       const boundModel = await getModelRegistry().getModelByModelId(childModel);
       const ctx = boundModel?.contextWindow ?? 0;
-      const estTokens = Math.ceil(((systemPrompt?.length ?? 0) + childMessage.length) / 4);
+      const estTokens = Math.ceil(((childSystemPrompt?.length ?? 0) + childMessage.length) / 4);
       if (ctx > 0 && estTokens > ctx * 0.9) {
         coreLogger.warn(
           { childRole, model: childModel, estTokens, contextWindow: ctx },
@@ -432,7 +438,7 @@ export class SwarmSpawner {
       childModel,
       childLane,
       childTools,
-      systemPrompt,
+      systemPrompt: childSystemPrompt,
       expertId,
       budget,
       topicPath,
@@ -1348,39 +1354,10 @@ export function composeChildMessage(
     : '(none)';
   parts.push(`Tools available to you: ${toolList}`);
 
-  // Delegation guidance — only relevant for Agents (depth 1); Subagents are
-  // structural leaves (the `spawn_child` tool isn't even registered for them).
-  if (opts.canSpawnChildren) {
-    parts.push(
-      'DELEGATION POLICY: you can spawn your OWN subagents with `spawn_child` ' +
-        '(pick a `role`, give a focused `taskBrief`). Decide with these rules:\n' +
-        '1. First check: can you do it with your own tools above? If yes, just ' +
-        "do it — don't spawn.\n" +
-        '2. SPAWN when you have 2+ INDEPENDENT units of non-trivial work to run ' +
-        'in parallel (per-page research, per-file audit, per-endpoint probe), OR ' +
-        "a sub-topic needs a DIFFERENT specialist's toolset.\n" +
-        '3. Same-role fan-out is OK: e.g. you are a research agent → spawn three ' +
-        'research subagents, one per source.\n' +
-        "4. DON'T hand a single task to one same-role subagent — you ARE that " +
-        'specialist; do it yourself.\n\n' +
-        'Roles you can spawn (`role` — what it does):\n' +
-        buildSpawnRoleCatalog(),
-    );
-    parts.push(
-      'HOW SPAWNING WORKS: `spawn_child` returns IMMEDIATELY with a pending ' +
-        'handle — the child always runs in the background (there is no `mode` ' +
-        'parameter). So you can fire several siblings in one turn, keep working, ' +
-        'and pick up results later. Use it for DATAPOINTS you collect at the end ' +
-        '(scrape a page, probe an endpoint) — not for a DEPENDENCY you need before ' +
-        'your next step (for that, spawn it and immediately `collect_children` ' +
-        'before continuing).\n' +
-        'Rules: (1) at most 3 subagents pending at any time; (2) call ' +
-        '`collect_children` BEFORE your final answer, or the framework force-waits ' +
-        'with a hard timeout and you may run out of budget for synthesis; ' +
-        "(3) don't spawn trivial work (<30s) — just do it; (4) if you finalize " +
-        'without collecting, your pending children are cancelled.',
-    );
-  } else {
+  // Delegation guidance for depth-1 Agents is STATIC and now lives in the
+  // child's (cacheable) system prompt (see buildDelegationGuidance / the spawn
+  // path), not re-sent per brief. Leaf subagents just get a one-line reminder.
+  if (!opts.canSpawnChildren) {
     parts.push(
       'You are a leaf subagent: no further delegation. Solve the task with ' +
         'your own tools and return the deliverable.',
