@@ -133,7 +133,7 @@ export class CustomAnthropicCompatProvider extends BaseCustomProvider implements
       max_tokens: options.maxTokens ?? CustomAnthropicCompatProvider.DEFAULT_MAX_TOKENS,
       stream: streaming,
     };
-    if (system) body.system = system;
+    if (system) body.system = buildCachedSystem(system);
     if (options.temperature != null) body.temperature = options.temperature;
     if (options.topP != null) body.top_p = options.topP;
     if (options.stopSequences?.length) body.stop_sequences = options.stopSequences;
@@ -212,6 +212,39 @@ interface AnthropicBlock {
 interface AnthropicMessage {
   role: 'user' | 'assistant';
   content: string | AnthropicBlock[];
+}
+
+// Marks the start of the VOLATILE section of an assembled system prompt. Both
+// prompt-assembly sites (worker-spawner, orchestrator-runner) push the date
+// block first into the volatile tier (Phase 2a), so the static/cacheable prefix
+// is everything before this marker.
+const VOLATILE_MARKER = /\n\nCURRENT DATE ?&? ?\/?\s?TIME/;
+// ~1024-token Anthropic cache minimum ≈ this many chars; below it a breakpoint
+// is a no-op, so don't bother marking one.
+const MIN_CACHEABLE_CHARS = 4000;
+
+type AnthropicSystem =
+  | string
+  | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }>;
+
+/**
+ * Emit the system prompt as Anthropic content blocks with a `cache_control`
+ * breakpoint at the static/volatile boundary (Phase 2b), so the stable prefix
+ * (preamble + role + skills + guidance) is served from the provider prompt
+ * cache at ~10% of input price while per-turn volatile content (date, memory,
+ * git, history) stays uncached. Falls back to a plain string when there's no
+ * volatile marker or the static prefix is too small to cache.
+ */
+export function buildCachedSystem(system: string): AnthropicSystem {
+  const m = system.match(VOLATILE_MARKER);
+  if (!m || m.index === undefined || m.index < MIN_CACHEABLE_CHARS) return system;
+  const staticPart = system.slice(0, m.index);
+  const volatilePart = system.slice(m.index);
+  const blocks: Exclude<AnthropicSystem, string> = [
+    { type: 'text', text: staticPart, cache_control: { type: 'ephemeral' } },
+  ];
+  if (volatilePart) blocks.push({ type: 'text', text: volatilePart });
+  return blocks;
 }
 
 /**

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import type { AgentMessage } from '@/core/types';
-import { toAnthropicMessages, toAnthropicTools } from './anthropic-compat-provider';
+import { buildCachedSystem, toAnthropicMessages, toAnthropicTools } from './anthropic-compat-provider';
 
 type AnthropicBlockLike = { type: string; id?: string; tool_use_id?: string; [k: string]: unknown };
 
@@ -8,6 +8,35 @@ const ts = new Date();
 const userMsg = (content: string): AgentMessage => ({ role: 'user', content, timestamp: ts });
 const sysMsg = (content: string): AgentMessage => ({ role: 'system', content, timestamp: ts });
 const asstMsg = (content: string): AgentMessage => ({ role: 'assistant', content, timestamp: ts });
+
+describe('buildCachedSystem (Phase 2b breakpoints)', () => {
+  const bigStatic = 'S'.repeat(5000); // over the ~1024-token cache minimum
+
+  it('splits at the worker date marker and caches the static prefix', () => {
+    const sys = `${bigStatic}\n\nCURRENT DATE/TIME: Tue\n\nmemory block`;
+    const out = buildCachedSystem(sys) as Array<{ text: string; cache_control?: unknown }>;
+    expect(Array.isArray(out)).toBe(true);
+    expect(out[0].text).toBe(bigStatic);
+    expect(out[0].cache_control).toEqual({ type: 'ephemeral' });
+    expect(out[1].text.startsWith('\n\nCURRENT DATE/TIME:')).toBe(true);
+    expect(out[1].cache_control).toBeUndefined(); // volatile part not cached
+  });
+
+  it('also matches the orchestrator "DATE & TIME" phrasing', () => {
+    const sys = `${bigStatic}\n\nCURRENT DATE & TIME: Tue`;
+    const out = buildCachedSystem(sys);
+    expect(Array.isArray(out)).toBe(true);
+  });
+
+  it('returns a plain string when there is no volatile marker', () => {
+    expect(buildCachedSystem(bigStatic)).toBe(bigStatic);
+  });
+
+  it('does not mark a breakpoint when the static prefix is too small', () => {
+    const sys = `tiny static\n\nCURRENT DATE/TIME: Tue`;
+    expect(typeof buildCachedSystem(sys)).toBe('string');
+  });
+});
 
 describe('toAnthropicMessages', () => {
   it('extracts system messages into the top-level system field', () => {
