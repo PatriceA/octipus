@@ -172,13 +172,19 @@ export class CustomAnthropicCompatProvider extends BaseCustomProvider implements
 
     const cacheRead = data.usage?.cache_read_input_tokens;
     const cacheCreate = data.usage?.cache_creation_input_tokens;
+    // Anthropic reports input_tokens EXCLUSIVE of cache reads/creation. Fold
+    // them in so inputTokens is the grand total (OpenAI convention) and
+    // cacheReadTokens/cacheCreationTokens stay subsets — the shape cost-tracker
+    // and telemetry expect across all providers.
+    const freshInput = data.usage?.input_tokens || 0;
+    const inputTokens = freshInput + (cacheRead || 0) + (cacheCreate || 0);
     const result: CompletionResult = {
       content: textParts.join(''),
       finishReason: mapStopReason(data.stop_reason),
       usage: {
-        inputTokens: data.usage?.input_tokens || 0,
+        inputTokens,
         outputTokens: data.usage?.output_tokens || 0,
-        totalTokens: (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0),
+        totalTokens: inputTokens + (data.usage?.output_tokens || 0),
         ...(cacheRead != null ? { cacheReadTokens: cacheRead } : {}),
         ...(cacheCreate != null ? { cacheCreationTokens: cacheCreate } : {}),
       },

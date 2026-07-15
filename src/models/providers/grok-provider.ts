@@ -9,6 +9,7 @@ import { repairTruncatedJson } from '@/utils/json-repair';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
+import { extractCachedTokens } from './usage';
 
 const GROK_BASE_URL = 'https://api.x.ai/v1';
 
@@ -74,6 +75,7 @@ export class GrokProvider implements ModelProvider {
           inputTokens: response.usage?.prompt_tokens || 0,
           outputTokens: response.usage?.completion_tokens || 0,
           totalTokens: response.usage?.total_tokens || 0,
+          ...extractCachedTokens(response.usage),
         },
         model: response.model,
         latencyMs,

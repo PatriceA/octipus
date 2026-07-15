@@ -1552,7 +1552,14 @@ export class AgentWorker extends BaseAgentWorker {
       model.modelId,
       result.usage.inputTokens,
       result.usage.outputTokens,
-      { sessionId: this.context.sessionId, agentId: this.context.id, requestType: 'chat', metadata: { toolshim: true, iteration: this.iteration } },
+      {
+        sessionId: this.context.sessionId,
+        agentId: this.context.id,
+        requestType: 'chat',
+        metadata: { toolshim: true, iteration: this.iteration },
+        cachedInputTokens: result.usage.cacheReadTokens,
+        cacheCreationTokens: result.usage.cacheCreationTokens,
+      },
     );
 
     return result.content;
@@ -1707,7 +1714,14 @@ export class AgentWorker extends BaseAgentWorker {
       this.context.model,
       result.usage.inputTokens,
       result.usage.outputTokens,
-      { sessionId: this.context.sessionId, agentId: this.context.id, requestType: 'chat', metadata: { iteration: this.iteration } },
+      {
+        sessionId: this.context.sessionId,
+        agentId: this.context.id,
+        requestType: 'chat',
+        metadata: { iteration: this.iteration },
+        cachedInputTokens: result.usage.cacheReadTokens,
+        cacheCreationTokens: result.usage.cacheCreationTokens,
+      },
     );
 
     const octiMessage: AgentMessage = {

@@ -15,6 +15,22 @@ export interface ModelUsageStats extends UsageStats {
   modelName: string;
 }
 
+// Cached prompt-read price as a fraction of the base input rate, by provider
+// family. Anthropic/Mistral/DeepSeek publish ~0.1×; OpenAI/Grok/Gemini ~0.5×.
+// Unknown providers default to 0.25× (see calculateCost).
+const CACHED_READ_MULTIPLIER: Record<string, number> = {
+  anthropic: 0.1,
+  'custom-anthropic': 0.1,
+  mistral: 0.1,
+  deepseek: 0.1,
+  openai: 0.5,
+  'custom-openai': 0.5,
+  grok: 0.5,
+  gemini: 0.5,
+  'custom-gemini': 0.5,
+  openrouter: 0.5,
+};
+
 export interface DailyUsage {
   date: string;
   inputTokens: number;
@@ -55,12 +71,22 @@ export class CostTracker {
   }
 
   /**
-   * Calculate cost for a request
+   * Calculate cost for a request.
+   *
+   * Convention (normalized at the provider boundary): `inputTokens` is the
+   * grand-total prompt tokens INCLUDING cached reads and cache-creation;
+   * `cachedInputTokens` and `cacheCreationTokens` are subsets of it, each
+   * billed at its own rate rather than the base input rate.
+   * ponytail: cached-read multiplier is per-provider-family (Anthropic/Mistral/
+   * DeepSeek reads ≈0.1×, OpenAI/Grok/Gemini ≈0.5×) and cache-write ≈1.25×
+   * (Anthropic 5-min). Upgrade path if a model diverges: per-model rate columns.
    */
   async calculateCost(
     modelName: string,
     inputTokens: number,
-    outputTokens: number
+    outputTokens: number,
+    cachedInputTokens = 0,
+    cacheCreationTokens = 0
   ): Promise<number> {
     // Get model pricing from config — callers pass either name or modelId
     const model = await this.db
@@ -74,11 +100,19 @@ export class CostTracker {
       return 0;
     }
 
+    const inputRate = model[0].costPerInputToken;
+    const readMultiplier = CACHED_READ_MULTIPLIER[model[0].provider] ?? 0.25;
+    // Cached reads + cache-creation are subsets of inputTokens billed at their
+    // own rates — the remainder is fresh input at full price.
+    const fullPriceInput = Math.max(0, inputTokens - cachedInputTokens - cacheCreationTokens);
+
     // Cost is per 1M tokens
-    const inputCost = (inputTokens / 1_000_000) * model[0].costPerInputToken;
+    const inputCost = (fullPriceInput / 1_000_000) * inputRate;
+    const cachedReadCost = (cachedInputTokens / 1_000_000) * inputRate * readMultiplier;
+    const cacheWriteCost = (cacheCreationTokens / 1_000_000) * inputRate * 1.25;
     const outputCost = (outputTokens / 1_000_000) * model[0].costPerOutputToken;
 
-    return inputCost + outputCost;
+    return inputCost + cachedReadCost + cacheWriteCost + outputCost;
   }
 
   /**
@@ -94,15 +128,27 @@ export class CostTracker {
       agentId?: string;
       requestType?: string;
       metadata?: Record<string, unknown>;
+      cachedInputTokens?: number;
+      cacheCreationTokens?: number;
     }
   ): Promise<CostLogEntry> {
-    const totalCost = await this.calculateCost(modelName, inputTokens, outputTokens);
+    const cachedInputTokens = options?.cachedInputTokens ?? 0;
+    const cacheCreationTokens = options?.cacheCreationTokens ?? 0;
+    const totalCost = await this.calculateCost(
+      modelName,
+      inputTokens,
+      outputTokens,
+      cachedInputTokens,
+      cacheCreationTokens
+    );
 
     return this.logUsage({
       userId,
       modelName,
       inputTokens,
       outputTokens,
+      cachedInputTokens,
+      cacheCreationTokens,
       totalCost,
       sessionId: options?.sessionId,
       agentId: options?.agentId,

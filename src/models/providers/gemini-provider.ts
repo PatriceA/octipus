@@ -13,6 +13,7 @@ import { sanitizeSchemaForGemini } from './custom/gemini-envelope';
 import { sanitizeGeminiHistory } from './gemini-history';
 import { fetchWithRetryAfter, withTimeoutSignal } from './http-retry';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
+import { extractCachedTokens } from './usage';
 
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
 
@@ -128,6 +129,7 @@ export class GeminiProvider implements ModelProvider {
         inputTokens: data.usage?.prompt_tokens || 0,
         outputTokens: data.usage?.completion_tokens || 0,
         totalTokens: data.usage?.total_tokens || 0,
+        ...extractCachedTokens(data.usage),
       },
       model: data.model || options.model,
       latencyMs,
