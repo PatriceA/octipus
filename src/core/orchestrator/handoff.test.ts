@@ -18,14 +18,21 @@ describe('parseStructuredHandoff', () => {
     expect(h?.completedWork).toBe('designed the schema');
   });
 
-  test('reads a json object with a top-level handoff key', () => {
-    const out = '```json\n' + JSON.stringify({ handoff: { decisions: ['a'] } }) + '\n```';
-    expect(parseStructuredHandoff(out)?.decisions).toEqual(['a']);
+  test('does NOT consume a generic json block even if it mentions handoff', () => {
+    // A doc/example block must not override real prose extraction.
+    const out = 'Here is the schema:\n```json\n' + JSON.stringify({ handoff: { decisions: ['example'] } }) + '\n```';
+    expect(parseStructuredHandoff(out)).toBeNull();
   });
 
-  test('returns null when no structured block is present', () => {
+  test('returns null when no ```handoff block is present', () => {
     expect(parseStructuredHandoff('just prose, decided: to ship it')).toBeNull();
     expect(parseStructuredHandoff('```json\n{"unrelated":1}\n```')).toBeNull();
+  });
+
+  test('bounds per-item length (no multi-KB decision bloat)', () => {
+    const huge = 'x'.repeat(5000);
+    const out = '```handoff\n' + JSON.stringify({ decisions: [huge] }) + '\n```';
+    expect(parseStructuredHandoff(out)?.decisions[0].length).toBe(500);
   });
 
   test('returns null on malformed JSON (caller falls back to regex)', () => {
@@ -63,5 +70,20 @@ describe('createHandoffContext', () => {
       stageOutput: '- decided: use a monorepo\n- TODO: pick a CI provider',
     });
     expect(h.decisions.some(d => /monorepo/.test(d))).toBe(true);
+  });
+
+  test('partial block: uses structured decisions but still fills missing fields', async () => {
+    // Block has decisions only — instructions/completedWork must NOT blank out.
+    const stageOutput =
+      'error: the build failed on the last run\n```handoff\n' +
+      JSON.stringify({ decisions: ['ship it anyway'] }) + '\n```';
+    const h = await createHandoffContext({
+      from: { role: 'coding' }, to: { role: 'review' },
+      originalRequest: 'x', stageOutput,
+    });
+    expect(h.decisions).toEqual(['ship it anyway']);
+    expect(h.completedWork.length).toBeGreaterThan(0);
+    // buildInstructions still fires: the error/warning flag survives.
+    expect(/errors or warnings/i.test(h.instructions)).toBe(true);
   });
 });

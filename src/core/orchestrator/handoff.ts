@@ -125,14 +125,22 @@ export async function createHandoffContext(params: {
   const { from, to, originalRequest, stageOutput } = params;
 
   // Prefer a schema-enforced handoff block if the stage emitted one — exact
-  // structure, no lossy regex. Fall back to prose scraping only when absent,
-  // and say so loudly (fail loud) so the eval surface is visible.
+  // structure, no lossy regex. Fall back PER FIELD when the block omits one
+  // (empty string/array is a miss, not a value), and say so loudly (fail loud).
   const structured = parseStructuredHandoff(stageOutput);
-  const decisions = structured?.decisions ?? extractDecisions(stageOutput);
-  const openQuestions = structured?.openQuestions ?? extractOpenQuestions(stageOutput);
-  const artifacts = structured?.artifacts ?? extractArtifacts(stageOutput);
-  const completedWork = structured?.completedWork ?? summarizeOutput(stageOutput);
-  const instructions = structured?.instructions ?? buildInstructions(from, to, stageOutput);
+  const decisions = structured?.decisions.length ? structured.decisions : extractDecisions(stageOutput);
+  const openQuestions = structured?.openQuestions.length ? structured.openQuestions : extractOpenQuestions(stageOutput);
+  const artifacts = structured?.artifacts.length ? structured.artifacts : extractArtifacts(stageOutput);
+  const completedWork = structured?.completedWork
+    ? summarizeOutput(structured.completedWork)
+    : summarizeOutput(stageOutput);
+  // Always compute the built instructions — they carry the automatic
+  // error/warning flag and role-transition hint the structured block won't.
+  // The stage's own nextStageInstructions, if any, lead.
+  const builtInstructions = buildInstructions(from, to, stageOutput);
+  const instructions = [structured?.instructions, builtInstructions]
+    .filter((s): s is string => !!s && s.length > 0)
+    .join('\n\n');
 
   if (!structured) {
     coreLogger.info(
@@ -178,28 +186,24 @@ interface StructuredHandoff {
   completedWork: string;
 }
 
+const HANDOFF_ITEM_MAX = 500; // per-item char bound, matches the regex extractors
+
 /**
- * Extract a schema-enforced handoff from a stage's output. Stages opt in by
- * emitting a fenced ```handoff block (or a JSON object with a top-level
- * `handoff` key) so it's unambiguous vs. incidental JSON in the prose. Returns
- * null when absent or malformed — the caller then falls back to regex scraping.
- * Every field is coerced to the expected type; embedded text is DATA only (it
- * populates string arrays, never executes), which narrows the injection surface
- * a compromised stage can steer.
+ * Extract a schema-enforced handoff from a stage's output. Stages opt in ONLY
+ * by emitting an explicit fenced ```handoff block — a generic ```json block is
+ * NOT treated as a handoff (a doc/example block that happens to mention
+ * "handoff" must not override real prose extraction). Returns null when absent
+ * or malformed — the caller falls back to regex scraping. Every field is
+ * coerced to the expected type and per-item length-bounded; embedded text is
+ * DATA only (populates string arrays, never executes), narrowing the injection
+ * surface a compromised stage can steer.
  */
 export function parseStructuredHandoff(output: string): StructuredHandoff | null {
-  let raw: unknown;
   const fenced = output.match(/```handoff\s*\n?([\s\S]*?)\n?```/);
+  if (!fenced) return null;
+  let raw: unknown;
   try {
-    if (fenced) {
-      raw = JSON.parse(fenced[1].trim());
-    } else {
-      const jsonFence = output.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-      const candidate = jsonFence ? jsonFence[1].trim() : null;
-      if (!candidate || !candidate.includes('"handoff"')) return null;
-      const obj = JSON.parse(candidate) as { handoff?: unknown };
-      raw = obj.handoff;
-    }
+    raw = JSON.parse(fenced[1].trim());
   } catch {
     return null;
   }
@@ -207,7 +211,12 @@ export function parseStructuredHandoff(output: string): StructuredHandoff | null
 
   const h = raw as Record<string, unknown>;
   const strArray = (v: unknown): string[] =>
-    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.length > 0).slice(0, 20) : [];
+    Array.isArray(v)
+      ? v
+          .filter((x): x is string => typeof x === 'string' && x.length > 0)
+          .map((x) => x.slice(0, HANDOFF_ITEM_MAX))
+          .slice(0, 20)
+      : [];
   const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 
   return {
