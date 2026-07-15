@@ -349,7 +349,7 @@ export class OrchestratorService {
           const memories = await retrieveForContext({
             userId,
             agentScope: classification.topic ?? null,
-            limit: 12,
+            limit: 20,
           });
           planMemoryBlock = renderMemoriesBlock(memories);
         } catch (err) {
@@ -491,7 +491,7 @@ export class OrchestratorService {
         const memories = await retrieveForContext({
           userId,
           agentScope: memoryScope,
-          limit: 12,
+          limit: 20,
         });
         memoryBlock = renderMemoriesBlock(memories);
       } catch (err) {
