@@ -211,6 +211,34 @@ function truncate(s: string, max = 60): string {
 }
 
 /**
+ * Derive a deterministic output gate from a brief's `expectedOutput.schema`
+ * (Phase B1). When a spawn declares a JSON Schema, enforce it by reusing the
+ * shallow `json` scorer: the child's output must be a valid JSON object carrying
+ * the schema's required top-level keys (its `required` list, else all declared
+ * `properties`). This is a SHAPE gate, not full JSON-Schema validation — no
+ * nested/type checks — but it fails loud (→ `contract_failed`) when a child
+ * returns prose or the wrong shape, with no schema library and no change to the
+ * hot agent-worker loop. Returns null when there's no usable schema, so callers
+ * only add a gate when one was actually declared.
+ *
+ * Deeper (typed/nested) validation is a deferred hardening — see the follow-ups
+ * plan (B1). Until then this catches the failure the plan cares about most: a
+ * model that ignored the schema and emitted free prose.
+ */
+export function deriveSchemaScorer(schema: unknown): Scorer | null {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return null;
+  const s = schema as Record<string, unknown>;
+  const required = Array.isArray(s.required)
+    ? s.required.filter((k): k is string => typeof k === 'string')
+    : [];
+  const props =
+    s.properties && typeof s.properties === 'object' && !Array.isArray(s.properties)
+      ? Object.keys(s.properties as Record<string, unknown>)
+      : [];
+  return { kind: 'json', requiredKeys: required.length > 0 ? required : props };
+}
+
+/**
  * Validate + normalize an untrusted `scorers` arg from a `spawn_child` call.
  * Returns the parsed scorers, or an error string describing the first invalid
  * entry (fail loud — a malformed scorer spec is reported, not silently dropped).

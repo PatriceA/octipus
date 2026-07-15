@@ -2,13 +2,47 @@ import { describe, expect, it } from 'bun:test';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type Scorer, parseScorers, runScorers } from './scorers';
+import { type Scorer, deriveSchemaScorer, parseScorers, runScorers } from './scorers';
 
 const ctx = { userId: 'system' as const };
 
 async function run(scorers: Scorer[], output: unknown, notes?: string) {
   return runScorers(scorers, { output, notes }, ctx);
 }
+
+describe('deriveSchemaScorer (Phase B1)', () => {
+  it('derives a json scorer with requiredKeys from the schema `required`', () => {
+    const s = deriveSchemaScorer({ type: 'object', required: ['verdict', 'score'], properties: { verdict: {}, score: {}, notes: {} } });
+    expect(s).toEqual({ kind: 'json', requiredKeys: ['verdict', 'score'] });
+  });
+
+  it('falls back to all property names when no `required` is declared', () => {
+    const s = deriveSchemaScorer({ type: 'object', properties: { a: {}, b: {} } });
+    expect(s).toEqual({ kind: 'json', requiredKeys: ['a', 'b'] });
+  });
+
+  it('returns null for a non-object / absent schema', () => {
+    expect(deriveSchemaScorer(undefined)).toBeNull();
+    expect(deriveSchemaScorer(null)).toBeNull();
+    expect(deriveSchemaScorer('nope')).toBeNull();
+    expect(deriveSchemaScorer([1, 2])).toBeNull();
+  });
+
+  it('enforces the shape end-to-end: prose fails, matching JSON passes', async () => {
+    const scorer = deriveSchemaScorer({ required: ['verdict'], properties: { verdict: {} } })!;
+    // A child that ignored the schema and returned prose → gate fails (loud).
+    const prose = await run([scorer], 'The task looks fine to me.');
+    expect(prose.passed).toBe(false);
+    expect(prose.failures[0].reason).toMatch(/not valid JSON/);
+    // Valid JSON missing the required key → still fails.
+    const missing = await run([scorer], JSON.stringify({ other: 1 }));
+    expect(missing.passed).toBe(false);
+    expect(missing.failures[0].reason).toMatch(/missing required keys: verdict/);
+    // Conforming JSON → passes.
+    const ok = await run([scorer], JSON.stringify({ verdict: 'pass' }));
+    expect(ok.passed).toBe(true);
+  });
+});
 
 describe('runScorers — non_empty', () => {
   it('passes for non-empty output, fails for empty/whitespace', async () => {
