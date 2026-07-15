@@ -5,6 +5,72 @@ Octipus includes voice capabilities at two levels:
 1. **Local Voice I/O** — speech-to-text, text-to-speech, and wake word detection for hands-free local interaction
 2. **Phone Calls** — make and receive actual phone calls via Twilio, Telnyx, or Plivo with interactive voice conversations
 
+## Voice Data Flows — the three lines
+
+Three input pipelines, one brain, one mouth. They differ only in how audio gets
+*in* and back *out*; all transcribe at **16 kHz mono** (whisper's only input) and
+all speak back through Mistral TTS. Detail for each stage is in the sections below.
+
+**Line 1 — Turn-based web** (`useVoiceConversation.ts`): record an utterance, POST it, get one reply.
+
+```text
+🎤 mic ──▶ MediaRecorder (webm/ogg)          AnalyserNode RMS VAD; stops after SILENCE_MS (2 s)
+   │
+   ▼  Web Audio decode + OfflineAudioContext  →  encodeWav16kMono
+ WAV 16 kHz mono ──base64──▶ POST /api/voice/transcribe
+   │
+   ▼  whisper.cpp (ggml-small.bin)             transcribeAudioBuffer → else Voxtral / OpenAI; stripNonSpeech
+ transcript ──▶ sendMessage() ──▶ 🧠 ORCHESTRATOR ──▶ chat_response
+                                                          │
+   ┌──────────────────────────────────────────────────────┘
+   ▼  /api/voice/speak (whole reply) → stripForSpeech
+ Mistral TTS → mp3 ──▶ 🔊 <audio>
+```
+
+**Line 2 — Realtime streaming web** (`useVoiceRealtime.ts`): duplex socket, streaming transcript, barge-in.
+
+```text
+🎤 mic (echoCancellation)                      AudioContext @16 kHz → AudioWorklet (Float32→Int16)
+   │
+   ▼  binary PCM frames (16 kHz s16, while "listening")
+ /voice  WebSocket  ?engine=whisper|mistral
+   ├─ whisper : WhisperEngine.streamTranscribe → 2 s sliding window   (voice-ws.ts)
+   └─ mistral : MistralSTTEngine → wss Mistral realtime
+   │
+   ▼  {type:transcript} frames (running text) → client VAD dispatches delta on silence
+ sendMessage() ──▶ 🧠 ORCHESTRATOR + voice-plan-gate ──▶ chat_response
+   │                        ╲___ narrator: {type:speak} lifecycle frames over /ws
+   ▼  per-sentence /api/voice/speak → Mistral TTS ──▶ 🔊
+        ◀── barge-in: sustained over-talk (RMS) stops playback, reopens mic (pre-roll flush)
+```
+
+**Line 3 — Telephony / phone** (`voice-media-ws.ts` + `media-bridge.ts`): 8 kHz μ-law over a carrier, both ways.
+
+```text
+📞 caller ──▶ carrier ──▶ TwiML <Connect><Stream> ──▶ /voice/media/:provider
+   │  8 kHz μ-law base64 media frames
+   ▼  twilioMediaToPcm16k:  muLawDecode → 8 kHz PCM → resamplePcm16(8k→16k)   [StreamingResampler]
+ 16 kHz PCM ──▶ per-utterance WhisperEngine.streamTranscribe ──▶ transcript
+   │
+   ▼  generatePhoneReply  (voice-topic model, short prompt — NOT the full orchestrator)
+ reply ── Mistral TTS → mp3 → ffmpeg → 16 kHz PCM
+   │
+   ▼  pcm16kToTwilioMedia:  resamplePcm16(16k→8k) → muLawEncode → base64
+ 8 kHz μ-law ──▶ carrier ──▶ 🔊 caller            paced real-time; RMS barge-in
+```
+
+**Where they converge**
+
+```text
+ Lines 1 & 2 ─▶ orchestrator.handleMessage (full pipeline + voice-plan-gate)
+ Line 3      ─▶ generatePhoneReply (direct-LLM fast path)
+                        │
+        planning turns (web) + phone reply run on the  ► voice-topic model ◄  (Gemini Flash Lite)
+        heavy post-handoff work → normal routing
+                        │
+        Mouth: Mistral TTS (en_paul_neutral).  STT floor: 16 kHz mono; telephony bridges 8↔16 kHz.
+```
+
 ## Local Voice
 
 ### Speech-to-Text (STT)
