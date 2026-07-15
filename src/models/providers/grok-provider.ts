@@ -9,7 +9,7 @@ import { repairTruncatedJson } from '@/utils/json-repair';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
-import { extractCachedTokens } from './usage';
+import { cacheAffinityKey, extractCachedTokens } from './usage';
 
 const GROK_BASE_URL = 'https://api.x.ai/v1';
 
@@ -55,13 +55,20 @@ export class GrokProvider implements ModelProvider {
       Object.assign(params, options.extraBody);
     }
 
+    // Grok prompt caching is automatic; a stable per-session conversation id
+    // maximizes the hit rate on the cached static prefix (Phase 2c).
+    const convId = cacheAffinityKey(options.sessionId);
+    const reqOpts: { signal?: AbortSignal; headers?: Record<string, string> } = {};
+    if (options.signal) reqOpts.signal = options.signal;
+    if (convId) reqOpts.headers = { 'x-grok-conv-id': convId };
+
     modelLogger.debug(
       { model: params.model, messageCount: options.messages.length, provider: this.name },
       'Sending completion request to Grok'
     );
 
     try {
-      const response = await client.chat.completions.create(params);
+      const response = await client.chat.completions.create(params, reqOpts);
       const latencyMs = Date.now() - startTime;
       if (!response.choices?.length) {
         throw classifyError(new Error(`Provider returned empty response (no choices) for model ${params.model || options.model}`), 'grok');

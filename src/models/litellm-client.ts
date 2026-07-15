@@ -49,6 +49,13 @@ export interface CompletionOptions {
    */
   userId?: string;
   /**
+   * Calling session ID — used as a stable prompt-cache affinity key for
+   * providers that route by one (Mistral `prompt_cache_key`, Grok
+   * `x-grok-conv-id`). Same session ⇒ same static prefix, so this maximizes
+   * cache-hit likelihood. Hashed before sending (no raw id / PII on the wire).
+   */
+  sessionId?: string;
+  /**
    * Pre-resolved custom-provider config that bypasses DB lookup.
    * Used by the test-model endpoint where the model row hasn't been saved yet.
    * When set, BaseCustomProvider.resolveModelConfig() returns this directly.

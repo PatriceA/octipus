@@ -11,7 +11,7 @@ import type { AgentMessage } from '@/core/types';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, OcrDocument, OcrResult, ProviderHealthStatus } from './interface';
-import { extractCachedTokens } from './usage';
+import { cacheAffinityKey, extractCachedTokens } from './usage';
 
 const MISTRAL_BASE_URL = 'https://api.mistral.ai/v1';
 
@@ -113,6 +113,11 @@ export class MistralProvider implements ModelProvider {
     if (options.extraBody) {
       Object.assign(params, options.extraBody);
     }
+
+    // Mistral prompt caching is explicit opt-in: a stable per-session key lets
+    // requests sharing the cached static prefix hit it (Phase 2c).
+    const cacheKey = cacheAffinityKey(options.sessionId);
+    if (cacheKey) (params as unknown as Record<string, unknown>).prompt_cache_key = cacheKey;
 
     modelLogger.debug(
       { model: params.model, messageCount: options.messages.length, provider: this.name },

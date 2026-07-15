@@ -1,5 +1,22 @@
 import { describe, expect, test } from 'bun:test';
-import { extractCachedTokens } from './usage';
+import { cacheAffinityKey, extractCachedTokens } from './usage';
+
+describe('cacheAffinityKey', () => {
+  test('undefined session ⇒ undefined (no key sent)', () => {
+    expect(cacheAffinityKey(undefined)).toBeUndefined();
+    expect(cacheAffinityKey('')).toBeUndefined();
+  });
+  test('stable and opaque — same id maps to same key, not the raw id', () => {
+    const id = '3f9a1c22-0000-4b8e-aaaa-000000000000';
+    const k = cacheAffinityKey(id);
+    expect(k).toBe(cacheAffinityKey(id));
+    expect(k).not.toContain(id);
+    expect(k?.startsWith('octi-')).toBe(true);
+  });
+  test('different ids map to different keys', () => {
+    expect(cacheAffinityKey('session-a')).not.toBe(cacheAffinityKey('session-b'));
+  });
+});
 
 describe('extractCachedTokens', () => {
   test('reads OpenAI-style prompt_tokens_details.cached_tokens', () => {
