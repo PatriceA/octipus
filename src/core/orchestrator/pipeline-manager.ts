@@ -942,6 +942,10 @@ export class PipelineManager {
           issues: Array.isArray(parsed.issues) ? parsed.issues : [],
           feedback: typeof parsed.feedback === 'string' ? parsed.feedback : '',
           retryCount: typeof parsed.retryCount === 'number' ? parsed.retryCount : 0,
+          confidence:
+            parsed.confidence === 'high' || parsed.confidence === 'medium' || parsed.confidence === 'low'
+              ? parsed.confidence
+              : undefined,
         };
       }
     } catch { /* fall through */ }

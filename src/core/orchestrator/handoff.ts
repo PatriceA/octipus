@@ -124,11 +124,22 @@ export async function createHandoffContext(params: {
 }): Promise<HandoffContext> {
   const { from, to, originalRequest, stageOutput } = params;
 
-  const decisions = extractDecisions(stageOutput);
-  const openQuestions = extractOpenQuestions(stageOutput);
-  const artifacts = extractArtifacts(stageOutput);
-  const completedWork = summarizeOutput(stageOutput);
-  const instructions = buildInstructions(from, to, stageOutput);
+  // Prefer a schema-enforced handoff block if the stage emitted one — exact
+  // structure, no lossy regex. Fall back to prose scraping only when absent,
+  // and say so loudly (fail loud) so the eval surface is visible.
+  const structured = parseStructuredHandoff(stageOutput);
+  const decisions = structured?.decisions ?? extractDecisions(stageOutput);
+  const openQuestions = structured?.openQuestions ?? extractOpenQuestions(stageOutput);
+  const artifacts = structured?.artifacts ?? extractArtifacts(stageOutput);
+  const completedWork = structured?.completedWork ?? summarizeOutput(stageOutput);
+  const instructions = structured?.instructions ?? buildInstructions(from, to, stageOutput);
+
+  if (!structured) {
+    coreLogger.info(
+      { from: `${from.stageName || from.role}`, to: `${to.stageName || to.role}` },
+      'handoff: no structured block found — fell back to prose extraction',
+    );
+  }
 
   const handoff: HandoffContext = {
     id: generateId(),
@@ -148,6 +159,7 @@ export async function createHandoffContext(params: {
       handoffId: handoff.id,
       from: `${from.stageName || from.role}`,
       to: `${to.stageName || to.role}`,
+      structured: !!structured,
       decisionsCount: decisions.length,
       artifactsCount: artifacts.length,
       questionsCount: openQuestions.length,
@@ -156,6 +168,56 @@ export async function createHandoffContext(params: {
   );
 
   return handoff;
+}
+
+interface StructuredHandoff {
+  decisions: string[];
+  openQuestions: string[];
+  artifacts: string[];
+  instructions: string;
+  completedWork: string;
+}
+
+/**
+ * Extract a schema-enforced handoff from a stage's output. Stages opt in by
+ * emitting a fenced ```handoff block (or a JSON object with a top-level
+ * `handoff` key) so it's unambiguous vs. incidental JSON in the prose. Returns
+ * null when absent or malformed — the caller then falls back to regex scraping.
+ * Every field is coerced to the expected type; embedded text is DATA only (it
+ * populates string arrays, never executes), which narrows the injection surface
+ * a compromised stage can steer.
+ */
+export function parseStructuredHandoff(output: string): StructuredHandoff | null {
+  let raw: unknown;
+  const fenced = output.match(/```handoff\s*\n?([\s\S]*?)\n?```/);
+  try {
+    if (fenced) {
+      raw = JSON.parse(fenced[1].trim());
+    } else {
+      const jsonFence = output.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+      const candidate = jsonFence ? jsonFence[1].trim() : null;
+      if (!candidate || !candidate.includes('"handoff"')) return null;
+      const obj = JSON.parse(candidate) as { handoff?: unknown };
+      raw = obj.handoff;
+    }
+  } catch {
+    return null;
+  }
+  if (!raw || typeof raw !== 'object') return null;
+
+  const h = raw as Record<string, unknown>;
+  const strArray = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.length > 0).slice(0, 20) : [];
+  const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+
+  return {
+    decisions: strArray(h.decisions),
+    openQuestions: strArray(h.openQuestions),
+    artifacts: strArray(h.artifacts),
+    // Accept either name — plan calls it nextStageInstructions.
+    instructions: str(h.instructions) || str(h.nextStageInstructions),
+    completedWork: str(h.completedWork),
+  };
 }
 
 // ── Internal extraction helpers ──────────────────────────────────

@@ -15,6 +15,13 @@ export interface QAValidationResult {
   issues: string[];
   feedback: string;
   retryCount: number;
+  /**
+   * Enumerated verdict confidence (Phase 3). Enumerated, not a probability
+   * float — LLM self-reported probabilities are poorly calibrated. Defaults to
+   * 'medium' when a stage doesn't report it. A low-confidence pass may warrant
+   * a retry even though `passed` is true.
+   */
+  confidence?: 'high' | 'medium' | 'low';
 }
 
 export interface RoleConfig {
