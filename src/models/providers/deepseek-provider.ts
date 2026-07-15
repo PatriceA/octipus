@@ -11,6 +11,7 @@ import { parseToolCallArguments } from '@/models/tool-call-args';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
+import { extractCachedTokens } from './usage';
 
 const DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1';
 
@@ -98,6 +99,7 @@ export class DeepSeekProvider implements ModelProvider {
           inputTokens: response.usage?.prompt_tokens || 0,
           outputTokens: response.usage?.completion_tokens || 0,
           totalTokens: response.usage?.total_tokens || 0,
+          ...extractCachedTokens(response.usage),
         },
         model: response.model,
         latencyMs,

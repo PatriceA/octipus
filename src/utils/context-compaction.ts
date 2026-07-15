@@ -1,3 +1,4 @@
+import { getEncoding, type Tiktoken } from 'js-tiktoken';
 import {
   buildSummarizationPrompt,
   extractFileOperations,
@@ -7,6 +8,7 @@ import {
 import type { AgentMessage } from '@/core/types';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
+import { coreLogger } from '@/utils/logger';
 
 export type { CompactionResult } from '@/core/context-compaction';
 // Re-export for convenience
@@ -27,11 +29,37 @@ const DEFAULT_OPTIONS: CompactionOptions = {
   preserveRecentCount: 10,
 };
 
+// Real BPE tokenizer for budget estimation. o200k_base is the GPT-4o/o-series
+// vocabulary — the best single default across providers; true per-request
+// counts still come from provider `usage`. Lazily built (rank load is ~ms) and
+// memoized. Falls back to chars/4 if the encoder can't load (exotic runtime).
+let encoder: Tiktoken | null | undefined;
+function getEncoder(): Tiktoken | null {
+  if (encoder === undefined) {
+    try {
+      encoder = getEncoding('o200k_base');
+    } catch (err) {
+      coreLogger.warn({ err }, 'tiktoken encoder unavailable — falling back to chars/4');
+      encoder = null;
+    }
+  }
+  return encoder;
+}
+
 /**
- * Estimate token count for a message (rough approximation)
- * Uses ~4 characters per token as a heuristic
+ * Estimate token count for a string using the o200k_base tokenizer, with a
+ * chars/4 fallback. Used for pre-flight budgeting/compaction only.
  */
 export function estimateTokens(content: string): number {
+  if (!content) return 0;
+  const enc = getEncoder();
+  if (enc) {
+    try {
+      return enc.encode(content).length;
+    } catch {
+      // fall through to heuristic
+    }
+  }
   return Math.ceil(content.length / 4);
 }
 

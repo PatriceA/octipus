@@ -105,6 +105,11 @@ export const costLog = pgTable('cost_log', {
   modelName: text('model_name').notNull(),
   inputTokens: integer('input_tokens').notNull(),
   outputTokens: integer('output_tokens').notNull(),
+  // Cache accounting: cachedInputTokens is the subset of inputTokens that hit a
+  // provider prompt cache (billed at a discount); cacheCreationTokens is the
+  // write cost for a fresh cache entry (Anthropic only, billed at a premium).
+  cachedInputTokens: integer('cached_input_tokens').default(0).notNull(),
+  cacheCreationTokens: integer('cache_creation_tokens').default(0).notNull(),
   totalCost: real('total_cost').notNull(),
   requestType: text('request_type'), // chat, completion, embedding
   metadata: jsonb('metadata').$type<CostLogMetadata>().default({}),

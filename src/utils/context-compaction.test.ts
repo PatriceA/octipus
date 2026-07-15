@@ -5,6 +5,19 @@ import {
   DEFAULT_TOOL_OUTPUT_SOFT_CAP,
   truncateOldestToolOutputs,
 } from './context-compaction';
+import { estimateTokens } from './context-compaction';
+
+describe('estimateTokens (real tokenizer)', () => {
+  test('empty string is zero', () => {
+    expect(estimateTokens('')).toBe(0);
+  });
+  test('counts BPE tokens, not chars/4', () => {
+    // " hello world" is 2 tokens in o200k_base; chars/4 would say ~3.
+    const n = estimateTokens(' hello world');
+    expect(n).toBe(2);
+    expect(n).toBeGreaterThan(0);
+  });
+});
 
 const now = new Date();
 const big = (n: number) => 'x'.repeat(n);

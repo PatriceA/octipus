@@ -11,6 +11,7 @@ import type { AgentMessage } from '@/core/types';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, OcrDocument, OcrResult, ProviderHealthStatus } from './interface';
+import { extractCachedTokens } from './usage';
 
 const MISTRAL_BASE_URL = 'https://api.mistral.ai/v1';
 
@@ -137,6 +138,7 @@ export class MistralProvider implements ModelProvider {
           inputTokens: response.usage?.prompt_tokens || 0,
           outputTokens: response.usage?.completion_tokens || 0,
           totalTokens: response.usage?.total_tokens || 0,
+          ...extractCachedTokens(response.usage),
         },
         model: response.model,
         latencyMs,

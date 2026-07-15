@@ -11,6 +11,7 @@ import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from '../interface';
 import { BaseCustomProvider, type ResolvedCustomConfig } from './base-custom-provider';
+import { extractCachedTokens } from '../usage';
 
 /**
  * Custom OpenAI-compatible provider.
@@ -86,6 +87,7 @@ export class CustomOpenAICompatProvider extends BaseCustomProvider implements Mo
           inputTokens: response.usage?.prompt_tokens || 0,
           outputTokens: response.usage?.completion_tokens || 0,
           totalTokens: response.usage?.total_tokens || 0,
+          ...extractCachedTokens(response.usage),
         },
         model: response.model || cfg.model?.modelId || options.model,
         latencyMs,

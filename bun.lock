@@ -17,6 +17,7 @@
         "elysia": "^1.4.29",
         "grammy": "^1.44.0",
         "ioredis": "^5.11.1",
+        "js-tiktoken": "1.0.21",
         "js-yaml": "5.2.0",
         "jszip": "3.10.1",
         "mammoth": "1.12.0",
@@ -615,6 +616,8 @@
     "isarray": ["isarray@1.0.0", "", {}, "sha512-VLghIWNM6ELQzo7zwmcg0NmTVyWKYjvIeM83yjp0wRDTmUnrM678fQbcKBo6n2CJEF0szoG//ytg+TKla89ALQ=="],
 
     "joycon": ["joycon@3.1.1", "", {}, "sha512-34wB/Y7MW7bzjKRjUKTa46I2Z7eV62Rkhva+KkopW7Qvv/OSWBqvkSY7vusOPrNuZcUG3tApvdVgNB8POj3SPw=="],
+
+    "js-tiktoken": ["js-tiktoken@1.0.21", "", { "dependencies": { "base64-js": "^1.5.1" } }, "sha512-biOj/6M5qdgx5TKjDnFT1ymSpM5tbd3ylwDtrQvFQSu0Z7bBYko2dF+W/aUkXUPuk6IVpRxk/3Q2sHOzGlS36g=="],
 
     "js-yaml": ["js-yaml@5.2.0", "", { "dependencies": { "argparse": "^2.0.1" }, "bin": { "js-yaml": "bin/js-yaml.mjs" } }, "sha512-YeLUMlvR4Ou1B119LIaM0r65JvbOBooJDc9yEu0dClb/uSC5P4FrLU8OCCz/HXWvtPoIrR0dRzABTjo1sTN9Bw=="],
 

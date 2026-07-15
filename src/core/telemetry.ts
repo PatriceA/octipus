@@ -108,7 +108,7 @@ const llmLatency = new Histogram({
 });
 const llmTokens = new Counter({
   name: 'octipus_llm_tokens_total',
-  help: 'LLM tokens, by provider, model, and direction (prompt|completion).',
+  help: 'LLM tokens, by provider, model, and direction (prompt|completion|prompt_cached).',
   labelNames: ['provider', 'model', 'direction'],
   registers: [registry],
 });
@@ -170,7 +170,7 @@ export function recordLlmRequest(
   model: string | undefined,
   status: 'success' | 'error',
   seconds: number,
-  tokens?: { prompt?: number; completion?: number },
+  tokens?: { prompt?: number; completion?: number; cached?: number },
 ): void {
   guard(() => {
     const p = label(provider);
@@ -182,6 +182,11 @@ export function recordLlmRequest(
     }
     if (tokens?.completion && tokens.completion > 0) {
       llmTokens.inc({ provider: p, model: m, direction: 'completion' }, tokens.completion);
+    }
+    // Cached prompt tokens are a subset of `prompt` — a separate series so a
+    // dashboard can show cache-hit ratio without double-counting input cost.
+    if (tokens?.cached && tokens.cached > 0) {
+      llmTokens.inc({ provider: p, model: m, direction: 'prompt_cached' }, tokens.cached);
     }
   });
 }

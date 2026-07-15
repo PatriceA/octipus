@@ -55,12 +55,21 @@ export class CostTracker {
   }
 
   /**
-   * Calculate cost for a request
+   * Calculate cost for a request.
+   *
+   * `cachedInputTokens` is the subset of `inputTokens` that hit a provider
+   * prompt cache; `cacheCreationTokens` is the write cost for a fresh entry.
+   * ponytail: cached-read at 0.1× and cache-write at 1.25× input price are
+   * provider-average multipliers (Anthropic/Mistral/DeepSeek reads ≈10%,
+   * Anthropic 5-min writes ≈1.25×). Upgrade path when a provider diverges
+   * materially: per-model rate columns on model_config.
    */
   async calculateCost(
     modelName: string,
     inputTokens: number,
-    outputTokens: number
+    outputTokens: number,
+    cachedInputTokens = 0,
+    cacheCreationTokens = 0
   ): Promise<number> {
     // Get model pricing from config — callers pass either name or modelId
     const model = await this.db
@@ -74,11 +83,17 @@ export class CostTracker {
       return 0;
     }
 
+    const inputRate = model[0].costPerInputToken;
+    // Cache reads are a subset of inputTokens — bill the remainder at full price.
+    const fullPriceInput = Math.max(0, inputTokens - cachedInputTokens);
+
     // Cost is per 1M tokens
-    const inputCost = (inputTokens / 1_000_000) * model[0].costPerInputToken;
+    const inputCost = (fullPriceInput / 1_000_000) * inputRate;
+    const cachedReadCost = (cachedInputTokens / 1_000_000) * inputRate * 0.1;
+    const cacheWriteCost = (cacheCreationTokens / 1_000_000) * inputRate * 1.25;
     const outputCost = (outputTokens / 1_000_000) * model[0].costPerOutputToken;
 
-    return inputCost + outputCost;
+    return inputCost + cachedReadCost + cacheWriteCost + outputCost;
   }
 
   /**
@@ -94,15 +109,27 @@ export class CostTracker {
       agentId?: string;
       requestType?: string;
       metadata?: Record<string, unknown>;
+      cachedInputTokens?: number;
+      cacheCreationTokens?: number;
     }
   ): Promise<CostLogEntry> {
-    const totalCost = await this.calculateCost(modelName, inputTokens, outputTokens);
+    const cachedInputTokens = options?.cachedInputTokens ?? 0;
+    const cacheCreationTokens = options?.cacheCreationTokens ?? 0;
+    const totalCost = await this.calculateCost(
+      modelName,
+      inputTokens,
+      outputTokens,
+      cachedInputTokens,
+      cacheCreationTokens
+    );
 
     return this.logUsage({
       userId,
       modelName,
       inputTokens,
       outputTokens,
+      cachedInputTokens,
+      cacheCreationTokens,
       totalCost,
       sessionId: options?.sessionId,
       agentId: options?.agentId,

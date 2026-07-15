@@ -247,6 +247,7 @@ export class ProviderRouter {
       recordLlmRequest(provider.name, result.model || options.model, 'success', latencyMs / 1000, {
         prompt: result.usage.inputTokens,
         completion: result.usage.outputTokens,
+        cached: result.usage.cacheReadTokens,
       });
 
       if (logsHere) {
@@ -443,6 +444,7 @@ export class ProviderRouter {
       recordLlmRequest('litellm', result.model || options.model, 'success', latencyMs / 1000, {
         prompt: result.usage.inputTokens,
         completion: result.usage.outputTokens,
+        cached: result.usage.cacheReadTokens,
       });
       return result;
     } catch (error) {

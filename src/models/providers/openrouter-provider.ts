@@ -10,6 +10,7 @@ import { parseToolCallArguments } from '@/models/tool-call-args';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus, QuotaStatus } from './interface';
+import { extractCachedTokens } from './usage';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -81,6 +82,7 @@ export class OpenRouterProvider implements ModelProvider {
           inputTokens: usage?.prompt_tokens || 0,
           outputTokens: usage?.completion_tokens || 0,
           totalTokens: usage?.total_tokens || 0,
+          ...extractCachedTokens(usage),
         },
         model: response.model,
         latencyMs,
