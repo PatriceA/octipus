@@ -13,6 +13,7 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import type { SessionContext } from '@/db/schema/sessions';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
+import { truncateLinesToTokens } from '@/utils/token-count';
 import { getOrchestratorHooks } from './hooks';
 import { buildSecurityReminder } from './input-guard';
 import { createMetaTools } from './meta-tools';
@@ -23,6 +24,11 @@ import { buildOutputDirective } from './output-directive';
 import { getLiteOrchestratorPrompt, getRoleConfig } from './roles';
 import type { OrchestratorEvent, OrchestratorService } from './service';
 import type { MessageClassification } from './types';
+
+// Token budget for the workspace-suite repo list (Phase 5 item 2 follow-up).
+// The top-40 count cap alone can't bound it — rootPath + dependency lists are
+// unbounded — so budget the lines and keep the top (highest-value) repos.
+const REPO_SUITE_TOKEN_BUDGET = 1500;
 
 /** Dependency bundle the runner needs from OrchestratorService. */
 export interface OrchestratorRunnerDeps {
@@ -311,16 +317,21 @@ export async function runOrchestrator(
       const { loadRepoGraph } = await import('@/core/repos/registry-service');
       const { repos, edges } = await loadRepoGraph(userId);
       if (repos.length > 0) {
-        let suite = `\nWORKSPACE SUITE — ${repos.length} repos under ${wsRoot}:`;
-        for (const r of repos.slice(0, 40)) {
+        const repoLines = repos.slice(0, 40).map((r) => {
           const deps = edges
             .filter((e) => e.from === r.id)
             .map((e) => repos.find((x) => x.id === e.to)?.name)
             .filter(Boolean);
-          suite += `\n  - ${r.name} [${r.kind}] ${r.rootPath}`
+          return `  - ${r.name} [${r.kind}] ${r.rootPath}`
             + `${r.hasAgentsMd ? ' (AGENTS.md)' : ''}`
             + `${deps.length ? ` → depends on: ${deps.join(', ')}` : ''}`;
-        }
+        });
+        // Token-bound the per-repo lines (Phase 5 item 2 follow-up), keeping
+        // whole lines so no absolute path is severed. The trailing tool-usage
+        // instructions are appended AFTER the budget so they always survive.
+        const { lines: shown, truncated } = truncateLinesToTokens(repoLines, REPO_SUITE_TOKEN_BUDGET);
+        let suite = `\nWORKSPACE SUITE — ${repos.length} repos under ${wsRoot}:\n${shown.join('\n')}`;
+        if (truncated) suite += `\n  (…suite truncated at ${shown.length} repos)`;
         suite += `\n\nUse the repo_registry tool (list_repos / get_repo / repo_dependents) to navigate this suite efficiently — read a repo's map before its files. Route each worker to a repo by its ABSOLUTE PATH and tell it to read that repo's AGENTS.md first. For a cross-repo change, call repo_dependents on a library before editing it and name every affected repo in the worker tasks.`;
         systemPrompt += suite;
         injectedSuite = true;

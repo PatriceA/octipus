@@ -93,3 +93,25 @@ export function truncateToTokens(text: string, budget: number): string {
   const keep = Math.max(0, budget - markerTokens);
   return `${enc.decode(ids.slice(0, keep)).trimEnd()}${TRUNCATION_MARKER}`;
 }
+
+/**
+ * Keep whole lines from `lines` (already ordered highest-value first) until the
+ * running token total would exceed `budget`, then stop. Unlike truncateToTokens
+ * this never cuts mid-line — used for indexes/maps where each line ends in a
+ * token that must survive intact (an `expertId`, an absolute repo path). Returns
+ * the kept lines and whether any were dropped, so the caller can append its own
+ * "…truncated" note in the block's own idiom.
+ */
+export function truncateLinesToTokens(
+  lines: string[],
+  budget: number,
+): { lines: string[]; truncated: boolean } {
+  const kept: string[] = [];
+  let used = 0;
+  for (const line of lines) {
+    used += estimateTokens(line) + 1; // +1 ≈ the joining newline
+    if (used > budget) return { lines: kept, truncated: true };
+    kept.push(line);
+  }
+  return { lines: kept, truncated: false };
+}
