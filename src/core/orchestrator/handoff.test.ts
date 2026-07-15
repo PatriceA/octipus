@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { createHandoffContext, HANDOFF_EMIT_INSTRUCTION, parseStructuredHandoff } from './handoff';
+import { createHandoffContext, HANDOFF_EMIT_INSTRUCTION, parseStructuredHandoff, stripHandoffBlock } from './handoff';
 
 describe('parseStructuredHandoff', () => {
   test('reads a fenced ```handoff block', () => {
@@ -51,14 +51,31 @@ describe('parseStructuredHandoff', () => {
     expect(h?.artifacts).toEqual([]);
   });
 
-  test('the emit instruction (B3) carries a block this parser accepts — drift guard', () => {
-    // The example block inside HANDOFF_EMIT_INSTRUCTION must round-trip through
-    // the parser; if the shapes ever diverge, this fails.
-    const h = parseStructuredHandoff(HANDOFF_EMIT_INSTRUCTION);
-    expect(h).not.toBeNull();
-    expect(typeof h!.completedWork).toBe('string');
-    expect(h!.instructions).toBe('explicit, actionable instruction for the next stage');
-    expect(Array.isArray(h!.decisions)).toBe(true);
+  test('the emit instruction (B3) is NOT itself a parseable block — anti-echo', () => {
+    // A model that echoes the instruction verbatim must NOT produce a handoff:
+    // the instruction describes the block as a field list, embedding no literal
+    // ```handoff fence, so echoing it yields nothing the parser accepts.
+    expect(parseStructuredHandoff(HANDOFF_EMIT_INSTRUCTION)).toBeNull();
+    // But it must still name every field the parser reads (drift guard).
+    for (const field of ['completedWork', 'decisions', 'artifacts', 'openQuestions', 'nextStageInstructions']) {
+      expect(HANDOFF_EMIT_INSTRUCTION).toContain(field);
+    }
+  });
+});
+
+describe('stripHandoffBlock', () => {
+  test('removes the handoff block, keeps the prose above it', () => {
+    const out = 'My report.\n\n```handoff\n{"completedWork":"x","decisions":[]}\n```';
+    expect(stripHandoffBlock(out)).toBe('My report.');
+  });
+
+  test('no-op when there is no block', () => {
+    expect(stripHandoffBlock('just prose')).toBe('just prose');
+  });
+
+  test('the stripped output no longer parses as a handoff', () => {
+    const out = 'Report.\n```handoff\n{"decisions":["a"]}\n```';
+    expect(parseStructuredHandoff(stripHandoffBlock(out))).toBeNull();
   });
 });
 

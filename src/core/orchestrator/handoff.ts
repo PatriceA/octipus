@@ -231,27 +231,37 @@ export function parseStructuredHandoff(output: string): StructuredHandoff | null
 
 /**
  * Instruction appended to every NON-final pipeline stage so it emits the
- * ```handoff block `parseStructuredHandoff` consumes (Phase B3). Kept next to
- * the parser above so the emitted shape and the parsed shape can't drift. The
- * regex extractors below stay as the loud fallback for stages (or models) that
- * don't produce the block.
+ * ```handoff block `parseStructuredHandoff` consumes (Phase B3). The regex
+ * extractors below stay as the loud fallback for stages (or models) that don't
+ * produce the block.
+ *
+ * Deliberately describes the block as a FIELD LIST rather than embedding a
+ * literal ```handoff example: an embedded example is itself a valid handoff, so
+ * a weak model echoing the instruction verbatim would emit parseable placeholder
+ * data. With no literal fence here, echoing the instruction yields nothing the
+ * parser accepts — only a stage that actually authors its own block succeeds.
  */
 export const HANDOFF_EMIT_INSTRUCTION = `
 
 ---
-PIPELINE HANDOFF — after your normal report above, append a machine-readable handoff for the next stage as a fenced code block tagged \`handoff\` containing ONLY this JSON (no prose inside the fence):
+PIPELINE HANDOFF — after your normal report above, append a fenced code block tagged \`handoff\` (open the fence with three backticks immediately followed by the word handoff) containing ONLY a JSON object with YOUR real values for these fields:
+- completedWork (string): 1-3 sentence summary of what THIS stage produced
+- decisions (string[]): key decisions the next stage must respect
+- artifacts (string[]): file paths / URLs you created or changed
+- openQuestions (string[]): anything unresolved the next stage should address
+- nextStageInstructions (string): explicit, actionable instruction for the next stage
 
-\`\`\`handoff
-{
-  "completedWork": "1-3 sentence summary of what THIS stage produced",
-  "decisions": ["a key decision the next stage must respect"],
-  "artifacts": ["a file path / URL you created or changed"],
-  "openQuestions": ["anything unresolved the next stage should address"],
-  "nextStageInstructions": "explicit, actionable instruction for the next stage"
+Use [] for any list with nothing to report. Emit the block exactly once — do not copy these field descriptions. It is internal pipeline data (stripped before the user sees it); keep your prose report above it.`;
+
+/**
+ * Remove the machine-readable ```handoff block from a stage's output once the
+ * handoff chain has been parsed from it — so the block (internal pipeline data)
+ * is never persisted, shown to the user, or carried into the next stage's prose
+ * context. Matches the same fence `parseStructuredHandoff` consumes.
+ */
+export function stripHandoffBlock(output: string): string {
+  return output.replace(/```handoff\s*\n?[\s\S]*?\n?```/g, '').replace(/\n{3,}/g, '\n\n').trimEnd();
 }
-\`\`\`
-
-Use [] for any field with nothing to report. The block is DATA for the pipeline (not shown to the user) — keep your normal prose report above it.`;
 
 // ── Internal extraction helpers ──────────────────────────────────
 
