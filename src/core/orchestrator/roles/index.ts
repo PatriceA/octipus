@@ -82,11 +82,19 @@ export function loadRoles(): Record<AgentRole, RoleConfig> {
     }
 
     // Optional dense small-model variant (Phase C). Absent for roles that
-    // haven't been given one yet — those keep using the full prompt.
+    // haven't been given one yet — those keep using the full prompt. A missing
+    // file is fine (ENOENT → undefined); any OTHER read error (bad perms,
+    // decode) throws like the full-prompt read, so a broken lite variant is
+    // never silently ignored. A blank/whitespace-only file is treated as absent
+    // so it can't replace the role prompt with a bare preamble.
     let litePrompt: string | undefined;
     try {
-      litePrompt = readFileSync(resolve(dir, 'prompt.lite.md'), 'utf-8');
-    } catch {
+      const raw = readFileSync(resolve(dir, 'prompt.lite.md'), 'utf-8');
+      litePrompt = raw.trim() ? raw : undefined;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw new Error(`Failed to read lite prompt at ${resolve(dir, 'prompt.lite.md')}: ${(err as Error).message}`);
+      }
       litePrompt = undefined;
     }
 

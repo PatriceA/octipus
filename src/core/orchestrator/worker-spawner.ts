@@ -477,6 +477,17 @@ export async function spawnWorker(
     return { error: 'No model configured. Please add one in the Models page.' };
   }
 
+  // `isSmall` above was derived from the topic model (routing.model), but the
+  // worker actually runs on finalModel — an override or expert modelPreference
+  // can pin a different-sized model. Re-derive smallness against finalModel so
+  // the lite prompt (Phase C) and tool-discovery path both key off the model
+  // that will actually run. Reused by the tool block below (avoids a 2nd lookup).
+  const finalModelEntry = await getModelRegistry().getModelByModelId(finalModel);
+  const finalIsSmall = isSmallModel(
+    { modelId: finalModel, metadata: finalModelEntry?.metadata },
+    orchCfg.routerSmallModelMaxParams,
+  );
+
   // Small-tier worker: cap the tool surface. Role tool lists are
   // priority-ordered so the core tools survive; the long tail (and MCP
   // meta-tools / connector handlers appended above) is dropped. Skipped for
@@ -494,9 +505,10 @@ export async function spawnWorker(
   // every turn by the date/memory/git blocks. SECURITY_PREAMBLE stays first (it
   // heads `base`); all user/session-scoped data lands in `volatile`, after any
   // cache breakpoint (security rule 4).
-  // Small models get the dense lite role prompt when one exists (Phase C).
+  // Small models get the dense lite role prompt when one exists (Phase C),
+  // keyed off finalModel (the model that actually runs), not the topic model.
   // A custom expert's own prompt (expertPrompt) or an explicit override wins.
-  const roleTemplate = (isSmall && roleConfig.liteSystemPromptTemplate) || roleConfig.systemPromptTemplate;
+  const roleTemplate = (finalIsSmall && roleConfig.liteSystemPromptTemplate) || roleConfig.systemPromptTemplate;
   const base = overrides?.systemPrompt || expertPrompt || roleTemplate;
   const staticParts: string[] = [base];
   const semiStaticParts: string[] = [];
@@ -795,15 +807,8 @@ Use these MCP tools when the task benefits from them — especially for people-r
   let workerTools = roleTools;
   if (!isSmall && roleConfig.coreToolIds !== undefined) {
     try {
-      const finalModelEntry = await getModelRegistry().getModelByModelId(finalModel);
-      // `isSmall` above was derived from the topic model (routing.model). An
-      // expert modelPreference can pin a *different* model, so re-check size
-      // against the actual finalModel — a small expert-pinned Ollama model must
-      // not be put on the discovery path.
-      const finalIsSmall = isSmallModel(
-        { modelId: finalModel, metadata: finalModelEntry?.metadata },
-        orchCfg.routerSmallModelMaxParams,
-      );
+      // finalIsSmall / finalModelEntry hoisted above (re-derived against the
+      // actual finalModel, which an expert modelPreference can pin small).
       if (!finalIsSmall && finalModelEntry?.provider === 'ollama' && finalModelEntry.supportsTools) {
         const { splitRoleTools } = await import('./tool-split');
         const { buildToolDiscoveryHandlers } = await import('@/tools/tool-discovery');
