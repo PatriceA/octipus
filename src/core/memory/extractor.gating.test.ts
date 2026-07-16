@@ -13,20 +13,27 @@ import { getLiteLLMClient } from '@/models/litellm-client';
  * explicit guard. See docs/QA.md §9.13.
  */
 describe('memory.extractor — memory_extraction topic gating', () => {
-  const registry = getModelRegistry();
-  const client = getLiteLLMClient();
-  const origGetModelForTopic = registry.getModelForTopic;
-  const origComplete = client.complete;
-
+  // Capture + restore the singletons PER TEST, not at module-load time: another
+  // test file can swap the litellm-client singleton (resetLiteLLMClient) between
+  // this module loading and these tests running, which would leave the patch on
+  // a stale instance and make the gate flaky under full-suite ordering.
+  let restore: (() => void)[] = [];
   afterEach(() => {
-    registry.getModelForTopic = origGetModelForTopic;
-    client.complete = origComplete;
+    for (const r of restore) r();
+    restore = [];
   });
+  function patch<T, K extends keyof T>(obj: T, key: K, value: T[K]) {
+    const orig = obj[key];
+    obj[key] = value;
+    restore.push(() => { obj[key] = orig; });
+  }
 
   test('no model bound to memory_extraction → returns [] and never calls the LLM', async () => {
+    const registry = getModelRegistry();
+    const client = getLiteLLMClient();
     const completeSpy = mock(async () => ({ content: '{"facts":[]}' }));
-    registry.getModelForTopic = mock(async () => null) as unknown as typeof registry.getModelForTopic;
-    client.complete = completeSpy as unknown as typeof client.complete;
+    patch(registry, 'getModelForTopic', mock(async () => null) as unknown as typeof registry.getModelForTopic);
+    patch(client, 'complete', completeSpy as unknown as typeof client.complete);
 
     const facts = await extractFacts({
       userMessage: 'I prefer tabs over spaces and I work mostly in TypeScript',
@@ -38,8 +45,9 @@ describe('memory.extractor — memory_extraction topic gating', () => {
   });
 
   test('first-person heuristic fails → returns [] before any model lookup', async () => {
+    const registry = getModelRegistry();
     const topicSpy = mock(async () => null);
-    registry.getModelForTopic = topicSpy as unknown as typeof registry.getModelForTopic;
+    patch(registry, 'getModelForTopic', topicSpy as unknown as typeof registry.getModelForTopic);
 
     const facts = await extractFacts({ userMessage: 'what time is it?', userId: 'user-1' });
 

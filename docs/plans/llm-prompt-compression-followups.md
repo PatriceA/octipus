@@ -150,3 +150,32 @@ Independent; rough value/effort order:
 
 Every item that changes a prompt or an output contract records before/after
 token numbers against the Phase 1 baseline and appends them here.
+
+---
+
+## Status — all items implemented (one PR + code review each)
+
+| Item | PR | Notes |
+|------|----|-------|
+| **D** — per-section token budgets | #227 | `truncateLinesToTokens` bounds the expert index + repo suite (whole-line, keeps ≥1). Not eval-gated. |
+| **A1** — cache_control pass-through | #228 | Shared `prompt-cache.ts` (`splitVolatileSystem`, `isAnthropicFamily`, `applyAnthropicCacheControl`); wired into LiteLLM + OpenRouter. |
+| **B3** — pipeline handoff emit | #229 | `HANDOFF_EMIT_INSTRUCTION` injected at runtime for non-final stages; block stripped from persisted output. |
+| **B1** — schema enforcement | #230 | `deriveSchemaScorer` → shape gate (valid-JSON object + `required` keys) at the scorer gate; shape=json only; fence-tolerant. |
+| **B2** — QA JSON verdict | #231 | `QA_VERDICT_JSON_INSTRUCTION` for `qa_validation` stages (incl. retries); `parseQAResult` scans all fences. `parseProseVerdict` kept. |
+| **C** — dense per-role prompts | #232 | `prompt.lite.md` for all 16 roles; selected on the small-model path keyed off finalModel. |
+| **A2** — native /v1/messages | #233 | Opt-in (`ANTHROPIC_NATIVE_MESSAGES=1`), default off; reuses the compat native transport; `classifyError(…, 'anthropic')`. |
+
+## Remaining (yours — needs eval / live models / funding)
+
+**Register + fund (nothing exercises A1/A2 live yet):**
+- **A1:** register an Anthropic-family model on the `litellm` or `openrouter` provider (e.g. `anthropic/claude-sonnet-4-6`). Acceptance: ≥60% cached input tokens from turn 2.
+- **A2:** set `ANTHROPIC_NATIVE_MESSAGES=1` **and** register a model on the `anthropic` provider (none today; needs `ANTHROPIC_API_KEY`/vault). A/B failover parity (injected 429/500/timeout → same `ClassifiedError`) + cache hits before flipping the default.
+
+**Run `bun run eval` + red-team (CI-gated prompt/contract changes):**
+- **B1, B2, B3:** confirm no quality/red-team regression. After eval shows B2's JSON path fires on 100% of QA stages, delete `parseProseVerdict`.
+- **C — per role:** A/B each of the 16 dense variants; ship only equal-or-better ones. Provisional until then (blast radius = small models only).
+
+**Deferred (documented in code):**
+- B1 deep/nested schema validation (currently shallow).
+- A2 `responseFormat` on native (Anthropic native has no JSON mode).
+- Provider-side `json_schema` responseFormat surface (only if provider-enforced schema is wanted over B1's in-app validation).
