@@ -4,7 +4,7 @@ import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { logger } from '../utils/logger';
-import { FrameAccumulator } from './audio-codec';
+import { FrameAccumulator, StreamingResampler } from './audio-codec';
 import { resolveWhisperBinary, whisperSpawnEnv } from './whisper';
 
 /** A unique temp path in the OS temp dir (cross-platform; collision-free). */
@@ -341,6 +341,12 @@ interface RealtimeWsProtocol {
   onOpen?: (ws: WebSocket) => void;
   /** The append-audio frame for a base64 PCM chunk. */
   appendMessage: (base64: string) => unknown;
+  /**
+   * Optional per-chunk PCM transform applied before base64 (e.g. resample the
+   * 16 kHz s16le input to a rate the provider demands). Stateful transforms
+   * (a streaming resampler) must be scoped to one streamTranscribe call.
+   */
+  transformPcm?: (pcm: Uint8Array) => Uint8Array;
   /** Frames sent after the input stream ends (flush/end, or commit). */
   finalMessages: unknown[];
   /** Delta text to yield for this event, or null if it isn't a delta. */
@@ -410,7 +416,8 @@ async function* streamRealtimeWs(
     // several chunks — accumulate before deciding whether to strip.
     let preamble: Uint8Array | null = new Uint8Array(0);
     const send = (pcm: Uint8Array) => {
-      if (pcm.length) ws.send(JSON.stringify(protocol.appendMessage(Buffer.from(pcm).toString('base64'))));
+      const out = protocol.transformPcm ? protocol.transformPcm(pcm) : pcm;
+      if (out.length) ws.send(JSON.stringify(protocol.appendMessage(Buffer.from(out).toString('base64'))));
     };
     try {
       while (true) {
@@ -556,6 +563,21 @@ export class MistralSTTEngine extends EventEmitter implements STTEngine {
 }
 
 const OPENAI_STT_REALTIME_MODEL = 'gpt-4o-transcribe';
+/** OpenAI realtime rejects input below 24 kHz; we upsample our 16 kHz PCM to this. */
+const OPENAI_REALTIME_RATE = 24000;
+
+/**
+ * Resample a frame of s16le PCM bytes through a streaming resampler and return
+ * s16le bytes. The host is little-endian (x86/arm), matching Int16Array, so we
+ * reinterpret bytes as samples directly; a fresh slice keeps 2-byte alignment.
+ */
+export function pcm16leResample(pcm: Uint8Array, resampler: StreamingResampler): Uint8Array {
+  const evenLen = pcm.byteLength & ~1; // drop a dangling odd byte, if any
+  if (!evenLen) return new Uint8Array(0);
+  const samples = new Int16Array(pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + evenLen));
+  const out = resampler.push(samples);
+  return new Uint8Array(out.buffer, out.byteOffset, out.byteLength);
+}
 
 /**
  * OpenAI realtime speech-to-text over `wss://api.openai.com/v1/realtime?intent=transcription`.
@@ -617,6 +639,9 @@ export class OpenAIRealtimeSTTEngine extends EventEmitter implements STTEngine {
   async *streamTranscribe(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
     const model = this.model;
     const language = this.options.language;
+    // OpenAI's realtime input requires >= 24 kHz; our pipeline is 16 kHz, so
+    // upsample each frame with a streaming (click-free across frames) resampler.
+    const resampler = new StreamingResampler(REALTIME_SAMPLE_RATE, OPENAI_REALTIME_RATE);
     yield* streamRealtimeWs({
       url: 'wss://api.openai.com/v1/realtime?intent=transcription',
       // GA API: the old `OpenAI-Beta: realtime=v1` header is gone (sending it now
@@ -624,7 +649,7 @@ export class OpenAIRealtimeSTTEngine extends EventEmitter implements STTEngine {
       headers: { Authorization: `Bearer ${await this.apiKey()}` },
       name: 'OpenAI',
       // GA `session.update`: config moved under session.audio.input. Select the
-      // transcription model + 16 kHz PCM. server_vad is essential here: the
+      // transcription model + 24 kHz PCM. server_vad is essential here: the
       // client streams continuously and never sends a manual commit, so OpenAI
       // must segment + transcribe on its own VAD (matching Voxtral's continuous
       // deltas); with turn_detection off nothing is ever transcribed.
@@ -634,13 +659,14 @@ export class OpenAIRealtimeSTTEngine extends EventEmitter implements STTEngine {
           type: 'transcription',
           audio: {
             input: {
-              format: { type: 'audio/pcm', rate: REALTIME_SAMPLE_RATE },
+              format: { type: 'audio/pcm', rate: OPENAI_REALTIME_RATE },
               transcription: { model, language },
               turn_detection: { type: 'server_vad' },
             },
           },
         },
       })),
+      transformPcm: (pcm) => pcm16leResample(pcm, resampler),
       appendMessage: (audio) => ({ type: 'input_audio_buffer.append', audio }),
       // server_vad auto-commits each detected utterance — no manual commit.
       finalMessages: [],
