@@ -443,6 +443,7 @@ export class PipelineManager {
                 });
 
                 qaResult = this.parseQAResult(previousOutput);
+                if (qaResult) void this.recordQaEvidence(sessionId, pipeline.id, stage.name, qaResult);
               } catch (retryError) {
                 const errorMsg = (retryError as Error).message;
                 coreLogger.error({ error: retryError, pipelineId: pipeline.id, attempt }, 'QA retry stage failed');
@@ -848,6 +849,7 @@ export class PipelineManager {
               });
 
               qaResult = this.parseQAResult(previousOutput);
+              if (qaResult) void this.recordQaEvidence(sessionId, pipeline.id, stage.name, qaResult);
             }
 
             // Escalate if max retries exhausted
