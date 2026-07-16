@@ -32,6 +32,15 @@ directory, a URL, or a recent workflow.
 - Skill usage tracker (`src/skills/usage-tracker.ts`) — the feedback signal
   for the self-improvement half.
 
+**Blocker to resolve in M1 (found while reading the code).** The existing
+`POST /skills/proposals/:id/approve` route promotes a proposal into a **custom
+expert** (`experts` table), *not* a skill. Distilled *procedures* must become
+skills (DB skill / `SKILL.md` via `external-loader`); only distilled
+*specialists* should become experts. Add a `kind: 'skill' | 'expert'`
+discriminator (+ optional `sourceRef`) to the `skill_proposals` schema and
+branch the approve route on it — otherwise distilled procedures land in the
+wrong table. Small migration; do it first in M1.
+
 **Plan (4 milestones, each shippable alone)**
 1. **`skill_distill` built-in tool** — `src/tools/skill-distill/index.ts`
    extending `BaseTool` (auto-discovered). Input: `{ source: 'conversation' |
