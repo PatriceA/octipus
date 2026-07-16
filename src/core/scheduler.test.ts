@@ -147,6 +147,25 @@ describe.skipIf(!isIntegration)('Scheduler (Integration)', () => {
     expect(hb!.ageMs).toBeLessThan(30_000);
   });
 
+  test('start()/stop(): the worker loop drains a scheduled task via its handler', async () => {
+    let ran = false;
+    scheduler.registerHandler('lifecycle-test', async () => {
+      ran = true;
+      return 'ok';
+    });
+    await scheduler.schedule('agent-1', 'lifecycle-test', {});
+
+    scheduler.start(1);
+    // Poll until the handler runs (loop drains ~every 100ms) or time out.
+    const deadline = Date.now() + 3000;
+    while (!ran && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    await scheduler.stop();
+
+    expect(ran).toBe(true);
+  });
+
   test('clearQueue empties everything', async () => {
     await scheduler.schedule('agent-1', 'test', {});
     await scheduler.schedule('agent-1', 'test', {});

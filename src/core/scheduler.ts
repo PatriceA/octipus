@@ -171,6 +171,8 @@ export class Scheduler {
   private processing: Map<string, ScheduledTask> = new Map();
   private taskHandlers: Map<string, (task: ScheduledTask) => Promise<unknown>> = new Map();
   private lastHeartbeatWrite = 0;
+  private running = false;
+  private workerLoops: Promise<void>[] = [];
 
   constructor() {
     this.queue = new RedisQueue(TASK_QUEUE);
@@ -380,23 +382,48 @@ export class Scheduler {
   }
 
   /**
-   * Process tasks in the queue
+   * Start draining the queue with `concurrency` worker loops. Non-blocking and
+   * idempotent — call once at boot. Without this, `schedule()` fills the Redis
+   * queue but nothing ever runs the tasks (e.g. artifact cleanup). Stop it with
+   * `stop()` during graceful shutdown.
+   */
+  start(concurrency: number = 5): void {
+    if (this.running) return;
+    this.running = true;
+    this.workerLoops = [];
+    for (let i = 0; i < concurrency; i++) {
+      this.workerLoops.push(this.worker());
+    }
+    coreLogger.info({ concurrency }, 'Scheduler worker loop started');
+  }
+
+  /**
+   * Signal the worker loops to exit and await their in-flight iteration. The
+   * loops check `running` each pass and the idle wait is 100ms, so this resolves
+   * quickly. Idempotent.
+   */
+  async stop(): Promise<void> {
+    if (!this.running) return;
+    this.running = false;
+    await Promise.allSettled(this.workerLoops);
+    this.workerLoops = [];
+    coreLogger.info('Scheduler worker loop stopped');
+  }
+
+  /**
+   * Process tasks in the queue until `stop()` is called. Blocking form of
+   * `start()` — mainly for tests/scripts that want to await the loops.
    */
   async processQueue(concurrency: number = 5): Promise<void> {
-    const workers: Promise<void>[] = [];
-
-    for (let i = 0; i < concurrency; i++) {
-      workers.push(this.worker());
-    }
-
-    await Promise.all(workers);
+    this.start(concurrency);
+    await Promise.all(this.workerLoops);
   }
 
   /**
    * Single worker that processes tasks
    */
   private async worker(): Promise<void> {
-    while (true) {
+    while (this.running) {
       await this.maybeWriteHeartbeat();
       const task = await this.getNextTask();
 
@@ -416,8 +443,7 @@ export class Scheduler {
       // Wake-gate: evaluate just before execution.
       if (task.wakeGate) {
         const gateResult = await evaluateWakeGate(task.wakeGate);
-        task.consecutiveDriftSkips ??= 0;
-        task.maxDriftSkips ??= DEFAULT_MAX_DRIFT_SKIPS;
+        // getNextTask() already defaulted these on any task it returns.
         const { decision, nextDriftSkips } = decideWakeGate(
           gateResult,
           task.consecutiveDriftSkips,
