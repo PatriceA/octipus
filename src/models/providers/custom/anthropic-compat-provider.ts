@@ -151,50 +151,60 @@ export class CustomAnthropicCompatProvider extends BaseCustomProvider implements
   }
 
   private parseResponse(data: AnthropicResponse, modelId: string, latencyMs: number): CompletionResult {
-    const blocks = data.content || [];
-    const textParts: string[] = [];
-    const toolCalls: ToolCall[] = [];
-
-    for (const block of blocks) {
-      if (block.type === 'text' && typeof block.text === 'string') {
-        textParts.push(block.text);
-      } else if (block.type === 'tool_use' && block.name) {
-        const input = block.input && typeof block.input === 'object' && !Array.isArray(block.input)
-          ? (block.input as Record<string, unknown>)
-          : {};
-        toolCalls.push({
-          id: block.id || `call_${toolCalls.length}`,
-          name: block.name,
-          arguments: input,
-        });
-      }
-    }
-
-    const cacheRead = data.usage?.cache_read_input_tokens;
-    const cacheCreate = data.usage?.cache_creation_input_tokens;
-    // Anthropic reports input_tokens EXCLUSIVE of cache reads/creation. Fold
-    // them in so inputTokens is the grand total (OpenAI convention) and
-    // cacheReadTokens/cacheCreationTokens stay subsets — the shape cost-tracker
-    // and telemetry expect across all providers.
-    const freshInput = data.usage?.input_tokens || 0;
-    const inputTokens = freshInput + (cacheRead || 0) + (cacheCreate || 0);
-    const result: CompletionResult = {
-      content: textParts.join(''),
-      finishReason: mapStopReason(data.stop_reason),
-      usage: {
-        inputTokens,
-        outputTokens: data.usage?.output_tokens || 0,
-        totalTokens: inputTokens + (data.usage?.output_tokens || 0),
-        ...(cacheRead != null ? { cacheReadTokens: cacheRead } : {}),
-        ...(cacheCreate != null ? { cacheCreationTokens: cacheCreate } : {}),
-      },
-      model: data.model || modelId,
-      latencyMs,
-    };
-
-    if (toolCalls.length) result.toolCalls = toolCalls;
-    return result;
+    return parseAnthropicResponse(data, modelId, latencyMs);
   }
+}
+
+/**
+ * Parse an Anthropic `/v1/messages` response into our CompletionResult. Pure +
+ * exported so the native path of the main `anthropic-provider` (Phase A2) shares
+ * exactly this decoding — including the cache-token folding — instead of
+ * re-implementing it and drifting.
+ */
+export function parseAnthropicResponse(data: AnthropicResponse, modelId: string, latencyMs: number): CompletionResult {
+  const blocks = data.content || [];
+  const textParts: string[] = [];
+  const toolCalls: ToolCall[] = [];
+
+  for (const block of blocks) {
+    if (block.type === 'text' && typeof block.text === 'string') {
+      textParts.push(block.text);
+    } else if (block.type === 'tool_use' && block.name) {
+      const input = block.input && typeof block.input === 'object' && !Array.isArray(block.input)
+        ? (block.input as Record<string, unknown>)
+        : {};
+      toolCalls.push({
+        id: block.id || `call_${toolCalls.length}`,
+        name: block.name,
+        arguments: input,
+      });
+    }
+  }
+
+  const cacheRead = data.usage?.cache_read_input_tokens;
+  const cacheCreate = data.usage?.cache_creation_input_tokens;
+  // Anthropic reports input_tokens EXCLUSIVE of cache reads/creation. Fold
+  // them in so inputTokens is the grand total (OpenAI convention) and
+  // cacheReadTokens/cacheCreationTokens stay subsets — the shape cost-tracker
+  // and telemetry expect across all providers.
+  const freshInput = data.usage?.input_tokens || 0;
+  const inputTokens = freshInput + (cacheRead || 0) + (cacheCreate || 0);
+  const result: CompletionResult = {
+    content: textParts.join(''),
+    finishReason: mapStopReason(data.stop_reason),
+    usage: {
+      inputTokens,
+      outputTokens: data.usage?.output_tokens || 0,
+      totalTokens: inputTokens + (data.usage?.output_tokens || 0),
+      ...(cacheRead != null ? { cacheReadTokens: cacheRead } : {}),
+      ...(cacheCreate != null ? { cacheCreationTokens: cacheCreate } : {}),
+    },
+    model: data.model || modelId,
+    latencyMs,
+  };
+
+  if (toolCalls.length) result.toolCalls = toolCalls;
+  return result;
 }
 
 // ── Request conversion (OpenAI-shaped AgentMessage → Anthropic wire) ──
@@ -387,7 +397,7 @@ function extractErrorMessage(errText: string): string {
  * Parse an Anthropic Messages SSE stream. Emits text deltas as `content` and
  * accumulates `tool_use` blocks, surfacing their partial JSON as toolCallDelta.
  */
-async function* parseAnthropicSseStream(body: ReadableStream<Uint8Array>, providerName: string, touch?: () => void): AsyncGenerator<StreamChunk> {
+export async function* parseAnthropicSseStream(body: ReadableStream<Uint8Array>, providerName: string, touch?: () => void): AsyncGenerator<StreamChunk> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
