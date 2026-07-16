@@ -81,11 +81,21 @@ export function loadRoles(): Record<AgentRole, RoleConfig> {
       throw new Error(`Failed to read prompt at ${promptPath}: ${(err as Error).message}`);
     }
 
+    // Optional dense small-model variant (Phase C). Absent for roles that
+    // haven't been given one yet — those keep using the full prompt.
+    let litePrompt: string | undefined;
+    try {
+      litePrompt = readFileSync(resolve(dir, 'prompt.lite.md'), 'utf-8');
+    } catch {
+      litePrompt = undefined;
+    }
+
     roles[meta.role] = {
       role: meta.role,
       toolIds: meta.toolIds,
       defaultTopic: meta.defaultTopic,
       systemPromptTemplate: prompt,
+      liteSystemPromptTemplate: litePrompt,
       coreToolIds: meta.coreToolIds,
     };
   }

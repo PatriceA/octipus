@@ -141,7 +141,10 @@ export async function handleExpertMessage(
     // baked in) and `roleConfig.systemPromptTemplate` (always prepended by
     // getRoleConfig) can carry it, which would duplicate the block above.
     expertPrompt += `\nYou are **${expert.name}**${expert.description ? ` — ${expert.description}` : ''}.\n\n`;
-    expertPrompt += stripSecurityPreamble(expert.systemPrompt || roleConfig.systemPromptTemplate);
+    // Small models get the dense lite role prompt when one exists (Phase C);
+    // a custom expert's own systemPrompt still wins over the role default.
+    const roleTemplate = (isSmall && roleConfig.liteSystemPromptTemplate) || roleConfig.systemPromptTemplate;
+    expertPrompt += stripSecurityPreamble(expert.systemPrompt || roleTemplate);
 
     // Critical rules
     expertPrompt += formatCriticalRules((expert.criticalRules as string[]) || []);
@@ -491,7 +494,10 @@ export async function spawnWorker(
   // every turn by the date/memory/git blocks. SECURITY_PREAMBLE stays first (it
   // heads `base`); all user/session-scoped data lands in `volatile`, after any
   // cache breakpoint (security rule 4).
-  const base = overrides?.systemPrompt || expertPrompt || roleConfig.systemPromptTemplate;
+  // Small models get the dense lite role prompt when one exists (Phase C).
+  // A custom expert's own prompt (expertPrompt) or an explicit override wins.
+  const roleTemplate = (isSmall && roleConfig.liteSystemPromptTemplate) || roleConfig.systemPromptTemplate;
+  const base = overrides?.systemPrompt || expertPrompt || roleTemplate;
   const staticParts: string[] = [base];
   const semiStaticParts: string[] = [];
   const volatileParts: string[] = [];
