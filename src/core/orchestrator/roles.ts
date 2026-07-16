@@ -64,6 +64,11 @@ export function getRoleConfig(role: AgentRole): RoleConfig {
   return {
     ...config,
     systemPromptTemplate: SECURITY_PREAMBLE + OUTPUT_FORMATTING_RULES + config.systemPromptTemplate,
+    // Mirror the preamble treatment for the lite variant (Phase C) so callers
+    // can swap it in and strip the preamble uniformly. Undefined stays undefined.
+    liteSystemPromptTemplate: config.liteSystemPromptTemplate
+      ? SECURITY_PREAMBLE + OUTPUT_FORMATTING_RULES + config.liteSystemPromptTemplate
+      : undefined,
   };
 }
 
