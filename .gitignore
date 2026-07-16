@@ -76,3 +76,6 @@ eval/results/*.json
 
 # Test coverage output (bun writes coverage/lcov.info)
 coverage/
+
+# stray local log bundle
+logs.zip
