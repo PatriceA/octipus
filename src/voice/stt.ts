@@ -349,6 +349,14 @@ interface RealtimeWsProtocol {
   isDone: (event: Record<string, unknown>) => boolean;
   /** Error message if this event is an error frame, else null. */
   error: (event: Record<string, unknown>) => string | null;
+  /**
+   * End the generator once the input stream is exhausted (client teardown),
+   * instead of waiting for a server "done" event. Needed for engines with no
+   * session-end signal — e.g. OpenAI server_vad, which emits a per-utterance
+   * `.completed` (not a session end) so the connection must stay open across
+   * utterances and close only when the mic stops.
+   */
+  finishOnInputEnd?: boolean;
 }
 
 /**
@@ -426,12 +434,18 @@ async function* streamRealtimeWs(
     } finally {
       reader.releaseLock();
     }
-  })().catch((err: unknown) => {
-    // If the uplink dies we never send the final frames, so the server never
-    // signals done and the consumer below would await forever. Wake it and rethrow.
-    pumpError = err instanceof Error ? err : new Error(String(err));
-    push(null);
-  });
+  })()
+    .then(() => {
+      // Input exhausted (teardown). For engines with no server "done" event,
+      // this is the end signal — wake the consumer so it drains and returns.
+      if (protocol.finishOnInputEnd) push(null);
+    })
+    .catch((err: unknown) => {
+      // If the uplink dies we never send the final frames, so the server never
+      // signals done and the consumer below would await forever. Wake it and rethrow.
+      pumpError = err instanceof Error ? err : new Error(String(err));
+      push(null);
+    });
 
   try {
     while (true) {
@@ -610,8 +624,10 @@ export class OpenAIRealtimeSTTEngine extends EventEmitter implements STTEngine {
       headers: { Authorization: `Bearer ${await this.apiKey()}` },
       name: 'OpenAI',
       // GA `session.update`: config moved under session.audio.input. Select the
-      // transcription model + 16 kHz PCM; turn_detection: null → we mark the
-      // utterance boundary ourselves via commit when the input stream ends.
+      // transcription model + 16 kHz PCM. server_vad is essential here: the
+      // client streams continuously and never sends a manual commit, so OpenAI
+      // must segment + transcribe on its own VAD (matching Voxtral's continuous
+      // deltas); with turn_detection off nothing is ever transcribed.
       onOpen: (ws) => ws.send(JSON.stringify({
         type: 'session.update',
         session: {
@@ -620,15 +636,20 @@ export class OpenAIRealtimeSTTEngine extends EventEmitter implements STTEngine {
             input: {
               format: { type: 'audio/pcm', rate: REALTIME_SAMPLE_RATE },
               transcription: { model, language },
-              turn_detection: null,
+              turn_detection: { type: 'server_vad' },
             },
           },
         },
       })),
       appendMessage: (audio) => ({ type: 'input_audio_buffer.append', audio }),
-      finalMessages: [{ type: 'input_audio_buffer.commit' }],
+      // server_vad auto-commits each detected utterance — no manual commit.
+      finalMessages: [],
       delta: (e) => (e.type === 'conversation.item.input_audio_transcription.delta' ? String(e.delta ?? '') : null),
-      isDone: (e) => e.type === 'conversation.item.input_audio_transcription.completed',
+      // `.completed` is a per-utterance boundary, NOT the end of the session —
+      // keep the connection open across utterances (the client never reconnects)
+      // and end only when the mic stops (finishOnInputEnd).
+      isDone: () => false,
+      finishOnInputEnd: true,
       error: (e) => (e.type === 'error' ? (e.error as { message?: string } | undefined)?.message || 'unknown error' : null),
     }, stream);
   }
