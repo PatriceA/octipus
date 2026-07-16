@@ -69,6 +69,7 @@ import { taskRoutes } from './routes/tasks';
 import { teamsWebhookRoutes } from './routes/teams-webhook';
 import { toolRoutes } from './routes/tools';
 import { trajectoryRoutes } from './routes/trajectories';
+import { verificationRoutes } from './routes/verification';
 import { vaultRoutes } from './routes/vault';
 import { voiceRoutes } from './routes/voice';
 import { webhookIncomingRoutes } from './routes/webhook-incoming';
@@ -383,6 +384,7 @@ export function createServer() {
         .use(deviceRoutes)
         .use(gatewayRoutes)
         .use(trajectoryRoutes)
+        .use(verificationRoutes)
         .use(skillProposalRoutes)
         .use(swarmRoutes)
     );

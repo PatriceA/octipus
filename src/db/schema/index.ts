@@ -49,4 +49,5 @@ export * from './trajectory-runs';
 export * from './user-quotas';
 export * from './users';
 export * from './vault';
+export * from './verification-evidence';
 export * from './workspace-repos';
