@@ -110,6 +110,7 @@ export const RETIRED_TOPIC_ALIASES: Readonly<Record<string, string>> = {
   evaluation: 'background',
   summarization: 'background',
   tool_translation: 'background',
+  skill_distillation: 'background',
 };
 
 /**
