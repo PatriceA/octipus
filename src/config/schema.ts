@@ -146,11 +146,21 @@ export const voiceConfigSchema = z.object({
   sttEnabled: z.boolean().default(false),
   ttsEnabled: z.boolean().default(false),
   /**
-   * Which TTS engine serves /api/voice/speak. Defaults to cloud (mistral/Voxtral)
-   * so voice-out works with no host setup; piper is the local opt-in (needs a
-   * binary + .onnx voice). Non-piper engines need no local model file.
+   * Which engine transcribes speech on the realtime `/voice` socket.
+   * `auto` picks the best available (cloud realtime if a key is set, else local
+   * whisper); the others force a specific engine. `mistral` = Voxtral cloud,
+   * `openai` = gpt-4o-transcribe, `whisper` = local whisper.cpp (offline).
    */
-  ttsProvider: z.enum(['piper', 'edge', 'coqui', 'mistral']).default('mistral'),
+  sttProvider: z.enum(['auto', 'whisper', 'mistral', 'openai']).default('auto').catch('auto'),
+  /**
+   * Which TTS engine serves /api/voice/speak. Defaults to cloud (mistral/Voxtral)
+   * so voice-out works with no host setup. `openai` = gpt-4o-mini-tts (cloud);
+   * `piper` is the local opt-in (needs a binary + .onnx voice).
+   *
+   * `.catch` coerces a now-removed value (an old `edge`/`coqui` row persisted in
+   * the settings DB) back to the default instead of failing the whole config load.
+   */
+  ttsProvider: z.enum(['mistral', 'openai', 'piper']).default('mistral').catch('mistral'),
   whisperModelPath: z.string().optional(),
   piperModelPath: z.string().optional(),
   wakeWord: z.string().optional(),

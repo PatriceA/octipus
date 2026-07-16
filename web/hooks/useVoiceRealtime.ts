@@ -31,8 +31,12 @@ export type RealtimeState = 'idle' | 'connecting' | 'listening' | 'thinking' | '
 
 interface UseVoiceRealtimeArgs {
   enabled: boolean;
-  /** 'whisper' (local, default) or 'mistral' (cloud low-latency, needs key). */
-  engine?: 'whisper' | 'mistral';
+  /**
+   * Force a transcription engine: 'whisper' (local), 'mistral' (Voxtral cloud),
+   * or 'openai'. Omit or 'auto' to let the server's `voice.sttProvider` setting
+   * decide.
+   */
+  engine?: 'auto' | 'whisper' | 'mistral' | 'openai';
   /** True while a chat turn is in flight. On its falling edge, if still
    * 'thinking' (no reply spoken — e.g. an error), the mic is unstuck to
    * 'listening'. NOT the speak trigger; that's the page. */
@@ -81,7 +85,7 @@ class PCMWorklet extends AudioWorkletProcessor {
 registerProcessor('pcm-worklet', PCMWorklet);
 `;
 
-export function useVoiceRealtime({ enabled, engine = 'whisper', isTurnActive, sendTranscript }: UseVoiceRealtimeArgs) {
+export function useVoiceRealtime({ enabled, engine = 'auto', isTurnActive, sendTranscript }: UseVoiceRealtimeArgs) {
   const [state, setState] = useState<RealtimeState>('idle');
   const [error, setError] = useState<string | null>(null);
   const [partial, setPartial] = useState(''); // live in-progress utterance text
@@ -320,7 +324,7 @@ export function useVoiceRealtime({ enabled, engine = 'whisper', isTurnActive, se
         setPhase('connecting');
 
         // WebSocket first, so we're ready to stream the moment speech starts.
-        ws = await createAuthenticatedWebSocket('/voice', engine === 'mistral' ? { engine } : undefined);
+        ws = await createAuthenticatedWebSocket('/voice', engine && engine !== 'auto' ? { engine } : undefined);
         ws.binaryType = 'arraybuffer';
         ws.onmessage = (e) => {
           if (cancelled) return;

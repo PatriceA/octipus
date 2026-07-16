@@ -1,5 +1,10 @@
 # Voice, end-to-end
 
+> **Status: done / superseded.** The live voice reference is now `docs/VOICE.md`
+> (source of truth). Engine set has since changed: STT = `auto | whisper | mistral
+> | openai`, TTS = `mistral | openai | piper`; `edge`/`coqui`/`faster-whisper`
+> removed.
+>
 > **Status: plan.** Audit of the whole voice surface + a phased plan to make voice a
 > first-class input/output across WebUI, channels, and TUI. Build order and engine
 > posture confirmed with user: **WebUI live voice first; local-first engines.**

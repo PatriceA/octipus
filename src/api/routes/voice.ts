@@ -20,24 +20,25 @@ const TTS_CONTENT_TYPES: Record<TtsFormat, string> = {
 
 /**
  * What each engine actually emits, regardless of the requested format. Only
- * Mistral forwards `response_format` upstream; piper/edge/coqui hardcode their
+ * Mistral & OpenAI forward `response_format` upstream; piper hardcodes its
  * output, so honouring the client's `format` there would mislabel the body.
  */
 const TTS_ENGINE_FORMAT: Record<string, TtsFormat | null> = {
   piper: 'wav',
-  edge: 'mp3',
-  coqui: 'wav',
   mistral: null, // honours the requested format
+  openai: null, // honours the requested format
 };
 
 /** Resolve real voice availability: does whisper actually run, or is a cloud key set. */
 async function resolveVoiceAvailability(config: ReturnType<typeof getConfig>) {
   const { getVoiceAvailability } = await import('@/voice/whisper');
   const { getMistralApiKey } = await import('@/models/providers/mistral-provider');
+  const { getOpenAIApiKey } = await import('@/models/providers/openai-provider');
   return getVoiceAvailability({
+    sttProvider: config.voice.sttProvider,
     ttsProvider: config.voice.ttsProvider,
     hasMistralKey: !!(await getMistralApiKey()),
-    hasOpenAIKey: !!process.env.OPENAI_API_KEY,
+    hasOpenAIKey: !!(await getOpenAIApiKey()),
     piperModelPath: config.voice.piperModelPath,
   });
 }

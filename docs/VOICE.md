@@ -9,7 +9,8 @@ Octipus includes voice capabilities at two levels:
 
 Three input pipelines, one brain, one mouth. They differ only in how audio gets
 *in* and back *out*; all transcribe at **16 kHz mono** (whisper's only input) and
-all speak back through Mistral TTS. Detail for each stage is in the sections below.
+all speak back through the configured TTS engine (Voxtral by default; also OpenAI
+or local Piper). Detail for each stage is in the sections below.
 
 **Line 1 — Turn-based web** (`useVoiceConversation.ts`): record an utterance, POST it, get one reply.
 
@@ -33,9 +34,10 @@ all speak back through Mistral TTS. Detail for each stage is in the sections bel
 🎤 mic (echoCancellation)                      AudioContext @16 kHz → AudioWorklet (Float32→Int16)
    │
    ▼  binary PCM frames (16 kHz s16, while "listening")
- /voice  WebSocket  ?engine=whisper|mistral
+ /voice  WebSocket  (engine from voice.sttProvider; ?engine= overrides)
    ├─ whisper : WhisperEngine.streamTranscribe → 2 s sliding window   (voice-ws.ts)
-   └─ mistral : MistralSTTEngine → wss Mistral realtime
+   ├─ mistral : MistralSTTEngine → wss Mistral realtime
+   └─ openai  : OpenAIRealtimeSTTEngine → wss OpenAI realtime
    │
    ▼  {type:transcript} frames (running text) → client VAD dispatches delta on silence
  sendMessage() ──▶ 🧠 ORCHESTRATOR + voice-plan-gate ──▶ chat_response
@@ -68,18 +70,22 @@ all speak back through Mistral TTS. Detail for each stage is in the sections bel
         planning turns (web) + phone reply run on the  ► voice-topic model ◄  (Gemini Flash Lite)
         heavy post-handoff work → normal routing
                         │
-        Mouth: Mistral TTS (en_paul_neutral).  STT floor: 16 kHz mono; telephony bridges 8↔16 kHz.
+        Mouth: configured TTS (Voxtral en_paul_neutral by default).  STT floor: 16 kHz mono; telephony bridges 8↔16 kHz.
 ```
 
 ## Local Voice
 
 ### Speech-to-Text (STT)
 
-| Engine | Type | Notes |
+Pick the engine in **Settings → Voice → "Which engine transcribes your speech"**
+(`voice.sttProvider`).
+
+| `voice.sttProvider` | Type | Notes |
 |--------|------|-------|
-| **Whisper.cpp** | Local | C++ Whisper — fast, private, offline |
-| **Faster-Whisper** | Local | Python + CTranslate2 — optimized |
-| **OpenAI Whisper** | Cloud | Fallback when local unavailable |
+| **auto** (default) | — | Best available: a configured cloud realtime engine, else local Whisper |
+| **whisper** | Local | whisper.cpp — offline, no key, free. Needs the model installed (`octi setup`); higher latency |
+| **mistral** (Voxtral) | Cloud | `voxtral-mini` realtime streaming. Needs a Mistral API key |
+| **openai** | Cloud | `gpt-4o-transcribe` realtime streaming. Needs an OpenAI API key |
 
 **API:** `POST /api/voice/transcribe` — send base64 audio, receive text.
 
@@ -91,11 +97,14 @@ voice.language = en
 
 ### Text-to-Speech (TTS)
 
-| Engine | Type | Notes |
+Pick the engine in **Settings → Voice → "Which engine speaks replies aloud"**
+(`voice.ttsProvider`).
+
+| `voice.ttsProvider` | Type | Notes |
 |--------|------|-------|
-| **Piper** | Local | Neural TTS — fast, high quality, offline |
-| **Edge TTS** | Cloud | Microsoft Edge — 200+ voices |
-| **Coqui** | Local | Neural TTS — multi-language |
+| **mistral** (Voxtral, default) | Cloud | `voxtral-mini-tts`. Needs a Mistral API key |
+| **openai** | Cloud | `gpt-4o-mini-tts`. Needs an OpenAI API key |
+| **piper** | Local | Neural TTS — offline, no key. Needs the Piper binary + a `.onnx` voice |
 
 ### Wake Word Detection
 
@@ -160,13 +169,19 @@ work after handoff uses normal routing. Map it on the Models/Topics page, or
 
 ### STT engine for the realtime loop
 
-The `/voice` WebSocket accepts `?engine=`:
+The engine is chosen by the `voice.sttProvider` setting (Settings → Voice). The
+`/voice` WebSocket also accepts an explicit `?engine=` override (used for
+testing); when omitted it follows the setting:
 
-- **whisper** (default) — local whisper.cpp streaming; no key, offline. Prefer
+- **auto** (default) — cloud realtime if a key is set (Voxtral, then OpenAI),
+  else local whisper.
+- **whisper** — local whisper.cpp streaming; no key, offline. Prefer
   `ggml-small.bin` (`voice.whisperModelPath`) over `base` for accuracy. Streaming
   windows must be ≥ 2 s (1 s windows return empty on the base model).
 - **mistral** — Mistral Voxtral realtime streaming STT (cloud, needs the Mistral
   key); more accurate than local small.
+- **openai** — OpenAI `gpt-4o-transcribe` realtime streaming (cloud, needs the
+  OpenAI key).
 
 ### Tuning knobs (web)
 
@@ -397,6 +412,8 @@ https://your-public-url/api/voice/webhook/twilio
 
 | Setting | Default | Description |
 |---------|---------|-------------|
+| `voice.sttProvider` | `auto` | STT engine: auto, whisper, mistral, openai |
+| `voice.ttsProvider` | `mistral` | TTS engine: mistral (Voxtral), openai, piper |
 | `voice.telephonyProvider` | `disabled` | Provider: twilio, telnyx, plivo |
 | `voice.publicUrl` | — | Webhook URL (ngrok etc.) |
 | `voice.inboundPolicy` | `disabled` | Inbound: disabled, allowlist, open |

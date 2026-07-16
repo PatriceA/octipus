@@ -14,15 +14,16 @@ import { apiLogger } from '@/utils/logger';
  * which decodes every binary frame to a string (gateway-ws.ts) — this one keeps
  * binary as PCM.
  *
- * Engine posture (local-first): whisper.cpp streaming is the default — no key,
- * runs on this box, ~windowSeconds latency. `?engine=mistral` opts into Mistral
- * Voxtral realtime (true low-latency streaming) when a key is configured.
+ * Engine selection: an explicit `?engine=` (whisper | mistral | openai) wins;
+ * otherwise `voice.sttProvider` decides. `auto` prefers a cloud realtime engine
+ * (Voxtral/OpenAI, true low-latency streaming) when a key is set, else falls
+ * back to local whisper.cpp streaming (~windowSeconds latency, no key).
  *
  * Client → server:
  *   - binary frame  → a chunk of 16 kHz mono s16le PCM
  *   - {"type":"stop"} → end of utterance; flush and finalize
  * Server → client:
- *   - {"type":"ready","engine":"whisper|mistral"}
+ *   - {"type":"ready","engine":"whisper|mistral|openai"}
  *   - {"type":"transcript","text": "<running full text>","final": false|true}
  *   - {"type":"error","message": "..."}
  */
@@ -40,35 +41,66 @@ function stateOf(ws: { data: unknown }): VoiceWsState {
   return ws.data as VoiceWsState;
 }
 
-/** Build the STT engine for this connection: whisper (default) or Mistral. */
-async function resolveEngine(engineParam: string | null): Promise<{ engine: STTEngine; name: string } | { error: string }> {
-  const config = getConfig();
-  const language = config.voice.language || 'en';
+async function mistralEngine(language: string): Promise<{ engine: STTEngine; name: string } | { error: string }> {
+  const { getMistralApiKey } = await import('@/models/providers/mistral-provider');
+  if (!(await getMistralApiKey())) return { error: 'Voxtral (Mistral) selected but no Mistral API key is configured.' };
+  const { MistralSTTEngine } = await import('@/voice/stt');
+  return { engine: new MistralSTTEngine(undefined, { language }), name: 'mistral' };
+}
 
-  if (engineParam === 'mistral') {
-    const { getMistralApiKey } = await import('@/models/providers/mistral-provider');
-    if (!(await getMistralApiKey())) return { error: 'Mistral engine requested but no Mistral API key is configured.' };
-    const { MistralSTTEngine } = await import('@/voice/stt');
-    return { engine: new MistralSTTEngine(undefined, { language }), name: 'mistral' };
-  }
+async function openaiEngine(language: string): Promise<{ engine: STTEngine; name: string } | { error: string }> {
+  const { getOpenAIApiKey } = await import('@/models/providers/openai-provider');
+  if (!(await getOpenAIApiKey())) return { error: 'OpenAI selected but no OpenAI API key is configured.' };
+  const { OpenAIRealtimeSTTEngine } = await import('@/voice/stt');
+  return { engine: new OpenAIRealtimeSTTEngine(undefined, { language }), name: 'openai' };
+}
 
-  // Default: local whisper.cpp streaming.
+async function whisperEngine(language: string): Promise<{ engine: STTEngine; name: string } | { error: string }> {
   const { whisperModelPath } = await import('@/voice/whisper');
+  const config = getConfig();
   const modelPath = config.voice.whisperModelPath || whisperModelPath();
   if (!(await Bun.file(modelPath).exists())) {
-    return { error: 'Local whisper is not installed. Run `octi setup`, or connect with ?engine=mistral.' };
+    return { error: 'Local whisper is not installed. Run `octi setup`, or pick a cloud engine in Settings → Voice.' };
   }
   const { WhisperEngine } = await import('@/voice/stt');
   return { engine: new WhisperEngine(modelPath, { language }), name: 'whisper' };
 }
 
+/**
+ * Build the STT engine for this connection. An explicit `?engine=` query param
+ * wins (whisper | mistral | openai); otherwise the configured `voice.sttProvider`
+ * decides, with `auto` preferring a cloud realtime engine (lower latency) and
+ * falling back to local whisper.
+ */
+async function resolveEngine(engineParam: string | null): Promise<{ engine: STTEngine; name: string } | { error: string }> {
+  const config = getConfig();
+  const language = config.voice.language || 'en';
+  // An explicit ?engine= wins only if it names a real engine; an unknown value
+  // (typo, stale client) falls back to the setting rather than silently routing
+  // to a cloud engine the caller never asked for.
+  const known = ['whisper', 'mistral', 'openai'];
+  const choice = engineParam && known.includes(engineParam) ? engineParam : config.voice.sttProvider || 'auto';
+
+  if (choice === 'mistral') return mistralEngine(language);
+  if (choice === 'openai') return openaiEngine(language);
+  if (choice === 'whisper') return whisperEngine(language);
+
+  // auto: cloud realtime first (low latency), else local whisper.
+  const { getMistralApiKey } = await import('@/models/providers/mistral-provider');
+  if (await getMistralApiKey()) return mistralEngine(language);
+  const { getOpenAIApiKey } = await import('@/models/providers/openai-provider');
+  if (await getOpenAIApiKey()) return openaiEngine(language);
+  return whisperEngine(language);
+}
+
 /** Join a new STT emission onto the running transcript. */
 function appendTranscript(full: string, piece: string, engineName: string): string {
+  // Mistral & OpenAI yield sub-word deltas — concatenate verbatim so a
+  // whitespace-only delta (the space between two words) is preserved.
+  if (engineName === 'mistral' || engineName === 'openai') return full + piece;
+  // Whisper yields whole-window transcripts — trim and space-join.
   const t = piece.trim();
   if (!t) return full;
-  // Mistral yields sub-word deltas (concatenate); whisper yields whole-window
-  // transcripts (space-join).
-  if (engineName === 'mistral') return full + piece;
   return full ? `${full} ${t}` : t;
 }
 

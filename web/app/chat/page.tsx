@@ -1566,9 +1566,8 @@ export default function ChatPage() {
   // mode above (one mic owner); the toggles below enforce it.
   const realtime = useVoiceRealtime({
     enabled: realtimeMode,
-    // Mistral Voxtral streaming STT — more accurate than local whisper-small
-    // (needs the Mistral key, which is configured). Backend /voice honors ?engine.
-    engine: 'mistral',
+    // Engine is chosen by the `voice.sttProvider` setting (Settings → Voice);
+    // omitting it here lets the backend honor that choice ('auto' by default).
     isTurnActive: isLoading,
     sendTranscript: (t) => { voiceTurnRef.current = true; sendMessage(t); },
   });

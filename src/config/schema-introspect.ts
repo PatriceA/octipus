@@ -57,6 +57,12 @@ export function validateSettingValue(key: string, value: unknown): { ok: true } 
   return { ok: false, message: issue?.message ?? 'invalid value' };
 }
 
+export interface EnumOption {
+  value: string;
+  label: string;
+  description?: string;
+}
+
 export interface FieldConstraints {
   /** Inclusive minimum (numbers). */
   min?: number;
@@ -66,7 +72,32 @@ export interface FieldConstraints {
   integer?: boolean;
   /** Allowed values for enum/string-union fields. */
   enumValues?: string[];
+  /**
+   * Human-friendly labels + help text for enum values, when a setting opts in
+   * (see ENUM_LABELS). The UI renders these instead of the raw enum strings.
+   */
+  enumOptions?: EnumOption[];
 }
+
+/**
+ * Display metadata for enum settings whose raw values are opaque (e.g. voice
+ * providers). Keyed by setting key → value → {label, description}. The option
+ * LIST still comes from the zod enum (source of truth); this only dresses it up,
+ * so a value with no entry here just falls back to showing its raw string.
+ */
+const ENUM_LABELS: Record<string, Record<string, { label: string; description: string }>> = {
+  'voice.sttProvider': {
+    auto: { label: 'Automatic (recommended)', description: 'Picks the best available: cloud realtime if a key is set, otherwise local Whisper.' },
+    whisper: { label: 'Local Whisper (offline)', description: 'Runs on this machine, no API key, free. Needs the Whisper model installed (`octi setup`); higher latency.' },
+    mistral: { label: 'Voxtral (Mistral cloud)', description: 'Low-latency realtime streaming. Requires a Mistral API key.' },
+    openai: { label: 'OpenAI (gpt-4o-transcribe)', description: 'Low-latency realtime streaming. Requires an OpenAI API key.' },
+  },
+  'voice.ttsProvider': {
+    mistral: { label: 'Voxtral (Mistral cloud)', description: 'Cloud voice, the default. Requires a Mistral API key.' },
+    openai: { label: 'OpenAI (gpt-4o-mini-tts)', description: 'Cloud voice. Requires an OpenAI API key.' },
+    piper: { label: 'Piper (offline)', description: 'Runs on this machine, no API key, free. Needs the Piper binary + a .onnx voice file installed.' },
+  },
+};
 
 /**
  * Extract human/UI-facing constraints from the schema for `key`, so the
@@ -89,6 +120,10 @@ export function getFieldConstraints(key: string): FieldConstraints | null {
     core?.options ?? (core?.def?.entries ? Object.values(core.def.entries) : undefined);
   if (Array.isArray(opts) && opts.length > 0 && opts.every((o) => typeof o === 'string')) {
     c.enumValues = opts as string[];
+    const labels = ENUM_LABELS[key];
+    if (labels) {
+      c.enumOptions = c.enumValues.map((v) => ({ value: v, label: labels[v]?.label ?? v, description: labels[v]?.description }));
+    }
   }
 
   return c.min !== undefined || c.max !== undefined || c.integer || c.enumValues ? c : null;

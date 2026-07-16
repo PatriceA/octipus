@@ -691,11 +691,19 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'PIPER_MODEL_PATH',
   },
   {
+    key: 'voice.sttProvider',
+    category: 'voice',
+    valueType: 'string',
+    defaultValue: 'auto',
+    description: 'Which engine transcribes your speech in realtime voice chat',
+    isSecret: false,
+  },
+  {
     key: 'voice.ttsProvider',
     category: 'voice',
     valueType: 'string',
     defaultValue: 'mistral',
-    description: 'Text-to-speech engine: mistral (Voxtral, cloud default), edge, coqui, or piper (local opt-in)',
+    description: 'Which engine speaks replies aloud',
     isSecret: false,
   },
   {

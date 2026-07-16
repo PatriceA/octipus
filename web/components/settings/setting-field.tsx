@@ -14,11 +14,19 @@ import Link from 'next/link';
 import { useCallback, useState } from 'react';
 import { api } from '@/lib/api';
 
+export interface EnumOption {
+  value: string;
+  label: string;
+  description?: string;
+}
+
 export interface SettingConstraints {
   min?: number;
   max?: number;
   integer?: boolean;
   enumValues?: string[];
+  /** Friendly label + help per enum value, for opaque enums (e.g. voice providers). */
+  enumOptions?: EnumOption[];
 }
 
 export interface SettingItem {
@@ -36,6 +44,9 @@ export interface SettingItem {
 /** Human hint for a field's constraints, e.g. "Allowed: 1–25" or "Options: a, b". */
 function constraintHint(c?: SettingConstraints): string | null {
   if (!c) return null;
+  // enumOptions render their own labelled dropdown + per-option help, so the
+  // flat "Options: a, b" hint would just be noise.
+  if (c.enumOptions?.length) return null;
   if (c.enumValues?.length) return `Options: ${c.enumValues.join(', ')}`;
   if (c.min !== undefined && c.max !== undefined) return `Allowed: ${c.min}–${c.max}${c.integer ? ' (whole number)' : ''}`;
   if (c.min !== undefined) return `Minimum: ${c.min}`;
@@ -138,7 +149,26 @@ export function SettingField({
           {hint && <span className="ml-1.5 text-on-surface-variant/70">· {hint}</span>}
         </p>
 
-        {setting.constraints?.enumValues?.length ? (
+        {setting.constraints?.enumOptions?.length ? (
+          <>
+            <select
+              value={String(value ?? '')}
+              onChange={(e) => onChange(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className={inputClasses}
+            >
+              {setting.constraints.enumOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+            {(() => {
+              const desc = setting.constraints?.enumOptions?.find((o) => o.value === String(value ?? ''))?.description;
+              return desc ? <p className="mt-1.5 text-xs text-on-surface-variant/70">{desc}</p> : null;
+            })()}
+          </>
+        ) : setting.constraints?.enumValues?.length ? (
           <select
             value={String(value ?? '')}
             onChange={(e) => onChange(e.target.value)}
