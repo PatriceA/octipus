@@ -38,7 +38,7 @@ import {
   checkSameRole,
   denialResult as denialResultFn,
 } from './spawn-validator';
-import { type Scorer, runScorers } from './scorers';
+import { type Scorer, deriveSchemaScorer, runScorers } from './scorers';
 import { applyRoleFit, buildDelegationGuidance } from './swarm-tool';
 import { recordChildScope, buildSiblingScopeBrief } from './session-scope';
 import {
@@ -870,9 +870,19 @@ export class SwarmSpawner {
     // failed gate flips the result to `contract_failed` and appends the
     // reason — fail loud so the parent can retry/correct instead of
     // synthesizing against output that missed the brief.
-    if (status === 'ok' && opts.scorers && opts.scorers.length > 0) {
+    // Enforce a declared expectedOutput.schema as an implicit output gate
+    // (Phase B1), in addition to any scorers the parent attached explicitly.
+    // Only for shape=json — a schema on a markdown/summary deliverable is not a
+    // JSON contract and must not flip a correct non-JSON result to failed.
+    const eo = opts.brief.expectedOutput;
+    const schemaScorer = eo?.shape === 'json' ? deriveSchemaScorer(eo.schema) : null;
+    const effectiveScorers: Scorer[] = [
+      ...(schemaScorer ? [schemaScorer] : []),
+      ...(opts.scorers ?? []),
+    ];
+    if (status === 'ok' && effectiveScorers.length > 0) {
       const outcome = await runScorers(
-        opts.scorers,
+        effectiveScorers,
         { output: result.output, notes: result.notes },
         { userId: opts.parentContext.userId },
       );
@@ -1375,11 +1385,25 @@ export function composeChildMessage(
     );
   }
 
-  parts.push(
-    `Expected output: ${brief.expectedOutput.shape} ` +
-      `(max ${brief.expectedOutput.maxTokens} tokens). ` +
-      `Return only the deliverable — no preamble.`,
-  );
+  const eo = brief.expectedOutput;
+  if (eo.shape === 'json' && eo.schema) {
+    // shape=json + schema (Phase B1): the child's ENTIRE reply must be one JSON
+    // object matching it — a shape gate validates this on return and fails loud
+    // (contract_failed) otherwise. Only for shape=json: a schema attached to a
+    // markdown/summary deliverable does NOT override the declared shape.
+    parts.push(
+      `Expected output: return ONLY a single JSON object that conforms to this JSON Schema ` +
+        `(every "required" key MUST be present):\n` +
+        `${JSON.stringify(eo.schema)}\n` +
+        `(max ${eo.maxTokens} tokens). Your entire reply must be that JSON object.`,
+    );
+  } else {
+    parts.push(
+      `Expected output: ${eo.shape} ` +
+        `(max ${eo.maxTokens} tokens). ` +
+        `Return only the deliverable — no preamble.`,
+    );
+  }
 
   return parts.join('\n\n');
 }
