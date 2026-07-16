@@ -48,6 +48,7 @@ Emit the block exactly once — do not copy these field descriptions.`;
 import { paramTemplateVars, resolveRecipeParams } from './recipe-params';
 import { getOrchestratorService } from './service';
 import { buildStagesFromTemplate, expandPromptTemplate, getPipelineTemplate } from './templates';
+import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
 import { appendSources, type QAValidationResult } from './types';
 
 /**
@@ -332,6 +333,7 @@ export class PipelineManager {
             });
 
             let qaResult = this.parseQAResult(previousOutput);
+            if (qaResult) void this.recordQaEvidence(sessionId, pipeline.id, stage.name, qaResult);
             retryCounts[i] = retryCounts[i] || 0;
 
             while (qaResult && !qaResult.passed && retryCounts[i] < maxRetries) {
@@ -441,6 +443,7 @@ export class PipelineManager {
                 });
 
                 qaResult = this.parseQAResult(previousOutput);
+                if (qaResult) void this.recordQaEvidence(sessionId, pipeline.id, stage.name, qaResult);
               } catch (retryError) {
                 const errorMsg = (retryError as Error).message;
                 coreLogger.error({ error: retryError, pipelineId: pipeline.id, attempt }, 'QA retry stage failed');
@@ -777,6 +780,7 @@ export class PipelineManager {
               : description;
 
             let qaResult = this.parseQAResult(previousOutput);
+            if (qaResult) void this.recordQaEvidence(sessionId, pipeline.id, stage.name, qaResult);
             retryCounts[i] = retryCounts[i] || 0;
 
             while (qaResult && !qaResult.passed && retryCounts[i] < maxRetries) {
@@ -845,6 +849,7 @@ export class PipelineManager {
               });
 
               qaResult = this.parseQAResult(previousOutput);
+              if (qaResult) void this.recordQaEvidence(sessionId, pipeline.id, stage.name, qaResult);
             }
 
             // Escalate if max retries exhausted
@@ -988,6 +993,32 @@ export class PipelineManager {
    *   because `parseQAResult` returns null → `while (qaResult && ...)`
    *   short-circuits and the pipeline marks the stage "complete".
    */
+  /**
+   * Persist a QA verdict to the verification evidence ledger. Best-effort: a
+   * ledger write must never break the pipeline, so failures are logged and
+   * swallowed. Append-only — every verdict (initial + each retry) is a row.
+   */
+  private async recordQaEvidence(
+    sessionId: string,
+    pipelineId: string,
+    stage: string,
+    qaResult: QAValidationResult,
+  ): Promise<void> {
+    try {
+      await verificationEvidenceRepository.record({
+        sessionId,
+        pipelineId,
+        stage,
+        kind: 'qa_verdict',
+        passed: qaResult.passed,
+        confidence: qaResult.confidence ?? null,
+        detail: { issues: qaResult.issues, feedback: qaResult.feedback, retryCount: qaResult.retryCount },
+      });
+    } catch (err) {
+      coreLogger.warn({ err: (err as Error).message, pipelineId, stage }, 'Failed to record QA verification evidence');
+    }
+  }
+
   private parseQAResult(output: string): QAValidationResult | null {
     // (1) Strict JSON parse. Scan EVERY fenced block (plus the bare-string
     // fallback) and take the first that yields an object with a boolean
