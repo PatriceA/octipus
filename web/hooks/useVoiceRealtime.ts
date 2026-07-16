@@ -85,7 +85,7 @@ class PCMWorklet extends AudioWorkletProcessor {
 registerProcessor('pcm-worklet', PCMWorklet);
 `;
 
-export function useVoiceRealtime({ enabled, engine = 'whisper', isTurnActive, sendTranscript }: UseVoiceRealtimeArgs) {
+export function useVoiceRealtime({ enabled, engine = 'auto', isTurnActive, sendTranscript }: UseVoiceRealtimeArgs) {
   const [state, setState] = useState<RealtimeState>('idle');
   const [error, setError] = useState<string | null>(null);
   const [partial, setPartial] = useState(''); // live in-progress utterance text

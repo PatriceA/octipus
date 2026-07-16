@@ -691,22 +691,6 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'PIPER_MODEL_PATH',
   },
   {
-    key: 'voice.sttEnabled',
-    category: 'voice',
-    valueType: 'boolean',
-    defaultValue: false,
-    description: 'Enable speech-to-text (transcribe your voice into text)',
-    isSecret: false,
-  },
-  {
-    key: 'voice.ttsEnabled',
-    category: 'voice',
-    valueType: 'boolean',
-    defaultValue: false,
-    description: 'Enable text-to-speech (speak replies aloud)',
-    isSecret: false,
-  },
-  {
     key: 'voice.sttProvider',
     category: 'voice',
     valueType: 'string',

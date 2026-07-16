@@ -35,6 +35,7 @@ async function resolveVoiceAvailability(config: ReturnType<typeof getConfig>) {
   const { getMistralApiKey } = await import('@/models/providers/mistral-provider');
   const { getOpenAIApiKey } = await import('@/models/providers/openai-provider');
   return getVoiceAvailability({
+    sttProvider: config.voice.sttProvider,
     ttsProvider: config.voice.ttsProvider,
     hasMistralKey: !!(await getMistralApiKey()),
     hasOpenAIKey: !!(await getOpenAIApiKey()),

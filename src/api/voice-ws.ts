@@ -75,7 +75,11 @@ async function whisperEngine(language: string): Promise<{ engine: STTEngine; nam
 async function resolveEngine(engineParam: string | null): Promise<{ engine: STTEngine; name: string } | { error: string }> {
   const config = getConfig();
   const language = config.voice.language || 'en';
-  const choice = engineParam || config.voice.sttProvider || 'auto';
+  // An explicit ?engine= wins only if it names a real engine; an unknown value
+  // (typo, stale client) falls back to the setting rather than silently routing
+  // to a cloud engine the caller never asked for.
+  const known = ['whisper', 'mistral', 'openai'];
+  const choice = engineParam && known.includes(engineParam) ? engineParam : config.voice.sttProvider || 'auto';
 
   if (choice === 'mistral') return mistralEngine(language);
   if (choice === 'openai') return openaiEngine(language);
@@ -91,11 +95,12 @@ async function resolveEngine(engineParam: string | null): Promise<{ engine: STTE
 
 /** Join a new STT emission onto the running transcript. */
 function appendTranscript(full: string, piece: string, engineName: string): string {
+  // Mistral & OpenAI yield sub-word deltas — concatenate verbatim so a
+  // whitespace-only delta (the space between two words) is preserved.
+  if (engineName === 'mistral' || engineName === 'openai') return full + piece;
+  // Whisper yields whole-window transcripts — trim and space-join.
   const t = piece.trim();
   if (!t) return full;
-  // Mistral & OpenAI yield sub-word deltas (concatenate); whisper yields
-  // whole-window transcripts (space-join).
-  if (engineName === 'mistral' || engineName === 'openai') return full + piece;
   return full ? `${full} ${t}` : t;
 }
 
