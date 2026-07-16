@@ -21,6 +21,30 @@ function parseConfidence(text: string): QAValidationResult['confidence'] {
   const m = text.match(/confidence["\s]*[:=]\s*["']?(high|medium|low)/i);
   return m ? (m[1].toLowerCase() as 'high' | 'medium' | 'low') : undefined;
 }
+
+/**
+ * Appended to `qa_validation` stages so they emit a machine-readable verdict
+ * `parseQAResult`'s strict-JSON tier (1) consumes — instead of relying on the
+ * prose-verdict fallback (`parseProseVerdict`, tier 3) to recover PASS/FAIL from
+ * free text (Phase B2). Kept as a runtime injection (both run loops) so it
+ * reaches ad-hoc pipelines and existing installs, not only reseeded templates.
+ *
+ * Describes the shape as a field list with NO literal ```json fence: if this
+ * text is echoed, `parseQAResult`'s first-fence match would otherwise grab the
+ * placeholder instead of the model's real verdict (the B3 anti-echo lesson).
+ * `parseProseVerdict` stays as the loud fallback until eval proves the JSON path
+ * fires on 100% of QA stages — its deletion is deferred (follow-ups plan B2).
+ */
+export const QA_VERDICT_JSON_INSTRUCTION = `
+
+---
+QA VERDICT (required) — after your report above, append your verdict as a fenced code block tagged \`json\` (open the fence with three backticks then the word json) containing ONLY an object with these fields and YOUR real values:
+- passed (boolean): true only if the implementation is acceptable; false if ANY critical or major issue remains
+- confidence ("high" | "medium" | "low"): your confidence in this verdict
+- issues (string[]): each blocking issue as one short string ([] when none)
+- feedback (string): a one-paragraph, actionable summary for the retry
+
+Emit the block exactly once — do not copy these field descriptions.`;
 import { paramTemplateVars, resolveRecipeParams } from './recipe-params';
 import { getOrchestratorService } from './service';
 import { buildStagesFromTemplate, expandPromptTemplate, getPipelineTemplate } from './templates';
@@ -130,11 +154,13 @@ export class PipelineManager {
 
       // Build input from template, using structured handoff chain when available
       const handoffText = handoffChain.length > 0 ? formatHandoffChain(handoffChain) : '';
-      const input = expandPromptTemplate(stageTemplate.promptTemplate, {
+      let input = expandPromptTemplate(stageTemplate.promptTemplate, {
         description,
         previousOutput: handoffText || previousOutput,
         ...paramVars,
       });
+      // QA stages emit a machine-readable JSON verdict for parseQAResult (B2).
+      if (builtStage.stageType === 'qa_validation') input += QA_VERDICT_JSON_INSTRUCTION;
 
       // Update stage input
       await this.updateStage(stage.id, { input, status: 'running' });
@@ -602,7 +628,9 @@ export class PipelineManager {
       // Build input using structured handoff chain when available
       const handoffText = handoffChain.length > 0 ? formatHandoffChain(handoffChain) : '';
       const contextInput = handoffText || previousOutput;
-      const input = stage.systemPrompt ? `${stage.systemPrompt}\n\nContext: ${description}\n\n${contextInput}` : description;
+      let input = stage.systemPrompt ? `${stage.systemPrompt}\n\nContext: ${description}\n\n${contextInput}` : description;
+      // QA stages emit a machine-readable JSON verdict for parseQAResult (B2).
+      if (stepConfig?.stageType === 'qa_validation') input += QA_VERDICT_JSON_INSTRUCTION;
 
       await this.updateStage(stage.id, { input, status: 'running' });
       await this.updatePipeline(pipeline.id, { currentStageIndex: i, status: 'running' });
