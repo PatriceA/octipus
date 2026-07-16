@@ -17,6 +17,7 @@ import {
   toAnthropicMessages,
   toAnthropicTools,
 } from './custom/anthropic-compat-provider';
+import { createIdleAbort, fetchWithRetryAfter, withTimeoutSignal } from './http-retry';
 
 const ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1/';
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -235,7 +236,21 @@ export class AnthropicProvider implements ModelProvider {
     if (options.temperature != null) body.temperature = options.temperature;
     if (options.topP != null) body.top_p = options.topP;
     if (options.stopSequences?.length) body.stop_sequences = options.stopSequences;
-    if (options.tools?.length) body.tools = toAnthropicTools(options.tools);
+    if (options.tools?.length) {
+      body.tools = toAnthropicTools(options.tools);
+      // Mirror the compat/default path's tool policy. Anthropic tool_choice:
+      // required→any, none→none, else auto (Anthropic's own default).
+      body.tool_choice =
+        options.toolChoice === 'required' ? { type: 'any' }
+        : options.toolChoice === 'none' ? { type: 'none' }
+        : { type: 'auto' };
+    }
+    // NOTE: options.responseFormat is intentionally NOT forwarded — Anthropic's
+    // native /v1/messages has no response_format field (structured output is via
+    // tools/prefill, not a JSON mode). The compat endpoint accepts it; the native
+    // path can't, so a json_object request degrades to prose here. B1's schema
+    // enforcement validates in-app and doesn't depend on this, but callers that
+    // rely on provider JSON mode must keep the flag off.
     if (options.extraBody) Object.assign(body, options.extraBody);
     return body;
   }
@@ -255,12 +270,15 @@ export class AnthropicProvider implements ModelProvider {
 
     let res: Response;
     try {
-      res = await fetch(`${ANTHROPIC_BASE_URL}messages`, {
+      // Same transport as the compat native provider: single Retry-After-honoring
+      // 429 retry, and a 120s request timeout ANDed with the caller signal (so a
+      // caller signal never disables the timeout).
+      res = await fetchWithRetryAfter(`${ANTHROPIC_BASE_URL}messages`, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
-        signal: options.signal ?? AbortSignal.timeout(120_000),
-      });
+        signal: withTimeoutSignal(120_000, options.signal),
+      }, 'anthropic');
     } catch (err) {
       throw classifyError(err, 'anthropic');
     }
@@ -276,22 +294,32 @@ export class AnthropicProvider implements ModelProvider {
     const headers = await this.nativeHeaders();
     const body = this.buildNativeBody(options, true);
 
+    // Idle (per-chunk) timeout that resets on each streamed chunk — a long but
+    // healthy stream must not be killed by a fixed total-duration cap; the caller
+    // signal still aborts. Mirrors the compat native provider's stream path.
+    const idle = createIdleAbort(180_000, options.signal);
     let res: Response;
     try {
       res = await fetch(`${ANTHROPIC_BASE_URL}messages`, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
-        signal: options.signal ?? AbortSignal.timeout(180_000),
+        signal: idle.signal,
       });
     } catch (err) {
+      idle.clear();
       throw classifyError(err, 'anthropic');
     }
     if (!res.ok || !res.body) {
+      idle.clear();
       const errText = await res.text().catch(() => '');
       throw classifyError({ status: res.status, message: errText.slice(0, 500) || `HTTP ${res.status}` }, 'anthropic');
     }
-    yield* parseAnthropicSseStream(res.body, 'anthropic');
+    try {
+      yield* parseAnthropicSseStream(res.body, 'anthropic', idle.touch);
+    } finally {
+      idle.clear();
+    }
   }
 
   async checkHealth(): Promise<ProviderHealthStatus> {

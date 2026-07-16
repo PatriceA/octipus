@@ -41,4 +41,11 @@ describe('AnthropicProvider native /v1/messages body (Phase A2)', () => {
   test('stream flag flows through', () => {
     expect(buildBody(opts, true).stream).toBe(true);
   });
+
+  test('maps toolChoice to Anthropic tool_choice', () => {
+    expect(buildBody({ ...opts, toolChoice: 'required' }, false).tool_choice).toEqual({ type: 'any' });
+    expect(buildBody({ ...opts, toolChoice: 'none' }, false).tool_choice).toEqual({ type: 'none' });
+    expect(buildBody({ ...opts, toolChoice: 'auto' }, false).tool_choice).toEqual({ type: 'auto' });
+    expect(buildBody({ ...opts, toolChoice: undefined }, false).tool_choice).toEqual({ type: 'auto' });
+  });
 });
