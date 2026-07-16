@@ -546,11 +546,12 @@ const OPENAI_STT_REALTIME_MODEL = 'gpt-4o-transcribe';
 /**
  * OpenAI realtime speech-to-text over `wss://api.openai.com/v1/realtime?intent=transcription`.
  *
- * Same push/pull websocket shape as {@link MistralSTTEngine}, but OpenAI's event
- * protocol: we send a `transcription_session.update` on open to select the model
- * and PCM format, stream `input_audio_buffer.append` frames, `commit` at end of
- * utterance, and read `conversation.item.input_audio_transcription.delta`
- * (sub-word deltas) until `.completed`. Expects headerless 16 kHz mono s16le PCM.
+ * Same push/pull websocket shape as {@link MistralSTTEngine}, but OpenAI's GA
+ * event protocol: we send a `session.update` (type: transcription) on open to
+ * select the model and PCM format, stream `input_audio_buffer.append` frames,
+ * `commit` at end of utterance, and read
+ * `conversation.item.input_audio_transcription.delta` (sub-word deltas) until
+ * `.completed`. Expects headerless 16 kHz mono s16le PCM.
  *
  * `transcribe()` (batch) uses the plain `/v1/audio/transcriptions` endpoint.
  */
@@ -604,16 +605,24 @@ export class OpenAIRealtimeSTTEngine extends EventEmitter implements STTEngine {
     const language = this.options.language;
     yield* streamRealtimeWs({
       url: 'wss://api.openai.com/v1/realtime?intent=transcription',
-      headers: { Authorization: `Bearer ${await this.apiKey()}`, 'OpenAI-Beta': 'realtime=v1' },
+      // GA API: the old `OpenAI-Beta: realtime=v1` header is gone (sending it now
+      // errors "Realtime Beta API is no longer supported").
+      headers: { Authorization: `Bearer ${await this.apiKey()}` },
       name: 'OpenAI',
-      // Select model + PCM format; turn_detection: null → we mark the utterance
-      // boundary ourselves via commit when the input stream ends.
+      // GA `session.update`: config moved under session.audio.input. Select the
+      // transcription model + 16 kHz PCM; turn_detection: null → we mark the
+      // utterance boundary ourselves via commit when the input stream ends.
       onOpen: (ws) => ws.send(JSON.stringify({
-        type: 'transcription_session.update',
+        type: 'session.update',
         session: {
-          input_audio_format: 'pcm16',
-          input_audio_transcription: { model, language },
-          turn_detection: null,
+          type: 'transcription',
+          audio: {
+            input: {
+              format: { type: 'audio/pcm', rate: REALTIME_SAMPLE_RATE },
+              transcription: { model, language },
+              turn_detection: null,
+            },
+          },
         },
       })),
       appendMessage: (audio) => ({ type: 'input_audio_buffer.append', audio }),
