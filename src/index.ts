@@ -312,6 +312,11 @@ async function main() {
     startCronLoop();
     logger.info('Cron scheduler started');
 
+    // Start the task-queue worker loop. Without this, getScheduler().schedule()
+    // (e.g. artifact cleanup) fills the Redis queue but nothing ever drains it.
+    const { getScheduler } = await import('@/core/scheduler');
+    getScheduler().start();
+
     logger.info('Octipus started successfully');
 
     // Handle graceful shutdown. Idempotent: SIGTERM immediately followed by
@@ -364,6 +369,12 @@ async function main() {
       }
 
       stopCronLoop();
+      try {
+        const { getScheduler } = await import('@/core/scheduler');
+        await getScheduler().stop();
+      } catch {
+        // scheduler may not have been started
+      }
       disconnectBridge();
       await gatewayHub.stop();
       await mcpBridge.disconnectAll();
