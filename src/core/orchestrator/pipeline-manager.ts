@@ -391,12 +391,15 @@ export class PipelineManager {
                   timestamp: new Date(),
                 });
 
-                // Re-run QA stage with the new output
+                // Re-run QA stage with the new output. Re-append the JSON
+                // verdict instruction (B2) — without it the retried QA falls
+                // back to prose parsing, which can return null and silently
+                // pass a still-failing stage.
                 const qaRetryInput = expandPromptTemplate(stageTemplate.promptTemplate, {
                   description,
                   previousOutput: retryOutput,
                   ...paramVars,
-                });
+                }) + QA_VERDICT_JSON_INSTRUCTION;
 
                 await this.updateStage(stage.id, { input: qaRetryInput, status: 'running' });
 
@@ -796,9 +799,11 @@ export class PipelineManager {
               });
 
               // Re-run QA stage
-              const qaRetryInput = stage.systemPrompt
+              // Re-append the JSON verdict instruction (B2) so the retried QA
+              // emits a parseable verdict instead of falling back to prose.
+              const qaRetryInput = (stage.systemPrompt
                 ? `${stage.systemPrompt}\n\nContext: ${description}\n\n${retryOutput}`
-                : `${description}\n\n${retryOutput}`;
+                : `${description}\n\n${retryOutput}`) + QA_VERDICT_JSON_INSTRUCTION;
 
               await this.updateStage(stage.id, { input: qaRetryInput, status: 'running' });
 
@@ -969,21 +974,29 @@ export class PipelineManager {
    *   short-circuits and the pipeline marks the stage "complete".
    */
   private parseQAResult(output: string): QAValidationResult | null {
-    // (1) Strict JSON parse
-    try {
-      const fenceMatch = output.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-      const jsonStr = fenceMatch ? fenceMatch[1].trim() : output.trim();
-      const parsed = JSON.parse(jsonStr);
-      if (typeof parsed.passed === 'boolean') {
-        return {
-          passed: parsed.passed,
-          issues: Array.isArray(parsed.issues) ? parsed.issues : [],
-          feedback: typeof parsed.feedback === 'string' ? parsed.feedback : '',
-          retryCount: typeof parsed.retryCount === 'number' ? parsed.retryCount : 0,
-          confidence: normalizeConfidence(parsed.confidence),
-        };
-      }
-    } catch { /* fall through */ }
+    // (1) Strict JSON parse. Scan EVERY fenced block (plus the bare-string
+    // fallback) and take the first that yields an object with a boolean
+    // `passed` — a QA/code-review report often has a code block ABOVE its
+    // verdict, so matching only the first fence would parse the wrong block.
+    const candidates: string[] = [];
+    for (const m of output.matchAll(/```(?:json)?\s*\n?([\s\S]*?)\n?```/g)) {
+      candidates.push(m[1].trim());
+    }
+    candidates.push(output.trim()); // whole output, when the model emitted bare JSON
+    for (const jsonStr of candidates) {
+      try {
+        const parsed = JSON.parse(jsonStr);
+        if (typeof parsed.passed === 'boolean') {
+          return {
+            passed: parsed.passed,
+            issues: Array.isArray(parsed.issues) ? parsed.issues : [],
+            feedback: typeof parsed.feedback === 'string' ? parsed.feedback : '',
+            retryCount: typeof parsed.retryCount === 'number' ? parsed.retryCount : 0,
+            confidence: normalizeConfidence(parsed.confidence),
+          };
+        }
+      } catch { /* try the next candidate */ }
+    }
 
     // (2) Inline `"passed": true|false` anywhere in prose
     const passedMatch = output.match(/"passed"\s*:\s*(true|false)/);
