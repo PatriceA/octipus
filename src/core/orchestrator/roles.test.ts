@@ -174,3 +174,30 @@ describe('OUTPUT_FORMATTING_RULES', () => {
     expect(stripSecurityPreamble(orphan)).toBe('BODY');
   });
 });
+
+describe('lite role prompts (Phase C)', () => {
+  test('every role that ships a prompt.lite.md is loaded into liteSystemPromptTemplate', () => {
+    // At minimum the roles authored in Phase C carry a lite variant.
+    const withLite = (Object.keys(ROLE_CONFIGS) as AgentRole[]).filter(
+      (r) => ROLE_CONFIGS[r].liteSystemPromptTemplate,
+    );
+    expect(withLite.length).toBeGreaterThanOrEqual(10);
+  });
+
+  test('getRoleConfig prepends the preamble to the lite variant, not the raw file', () => {
+    const cfg = getRoleConfig('coding');
+    expect(cfg.liteSystemPromptTemplate).toBeDefined();
+    // Preamble + formatting are prepended (mirrors systemPromptTemplate).
+    expect(cfg.liteSystemPromptTemplate!.startsWith(SECURITY_PREAMBLE)).toBe(true);
+    expect(cfg.liteSystemPromptTemplate).toContain(OUTPUT_FORMATTING_RULES.trim());
+    // The lite variant is materially shorter than the full one.
+    expect(cfg.liteSystemPromptTemplate!.length).toBeLessThan(cfg.systemPromptTemplate.length);
+  });
+
+  test('no lite prompt embeds its own SECURITY_PREAMBLE (would double it)', () => {
+    for (const r of Object.keys(ROLE_CONFIGS) as AgentRole[]) {
+      const lite = ROLE_CONFIGS[r].liteSystemPromptTemplate;
+      if (lite) expect(lite).not.toContain('SECURITY RULES:');
+    }
+  });
+});

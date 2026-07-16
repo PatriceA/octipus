@@ -30,6 +30,12 @@ export interface RoleConfig {
   toolIds: string[];
   defaultTopic: string;
   systemPromptTemplate: string;
+  /**
+   * Dense small-model variant (from `roles/<role>/prompt.lite.md`), selected on
+   * the small-model path in place of `systemPromptTemplate` (Phase C). Undefined
+   * when the role ships no lite variant — the full prompt is used as before.
+   */
+  liteSystemPromptTemplate?: string;
   /** Lazy-discovery core set; see `RoleMeta.coreToolIds`. */
   coreToolIds?: string[];
 }

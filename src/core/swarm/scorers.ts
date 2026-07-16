@@ -31,7 +31,7 @@ export type Scorer =
   | { kind: 'non_empty' }
   | { kind: 'contains'; value: string; on?: ScorerTarget }
   | { kind: 'regex'; pattern: string; flags?: string; on?: ScorerTarget }
-  | { kind: 'json'; requiredKeys?: string[] }
+  | { kind: 'json'; requiredKeys?: string[]; object?: boolean }
   | { kind: 'file_exists'; path: string };
 
 export interface ScorerFailure {
@@ -170,15 +170,24 @@ async function evaluate(
       let obj: unknown;
       if (typeof raw === 'string') {
         try {
-          obj = JSON.parse(raw);
+          // Tolerate a ```json / ``` code fence — weak models routinely wrap
+          // JSON in one despite instructions, and the JSON inside is still
+          // conforming (matches parseQAResult's fence tolerance).
+          obj = JSON.parse(stripJsonFence(raw));
         } catch {
           return { scorer: 'json', reason: 'output is not valid JSON' };
         }
       } else {
         obj = raw;
       }
+      const isObject = obj !== null && typeof obj === 'object' && !Array.isArray(obj);
+      // `object: true` enforces object-ness even with no requiredKeys — a
+      // schema of `{ type: 'object' }` must reject bare `42`/`null`/an array.
+      if (scorer.object && !isObject) {
+        return { scorer: 'json', reason: 'output is not a JSON object' };
+      }
       if (scorer.requiredKeys && scorer.requiredKeys.length > 0) {
-        if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
+        if (!isObject) {
           return { scorer: 'json', reason: 'output is not a JSON object, so required keys cannot be present' };
         }
         const present = new Set(Object.keys(obj as Record<string, unknown>));
@@ -208,6 +217,41 @@ async function evaluate(
 
 function truncate(s: string, max = 60): string {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+/** Unwrap a leading ```json / ``` code fence, returning the JSON inside. */
+function stripJsonFence(s: string): string {
+  const m = s.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+  return (m ? m[1] : s).trim();
+}
+
+/**
+ * Derive a deterministic output gate from a brief's `expectedOutput.schema`
+ * (Phase B1). When a spawn declares a JSON Schema, enforce it by reusing the
+ * shallow `json` scorer: the child's output must be a valid JSON object carrying
+ * the schema's required top-level keys (its `required` list, else all declared
+ * `properties`). This is a SHAPE gate, not full JSON-Schema validation — no
+ * nested/type checks — but it fails loud (→ `contract_failed`) when a child
+ * returns prose or the wrong shape, with no schema library and no change to the
+ * hot agent-worker loop. Returns null when there's no usable schema, so callers
+ * only add a gate when one was actually declared.
+ *
+ * Deeper (typed/nested) validation is a deferred hardening — see the follow-ups
+ * plan (B1). Until then this catches the failure the plan cares about most: a
+ * model that ignored the schema and emitted free prose.
+ *
+ * Enforces object-ness plus the schema's `required` keys ONLY. JSON Schema is
+ * optional-by-default, so a key in `properties` but not `required` is NOT
+ * demanded — promoting `properties` to required would reject valid partial
+ * output (a child that legitimately omits an optional field).
+ */
+export function deriveSchemaScorer(schema: unknown): Scorer | null {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return null;
+  const s = schema as Record<string, unknown>;
+  const requiredKeys = Array.isArray(s.required)
+    ? s.required.filter((k): k is string => typeof k === 'string')
+    : [];
+  return { kind: 'json', requiredKeys, object: true };
 }
 
 /**

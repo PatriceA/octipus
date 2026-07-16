@@ -7,6 +7,7 @@ import type { CompletionOptions, CompletionResult, StreamChunk } from '../../lit
 import { createIdleAbort, fetchWithRetryAfter, withTimeoutSignal } from '../http-retry';
 import type { ModelProvider, ProviderHealthStatus } from '../interface';
 import { BaseCustomProvider, type ResolvedCustomConfig } from './base-custom-provider';
+import { buildCachedBlocks, splitVolatileSystem } from '../prompt-cache';
 
 /**
  * Custom Anthropic-compatible provider.
@@ -224,15 +225,6 @@ interface AnthropicMessage {
   content: string | AnthropicBlock[];
 }
 
-// Marks the start of the VOLATILE section of an assembled system prompt. Both
-// prompt-assembly sites (worker-spawner, orchestrator-runner) push the date
-// block first into the volatile tier (Phase 2a), so the static/cacheable prefix
-// is everything before this marker.
-const VOLATILE_MARKER = /\n\nCURRENT DATE ?&? ?\/?\s?TIME/;
-// ~1024-token Anthropic cache minimum ≈ this many chars; below it a breakpoint
-// is a no-op, so don't bother marking one.
-const MIN_CACHEABLE_CHARS = 4000;
-
 type AnthropicSystem =
   | string
   | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }>;
@@ -243,18 +235,13 @@ type AnthropicSystem =
  * (preamble + role + skills + guidance) is served from the provider prompt
  * cache at ~10% of input price while per-turn volatile content (date, memory,
  * git, history) stays uncached. Falls back to a plain string when there's no
- * volatile marker or the static prefix is too small to cache.
+ * volatile marker or the static prefix is too small to cache. Shares the split
+ * with the OpenAI-compat pass-through (LiteLLM/OpenRouter) via prompt-cache.
  */
 export function buildCachedSystem(system: string): AnthropicSystem {
-  const m = system.match(VOLATILE_MARKER);
-  if (!m || m.index === undefined || m.index < MIN_CACHEABLE_CHARS) return system;
-  const staticPart = system.slice(0, m.index);
-  const volatilePart = system.slice(m.index);
-  const blocks: Exclude<AnthropicSystem, string> = [
-    { type: 'text', text: staticPart, cache_control: { type: 'ephemeral' } },
-  ];
-  if (volatilePart) blocks.push({ type: 'text', text: volatilePart });
-  return blocks;
+  const split = splitVolatileSystem(system);
+  if (!split) return system;
+  return buildCachedBlocks(split);
 }
 
 /**
