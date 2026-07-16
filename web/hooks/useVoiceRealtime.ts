@@ -47,12 +47,15 @@ interface UseVoiceRealtimeArgs {
 // VAD tuning — same knobs as the turn hook (real mics/rooms vary).
 const RMS_SPEAKING = 0.015;
 // Trailing silence that ends an utterance. Short windows split a sentence on a
-// thinking pause and feed its tail into the next turn. 2000 ms tolerates normal
-// mid-sentence pauses. ponytail: calibration knob — raise if it still cuts you
-// off, lower if replies feel laggy.
-const SILENCE_MS = 2000;
+// thinking pause and feed its tail into the next turn. 1500 ms trades a little
+// pause-tolerance for snappier turn-taking. ponytail: calibration knob — raise
+// if it still cuts you off, lower if replies feel laggy.
+const SILENCE_MS = 1500;
 const MIN_SPEECH_MS = 350;
 const MAX_TTS_CHARS = 5000;
+// TTS playback speed. The voices synthesize a touch slow; 1.2× reads naturally
+// with preservesPitch on (no chipmunk). ponytail: calibration knob.
+const SPEECH_RATE = 1.2;
 // Fallback flush when STT emits nothing after silence; > the 2 s whisper window
 // so the real tail transcript (fast path) still wins in the common case.
 const DISPATCH_GRACE_MS = 3500;
@@ -146,9 +149,10 @@ export function useVoiceRealtime({ enabled, engine = 'auto', isTurnActive, sendT
 
   // Speak the reply, streaming per sentence so time-to-first-audio is one
   // sentence, not the whole reply. `/speak` is called per sentence (no new
-  // endpoint). Sequential synth→play (not prefetched): exactly one object URL is
-  // alive at a time and it's revoked the moment it's done, so barge-in / a
-  // superseding turn can't leak blobs. Barge-in or a new turn bumps
+  // endpoint). The NEXT sentence is synthesized while the current one plays, so
+  // there's no synth-latency gap between sentences; at most two blob URLs are
+  // alive at once and every exit path (barge-in, superseding turn, synth error)
+  // drains the in-flight prefetch so nothing leaks. Barge-in or a new turn bumps
   // playbackIdRef, and every await re-checks it to bail promptly.
   const speak = useCallback(
     async (text: string) => {
@@ -185,25 +189,34 @@ export function useVoiceRealtime({ enabled, engine = 'auto', isTurnActive, sendT
         new Promise<boolean>((resolve) => {
           audioUrlRef.current = url;
           audio.src = url;
+          audio.playbackRate = SPEECH_RATE; // preservesPitch defaults true → no pitch shift
           audio.onended = () => resolve(true);
           audio.onerror = () => resolve(false);
           void audio.play().then(undefined, () => resolve(false));
         });
 
+      // Prefetch pipeline: hold the next sentence's synth in flight while the
+      // current one plays. `pending` is always the not-yet-played clip.
+      let pending = synth(sentences[0]).catch(() => null);
+      const drain = async () => { const u = await pending; if (u) URL.revokeObjectURL(u); };
       try {
-        for (const sentence of sentences) {
-          const url = await synth(sentence).catch(() => null);
+        for (let i = 0; i < sentences.length; i++) {
+          const url = await pending;
+          // Kick off the next synth now, so it overlaps this sentence's playback.
+          pending = i + 1 < sentences.length ? synth(sentences[i + 1]).catch(() => null) : Promise.resolve(null);
           if (playbackIdRef.current !== myId) {
             if (url) URL.revokeObjectURL(url); // cancelled between synth and play
+            await drain();
             return;
           }
           if (!url) break; // synth failed (503/error) — stop, don't hammer /speak
           const ok = await play(url);
-          if (playbackIdRef.current !== myId) return; // barged: stopPlayback revoked url
+          if (playbackIdRef.current !== myId) { await drain(); return; } // barged
           URL.revokeObjectURL(url); // done with this clip — revoke immediately
           if (audioUrlRef.current === url) audioUrlRef.current = null;
           if (!ok) break; // autoplay blocked / decode error — stop the reply
         }
+        await drain(); // revoke any prefetched-but-unplayed clip
       } finally {
         // Only advance if we're still the active playback (not barged/superseded).
         if (playbackIdRef.current === myId && stateRef.current === 'speaking') setPhase('listening');
