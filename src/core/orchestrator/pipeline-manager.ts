@@ -21,6 +21,30 @@ function parseConfidence(text: string): QAValidationResult['confidence'] {
   const m = text.match(/confidence["\s]*[:=]\s*["']?(high|medium|low)/i);
   return m ? (m[1].toLowerCase() as 'high' | 'medium' | 'low') : undefined;
 }
+
+/**
+ * Appended to `qa_validation` stages so they emit a machine-readable verdict
+ * `parseQAResult`'s strict-JSON tier (1) consumes — instead of relying on the
+ * prose-verdict fallback (`parseProseVerdict`, tier 3) to recover PASS/FAIL from
+ * free text (Phase B2). Kept as a runtime injection (both run loops) so it
+ * reaches ad-hoc pipelines and existing installs, not only reseeded templates.
+ *
+ * Describes the shape as a field list with NO literal ```json fence: if this
+ * text is echoed, `parseQAResult`'s first-fence match would otherwise grab the
+ * placeholder instead of the model's real verdict (the B3 anti-echo lesson).
+ * `parseProseVerdict` stays as the loud fallback until eval proves the JSON path
+ * fires on 100% of QA stages — its deletion is deferred (follow-ups plan B2).
+ */
+export const QA_VERDICT_JSON_INSTRUCTION = `
+
+---
+QA VERDICT (required) — after your report above, append your verdict as a fenced code block tagged \`json\` (open the fence with three backticks then the word json) containing ONLY an object with these fields and YOUR real values:
+- passed (boolean): true only if the implementation is acceptable; false if ANY critical or major issue remains
+- confidence ("high" | "medium" | "low"): your confidence in this verdict
+- issues (string[]): each blocking issue as one short string ([] when none)
+- feedback (string): a one-paragraph, actionable summary for the retry
+
+Emit the block exactly once — do not copy these field descriptions.`;
 import { paramTemplateVars, resolveRecipeParams } from './recipe-params';
 import { getOrchestratorService } from './service';
 import { buildStagesFromTemplate, expandPromptTemplate, getPipelineTemplate } from './templates';
@@ -138,6 +162,10 @@ export class PipelineManager {
       // Non-final stages emit a structured ```handoff block for the next stage
       // (Phase B3) — createHandoffContext below prefers it over regex scraping.
       if (i < stages.length - 1) input += HANDOFF_EMIT_INSTRUCTION;
+      // QA stages also emit a machine-readable JSON verdict for parseQAResult
+      // (B2). The two compose: B3 strips the handoff block from previousOutput
+      // before parseQAResult runs, so the verdict is what the QA parser sees.
+      if (builtStage.stageType === 'qa_validation') input += QA_VERDICT_JSON_INSTRUCTION;
 
       // Update stage input
       await this.updateStage(stage.id, { input, status: 'running' });
@@ -372,12 +400,15 @@ export class PipelineManager {
                   timestamp: new Date(),
                 });
 
-                // Re-run QA stage with the new output
+                // Re-run QA stage with the new output. Re-append the JSON
+                // verdict instruction (B2) — without it the retried QA falls
+                // back to prose parsing, which can return null and silently
+                // pass a still-failing stage.
                 const qaRetryInput = expandPromptTemplate(stageTemplate.promptTemplate, {
                   description,
                   previousOutput: retryOutput,
                   ...paramVars,
-                });
+                }) + QA_VERDICT_JSON_INSTRUCTION;
 
                 await this.updateStage(stage.id, { input: qaRetryInput, status: 'running' });
 
@@ -612,6 +643,9 @@ export class PipelineManager {
       let input = stage.systemPrompt ? `${stage.systemPrompt}\n\nContext: ${description}\n\n${contextInput}` : description;
       // Non-final stages emit a structured ```handoff block (Phase B3).
       if (i < stages.length - 1) input += HANDOFF_EMIT_INSTRUCTION;
+      // QA stages also emit a JSON verdict for parseQAResult (B2); composes
+      // with B3 (the handoff block is stripped before parseQAResult).
+      if (stepConfig?.stageType === 'qa_validation') input += QA_VERDICT_JSON_INSTRUCTION;
 
       await this.updateStage(stage.id, { input, status: 'running' });
       await this.updatePipeline(pipeline.id, { currentStageIndex: i, status: 'running' });
@@ -780,9 +814,11 @@ export class PipelineManager {
               });
 
               // Re-run QA stage
-              const qaRetryInput = stage.systemPrompt
+              // Re-append the JSON verdict instruction (B2) so the retried QA
+              // emits a parseable verdict instead of falling back to prose.
+              const qaRetryInput = (stage.systemPrompt
                 ? `${stage.systemPrompt}\n\nContext: ${description}\n\n${retryOutput}`
-                : `${description}\n\n${retryOutput}`;
+                : `${description}\n\n${retryOutput}`) + QA_VERDICT_JSON_INSTRUCTION;
 
               await this.updateStage(stage.id, { input: qaRetryInput, status: 'running' });
 
@@ -953,21 +989,29 @@ export class PipelineManager {
    *   short-circuits and the pipeline marks the stage "complete".
    */
   private parseQAResult(output: string): QAValidationResult | null {
-    // (1) Strict JSON parse
-    try {
-      const fenceMatch = output.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-      const jsonStr = fenceMatch ? fenceMatch[1].trim() : output.trim();
-      const parsed = JSON.parse(jsonStr);
-      if (typeof parsed.passed === 'boolean') {
-        return {
-          passed: parsed.passed,
-          issues: Array.isArray(parsed.issues) ? parsed.issues : [],
-          feedback: typeof parsed.feedback === 'string' ? parsed.feedback : '',
-          retryCount: typeof parsed.retryCount === 'number' ? parsed.retryCount : 0,
-          confidence: normalizeConfidence(parsed.confidence),
-        };
-      }
-    } catch { /* fall through */ }
+    // (1) Strict JSON parse. Scan EVERY fenced block (plus the bare-string
+    // fallback) and take the first that yields an object with a boolean
+    // `passed` — a QA/code-review report often has a code block ABOVE its
+    // verdict, so matching only the first fence would parse the wrong block.
+    const candidates: string[] = [];
+    for (const m of output.matchAll(/```(?:json)?\s*\n?([\s\S]*?)\n?```/g)) {
+      candidates.push(m[1].trim());
+    }
+    candidates.push(output.trim()); // whole output, when the model emitted bare JSON
+    for (const jsonStr of candidates) {
+      try {
+        const parsed = JSON.parse(jsonStr);
+        if (typeof parsed.passed === 'boolean') {
+          return {
+            passed: parsed.passed,
+            issues: Array.isArray(parsed.issues) ? parsed.issues : [],
+            feedback: typeof parsed.feedback === 'string' ? parsed.feedback : '',
+            retryCount: typeof parsed.retryCount === 'number' ? parsed.retryCount : 0,
+            confidence: normalizeConfidence(parsed.confidence),
+          };
+        }
+      } catch { /* try the next candidate */ }
+    }
 
     // (2) Inline `"passed": true|false` anywhere in prose
     const passedMatch = output.match(/"passed"\s*:\s*(true|false)/);
