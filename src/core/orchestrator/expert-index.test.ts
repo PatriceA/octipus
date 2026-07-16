@@ -96,9 +96,31 @@ describe('buildExpertIndexBlock', () => {
       });
     }
     const block = await buildExpertIndexBlock(userA);
-    expect(block).toContain('list truncated at 50 experts');
+    expect(block).toContain('showing top 50 experts');
     // 50 entries max: count rendered bullet lines.
     const bullets = block.split('\n').filter((l) => l.startsWith('- '));
     expect(bullets.length).toBe(50);
+  });
+
+  test('token-bounds bloated descriptions, keeping whole lines', async () => {
+    // A few experts under the count cap but with descriptions large enough to
+    // blow the token budget — the block must drop trailing entries (never a
+    // partial line / severed expertId) and flag it. Insert as userB's own
+    // custom experts: custom sorts first, so they dominate the budget
+    // deterministically regardless of the system experts other tests left.
+    const db = getDb();
+    const bloat = 'lorem ipsum '.repeat(400); // ~1200 tokens each
+    for (let i = 0; i < 6; i++) {
+      await db.insert(experts).values({
+        name: `Verbose Expert ${i}`, role: 'general', isSystem: false, userId: userB, description: bloat,
+      });
+    }
+    const block = await buildExpertIndexBlock(userB);
+    const bullets = block.split('\n').filter((l) => l.startsWith('- '));
+    expect(bullets.length).toBeGreaterThan(0); // never collapses to zero
+    expect(bullets.length).toBeLessThan(6); // token budget cut some
+    expect(block).toContain(`showing top ${bullets.length} experts`);
+    // Every emitted line is whole — its expertId parenthetical is intact.
+    bullets.forEach((l) => expect(l).toMatch(/expertId: [0-9a-f-]+\)/));
   });
 });

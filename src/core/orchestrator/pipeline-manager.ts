@@ -10,7 +10,7 @@ import type { NewPipeline, NewPipelineStage, Pipeline, PipelineStageRow } from '
 import { pipelineStages, pipelines } from '@/db/schema/pipelines';
 import { getModelRegistry, type ModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
-import { createHandoffContext, formatHandoffChain, type HandoffContext } from './handoff';
+import { createHandoffContext, formatHandoffChain, HANDOFF_EMIT_INSTRUCTION, stripHandoffBlock, type HandoffContext } from './handoff';
 
 /** Coerce an arbitrary value to the enumerated QA confidence (or undefined). */
 function normalizeConfidence(v: unknown): QAValidationResult['confidence'] {
@@ -159,7 +159,12 @@ export class PipelineManager {
         previousOutput: handoffText || previousOutput,
         ...paramVars,
       });
-      // QA stages emit a machine-readable JSON verdict for parseQAResult (B2).
+      // Non-final stages emit a structured ```handoff block for the next stage
+      // (Phase B3) — createHandoffContext below prefers it over regex scraping.
+      if (i < stages.length - 1) input += HANDOFF_EMIT_INSTRUCTION;
+      // QA stages also emit a machine-readable JSON verdict for parseQAResult
+      // (B2). The two compose: B3 strips the handoff block from previousOutput
+      // before parseQAResult runs, so the verdict is what the QA parser sees.
       if (builtStage.stageType === 'qa_validation') input += QA_VERDICT_JSON_INSTRUCTION;
 
       // Update stage input
@@ -257,7 +262,11 @@ export class PipelineManager {
           },
         );
 
-        previousOutput = String(result || '');
+        // Parse the handoff from the RAW output (which carries the ```handoff
+        // block), but persist/forward the STRIPPED output so the internal block
+        // is never shown to the user or bled into the next stage's prose (B3).
+        const rawOutput = String(result || '');
+        previousOutput = stripHandoffBlock(rawOutput);
         pipelineSources.push(`stage(${i + 1}: ${stage.name}/${stage.role})`);
 
         await this.updateStage(stage.id, {
@@ -273,7 +282,7 @@ export class PipelineManager {
             from: { role: stage.role, stageName: stage.name, stageIndex: i },
             to: { role: nextStage.role, stageName: nextStage.name, stageIndex: i + 1 },
             originalRequest: description,
-            stageOutput: previousOutput,
+            stageOutput: rawOutput,
           });
           handoffChain.push(handoff);
         }
@@ -632,7 +641,10 @@ export class PipelineManager {
       const handoffText = handoffChain.length > 0 ? formatHandoffChain(handoffChain) : '';
       const contextInput = handoffText || previousOutput;
       let input = stage.systemPrompt ? `${stage.systemPrompt}\n\nContext: ${description}\n\n${contextInput}` : description;
-      // QA stages emit a machine-readable JSON verdict for parseQAResult (B2).
+      // Non-final stages emit a structured ```handoff block (Phase B3).
+      if (i < stages.length - 1) input += HANDOFF_EMIT_INSTRUCTION;
+      // QA stages also emit a JSON verdict for parseQAResult (B2); composes
+      // with B3 (the handoff block is stripped before parseQAResult).
       if (stepConfig?.stageType === 'qa_validation') input += QA_VERDICT_JSON_INSTRUCTION;
 
       await this.updateStage(stage.id, { input, status: 'running' });
@@ -701,7 +713,10 @@ export class PipelineManager {
           },
         );
 
-        previousOutput = String(result || '');
+        // Strip the internal ```handoff block before persist/forward (B3);
+        // parse the handoff chain from the raw output that still carries it.
+        const rawOutput = String(result || '');
+        previousOutput = stripHandoffBlock(rawOutput);
         pipelineSources.push(`stage(${i + 1}: ${stage.name}/${stage.role})`);
         await this.updateStage(stage.id, {
           status: 'completed',
@@ -716,7 +731,7 @@ export class PipelineManager {
             from: { role: stage.role, stageName: stage.name, stageIndex: i },
             to: { role: nextStage.role, stageName: nextStage.name, stageIndex: i + 1 },
             originalRequest: description,
-            stageOutput: previousOutput,
+            stageOutput: rawOutput,
           });
           handoffChain.push(handoff);
         }

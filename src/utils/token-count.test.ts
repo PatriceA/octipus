@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { estimateTokens, truncateToTokens } from './token-count';
+import { estimateTokens, truncateLinesToTokens, truncateToTokens } from './token-count';
 
 describe('estimateTokens', () => {
   test('empty is zero, counts BPE tokens', () => {
@@ -32,5 +32,30 @@ describe('truncateToTokens', () => {
 
   test('budget <= 0 yields empty', () => {
     expect(truncateToTokens('anything', 0)).toBe('');
+  });
+});
+
+describe('truncateLinesToTokens', () => {
+  test('keeps all lines when within budget', () => {
+    const lines = ['- a (expertId: 1)', '- b (expertId: 2)'];
+    expect(truncateLinesToTokens(lines, 1000)).toEqual({ lines, truncated: false });
+  });
+
+  test('always keeps the first line even if it alone exceeds budget', () => {
+    const huge = `- expert (expertId: x) — ${'lorem '.repeat(2000)}`;
+    const { lines, truncated } = truncateLinesToTokens([huge, '- b (expertId: 2)'], 50);
+    expect(lines).toEqual([huge]); // never returns an empty list
+    expect(truncated).toBe(true);
+  });
+
+  test('drops trailing lines and never cuts mid-line', () => {
+    const lines = Array.from({ length: 50 }, (_, i) => `  - repo-${i} [service] /abs/path/to/repo-${i}`);
+    const { lines: kept, truncated } = truncateLinesToTokens(lines, 40);
+    expect(truncated).toBe(true);
+    expect(kept.length).toBeGreaterThan(0);
+    expect(kept.length).toBeLessThan(lines.length);
+    // Every kept line is whole (highest-value first survive) — no severed path.
+    expect(kept).toEqual(lines.slice(0, kept.length));
+    kept.forEach((l) => expect(l.endsWith(`repo-${lines.indexOf(l)}`)).toBe(true));
   });
 });

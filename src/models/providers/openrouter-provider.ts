@@ -10,6 +10,7 @@ import { parseToolCallArguments } from '@/models/tool-call-args';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus, QuotaStatus } from './interface';
+import { applyAnthropicCacheControl, isAnthropicFamily } from './prompt-cache';
 import { extractCachedTokens } from './usage';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
@@ -49,6 +50,10 @@ export class OpenRouterProvider implements ModelProvider {
       response_format: options.responseFormat,
       stream: false,
     };
+
+    // Anthropic prompt caching (Phase A1): OpenRouter forwards `cache_control`
+    // content blocks to Anthropic upstreams, so cache the static prefix.
+    if (isAnthropicFamily(options.model)) applyAnthropicCacheControl(params.messages);
 
     if (options.tools?.length) {
       params.tools = options.tools;
@@ -148,6 +153,8 @@ export class OpenRouterProvider implements ModelProvider {
       stop: options.stopSequences,
       stream: true,
     };
+
+    if (isAnthropicFamily(options.model)) applyAnthropicCacheControl(params.messages);
 
     if (options.tools?.length) {
       params.tools = options.tools;
