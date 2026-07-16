@@ -32,7 +32,15 @@ jobs:
         run: bun run lint
 
       - name: Test
-        run: bun run test
+        run: |
+          set +e
+          bun test src scripts --timeout 30000 --reporter=junit --reporter-outfile=junit.xml
+          code=$?
+          echo "=== FAILING TESTCASES (file = classname) ==="
+          grep -B1 -A4 '<failure' junit.xml | head -60 || true
+          echo "=== classnames with failures ==="
+          grep -E 'testcase|<failure' junit.xml | grep -iB1 'failure' | grep 'classname' | head || true
+          exit $code
         env:
           # Dummy 32+ char secrets to satisfy config-load validation in tests.
           # Code paths that construct LiteLLMClient eagerly call loadConfig().
