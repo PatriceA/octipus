@@ -146,19 +146,20 @@ export async function getVoiceAvailability(opts: {
       ? `${probe.binaryReason}. Run \`octi setup\` to install local voice, or configure a cloud STT key.`
       : 'No local whisper and no cloud STT key configured.';
 
-  // TTS: mistral needs a key; piper needs its model; edge/coqui need their host
-  // tools (assume present if explicitly selected). Only the mistral path is
-  // strictly checkable here.
+  // TTS: mistral needs a Mistral key; openai needs an OpenAI key; piper needs
+  // its local model. All strictly checkable here.
   let ttsAvailable: boolean;
   let ttsReason: string | null = null;
-  if (opts.ttsProvider === 'mistral') {
-    ttsAvailable = opts.hasMistralKey;
-    if (!ttsAvailable) ttsReason = 'Mistral TTS selected but no Mistral API key configured.';
+  if (opts.ttsProvider === 'openai') {
+    ttsAvailable = opts.hasOpenAIKey;
+    if (!ttsAvailable) ttsReason = 'OpenAI TTS selected but no OpenAI API key configured.';
   } else if (opts.ttsProvider === 'piper') {
     ttsAvailable = !!opts.piperModelPath;
     if (!ttsAvailable) ttsReason = 'Piper TTS selected but no piper model path configured.';
   } else {
-    ttsAvailable = true; // edge/coqui — validated at synthesis time
+    // mistral (default)
+    ttsAvailable = opts.hasMistralKey;
+    if (!ttsAvailable) ttsReason = 'Voxtral (Mistral) TTS selected but no Mistral API key configured.';
   }
 
   return {

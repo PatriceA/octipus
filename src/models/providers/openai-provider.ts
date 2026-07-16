@@ -20,6 +20,25 @@ const SUPPORTED_EXACT = new Set(['chatgpt-4o-latest', 'dall-e-3']);
 const O_SERIES = /^o\d/;
 
 /**
+ * Resolve the OpenAI API key: environment first, then the vault. Exported so
+ * the realtime STT / TTS voice paths share one resolution rule with the chat
+ * provider (mirrors `getMistralApiKey`).
+ */
+export async function getOpenAIApiKey(): Promise<string | null> {
+  if (process.env.OPENAI_API_KEY) {
+    return process.env.OPENAI_API_KEY;
+  }
+  try {
+    const { getVault } = await import('@/security/vault');
+    const value = await getVault().getByName('system', 'openai_api_key');
+    return value || null;
+  } catch (err) {
+    modelLogger.warn({ err: (err as Error).message, provider: 'openai' }, 'OpenAI vault lookup failed; falling back to env var');
+    return null;
+  }
+}
+
+/**
  * o-series (o1/o3/o4) and gpt-5 reject `max_tokens` (want `max_completion_tokens`)
  * and o-series also reject a non-default `temperature`.
  */

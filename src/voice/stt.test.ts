@@ -1,5 +1,26 @@
 import { describe, test, expect } from 'bun:test';
-import { isConformantWav, stripWavHeader, stripNonSpeech } from './stt';
+import {
+  createSTTEngine,
+  isConformantWav,
+  MistralSTTEngine,
+  OpenAIRealtimeSTTEngine,
+  stripNonSpeech,
+  stripWavHeader,
+  WhisperEngine,
+} from './stt';
+
+describe('createSTTEngine', () => {
+  test('maps each provider to its engine class', () => {
+    expect(createSTTEngine('whisper-cpp', '/tmp/model.bin')).toBeInstanceOf(WhisperEngine);
+    expect(createSTTEngine('mistral', '')).toBeInstanceOf(MistralSTTEngine);
+    expect(createSTTEngine('openai', '')).toBeInstanceOf(OpenAIRealtimeSTTEngine);
+  });
+
+  test('rejects removed/unknown engine types', () => {
+    // 'faster-whisper' was removed; anything off-enum must throw, not silently no-op.
+    expect(() => createSTTEngine('faster-whisper' as never, '')).toThrow();
+  });
+});
 
 describe('stripNonSpeech', () => {
   test('removes whisper blank/non-speech annotations', () => {

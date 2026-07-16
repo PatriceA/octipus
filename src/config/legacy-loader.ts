@@ -90,6 +90,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       // Default is cloud (mistral) so voice-out works without a piper binary,
       // which makes ttsEnabled true by default (a non-piper provider is set).
       ttsEnabled: true,
+      sttProvider: 'auto' as const,
       ttsProvider: 'mistral' as const,
       whisperModelPath: process.env.WHISPER_MODEL_PATH,
       piperModelPath: process.env.PIPER_MODEL_PATH,

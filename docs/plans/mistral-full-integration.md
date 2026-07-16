@@ -1,5 +1,10 @@
 # Full Mistral direct-API integration
 
+> **Status: done / superseded.** Live provider matrix now lives in `docs/VOICE.md`
+> (the source of truth). Since this plan: OpenAI STT (`gpt-4o-transcribe`) + TTS
+> (`gpt-4o-mini-tts`) added, and the untested `edge`/`coqui`/`faster-whisper`
+> engines removed. The TTS enum is now `mistral | openai | piper`.
+>
 > **Status: implemented.** Two API facts differed from the published docs and were
 > corrected against the `@mistralai/mistralai` v2.4.1 package source:
 > - `POST /v1/audio/transcriptions` is **multipart/form-data**, not `application/json`

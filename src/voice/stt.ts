@@ -294,158 +294,6 @@ export class WhisperEngine extends EventEmitter implements STTEngine {
   }
 }
 
-/**
- * Faster-Whisper (Python) based speech-to-text engine
- * Uses CTranslate2 for faster inference
- */
-export class FasterWhisperEngine extends EventEmitter implements STTEngine {
-  private model: string;
-  private options: STTOptions;
-  private pythonPath: string;
-
-  constructor(model: string = 'base', options: STTOptions = {}) {
-    super();
-    this.model = model;
-    this.pythonPath = process.env.PYTHON_PATH || 'python3';
-    this.options = {
-      language: 'en',
-      vadEnabled: true,
-      vadThreshold: 0.5,
-      ...options,
-    };
-  }
-
-  async transcribe(audio: Buffer | string): Promise<TranscriptionResult> {
-    const startTime = Date.now();
-
-    let audioPath: string;
-    let tempFile = false;
-
-    if (Buffer.isBuffer(audio)) {
-      audioPath = `/tmp/faster-whisper-${Date.now()}.wav`;
-      await Bun.write(audioPath, audio);
-      tempFile = true;
-    } else {
-      audioPath = audio;
-    }
-
-    try {
-      // Python script for faster-whisper
-      const script = `
-import sys
-import json
-import os
-from faster_whisper import WhisperModel
-
-model = WhisperModel(os.environ["WHISPER_MODEL"], device="auto", compute_type="auto")
-segments, info = model.transcribe(os.environ["WHISPER_AUDIO_PATH"], language=os.environ.get("WHISPER_LANGUAGE"))
-
-result = {
-    "text": "",
-    "segments": [],
-    "language": info.language,
-}
-
-for segment in segments:
-    result["segments"].append({
-        "start": segment.start,
-        "end": segment.end,
-        "text": segment.text,
-        "confidence": segment.avg_logprob,
-    })
-    result["text"] += segment.text
-
-print(json.dumps(result))
-`;
-
-      const proc = spawn({
-        cmd: [this.pythonPath, '-c', script],
-        stdout: 'pipe',
-        stderr: 'pipe',
-        env: {
-          ...process.env,
-          WHISPER_MODEL: this.model,
-          WHISPER_AUDIO_PATH: audioPath,
-          WHISPER_LANGUAGE: this.options.language || '',
-        },
-      });
-
-      const output = await new Response(proc.stdout).text();
-      const exitCode = await proc.exited;
-
-      if (exitCode !== 0) {
-        const stderr = await new Response(proc.stderr).text();
-        throw new Error(`Faster-Whisper failed: ${stderr}`);
-      }
-
-      const result = JSON.parse(output.trim());
-
-      return {
-        text: result.text?.trim() || '',
-        segments: result.segments || [],
-        language: result.language || this.options.language!,
-        duration: (Date.now() - startTime) / 1000,
-      };
-    } finally {
-      if (tempFile) {
-        await Bun.file(audioPath).exists() &&
-          await Bun.$`rm ${audioPath}`.quiet();
-      }
-    }
-  }
-
-  async *streamTranscribe(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
-    // Similar implementation to WhisperEngine
-    const tempPath = `/tmp/faster-whisper-stream-${Date.now()}.wav`;
-    const chunks: Uint8Array[] = [];
-
-    const reader = stream.getReader();
-    let totalBytes = 0;
-    const chunkThreshold = 16000 * 2 * 3;
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-
-        if (done) break;
-
-        chunks.push(value);
-        totalBytes += value.length;
-
-        if (totalBytes >= chunkThreshold) {
-          const audioData = Buffer.concat(chunks);
-          chunks.length = 0;
-          totalBytes = 0;
-
-          await Bun.write(tempPath, audioData);
-          const result = await this.transcribe(tempPath);
-
-          if (result.text) {
-            yield result.text;
-          }
-        }
-      }
-
-      if (chunks.length > 0) {
-        const audioData = Buffer.concat(chunks);
-        await Bun.write(tempPath, audioData);
-        const result = await this.transcribe(tempPath);
-
-        if (result.text) {
-          yield result.text;
-        }
-      }
-    } finally {
-      await Bun.file(tempPath).exists() &&
-        await Bun.$`rm ${tempPath}`.quiet();
-    }
-  }
-
-  async dispose(): Promise<void> {
-    // No persistent process to clean up
-  }
-}
-
 /** Mistral batch transcription model. */
 const MISTRAL_STT_MODEL = 'voxtral-mini-latest';
 /** Mistral realtime transcription model — `diarize` is not supported on this path. */
@@ -473,7 +321,7 @@ export function stripWavHeader(chunk: Uint8Array): Uint8Array {
   const bitsPerSample = view.getUint16(34, true);
   if (channels !== 1 || sampleRate !== REALTIME_SAMPLE_RATE || bitsPerSample !== 16) {
     throw new Error(
-      `Mistral realtime transcription requires 16kHz mono 16-bit PCM; got ${sampleRate}Hz ${channels}ch ${bitsPerSample}-bit. Resample before streaming.`
+      `Realtime transcription requires 16kHz mono 16-bit PCM; got ${sampleRate}Hz ${channels}ch ${bitsPerSample}-bit. Resample before streaming.`
     );
   }
   return chunk.subarray(44);
@@ -654,6 +502,172 @@ export class MistralSTTEngine extends EventEmitter implements STTEngine {
   }
 }
 
+const OPENAI_STT_REALTIME_MODEL = 'gpt-4o-transcribe';
+
+/**
+ * OpenAI realtime speech-to-text over `wss://api.openai.com/v1/realtime?intent=transcription`.
+ *
+ * Same push/pull websocket shape as {@link MistralSTTEngine}, but OpenAI's event
+ * protocol: we send a `transcription_session.update` on open to select the model
+ * and PCM format, stream `input_audio_buffer.append` frames, `commit` at end of
+ * utterance, and read `conversation.item.input_audio_transcription.delta`
+ * (sub-word deltas) until `.completed`. Expects headerless 16 kHz mono s16le PCM.
+ *
+ * `transcribe()` (batch) uses the plain `/v1/audio/transcriptions` endpoint.
+ */
+export class OpenAIRealtimeSTTEngine extends EventEmitter implements STTEngine {
+  private model: string;
+  private options: STTOptions;
+
+  constructor(model: string = OPENAI_STT_REALTIME_MODEL, options: STTOptions = {}) {
+    super();
+    this.model = model;
+    this.options = { language: 'en', ...options };
+  }
+
+  private async apiKey(): Promise<string> {
+    const { getOpenAIApiKey } = await import('../models/providers/openai-provider');
+    const key = await getOpenAIApiKey();
+    if (!key) throw new Error('OpenAI API key not available. Set OPENAI_API_KEY or store it in the vault.');
+    return key;
+  }
+
+  async transcribe(audio: Buffer | string): Promise<TranscriptionResult> {
+    const startTime = Date.now();
+    const buffer = Buffer.isBuffer(audio) ? audio : Buffer.from(await Bun.file(audio).arrayBuffer());
+    const fileName = typeof audio === 'string' ? audio.split('/').pop()! : 'audio.wav';
+
+    const form = new FormData();
+    form.append('model', this.model);
+    form.append('file', new Blob([new Uint8Array(buffer)]), fileName);
+    if (this.options.language) form.append('language', this.options.language);
+
+    const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${await this.apiKey()}` },
+      body: form,
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(`OpenAI transcription failed (${response.status}): ${detail.slice(0, 500)}`);
+    }
+    const raw = (await response.json()) as { text?: string };
+    return {
+      text: (raw.text || '').trim(),
+      segments: [],
+      language: this.options.language!,
+      duration: (Date.now() - startTime) / 1000,
+    };
+  }
+
+  async *streamTranscribe(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
+    const ws = new WebSocket('wss://api.openai.com/v1/realtime?intent=transcription', {
+      headers: { Authorization: `Bearer ${await this.apiKey()}`, 'OpenAI-Beta': 'realtime=v1' },
+    } as never);
+
+    const queue: Array<Record<string, unknown>> = [];
+    let wake: (() => void) | null = null;
+    let finished = false;
+    let socketError: Error | null = null;
+    let pumpError: Error | null = null;
+
+    const push = (item: Record<string, unknown> | null) => {
+      if (item) queue.push(item);
+      else finished = true;
+      wake?.();
+      wake = null;
+    };
+
+    ws.addEventListener('message', (e) => {
+      try {
+        push(JSON.parse(typeof e.data === 'string' ? e.data : new TextDecoder().decode(e.data as ArrayBuffer)));
+      } catch {
+        // Unknown frame — ignore.
+      }
+    });
+    ws.addEventListener('error', () => { socketError = new Error('OpenAI realtime websocket error'); push(null); });
+    ws.addEventListener('close', () => push(null));
+
+    await new Promise<void>((resolve, reject) => {
+      if (ws.readyState === WebSocket.OPEN) return resolve();
+      ws.addEventListener('open', () => resolve(), { once: true });
+      ws.addEventListener('error', () => reject(new Error('OpenAI realtime websocket failed to connect')), { once: true });
+    });
+
+    // Select model + PCM format; turn_detection: null → we mark the utterance
+    // boundary ourselves via commit when the input stream ends.
+    ws.send(JSON.stringify({
+      type: 'transcription_session.update',
+      session: {
+        input_audio_format: 'pcm16',
+        input_audio_transcription: { model: this.model, language: this.options.language },
+        turn_detection: null,
+      },
+    }));
+
+    const pump = (async () => {
+      const reader = stream.getReader();
+      let preamble: Uint8Array | null = new Uint8Array(0);
+      const send = (pcm: Uint8Array) => {
+        if (pcm.length) {
+          ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: Buffer.from(pcm).toString('base64') }));
+        }
+      };
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (preamble) {
+            const merged: Uint8Array = new Uint8Array(preamble.length + value.length);
+            merged.set(preamble);
+            merged.set(value, preamble.length);
+            if (merged.length < 44) { preamble = merged; continue; }
+            preamble = null;
+            send(stripWavHeader(merged));
+          } else {
+            send(value);
+          }
+        }
+        if (preamble) send(stripWavHeader(preamble));
+        ws.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
+      } finally {
+        reader.releaseLock();
+      }
+    })().catch((err: unknown) => {
+      pumpError = err instanceof Error ? err : new Error(String(err));
+      push(null);
+    });
+
+    try {
+      while (true) {
+        if (!queue.length) {
+          if (finished) break;
+          await new Promise<void>((resolve) => { wake = resolve; });
+          continue;
+        }
+        const event = queue.shift()!;
+        if (event.type === 'conversation.item.input_audio_transcription.delta') {
+          yield String(event.delta ?? '');
+        } else if (event.type === 'conversation.item.input_audio_transcription.completed') {
+          break;
+        } else if (event.type === 'error') {
+          const detail = (event.error as { message?: string } | undefined)?.message || 'unknown error';
+          throw new Error(`OpenAI realtime transcription error: ${detail}`);
+        }
+      }
+      if (pumpError) throw pumpError;
+      if (socketError) throw socketError;
+    } finally {
+      if (ws.readyState === WebSocket.OPEN) ws.close();
+      await pump;
+    }
+  }
+
+  async dispose(): Promise<void> {
+    // Stateless — the websocket is scoped to streamTranscribe().
+  }
+}
+
 /**
  * Transcribe an audio buffer with the best available engine, mirroring the
  * `/voice/transcribe` route's default order: local whisper.cpp (no API cost) →
@@ -710,17 +724,17 @@ export async function transcribeAudioBuffer(audio: Buffer, format = 'ogg'): Prom
  * Factory function to create STT engine
  */
 export function createSTTEngine(
-  type: 'whisper-cpp' | 'faster-whisper' | 'mistral' = 'faster-whisper',
+  type: 'whisper-cpp' | 'mistral' | 'openai' = 'whisper-cpp',
   modelPathOrName: string,
   options: STTOptions = {}
 ): STTEngine {
   switch (type) {
     case 'whisper-cpp':
       return new WhisperEngine(modelPathOrName, options);
-    case 'faster-whisper':
-      return new FasterWhisperEngine(modelPathOrName, options);
     case 'mistral':
       return new MistralSTTEngine(modelPathOrName || MISTRAL_STT_MODEL, options);
+    case 'openai':
+      return new OpenAIRealtimeSTTEngine(modelPathOrName || OPENAI_STT_REALTIME_MODEL, options);
     default:
       throw new Error(`Unknown STT engine type: ${type}`);
   }
@@ -738,7 +752,7 @@ export class SpeechToText {
   }
 
   static async create(
-    type: 'whisper-cpp' | 'faster-whisper' | 'mistral' = 'faster-whisper',
+    type: 'whisper-cpp' | 'mistral' | 'openai' = 'whisper-cpp',
     modelPathOrName: string = 'base',
     options: STTOptions = {}
   ): Promise<SpeechToText> {
