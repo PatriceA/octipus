@@ -10,8 +10,30 @@ import { parseToolCallArguments } from '@/models/tool-call-args';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
+import {
+  buildCachedSystem,
+  parseAnthropicResponse,
+  parseAnthropicSseStream,
+  toAnthropicMessages,
+  toAnthropicTools,
+} from './custom/anthropic-compat-provider';
+import { createIdleAbort, fetchWithRetryAfter, withTimeoutSignal } from './http-retry';
 
 const ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1/';
+const ANTHROPIC_VERSION = '2023-06-01';
+
+/**
+ * Opt-in flag (Phase A2) to route this provider through the NATIVE
+ * `/v1/messages` endpoint instead of the OpenAI-compat `/v1/chat/completions`
+ * one. The native path supports `cache_control` prompt caching (the compat
+ * layer strips it); the compat path stays the default until failover parity is
+ * proven on the native path (see the follow-ups plan). Default OFF — set
+ * ANTHROPIC_NATIVE_MESSAGES=1 to enable and A/B it.
+ */
+function nativeMessagesEnabled(): boolean {
+  const v = process.env.ANTHROPIC_NATIVE_MESSAGES;
+  return v === '1' || v === 'true';
+}
 
 /**
  * Anthropic direct provider -- calls the Anthropic API through its
@@ -27,6 +49,7 @@ export class AnthropicProvider implements ModelProvider {
   }
 
   async complete(options: CompletionOptions): Promise<CompletionResult> {
+    if (nativeMessagesEnabled()) return this.completeNative(options);
     const client = await this.createClient();
     const startTime = Date.now();
 
@@ -118,6 +141,10 @@ export class AnthropicProvider implements ModelProvider {
   }
 
   async *stream(options: CompletionOptions): AsyncGenerator<StreamChunk> {
+    if (nativeMessagesEnabled()) {
+      yield* this.streamNative(options);
+      return;
+    }
     const client = await this.createClient();
 
     const params: ChatCompletionCreateParams = {
@@ -188,6 +215,110 @@ export class AnthropicProvider implements ModelProvider {
         }
         yield { finishReason: chunk.choices[0].finish_reason };
       }
+    }
+  }
+
+  // -- Native /v1/messages path (Phase A2, opt-in) --
+
+  /** Build the native Anthropic request body. `system` is cached at the
+   * static/volatile boundary (buildCachedSystem) so this path gets prompt
+   * caching the OpenAI-compat path can't. Errors keep the 'anthropic' provider
+   * tag so failover classification is identical to the compat path. */
+  private buildNativeBody(options: CompletionOptions, stream: boolean): Record<string, unknown> {
+    const { system, messages } = toAnthropicMessages(transformMessagesForProvider(options.messages, this.name));
+    const body: Record<string, unknown> = {
+      model: options.model,
+      messages,
+      max_tokens: options.maxTokens || 4096,
+      stream,
+    };
+    if (system) body.system = buildCachedSystem(system);
+    if (options.temperature != null) body.temperature = options.temperature;
+    if (options.topP != null) body.top_p = options.topP;
+    if (options.stopSequences?.length) body.stop_sequences = options.stopSequences;
+    if (options.tools?.length) {
+      body.tools = toAnthropicTools(options.tools);
+      // Mirror the compat/default path's tool policy. Anthropic tool_choice:
+      // required→any, none→none, else auto (Anthropic's own default).
+      body.tool_choice =
+        options.toolChoice === 'required' ? { type: 'any' }
+        : options.toolChoice === 'none' ? { type: 'none' }
+        : { type: 'auto' };
+    }
+    // NOTE: options.responseFormat is intentionally NOT forwarded — Anthropic's
+    // native /v1/messages has no response_format field (structured output is via
+    // tools/prefill, not a JSON mode). The compat endpoint accepts it; the native
+    // path can't, so a json_object request degrades to prose here. B1's schema
+    // enforcement validates in-app and doesn't depend on this, but callers that
+    // rely on provider JSON mode must keep the flag off.
+    if (options.extraBody) Object.assign(body, options.extraBody);
+    return body;
+  }
+
+  private async nativeHeaders(): Promise<Record<string, string>> {
+    const apiKey = await this.getApiKey();
+    if (!apiKey) {
+      throw classifyError(new Error('Anthropic API key not available. Set ANTHROPIC_API_KEY or store it in the vault.'), 'anthropic');
+    }
+    return { 'x-api-key': apiKey, 'anthropic-version': ANTHROPIC_VERSION, 'content-type': 'application/json' };
+  }
+
+  private async completeNative(options: CompletionOptions): Promise<CompletionResult> {
+    const startTime = Date.now();
+    const headers = await this.nativeHeaders();
+    const body = this.buildNativeBody(options, false);
+
+    let res: Response;
+    try {
+      // Same transport as the compat native provider: single Retry-After-honoring
+      // 429 retry, and a 120s request timeout ANDed with the caller signal (so a
+      // caller signal never disables the timeout).
+      res = await fetchWithRetryAfter(`${ANTHROPIC_BASE_URL}messages`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: withTimeoutSignal(120_000, options.signal),
+      }, 'anthropic');
+    } catch (err) {
+      throw classifyError(err, 'anthropic');
+    }
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      throw classifyError({ status: res.status, message: errText.slice(0, 500) || `HTTP ${res.status}` }, 'anthropic');
+    }
+    const data = await res.json();
+    return parseAnthropicResponse(data, options.model, Date.now() - startTime);
+  }
+
+  private async *streamNative(options: CompletionOptions): AsyncGenerator<StreamChunk> {
+    const headers = await this.nativeHeaders();
+    const body = this.buildNativeBody(options, true);
+
+    // Idle (per-chunk) timeout that resets on each streamed chunk — a long but
+    // healthy stream must not be killed by a fixed total-duration cap; the caller
+    // signal still aborts. Mirrors the compat native provider's stream path.
+    const idle = createIdleAbort(180_000, options.signal);
+    let res: Response;
+    try {
+      res = await fetch(`${ANTHROPIC_BASE_URL}messages`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: idle.signal,
+      });
+    } catch (err) {
+      idle.clear();
+      throw classifyError(err, 'anthropic');
+    }
+    if (!res.ok || !res.body) {
+      idle.clear();
+      const errText = await res.text().catch(() => '');
+      throw classifyError({ status: res.status, message: errText.slice(0, 500) || `HTTP ${res.status}` }, 'anthropic');
+    }
+    try {
+      yield* parseAnthropicSseStream(res.body, 'anthropic', idle.touch);
+    } finally {
+      idle.clear();
     }
   }
 

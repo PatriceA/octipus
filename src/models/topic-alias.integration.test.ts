@@ -39,7 +39,8 @@ beforeAll(async () => {
     name: 'lane-backup', provider: 'ollama', modelId: 'lane-backup-id', isEnabled: true,
     topicRoles: { agents: 'backup' },
   } as never);
-});
+}, 30_000); // initializeDb + full migration run can exceed the default hook
+            // timeout under a loaded CI runner — a recurring "(unnamed)" flake.
 
 afterAll(async () => {
   try {
