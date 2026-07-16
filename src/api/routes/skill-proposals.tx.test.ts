@@ -106,4 +106,55 @@ describe('skill-proposal approve atomicity (M14)', () => {
     const [proposal] = await db.select().from(skillProposals).where(eq(skillProposals.id, id));
     expect(proposal.status).toBe('pending');
   });
+
+  test('a kind:skill proposal promotes into a skill row (not an expert)', async () => {
+    const { getDb } = await import('@/db/postgres');
+    const { eq } = await import('drizzle-orm');
+    const { skills } = await import('@/db/schema/skills');
+    const { skillProposals } = await import('@/db/schema/skill-proposals');
+    const db = getDb();
+
+    // The kind + sourceRef columns round-trip.
+    const [prop] = await db.insert(skillProposals).values({
+      userId,
+      fingerprint: randomUUID(),
+      name: 'deploy-runbook',
+      description: 'deploy steps',
+      draftPromptTemplate: '1. build 2. ship',
+      kind: 'skill',
+      sourceRef: 'trajectory:abc',
+      lastExemplarAt: new Date(),
+    }).returning();
+    expect(prop.kind).toBe('skill');
+    expect(prop.sourceRef).toBe('trajectory:abc');
+
+    // The approve 'skill' branch: create a skill + flip status, atomically.
+    const created = await db.transaction(async (tx) => {
+      const [skill] = await tx.insert(skills).values({
+        id: randomUUID(),
+        name: prop.name,
+        description: prop.description,
+        content: prop.draftPromptTemplate,
+        category: 'general',
+        isSystem: false,
+        userId,
+      }).returning();
+      await tx.update(skillProposals).set({ status: 'promoted' }).where(eq(skillProposals.id, prop.id));
+      return skill;
+    });
+
+    expect(created?.content).toBe('1. build 2. ship');
+    const [after] = await db.select().from(skillProposals).where(eq(skillProposals.id, prop.id));
+    expect(after.status).toBe('promoted');
+  });
+
+  test('kind defaults to expert for a proposal that does not set it', async () => {
+    const { getDb } = await import('@/db/postgres');
+    const { eq } = await import('drizzle-orm');
+    const { skillProposals } = await import('@/db/schema/skill-proposals');
+    const db = getDb();
+    const id = await seedProposal();
+    const [prop] = await db.select().from(skillProposals).where(eq(skillProposals.id, id));
+    expect(prop.kind).toBe('expert');
+  });
 });
