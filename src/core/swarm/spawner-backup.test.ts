@@ -7,7 +7,8 @@
  * stub backup lookup and the spawner's private `singleSpawnAndRun` is
  * instance-patched.
  */
-import { describe, expect, mock, test } from 'bun:test';
+import { afterAll, describe, expect, mock, test } from 'bun:test';
+import * as realModelRegistry from '@/models/model-registry';
 
 let backupModelId: string | null = null;
 
@@ -30,6 +31,13 @@ if (!inIntegration) {
       getDefaultModel: async () => null,
     }),
   }));
+  // Restore the real module after this suite — bun's mock.module is
+  // process-global, so without this the partial stub leaks into later suites
+  // (e.g. memory.extractor, which then sees a getModelRegistry() missing the
+  // methods it needs). This mirrors openai-compat.test.ts.
+  afterAll(() => {
+    mock.module('@/models/model-registry', () => realModelRegistry);
+  });
 }
 
 const { SwarmSpawner } = await import('./spawner');
