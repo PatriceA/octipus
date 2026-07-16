@@ -13,9 +13,17 @@
 
 import { asc, desc, eq, or } from 'drizzle-orm';
 import { coreLogger } from '@/utils/logger';
+import { truncateLinesToTokens } from '@/utils/token-count';
 
 /** Hard cap on prompt lines — an unbounded expert list would eat the context. */
 const MAX_EXPERTS_IN_PROMPT = 50;
+
+// Token budget for the whole expert list (Phase 5 item 2 follow-up). The count
+// cap alone can't bound it — descriptions are free-form and uncapped, so a few
+// verbose experts could dominate the prompt. Sized so 50 minimal lines (the
+// count cap) always fit; it only bites when descriptions bloat the block.
+// Custom experts sort first, so budget pressure drops system defaults last.
+const EXPERT_INDEX_TOKEN_BUDGET = 3000;
 
 export interface ExpertIndexEntry {
   id: string;
@@ -62,14 +70,17 @@ export async function buildExpertIndexBlock(userId: string): Promise<string> {
   }
   if (rows.length === 0) return '';
 
-  const truncated = rows.length > MAX_EXPERTS_IN_PROMPT;
-  const shown = truncated ? rows.slice(0, MAX_EXPERTS_IN_PROMPT) : rows;
+  const countCapped = rows.length > MAX_EXPERTS_IN_PROMPT;
+  const shown = countCapped ? rows.slice(0, MAX_EXPERTS_IN_PROMPT) : rows;
 
-  const lines = shown.map((e) => {
+  const allLines = shown.map((e) => {
     const desc = e.description ? ` — ${e.description}` : '';
     const custom = e.isSystem ? '' : ' [custom]';
     return `- ${e.name}${custom} (role: ${e.role}, expertId: ${e.id})${desc}`;
   });
+  // Bound the list in tokens too, keeping whole lines so no expertId is severed.
+  const { lines, truncated: tokenCapped } = truncateLinesToTokens(allLines, EXPERT_INDEX_TOKEN_BUDGET);
+  const truncated = countCapped || tokenCapped;
 
   return (
     `\n\nAVAILABLE EXPERTS\n` +
@@ -78,6 +89,8 @@ export async function buildExpertIndexBlock(userId: string): Promise<string> {
     `Custom experts (marked [custom]) are user-created specialists — prefer them over the generic system expert of the same role when their description matches the task. ` +
     `If no listed expert stands out, omit \`expertId\` and the role's default expert is used.\n` +
     lines.join('\n') +
-    (truncated ? `\n(…list truncated at ${MAX_EXPERTS_IN_PROMPT} experts)` : '')
+    // "top N" (not "N total") so the model knows more experts exist beyond the
+    // budget/count cap and can still omit expertId to reach an unlisted one.
+    (truncated ? `\n(…list truncated — showing top ${lines.length} experts; more exist)` : '')
   );
 }

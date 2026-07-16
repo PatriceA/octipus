@@ -47,13 +47,23 @@ deterministic date marker and caches the static prefix.
   cost/telemetry already measure this).
 
 ### A2. Native migration of the main `anthropic-provider`
-- The main `anthropic-provider` speaks OpenAI-compat to
-  `api.anthropic.com/v1/`, which **strips `cache_control`** — so it can never
-  cache without moving to the native `/v1/messages` path.
-- **Risk (parent plan §Risks):** the native path touches `classifyError` /
-  failover. Keep the OpenAI-compat path as a fallback until parity is proven;
-  gate the native path behind a model/config flag; A/B the error-classification
-  behavior before flipping the default.
+- The main `anthropic-provider` (`anthropic-provider.ts`) speaks OpenAI-compat
+  via the `openai` SDK to `api.anthropic.com/v1/chat/completions`, which
+  **strips `cache_control`** (confirmed by the in-file comment at
+  `anthropic-provider.ts:56-61`) — so it can never cache without moving to the
+  native `/v1/messages` path.
+- **Don't build a fresh native path.** The native `/v1/messages` transport
+  already exists as `CustomAnthropicCompatProvider` (`custom-anthropic`,
+  `custom/anthropic-compat-provider.ts`), and it already calls
+  `buildCachedSystem`. A2 is: route Anthropic-family models through that
+  existing provider (or fold its `/v1/messages` + `buildCachedSystem` path into
+  `anthropic-provider`), not write native Anthropic wire code from scratch.
+- **Risk (parent plan §Risks):** both providers already wrap errors with
+  `classifyError` (`anthropic-provider.ts` lines 72/116/150/248;
+  `custom-anthropic` lines 62/67/102) but tag a different provider name, so
+  failover behavior can diverge. Keep the OpenAI-compat path as a fallback until
+  parity is proven; gate the native path behind a model/config flag; A/B the
+  error-classification behavior before flipping the default.
 - **Acceptance:** failover parity (same `ClassifiedError` outcomes on injected
   429/500/timeout) + the same cache-hit acceptance as A1.
 
@@ -61,19 +71,34 @@ deterministic date marker and caches the static prefix.
 
 ## Item B — Enforced structured output on agent boundaries
 
-**Shipped:** structured *consumption* — receipt in the `<ChildResult>`
-envelope, `parseStructuredHandoff`, QA `confidence` enum, all with loud
-fallbacks (PR #221).
+**Shipped:** structured *consumption* on two distinct boundaries — the swarm
+`<ChildResult>` envelope + deterministic `SwarmReceipt`
+(`collect-tool.ts`/`receipt.ts`), the pipeline handoff parser
+`parseStructuredHandoff` with per-field regex fallback (`handoff.ts`), and the
+QA 3-tier verdict parser (`parseQAResult` → inline → `parseProseVerdict`) with
+the `confidence` enum — all with loud fallbacks (PR #221). Note these are
+separate boundaries: `parseStructuredHandoff` runs on the *pipeline* stage
+handoff, not on `<ChildResult>` receipt.
 
 **Remaining (eval-gated — this is the *enforcement* half):**
 
 ### B1. Enforce `expectedOutput.schema` as provider `responseFormat`
-- When a `spawn_child` brief declares `expectedOutput.schema`, set it as
-  provider structured output on the child's **final** turn — not every turn
-  (`json_object`/`json_schema` on a tool-calling turn breaks the tool call).
+- **Prerequisite — the `responseFormat` surface has no schema slot yet.**
+  `CompletionOptions.responseFormat` is `{ type: 'text' | 'json_object' }`
+  (`litellm-client.ts:25`); there is no `json_schema` path. Either (a) extend
+  that type to carry a `json_schema` and map it per provider, or (b) scope B1 to
+  `json_object` + in-app validation of `expectedOutput.schema` after the fact.
+  Pick (b) unless eval shows provider-side `json_schema` measurably beats
+  post-hoc validation — it's the smaller change and avoids per-provider schema
+  mapping. `expectedOutput.schema` is currently plumbed into the brief
+  (`spawner.ts:187`) but **only `shape`/`maxTokens` reach the child prompt**
+  (`spawner.ts:1378-1382`) — `schema` is stored-but-unused today.
+- Apply on the child's **final** turn — not every turn (`json_object` on a
+  tool-calling turn breaks the tool call).
 - **Threading required:** `brief.expectedOutput.schema` → child agent context →
   `agent-worker` completion opts, applied only when the worker is emitting its
-  final answer (detect via the `final` tool / no-more-tools state).
+  final answer (detect via the `final` tool via `hasFinalToolCall` /
+  no-more-tools state — both already exist in `agent-worker`/`tool-executor`).
 - **Weak-model caveat (parent §Risks):** some models ignore `json_object`.
   Fail loud — let the typed `ChildResult.status` carry the failure; never
   silently degrade to prose.
@@ -102,16 +127,21 @@ fallbacks (PR #221).
 
 ## Item C — Dense per-role prompt rewrites (P4 item 3)
 
-`prompt.lite.md` proves 485 tokens can do the job of 2,080. Rewrite each role
-prompt as a dense rule-table variant.
+Only `orchestrator` has a `prompt.lite.md` today (485 tokens vs the 2,080-token
+`prompt.md`); every other role ships a single `prompt.md` and workers *trim it
+inline* by section (`worker-spawner.ts`, gated on `isSmall`) rather than
+selecting a separate tier file. Give each role a dense rule-table variant so the
+small-model path selects a purpose-built prompt instead of a trimmed one.
 
 - **Per-role, per-tier, eval-gated.** For each role: author a dense variant,
   A/B against `bun run eval` + red-team, ship only the variant that scores
   **equal-or-better** on both quality and red-team. A terse prompt that ties on
   quality but regresses on red-team does not ship.
 - `SECURITY_PREAMBLE` is exempt (rule 1) — never terse-rewritten.
-- Small models need *different*, not just shorter, prompts — keep the
-  per-role-per-tier split the existing small-model detection already selects.
+- Small models need *different*, not just shorter, prompts — the tier detection
+  already exists (`mode-selector.ts` `resolveOrchestratorMode`, `small-model.ts`
+  `isSmallModel`, both off `deriveParamCount`); this item adds the per-role
+  prompt files it selects, which don't exist yet outside `orchestrator`.
 - **Acceptance:** role-prompt token count materially down (target 40–60%) with
   eval + red-team parity, per role.
 - **Why not done inline:** requires the eval harness to compare variants; a
