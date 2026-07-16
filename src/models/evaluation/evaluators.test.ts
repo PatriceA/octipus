@@ -1,4 +1,10 @@
-import { mock } from 'bun:test';
+import { afterAll, mock } from 'bun:test';
+// Captured BEFORE the mock.module calls below so afterAll can restore the real
+// modules — bun's mock.module is process-global, and this suite's partial
+// model-registry stub (truthy getModelForTopic, no registerModel) otherwise
+// leaks forward and breaks memory.extractor / topics / swarm-spawner suites.
+import * as realProviders from '@/models/providers';
+import * as realModelRegistry from '@/models/model-registry';
 
 // This is a pure unit suite: every dependency below is replaced via
 // `mock.module`, which bun applies process-globally for the whole `bun test`
@@ -57,6 +63,14 @@ mockModule('@/models/model-registry', () => ({
     }),
   }),
 }));
+
+// Restore the real modules after this suite so the partial stubs above don't
+// leak into later real-DB suites (mock.module is process-global; noop under
+// INTEGRATION where mockModule is already a noop).
+afterAll(() => {
+  mockModule('@/models/providers', () => realProviders);
+  mockModule('@/models/model-registry', () => realModelRegistry);
+});
 
 import { describe, test, expect } from 'bun:test';
 import {
