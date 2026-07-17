@@ -6,7 +6,33 @@
 > (Honcho user modeling, memory-graph UI, `/journey`, extra terminal backends,
 > Windows Git Bash bundle) are intentionally absent.
 
-Status: proposed · Owner: TBD · Branch of record: `claude/hermes-octopus-comparison-o6ysqo`
+Status: **in progress** · Branch of record: `claude/hermes-octopus-comparison-o6ysqo`
+
+## Status (2026-07-17)
+
+Shipped as independently reviewed, CI-green, squash-merged PRs (in dependency
+order, on top of the CI unblock #240 which fixed a team-wide red `main`):
+
+| Item | State | PR |
+|------|-------|----|
+| A2 · Scheduler reliability hardening (+ worker-loop boot wiring) | ✅ merged | #238 |
+| A3 · Vertex AI provider (OAuth2 token minting) | ✅ merged | #241 |
+| B1 · Completion contracts — evidence ledger (step 1) | ✅ merged | #242 |
+| B2 · Trajectory export for training | ✅ merged | #243 |
+| A1-M1 · `kind` discriminator + approve-into-skill + `skill_distill` tool | ✅ merged | #244 |
+| A1-M2 · Distill from verified-good trajectories | ✅ merged | #245 |
+| **A1-M3** · Post-task distill nudge | ⏳ remaining | — |
+| **A1-M4** · Curator refresh half | ⏳ remaining | — |
+| **B1b** · `pre_verify` hooks + verify-stop-loop (B1 steps 2–4) | ⏳ remaining | — |
+| C1 · Mixture-of-Agents | 🅿️ parked (opt-in preset; see ROADMAP → Later) | — |
+
+**A1-M3 open decision** (surfaced during implementation): the nudge can be
+*nudge-then-distill-on-accept* (the plan's intent — cheap, but needs new
+accept→run UI plumbing across orchestrator/gateway/web) or
+*auto-distil-to-a-pending-proposal* after complex successful runs (fully wired
+today via the existing proposals review page — the pending proposal *is* the
+nudge, human still approves — but spends an LLM call per complex run). Pick a
+direction before building M3.
 
 ---
 

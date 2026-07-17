@@ -129,6 +129,43 @@ Skills are domain knowledge documents (markdown with principles, best practices,
 | plugin-development | Coder |
 | networking | DevOps Engineer, Security Analyst |
 
+### Skill lifecycle: distillation → proposal → promotion
+
+Skills are not only seeded — octipus can **learn** them from real work and
+**retire** them when they go stale. Both halves route through
+`skill_proposals`; nothing becomes a live skill without human approval.
+
+**Generate (distillation).** The `skill_distill` tool distils a *reusable
+procedure* — steps and principles, not the one-off instance — into a **pending
+proposal** (`kind = 'skill'`). Sources:
+
+| `source` | Material |
+|---|---|
+| `conversation` | The recent turns of the current session |
+| `text` | Literal `content` you pass in |
+| `trajectory` | A recorded run (`ref` = a `trajectory_runs` id) — **gated on quality** |
+
+The `trajectory` source only distils a run whose `outcome` is `success`, and —
+when the session recorded [verification evidence](OBSERVABILITY.md) — only when
+none of it failed. The distiller model resolves via the `skill_distillation`
+topic, which canonicalizes to the shared **`background`** lane (bind a cheap /
+local model there); an unbound lane fails loud. Distillation is never a silent
+write: it always produces a *pending proposal*.
+
+**Promote (approval).** `POST /api/skills/proposals/:id/approve` promotes a
+proposal. It branches on `kind`:
+
+- `kind = 'skill'` → inserts a row into the `skills` table (a distilled
+  procedure).
+- `kind = 'expert'` → creates a custom expert (the default / legacy path).
+
+Each promotion is atomic with the status flip (no orphan skill/expert if the
+status update fails). Rejecting a proposal suppresses re-proposal for 90 days.
+
+**Prune (curation).** `runSkillCurator` flags skills unused for 30 days and
+auto-archives after 90 (see the roadmap "Skill auto-extension" item for the
+generative-refresh follow-up).
+
 ## Pipeline Stages
 
 Pipeline stages specify a `topic` field that determines both the role (tools) and model:

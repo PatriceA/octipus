@@ -14,6 +14,29 @@ Both are stateless — configuration lives entirely on the `model_config` row
 and is loaded per call. Add as many models against the same upstream as needed;
 each row points at its own endpoint and key.
 
+> **Reaching Google Vertex AI?** For service-account auth (no static keys),
+> prefer the **first-class `vertex` provider** below over the `custom-gemini`
+> route. Use `custom-gemini` only for an API-key or proxied Gemini endpoint.
+
+## First-class Vertex AI provider
+
+`provider = 'vertex'` is a built-in provider (not a custom flavor) that talks to
+Vertex's OpenAI-compatible endpoint and authenticates with a **short-lived
+OAuth2 access token minted from a service account** — **no static API key**.
+
+- **Credentials.** Store the service-account JSON in the vault as
+  `system` / `vertex_service_account`, or set `VERTEX_SERVICE_ACCOUNT_JSON`.
+  The token is minted via the RS256 JWT-bearer grant (`node:crypto`, no
+  `google-auth-library` dependency), cached, and refreshed ~60 s before expiry;
+  concurrent refreshes coalesce into one mint. Only the derived bearer token
+  ever reaches the model client.
+- **Project / region.** `VERTEX_PROJECT` (or `GOOGLE_CLOUD_PROJECT`, or the
+  SA's `project_id`) and `VERTEX_LOCATION` (default `us-central1`).
+- **Model selection.** A model is routed here by a `vertex/` (or `vertex_ai/`)
+  prefix — e.g. `vertex/gemini-2.0-flash`, which is sent to Vertex as
+  `google/gemini-2.0-flash`. `checkHealth()` mints a token to verify the
+  credential path without a model call.
+
 ## Configuration
 
 A custom-provider model row uses the existing `model_config` columns plus a
