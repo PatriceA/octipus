@@ -95,7 +95,8 @@ const ENUM_LABELS: Record<string, Record<string, { label: string; description: s
   'voice.ttsProvider': {
     mistral: { label: 'Voxtral (Mistral cloud)', description: 'Cloud voice, the default. Requires a Mistral API key.' },
     openai: { label: 'OpenAI (gpt-4o-mini-tts)', description: 'Cloud voice. Requires an OpenAI API key.' },
-    piper: { label: 'Piper (offline)', description: 'Runs on this machine, no API key, free. Needs the Piper binary + a .onnx voice file installed.' },
+    kokoro: { label: 'Kokoro (offline)', description: 'Runs on this machine, no API key, free. Best-quality local voice in 2026. Needs the kokoro-tts CLI installed.' },
+    piper: { label: 'Piper (offline)', description: 'Runs on this machine, no API key, free. Fastest/smallest local voice for low-end hardware. Needs the Piper binary + a .onnx voice file installed.' },
   },
 };
 

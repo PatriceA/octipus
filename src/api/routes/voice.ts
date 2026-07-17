@@ -25,6 +25,7 @@ const TTS_CONTENT_TYPES: Record<TtsFormat, string> = {
  */
 const TTS_ENGINE_FORMAT: Record<string, TtsFormat | null> = {
   piper: 'wav',
+  kokoro: 'wav',
   mistral: null, // honours the requested format
   openai: null, // honours the requested format
 };

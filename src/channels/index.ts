@@ -207,7 +207,7 @@ async function synthesizeVoiceReply(text: string): Promise<Attachment[] | undefi
     const provider = config.voice.ttsProvider;
     // Each engine's real output format (piper hardcodes wav; mistral/openai
     // honour the request) — so the extension always matches the bytes.
-    const ext = ({ piper: 'wav', mistral: 'mp3', openai: 'mp3' } as Record<string, string>)[provider] || 'mp3';
+    const ext = ({ piper: 'wav', kokoro: 'wav', mistral: 'mp3', openai: 'mp3' } as Record<string, string>)[provider] || 'mp3';
     const { createTTSEngine } = await import('@/voice/tts');
     const engine = createTTSEngine(provider, undefined, { outputFormat: ext as 'wav' | 'mp3' });
     const audio = await engine.synthesize(text.slice(0, 2000));

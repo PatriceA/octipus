@@ -106,6 +106,86 @@ export class PiperEngine extends EventEmitter implements TTSEngine {
   }
 }
 
+/**
+ * Kokoro TTS engine (local, ONNX, no API key). Shells out to the `kokoro-tts`
+ * CLI (pip package, ONNX build — no torch), which reads an input text file and
+ * writes a wav. Kokoro-82M leads open local TTS on quality in 2026 while still
+ * running faster-than-real-time on CPU; Piper stays as the tiny/RPi fallback.
+ *
+ * Voices are baked into the model (fixed set, no cloning), so `getVoices`
+ * returns a static list rather than scanning the filesystem like Piper.
+ */
+const KOKORO_DEFAULT_VOICE = 'af_sarah';
+const KOKORO_VOICES = [
+  'af_heart', 'af_sarah', 'af_bella', 'af_nicole', 'af_sky',
+  'am_adam', 'am_michael', 'bf_emma', 'bf_isabella', 'bm_george', 'bm_lewis',
+];
+
+export class KokoroEngine extends EventEmitter implements TTSEngine {
+  private options: TTSOptions;
+
+  constructor(voice?: string, options: TTSOptions = {}) {
+    super();
+    this.options = {
+      speed: 1.0,
+      sampleRate: 24000, // Kokoro synthesises at 24 kHz
+      outputFormat: 'wav',
+      ...options,
+      voice: voice || options.voice || KOKORO_DEFAULT_VOICE,
+    };
+  }
+
+  async synthesize(text: string): Promise<Buffer> {
+    const stamp = `${Date.now()}-${process.pid}`;
+    const inputPath = `/tmp/kokoro-${stamp}.txt`;
+    const outputPath = `/tmp/kokoro-${stamp}.wav`;
+
+    try {
+      await Bun.write(inputPath, text);
+
+      const args = [
+        inputPath, outputPath,
+        '--voice', this.options.voice || KOKORO_DEFAULT_VOICE,
+        '--speed', String(this.options.speed ?? 1.0),
+      ];
+
+      const proc = spawn({
+        cmd: ['kokoro-tts', ...args],
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+
+      const exitCode = await proc.exited;
+      if (exitCode !== 0) {
+        const stderr = await new Response(proc.stderr).text();
+        throw new Error(`Kokoro failed: ${stderr || `exit ${exitCode}`}`);
+      }
+
+      const audioBuffer = await Bun.file(outputPath).arrayBuffer();
+      return Buffer.from(audioBuffer);
+    } finally {
+      await Bun.file(inputPath).exists() && (await Bun.$`rm ${inputPath}`.quiet());
+      await Bun.file(outputPath).exists() && (await Bun.$`rm ${outputPath}`.quiet());
+    }
+  }
+
+  async *streamSynthesize(text: string): AsyncGenerator<Buffer> {
+    // ponytail: sentence-split like Piper; the CLI has no streaming mode.
+    const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
+    for (const sentence of sentences) {
+      yield await this.synthesize(sentence.trim());
+    }
+  }
+
+  async getVoices(): Promise<string[]> {
+    return KOKORO_VOICES;
+  }
+
+  async dispose(): Promise<void> {
+    // No persistent process.
+  }
+}
+
 const MISTRAL_TTS_MODEL = 'voxtral-mini-tts-2603';
 /**
  * Voxtral TTS rejects a request with no voice ("Either ref_audio or voice must
@@ -258,7 +338,7 @@ export class OpenAITTSEngine extends EventEmitter implements TTSEngine {
  * Factory function to create TTS engine
  */
 export function createTTSEngine(
-  type: 'piper' | 'mistral' | 'openai' = 'mistral',
+  type: 'piper' | 'kokoro' | 'mistral' | 'openai' = 'mistral',
   modelOrVoice?: string,
   options: TTSOptions = {}
 ): TTSEngine {
@@ -267,6 +347,8 @@ export function createTTSEngine(
       const modelPath = modelOrVoice || '~/.local/share/piper/voices/en_US-lessac-medium.onnx';
       const configPath = modelPath.replace('.onnx', '.json');
       return new PiperEngine(modelPath, configPath, options);
+    case 'kokoro':
+      return new KokoroEngine(modelOrVoice, options);
     case 'mistral':
       return new MistralTTSEngine(modelOrVoice, options);
     case 'openai':
@@ -288,7 +370,7 @@ export class TextToSpeech {
   }
 
   static async create(
-    type: 'piper' | 'mistral' | 'openai' = 'mistral',
+    type: 'piper' | 'kokoro' | 'mistral' | 'openai' = 'mistral',
     modelOrVoice?: string,
     options: TTSOptions = {}
   ): Promise<TextToSpeech> {

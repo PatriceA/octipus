@@ -1,11 +1,12 @@
 import { describe, test, expect } from 'bun:test';
-import { createTTSEngine, MistralTTSEngine, OpenAITTSEngine, PiperEngine } from './tts';
+import { createTTSEngine, KokoroEngine, MistralTTSEngine, OpenAITTSEngine, PiperEngine } from './tts';
 
 describe('createTTSEngine', () => {
   test('maps each provider to its engine class', () => {
     expect(createTTSEngine('mistral')).toBeInstanceOf(MistralTTSEngine);
     expect(createTTSEngine('openai')).toBeInstanceOf(OpenAITTSEngine);
     expect(createTTSEngine('piper')).toBeInstanceOf(PiperEngine);
+    expect(createTTSEngine('kokoro')).toBeInstanceOf(KokoroEngine);
   });
 
   test('rejects removed/unknown engine types', () => {

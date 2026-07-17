@@ -1,7 +1,7 @@
 export type { STTEngine, STTOptions, TranscriptionResult } from './stt';
 export { createSTTEngine, MistralSTTEngine, OpenAIRealtimeSTTEngine, SpeechToText, WhisperEngine } from './stt';
 export type { TTSEngine, TTSOptions } from './tts';
-export { createTTSEngine, MistralTTSEngine, OpenAITTSEngine, PiperEngine, TextToSpeech } from './tts';
+export { createTTSEngine, KokoroEngine, MistralTTSEngine, OpenAITTSEngine, PiperEngine, TextToSpeech } from './tts';
 export type { WakeWordDetection, WakeWordEngine, WakeWordOptions } from './wake-word';
 export {
   createWakeWordEngine,
@@ -24,7 +24,7 @@ export interface VoiceServiceConfig {
     language?: string;
   };
   tts?: {
-    type: 'piper' | 'mistral' | 'openai';
+    type: 'piper' | 'kokoro' | 'mistral' | 'openai';
     voice?: string;
     speed?: number;
   };
