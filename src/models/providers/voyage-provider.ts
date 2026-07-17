@@ -131,3 +131,31 @@ export class VoyageProvider implements ModelProvider {
     }
   }
 }
+
+/**
+ * Voyage's embedding models are a static, published set — there is no `/models`
+ * discovery endpoint. Kept here so the add-model picker can offer them.
+ * https://docs.voyageai.com/docs/embeddings
+ */
+export const VOYAGE_EMBEDDING_MODELS: Array<{ id: string; label: string }> = [
+  { id: 'voyage-3.5', label: 'Voyage 3.5' },
+  { id: 'voyage-3.5-lite', label: 'Voyage 3.5 Lite' },
+  { id: 'voyage-3-large', label: 'Voyage 3 Large' },
+  { id: 'voyage-3', label: 'Voyage 3' },
+  { id: 'voyage-3-lite', label: 'Voyage 3 Lite' },
+  { id: 'voyage-code-3', label: 'Voyage Code 3' },
+  { id: 'voyage-finance-2', label: 'Voyage Finance 2' },
+  { id: 'voyage-law-2', label: 'Voyage Law 2' },
+  { id: 'voyage-multilingual-2', label: 'Voyage Multilingual 2' },
+];
+
+/** True if a Voyage key is available (env var or vault) — mirrors getApiKey(). */
+export async function isVoyageConfigured(): Promise<boolean> {
+  if (process.env.VOYAGE_API_KEY) return true;
+  try {
+    const { getVault } = await import('@/security/vault');
+    return !!(await getVault().getByName('system', 'voyage_api_key'));
+  } catch {
+    return false;
+  }
+}

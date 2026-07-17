@@ -175,7 +175,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
         configured.add('custom-gemini');
         try {
           // Check vault-based providers by testing their availability
-          const providerChecks = ['openai', 'anthropic', 'deepseek', 'gemini', 'vertex', 'grok', 'mistral', 'openrouter'] as const;
+          const providerChecks = ['openai', 'anthropic', 'deepseek', 'gemini', 'vertex', 'grok', 'mistral', 'openrouter', 'voyage'] as const;
           const [healthResults, healthDetailed] = await Promise.all([
             Promise.allSettled(
               providerChecks.map(p => api.get<{ configured?: boolean }>(`/models/providers/${p}/available`))

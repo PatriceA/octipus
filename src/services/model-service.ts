@@ -345,6 +345,15 @@ export async function getAvailableProviderModels(
       : { configured: false, error: 'Vertex service account not configured. Add it on the Secrets page.', models: [] };
   }
 
+  // Voyage is embeddings-only with a static, published model set and no
+  // `/models` discovery endpoint — return the known list directly.
+  if (provider === 'voyage') {
+    const { isVoyageConfigured, VOYAGE_EMBEDDING_MODELS } = await import('@/models/providers/voyage-provider');
+    return (await isVoyageConfigured())
+      ? { configured: true, models: VOYAGE_EMBEDDING_MODELS, source: 'static' }
+      : { configured: false, error: 'Voyage API key not configured. Add voyage_api_key on the Secrets page.', models: [] };
+  }
+
   const { discover, getDiscoverableProviders } = await import('@/models/providers/discovery');
 
   if (!getDiscoverableProviders().includes(provider)) {
