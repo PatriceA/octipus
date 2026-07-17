@@ -155,12 +155,14 @@ export const voiceConfigSchema = z.object({
   /**
    * Which TTS engine serves /api/voice/speak. Defaults to cloud (mistral/Voxtral)
    * so voice-out works with no host setup. `openai` = gpt-4o-mini-tts (cloud);
-   * `piper` is the local opt-in (needs a binary + .onnx voice).
+   * `kokoro` and `piper` are the local opt-ins. `kokoro` (Kokoro-82M via the
+   * `kokoro-tts` CLI) leads open local TTS on quality in 2026; `piper` is the
+   * tiny/low-end fallback.
    *
    * `.catch` coerces a now-removed value (an old `edge`/`coqui` row persisted in
    * the settings DB) back to the default instead of failing the whole config load.
    */
-  ttsProvider: z.enum(['mistral', 'openai', 'piper']).default('mistral').catch('mistral'),
+  ttsProvider: z.enum(['mistral', 'openai', 'kokoro', 'piper']).default('mistral').catch('mistral'),
   whisperModelPath: z.string().optional(),
   piperModelPath: z.string().optional(),
   wakeWord: z.string().optional(),
