@@ -335,6 +335,16 @@ export async function getAvailableProviderModels(
   query: AvailableProviderModelsQuery,
   userId: string,
 ) {
+  // Vertex has no simple model-list endpoint (Model Garden isn't a `/models`
+  // call), so there is no discovery: "configured" means a service account is
+  // present and the user types the model id manually (e.g. gemini-2.0-flash).
+  if (provider === 'vertex') {
+    const { isVertexConfigured } = await import('@/models/providers/vertex-provider');
+    return (await isVertexConfigured())
+      ? { configured: true, models: [], source: 'manual' }
+      : { configured: false, error: 'Vertex service account not configured. Add it on the Secrets page.', models: [] };
+  }
+
   const { discover, getDiscoverableProviders } = await import('@/models/providers/discovery');
 
   if (!getDiscoverableProviders().includes(provider)) {

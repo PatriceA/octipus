@@ -175,7 +175,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
         configured.add('custom-gemini');
         try {
           // Check vault-based providers by testing their availability
-          const providerChecks = ['openai', 'anthropic', 'deepseek', 'gemini', 'grok', 'mistral', 'openrouter'] as const;
+          const providerChecks = ['openai', 'anthropic', 'deepseek', 'gemini', 'vertex', 'grok', 'mistral', 'openrouter'] as const;
           const [healthResults, healthDetailed] = await Promise.all([
             Promise.allSettled(
               providerChecks.map(p => api.get<{ configured?: boolean }>(`/models/providers/${p}/available`))
@@ -205,6 +205,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
       !provider
       || provider === 'cli'
       || provider === 'litellm'
+      || provider === 'vertex' // no model-list discovery — enter the model id manually
       || provider === 'custom-openai'
       || provider === 'custom-anthropic'
       || provider === 'custom-gemini'
@@ -597,7 +598,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="block text-sm font-medium text-on-surface-variant">Model ID *</label>
-                  {connectionType === 'direct' && !isCli && formData.provider !== 'openrouter' && !formData.provider.startsWith('custom-') && (
+                  {connectionType === 'direct' && !isCli && formData.provider !== 'openrouter' && formData.provider !== 'vertex' && !formData.provider.startsWith('custom-') && (
                     <button
                       type="button"
                       onClick={() => fetchAvailableModels(formData.provider, formData.endpoint || undefined, true)}
@@ -650,7 +651,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                     type="text"
                     value={formData.modelId}
                     onChange={(e) => setFormData({ ...formData, modelId: e.target.value })}
-                    placeholder={isCli ? 'cli/claude-code' : 'e.g., gpt-4o'}
+                    placeholder={isCli ? 'cli/claude-code' : formData.provider === 'vertex' ? 'e.g., gemini-2.0-flash' : 'e.g., gpt-4o'}
                     className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface font-mono text-sm"
                   />
                 )}
