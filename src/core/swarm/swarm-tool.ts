@@ -5,7 +5,7 @@ import type { AgentRole } from '@/core/orchestrator/types';
 import { coreLogger } from '@/utils/logger';
 import { parseScorers } from './scorers';
 import { getSwarmSpawner, type SwarmSpawner } from './spawner';
-import type { AgentNode, ChildResult, PendingChild, SpawnChildParams } from './types';
+import type { AgentNode, ChildResult, PendingChild, PlanStep, SpawnChildParams } from './types';
 
 /**
  * Hooks passed in by the worker that owns this tool so spawn_child can
@@ -405,6 +405,20 @@ export function createSpawnChildTool(
             'Optional deterministic checks the child output MUST pass. Run after the child returns; any failure marks the result contract_failed so you can retry or correct. Kinds: {"kind":"non_empty"}, {"kind":"contains","value":"...","on":"output|notes"}, {"kind":"regex","pattern":"...","flags":"i","on":"output|notes"}, {"kind":"json","requiredKeys":["a","b"]}, {"kind":"file_exists","path":"report.md"}.',
           items: { type: 'object' },
         },
+        plan: {
+          type: 'array',
+          description:
+            'Ordered execution plan. Provide ONLY when you have already done the thinking and want a cheap executor to run it mechanically — this routes the child to the topic\'s executor model. Omit it to delegate to a capable specialist that uses its own judgment (recon/investigation). Each step: {"action":"what to do","tool":"tool to use (optional)","expect":"what it should yield (optional)"}.',
+          items: {
+            type: 'object',
+            properties: {
+              action: { type: 'string', description: 'What to do in this step.' },
+              tool: { type: 'string', description: 'Named tool for this step (must be one the child has).' },
+              expect: { type: 'string', description: 'What this step should produce; feeds the next step.' },
+            },
+            required: ['action'],
+          },
+        },
       },
       required: ['topic', 'subtopic', 'taskBrief', 'expectedOutput'],
     },
@@ -417,6 +431,28 @@ export function createSpawnChildTool(
 export type ValidatedSpawn =
   | { params: SpawnChildParams }
   | { error: string };
+
+/**
+ * Parse the optional `plan` arg into typed `PlanStep[]`. Lenient on absence
+ * (providers drop nested params — treat missing/null as "no plan"), loud on a
+ * malformed array so the parent LLM learns to fix its own plan shape.
+ */
+export function parsePlan(raw: unknown): { plan?: PlanStep[] } | { error: string } {
+  if (raw === undefined || raw === null) return {};
+  if (!Array.isArray(raw)) return { error: 'plan must be an array of steps' };
+  const steps: PlanStep[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const s = raw[i];
+    if (!s || typeof s !== 'object') return { error: `plan[${i}] must be an object` };
+    const o = s as Record<string, unknown>;
+    const action = typeof o.action === 'string' ? o.action.trim() : '';
+    if (!action) return { error: `plan[${i}].action is required and must be a non-empty string` };
+    const tool = typeof o.tool === 'string' && o.tool.trim() ? o.tool.trim() : undefined;
+    const expect = typeof o.expect === 'string' && o.expect.trim() ? o.expect.trim() : undefined;
+    steps.push({ action, tool, expect });
+  }
+  return { plan: steps.length > 0 ? steps : undefined };
+}
 
 export function validateSpawnChildArgs(args: Record<string, unknown>): ValidatedSpawn {
   let topic = typeof args.topic === 'string' ? args.topic.trim() : '';
@@ -477,6 +513,14 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
     return { error: `invalid scorers: ${parsedScorers.error}` };
   }
 
+  // Optional execution plan. Presence flips the child into mechanical-executor
+  // mode and (downstream) routes it to the lane's executorModel. Malformed
+  // plan is rejected loud, same as scorers.
+  const parsedPlan = parsePlan(args.plan);
+  if ('error' in parsedPlan) {
+    return { error: `invalid plan: ${parsedPlan.error}` };
+  }
+
   // `mode` is no longer LLM-controlled — spawn_child always detaches when the
   // depth has a detach budget, else awaits. The execute path sets params.mode
   // to reflect what actually happened (for spawn_node bookkeeping).
@@ -496,6 +540,7 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
       ? (args.constraints.filter((c) => typeof c === 'string') as string[])
       : undefined,
     scorers: parsedScorers.scorers.length > 0 ? parsedScorers.scorers : undefined,
+    plan: parsedPlan.plan,
   };
 
   return { params };

@@ -190,6 +190,9 @@ export class SwarmSpawner {
       // Subagent MUST NOT spawn (hard leaf). Tool intersection already drops
       // the tool; the `forbidden` field is belt-and-suspenders for the LLM prompt.
       forbidden: childDepth >= 2 ? ['Do not spawn children'] : [],
+      // Explicit execution plan (optional). Presence routes the child to the
+      // lane's executorModel and switches it to mechanical-execution mode.
+      plan: params.plan,
     };
 
     // ── Cycle protection (Phase 2) ──────────────────────────────────
