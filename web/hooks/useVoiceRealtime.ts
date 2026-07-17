@@ -353,7 +353,17 @@ export function useVoiceRealtime({ enabled, engine = 'auto', isTurnActive, sendT
               const delta = fullRef.current.slice(dispatchedLenRef.current).trim();
               if (stateRef.current === 'listening' || stateRef.current === 'connecting') setPartial(delta);
               // If we're waiting on the STT tail after silence, dispatch now.
-              if (awaitingFinalRef.current && stateRef.current === 'listening') dispatchUtterance();
+              if (awaitingFinalRef.current && stateRef.current === 'listening') {
+                dispatchUtterance();
+              } else if (delta && stateRef.current === 'listening' && !hadSpeech && !awaitingSince) {
+                // Orphaned STT tail: whisper's last 2 s window landed AFTER we
+                // dispatched and the user has gone silent, so no speech→silence
+                // transition follows to flush it — it would hang in `partial`
+                // forever. Arm the same grace timer the silence path uses so the
+                // tail flushes as its own turn instead of stalling.
+                awaitingFinalRef.current = true;
+                awaitingSince = performance.now();
+              }
             } else if (msg.type === 'error') {
               setError(msg.message || 'Voice stream error');
             }
