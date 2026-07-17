@@ -126,6 +126,21 @@ whisper did (`spawn kokoro-tts` → ENOENT). Bring TTS up to the STT bar:
 Verified manually during #247 (kokoro-onnx behind a `kokoro-tts` shim produced valid
 24 kHz WAV end-to-end); this follow-up just makes that provisioning first-class.
 
+## faster-whisper STT (implemented)
+
+Local whisper.cpp reloads its model per streaming window, which on CPU caps
+realtime STT at the `base` model (measured: `small` = 1.06× realtime, no
+headroom; `large-v3-turbo` = ~5× — hopeless). `fasterwhisper` (`sttProvider`,
+`FasterWhisperEngine` in `src/voice/stt.ts`) fixes this: a persistent CTranslate2
+worker (`faster_whisper_worker.py`) holds the model loaded and is ~4× faster, so
+`small` runs at 0.28× realtime and `medium` at 0.83× — a real local-accuracy jump.
+
+Self-provisions via `uv run --with faster-whisper` (only `uv` need be present;
+the CT2 model auto-downloads to the HF cache on first use). Model is picked by
+`voice.fasterWhisperModel` (default `small`). Remaining polish (not blocking):
+detect `uv` in `getVoiceAvailability` so `/voice/status` reports it, and an
+`octi setup` prewarm that downloads the model instead of paying it on first turn.
+
 ## Out of scope
 
 Prebuilt-binary download and OS-package-manager installs (rejected in favor of one

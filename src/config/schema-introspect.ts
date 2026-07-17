@@ -88,9 +88,17 @@ export interface FieldConstraints {
 const ENUM_LABELS: Record<string, Record<string, { label: string; description: string }>> = {
   'voice.sttProvider': {
     auto: { label: 'Automatic (recommended)', description: 'Picks the best available: cloud realtime if a key is set, otherwise local Whisper.' },
-    whisper: { label: 'Local Whisper (offline)', description: 'Runs on this machine, no API key, free. Needs the Whisper model installed (`octi setup`); higher latency.' },
+    whisper: { label: 'Local Whisper.cpp (offline)', description: 'Runs on this machine, no API key, free. Capped at the `base` model on CPU; lowest accuracy of the local options.' },
+    fasterwhisper: { label: 'Local faster-whisper (offline)', description: 'Runs on this machine, no API key, free. ~4x faster than Whisper.cpp so it runs the `small`/`medium` model in realtime — best local accuracy. Needs `uv` (auto-provisions the rest on first use).' },
     mistral: { label: 'Voxtral (Mistral cloud)', description: 'Low-latency realtime streaming. Requires a Mistral API key.' },
     openai: { label: 'OpenAI (gpt-4o-transcribe)', description: 'Low-latency realtime streaming. Requires an OpenAI API key.' },
+  },
+  'voice.fasterWhisperModel': {
+    tiny: { label: 'tiny', description: 'Fastest, lowest accuracy.' },
+    base: { label: 'base', description: 'Fast, low accuracy.' },
+    small: { label: 'small (recommended)', description: 'Big accuracy jump over base, comfortably realtime on CPU.' },
+    medium: { label: 'medium', description: 'Near-best accuracy; realtime only on a fast multi-core CPU.' },
+    large: { label: 'large', description: 'Best accuracy; needs a GPU or a very fast CPU for realtime.' },
   },
   'voice.ttsProvider': {
     mistral: { label: 'Voxtral (Mistral cloud)', description: 'Cloud voice, the default. Requires a Mistral API key.' },

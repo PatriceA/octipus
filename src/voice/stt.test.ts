@@ -1,7 +1,9 @@
 import { describe, test, expect } from 'bun:test';
 import { StreamingResampler } from './audio-codec';
 import {
+  AsyncLineReader,
   createSTTEngine,
+  FasterWhisperEngine,
   isConformantWav,
   MistralSTTEngine,
   OpenAIRealtimeSTTEngine,
@@ -10,6 +12,41 @@ import {
   stripWavHeader,
   WhisperEngine,
 } from './stt';
+
+describe('AsyncLineReader', () => {
+  const streamOf = (...chunks: string[]) =>
+    new ReadableStream<Uint8Array>({
+      start(c) {
+        for (const s of chunks) c.enqueue(new TextEncoder().encode(s));
+        c.close();
+      },
+    });
+
+  test('reassembles lines split across chunks and splits multiple per chunk', async () => {
+    // The faster-whisper worker frames one JSON reply per line; a line can span
+    // reads and a read can carry several — both must reconstruct exactly.
+    const r = new AsyncLineReader(streamOf('{"a":', '1}\n{"b":2}\n{"c', '":3}\n'));
+    expect(await r.next()).toBe('{"a":1}');
+    expect(await r.next()).toBe('{"b":2}');
+    expect(await r.next()).toBe('{"c":3}');
+    expect(await r.next()).toBeNull();
+  });
+
+  test('yields a final unterminated line then null at EOF', async () => {
+    const r = new AsyncLineReader(streamOf('ready\n', 'tail-no-newline'));
+    expect(await r.next()).toBe('ready');
+    expect(await r.next()).toBe('tail-no-newline');
+    expect(await r.next()).toBeNull();
+  });
+});
+
+describe('FasterWhisperEngine', () => {
+  test('defaults to the small model', () => {
+    // small is the safe realtime-on-CPU default (see voice.fasterWhisperModel).
+    expect(new FasterWhisperEngine()).toBeInstanceOf(FasterWhisperEngine);
+    expect(new FasterWhisperEngine({ model: 'medium' })).toBeInstanceOf(FasterWhisperEngine);
+  });
+});
 
 describe('pcm16leResample', () => {
   // s16le bytes → samples → 16k→24k resample → s16le bytes.

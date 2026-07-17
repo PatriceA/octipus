@@ -699,6 +699,14 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
   },
   {
+    key: 'voice.fasterWhisperModel',
+    category: 'voice',
+    valueType: 'string',
+    defaultValue: 'small',
+    description: 'Model for the local faster-whisper STT engine (tiny/base/small/medium/large)',
+    isSecret: false,
+  },
+  {
     key: 'voice.ttsProvider',
     category: 'voice',
     valueType: 'string',

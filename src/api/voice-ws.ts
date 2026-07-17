@@ -66,6 +66,14 @@ async function whisperEngine(language: string): Promise<{ engine: STTEngine; nam
   return { engine: new WhisperEngine(modelPath, { language }), name: 'whisper' };
 }
 
+async function fasterWhisperEngine(language: string): Promise<{ engine: STTEngine; name: string } | { error: string }> {
+  const { FasterWhisperEngine } = await import('@/voice/stt');
+  const model = getConfig().voice.fasterWhisperModel || 'small';
+  // uv provisions the Python env + downloads the model on first use; a missing
+  // `uv` surfaces as a start error from ensureWorker (streamed to the client).
+  return { engine: new FasterWhisperEngine({ language, model }), name: 'fasterwhisper' };
+}
+
 /**
  * Build the STT engine for this connection. An explicit `?engine=` query param
  * wins (whisper | mistral | openai); otherwise the configured `voice.sttProvider`
@@ -78,11 +86,12 @@ async function resolveEngine(engineParam: string | null): Promise<{ engine: STTE
   // An explicit ?engine= wins only if it names a real engine; an unknown value
   // (typo, stale client) falls back to the setting rather than silently routing
   // to a cloud engine the caller never asked for.
-  const known = ['whisper', 'mistral', 'openai'];
+  const known = ['whisper', 'fasterwhisper', 'mistral', 'openai'];
   const choice = engineParam && known.includes(engineParam) ? engineParam : config.voice.sttProvider || 'auto';
 
   if (choice === 'mistral') return mistralEngine(language);
   if (choice === 'openai') return openaiEngine(language);
+  if (choice === 'fasterwhisper') return fasterWhisperEngine(language);
   if (choice === 'whisper') return whisperEngine(language);
 
   // auto: cloud realtime first (low latency), else local whisper.
