@@ -374,7 +374,11 @@ export class SwarmSpawner {
     // User spec: "any agent should check tools and see if the task can be
     // done with the given ones."
     const availableToolNames = childTools.map((t) => t.name);
-    const canSpawnChildren = childDepth === 1;
+    // A planned child is a mechanical executor: it does not delegate, so it gets
+    // neither the delegation reminder nor the (system-prompt) delegation guidance
+    // — and, in singleSpawnAndRun, no spawn/collect meta-tools. Only plan-less
+    // depth-1 agents are delegators.
+    const canSpawnChildren = childDepth === 1 && !brief.plan?.length;
     const childMessage = composeChildMessage(brief, {
       availableToolNames,
       canSpawnChildren,
@@ -591,7 +595,12 @@ export class SwarmSpawner {
     // over `childNode` by reference so the mutation is observed.
     const tools: ToolHandler[] = [...opts.childTools];
     let childNode: AgentNode | null = null;
-    if (opts.childDepth === 1) {
+    // A planned child is a mechanical executor — withhold the spawn/escalate/
+    // collect meta-tools entirely so the "do not spawn" prompt line is backed by
+    // tool-level enforcement, not just instruction-following (weak executor
+    // models under-weight instructions). Tracking/persistence below key off
+    // `childId`, not `childNode`, so a null childNode is safe here.
+    if (opts.childDepth === 1 && !opts.brief.plan?.length) {
       childNode = {
         id: '__pending__',
         rootSessionId: opts.parent.rootSessionId,
@@ -1371,6 +1380,27 @@ export function composeChildMessage(
 
   parts.push(`YOUR TASK:\n${brief.taskBrief}`);
 
+  // Explicit execution plan (planner→executor split): the parent already did
+  // the thinking and handed down ordered steps. Render them as a mechanical
+  // checklist so a cheap executor model runs them instead of re-deriving its
+  // own strategy. Steps are 1-indexed so "STOP at step N" is unambiguous.
+  if (brief.plan?.length) {
+    const steps = brief.plan
+      .map((s, i) => {
+        const tool = s.tool ? ` [tool: ${s.tool}]` : '';
+        const expect = s.expect ? ` → expect: ${s.expect}` : '';
+        return `${i + 1}. ${s.action}${tool}${expect}`;
+      })
+      .join('\n');
+    parts.push(
+      'EXECUTION PLAN — run these steps IN ORDER. Do not deviate, reorder, or ' +
+        'add steps. Use the named tool at each step where one is given.\n' +
+        `${steps}\n` +
+        'If a step fails, STOP and report which step number failed and why — do ' +
+        'not improvise a workaround.',
+    );
+  }
+
   if (brief.constraints.length > 0) {
     parts.push(`Constraints:\n- ${brief.constraints.join('\n- ')}`);
   }
@@ -1393,7 +1423,15 @@ export function composeChildMessage(
   // trailing (high-salience) user message so weak models — which under-weight
   // system instructions — still act on the fan-out/collect rules at decision
   // time. Leaf subagents get the no-delegation line instead.
-  if (opts.canSpawnChildren) {
+  if (brief.plan?.length) {
+    // A planned child is a mechanical executor — following the plan IS the job,
+    // so don't invite it to delegate (spawning would be "deviating"). Overrides
+    // the delegation reminder even at depth 1.
+    parts.push(
+      'Follow the EXECUTION PLAN above exactly and return the deliverable. Do ' +
+        'not spawn children or add steps of your own.',
+    );
+  } else if (opts.canSpawnChildren) {
     parts.push(
       'REMINDER: you can `spawn_child` to run 2+ INDEPENDENT units of work in ' +
         'parallel (the full delegation policy + mechanics are in your ' +
