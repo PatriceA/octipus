@@ -1,13 +1,34 @@
 import { describe, test, expect } from 'bun:test';
+import { StreamingResampler } from './audio-codec';
 import {
   createSTTEngine,
   isConformantWav,
   MistralSTTEngine,
   OpenAIRealtimeSTTEngine,
+  pcm16leResample,
   stripNonSpeech,
   stripWavHeader,
   WhisperEngine,
 } from './stt';
+
+describe('pcm16leResample', () => {
+  // s16le bytes → samples → 16k→24k resample → s16le bytes.
+  test('upsamples 16k→24k (~1.5× samples) and preserves the level', () => {
+    const samples = new Int16Array(160).fill(1000); // 10 ms @16k, constant tone
+    const bytes = new Uint8Array(samples.buffer);
+    const out = pcm16leResample(bytes, new StreamingResampler(16000, 24000));
+    const outSamples = new Int16Array(out.buffer, out.byteOffset, out.byteLength >> 1);
+    expect(outSamples.length).toBeGreaterThan(220); // ≈ 160 * 1.5
+    expect(outSamples.length).toBeLessThan(250);
+    // Interpolating a constant signal returns the same value, not garbage.
+    expect(outSamples[100]).toBe(1000);
+  });
+
+  test('drops a dangling odd byte instead of misreading it', () => {
+    expect(pcm16leResample(new Uint8Array(3), new StreamingResampler(16000, 24000)).length % 2).toBe(0);
+    expect(pcm16leResample(new Uint8Array(0), new StreamingResampler(16000, 24000)).length).toBe(0);
+  });
+});
 
 describe('createSTTEngine', () => {
   test('maps each provider to its engine class', () => {

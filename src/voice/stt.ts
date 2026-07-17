@@ -4,7 +4,7 @@ import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { logger } from '../utils/logger';
-import { FrameAccumulator } from './audio-codec';
+import { FrameAccumulator, StreamingResampler } from './audio-codec';
 import { resolveWhisperBinary, whisperSpawnEnv } from './whisper';
 
 /** A unique temp path in the OS temp dir (cross-platform; collision-free). */
@@ -341,6 +341,12 @@ interface RealtimeWsProtocol {
   onOpen?: (ws: WebSocket) => void;
   /** The append-audio frame for a base64 PCM chunk. */
   appendMessage: (base64: string) => unknown;
+  /**
+   * Optional per-chunk PCM transform applied before base64 (e.g. resample the
+   * 16 kHz s16le input to a rate the provider demands). Stateful transforms
+   * (a streaming resampler) must be scoped to one streamTranscribe call.
+   */
+  transformPcm?: (pcm: Uint8Array) => Uint8Array;
   /** Frames sent after the input stream ends (flush/end, or commit). */
   finalMessages: unknown[];
   /** Delta text to yield for this event, or null if it isn't a delta. */
@@ -349,6 +355,14 @@ interface RealtimeWsProtocol {
   isDone: (event: Record<string, unknown>) => boolean;
   /** Error message if this event is an error frame, else null. */
   error: (event: Record<string, unknown>) => string | null;
+  /**
+   * End the generator once the input stream is exhausted (client teardown),
+   * instead of waiting for a server "done" event. Needed for engines with no
+   * session-end signal — e.g. OpenAI server_vad, which emits a per-utterance
+   * `.completed` (not a session end) so the connection must stay open across
+   * utterances and close only when the mic stops.
+   */
+  finishOnInputEnd?: boolean;
 }
 
 /**
@@ -402,7 +416,8 @@ async function* streamRealtimeWs(
     // several chunks — accumulate before deciding whether to strip.
     let preamble: Uint8Array | null = new Uint8Array(0);
     const send = (pcm: Uint8Array) => {
-      if (pcm.length) ws.send(JSON.stringify(protocol.appendMessage(Buffer.from(pcm).toString('base64'))));
+      const out = protocol.transformPcm ? protocol.transformPcm(pcm) : pcm;
+      if (out.length) ws.send(JSON.stringify(protocol.appendMessage(Buffer.from(out).toString('base64'))));
     };
     try {
       while (true) {
@@ -426,12 +441,18 @@ async function* streamRealtimeWs(
     } finally {
       reader.releaseLock();
     }
-  })().catch((err: unknown) => {
-    // If the uplink dies we never send the final frames, so the server never
-    // signals done and the consumer below would await forever. Wake it and rethrow.
-    pumpError = err instanceof Error ? err : new Error(String(err));
-    push(null);
-  });
+  })()
+    .then(() => {
+      // Input exhausted (teardown). For engines with no server "done" event,
+      // this is the end signal — wake the consumer so it drains and returns.
+      if (protocol.finishOnInputEnd) push(null);
+    })
+    .catch((err: unknown) => {
+      // If the uplink dies we never send the final frames, so the server never
+      // signals done and the consumer below would await forever. Wake it and rethrow.
+      pumpError = err instanceof Error ? err : new Error(String(err));
+      push(null);
+    });
 
   try {
     while (true) {
@@ -541,7 +562,28 @@ export class MistralSTTEngine extends EventEmitter implements STTEngine {
   }
 }
 
-const OPENAI_STT_REALTIME_MODEL = 'gpt-4o-transcribe';
+// gpt-realtime-whisper is OpenAI's natively-streaming realtime STT model ("very
+// fast", tunable latency). gpt-4o-transcribe also connects but is built for
+// file/request-response (it batches internally) — slower for a live socket.
+const OPENAI_STT_REALTIME_MODEL = 'gpt-realtime-whisper';
+// The realtime model is streaming-only; the batch `transcribe()` fallback (POST
+// /v1/audio/transcriptions) needs a file/request-response model.
+const OPENAI_STT_BATCH_MODEL = 'gpt-4o-transcribe';
+/** OpenAI realtime rejects input below 24 kHz; we upsample our 16 kHz PCM to this. */
+const OPENAI_REALTIME_RATE = 24000;
+
+/**
+ * Resample a frame of s16le PCM bytes through a streaming resampler and return
+ * s16le bytes. The host is little-endian (x86/arm), matching Int16Array, so we
+ * reinterpret bytes as samples directly; a fresh slice keeps 2-byte alignment.
+ */
+export function pcm16leResample(pcm: Uint8Array, resampler: StreamingResampler): Uint8Array {
+  const evenLen = pcm.byteLength & ~1; // drop a dangling odd byte, if any
+  if (!evenLen) return new Uint8Array(0);
+  const samples = new Int16Array(pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + evenLen));
+  const out = resampler.push(samples);
+  return new Uint8Array(out.buffer, out.byteOffset, out.byteLength);
+}
 
 /**
  * OpenAI realtime speech-to-text over `wss://api.openai.com/v1/realtime?intent=transcription`.
@@ -578,7 +620,8 @@ export class OpenAIRealtimeSTTEngine extends EventEmitter implements STTEngine {
     const fileName = typeof audio === 'string' ? audio.split('/').pop()! : 'audio.wav';
 
     const form = new FormData();
-    form.append('model', this.model);
+    // this.model is the realtime (streaming-only) model; batch needs a file model.
+    form.append('model', OPENAI_STT_BATCH_MODEL);
     form.append('file', new Blob([new Uint8Array(buffer)]), fileName);
     if (this.options.language) form.append('language', this.options.language);
 
@@ -603,6 +646,9 @@ export class OpenAIRealtimeSTTEngine extends EventEmitter implements STTEngine {
   async *streamTranscribe(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
     const model = this.model;
     const language = this.options.language;
+    // OpenAI's realtime input requires >= 24 kHz; our pipeline is 16 kHz, so
+    // upsample each frame with a streaming (click-free across frames) resampler.
+    const resampler = new StreamingResampler(REALTIME_SAMPLE_RATE, OPENAI_REALTIME_RATE);
     yield* streamRealtimeWs({
       url: 'wss://api.openai.com/v1/realtime?intent=transcription',
       // GA API: the old `OpenAI-Beta: realtime=v1` header is gone (sending it now
@@ -610,25 +656,33 @@ export class OpenAIRealtimeSTTEngine extends EventEmitter implements STTEngine {
       headers: { Authorization: `Bearer ${await this.apiKey()}` },
       name: 'OpenAI',
       // GA `session.update`: config moved under session.audio.input. Select the
-      // transcription model + 16 kHz PCM; turn_detection: null → we mark the
-      // utterance boundary ourselves via commit when the input stream ends.
+      // transcription model + 24 kHz PCM. server_vad is essential here: the
+      // client streams continuously and never sends a manual commit, so OpenAI
+      // must segment + transcribe on its own VAD (matching Voxtral's continuous
+      // deltas); with turn_detection off nothing is ever transcribed.
       onOpen: (ws) => ws.send(JSON.stringify({
         type: 'session.update',
         session: {
           type: 'transcription',
           audio: {
             input: {
-              format: { type: 'audio/pcm', rate: REALTIME_SAMPLE_RATE },
+              format: { type: 'audio/pcm', rate: OPENAI_REALTIME_RATE },
               transcription: { model, language },
-              turn_detection: null,
+              turn_detection: { type: 'server_vad' },
             },
           },
         },
       })),
+      transformPcm: (pcm) => pcm16leResample(pcm, resampler),
       appendMessage: (audio) => ({ type: 'input_audio_buffer.append', audio }),
-      finalMessages: [{ type: 'input_audio_buffer.commit' }],
+      // server_vad auto-commits each detected utterance — no manual commit.
+      finalMessages: [],
       delta: (e) => (e.type === 'conversation.item.input_audio_transcription.delta' ? String(e.delta ?? '') : null),
-      isDone: (e) => e.type === 'conversation.item.input_audio_transcription.completed',
+      // `.completed` is a per-utterance boundary, NOT the end of the session —
+      // keep the connection open across utterances (the client never reconnects)
+      // and end only when the mic stops (finishOnInputEnd).
+      isDone: () => false,
+      finishOnInputEnd: true,
       error: (e) => (e.type === 'error' ? (e.error as { message?: string } | undefined)?.message || 'unknown error' : null),
     }, stream);
   }
