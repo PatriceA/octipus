@@ -14,8 +14,9 @@
  *   script (`scripts/trajectories/compress.ts`) gzips yesterday's file.
  */
 
-import { appendFileSync, mkdirSync, statSync } from 'fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { dirname, resolve } from 'path';
+import { gzipSync } from 'zlib';
 import { getConfig } from '@/config';
 import { filterPII } from '@/core/orchestrator/pii-filter';
 import type { MessageClassification } from '@/core/orchestrator/types';
@@ -50,6 +51,29 @@ export function trajectoryFilePathForDate(date: Date, rootOverride?: string): st
   const d = String(date.getUTCDate()).padStart(2, '0');
   const root = rootOverride ?? resolveWorkspaceRoot();
   return resolve(root, 'trajectories', `${y}-${m}-${d}.jsonl`);
+}
+
+export type CompressResult = 'compressed' | 'already-compressed' | 'no-file';
+
+/**
+ * Gzip the trajectory JSONL for `date` to `<path>.gz` and remove the source.
+ * Idempotent: if the `.gz` already exists the (now-redundant) source is removed;
+ * if there is no source at all it's a no-op. Called by the daily cron and the
+ * `scripts/trajectories/compress.ts` CLI.
+ */
+export function compressTrajectoryForDate(date: Date, rootOverride?: string): CompressResult {
+  const path = trajectoryFilePathForDate(date, rootOverride);
+  const gz = `${path}.gz`;
+
+  if (!existsSync(path)) return 'no-file';
+  if (existsSync(gz)) {
+    unlinkSync(path); // gz already made; drop the leftover source
+    return 'already-compressed';
+  }
+  const data = readFileSync(path);
+  writeFileSync(gz, gzipSync(data));
+  unlinkSync(path);
+  return 'compressed';
 }
 
 function resolveWorkspaceRoot(): string {

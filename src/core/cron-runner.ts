@@ -14,6 +14,7 @@ const SESSION_CLEANUP_INTERVAL_MS = 3600_000; // Check every hour
 const KNOWLEDGE_CLEANUP_INTERVAL_MS = 7 * 24 * 3600_000; // Weekly
 const AGENT_CLEANUP_INTERVAL_MS = 7 * 24 * 3600_000; // Weekly
 const DOCS_REINDEX_INTERVAL_MS = 6 * 3600_000; // Every 6 hours
+const TRAJECTORY_COMPRESS_INTERVAL_MS = 24 * 3600_000; // Daily
 
 /**
  * Default age cap for finished agent rows + their events. Nobody needs an
@@ -35,6 +36,8 @@ let lastAgentCleanup = 0;
 // an embedding model is bound. (Session/knowledge cleanup init to 0 on purpose
 // — they have no boot-time pass, so they SHOULD run on the first tick.)
 let lastDocsReindex = Date.now();
+// Seed to 0 so the first tick after boot compresses yesterday's file (idempotent).
+let lastTrajectoryCompress = 0;
 
 /**
  * Parse a simple cron expression and compute the next run date.
@@ -192,12 +195,35 @@ async function maybeReindexDocs(): Promise<void> {
   }
 }
 
+/**
+ * Gzip yesterday's trajectory JSONL once a day. Without this the recorder's
+ * daily files accumulate uncompressed forever (the `compress` script existed
+ * but nothing ran it). Idempotent + best-effort — never aborts the tick.
+ */
+async function maybeCompressTrajectories(): Promise<void> {
+  const now = Date.now();
+  if (now - lastTrajectoryCompress < TRAJECTORY_COMPRESS_INTERVAL_MS) return;
+  lastTrajectoryCompress = now;
+  try {
+    const { compressTrajectoryForDate } = await import('@/core/trajectories/recorder');
+    const yesterday = new Date();
+    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+    const result = compressTrajectoryForDate(yesterday);
+    if (result === 'compressed') {
+      coreLogger.info({ result }, 'Trajectory compress: gzipped yesterday\'s JSONL');
+    }
+  } catch (err) {
+    coreLogger.warn({ err: (err as Error).message }, 'Trajectory compress failed — continuing');
+  }
+}
+
 async function processCronTick(): Promise<void> {
   try {
     await maybeCleanupSessions();
     await maybeCleanupKnowledge();
     await maybeCleanupAgents();
     await maybeReindexDocs();
+    await maybeCompressTrajectories();
     const db = getDb();
     const now = new Date();
 
