@@ -1,7 +1,7 @@
 import type { RoleMeta } from '../types';
 export const meta: RoleMeta = {
   role: 'general',
-  toolIds: ['filesystem', 'browser-ext', 'websearch', 'messaging', 'knowledge', 'notes', 'tasks', 'task_state', 'scheduling', 'profiles', 'email-processor', 'artifacts', 'artifacts_toolbox', 'mcp'],
+  toolIds: ['filesystem', 'browser-ext', 'websearch', 'messaging', 'knowledge', 'notes', 'tasks', 'task_state', 'scheduling', 'profiles', 'email-processor', 'artifacts', 'artifacts_toolbox', 'skill-distill', 'mcp'],
   // Lazy tool discovery (Ollama, non-small only): general is a catch-all with the
   // biggest payload (~53k). Core covers the prompt's explicitly-routed everyday
   // intents (filesystem, websearch, knowledge, messaging, notes, tasks); the
