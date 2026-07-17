@@ -385,18 +385,26 @@ export class SwarmSpawner {
     // instead of burning a doomed child.
     if (brief.plan?.length) {
       const { missingTools, unrunnable } = planToolGaps(brief.plan, availableToolNames);
+      if (unrunnable) {
+        // The plan can't run as specified. Deny so the parent re-plans — and go
+        // through denyAndRelease so the reserved briefHash fingerprint is freed;
+        // otherwise a same-content re-plan hashes identically and is silently
+        // blocked as a duplicate, contradicting the "re-plan" advice below.
+        return denyAndRelease(
+          this.denialResult(
+            parent,
+            `spawn_child refused: every tool named in the plan is unavailable to the '${childRole}' ` +
+              `child (named: ${missingTools.join(', ')}; available: ${availableToolNames.join(', ') || 'none'}). ` +
+              `Re-plan using the child's tools.`,
+          ),
+        );
+      }
       if (missingTools.length > 0) {
+        // Partially-bad plan still runs; the missing tools are rendered as
+        // unavailable in the checklist (composeChildMessage).
         coreLogger.warn(
           { childRole, missingTools, availableToolNames },
           'Plan names tools the child does not have — steps rendered as tool-unavailable',
-        );
-      }
-      if (unrunnable) {
-        return this.denialResult(
-          parent,
-          `spawn_child refused: every tool named in the plan is unavailable to the '${childRole}' ` +
-            `child (named: ${missingTools.join(', ')}; available: ${availableToolNames.join(', ') || 'none'}). ` +
-            `Re-plan using the child's tools.`,
         );
       }
     }
@@ -1432,6 +1440,7 @@ export function composeChildMessage(
   // checklist so a cheap executor model runs them instead of re-deriving its
   // own strategy. Steps are 1-indexed so "STOP at step N" is unambiguous.
   if (brief.plan?.length) {
+    const availSet = new Set(opts.availableToolNames);
     const steps = brief.plan
       .map((s, i) => {
         // A tool the child doesn't actually hold is marked so the mechanical
@@ -1439,7 +1448,7 @@ export function composeChildMessage(
         // missing tool and tripping the STOP-on-failure rule. (Spawn-time
         // validation already denied a plan whose every tool is unavailable.)
         const tool = s.tool
-          ? opts.availableToolNames.includes(s.tool)
+          ? availSet.has(s.tool)
             ? ` [tool: ${s.tool}]`
             : ` [tool: ${s.tool} — NOT available to you; use the tools you have for this step]`
           : '';
