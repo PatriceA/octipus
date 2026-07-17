@@ -1371,6 +1371,27 @@ export function composeChildMessage(
 
   parts.push(`YOUR TASK:\n${brief.taskBrief}`);
 
+  // Explicit execution plan (planner→executor split): the parent already did
+  // the thinking and handed down ordered steps. Render them as a mechanical
+  // checklist so a cheap executor model runs them instead of re-deriving its
+  // own strategy. Steps are 1-indexed so "STOP at step N" is unambiguous.
+  if (brief.plan?.length) {
+    const steps = brief.plan
+      .map((s, i) => {
+        const tool = s.tool ? ` [tool: ${s.tool}]` : '';
+        const expect = s.expect ? ` → expect: ${s.expect}` : '';
+        return `${i + 1}. ${s.action}${tool}${expect}`;
+      })
+      .join('\n');
+    parts.push(
+      'EXECUTION PLAN — run these steps IN ORDER. Do not deviate, reorder, or ' +
+        'add steps. Use the named tool at each step where one is given.\n' +
+        `${steps}\n` +
+        'If a step fails, STOP and report which step number failed and why — do ' +
+        'not improvise a workaround.',
+    );
+  }
+
   if (brief.constraints.length > 0) {
     parts.push(`Constraints:\n- ${brief.constraints.join('\n- ')}`);
   }
@@ -1393,7 +1414,15 @@ export function composeChildMessage(
   // trailing (high-salience) user message so weak models — which under-weight
   // system instructions — still act on the fan-out/collect rules at decision
   // time. Leaf subagents get the no-delegation line instead.
-  if (opts.canSpawnChildren) {
+  if (brief.plan?.length) {
+    // A planned child is a mechanical executor — following the plan IS the job,
+    // so don't invite it to delegate (spawning would be "deviating"). Overrides
+    // the delegation reminder even at depth 1.
+    parts.push(
+      'Follow the EXECUTION PLAN above exactly and return the deliverable. Do ' +
+        'not spawn children or add steps of your own.',
+    );
+  } else if (opts.canSpawnChildren) {
     parts.push(
       'REMINDER: you can `spawn_child` to run 2+ INDEPENDENT units of work in ' +
         'parallel (the full delegation policy + mechanics are in your ' +

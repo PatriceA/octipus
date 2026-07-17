@@ -60,6 +60,51 @@ describe('composeChildMessage — date grounding', () => {
   });
 });
 
+// ── composeChildMessage: plan rendering (Phase 3) ─────────────────────
+
+describe('composeChildMessage — execution plan', () => {
+  const base: TaskBrief = {
+    originalUserRequest: 'Refactor the thing.',
+    topicPath: 'coding/refactor',
+    parentSummary: '',
+    taskBrief: 'Do the refactor.',
+    constraints: [],
+    inputArtifacts: [],
+    expectedOutput: { shape: 'summary', maxTokens: 800 },
+    forbidden: [],
+  };
+
+  test('renders a numbered checklist with tool/expect annotations and a STOP rule', () => {
+    const msg = composeChildMessage(
+      { ...base, plan: [
+        { action: 'read the file', tool: 'read', expect: 'current contents' },
+        { action: 'rewrite it' },
+      ] },
+      { availableToolNames: ['read', 'edit'], canSpawnChildren: true },
+    );
+    expect(msg).toContain('EXECUTION PLAN');
+    expect(msg).toContain('1. read the file [tool: read] → expect: current contents');
+    expect(msg).toContain('2. rewrite it');
+    expect(msg).toContain('STOP');
+  });
+
+  test('a planned depth-1 child is mechanical: no spawn reminder', () => {
+    const msg = composeChildMessage(
+      { ...base, plan: [{ action: 'run it' }] },
+      { availableToolNames: ['shell'], canSpawnChildren: true },
+    );
+    // The mechanical-executor line replaces the delegation reminder.
+    expect(msg).toContain('Follow the EXECUTION PLAN above exactly');
+    expect(msg).not.toContain('you can `spawn_child`');
+  });
+
+  test('no plan ⇒ no EXECUTION PLAN block, delegation framing unchanged', () => {
+    const msg = composeChildMessage(base, { availableToolNames: ['shell'], canSpawnChildren: true });
+    expect(msg).not.toContain('EXECUTION PLAN');
+    expect(msg).toContain('spawn_child'); // recon child still gets the reminder
+  });
+});
+
 // ── syncParentTokenUsage: node budget reflects live worker spend ──────
 
 describe('syncParentTokenUsage', () => {
