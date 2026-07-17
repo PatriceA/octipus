@@ -1187,6 +1187,15 @@ export class SwarmSpawner {
         }
         candidate = execModel.modelId;
       }
+    } else if (!candidate && !hasPlan && getTopicConfig(lane).executorModel) {
+      // Breadcrumb: this lane HAS an executorModel but the child arrived without
+      // a plan, so we deliberately skip it and use the primary (recon path). Log
+      // it so a configured-but-never-exercised executor — or a typo that only a
+      // planned spawn would surface — is at least visible to operators.
+      coreLogger.debug(
+        { lane, childRole, executorModel: getTopicConfig(lane).executorModel },
+        'Plan-less child: skipping configured executorModel, resolving topic primary (recon path)',
+      );
     }
     if (!candidate) {
       const topicModel = await registry.getModelForTopic(lane);
