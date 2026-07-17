@@ -85,7 +85,7 @@ Pick the engine in **Settings → Voice → "Which engine transcribes your speec
 | **auto** (default) | — | Best available: a configured cloud realtime engine, else local Whisper |
 | **whisper** | Local | whisper.cpp — offline, no key, free. Needs the model installed (`octi setup`); higher latency |
 | **mistral** (Voxtral) | Cloud | `voxtral-mini` realtime streaming. Needs a Mistral API key |
-| **openai** | Cloud | `gpt-4o-transcribe` realtime streaming. Needs an OpenAI API key |
+| **openai** | Cloud | `gpt-realtime-whisper` realtime streaming (natively-streaming, low latency). Needs an OpenAI API key |
 
 **API:** `POST /api/voice/transcribe` — send base64 audio, receive text.
 
@@ -180,7 +180,7 @@ testing); when omitted it follows the setting:
   windows must be ≥ 2 s (1 s windows return empty on the base model).
 - **mistral** — Mistral Voxtral realtime streaming STT (cloud, needs the Mistral
   key); more accurate than local small.
-- **openai** — OpenAI `gpt-4o-transcribe` realtime streaming (cloud, needs the
+- **openai** — OpenAI `gpt-realtime-whisper` realtime streaming (cloud, needs the
   OpenAI key).
 
 ### Tuning knobs (web)

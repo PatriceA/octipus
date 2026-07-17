@@ -562,7 +562,13 @@ export class MistralSTTEngine extends EventEmitter implements STTEngine {
   }
 }
 
-const OPENAI_STT_REALTIME_MODEL = 'gpt-4o-transcribe';
+// gpt-realtime-whisper is OpenAI's natively-streaming realtime STT model ("very
+// fast", tunable latency). gpt-4o-transcribe also connects but is built for
+// file/request-response (it batches internally) — slower for a live socket.
+const OPENAI_STT_REALTIME_MODEL = 'gpt-realtime-whisper';
+// The realtime model is streaming-only; the batch `transcribe()` fallback (POST
+// /v1/audio/transcriptions) needs a file/request-response model.
+const OPENAI_STT_BATCH_MODEL = 'gpt-4o-transcribe';
 /** OpenAI realtime rejects input below 24 kHz; we upsample our 16 kHz PCM to this. */
 const OPENAI_REALTIME_RATE = 24000;
 
@@ -614,7 +620,8 @@ export class OpenAIRealtimeSTTEngine extends EventEmitter implements STTEngine {
     const fileName = typeof audio === 'string' ? audio.split('/').pop()! : 'audio.wav';
 
     const form = new FormData();
-    form.append('model', this.model);
+    // this.model is the realtime (streaming-only) model; batch needs a file model.
+    form.append('model', OPENAI_STT_BATCH_MODEL);
     form.append('file', new Blob([new Uint8Array(buffer)]), fileName);
     if (this.options.language) form.append('language', this.options.language);
 
