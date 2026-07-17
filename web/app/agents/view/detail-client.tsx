@@ -8,6 +8,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { AgentTimeline } from '@/components/agent-timeline';
 import { StatusBadge, type StatusVariant } from '@/components/ui/status-badge';
 import { PipelineView } from '@/components/pipeline-view';
+import { VerificationEvidence } from '@/components/verification-evidence';
 import { useAgentEvents } from '@/hooks/useAgentEvents';
 import { api } from '@/lib/api';
 
@@ -217,6 +218,9 @@ export default function AgentDetailPage() {
           />
         </div>
       )}
+
+      {/* Verification evidence — self-hides when the session ran no checks. */}
+      <VerificationEvidence sessionId={agent.sessionId} />
 
       {/* Event Timeline */}
       <div className="bg-surface-container rounded-xs border border-outline-variant/10">
