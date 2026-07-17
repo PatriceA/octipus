@@ -149,6 +149,12 @@ export async function getVoiceAvailability(opts: {
   if (opts.sttProvider === 'whisper') {
     sttAvailable = local;
     if (!sttAvailable) sttReason = `${probe.binaryReason ?? 'Local Whisper is not installed'}. Run \`octi setup\`, or pick a cloud STT engine in Settings → Voice.`;
+  } else if (opts.sttProvider === 'fasterwhisper') {
+    // faster-whisper self-provisions via uv (model auto-downloads); uv on PATH
+    // is the one hard prerequisite the server can check.
+    const { hasUv, UV_INSTALL_HINT } = await import('./provision');
+    sttAvailable = hasUv();
+    if (!sttAvailable) sttReason = `faster-whisper STT selected but \`uv\` is not installed. ${UV_INSTALL_HINT}`;
   } else if (opts.sttProvider === 'mistral') {
     sttAvailable = opts.hasMistralKey;
     if (!sttAvailable) sttReason = 'Voxtral (Mistral) STT selected but no Mistral API key configured.';
@@ -170,6 +176,14 @@ export async function getVoiceAvailability(opts: {
   if (opts.ttsProvider === 'openai') {
     ttsAvailable = opts.hasOpenAIKey;
     if (!ttsAvailable) ttsReason = 'OpenAI TTS selected but no OpenAI API key configured.';
+  } else if (opts.ttsProvider === 'kokoro') {
+    // Needs uv + the downloaded model files (both provisioned by `octi setup`).
+    const { hasUv, kokoroModelsPresent, UV_INSTALL_HINT } = await import('./provision');
+    const uv = hasUv();
+    const models = await kokoroModelsPresent();
+    ttsAvailable = uv && models;
+    if (!uv) ttsReason = `Kokoro TTS selected but \`uv\` is not installed. ${UV_INSTALL_HINT}`;
+    else if (!models) ttsReason = 'Kokoro TTS selected but its model files are missing. Run `octi setup` to download them.';
   } else if (opts.ttsProvider === 'piper') {
     ttsAvailable = !!opts.piperModelPath;
     if (!ttsAvailable) ttsReason = 'Piper TTS selected but no piper model path configured.';

@@ -55,7 +55,15 @@ import {
 } from '@mariozechner/pi-tui';
 import { httpReachable, probeAllServices } from '@/setup/probes';
 import { PROVIDERS, getProvider, type ProviderId } from '@/setup/providers';
-import { installWhisper, ToolchainMissingError } from '@/voice/whisper';
+import {
+  FASTER_WHISPER_MODELS,
+  hasUv,
+  installFasterWhisper,
+  installKokoro,
+  KOKORO_SIZE_NOTE,
+  UV_INSTALL_HINT,
+  type FasterWhisperModel,
+} from '@/voice/provision';
 
 // ── Args ───────────────────────────────────────────────────────────
 
@@ -589,52 +597,132 @@ async function pickCapabilities(ctx: WizardCtx | null, missing: string[]): Promi
   return picked;
 }
 
+/** Persist a voice setting through the authenticated (admin) settings API. */
+async function setVoiceSetting(api: ApiClient, key: string, value: string): Promise<void> {
+  try {
+    await api.put(`/api/settings/${key}`, { value });
+  } catch (err) {
+    process.stdout.write(`\x1b[33m! Could not save ${key}: ${(err as Error).message}\x1b[0m\n`);
+  }
+}
+
+const gray = (s: string) => process.stdout.write(`\x1b[2m${s}\x1b[0m\n`);
+const ok = (s: string) => process.stdout.write(`\x1b[32m✓ ${s}\x1b[0m\n`);
+const warn = (s: string) => process.stdout.write(`\x1b[33m! ${s}\x1b[0m\n`);
+const cloudKeyHint = (provider: 'Mistral' | 'OpenAI') =>
+  gray(`  → Add your ${provider} API key in the vault (web: Settings → Secrets) so voice can use it.`);
+
 /**
- * Voice dependencies: detect whether STT actually works (local whisper runs, or
- * a cloud key is set) and, if not, offer to build local whisper from source.
- * Detection goes through the API (it knows the vault keys); the build runs
- * in-process here — it takes minutes, so an HTTP call would just time out.
+ * Configure voice end to end: whether the user wants it, then per-direction
+ * (speech-in / spoken-replies) local vs cloud, model choice, provisioning, and
+ * wiring the config. Local engines are provisioned in-process (downloads take
+ * minutes — an HTTP call would time out); cloud picks just point at the vault.
  */
 async function pickVoice(api: ApiClient): Promise<void> {
-  let status: { sttAvailable?: boolean; sttLocal?: boolean; sttReason?: string | null } | null = null;
-  try {
-    status = await api.get('/api/voice/status');
-  } catch {
-    return; // status unreachable (e.g. auth) — don't block setup on voice
-  }
-  if (status?.sttAvailable) {
-    process.stdout.write(`\x1b[32m✓ Voice ready\x1b[0m (${status.sttLocal ? 'local whisper' : 'cloud STT provider'}).\n`);
+  // ── Non-interactive: only local defaults, and only on explicit opt-in. ──
+  if (NON_INTERACTIVE) {
+    if (process.env.OCTIPUS_SETUP_INSTALL_VOICE !== '1' && process.env.OCTIPUS_SETUP_INSTALL_VOICE !== 'true') return;
+    if (!hasUv()) { warn(`Voice: skipped local install — ${UV_INSTALL_HINT}`); return; }
+    try {
+      await installFasterWhisper('small', gray);
+      await setVoiceSetting(api, 'voice.sttProvider', 'fasterwhisper');
+      await setVoiceSetting(api, 'voice.fasterWhisperModel', 'small');
+      await installKokoro(gray);
+      await setVoiceSetting(api, 'voice.ttsProvider', 'kokoro');
+      ok('Local voice installed (faster-whisper small + Kokoro).');
+    } catch (err) { warn(`Voice install failed: ${(err as Error).message}`); }
     return;
   }
 
-  process.stdout.write(`\x1b[2mVoice: ${status?.sttReason || 'no local whisper and no cloud STT key configured'}\x1b[0m\n`);
+  const want = await selectStep<'y' | 'n'>(
+    null,
+    'Set up voice? (talk to Octipus and hear spoken replies)',
+    [
+      { value: 'y', label: 'Yes — configure voice' },
+      { value: 'n', label: 'No — skip', description: 'You can rerun `octi setup` later.' },
+    ],
+    'n',
+  );
+  if (want !== 'y') return;
 
-  let install: boolean;
-  if (NON_INTERACTIVE) {
-    install = process.env.OCTIPUS_SETUP_INSTALL_VOICE === '1' || process.env.OCTIPUS_SETUP_INSTALL_VOICE === 'true';
-  } else {
-    install =
-      (await selectStep<'y' | 'n'>(
-        null,
-        'Install local voice (builds whisper.cpp from source — needs cmake + a C++ compiler)?',
-        [
-          { value: 'y', label: 'Yes — build & install now', description: 'A few minutes; fully local, offline speech-to-text.' },
-          { value: 'n', label: 'No — skip', description: 'Configure a cloud STT key later, or rerun setup.' },
-        ],
-        'n',
-      )) === 'y';
-  }
-  if (!install) return;
+  // ── Speech-to-text ──
+  const stt = await selectStep<'local' | 'mistral' | 'openai' | 'skip'>(
+    null,
+    'Speech-to-text — how should Octipus hear you?',
+    [
+      { value: 'local', label: 'On this machine (faster-whisper)', description: 'Offline, free, private. Needs `uv`. You pick the model size next.' },
+      { value: 'mistral', label: 'Voxtral (Mistral cloud)', description: 'Low latency. Needs a Mistral API key.' },
+      { value: 'openai', label: 'OpenAI (cloud)', description: 'Low latency. Needs an OpenAI API key.' },
+      { value: 'skip', label: 'Skip speech-to-text' },
+    ],
+    'local',
+  );
 
-  process.stdout.write('Building whisper.cpp (this can take a few minutes)…\n');
-  try {
-    await installWhisper((line) => process.stdout.write(`\x1b[2m  ${line}\x1b[0m\n`));
-    process.stdout.write('\x1b[32m✓ Local voice installed and verified\x1b[0m\n');
-  } catch (err) {
-    // Missing toolchain is a user-fixable setup gap, not a wizard failure.
-    const prefix = err instanceof ToolchainMissingError ? 'Local voice not installed' : 'Local voice install failed';
-    process.stdout.write(`\x1b[33m! ${prefix}: ${(err as Error).message}\x1b[0m\n`);
+  if (stt === 'local') {
+    const model = await selectStep<FasterWhisperModel>(
+      null,
+      'Whisper model — bigger = more accurate, but more download, RAM and CPU:',
+      FASTER_WHISPER_MODELS.map((m) => ({
+        value: m.id,
+        label: `${m.id}  (${m.download}, ${m.ram} RAM)`,
+        description: m.note,
+      })),
+      'small',
+    );
+    await setVoiceSetting(api, 'voice.sttProvider', 'fasterwhisper');
+    await setVoiceSetting(api, 'voice.fasterWhisperModel', model);
+    if (!hasUv()) {
+      warn(`Selected faster-whisper "${model}", but \`uv\` is not installed. ${UV_INSTALL_HINT}`);
+      gray('  The model will download automatically once `uv` is available.');
+    } else {
+      process.stdout.write(`Downloading faster-whisper "${model}" (one-time)…\n`);
+      try {
+        await installFasterWhisper(model, (l) => gray(`  ${l}`));
+        ok(`Speech-to-text ready (faster-whisper ${model}).`);
+      } catch (err) { warn(`faster-whisper download failed: ${(err as Error).message}`); }
+    }
+  } else if (stt === 'mistral' || stt === 'openai') {
+    await setVoiceSetting(api, 'voice.sttProvider', stt);
+    ok(`Speech-to-text set to ${stt === 'mistral' ? 'Voxtral (Mistral)' : 'OpenAI'} (cloud).`);
+    cloudKeyHint(stt === 'mistral' ? 'Mistral' : 'OpenAI');
   }
+
+  // ── Text-to-speech ──
+  const tts = await selectStep<'kokoro' | 'piper' | 'mistral' | 'openai' | 'skip'>(
+    null,
+    'Spoken replies — how should Octipus talk back?',
+    [
+      { value: 'kokoro', label: 'On this machine (Kokoro)', description: `Best local voice; great for conversation. ${KOKORO_SIZE_NOTE}. Needs \`uv\`.` },
+      { value: 'piper', label: 'On this machine (Piper)', description: 'Tiny/low-end fallback; more robotic. You install the binary + voice.' },
+      { value: 'mistral', label: 'Voxtral (Mistral cloud)', description: 'Needs a Mistral API key.' },
+      { value: 'openai', label: 'OpenAI (cloud)', description: 'Needs an OpenAI API key.' },
+      { value: 'skip', label: 'Skip spoken replies' },
+    ],
+    'kokoro',
+  );
+
+  if (tts === 'kokoro') {
+    await setVoiceSetting(api, 'voice.ttsProvider', 'kokoro');
+    if (!hasUv()) {
+      warn(`Selected Kokoro, but \`uv\` is not installed. ${UV_INSTALL_HINT}`);
+    } else {
+      process.stdout.write(`Downloading Kokoro model (${KOKORO_SIZE_NOTE})…\n`);
+      try {
+        await installKokoro((l) => gray(`  ${l}`));
+        ok('Spoken replies ready (Kokoro).');
+      } catch (err) { warn(`Kokoro download failed: ${(err as Error).message}`); }
+    }
+  } else if (tts === 'piper') {
+    await setVoiceSetting(api, 'voice.ttsProvider', 'piper');
+    ok('Spoken replies set to Piper.');
+    gray('  → Install the Piper binary + a .onnx voice, then set `voice.piperModelPath` in Settings → Voice.');
+  } else if (tts === 'mistral' || tts === 'openai') {
+    await setVoiceSetting(api, 'voice.ttsProvider', tts);
+    ok(`Spoken replies set to ${tts === 'mistral' ? 'Voxtral (Mistral)' : 'OpenAI'} (cloud).`);
+    cloudKeyHint(tts === 'mistral' ? 'Mistral' : 'OpenAI');
+  }
+
+  gray('Voice configured. Toggle it per chat with the mic / conversation buttons.');
 }
 
 // ── Main ───────────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 import { spawn, } from 'bun';
 import { EventEmitter } from 'events';
+import { join } from 'node:path';
 import { logger } from '../utils/logger';
 
 export interface TTSOptions {
@@ -107,12 +108,12 @@ export class PiperEngine extends EventEmitter implements TTSEngine {
 }
 
 /**
- * Kokoro TTS engine (local, ONNX, no API key). Shells out to a `kokoro-tts`
- * CLI (the `kokoro-onnx` runtime — ONNX, no torch) that reads an input text
- * file and writes a wav. Kokoro-82M leads open local TTS on quality in 2026
- * while still running faster-than-real-time on CPU; Piper stays as the tiny/RPi
- * fallback. Provisioning the CLI is handled by `octi setup` (see
- * docs/plans/voice-local-setup.md).
+ * Kokoro TTS engine (local, ONNX, no API key). Runs the `kokoro-onnx` runtime
+ * (ONNX, no torch) through `uv run` + a bundled worker — no global install, the
+ * same self-contained pattern as FasterWhisperEngine. Kokoro-82M leads open
+ * local TTS on quality in 2026 while running faster-than-real-time on CPU; Piper
+ * stays as the tiny/RPi fallback. Model files are provisioned by `octi setup`
+ * (installKokoro in provision.ts) into kokoroModelDir().
  *
  * Voices are baked into the model (fixed set, no cloning), so `getVoices`
  * returns a static list rather than scanning the filesystem like Piper.
@@ -145,14 +146,16 @@ export class KokoroEngine extends EventEmitter implements TTSEngine {
     try {
       await Bun.write(inputPath, text);
 
-      const args = [
-        inputPath, outputPath,
-        '--voice', this.options.voice || KOKORO_DEFAULT_VOICE,
-        '--speed', String(this.options.speed ?? 1.0),
-      ];
-
+      const { kokoroModelDir } = await import('./provision');
+      const worker = join(import.meta.dir, 'kokoro_tts_worker.py');
       const proc = spawn({
-        cmd: ['kokoro-tts', ...args],
+        cmd: [
+          'uv', 'run', '--python', '3.12', '--with', 'kokoro-onnx', '--with', 'soundfile',
+          worker, inputPath, outputPath,
+          '--model-dir', kokoroModelDir(),
+          '--voice', this.options.voice || KOKORO_DEFAULT_VOICE,
+          '--speed', String(this.options.speed ?? 1.0),
+        ],
         stdout: 'pipe',
         stderr: 'pipe',
       });
