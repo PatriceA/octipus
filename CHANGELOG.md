@@ -7,6 +7,63 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### Hermes v0.18 adoption — learning loop, verification, Vertex (2026-07-16/17, PRs #237–#245)
+
+Selectively adopts ideas from Hermes Agent v0.18 ("The Judgment Release")
+after a comparison against octipus. What we stole/finished, why, and what we
+deliberately ignored is in
+[`.octipus/plans/hermes-v018-adoption.md`](.octipus/plans/hermes-v018-adoption.md);
+Mixture-of-Agents was assessed and **parked** (opt-in preset only — see
+[ROADMAP](ROADMAP.md) → *Later*).
+
+- **CI unblock (#240).** `main` had been red team-wide since #231 — the only
+  `*.integration.test.ts` missing the `describe.skipIf(!isIntegration)` guard
+  (`topic-alias`) ran its embedded-PGlite setup in the unit lane, where a
+  process-global DB/registry singleton made it order-dependent (passed locally,
+  failed in CI). Gated it behind `INTEGRATION=1` like every sibling. Backend CI
+  green again.
+- **Learning loop — octipus can now *generate* skills, not just prune them
+  (A1-M1 #244, A1-M2 #245).** A new **`skill_distill` tool** distils a reusable
+  skill from recent conversation, provided text, or a **verified-good
+  trajectory**, and files it as a **pending proposal** for review — never a live
+  skill directly (the human approve gate stays in the loop). `skill_proposals`
+  gained a **`kind` (`skill` | `expert`)** discriminator so the approve route
+  promotes a distilled *procedure* into a skill (it only made experts before) +
+  a `sourceRef` for provenance. Trajectory distillation is gated on quality:
+  outcome must be `success` and, if the session recorded B1 verification
+  evidence, none of it may have failed. Distiller model resolves via the
+  `skill_distillation` topic → shared `background` lane. See
+  [`docs/EXPERT-TOPIC-SKILL-ROUTING.md`](docs/EXPERT-TOPIC-SKILL-ROUTING.md)
+  ("Skill lifecycle").
+- **Verification evidence ledger (B1 #242).** QA verdicts were computed then
+  dropped; they now persist to a durable, append-only `verification_evidence`
+  table (`kind`, `passed`, `confidence`, `detail`) and are readable per session
+  at `GET /api/verification/:sessionId` (ownership-scoped). The "verified" rule
+  fails loud: **no evidence ⇒ not verified**. Foundation for evidence-backed
+  completion contracts; `pre_verify` hooks + the verify-stop-loop are the
+  tracked follow-up (B1b). See
+  [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md) ("Verification evidence").
+- **Trajectory export for training (B2 #243).** `scripts/trajectories/export.ts`
+  turns recorded runs into chat-format training JSONL for offline eval /
+  fine-tune pipelines — `--from/--to/--outcome/--out`, reads compressed or plain
+  dailies, re-runs the PII filter at export, and reports scanned/exported/
+  filtered/malformed counts (no silent truncation).
+- **Vertex AI provider with OAuth2 token minting (A3 #241).** First-class
+  `vertex` provider via Google's OpenAI-compatible endpoint, authenticated by a
+  short-lived access token **minted from a service account** (RS256 JWT-bearer
+  grant via `node:crypto`, cached + refreshed before expiry) — **no static
+  keys** on disk; the SA lives in the vault. Selected by a `vertex/` model
+  prefix. See [`docs/CUSTOM-PROVIDERS.md`](docs/CUSTOM-PROVIDERS.md)
+  ("First-class Vertex AI provider").
+- **Scheduler reliability hardening (A2 #238).** Adapts three Hermes cron
+  fixes onto the task scheduler: **missed-grace** (an overdue task past its
+  window is dropped once with a `skipped_missed` event, not run stale);
+  **fail-closed on wake-gate drift** (a gate that can't be *evaluated* fails the
+  task after a cap instead of deferring forever — a legitimate "not now" still
+  defers); and a **liveness heartbeat**. Also wires `getScheduler().start()`
+  into boot — the worker loop had **no caller**, so the task queue (e.g.
+  artifact cleanup) was filled but never drained.
+
 ### Live voice conversation — talk to the orchestrator (2026-07-13/14, PRs #210–#217)
 
 Realtime, hands-free voice in the web chat that runs the full orchestrator

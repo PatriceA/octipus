@@ -95,16 +95,37 @@ This doc lists what we are exploring. Order inside each section is rough priorit
   [2026-05-24 curator land](#2026-05-24--orchestrator-freedom--hermes-skill-curator)
   added the lifecycle backbone (`last_used_at`, `usage_count`,
   `archived_at`, `curation_notes`, debounced usage tracker,
-  `runSkillCurator` auto-archive after 90d / flag after 30d). What's
-  still next on this item: tighten the proposal review UI (diff
-  preview of generated prompt, one-click promote to `skills` table,
-  rejection-suppression timers visible, user-scoped opt-out toggle).
+  `runSkillCurator` auto-archive after 90d / flag after 30d). The
+  **generative half + skill-promotion path shipped** in the Hermes A1
+  adoption (PRs #244/#245): a `kind` (`skill`|`expert`) discriminator on
+  `skill_proposals`, the approve route promoting a distilled *procedure*
+  into the `skills` table (not just an expert), and the **`skill_distill`
+  tool** (distils from conversation / text / verified-good trajectory into
+  a pending proposal). What's still next on this item: the **post-task
+  distill nudge** (A1-M3 — surface "distil this into a skill?" after a
+  complex, successful run) and the **curator refresh half** (A1-M4 — queue
+  flagged-stale skills for a background distiller refresh pass). Plus the
+  proposal review-UI polish (diff preview, rejection-timer visibility,
+  user-scoped opt-out).
 
 - **Trajectory learning — consumers.** Recorder + JSONL + compress +
-  `trajectory_runs` pointer table + `/api/trajectories` are live. Next:
-  a reader that turns trajectories into labeled training pairs for
-  offline eval / fine-tune pipelines. Opt-out env `TRAJECTORY_LOGGING=false`
-  already wired.
+  `trajectory_runs` pointer table + `/api/trajectories` are live. The
+  **consumer end shipped** in the Hermes B2 adoption (PR #243):
+  `scripts/trajectories/export.ts` turns runs into labeled chat-format
+  training JSONL (filter by outcome/date, PII re-filtered at export). It is
+  also reused as a **learning-loop source** — `skill_distill source=trajectory`
+  distils a skill from a verified-good run (A1-M2, #245). Opt-out env
+  `TRAJECTORY_LOGGING=false` already wired.
+
+- **Completion contracts — verify against evidence, not the model's word.**
+  The **evidence ledger shipped** (Hermes B1, #242): QA verdicts persist to
+  `verification_evidence` and are readable at `GET /api/verification/:sessionId`;
+  the "verified" rule fails loud (no evidence ⇒ not verified). Still next
+  (**B1b**): `pre_verify` project hooks that run tests/build/lint as evidence,
+  and a **verify-stop-loop** that blocks a role's deliverable until required
+  evidence passes (bounded by the existing node budgets; on exhaustion a typed
+  failure, never a coerced pass) — plus persisting the `expectedOutput.schema`
+  gate results alongside the QA verdicts.
 
 - **Dynamic role definition from the chat.** "Define a role that does X with tools Y" → orchestrator writes the three node-folder files, hot-reloads, and uses the new role on the next message.
 
