@@ -103,6 +103,29 @@ confirm-before-download idiom of `maybeRecommendModel`:
 - **macOS/Windows:** implemented to spec, **not executable on this host** — flagged in the
   PR as needing a real run on each OS. Toolchain-missing paths degrade to actionable text.
 
+## Follow-up: Kokoro TTS provisioning (not yet implemented)
+
+`KokoroEngine` (`src/voice/tts.ts`, merged in #247) shells out to a `kokoro-tts`
+CLI on PATH — exactly as `PiperEngine` assumes `piper`. Nothing provisions it yet,
+so selecting `ttsProvider: kokoro` on a clean host silently fails the same way
+whisper did (`spawn kokoro-tts` → ENOENT). Bring TTS up to the STT bar:
+
+- **Detect** — extend `probeWhisper`'s sibling in `src/voice/whisper.ts` (or add
+  `probeKokoro()`): run `kokoro-tts --help`, stat the model+voices files. Feed
+  `getVoiceAvailability().tts.local` so `/voice/status` reports the truth instead
+  of assuming the CLI exists.
+- **Install** — the `kokoro-onnx` runtime is pip/`uv`-installable (no torch, no
+  system espeak — `espeakng-loader` is bundled). `installKokoro()`: create a
+  pinned `uv` env, drop a `kokoro-tts` launcher on PATH, download
+  `kokoro-v1.0.onnx` (~310 MB) + `voices-v1.0.bin` (~27 MB) from the
+  `kokoro-onnx` release. Mirror `installWhisper()`'s streamed-progress + concurrency
+  guard. Cheaper than whisper's build-from-source (no compiler needed).
+- **Setup step** — same `octi setup` prompt shape as whisper: offer local TTS when
+  no external voice provider is configured; `OCTIPUS_SETUP_INSTALL_VOICE` covers it.
+
+Verified manually during #247 (kokoro-onnx behind a `kokoro-tts` shim produced valid
+24 kHz WAV end-to-end); this follow-up just makes that provisioning first-class.
+
 ## Out of scope
 
 Prebuilt-binary download and OS-package-manager installs (rejected in favor of one
