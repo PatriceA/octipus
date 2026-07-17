@@ -48,6 +48,7 @@ import {
   getLevelDefault,
   type NodeBudget,
   type PendingChild,
+  type PlanStep,
   type SpawnChildParams,
   type TaskBrief,
 } from './types';
@@ -374,6 +375,32 @@ export class SwarmSpawner {
     // User spec: "any agent should check tools and see if the task can be
     // done with the given ones."
     const availableToolNames = childTools.map((t) => t.name);
+
+    // Plan tool validation (planner→executor split): a plan step may name a tool
+    // the child doesn't actually hold — the parent-intersection dropped it, or
+    // the planner guessed a name. Cross-check against the child's real toolset.
+    // A partially-bad plan still runs (composeChildMessage marks the missing
+    // tool so the mechanical executor doesn't blindly call it), but a plan whose
+    // EVERY tool-bearing step is unrunnable is denied so the parent re-plans
+    // instead of burning a doomed child.
+    if (brief.plan?.length) {
+      const { missingTools, unrunnable } = planToolGaps(brief.plan, availableToolNames);
+      if (missingTools.length > 0) {
+        coreLogger.warn(
+          { childRole, missingTools, availableToolNames },
+          'Plan names tools the child does not have — steps rendered as tool-unavailable',
+        );
+      }
+      if (unrunnable) {
+        return this.denialResult(
+          parent,
+          `spawn_child refused: every tool named in the plan is unavailable to the '${childRole}' ` +
+            `child (named: ${missingTools.join(', ')}; available: ${availableToolNames.join(', ') || 'none'}). ` +
+            `Re-plan using the child's tools.`,
+        );
+      }
+    }
+
     // A planned child is a mechanical executor: it does not delegate, so it gets
     // neither the delegation reminder nor the (system-prompt) delegation guidance
     // — and, in singleSpawnAndRun, no spawn/collect meta-tools. Only plan-less
@@ -1346,6 +1373,26 @@ function mapChildResultToNodeStatus(status: ChildResultStatus): import('./types'
 }
 
 /** Build the child's initial user message from the structured brief. */
+/**
+ * Cross-check a plan's named tools against the child's actual toolset.
+ *   - `missingTools`: distinct named tools the child does not hold.
+ *   - `unrunnable`: the plan names ≥1 tool AND every tool-bearing step names a
+ *     missing one — nothing the plan wants to do is possible, so the parent
+ *     should re-plan rather than spawn a doomed child.
+ * A plan-step with no `tool` never counts as missing (the executor picks).
+ */
+export function planToolGaps(
+  plan: PlanStep[],
+  availableToolNames: string[],
+): { missingTools: string[]; unrunnable: boolean } {
+  const availSet = new Set(availableToolNames);
+  const stepsWithTool = plan.filter((s) => s.tool);
+  const missing = stepsWithTool.filter((s) => !availSet.has(s.tool as string));
+  const missingTools = [...new Set(missing.map((s) => s.tool as string))];
+  const unrunnable = stepsWithTool.length > 0 && missing.length === stepsWithTool.length;
+  return { missingTools, unrunnable };
+}
+
 export function composeChildMessage(
   brief: TaskBrief,
   opts: { availableToolNames: string[]; canSpawnChildren: boolean },
@@ -1387,7 +1434,15 @@ export function composeChildMessage(
   if (brief.plan?.length) {
     const steps = brief.plan
       .map((s, i) => {
-        const tool = s.tool ? ` [tool: ${s.tool}]` : '';
+        // A tool the child doesn't actually hold is marked so the mechanical
+        // executor does the step with the tools it has instead of calling a
+        // missing tool and tripping the STOP-on-failure rule. (Spawn-time
+        // validation already denied a plan whose every tool is unavailable.)
+        const tool = s.tool
+          ? opts.availableToolNames.includes(s.tool)
+            ? ` [tool: ${s.tool}]`
+            : ` [tool: ${s.tool} — NOT available to you; use the tools you have for this step]`
+          : '';
         const expect = s.expect ? ` → expect: ${s.expect}` : '';
         return `${i + 1}. ${s.action}${tool}${expect}`;
       })
