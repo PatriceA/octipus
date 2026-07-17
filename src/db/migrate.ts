@@ -1,5 +1,10 @@
-import { executeRaw, queryRaw } from '@/db/postgres';
+import { executeRaw, isTransientPgliteFault, queryRaw } from '@/db/postgres';
 import { logger } from '@/utils/logger';
+
+// Re-exported so the migration-retry regression test can assert the classifier
+// contract from one place; the single definition lives in `postgres.ts` (the
+// module that owns the embedded connection).
+export { isTransientPgliteFault };
 
 /**
  * Run database migrations.
@@ -191,19 +196,4 @@ export async function applyEmbeddedMigrationWithRetry(
       await sleep(50 * attempt);
     }
   }
-}
-
-/**
- * True for the narrow, known-transient PGlite storage fault that a fresh
- * replay recovers from — an `ErrnoError` (errno 44 = ENOENT) or a Postgres
- * `could not open file` / SQLSTATE 58P01 raised while the WASM VFS opens a
- * relfilenode. Everything else (real SQL errors, constraint violations) is
- * NOT transient and must surface.
- */
-export function isTransientPgliteFault(err: unknown): boolean {
-  const e = err as { errno?: number; code?: string; message?: string; name?: string };
-  if (e?.errno === 44 || e?.name === 'ErrnoError') return true;
-  if (e?.code === '58P01') return true;
-  const msg = String(e?.message ?? '');
-  return /could not open file|No such file or directory/i.test(msg);
 }

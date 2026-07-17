@@ -42,6 +42,10 @@ describe('isTransientPgliteFault', () => {
     ).toBe(true);
   });
 
+  test('matches the WASM boot fault from PGlite.create', () => {
+    expect(isTransientPgliteFault(new Error('PGlite failed to initialize properly'))).toBe(true);
+  });
+
   test('does NOT match ordinary SQL errors', () => {
     expect(isTransientPgliteFault(new Error('relation "foo" already exists'))).toBe(false);
     expect(isTransientPgliteFault({ code: '42P07' })).toBe(false);
