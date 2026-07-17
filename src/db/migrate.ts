@@ -1,5 +1,10 @@
-import { executeRaw, queryRaw } from '@/db/postgres';
+import { executeRaw, isTransientPgliteFault, queryRaw } from '@/db/postgres';
 import { logger } from '@/utils/logger';
+
+// Re-exported so the migration-retry regression test can assert the classifier
+// contract from one place; the single definition lives in `postgres.ts` (the
+// module that owns the embedded connection).
+export { isTransientPgliteFault };
 
 /**
  * Run database migrations.
@@ -117,22 +122,78 @@ async function runEmbeddedMigrations(): Promise<void> {
       // committed and the tracking row unwritten — so a re-run replayed the
       // whole file and hit duplicate-object errors. None of the migrations use
       // CREATE INDEX CONCURRENTLY, so wrapping in a transaction is safe.
-      await executeRaw('BEGIN');
-      try {
-        await executeRaw(patchedSql);
-        await executeRaw(
-          `INSERT INTO "drizzle"."__drizzle_migrations" (hash, created_at) VALUES ('${safeHash}', ${safeWhen})`
-        );
-        await executeRaw('COMMIT');
-      } catch (err) {
-        await executeRaw('ROLLBACK').catch(() => { /* connection may be aborted */ });
-        throw err;
-      }
+      //
+      // Bounded retry: under the full test suite (many throwaway PGlite
+      // instances created back-to-back in one process), a heavy migration that
+      // rewrites tables — the `timestamp`→`timestamptz` conversion in
+      // particular — intermittently faults inside PGlite's WASM VFS with
+      // `could not open file "base/…"` (SQLSTATE 58P01) / an `ErrnoError`
+      // (errno 44 = ENOENT) when the storage manager opens the freshly written
+      // relfilenode. It is transient: the transaction is rolled back cleanly, so
+      // replaying the same entry on the next attempt succeeds. This also hardens
+      // a real first-boot embedded install against the same hiccup. Only the
+      // known-transient VFS class is retried; every other error still fails loud.
+      await applyEmbeddedMigrationWithRetry(entry.tag, patchedSql, safeHash, safeWhen);
     }
 
     logger.info('Migrations completed successfully (PGlite)');
   } catch (error) {
     logger.error({ error, message: (error as Error).message, stack: (error as Error).stack }, 'Migration failed (PGlite)');
     throw error;
+  }
+}
+
+/** Injectable seams so the retry loop is unit-testable without a real PGlite. */
+export interface MigrationRetryDeps {
+  /** Runs a single SQL statement — defaults to the embedded `executeRaw`. */
+  exec: (query: string) => Promise<unknown>;
+  /** Backoff between attempts — defaults to a real timer; tests pass a no-op. */
+  sleep: (ms: number) => Promise<void>;
+  /** Total attempts (1 = no retry). Defaults to 3. */
+  maxAttempts: number;
+}
+
+const defaultRetryDeps: MigrationRetryDeps = {
+  exec: (query) => executeRaw(query),
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  maxAttempts: 3,
+};
+
+/**
+ * Apply one embedded migration entry inside a transaction, retrying only the
+ * transient PGlite WASM-VFS fault described at the call site. Each attempt is
+ * fully isolated: a failure rolls the transaction back before the next try, so
+ * a replay starts from the same clean pre-migration state (no half-applied
+ * DDL, no duplicate-object errors). Non-transient errors throw immediately.
+ *
+ * Exported (with injectable deps) so the retry contract has a regression test.
+ */
+export async function applyEmbeddedMigrationWithRetry(
+  tag: string,
+  patchedSql: string,
+  safeHash: string,
+  safeWhen: number,
+  deps: MigrationRetryDeps = defaultRetryDeps,
+): Promise<void> {
+  const { exec, sleep, maxAttempts } = deps;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    await exec('BEGIN');
+    try {
+      await exec(patchedSql);
+      await exec(
+        `INSERT INTO "drizzle"."__drizzle_migrations" (hash, created_at) VALUES ('${safeHash}', ${safeWhen})`
+      );
+      await exec('COMMIT');
+      return;
+    } catch (err) {
+      await exec('ROLLBACK').catch(() => { /* connection may be aborted */ });
+      if (attempt >= maxAttempts || !isTransientPgliteFault(err)) throw err;
+      logger.warn(
+        { tag, attempt, error: (err as Error).message },
+        'Transient PGlite fault applying migration — retrying',
+      );
+      // Yield a tick so PGlite's WASM VFS can settle before the replay.
+      await sleep(50 * attempt);
+    }
   }
 }

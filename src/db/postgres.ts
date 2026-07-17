@@ -69,6 +69,25 @@ async function initExternal(config: { url: string; poolSize: number; idleTimeout
 }
 
 /**
+ * True for the narrow, known-transient PGlite/WASM faults that a clean replay
+ * recovers from, seen only under heavy full-test-suite churn (many throwaway
+ * embedded databases in one process):
+ *   - `PGlite failed to initialize properly` — the WASM runtime faults on boot.
+ *   - an `ErrnoError` (errno 44 = ENOENT) — the WASM VFS can't open a file.
+ *   - a Postgres `could not open file "base/…"` / SQLSTATE 58P01 — the storage
+ *     manager (mdopenfork) can't open a freshly written relfilenode.
+ * Everything else (real SQL errors, constraint violations, config problems) is
+ * NOT transient and must surface on the first attempt.
+ */
+export function isTransientPgliteFault(err: unknown): boolean {
+  const e = err as { errno?: number; code?: string; message?: string; name?: string };
+  if (e?.errno === 44 || e?.name === 'ErrnoError') return true;
+  if (e?.code === '58P01') return true;
+  const msg = String(e?.message ?? '');
+  return /could not open file|No such file or directory|failed to initialize/i.test(msg);
+}
+
+/**
  * Initialize PGlite connection (embedded mode)
  */
 async function initEmbedded(dataDir: string): Promise<DrizzleDB> {
@@ -82,13 +101,36 @@ async function initEmbedded(dataDir: string): Promise<DrizzleDB> {
   const resolvedDir = dataDir.replace(/^~/, process.env.HOME || process.env.USERPROFILE || '/tmp');
 
   // Ensure data directory exists
-  const { mkdirSync } = await import('fs');
+  const { mkdirSync, rmSync } = await import('fs');
   mkdirSync(resolvedDir, { recursive: true });
 
-  const client = await PGlite.create({
-    dataDir: resolvedDir,
-    extensions: { vector },
-  });
+  // Bounded retry around PGlite instantiation. Under the full test suite —
+  // dozens of throwaway embedded databases created back-to-back in one process
+  // — PGlite's WASM runtime intermittently faults on boot ("PGlite failed to
+  // initialize properly") or when opening a freshly written relation file
+  // (ErrnoError errno 44 / "could not open file"). Both are transient: a clean
+  // datadir + a fresh create succeeds. Wipe any partial datadir between
+  // attempts so the retry starts from empty, and keep the SAME resolved path so
+  // the caller's DATA_DIR / cache key stay consistent. This also hardens a real
+  // first-boot embedded install against the same hiccup.
+  const CREATE_ATTEMPTS = 3;
+  let client: Awaited<ReturnType<typeof PGlite.create>> | undefined;
+  for (let attempt = 1; attempt <= CREATE_ATTEMPTS; attempt++) {
+    try {
+      client = await PGlite.create({ dataDir: resolvedDir, extensions: { vector } });
+      break;
+    } catch (err) {
+      if (attempt >= CREATE_ATTEMPTS || !isTransientPgliteFault(err)) throw err;
+      dbLogger.warn(
+        { attempt, dataDir: resolvedDir, error: (err as Error).message },
+        'Transient PGlite init fault — recreating embedded database',
+      );
+      try { rmSync(resolvedDir, { recursive: true, force: true }); } catch { /* best effort */ }
+      mkdirSync(resolvedDir, { recursive: true });
+      await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
+    }
+  }
+  if (!client) throw new Error('PGlite initialization failed after retries');
 
   closeHandle = async () => { await client.close(); };
   rawExec = async (query) => { await client.exec(query); return []; };
