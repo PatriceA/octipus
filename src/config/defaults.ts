@@ -56,6 +56,7 @@ export const defaultConfig: Partial<Config> = {
     sttEnabled: false,
     ttsEnabled: false,
     sttProvider: 'auto' as const,
+    fasterWhisperModel: 'small' as const,
     ttsProvider: 'mistral' as const,
     language: 'en',
   },

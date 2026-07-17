@@ -91,6 +91,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       // which makes ttsEnabled true by default (a non-piper provider is set).
       ttsEnabled: true,
       sttProvider: 'auto' as const,
+      fasterWhisperModel: 'small' as const,
       ttsProvider: 'mistral' as const,
       whisperModelPath: process.env.WHISPER_MODEL_PATH,
       piperModelPath: process.env.PIPER_MODEL_PATH,

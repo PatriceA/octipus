@@ -149,9 +149,17 @@ export const voiceConfigSchema = z.object({
    * Which engine transcribes speech on the realtime `/voice` socket.
    * `auto` picks the best available (cloud realtime if a key is set, else local
    * whisper); the others force a specific engine. `mistral` = Voxtral cloud,
-   * `openai` = gpt-4o-transcribe, `whisper` = local whisper.cpp (offline).
+   * `openai` = gpt-4o-transcribe, `whisper` = local whisper.cpp (offline, capped
+   * at the `base` model on CPU), `fasterwhisper` = local CTranslate2 (offline,
+   * ~4x faster so `small`/`medium` run in realtime — better local accuracy).
    */
-  sttProvider: z.enum(['auto', 'whisper', 'mistral', 'openai']).default('auto').catch('auto'),
+  sttProvider: z.enum(['auto', 'whisper', 'fasterwhisper', 'mistral', 'openai']).default('auto').catch('auto'),
+  /**
+   * Model for the `fasterwhisper` engine. `small` is the safe realtime default
+   * on CPU (big accuracy jump over whisper.cpp `base`); `medium` is near-best and
+   * still realtime on a fast machine. Auto-downloaded to the HF cache on first use.
+   */
+  fasterWhisperModel: z.enum(['tiny', 'base', 'small', 'medium', 'large']).default('small').catch('small'),
   /**
    * Which TTS engine serves /api/voice/speak. Defaults to cloud (mistral/Voxtral)
    * so voice-out works with no host setup. `openai` = gpt-4o-mini-tts (cloud);

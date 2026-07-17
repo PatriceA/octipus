@@ -294,6 +294,157 @@ export class WhisperEngine extends EventEmitter implements STTEngine {
   }
 }
 
+/** Reads a byte stream as newline-delimited text, one line pulled on demand. */
+export class AsyncLineReader {
+  private reader: ReadableStreamDefaultReader<Uint8Array>;
+  private decoder = new TextDecoder();
+  private buf = '';
+  private queue: string[] = [];
+
+  constructor(stream: ReadableStream<Uint8Array>) {
+    this.reader = stream.getReader();
+  }
+
+  /** Next full line (newline stripped), or null at EOF. */
+  async next(): Promise<string | null> {
+    while (this.queue.length === 0) {
+      const { done, value } = await this.reader.read();
+      if (done) {
+        if (this.buf.length) {
+          const line = this.buf;
+          this.buf = '';
+          return line;
+        }
+        return null;
+      }
+      this.buf += this.decoder.decode(value, { stream: true });
+      let idx: number;
+      while ((idx = this.buf.indexOf('\n')) >= 0) {
+        this.queue.push(this.buf.slice(0, idx));
+        this.buf = this.buf.slice(idx + 1);
+      }
+    }
+    return this.queue.shift()!;
+  }
+}
+
+/**
+ * faster-whisper (CTranslate2) STT — a persistent Python worker holding the
+ * loaded model, driven over stdio (see faster_whisper_worker.py). ~4x faster
+ * than whisper.cpp and no per-window model reload, so `small`/`medium` run in
+ * realtime on CPU where whisper.cpp is capped at `base`. Self-provisions via
+ * `uv run --with faster-whisper`; the model auto-downloads to the HF cache.
+ */
+export class FasterWhisperEngine extends EventEmitter implements STTEngine {
+  private options: STTOptions;
+  private proc: Subprocess<'pipe', 'pipe', 'inherit'> | null = null;
+  private sink: import('bun').FileSink | null = null;
+  private lines: AsyncLineReader | null = null;
+  private chain: Promise<unknown> = Promise.resolve(); // serialises window requests
+
+  constructor(options: STTOptions = {}) {
+    super();
+    this.options = { model: 'small', language: 'en', ...options };
+  }
+
+  private async ensureWorker(): Promise<void> {
+    if (this.proc) return;
+    const worker = join(import.meta.dir, 'faster_whisper_worker.py');
+    const proc = spawn({
+      cmd: [
+        'uv', 'run', '--python', '3.12', '--with', 'faster-whisper', worker,
+        '--model', this.options.model || 'small',
+        '--language', this.options.language || 'en',
+      ],
+      stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: 'inherit', // model-load / download progress goes to the server log
+    });
+    this.proc = proc;
+    this.sink = proc.stdin;
+    this.lines = new AsyncLineReader(proc.stdout as ReadableStream<Uint8Array>);
+    const first = await this.lines.next();
+    if (!first || !(JSON.parse(first) as { ready?: boolean }).ready) {
+      await this.dispose();
+      throw new Error('faster-whisper worker failed to start (is `uv` installed?)');
+    }
+  }
+
+  /** Send one PCM window (16 kHz mono s16le) and await its transcript. Serialised. */
+  private send(pcm: Uint8Array): Promise<string> {
+    const run = async (): Promise<string> => {
+      await this.ensureWorker();
+      const header = new Uint8Array(4);
+      new DataView(header.buffer).setUint32(0, pcm.length, false); // big-endian
+      this.sink!.write(header);
+      this.sink!.write(pcm);
+      await this.sink!.flush(); // ensure the worker sees the full window now
+      const line = await this.lines!.next();
+      if (line == null) throw new Error('faster-whisper worker closed unexpectedly');
+      return ((JSON.parse(line) as { text?: string }).text || '');
+    };
+    const p = this.chain.then(run, run);
+    this.chain = p.catch(() => {}); // keep the chain alive past a failed request
+    return p;
+  }
+
+  async transcribe(audio: Buffer | string): Promise<TranscriptionResult> {
+    const start = Date.now();
+    const raw = typeof audio === 'string'
+      ? Buffer.from(await Bun.file(audio).arrayBuffer())
+      : audio;
+    const pcm = stripWavHeader(new Uint8Array(raw)); // requires 16 kHz mono s16
+    const text = stripNonSpeech(await this.send(pcm)).trim();
+    const duration = (Date.now() - start) / 1000;
+    return {
+      text,
+      segments: text ? [{ start: 0, end: duration, text, confidence: 1.0 }] : [],
+      language: this.options.language!,
+      duration,
+    };
+  }
+
+  async *streamTranscribe(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
+    // Same sliding-window scheme as WhisperEngine, but each window streams to the
+    // resident worker (raw PCM — the realtime socket feeds headerless frames).
+    const cfg = this.options.streamWindowSeconds;
+    const windowSeconds = typeof cfg === 'number' && cfg > 0 ? cfg : 2;
+    const acc = new FrameAccumulator(Math.round(16000 * 2 * windowSeconds));
+    const reader = stream.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        for (const window of acc.push(value)) {
+          const text = stripNonSpeech(await this.send(window)).trim();
+          if (text) yield text;
+        }
+      }
+      const tail = acc.flush();
+      if (tail) {
+        const text = stripNonSpeech(await this.send(tail)).trim();
+        if (text) yield text;
+      }
+    } finally {
+      await this.dispose();
+    }
+  }
+
+  async dispose(): Promise<void> {
+    try {
+      this.sink?.end(); // EOF → worker shuts down
+    } catch {
+      /* already closed */
+    }
+    this.sink = null;
+    this.lines = null;
+    if (this.proc) {
+      this.proc.kill();
+      this.proc = null;
+    }
+  }
+}
+
 /** Mistral batch transcription model. */
 const MISTRAL_STT_MODEL = 'voxtral-mini-latest';
 /** Mistral realtime transcription model — `diarize` is not supported on this path. */
