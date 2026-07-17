@@ -2,12 +2,15 @@ import { and, eq } from 'drizzle-orm';
 import type { ToolManifest } from '@/core/types';
 import { getDb } from '@/db/postgres';
 import { messageRepository } from '@/db/repositories/message-repository';
+import { trajectoryRepository } from '@/db/repositories/trajectory-repository';
+import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
 import { skillProposals } from '@/db/schema/skill-proposals';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
 import { toolLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema } from '../base-tool';
 import { parseDistilledSkill, skillFingerprint, SKILL_DISTILL_SYSTEM_PROMPT } from './distiller';
+import { readTrajectoryRecordLine, trajectoryToDistillMaterial } from './trajectory-source';
 
 /**
  * skill-distill — the generative half of the learning loop (Hermes A1). Distils
@@ -39,8 +42,9 @@ export class SkillDistillTool extends BaseTool {
           description:
             'Distil a reusable skill from recent conversation or provided text; files a pending skill proposal for review (does NOT create a live skill).',
           parameters: {
-            source: { type: 'string', description: "'conversation' (recent turns) or 'text'", required: true },
+            source: { type: 'string', description: "'conversation' (recent turns), 'text', or 'trajectory'", required: true },
             content: { type: 'string', description: "Source text when source='text'" },
+            ref: { type: 'string', description: "Trajectory run id when source='trajectory'" },
           },
           returns: 'The created (or existing pending) skill proposal',
         },
@@ -57,23 +61,32 @@ export class SkillDistillTool extends BaseTool {
       createParameterSchema({
         source: {
           type: 'string',
-          description: "Where to distil from: 'conversation' (recent session turns) or 'text'",
+          description: "Where to distil from: 'conversation' (recent session turns), 'text', or 'trajectory'",
           required: true,
         },
         content: { type: 'string', description: "The source text when source='text'" },
+        ref: { type: 'string', description: "A trajectory run id when source='trajectory'" },
       }),
       async (args, context) => {
         const source = String(args.source ?? 'conversation');
 
-        // 1. Gather the source material.
+        // 1. Gather the source material + its provenance.
         let material: string;
+        let sourceRef: string;
         if (source === 'text') {
           material = String(args.content ?? '').trim();
           if (!material) return { error: "source='text' requires a non-empty `content`" };
+          sourceRef = 'text';
+        } else if (source === 'trajectory') {
+          const gathered = await this.gatherTrajectory(String(args.ref ?? '').trim());
+          if ('error' in gathered) return gathered.error;
+          material = gathered.material;
+          sourceRef = gathered.sourceRef;
         } else {
           const msgs = await messageRepository.findRecentBySession(context.sessionId, 30, ['user', 'assistant']);
           material = msgs.map((m) => `${m.role}: ${m.content}`).join('\n\n').trim();
           if (!material) return { error: 'No recent conversation to distil from' };
+          sourceRef = `session:${context.sessionId}`;
         }
 
         // 2. Resolve the distiller model — config-driven, fail loud on unbound.
@@ -135,7 +148,7 @@ export class SkillDistillTool extends BaseTool {
             description: distilled.description,
             draftPromptTemplate: distilled.content,
             kind: 'skill',
-            sourceRef: source === 'text' ? 'text' : `session:${context.sessionId}`,
+            sourceRef,
             lastExemplarAt: new Date(),
           })
           .returning();
@@ -155,6 +168,40 @@ export class SkillDistillTool extends BaseTool {
       },
       { requiresPermission: false },
     );
+  }
+
+  /**
+   * Gather + verify a trajectory run for distillation. Returns the material +
+   * provenance, or an `error` carrying the tool result to return verbatim.
+   * Only *verified-good* runs are distilled: outcome must be 'success', and if
+   * the session recorded verification evidence (B1) none of it may have failed.
+   */
+  private async gatherTrajectory(
+    ref: string,
+  ): Promise<{ material: string; sourceRef: string } | { error: Record<string, unknown> }> {
+    if (!ref) return { error: { error: "source='trajectory' requires `ref` (a trajectory run id)" } };
+
+    const run = await trajectoryRepository.findById(ref);
+    if (!run) return { error: { error: `Trajectory run ${ref} not found` } };
+
+    if (run.outcome !== 'success') {
+      return { error: { distilled: false, message: `Trajectory outcome is '${run.outcome}', not 'success' — skipped.` } };
+    }
+
+    // B1 verdict gate. No evidence ⇒ fall back to the outcome (graceful).
+    const evidence = await verificationEvidenceRepository.listForSession(run.rootSessionId);
+    if (evidence.length > 0 && !(await verificationEvidenceRepository.isSessionVerified(run.rootSessionId))) {
+      return { error: { distilled: false, message: 'Trajectory session has failing verification evidence — skipped.' } };
+    }
+
+    const record = readTrajectoryRecordLine(run.jsonlPath, run.jsonlLine);
+    if (!record) {
+      return { error: { error: `Could not read trajectory record from ${run.jsonlPath}:${run.jsonlLine}` } };
+    }
+    const material = trajectoryToDistillMaterial(record);
+    if (!material) return { error: { error: 'Trajectory record has no usable content' } };
+
+    return { material, sourceRef: `trajectory:${ref}` };
   }
 }
 
