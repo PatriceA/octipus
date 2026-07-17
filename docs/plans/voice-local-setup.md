@@ -103,7 +103,25 @@ confirm-before-download idiom of `maybeRecommendModel`:
 - **macOS/Windows:** implemented to spec, **not executable on this host** — flagged in the
   PR as needing a real run on each OS. Toolchain-missing paths degrade to actionable text.
 
-## Follow-up: Kokoro TTS provisioning (not yet implemented)
+## `octi setup` voice provisioning (implemented)
+
+`pickVoice` in `scripts/setup-wizard.ts` now drives the full flow: want voice? →
+per-direction local vs cloud → (local STT) faster-whisper model size with
+download/RAM guidance → (local TTS) Kokoro or Piper → provision + wire config.
+Local engines provision **in-process** via `src/voice/provision.ts`
+(`installFasterWhisper` prewarms the CT2 model; `installKokoro` downloads the
+ONNX model + voices to `kokoroModelDir()`); both just need `uv` on PATH. Cloud
+picks set the provider and point the user at the vault for the API key. Choices
+persist through `PUT /api/settings/voice.*`. `getVoiceAvailability` now reports
+`fasterwhisper` (uv present) and `kokoro` (uv + model files) so the web UI gates
+correctly. Kokoro no longer needs a `~/.local/bin` launcher — `KokoroEngine`
+runs the model through `uv run` + a bundled worker, same as faster-whisper.
+
+Remaining (not blocking): a web Settings "install" button (the in-process
+installers would need an API endpoint + streamed progress, mirroring
+`POST /voice/install`); Windows (`uv` works, untested).
+
+## Follow-up: original Kokoro CLI provisioning notes (superseded by the above)
 
 `KokoroEngine` (`src/voice/tts.ts`, merged in #247) shells out to a `kokoro-tts`
 CLI on PATH — exactly as `PiperEngine` assumes `piper`. Nothing provisions it yet,
