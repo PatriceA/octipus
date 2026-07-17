@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { applyRoleFit, validateSpawnChildArgs, formatChildResult, createSpawnChildTool, buildSpawnRoleCatalog, buildDelegationGuidance, parsePlan, SPAWN_CHILD_ROLES } from './swarm-tool';
+import { applyRoleFit, validateSpawnChildArgs, formatChildResult, createSpawnChildTool, buildSpawnRoleCatalog, buildDelegationGuidance, parsePlan, MAX_PLAN_STEPS, SPAWN_CHILD_ROLES } from './swarm-tool';
 import { LEVEL_DEFAULT, type AgentNode, type ChildResult } from './types';
 import { SwarmSpawner } from './spawner';
 
@@ -660,6 +660,13 @@ describe('parsePlan', () => {
   test('rejects a step missing action (loud, so the LLM fixes it)', () => {
     const r = parsePlan([{ tool: 'grep' }]);
     expect('error' in r && r.error).toContain('plan[0].action');
+  });
+
+  test('rejects a runaway plan over the step cap', () => {
+    const runaway = Array.from({ length: MAX_PLAN_STEPS + 1 }, () => ({ action: 'step' }));
+    expect('error' in parsePlan(runaway)).toBe(true);
+    const atCap = Array.from({ length: MAX_PLAN_STEPS }, () => ({ action: 'step' }));
+    expect('plan' in parsePlan(atCap)).toBe(true);
   });
 });
 

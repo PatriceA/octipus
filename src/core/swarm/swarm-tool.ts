@@ -437,9 +437,16 @@ export type ValidatedSpawn =
  * (providers drop nested params — treat missing/null as "no plan"), loud on a
  * malformed array so the parent LLM learns to fix its own plan shape.
  */
+export const MAX_PLAN_STEPS = 50;
+
 export function parsePlan(raw: unknown): { plan?: PlanStep[] } | { error: string } {
   if (raw === undefined || raw === null) return {};
   if (!Array.isArray(raw)) return { error: 'plan must be an array of steps' };
+  // Trust-boundary cap, mirrors parseScorers' array bound. A single child's
+  // plan of tens of steps is already generous; thousands is a runaway LLM.
+  if (raw.length > MAX_PLAN_STEPS) {
+    return { error: `plan has ${raw.length} steps; max is ${MAX_PLAN_STEPS}` };
+  }
   const steps: PlanStep[] = [];
   for (let i = 0; i < raw.length; i++) {
     const s = raw[i];
