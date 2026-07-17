@@ -5,10 +5,10 @@ import { createAuthenticatedWebSocket } from '@/lib/api';
 import { stripForSpeech } from '@/lib/voice-speech';
 
 /**
- * Realtime (streaming) voice loop for web chat — the Phase 4b upgrade over the
- * turn-based useVoiceConversation hook.
+ * Voice conversation loop for web chat — hands-free, streaming (the single
+ * conversation mode; the older turn-based POST /transcribe hook was retired).
  *
- * Instead of record-an-utterance → POST /transcribe, it holds one WebSocket to
+ * It holds one WebSocket to
  * `/voice` open for the whole session and streams 16 kHz mono s16le PCM frames
  * off an AudioWorklet. The server runs streaming STT (local whisper by default,
  * Mistral when engine='mistral') and pushes back a *running full transcript*.
@@ -22,9 +22,6 @@ import { stripForSpeech } from '@/lib/voice-speech';
  * Half-duplex: PCM frames stream only while `listening`, so the assistant's own
  * spoken reply can't be picked up and transcribed. Barge-in is Phase 4c.
  *
- * ponytail: playback (speak) intentionally mirrors useVoiceConversation rather
- * than sharing code — keeping the working Phase 1 hook untouched. Converge into
- * one tts-playback helper when 4c refactors both.
  */
 
 export type RealtimeState = 'idle' | 'connecting' | 'listening' | 'thinking' | 'speaking' | 'error';

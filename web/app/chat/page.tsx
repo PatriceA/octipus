@@ -15,7 +15,6 @@ import { type SessionInfo, SessionList } from '@/components/chat/session-list';
 import SidePanel from '@/components/chat/side-panel';
 import { GlobalPermissionBanner } from '@/components/global-permission-banner';
 import type { SwarmTreeEvent } from '@/components/swarm-tree';
-import { useVoiceConversation } from '@/hooks/useVoiceConversation';
 import { useVoiceRealtime } from '@/hooks/useVoiceRealtime';
 import { api, createAuthenticatedWebSocket, getApiUrl } from '@/lib/api';
 import { usePermissions } from '@/lib/permission-context';
@@ -118,7 +117,6 @@ export default function ChatPage() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionStates, setSessionStates] = useState<Map<string, SessionState>>(new Map());
   const [isLoading, setIsLoading] = useState(false);
-  const [voiceMode, setVoiceMode] = useState(false);
   const [realtimeMode, setRealtimeMode] = useState(false);
   // Real STT availability (whisper runs, or a cloud key is set) — the voice
   // feature disables itself when neither is present.
@@ -1552,18 +1550,10 @@ export default function ChatPage() {
   // typing while the mic is on doesn't get the reply spoken back.
   const voiceTurnRef = useRef(false);
 
-  // Live voice conversation: transcribe → sendMessage (same pipeline as text, so
-  // agents spawn as usual). The reply is spoken when its chat_response arrives
-  // (see speakRef below + the chat_response/speak WS cases) — decoupled from turn
-  // timing, so no stale-reply reads.
-  const voice = useVoiceConversation({
-    enabled: voiceMode,
-    isTurnActive: isLoading,
-    sendTranscript: (t) => { voiceTurnRef.current = true; sendMessage(t); },
-  });
-
-  // Realtime (streaming) voice — Phase 4b. Mutually exclusive with the turn-based
-  // mode above (one mic owner); the toggles below enforce it.
+  // Voice conversation (hands-free, streaming): transcribe → sendMessage (same
+  // pipeline as text, so agents spawn as usual). The reply is spoken when its
+  // chat_response arrives (see speakRef below + the chat_response/speak WS cases)
+  // — decoupled from turn timing, so no stale-reply reads.
   const realtime = useVoiceRealtime({
     enabled: realtimeMode,
     // Engine is chosen by the `voice.sttProvider` setting (Settings → Voice);
@@ -1580,7 +1570,6 @@ export default function ChatPage() {
     speakRef.current = (text: string) => {
       if (!text || !text.trim()) return;
       if (realtimeMode) realtime.speak?.(text);
-      else if (voiceMode) voice.speak?.(text);
     };
   });
 
@@ -1592,7 +1581,7 @@ export default function ChatPage() {
   useEffect(() => {
     const ws = wsRef.current;
     if (ws?.readyState !== WebSocket.OPEN) return;
-    const on = voiceMode || realtimeMode;
+    const on = realtimeMode;
     const prev = prevVoiceSessionRef.current;
     if (prev && prev !== activeSessionId) {
       ws.send(JSON.stringify({ type: 'voice', on: false, sessionId: prev }));
@@ -1601,7 +1590,7 @@ export default function ChatPage() {
       ws.send(JSON.stringify({ type: 'voice', on, sessionId: activeSessionId }));
     }
     prevVoiceSessionRef.current = on ? activeSessionId : null;
-  }, [voiceMode, realtimeMode, activeSessionId]);
+  }, [realtimeMode, activeSessionId]);
 
   return (
     <div className="h-full flex">
@@ -1692,22 +1681,13 @@ export default function ChatPage() {
             onSend={sendMessage}
             disabled={isLoading}
             placeholder={activeSessionId ? 'Send a message...' : 'Create a session to start chatting'}
-            voiceMode={voiceMode}
-            voiceState={voice.state}
-            voiceError={voice.error || voiceUnavailableReason}
+            voiceError={realtime.error || voiceUnavailableReason}
             voiceAvailable={voiceAvailable !== false}
-            onToggleVoiceMode={() => {
-              setRealtimeMode(false); // exclusive with realtime
-              setVoiceMode((v) => !v);
-            }}
             realtimeMode={realtimeMode}
             realtimeState={realtime.state}
             realtimePartial={realtime.partial}
             realtimeError={realtime.error}
-            onToggleRealtimeMode={() => {
-              setVoiceMode(false); // exclusive with turn-based
-              setRealtimeMode((v) => !v);
-            }}
+            onToggleRealtimeMode={() => setRealtimeMode((v) => !v)}
           />
         </div>
       </div>

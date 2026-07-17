@@ -7,13 +7,11 @@ import {
   Mic,
   Music,
   Paperclip,
-  Radio,
   Send,
   Square,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { VoiceState } from '@/hooks/useVoiceConversation';
 import type { RealtimeState } from '@/hooks/useVoiceRealtime';
 import { cn } from '@/lib/utils';
 import { AudioWaveform } from './audio-waveform';
@@ -39,14 +37,11 @@ interface PromptInputProps {
   onSend: (message: string, attachments?: Attachment[]) => void;
   disabled?: boolean;
   placeholder?: string;
-  /** Live voice conversation mode (hands-free talk ↔ spoken reply). */
-  voiceMode?: boolean;
-  voiceState?: VoiceState;
+  /** Reason voice is unavailable (no STT engine / no cloud key) — for the tooltip. */
   voiceError?: string | null;
-  /** False when STT is unavailable (no whisper, no cloud key) — disables the toggle. */
+  /** False when voice is unavailable — disables the conversation toggle. */
   voiceAvailable?: boolean;
-  onToggleVoiceMode?: () => void;
-  /** Realtime (streaming) voice — the Phase 4b duplex-WS mode. */
+  /** Hands-free voice conversation (streaming talk ↔ spoken reply). */
   realtimeMode?: boolean;
   realtimeState?: RealtimeState;
   realtimePartial?: string;
@@ -85,14 +80,6 @@ const ACCEPTED_TYPES =
 
 const MAX_HISTORY = 50;
 
-const VOICE_STATE_LABEL: Record<VoiceState, string> = {
-  idle: 'starting…',
-  listening: 'listening',
-  transcribing: 'transcribing',
-  thinking: 'thinking',
-  speaking: 'speaking',
-  error: 'mic error',
-};
 
 const REALTIME_STATE_LABEL: Record<RealtimeState, string> = {
   idle: 'starting…',
@@ -107,16 +94,13 @@ export default function PromptInput({
   onSend,
   disabled = false,
   placeholder = 'Type a message...',
-  voiceMode = false,
   realtimeMode = false,
   realtimeState = 'idle',
   realtimePartial = '',
   realtimeError = null,
   onToggleRealtimeMode,
-  voiceState = 'idle',
   voiceError = null,
   voiceAvailable = true,
-  onToggleVoiceMode,
 }: PromptInputProps) {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -470,11 +454,6 @@ export default function PromptInput({
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
-      {/* Voice conversation error (STT/TTS/mic) */}
-      {voiceMode && voiceError && (
-        <div className="mb-2 rounded-lg bg-error/10 px-3 py-1.5 text-xs text-error">{voiceError}</div>
-      )}
-
       {/* Drop zone overlay */}
       {isDragging && (
         <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-primary bg-primary/10">
@@ -616,41 +595,7 @@ export default function PromptInput({
           </div>
         )}
 
-        {/* Live voice conversation toggle */}
-        {onToggleVoiceMode && (
-          <button
-            type="button"
-            onClick={voiceAvailable ? onToggleVoiceMode : undefined}
-            disabled={!voiceAvailable}
-            className={cn(
-              'rounded-lg p-2 transition-colors',
-              !voiceAvailable
-                ? 'text-on-surface-variant/40 cursor-not-allowed'
-                : voiceMode
-                  ? 'bg-primary/15 text-primary hover:bg-primary/25'
-                  : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface'
-            )}
-            title={
-              !voiceAvailable
-                ? voiceError || 'Voice unavailable — run `octi setup` to install local voice'
-                : voiceMode
-                  ? 'Exit voice conversation'
-                  : 'Start voice conversation'
-            }
-          >
-            <AudioLines className="h-4 w-4" />
-          </button>
-        )}
-
-        {/* Voice conversation state */}
-        {voiceMode && (
-          <div className="flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-1.5">
-            <span className={cn('dot dot-live h-1.5 w-1.5', voiceState === 'error' ? 'text-error bg-error' : 'text-primary bg-primary')} />
-            <span className="text-xs text-accent">{VOICE_STATE_LABEL[voiceState]}<span className="term-caret" /></span>
-          </div>
-        )}
-
-        {/* Realtime (streaming) voice toggle — Phase 4b */}
+        {/* Voice conversation toggle (hands-free, streaming) */}
         {onToggleRealtimeMode && (
           <button
             type="button"
@@ -666,13 +611,13 @@ export default function PromptInput({
             )}
             title={
               !voiceAvailable
-                ? voiceError || 'Voice unavailable — run `octi setup` to install local voice'
+                ? voiceError || 'Voice unavailable — run `octi setup` to enable voice'
                 : realtimeMode
-                  ? 'Exit realtime voice'
-                  : 'Start realtime (streaming) voice'
+                  ? 'Exit voice conversation'
+                  : 'Start voice conversation'
             }
           >
-            <Radio className="h-4 w-4" />
+            <AudioLines className="h-4 w-4" />
           </button>
         )}
 
