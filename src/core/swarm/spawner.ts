@@ -374,7 +374,11 @@ export class SwarmSpawner {
     // User spec: "any agent should check tools and see if the task can be
     // done with the given ones."
     const availableToolNames = childTools.map((t) => t.name);
-    const canSpawnChildren = childDepth === 1;
+    // A planned child is a mechanical executor: it does not delegate, so it gets
+    // neither the delegation reminder nor the (system-prompt) delegation guidance
+    // — and, in singleSpawnAndRun, no spawn/collect meta-tools. Only plan-less
+    // depth-1 agents are delegators.
+    const canSpawnChildren = childDepth === 1 && !brief.plan?.length;
     const childMessage = composeChildMessage(brief, {
       availableToolNames,
       canSpawnChildren,
@@ -591,7 +595,12 @@ export class SwarmSpawner {
     // over `childNode` by reference so the mutation is observed.
     const tools: ToolHandler[] = [...opts.childTools];
     let childNode: AgentNode | null = null;
-    if (opts.childDepth === 1) {
+    // A planned child is a mechanical executor — withhold the spawn/escalate/
+    // collect meta-tools entirely so the "do not spawn" prompt line is backed by
+    // tool-level enforcement, not just instruction-following (weak executor
+    // models under-weight instructions). Tracking/persistence below key off
+    // `childId`, not `childNode`, so a null childNode is safe here.
+    if (opts.childDepth === 1 && !opts.brief.plan?.length) {
       childNode = {
         id: '__pending__',
         rootSessionId: opts.parent.rootSessionId,
