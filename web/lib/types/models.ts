@@ -151,6 +151,7 @@ export const PROVIDER_LABELS: Record<string, string> = {
   anthropic: 'Anthropic',
   deepseek: 'DeepSeek',
   gemini: 'Google Gemini',
+  vertex: 'Vertex AI (Google)',
   grok: 'Grok (xAI)',
   mistral: 'Mistral AI',
   openrouter: 'OpenRouter',

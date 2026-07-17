@@ -107,7 +107,7 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
               lastChecked: new Date(),
             });
 
-      const [litellm, ollama, openai, anthropic, gemini, deepseek, grok, mistral, voyage, openrouter, custom] = await Promise.all([
+      const [litellm, ollama, openai, anthropic, gemini, deepseek, grok, mistral, voyage, openrouter, vertex, custom] = await Promise.all([
         healthChecker.checkLiteLLMProxy().catch((e: Error) => ({
           service: 'litellm', status: 'unhealthy' as const, message: e.message, lastChecked: new Date(),
         })),
@@ -122,6 +122,7 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
         conditionalCheck('mistral'),
         conditionalCheck('voyage'),
         conditionalCheck('openrouter'),
+        conditionalCheck('vertex'),
         customCheck(),
       ]);
 
@@ -155,6 +156,7 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
           mistral: toHealthEntry(mistral),
           voyage: toHealthEntry(voyage),
           openrouter: toHealthEntry(openrouter),
+          vertex: toHealthEntry(vertex),
           custom: toHealthEntry(custom),
         },
       };

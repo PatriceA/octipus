@@ -27,6 +27,7 @@ interface HealthData {
     openai: ServiceHealth;
     anthropic: ServiceHealth;
     gemini: ServiceHealth;
+    vertex: ServiceHealth;
     deepseek: ServiceHealth;
     grok: ServiceHealth;
     mistral: ServiceHealth;

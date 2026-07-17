@@ -182,17 +182,7 @@ export class VertexProvider implements ModelProvider {
 
   /** Service account from env (VERTEX_SERVICE_ACCOUNT_JSON) or the vault. */
   private async loadServiceAccount(): Promise<ServiceAccount | null> {
-    if (process.env.VERTEX_SERVICE_ACCOUNT_JSON) {
-      return parseServiceAccount(process.env.VERTEX_SERVICE_ACCOUNT_JSON);
-    }
-    try {
-      const { getVault } = await import('@/security/vault');
-      const raw = await getVault().getByName('system', 'vertex_service_account');
-      return raw ? parseServiceAccount(raw) : null;
-    } catch (err) {
-      modelLogger.warn({ err: (err as Error).message, provider: this.name }, 'Vertex vault lookup failed');
-      return null;
-    }
+    return loadVertexServiceAccount();
   }
 
   private async createClient(): Promise<OpenAI> {
@@ -230,4 +220,35 @@ export class VertexProvider implements ModelProvider {
       return { role: msg.role as 'system' | 'user' | 'assistant', content: msg.content };
     });
   }
+}
+
+/**
+ * Load the Vertex service account from env (VERTEX_SERVICE_ACCOUNT_JSON) or the
+ * vault (`system` / `vertex_service_account`). Returns null when absent or
+ * unparseable. Shared by the provider and the "is Vertex configured?" check the
+ * UI (secrets / model-add / health) reads.
+ */
+export async function loadVertexServiceAccount(): Promise<ServiceAccount | null> {
+  const raw = process.env.VERTEX_SERVICE_ACCOUNT_JSON;
+  if (raw) {
+    try {
+      return parseServiceAccount(raw);
+    } catch (err) {
+      modelLogger.warn({ err: (err as Error).message }, 'VERTEX_SERVICE_ACCOUNT_JSON is not valid');
+      return null;
+    }
+  }
+  try {
+    const { getVault } = await import('@/security/vault');
+    const stored = await getVault().getByName('system', 'vertex_service_account');
+    return stored ? parseServiceAccount(stored) : null;
+  } catch (err) {
+    modelLogger.warn({ err: (err as Error).message, provider: 'vertex' }, 'Vertex vault lookup failed');
+    return null;
+  }
+}
+
+/** True when a usable Vertex service account is present (cheap — no token mint). */
+export async function isVertexConfigured(): Promise<boolean> {
+  return (await loadVertexServiceAccount()) !== null;
 }

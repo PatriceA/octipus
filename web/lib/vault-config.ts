@@ -45,6 +45,7 @@ export const PROVIDER_KEY_GROUPS: VaultKeyGroup[] = [
       { label: 'OpenAI', vaultName: 'openai_api_key', testProvider: 'openai', placeholder: 'sk-...' },
       { label: 'Anthropic', vaultName: 'anthropic_api_key', testProvider: 'anthropic', placeholder: 'sk-ant-...' },
       { label: 'Google Gemini', vaultName: 'gemini_api_key', testProvider: 'gemini' },
+      { label: 'Vertex AI (service account JSON)', vaultName: 'vertex_service_account', testProvider: 'vertex', placeholder: '{ "type": "service_account", "project_id": "...", "client_email": "...", "private_key": "..." }' },
       { label: 'Grok (xAI)', vaultName: 'xai_api_key', testProvider: 'grok', placeholder: 'xai-...' },
       { label: 'DeepSeek', vaultName: 'deepseek_api_key', testProvider: 'deepseek', placeholder: 'sk-...' },
       { label: 'Mistral AI', vaultName: 'mistral_api_key', testProvider: 'mistral' },
