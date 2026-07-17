@@ -62,7 +62,11 @@ def main():
         if pcm is None:
             break
         audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
-        segments, _ = model.transcribe(audio, language=a.language)
+        # vad_filter (Silero) drops non-speech before decoding. Without it,
+        # Whisper hallucinates YouTube-caption phantoms ("Thank you.", "You")
+        # on silent/near-silent windows — and the realtime loop streams a window
+        # every 2 s whether or not anyone is talking, so those repeat forever.
+        segments, _ = model.transcribe(audio, language=a.language, vad_filter=True)
         text = " ".join(s.text.strip() for s in segments).strip()
         emit({"text": text})
 
