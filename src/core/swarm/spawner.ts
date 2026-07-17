@@ -365,6 +365,7 @@ export class SwarmSpawner {
         params.expertId,
         internal.excludeExpertId,
         childTools.length > 0,
+        !!brief.plan?.length,
       ));
 
     // ── Compose child's initial user message from brief ─────────────
@@ -1024,6 +1025,12 @@ export class SwarmSpawner {
     excludeExpertId?: string,
     /** Whether this child is equipped with tools — gates the tool-support reroute. */
     childUsesTools = false,
+    /**
+     * Whether the parent supplied an explicit execution plan. Only a planned
+     * child binds to the lane's `executorModel` (the cheap mechanical
+     * executor); a plan-less child uses its own judgment on the primary model.
+     */
+    hasPlan = false,
   ): Promise<{ model: string; lane: string; expertId?: string; systemPrompt?: string }> {
     const registry = getModelRegistry();
 
@@ -1147,9 +1154,11 @@ export class SwarmSpawner {
 
     // Model selection — in order of preference:
     //   1. expert.modelPreference (specialist's explicit choice)
-    //   2. lane executorModel (W9 planner→executor split) — the spawned child
-    //      IS the executor, so it binds to the lane's configured executor model
-    //      when one is set on the Topics page.
+    //   2. lane executorModel (W9 planner→executor split) — ONLY when the
+    //      parent supplied a `plan` (hasPlan). A plan is the parent saying "I've
+    //      done the thinking; run these steps mechanically", so it binds to the
+    //      lane's cheap executor. A plan-less child is a recon/judgment
+    //      delegation and skips this branch → falls through to the primary.
     //   3. lane→model mapping (topic primary binding)
     //   4. fail loud — do NOT inherit parent model. The parent's model is
     //      whatever the orchestrator happened to pick; it has no claim to
@@ -1161,9 +1170,11 @@ export class SwarmSpawner {
     // research/communication/pm/writing).
     const lane = expertLane || childRole;
     let candidate = expertModel;
-    if (!candidate) {
-      // Empty executorModel ⇒ this whole block is skipped and resolution is
-      // byte-for-byte today's behaviour (planner == executor).
+    if (!candidate && hasPlan) {
+      // No plan ⇒ this whole block is skipped and the child resolves to the
+      // lane's primary (recon/judgment). Empty executorModel ⇒ also skipped
+      // (planner == executor). A misconfigured executorModel only fails loud
+      // when a plan actually needs the executor.
       const executorName = getTopicConfig(lane).executorModel;
       if (executorName) {
         const execModel =
@@ -1176,6 +1187,15 @@ export class SwarmSpawner {
         }
         candidate = execModel.modelId;
       }
+    } else if (!candidate && !hasPlan && getTopicConfig(lane).executorModel) {
+      // Breadcrumb: this lane HAS an executorModel but the child arrived without
+      // a plan, so we deliberately skip it and use the primary (recon path). Log
+      // it so a configured-but-never-exercised executor — or a typo that only a
+      // planned spawn would surface — is at least visible to operators.
+      coreLogger.debug(
+        { lane, childRole, executorModel: getTopicConfig(lane).executorModel },
+        'Plan-less child: skipping configured executorModel, resolving topic primary (recon path)',
+      );
     }
     if (!candidate) {
       const topicModel = await registry.getModelForTopic(lane);

@@ -4,14 +4,16 @@ import { SwarmSpawner } from './spawner';
 
 /**
  * W9 planner→executor split: a swarm child spawned for a topic with an
- * `executorModel` configured binds to that model instead of the topic's primary.
- * Empty executor ⇒ today's behaviour (topic primary binding).
+ * `executorModel` configured binds to that model instead of the topic's primary
+ * — but ONLY when the parent supplied an explicit `plan` (hasPlan). A plan-less
+ * child is a recon/judgment delegation and stays on the topic primary.
+ * Empty executor ⇒ topic primary binding regardless of plan.
  *
  * DB-backed: run via `bun run test:integration -- src/core/swarm/spawner-executor.test.ts`.
  */
 describe.skipIf(!isIntegration)('SwarmSpawner — executor model resolution (W9)', () => {
   // resolveChildModelAndExpert is private; cast to reach it in the test.
-  let resolve: (parentModel: string, childRole: string, msg: string) => Promise<{ model: string }>;
+  let resolve: (parentModel: string, childRole: string, msg: string, hasPlan?: boolean) => Promise<{ model: string }>;
 
   beforeAll(async () => {
     await setupIntegrationDb();
@@ -27,33 +29,46 @@ describe.skipIf(!isIntegration)('SwarmSpawner — executor model resolution (W9)
     await reg.registerModel({ name: 'exec-model', provider: 'ollama', modelId: 'exec-id', isEnabled: true } as never);
 
     const spawner = new SwarmSpawner({} as never);
-    resolve = (parentModel, childRole, msg) =>
+    resolve = (parentModel, childRole, msg, hasPlan = false) =>
       (spawner as unknown as {
-        resolveChildModelAndExpert: (a: string, b: string, c: string) => Promise<{ model: string }>;
-      }).resolveChildModelAndExpert(parentModel, childRole, msg);
+        resolveChildModelAndExpert: (
+          a: string, b: string, c: string, d?: string, e?: string, f?: boolean, g?: boolean,
+        ) => Promise<{ model: string }>;
+      }).resolveChildModelAndExpert(parentModel, childRole, msg, undefined, undefined, false, hasPlan);
   });
 
   afterAll(async () => {
     await teardownIntegration();
   });
 
-  test('no executorModel ⇒ resolves the topic primary (unchanged behaviour)', async () => {
+  test('no executorModel ⇒ resolves the topic primary (with or without plan)', async () => {
     const { setTopicConfig } = await import('@/models/topic-config');
     await setTopicConfig('agents', { executorModel: null, temperature: null, maxTokens: null });
-    const r = await resolve('parent-id', 'coding', 'do coding');
-    expect(r.model).toBe('primary-id');
+    expect((await resolve('parent-id', 'coding', 'do coding', false)).model).toBe('primary-id');
+    expect((await resolve('parent-id', 'coding', 'do coding', true)).model).toBe('primary-id');
   });
 
-  test('executorModel set ⇒ child resolves to the executor model', async () => {
+  test('executorModel set + plan ⇒ child resolves to the executor model', async () => {
     const { setTopicConfig } = await import('@/models/topic-config');
     await setTopicConfig('agents', { executorModel: 'exec-model', temperature: null, maxTokens: null });
-    const r = await resolve('parent-id', 'coding', 'do coding');
+    const r = await resolve('parent-id', 'coding', 'do coding', true);
     expect(r.model).toBe('exec-id');
   });
 
-  test('executorModel pointing at a missing model fails loud', async () => {
+  test('executorModel set but NO plan ⇒ stays on the topic primary (recon path)', async () => {
+    const { setTopicConfig } = await import('@/models/topic-config');
+    await setTopicConfig('agents', { executorModel: 'exec-model', temperature: null, maxTokens: null });
+    const r = await resolve('parent-id', 'coding', 'do coding', false);
+    expect(r.model).toBe('primary-id');
+  });
+
+  test('executorModel pointing at a missing model fails loud only when a plan needs it', async () => {
     const { setTopicConfig } = await import('@/models/topic-config');
     await setTopicConfig('agents', { executorModel: 'ghost-model', temperature: null, maxTokens: null });
-    await expect(resolve('parent-id', 'coding', 'do coding')).rejects.toThrow(/executorModel/);
+    // With a plan, the executor branch runs and the missing model throws.
+    await expect(resolve('parent-id', 'coding', 'do coding', true)).rejects.toThrow(/executorModel/);
+    // Without a plan, the branch is skipped — a misconfigured executor must not
+    // block a recon spawn; it falls through to the primary.
+    expect((await resolve('parent-id', 'coding', 'do coding', false)).model).toBe('primary-id');
   });
 });
