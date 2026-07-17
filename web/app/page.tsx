@@ -22,6 +22,7 @@ interface HealthData {
   health?: {
     database: ServiceHealth;
     redis: ServiceHealth;
+    scheduler: ServiceHealth;
     litellm: ServiceHealth;
     ollama: ServiceHealth;
     openai: ServiceHealth;

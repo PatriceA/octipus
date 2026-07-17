@@ -1,6 +1,6 @@
 'use client';
 
-import { Brain, Cloud, Compass, Cpu, Database, Globe, Layers, RefreshCw, Rocket, Server, Settings2, Sparkles, Wind, Zap } from 'lucide-react';
+import { Brain, Clock, Cloud, Compass, Cpu, Database, Globe, Layers, RefreshCw, Rocket, Server, Settings2, Sparkles, Wind, Zap } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 
@@ -14,6 +14,7 @@ interface HealthStatusProps {
   health?: {
     database: ServiceHealth;
     redis: ServiceHealth;
+    scheduler: ServiceHealth;
     litellm: ServiceHealth;
     ollama: ServiceHealth;
     openai: ServiceHealth;
@@ -33,6 +34,7 @@ interface HealthStatusProps {
 const SERVICE_CONFIG = [
   { key: 'database',   label: 'postgres',   icon: Database },
   { key: 'redis',      label: 'valkey',     icon: Server },
+  { key: 'scheduler',  label: 'scheduler',  icon: Clock },
   { key: 'litellm',    label: 'litellm',    icon: Layers },
   { key: 'ollama',     label: 'ollama',     icon: Cpu },
   { key: 'openai',     label: 'openai',     icon: Zap },

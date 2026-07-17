@@ -16,6 +16,8 @@ interface SkillProposal {
   draftPromptTemplate: string;
   exemplarCount: number;
   lastExemplarAt: string;
+  kind?: 'skill' | 'expert';
+  sourceRef?: string | null;
   status: 'pending' | 'approved' | 'rejected' | 'promoted';
   createdAt: string;
 }
@@ -65,7 +67,7 @@ export default function SkillProposalsPage() {
       <div className="max-w-5xl mx-auto">
         <PageHeader
           title="skills/proposals"
-          description="Auto-extension suggestions from recurring interaction patterns. Nothing activates until you approve."
+          description="Suggestions from recurring interaction patterns and distilled skills (skill_distill). The → badge shows whether approving creates a skill or an expert. Nothing activates until you approve."
         />
 
         {error && (
@@ -103,6 +105,12 @@ export default function SkillProposalsPage() {
                     <span className="px-1.5 py-0.5 text-[10px] uppercase tracking-wider font-mono leading-none border border-accent/40 bg-accent-container/40 text-accent rounded-xs">
                       ai proposed
                     </span>
+                    <span
+                      className="px-1.5 py-0.5 text-[10px] uppercase tracking-wider font-mono leading-none border border-outline-variant/30 bg-surface-container-high text-on-surface-variant rounded-xs"
+                      title={p.kind === 'skill' ? 'Approving creates a reusable skill' : 'Approving creates a custom expert'}
+                    >
+                      → {p.kind ?? 'expert'}
+                    </span>
                     {busyId === p.id && (
                       <span aria-hidden className="dot dot-live bg-primary text-primary shrink-0" />
                     )}
@@ -111,6 +119,7 @@ export default function SkillProposalsPage() {
                   <div className="flex gap-4 text-xs text-on-surface-variant">
                     <span>{p.exemplarCount} exemplars</span>
                     <span>last seen {new Date(p.lastExemplarAt).toLocaleDateString()}</span>
+                    {p.sourceRef && <span title="Where this was distilled from">source: {p.sourceRef}</span>}
                   </div>
                 </div>
                 <div className="flex gap-2 shrink-0">

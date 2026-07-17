@@ -91,6 +91,28 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
         }
       };
 
+      // Scheduler liveness: the task-queue worker loop writes a heartbeat each
+      // tick. A stale/absent heartbeat means it's wedged or never started.
+      const schedulerCheck = async () => {
+        try {
+          const { getScheduler } = await import('@/core/scheduler');
+          const stats = await getScheduler().getStats();
+          if (!stats.heartbeat) {
+            return { service: 'scheduler', status: 'not_configured' as const, message: 'worker loop not started', lastChecked: new Date() };
+          }
+          return {
+            service: 'scheduler',
+            status: stats.heartbeat.stale ? ('unhealthy' as const) : ('healthy' as const),
+            message: stats.heartbeat.stale
+              ? `heartbeat stale (${Math.round(stats.heartbeat.ageMs / 1000)}s)`
+              : `queue ${stats.queueLength}, processing ${stats.processing}`,
+            lastChecked: new Date(),
+          };
+        } catch (e) {
+          return { service: 'scheduler', status: 'unhealthy' as const, message: (e as Error).message, lastChecked: new Date() };
+        }
+      };
+
       // Only probe providers that have at least one enabled model row. Avoids
       // burning paid API calls (e.g. xAI models.list()) for providers the user
       // has deleted from the registry.
@@ -107,7 +129,7 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
               lastChecked: new Date(),
             });
 
-      const [litellm, ollama, openai, anthropic, gemini, deepseek, grok, mistral, voyage, openrouter, vertex, custom] = await Promise.all([
+      const [litellm, ollama, openai, anthropic, gemini, deepseek, grok, mistral, voyage, openrouter, vertex, custom, scheduler] = await Promise.all([
         healthChecker.checkLiteLLMProxy().catch((e: Error) => ({
           service: 'litellm', status: 'unhealthy' as const, message: e.message, lastChecked: new Date(),
         })),
@@ -124,6 +146,7 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
         conditionalCheck('openrouter'),
         conditionalCheck('vertex'),
         customCheck(),
+        schedulerCheck(),
       ]);
 
       const toHealthEntry = (h: { service?: string; status: string; latency?: number; message?: string; lastChecked?: Date }) => ({
@@ -158,6 +181,7 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
           openrouter: toHealthEntry(openrouter),
           vertex: toHealthEntry(vertex),
           custom: toHealthEntry(custom),
+          scheduler: toHealthEntry(scheduler),
         },
       };
     } catch (_error) {
