@@ -40,7 +40,7 @@ export class PiperEngine extends EventEmitter implements TTSEngine {
   }
 
   async synthesize(text: string): Promise<Buffer> {
-    const outputPath = `/tmp/piper-${Date.now()}.wav`;
+    const outputPath = `/tmp/piper-${crypto.randomUUID()}.wav`;
 
     try {
       const args = [
@@ -107,10 +107,12 @@ export class PiperEngine extends EventEmitter implements TTSEngine {
 }
 
 /**
- * Kokoro TTS engine (local, ONNX, no API key). Shells out to the `kokoro-tts`
- * CLI (pip package, ONNX build — no torch), which reads an input text file and
- * writes a wav. Kokoro-82M leads open local TTS on quality in 2026 while still
- * running faster-than-real-time on CPU; Piper stays as the tiny/RPi fallback.
+ * Kokoro TTS engine (local, ONNX, no API key). Shells out to a `kokoro-tts`
+ * CLI (the `kokoro-onnx` runtime — ONNX, no torch) that reads an input text
+ * file and writes a wav. Kokoro-82M leads open local TTS on quality in 2026
+ * while still running faster-than-real-time on CPU; Piper stays as the tiny/RPi
+ * fallback. Provisioning the CLI is handled by `octi setup` (see
+ * docs/plans/voice-local-setup.md).
  *
  * Voices are baked into the model (fixed set, no cloning), so `getVoices`
  * returns a static list rather than scanning the filesystem like Piper.
@@ -136,7 +138,7 @@ export class KokoroEngine extends EventEmitter implements TTSEngine {
   }
 
   async synthesize(text: string): Promise<Buffer> {
-    const stamp = `${Date.now()}-${process.pid}`;
+    const stamp = crypto.randomUUID();
     const inputPath = `/tmp/kokoro-${stamp}.txt`;
     const outputPath = `/tmp/kokoro-${stamp}.wav`;
 
