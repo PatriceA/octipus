@@ -7,6 +7,7 @@ import {
   SwarmSpawner,
   TASK_BRIEF_PREVIEW_MAX,
   composeChildMessage,
+  planToolGaps,
 } from './spawner';
 import { LEVEL_DEFAULT, type AgentNode, type NodeBudget, type TaskBrief } from './types';
 import type { ToolHandler } from '@/core/agent-worker';
@@ -102,6 +103,50 @@ describe('composeChildMessage — execution plan', () => {
     const msg = composeChildMessage(base, { availableToolNames: ['shell'], canSpawnChildren: true });
     expect(msg).not.toContain('EXECUTION PLAN');
     expect(msg).toContain('spawn_child'); // recon child still gets the reminder
+  });
+
+  test('marks a step whose tool the child does not have (Phase 4)', () => {
+    const msg = composeChildMessage(
+      { ...base, plan: [
+        { action: 'read it', tool: 'read' },
+        { action: 'edit it', tool: 'edit' },
+      ] },
+      { availableToolNames: ['read'], canSpawnChildren: true }, // no 'edit'
+    );
+    expect(msg).toContain('1. read it [tool: read]');
+    expect(msg).toContain('2. edit it [tool: edit — NOT available to you');
+  });
+});
+
+// ── planToolGaps (Phase 4: plan tool validation) ─────────────────────
+
+describe('planToolGaps', () => {
+  test('all named tools available ⇒ no gaps, runnable', () => {
+    const r = planToolGaps([{ action: 'a', tool: 'read' }, { action: 'b', tool: 'edit' }], ['read', 'edit']);
+    expect(r).toEqual({ missingTools: [], unrunnable: false });
+  });
+
+  test('some tools missing ⇒ reports them, still runnable', () => {
+    const r = planToolGaps([{ action: 'a', tool: 'read' }, { action: 'b', tool: 'edit' }], ['read']);
+    expect(r.missingTools).toEqual(['edit']);
+    expect(r.unrunnable).toBe(false);
+  });
+
+  test('every tool-bearing step unrunnable ⇒ unrunnable=true', () => {
+    const r = planToolGaps([{ action: 'a', tool: 'edit' }, { action: 'b', tool: 'grep' }], ['read']);
+    expect(r.missingTools).toEqual(['edit', 'grep']);
+    expect(r.unrunnable).toBe(true);
+  });
+
+  test('steps with no tool never count as missing or unrunnable', () => {
+    const r = planToolGaps([{ action: 'think' }, { action: 'write it up' }], []);
+    expect(r).toEqual({ missingTools: [], unrunnable: false });
+  });
+
+  test('dedups a repeated missing tool', () => {
+    const r = planToolGaps([{ action: 'a', tool: 'edit' }, { action: 'b', tool: 'edit' }], ['read']);
+    expect(r.missingTools).toEqual(['edit']);
+    expect(r.unrunnable).toBe(true);
   });
 });
 
