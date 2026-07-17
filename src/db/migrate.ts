@@ -117,17 +117,18 @@ async function runEmbeddedMigrations(): Promise<void> {
       // committed and the tracking row unwritten — so a re-run replayed the
       // whole file and hit duplicate-object errors. None of the migrations use
       // CREATE INDEX CONCURRENTLY, so wrapping in a transaction is safe.
-      await executeRaw('BEGIN');
-      try {
-        await executeRaw(patchedSql);
-        await executeRaw(
-          `INSERT INTO "drizzle"."__drizzle_migrations" (hash, created_at) VALUES ('${safeHash}', ${safeWhen})`
-        );
-        await executeRaw('COMMIT');
-      } catch (err) {
-        await executeRaw('ROLLBACK').catch(() => { /* connection may be aborted */ });
-        throw err;
-      }
+      //
+      // Bounded retry: under the full test suite (many throwaway PGlite
+      // instances created back-to-back in one process), a heavy migration that
+      // rewrites tables — the `timestamp`→`timestamptz` conversion in
+      // particular — intermittently faults inside PGlite's WASM VFS with
+      // `could not open file "base/…"` (SQLSTATE 58P01) / an `ErrnoError`
+      // (errno 44 = ENOENT) when the storage manager opens the freshly written
+      // relfilenode. It is transient: the transaction is rolled back cleanly, so
+      // replaying the same entry on the next attempt succeeds. This also hardens
+      // a real first-boot embedded install against the same hiccup. Only the
+      // known-transient VFS class is retried; every other error still fails loud.
+      await applyEmbeddedMigrationWithRetry(entry.tag, patchedSql, safeHash, safeWhen);
     }
 
     logger.info('Migrations completed successfully (PGlite)');
@@ -135,4 +136,55 @@ async function runEmbeddedMigrations(): Promise<void> {
     logger.error({ error, message: (error as Error).message, stack: (error as Error).stack }, 'Migration failed (PGlite)');
     throw error;
   }
+}
+
+/**
+ * Apply one embedded migration entry inside a transaction, retrying only the
+ * transient PGlite WASM-VFS fault described at the call site. Each attempt is
+ * fully isolated: a failure rolls the transaction back before the next try, so
+ * a replay starts from the same clean pre-migration state (no half-applied
+ * DDL, no duplicate-object errors). Non-transient errors throw immediately.
+ */
+async function applyEmbeddedMigrationWithRetry(
+  tag: string,
+  patchedSql: string,
+  safeHash: string,
+  safeWhen: number,
+): Promise<void> {
+  const MAX_ATTEMPTS = 3;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    await executeRaw('BEGIN');
+    try {
+      await executeRaw(patchedSql);
+      await executeRaw(
+        `INSERT INTO "drizzle"."__drizzle_migrations" (hash, created_at) VALUES ('${safeHash}', ${safeWhen})`
+      );
+      await executeRaw('COMMIT');
+      return;
+    } catch (err) {
+      await executeRaw('ROLLBACK').catch(() => { /* connection may be aborted */ });
+      if (attempt >= MAX_ATTEMPTS || !isTransientPgliteFault(err)) throw err;
+      logger.warn(
+        { tag, attempt, error: (err as Error).message },
+        'Transient PGlite fault applying migration — retrying',
+      );
+      // Yield a tick so PGlite's WASM VFS can settle before the replay.
+      await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
+    }
+  }
+}
+
+/**
+ * True for the narrow, known-transient PGlite storage fault that a fresh
+ * replay recovers from — an `ErrnoError` (errno 44 = ENOENT) or a Postgres
+ * `could not open file` / SQLSTATE 58P01 raised while the WASM VFS opens a
+ * relfilenode. Everything else (real SQL errors, constraint violations) is
+ * NOT transient and must surface.
+ */
+function isTransientPgliteFault(err: unknown): boolean {
+  const e = err as { errno?: number; code?: string; message?: string; name?: string };
+  if (e?.errno === 44 || e?.name === 'ErrnoError') return true;
+  if (e?.code === '58P01') return true;
+  const msg = String(e?.message ?? '');
+  return /could not open file|No such file or directory/i.test(msg);
 }
