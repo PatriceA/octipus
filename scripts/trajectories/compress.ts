@@ -1,12 +1,11 @@
 #!/usr/bin/env bun
 /**
- * Gzip yesterday's trajectory JSONL file.
- * Run via cron or pipeline scheduler. Idempotent — skips if already gzipped.
+ * Gzip yesterday's trajectory JSONL file. Idempotent — skips if already gzipped.
+ * The compression logic lives in the recorder (`compressTrajectoryForDate`) and
+ * also runs daily from the cron loop; this CLI is the manual/one-off entry point.
  */
 
-import { readFileSync, existsSync, unlinkSync, writeFileSync } from 'fs';
-import { gzipSync } from 'zlib';
-import { trajectoryFilePathForDate } from '@/core/trajectories/recorder';
+import { compressTrajectoryForDate, trajectoryFilePathForDate } from '@/core/trajectories/recorder';
 
 function yesterday(): Date {
   const d = new Date();
@@ -15,24 +14,20 @@ function yesterday(): Date {
 }
 
 function main(): void {
-  const path = trajectoryFilePathForDate(yesterday());
-  const gz = `${path}.gz`;
-
-  if (!existsSync(path)) {
-    console.log(`[trajectories] no file at ${path}, skipping`);
-    return;
+  const date = yesterday();
+  const path = trajectoryFilePathForDate(date);
+  const result = compressTrajectoryForDate(date);
+  switch (result) {
+    case 'no-file':
+      console.log(`[trajectories] no file at ${path}, skipping`);
+      break;
+    case 'already-compressed':
+      console.log(`[trajectories] ${path}.gz already exists, removed leftover source`);
+      break;
+    case 'compressed':
+      console.log(`[trajectories] compressed ${path} → ${path}.gz`);
+      break;
   }
-  if (existsSync(gz)) {
-    console.log(`[trajectories] ${gz} already exists, removing uncompressed source`);
-    unlinkSync(path);
-    return;
-  }
-
-  const data = readFileSync(path);
-  const compressed = gzipSync(data);
-  writeFileSync(gz, compressed);
-  unlinkSync(path);
-  console.log(`[trajectories] compressed ${path} → ${gz} (${data.length} → ${compressed.length} bytes)`);
 }
 
 if (import.meta.main) main();
