@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { applyRoleFit, validateSpawnChildArgs, formatChildResult, createSpawnChildTool, buildSpawnRoleCatalog, buildDelegationGuidance, SPAWN_CHILD_ROLES } from './swarm-tool';
+import { applyRoleFit, validateSpawnChildArgs, formatChildResult, createSpawnChildTool, buildSpawnRoleCatalog, buildDelegationGuidance, parsePlan, MAX_PLAN_STEPS, SPAWN_CHILD_ROLES } from './swarm-tool';
 import { LEVEL_DEFAULT, type AgentNode, type ChildResult } from './types';
 import { SwarmSpawner } from './spawner';
 
@@ -625,5 +625,80 @@ describe('createSpawnChildTool', () => {
     );
     expect(awaitCalled).toBe(true);
     expect(String(out)).toContain('nodeId="n1"');
+  });
+});
+
+// ── plan (Phase 1: explicit planner→executor plan) ───────────────────
+
+describe('parsePlan', () => {
+  test('treats missing/null as no plan (lenient — providers drop nested params)', () => {
+    expect(parsePlan(undefined)).toEqual({});
+    expect(parsePlan(null)).toEqual({});
+  });
+
+  test('parses a well-formed plan and trims fields', () => {
+    const r = parsePlan([
+      { action: '  find callers  ', tool: ' grep ', expect: ' a list ' },
+      { action: 'summarize' },
+    ]);
+    expect(r).toEqual({
+      plan: [
+        { action: 'find callers', tool: 'grep', expect: 'a list' },
+        { action: 'summarize', tool: undefined, expect: undefined },
+      ],
+    });
+  });
+
+  test('empty array yields no plan (undefined), not an empty plan', () => {
+    expect(parsePlan([])).toEqual({ plan: undefined });
+  });
+
+  test('rejects a non-array plan', () => {
+    expect(parsePlan('do a thing')).toEqual({ error: expect.stringContaining('array') });
+  });
+
+  test('rejects a step missing action (loud, so the LLM fixes it)', () => {
+    const r = parsePlan([{ tool: 'grep' }]);
+    expect('error' in r && r.error).toContain('plan[0].action');
+  });
+
+  test('rejects a runaway plan over the step cap', () => {
+    const runaway = Array.from({ length: MAX_PLAN_STEPS + 1 }, () => ({ action: 'step' }));
+    expect('error' in parsePlan(runaway)).toBe(true);
+    const atCap = Array.from({ length: MAX_PLAN_STEPS }, () => ({ action: 'step' }));
+    expect('plan' in parsePlan(atCap)).toBe(true);
+  });
+});
+
+describe('validateSpawnChildArgs plan handling', () => {
+  const valid = {
+    topic: 'coding',
+    subtopic: 'refactor',
+    taskBrief: 'Do the thing.',
+    expectedOutput: { shape: 'summary' },
+  };
+
+  test('round-trips a plan into params', () => {
+    const r = validateSpawnChildArgs({
+      ...valid,
+      plan: [{ action: 'read file', tool: 'read' }, { action: 'edit file', tool: 'edit' }],
+    });
+    expect('params' in r).toBe(true);
+    if ('params' in r) {
+      expect(r.params.plan).toEqual([
+        { action: 'read file', tool: 'read', expect: undefined },
+        { action: 'edit file', tool: 'edit', expect: undefined },
+      ]);
+    }
+  });
+
+  test('leaves plan undefined when omitted', () => {
+    const r = validateSpawnChildArgs(valid);
+    expect('params' in r && r.params.plan).toBeUndefined();
+  });
+
+  test('rejects a malformed plan loud', () => {
+    const r = validateSpawnChildArgs({ ...valid, plan: [{ tool: 'grep' }] });
+    expect('error' in r && r.error).toContain('invalid plan');
   });
 });

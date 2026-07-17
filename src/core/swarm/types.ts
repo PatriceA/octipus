@@ -125,6 +125,22 @@ export const BUDGET_RESERVE_FRACTION = 0.1;
  * Outbound brief handed from a parent to its child when spawning.
  * Becomes the child's user message.
  */
+/**
+ * One step of an explicit execution plan. When a parent supplies a `plan`, the
+ * child is expected to run the steps mechanically in order rather than reason
+ * out its own strategy — and (see `resolveChildModelAndExpert`) the presence of
+ * a plan is what routes the child to the lane's cheap `executorModel`. Omit the
+ * plan to delegate to a capable specialist that uses its own judgment.
+ */
+export interface PlanStep {
+  /** What to do in this step. */
+  action: string;
+  /** Named tool for this step (must be one the child actually has). */
+  tool?: string;
+  /** What this step should produce; feeds the next step. */
+  expect?: string;
+}
+
 export interface TaskBrief {
   /** Verbatim one-line echo of the user's original request. */
   originalUserRequest: string;
@@ -150,6 +166,13 @@ export interface TaskBrief {
   };
   /** Explicit prohibitions (auto-set for Subagent: "Do not spawn children"). */
   forbidden: string[];
+  /**
+   * Ordered execution plan. When present, the child runs these steps
+   * mechanically and the child is routed to the lane's `executorModel` (cheap
+   * executor). When absent, the child uses its own judgment on the lane's
+   * primary model. See `PlanStep`.
+   */
+  plan?: PlanStep[];
 }
 
 /**
@@ -219,6 +242,12 @@ export interface SpawnChildParams {
   parallelGroup?: string;
   /** Optional hard constraints forwarded into the child's brief. */
   constraints?: string[];
+  /**
+   * Optional ordered execution plan. Its presence routes the child to the
+   * lane's `executorModel` and makes the child run the steps mechanically.
+   * See `PlanStep` / `TaskBrief.plan`.
+   */
+  plan?: PlanStep[];
   /**
    * Deterministic gates the parent attaches to verify the child met its
    * contract. Run after the child returns `ok`, before the result surfaces;
