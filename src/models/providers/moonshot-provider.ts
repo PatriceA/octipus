@@ -2,11 +2,10 @@ import OpenAI from 'openai';
 import type {
   ChatCompletionCreateParams,
   ChatCompletionMessageParam,
-  ChatCompletionMessageToolCall,
 } from 'openai/resources/chat/completions';
-import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
+import { classifyError } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
-import { repairTruncatedJson } from '@/utils/json-repair';
+import { parseToolCallArguments } from '@/models/tool-call-args';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
@@ -100,7 +99,16 @@ export class MoonshotProvider implements ModelProvider {
       };
 
       if (choice.message.tool_calls?.length) {
-        result.toolCalls = choice.message.tool_calls.map((tc) => this.parseToolCall(tc));
+        result.toolCalls = choice.message.tool_calls.map((tc) => {
+          if (tc.type !== 'function') {
+            throw new Error(`Unexpected tool call type from ${this.name}: ${tc.type}`);
+          }
+          return {
+            id: tc.id,
+            name: tc.function.name,
+            arguments: parseToolCallArguments(tc.function.arguments, tc.function.name, this.name),
+          };
+        });
       }
 
       modelLogger.debug(
@@ -222,36 +230,6 @@ export class MoonshotProvider implements ModelProvider {
   }
 
   // -- Private helpers --
-
-  private parseToolCall(tc: ChatCompletionMessageToolCall) {
-    if (tc.type !== 'function') {
-      throw new Error(`Unexpected tool call type from ${this.name}: ${tc.type}`);
-    }
-    const rawArgs = tc.function.arguments || '';
-    try {
-      return { id: tc.id, name: tc.function.name, arguments: JSON.parse(rawArgs || '{}') as Record<string, unknown> };
-    } catch (parseErr) {
-      const repaired = repairTruncatedJson(rawArgs);
-      if (repaired) {
-        try {
-          const parsed = JSON.parse(repaired) as Record<string, unknown>;
-          modelLogger.warn(
-            { toolName: tc.function.name, rawLength: rawArgs.length, provider: this.name },
-            'Recovered truncated tool-call JSON via repairTruncatedJson',
-          );
-          return { id: tc.id, name: tc.function.name, arguments: parsed };
-        } catch { /* fall through */ }
-      }
-      throw new ClassifiedError({
-        reason: FailoverReason.TOOL_CALL_INVALID,
-        recovery: RecoveryAction.RETRY_NOW,
-        message: `Malformed tool call JSON from ${this.name} for tool "${tc.function.name}": ${(parseErr as Error).message}`,
-        providerHint: this.name,
-        metadata: { toolName: tc.function.name, raw: rawArgs.slice(0, 300) },
-        cause: parseErr,
-      });
-    }
-  }
 
   private async getApiKey(): Promise<string | null> {
     if (process.env.MOONSHOT_API_KEY) {

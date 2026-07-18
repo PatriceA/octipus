@@ -2,11 +2,10 @@ import OpenAI from 'openai';
 import type {
   ChatCompletionCreateParams,
   ChatCompletionMessageParam,
-  ChatCompletionMessageToolCall,
 } from 'openai/resources/chat/completions';
-import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
+import { classifyError } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
-import { repairTruncatedJson } from '@/utils/json-repair';
+import { parseToolCallArguments } from '@/models/tool-call-args';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
@@ -21,10 +20,14 @@ const ZAI_BASE_URL = 'https://api.z.ai/api/paas/v4';
 const REASONING_TIMEOUT_MS = 1_800_000; // 30 min
 const DEFAULT_TIMEOUT_MS = 120_000;
 
-/** Detect GLM reasoning variants by id. Conservative id-substring match. */
+/**
+ * Detect GLM reasoning variants by id. GLM-4.5+ and GLM-5+ are hybrid-reasoning
+ * flagships (glm-4.6 can think for minutes), so they get the long timeout too —
+ * the timeout is only a ceiling, a fast response still returns immediately.
+ */
 function isZaiReasoningModel(modelName: string): boolean {
   const lower = (modelName || '').toLowerCase();
-  return /-z1|reasoning|thinking/.test(lower);
+  return /-z1|reasoning|thinking|glm-4\.[5-9]|glm-[5-9]/.test(lower);
 }
 
 /**
@@ -101,7 +104,16 @@ export class ZaiProvider implements ModelProvider {
       };
 
       if (choice.message.tool_calls?.length) {
-        result.toolCalls = choice.message.tool_calls.map((tc) => this.parseToolCall(tc));
+        result.toolCalls = choice.message.tool_calls.map((tc) => {
+          if (tc.type !== 'function') {
+            throw new Error(`Unexpected tool call type from ${this.name}: ${tc.type}`);
+          }
+          return {
+            id: tc.id,
+            name: tc.function.name,
+            arguments: parseToolCallArguments(tc.function.arguments, tc.function.name, this.name),
+          };
+        });
       }
 
       modelLogger.debug(
@@ -224,36 +236,6 @@ export class ZaiProvider implements ModelProvider {
   }
 
   // -- Private helpers --
-
-  private parseToolCall(tc: ChatCompletionMessageToolCall) {
-    if (tc.type !== 'function') {
-      throw new Error(`Unexpected tool call type from ${this.name}: ${tc.type}`);
-    }
-    const rawArgs = tc.function.arguments || '';
-    try {
-      return { id: tc.id, name: tc.function.name, arguments: JSON.parse(rawArgs || '{}') as Record<string, unknown> };
-    } catch (parseErr) {
-      const repaired = repairTruncatedJson(rawArgs);
-      if (repaired) {
-        try {
-          const parsed = JSON.parse(repaired) as Record<string, unknown>;
-          modelLogger.warn(
-            { toolName: tc.function.name, rawLength: rawArgs.length, provider: this.name },
-            'Recovered truncated tool-call JSON via repairTruncatedJson',
-          );
-          return { id: tc.id, name: tc.function.name, arguments: parsed };
-        } catch { /* fall through */ }
-      }
-      throw new ClassifiedError({
-        reason: FailoverReason.TOOL_CALL_INVALID,
-        recovery: RecoveryAction.RETRY_NOW,
-        message: `Malformed tool call JSON from ${this.name} for tool "${tc.function.name}": ${(parseErr as Error).message}`,
-        providerHint: this.name,
-        metadata: { toolName: tc.function.name, raw: rawArgs.slice(0, 300) },
-        cause: parseErr,
-      });
-    }
-  }
 
   private async getApiKey(): Promise<string | null> {
     if (process.env.ZAI_API_KEY) {
