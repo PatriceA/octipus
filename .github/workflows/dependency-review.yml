@@ -19,7 +19,7 @@ jobs:
     # dependency-review-action only operates on pull requests.
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
