@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, describe, expect, type Mock, spyOn, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -9,6 +9,7 @@ import type { ToolHandler } from '@/core/agent-worker';
 describe('NotesTool', () => {
   const userId = randomUUID();
   let handlers: Map<string, ToolHandler>;
+  let embeddingSpy: Mock<(text: string) => Promise<number[]>> | undefined;
 
   const ctx = (): AgentContext => ({
     id: randomUUID(), sessionId: randomUUID(), userId, workspaceId: null,
@@ -30,6 +31,15 @@ describe('NotesTool', () => {
     await runMigrations();
     const { seedUsers } = await import('@/test-helpers/multiuser-fixtures');
     await seedUsers([{ id: userId, username: 'nt-user' }]);
+    // The tool resolves the getEmbeddingService() singleton internally, so stub
+    // its network seam (generateEmbedding) here rather than injecting — without
+    // it, note saves/searches hit the absent LiteLLM proxy and retry ~6s,
+    // timing out the suite (flaky in CI). Restored in afterAll so the stub does
+    // not leak to later test files sharing the singleton.
+    const { getEmbeddingService } = await import('@/core/rag/embeddings');
+    embeddingSpy = spyOn(getEmbeddingService(), 'generateEmbedding').mockRejectedValue(
+      new Error('No embedding model configured (test) — re-index degrades to indexed:false'),
+    );
     const { NotesTool } = await import('./index');
     const tool = new NotesTool();
     await tool.initialize();
@@ -37,6 +47,7 @@ describe('NotesTool', () => {
   });
 
   afterAll(async () => {
+    embeddingSpy?.mockRestore();
     const { closeDb } = await import('@/db/postgres');
     await closeDb();
   });

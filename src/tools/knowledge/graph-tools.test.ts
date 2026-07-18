@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, describe, expect, type Mock, spyOn, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -15,6 +15,7 @@ import type { ToolHandler } from '@/core/agent-worker';
 describe('KnowledgeTool graph tools', () => {
   const userId = randomUUID();
   let handlers: Map<string, ToolHandler>;
+  let embeddingSpy: Mock<(text: string) => Promise<number[]>> | undefined;
 
   const ctx = (): AgentContext => ({
     id: randomUUID(),
@@ -46,6 +47,15 @@ describe('KnowledgeTool graph tools', () => {
     const { seedUsers } = await import('@/test-helpers/multiuser-fixtures');
     await seedUsers([{ id: userId, username: 'ktool-user' }]);
 
+    // The tool resolves the getEmbeddingService() singleton internally, so stub
+    // its network seam (generateEmbedding) here rather than injecting — without
+    // it, entity/note indexing hits the absent LiteLLM proxy and retries ~6s,
+    // timing out the suite (flaky in CI). Restored in afterAll so the stub does
+    // not leak to later test files sharing the singleton.
+    const { getEmbeddingService } = await import('@/core/rag/embeddings');
+    embeddingSpy = spyOn(getEmbeddingService(), 'generateEmbedding').mockRejectedValue(
+      new Error('No embedding model configured (test) — re-index degrades to indexed:false'),
+    );
     const { KnowledgeTool } = await import('./index');
     const tool = new KnowledgeTool();
     await tool.initialize();
@@ -53,6 +63,7 @@ describe('KnowledgeTool graph tools', () => {
   });
 
   afterAll(async () => {
+    embeddingSpy?.mockRestore();
     const { closeDb } = await import('@/db/postgres');
     await closeDb();
   });

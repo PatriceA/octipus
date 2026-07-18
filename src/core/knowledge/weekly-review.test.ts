@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -25,8 +25,15 @@ describe('weekly review', () => {
     assembleReviewContext = mod.assembleReviewContext;
     generateWeeklyReview = mod.generateWeeklyReview;
     renderReviewPrompt = mod.renderReviewPrompt;
+    // Stub the embedding network seam (see notes.test.ts): without it, each
+    // svc.save() fires a real embed to the absent LiteLLM proxy, retries ~6s,
+    // and times out under the full suite — flaky in CI.
     const { EmbeddingService } = await import('@/core/rag/embeddings');
-    svc = new (await import('./notes')).NoteService(undefined, undefined, new EmbeddingService('test-model'));
+    const embeddings = new EmbeddingService('test-model');
+    spyOn(embeddings, 'generateEmbedding').mockRejectedValue(
+      new Error('No embedding model configured (test) — re-index degrades to indexed:false'),
+    );
+    svc = new (await import('./notes')).NoteService(undefined, undefined, embeddings);
     links = new (await import('@/db/repositories/knowledge-link-repository')).KnowledgeLinkRepository();
   });
 
