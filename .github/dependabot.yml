@@ -12,7 +12,10 @@ updates:
       # still come as individual PRs so they can be reviewed on their own.
       minor-and-patch:
         update-types: [minor, patch]
-    labels: [dependencies]
+    ignore:
+      # Deferred for a deliberate upgrade — Bolt 4→5 has breaking API changes.
+      - dependency-name: "@slack/bolt"
+        update-types: ["version-update:semver-major"]
 
   # Next.js web app.
   - package-ecosystem: npm
@@ -24,7 +27,13 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
-    labels: [dependencies, web]
+    ignore:
+      # ESLint 9→10 needs a flat-config migration; do it deliberately.
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
+      # TypeScript majors land breaking type-checker changes; upgrade on purpose.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   # Published MCP server package.
   - package-ecosystem: npm
@@ -33,7 +42,10 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
-    labels: [dependencies, mcp-server]
+    ignore:
+      # Zod 3→4 has breaking changes; coordinate with the root package upgrade.
+      - dependency-name: "zod"
+        update-types: ["version-update:semver-major"]
 
   # Tauri desktop shell (Rust).
   - package-ecosystem: cargo
@@ -42,7 +54,6 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
-    labels: [dependencies, desktop]
 
   # The GitHub Actions themselves — keeps the pinned action versions current
   # (and complements the Zizmor workflow audit).
@@ -52,4 +63,3 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
-    labels: [dependencies, ci]
