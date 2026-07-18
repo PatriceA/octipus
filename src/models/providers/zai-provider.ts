@@ -49,7 +49,27 @@ export class ZaiProvider implements ModelProvider {
 
   supportsModel(modelName: string): boolean {
     const lower = modelName.toLowerCase();
-    return lower.startsWith('glm-') || lower.startsWith('zai/');
+    // `embedding-2`/`embedding-3` are z.ai's embedding models (distinct from
+    // OpenAI's `text-embedding-*`), routed here for the embed() path.
+    return lower.startsWith('glm-') || lower.startsWith('zai/') || lower.startsWith('embedding-');
+  }
+
+  /**
+   * Generate embeddings via z.ai's OpenAI-compatible `/embeddings` endpoint
+   * (e.g. `embedding-3`, 1024/2048-dim). Serves the `embedding` topic as an
+   * alternative to Voyage.
+   */
+  async embed(texts: string[], model: string): Promise<number[][]> {
+    const client = await this.createClient(model);
+    modelLogger.debug({ model, inputCount: texts.length, provider: this.name }, 'Generating embeddings via z.ai');
+    try {
+      // Pin float encoding: the OpenAI SDK otherwise requests base64 and decodes
+      // it, which corrupts results if the upstream returns plain float arrays.
+      const res = await client.embeddings.create({ model, input: texts, encoding_format: 'float' });
+      return res.data.map((d) => d.embedding as number[]);
+    } catch (error) {
+      throw classifyError(error, this.name);
+    }
   }
 
   async complete(options: CompletionOptions): Promise<CompletionResult> {

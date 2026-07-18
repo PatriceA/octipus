@@ -318,7 +318,13 @@ export class CLIAgentWorker extends BaseAgentWorker {
     const prompt = this.buildPrompt();
     const systemPrompt = this.buildSystemPrompt();
     const settings = await this.getCLISettings();
-    const { binary, args, stdinPrompt, useShell, env: toolEnv } = this.argBuilder.build(toolConfig.name, prompt, settings, this.systemMessages, systemPrompt, this.config.maxTokenBudget, this.context.id);
+    const built = this.argBuilder.build(toolConfig.name, prompt, settings, this.systemMessages, systemPrompt, this.config.maxTokenBudget, this.context.id);
+    const { binary, args, stdinPrompt, useShell } = built;
+    // Vendor CLIs that reuse the `claude` binary (z.ai GLM / Moonshot Kimi) inject
+    // ANTHROPIC_BASE_URL + auth token via buildEnv — merge it over the adapter's env.
+    const toolEnv = toolConfig.buildEnv
+      ? { ...(built.env || {}), ...(await toolConfig.buildEnv()) }
+      : built.env;
 
     agentLogger.info(
       { agentId: this.context.id, tool: toolConfig.name, model: this.context.model },

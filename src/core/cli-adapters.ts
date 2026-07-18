@@ -335,9 +335,13 @@ export class CLIArgumentBuilder {
     maxTokenBudget?: number,
     agentId?: string,
   ): { binary: string; args: string[]; stdinPrompt?: string; useShell?: boolean; env?: Record<string, string> } {
+    // The Claude Code family — plain Claude Code plus z.ai GLM / Moonshot Kimi,
+    // which run the same `claude` binary against a vendor Anthropic-compatible
+    // endpoint — shares Claude's args, MCP config, and stream-json output.
+    if (toolName === 'Claude Code' || toolName.startsWith('Claude Code (')) {
+      return this.buildClaudeArgs(prompt, settings, systemMessages, agentId);
+    }
     switch (toolName) {
-      case 'Claude Code':
-        return this.buildClaudeArgs(prompt, settings, systemMessages, agentId);
       case 'Antigravity':
         return this.buildAntigravityArgs(prompt, settings, systemPrompt);
       case 'Codex CLI':
@@ -645,7 +649,7 @@ export class CLIOutputParser {
   parse(event: Record<string, unknown>, toolName: string): { text: string; replace?: boolean } | null {
     const type = event.type as string;
 
-    if (toolName === 'Claude Code') {
+    if (toolName === 'Claude Code' || toolName.startsWith('Claude Code (')) {
       return this.parseClaudeEvent(event, type);
     }
 

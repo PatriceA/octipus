@@ -846,6 +846,10 @@ export class LiteLLMClient {
           deepseek: { baseURL: 'https://api.deepseek.com/v1', vaultName: 'deepseek_api_key', envVar: 'DEEPSEEK_API_KEY' },
           openrouter: { baseURL: 'https://openrouter.ai/api/v1', vaultName: 'openrouter_api_key', envVar: 'OPENROUTER_API_KEY' },
           mistral: { baseURL: 'https://api.mistral.ai/v1', vaultName: 'mistral_api_key', envVar: 'MISTRAL_API_KEY' },
+          // z.ai (GLM-4.xV) and Moonshot (moonshot-v1-*-vision / Kimi native) —
+          // OpenAI-compatible multimodal. Only models flagged supportsVision route here.
+          zai: { baseURL: process.env.ZAI_BASE_URL || 'https://api.z.ai/api/paas/v4', vaultName: 'zai_api_key', envVar: 'ZAI_API_KEY' },
+          moonshot: { baseURL: process.env.MOONSHOT_BASE_URL || 'https://api.moonshot.ai/v1', vaultName: 'moonshot_api_key', envVar: 'MOONSHOT_API_KEY' },
         };
 
         const pe = providerEndpoints[provider.name];

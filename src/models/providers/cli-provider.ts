@@ -48,9 +48,16 @@ export interface CLIToolConfig {
   /** Vendor-managed billing/usage pointers (surfaced in UI) */
   billingInfo: CLIBillingInfo;
   /** Direct provider whose model catalog drives the picker for this CLI */
-  modelProvider: 'anthropic' | 'google' | 'openai' | 'mistral';
+  modelProvider: 'anthropic' | 'google' | 'openai' | 'mistral' | 'zai' | 'moonshot';
   /** Flag the CLI uses to select a model (`--model`, `-m`) — for docs only */
   modelFlag: string;
+  /**
+   * Extra environment variables to inject into the spawned process, resolved at
+   * call time (e.g. re-point the `claude` binary at a vendor's Anthropic-
+   * compatible endpoint with `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`).
+   * Merged over `process.env`.
+   */
+  buildEnv?: () => Promise<Record<string, string>>;
   /**
    * The CLI emits its entire result as a single blob at process end (e.g. vibe
    * `--output json` writes one JSON array), not incremental stream-json events.
@@ -303,10 +310,113 @@ function resolveWorkspaceRoot(): string {
   }
 }
 
-/** All registered CLI tool configs */
-export const CLI_TOOLS: CLIToolConfig[] = [claudeCodeConfig, antigravityConfig, codexCliConfig, vibeCliConfig];
+// ---- z.ai (GLM) & Moonshot (Kimi) via the Claude Code binary ----
+// Both vendors publish an Anthropic-compatible endpoint, so the existing
+// `claude` binary drives them unchanged — we just re-point it via env
+// (ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN + ANTHROPIC_MODEL). This is the
+// documented, reliable path; the standalone `zcode`/`kimi` binaries have no
+// non-interactive mode our subprocess wrapper can consume.
 
-export { antigravityConfig, claudeCodeConfig, codexCliConfig, vibeCliConfig };
+/** Resolve a vendor API key: env var first, then the system vault. */
+async function resolveCliVendorKey(envVar: string, vaultName: string): Promise<string> {
+  if (process.env[envVar]) return process.env[envVar] as string;
+  try {
+    const { getVault } = await import('@/security/vault');
+    return (await getVault().getByName('system', vaultName)) || '';
+  } catch (err) {
+    modelLogger.warn({ err: (err as Error).message, vaultName }, 'CLI vendor key vault lookup failed');
+    return '';
+  }
+}
+
+/** Parser for the `claude --output-format json` envelope, tagged with a model label. */
+function parseClaudeStyleOutput(modelLabel: string) {
+  return (stdout: string, startTime: number): CompletionResult => {
+    try {
+      const data = JSON.parse(stdout);
+      const content = typeof data === 'string' ? data : (data.result || data.content || JSON.stringify(data));
+      const inputTokens = data.input_tokens || data.usage?.input_tokens || 0;
+      const outputTokens = data.output_tokens || data.usage?.output_tokens || 0;
+      return {
+        content,
+        finishReason: 'stop',
+        usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
+        model: modelLabel,
+        latencyMs: Date.now() - startTime,
+      };
+    } catch {
+      return {
+        content: stdout.trim(),
+        finishReason: 'stop',
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        model: modelLabel,
+        latencyMs: Date.now() - startTime,
+      };
+    }
+  };
+}
+
+const glmCliConfig: CLIToolConfig = {
+  name: 'Claude Code (z.ai GLM)',
+  modelPatterns: ['cli/glm', 'cli/glm-code', 'cli/zai'],
+  binaryPath: 'claude',
+  buildArgs: (prompt: string) => ['-p', prompt, '--output-format', 'json'],
+  parseOutput: parseClaudeStyleOutput('cli/glm'),
+  buildEnv: async () => ({
+    ANTHROPIC_BASE_URL: process.env.ZAI_ANTHROPIC_BASE_URL || 'https://api.z.ai/api/anthropic',
+    ANTHROPIC_AUTH_TOKEN: await resolveCliVendorKey('ZAI_API_KEY', 'zai_api_key'),
+    // Clear any real Anthropic key so it can't shadow the z.ai auth token.
+    ANTHROPIC_API_KEY: '',
+    ANTHROPIC_MODEL: process.env.ZAI_CLI_MODEL || 'glm-4.6',
+    API_TIMEOUT_MS: '3000000',
+  }),
+  isQuotaError: (output: string) => /rate.?limit|quota|exceeded|capacity|too many/i.test(output),
+  quotaProvider: 'zai-cli',
+  modelProvider: 'zai',
+  modelFlag: 'ANTHROPIC_MODEL (env)',
+  billingInfo: {
+    vendor: 'z.ai (Zhipu)',
+    planNote: 'GLM Coding Plan or pay-per-token API key',
+    billingMode: 'mixed',
+    pricingDocUrl: 'https://z.ai/model-api',
+    modelsDocUrl: 'https://docs.z.ai/guides/llm/glm-4.6',
+    modelFlagDocUrl: 'https://docs.z.ai/scenario-example/develop-tools/claude',
+    warning: 'Runs the Claude Code binary against z.ai’s Anthropic-compatible endpoint. Requires the `claude` CLI installed and a z.ai key (ZAI_API_KEY / zai_api_key). Pick the GLM model via ZAI_CLI_MODEL.',
+  },
+};
+
+const kimiCliConfig: CLIToolConfig = {
+  name: 'Claude Code (Moonshot Kimi)',
+  modelPatterns: ['cli/kimi', 'cli/kimi-code', 'cli/moonshot'],
+  binaryPath: 'claude',
+  buildArgs: (prompt: string) => ['-p', prompt, '--output-format', 'json'],
+  parseOutput: parseClaudeStyleOutput('cli/kimi'),
+  buildEnv: async () => ({
+    ANTHROPIC_BASE_URL: process.env.MOONSHOT_ANTHROPIC_BASE_URL || 'https://api.moonshot.ai/anthropic',
+    ANTHROPIC_AUTH_TOKEN: await resolveCliVendorKey('MOONSHOT_API_KEY', 'moonshot_api_key'),
+    ANTHROPIC_API_KEY: '',
+    ANTHROPIC_MODEL: process.env.MOONSHOT_CLI_MODEL || 'kimi-k2-0711-preview',
+    API_TIMEOUT_MS: '3000000',
+  }),
+  isQuotaError: (output: string) => /rate.?limit|quota|exceeded|capacity|too many/i.test(output),
+  quotaProvider: 'moonshot-cli',
+  modelProvider: 'moonshot',
+  modelFlag: 'ANTHROPIC_MODEL (env)',
+  billingInfo: {
+    vendor: 'Moonshot (Kimi)',
+    planNote: 'Kimi Code plan or pay-per-token Moonshot API key',
+    billingMode: 'mixed',
+    pricingDocUrl: 'https://platform.moonshot.ai/',
+    modelsDocUrl: 'https://platform.kimi.ai/docs/models',
+    modelFlagDocUrl: 'https://platform.kimi.ai/docs/api/overview',
+    warning: 'Runs the Claude Code binary against Moonshot’s Anthropic-compatible endpoint. Requires the `claude` CLI installed and a Moonshot key (MOONSHOT_API_KEY / moonshot_api_key). Pick the Kimi model via MOONSHOT_CLI_MODEL. Note: Moonshot rescales temperature (×0.6).',
+  },
+};
+
+/** All registered CLI tool configs */
+export const CLI_TOOLS: CLIToolConfig[] = [claudeCodeConfig, antigravityConfig, codexCliConfig, vibeCliConfig, glmCliConfig, kimiCliConfig];
+
+export { antigravityConfig, claudeCodeConfig, codexCliConfig, glmCliConfig, kimiCliConfig, vibeCliConfig };
 
 /**
  * CLI Provider — wraps subscription-based CLI tools (Claude Code, Antigravity, Codex, Mistral Vibe)
@@ -346,12 +456,13 @@ export class CLIProvider implements ModelProvider {
     // Build prompt from messages (combine system + user messages)
     const prompt = this.buildPrompt(options);
     const args = tool.buildArgs(prompt);
+    const env = tool.buildEnv ? await tool.buildEnv() : undefined;
     const startTime = Date.now();
 
     modelLogger.debug({ tool: tool.name, model: options.model }, 'Executing CLI tool');
 
     try {
-      const stdout = await this.execCli(tool.binaryPath, args);
+      const stdout = await this.execCli(tool.binaryPath, args, env ? { env } : undefined);
       const result = tool.parseOutput(stdout, startTime);
 
       // Track usage
@@ -444,7 +555,7 @@ export class CLIProvider implements ModelProvider {
     name: string;
     available: boolean;
     modelPatterns: string[];
-    modelProvider: 'anthropic' | 'google' | 'openai' | 'mistral';
+    modelProvider: 'anthropic' | 'google' | 'openai' | 'mistral' | 'zai' | 'moonshot';
     modelFlag: string;
     billingInfo: CLIBillingInfo;
   }[]> {
@@ -477,7 +588,7 @@ export class CLIProvider implements ModelProvider {
     return parts.join('\n\n');
   }
 
-  private execCli(binary: string, args: string[], opts?: { timeoutMs?: number }): Promise<string> {
+  private execCli(binary: string, args: string[], opts?: { timeoutMs?: number; env?: Record<string, string> }): Promise<string> {
     return new Promise((resolve, reject) => {
       // Fixed generous default, not a maxTokens*100ms heuristic (which could
       // arm a sub-second timeout for a small budget or a 3h one for a big
@@ -491,7 +602,7 @@ export class CLIProvider implements ModelProvider {
         // Run in the workspace root, not wherever the server was launched — a
         // CLI completion must not read/write the octipus repo by default.
         cwd: resolveWorkspaceRoot(),
-        env: { ...process.env },
+        env: { ...process.env, ...opts?.env },
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout,
         shell: process.platform === 'win32' && !noShell,
