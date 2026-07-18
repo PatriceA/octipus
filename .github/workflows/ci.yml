@@ -40,6 +40,21 @@ jobs:
           JWT_SECRET: ci-dummy-jwt-secret-for-unit-tests-only-1234567890
           SESSION_SECRET: ci-dummy-session-secret-for-unit-tests-only-1234567890
 
+      # Surface coverage in the job summary and fail if it drops below the
+      # committed baseline (scripts/coverage-baseline.json). `bun run test`
+      # above writes coverage/lcov.info (bunfig.toml). Self-contained — no
+      # Codecov/token/upload.
+      - name: Coverage summary + ratchet
+        run: bun run scripts/coverage-check.ts
+
+      - name: Upload coverage report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: coverage/lcov.info
+          retention-days: 7
+
       # Blocking dependency audit. Accepted advisories are recorded in a
       # reviewable allowlist (scripts/audit-allowlist.json); see the wrapper
       # scripts/audit-check.ts and scripts/audit-allowlist.README.md.
