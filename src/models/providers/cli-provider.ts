@@ -486,6 +486,7 @@ export class CLIProvider implements ModelProvider {
       // agy is a native binary — shell:true on Windows would re-tokenize its
       // argv (breaking the prompt); only .cmd wrappers need the shell.
       const noShell = binary === 'agy';
+      // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn (no shell interpolation); binary/args come from vetted provider config, not request input
       const proc = spawn(binary, args, {
         // Run in the workspace root, not wherever the server was launched — a
         // CLI completion must not read/write the octipus repo by default.
