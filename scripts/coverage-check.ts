@@ -61,12 +61,36 @@ export function parseLcov(lcov: string): CoverageTotals {
   };
 }
 
+/**
+ * Parse + validate the committed baseline. A missing or non-numeric key would
+ * make `baseline.<k> - tolerance` NaN and every `pct < NaN` comparison false —
+ * i.e. the ratchet silently passes everything. Fail loud instead.
+ */
+export function parseBaseline(json: string): CoverageBaseline {
+  const b = JSON.parse(json) as Record<string, unknown>;
+  for (const key of ['lines', 'functions', 'tolerance'] as const) {
+    if (typeof b[key] !== 'number' || !Number.isFinite(b[key])) {
+      throw new Error(`coverage-baseline.json: "${key}" must be a finite number (got ${JSON.stringify(b[key])})`);
+    }
+  }
+  return { lines: b.lines as number, functions: b.functions as number, tolerance: b.tolerance as number };
+}
+
 export function evaluateCoverage(lcov: string, baseline: CoverageBaseline): CoverageVerdict {
   const totals = parseLcov(lcov);
   const floorL = baseline.lines - baseline.tolerance;
   const floorF = baseline.functions - baseline.tolerance;
   const failures: string[] = [];
   const improvements: string[] = [];
+
+  // No data at all (empty/truncated lcov) would otherwise report 100% via the
+  // zero-denominator guard and pass the ratchet — a "no data = perfect" false
+  // pass. Treat an empty report as a failure.
+  if (totals.lines.found === 0) {
+    failures.push(
+      'no line coverage data in lcov.info — the report is empty or truncated (expected coverage from the full `bun test src scripts` run)',
+    );
+  }
 
   if (totals.lines.pct < floorL) {
     failures.push(
@@ -120,7 +144,13 @@ function main(): void {
     );
     process.exit(2);
   }
-  const baseline = JSON.parse(readFileSync(join(root, 'scripts', 'coverage-baseline.json'), 'utf8')) as CoverageBaseline;
+  let baseline: CoverageBaseline;
+  try {
+    baseline = parseBaseline(readFileSync(join(root, 'scripts', 'coverage-baseline.json'), 'utf8'));
+  } catch (err) {
+    console.error(`Invalid scripts/coverage-baseline.json: ${(err as Error).message}`);
+    process.exit(2);
+  }
   const verdict = evaluateCoverage(lcov, baseline);
 
   console.log(verdict.summaryMarkdown);

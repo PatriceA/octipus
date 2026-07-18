@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { type CoverageBaseline, evaluateCoverage, parseLcov } from './coverage-check';
+import { type CoverageBaseline, evaluateCoverage, parseBaseline, parseLcov } from './coverage-check';
 
 // Minimal lcov: 2 files. Totals: lines 15/20 = 75%, functions 3/4 = 75%.
 const LCOV = [
@@ -74,5 +74,29 @@ describe('evaluateCoverage', () => {
     const v = evaluateCoverage(LCOV, baseline());
     expect(v.summaryMarkdown).toContain('## Test coverage');
     expect(v.summaryMarkdown).toContain('| Lines | 75.00% |');
+  });
+
+  test('FAILS on an empty/dataless lcov instead of reporting 100%', () => {
+    const v = evaluateCoverage('', baseline());
+    expect(v.ok).toBe(false);
+    expect(v.failures.join('\n')).toContain('no line coverage data');
+  });
+});
+
+describe('parseBaseline', () => {
+  test('parses a valid baseline', () => {
+    expect(parseBaseline('{"lines":51.4,"functions":59.3,"tolerance":0.5}')).toEqual({
+      lines: 51.4,
+      functions: 59.3,
+      tolerance: 0.5,
+    });
+  });
+
+  test('throws on a missing key (would otherwise make the ratchet a silent no-op)', () => {
+    expect(() => parseBaseline('{"lines":51.4,"functions":59.3}')).toThrow(/tolerance/);
+  });
+
+  test('throws on a non-numeric key', () => {
+    expect(() => parseBaseline('{"lines":"51.4","functions":59.3,"tolerance":0.5}')).toThrow(/lines/);
   });
 });
