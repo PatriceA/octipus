@@ -29,7 +29,7 @@ jobs:
       # Settings → Security → Dependency graph, then remove `continue-on-error`
       # to make this a blocking gate.
       - name: Dependency Review
-        uses: actions/dependency-review-action@v4
+        uses: actions/dependency-review-action@v5
         continue-on-error: true
         with:
           fail-on-severity: high
