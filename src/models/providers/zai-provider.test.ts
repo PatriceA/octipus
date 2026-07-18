@@ -14,8 +14,15 @@ describe('ZaiProvider.supportsModel', () => {
     expect(p.supportsModel('GLM-4.6')).toBe(true);
   });
 
+  it('does not claim embedding ids by name (they route by DB provider column)', () => {
+    // embed() still serves embedding-3; routing is via resolveProvider, not the
+    // name heuristic (which the greedy Ollama provider would win anyway).
+    expect(p.supportsModel('embedding-3')).toBe(false);
+    expect(p.supportsModel('embedding-2')).toBe(false);
+  });
+
   it('does not match other providers', () => {
-    for (const m of ['gpt-4o', 'claude-sonnet-4-6', 'deepseek-chat', 'kimi-k2', 'gemini-2.0-flash']) {
+    for (const m of ['gpt-4o', 'claude-sonnet-4-6', 'deepseek-chat', 'kimi-k2', 'gemini-2.0-flash', 'text-embedding-3-small']) {
       expect(p.supportsModel(m)).toBe(false);
     }
   });
@@ -23,6 +30,43 @@ describe('ZaiProvider.supportsModel', () => {
   it('identifies as a direct provider named "zai"', () => {
     expect(p.name).toBe('zai');
     expect(p.type).toBe('direct');
+  });
+});
+
+describe('ZaiProvider.embed', () => {
+  const p = new ZaiProvider();
+  const realFetch = globalThis.fetch;
+  const realKey = process.env.ZAI_API_KEY;
+
+  beforeEach(() => { process.env.ZAI_API_KEY = 'test-key'; });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    if (realKey === undefined) delete process.env.ZAI_API_KEY;
+    else process.env.ZAI_API_KEY = realKey;
+  });
+
+  it('returns embedding vectors from the /embeddings endpoint', async () => {
+    let capturedUrl = '';
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      capturedUrl = String(url);
+      return new Response(
+        JSON.stringify({
+          object: 'list',
+          model: 'embedding-3',
+          data: [
+            { object: 'embedding', index: 0, embedding: [0.1, 0.2, 0.3] },
+            { object: 'embedding', index: 1, embedding: [0.4, 0.5, 0.6] },
+          ],
+          usage: { prompt_tokens: 4, total_tokens: 4 },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }) as unknown as typeof fetch;
+
+    const vectors = await p.embed(['hello', 'world'], 'embedding-3');
+
+    expect(capturedUrl).toContain('api.z.ai/api/paas/v4/embeddings');
+    expect(vectors).toEqual([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]);
   });
 });
 

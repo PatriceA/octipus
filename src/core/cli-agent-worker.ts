@@ -318,7 +318,16 @@ export class CLIAgentWorker extends BaseAgentWorker {
     const prompt = this.buildPrompt();
     const systemPrompt = this.buildSystemPrompt();
     const settings = await this.getCLISettings();
-    const { binary, args, stdinPrompt, useShell, env: toolEnv } = this.argBuilder.build(toolConfig.name, prompt, settings, this.systemMessages, systemPrompt, this.config.maxTokenBudget, this.context.id);
+    // Adapter family for arg-building + output parsing (defaults to name);
+    // vendor CLIs on the claude binary set adapter='Claude Code'.
+    const adapterKey = toolConfig.adapter ?? toolConfig.name;
+    const built = this.argBuilder.build(adapterKey, prompt, settings, this.systemMessages, systemPrompt, this.config.maxTokenBudget, this.context.id);
+    const { binary, args, stdinPrompt, useShell } = built;
+    // Vendor CLIs that reuse the `claude` binary (z.ai GLM / Moonshot Kimi) inject
+    // ANTHROPIC_BASE_URL + auth token via buildEnv — merge it over the adapter's env.
+    const toolEnv = toolConfig.buildEnv
+      ? { ...(built.env || {}), ...(await toolConfig.buildEnv()) }
+      : built.env;
 
     agentLogger.info(
       { agentId: this.context.id, tool: toolConfig.name, model: this.context.model },
@@ -573,7 +582,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
           try {
             const event = JSON.parse(line);
             consecutiveNonJson = 0;
-            const result = parser.parse(event, toolConfig.name);
+            const result = parser.parse(event, adapterKey);
             if (result) {
               if (result.replace) {
                 accumulatedText = result.text;
@@ -633,7 +642,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
             // Process remaining streamed line buffer
             try {
               const event = JSON.parse(lineBuffer);
-              const result = parser.parse(event, toolConfig.name);
+              const result = parser.parse(event, adapterKey);
               if (result) {
                 if (result.replace) accumulatedText = result.text;
                 else accumulatedText += result.text;

@@ -79,13 +79,14 @@ export const PROVIDER_CAPABILITY_DEFAULTS: Record<string, ModelCapabilities> = {
   },
   zai: {
     // z.ai (GLM) — OpenAI-compatible chat with function calling and JSON mode.
-    // GLM-4.xV variants add vision, but the provider default stays text-only.
+    // GLM-4.xV variants add vision (per-model supportsVision); embedding-3 is
+    // served via the embed() method.
     multiturn: true,
     media: false,
     tools: true,
     streaming: true,
     systemRole: true,
-    embeddings: false,
+    embeddings: true,
     structuredOutput: true,
   },
   moonshot: {

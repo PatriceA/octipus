@@ -57,6 +57,8 @@ function resolveRateLimitKey(provider: ModelProvider, model: string): string {
     if (lower.includes('gemini') || lower.includes('antigravity') || lower.includes('agy')) return 'cli-gemini';
     if (lower.includes('codex')) return 'cli-codex';
     if (lower.includes('vibe')) return 'cli-vibe';
+    if (lower.includes('glm') || lower.includes('zai')) return 'cli-glm';
+    if (lower.includes('kimi') || lower.includes('moonshot')) return 'cli-kimi';
     return 'cli-claude'; // default CLI
   }
   return provider.name;

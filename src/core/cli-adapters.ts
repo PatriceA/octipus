@@ -335,6 +335,8 @@ export class CLIArgumentBuilder {
     maxTokenBudget?: number,
     agentId?: string,
   ): { binary: string; args: string[]; stdinPrompt?: string; useShell?: boolean; env?: Record<string, string> } {
+    // `toolName` is the CLIToolConfig.adapter key (defaults to name). Vendors
+    // that reuse the Claude binary (z.ai GLM, Moonshot Kimi) pass 'Claude Code'.
     switch (toolName) {
       case 'Claude Code':
         return this.buildClaudeArgs(prompt, settings, systemMessages, agentId);

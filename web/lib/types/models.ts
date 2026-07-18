@@ -62,7 +62,7 @@ export interface CLITool {
   available: boolean;
   modelPatterns: string[];
   /** Direct provider whose model catalog drives this CLI's picker. */
-  modelProvider?: 'anthropic' | 'google' | 'openai' | 'mistral';
+  modelProvider?: 'anthropic' | 'google' | 'openai' | 'mistral' | 'zai' | 'moonshot';
   /** CLI flag for model selection (display only). */
   modelFlag?: string;
   billingInfo?: CLIBillingInfo;
