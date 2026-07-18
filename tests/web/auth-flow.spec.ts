@@ -11,8 +11,8 @@ test.describe('auth flow', () => {
 
   test('login form renders username + password', async ({ unauthenticatedPage: page }) => {
     await page.goto('/login');
-    await expect(page.getByPlaceholder(/username/i)).toBeVisible();
-    await expect(page.getByPlaceholder(/password/i).first()).toBeVisible();
+    await expect(page.getByPlaceholder('alice')).toBeVisible();
+    await expect(page.getByPlaceholder('••••••••').first()).toBeVisible();
   });
 
   test('authenticated visitor can access protected pages', async ({ authenticatedPage: page }) => {
@@ -32,8 +32,8 @@ test.describe('auth flow', () => {
     );
 
     await page.goto('/login');
-    await page.getByPlaceholder(/username/i).fill('e2etest');
-    await page.getByPlaceholder(/password/i).first().fill('TestP@ssw0rd!');
+    await page.getByPlaceholder('alice').fill('e2etest');
+    await page.getByPlaceholder('••••••••').first().fill('TestP@ssw0rd!');
     // The tab and the submit button both say "Sign In" — the submit button is inside a <form>.
     await page.locator('form').getByRole('button', { name: /sign in/i }).click();
 

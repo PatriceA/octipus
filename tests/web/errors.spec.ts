@@ -8,8 +8,8 @@ test.describe('error handling', () => {
     );
     await page.goto('/models');
     await page.waitForLoadState('networkidle');
-    // Shell chrome still renders — the sidebar is present.
-    await expect(page.getByText('Octipus', { exact: true }).first()).toBeVisible();
+    // Shell chrome still renders — the sidebar's Octipus logo is present.
+    await expect(page.getByRole('img', { name: 'Octipus' }).first()).toBeVisible();
   });
 
   test('503 on KB shows readiness banner', async ({ authenticatedPage: page }) => {

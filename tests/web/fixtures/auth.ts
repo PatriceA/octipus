@@ -134,6 +134,9 @@ const ERROR_ALLOWLIST: RegExp[] = [
   /favicon.ico/,
   // Generic "Failed to load resource" noise — we assert explicit statuses elsewhere
   /Failed to load resource/,
+  // Live-update WebSockets (permissions, notifications, …) have no backend in
+  // stubbed E2E mode, so the browser logs a connection-refused error. Expected.
+  /WebSocket connection to .* failed/,
 ];
 
 export function installConsoleWatchdog(page: Page, bucket: string[]): void {

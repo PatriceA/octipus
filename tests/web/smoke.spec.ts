@@ -5,7 +5,8 @@ test.describe('smoke — page load + nav', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     await expect(page).toHaveTitle(/Octipus/);
-    await expect(page.getByText('Octipus', { exact: true }).first()).toBeVisible();
+    // The brand renders as a logo image (alt "Octipus"), not a bare text node.
+    await expect(page.getByRole('img', { name: 'Octipus' }).first()).toBeVisible();
     expectNoConsoleErrors(consoleErrors);
   });
 
