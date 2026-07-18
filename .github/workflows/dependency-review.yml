@@ -20,6 +20,8 @@ jobs:
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # Non-blocking until the repo's Dependency Graph feature is enabled — the
       # action hard-fails ("Dependency review is not supported on this

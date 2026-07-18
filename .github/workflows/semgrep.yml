@@ -9,6 +9,9 @@ concurrency:
   group: semgrep-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   semgrep:
     name: Semgrep (typescript · security-audit)
@@ -20,9 +23,10 @@ jobs:
       image: semgrep/semgrep:1.86.0
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-      # NOTE: starts non-blocking for a one-week triage window. Flip to blocking
-      # (remove `continue-on-error`) once the initial findings are triaged.
+      # Blocking: `semgrep ci` exits non-zero on any blocking finding. Findings
+      # were triaged (0 blocking on the current tree) so this now gates PRs.
       - name: Run Semgrep
         run: semgrep ci --config p/typescript --config p/security-audit
-        continue-on-error: true
