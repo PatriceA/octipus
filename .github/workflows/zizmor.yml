@@ -23,6 +23,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -34,8 +36,14 @@ jobs:
       - name: Install zizmor
         run: pip install zizmor==1.5.2
 
-      # NOTE: starts non-blocking — we cannot triage findings in this change.
-      # Flip to blocking (remove `continue-on-error`) once findings are triaged.
+      # Blocking on zizmor's local audits (template-injection, excessive
+      # permissions, credential persistence, dangerous triggers, …) — the
+      # high-value checks, now all clean on our workflows.
+      #
+      # `--offline` skips the audits that require GitHub API access
+      # (ref-confusion, known-vulnerable-actions, impostor-commit). Those want
+      # every third-party action SHA-pinned; pinning + re-enabling the online
+      # audits is a follow-up. Offline keeps this gate deterministic and
+      # reproducible locally (`zizmor --offline .github/workflows/`).
       - name: Audit workflows
-        run: zizmor .github/workflows/
-        continue-on-error: true
+        run: zizmor --offline .github/workflows/
