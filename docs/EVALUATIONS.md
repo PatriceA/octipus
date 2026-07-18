@@ -292,6 +292,8 @@ Provider tests run only when the corresponding key is set:
 | `ANTHROPIC_API_KEY` | anthropic |
 | `GEMINI_API_KEY` | gemini |
 | `DEEPSEEK_API_KEY` | deepseek |
+| `ZAI_API_KEY` | zai (GLM) |
+| `MOONSHOT_API_KEY` | moonshot (Kimi) |
 | `VOYAGE_API_KEY` | voyage (embeddings) |
 
 Ollama and LiteLLM are always attempted. The `cli` provider is excluded from conformance runs.

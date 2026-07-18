@@ -605,6 +605,26 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     vaultName: 'mistral_api_key',
     envVar: 'MISTRAL_API_KEY',
   },
+  {
+    key: 'zai.apiKey',
+    category: 'providers',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'z.ai (GLM) API key',
+    isSecret: true,
+    vaultName: 'zai_api_key',
+    envVar: 'ZAI_API_KEY',
+  },
+  {
+    key: 'moonshot.apiKey',
+    category: 'providers',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'Moonshot (Kimi) API key',
+    isSecret: true,
+    vaultName: 'moonshot_api_key',
+    envVar: 'MOONSHOT_API_KEY',
+  },
 
   // ── Workspace ──
   {

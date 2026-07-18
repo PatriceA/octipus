@@ -32,6 +32,8 @@ interface HealthData {
     deepseek: ServiceHealth;
     grok: ServiceHealth;
     mistral: ServiceHealth;
+    zai: ServiceHealth;
+    moonshot: ServiceHealth;
     voyage: ServiceHealth;
     openrouter: ServiceHealth;
     custom: ServiceHealth;
@@ -56,7 +58,7 @@ export default function DashboardPage() {
     refetchInterval: (query) => {
       const h = query.state.data?.health;
       if (!h) return 3000;
-      const statuses = [h.database, h.redis, h.litellm, h.ollama, h.openai, h.anthropic, h.gemini, h.deepseek, h.grok, h.mistral, h.voyage, h.openrouter, h.custom]
+      const statuses = [h.database, h.redis, h.litellm, h.ollama, h.openai, h.anthropic, h.gemini, h.deepseek, h.grok, h.mistral, h.zai, h.moonshot, h.voyage, h.openrouter, h.custom]
         .map(s => s?.status)
         .filter(s => s && s !== 'not_configured');
       const allHealthy = statuses.every(s => s === 'healthy');

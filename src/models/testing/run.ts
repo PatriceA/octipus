@@ -43,7 +43,7 @@ Usage:
   bun run src/models/testing/run.ts [options]
 
 Options:
-  --provider=<name>    Filter models by provider (ollama, openai, anthropic, gemini, deepseek, mistral)
+  --provider=<name>    Filter models by provider (ollama, openai, anthropic, gemini, deepseek, mistral, zai, moonshot)
   --test=<names>       Comma-separated test names to run (default: all)
   --model=<modelId>    Test a specific model by modelId
   --timeout=<ms>       Per-test timeout in milliseconds (default: 30000)
@@ -116,6 +116,22 @@ function detectProviderAvailability(): ProviderAvailability[] {
     name: 'mistral',
     available: hasMistral,
     reason: hasMistral ? undefined : 'MISTRAL_API_KEY not set',
+  });
+
+  // z.ai (GLM)
+  const hasZai = !!process.env.ZAI_API_KEY;
+  checks.push({
+    name: 'zai',
+    available: hasZai,
+    reason: hasZai ? undefined : 'ZAI_API_KEY not set',
+  });
+
+  // Moonshot (Kimi)
+  const hasMoonshot = !!process.env.MOONSHOT_API_KEY;
+  checks.push({
+    name: 'moonshot',
+    available: hasMoonshot,
+    reason: hasMoonshot ? undefined : 'MOONSHOT_API_KEY not set',
   });
 
   // LiteLLM — always available if proxy is running

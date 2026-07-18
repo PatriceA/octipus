@@ -77,6 +77,27 @@ export const PROVIDER_CAPABILITY_DEFAULTS: Record<string, ModelCapabilities> = {
     embeddings: true,
     structuredOutput: true,
   },
+  zai: {
+    // z.ai (GLM) — OpenAI-compatible chat with function calling and JSON mode.
+    // GLM-4.xV variants add vision, but the provider default stays text-only.
+    multiturn: true,
+    media: false,
+    tools: true,
+    streaming: true,
+    systemRole: true,
+    embeddings: false,
+    structuredOutput: true,
+  },
+  moonshot: {
+    // Moonshot (Kimi) — OpenAI-compatible chat with function calling and JSON mode.
+    multiturn: true,
+    media: false,
+    tools: true,
+    streaming: true,
+    systemRole: true,
+    embeddings: false,
+    structuredOutput: true,
+  },
   openrouter: {
     // OpenRouter is a multi-provider proxy; capabilities depend on the
     // underlying model. Default to all true (similar to litellm).

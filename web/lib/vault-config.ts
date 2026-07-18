@@ -49,6 +49,8 @@ export const PROVIDER_KEY_GROUPS: VaultKeyGroup[] = [
       { label: 'Grok (xAI)', vaultName: 'xai_api_key', testProvider: 'grok', placeholder: 'xai-...' },
       { label: 'DeepSeek', vaultName: 'deepseek_api_key', testProvider: 'deepseek', placeholder: 'sk-...' },
       { label: 'Mistral AI', vaultName: 'mistral_api_key', testProvider: 'mistral' },
+      { label: 'Z.AI (GLM)', vaultName: 'zai_api_key', testProvider: 'zai', placeholder: '...' },
+      { label: 'Moonshot (Kimi)', vaultName: 'moonshot_api_key', testProvider: 'moonshot', placeholder: 'sk-...' },
       { label: 'OpenRouter', vaultName: 'openrouter_api_key', testProvider: 'openrouter', placeholder: 'sk-or-...' },
       { label: 'Voyage AI (Embeddings)', vaultName: 'voyage_api_key', testProvider: 'voyage', placeholder: 'pa-...' },
       { label: 'Custom Provider', vaultName: 'custom_api_key', placeholder: 'API key for custom OpenAI-compatible providers' },

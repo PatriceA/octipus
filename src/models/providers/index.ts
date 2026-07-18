@@ -19,10 +19,12 @@ import { VertexProvider } from './vertex-provider';
 import type { ModelProvider } from './interface';
 import { LiteLLMProvider } from './litellm-provider';
 import { MistralProvider } from './mistral-provider';
+import { MoonshotProvider } from './moonshot-provider';
 import { OllamaProvider } from './ollama-provider';
 import { OpenAIProvider } from './openai-provider';
 import { OpenRouterProvider } from './openrouter-provider';
 import { VoyageProvider } from './voyage-provider';
+import { ZaiProvider } from './zai-provider';
 
 export { AnthropicProvider } from './anthropic-provider';
 export { CLIProvider } from './cli-provider';
@@ -36,10 +38,12 @@ export { VertexProvider } from './vertex-provider';
 export type { ModelProvider, ProviderHealthStatus, ProviderType, QuotaStatus } from './interface';
 export { LiteLLMProvider } from './litellm-provider';
 export { MistralProvider } from './mistral-provider';
+export { MoonshotProvider } from './moonshot-provider';
 export { OllamaProvider } from './ollama-provider';
 export { OpenAIProvider } from './openai-provider';
 export { OpenRouterProvider } from './openrouter-provider';
 export { VoyageProvider } from './voyage-provider';
+export { ZaiProvider } from './zai-provider';
 
 /**
  * Resolve the rate-limit provider key from a ModelProvider + model name.
@@ -101,7 +105,7 @@ function isRateLimitResponse(error: unknown): boolean {
  *
  * Now integrates per-provider rate limiting and circuit breaking.
  *
- * Priority: CLI → Ollama → OpenAI → Anthropic → Gemini → Grok → DeepSeek → Mistral → OpenRouter → LiteLLM (catch-all)
+ * Priority: CLI → Ollama → OpenAI → Anthropic → Gemini → Grok → DeepSeek → Mistral → z.ai → Moonshot → OpenRouter → LiteLLM (catch-all)
  * LiteLLM is only registered if proxyUrl is configured.
  */
 export class ProviderRouter {
@@ -134,6 +138,8 @@ export class ProviderRouter {
     this.providers.push(new VertexProvider());
     this.providers.push(new DeepSeekProvider());
     this.providers.push(new MistralProvider());
+    this.providers.push(new ZaiProvider());
+    this.providers.push(new MoonshotProvider());
     this.providers.push(new OpenRouterProvider());
     this.providers.push(new VoyageProvider()); // embeddings only
 

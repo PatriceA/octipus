@@ -241,7 +241,7 @@ export class HealthChecker {
    * burns through rate limits — the user sees 429s for no reason).
    */
   private static SKIP_LITELLM_PROVIDERS = new Set([
-    'cli', 'ollama', 'openai', 'anthropic', 'gemini', 'deepseek', 'mistral', 'voyage', 'openrouter',
+    'cli', 'ollama', 'openai', 'anthropic', 'gemini', 'deepseek', 'mistral', 'zai', 'moonshot', 'voyage', 'openrouter',
     // Custom (per-model) providers use their free checkHealth() like the native
     // ones — without this they got a real billed "Hi" completion every 60s.
     // Per-model reachability still surfaces lazily via classifyError + circuit breaker.

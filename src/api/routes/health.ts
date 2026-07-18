@@ -119,7 +119,7 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
       // model row, is what marks a provider as in-use. Gating on model rows
       // wrongly greyed out providers whose models route through the litellm
       // proxy (provider !== the direct name) despite a key being set.
-      const [litellm, ollama, openai, anthropic, gemini, deepseek, grok, mistral, voyage, openrouter, vertex, custom, scheduler] = await Promise.all([
+      const [litellm, ollama, openai, anthropic, gemini, deepseek, grok, mistral, zai, moonshot, voyage, openrouter, vertex, custom, scheduler] = await Promise.all([
         healthChecker.checkLiteLLMProxy().catch((e: Error) => ({
           service: 'litellm', status: 'unhealthy' as const, message: e.message, lastChecked: new Date(),
         })),
@@ -132,6 +132,8 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
         directCheck('deepseek'),
         directCheck('grok'),
         directCheck('mistral'),
+        directCheck('zai'),
+        directCheck('moonshot'),
         directCheck('voyage'),
         directCheck('openrouter'),
         directCheck('vertex'),
@@ -167,6 +169,8 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
           deepseek: toHealthEntry(deepseek),
           grok: toHealthEntry(grok),
           mistral: toHealthEntry(mistral),
+          zai: toHealthEntry(zai),
+          moonshot: toHealthEntry(moonshot),
           voyage: toHealthEntry(voyage),
           openrouter: toHealthEntry(openrouter),
           vertex: toHealthEntry(vertex),
@@ -193,6 +197,8 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
           deepseek: fallback('deepseek'),
           grok: fallback('grok'),
           mistral: fallback('mistral'),
+          zai: fallback('zai'),
+          moonshot: fallback('moonshot'),
           voyage: fallback('voyage'),
           openrouter: fallback('openrouter'),
           custom: fallback('custom'),

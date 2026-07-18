@@ -7,9 +7,11 @@ import { DeepSeekDiscovery } from './deepseek';
 import { GeminiDiscovery } from './gemini';
 import { GrokDiscovery } from './grok';
 import { MistralDiscovery } from './mistral';
+import { MoonshotDiscovery } from './moonshot';
 import { OllamaDiscovery } from './ollama';
 import { OpenAIDiscovery } from './openai';
 import { OpenRouterDiscovery } from './openrouter';
+import { ZaiDiscovery } from './zai';
 import type { CanonicalModel, CuratedSet, DiscoveryCreds, ProviderDiscovery } from './types';
 
 export type { CanonicalModel, CuratedSet, DiscoveryCreds } from './types';
@@ -24,6 +26,8 @@ const CLIENTS: Record<string, ProviderDiscovery> = {
   google: new GeminiDiscovery(),
   grok: new GrokDiscovery(),
   mistral: new MistralDiscovery(),
+  zai: new ZaiDiscovery(),
+  moonshot: new MoonshotDiscovery(),
   openrouter: new OpenRouterDiscovery(),
   ollama: new OllamaDiscovery(),
 };
@@ -63,6 +67,8 @@ async function resolveCreds(provider: string, userId?: string): Promise<Discover
     google: 'GEMINI_API_KEY',
     grok: 'XAI_API_KEY',
     mistral: 'MISTRAL_API_KEY',
+    zai: 'ZAI_API_KEY',
+    moonshot: 'MOONSHOT_API_KEY',
     openrouter: 'OPENROUTER_API_KEY',
   };
   const vaultKeyMap: Record<string, string> = {
@@ -73,8 +79,17 @@ async function resolveCreds(provider: string, userId?: string): Promise<Discover
     google: 'gemini_api_key',
     grok: 'xai_api_key',
     mistral: 'mistral_api_key',
+    zai: 'zai_api_key',
+    moonshot: 'moonshot_api_key',
     openrouter: 'openrouter_api_key',
   };
+  // Base-URL overrides so discovery hits the SAME host the provider uses
+  // (e.g. Moonshot's China host via MOONSHOT_BASE_URL) — otherwise a .cn-only
+  // key would 401 against the default .ai host and the model picker stays empty.
+  const endpoint =
+    provider === 'zai' ? process.env.ZAI_BASE_URL :
+    provider === 'moonshot' ? process.env.MOONSHOT_BASE_URL :
+    undefined;
 
   // Ollama is endpoint-only; pull from config.
   if (provider === 'ollama') {
@@ -83,7 +98,7 @@ async function resolveCreds(provider: string, userId?: string): Promise<Discover
   }
 
   if (envMap[provider] && process.env[envMap[provider]]) {
-    return { apiKey: process.env[envMap[provider]] };
+    return { apiKey: process.env[envMap[provider]], endpoint };
   }
 
   try {
@@ -94,10 +109,10 @@ async function resolveCreds(provider: string, userId?: string): Promise<Discover
       // Try user-scoped secret first, then fall back to system
       if (userId && userId !== 'system') {
         const userValue = await vault.getByName(userId, vaultKey);
-        if (userValue) return { apiKey: userValue };
+        if (userValue) return { apiKey: userValue, endpoint };
       }
       const value = await vault.getByName('system', vaultKey);
-      if (value) return { apiKey: value };
+      if (value) return { apiKey: value, endpoint };
     }
   } catch (err) {
     modelLogger.debug({ err, provider }, 'discovery: vault lookup failed');

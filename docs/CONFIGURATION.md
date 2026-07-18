@@ -40,7 +40,7 @@ OLLAMA_URL=                            # Ollama URL (optional — set in Setting
 # model_config row, stores the API key in the vault, and stops
 # touching .env. Editing these after first boot has no effect —
 # use the Models page instead. See CONFIGURATION-PRECEDENCE.md.
-BOOTSTRAP_PROVIDER=                    # ollama | litellm | openai | anthropic | gemini | deepseek | openrouter | cli
+BOOTSTRAP_PROVIDER=                    # ollama | litellm | openai | anthropic | gemini | deepseek | mistral | zai | moonshot | openrouter | cli
 BOOTSTRAP_MODEL=                       # e.g. llama3.2:3b, gpt-4o-mini, claude-haiku-4-5-20251001
 BOOTSTRAP_API_KEY=                     # required for cloud providers
 BOOTSTRAP_BASE_URL=                    # for litellm: the proxy URL
