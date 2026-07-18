@@ -14,9 +14,11 @@ describe('ZaiProvider.supportsModel', () => {
     expect(p.supportsModel('GLM-4.6')).toBe(true);
   });
 
-  it('matches z.ai embedding model ids', () => {
-    expect(p.supportsModel('embedding-3')).toBe(true);
-    expect(p.supportsModel('embedding-2')).toBe(true);
+  it('does not claim embedding ids by name (they route by DB provider column)', () => {
+    // embed() still serves embedding-3; routing is via resolveProvider, not the
+    // name heuristic (which the greedy Ollama provider would win anyway).
+    expect(p.supportsModel('embedding-3')).toBe(false);
+    expect(p.supportsModel('embedding-2')).toBe(false);
   });
 
   it('does not match other providers', () => {

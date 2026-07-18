@@ -37,6 +37,13 @@ export interface CLIToolConfig {
   modelPatterns: string[];
   /** Path to the CLI binary */
   binaryPath: string;
+  /**
+   * Which arg-builder / output-parser family this CLI uses in agentic mode
+   * (see cli-adapters). Defaults to `name`. Vendors that reuse the Claude Code
+   * binary (z.ai GLM, Moonshot Kimi) set this to `'Claude Code'` so dispatch is
+   * decoupled from the human-facing `name`.
+   */
+  adapter?: string;
   /** Build command args for a non-interactive prompt */
   buildArgs: (prompt: string) => string[];
   /** Parse JSON output into CompletionResult */
@@ -73,38 +80,10 @@ const claudeCodeConfig: CLIToolConfig = {
   modelPatterns: ['cli/claude', 'cli/claude-code'],
   binaryPath: 'claude',
   buildArgs: (prompt: string) => ['-p', prompt, '--output-format', 'json'],
-  parseOutput: (stdout: string, startTime: number): CompletionResult => {
-    try {
-      const data = JSON.parse(stdout);
-      // claude --output-format json returns { result: string, ... }
-      const content = typeof data === 'string' ? data : (data.result || data.content || JSON.stringify(data));
-      // C18: total must sum the SAME resolved input/output values. The old
-      // code summed only the top-level fields while input/output fell back to
-      // nested `usage.*`, so nested-usage payloads reported a zero total.
-      const inputTokens = data.input_tokens || data.usage?.input_tokens || 0;
-      const outputTokens = data.output_tokens || data.usage?.output_tokens || 0;
-      return {
-        content,
-        finishReason: 'stop',
-        usage: {
-          inputTokens,
-          outputTokens,
-          totalTokens: inputTokens + outputTokens,
-        },
-        model: 'cli/claude-code',
-        latencyMs: Date.now() - startTime,
-      };
-    } catch {
-      // Plain text response
-      return {
-        content: stdout.trim(),
-        finishReason: 'stop',
-        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-        model: 'cli/claude-code',
-        latencyMs: Date.now() - startTime,
-      };
-    }
-  },
+  // claude --output-format json returns { result, usage: {...} }; the shared
+  // parser sums the SAME resolved input/output values (C18) and falls back to
+  // plain text when the payload isn't JSON.
+  parseOutput: parseClaudeStyleOutput('cli/claude-code'),
   isQuotaError: (output: string) =>
     /rate.?limit|quota|exceeded|capacity|too many/i.test(output),
   quotaProvider: 'claude-code',
@@ -356,24 +335,73 @@ function parseClaudeStyleOutput(modelLabel: string) {
   };
 }
 
-const glmCliConfig: CLIToolConfig = {
+/** Fields that vary between the Anthropic-compatible vendor CLIs. */
+interface AnthropicCompatCliSpec {
+  name: string;
+  modelPatterns: string[];
+  /** Model label stamped on results (e.g. `cli/glm`). */
+  modelLabel: string;
+  /** Env var overriding the Anthropic-compatible base URL. */
+  baseUrlEnv: string;
+  defaultBaseUrl: string;
+  /** Vendor key env var + vault name. */
+  keyEnv: string;
+  keyVault: string;
+  /** Env var selecting the model + its default. */
+  modelEnv: string;
+  defaultModel: string;
+  quotaProvider: string;
+  modelProvider: 'zai' | 'moonshot';
+  billingInfo: CLIBillingInfo;
+}
+
+/**
+ * Build a CLIToolConfig that drives the `claude` binary against a vendor's
+ * Anthropic-compatible endpoint. `adapter: 'Claude Code'` reuses Claude's
+ * arg-builder + stream parser without coupling dispatch to the display name.
+ */
+function makeAnthropicCompatCliConfig(spec: AnthropicCompatCliSpec): CLIToolConfig {
+  return {
+    name: spec.name,
+    modelPatterns: spec.modelPatterns,
+    binaryPath: 'claude',
+    adapter: 'Claude Code',
+    buildArgs: (prompt: string) => ['-p', prompt, '--output-format', 'json'],
+    parseOutput: parseClaudeStyleOutput(spec.modelLabel),
+    buildEnv: async () => {
+      const token = await resolveCliVendorKey(spec.keyEnv, spec.keyVault);
+      if (!token) {
+        throw new Error(`${spec.name}: no API key configured. Set ${spec.keyEnv} or store ${spec.keyVault} in the vault.`);
+      }
+      return {
+        ANTHROPIC_BASE_URL: process.env[spec.baseUrlEnv] || spec.defaultBaseUrl,
+        ANTHROPIC_AUTH_TOKEN: token,
+        // Clear any real Anthropic key so it can't shadow the vendor auth token.
+        ANTHROPIC_API_KEY: '',
+        ANTHROPIC_MODEL: process.env[spec.modelEnv] || spec.defaultModel,
+        API_TIMEOUT_MS: '3000000',
+      };
+    },
+    isQuotaError: (output: string) => /rate.?limit|quota|exceeded|capacity|too many/i.test(output),
+    quotaProvider: spec.quotaProvider,
+    modelProvider: spec.modelProvider,
+    modelFlag: 'ANTHROPIC_MODEL (env)',
+    billingInfo: spec.billingInfo,
+  };
+}
+
+const glmCliConfig: CLIToolConfig = makeAnthropicCompatCliConfig({
   name: 'Claude Code (z.ai GLM)',
   modelPatterns: ['cli/glm', 'cli/glm-code', 'cli/zai'],
-  binaryPath: 'claude',
-  buildArgs: (prompt: string) => ['-p', prompt, '--output-format', 'json'],
-  parseOutput: parseClaudeStyleOutput('cli/glm'),
-  buildEnv: async () => ({
-    ANTHROPIC_BASE_URL: process.env.ZAI_ANTHROPIC_BASE_URL || 'https://api.z.ai/api/anthropic',
-    ANTHROPIC_AUTH_TOKEN: await resolveCliVendorKey('ZAI_API_KEY', 'zai_api_key'),
-    // Clear any real Anthropic key so it can't shadow the z.ai auth token.
-    ANTHROPIC_API_KEY: '',
-    ANTHROPIC_MODEL: process.env.ZAI_CLI_MODEL || 'glm-4.6',
-    API_TIMEOUT_MS: '3000000',
-  }),
-  isQuotaError: (output: string) => /rate.?limit|quota|exceeded|capacity|too many/i.test(output),
+  modelLabel: 'cli/glm',
+  baseUrlEnv: 'ZAI_ANTHROPIC_BASE_URL',
+  defaultBaseUrl: 'https://api.z.ai/api/anthropic',
+  keyEnv: 'ZAI_API_KEY',
+  keyVault: 'zai_api_key',
+  modelEnv: 'ZAI_CLI_MODEL',
+  defaultModel: 'glm-4.6',
   quotaProvider: 'zai-cli',
   modelProvider: 'zai',
-  modelFlag: 'ANTHROPIC_MODEL (env)',
   billingInfo: {
     vendor: 'z.ai (Zhipu)',
     planNote: 'GLM Coding Plan or pay-per-token API key',
@@ -383,25 +411,20 @@ const glmCliConfig: CLIToolConfig = {
     modelFlagDocUrl: 'https://docs.z.ai/scenario-example/develop-tools/claude',
     warning: 'Runs the Claude Code binary against z.ai’s Anthropic-compatible endpoint. Requires the `claude` CLI installed and a z.ai key (ZAI_API_KEY / zai_api_key). Pick the GLM model via ZAI_CLI_MODEL.',
   },
-};
+});
 
-const kimiCliConfig: CLIToolConfig = {
+const kimiCliConfig: CLIToolConfig = makeAnthropicCompatCliConfig({
   name: 'Claude Code (Moonshot Kimi)',
   modelPatterns: ['cli/kimi', 'cli/kimi-code', 'cli/moonshot'],
-  binaryPath: 'claude',
-  buildArgs: (prompt: string) => ['-p', prompt, '--output-format', 'json'],
-  parseOutput: parseClaudeStyleOutput('cli/kimi'),
-  buildEnv: async () => ({
-    ANTHROPIC_BASE_URL: process.env.MOONSHOT_ANTHROPIC_BASE_URL || 'https://api.moonshot.ai/anthropic',
-    ANTHROPIC_AUTH_TOKEN: await resolveCliVendorKey('MOONSHOT_API_KEY', 'moonshot_api_key'),
-    ANTHROPIC_API_KEY: '',
-    ANTHROPIC_MODEL: process.env.MOONSHOT_CLI_MODEL || 'kimi-k2-0711-preview',
-    API_TIMEOUT_MS: '3000000',
-  }),
-  isQuotaError: (output: string) => /rate.?limit|quota|exceeded|capacity|too many/i.test(output),
+  modelLabel: 'cli/kimi',
+  baseUrlEnv: 'MOONSHOT_ANTHROPIC_BASE_URL',
+  defaultBaseUrl: 'https://api.moonshot.ai/anthropic',
+  keyEnv: 'MOONSHOT_API_KEY',
+  keyVault: 'moonshot_api_key',
+  modelEnv: 'MOONSHOT_CLI_MODEL',
+  defaultModel: 'kimi-k2-0711-preview',
   quotaProvider: 'moonshot-cli',
   modelProvider: 'moonshot',
-  modelFlag: 'ANTHROPIC_MODEL (env)',
   billingInfo: {
     vendor: 'Moonshot (Kimi)',
     planNote: 'Kimi Code plan or pay-per-token Moonshot API key',
@@ -411,7 +434,7 @@ const kimiCliConfig: CLIToolConfig = {
     modelFlagDocUrl: 'https://platform.kimi.ai/docs/api/overview',
     warning: 'Runs the Claude Code binary against Moonshot’s Anthropic-compatible endpoint. Requires the `claude` CLI installed and a Moonshot key (MOONSHOT_API_KEY / moonshot_api_key). Pick the Kimi model via MOONSHOT_CLI_MODEL. Note: Moonshot rescales temperature (×0.6).',
   },
-};
+});
 
 /** All registered CLI tool configs */
 export const CLI_TOOLS: CLIToolConfig[] = [claudeCodeConfig, antigravityConfig, codexCliConfig, vibeCliConfig, glmCliConfig, kimiCliConfig];

@@ -16,13 +16,21 @@ describe('GLM / Kimi CLI configs (Claude-binary + Anthropic endpoint)', () => {
     delete process.env.MOONSHOT_CLI_MODEL;
   });
 
-  it('both are registered and reuse the claude binary', () => {
+  it('both are registered and reuse the claude binary + adapter', () => {
     expect(CLI_TOOLS).toContain(glmCliConfig);
     expect(CLI_TOOLS).toContain(kimiCliConfig);
     expect(glmCliConfig.binaryPath).toBe('claude');
     expect(kimiCliConfig.binaryPath).toBe('claude');
     expect(glmCliConfig.modelProvider).toBe('zai');
     expect(kimiCliConfig.modelProvider).toBe('moonshot');
+    // adapter decouples arg-building/parsing dispatch from the display name.
+    expect(glmCliConfig.adapter).toBe('Claude Code');
+    expect(kimiCliConfig.adapter).toBe('Claude Code');
+  });
+
+  it('buildEnv throws a clear error when the vendor key is missing', async () => {
+    delete process.env.ZAI_API_KEY;
+    await expect(glmCliConfig.buildEnv!()).rejects.toThrow(/no API key configured.*ZAI_API_KEY/);
   });
 
   it('CLIProvider routes cli/glm and cli/kimi models', () => {

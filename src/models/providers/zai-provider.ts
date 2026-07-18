@@ -49,15 +49,16 @@ export class ZaiProvider implements ModelProvider {
 
   supportsModel(modelName: string): boolean {
     const lower = modelName.toLowerCase();
-    // `embedding-2`/`embedding-3` are z.ai's embedding models (distinct from
-    // OpenAI's `text-embedding-*`), routed here for the embed() path.
-    return lower.startsWith('glm-') || lower.startsWith('zai/') || lower.startsWith('embedding-');
+    return lower.startsWith('glm-') || lower.startsWith('zai/');
   }
 
   /**
    * Generate embeddings via z.ai's OpenAI-compatible `/embeddings` endpoint
    * (e.g. `embedding-3`, 1024/2048-dim). Serves the `embedding` topic as an
-   * alternative to Voyage.
+   * alternative to Voyage. Embedding models route here by the DB `provider`
+   * column (resolveProvider → getProviderByName), not the name heuristic — a
+   * bare `embedding-*` id would otherwise be claimed by the greedy Ollama
+   * provider, so supportsModel deliberately does not match it.
    */
   async embed(texts: string[], model: string): Promise<number[][]> {
     const client = await this.createClient(model);
