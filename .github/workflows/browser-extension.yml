@@ -1,0 +1,66 @@
+name: Browser extension
+
+# The browser-extension/ (a privileged MV3 content-script + background worker)
+# had zero CI. This gives it a basic gate: every script must parse, and the
+# manifest must be valid and well-formed. Cheap, no dependencies.
+
+on:
+  pull_request:
+    paths:
+      - 'browser-extension/**'
+      - '.github/workflows/browser-extension.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'browser-extension/**'
+      - '.github/workflows/browser-extension.yml'
+
+concurrency:
+  group: browser-extension-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Syntax + manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Syntax-check every extension script
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          found=0
+          for f in browser-extension/*.js; do
+            found=1
+            echo "── node --check $f ──"
+            node --check "$f"
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "::error::no .js files found under browser-extension/"
+            exit 1
+          fi
+
+      - name: Validate manifest.json
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("fs");
+            const m = JSON.parse(fs.readFileSync("browser-extension/manifest.json", "utf8"));
+            for (const key of ["manifest_version", "name", "version"]) {
+              if (m[key] === undefined) throw new Error(`manifest.json missing required key: ${key}`);
+            }
+            if (m.manifest_version !== 3) throw new Error(`expected manifest_version 3, got ${m.manifest_version}`);
+            console.log(`manifest.json OK — ${m.name} v${m.version} (MV${m.manifest_version})`);
+          '
