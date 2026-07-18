@@ -5,8 +5,10 @@ import { defineConfig, devices } from '@playwright/test';
  *
  * The specs drive the Next.js web app (web/) with every `/api/**` call stubbed
  * at the browser (see tests/web/fixtures/), so no backend, database, or
- * provider keys are needed — just the front-end dev server. `webServer` boots
- * `next dev` on :3007 and Playwright waits for it before the run.
+ * provider keys are needed — just the front-end. `webServer` builds and serves
+ * a PRODUCTION build (`next build && next start`, or just `next start` in CI
+ * where the build is a separate step) on :3007 and Playwright waits for it
+ * before the run. See the `webServer` block below for why production, not dev.
  *
  * bun's unit runner ignores tests/web (see bunfig.toml `pathIgnorePatterns`);
  * this config is the only thing that runs these specs.
