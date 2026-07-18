@@ -17,8 +17,17 @@
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { Elysia } from 'elysia';
-import * as realRegistry from '@/models/model-registry';
-import * as realProviders from '@/models/providers';
+import * as realRegistryNs from '@/models/model-registry';
+import * as realProvidersNs from '@/models/providers';
+
+// Snapshot the real exports into plain objects BEFORE the mock.module calls
+// below. bun's `mock.module` leaves the live `import * as` namespace binding
+// pointing at the installed stub, so restoring from the namespace in afterAll
+// re-installs the stub (a silent cross-file leak: later suites see a partial
+// `getModelRegistry()` and crash on e.g. `registerModel is not a function`).
+// A plain-object copy taken before mocking is immune and restores cleanly.
+const realRegistry = { ...realRegistryNs };
+const realProviders = { ...realProvidersNs };
 import { ANONYMOUS_PRINCIPAL, type Principal, principalFromUser } from '@/security/principal';
 
 // ── Mutable per-test behavior the pinned stubs delegate to ──────────────────

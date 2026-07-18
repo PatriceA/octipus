@@ -64,7 +64,10 @@ describe.skipIf(!isIntegration)('Experts API (Integration) — clearing the over
 
   beforeAll(async () => {
     await setupIntegrationDb();
-    await truncateTables(['experts', 'users']);
+    // The `experts` schema export maps to the physical `presets` table
+    // (see src/db/schema/experts.ts). truncateTables takes physical table
+    // names, so 'experts' would raise `relation "experts" does not exist`.
+    await truncateTables(['presets', 'users']);
 
     const { seedUsers } = await import('@/test-helpers/multiuser-fixtures');
     await seedUsers([{ id: userId, username: 'alice', isAdmin: false }]);

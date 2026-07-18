@@ -11,6 +11,13 @@ describe.skipIf(!isIntegration)('Roles API (Integration)', () => {
   let userApp: ElysiaLike;
   const adminId = randomUUID();
   const userId = randomUUID();
+  // ROLE_CONFIGS is a process-global singleton. `loadRolesFromDb()` below
+  // replaces each entry with the DB row (which carries no lite prompt variant
+  // and DB-sourced toolIds), so without restoring it this suite would leak the
+  // mutated config into unit suites that assert the file-registry defaults
+  // (e.g. core/orchestrator/roles.test.ts). Snapshot the original entries and
+  // restore them in afterAll.
+  let roleConfigsBackup: Record<string, unknown> | null = null;
 
   beforeAll(async () => {
     await setupIntegrationDb();
@@ -24,6 +31,10 @@ describe.skipIf(!isIntegration)('Roles API (Integration)', () => {
 
     // Seed roles from the file registry into the DB + in-memory cache.
     const { seedRoles, loadRolesFromDb } = await import('@/db/seed-roles');
+    const { ROLE_CONFIGS } = await import('@/core/orchestrator/roles');
+    // Snapshot before mutating: loadRolesFromDb() replaces whole entries, so a
+    // shallow copy of the original per-role objects is enough to restore.
+    roleConfigsBackup = { ...ROLE_CONFIGS };
     await seedRoles();
     await loadRolesFromDb();
 
@@ -44,6 +55,14 @@ describe.skipIf(!isIntegration)('Roles API (Integration)', () => {
   });
 
   afterAll(async () => {
+    // Restore the in-memory role registry so this suite's DB-sourced configs
+    // don't leak into later unit suites.
+    if (roleConfigsBackup) {
+      const { ROLE_CONFIGS } = await import('@/core/orchestrator/roles');
+      for (const key of Object.keys(roleConfigsBackup)) {
+        (ROLE_CONFIGS as Record<string, unknown>)[key] = roleConfigsBackup[key];
+      }
+    }
     await teardownIntegration();
   });
 

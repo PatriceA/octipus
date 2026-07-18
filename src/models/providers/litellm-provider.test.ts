@@ -25,7 +25,11 @@ process.env.LITELLM_API_KEY ??= 'sk-test';
 const { resetConfig } = await import('@/config');
 resetConfig();
 
-const realLitellmClient = await import('../litellm-client');
+// Plain-object snapshot taken before the mock.module below. Restoring from the
+// live namespace does not work — bun's `mock.module` leaves that binding on the
+// installed stub, so the afterAll "restore" would re-install the stub and leak a
+// partial `getLiteLLMClient()` (missing `embed`/`complete`) into later suites.
+const realLitellmClient = { ...(await import('../litellm-client')) };
 
 const fakeCompleteResult: CompletionResult = {
   content: 'hi',

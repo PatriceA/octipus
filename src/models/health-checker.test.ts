@@ -1,7 +1,7 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { randomBytes } from 'node:crypto';
 import { RedisCache } from '@/db/redis';
-import { initializeStorage } from '@/db/storage';
+import { closeStorage, initializeStorage } from '@/db/storage';
 import { getHealthChecker, HealthChecker } from './health-checker';
 
 // checkProvider('litellm', …) reaches getConfig() for the proxy URL/key, which
@@ -50,6 +50,16 @@ function jsonResponse(body: unknown): Response {
 beforeAll(() => {
   // In-memory cache so RedisCache works without a real Valkey/Redis.
   initializeStorage({ mode: 'embedded' });
+});
+
+afterAll(async () => {
+  // Reset the process-global storage provider. `initializeStorage` is
+  // idempotent (`if (provider) return provider`), so leaving the embedded
+  // provider installed would starve a later integration suite's
+  // `setupIntegrationStorage()` — its external re-init becomes a no-op and
+  // `getRedis()` returns a non-persisting proxy (e.g. the scheduler heartbeat
+  // then reads null). Closing it here restores symmetry with quota-enforcement.
+  await closeStorage();
 });
 
 beforeEach(async () => {
