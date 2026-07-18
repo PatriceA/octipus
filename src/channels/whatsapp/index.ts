@@ -1,4 +1,4 @@
-import { createHmac } from 'crypto';
+import { createHmac, timingSafeEqual } from 'crypto';
 import { fetchWithTimeout } from '@/utils/http';
 import { generateLinkCode } from '@/channels/linking';
 import { getConfig } from '@/config';
@@ -88,7 +88,11 @@ export class WhatsAppChannel extends BaseChannel {
     if (parts.length !== 2 || parts[0] !== 'sha256') return false;
 
     const expected = createHmac('sha256', this.appSecret).update(rawBody).digest('hex');
-    return expected === parts[1];
+    // Constant-time comparison to avoid leaking the signature via timing.
+    // timingSafeEqual throws on length mismatch, so guard on length first.
+    const expectedBuf = Buffer.from(expected, 'hex');
+    const providedBuf = Buffer.from(parts[1], 'hex');
+    return expectedBuf.length === providedBuf.length && timingSafeEqual(expectedBuf, providedBuf);
   }
 
   /**
