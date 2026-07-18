@@ -50,6 +50,7 @@ async function main(): Promise<void> {
       // CORS headers — restrict to configured origins
       const requestOrigin = req.headers.origin;
       if (requestOrigin && corsOrigins.includes(requestOrigin)) {
+        // nosemgrep: javascript.express.security.cors-misconfiguration.cors-misconfiguration -- origin reflected only after allowlist membership check against CORS_ORIGINS
         res.setHeader('Access-Control-Allow-Origin', requestOrigin);
       } else if (corsOrigins.length === 1) {
         res.setHeader('Access-Control-Allow-Origin', corsOrigins[0]);

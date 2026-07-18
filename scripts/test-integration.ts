@@ -22,6 +22,7 @@ const REDIS_URL = `redis://localhost:${TEST_REDIS_PORT}`;
 
 function run(cmd: string, args: string[], env: Record<string, string> = {}): Promise<number> {
   return new Promise((resolve) => {
+    // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- local test harness; args are array-form (no shell) and callers pass only hardcoded docker/bun commands
     const proc = spawn(cmd, args, {
       stdio: 'inherit',
       env: { ...process.env, ...env },

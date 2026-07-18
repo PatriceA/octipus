@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes, sc
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12;
-const _AUTH_TAG_LENGTH = 16;
+const AUTH_TAG_LENGTH = 16;
 const SALT_LENGTH = 32;
 
 export interface EncryptedData {
@@ -53,7 +53,7 @@ export function decrypt(encrypted: EncryptedData, key: Buffer): string {
   const iv = Buffer.from(encrypted.iv, 'base64');
   const authTag = Buffer.from(encrypted.authTag, 'base64');
 
-  const decipher = createDecipheriv(ALGORITHM, key, iv);
+  const decipher = createDecipheriv(ALGORITHM, key, iv, { authTagLength: AUTH_TAG_LENGTH });
   decipher.setAuthTag(authTag);
 
   let decrypted = decipher.update(encrypted.ciphertext, 'base64', 'utf8');

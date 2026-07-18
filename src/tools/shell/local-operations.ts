@@ -150,6 +150,7 @@ export class LocalShellOperations implements ShellOperations {
     }
 
     return new Promise((resolve, reject) => {
+      // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn (no shell); this is the shell tool's own executor, argv already parsed/sandboxed upstream
       const child = spawn(finalArgv[0], finalArgv.slice(1), {
         cwd,
         env: buildChildEnv(options.env),
@@ -237,6 +238,7 @@ export class LocalShellOperations implements ShellOperations {
       allowNetwork: !!options.unsafe,
     });
 
+    // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn (no shell); this is the shell tool's own detached executor, argv already parsed/sandboxed upstream
     const child = spawn(wrap.argv[0], wrap.argv.slice(1), {
       cwd,
       env: buildChildEnv(options.env),

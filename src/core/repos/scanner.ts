@@ -205,6 +205,7 @@ function gitDefaultBranch(repoRoot: string): string | null {
 function git(repoRoot: string, cmd: string): string | null {
   if (!existsSync(join(repoRoot, '.git'))) return null;
   try {
+    // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- cmd is never user-supplied; both callers pass hardcoded git subcommands
     const out = execSync(`${cmd} 2>/dev/null`, { cwd: repoRoot, timeout: 5_000, encoding: 'utf-8' }).trim();
     return out || null;
   } catch {
