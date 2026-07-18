@@ -32,7 +32,12 @@ let currentEmbedding: number[] | null = null;
 // Eagerly load the real module so we can spread its real exports into the
 // mock — `mock.module` is process-wide in bun and other test files (notably
 // src/core/rag/embeddings.test.ts) need the real `EmbeddingService` class.
-import * as realEmbeddings from '@/core/rag/embeddings';
+import * as realEmbeddingsNs from '@/core/rag/embeddings';
+// Plain-object snapshot taken BEFORE mock.module so afterAll can reinstall the
+// real module — restoring from the live `import * as` namespace re-installs the
+// stub (bun leaves that binding on the mock), leaking the fixed embedding vector
+// into later suites.
+const realEmbeddings = { ...realEmbeddingsNs };
 
 mock.module('@/core/rag/embeddings', () => ({
   ...realEmbeddings,
@@ -126,6 +131,9 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // Restore the real embeddings module so this suite's stub doesn't leak into
+  // later suites in the same bun process.
+  mock.module('@/core/rag/embeddings', () => realEmbeddings);
   // Clean up everything we seeded — per memory feedback_e2e_session_cleanup.
   try {
     const db = getDb();

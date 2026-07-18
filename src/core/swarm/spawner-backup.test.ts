@@ -8,7 +8,13 @@
  * instance-patched.
  */
 import { afterAll, describe, expect, mock, test } from 'bun:test';
-import * as realModelRegistry from '@/models/model-registry';
+import * as realModelRegistryNs from '@/models/model-registry';
+
+// Plain-object snapshot taken before this file mocks the module. Restoring from
+// the live `import * as` namespace does NOT work — bun's `mock.module` leaves
+// that binding pointing at the installed stub, so the "restore" re-installs the
+// stub and leaks it forward. A copy taken before mocking restores cleanly.
+const realModelRegistry = { ...realModelRegistryNs };
 
 let backupModelId: string | null = null;
 

@@ -1,6 +1,15 @@
 import { afterAll, afterEach, describe, expect, mock, test } from 'bun:test';
-import * as realModelRegistry from '@/models/model-registry';
-import * as realLitellmClient from '@/models/litellm-client';
+import * as realModelRegistryNs from '@/models/model-registry';
+import * as realLitellmClientNs from '@/models/litellm-client';
+
+// Plain-object snapshots taken before the mock.module calls below. Restoring
+// from the live `import * as` namespaces does NOT work: bun's `mock.module`
+// leaves those bindings pointing at the installed stubs, so restoring from them
+// re-installs the stubs and leaks them forward (later integration suites then
+// see a partial `getModelRegistry()`/`getLiteLLMClient()` and crash). A copy
+// taken before mocking is immune.
+const realModelRegistry = { ...realModelRegistryNs };
+const realLitellmClient = { ...realLitellmClientNs };
 
 /**
  * Locks the silent short-circuit that left the `memories` table empty in

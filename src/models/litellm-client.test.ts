@@ -36,10 +36,13 @@ process.env.LITELLM_API_KEY = 'sk-test';
 process.env.LITELLM_TIMEOUT = '5000';
 process.env.LITELLM_MAX_RETRIES = '0';
 
-// Capture real modules for spread-mocking and afterAll restoration.
-const realProviders = await import('@/models/providers');
-const realRegistry = await import('@/models/model-registry');
-const realOpenAIMod = await import('openai');
+// Capture real modules for spread-mocking and afterAll restoration. Plain-object
+// snapshots, not the live namespaces: bun's mock.module leaves an `await import`
+// binding pointing at the installed stub, so restoring from it would re-install
+// the partial stub and leak it into later unit suites.
+const realProviders = { ...(await import('@/models/providers')) };
+const realRegistry = { ...(await import('@/models/model-registry')) };
+const realOpenAIMod = { ...(await import('openai')) };
 const realConfig = await import('@/config');
 
 // ── Mocks ────────────────────────────────────────────────────────────

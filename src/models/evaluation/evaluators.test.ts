@@ -3,8 +3,14 @@ import { afterAll, mock } from 'bun:test';
 // modules — bun's mock.module is process-global, and this suite's partial
 // model-registry stub (truthy getModelForTopic, no registerModel) otherwise
 // leaks forward and breaks memory.extractor / topics / swarm-spawner suites.
-import * as realProviders from '@/models/providers';
-import * as realModelRegistry from '@/models/model-registry';
+import * as realProvidersNs from '@/models/providers';
+import * as realModelRegistryNs from '@/models/model-registry';
+// Plain-object snapshots taken before mocking — restoring from the live
+// `import * as` namespace re-installs the stub (bun leaves the binding on the
+// mock), so afterAll must reinstall these copies to avoid leaking the partial
+// registry stub into later unit suites.
+const realProviders = { ...realProvidersNs };
+const realModelRegistry = { ...realModelRegistryNs };
 
 // This is a pure unit suite: every dependency below is replaced via
 // `mock.module`, which bun applies process-globally for the whole `bun test`
