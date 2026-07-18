@@ -14,6 +14,25 @@ import { securityLogger } from '@/utils/logger';
 // secrets keep verifying.
 const TOTP_EPOCH_TOLERANCE_SECONDS = 30;
 
+/**
+ * Verify a TOTP token, returning false (never throwing) for a malformed token.
+ *
+ * otplib 13's `verify` throws `TokenLengthError` when the token isn't 6 digits.
+ * Login and `verify()` accept a single field that may hold EITHER a 6-digit
+ * TOTP code OR an 8-character backup code, so the raw throw would (a) propagate
+ * out of `verify()` before its backup-code fallback could run, making backup
+ * codes unusable, and (b) surface as a 500 on the login route. Treating a
+ * non-verifiable token as simply invalid lets the backup-code path take over.
+ */
+async function isValidTotpToken(token: string, secret: string): Promise<boolean> {
+  try {
+    const { valid } = await verify({ token, secret, epochTolerance: TOTP_EPOCH_TOLERANCE_SECONDS });
+    return valid;
+  } catch {
+    return false;
+  }
+}
+
 let encryptionKey: Buffer | null = null;
 
 async function getEncryptionKey(): Promise<Buffer> {
@@ -100,7 +119,7 @@ export class TOTPAuth {
     const { secret } = JSON.parse(decrypted);
 
     // Verify code
-    const { valid: isValid } = await verify({ token: code, secret, epochTolerance: TOTP_EPOCH_TOLERANCE_SECONDS });
+    const isValid = await isValidTotpToken(code, secret);
 
     if (!isValid) {
       securityLogger.warn({ userId }, 'Invalid TOTP code during enable');
@@ -128,8 +147,9 @@ export class TOTPAuth {
     const decrypted = decrypt({ iv, authTag, ciphertext }, key);
     const { secret, backupCodes } = JSON.parse(decrypted);
 
-    // Try regular TOTP code
-    const { valid } = await verify({ token: code, secret, epochTolerance: TOTP_EPOCH_TOLERANCE_SECONDS });
+    // Try regular TOTP code (tolerant: a backup code is not a 6-digit token, so
+    // this returns false and we fall through instead of throwing).
+    const valid = await isValidTotpToken(code, secret);
     if (valid) {
       return true;
     }
@@ -219,7 +239,7 @@ export class TOTPAuth {
     const { secret } = JSON.parse(decrypted);
 
     // Verify code
-    const { valid } = await verify({ token: code, secret, epochTolerance: TOTP_EPOCH_TOLERANCE_SECONDS });
+    const valid = await isValidTotpToken(code, secret);
     if (!valid) {
       return null;
     }
