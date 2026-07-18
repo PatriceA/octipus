@@ -19,6 +19,7 @@ concurrency:
 
 permissions:
   contents: write # create the GitHub Release
+  id-token: write # npm publish --provenance (OIDC attestation)
 
 jobs:
   release:
@@ -92,6 +93,9 @@ jobs:
       - name: Publish mcp-server to npm
         if: ${{ env.HAS_NPM_TOKEN == 'true' }}
         working-directory: mcp-server
-        run: npm publish --access public
+        # --provenance publishes a signed build-provenance attestation (via the
+        # id-token permission above), so consumers can verify the package was
+        # built from this repo's tagged CI. Public repo + GitHub Actions = free.
+        run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
