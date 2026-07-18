@@ -42,6 +42,12 @@ const CLOUD_PREFIXES = [
   // xAI
   'grok-',
   'xai/',
+  // z.ai (GLM) — sibling ZaiProvider SUPPORTED_PREFIXES.
+  'glm-',
+  'zai/',
+  // Moonshot (Kimi) — sibling MoonshotProvider SUPPORTED_PREFIXES.
+  'kimi-',
+  'moonshot-',
 ];
 
 /** OpenAI o-series (o1/o3/o4…) — cloud, not Ollama. */

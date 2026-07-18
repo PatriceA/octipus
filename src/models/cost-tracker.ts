@@ -23,6 +23,10 @@ const CACHED_READ_MULTIPLIER: Record<string, number> = {
   'custom-anthropic': 0.1,
   mistral: 0.1,
   deepseek: 0.1,
+  // Moonshot (Kimi) cached input ≈ 10-15% of the cache-miss rate.
+  moonshot: 0.1,
+  // z.ai (GLM) context-cache reads billed at a steep discount off input.
+  zai: 0.2,
   openai: 0.5,
   'custom-openai': 0.5,
   grok: 0.5,

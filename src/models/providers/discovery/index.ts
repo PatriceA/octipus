@@ -7,9 +7,11 @@ import { DeepSeekDiscovery } from './deepseek';
 import { GeminiDiscovery } from './gemini';
 import { GrokDiscovery } from './grok';
 import { MistralDiscovery } from './mistral';
+import { MoonshotDiscovery } from './moonshot';
 import { OllamaDiscovery } from './ollama';
 import { OpenAIDiscovery } from './openai';
 import { OpenRouterDiscovery } from './openrouter';
+import { ZaiDiscovery } from './zai';
 import type { CanonicalModel, CuratedSet, DiscoveryCreds, ProviderDiscovery } from './types';
 
 export type { CanonicalModel, CuratedSet, DiscoveryCreds } from './types';
@@ -24,6 +26,8 @@ const CLIENTS: Record<string, ProviderDiscovery> = {
   google: new GeminiDiscovery(),
   grok: new GrokDiscovery(),
   mistral: new MistralDiscovery(),
+  zai: new ZaiDiscovery(),
+  moonshot: new MoonshotDiscovery(),
   openrouter: new OpenRouterDiscovery(),
   ollama: new OllamaDiscovery(),
 };
@@ -63,6 +67,8 @@ async function resolveCreds(provider: string, userId?: string): Promise<Discover
     google: 'GEMINI_API_KEY',
     grok: 'XAI_API_KEY',
     mistral: 'MISTRAL_API_KEY',
+    zai: 'ZAI_API_KEY',
+    moonshot: 'MOONSHOT_API_KEY',
     openrouter: 'OPENROUTER_API_KEY',
   };
   const vaultKeyMap: Record<string, string> = {
@@ -73,6 +79,8 @@ async function resolveCreds(provider: string, userId?: string): Promise<Discover
     google: 'gemini_api_key',
     grok: 'xai_api_key',
     mistral: 'mistral_api_key',
+    zai: 'zai_api_key',
+    moonshot: 'moonshot_api_key',
     openrouter: 'openrouter_api_key',
   };
 

@@ -25,6 +25,8 @@ export type ProviderId =
   | 'gemini'
   | 'deepseek'
   | 'mistral'
+  | 'zai'
+  | 'moonshot'
   | 'cli';
 
 export interface ProviderDef {
@@ -166,6 +168,40 @@ export const PROVIDERS: ProviderDef[] = [
       if (!apiKey) return null;
       const data = await httpJson<{ data?: Array<{ id: string }> }>(
         'https://api.mistral.ai/v1/models',
+        { headers: { Authorization: `Bearer ${apiKey}` } },
+      );
+      return data?.data?.map((m) => m.id) ?? null;
+    },
+  },
+  {
+    id: 'zai',
+    label: 'Z.AI (GLM)',
+    description: 'Zhipu GLM models (glm-4.6, …). OpenAI-compatible. Requires API key.',
+    defaultModel: 'glm-4.6',
+    kind: 'manual',
+    requiresApiKey: true,
+    vaultKey: 'zai_api_key',
+    listModels: async ({ apiKey }) => {
+      if (!apiKey) return null;
+      const data = await httpJson<{ data?: Array<{ id: string }> }>(
+        'https://api.z.ai/api/paas/v4/models',
+        { headers: { Authorization: `Bearer ${apiKey}` } },
+      );
+      return data?.data?.map((m) => m.id) ?? null;
+    },
+  },
+  {
+    id: 'moonshot',
+    label: 'Moonshot (Kimi)',
+    description: 'Moonshot Kimi models (kimi-k2, moonshot-v1-*). OpenAI-compatible. Requires API key.',
+    defaultModel: 'kimi-k2-0711-preview',
+    kind: 'manual',
+    requiresApiKey: true,
+    vaultKey: 'moonshot_api_key',
+    listModels: async ({ apiKey }) => {
+      if (!apiKey) return null;
+      const data = await httpJson<{ data?: Array<{ id: string }> }>(
+        'https://api.moonshot.ai/v1/models',
         { headers: { Authorization: `Bearer ${apiKey}` } },
       );
       return data?.data?.map((m) => m.id) ?? null;

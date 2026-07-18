@@ -24,6 +24,8 @@ interface HealthStatusProps {
     deepseek: ServiceHealth;
     grok: ServiceHealth;
     mistral: ServiceHealth;
+    zai: ServiceHealth;
+    moonshot: ServiceHealth;
     voyage: ServiceHealth;
     openrouter: ServiceHealth;
     custom: ServiceHealth;
@@ -44,6 +46,8 @@ const SERVICE_CONFIG = [
   { key: 'deepseek',   label: 'deepseek',   icon: Layers },
   { key: 'grok',       label: 'grok',       icon: Rocket },
   { key: 'mistral',    label: 'mistral',    icon: Wind },
+  { key: 'zai',        label: 'z.ai',       icon: Sparkles },
+  { key: 'moonshot',   label: 'moonshot',   icon: Sparkles },
   { key: 'voyage',     label: 'voyage',     icon: Compass },
   { key: 'openrouter', label: 'openrouter', icon: Globe },
   { key: 'custom',     label: 'custom',     icon: Settings2 },
