@@ -383,7 +383,23 @@ export async function stubProfiles(page: Page): Promise<void> {
  * after this call because Playwright's `page.route` matches in reverse order
  * of registration (last registered wins).
  */
+export async function stubWorkspaces(page: Page): Promise<void> {
+  const now = new Date().toISOString();
+  // The app shell (WorkspaceProvider) fetches these on every page and calls
+  // `.find()` on the result, so an unstubbed `{}` from the catch-all crashes
+  // every route into the error boundary.
+  await page.route('**/api/me/workspaces', (route) =>
+    json(route, 200, {
+      workspaces: [
+        { id: 'ws-1', userId: 'e2e-user-id', slug: 'default', name: 'Default', isDefault: true, createdAt: now, updatedAt: now },
+      ],
+    }),
+  );
+  await page.route('**/api/me/orgs', (route) => json(route, 200, { orgs: [] }));
+}
+
 export async function stubAllDefaults(page: Page): Promise<void> {
+  await stubWorkspaces(page);
   await stubHealth(page);
   await stubSessions(page);
   await stubModels(page);

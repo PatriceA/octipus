@@ -62,6 +62,7 @@ bun.lockb
 # Ad-hoc debug/utility scripts at project root
 /*.ts
 !drizzle.config.ts
+!playwright.config.ts
 
 # Eval results (generated)
 eval/results/*.json
