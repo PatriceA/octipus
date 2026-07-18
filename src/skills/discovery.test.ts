@@ -53,7 +53,12 @@ let embeddingError: Error | null = null;
 // otherwise other test files that legitimately import the real module
 // (e.g. src/core/rag/embeddings.test.ts uses the real `EmbeddingService`
 // class directly) end up with `undefined` exports.
-import * as realEmbeddings from '@/core/rag/embeddings';
+import * as realEmbeddingsNs from '@/core/rag/embeddings';
+// Plain-object snapshot taken BEFORE mock.module. Restoring from the live
+// `import * as` namespace does not work — bun leaves it pointing at the stub,
+// so afterAll must reinstall this copy or the embedding stub leaks into later
+// suites (getEmbeddingService returns a fixed vector → wrong similarity results).
+const realEmbeddings = { ...realEmbeddingsNs };
 
 mock.module('@/core/rag/embeddings', () => ({
   ...realEmbeddings,
@@ -97,6 +102,9 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // Restore the real embeddings module so this suite's stub doesn't leak into
+  // later suites in the same bun process.
+  mock.module('@/core/rag/embeddings', () => realEmbeddings);
   // Best-effort: clean up everything we added under TEST_TOPIC, then
   // close the DB and rm the data dir.
   try {

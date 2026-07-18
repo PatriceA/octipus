@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test';
 import * as realChildProcess from 'node:child_process';
 import { gitTool } from './index';
 
@@ -36,6 +36,13 @@ mock.module('child_process', () => ({
   ...realChildProcessSnapshot,
   spawn: mockSpawn,
 }));
+
+// Restore the real child_process so this suite's `git`-spawn stub doesn't leak
+// into later suites (which would then get fabricated close(0)/empty output for
+// real `git` invocations). bun's mock.module is process-global.
+afterAll(() => {
+  mock.module('child_process', () => realChildProcessSnapshot);
+});
 
 describe('GitTool', () => {
   beforeEach(() => {
