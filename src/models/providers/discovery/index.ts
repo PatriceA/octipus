@@ -83,6 +83,13 @@ async function resolveCreds(provider: string, userId?: string): Promise<Discover
     moonshot: 'moonshot_api_key',
     openrouter: 'openrouter_api_key',
   };
+  // Base-URL overrides so discovery hits the SAME host the provider uses
+  // (e.g. Moonshot's China host via MOONSHOT_BASE_URL) — otherwise a .cn-only
+  // key would 401 against the default .ai host and the model picker stays empty.
+  const endpoint =
+    provider === 'zai' ? process.env.ZAI_BASE_URL :
+    provider === 'moonshot' ? process.env.MOONSHOT_BASE_URL :
+    undefined;
 
   // Ollama is endpoint-only; pull from config.
   if (provider === 'ollama') {
@@ -91,7 +98,7 @@ async function resolveCreds(provider: string, userId?: string): Promise<Discover
   }
 
   if (envMap[provider] && process.env[envMap[provider]]) {
-    return { apiKey: process.env[envMap[provider]] };
+    return { apiKey: process.env[envMap[provider]], endpoint };
   }
 
   try {
@@ -102,10 +109,10 @@ async function resolveCreds(provider: string, userId?: string): Promise<Discover
       // Try user-scoped secret first, then fall back to system
       if (userId && userId !== 'system') {
         const userValue = await vault.getByName(userId, vaultKey);
-        if (userValue) return { apiKey: userValue };
+        if (userValue) return { apiKey: userValue, endpoint };
       }
       const value = await vault.getByName('system', vaultKey);
-      if (value) return { apiKey: value };
+      if (value) return { apiKey: value, endpoint };
     }
   } catch (err) {
     modelLogger.debug({ err, provider }, 'discovery: vault lookup failed');
