@@ -28,7 +28,12 @@ async function isValidTotpToken(token: string, secret: string): Promise<boolean>
   try {
     const { valid } = await verify({ token, secret, epochTolerance: TOTP_EPOCH_TOLERANCE_SECONDS });
     return valid;
-  } catch {
+  } catch (err) {
+    // Expected for a non-6-digit token (e.g. a backup code) — otplib throws
+    // TokenLengthError and we fall through to "invalid". Log at debug so an
+    // UNEXPECTED throw (e.g. a secret that decrypts to invalid Base32) isn't
+    // silently masked as a wrong code with no trace.
+    securityLogger.debug({ err: (err as Error).message }, 'TOTP token verification threw — treating as invalid');
     return false;
   }
 }
