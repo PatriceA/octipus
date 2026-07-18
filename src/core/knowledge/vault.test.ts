@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
@@ -43,11 +43,18 @@ describe('VaultSync (embedded)', () => {
     await runMigrations();
     const { seedUsers } = await import('@/test-helpers/multiuser-fixtures');
     await seedUsers([{ id: userId, username: 'vault-user' }, { id: importer, username: 'vault-importer' }]);
-    // Inject a real EmbeddingService — see notes.test.ts for why the
-    // getEmbeddingService() singleton can't be trusted across the suite.
+    // Inject an EmbeddingService whose network seam (generateEmbedding) is
+    // stubbed to fail fast — see notes.test.ts. Without the stub, saving a note
+    // triggers a real embed call to the (absent/inconsistent) LiteLLM proxy,
+    // which retries for ~6s and times out the test (a flaky failure in CI, and
+    // an async rejection that bun mis-attributes to unrelated tests).
     const { EmbeddingService } = await import('@/core/rag/embeddings');
+    const embeddings = new EmbeddingService('test-model');
+    spyOn(embeddings, 'generateEmbedding').mockRejectedValue(
+      new Error('No embedding model configured (test) — re-index degrades to indexed:false'),
+    );
     const { NoteService } = await import('./notes');
-    svc = new NoteService(undefined, undefined, new EmbeddingService('test-model'));
+    svc = new NoteService(undefined, undefined, embeddings);
     vault = new (await import('./vault')).VaultSync(svc);
   });
 
