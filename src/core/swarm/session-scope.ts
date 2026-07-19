@@ -119,7 +119,9 @@ export function buildSiblingScopeBrief(
   });
   if (overlapping.length > 0) {
     parts.push(
-      'RELATED SIBLING WORK (overlapping mandate) — build on this, do not redo or contradict it:\n' +
+      'RELATED SIBLING WORK (overlapping mandate) — build on this instead of redoing it. ' +
+        'Do not contradict it arbitrarily, but if you find it is clearly wrong, correct it ' +
+        'and state what you changed and why:\n' +
         overlapping
           .map((r) => `[${r.role} @ ${r.topicPath}]\n${r.report}`)
           .join('\n\n'),

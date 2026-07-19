@@ -59,6 +59,30 @@ describe('composeChildMessage — date grounding', () => {
     const msg = composeChildMessage(brief, { availableToolNames: [], canSpawnChildren: false });
     expect(msg).toContain('leaf subagent');
   });
+
+  test('injects the executor-awareness block only when the lane binds an executor', () => {
+    const withExec = composeChildMessage(brief, {
+      availableToolNames: ['websearch__search'],
+      canSpawnChildren: true,
+      executorModel: 'gemini-flash-lite',
+    });
+    expect(withExec).toContain('EXECUTOR AVAILABLE');
+    expect(withExec).toContain('`plan`');
+
+    // No executor bound → no plan-for-executor noise.
+    const noExec = composeChildMessage(brief, {
+      availableToolNames: ['websearch__search'],
+      canSpawnChildren: true,
+    });
+    expect(noExec).not.toContain('EXECUTOR AVAILABLE');
+
+    // Planned (leaf) children never get it — they ARE the executor.
+    const planned = composeChildMessage(
+      { ...brief, plan: [{ action: 'run it' }] },
+      { availableToolNames: [], canSpawnChildren: false, executorModel: 'gemini-flash-lite' },
+    );
+    expect(planned).not.toContain('EXECUTOR AVAILABLE');
+  });
 });
 
 // ── composeChildMessage: plan rendering (Phase 3) ─────────────────────

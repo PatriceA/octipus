@@ -417,6 +417,9 @@ export class SwarmSpawner {
     const childMessage = composeChildMessage(brief, {
       availableToolNames,
       canSpawnChildren,
+      // Tell the agent it has a cheap executor to plan for — only when its lane
+      // actually binds one (getTopicConfig on the child's resolved lane).
+      executorModel: canSpawnChildren ? getTopicConfig(childLane).executorModel ?? undefined : undefined,
     });
     // Delegation guidance is static, identical for every depth-1 spawn, so it
     // lives in the (cacheable) system prompt instead of every brief (Phase 4).
@@ -1403,7 +1406,7 @@ export function planToolGaps(
 
 export function composeChildMessage(
   brief: TaskBrief,
-  opts: { availableToolNames: string[]; canSpawnChildren: boolean },
+  opts: { availableToolNames: string[]; canSpawnChildren: boolean; executorModel?: string },
 ): string {
   const parts: string[] = [];
 
@@ -1503,6 +1506,23 @@ export function composeChildMessage(
         'do it yourself. If you spawn, call `collect_children` BEFORE your ' +
         'final answer.',
     );
+    // Executor-awareness: this topic has a cheap executor model bound. For
+    // mechanical, fully-specified sub-work, the agent should do the thinking
+    // itself and hand a step-by-step `plan` to spawn_child — that routes the
+    // child to the cheap executor instead of a full-price specialist. Only
+    // injected when the lane actually has an executor (else it's noise).
+    if (opts.executorModel) {
+      parts.push(
+        'EXECUTOR AVAILABLE: this topic has a cheap executor model for mechanical ' +
+          'work. When a sub-task is well-defined and does NOT need judgment (e.g. ' +
+          'run these searches, fetch these pages, apply these edits), do the ' +
+          'thinking yourself and pass a `plan` to `spawn_child` — an ordered list ' +
+          'of {"action","tool"(optional),"expect"(optional)} steps. A child spawned ' +
+          'WITH a plan runs mechanically on the cheap executor; a child spawned ' +
+          'WITHOUT a plan uses a full specialist that re-derives its own strategy. ' +
+          'Reserve plan-less delegation for sub-tasks that genuinely need judgment.',
+      );
+    }
   } else {
     parts.push(
       'You are a leaf subagent: no further delegation. Solve the task with ' +
