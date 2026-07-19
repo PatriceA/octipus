@@ -49,7 +49,9 @@ function usesMaxCompletionTokens(model: string): boolean {
 }
 function omitsTemperature(model: string): boolean {
   const lower = model.toLowerCase();
-  return O_SERIES.test(lower) || lower.startsWith('gpt-5');
+  // gpt-5 reasoning SKUs reject non-default temperature, but the non-reasoning
+  // chat variants (gpt-5-chat*) accept it — don't silently drop it for those.
+  return O_SERIES.test(lower) || (lower.startsWith('gpt-5') && !lower.startsWith('gpt-5-chat'));
 }
 
 /**

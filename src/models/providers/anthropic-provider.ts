@@ -11,6 +11,7 @@ import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import {
   buildCachedSystem,
+  clampAnthropicTemperature,
   parseAnthropicResponse,
   parseAnthropicSseStream,
   toAnthropicMessages,
@@ -235,10 +236,7 @@ export class AnthropicProvider implements ModelProvider {
       stream,
     };
     if (system) body.system = buildCachedSystem(system, options.model);
-    // Native /v1/messages requires temperature in [0, 1] (the compat layer
-    // auto-caps; native 400s on >1). Clamp so an OpenAI-range 0–2 setting
-    // doesn't hard-fail the request.
-    if (options.temperature != null) body.temperature = Math.max(0, Math.min(1, options.temperature));
+    if (options.temperature != null) body.temperature = clampAnthropicTemperature(options.temperature);
     if (options.topP != null) body.top_p = options.topP;
     if (options.stopSequences?.length) body.stop_sequences = options.stopSequences;
     if (options.tools?.length) {

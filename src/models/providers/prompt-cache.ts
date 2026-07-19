@@ -30,8 +30,16 @@ export const MIN_CACHEABLE_CHARS = 4000;
 export function minCacheableChars(model?: string): number {
   const m = (model || '').toLowerCase();
   if (/opus-4|haiku-4/.test(m)) return 16_384; // 4096 tok
-  if (/fable|mythos|sonnet-4-6|haiku-3/.test(m)) return 8_192; // 2048 tok
-  return MIN_CACHEABLE_CHARS; // 1024 tok — Sonnet 4.5-class and unknown models
+  // Haiku 3.x ids are `claude-3-haiku-*` / `claude-3-5-haiku-*` (family digit
+  // BEFORE the name), so match both orderings.
+  if (/fable|mythos|sonnet-4-6|haiku-3|3(-5)?-haiku/.test(m)) return 8_192; // 2048 tok
+  // 1024 tok — Sonnet 4.5-class, and the deliberate fall-through for unknown
+  // or aliased ids (custom endpoints, LiteLLM aliases, future models): a
+  // breakpoint below a model's real minimum is a free no-op (Anthropic just
+  // ignores it — no write premium is charged unless it actually caches),
+  // whereas defaulting HIGH would forfeit real caching on every 1024-tok
+  // model. Lowest floor is the safe default.
+  return MIN_CACHEABLE_CHARS;
 }
 
 /**

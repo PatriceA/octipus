@@ -1238,13 +1238,17 @@ export class SwarmSpawner {
     // research/communication/pm/writing).
     const lane = expertLane || childRole;
     let candidate = expertModel;
-    if (candidate && hasPlan && getTopicConfig(lane).executorModel) {
+    // One lookup for the whole routing block — getTopicConfig is an in-memory
+    // cache, but the branches below reference the executor binding repeatedly
+    // and must all agree on the same value.
+    const laneExecutor = getTopicConfig(lane).executorModel;
+    if (candidate && hasPlan && laneExecutor) {
       // A plan was supplied AND the lane has a cheap executor, but the matched
       // expert's explicit modelPreference wins (precedence #1). Surface the
       // shadowing at info so operators can see why a planned child still ran
       // on a full-price model.
       coreLogger.info(
-        { lane, childRole, expertModel: candidate, executorModel: getTopicConfig(lane).executorModel },
+        { lane, childRole, expertModel: candidate, executorModel: laneExecutor },
         'Planned child: expert modelPreference overrides the lane executorModel',
       );
     }
@@ -1253,7 +1257,7 @@ export class SwarmSpawner {
       // lane's primary (recon/judgment). Empty executorModel ⇒ also skipped
       // (planner == executor). A misconfigured executorModel only fails loud
       // when a plan actually needs the executor.
-      const executorName = getTopicConfig(lane).executorModel;
+      const executorName = laneExecutor;
       if (executorName) {
         const execModel =
           (await registry.getModel(executorName)) || (await registry.getModelByModelId(executorName));
@@ -1269,7 +1273,7 @@ export class SwarmSpawner {
           'Planned child routed to the lane executorModel (cheap executor path)',
         );
       }
-    } else if (!candidate && !hasPlan && getTopicConfig(lane).executorModel) {
+    } else if (!candidate && !hasPlan && laneExecutor) {
       // Breadcrumb: this lane HAS an executorModel but the child arrived without
       // a plan, so we deliberately skip it and use the primary (recon path). Log
       // it at info so a configured-but-never-exercised executor — or a typo that
@@ -1277,7 +1281,7 @@ export class SwarmSpawner {
       // debug logging. Paired with the `planned` label on
       // octipus_swarm_spawns_total, this makes "executor never used" measurable.
       coreLogger.info(
-        { lane, childRole, executorModel: getTopicConfig(lane).executorModel },
+        { lane, childRole, executorModel: laneExecutor },
         'Plan-less child: skipping configured executorModel, resolving topic primary (recon path)',
       );
     }
