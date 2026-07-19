@@ -336,6 +336,18 @@ export class SwarmSpawner {
 
     const childTools = resolveChildTools(parent.allowedToolIds, roleTools);
 
+    // Skill loader (`get_skill`/`list_skills`): the child's Domain Knowledge is
+    // injected as an INDEX (name + 1-line desc), and the body is pulled on
+    // demand. Native workers get these globally, but they never appear in the
+    // child's advertised tool list — and a CLI worker ignores in-process tools
+    // entirely (registerTools is a no-op), so without advertising the loader a
+    // CLI child sees the index but no way to load a skill. Append them here so
+    // both worker kinds see the loader in "Tools available to you"; the CLI
+    // child reaches the equivalent `octipus_get_skill` over MCP. Idempotent —
+    // registerTool is keyed by name.
+    const { buildSkillLoaderHandlers } = await import('@/tools/skill-loader');
+    childTools.push(...buildSkillLoaderHandlers());
+
     coreLogger.info(
       {
         parentNodeId: parent.id,
@@ -1145,8 +1157,14 @@ export class SwarmSpawner {
             'Expert lists skillIds that are missing from skill registry — child will run with partial domain knowledge',
           );
         }
-        const fragment = await skillReg.buildPromptFragment(expertSkillIds);
-        if (fragment) skillFragments.push(`# Domain Knowledge (expert)\n${fragment}`);
+        // Index-only injection (matches the orchestrator's spawnWorker path):
+        // one line per skill, not the full body. A multi-skill expert otherwise
+        // dumps tens of k tokens into every child prompt — bloat a fan-out child
+        // can't use, and which actively skews small models (see the 743d4b66
+        // post-mortem). The child loads full content on demand via the global
+        // `get_skill` tool registered on every worker.
+        const fragment = await skillReg.buildPromptSummary(expertSkillIds);
+        if (fragment) skillFragments.push(`# Domain Knowledge (expert index)\n${fragment}`);
       }
 
       // Topic-assigned skills: skills assigned to the child's role/topic
@@ -1165,9 +1183,9 @@ export class SwarmSpawner {
       const expertSkillSet = new Set(expertSkillIds);
       const discoveredIds = discoveredRaw.filter((id) => !expertSkillSet.has(id));
       const topicFragment = discoveredIds.length > 0
-        ? await skillReg.buildPromptFragment(discoveredIds)
+        ? await skillReg.buildPromptSummary(discoveredIds)
         : '';
-      if (topicFragment) skillFragments.push(`# Domain Knowledge (topic)\n${topicFragment}`);
+      if (topicFragment) skillFragments.push(`# Domain Knowledge (topic index)\n${topicFragment}`);
       coreLogger.debug(
         { childRole, expertId, discoveredSkillCount: discoveredIds.length },
         'Swarm child topic-skill discovery complete',
