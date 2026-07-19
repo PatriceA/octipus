@@ -40,10 +40,8 @@ jobs:
           fetch-depth: 0 # full history so the tagged CHANGELOG is present
           persist-credentials: false
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.11
+      - name: Setup Bun (+ dependency cache)
+        uses: ./.github/actions/bun-setup
 
       - name: Setup Node (for npm publish)
         uses: actions/setup-node@v7

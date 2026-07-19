@@ -63,3 +63,8 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    groups:
+      # Bundle routine action patch/minor bumps into one PR; majors still come
+      # individually so version jumps get their own review.
+      minor-and-patch:
+        update-types: [minor, patch]
