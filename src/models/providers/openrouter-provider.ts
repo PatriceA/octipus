@@ -53,7 +53,7 @@ export class OpenRouterProvider implements ModelProvider {
 
     // Anthropic prompt caching (Phase A1): OpenRouter forwards `cache_control`
     // content blocks to Anthropic upstreams, so cache the static prefix.
-    if (isAnthropicFamily(options.model)) applyAnthropicCacheControl(params.messages);
+    if (isAnthropicFamily(options.model)) applyAnthropicCacheControl(params.messages, options.model);
 
     if (options.tools?.length) {
       params.tools = options.tools;
@@ -154,7 +154,7 @@ export class OpenRouterProvider implements ModelProvider {
       stream: true,
     };
 
-    if (isAnthropicFamily(options.model)) applyAnthropicCacheControl(params.messages);
+    if (isAnthropicFamily(options.model)) applyAnthropicCacheControl(params.messages, options.model);
 
     if (options.tools?.length) {
       params.tools = options.tools;

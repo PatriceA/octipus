@@ -55,7 +55,9 @@ export const PROVIDER_CAPABILITY_DEFAULTS: Record<string, ModelCapabilities> = {
     // user turn by the provider adapter.
     systemRole: false,
     embeddings: false,
-    structuredOutput: false,
+    // The OpenAI-compat endpoint supports response_format (json_object /
+    // json_schema); the provider forwards it.
+    structuredOutput: true,
   },
   deepseek: {
     multiturn: true,

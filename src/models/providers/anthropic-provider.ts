@@ -9,7 +9,6 @@ import { transformMessagesForProvider } from '@/models/message-transform';
 import { parseToolCallArguments } from '@/models/tool-call-args';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
-import type { ModelProvider, ProviderHealthStatus } from './interface';
 import {
   buildCachedSystem,
   parseAnthropicResponse,
@@ -18,6 +17,7 @@ import {
   toAnthropicTools,
 } from './custom/anthropic-compat-provider';
 import { createIdleAbort, fetchWithRetryAfter, withTimeoutSignal } from './http-retry';
+import type { ModelProvider, ProviderHealthStatus } from './interface';
 
 const ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1/';
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -62,7 +62,10 @@ export class AnthropicProvider implements ModelProvider {
       max_tokens: options.maxTokens || 4096,
       top_p: options.topP,
       stop: options.stopSequences,
-      response_format: options.responseFormat,
+      // response_format deliberately NOT sent: Anthropic's OpenAI-compat layer
+      // documents it as ignored, so a json_object request silently degrades to
+      // prose either way. Callers needing structured output must validate
+      // in-app (B1) — don't imply a JSON mode this endpoint doesn't have.
       stream: false,
     };
 
@@ -154,7 +157,8 @@ export class AnthropicProvider implements ModelProvider {
       max_tokens: options.maxTokens || 4096,
       top_p: options.topP,
       stop: options.stopSequences,
-      response_format: options.responseFormat,
+      // response_format deliberately NOT sent — ignored by the compat layer
+      // (see complete()).
       stream: true,
     };
 
@@ -207,12 +211,10 @@ export class AnthropicProvider implements ModelProvider {
       }
 
       if (chunk.choices[0]?.finish_reason) {
-        // Surface the fully-accumulated tool calls so a consumer that only
-        // reads final state still gets complete calls (the per-delta yields
-        // above only stream partial argument fragments).
-        for (const buffer of toolCallBuffers.values()) {
-          yield { toolCallDelta: { id: buffer.id, name: buffer.name, arguments: buffer.arguments } };
-        }
+        // Do NOT re-emit the accumulated tool-call buffers here: every other
+        // provider yields only per-delta fragments + the finish chunk, and a
+        // consumer that accumulates `arguments +=` across deltas would double
+        // the argument string if the full buffer were replayed at finish.
         yield { finishReason: chunk.choices[0].finish_reason };
       }
     }
@@ -232,8 +234,11 @@ export class AnthropicProvider implements ModelProvider {
       max_tokens: options.maxTokens || 4096,
       stream,
     };
-    if (system) body.system = buildCachedSystem(system);
-    if (options.temperature != null) body.temperature = options.temperature;
+    if (system) body.system = buildCachedSystem(system, options.model);
+    // Native /v1/messages requires temperature in [0, 1] (the compat layer
+    // auto-caps; native 400s on >1). Clamp so an OpenAI-range 0–2 setting
+    // doesn't hard-fail the request.
+    if (options.temperature != null) body.temperature = Math.max(0, Math.min(1, options.temperature));
     if (options.topP != null) body.top_p = options.topP;
     if (options.stopSequences?.length) body.stop_sequences = options.stopSequences;
     if (options.tools?.length) {

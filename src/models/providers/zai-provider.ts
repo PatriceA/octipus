@@ -5,6 +5,7 @@ import type {
 } from 'openai/resources/chat/completions';
 import { classifyError } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
+import { transformMessagesForProvider } from '@/models/message-transform';
 import { parseToolCallArguments } from '@/models/tool-call-args';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
@@ -293,7 +294,10 @@ export class ZaiProvider implements ModelProvider {
   }
 
   private formatMessages(messages: AgentMessage[]): ChatCompletionMessageParam[] {
-    return messages.map((msg) => {
+    // A10: pairing + id normalization + thinking-strip, shared across providers.
+    // Without this, a compacted/re-sliced history can send an assistant
+    // `tool_calls` turn with no matching `tool` reply → provider 400.
+    return transformMessagesForProvider(messages, this.name).map((msg) => {
       if (msg.role === 'tool') {
         return {
           role: 'tool' as const,

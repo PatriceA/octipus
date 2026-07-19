@@ -3,8 +3,9 @@ import type {
   ChatCompletionCreateParams,
   ChatCompletionMessageParam,
 } from 'openai/resources/chat/completions';
-import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
+import { ClassifiedError, classifyError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
+import { transformMessagesForProvider } from '@/models/message-transform';
 import { repairTruncatedJson } from '@/utils/json-repair';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
@@ -62,7 +63,7 @@ export class GrokProvider implements ModelProvider {
 
     if (options.tools?.length) {
       params.tools = options.tools;
-      params.tool_choice = 'auto';
+      params.tool_choice = options.toolChoice ?? 'auto';
     }
 
     if (options.extraBody) {
@@ -163,7 +164,7 @@ export class GrokProvider implements ModelProvider {
 
     if (options.tools?.length) {
       params.tools = options.tools;
-      params.tool_choice = 'auto';
+      params.tool_choice = options.toolChoice ?? 'auto';
     }
 
     if (options.extraBody) {
@@ -280,7 +281,10 @@ export class GrokProvider implements ModelProvider {
   }
 
   private formatMessages(messages: AgentMessage[]): ChatCompletionMessageParam[] {
-    return messages.map((msg) => {
+    // A10: pairing + id normalization + thinking-strip, shared across providers.
+    // Without this, a compacted/re-sliced history can send an assistant
+    // `tool_calls` turn with no matching `tool` reply → xAI 400s.
+    return transformMessagesForProvider(messages, this.name).map((msg) => {
       if (msg.role === 'tool') {
         return {
           role: 'tool' as const,

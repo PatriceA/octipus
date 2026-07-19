@@ -45,28 +45,26 @@ docs.z.ai. Top issues, ranked:
    every agentic iteration. Add a rolling breakpoint on the last history block
    (`prompt-cache.ts`, `custom/anthropic-compat-provider.ts:137`,
    `openrouter-provider.ts:56`).
-3. **gpt-5 400s on temperature**: `omitsTemperature` only matches `^o\d`
+3. ✅ *(fixed in this branch)* **gpt-5 400s on temperature**: `omitsTemperature` only matches `^o\d`
    (`openai-provider.ts:49-51`).
-4. **Gemini structured output needlessly disabled**: `response_format` is
+4. ✅ *(response_format now forwarded; max_tokens inflation kept pending reasoning enablement)* **Gemini structured output needlessly disabled**: `response_format` is
    stripped (`gemini-provider.ts:87-88, 241-242`) though the compat endpoint
    supports it; the Flash `max_tokens ≥ 8192` inflation workaround
    (`:73-77`) is obsolete for the same reason.
-5. **Grok ignores `tool_choice`** — hardcoded `'auto'` (`grok-provider.ts:65,
+5. ✅ *(fixed in this branch)* **Grok ignores `tool_choice`** — hardcoded `'auto'` (`grok-provider.ts:65,
    166`), so forced-tool escalation silently no-ops.
-6. **Vertex**: no Gemini schema sanitization on tools (can 400 on complex
+6. ✅ *(fixed in this branch)* **Vertex**: no Gemini schema sanitization on tools (can 400 on complex
    schemas), hardcoded tool_choice, raw `JSON.parse` instead of the shared
    repair parser (`vertex-provider.ts:55, 90, 116`).
-7. **`MIN_CACHEABLE_CHARS = 4000` (~1k tok) is below the 4096-tok per-model
-   minimum** for some Anthropic models → breakpoint is a silent no-op there.
-   Make it model-aware (`prompt-cache.ts:19`).
-8. **Pairing sanitizer skipped on grok/zai/moonshot/vertex** — they call bare
+7. ✅ *(fixed in this branch — `minCacheableChars(model)`: Opus 4.x/Haiku 4.5 = 4096 tok, Fable/Mythos 5 + Sonnet 4.6 = 2048, Sonnet 4.5-class = 1024, per current Anthropic docs)* **`MIN_CACHEABLE_CHARS = 4000` was below the per-model minimum** for some Anthropic models → breakpoint was a silent no-op there (`prompt-cache.ts`).
+8. ✅ *(fixed in this branch)* **Pairing sanitizer skipped on grok/zai/moonshot/vertex** — they call bare
    `formatMessages` instead of `transformMessagesForProvider`, so a compacted
    history can send `tool_calls` without the matching tool reply → 400
    (`grok:282, zai:295, moonshot:268, vertex:204`).
-9. **Anthropic compat stream double-yields tool args** at finish
+9. ✅ *(fixed in this branch — finish-time re-emit removed to match every other provider)* **Anthropic compat stream double-yields tool args** at finish
    (`anthropic-provider.ts:209-217`) — inconsistent with every other provider;
    reconcile before a consumer accumulates arguments twice.
-10. **Compat path still sends `response_format` to Anthropic** — documented as
+10. ✅ *(fixed in this branch — also clamped native-path temperature to [0,1])* **Compat path still sends `response_format` to Anthropic** — documented as
     ignored; json_object silently degrades to prose (`anthropic-provider.ts:65`).
 
 Correct and worth keeping as-is: toolshim (a gated last-resort recovery, not a

@@ -5,8 +5,11 @@ import type {
 } from 'openai/resources/chat/completions';
 import { classifyError } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
+import { transformMessagesForProvider } from '@/models/message-transform';
+import { parseToolCallArguments } from '@/models/tool-call-args';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
+import { sanitizeToolsForGemini } from './gemini-provider';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
 import { extractCachedTokens } from './usage';
 import { parseServiceAccount, type ServiceAccount, VertexTokenManager } from './vertex-token';
@@ -51,8 +54,8 @@ export class VertexProvider implements ModelProvider {
       stream: false,
     };
     if (options.tools?.length) {
-      params.tools = options.tools;
-      params.tool_choice = 'auto';
+      params.tools = this.prepareTools(model, options.tools);
+      params.tool_choice = options.toolChoice ?? 'auto';
     }
     if (options.extraBody) Object.assign(params, options.extraBody);
 
@@ -87,7 +90,7 @@ export class VertexProvider implements ModelProvider {
           return {
             id: tc.id,
             name: tc.function.name,
-            arguments: JSON.parse(tc.function.arguments || '{}') as Record<string, unknown>,
+            arguments: parseToolCallArguments(tc.function.arguments, tc.function.name, this.name),
           };
         });
       }
@@ -112,8 +115,8 @@ export class VertexProvider implements ModelProvider {
       stream: true,
     };
     if (options.tools?.length) {
-      params.tools = options.tools;
-      params.tool_choice = 'auto';
+      params.tools = this.prepareTools(model, options.tools);
+      params.tool_choice = options.toolChoice ?? 'auto';
     }
     if (options.extraBody) Object.assign(params, options.extraBody);
 
@@ -201,8 +204,24 @@ export class VertexProvider implements ModelProvider {
     return new OpenAI({ baseURL, apiKey: accessToken, timeout: DEFAULT_TIMEOUT_MS, maxRetries: 2 });
   }
 
+  /**
+   * Vertex's openapi endpoint serves Gemini models with Gemini's strict schema
+   * validator — run tool parameters through the shared sanitizer for them
+   * (arrays get `items`, meta-keys stripped). Non-Gemini publishers get the
+   * schemas untouched.
+   */
+  private prepareTools(
+    resolvedModel: string,
+    tools: NonNullable<CompletionOptions['tools']>,
+  ): NonNullable<CompletionOptions['tools']> {
+    return /gemini/i.test(resolvedModel) ? sanitizeToolsForGemini(tools) : tools;
+  }
+
   private formatMessages(messages: AgentMessage[]): ChatCompletionMessageParam[] {
-    return messages.map((msg) => {
+    // A10: pairing + id normalization + thinking-strip, shared across providers.
+    // Without this, a compacted/re-sliced history can send an assistant
+    // `tool_calls` turn with no matching `tool` reply → provider 400.
+    return transformMessagesForProvider(messages, this.name).map((msg) => {
       if (msg.role === 'tool') {
         return { role: 'tool' as const, content: msg.content, tool_call_id: msg.toolCallId || '' };
       }

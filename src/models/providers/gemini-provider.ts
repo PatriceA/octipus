@@ -83,10 +83,13 @@ export class GeminiProvider implements ModelProvider {
       body.tool_choice = options.toolChoice ?? 'auto';
     }
 
-    if (options.extraBody) {
-      const { response_format, ...rest } = options.extraBody as Record<string, unknown>;
-      Object.assign(body, rest);
-    }
+    // The OpenAI-compat endpoint supports structured output via
+    // response_format (json_object / json_schema) — forward it instead of the
+    // old strip (the strip predated compat support and silently disabled JSON
+    // mode on Gemini).
+    if (options.responseFormat) body.response_format = options.responseFormat;
+
+    if (options.extraBody) Object.assign(body, options.extraBody);
 
     modelLogger.debug(
       { model: options.model, messageCount: options.messages.length, provider: this.name },
@@ -237,10 +240,8 @@ export class GeminiProvider implements ModelProvider {
       params.tool_choice = options.toolChoice ?? 'auto';
     }
 
-    if (options.extraBody) {
-      const { response_format, ...rest } = options.extraBody as Record<string, unknown>;
-      Object.assign(params, rest);
-    }
+    if (options.responseFormat) params.response_format = options.responseFormat;
+    if (options.extraBody) Object.assign(params, options.extraBody);
 
     modelLogger.debug({ model: params.model, provider: this.name }, 'Starting streaming completion via Gemini');
 
