@@ -42,6 +42,26 @@ import { repairTruncatedJson } from '@/utils/json-repair';
 export const DEEPSEEK_TEMPLATE_LEAK =
   /<\/?｜+(?:DSML｜+(?:tool_calls?|tool_call|invoke|parameter|function|tool_outputs?)|tool[▁_]calls?[▁_]begin|tool[▁_]call[▁_]begin|tool[▁_]calls?[▁_]end|tool[▁_]sep|tool[▁_]outputs?[▁_]begin)\b/iu;
 
+/** Detect DeepSeek thinking/reasoning variants by id (reasoner/r1/thinking/flash/v4). */
+export function isDeepSeekReasoningModel(modelName: string): boolean {
+  return /reasoner|r1|thinking|flash|v4/.test((modelName || '').toLowerCase());
+}
+
+/**
+ * DeepSeek's thinking mode rejects a forced `tool_choice` with 400 "Thinking
+ * mode does not support this tool_choice". Downgrade `required` → `auto` for
+ * those models so structured-output/escalate paths don't hard-crash — the model
+ * still gets the tools and usually calls them; callers already fall back to
+ * prose-parsing when a forced call doesn't materialize. `auto`/`none` pass
+ * through unchanged.
+ */
+export function coerceDeepseekToolChoice<T extends 'auto' | 'required' | 'none' | undefined>(
+  model: string,
+  toolChoice: T,
+): T | 'auto' {
+  return toolChoice === 'required' && isDeepSeekReasoningModel(model) ? 'auto' : toolChoice;
+}
+
 /** Parse DeepSeek native tool-call markup back into structured ToolCall objects. */
 export function parseDsmlToolCalls(content: string): ToolCall[] {
   const calls: ToolCall[] = [];

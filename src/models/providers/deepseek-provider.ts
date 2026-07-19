@@ -5,7 +5,7 @@ import type {
 } from 'openai/resources/chat/completions';
 import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
-import { DEEPSEEK_TEMPLATE_LEAK, parseDsmlToolCalls } from '@/models/deepseek-template-recovery';
+import { coerceDeepseekToolChoice, DEEPSEEK_TEMPLATE_LEAK, isDeepSeekReasoningModel, parseDsmlToolCalls } from '@/models/deepseek-template-recovery';
 import { transformMessagesForProvider } from '@/models/message-transform';
 import { parseToolCallArguments } from '@/models/tool-call-args';
 import { modelLogger } from '@/utils/logger';
@@ -22,12 +22,6 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 
 /** Model names / prefixes supported by the DeepSeek API */
 const SUPPORTED_PREFIXES = ['deepseek-'];
-
-/** Detect DeepSeek reasoning variants by id. Conservative: id-substring match. */
-function isDeepSeekReasoningModel(modelName: string): boolean {
-  const lower = (modelName || '').toLowerCase();
-  return /reasoner|r1|thinking|flash|v4/.test(lower);
-}
 
 /**
  * DeepSeek direct provider -- calls the DeepSeek API (OpenAI-compatible)
@@ -66,7 +60,7 @@ export class DeepSeekProvider implements ModelProvider {
 
     if (options.tools?.length) {
       params.tools = options.tools;
-      params.tool_choice = options.toolChoice ?? 'auto';
+      params.tool_choice = coerceDeepseekToolChoice(options.model, options.toolChoice) ?? 'auto';
     }
 
     // Merge extra body parameters
@@ -192,7 +186,7 @@ export class DeepSeekProvider implements ModelProvider {
 
     if (options.tools?.length) {
       params.tools = options.tools;
-      params.tool_choice = options.toolChoice ?? 'auto';
+      params.tool_choice = coerceDeepseekToolChoice(options.model, options.toolChoice) ?? 'auto';
     }
 
     // Merge extra body parameters

@@ -7,7 +7,7 @@ import type {
 import { getConfig } from '@/config';
 import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
 import type { AgentMessage, ToolCall } from '@/core/types';
-import { DEEPSEEK_TEMPLATE_LEAK, parseDsmlToolCalls } from '@/models/deepseek-template-recovery';
+import { coerceDeepseekToolChoice, DEEPSEEK_TEMPLATE_LEAK, parseDsmlToolCalls } from '@/models/deepseek-template-recovery';
 import { transformMessagesForProvider } from '@/models/message-transform';
 import { parseToolCallArguments } from '@/models/tool-call-args';
 import { extractCachedTokens } from '@/models/providers/usage';
@@ -439,7 +439,7 @@ export class LiteLLMClient {
 
     if (options.tools?.length) {
       params.tools = options.tools;
-      params.tool_choice = options.toolChoice ?? 'auto';
+      params.tool_choice = coerceDeepseekToolChoice(params.model || '', options.toolChoice) ?? 'auto';
     }
 
     // Merge extra body parameters (e.g. { think: false } for Ollama/Qwen3/Gemma4)
@@ -625,7 +625,7 @@ export class LiteLLMClient {
 
     if (options.tools?.length) {
       params.tools = options.tools;
-      params.tool_choice = options.toolChoice ?? 'auto';
+      params.tool_choice = coerceDeepseekToolChoice(params.model || '', options.toolChoice) ?? 'auto';
     }
 
     // Merge extra body parameters (e.g. { think: false } for Ollama Qwen3)

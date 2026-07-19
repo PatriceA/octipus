@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { DEEPSEEK_TEMPLATE_LEAK, parseDsmlToolCalls } from './deepseek-template-recovery';
+import { coerceDeepseekToolChoice, DEEPSEEK_TEMPLATE_LEAK, isDeepSeekReasoningModel, parseDsmlToolCalls } from './deepseek-template-recovery';
 
 describe('DEEPSEEK_TEMPLATE_LEAK detector', () => {
   test('matches DSML tool_calls block (V4-flash, V4-pro real-world)', () => {
@@ -66,5 +66,29 @@ describe('parseDsmlToolCalls', () => {
 
   test('returns [] on prose with no invoke blocks', () => {
     expect(parseDsmlToolCalls('I would normally invoke the tool, but cannot.')).toEqual([]);
+  });
+});
+
+describe('coerceDeepseekToolChoice — thinking-mode tool_choice guard', () => {
+  test('downgrades required → auto for deepseek thinking models', () => {
+    // The 400 "Thinking mode does not support this tool_choice" case.
+    expect(coerceDeepseekToolChoice('deepseek-v4-flash', 'required')).toBe('auto');
+    expect(coerceDeepseekToolChoice('deepseek-reasoner', 'required')).toBe('auto');
+  });
+
+  test('leaves required intact for non-thinking deepseek (e.g. chat) and non-deepseek', () => {
+    expect(coerceDeepseekToolChoice('deepseek-chat', 'required')).toBe('required');
+    expect(coerceDeepseekToolChoice('gpt-4o', 'required')).toBe('required');
+  });
+
+  test('passes auto/none/undefined through untouched even for thinking models', () => {
+    expect(coerceDeepseekToolChoice('deepseek-v4-flash', 'auto')).toBe('auto');
+    expect(coerceDeepseekToolChoice('deepseek-v4-flash', 'none')).toBe('none');
+    expect(coerceDeepseekToolChoice('deepseek-v4-flash', undefined)).toBeUndefined();
+  });
+
+  test('isDeepSeekReasoningModel detects flash/v4/reasoner/r1/thinking', () => {
+    expect(isDeepSeekReasoningModel('deepseek-v4-flash')).toBe(true);
+    expect(isDeepSeekReasoningModel('deepseek-chat')).toBe(false);
   });
 });
