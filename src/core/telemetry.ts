@@ -124,8 +124,8 @@ const llmCachedTokens = new Counter({
 });
 const swarmSpawns = new Counter({
   name: 'octipus_swarm_spawns_total',
-  help: 'Child agent spawns, by child role and depth.',
-  labelNames: ['role', 'depth'],
+  help: 'Child agent spawns, by child role, depth, and whether the parent supplied a plan (planned children route to the lane executorModel).',
+  labelNames: ['role', 'depth', 'planned'],
   registers: [registry],
 });
 const channelMessages = new Counter({
@@ -201,8 +201,8 @@ export function recordLlmRequest(
   });
 }
 
-export function recordSwarmSpawn(role: string | undefined, depth: number): void {
-  guard(() => swarmSpawns.inc({ role: label(role), depth: String(depth) }));
+export function recordSwarmSpawn(role: string | undefined, depth: number, planned = false): void {
+  guard(() => swarmSpawns.inc({ role: label(role), depth: String(depth), planned: String(planned) }));
 }
 
 export function recordChannelMessage(

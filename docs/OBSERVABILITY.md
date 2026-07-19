@@ -55,7 +55,7 @@ scrape_configs:
 | `octipus_llm_requests_total` | counter | `provider`, `model`, `status` | `ProviderRouter.complete` / `.stream` |
 | `octipus_llm_request_duration_seconds` | histogram | `provider`, `model` | " |
 | `octipus_llm_tokens_total` | counter | `provider`, `model`, `direction` | non-streaming completions (prompt/completion tokens) |
-| `octipus_swarm_spawns_total` | counter | `role`, `depth` | child agent spawns (`SwarmSpawner.spawnChild`) |
+| `octipus_swarm_spawns_total` | counter | `role`, `depth`, `planned` | child agent spawns (`SwarmSpawner.spawnChild`); `planned="true"` = parent supplied a `plan` (child routed to the lane executorModel) |
 | `octipus_channel_messages_total` | counter | `channel`, `direction` | inbound/outbound channel messages |
 
 Metric emission is best-effort: every emit is wrapped so a telemetry error can

@@ -104,7 +104,13 @@ export function buildDelegationGuidance(): string {
     '3. Same-role fan-out is OK: e.g. you are a research agent → spawn three ' +
     'research subagents, one per source.\n' +
     "4. DON'T hand a single task to one same-role subagent — you ARE that " +
-    'specialist; do it yourself.\n\n' +
+    'specialist; do it yourself.\n' +
+    '5. COST: when a sub-task is mechanical and fully specified (you can list ' +
+    'the exact steps), do the thinking yourself and pass a `plan` to ' +
+    '`spawn_child` — a planned child runs the steps mechanically and, when the ' +
+    'topic has an executor model bound, on that cheaper executor instead of a ' +
+    'full-price specialist. Reserve plan-less spawns for work that needs the ' +
+    "child's own judgment.\n\n" +
     'Roles you can spawn (`role` — what it does):\n' +
     buildSpawnRoleCatalog() +
     '\n\nHOW SPAWNING WORKS: `spawn_child` returns IMMEDIATELY with a pending ' +
@@ -390,6 +396,20 @@ export function createSpawnChildTool(
           },
           required: ['shape'],
         },
+        plan: {
+          type: 'array',
+          description:
+            'Ordered execution plan. Provide when you have already done the topic-level thinking and the remaining sub-work is mechanical (run these searches, fetch these pages, apply these edits) — a planned child runs your steps on the topic\'s cheap executor model instead of a full-price specialist. Omit to delegate to a specialist that uses its own judgment (recon/investigation/design). Each step: {"action":"what to do","tool":"tool to use (optional)","expect":"what it should yield (optional)"}. Example: [{"action":"fetch https://example.com/pricing","tool":"web_fetch","expect":"raw pricing page"},{"action":"extract per-seat prices into a markdown table"}].',
+          items: {
+            type: 'object',
+            properties: {
+              action: { type: 'string', description: 'What to do in this step.' },
+              tool: { type: 'string', description: 'Named tool for this step (must be one the child has).' },
+              expect: { type: 'string', description: 'What this step should produce; feeds the next step.' },
+            },
+            required: ['action'],
+          },
+        },
         parallelGroup: {
           type: 'string',
           description: 'Same group in the same LLM turn = parent will Promise.all the calls.',
@@ -404,20 +424,6 @@ export function createSpawnChildTool(
           description:
             'Optional deterministic checks the child output MUST pass. Run after the child returns; any failure marks the result contract_failed so you can retry or correct. Kinds: {"kind":"non_empty"}, {"kind":"contains","value":"...","on":"output|notes"}, {"kind":"regex","pattern":"...","flags":"i","on":"output|notes"}, {"kind":"json","requiredKeys":["a","b"]}, {"kind":"file_exists","path":"report.md"}.',
           items: { type: 'object' },
-        },
-        plan: {
-          type: 'array',
-          description:
-            'Ordered execution plan. Provide ONLY when you have already done the thinking and want a cheap executor to run it mechanically — this routes the child to the topic\'s executor model. Omit it to delegate to a capable specialist that uses its own judgment (recon/investigation). Each step: {"action":"what to do","tool":"tool to use (optional)","expect":"what it should yield (optional)"}.',
-          items: {
-            type: 'object',
-            properties: {
-              action: { type: 'string', description: 'What to do in this step.' },
-              tool: { type: 'string', description: 'Named tool for this step (must be one the child has).' },
-              expect: { type: 'string', description: 'What this step should produce; feeds the next step.' },
-            },
-            required: ['action'],
-          },
         },
       },
       required: ['topic', 'subtopic', 'taskBrief', 'expectedOutput'],
@@ -450,6 +456,14 @@ export function parsePlan(raw: unknown): { plan?: PlanStep[] } | { error: string
   const steps: PlanStep[] = [];
   for (let i = 0; i < raw.length; i++) {
     const s = raw[i];
+    // Lenient shorthand: LLMs sometimes emit bare string steps — treat the
+    // string as the action instead of bouncing the whole spawn.
+    if (typeof s === 'string') {
+      const action = s.trim();
+      if (!action) return { error: `plan[${i}] must be a non-empty string or an object with "action"` };
+      steps.push({ action, tool: undefined, expect: undefined });
+      continue;
+    }
     if (!s || typeof s !== 'object') return { error: `plan[${i}] must be an object` };
     const o = s as Record<string, unknown>;
     const action = typeof o.action === 'string' ? o.action.trim() : '';

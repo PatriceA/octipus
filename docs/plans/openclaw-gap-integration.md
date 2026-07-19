@@ -275,7 +275,7 @@ measure `latencyMs` + token counts (`ProviderRouter.complete/stream`,
    - `octipus_llm_requests_total{provider,model,status}` + latency
      histogram + `octipus_llm_tokens_total{provider,model,direction}`
      (hook: the existing `ProviderRouter` timing points)
-   - `octipus_swarm_spawns_total{role,depth}` (hook:
+   - `octipus_swarm_spawns_total{role,depth,planned}` (hook:
      `SwarmSpawner.spawnChild`)
    - `octipus_channel_messages_total{channel,direction}` (hook: UMI
      message handler / `umi.send`, `src/channels/index.ts:467/764`)

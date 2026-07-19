@@ -134,8 +134,8 @@ export class CustomAnthropicCompatProvider extends BaseCustomProvider implements
       max_tokens: options.maxTokens ?? CustomAnthropicCompatProvider.DEFAULT_MAX_TOKENS,
       stream: streaming,
     };
-    if (system) body.system = buildCachedSystem(system);
-    if (options.temperature != null) body.temperature = options.temperature;
+    if (system) body.system = buildCachedSystem(system, (body.model as string) || options.model);
+    if (options.temperature != null) body.temperature = clampAnthropicTemperature(options.temperature);
     if (options.topP != null) body.top_p = options.topP;
     if (options.stopSequences?.length) body.stop_sequences = options.stopSequences;
     if (options.tools?.length) body.tools = toAnthropicTools(options.tools);
@@ -238,8 +238,17 @@ type AnthropicSystem =
  * volatile marker or the static prefix is too small to cache. Shares the split
  * with the OpenAI-compat pass-through (LiteLLM/OpenRouter) via prompt-cache.
  */
-export function buildCachedSystem(system: string): AnthropicSystem {
-  const split = splitVolatileSystem(system);
+/**
+ * Anthropic /v1/messages requires temperature in [0, 1] (the OpenAI-compat
+ * layer auto-caps; native 400s on >1). Shared by both native-body builders so
+ * the bound is stated once.
+ */
+export function clampAnthropicTemperature(t: number): number {
+  return Math.max(0, Math.min(1, t));
+}
+
+export function buildCachedSystem(system: string, model?: string): AnthropicSystem {
+  const split = splitVolatileSystem(system, model);
   if (!split) return system;
   return buildCachedBlocks(split);
 }

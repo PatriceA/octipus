@@ -514,13 +514,19 @@ export async function spawnWorker(
   const semiStaticParts: string[] = [];
   const volatileParts: string[] = [];
 
-  // Append topic-assigned skills (e.g. caveman mode) after the base prompt
-  if (topicSkillFragment) {
-    staticParts.push('\n\n# Topic Skills\n' + topicSkillFragment);
-  }
-
   // Inject current date/time context so agents know "today" (VOLATILE)
   volatileParts.push(`\n\nCURRENT DATE/TIME: ${formatDateTimeContext(new Date())}`);
+
+  // Append topic-assigned skills (e.g. caveman mode). VOLATILE, not static:
+  // in hybrid mode discoverSkillIds ranks skills against the per-task MESSAGE,
+  // so this fragment changes spawn-to-spawn. Injected into staticParts it sat
+  // mid-prefix and silently busted the Phase 2a prefix cache (and shifted the
+  // Anthropic breakpoint) for every hybrid-skill worker. It must land after
+  // the CURRENT DATE marker (the explicit-cache split point), hence pushed
+  // after the date line above.
+  if (topicSkillFragment) {
+    volatileParts.push('\n\n# Topic Skills\n' + topicSkillFragment);
+  }
   // Determine if this is a dev mode session
   const session = await sessionRepository.findById(context.sessionId);
   const sessionCtx = session?.context as import('@/db/schema/sessions').SessionContext | undefined;
@@ -746,6 +752,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
 - **Messaging**: Send messages to the user's channels — Telegram, Slack, etc. (octipus_send_channel_message)
 - **Scheduling**: Create/manage scheduled tasks and automations (octipus_create_recurring_task)
 - **Documents**: Upload and index documents (octipus_upload_document)
+- **Skills**: List available domain skills (octipus_list_skills) and load a skill's full content by id (octipus_get_skill). Skill ids mentioned elsewhere in this prompt (e.g. under "Topic Skills" or "Domain Knowledge (index)") are loaded with octipus_get_skill — \`get_skill\` is the same tool under its MCP name.
 Use these MCP tools when the task benefits from them — especially for people-related questions, knowledge lookups, or cross-channel messaging.`);
   }
 

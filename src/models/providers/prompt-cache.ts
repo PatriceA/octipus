@@ -14,18 +14,43 @@ import type { ChatCompletionMessageParam } from 'openai/resources/chat/completio
 // block first into the volatile tier (Phase 2a), so the static/cacheable prefix
 // is everything before this marker.
 export const VOLATILE_MARKER = /\n\nCURRENT DATE ?&? ?\/?\s?TIME/;
-// ~1024-token Anthropic cache minimum ≈ this many chars; below it a breakpoint
-// is a no-op, so don't bother marking one.
+// Default floor ≈ 1024 tokens at ~4 chars/token; below the per-model minimum a
+// breakpoint is a silent no-op (cache_creation_input_tokens stays 0), so don't
+// bother marking one. Kept exported for tests/back-compat; prefer
+// minCacheableChars(model) which knows the per-model minimums.
 export const MIN_CACHEABLE_CHARS = 4000;
+
+/**
+ * Anthropic's minimum cacheable prefix is MODEL-dependent (per current docs):
+ * Opus 4.x + Haiku 4.5 need 4096 tokens, Fable/Mythos 5 + Sonnet 4.6 + Haiku 3.x
+ * need 2048, Sonnet 4.5-class models 1024. Below the minimum the breakpoint is
+ * silently ignored, so marking one only spends the cache-write premium chance
+ * for nothing. Chars ≈ tokens × 4 (repo-wide heuristic).
+ */
+export function minCacheableChars(model?: string): number {
+  const m = (model || '').toLowerCase();
+  if (/opus-4|haiku-4/.test(m)) return 16_384; // 4096 tok
+  // Haiku 3.x ids are `claude-3-haiku-*` / `claude-3-5-haiku-*` (family digit
+  // BEFORE the name), so match both orderings.
+  if (/fable|mythos|sonnet-4-6|haiku-3|3(-5)?-haiku/.test(m)) return 8_192; // 2048 tok
+  // 1024 tok — Sonnet 4.5-class, and the deliberate fall-through for unknown
+  // or aliased ids (custom endpoints, LiteLLM aliases, future models): a
+  // breakpoint below a model's real minimum is a free no-op (Anthropic just
+  // ignores it — no write premium is charged unless it actually caches),
+  // whereas defaulting HIGH would forfeit real caching on every 1024-tok
+  // model. Lowest floor is the safe default.
+  return MIN_CACHEABLE_CHARS;
+}
 
 /**
  * Split an assembled system prompt at the volatile marker. Returns null when
  * there's no marker or the static prefix is too small to be worth caching — the
- * caller then sends the prompt unsplit.
+ * caller then sends the prompt unsplit. Pass the model id so the per-model
+ * cache minimum applies; without it the (lowest) default floor is used.
  */
-export function splitVolatileSystem(system: string): { staticPart: string; volatilePart: string } | null {
+export function splitVolatileSystem(system: string, model?: string): { staticPart: string; volatilePart: string } | null {
   const m = system.match(VOLATILE_MARKER);
-  if (!m || m.index === undefined || m.index < MIN_CACHEABLE_CHARS) return null;
+  if (!m || m.index === undefined || m.index < minCacheableChars(model)) return null;
   return { staticPart: system.slice(0, m.index), volatilePart: system.slice(m.index) };
 }
 
@@ -70,10 +95,10 @@ export function isAnthropicFamily(model: string): boolean {
  * reject the field. Returns true if a breakpoint was applied (used by tests;
  * callers may log it).
  */
-export function applyAnthropicCacheControl(messages: ChatCompletionMessageParam[]): boolean {
+export function applyAnthropicCacheControl(messages: ChatCompletionMessageParam[], model?: string): boolean {
   for (const msg of messages) {
     if (msg.role !== 'system' || typeof msg.content !== 'string') continue;
-    const split = splitVolatileSystem(msg.content);
+    const split = splitVolatileSystem(msg.content, model);
     if (!split) continue;
     (msg as { content: unknown }).content = buildCachedBlocks(split);
     return true;

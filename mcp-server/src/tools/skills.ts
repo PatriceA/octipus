@@ -7,45 +7,69 @@ import { z } from 'zod';
 import type { OctiClient } from '../client.js';
 
 export function registerSkillTools(server: McpServer, client: OctiClient): void {
+  const listSkills = async () => {
+    try {
+      const skills = await client.listSkills();
+      const summary = skills.map((s) => `- **${s.name}** (${s.category}): ${s.description}`).join('\n');
+      return {
+        content: [{ type: 'text' as const, text: summary || 'No skills found.' }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: 'text' as const, text: `Failed to list skills: ${(error as Error).message}` }],
+        isError: true,
+      };
+    }
+  };
+
+  const getSkill = async ({ skill_id }: { skill_id: string }) => {
+    try {
+      const skill = await client.getSkill(skill_id);
+      return {
+        content: [{ type: 'text' as const, text: JSON.stringify(skill, null, 2) }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: 'text' as const, text: `Failed to get skill: ${(error as Error).message}` }],
+        isError: true,
+      };
+    }
+  };
+
+  const GET_SKILL_PARAMS = {
+    skill_id: z.string().describe('Skill ID (e.g., "software-architecture", "security-practices")'),
+  };
+
   server.tool(
     'octipus_list_skills',
     'List all domain knowledge skills available to experts. Skills contain principles, best practices, and anti-patterns for domains like architecture, testing, security, etc.',
     {},
-    async () => {
-      try {
-        const skills = await client.listSkills();
-        const summary = skills.map((s) => `- **${s.name}** (${s.category}): ${s.description}`).join('\n');
-        return {
-          content: [{ type: 'text' as const, text: summary || 'No skills found.' }],
-        };
-      } catch (error) {
-        return {
-          content: [{ type: 'text' as const, text: `Failed to list skills: ${(error as Error).message}` }],
-          isError: true,
-        };
-      }
-    },
+    listSkills,
   );
 
   server.tool(
     'octipus_get_skill',
     'Get full details of a domain knowledge skill including principles, best practices, anti-patterns, and frameworks.',
-    {
-      skill_id: z.string().describe('Skill ID (e.g., "software-architecture", "security-practices")'),
-    },
-    async ({ skill_id }) => {
-      try {
-        const skill = await client.getSkill(skill_id);
-        return {
-          content: [{ type: 'text' as const, text: JSON.stringify(skill, null, 2) }],
-        };
-      } catch (error) {
-        return {
-          content: [{ type: 'text' as const, text: `Failed to get skill: ${(error as Error).message}` }],
-          isError: true,
-        };
-      }
-    },
+    GET_SKILL_PARAMS,
+    getSkill,
+  );
+
+  // Aliases under the built-in octipus tool names. Octipus system prompts tell
+  // agents to load skill bodies via `get_skill` (the in-process tool name);
+  // CLI agents (Claude Code, Codex, Gemini CLI, vibe) only reach octipus over
+  // this MCP server, so the prompt-referenced names must resolve here too.
+  server.tool(
+    'list_skills',
+    'Alias of octipus_list_skills — list all available domain knowledge skills.',
+    {},
+    listSkills,
+  );
+
+  server.tool(
+    'get_skill',
+    'Alias of octipus_get_skill — load the full content of a skill by id. Use for skill ids listed in your instructions (e.g. under "Topic Skills" or "Domain Knowledge (index)").',
+    GET_SKILL_PARAMS,
+    getSkill,
   );
 
   server.tool(

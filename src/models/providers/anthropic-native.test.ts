@@ -8,7 +8,9 @@ const buildBody = (o: CompletionOptions, stream: boolean) =>
     .buildNativeBody(o, stream);
 
 describe('AnthropicProvider native /v1/messages body (Phase A2)', () => {
-  const bigStatic = 'You are a helpful assistant. '.repeat(200); // > 4000 chars
+  // > 8192 chars — Sonnet 4.6's minimum cacheable prefix is 2048 tokens
+  // (minCacheableChars); below it the split is correctly skipped.
+  const bigStatic = 'You are a helpful assistant. '.repeat(400);
   const system = `${bigStatic}\n\nCURRENT DATE & TIME: 2026-07-16`;
 
   const opts: CompletionOptions = {

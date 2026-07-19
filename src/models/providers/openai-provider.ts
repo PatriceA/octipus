@@ -40,14 +40,18 @@ export async function getOpenAIApiKey(): Promise<string | null> {
 
 /**
  * o-series (o1/o3/o4) and gpt-5 reject `max_tokens` (want `max_completion_tokens`)
- * and o-series also reject a non-default `temperature`.
+ * and both reject a non-default `temperature` (reasoning models accept only
+ * the default of 1 — sending anything else 400s).
  */
 function usesMaxCompletionTokens(model: string): boolean {
   const lower = model.toLowerCase();
   return O_SERIES.test(lower) || lower.startsWith('gpt-5');
 }
 function omitsTemperature(model: string): boolean {
-  return O_SERIES.test(model.toLowerCase());
+  const lower = model.toLowerCase();
+  // gpt-5 reasoning SKUs reject non-default temperature, but the non-reasoning
+  // chat variants (gpt-5-chat*) accept it — don't silently drop it for those.
+  return O_SERIES.test(lower) || (lower.startsWith('gpt-5') && !lower.startsWith('gpt-5-chat'));
 }
 
 /**
