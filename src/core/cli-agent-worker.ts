@@ -434,7 +434,11 @@ export class CLIAgentWorker extends BaseAgentWorker {
         '',
         '## CLI args',
         '```',
-        [binary, ...args].join(' '),
+        // The prompt and system prompt are printed in full above; don't re-inline
+        // them here (they're the "-p <prompt>" / "--append-system-prompt <sys>"
+        // args and make the dump look duplicated). Redact any oversized arg —
+        // only prompt/system-prompt bodies are ever this long.
+        [binary, ...args.map((a) => (a.length > 400 ? `<${a.length} chars — see sections above>` : a))].join(' '),
         '```',
       ].join('\n');
       writeFileSync(dumpPath, body, 'utf-8');
