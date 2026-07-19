@@ -41,6 +41,7 @@ describe('telemetry exposition (WS4)', () => {
     recordToolExecution('read_file', 'error', 0.1);
     recordLlmRequest('ollama', 'llama3', 'success', 1.5, { prompt: 120, completion: 40 });
     recordSwarmSpawn('research', 2);
+    recordSwarmSpawn('research', 2, true);
     recordChannelMessage('telegram', 'inbound');
 
     const out = await renderMetrics(1, 1);
@@ -50,7 +51,8 @@ describe('telemetry exposition (WS4)', () => {
     expect(out).toContain('octipus_tool_executions_total{tool="read_file",status="error"} 1');
     expect(out).toContain('octipus_llm_tokens_total{provider="ollama",model="llama3",direction="prompt"} 120');
     expect(out).toContain('octipus_llm_tokens_total{provider="ollama",model="llama3",direction="completion"} 40');
-    expect(out).toContain('octipus_swarm_spawns_total{role="research",depth="2"} 1');
+    expect(out).toContain('octipus_swarm_spawns_total{role="research",depth="2",planned="false"} 1');
+    expect(out).toContain('octipus_swarm_spawns_total{role="research",depth="2",planned="true"} 1');
     expect(out).toContain('octipus_channel_messages_total{channel="telegram",direction="inbound"} 1');
   });
 

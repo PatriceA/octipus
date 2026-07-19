@@ -198,7 +198,7 @@ To assign a model to a topic, use the **Models** page in the web UI:
 
 When an Agent spawns a Subagent via `spawn_child`, the child resolves its model through the **child's topic** — not the parent's. A research Agent (`research` topic) spawning a security Subagent (`security` topic) gets the model bound to `security`, independent of what the parent is using. This means configuring each topic once produces consistent behaviour regardless of how deep the swarm tree goes.
 
-Expert `modelPreference` is a fallback and only applies when no topic binding exists.
+Expert `modelPreference`, when set, takes precedence over the topic binding (it is the specialist's explicit choice). Topics can additionally bind a **backup** model (failure retry) and an **executor** model (cheap model for pre-planned mechanical sub-work) — see [MODEL-ROUTING.md](MODEL-ROUTING.md) for the full resolution order and the planner→executor split.
 
 ## Skill Embedding Backfill
 

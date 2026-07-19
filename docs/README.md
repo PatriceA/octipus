@@ -24,6 +24,7 @@ The map for everything under `docs/`. Start with **Getting Started**, then jump 
 
 | Doc | What it covers |
 |-----|----------------|
+| [MODEL-ROUTING.md](MODEL-ROUTING.md) | Per-topic primary/backup/executor model bindings, resolution order, and the planner→executor cost split. |
 | [LITELLM.md](LITELLM.md) | Routing every model call through a LiteLLM proxy; authentication and the "401 unreachable" fix. |
 | [CUSTOM-PROVIDERS.md](CUSTOM-PROVIDERS.md) | Custom OpenAI-, Gemini-, and Anthropic-compatible endpoints that aren't backed by a first-party provider. |
 | [EVALUATIONS.md](EVALUATIONS.md) | Model evaluation and provider conformance testing. |

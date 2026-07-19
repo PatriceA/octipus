@@ -131,10 +131,13 @@ export class SwarmSpawner {
     const childRole = this.resolveChildRole(params);
     const topicPath = this.buildTopicPath(parent.topicPath, params.topic, params.subtopic);
 
-    // WS4 observability — count spawns that clear the depth gate, by child role
-    // and depth. (Later input-guard/same-role denials are rare; this tracks the
-    // fan-out shape well enough for capacity/cost dashboards.)
-    recordSwarmSpawn(childRole, childDepth);
+    // WS4 observability — count spawns that clear the depth gate, by child role,
+    // depth, and planned-ness. (Later input-guard/same-role denials are rare;
+    // this tracks the fan-out shape well enough for capacity/cost dashboards.)
+    // `planned` is the label that shows whether the cheap planner→executor
+    // split is actually being exercised — planned=false on every spawn means
+    // the executorModel lane is configured but dead.
+    recordSwarmSpawn(childRole, childDepth, !!params.plan?.length);
 
     // ── Same-role guard ─────────────────────────────────────────────
     // At depth 0→1 (Orchestrator → Agent): Orchestrator role is unique, so
@@ -1235,6 +1238,16 @@ export class SwarmSpawner {
     // research/communication/pm/writing).
     const lane = expertLane || childRole;
     let candidate = expertModel;
+    if (candidate && hasPlan && getTopicConfig(lane).executorModel) {
+      // A plan was supplied AND the lane has a cheap executor, but the matched
+      // expert's explicit modelPreference wins (precedence #1). Surface the
+      // shadowing at info so operators can see why a planned child still ran
+      // on a full-price model.
+      coreLogger.info(
+        { lane, childRole, expertModel: candidate, executorModel: getTopicConfig(lane).executorModel },
+        'Planned child: expert modelPreference overrides the lane executorModel',
+      );
+    }
     if (!candidate && hasPlan) {
       // No plan ⇒ this whole block is skipped and the child resolves to the
       // lane's primary (recon/judgment). Empty executorModel ⇒ also skipped
@@ -1251,13 +1264,19 @@ export class SwarmSpawner {
           );
         }
         candidate = execModel.modelId;
+        coreLogger.info(
+          { lane, childRole, executorModel: candidate },
+          'Planned child routed to the lane executorModel (cheap executor path)',
+        );
       }
     } else if (!candidate && !hasPlan && getTopicConfig(lane).executorModel) {
       // Breadcrumb: this lane HAS an executorModel but the child arrived without
       // a plan, so we deliberately skip it and use the primary (recon path). Log
-      // it so a configured-but-never-exercised executor — or a typo that only a
-      // planned spawn would surface — is at least visible to operators.
-      coreLogger.debug(
+      // it at info so a configured-but-never-exercised executor — or a typo that
+      // only a planned spawn would surface — is visible to operators without
+      // debug logging. Paired with the `planned` label on
+      // octipus_swarm_spawns_total, this makes "executor never used" measurable.
+      coreLogger.info(
         { lane, childRole, executorModel: getTopicConfig(lane).executorModel },
         'Plan-less child: skipping configured executorModel, resolving topic primary (recon path)',
       );
