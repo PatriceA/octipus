@@ -73,9 +73,35 @@ T0.1 and T0.2 are the two highest-value lines in this document. Do them first.
 | # | Change | Approach |
 |---|---|---|
 | T1.1 | **Receipt-vs-claim scorer.** A child whose brief implies file work and whose `receipt.filesChanged === 0` returns `contract_failed`, not `ok`. | Auto-inject alongside the existing schema scorer at `spawner.ts:941`, reusing `scorers.ts`. This is the audit's "P0 mandatory completion contract" reduced to one scorer — no new tables, no new types. Depends on T0.1 |
-| T1.2 | **Role-scoped filesystem DENY.** research / architecture / review / qa deny `write_file`/`delete_file`/`move_file`. | Extend `permission-rules.ts` to be role-aware, or intersect at `resolveChildTools` (`spawner.ts:1364`) which already filters by tool id. Must be DENY, not ASK (M3). Note `roles/research/prompt.md:18` actively tells research to `write_file` — fix the prompt in the same change |
+| T1.2 | **Role-scoped filesystem DENY.** ~~research / architecture / review / qa~~ → **review only**, see the scope correction below. | `readOnly` flag on `RoleMeta`/`RoleConfig`, filtered in `getToolsForRole` — the one function both spawn paths funnel through, and the source `allowedToolIds` derives from. Must be a removal, not ASK (M3) |
 | T1.3 | **Redirect warning on write.** Return `{requestedPath, redirected: true, reason}` when the session-dir redirect fires. | `filesystem/index.ts:312`. Removes the guesswork behind "file created in the wrong place" |
 | T1.4 | **Non-vision image guard.** When a tool returns an image and the bound model has `supportsVision === false`, replace the blob with a text placeholder instead of dumping 373 KB of base64. | `tool-executor.ts:757` / `sanitize.ts:242`. This is the *cheap* answer to RC7's deferred vision gating — check at the point images appear, not at spawn where it is unknowable |
+
+#### Scope correction on T1.2 (found while implementing, 2026-07-20)
+
+The audit's recommendation — "make research, architecture, review and QA
+read-only by default" — is **wrong for three of the four**. Only `review`
+already claims to be read-only. The others are *specified* to write as their
+deliverable:
+
+| Role | Evidence | Verdict |
+|---|---|---|
+| review | `prompt.md:1` "You are READ-ONLY — do NOT modify code"; `:6` "No `write_file`, no edits" | **Flagged.** Pure tightening — code now matches a contract the prompt already made |
+| architecture | `prompt.md:1` "You are **READ + WRITE-DOCS**"; `:32` "Save to a relative path … auto-indexed" | **Flagged, prompt rewritten** (owner decision 2026-07-20). Returns the ADR content in its reply and names the intended file; `coding` persists it |
+| qa | `prompt.md:72` "**Write and run new tests** to cover gaps" | **Flagged, prompt rewritten** (owner decision). Emits test source + intended path in its reply; `coding` saves and runs |
+| research | `prompt.md:18` "save findings to a markdown file via `write_file` — auto-indexed to the KB" | **Not flagged.** `knowledge` has no "index this string" handler, so removing write breaks the research→KB flow with no replacement |
+
+Flipping architecture and qa was a **product decision about what those roles
+do**, not a security tightening: writing *was* their deliverable, so their
+prompts and OUTPUT sections were rewritten in the same change to hand the
+content back instead. `buildOutputDirective` also gained a read-only variant —
+otherwise file-mode turns would order a role to call a tool it no longer has.
+
+**Known ceiling on the flag itself:** review/qa/architecture all hold `shell`,
+whose permission action resolves per-command from the command string, so
+`echo > file` bypasses a filesystem-name filter entirely. For any role with
+shell, `readOnly` is defense-in-depth, not a boundary. It is a true boundary
+only for a role without shell (research, if it were ever flagged).
 
 ### Tier 2 — real design work (already specified in swarm-v2.md)
 

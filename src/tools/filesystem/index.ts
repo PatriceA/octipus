@@ -259,6 +259,8 @@ export class FilesystemTool extends BaseTool {
         // up in the repo.
         const projectPath = (context?.metadata as Record<string, unknown> | undefined)?.projectPath as string | undefined;
         const sessionDir = projectPath ? null : await getSessionOutputDir(context, root);
+        /** Where the write would have gone with no session redirect — set only when one actually moved it. */
+        let redirectedFrom: string | null = null;
         if (sessionDir) {
           // Session agent: anchor on the session dir via the SHARED decision
           // (`sessionResolve`) so reads round-trip with this write. Pipeline
@@ -268,6 +270,13 @@ export class FilesystemTool extends BaseTool {
           // project or an excluded subtree. `preferExisting: false` — a fresh
           // write's target need not already exist.
           filePath = this.sessionResolve(rawPath, fs, sessionDir, false);
+          // Compare LEXICAL to LEXICAL, before `resolveSafe` canonicalizes
+          // symlinks below. `fs.root` is never realpath'd, so comparing the
+          // canonicalized result against a fresh `resolve(root, rawPath)` would
+          // report a redirect on every write whenever any ancestor is a symlink
+          // (Docker bind mounts, macOS /tmp → /private/tmp).
+          const noRedirect = rawPath.startsWith('/') ? resolve(rawPath) : resolve(root, rawPath);
+          if (filePath !== noRedirect) redirectedFrom = noRedirect;
         } else if (projectPath && !rawPath.startsWith('/')) {
           // Project-scoped agent: relative paths resolve inside the project
           filePath = resolve(projectPath, rawPath);
@@ -310,6 +319,19 @@ export class FilesystemTool extends BaseTool {
           autoIndexFile(filePath);
 
           const result: Record<string, unknown> = { success: true, path: filePath, bytesWritten: content.length };
+          // Say so when the write did NOT land where the model asked. A bare
+          // `src/app.ts` with no project context silently becomes
+          // `<root>/sessions/<date>-<topic>-<id>/src/app.ts`; returning only the
+          // final path makes that look intentional, and the model reports
+          // success on a file the user will never find in their repo. This is
+          // the "file was created in the wrong place" class.
+          if (redirectedFrom) {
+            result.requestedPath = rawPath;
+            result.redirected = true;
+            result.reason =
+              'No project context for this session, so the write went to the session output directory instead of the workspace root. ' +
+              'To write into a real project, use a path starting with the project directory, or run with a project selected.';
+          }
           // UI-only diff for the work stream / file view — stripped before the
           // model sees the result (it already has the inputs it acted on).
           if (before !== null && content.length <= DIFF_SOURCE_MAX_BYTES) {

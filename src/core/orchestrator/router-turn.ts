@@ -82,7 +82,10 @@ export async function runRouterTurn(
 
   // Carry the inline-vs-file deliverable directive (Thread 3) so file-mode
   // requests still produce a file in router mode, matching the full/lite path.
-  const workerInput = [opts.extraSystemContext, buildOutputDirective(opts.outputDirective.mode, opts.outputDirective.forced)]
+  const workerInput = [
+    opts.extraSystemContext,
+    buildOutputDirective(opts.outputDirective.mode, opts.outputDirective.forced, roleConfig.readOnly),
+  ]
     .filter(Boolean)
     .join('\n\n');
 

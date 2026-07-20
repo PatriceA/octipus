@@ -10,8 +10,20 @@
  * orchestrator behavior — including coding/devops tasks that legitimately write
  * files via their own tools — is completely unchanged.
  */
-export function buildOutputDirective(mode: 'inline' | 'file', forced: boolean): string {
+export function buildOutputDirective(mode: 'inline' | 'file', forced: boolean, readOnly = false): string {
   if (mode === 'file') {
+    // A read-only role has no write handlers at all (see `RoleMeta.readOnly`),
+    // so the standard directive would order it to call a tool that is not on
+    // its surface — a dead end, and a direct contradiction of the role prompt
+    // that says it must not write. Tell it to hand the content over instead.
+    if (readOnly) {
+      return (
+        '\n\nDELIVERABLE FORMAT — FILE: The user wants an editable file. You are a READ-ONLY role ' +
+        'and have no file-writing tools — do NOT attempt to write one. Produce the full deliverable ' +
+        'content in your reply and state that it needs saving to a file, so the orchestrator can ' +
+        'delegate the write to a specialist.'
+      );
+    }
     return (
       '\n\nDELIVERABLE FORMAT — FILE: The user wants an editable file, not a wall of text in ' +
       'chat. Write the deliverable to a sensibly-named file in the workspace (use the filesystem ' +

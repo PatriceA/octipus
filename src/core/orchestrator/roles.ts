@@ -12,6 +12,7 @@ import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { getCapabilityService } from '@/capabilities/service';
 import type { ToolHandler } from '@/core/agent-worker';
+import { FILE_CHANGE_TOOLS } from '@/core/tool-executor';
 import { getMCPBridge } from '@/mcp/bridge';
 import { getToolRegistry } from '@/tools/registry';
 import { logger } from '@/utils/logger';
@@ -196,6 +197,23 @@ export function getToolsForRole(role: AgentRole): ToolHandler[] {
   if (wantsMcp) {
     const bridge = getMCPBridge();
     handlers.push(...bridge.getLazyToolHandlers());
+  }
+
+  // Read-only roles never receive the file-mutating handlers. Enforced HERE
+  // because both spawn paths funnel through this function, and because
+  // `allowedToolIds` is derived from its result — so a read-only parent cannot
+  // hand write capability to a swarm child through the tool intersection either.
+  //
+  // This is the only per-handler restriction in the system: the other
+  // mechanisms (resolveChildTools, capToolsForSmallModel) key on tool GROUP and
+  // so cannot express "filesystem minus write".
+  //
+  // Note the ceiling: a read-only role that also holds `shell` can still write
+  // via `>` or `tee`, since shell resolves its permission action per-command.
+  // For those roles this is defense-in-depth, not a boundary. It is a real
+  // boundary only for a role with no shell access.
+  if (config.readOnly) {
+    return handlers.filter((h) => !FILE_CHANGE_TOOLS.has(h.name));
   }
 
   return handlers;

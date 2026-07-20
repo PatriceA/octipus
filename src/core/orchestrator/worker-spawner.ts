@@ -188,8 +188,10 @@ export async function handleExpertMessage(
       expertPrompt += attachedFilesBlock;
     }
 
-    // Chat/work split (Thread 3): deliver inline vs as a file.
-    expertPrompt += buildOutputDirective(outputDirective.mode, outputDirective.forced);
+    // Chat/work split (Thread 3): deliver inline vs as a file. A read-only role
+    // gets the hand-it-back variant — it has no write handlers to obey the
+    // standard instruction with.
+    expertPrompt += buildOutputDirective(outputDirective.mode, outputDirective.forced, roleConfig.readOnly);
 
     // Domain knowledge from skills
     const skillIds = (expert.skillIds as string[]) || [];

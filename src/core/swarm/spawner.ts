@@ -39,7 +39,7 @@ import {
   checkSameRole,
   denialResult as denialResultFn,
 } from './spawn-validator';
-import { type Scorer, deriveSchemaScorer, runScorers } from './scorers';
+import { type Scorer, deriveCodeDiffScorer, deriveSchemaScorer, runScorers } from './scorers';
 import { applyRoleFit, buildDelegationGuidance } from './swarm-tool';
 import { recordChildScope, buildSiblingScopeBrief } from './session-scope';
 import {
@@ -956,16 +956,22 @@ export class SwarmSpawner {
     // (Phase B1), in addition to any scorers the parent attached explicitly.
     // Only for shape=json — a schema on a markdown/summary deliverable is not a
     // JSON contract and must not flip a correct non-JSON result to failed.
+    // A declared `code-diff` deliverable additionally gates on the RECEIPT: the
+    // parent said the deliverable is a change to the tree, so an `ok` child whose
+    // execution record shows zero files changed missed the contract regardless of
+    // how the prose reads. Evidence over narration.
     const eo = opts.brief.expectedOutput;
     const schemaScorer = eo?.shape === 'json' ? deriveSchemaScorer(eo.schema) : null;
+    const codeDiffScorer = deriveCodeDiffScorer(eo?.shape);
     const effectiveScorers: Scorer[] = [
       ...(schemaScorer ? [schemaScorer] : []),
+      ...(codeDiffScorer ? [codeDiffScorer] : []),
       ...(opts.scorers ?? []),
     ];
     if (status === 'ok' && effectiveScorers.length > 0) {
       const outcome = await runScorers(
         effectiveScorers,
-        { output: result.output, notes: result.notes },
+        { output: result.output, notes: result.notes, receipt: result.receipt },
         { userId: opts.parentContext.userId },
       );
       result.scorerOutcome = outcome;
@@ -973,6 +979,11 @@ export class SwarmSpawner {
         const summary = outcome.failures.map((f) => `${f.scorer}: ${f.reason}`).join('; ');
         status = 'contract_failed';
         result.status = 'contract_failed';
+        // Keep the receipt's own status in step — it is snapshotted before the
+        // gates run, and a receipt that still says `ok` next to a
+        // `contract_failed` envelope is exactly the kind of contradiction the
+        // receipt exists to prevent.
+        if (result.receipt) result.receipt = { ...result.receipt, status: 'contract_failed' };
         notes = notes ? `${notes}\nScorer gate failed: ${summary}` : `Scorer gate failed: ${summary}`;
         result.notes = notes;
         coreLogger.info(

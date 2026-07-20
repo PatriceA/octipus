@@ -38,6 +38,8 @@ export interface RoleConfig {
   liteSystemPromptTemplate?: string;
   /** Lazy-discovery core set; see `RoleMeta.coreToolIds`. */
   coreToolIds?: string[];
+  /** Strip file-mutating handlers from this role; see `RoleMeta.readOnly`. */
+  readOnly?: boolean;
 }
 
 export interface MessageClassification {
