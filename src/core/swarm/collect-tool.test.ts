@@ -195,4 +195,53 @@ describe('collect_children', () => {
     expect(out).toContain('status="running"');
     expect(out).not.toContain('status="timeout"');
   });
+
+  test('formatCollectedResults: renders the receipt — detach is the DEFAULT path', () => {
+    // Regression guard: the receipt used to render only on the await path, so
+    // the parent never saw ground truth on the flow it actually uses. A child
+    // claiming success with filesChanged="0" must be detectable here.
+    const out = formatCollectedResults([
+      {
+        nodeId: 'n1',
+        kind: 'agent',
+        status: 'ok',
+        output: 'Implemented the feature successfully!',
+        usedTokens: 100,
+        durationMs: 1_000,
+        spawnedChildren: [],
+        receipt: {
+          schemaVersion: 1,
+          nodeId: 'n1',
+          kind: 'agent',
+          status: 'ok',
+          sideEffects: {
+            toolCalls: 3,
+            filesChanged: 0,
+            commandsRun: 0,
+            approvalsRequired: 0,
+            approvalsDenied: 0,
+            autoApproved: 0,
+            permissionDenials: 2,
+            toolErrors: 1,
+            byName: { read_file: 3 },
+          },
+          tokens: { used: 100, cap: 80_000 },
+          durationMs: 1_000,
+          unavailable: [],
+          notCertified: ['correctness', 'security'],
+        },
+      },
+    ]);
+    expect(out).toContain('<receipt ');
+    expect(out).toContain('filesChanged="0"');
+    expect(out).toContain('denials="2"');
+    expect(out).toContain('toolErrors="1"');
+  });
+
+  test('formatCollectedResults: no receipt → no empty receipt tag', () => {
+    const out = formatCollectedResults([
+      { nodeId: 'n1', kind: 'agent', status: 'ok', output: 'done', usedTokens: 1, durationMs: 1, spawnedChildren: [] },
+    ]);
+    expect(out).not.toContain('<receipt');
+  });
 });

@@ -167,11 +167,19 @@ async function handleChatSend(
     let devModeOk = false;
     if (message.projectPath) {
       const { userRepository } = await import('@/db/repositories/user-repository');
-      const { devModeAllowed } = await import('@/security/devmode');
+      const { checkProjectPath, devModeAllowed } = await import('@/security/devmode');
       const u = await userRepository.findById(userId);
-      devModeOk = devModeAllowed(!!u?.isAdmin);
+      devModeOk = devModeAllowed(!!u?.isAdmin, message.projectPath);
       if (!devModeOk) {
-        coreLogger.warn({ userId, sessionId: message.sessionId }, 'Ignoring devMode/projectPath from non-admin under multiuser');
+        // Distinguish the two rejection causes — "you're not an admin" and
+        // "that path isn't a project" need very different operator responses.
+        const pathCheck = u?.isAdmin ? checkProjectPath(message.projectPath) : undefined;
+        coreLogger.warn(
+          { userId, sessionId: message.sessionId, projectPath: message.projectPath, reason: pathCheck?.reason },
+          pathCheck
+            ? 'Ignoring devMode/projectPath — rejected project path'
+            : 'Ignoring devMode/projectPath from non-admin under multiuser',
+        );
       }
     }
     if (message.projectPath && devModeOk) {

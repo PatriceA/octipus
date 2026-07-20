@@ -3,6 +3,8 @@
  * Catches cases where the model complied with an injection despite system prompt hardening.
  */
 
+import { coreLogger } from '@/utils/logger';
+
 export interface OutputGuardResult {
   action: 'pass' | 'replace';
   response: string;
@@ -184,9 +186,24 @@ export function ensureChildRelay(
   if (!child) return answer;
   const ans = (answer ?? '').trim();
   if (ans.length >= child.length * RELAY_MIN_LENGTH_FRACTION) return answer;
-  if (relayOverlap(ans, child) >= RELAY_MIN_OVERLAP) return answer;
+  const overlap = relayOverlap(ans, child);
+  if (overlap >= RELAY_MIN_OVERLAP) return answer;
   const appended = formattedChildResults.trim();
   if (!appended) return answer;
+  // This path firing means synthesis FAILED — the orchestrator answered with a
+  // stub and the user is about to get raw child output instead of a synthesized
+  // reply. That is a quality event worth counting, but nothing logged it, so
+  // its real frequency was unknown. Log both gate values so a tuning decision
+  // has data behind it.
+  coreLogger.warn(
+    {
+      answerChars: ans.length,
+      childChars: child.length,
+      lengthFraction: +(ans.length / child.length).toFixed(3),
+      overlap: +overlap.toFixed(3),
+    },
+    'Orchestrator synthesis too thin — appending raw child results (relay fallback)',
+  );
   return ans
     ? `${ans}\n\n---\n\nFull results from the delegated work:\n\n${appended}`
     : appended;

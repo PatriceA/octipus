@@ -2,7 +2,7 @@ import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { getOrchestratorService } from '@/core/orchestrator';
 import { scopedRepos } from '@/db/repositories/scoped';
-import { devModeAllowed } from '@/security/devmode';
+import { checkProjectPath, devModeAllowed } from '@/security/devmode';
 import { isAuthenticated, requireScope } from '@/security/principal';
 import { API_SCOPES } from '@/security/scopes';
 import { generateId } from '@/utils/crypto';
@@ -49,9 +49,17 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
       // honor them for a single-user install or an admin (see devModeAllowed).
       // A non-admin request on a shared instance has them dropped, not errored,
       // so a stray devMode flag doesn't break the chat turn.
-      const allowDev = devModeAllowed(!!user.isAdmin);
+      const allowDev = devModeAllowed(!!user.isAdmin, body.projectPath);
       if ((body.devMode || body.projectPath) && !allowDev) {
-        apiLogger.warn({ userId: user.id }, 'Ignoring devMode/projectPath from non-admin under multiuser');
+        // Admin + rejected ⇒ the path is the problem, not the caller.
+        const pathReason =
+          user.isAdmin && body.projectPath ? checkProjectPath(body.projectPath).reason : undefined;
+        apiLogger.warn(
+          { userId: user.id, projectPath: body.projectPath, reason: pathReason },
+          pathReason
+            ? 'Ignoring devMode/projectPath — rejected project path'
+            : 'Ignoring devMode/projectPath from non-admin under multiuser',
+        );
       }
 
       // Auto-create a session if none provided
