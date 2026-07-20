@@ -7,6 +7,7 @@ import type { GatewayHub } from '@/core/gateway/hub';
 import { getGatewayHub } from '@/core/gateway/hub';
 import { buildSecurityReminder, guardInput } from '@/core/orchestrator/input-guard';
 import { formatCriticalRules, getRoleConfig, getToolsForRole } from '@/core/orchestrator/roles';
+import { applyToolCap, isSmallModel } from '@/core/orchestrator/small-model';
 import type { AgentRole } from '@/core/orchestrator/types';
 import type { AgentContext } from '@/core/types';
 import { agentRepository } from '@/db/repositories/agent-repository';
@@ -337,7 +338,37 @@ export class SwarmSpawner {
       }
     }
 
-    const childTools = resolveChildTools(parent.allowedToolIds, roleTools);
+    let childTools = resolveChildTools(parent.allowedToolIds, roleTools);
+
+    // Phase 2: register swarm meta-tools on Agent (depth 1) children so they
+    // can in turn spawn Subagents. Subagent (depth 2) receives NEITHER —
+    // hard leaf per design §Conceptual Model. The child's own AgentNode is
+    // built inside `singleSpawnAndRun` using the child agentId (known
+    // post-spawn). The swarm tools close over that node by reference so the
+    // placeholder id is mutated to the real one before any tool can fire.
+
+    // ── Model + expert resolution (topic binding is authoritative) ──
+    const { model: childModel, lane: childLane, expertId, systemPrompt, isSmall } = await releaseOnThrow(() =>
+      this.resolveChildModelAndExpert(
+        parent.model,
+        childRole,
+        brief.taskBrief,
+        params.expertId,
+        internal.excludeExpertId,
+        childTools.length > 0,
+        !!brief.plan?.length,
+      ));
+
+    // Small-tier child: cap the tool surface, mirroring the worker path. Role
+    // tool lists are priority-ordered so the core groups survive. Applied here —
+    // after resolution (the tier needs the bound model) but BEFORE the skill
+    // loader is appended, so the loader can never be the thing the cap drops.
+    if (isSmall) {
+      childTools = applyToolCap(childTools, getConfig().orchestrator.smallModelMaxTools, {
+        role: childRole,
+        modelId: childModel,
+      });
+    }
 
     // Skill loader (`get_skill`/`list_skills`): the child's Domain Knowledge is
     // injected as an INDEX (name + 1-line desc), and the body is pulled on
@@ -351,6 +382,9 @@ export class SwarmSpawner {
     const { buildSkillLoaderHandlers } = await import('@/tools/skill-loader');
     childTools.push(...buildSkillLoaderHandlers());
 
+    // Logged here, after the cap and the loader push, so `childToolCount` is
+    // the surface the child ACTUALLY gets — a diagnostic that reports a
+    // different number than the child sees is worse than none.
     coreLogger.info(
       {
         parentNodeId: parent.id,
@@ -361,28 +395,10 @@ export class SwarmSpawner {
         parentAllowedToolIdsCount: parent.allowedToolIds.size,
         parentAllowedToolIds: [...parent.allowedToolIds],
         childToolCount: childTools.length,
+        smallModelTier: isSmall,
       },
       'Swarm tool-intersection diagnostic',
     );
-
-    // Phase 2: register swarm meta-tools on Agent (depth 1) children so they
-    // can in turn spawn Subagents. Subagent (depth 2) receives NEITHER —
-    // hard leaf per design §Conceptual Model. The child's own AgentNode is
-    // built inside `singleSpawnAndRun` using the child agentId (known
-    // post-spawn). The swarm tools close over that node by reference so the
-    // placeholder id is mutated to the real one before any tool can fire.
-
-    // ── Model + expert resolution (topic binding is authoritative) ──
-    const { model: childModel, lane: childLane, expertId, systemPrompt } = await releaseOnThrow(() =>
-      this.resolveChildModelAndExpert(
-        parent.model,
-        childRole,
-        brief.taskBrief,
-        params.expertId,
-        internal.excludeExpertId,
-        childTools.length > 0,
-        !!brief.plan?.length,
-      ));
 
     // ── Compose child's initial user message from brief ─────────────
     // Include the list of tools available to this child so the agent can
@@ -1093,7 +1109,7 @@ export class SwarmSpawner {
      * executor); a plan-less child uses its own judgment on the primary model.
      */
     hasPlan = false,
-  ): Promise<{ model: string; lane: string; expertId?: string; systemPrompt?: string }> {
+  ): Promise<{ model: string; lane: string; expertId?: string; systemPrompt?: string; isSmall: boolean }> {
     const registry = getModelRegistry();
 
     let expertModel: string | undefined;
@@ -1200,25 +1216,10 @@ export class SwarmSpawner {
       );
     }
 
-    // Role-prompt fallback: seeded experts have `systemPrompt = null`, so without
-    // this the child's ENTIRE system prompt was just the injected skill blocks —
-    // no role identity, no security preamble, no honesty/stopping rules. That is
-    // the direct cause of a research child that forgot it was doing research. Use
-    // the same base the worker-spawner path uses: expert prompt if present, else
-    // the role's template (which carries SECURITY_PREAMBLE + the good research
-    // prompt.md with its HONESTY section).
-    if (!systemPrompt) {
-      systemPrompt = getRoleConfig(childRole).systemPromptTemplate;
-    }
-
-    // Expert critical rules — injected on the worker path but previously dropped
-    // on the swarm path (the Researcher expert's "always cite / distinguish fact
-    // from speculation" rules never reached the child).
-    systemPrompt += formatCriticalRules(expertCriticalRules);
-
-    if (skillFragments.length > 0) {
-      systemPrompt = `${systemPrompt}\n\n${skillFragments.join('\n\n')}`.trim();
-    }
+    // NOTE: the system prompt is assembled AFTER model resolution (below), because
+    // the role-template choice depends on the resolved model's tier — a small model
+    // gets the lite template. Everything gathered above (expert prompt, critical
+    // rules, skill fragments) is held until then.
 
     // Model selection — in order of preference:
     //   1. expert.modelPreference (specialist's explicit choice)
@@ -1310,11 +1311,16 @@ export class SwarmSpawner {
     // a genuine mismatch, not a preference override. A tool-less child (pure
     // synthesis) keeps its bound model even if that model reports no tool
     // support. Never blocks the spawn.
+    //
+    // The small-model tier is derived in the same block: it needs the same
+    // lookup, and it must reflect the model we ACTUALLY bound — i.e. after any
+    // reroute above, not the original candidate.
+    let isSmall = false;
     try {
-      const bound = await registry.getModelByModelId(candidate);
+      const routerMax = getConfig().orchestrator.routerSmallModelMaxParams;
+      let bound = await registry.getModelByModelId(candidate);
       if (bound) {
         const { staticCapabilityWarnings } = await import('@/models/capability-gate');
-        const routerMax = getConfig().orchestrator.routerSmallModelMaxParams;
         const warnings = staticCapabilityWarnings(bound, routerMax);
         if (warnings.length > 0) {
           coreLogger.warn({ childRole, model: candidate, warnings }, 'Swarm child bound to a weak model');
@@ -1328,6 +1334,8 @@ export class SwarmSpawner {
               'Swarm child has tools but its model lacks tool support — rerouting to a tool-capable local model',
             );
             candidate = alt.model;
+            // Re-fetch: the tier below must describe the rerouted model.
+            bound = await registry.getModelByModelId(candidate);
           } else {
             coreLogger.warn(
               { childRole, model: candidate },
@@ -1336,12 +1344,41 @@ export class SwarmSpawner {
           }
         }
       }
+      // The worker path has adapted to weak models since Phase C (lite role
+      // prompts, tool cap); the swarm path never did — so a swarm child on a 9B
+      // model got the FULL role prompt, which is the population the 743d4b66
+      // post-mortem is about. Mirrors `worker-spawner.ts:146`.
+      isSmall = isSmallModel({ modelId: candidate, metadata: bound?.metadata }, routerMax);
     } catch (err) {
-      // Best-effort gate — a lookup failure must not block a spawn.
+      // Best-effort gate — a lookup failure must not block a spawn. Unknown
+      // tier ⇒ full surface: we only ever *reduce* capability when we're
+      // confident the model is small (same policy as isSmallModel).
       coreLogger.debug({ err, childRole, model: candidate }, 'Swarm capability gate skipped');
     }
 
-    return { model: candidate, lane, expertId, systemPrompt };
+    // ── System prompt assembly (needs the tier, hence its position) ──
+    // Role-prompt fallback: seeded experts have `systemPrompt = null`, so without
+    // this the child's ENTIRE system prompt was just the injected skill blocks —
+    // no role identity, no security preamble, no honesty/stopping rules. That is
+    // the direct cause of a research child that forgot it was doing research. Use
+    // the same base the worker-spawner path uses: expert prompt if present, else
+    // the role's template (which carries SECURITY_PREAMBLE + the good research
+    // prompt.md with its HONESTY section), lite variant for a small model.
+    if (!systemPrompt) {
+      const roleConfig = getRoleConfig(childRole);
+      systemPrompt = (isSmall && roleConfig.liteSystemPromptTemplate) || roleConfig.systemPromptTemplate;
+    }
+
+    // Expert critical rules — injected on the worker path but previously dropped
+    // on the swarm path (the Researcher expert's "always cite / distinguish fact
+    // from speculation" rules never reached the child).
+    systemPrompt += formatCriticalRules(expertCriticalRules);
+
+    if (skillFragments.length > 0) {
+      systemPrompt = `${systemPrompt}\n\n${skillFragments.join('\n\n')}`.trim();
+    }
+
+    return { model: candidate, lane, expertId, systemPrompt, isSmall };
   }
 
   private emitNodeSpawned(parent: AgentNode, payload: Record<string, unknown>): void {

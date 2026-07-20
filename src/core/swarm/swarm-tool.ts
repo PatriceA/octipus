@@ -3,6 +3,7 @@ import type { ToolHandler } from '@/core/agent-worker';
 import { classifyMessage } from '@/core/orchestrator/classifier';
 import type { AgentRole } from '@/core/orchestrator/types';
 import { coreLogger } from '@/utils/logger';
+import { formatReceiptBlock } from './receipt';
 import { parseScorers } from './scorers';
 import { getSwarmSpawner, type SwarmSpawner } from './spawner';
 import type { AgentNode, ChildResult, PendingChild, PlanStep, SpawnChildParams } from './types';
@@ -592,24 +593,3 @@ export function formatChildResult(result: ChildResult): string {
   return `<ChildResult ${meta}>${formatReceiptBlock(result.receipt)}\n<output>${outStr}</output>${notes}${scorerFail}\n</ChildResult>`;
 }
 
-/**
- * Render the deterministic swarm receipt into the envelope so the parent LLM
- * audits the child against ground truth (real tool-execution counters) instead
- * of the child's self-narration — "claims success but wrote no files / had
- * denied calls" is detectable without re-reading the transcript. Empty when no
- * receipt (e.g. a node with no worker run).
- */
-function formatReceiptBlock(receipt: ChildResult['receipt']): string {
-  if (!receipt) return '';
-  const s = receipt.sideEffects;
-  const attrs =
-    `toolCalls="${s.toolCalls}" filesChanged="${s.filesChanged}" ` +
-    `commandsRun="${s.commandsRun}" toolErrors="${s.toolErrors}" ` +
-    `denials="${s.permissionDenials}"`;
-  // Fail loud: if the framework couldn't capture side effects, say so rather
-  // than let zeros read as "did nothing".
-  const unavailable = receipt.unavailable.length
-    ? ` unavailable="${receipt.unavailable.join('; ')}"`
-    : '';
-  return `\n<receipt ${attrs}${unavailable}/>`;
-}

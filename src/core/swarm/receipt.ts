@@ -107,6 +107,34 @@ export interface SwarmReceipt {
  * case every side-effect field is reported as unavailable rather than zero —
  * "we don't know" is not the same as "nothing happened".
  */
+/**
+ * Render a receipt into the child-result envelope so the parent LLM audits the
+ * child against ground truth (real tool-execution counters) instead of the
+ * child's self-narration — "claims success but wrote no files / had denied
+ * calls" is detectable without re-reading the transcript. Empty when no receipt
+ * (e.g. a node with no worker run).
+ *
+ * Lives here rather than next to one formatter because BOTH child-result
+ * surfaces need it: the await path (`swarm-tool.formatChildResult`) and the
+ * detached path (`collect-tool.formatCollectedResults`). Detach is the default
+ * for an orchestrator (`maxPendingDetached: 6`), so a receipt that renders only
+ * on the await path is invisible on the flow that actually runs.
+ */
+export function formatReceiptBlock(receipt: SwarmReceipt | undefined): string {
+  if (!receipt) return '';
+  const s = receipt.sideEffects;
+  const attrs =
+    `toolCalls="${s.toolCalls}" filesChanged="${s.filesChanged}" ` +
+    `commandsRun="${s.commandsRun}" toolErrors="${s.toolErrors}" ` +
+    `denials="${s.permissionDenials}"`;
+  // Fail loud: if the framework couldn't capture side effects, say so rather
+  // than let zeros read as "did nothing".
+  const unavailable = receipt.unavailable.length
+    ? ` unavailable="${receipt.unavailable.join('; ')}"`
+    : '';
+  return `\n<receipt ${attrs}${unavailable}/>`;
+}
+
 export function buildReceipt(opts: {
   nodeId: string;
   kind: 'agent' | 'subagent';

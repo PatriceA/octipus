@@ -1,6 +1,7 @@
 import type { ToolHandler } from '@/core/agent-worker';
 import type { AgentWorker } from '@/core/agent-worker';
 import { swarmNodeRepository } from './node-repository';
+import { formatReceiptBlock } from './receipt';
 import { getLevelDefault } from './types';
 import type { AgentNode, ChildResult } from './types';
 
@@ -126,7 +127,12 @@ export function formatCollectedResults(results: ChildResult[]): string {
             .map((f) => `${f.scorer}: ${f.reason}`)
             .join('; ')}</scorers>`
         : '';
-    return `<ChildResult ${meta}>\n  <output>${outStr}</output>${notes}${scorerFail}\n</ChildResult>`;
+    // The other half of that mirror. Detach is the DEFAULT orchestrator path
+    // (maxPendingDetached: 6), so omitting the receipt here meant the parent
+    // never saw filesChanged/toolErrors/denials on the flow it actually uses —
+    // the ground-truth audit was computed, persisted to swarm_nodes, and then
+    // dropped before it reached the model that needed it.
+    return `<ChildResult ${meta}>${formatReceiptBlock(r.receipt)}\n  <output>${outStr}</output>${notes}${scorerFail}\n</ChildResult>`;
   });
   return `<CollectChildren count="${results.length}">\n${lines.join('\n')}\n</CollectChildren>`;
 }
