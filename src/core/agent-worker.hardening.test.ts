@@ -17,8 +17,10 @@ import type { AgentEvent } from '@/core/agent-worker';
 import type { AgentContext } from '@/core/types';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
+import { messageRepository } from '@/db/repositories/message-repository';
+import { sessionRepository } from '@/db/repositories/session-repository';
 import type { CompletionResult } from '@/models/litellm-client';
-import { CascadedCancellationError, ChildTimeoutError, classifyChildError } from './swarm/errors';
+import { CascadedCancellationError, ChildTimeoutError, DriftDetectedError, classifyChildError } from './swarm/errors';
 import type { ChildResult, PendingChild } from './swarm/types';
 
 const mkCtx = (over: Partial<AgentContext> = {}): AgentContext => ({
@@ -199,5 +201,121 @@ describe('AgentWorker child-aware timeout (2.2) + graceful exit (3.5)', () => {
     expect(calls).toBe(1);
     expect(result).toContain('SUMMARY');
     expect(priv.toolExecutor.toolsDisabled).toBe(true); // tools disabled for the summary turn
+  });
+});
+
+describe('AgentWorker task-drift detection (T2.2)', () => {
+  let auditSpy: ReturnType<typeof spyOn>;
+  let updateSpy: ReturnType<typeof spyOn>;
+  // The orchestrator case persists its user message; this suite has no DB.
+  let msgSpy: ReturnType<typeof spyOn>;
+  let sessSpy: ReturnType<typeof spyOn>;
+  beforeEach(() => {
+    auditSpy = spyOn(auditRepository, 'logAgentCompleted').mockResolvedValue(undefined as never);
+    updateSpy = spyOn(agentRepository, 'updateStatus').mockResolvedValue(undefined as never);
+    msgSpy = spyOn(messageRepository, 'create').mockResolvedValue(undefined as never);
+    sessSpy = spyOn(sessionRepository, 'incrementMessageCount').mockResolvedValue(undefined as never);
+  });
+  afterEach(() => {
+    auditSpy.mockRestore();
+    updateSpy.mockRestore();
+    msgSpy.mockRestore();
+    sessSpy.mockRestore();
+  });
+
+  /**
+   * write_file into an unrelated doc tree, a DIFFERENT path each time — as in
+   * the real incident, which produced ~25 distinct files. Distinct signatures
+   * also keep `ToolLoopDetector.checkRepeat` (identical-args) out of the way,
+   * so this exercises drift rather than repetition. `filesystem__` is already
+   * exempt from the same-name check via REPEAT_ALLOWED_PREFIXES.
+   */
+  let n = 0;
+  const driftingCall = (): CompletionResult => {
+    n++;
+    return {
+      content: '',
+      toolCalls: [
+        {
+          id: `tc-${n}`,
+          name: 'filesystem__write_file',
+          arguments: { path: `ai-docs/reference/tool-${n}.md`, content: 'documentation framework page' },
+        },
+      ],
+      finishReason: 'tool_calls',
+      usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10 },
+      model: 'test-model',
+      latencyMs: 1,
+    };
+  };
+
+  test('a worker that drifts off its brief is stopped instead of running to budget', async () => {
+    const worker = new AgentWorker(mkCtx({ id: 'drift-1' }), cfg({ maxIterations: 40 }));
+    const priv = worker as unknown as {
+      getCompletion: () => Promise<CompletionResult>;
+      toolExecutor: { handleToolCalls: (tc: unknown) => Promise<unknown[]> };
+    };
+    priv.getCompletion = async () => driftingCall();
+    // Tools "succeed" — the point is that success is not the same as relevance.
+    priv.toolExecutor.handleToolCalls = async () => [];
+
+    let thrown: unknown = null;
+    try {
+      await worker.run('Find which World Cup matches were played yesterday and the scores.');
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(DriftDetectedError);
+    // Stopped well inside the 40-iteration budget — the 743d4b66 child burned 37.
+    expect((thrown as DriftDetectedError).metadata?.consecutive).toBe(8);
+    expect(classifyChildError(thrown)).toBe('contract_failed');
+  });
+
+  test('the ORCHESTRATOR is exempt — a false abort there would cascade-cancel its own children', async () => {
+    // The orchestrator's tool vocabulary (spawn_child / collect_children) never
+    // echoes the user's wording, so judging it the same way would abort it —
+    // and run()'s catch calls detached.cancelAll(), killing the pending
+    // children it was waiting to collect.
+    const worker = new AgentWorker(mkCtx({ id: 'orch-1', role: 'orchestrator' }), cfg({ maxIterations: 14 }));
+    const priv = worker as unknown as {
+      getCompletion: () => Promise<CompletionResult>;
+      toolExecutor: { handleToolCalls: (tc: unknown) => Promise<unknown[]> };
+      driftDetector?: unknown;
+    };
+    let calls = 0;
+    priv.getCompletion = async () => {
+      calls++;
+      if (calls > 12) return completion('Here is the summary of the delegated work.');
+      return driftingCall();
+    };
+    priv.toolExecutor.handleToolCalls = async () => [];
+
+    const out = await worker.run('Find which World Cup matches were played yesterday and the scores.');
+    expect(priv.driftDetector).toBeUndefined();
+    expect(out).toContain('summary');
+  });
+
+  test('an on-task worker is never tripped by the detector', async () => {
+    const worker = new AgentWorker(mkCtx({ id: 'ontask-1' }), cfg({ maxIterations: 12 }));
+    const priv = worker as unknown as {
+      getCompletion: () => Promise<CompletionResult>;
+      toolExecutor: { handleToolCalls: (tc: unknown) => Promise<unknown[]> };
+    };
+    let calls = 0;
+    priv.getCompletion = async () => {
+      calls++;
+      if (calls > 9) return completion('Brazil beat Serbia 2-0 yesterday.');
+      return {
+        ...driftingCall(),
+        toolCalls: [
+          { id: `tc-${calls}`, name: 'websearch__search', arguments: { query: 'World Cup scores yesterday' } },
+        ],
+      };
+    };
+    priv.toolExecutor.handleToolCalls = async () => [];
+
+    const out = await worker.run('Find which World Cup matches were played yesterday and the scores.');
+    expect(out).toContain('Brazil');
   });
 });

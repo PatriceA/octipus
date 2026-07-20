@@ -13,6 +13,7 @@ const VALID_ASSERTION_TYPES: Set<string> = new Set([
   'classification', 'confidence_above', 'output_mode',
   'response_quality', 'latency_under',
   'no_hallucination', 'follows_format', 'token_count_under',
+  'defense_held',
 ]);
 
 // ── Lightweight YAML parser ──────────────────────────────────────────

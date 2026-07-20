@@ -30,6 +30,27 @@ export class BudgetExceededError extends ClassifiedError {
   }
 }
 
+/**
+ * Thrown when a node's tool activity stopped matching its brief for long enough
+ * that it is no longer plausibly doing the requested work. See
+ * `agent-worker/drift-detector.ts`.
+ */
+export class DriftDetectedError extends ClassifiedError {
+  constructor(opts: { agentId: string; consecutive: number; briefSummary: string; cause?: unknown }) {
+    super({
+      reason: FailoverReason.TASK_DRIFT,
+      recovery: RecoveryAction.ABORT,
+      message:
+        `Task drift: ${opts.agentId} ran ${opts.consecutive} consecutive iterations whose tool ` +
+        `activity had nothing in common with its brief (${opts.briefSummary}). Stopped rather than ` +
+        `letting it run to budget and report success on unrelated work.`,
+      metadata: { agentId: opts.agentId, consecutive: opts.consecutive },
+      cause: opts.cause,
+    });
+    this.name = 'DriftDetectedError';
+  }
+}
+
 /** Thrown when a node's wall-clock cap elapses. */
 export class ChildTimeoutError extends ClassifiedError {
   constructor(opts: { agentId: string; elapsedMs: number; capMs: number; cause?: unknown }) {
@@ -105,6 +126,11 @@ export function classifyChildError(err: unknown): ChildResultStatus {
   // Direct matches on our own classes (fast path).
   if (err instanceof BudgetExceededError) return 'budget';
   if (err instanceof ChildTimeoutError) return 'timeout';
+  // `contract_failed`, not `tool_error` — drift means the child did not do the
+  // requested work, which is a contract miss. Without this line it falls
+  // through to `tool_error`, which triggers the crash-retry path in the spawner
+  // and would spawn a SECOND child to drift all over again.
+  if (err instanceof DriftDetectedError) return 'contract_failed';
   if (err instanceof DuplicateSpawnError) return 'cancelled';
   if (err instanceof CascadedCancellationError) return 'cancelled';
 

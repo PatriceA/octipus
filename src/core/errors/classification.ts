@@ -34,6 +34,7 @@ export enum FailoverReason {
   DUPLICATE_SPAWN = 'duplicate_spawn',
   CASCADED_CANCELLATION = 'cascaded_cancellation',
   CHILD_TIMEOUT = 'child_timeout',
+  TASK_DRIFT = 'task_drift',
   PERMISSION_DENIED = 'permission_denied',
   // Swarm open-Q decisions
   CONCURRENCY_LIMIT = 'concurrency_limit',

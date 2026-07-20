@@ -7,6 +7,7 @@ import type { GatewayHub } from '@/core/gateway/hub';
 import { getGatewayHub } from '@/core/gateway/hub';
 import { buildSecurityReminder, guardInput } from '@/core/orchestrator/input-guard';
 import { formatCriticalRules, getRoleConfig, getToolsForRole } from '@/core/orchestrator/roles';
+import { logPromptComposition } from '@/core/orchestrator/prompt-budget';
 import { applyToolCap, isSmallModel } from '@/core/orchestrator/small-model';
 import type { AgentRole } from '@/core/orchestrator/types';
 import type { AgentContext } from '@/core/types';
@@ -468,6 +469,12 @@ export class SwarmSpawner {
       const boundModel = await getModelRegistry().getModelByModelId(childModel);
       const ctx = boundModel?.contextWindow ?? 0;
       const estTokens = Math.ceil(((childSystemPrompt?.length ?? 0) + childMessage.length) / 4);
+      // Break the input down per section. The warning below says "you are over
+      // the window"; this says WHICH block to cut, which is the actionable half.
+      logPromptComposition(
+        { role: childRole, model: childModel, isSmall, contextWindow: ctx || undefined },
+        { system: [childSystemPrompt ?? ''], brief: [childMessage] },
+      );
       if (ctx > 0 && estTokens > ctx * 0.9) {
         coreLogger.warn(
           { childRole, model: childModel, estTokens, contextWindow: ctx },
