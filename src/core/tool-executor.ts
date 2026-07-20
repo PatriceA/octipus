@@ -36,7 +36,12 @@ function boundedLevenshtein(a: string, b: string, max: number): number {
   return prev[b.length];
 }
 
-const FILE_CHANGE_TOOLS = new Set([
+/**
+ * The file-mutating tool handlers, by fully-qualified name. Exported because
+ * the read-only role gate (`roles.ts`) filters on exactly this set — a second
+ * copy over there would drift the moment a handler is added.
+ */
+export const FILE_CHANGE_TOOLS = new Set([
   'filesystem__write_file',
   'filesystem__append_file',
   'filesystem__delete_file',
@@ -44,6 +49,46 @@ const FILE_CHANGE_TOOLS = new Set([
   'filesystem__move_file',
   'filesystem__create_directory',
 ]);
+
+/**
+ * Minimum run of base64-alphabet characters treated as an embedded binary blob.
+ * 1 KB of base64 ≈ 768 bytes — far past any identifier, hash, or token that
+ * legitimately appears in tool output, and well short of a real screenshot.
+ */
+const BINARY_BLOB_MIN_CHARS = 1024;
+
+/**
+ * Replace embedded binary blobs with a short note, for models that cannot see
+ * images.
+ *
+ * A tool that returns a screenshot puts base64 into STRING content, which no
+ * provider interprets as an image — so a text-only model gets tens of thousands
+ * of junk tokens it cannot use, and which crowd out the actual task. That is the
+ * 373 KB screenshot from the 743d4b66 post-mortem: sanitizeToolOutput truncated
+ * it to 50 KB and shipped it anyway.
+ *
+ * Deliberately shape-agnostic. Image-returning tools have no common field name
+ * (`base64`, `image`, MCP `content[].data`), so matching on the blob itself
+ * covers all of them plus any future tool, with no per-tool knowledge. The
+ * surrounding JSON (url, size, title) survives — that part is genuinely useful.
+ *
+ * The newline exclusion in the character class is load-bearing: PEM and MIME
+ * base64 are line-wrapped at 64 chars (RFC 1421/2045), so a deliberately-read
+ * `.pem` breaks into sub-threshold runs and survives intact. Only UNBROKEN
+ * base64 — which is exactly what a tool returns in a JSON string field — is
+ * replaced.
+ *
+ * ponytail: matches on the blob, not on tool identity, so `browser__pdf` (same
+ * `base64` field, not an image) is stripped too. Correct by accident and on
+ * purpose — a text model can't read either one.
+ */
+export function stripBinaryBlobs(text: string): string {
+  if (text.length < BINARY_BLOB_MIN_CHARS) return text;
+  return text.replace(
+    new RegExp(`[A-Za-z0-9+/=]{${BINARY_BLOB_MIN_CHARS},}`, 'g'),
+    (blob) => `[binary blob omitted: ${blob.length} chars — this model has no vision capability]`,
+  );
+}
 
 /**
  * Pull the canonical filesystem path out of a file-mutating tool's *result*.
@@ -150,6 +195,33 @@ export class ToolExecutor {
    * returned). Only `byName` is tallied; the classified/total counts are
    * derived from it in `getSideEffectCounters`.
    */
+  /**
+   * Can the bound model actually read an image? Cached for the executor's
+   * lifetime — the binding does not change mid-run, and this is consulted on
+   * every tool batch.
+   *
+   * Fails OPEN (assumes vision) on a lookup error: wrongly stripping a blob
+   * from a model that could have used it loses information, while wrongly
+   * keeping one only wastes tokens. Unknown ⇒ leave the output alone.
+   */
+  private visionSupport?: boolean;
+  private async boundModelSupportsVision(): Promise<boolean> {
+    if (this.visionSupport !== undefined) return this.visionSupport;
+    try {
+      const { getModelRegistry } = await import('@/models/model-registry');
+      const registry = getModelRegistry();
+      const model =
+        (await registry.getModel(this.context.model)) ||
+        (await registry.getModelByModelId(this.context.model));
+      // A model we cannot find is not a model we can make claims about.
+      this.visionSupport = model ? model.supportsVision : true;
+    } catch (err) {
+      coreLogger.debug({ err, model: this.context.model }, 'Vision-capability lookup failed — leaving tool output intact');
+      this.visionSupport = true;
+    }
+    return this.visionSupport;
+  }
+
   private recordExecuted(name: string): void {
     this.counters.byName[name] = (this.counters.byName[name] ?? 0) + 1;
   }
@@ -750,12 +822,17 @@ export class ToolExecutor {
       this.consecutiveToolErrors = 0;
     }
 
+    // Does the bound model actually understand images? Hoisted out of the loop —
+    // one registry lookup (Redis-cached) per tool batch, not per result.
+    const modelSeesImages = await this.boundModelSupportsVision();
+
     // Build tool result messages
     for (const result of results) {
       // Drop UI-only work-stream metadata (e.g. a file diff) before the result
       // reaches the model or the persisted transcript — the model already has
       // the inputs it acted on, so this would be redundant, token-costly context.
-      const modelSafe = result.error || sanitizeToolOutput(stripWorkStreamMeta(result.result));
+      const sanitized = result.error || sanitizeToolOutput(stripWorkStreamMeta(result.result));
+      const modelSafe = modelSeesImages ? sanitized : stripBinaryBlobs(sanitized);
       toolMessages.push({
         role: 'tool',
         content: modelSafe,
@@ -763,12 +840,17 @@ export class ToolExecutor {
         timestamp: new Date(),
       });
 
-      // Persist tool result (skip for orchestrator)
+      // Persist tool result (skip for orchestrator). Persist the UNSTRIPPED
+      // text: blob removal is model-context hygiene, and the transcript is the
+      // durable record a human or an eval reads later. Stripping here would
+      // destroy the only surviving copy of a small screenshot (nothing else
+      // persists the bytes), which is a different and worse thing than not
+      // showing it to a model that cannot read it anyway.
       if (this.context.role !== 'orchestrator') {
         await messageRepository.create({
           sessionId: this.context.sessionId,
           role: 'tool',
-          content: modelSafe,
+          content: sanitized,
           toolCallId: result.toolCallId,
           agentId: this.context.id,
         });

@@ -18,6 +18,7 @@
 import { existsSync } from 'node:fs';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
+import type { SwarmReceipt } from './receipt';
 
 /** Which part of the child result a text scorer inspects. */
 export type ScorerTarget = 'output' | 'notes';
@@ -32,7 +33,14 @@ export type Scorer =
   | { kind: 'contains'; value: string; on?: ScorerTarget }
   | { kind: 'regex'; pattern: string; flags?: string; on?: ScorerTarget }
   | { kind: 'json'; requiredKeys?: string[]; object?: boolean }
-  | { kind: 'file_exists'; path: string };
+  | { kind: 'file_exists'; path: string }
+  /**
+   * Check the child's DETERMINISTIC RECEIPT rather than anything it said.
+   * Every other scorer inspects text the child authored; this one inspects
+   * counters the ToolExecutor observed, so "claims success but wrote no files"
+   * is caught without parsing prose.
+   */
+  | { kind: 'side_effect'; minFilesChanged?: number; minCommandsRun?: number; maxToolErrors?: number };
 
 export interface ScorerFailure {
   /** Human-readable scorer label, e.g. `regex(/PASS/)` or `file_exists`. */
@@ -81,6 +89,8 @@ export function looksCatastrophic(pattern: string): boolean {
 export interface ScorableResult {
   output: unknown;
   notes?: string;
+  /** Framework-built side-effect audit; the only non-self-reported evidence. */
+  receipt?: SwarmReceipt;
 }
 
 /** Context a scorer may need — currently just the user scope for file checks. */
@@ -212,6 +222,41 @@ async function evaluate(
         ? null
         : { scorer: 'file_exists', reason: `file "${truncate(scorer.path)}" does not exist` };
     }
+
+    case 'side_effect': {
+      const receipt = result.receipt;
+      // No receipt, or counters the framework genuinely could not capture (a
+      // CLI worker exposes none): we cannot distinguish "did nothing" from
+      // "could not observe". PASS rather than invent a contract failure —
+      // CLI workers are a primary coding path, and failing them all would be
+      // a regression, not a gate. The receipt already surfaces `unavailable`
+      // to the parent, so the uncertainty is visible either way.
+      if (!receipt || receipt.unavailable.length > 0) {
+        coreLogger.debug(
+          { nodeId: receipt?.nodeId, unavailable: receipt?.unavailable },
+          'side_effect scorer: no observable counters — gate not evaluated',
+        );
+        return null;
+      }
+
+      const s = receipt.sideEffects;
+      const misses: string[] = [];
+      if (scorer.minFilesChanged !== undefined && s.filesChanged < scorer.minFilesChanged) {
+        misses.push(`filesChanged=${s.filesChanged} (expected >= ${scorer.minFilesChanged})`);
+      }
+      if (scorer.minCommandsRun !== undefined && s.commandsRun < scorer.minCommandsRun) {
+        misses.push(`commandsRun=${s.commandsRun} (expected >= ${scorer.minCommandsRun})`);
+      }
+      if (scorer.maxToolErrors !== undefined && s.toolErrors > scorer.maxToolErrors) {
+        misses.push(`toolErrors=${s.toolErrors} (expected <= ${scorer.maxToolErrors})`);
+      }
+      return misses.length === 0
+        ? null
+        : {
+            scorer: 'side_effect',
+            reason: `the child's own execution record contradicts a completed deliverable: ${misses.join('; ')}`,
+          };
+    }
   }
 }
 
@@ -252,6 +297,26 @@ export function deriveSchemaScorer(schema: unknown): Scorer | null {
     ? s.required.filter((k): k is string => typeof k === 'string')
     : [];
   return { kind: 'json', requiredKeys, object: true };
+}
+
+/**
+ * Auto-gate for a declared code deliverable.
+ *
+ * When a parent declares `expectedOutput.shape === 'code-diff'` it has stated
+ * that the deliverable IS a change to the tree. A child that returns `ok` while
+ * its receipt shows zero files changed has definitionally missed that contract,
+ * no matter how confident its prose is — this is the "implemented successfully"
+ * / nothing-on-disk case, caught deterministically.
+ *
+ * Deliberately narrow. It keys off an explicit declaration rather than guessing
+ * from the brief's wording, so it cannot produce a false `contract_failed` for a
+ * child that was never supposed to write anything. Broadening it to infer intent
+ * from the task text needs the drift work (see docs/plans/quality-enforcement.md
+ * T2.2); a wrong guess here is worse than no gate, because it fails work that
+ * actually succeeded.
+ */
+export function deriveCodeDiffScorer(shape: string | undefined): Scorer | null {
+  return shape === 'code-diff' ? { kind: 'side_effect', minFilesChanged: 1 } : null;
 }
 
 /**
@@ -318,8 +383,26 @@ export function parseScorers(raw: unknown): { scorers: Scorer[] } | { error: str
         scorers.push({ kind: 'file_exists', path: e.path });
         break;
       }
+      case 'side_effect': {
+        const bounds: { minFilesChanged?: number; minCommandsRun?: number; maxToolErrors?: number } = {};
+        for (const key of ['minFilesChanged', 'minCommandsRun', 'maxToolErrors'] as const) {
+          const v = e[key];
+          if (v === undefined) continue;
+          if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+            return { error: `scorers[${i}].${key} (side_effect) must be a non-negative integer` };
+          }
+          bounds[key] = v;
+        }
+        if (Object.keys(bounds).length === 0) {
+          return { error: `scorers[${i}] (side_effect) needs at least one of minFilesChanged, minCommandsRun, maxToolErrors` };
+        }
+        scorers.push({ kind: 'side_effect', ...bounds });
+        break;
+      }
       default:
-        return { error: `scorers[${i}].kind must be one of non_empty|contains|regex|json|file_exists (got "${String(kind)}")` };
+        return {
+          error: `scorers[${i}].kind must be one of non_empty|contains|regex|json|file_exists|side_effect (got "${String(kind)}")`,
+        };
     }
   }
   return { scorers };

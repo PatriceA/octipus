@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type Scorer, deriveSchemaScorer, parseScorers, runScorers } from './scorers';
+import { type Scorer, deriveCodeDiffScorer, deriveSchemaScorer, parseScorers, runScorers } from './scorers';
 
 const ctx = { userId: 'system' as const };
 
@@ -212,5 +212,103 @@ describe('parseScorers — validation', () => {
   it('rejects an over-long regex pattern', () => {
     const long = 'a'.repeat(201);
     expect(parseScorers([{ kind: 'regex', pattern: long }])).toHaveProperty('error');
+  });
+});
+
+describe('side_effect scorer (receipt-vs-claim)', () => {
+  function receipt(over: Partial<{ filesChanged: number; commandsRun: number; toolErrors: number; unavailable: string[] }> = {}) {
+    return {
+      schemaVersion: 1 as const,
+      nodeId: 'n1',
+      kind: 'agent' as const,
+      status: 'ok' as const,
+      sideEffects: {
+        toolCalls: 5,
+        filesChanged: over.filesChanged ?? 0,
+        commandsRun: over.commandsRun ?? 0,
+        approvalsRequired: 0,
+        approvalsDenied: 0,
+        autoApproved: 0,
+        permissionDenials: 0,
+        toolErrors: over.toolErrors ?? 0,
+        byName: {},
+      },
+      tokens: { used: 1, cap: 100 },
+      durationMs: 1,
+      unavailable: over.unavailable ?? [],
+      notCertified: ['correctness', 'security'],
+    };
+  }
+
+  it('fails a confident claim contradicted by zero files changed', async () => {
+    const out = await runScorers(
+      [{ kind: 'side_effect', minFilesChanged: 1 }],
+      { output: 'Implemented the feature successfully! All changes are in place.', receipt: receipt() },
+      ctx,
+    );
+    expect(out.passed).toBe(false);
+    expect(out.failures[0].reason).toContain('filesChanged=0');
+  });
+
+  it('passes when the evidence backs the claim', async () => {
+    const out = await runScorers(
+      [{ kind: 'side_effect', minFilesChanged: 1 }],
+      { output: 'done', receipt: receipt({ filesChanged: 3 }) },
+      ctx,
+    );
+    expect(out.passed).toBe(true);
+  });
+
+  it('does NOT fail when counters were unobservable — a CLI worker must not be gated on evidence it cannot emit', async () => {
+    const out = await runScorers(
+      [{ kind: 'side_effect', minFilesChanged: 1 }],
+      { output: 'done', receipt: receipt({ unavailable: ['sideEffects: worker did not expose tool-execution counters'] }) },
+      ctx,
+    );
+    expect(out.passed).toBe(true);
+  });
+
+  it('does NOT fail when there is no receipt at all', async () => {
+    const out = await runScorers([{ kind: 'side_effect', minFilesChanged: 1 }], { output: 'done' }, ctx);
+    expect(out.passed).toBe(true);
+  });
+
+  it('checks commandsRun and toolErrors bounds', async () => {
+    const noCmds = await runScorers(
+      [{ kind: 'side_effect', minCommandsRun: 1 }],
+      { output: 'tests pass!', receipt: receipt({ filesChanged: 2 }) },
+      ctx,
+    );
+    expect(noCmds.passed).toBe(false);
+    expect(noCmds.failures[0].reason).toContain('commandsRun=0');
+
+    const errored = await runScorers(
+      [{ kind: 'side_effect', maxToolErrors: 0 }],
+      { output: 'all good', receipt: receipt({ toolErrors: 2 }) },
+      ctx,
+    );
+    expect(errored.passed).toBe(false);
+    expect(errored.failures[0].reason).toContain('toolErrors=2');
+  });
+
+  it('parses bounds and rejects malformed ones', () => {
+    expect(parseScorers([{ kind: 'side_effect', minFilesChanged: 1 }])).toEqual({
+      scorers: [{ kind: 'side_effect', minFilesChanged: 1 }],
+    });
+    expect(parseScorers([{ kind: 'side_effect' }])).toHaveProperty('error');
+    expect(parseScorers([{ kind: 'side_effect', minFilesChanged: -1 }])).toHaveProperty('error');
+    expect(parseScorers([{ kind: 'side_effect', minFilesChanged: 1.5 }])).toHaveProperty('error');
+  });
+});
+
+describe('deriveCodeDiffScorer', () => {
+  it('gates a declared code-diff deliverable on at least one file changed', () => {
+    expect(deriveCodeDiffScorer('code-diff')).toEqual({ kind: 'side_effect', minFilesChanged: 1 });
+  });
+
+  it('does not gate any other shape — a summary child was never meant to write', () => {
+    for (const shape of ['summary', 'markdown', 'list', 'json', undefined]) {
+      expect(deriveCodeDiffScorer(shape)).toBeNull();
+    }
   });
 });

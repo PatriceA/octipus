@@ -105,6 +105,7 @@ export function loadRoles(): Record<AgentRole, RoleConfig> {
       systemPromptTemplate: prompt,
       liteSystemPromptTemplate: litePrompt,
       coreToolIds: meta.coreToolIds,
+      readOnly: meta.readOnly,
     };
   }
 
