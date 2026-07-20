@@ -27,10 +27,12 @@ import {
   BudgetExceededError,
   CascadedCancellationError,
   ChildTimeoutError,
+  DriftDetectedError,
 } from './swarm/errors';
 import type { ChildResult, PendingChild } from './swarm/types';
 import { ToolExecutor } from './tool-executor';
 import { DetachedChildManager } from './agent-worker/detached-child-manager';
+import { DriftDetector } from './agent-worker/drift-detector';
 import { ToolLoopDetector } from './agent-worker/tool-loop-detector';
 import type { AgentMessage, ToolCall } from './types';
 
@@ -87,6 +89,10 @@ export class AgentWorker extends BaseAgentWorker {
   private lengthRetryBoost: number = 0;
   /** Tool-call loop/spam detection (same-args + same-name state machines). */
   private loopDetector = new ToolLoopDetector();
+  /** Seeded in `run()` from the brief; absent until then. */
+  private driftDetector?: DriftDetector;
+  /** Nudge queued by the drift check, appended once tool results close the turn. */
+  private pendingDriftNudge?: string;
 
   /** Queue for steering messages injected mid-run */
   private steeringQueue: AgentMessage[] = [];
@@ -349,6 +355,25 @@ export class AgentWorker extends BaseAgentWorker {
   async run(userMessage?: string): Promise<string> {
     if (userMessage) {
       await this.addUserMessage(userMessage);
+    }
+
+    // Snapshot the brief for drift detection NOW, while it is still intact.
+    // It must not be re-read from `this.messages` later: the brief is a `user`
+    // message, compaction pins only `system` messages, so it is evictable — and
+    // that eviction is precisely what let run 743d4b66 forget its task. A
+    // detector reading from there would go blind exactly when it matters.
+    //
+    // The ORCHESTRATOR is exempt. Its work is delegation and polling, so its
+    // tool vocabulary (spawn_child, collect_children) legitimately shares
+    // nothing with the user's wording, and a false abort there is uniquely
+    // destructive: `run()`'s catch cascade-cancels every pending detached
+    // child, killing the work it was waiting to collect. Drift is a worker
+    // failure mode; this guard belongs on workers.
+    if (this.context.role !== 'orchestrator') {
+      const originalRequest = (this.context.metadata as Record<string, unknown> | undefined)?.originalRequest;
+      this.driftDetector = new DriftDetector(
+        [userMessage ?? '', typeof originalRequest === 'string' ? originalRequest : ''].join(' '),
+      );
     }
 
     this.context.status = 'running';
@@ -1005,6 +1030,38 @@ export class AgentWorker extends BaseAgentWorker {
           continue;
         }
 
+        // Drift: is this iteration's tool activity still about the brief?
+        // Checked HERE — after name normalization, before execution — so a
+        // drifting write actually gets stopped rather than producing one more
+        // rogue file. An on-task iteration resets the counter.
+        const drift = this.driftDetector?.record(completion.toolCalls) ?? { action: 'none' as const };
+        if (drift.action === 'abort') {
+          agentLogger.warn({
+            agentId: this.context.id, iteration: this.iteration,
+            consecutive: drift.consecutive, tools: toolNames,
+          }, 'Task drift — aborting: tool activity has not matched the brief for many iterations');
+          this.abortController.abort(`drift:${drift.consecutive}`);
+          throw new DriftDetectedError({
+            agentId: this.context.id,
+            consecutive: drift.consecutive,
+            briefSummary: this.driftDetector?.briefSummary() ?? '',
+          });
+        }
+        if (drift.action === 'nudge') {
+          agentLogger.warn({
+            agentId: this.context.id, iteration: this.iteration,
+            consecutive: drift.consecutive, tools: toolNames,
+          }, 'Task drift suspected — nudging the agent back to its brief');
+          // Let the tools run; just make sure the NEXT turn re-states the task.
+          // Injecting after execution avoids orphaning the assistant's
+          // tool_calls, which strict providers reject.
+          this.pendingDriftNudge =
+            `[SYSTEM] Your recent tool calls do not appear to relate to your task, whose key terms were: ` +
+            `${this.driftDetector?.briefSummary() ?? ''}. If you are still working on it, continue. If you have ` +
+            `drifted onto something else, STOP that work now and either return to the task or report plainly ` +
+            `that you could not complete it. Do not invent a different deliverable.`;
+        }
+
         agentLogger.info({
           agentId: this.context.id, sessionId: this.context.sessionId,
           iteration: this.iteration, elapsedMs: this.elapsed(),
@@ -1069,6 +1126,13 @@ export class AgentWorker extends BaseAgentWorker {
           );
         });
         this.messages.push(...toolMessages);
+
+        // Drift nudge, queued before execution — appended now that the
+        // tool_calls are properly closed out by their results.
+        if (this.pendingDriftNudge) {
+          this.messages.push({ role: 'user' as const, content: this.pendingDriftNudge, timestamp: new Date() });
+          this.pendingDriftNudge = undefined;
+        }
 
         agentLogger.info({
           agentId: this.context.id, sessionId: this.context.sessionId,

@@ -20,6 +20,7 @@ import { buildSecurityReminder } from './input-guard';
 import type { ModelSelector } from './model-selector';
 import { buildOutputDirective } from './output-directive';
 import { formatCriticalRules, getBoundConnectorIds, getRoleConfig, getToolsForRole, SECURITY_PREAMBLE, stripSecurityPreamble } from './roles';
+import { logPromptComposition } from './prompt-budget';
 import { applyToolCap, isSmallModel } from './small-model';
 import type { OrchestratorEvent } from './service';
 import { appendSources } from './types';
@@ -764,6 +765,13 @@ Use these MCP tools when the task benefits from them — especially for people-r
   // providers (Phase 2b).
   const staticPrefix = staticParts.join('');
   const systemPrompt = staticPrefix + semiStaticParts.join('') + volatileParts.join('');
+
+  // What did we just build? Measured per section so an over-long prompt names
+  // its own biggest contributor instead of just reporting a total.
+  logPromptComposition(
+    { role: agentRole, model: finalModel, isSmall: finalIsSmall },
+    { static: staticParts, semiStatic: semiStaticParts, volatile: volatileParts },
+  );
 
   // ── Swarm wiring (pipeline stages) ──────────────────────────────
   // When a parent swarm node is supplied (currently only by pipeline

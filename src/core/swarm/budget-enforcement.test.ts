@@ -4,6 +4,7 @@ import type { AgentContext } from '@/core/types';
 import {
   BudgetExceededError,
   CascadedCancellationError,
+  DriftDetectedError,
   ChildTimeoutError,
   classifyChildError,
 } from './errors';
@@ -229,6 +230,15 @@ describe('classifyChildError taxonomy', () => {
     expect(classifyChildError(new BudgetExceededError({ agentId: 'a', used: 1, cap: 0 }))).toBe('budget');
     expect(classifyChildError(new ChildTimeoutError({ agentId: 'a', elapsedMs: 1, capMs: 0 }))).toBe('timeout');
     expect(classifyChildError(new CascadedCancellationError({ agentId: 'a' }))).toBe('cancelled');
+  });
+
+  test('drift maps to contract_failed, NOT tool_error', () => {
+    // tool_error would send it down the spawner's crash-retry path and spawn a
+    // second child to drift all over again. contract_failed is terminal and
+    // tells the parent the work was not done.
+    expect(
+      classifyChildError(new DriftDetectedError({ agentId: 'a', consecutive: 8, briefSummary: 'world, cup' })),
+    ).toBe('contract_failed');
   });
 
   test('falls through to string heuristics for plain errors', () => {

@@ -107,10 +107,57 @@ only for a role without shell (research, if it were ever flagged).
 
 Do not re-design these; `swarm-v2.md` §3.1/§3.2/§3.5/§3.6 covers them. Confirmed unimplemented: no `validation_contracts` table, no `contextFilter`, no `seat` field.
 
-- **T2.1 Deterministic verify trigger.** Today the choice is prose ("PREFER using the Full Development Cycle"). Make a file-mutating or code-producing task route to the QA-bearing pipeline in code. The QA engine, retry loop, verdict parser and escalation already exist and work — only the door is model-chosen.
-- **T2.2 Drift detection.** Cheapest useful version: N consecutive iterations whose tool calls touch nothing matching the brief's scope → stop and report drift. The post-mortem's child #2 ran 29 iterations past its last on-task action.
-- **T2.3 Outcome evals.** Current suites (`eval/capability-orchestration.yaml`, `capability-quality.yaml`) assert *classification* and *routing* — not whether the right files changed or tests ran. Add an outcome suite: correct files created/modified, no unrelated files, tests actually run, contract-failure detected.
-- **T2.4 Per-section prompt token logging** before any global prompt budget. Nothing currently measures which block eats a small model's context (`spawner.ts:452` is a whole-input warn-only estimate). Measure, then cap.
+- **T2.2 Drift detection — ✅ SHIPPED.** `agent-worker/drift-detector.ts`. Per iteration, does the tool activity (names + args) share any token with the brief? Four consecutive misses → nudge; eight → abort with `DriftDetectedError`, mapped to `contract_failed` (NOT `tool_error`, which would trigger the spawner's crash-retry and spawn a second child to drift again). Brief snapshotted at `run()` — never re-read from `messages`, since compaction evicts it and that eviction is the drift mechanism.
+
+  Biased hard toward false negatives, because a false positive kills work that was succeeding. Four guards, three of them added after review found concrete false-positive scenarios:
+  - **The orchestrator is exempt entirely.** Its vocabulary (`spawn_child`, `collect_children`) never echoes the user's wording, and a false abort there is uniquely destructive: `run()`'s catch calls `detached.cancelAll()`, killing the pending children it was waiting to collect.
+  - **Coordination/discovery tools are neutral** — an iteration made only of `collect_children`/`spawn_child`/skill lookups neither advances nor clears the counter. `ToolLoopDetector` already learned this lesson; its `REPEAT_ALLOWED_TOOLS` exists for the same reason.
+  - **Prefix matching, not equality.** A brief saying "tests" against a `bun test` command used to read as drift. Exact matching would have aborted a successful bug-fix run whose fix lived in a file the brief never named.
+  - Any single shared token clears the iteration; a nudge always precedes an abort; a brief under 5 distinctive tokens disables detection outright.
+
+  It is a backstop against wholesale wandering, not a precision instrument — it cannot detect subtle drift and is not meant to.
+- **T2.4 Per-section prompt token logging — ✅ SHIPPED.** `orchestrator/prompt-budget.ts`, wired into both assembly paths. Labels are derived from each section's own leading text, so a newly added section is accounted for automatically instead of silently going unmeasured. Read-only by design: measure the distribution before imposing a ceiling, or a cap just truncates whichever section happens to be last.
+
+#### T2.1 Deterministic verify trigger — DEFERRED, needs a decision
+
+The QA engine (auto-retry, code-parsed verdicts, human escalation) works; only its
+trigger is prose. But making it deterministic means picking one of two designs,
+and both are behavior changes big enough to want their own PR:
+
+1. **Route implementation tasks to the pipeline in code** — changes orchestrator
+   routing for a broad class of requests.
+2. **Auto-spawn a verifier on the swarm path** (swarm-v2 §3.2) — when a coding
+   child returns `ok` with `filesChanged > 0`, spawn a review child against the
+   diff. Consumes fan-out and budget the parent did not plan for.
+
+Not shipped speculatively: a wrong choice here changes what every coding request
+does. The receipt-based `side_effect` scorer (T1.1) already catches the specific
+"claimed a diff, changed nothing" case in the meantime.
+
+#### T2.3 Outcome evals — DEFERRED, would be dead code today
+
+Investigated and rejected for now. The eval harness **never runs an agent**:
+unit mode is `classifyMessage()` plus a single tool-less completion
+(`src/eval/runner.ts`), so there is no tool loop to observe. Integration mode is
+non-functional — it sends no auth (`/api/chat` returns `Not authenticated` with a
+200, so `res.ok` passes) and fabricates a non-UUID `sessionId` that fails session
+lookup, also 200. Both fail soft into meaningless scores.
+
+`toolsUsed` is hardcoded `[]` at both producers, so the existing `uses_tool` /
+`not_uses_tool` assertions can never fire — and no suite uses them. An outcome
+assertion added today would join them.
+
+**Unblock ordering** (each step small, but they must come first): fix integration
+auth → capture `data.sessionId` instead of fabricating one → add
+`receipt?: SwarmReceipt` to `TestExecutionContext`, hydrated from
+`GET /api/swarm/nodes?rootSessionId=…` → then `side_effect` / `tests_ran` /
+`contract_failed` assertions are ~20 lines each, reusing `scorers.ts` logic
+verbatim. Also worth noting: evals don't run in CI and the harness has no tests
+of its own, so anything added there ships with no signal.
+
+Shipped meanwhile: `defense_held` was registered in `assertions.ts` but missing
+from both `AssertionType` and the loader's valid-type set, so `red-team.yaml`
+warned on every run. Two lines.
 
 ### Explicitly not doing
 

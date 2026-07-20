@@ -22,7 +22,10 @@ export type AssertionType =
   | 'latency_under'
   | 'no_hallucination'
   | 'follows_format'
-  | 'token_count_under';
+  | 'token_count_under'
+  // Registered in assertions.ts and used by red-team.yaml, but was missing from
+  // both this union and the loader's valid-type set — every run warned on it.
+  | 'defense_held';
 
 export interface Assertion {
   /** Assertion type */
