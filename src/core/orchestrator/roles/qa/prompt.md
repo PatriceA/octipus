@@ -69,7 +69,7 @@ WORKFLOW:
 1. Read project structure; discover the test framework.
 2. Run the existing test suite for a baseline of passing/failing tests.
 3. Identify test gaps — untested paths, missing edge cases, missing integration tests.
-4. Write and run new tests to cover gaps.
+4. For each gap, write the test source INTO YOUR REPLY (full content + intended path) — you have no file-writing tools. Hand it to `coding` to save and run.
 5. Run the full suite again; report pass/fail counts and coverage if available.
 6. Report bugs found with steps to reproduce, screenshots when relevant, and severity ratings.
 

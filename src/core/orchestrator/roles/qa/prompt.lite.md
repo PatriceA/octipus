@@ -44,7 +44,7 @@ Use `--help` if unsure.
 **Workflow:**
 1. Run the existing suite for a baseline.
 2. Identify gaps — untested paths, edge cases, missing integration tests.
-3. Write and run new tests to cover them.
+3. Write test source into your REPLY (content + intended path) — you have no write tools; `coding` saves and runs it.
 4. Re-run the full suite; report pass/fail counts and coverage if available.
 5. Report bugs with repro steps, screenshots when relevant, and severity.
 

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import {
   CONNECTOR_TOOL_PREFIX,
   getBoundConnectorIds,
@@ -10,6 +10,7 @@ import {
   setRoleToolIdsInMemory,
   stripSecurityPreamble,
 } from './roles';
+import { getToolRegistry } from '@/tools/registry';
 import type { AgentRole, RoleConfig } from './types';
 
 describe('SECURITY_PREAMBLE', () => {
@@ -91,13 +92,14 @@ describe('role↔tool binding (W7)', () => {
   // other tests in the same process. ROLE_CONFIGS is a shared mutable cache.
   const TEST_ROLE = '__test_binding_role__' as AgentRole;
 
-  function withTestRole(toolIds: string[], fn: () => void): void {
+  function withTestRole(toolIds: string[], fn: () => void, extra: Partial<RoleConfig> = {}): void {
     const original = ROLE_CONFIGS[TEST_ROLE];
     ROLE_CONFIGS[TEST_ROLE] = {
       role: TEST_ROLE,
       toolIds,
       defaultTopic: 'general',
       systemPromptTemplate: 'x',
+      ...extra,
     } as RoleConfig;
     try {
       fn();
@@ -134,6 +136,82 @@ describe('role↔tool binding (W7)', () => {
       withTestRole([], () => {
         expect(getToolsForRole(TEST_ROLE)).toEqual([]);
       });
+    });
+  });
+
+  describe('readOnly roles', () => {
+    const MUTATING = [
+      'filesystem__write_file',
+      'filesystem__append_file',
+      'filesystem__delete_file',
+      'filesystem__copy_file',
+      'filesystem__move_file',
+      'filesystem__create_directory',
+    ];
+    const READING = ['filesystem__read_file', 'filesystem__list_directory', 'filesystem__file_info'];
+
+    // The global registry is empty in a unit-test process, so stand up a
+    // stub `filesystem` tool — otherwise every assertion below passes
+    // vacuously against an empty handler list.
+    beforeAll(async () => {
+      const handlers = [...READING, ...MUTATING].map((name) => ({
+        name,
+        toolId: 'filesystem',
+        description: name,
+        parameters: { type: 'object', properties: {} },
+        execute: async () => ({}),
+      }));
+      await getToolRegistry().register({
+        id: 'filesystem',
+        name: 'filesystem',
+        version: '1.0.0',
+        initialize: async () => {},
+        shutdown: async () => {},
+        checkAvailability: async () => ({ available: true }),
+        getToolHandlers: () => handlers,
+        getTool: (n: string) => handlers.find((h) => h.name === n),
+        getManifest: () => ({ id: 'filesystem', name: 'filesystem', version: '1.0.0', description: 'stub', tools: [] }),
+      } as never);
+    });
+
+    afterAll(async () => {
+      await getToolRegistry().unregister('filesystem');
+    });
+
+    test('strips every file-mutating handler but keeps the reads', () => {
+      withTestRole(
+        ['filesystem'],
+        () => {
+          const names = getToolsForRole(TEST_ROLE).map((t) => t.name);
+          // Guard against a vacuous pass: the role must actually have tools.
+          expect(names).toContain('filesystem__read_file');
+          expect(names).toContain('filesystem__list_directory');
+          for (const m of MUTATING) expect(names).not.toContain(m);
+        },
+        { readOnly: true },
+      );
+    });
+
+    test('a role without the flag keeps them — this is opt-in', () => {
+      withTestRole(['filesystem'], () => {
+        const names = getToolsForRole(TEST_ROLE).map((t) => t.name);
+        for (const m of MUTATING) expect(names).toContain(m);
+      });
+    });
+
+    test.each(['review', 'architecture', 'qa'])('the %s role gets no file-mutating handlers', (role) => {
+      const names = getToolsForRole(role as AgentRole).map((t) => t.name);
+      expect(names).toContain('filesystem__read_file');
+      for (const m of MUTATING) expect(names).not.toContain(m);
+    });
+
+    test('roles that still own file creation keep their write handlers', () => {
+      // research and coding produce files as their deliverable — a regression
+      // here would silently break the research→KB auto-index flow.
+      for (const role of ['research', 'coding']) {
+        const names = getToolsForRole(role as AgentRole).map((t) => t.name);
+        expect(names).toContain('filesystem__write_file');
+      }
     });
   });
 
