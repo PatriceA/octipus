@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { SCRATCH_PREFIX, selectReap } from './tmp-cleanup';
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { SCRATCH_PREFIX, reapCoverageTmp, selectReap } from './tmp-cleanup';
 
 describe('tmp-cleanup selectReap', () => {
   const NOW = 1_000_000_000_000;
@@ -28,5 +31,24 @@ describe('tmp-cleanup selectReap', () => {
     expect(reaped).not.toContain('keep-me'); // wrong prefix
     expect(reaped).not.toContain(`${SCRATCH_PREFIX}unreadable`); // null time
     expect(reaped.every((n) => n.startsWith(SCRATCH_PREFIX))).toBe(true);
+  });
+});
+
+describe('tmp-cleanup reapCoverageTmp', () => {
+  test('removes only the leaked .lcov.info.*.tmp files, never the report itself', () => {
+    const dir = mkdtempSync(join(tmpdir(), `${SCRATCH_PREFIX}covtmp-`));
+    try {
+      for (const name of ['.lcov.info.abc123.tmp', '.lcov.info.def456.tmp', 'lcov.info', 'other.tmp']) {
+        writeFileSync(join(dir, name), '');
+      }
+      expect(reapCoverageTmp(dir)).toBe(2);
+      expect(readdirSync(dir).sort()).toEqual(['lcov.info', 'other.tmp']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('is a no-op on a missing coverage dir', () => {
+    expect(reapCoverageTmp(join(tmpdir(), `${SCRATCH_PREFIX}does-not-exist-${process.pid}`))).toBe(0);
   });
 });

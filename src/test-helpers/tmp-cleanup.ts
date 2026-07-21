@@ -98,3 +98,37 @@ reap(TMP, (last) => last < LOAD - STALE_MS);
 afterAll(() => {
   reap(TMP, (last) => last >= LOAD);
 });
+
+/**
+ * Second leak, same shape: Bun's lcov writer leaves a
+ * `coverage/.lcov.info.<hash>.tmp` behind on every run and never reaps them
+ * (observed: 175 files / 30 MB in one week). Swept at load, not in `afterAll`,
+ * because the writer finalises *after* the last hook — at preload every `.tmp`
+ * present is necessarily from an earlier run, so no timestamp window is needed.
+ *
+ * ponytail: unconditional sweep. Ceiling — a second `bun test` running
+ * concurrently against this same checkout would lose its in-flight `.tmp`
+ * files. Upgrade path: reuse the `LOAD`-window predicate above if that ever
+ * becomes a real workflow.
+ */
+export function reapCoverageTmp(dir: string): number {
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return 0; // no coverage dir yet — nothing to do
+  }
+  let removed = 0;
+  for (const name of names) {
+    if (!name.startsWith('.lcov.info.') || !name.endsWith('.tmp')) continue;
+    try {
+      rmSync(join(dir, name), { force: true });
+      removed++;
+    } catch {
+      // best effort — same as above
+    }
+  }
+  return removed;
+}
+
+reapCoverageTmp(join(import.meta.dir, '..', '..', 'coverage'));
