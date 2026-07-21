@@ -10,6 +10,9 @@ describe('sibling session scope', () => {
     recordChildScope('', {
       nodeId: 'ignored', role: 'coding', topicPath: 'root/coding', paths: ['src/ignored.ts'], report: 'ignored',
     });
+    // Read back the SAME empty id the write used — asserting on a different,
+    // never-written id would pass even if the guard were removed.
+    expect(buildSiblingScopeBrief('', { topicPath: 'root/coding' })).toBe('');
     expect(buildSiblingScopeBrief(SESSION, { topicPath: 'root/coding' })).toBe('');
   });
 
@@ -50,9 +53,13 @@ describe('sibling session scope', () => {
     });
 
     const brief = buildSiblingScopeBrief(SESSION, { topicPath: 'root/coding' });
-    expect(brief).toContain('…and 1 more');
-    expect(brief).toContain('…');
+    expect(brief).toContain('…and 1 more'); // 41 paths, MAX_LISTED_FILES = 40
     expect(brief).not.toContain('src/file-40.ts (by coding)');
+    // Report cut to MAX_REPORT_CHARS + ellipsis. Assert on the exact boundary:
+    // a bare `toContain('…')` would be satisfied by the file-list marker above
+    // even if report truncation were broken entirely.
+    expect(brief).toContain(`${'x'.repeat(1_500)}…`);
+    expect(brief).not.toContain('x'.repeat(1_501));
   });
 
   test('clears all recorded state for a session', () => {

@@ -103,15 +103,25 @@ afterAll(() => {
  * Second leak, same shape: Bun's lcov writer leaves a
  * `coverage/.lcov.info.<hash>.tmp` behind on every run and never reaps them
  * (observed: 175 files / 30 MB in one week). Swept at load, not in `afterAll`,
- * because the writer finalises *after* the last hook — at preload every `.tmp`
- * present is necessarily from an earlier run, so no timestamp window is needed.
+ * because the writer finalises *after* the last hook — so this process's own
+ * `.tmp` does not exist yet at preload and can never be its own victim.
  *
- * ponytail: unconditional sweep. Ceiling — a second `bun test` running
- * concurrently against this same checkout would lose its in-flight `.tmp`
- * files. Upgrade path: reuse the `LOAD`-window predicate above if that ever
- * becomes a real workflow.
+ * The age guard is what makes that safe for *other* processes: this preload
+ * runs on every `bun test` invocation, including a targeted single-file run
+ * started in a second terminal while a full suite is mid-flight. Deleting that
+ * suite's in-flight `.tmp` would make its coverage output silently vanish
+ * (Bun's finalise would fail against a missing path, and the `catch` below
+ * would swallow it). Anything younger than `FRESH_MS` is therefore assumed to
+ * belong to a live run and left alone.
+ *
+ * ponytail: age window, not ownership tracking. Ceiling — back-to-back runs
+ * inside the window leave a few files behind until they age out (a handful,
+ * versus the 175 that motivated this). Upgrade path: read the writer's pid
+ * from the filename if Bun ever puts one there.
  */
-export function reapCoverageTmp(dir: string): number {
+const FRESH_MS = 5 * 60 * 1000; // 5m — a full `bun test src scripts` run is ~80s
+
+export function reapCoverageTmp(dir: string, now: number = Date.now()): number {
   let names: string[];
   try {
     names = readdirSync(dir);
@@ -122,6 +132,11 @@ export function reapCoverageTmp(dir: string): number {
   for (const name of names) {
     if (!name.startsWith('.lcov.info.') || !name.endsWith('.tmp')) continue;
     try {
+      const st = statSync(join(dir, name));
+      // Plain files only (a directory of this name would throw on the
+      // non-recursive rmSync anyway — this just makes the skip explicit), and
+      // only ones too old to still be in flight elsewhere.
+      if (!st.isFile() || st.mtimeMs > now - FRESH_MS) continue;
       rmSync(join(dir, name), { force: true });
       removed++;
     } catch {
