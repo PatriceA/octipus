@@ -82,6 +82,13 @@ export default function ComparePage() {
     queryFn: () => api.get<CompareData>(`/eval/compare?ids=${selectedIds.join(',')}`),
     enabled: selectedIds.length >= 2,
   });
+  // Same `?? []` normalization as `availableRuns` above: a 200 whose body is
+  // missing an array must not throw during render. Reading `.map`/`.findIndex`
+  // straight off the payload turns one malformed response into a full-page
+  // "This page couldn't load" via the error boundary.
+  const evalRuns = compareData?.evalRuns ?? [];
+  const testIds = compareData?.testIds ?? [];
+  const matrix = compareData?.matrix ?? {};
   const rawError = compareError ? (compareError as Error).message : '';
   // Allow dismissing the current error without refetching. Key dismissal on the
   // error's timestamp so a *new* failure re-shows the banner even when the
@@ -102,12 +109,12 @@ export default function ComparePage() {
   // Detect regressions: test passed in first run but failed in later run
   const isRegression = (testId: string, evalId: string): boolean => {
     if (!compareData) return false;
-    const cell = compareData.matrix[testId]?.[evalId];
+    const cell = matrix[testId]?.[evalId];
     if (!cell || cell.passed) return false;
     // Check if earlier runs passed
-    const idx = compareData.evalRuns.findIndex(r => r.id === evalId);
+    const idx = evalRuns.findIndex(r => r.id === evalId);
     for (let i = 0; i < idx; i++) {
-      const prevCell = compareData.matrix[testId]?.[compareData.evalRuns[i].id];
+      const prevCell = matrix[testId]?.[evalRuns[i].id];
       if (prevCell?.passed) return true;
     }
     return false;
@@ -220,7 +227,7 @@ export default function ComparePage() {
                   <th className="px-4 py-3 text-left text-sm font-medium text-on-surface-variant sticky left-0 bg-surface-container z-10 min-w-[200px]">
                     Test ID
                   </th>
-                  {compareData.evalRuns.map((run, i) => (
+                  {evalRuns.map((run, i) => (
                     <th
                       key={run.id}
                       className="px-4 py-3 text-center text-sm font-medium text-on-surface-variant min-w-[160px]"
@@ -235,7 +242,7 @@ export default function ComparePage() {
                 </tr>
               </thead>
               <tbody>
-                {compareData.testIds.map(testId => (
+                {testIds.map(testId => (
                   <tr
                     key={testId}
                     className="border-b border-outline-variant/10 hover:bg-surface-container/30"
@@ -243,8 +250,8 @@ export default function ComparePage() {
                     <td className="px-4 py-2.5 text-sm font-mono text-on-surface sticky left-0 bg-surface-container z-10">
                       {testId}
                     </td>
-                    {compareData.evalRuns.map(run => {
-                      const cell = compareData.matrix[testId]?.[run.id];
+                    {evalRuns.map(run => {
+                      const cell = matrix[testId]?.[run.id];
                       const regression = isRegression(testId, run.id);
 
                       if (!cell) {

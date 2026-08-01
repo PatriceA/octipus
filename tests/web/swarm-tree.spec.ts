@@ -16,17 +16,23 @@ test.describe('swarm tree', () => {
 
   test('cancel button hits the cancel endpoint', async ({ authenticatedPage: page }) => {
     let cancelCalled = false;
-    await page.route('**/api/swarm/runs/*/cancel**', (route) => {
+    // The tree posts to /swarm/nodes/<nodeId>/cancel (swarm-tree.tsx). The old
+    // pattern here was /swarm/runs/*/cancel, which matches nothing — and since
+    // the assertion sat inside an `if (visible)`, the mismatch could never fail
+    // the test; it just skipped.
+    await page.route('**/api/swarm/nodes/*/cancel**', (route) => {
       cancelCalled = true;
       return json(route, 200, { ok: true });
     });
+    // Cancelling asks for confirmation first, and Playwright auto-DISMISSES
+    // dialogs — so without this the handler returns early and never posts.
+    page.on('dialog', (dialog) => dialog.accept());
+
     await page.goto('/chat');
-    const cancelBtn = page.getByRole('button', { name: /cancel/i }).first();
-    if (await cancelBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
-      await cancelBtn.click();
-      await page.waitForTimeout(500);
-      expect(cancelCalled).toBeTruthy();
-    }
+    const cancelBtn = page.getByRole('button', { name: /cancel swarm/i }).first();
+    await expect(cancelBtn).toBeVisible({ timeout: 10_000 });
+    await cancelBtn.click();
+    await expect.poll(() => cancelCalled, { timeout: 5_000 }).toBe(true);
   });
 
   test('status transitions do not crash the tree', async ({ authenticatedPage: page }) => {

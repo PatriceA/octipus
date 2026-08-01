@@ -38,8 +38,14 @@ export function OrchestratorModelNote() {
 
   if (!topicsData || !modelsData) return null;
 
-  const chatModel = topicsData.topics.find((t) => t.value === 'chat')?.primaryModel ?? null;
-  const defaultModel = modelsData.models.find((m) => m.isDefault)?.name ?? null;
+  // `?? []` because a 200 whose body lacks the array is not hypothetical — an
+  // older backend, a partial deploy, or a proxy returning `{}` all produce it,
+  // and this note is a decoration on the Models page. Reading `.find` off the
+  // missing array threw during render, which the error boundary turned into a
+  // full-page "This page couldn't load" — an auxiliary widget taking down the
+  // page it merely annotates.
+  const chatModel = (topicsData.topics ?? []).find((t) => t.value === 'chat')?.primaryModel ?? null;
+  const defaultModel = (modelsData.models ?? []).find((m) => m.isDefault)?.name ?? null;
   const effective = chatModel ?? defaultModel;
   const overridden = !!chatModel && !!defaultModel && chatModel !== defaultModel;
 

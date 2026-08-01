@@ -99,6 +99,22 @@ export async function stubModels(page: Page): Promise<void> {
   });
 }
 
+/**
+ * Topic → model bindings. The Models page reads these (OrchestratorModelNote
+ * shows which lane the orchestrator resolves), so leaving `/api/topics`
+ * unstubbed meant the page rendered against a body with no `topics` array.
+ */
+export async function stubTopics(page: Page): Promise<void> {
+  await page.route('**/api/topics', (route) =>
+    json(route, 200, {
+      topics: [
+        { value: 'chat', label: 'chat', primaryModel: 'gpt-4o', backupModel: null, executorModel: null },
+        { value: 'coding', label: 'coding', primaryModel: 'claude-3-5-sonnet', backupModel: null, executorModel: null },
+      ],
+    }),
+  );
+}
+
 export async function stubExperts(page: Page): Promise<void> {
   const experts = [
     {
@@ -403,6 +419,7 @@ export async function stubAllDefaults(page: Page): Promise<void> {
   await stubHealth(page);
   await stubSessions(page);
   await stubModels(page);
+  await stubTopics(page);
   await stubExperts(page);
   await stubMcp(page);
   await stubKnowledge(page);

@@ -3,7 +3,12 @@ import nextConfig from 'eslint-config-next';
 const config = [
   ...nextConfig,
   {
-    ignores: ['.next/', 'node_modules/'],
+    // `.next-desktop/` is the Tauri static-export build dir (gitignored, ~1 GB
+    // of generated chunks). CI never has it, so CI's lint is green — but any
+    // developer who has run a desktop build gets ~530 errors from bundled
+    // output and none from their own code, which makes the local lint useless
+    // right where it should be most useful.
+    ignores: ['.next/', '.next-desktop/', 'out/', 'node_modules/'],
   },
   {
     rules: {

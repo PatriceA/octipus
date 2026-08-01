@@ -29,12 +29,19 @@ test.describe('accessibility', () => {
 
   test('keyboard-only nav reaches interactive elements', async ({ authenticatedPage: page }) => {
     await page.goto('/');
+    // Wait for the shell to hydrate before tabbing. Pressing Tab against a
+    // not-yet-interactive document leaves focus on <body>, which the assertion
+    // below (correctly) treats as a failure — so without this the test reports
+    // an accessibility defect when what it actually caught was a race.
+    await expect(page.locator('a, button').first()).toBeVisible();
     // Tab a few times; we should land on something focusable.
     for (let i = 0; i < 5; i++) {
       await page.keyboard.press('Tab');
     }
     const focused = await page.evaluate(() => document.activeElement?.tagName);
-    expect(['A', 'BUTTON', 'INPUT', 'TEXTAREA', 'SELECT']).toContain(focused || 'BODY');
+    // `?? 'BODY'` keeps the failure message readable ("expected BODY to be one
+    // of …") instead of "expected undefined".
+    expect(['A', 'BUTTON', 'INPUT', 'TEXTAREA', 'SELECT']).toContain(focused ?? 'BODY');
   });
 
   test('icon-only buttons have accessible names', async ({ authenticatedPage: page }) => {
