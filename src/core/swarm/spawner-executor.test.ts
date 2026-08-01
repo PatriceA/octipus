@@ -14,6 +14,10 @@ import { SwarmSpawner } from './spawner';
 describe.skipIf(!isIntegration)('SwarmSpawner — executor model resolution (W9)', () => {
   // resolveChildModelAndExpert is private; cast to reach it in the test.
   let resolve: (parentModel: string, childRole: string, msg: string, hasPlan?: boolean) => Promise<{ model: string }>;
+  /** Same, but pins a specific expert so the match is deterministic. */
+  let resolveWithExpert: (
+    parentModel: string, childRole: string, msg: string, expertId: string, hasPlan?: boolean,
+  ) => Promise<{ model: string }>;
 
   beforeAll(async () => {
     await setupIntegrationDb();
@@ -35,6 +39,12 @@ describe.skipIf(!isIntegration)('SwarmSpawner — executor model resolution (W9)
           a: string, b: string, c: string, d?: string, e?: string, f?: boolean, g?: boolean,
         ) => Promise<{ model: string }>;
       }).resolveChildModelAndExpert(parentModel, childRole, msg, undefined, undefined, false, hasPlan);
+    resolveWithExpert = (parentModel, childRole, msg, expertId, hasPlan = false) =>
+      (spawner as unknown as {
+        resolveChildModelAndExpert: (
+          a: string, b: string, c: string, d?: string, e?: string, f?: boolean, g?: boolean,
+        ) => Promise<{ model: string }>;
+      }).resolveChildModelAndExpert(parentModel, childRole, msg, expertId, undefined, false, hasPlan);
   });
 
   afterAll(async () => {
@@ -70,5 +80,38 @@ describe.skipIf(!isIntegration)('SwarmSpawner — executor model resolution (W9)
     // Without a plan, the branch is skipped — a misconfigured executor must not
     // block a recon spawn; it falls through to the primary.
     expect((await resolve('parent-id', 'coding', 'do coding', false)).model).toBe('primary-id');
+  });
+  test('planned child: the lane executor overrides an expert modelPreference', async () => {
+    const { setTopicConfig } = await import('@/models/topic-config');
+    const { getDb } = await import('@/db/postgres');
+    const { experts } = await import('@/db/schema/experts');
+    await setTopicConfig('agents', { executorModel: 'exec-model', temperature: null, maxTokens: null });
+
+    // A specialist that names its own (full-price) model — the shape 9 of the
+    // 16 shipped experts have, all of them on the `agents` lane that every
+    // hands-on role aliases to.
+    const [expert] = await getDb()
+      .insert(experts)
+      .values({
+        name: 'Pricey Specialist',
+        role: 'coding',
+        topic: 'agents',
+        modelPreference: 'expert-choice-id',
+        isSystem: true,
+      } as never)
+      .returning();
+
+    // Planned ⇒ the judgment is already done, so the checklist runs on the
+    // cheap executor even though the expert names a model. Without this the
+    // executor was unreachable for the whole agents lane.
+    const planned = await resolveWithExpert('parent-id', 'coding', 'do coding', expert.id, true);
+    expect(planned.model).toBe('exec-id');
+
+    // Plan-less ⇒ this is a judgment delegation and the expert's choice stands.
+    // Note the expert branch passes `modelPreference` through verbatim, where
+    // the executor branch resolves a model NAME to its modelId — a pre-existing
+    // asymmetry this test pins rather than changes.
+    const recon = await resolveWithExpert('parent-id', 'coding', 'do coding', expert.id, false);
+    expect(recon.model).toBe('expert-choice-id');
   });
 });

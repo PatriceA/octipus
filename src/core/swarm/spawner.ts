@@ -1240,12 +1240,15 @@ export class SwarmSpawner {
     // rules, skill fragments) is held until then.
 
     // Model selection — in order of preference:
-    //   1. expert.modelPreference (specialist's explicit choice)
-    //   2. lane executorModel (W9 planner→executor split) — ONLY when the
+    //   1. lane executorModel (W9 planner→executor split) — ONLY when the
     //      parent supplied a `plan` (hasPlan). A plan is the parent saying "I've
     //      done the thinking; run these steps mechanically", so it binds to the
-    //      lane's cheap executor. A plan-less child is a recon/judgment
-    //      delegation and skips this branch → falls through to the primary.
+    //      lane's cheap executor. This outranks modelPreference *on a planned
+    //      spawn only*: the preference picks a model to think with, and the
+    //      plan is what removes the thinking. A plan-less child skips this
+    //      branch entirely → expert preference, then primary.
+    //   2. expert.modelPreference (specialist's explicit choice) — authoritative
+    //      for every plan-less (recon/judgment) delegation.
     //   3. lane→model mapping (topic primary binding)
     //   4. fail loud — do NOT inherit parent model. The parent's model is
     //      whatever the orchestrator happened to pick; it has no claim to
@@ -1262,14 +1265,28 @@ export class SwarmSpawner {
     // and must all agree on the same value.
     const laneExecutor = getTopicConfig(lane).executorModel;
     if (candidate && hasPlan && laneExecutor) {
-      // A plan was supplied AND the lane has a cheap executor, but the matched
-      // expert's explicit modelPreference wins (precedence #1). Surface the
-      // shadowing at info so operators can see why a planned child still ran
-      // on a full-price model.
+      // A plan says the parent has already done the judgment and wants the
+      // steps run mechanically. `modelPreference` answers a different question
+      // — which model this specialist should THINK with — and that question is
+      // moot once a checklist replaces the thinking. So on a planned spawn the
+      // lane's executor wins; the expert still contributes its prompt, skills
+      // and tools, only the model changes.
+      //
+      // This used to go the other way, which made the saving unreachable in
+      // practice: on this install 9 of 16 experts carry a modelPreference and
+      // ALL of them sit on the `agents` lane, the alias target for every
+      // hands-on role (general, coding, review, devops, qa, …). A measured
+      // planned run spent 101,546 tokens, 100% of them on the full-price
+      // planner, with the configured executor untouched.
+      //
+      // The escape hatch is per-lane and deliberate: a lane whose work needs a
+      // capable model regardless simply leaves `executorModel` empty, which
+      // skips this branch entirely (planner == executor).
       coreLogger.info(
         { lane, childRole, expertModel: candidate, executorModel: laneExecutor },
-        'Planned child: expert modelPreference overrides the lane executorModel',
+        'Planned child: lane executorModel overrides expert modelPreference (mechanical execution)',
       );
+      candidate = undefined;
     }
     if (!candidate && hasPlan) {
       // No plan ⇒ this whole block is skipped and the child resolves to the
