@@ -1,4 +1,5 @@
 import { deriveParamCount } from '../../../src/core/orchestrator/mode-selector';
+import { canonicalTopic } from '../../../src/models/topics';
 import type { APIClient } from '../client';
 import { fixtures } from '../fixtures';
 import type { TestRunner } from '../runner';
@@ -84,12 +85,18 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
 
     const missing: string[] = [];
     for (const role of SPECIALIST_ROLES) {
-      // Primary binding from /topics wins (matches getModelForTopic routing);
-      // fall back to legacy topics[] on the model card.
-      const primaryName = primaryByTopic.get(role);
+      // Resolve the role the way the runtime does. Since the topic
+      // consolidation, most specialist roles are retired names that alias onto
+      // one of the canonical lanes (`research` → `writing`, the hands-on roles
+      // → `agents`), and only the lanes appear in /topics. Looking up the raw
+      // role therefore reported "research unmapped" for a role that routes
+      // perfectly well — a false failure that would have masked a real one.
+      const lane = canonicalTopic(role);
+      const primaryName = primaryByTopic.get(lane) ?? primaryByTopic.get(role);
       const modelId = (primaryName && modelIdByName.get(primaryName))
         ?? data.models.find(m =>
-          m.isEnabled !== false && Array.isArray(m.topics) && m.topics.includes(role),
+          m.isEnabled !== false && Array.isArray(m.topics)
+          && (m.topics.includes(lane) || m.topics.includes(role)),
         )?.modelId;
       if (!modelId) {
         missing.push(role);
