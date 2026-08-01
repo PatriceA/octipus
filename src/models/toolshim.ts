@@ -23,6 +23,49 @@
 import type { ToolCall } from '@/core/types';
 import { modelLogger } from '@/utils/logger';
 
+/**
+ * Structural leftovers of a tool call the model tried, and failed, to emit —
+ * a half-serialized envelope, a provider-specific block, a fenced call.
+ */
+const TOOL_CALL_MARKERS: RegExp[] = [
+  /"(?:name|tool|tool_name|function|recipient_name)"\s*:/i,
+  /"(?:arguments|parameters|args|tool_input)"\s*:/i,
+  /<\s*(?:tool_call|function_call|tool_code|invoke)\b/i,
+  /```\s*(?:tool_code|tool_call|json)\b/i,
+  /\bfunctions?\.[a-z0-9_]+\s*\(/i,
+];
+
+/**
+ * Does this prose look like a tool call the model failed to emit natively?
+ *
+ * The toolshim costs a whole extra LLM call, so it must not fire on prose that
+ * was never trying to be a tool call — i.e. on an ordinary final answer, which
+ * is the normal way a turn ends. Historically it did: a daily 1-iteration cron
+ * whose orchestrator simply answered in plain text still paid for a translator
+ * call, and when that translator was a cold local model the run sat ~15 min
+ * past its finished answer.
+ *
+ * Two signals, both cheap and local:
+ *  - the prose names a tool that is actually advertised to this agent, or
+ *  - it carries the structural debris of a botched call envelope.
+ *
+ * Tool names are matched on identifier boundaries so `spawn_child` matches the
+ * word but not `respawn_children`. A false positive costs one bounded shim call
+ * (today's behaviour); a false negative costs the recovery — so when in doubt
+ * the markers above are deliberately broad.
+ */
+export function proseShowsToolIntent(prose: string, toolNames: Iterable<string>): boolean {
+  if (!prose?.trim()) return false;
+  if (TOOL_CALL_MARKERS.some((rx) => rx.test(prose))) return true;
+  for (const name of toolNames) {
+    if (!name) continue;
+    // Identifier boundary: not preceded/followed by a name character.
+    const rx = new RegExp(`(?<![A-Za-z0-9_])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_])`);
+    if (rx.test(prose)) return true;
+  }
+  return false;
+}
+
 /** The tool schema shape we hand the translator — same fields the providers see. */
 export interface ToolShimSchema {
   name: string;

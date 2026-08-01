@@ -393,8 +393,28 @@ describe('AgentWorker toolshim gate (native tool-caller ⇒ no translator)', () 
     const topicSpy = spyOn(getModelRegistry(), 'getModelForTopic').mockResolvedValue(null as never);
 
     priv.sawNativeToolCall = false;
-    expect(await priv.tryToolShim('I will now write hello to /a.txt')).toBeNull();
+    // Names the advertised tool, so the intent gate passes and the shim runs.
+    expect(await priv.tryToolShim('I will now call filesystem__write_file with /a.txt')).toBeNull();
     expect(topicSpy).toHaveBeenCalledWith('background');
+    topicSpy.mockRestore();
+  });
+
+  test('a plain final answer never reaches the translator, even from a weak model', async () => {
+    const worker = shimWorker();
+    const priv = worker as unknown as {
+      sawNativeToolCall: boolean;
+      tryToolShim: (prose: string) => Promise<unknown>;
+    };
+    const topicSpy = spyOn(getModelRegistry(), 'getModelForTopic');
+
+    // No native call yet (the daily-cron case: a 1-iteration run that simply
+    // answers), and prose with no tool intent. Historically this still bought a
+    // translator call and, against a cold local model, ~15 min of dead wait.
+    priv.sawNativeToolCall = false;
+    expect(
+      await priv.tryToolShim('The daily update task for WM 2026 has been disabled.'),
+    ).toBeNull();
+    expect(topicSpy).not.toHaveBeenCalled();
     topicSpy.mockRestore();
   });
 

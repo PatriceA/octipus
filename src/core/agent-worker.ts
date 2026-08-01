@@ -10,7 +10,7 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import { getCostTracker } from '@/models/cost-tracker';
 import { type CompletionResult, getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
-import { type ToolShimSchema, translateToToolCall } from '@/models/toolshim';
+import { type ToolShimSchema, proseShowsToolIntent, translateToToolCall } from '@/models/toolshim';
 import { applyTopicParamOverrides, getTopicConfig } from '@/models/topic-config';
 import { getConfig } from '@/config';
 import type { ModelConfigEntry } from '@/db/schema/models';
@@ -692,11 +692,14 @@ export class AgentWorker extends BaseAgentWorker {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const ceilingPromise = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
-        // Render sub-minute ceilings in seconds — `Math.round(ms/60_000)` prints
-        // a bare "0min" for anything under 30s, which reads as "no ceiling".
+        // Render short ceilings in their own unit — `Math.round(ms/60_000)`
+        // prints a bare "0min" for anything under 30s, which reads as "no
+        // ceiling" in a log line whose whole point is the ceiling.
         const ceilingLabel = ceilingMs >= 60_000
           ? `${Math.round(ceilingMs / 60_000)}min`
-          : `${Math.round(ceilingMs / 1_000)}s`;
+          : ceilingMs >= 1_000
+            ? `${Math.round(ceilingMs / 1_000)}s`
+            : `${ceilingMs}ms`;
         const msg = `Self-timed tool exceeded the absolute ceiling (${ceilingLabel}) during ${label} — treating as a wedged wait`;
         agentLogger.error(
           { agentId: this.context.id, iteration: this.iteration, phase: label, ceilingMs },
@@ -1581,6 +1584,16 @@ export class AgentWorker extends BaseAgentWorker {
     if (this.sawNativeToolCall) return null;
     const advertised = this.getAdvertisedToolHandlers();
     if (advertised.length === 0) return null;
+    // Prose that never tried to be a tool call has nothing to translate. This
+    // is the ordinary final answer, so without the check the shim bills an
+    // extra LLM call on every successful turn. See `proseShowsToolIntent`.
+    if (!proseShowsToolIntent(prose, advertised.map((t) => t.name))) {
+      agentLogger.debug(
+        { agentId: this.context.id, iteration: this.iteration },
+        'Toolshim skipped: prose shows no tool intent (plain final answer)',
+      );
+      return null;
+    }
     // Mark attempted up front: a thrown/failed translator call must still count
     // against the once-per-iteration cap (no retry storm on the failure path).
     this.toolShimAttemptedIteration = this.iteration;
