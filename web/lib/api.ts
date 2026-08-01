@@ -167,6 +167,54 @@ class ApiClient {
   delete<T>(path: string): Promise<T> {
     return this.request<T>('DELETE', path);
   }
+
+  /**
+   * Auth headers only — no Content-Type. `fetch` must set that itself for
+   * `FormData` so the multipart boundary is included; setting it by hand
+   * produces a body the server cannot parse.
+   */
+  private authHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {};
+    const token = this.getToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (this.workspaceSlug) headers['X-Octipus-Workspace'] = this.workspaceSlug;
+    return headers;
+  }
+
+  /** Multipart upload. Not routed through `request` — that JSON-encodes the body. */
+  async upload<T>(path: string, files: File[], field = 'files'): Promise<T> {
+    const form = new FormData();
+    for (const file of files) form.append(field, file);
+    const res = await fetch(`${getApiUrl()}${path}`, {
+      method: 'POST',
+      headers: this.authHeaders(),
+      body: form,
+      credentials: 'include',
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(detail || `Upload failed (${res.status})`);
+    }
+    return res.json() as Promise<T>;
+  }
+
+  /**
+   * Fetch binary content with the caller's credentials.
+   *
+   * Needed because an `<img src>` cannot carry them everywhere octipus runs:
+   * in the browser the API is same-origin via the Next rewrite and the session
+   * cookie rides along, but the Tauri desktop client talks to an arbitrary
+   * remote base URL with a bearer token that a plain `<img>` never sends. One
+   * authenticated fetch is correct in both, so we don't branch on deployment.
+   */
+  async getBlob(path: string): Promise<Blob> {
+    const res = await fetch(`${getApiUrl()}${path}`, {
+      headers: this.authHeaders(),
+      credentials: 'include',
+    });
+    if (!res.ok) throw new Error(`Failed to load ${path} (${res.status})`);
+    return res.blob();
+  }
 }
 
 export const api = new ApiClient();

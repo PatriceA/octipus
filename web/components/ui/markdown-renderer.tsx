@@ -4,6 +4,7 @@ import { Check, Copy } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { AuthedImage } from '@/components/ui/authed-image';
 import { remarkWikilink } from '@/lib/remark-wikilink';
 import { cn } from '@/lib/utils';
 
@@ -185,6 +186,10 @@ export function Markdown({
                 {children}
               </a>
             );
+          },
+          img({ src, alt, title }) {
+            if (typeof src !== 'string' || !src) return null;
+            return <AuthedImage src={src} alt={alt} title={title} />;
           },
           ul({ children }) {
             return <ul className="list-disc pl-5 space-y-0.5">{children}</ul>;

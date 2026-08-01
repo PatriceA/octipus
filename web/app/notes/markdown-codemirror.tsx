@@ -32,6 +32,15 @@ export interface MarkdownEditorHandle {
   wrap: (before: string, after?: string, placeholder?: string) => void;
   /** Prepend a token to the start of the caret's line (headings/list/quote). */
   linePrefix: (prefix: string) => void;
+  /** Insert text at the caret, replacing any selection. */
+  insert: (text: string) => void;
+  /**
+   * Replace the first occurrence of `token` with `text`. Used to swap an
+   * upload placeholder for the finished image once the request returns — by
+   * then the caret has usually moved, so a position-based insert would land
+   * the image wherever the user happens to be typing.
+   */
+  replaceToken: (token: string, text: string) => void;
   focus: () => void;
 }
 
@@ -41,6 +50,8 @@ interface Props {
   onSave?: () => void;
   getNotes: () => NoteIndexEntry[];
   getTags: () => TagCount[];
+  /** Images pasted or dropped into the editor. */
+  onFiles?: (files: File[]) => void;
 }
 
 /**
@@ -57,6 +68,31 @@ function slugifyClient(input: string): string {
     .replace(/-{2,}/g, '-')
     .replace(/\/{2,}/g, '/')
     .replace(/^[-/]+|[-/]+$/g, '');
+}
+
+/**
+ * Image files carried by a paste or drop, in either shape the browser uses:
+ * `files` for a real file drop, `items` for a screenshot on the clipboard
+ * (which has no entry in `files` in some browsers).
+ */
+export function imageFilesFrom(data: DataTransfer | null): File[] {
+  if (!data) return [];
+  const out: File[] = [];
+  const seen = new Set<string>();
+  const add = (file: File | null) => {
+    if (!file || !file.type.startsWith('image/')) return;
+    // A clipboard image can appear in BOTH `items` and `files`; de-dupe so one
+    // paste doesn't upload the same screenshot twice.
+    const key = `${file.name}:${file.size}:${file.type}:${file.lastModified}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(file);
+  };
+  for (const item of Array.from(data.items ?? [])) {
+    if (item.kind === 'file') add(item.getAsFile());
+  }
+  for (const file of Array.from(data.files ?? [])) add(file);
+  return out;
 }
 
 /** Completion source for `[[wikilinks]]`. */
@@ -155,7 +191,7 @@ const editorTheme = EditorView.theme({
 });
 
 const NotesMarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function NotesMarkdownEditor(
-  { value, onChange, onSave, getNotes, getTags },
+  { value, onChange, onSave, getNotes, getTags, onFiles },
   ref,
 ) {
   const cmRef = useRef<ReactCodeMirrorRef>(null);
@@ -163,6 +199,8 @@ const NotesMarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function Not
   // always sees the latest values without being torn down on every render.
   const onSaveRef = useRef(onSave);
   onSaveRef.current = onSave;
+  const onFilesRef = useRef(onFiles);
+  onFilesRef.current = onFiles;
   const getNotesRef = useRef(getNotes);
   getNotesRef.current = getNotes;
   const getTagsRef = useRef(getTags);
@@ -186,6 +224,26 @@ const NotesMarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function Not
           },
         },
       ]),
+      // Paste / drop of image files. A screenshot on the clipboard arrives as a
+      // `file` item with no text alternative, so CodeMirror's own paste handling
+      // would drop it silently. Only intercept when there ARE image files —
+      // pasting text or dragging a text selection must behave normally.
+      EditorView.domEventHandlers({
+        paste(event) {
+          const files = imageFilesFrom(event.clipboardData);
+          if (files.length === 0 || !onFilesRef.current) return false;
+          event.preventDefault();
+          onFilesRef.current(files);
+          return true;
+        },
+        drop(event) {
+          const files = imageFilesFrom(event.dataTransfer);
+          if (files.length === 0 || !onFilesRef.current) return false;
+          event.preventDefault();
+          onFilesRef.current(files);
+          return true;
+        },
+      }),
       oneDark,
       editorTheme,
     ],
@@ -215,6 +273,23 @@ const NotesMarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function Not
         selection: { anchor: head + prefix.length },
       });
       view.focus();
+    },
+    insert(text) {
+      const view = cmRef.current?.view;
+      if (!view) return;
+      const { from, to } = view.state.selection.main;
+      view.dispatch({
+        changes: { from, to, insert: text },
+        selection: { anchor: from + text.length },
+      });
+      view.focus();
+    },
+    replaceToken(token, text) {
+      const view = cmRef.current?.view;
+      if (!view) return;
+      const at = view.state.doc.toString().indexOf(token);
+      if (at < 0) return; // the user deleted the placeholder — respect that
+      view.dispatch({ changes: { from: at, to: at + token.length, insert: text } });
     },
     focus() {
       cmRef.current?.view?.focus();
