@@ -77,6 +77,11 @@ Present this clearly so the user can review and approve before coding begins.`,
         topic: 'coding',
         toolIds: ['filesystem', 'shell', 'git'],
         requiresApproval: false,
+        // The one stage here whose whole purpose is to leave code behind, so it
+        // is the one that gets evidence-gated. Testing / Code Review / QA are
+        // deliberately NOT declared: each can legitimately pass by only reading
+        // and running things, and a wrong gate fails work that succeeded.
+        producesArtifacts: true,
         promptTemplate: `Implement the approved plan. Write clean, well-documented code following project conventions.
 
 Task: {{description}}
@@ -300,6 +305,8 @@ Report:
         topic: 'coding',
         toolIds: ['filesystem', 'shell', 'git'],
         requiresApproval: false,
+        // A bug fix that changed no file did not happen. See 'Implementation'.
+        producesArtifacts: true,
         promptTemplate: `Implement the bug fix based on the diagnosis.
 
 Bug: {{description}}
@@ -341,6 +348,38 @@ Report: FIXED / NOT FIXED / PARTIALLY FIXED with evidence.`,
 ];
 
 /**
+ * Add `producesArtifacts` to an already-seeded preset's steps when the stored
+ * step has no such key at all. Matches steps BY NAME (a user may have added,
+ * removed or reordered steps) and only ever *adds* the key — a step the user
+ * explicitly set to `false` stays false, and every other field is untouched.
+ * No-ops (no write) when nothing is missing, which is the steady state.
+ */
+async function backfillPresetStepFlags(name: string, shipped: PipelineStepConfig[]): Promise<void> {
+  const declared = new Map(shipped.filter((s) => s.producesArtifacts).map((s) => [s.name, true]));
+  if (declared.size === 0) return;
+
+  const db = getDb();
+  const [row] = await db
+    .select({ id: pipelineTemplates.id, steps: pipelineTemplates.steps })
+    .from(pipelineTemplates)
+    .where(eq(pipelineTemplates.name, name))
+    .limit(1);
+  if (!row) return;
+
+  const steps = (row.steps as PipelineStepConfig[]) ?? [];
+  let changed = false;
+  const patched = steps.map((step) => {
+    if (step.producesArtifacts !== undefined || !declared.has(step.name)) return step;
+    changed = true;
+    return { ...step, producesArtifacts: true };
+  });
+  if (!changed) return;
+
+  await db.update(pipelineTemplates).set({ steps: patched, updatedAt: new Date() }).where(eq(pipelineTemplates.id, row.id));
+  logger.info({ template: name }, 'Backfilled producesArtifacts on preset pipeline template');
+}
+
+/**
  * Seed preset pipeline templates into the database.
  * Idempotent — only inserts templates that don't exist yet.
  * Existing templates are never overwritten so user modifications persist across restarts.
@@ -357,7 +396,11 @@ export async function seedPresetTemplates(): Promise<void> {
 
     if (existing.length > 0) {
       // Do not overwrite — users can edit preset templates and we must not
-      // clobber their changes on restart.
+      // clobber their changes on restart. The ONE exception is backfilling a
+      // step field the row predates entirely: an absent key was never a user
+      // choice, and without this an existing install never gets the evidence
+      // declaration, so the gate silently never fires.
+      await backfillPresetStepFlags(preset.name, preset.steps);
       continue;
     }
 

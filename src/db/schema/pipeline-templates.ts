@@ -17,6 +17,16 @@ export interface PipelineStepConfig {
    * primary binding. Empty ⇒ topic binding (today's behaviour).
    */
   model?: string;
+  /**
+   * DECLARES that this stage is expected to leave files behind. Only declared
+   * stages are evidence-gated: a run that changed zero files fails instead of
+   * reporting green over an empty workspace (docs/plans/pipeline-evidence-gate.md).
+   *
+   * Deliberately opt-in, never inferred from the stage name or its prompt
+   * wording — a research/review stage legitimately writes nothing, and wrongly
+   * failing work that actually succeeded is worse than no gate at all.
+   */
+  producesArtifacts?: boolean;
 }
 
 /**

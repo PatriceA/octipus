@@ -282,7 +282,21 @@ export async function spawnWorker(
   input: string,
   context: AgentContext,
   deps: WorkerSpawnerDeps,
-  overrides?: { systemPrompt?: string; model?: string; topic?: string; swarmParent?: WorkerSwarmParent },
+  overrides?: {
+    systemPrompt?: string;
+    model?: string;
+    topic?: string;
+    swarmParent?: WorkerSwarmParent;
+    /**
+     * Receives the worker's deterministic side-effect counters once it has run
+     * — `null` when the worker keeps no tally (see
+     * `BaseAgentWorker.getSideEffectCounters`). A side channel rather than a
+     * changed return type so the six existing call sites that just want the
+     * output string stay untouched. Fires for the retry/fallback worker too,
+     * so the counters always describe the run whose output is returned.
+     */
+    onCounters?: (counters: import('@/core/swarm/receipt').SideEffectCounters | null) => void;
+  },
 ): Promise<unknown> {
   const agentManager = getAgentManager();
   const agentRole = role as AgentRole;
@@ -969,6 +983,7 @@ Use these MCP tools when the task benefits from them — especially for people-r
 
     const result = await worker.run(workerMessage);
     const durationMs = Date.now() - startTime;
+    overrides?.onCounters?.(worker.getSideEffectCounters());
 
     coreLogger.info({
       workerId, role: agentRole, model: finalModel,
@@ -1084,6 +1099,7 @@ Use these MCP tools when the task benefits from them — especially for people-r
       systemPrompt,
       tools: workerTools,
       toolAdvertisement,
+      onCounters: overrides?.onCounters,
     });
   }
 }
@@ -1098,6 +1114,8 @@ interface WorkerRespawnContext {
   systemPrompt: string;
   tools: import('@/core/agent-base').ToolHandler[];
   toolAdvertisement: import('@/core/agent-base').ToolAdvertisement;
+  /** Caller's side-effect sink — the respawned worker reports through it too. */
+  onCounters?: (counters: import('@/core/swarm/receipt').SideEffectCounters | null) => void;
 }
 
 /**
@@ -1177,6 +1195,7 @@ async function handleWorkerFailure(
       ? `${task}\n\n--- Context from previous steps ---\n${input}`
       : task;
     const result = await retryWorker.run(workerMessage);
+    respawnCtx.onCounters?.(retryWorker.getSideEffectCounters());
     deps.emit({
       type: 'worker_completed',
       sessionId: context.sessionId,

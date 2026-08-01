@@ -16,6 +16,8 @@ export interface StageTemplate {
   retryTargetStage?: number;
   /** Per-stage model override (bound model name/id). Empty ⇒ topic binding. */
   model?: string;
+  /** Declares the stage must leave files behind — see PipelineStepConfig. */
+  producesArtifacts?: boolean;
 }
 
 export interface PipelineTemplate {
@@ -38,6 +40,7 @@ function stepConfigToStageTemplate(step: PipelineStepConfig): StageTemplate {
     maxRetries: step.maxRetries,
     retryTargetStage: step.retryTargetStage,
     model: step.model,
+    producesArtifacts: step.producesArtifacts,
   };
 }
 
@@ -285,6 +288,7 @@ export function buildStagesFromTemplate(
       maxRetries: stage.maxRetries ?? 3,
       retryTargetStage: stage.retryTargetStage,
       model: stage.model,
+      producesArtifacts: stage.producesArtifacts,
     };
   });
 }

@@ -17,6 +17,7 @@ export const verificationKindEnum = pgEnum('verification_kind', [
   'schema_gate', // an expectedOutput.schema deterministic output-shape gate
   'pre_verify', // a project-defined pre-verify command/tool (tests, build, lint)
   'adhoc', // an ad-hoc verification script result
+  'side_effect', // deterministic tool-execution counters for a stage that declared it produces artifacts
 ]);
 
 export const verificationEvidence = pgTable(

@@ -49,6 +49,7 @@ import { paramTemplateVars, resolveRecipeParams } from './recipe-params';
 import { getOrchestratorService } from './service';
 import { buildStagesFromTemplate, expandPromptTemplate, getPipelineTemplate } from './templates';
 import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
+import type { SideEffectCounters } from '@/core/swarm/receipt';
 import { appendSources, type QAValidationResult } from './types';
 
 /**
@@ -69,6 +70,29 @@ async function resolveStageModelId(
     );
   }
   return model.modelId;
+}
+
+/**
+ * The evidence-gate decision, with no IO so it is directly testable.
+ *
+ * Returns the failure reason when a stage that DECLARED it produces artifacts
+ * demonstrably changed nothing, else null (= let the stage complete).
+ *
+ * `counters === null` means the worker exposed no tally — "we could not
+ * measure", which is NOT "it did nothing". It passes. Failing a run we simply
+ * failed to observe is the worse error: it fails work that actually succeeded.
+ */
+export function stageEvidenceFailure(
+  producesArtifacts: boolean | undefined,
+  counters: SideEffectCounters | null,
+): string | null {
+  if (!producesArtifacts) return null;
+  if (counters === null) return null;
+  if (counters.filesChanged > 0) return null;
+  return (
+    `changed 0 files (${counters.toolCalls} tool calls, ${counters.commandsRun} commands, ` +
+    `${counters.toolErrors} tool errors)`
+  );
 }
 
 export class PipelineManager {
@@ -247,6 +271,7 @@ export class PipelineManager {
         const topicModel = await registry.getModelForTopic(stageTopic);
         const modelOverride = stageModelId || topicModel?.modelId || undefined;
 
+        let counters: SideEffectCounters | null = null;
         const result = await orchestrator.spawnWorker(
           stage.role,
           input,
@@ -260,8 +285,19 @@ export class PipelineManager {
               topicPath: `pipeline/${pipeline.id}/${stage.name}`,
               subtopic: stage.name,
             },
+            onCounters: (c) => { counters = c; },
           },
         );
+
+        // Evidence gate BEFORE the stage is marked complete — throws into the
+        // catch below, which already fails the stage and the pipeline.
+        await this.assertStageEvidence({
+          sessionId,
+          pipelineId: pipeline.id,
+          stageName: stage.name,
+          producesArtifacts: builtStage.producesArtifacts,
+          counters,
+        });
 
         // Parse the handoff from the RAW output (which carries the ```handoff
         // block), but persist/forward the STRIPPED output so the internal block
@@ -372,6 +408,7 @@ export class PipelineManager {
                 const retryTopicModel = await registry.getModelForTopic(retryTargetStage.role);
                 const retryModelOverride = retryStageModelId || retryTopicModel?.modelId || undefined;
 
+                let retryCounters: SideEffectCounters | null = null;
                 const retryResult = await orchestrator.spawnWorker(
                   retryTargetStage.role,
                   retryInput,
@@ -385,8 +422,17 @@ export class PipelineManager {
                       topicPath: `pipeline/${pipeline.id}/${retryTargetStage.name}#retry${attempt}`,
                       subtopic: `${retryTargetStage.name} (retry ${attempt})`,
                     },
+                    onCounters: (c) => { retryCounters = c; },
                   },
                 );
+
+                await this.assertStageEvidence({
+                  sessionId,
+                  pipelineId: pipeline.id,
+                  stageName: retryTargetStage.name,
+                  producesArtifacts: template.stages[retryTargetIndex]?.producesArtifacts,
+                  counters: retryCounters,
+                });
 
                 const retryOutput = String(retryResult || '');
                 await this.updateStage(retryTargetStage.id, {
@@ -419,6 +465,7 @@ export class PipelineManager {
                 const qaTopicModel = await registry.getModelForTopic(stage.role);
                 const qaModelOverride = qaStageModelId || qaTopicModel?.modelId || undefined;
 
+                let qaRetryCounters: SideEffectCounters | null = null;
                 const qaRetryResult = await orchestrator.spawnWorker(
                   stage.role,
                   qaRetryInput,
@@ -432,8 +479,17 @@ export class PipelineManager {
                       topicPath: `pipeline/${pipeline.id}/${stage.name}#qa-retry${attempt}`,
                       subtopic: `${stage.name} QA (retry ${attempt})`,
                     },
+                    onCounters: (c) => { qaRetryCounters = c; },
                   },
                 );
+
+                await this.assertStageEvidence({
+                  sessionId,
+                  pipelineId: pipeline.id,
+                  stageName: stage.name,
+                  producesArtifacts: builtStage.producesArtifacts,
+                  counters: qaRetryCounters,
+                });
 
                 previousOutput = String(qaRetryResult || '');
                 await this.updateStage(stage.id, {
@@ -701,6 +757,7 @@ export class PipelineManager {
       }
 
       try {
+        let counters: SideEffectCounters | null = null;
         const result = await orchestrator.spawnWorker(
           stage.role,
           input,
@@ -713,8 +770,18 @@ export class PipelineManager {
               topicPath: `pipeline/${pipeline.id}/${stage.name}`,
               subtopic: stage.name,
             },
+            onCounters: (c) => { counters = c; },
           },
         );
+
+        // Evidence gate BEFORE completion — throws into the catch below.
+        await this.assertStageEvidence({
+          sessionId,
+          pipelineId: pipeline.id,
+          stageName: stage.name,
+          producesArtifacts: stepConfig?.producesArtifacts,
+          counters,
+        });
 
         // Strip the internal ```handoff block before persist/forward (B3);
         // parse the handoff chain from the raw output that still carries it.
@@ -795,6 +862,7 @@ export class PipelineManager {
               const retryInput = `Previous attempt had issues:\n${qaResult.feedback}\n\nPlease fix these issues:\n${qaResult.issues.join('\n')}\n\nOriginal task:\n${originalTargetInput}`;
               await this.updateStage(retryTargetStage.id, { input: retryInput, status: 'running' });
 
+              let retryCounters: SideEffectCounters | null = null;
               const retryResult = await orchestrator.spawnWorker(
                 retryTargetStage.role,
                 retryInput,
@@ -807,8 +875,17 @@ export class PipelineManager {
                     topicPath: `pipeline/${pipeline.id}/${retryTargetStage.name}#retry${attempt}`,
                     subtopic: `${retryTargetStage.name} (retry ${attempt})`,
                   },
+                  onCounters: (c) => { retryCounters = c; },
                 },
               );
+
+              await this.assertStageEvidence({
+                sessionId,
+                pipelineId: pipeline.id,
+                stageName: retryTargetStage.name,
+                producesArtifacts: stepConfigs[retryTargetIndex]?.producesArtifacts,
+                counters: retryCounters,
+              });
 
               const retryOutput = String(retryResult || '');
               await this.updateStage(retryTargetStage.id, {
@@ -826,6 +903,7 @@ export class PipelineManager {
 
               await this.updateStage(stage.id, { input: qaRetryInput, status: 'running' });
 
+              let qaRetryCounters: SideEffectCounters | null = null;
               const qaRetryResult = await orchestrator.spawnWorker(
                 stage.role,
                 qaRetryInput,
@@ -838,8 +916,17 @@ export class PipelineManager {
                     topicPath: `pipeline/${pipeline.id}/${stage.name}#qa-retry${attempt}`,
                     subtopic: `${stage.name} QA (retry ${attempt})`,
                   },
+                  onCounters: (c) => { qaRetryCounters = c; },
                 },
               );
+
+              await this.assertStageEvidence({
+                sessionId,
+                pipelineId: pipeline.id,
+                stageName: stage.name,
+                producesArtifacts: stepConfig?.producesArtifacts,
+                counters: qaRetryCounters,
+              });
 
               previousOutput = String(qaRetryResult || '');
               await this.updateStage(stage.id, {
@@ -998,6 +1085,75 @@ export class PipelineManager {
    * ledger write must never break the pipeline, so failures are logged and
    * swallowed. Append-only — every verdict (initial + each retry) is a row.
    */
+  /**
+   * Evidence gate for a stage that DECLARED it produces artifacts
+   * (`PipelineStepConfig.producesArtifacts`). Throws when the stage's worker
+   * changed zero files, so the caller's existing error path marks the stage —
+   * and the pipeline — failed. Without this a "Full Development Cycle" reports
+   * seven green stages over an empty workspace, which is the exact failure this
+   * gate exists for (docs/plans/pipeline-evidence-gate.md).
+   *
+   * Three deliberate non-behaviours:
+   * - An UNDECLARED stage is never gated and never even writes a row. Research
+   *   and review stages legitimately write nothing.
+   * - `counters === null` means "we could not measure", NOT "it did nothing" —
+   *   it passes, loudly, and records `passed: true` with the gap named. Failing
+   *   work that actually succeeded is the worse error (the standing guidance on
+   *   `deriveCodeDiffScorer`).
+   * - The ledger write is best-effort and never breaks a run, matching
+   *   `recordQaEvidence`. The gate decision itself does NOT depend on it.
+   */
+  private async assertStageEvidence(args: {
+    sessionId: string;
+    pipelineId: string;
+    stageName: string;
+    producesArtifacts?: boolean;
+    counters: SideEffectCounters | null;
+  }): Promise<void> {
+    if (!args.producesArtifacts) return;
+
+    const { counters, stageName, pipelineId } = args;
+    const measured = counters !== null;
+    const failure = stageEvidenceFailure(args.producesArtifacts, counters);
+    const passed = failure === null;
+
+    try {
+      await verificationEvidenceRepository.record({
+        sessionId: args.sessionId,
+        pipelineId,
+        stage: stageName,
+        kind: 'side_effect',
+        passed,
+        detail: measured
+          ? {
+              filesChanged: counters.filesChanged,
+              toolCalls: counters.toolCalls,
+              commandsRun: counters.commandsRun,
+              toolErrors: counters.toolErrors,
+              byName: counters.byName,
+            }
+          : { unavailable: 'worker exposed no side-effect counters — not gated' },
+      });
+    } catch (err) {
+      coreLogger.warn({ err: (err as Error).message, pipelineId, stage: stageName }, 'Failed to record side-effect verification evidence');
+    }
+
+    if (!measured) {
+      coreLogger.warn(
+        { pipelineId, stage: stageName },
+        'Stage declares producesArtifacts but its worker exposed no counters — passing ungated (unknown is not zero)',
+      );
+      return;
+    }
+
+    if (failure) {
+      throw new Error(
+        `Stage "${stageName}" declares it produces artifacts but ${failure}. ` +
+          `Reporting it complete would claim work that did not happen.`,
+      );
+    }
+  }
+
   private async recordQaEvidence(
     sessionId: string,
     pipelineId: string,

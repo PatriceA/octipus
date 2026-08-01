@@ -254,3 +254,66 @@ describe('permissionMode translation', () => {
     expect(() => resolveCodexSandboxMode('bypassPermissions')).toThrow();
   });
 });
+
+// ── Side-effect counters (Phase B of the pipeline evidence gate) ────────────
+// A CLI writes files in its OWN process, so the parsed stream is the only
+// ground truth octipus has. See docs/plans/pipeline-evidence-gate.md.
+
+describe('CLIOutputParser — side-effect counters', () => {
+  /** One Claude assistant message carrying the given tool_use blocks. */
+  const assistantWith = (blocks: Array<{ name: string; input: Record<string, unknown> }>) => ({
+    type: 'assistant',
+    message: {
+      id: `m-${blocks.map((b) => b.name).join('-')}`,
+      content: blocks.map((b, i) => ({ type: 'tool_use', id: `t${i}`, name: b.name, input: b.input })),
+    },
+  });
+
+  it('counts a claude run that writes one file', () => {
+    const { parser, feed } = makeParser();
+    feed(assistantWith([{ name: 'Write', input: { file_path: 'calc/percent.ts', content: 'export const x = 1;' } }]), 'Claude Code');
+
+    const c = parser.getSideEffectCounters();
+    expect(c?.filesChanged).toBe(1);
+    expect(c?.toolCalls).toBe(1);
+    expect(c?.byName.Write).toBe(1);
+  });
+
+  it('reports 0 files changed for a read-only claude run', () => {
+    const { parser, feed } = makeParser();
+    feed(assistantWith([
+      { name: 'Read', input: { file_path: 'README.md' } },
+      { name: 'Bash', input: { command: 'ls -la' } },
+    ]), 'Claude Code');
+
+    const c = parser.getSideEffectCounters();
+    expect(c).not.toBeNull();
+    expect(c?.filesChanged).toBe(0);
+    expect(c?.toolCalls).toBe(2);
+    expect(c?.commandsRun).toBe(1);
+  });
+
+  it('counts codex file_change items and command executions', () => {
+    const { parser, feed } = makeParser();
+    feed({ type: 'item.started', item: { id: 'i1', type: 'command_execution', command: "zsh -lc 'git status'", status: 'in_progress' } }, 'Codex CLI');
+    feed({ type: 'item.completed', item: { id: 'i2', type: 'file_change', changes: [{ path: 'a.ts', kind: 'update' }, { path: 'b.ts', kind: 'add' }], status: 'completed' } }, 'Codex CLI');
+
+    expect(parser.getSideEffectCounters()?.filesChanged).toBe(2);
+  });
+
+  it('counts an errored tool result', () => {
+    const { parser, feed } = makeParser();
+    feed(assistantWith([{ name: 'Edit', input: { file_path: 'x.ts', old_string: 'a', new_string: 'b' } }]), 'Claude Code');
+    feed({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't0', content: 'nope', is_error: true }] } }, 'Claude Code');
+
+    expect(parser.getSideEffectCounters()?.toolErrors).toBe(1);
+  });
+
+  it('returns null — unknown, NOT zero — when the stream was never recognized', () => {
+    // A buffered-output CLI (agy) emits no parseable events. All-zero counters
+    // would read as "wrote nothing" and wrongly fail work that succeeded.
+    const { parser, feed } = makeParser();
+    feed({ type: 'whatever' }, 'Antigravity');
+    expect(parser.getSideEffectCounters()).toBeNull();
+  });
+});

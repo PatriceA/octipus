@@ -70,6 +70,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
    * worker too — it triggers `stop()` which kills the subprocess.
    */
   private parentSignalCleanup: (() => void) | null = null;
+  /** Stream parser for the current run — owns the side-effect tally. */
+  private parser: CLIOutputParser | null = null;
 
   constructor(
     context: AgentContext,
@@ -95,6 +97,17 @@ export class CLIAgentWorker extends BaseAgentWorker {
   /** Return the running token count reported by the underlying CLI provider. */
   override getTotalTokens(): number {
     return this.totalTokens;
+  }
+
+  /**
+   * Side-effect counters for this run. A CLI writes files in its own process,
+   * so octipus has no `ToolExecutor` tally here — the parsed output stream is
+   * the only ground truth, and `CLIOutputParser` counts it. Stays `null` (=
+   * unknown, NOT zero) when the run never produced a recognized stream, so an
+   * evidence gate treats it as "no evidence" rather than "wrote nothing".
+   */
+  override getSideEffectCounters(): import('./swarm/receipt').SideEffectCounters | null {
+    return this.parser?.getSideEffectCounters() ?? null;
   }
 
   /** No-op — CLI models have their own tools */
@@ -356,7 +369,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
       }
     }
 
-    const parser = new CLIOutputParser(
+    const parser = this.parser = new CLIOutputParser(
       this.context.id,
       this.context.model,
       (type, data) => this.emit(type, data),

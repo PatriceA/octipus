@@ -6,6 +6,7 @@ import type { CLIAgentConfig } from '@/db/schema/models';
 import { computeLineDiff } from '@/shared/diff';
 import { coreLogger } from '@/utils/logger';
 import type { AgentEvent } from './agent-base';
+import { type SideEffectCounters, emptyCounters } from './swarm/receipt';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -608,6 +609,16 @@ export interface CLIParserCallbacks {
  * Ids are the CLI's own stable ids (Claude `tool_use.id`, codex `item.id`) so
  * start/result rows pair up in every UI (C1/C2/C9).
  */
+/**
+ * CLI tool names that mean "ran a shell command". Claude reports one `Bash`
+ * tool; codex reports the *resolved* program name (`detectToolFromCommand` maps
+ * `npm`/`git`/`bun`/… individually), so only its unmapped `shell` bucket lands
+ * here.
+ * ponytail: undercounts codex's named commands; widen to the toolMap values if
+ * `commandsRun` ever gates anything (today only `filesChanged` does).
+ */
+const CLI_COMMAND_TOOLS = new Set(['Bash', 'shell']);
+
 export class CLIOutputParser {
   /** tool id → tool name, so results can carry the real name (C9). */
   private toolNamesById = new Map<string, string>();
@@ -617,6 +628,22 @@ export class CLIOutputParser {
   private seenClaudeMessageIds = new Set<string>();
   /** Tokens already reported via onTokenUsage (for final reconciliation). */
   private reportedTokens = 0;
+  /**
+   * Deterministic side-effect tally for this CLI run. A CLI writes files in its
+   * OWN process, so octipus never sees those writes through a `ToolExecutor` —
+   * the stream is the only ground truth we have. Counted from the events we
+   * already parse, never inferred from the CLI's prose.
+   */
+  private counters: SideEffectCounters = emptyCounters();
+  /**
+   * Did we parse a stream shape we actually understand? Only `Claude Code` and
+   * `Codex CLI` stream structured events; a buffered-output tool (agy) yields
+   * no events at all. Its counters would read as all-zero — indistinguishable
+   * from "did nothing" — so `getSideEffectCounters` reports null (unknown)
+   * instead. A wrong zero is worse than no evidence: it fails work that
+   * actually succeeded.
+   */
+  private streamRecognized = false;
 
   constructor(
     private agentId: string,
@@ -632,8 +659,49 @@ export class CLIOutputParser {
     return isAbsolute(p) ? p : resolve(this.workspaceCwd, p);
   }
 
+  /**
+   * Every parser emission funnels through here so the side-effect tally is
+   * maintained at ONE chokepoint — a new `cli_tool_use`/`file_change` emitter
+   * (there are already 5 across the two vendors) is counted automatically
+   * instead of silently skipping the tally.
+   */
+  private emit(type: AgentEvent['type'], data: unknown): void {
+    const d = data as { type?: string; toolName?: string; isError?: boolean } | null;
+    switch (d?.type) {
+      case 'cli_tool_use':
+        this.counters.byName[d.toolName || 'tool'] = (this.counters.byName[d.toolName || 'tool'] ?? 0) + 1;
+        break;
+      case 'cli_tool_result':
+        if (d.isError) this.counters.toolErrors++;
+        break;
+      case 'file_change':
+        this.counters.filesChanged++;
+        break;
+    }
+    this.emitFn(type, data);
+  }
+
+  /**
+   * Deterministic side-effect counters for this CLI run, or `null` when the
+   * stream shape was never recognized (see `streamRecognized`). `toolCalls` /
+   * `commandsRun` are derived from `byName` at snapshot time so they cannot
+   * drift; `filesChanged` is counted directly from `file_change` emissions,
+   * which BOTH vendors route through `emitFileChange`.
+   */
+  getSideEffectCounters(): SideEffectCounters | null {
+    if (!this.streamRecognized) return null;
+    const byName = { ...this.counters.byName };
+    let toolCalls = 0;
+    let commandsRun = 0;
+    for (const [name, n] of Object.entries(byName)) {
+      toolCalls += n;
+      if (CLI_COMMAND_TOOLS.has(name)) commandsRun += n;
+    }
+    return { ...this.counters, toolCalls, commandsRun, byName };
+  }
+
   private emitFileChange(change: { action: string; path: string; content?: string; oldContent?: string; diff?: { patch: string; added: number; removed: number } }): void {
-    this.emitFn('action', {
+    this.emit('action', {
       type: 'file_change',
       ...change,
       path: this.absPath(change.path),
@@ -648,6 +716,7 @@ export class CLIOutputParser {
     const type = event.type as string;
 
     if (toolName === 'Claude Code') {
+      this.streamRecognized = true;
       return this.parseClaudeEvent(event, type);
     }
 
@@ -655,6 +724,7 @@ export class CLIOutputParser {
     // (CLIToolConfig.bufferOutput), so it has no per-event stream parser here.
 
     if (toolName === 'Codex CLI') {
+      this.streamRecognized = true;
       return this.parseCodexEvent(event, type);
     }
 
@@ -671,7 +741,7 @@ export class CLIOutputParser {
     if (type === 'system') {
       const subtype = event.subtype as string | undefined;
       if (subtype === 'init') {
-        this.emitFn('thought', {
+        this.emit('thought', {
           status: 'running',
           sessionId: event.session_id,
         });
@@ -700,7 +770,7 @@ export class CLIOutputParser {
           const toolName = block.name as string;
           if (toolUseId) this.toolNamesById.set(toolUseId, toolName);
           const input = (block.input || {}) as Record<string, unknown>;
-          this.emitFn('action', {
+          this.emit('action', {
             type: 'cli_tool_use',
             id: toolUseId || undefined,
             toolName,
@@ -730,7 +800,7 @@ export class CLIOutputParser {
         if (block.type !== 'tool_result') continue;
         const toolUseId = (block.tool_use_id || '') as string;
         const isError = block.is_error === true;
-        this.emitFn('action', {
+        this.emit('action', {
           type: 'cli_tool_result',
           id: toolUseId || undefined,
           toolName: this.toolNamesById.get(toolUseId) || 'tool',
@@ -758,7 +828,7 @@ export class CLIOutputParser {
 
       const totalTokens = inputTokens + outputTokens + cacheRead + cacheCreation;
       if (typeof numTurns === 'number') this.callbacks.onTurnCount?.(numTurns);
-      this.emitFn('thought', {
+      this.emit('thought', {
         status: isError ? 'failed' : 'completed',
         sessionId: event.session_id,
         stats: {
@@ -868,7 +938,7 @@ export class CLIOutputParser {
     const item = event.item as Record<string, unknown> | undefined;
 
     if (type === 'thread.started') {
-      this.emitFn('thought', {
+      this.emit('thought', {
         status: 'running',
         sessionId: event.thread_id,
       });
@@ -896,7 +966,7 @@ export class CLIOutputParser {
 
       if (itemType === 'reasoning') {
         const text = (item.text || '') as string;
-        if (text) this.emitFn('thought', { text: text.slice(0, 2000) });
+        if (text) this.emit('thought', { text: text.slice(0, 2000) });
         return null;
       }
 
@@ -907,7 +977,7 @@ export class CLIOutputParser {
       if (itemType === 'command_execution') {
         const output = (item.aggregated_output || '') as string;
         const exitCode = item.exit_code as number | null;
-        this.emitFn('action', {
+        this.emit('action', {
           type: 'cli_tool_result',
           id: itemId || undefined,
           toolName: this.toolNamesById.get(itemId) || detectToolFromCommand((item.command || '') as string),
@@ -931,7 +1001,7 @@ export class CLIOutputParser {
           this.emitFileChange({ action: kindMap[(change.kind as string) || ''] || 'edit', path });
         }
         const failed = item.status === 'failed';
-        this.emitFn('action', {
+        this.emit('action', {
           type: 'cli_tool_result',
           id: itemId || undefined,
           toolName: 'apply_patch',
@@ -943,7 +1013,7 @@ export class CLIOutputParser {
 
       if (itemType === 'mcp_tool_call') {
         const failed = item.status === 'failed';
-        this.emitFn('action', {
+        this.emit('action', {
           type: 'cli_tool_result',
           id: itemId || undefined,
           toolName: this.toolNamesById.get(itemId) || codexMcpToolName(item),
@@ -954,7 +1024,7 @@ export class CLIOutputParser {
       }
 
       if (itemType === 'web_search') {
-        this.emitFn('action', {
+        this.emit('action', {
           type: 'cli_tool_result',
           id: itemId || undefined,
           toolName: 'web_search',
@@ -967,7 +1037,7 @@ export class CLIOutputParser {
 
       if (itemType === 'error') {
         const message = (item.message || 'codex reported an error') as string;
-        this.emitFn('error', { error: message });
+        this.emit('error', { error: message });
         this.callbacks.onRunError?.(message);
         return null;
       }
@@ -982,7 +1052,7 @@ export class CLIOutputParser {
         const cachedTokens = (usage.cached_input_tokens || 0) as number;
         const outputTokens = (usage.output_tokens || 0) as number;
         const totalTokens = inputTokens + outputTokens;
-        this.emitFn('thought', {
+        this.emit('thought', {
           status: 'completed',
           stats: {
             totalTokens,
@@ -1000,15 +1070,15 @@ export class CLIOutputParser {
     if (type === 'turn.failed') {
       const error = event.error as Record<string, unknown> | undefined;
       const message = (error?.message || 'codex turn failed') as string;
-      this.emitFn('error', { error: message });
-      this.emitFn('thought', { status: 'failed', error: message });
+      this.emit('error', { error: message });
+      this.emit('thought', { status: 'failed', error: message });
       this.callbacks.onRunError?.(message);
       return null;
     }
 
     if (type === 'error') {
       const message = (event.message || 'codex reported an error') as string;
-      this.emitFn('error', { error: message });
+      this.emit('error', { error: message });
       this.callbacks.onRunError?.(message);
       return null;
     }
@@ -1030,7 +1100,7 @@ export class CLIOutputParser {
         this.startedItemIds.add(itemId);
         this.toolNamesById.set(itemId, toolName);
       }
-      this.emitFn('action', {
+      this.emit('action', {
         type: 'cli_tool_use',
         id: itemId || undefined,
         toolName,
@@ -1051,7 +1121,7 @@ export class CLIOutputParser {
         this.startedItemIds.add(itemId);
         this.toolNamesById.set(itemId, toolName);
       }
-      this.emitFn('action', {
+      this.emit('action', {
         type: 'cli_tool_use',
         id: itemId || undefined,
         toolName,
@@ -1063,7 +1133,7 @@ export class CLIOutputParser {
     if (itemType === 'file_change') {
       this.callbacks.onToolCall?.();
       if (itemId) this.startedItemIds.add(itemId);
-      this.emitFn('action', {
+      this.emit('action', {
         type: 'cli_tool_use',
         id: itemId || undefined,
         toolName: 'apply_patch',
@@ -1075,7 +1145,7 @@ export class CLIOutputParser {
     if (itemType === 'web_search') {
       this.callbacks.onToolCall?.();
       if (itemId) this.startedItemIds.add(itemId);
-      this.emitFn('action', {
+      this.emit('action', {
         type: 'cli_tool_use',
         id: itemId || undefined,
         toolName: 'web_search',
@@ -1113,12 +1183,12 @@ export class CLIOutputParser {
               try { args = JSON.parse(args); } catch { /* keep raw string */ }
             }
             this.callbacks.onToolCall?.();
-            this.emitFn('action', { type: 'cli_tool_use', id: id || undefined, toolName: name, args });
+            this.emit('action', { type: 'cli_tool_use', id: id || undefined, toolName: name, args });
           }
         }
         if (msg?.role === 'tool') {
           const id = (msg.tool_call_id || '') as string;
-          this.emitFn('action', {
+          this.emit('action', {
             type: 'cli_tool_result',
             id: id || undefined,
             toolName: this.toolNamesById.get(id) || 'tool',
@@ -1134,7 +1204,7 @@ export class CLIOutputParser {
       // agy --print is plain text with no tool telemetry; surface a final
       // summary event so the run isn't a silent zero-event blob.
       const summary = rawStdout.trim().slice(0, 500);
-      if (summary) this.emitFn('thought', { status: 'completed', summary });
+      if (summary) this.emit('thought', { status: 'completed', summary });
     }
   }
 }

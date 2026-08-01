@@ -697,7 +697,12 @@ export class OrchestratorService {
     task: string,
     input: string,
     context: AgentContext,
-    overrides?: { systemPrompt?: string; model?: string; swarmParent?: import('./worker-spawner').WorkerSwarmParent },
+    overrides?: {
+      systemPrompt?: string;
+      model?: string;
+      swarmParent?: import('./worker-spawner').WorkerSwarmParent;
+      onCounters?: (counters: import('@/core/swarm/receipt').SideEffectCounters | null) => void;
+    },
   ): Promise<unknown> {
     return spawnWorker(role, task, input, context, this.deps, overrides);
   }

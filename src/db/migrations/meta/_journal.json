@@ -568,6 +568,13 @@
       "when": 1784241643742,
       "tag": "0080_sticky_lilith",
       "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1785624068960,
+      "tag": "0081_rich_speed",
+      "breakpoints": true
     }
   ]
 }

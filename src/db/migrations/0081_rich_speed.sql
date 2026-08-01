@@ -1,0 +1,1 @@
+ALTER TYPE "public"."verification_kind" ADD VALUE 'side_effect';
