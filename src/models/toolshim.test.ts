@@ -3,6 +3,7 @@ import { modelLogger } from '@/utils/logger';
 import {
   buildToolShimPrompt,
   parseToolShimResponse,
+  proseShowsToolIntent,
   type ToolShimSchema,
   translateToToolCall,
 } from './toolshim';
@@ -111,8 +112,8 @@ describe('translateToToolCall', () => {
     expect(called).toBe(false);
   });
 
-  test('translator throws ⇒ null (fail-soft, no rethrow) AND logs a breadcrumb', async () => {
-    const debugSpy = spyOn(modelLogger, 'debug').mockImplementation(() => {});
+  test('translator throws ⇒ null (fail-soft, no rethrow) AND warns with elapsed time', async () => {
+    const warnSpy = spyOn(modelLogger, 'warn').mockImplementation(() => {});
     try {
       const err = new Error('provider down');
       const call = await translateToToolCall({
@@ -122,19 +123,21 @@ describe('translateToToolCall', () => {
         complete: async () => { throw err; },
       });
       expect(call).toBeNull();
-      // The thrown-error path must NOT be silent: a debug breadcrumb carrying
-      // the error reason fires (the caller's success/unbound logs never run here).
-      expect(debugSpy).toHaveBeenCalledTimes(1);
-      const [ctx, msg] = debugSpy.mock.calls[0] as [{ error: unknown }, string];
+      // The thrown-error path must NOT be silent, and must NOT be debug-only:
+      // a slow/stuck translator burns wall-clock on a turn whose answer is
+      // already written, so the elapsed time has to be in the record.
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const [ctx, msg] = warnSpy.mock.calls[0] as [{ error: unknown; elapsedMs: number }, string];
       expect(ctx.error).toBe(err);
+      expect(ctx.elapsedMs).toBeGreaterThanOrEqual(0);
       expect(msg).toContain('tool-translation failed');
     } finally {
-      debugSpy.mockRestore();
+      warnSpy.mockRestore();
     }
   });
 
   test('successful translation does NOT log a failure breadcrumb', async () => {
-    const debugSpy = spyOn(modelLogger, 'debug').mockImplementation(() => {});
+    const warnSpy = spyOn(modelLogger, 'warn').mockImplementation(() => {});
     try {
       const call = await translateToToolCall({
         text: 'I will write hello to /a.txt',
@@ -143,9 +146,9 @@ describe('translateToToolCall', () => {
         complete: async () => '{"name":"filesystem__write_file","arguments":{"path":"/a.txt","content":"hello"}}',
       });
       expect(call?.name).toBe('filesystem__write_file');
-      expect(debugSpy).not.toHaveBeenCalled();
+      expect(warnSpy).not.toHaveBeenCalled();
     } finally {
-      debugSpy.mockRestore();
+      warnSpy.mockRestore();
     }
   });
 
@@ -157,5 +160,47 @@ describe('translateToToolCall', () => {
       complete: async () => '{"name":"nonexistent","arguments":{}}',
     });
     expect(call).toBeNull();
+  });
+});
+
+describe('proseShowsToolIntent', () => {
+  const NAMES = ['filesystem__write_file', 'shell__run', 'spawn_child', 'collect_children'];
+
+  test('a plain final answer shows no tool intent', () => {
+    // Verbatim from run 4f88751a, whose orchestrator sat 845s past this answer
+    // paying for a translator call that had nothing to translate.
+    expect(
+      proseShowsToolIntent(
+        'The daily update task for WM 2026 has been disabled. It is currently in a dormant state; ' +
+          'state your preference if you want it deleted permanently or re-enabled later.',
+        NAMES,
+      ),
+    ).toBe(false);
+  });
+
+  test('prose naming an advertised tool does show intent', () => {
+    expect(proseShowsToolIntent('Next I will use shell__run to list the directory.', NAMES)).toBe(true);
+  });
+
+  test('a half-serialized call envelope shows intent even without a known name', () => {
+    expect(proseShowsToolIntent('{"name": "some_tool", "arguments": {"a": 1}', NAMES)).toBe(true);
+    expect(proseShowsToolIntent('<tool_call>{"tool":"x"}</tool_call>', NAMES)).toBe(true);
+    expect(proseShowsToolIntent('```tool_code\nprint(1)\n```', NAMES)).toBe(true);
+  });
+
+  test('tool names match on identifier boundaries, not substrings', () => {
+    expect(proseShowsToolIntent('I will respawn_children later.', ['spawn_child'])).toBe(false);
+    expect(proseShowsToolIntent('calling spawn_child now', ['spawn_child'])).toBe(true);
+  });
+
+  test('regex metacharacters in a tool name cannot break the match', () => {
+    expect(proseShowsToolIntent('ran a.b(c)', ['a.b(c)'])).toBe(true);
+    expect(proseShowsToolIntent('ran axb(c)', ['a.b(c)'])).toBe(false);
+  });
+
+  test('empty prose or no tools ⇒ no intent', () => {
+    expect(proseShowsToolIntent('', NAMES)).toBe(false);
+    expect(proseShowsToolIntent('   ', NAMES)).toBe(false);
+    expect(proseShowsToolIntent('a perfectly ordinary sentence', [])).toBe(false);
   });
 });

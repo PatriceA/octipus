@@ -1,6 +1,6 @@
 {
   "_comment": "Coverage ratchet floor for scripts/coverage-check.ts. CI fails if `bun test src scripts` coverage drops more than `tolerance` percentage points below these. Bump lines/functions upward as coverage rises (the check prints a hint when it should).",
-  "lines": 51.4,
-  "functions": 59.3,
+  "lines": 52.8,
+  "functions": 61.1,
   "tolerance": 0.5
 }

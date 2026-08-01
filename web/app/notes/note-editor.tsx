@@ -1,11 +1,12 @@
 'use client';
 
 import {
-  Bold, Code, Columns2, Eye, Hash, Heading1, Heading2, Italic, Link2, List, Loader2,
-  Pencil, Quote, Save, Star, Trash2, X,
+  Bold, Code, Columns2, ExternalLink, Eye, Hash, Heading1, Heading2, Image as ImageIcon,
+  Italic, Link2, List, Loader2, Pencil, Quote, Save, Star, Trash2, X,
 } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { Markdown } from '@/components/ui/markdown-renderer';
+import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import NotesMarkdownEditor, { type MarkdownEditorHandle } from './markdown-codemirror';
 import type { NoteIndexEntry, TagCount } from './types';
@@ -81,8 +82,47 @@ export function NoteEditor(props: EditorProps) {
   } = props;
 
   const editorRef = useRef<MarkdownEditorHandle>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [tagInput, setTagInput] = useState('');
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const isNew = !selectedId;
+
+  /**
+   * Upload pasted/dropped/picked images and swap each placeholder for the
+   * finished markdown.
+   *
+   * Storage reuses the documents pipeline rather than adding a parallel
+   * attachment store: it already writes per-principal, serves the bytes back
+   * with the right content type, and 404s cross-tenant reads. The upload is
+   * also OCR'd and indexed, which is why a pasted screenshot becomes
+   * searchable alongside the note text.
+   */
+  async function uploadImages(files: File[]) {
+    const editor = editorRef.current;
+    if (!editor || files.length === 0) return;
+    setUploadError(null);
+    for (const file of files) {
+      // A stable, unlikely-to-be-typed placeholder so the caret can keep moving
+      // while the upload is in flight.
+      const token = `![uploading ${file.name || 'image'}…](#upload-${Math.random().toString(36).slice(2, 10)})`;
+      editor.insert(`\n${token}\n`);
+      try {
+        const res = await api.upload<{ uploaded: Array<{ id: string; filename: string; status: string }> }>(
+          '/documents/upload',
+          [file],
+        );
+        const up = res.uploaded?.[0];
+        if (!up?.id) throw new Error(up?.status || 'upload rejected');
+        const alt = (file.name || 'image').replace(/[[\]]/g, '');
+        editor.replaceToken(token, `![${alt}](/api/documents/${up.id}/raw)`);
+      } catch (err) {
+        // Take the placeholder back out — a note left holding a dead
+        // `#upload-…` link is worse than no image.
+        editor.replaceToken(token, '');
+        setUploadError(err instanceof Error ? err.message : 'Image upload failed');
+      }
+    }
+  }
 
   function addTag(raw: string) {
     const t = raw.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9/_-]/g, '');
@@ -98,6 +138,7 @@ export function NoteEditor(props: EditorProps) {
       onSave={onSave}
       getNotes={() => noteIndex}
       getTags={() => tags}
+      onFiles={uploadImages}
     />
   );
 
@@ -225,6 +266,31 @@ export function NoteEditor(props: EditorProps) {
           <ToolBtn title="Quote" onClick={() => editorRef.current?.linePrefix('> ')}><Quote size={14} /></ToolBtn>
           <span className="w-px h-4 bg-outline-variant/40 mx-1" />
           <ToolBtn title="Link to a note ([[…]])" onClick={() => editorRef.current?.wrap('[[', ']]', 'Note Title')}><Link2 size={14} /></ToolBtn>
+          <ToolBtn title="Web link" onClick={() => editorRef.current?.wrap('[', '](https://)', 'link text')}><ExternalLink size={14} /></ToolBtn>
+          <ToolBtn title="Image (or just paste / drop one)" onClick={() => fileInputRef.current?.click()}><ImageIcon size={14} /></ToolBtn>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            hidden
+            onChange={(e) => {
+              const picked = Array.from(e.target.files ?? []);
+              // Reset first so picking the SAME file twice still fires change.
+              e.target.value = '';
+              void uploadImages(picked);
+            }}
+          />
+          {uploadError && (
+            <button
+              type="button"
+              onClick={() => setUploadError(null)}
+              title="Dismiss"
+              className="ml-2 text-[10px] text-error hover:opacity-80"
+            >
+              {uploadError} ✕
+            </button>
+          )}
           {dirty && <span className="ml-auto pr-1 text-[10px] text-on-surface-variant/60">unsaved</span>}
         </div>
       )}

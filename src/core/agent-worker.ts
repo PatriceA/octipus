@@ -10,7 +10,7 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import { getCostTracker } from '@/models/cost-tracker';
 import { type CompletionResult, getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
-import { type ToolShimSchema, translateToToolCall } from '@/models/toolshim';
+import { type ToolShimSchema, proseShowsToolIntent, translateToToolCall } from '@/models/toolshim';
 import { applyTopicParamOverrides, getTopicConfig } from '@/models/topic-config';
 import { getConfig } from '@/config';
 import type { ModelConfigEntry } from '@/db/schema/models';
@@ -46,6 +46,25 @@ export type { AgentEvent, AgentEventHandler, AgentWorkerConfig, ToolHandler } fr
  */
 export const DEFAULT_SELF_TIMED_TOOL_CEILING_MS = 2 * 60 * 60_000;
 
+/**
+ * Ceiling for the toolshim translator call. It is a one-shot prose→JSON
+ * translation with no history and no tools; anything slower than this is a
+ * stuck provider, and the caller fail-softs to "no tool call" anyway.
+ */
+export const TOOLSHIM_TIMEOUT_MS = 30_000;
+
+/**
+ * Ceiling for the two LLM calls that deliberately skip the wall race:
+ * `finalizeGracefully`'s no-tools summary turn (reached only when the wall or
+ * iteration budget is ALREADY spent, so `raceTimeout` would reject instantly)
+ * and the post-delegation turn (`toolsDisabled`, where elapsed() likewise
+ * includes a child's work). Skipping the *wall* race is right; skipping every
+ * bound is not — an unbounded call there lets a stuck or cold provider hold a
+ * worker open indefinitely after its budget is gone. Generous, since these are
+ * real answer-producing turns; it only fires on a wedge.
+ */
+export const DEFAULT_UNRACED_TURN_CEILING_MS = 5 * 60_000;
+
 export class AgentWorker extends BaseAgentWorker {
   private toolExecutor: ToolExecutor;
   private abortController: AbortController;
@@ -70,6 +89,18 @@ export class AgentWorker extends BaseAgentWorker {
   private toolShimAttemptedIteration: number = -1;
   /** Log the unbound-translator skip only once per agent. */
   private toolShimUnboundLogged: boolean = false;
+  /**
+   * Set the first time this run's model emits tool calls NATIVELY. The toolshim
+   * exists to reconstruct calls a model couldn't emit itself; a model that has
+   * already emitted one in this run demonstrably can, so its later prose is a
+   * real final answer, not a failed tool call. Without this gate the shim fired
+   * on every text-only turn — i.e. on the normal, correct way to end a turn —
+   * spending an extra LLM call per turn on the happy path (and, when the
+   * `background` model is a cold local one, stalling the answer for as long as
+   * that provider takes to load: one observed orchestrator sat 14 min between
+   * its finished answer and delivery).
+   */
+  private sawNativeToolCall: boolean = false;
   /** Guards the terminal `complete` event so stop() and run() never double-fire it. */
   private terminalEmitted: boolean = false;
   /**
@@ -661,7 +692,15 @@ export class AgentWorker extends BaseAgentWorker {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const ceilingPromise = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
-        const msg = `Self-timed tool exceeded the absolute ceiling (${Math.round(ceilingMs / 60_000)}min) during ${label} — treating as a wedged wait`;
+        // Render short ceilings in their own unit — `Math.round(ms/60_000)`
+        // prints a bare "0min" for anything under 30s, which reads as "no
+        // ceiling" in a log line whose whole point is the ceiling.
+        const ceilingLabel = ceilingMs >= 60_000
+          ? `${Math.round(ceilingMs / 60_000)}min`
+          : ceilingMs >= 1_000
+            ? `${Math.round(ceilingMs / 1_000)}s`
+            : `${ceilingMs}ms`;
+        const msg = `Self-timed tool exceeded the absolute ceiling (${ceilingLabel}) during ${label} — treating as a wedged wait`;
         agentLogger.error(
           { agentId: this.context.id, iteration: this.iteration, phase: label, ceilingMs },
           msg,
@@ -856,9 +895,17 @@ export class AgentWorker extends BaseAgentWorker {
       const llmStart = Date.now();
       let completion: CompletionResult;
       try {
-        // Skip timeout for post-delegation LLM calls (toolsDisabled means a pipeline/worker already completed)
+        // Skip the WALL race for post-delegation LLM calls (toolsDisabled means a
+        // pipeline/worker already completed, so elapsed() includes its time and
+        // the wall deadline is already blown) — but still bound it, so a stuck
+        // provider can't hold the worker open forever. See
+        // DEFAULT_UNRACED_TURN_CEILING_MS.
         completion = this.toolExecutor.toolsDisabled
-          ? await this.getCompletion()
+          ? await this.raceAbsolute(
+              this.getCompletion(),
+              'getCompletion:post-delegation',
+              this.config.unracedTurnCeilingMs ?? DEFAULT_UNRACED_TURN_CEILING_MS,
+            )
           : await this.raceTimeout(this.getCompletion(), 'getCompletion');
       } catch (err) {
         const errMsg = (err as Error).message || '';
@@ -965,6 +1012,7 @@ export class AgentWorker extends BaseAgentWorker {
         // Capability floor signal (Phase 2.1): the model emitted tool calls
         // natively — the good sample that heals a prior shim streak.
         recordModelToolCall(this.context.model, false);
+        this.sawNativeToolCall = true;
 
         // Detect hallucinated "respond" tools — smaller models sometimes invent
         // a tool to deliver their answer instead of returning plain text.
@@ -1331,7 +1379,14 @@ export class AgentWorker extends BaseAgentWorker {
       timestamp: new Date(),
     });
     try {
-      const completion = await this.getCompletion();
+      // Bounded, not wall-raced: we are here BECAUSE the wall/iteration budget
+      // is spent, so raceTimeout would reject before the call started. See
+      // DEFAULT_UNRACED_TURN_CEILING_MS.
+      const completion = await this.raceAbsolute(
+        this.getCompletion(),
+        'getCompletion:finalizeGracefully',
+        this.config.unracedTurnCeilingMs ?? DEFAULT_UNRACED_TURN_CEILING_MS,
+      );
       if (this.context.role === 'orchestrator') {
         await sessionRepository
           .incrementMessageCount(this.context.sessionId, this.accountedTokens(completion))
@@ -1523,8 +1578,22 @@ export class AgentWorker extends BaseAgentWorker {
   private async tryToolShim(prose: string): Promise<ToolCall[] | null> {
     if (this.toolShimAttemptedIteration === this.iteration) return null;
     if (this.toolExecutor.toolsDisabled) return null;
+    // This model already proved it can emit tool calls natively in this run —
+    // its prose is an answer, not a call it failed to make. See
+    // `sawNativeToolCall`.
+    if (this.sawNativeToolCall) return null;
     const advertised = this.getAdvertisedToolHandlers();
     if (advertised.length === 0) return null;
+    // Prose that never tried to be a tool call has nothing to translate. This
+    // is the ordinary final answer, so without the check the shim bills an
+    // extra LLM call on every successful turn. See `proseShowsToolIntent`.
+    if (!proseShowsToolIntent(prose, advertised.map((t) => t.name))) {
+      agentLogger.debug(
+        { agentId: this.context.id, iteration: this.iteration },
+        'Toolshim skipped: prose shows no tool intent (plain final answer)',
+      );
+      return null;
+    }
     // Mark attempted up front: a thrown/failed translator call must still count
     // against the once-per-iteration cap (no retry storm on the failure path).
     this.toolShimAttemptedIteration = this.iteration;
@@ -1579,6 +1648,26 @@ export class AgentWorker extends BaseAgentWorker {
   private async runToolTranslator(model: ModelConfigEntry, prompt: string): Promise<string> {
     const messages: AgentMessage[] = [{ role: 'user', content: prompt, timestamp: new Date() }];
 
+    // Hard deadline. This is a one-shot, zero-history, no-tools translation —
+    // if it can't answer inside the ceiling it is not worth the turn, and the
+    // caller (`translateToToolCall`) already fail-softs to "no tool call". The
+    // call previously carried only the worker's abort signal, so a cold local
+    // provider (ollama with a 15 min load timeout) could pin the whole turn
+    // AFTER the user's answer was already written. Chain to the worker signal
+    // so a stop() still cancels, and abort on the deadline so the underlying
+    // request is torn down rather than left running.
+    const ceilingMs = this.config.toolShimTimeoutMs ?? TOOLSHIM_TIMEOUT_MS;
+    const deadline = new AbortController();
+    const onParentAbort = () => deadline.abort(this.abortController.signal.reason);
+    if (this.abortController.signal.aborted) onParentAbort();
+    else this.abortController.signal.addEventListener('abort', onParentAbort, { once: true });
+    const timer = ceilingMs > 0
+      ? setTimeout(
+          () => deadline.abort(new Error(`toolshim translator exceeded ${ceilingMs}ms`)),
+          ceilingMs,
+        )
+      : undefined;
+
     let apiKey: string | undefined;
     if (model.apiKeyRef) {
       try {
@@ -1598,18 +1687,23 @@ export class AgentWorker extends BaseAgentWorker {
       apiKey,
       userId: this.context.userId,
       sessionId: this.context.sessionId,
-      signal: this.abortController.signal,
+      signal: deadline.signal,
     };
 
     let result: CompletionResult;
-    if (model.provider && model.provider !== 'litellm') {
-      const { getProviderRouter } = await import('@/models/providers');
-      const directProvider = getProviderRouter().getProviderByName(model.provider);
-      result = directProvider
-        ? await directProvider.complete(completionOpts)
-        : await getLiteLLMClient().complete(completionOpts);
-    } else {
-      result = await getLiteLLMClient().complete(completionOpts);
+    try {
+      if (model.provider && model.provider !== 'litellm') {
+        const { getProviderRouter } = await import('@/models/providers');
+        const directProvider = getProviderRouter().getProviderByName(model.provider);
+        result = directProvider
+          ? await directProvider.complete(completionOpts)
+          : await getLiteLLMClient().complete(completionOpts);
+      } else {
+        result = await getLiteLLMClient().complete(completionOpts);
+      }
+    } finally {
+      if (timer) clearTimeout(timer);
+      this.abortController.signal.removeEventListener('abort', onParentAbort);
     }
 
     await getCostTracker().logUsageWithCost(

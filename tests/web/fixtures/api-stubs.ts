@@ -99,6 +99,81 @@ export async function stubModels(page: Page): Promise<void> {
   });
 }
 
+/**
+ * Notes workspace: list/index/tags plus a stand-in for the documents upload
+ * that backs pasted images, and the `/raw` read-back the preview performs.
+ */
+export async function stubNotes(page: Page): Promise<void> {
+  // Mirrors src/api/routes/notes.ts: `noteKind` (not `kind`), and GET /notes/:id
+  // returns the note itself spread with `backlinks`/`outgoing` — NOT wrapped in
+  // a `{ note }` envelope. A stub that drifts from the route teaches the suite
+  // to pass against a shape the server never sends.
+  const notes = [
+    {
+      id: 'n1',
+      slug: 'first-note',
+      title: 'First note',
+      noteKind: 'note',
+      tags: ['demo'],
+      pinned: false,
+      updatedAt: '2026-01-01T00:00:00Z',
+      noteDate: null,
+    },
+  ];
+  // One handler branching on pathname: glob routes treat `?` as a wildcard, so
+  // `**/api/notes?**` does not reliably distinguish the list call from
+  // `/notes/index`. Matching on the parsed path removes the ambiguity.
+  await page.route(/\/api\/notes(\/|\?|$)/, (route) => {
+    const path = new URL(route.request().url()).pathname.replace(/^.*\/api\/notes/, '') || '/';
+    if (path.startsWith('/index')) {
+      return json(route, 200, {
+        notes: notes.map((n) => ({ id: n.id, slug: n.slug, title: n.title, noteKind: n.noteKind })),
+        total: notes.length,
+      });
+    }
+    if (path.startsWith('/tags')) return json(route, 200, { tags: [{ tag: 'demo', count: 1 }] });
+    if (path.includes('/suggestions')) return json(route, 200, { suggestions: [] });
+    if (path.startsWith('/n1')) {
+      return json(route, 200, {
+        ...notes[0],
+        body: '# First note\n\nbody text\n',
+        frontmatter: {},
+        backlinks: [],
+        outgoing: [],
+      });
+    }
+    return json(route, 200, { notes, total: notes.length });
+  });
+
+  // A 1x1 PNG — enough for the object-URL round trip.
+  const PNG = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64',
+  );
+  await page.route('**/api/documents/upload', (route) =>
+    json(route, 200, { uploaded: [{ id: 'doc-img-1', filename: 'pasted.png', status: 'queued' }] }),
+  );
+  await page.route('**/api/documents/doc-img-1/raw**', (route) =>
+    route.fulfill({ status: 200, contentType: 'image/png', body: PNG }),
+  );
+}
+
+/**
+ * Topic → model bindings. The Models page reads these (OrchestratorModelNote
+ * shows which lane the orchestrator resolves), so leaving `/api/topics`
+ * unstubbed meant the page rendered against a body with no `topics` array.
+ */
+export async function stubTopics(page: Page): Promise<void> {
+  await page.route('**/api/topics', (route) =>
+    json(route, 200, {
+      topics: [
+        { value: 'chat', label: 'chat', primaryModel: 'gpt-4o', backupModel: null, executorModel: null },
+        { value: 'coding', label: 'coding', primaryModel: 'claude-3-5-sonnet', backupModel: null, executorModel: null },
+      ],
+    }),
+  );
+}
+
 export async function stubExperts(page: Page): Promise<void> {
   const experts = [
     {
@@ -403,6 +478,7 @@ export async function stubAllDefaults(page: Page): Promise<void> {
   await stubHealth(page);
   await stubSessions(page);
   await stubModels(page);
+  await stubTopics(page);
   await stubExperts(page);
   await stubMcp(page);
   await stubKnowledge(page);
@@ -417,4 +493,8 @@ export async function stubAllDefaults(page: Page): Promise<void> {
   await stubVault(page);
   await stubEvaluations(page);
   await stubProfiles(page);
+  // AFTER stubDocuments on purpose: Playwright tries the most recently
+  // registered route first, and stubDocuments' `**/api/documents**` catch-all
+  // would otherwise answer the image upload with `{documents: []}`.
+  await stubNotes(page);
 }

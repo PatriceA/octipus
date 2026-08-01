@@ -48,6 +48,21 @@ export interface AgentWorkerConfig {
    * human approval for arbitrary durations.)
    */
   selfTimedToolCeilingMs?: number;
+  /**
+   * Deadline (ms) for the toolshim translator call — the one-shot prose→tool-call
+   * translation that runs only when the model could not emit a native call. The
+   * caller fail-softs to "no tool call", so this bounds a stuck/cold translator
+   * rather than failing the turn. Defaults to `TOOLSHIM_TIMEOUT_MS`; ≤0 disables.
+   */
+  toolShimTimeoutMs?: number;
+  /**
+   * Ceiling (ms) for the LLM turns that deliberately skip the wall race — the
+   * graceful-exit summary and the post-delegation turn. Both run when the wall
+   * budget is already spent, so the wall race can't bound them; this stops a
+   * stuck provider holding the worker open anyway. Defaults to
+   * `DEFAULT_UNRACED_TURN_CEILING_MS`; ≤0 disables.
+   */
+  unracedTurnCeilingMs?: number;
 }
 
 export interface ToolHandler {

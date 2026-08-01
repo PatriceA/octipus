@@ -16,6 +16,22 @@ test.describe('models page', () => {
     await expect(page.locator('body')).toContainText(/default|Default/i, { timeout: 10_000 });
   });
 
+  test('a topics response with no topics array does not take down the page', async ({
+    authenticatedPage: page,
+  }) => {
+    // OrchestratorModelNote is a decoration on this page, but it read
+    // `topics.find(...)` straight off the payload — so a 200 whose body lacked
+    // the array threw during render and the error boundary replaced the whole
+    // Models page with "This page couldn't load". An older backend, a partial
+    // deploy, or a proxy all produce exactly this body.
+    await page.route('**/api/topics', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }),
+    );
+    await page.goto('/models');
+    await expect(page.locator('body')).toContainText(/gpt-4o|claude-3-5-sonnet/, { timeout: 10_000 });
+    await expect(page.locator('body')).not.toContainText(/couldn.t load/i);
+  });
+
   test('error surface when models API returns 500', async ({ authenticatedPage: page, consoleErrors }) => {
     // Override the default stub with a 500.
     await page.route('**/api/models**', (route) =>
