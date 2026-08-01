@@ -12,8 +12,10 @@
  * hermetic pattern used by budget-enforcement.test.ts (no DB / no real LLM).
  */
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
-import { AgentWorker } from '@/core/agent-worker';
+import { AgentWorker, TOOLSHIM_TIMEOUT_MS } from '@/core/agent-worker';
 import type { AgentEvent } from '@/core/agent-worker';
+import { getLiteLLMClient } from '@/models/litellm-client';
+import { getModelRegistry } from '@/models/model-registry';
 import type { AgentContext } from '@/core/types';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
@@ -202,6 +204,33 @@ describe('AgentWorker child-aware timeout (2.2) + graceful exit (3.5)', () => {
     expect(result).toContain('SUMMARY');
     expect(priv.toolExecutor.toolsDisabled).toBe(true); // tools disabled for the summary turn
   });
+
+  test('a wedged summary turn is bounded and still yields a deterministic recap', async () => {
+    // The graceful exit is reached only once the wall/iteration budget is spent,
+    // so `raceTimeout` cannot bound it — without an absolute ceiling a stuck or
+    // cold provider holds the worker open indefinitely PAST its budget.
+    const worker = new AgentWorker(
+      mkCtx({ role: 'research', id: 'budget-wedged' }),
+      { ...cfg({ maxIterations: 2 }), unracedTurnCeilingMs: 50 },
+    );
+    const priv = worker as unknown as {
+      iteration: number;
+      loop: () => Promise<string>;
+      getCompletion: () => Promise<CompletionResult>;
+      messages: Array<{ role: string; content: string; timestamp: Date }>;
+    };
+    priv.iteration = 2;
+    priv.messages.push({ role: 'tool', content: 'INDEXED 12 FILES', timestamp: new Date() });
+    // A provider that never answers.
+    priv.getCompletion = () => new Promise<CompletionResult>(() => {});
+
+    const startedAt = Date.now();
+    const result = await priv.loop();
+    // Bounded by the ceiling, not by the provider.
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    // And it still returns real content rather than a bare error.
+    expect(result).toContain('INDEXED 12 FILES');
+  });
 });
 
 describe('AgentWorker task-drift detection (T2.2)', () => {
@@ -317,5 +346,91 @@ describe('AgentWorker task-drift detection (T2.2)', () => {
 
     const out = await worker.run('Find which World Cup matches were played yesterday and the scores.');
     expect(out).toContain('Brazil');
+  });
+});
+
+/**
+ * Toolshim gating: the shim reconstructs a call the model FAILED to emit. It
+ * must not fire on a normal text-only final answer — that costs an extra LLM
+ * call per turn and, when the `background` model is a cold local one, stalls
+ * delivery of an answer that is already written (observed: 14 min between an
+ * orchestrator's finished text and its completion event).
+ */
+describe('AgentWorker toolshim gate (native tool-caller ⇒ no translator)', () => {
+  const shimWorker = () => {
+    const worker = new AgentWorker(mkCtx({ id: 'shim-1' }), cfg());
+    worker.registerTool({
+      name: 'filesystem__write_file',
+      description: 'write a file',
+      parameters: { type: 'object', properties: {} },
+      execute: async () => 'ok',
+    });
+    return worker;
+  };
+
+  test('a model that emitted a native tool call never reaches the translator again', async () => {
+    const worker = shimWorker();
+    const priv = worker as unknown as {
+      sawNativeToolCall: boolean;
+      tryToolShim: (prose: string) => Promise<unknown>;
+    };
+    const topicSpy = spyOn(getModelRegistry(), 'getModelForTopic');
+
+    priv.sawNativeToolCall = true;
+    expect(await priv.tryToolShim('Done — the daily update task has been disabled.')).toBeNull();
+    // The gate must sit BEFORE the translator is even resolved: resolving the
+    // model is what leads to the (unbounded, possibly cold) provider call.
+    expect(topicSpy).not.toHaveBeenCalled();
+    topicSpy.mockRestore();
+  });
+
+  test('a model that has NOT emitted a native tool call still gets the translator', async () => {
+    const worker = shimWorker();
+    const priv = worker as unknown as {
+      sawNativeToolCall: boolean;
+      tryToolShim: (prose: string) => Promise<unknown>;
+    };
+    const topicSpy = spyOn(getModelRegistry(), 'getModelForTopic').mockResolvedValue(null as never);
+
+    priv.sawNativeToolCall = false;
+    expect(await priv.tryToolShim('I will now write hello to /a.txt')).toBeNull();
+    expect(topicSpy).toHaveBeenCalledWith('background');
+    topicSpy.mockRestore();
+  });
+
+  test('the translator call carries a bounded deadline, not just the worker signal', async () => {
+    // 50ms stand-in for the 30s production ceiling — same code path, no sleep.
+    const worker = new AgentWorker(mkCtx({ id: 'shim-2' }), { ...cfg(), toolShimTimeoutMs: 50 });
+    const priv = worker as unknown as {
+      runToolTranslator: (m: unknown, p: string) => Promise<string>;
+    };
+    let seen: AbortSignal | undefined;
+    // Stands in for a provider that never answers — e.g. ollama cold-loading a
+    // 21 GB model — and, like a real HTTP client, aborts when its signal does.
+    const completeSpy = spyOn(getLiteLLMClient(), 'complete').mockImplementation((async (opts: {
+      signal?: AbortSignal;
+    }) => {
+      seen = opts.signal;
+      return await new Promise((_resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('provider never answered')), 5_000);
+        opts.signal?.addEventListener('abort', () => {
+          clearTimeout(t);
+          reject(opts.signal?.reason);
+        }, { once: true });
+      });
+    }) as never);
+
+    await expect(
+      priv.runToolTranslator({ modelId: 'slow-local', provider: 'litellm' }, 'prose'),
+    ).rejects.toThrow(/50ms/);
+    // The deadline fired and tore the request DOWN — a stuck provider can no
+    // longer pin the turn for its own (15 min) timeout.
+    expect(seen?.aborted).toBe(true);
+    completeSpy.mockRestore();
+  });
+
+  test('the production default ceiling is bounded and well under a provider load timeout', () => {
+    expect(TOOLSHIM_TIMEOUT_MS).toBeGreaterThan(0);
+    expect(TOOLSHIM_TIMEOUT_MS).toBeLessThanOrEqual(60_000);
   });
 });

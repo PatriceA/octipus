@@ -157,13 +157,18 @@ export async function translateToToolCall(
   if (!text?.trim() || tools.length === 0) return null;
 
   let content: string;
+  const startedAt = Date.now();
   try {
     content = await complete(buildToolShimPrompt(text, tools));
   } catch (error) {
     // Translator call failed (timeout/5xx/etc). Fail-soft to current behaviour,
-    // but leave a breadcrumb so the failure isn't fully silent — the caller's
-    // success/unbound logs never fire on this thrown-error path.
-    modelLogger.debug({ error }, 'tool-translation failed, skipping toolshim');
+    // but at WARN with the elapsed time: a slow translator is invisible from the
+    // outside (it burns wall-clock on a turn whose answer is already written)
+    // and a `debug` breadcrumb is not enough to find it in a post-mortem.
+    modelLogger.warn(
+      { error, elapsedMs: Date.now() - startedAt },
+      'tool-translation failed, skipping toolshim',
+    );
     return null;
   }
 

@@ -111,8 +111,8 @@ describe('translateToToolCall', () => {
     expect(called).toBe(false);
   });
 
-  test('translator throws ⇒ null (fail-soft, no rethrow) AND logs a breadcrumb', async () => {
-    const debugSpy = spyOn(modelLogger, 'debug').mockImplementation(() => {});
+  test('translator throws ⇒ null (fail-soft, no rethrow) AND warns with elapsed time', async () => {
+    const warnSpy = spyOn(modelLogger, 'warn').mockImplementation(() => {});
     try {
       const err = new Error('provider down');
       const call = await translateToToolCall({
@@ -122,19 +122,21 @@ describe('translateToToolCall', () => {
         complete: async () => { throw err; },
       });
       expect(call).toBeNull();
-      // The thrown-error path must NOT be silent: a debug breadcrumb carrying
-      // the error reason fires (the caller's success/unbound logs never run here).
-      expect(debugSpy).toHaveBeenCalledTimes(1);
-      const [ctx, msg] = debugSpy.mock.calls[0] as [{ error: unknown }, string];
+      // The thrown-error path must NOT be silent, and must NOT be debug-only:
+      // a slow/stuck translator burns wall-clock on a turn whose answer is
+      // already written, so the elapsed time has to be in the record.
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const [ctx, msg] = warnSpy.mock.calls[0] as [{ error: unknown; elapsedMs: number }, string];
       expect(ctx.error).toBe(err);
+      expect(ctx.elapsedMs).toBeGreaterThanOrEqual(0);
       expect(msg).toContain('tool-translation failed');
     } finally {
-      debugSpy.mockRestore();
+      warnSpy.mockRestore();
     }
   });
 
   test('successful translation does NOT log a failure breadcrumb', async () => {
-    const debugSpy = spyOn(modelLogger, 'debug').mockImplementation(() => {});
+    const warnSpy = spyOn(modelLogger, 'warn').mockImplementation(() => {});
     try {
       const call = await translateToToolCall({
         text: 'I will write hello to /a.txt',
@@ -143,9 +145,9 @@ describe('translateToToolCall', () => {
         complete: async () => '{"name":"filesystem__write_file","arguments":{"path":"/a.txt","content":"hello"}}',
       });
       expect(call?.name).toBe('filesystem__write_file');
-      expect(debugSpy).not.toHaveBeenCalled();
+      expect(warnSpy).not.toHaveBeenCalled();
     } finally {
-      debugSpy.mockRestore();
+      warnSpy.mockRestore();
     }
   });
 
