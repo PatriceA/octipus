@@ -19,6 +19,19 @@ import { GatewayWSClient } from '../ws-client';
  * non-deterministic. Session.context.activeExpertId / activeExpertName are
  * the load-bearing fields the bug was about.
  */
+
+/**
+ * How long one real chat turn may take before we call it a failure.
+ *
+ * These tests drive a genuine orchestrator turn, and the `agents` lane on a
+ * normal install resolves to a CLI-backed model (`cli/claude`), which spawns a
+ * process and loads its own config before it answers. A measured run of the
+ * expert turn below completed in 33.5s — under the old 30s wait, so the suite
+ * reported a hang for a turn that had in fact succeeded. A too-tight timeout on
+ * a real-LLM test doesn't catch slowness, it just manufactures red.
+ */
+const CHAT_TURN_TIMEOUT_MS = 120_000;
+
 export async function testExpertRoutingFlow(runner: TestRunner, client: APIClient) {
   console.log('\n\x1b[1mExpert routing flow (WS)\x1b[0m');
 
@@ -83,7 +96,7 @@ export async function testExpertRoutingFlow(runner: TestRunner, client: APIClien
       // attempts — the session attaches fine, but the side-effects
       // dwarfed the test budget.
       ws.send({ type: 'chat.send', sessionId, content: 'hi' });
-      await ws.waitForEvent('chat.response', 60_000);
+      await ws.waitForEvent('chat.response', CHAT_TURN_TIMEOUT_MS);
 
       ws.send({ type: 'command', name: 'expert', args: { name: coderName } });
       const result = await ws.waitForCommandResult('expert', 10_000);
@@ -115,14 +128,14 @@ export async function testExpertRoutingFlow(runner: TestRunner, client: APIClien
       await ws.connect();
       // Attach session
       ws.send({ type: 'chat.send', sessionId, content: 'hi' });
-      await ws.waitForEvent('chat.response', 30_000);
+      await ws.waitForEvent('chat.response', CHAT_TURN_TIMEOUT_MS);
 
       ws.send({ type: 'command', name: 'expert', args: { name: coderName } });
       await ws.waitForCommandResult('expert', 10_000);
 
       // Send a chat message — it should route through the expert.
       ws.send({ type: 'chat.send', sessionId, content: 'What is 2+2? One word.' });
-      await ws.waitForEvent('chat.response', 30_000);
+      await ws.waitForEvent('chat.response', CHAT_TURN_TIMEOUT_MS);
 
       const ctx = await getSessionContext(sessionId);
       assert(
@@ -141,7 +154,7 @@ export async function testExpertRoutingFlow(runner: TestRunner, client: APIClien
     try {
       await ws.connect();
       ws.send({ type: 'chat.send', sessionId, content: 'hi' });
-      await ws.waitForEvent('chat.response', 30_000);
+      await ws.waitForEvent('chat.response', CHAT_TURN_TIMEOUT_MS);
 
       ws.send({ type: 'command', name: 'expert', args: { name: coderName } });
       await ws.waitForCommandResult('expert', 10_000);
@@ -168,7 +181,7 @@ export async function testExpertRoutingFlow(runner: TestRunner, client: APIClien
     try {
       await ws1.connect();
       ws1.send({ type: 'chat.send', sessionId, content: 'hi' });
-      await ws1.waitForEvent('chat.response', 30_000);
+      await ws1.waitForEvent('chat.response', CHAT_TURN_TIMEOUT_MS);
 
       ws1.send({ type: 'command', name: 'expert', args: { name: coderName } });
       await ws1.waitForCommandResult('expert', 10_000);
@@ -194,7 +207,7 @@ export async function testExpertRoutingFlow(runner: TestRunner, client: APIClien
     try {
       await ws2.connect();
       ws2.send({ type: 'chat.send', sessionId, content: 'Say the word ok.' });
-      await ws2.waitForEvent('chat.response', 30_000);
+      await ws2.waitForEvent('chat.response', CHAT_TURN_TIMEOUT_MS);
 
       const ctxAfter = await getSessionContext(sessionId);
       assert(

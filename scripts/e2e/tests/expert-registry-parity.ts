@@ -79,7 +79,11 @@ export async function testExpertRegistryParity(runner: TestRunner, client: APICl
       // single non-printing character keeps the binding while leaving nothing
       // human-readable behind (the session is also deleted in cleanup below).
       ws.send({ type: 'chat.send', sessionId, content: '​' });
-      await ws.waitForEvent('chat.response', 30_000);
+      // A real orchestrator turn, and the `agents` lane commonly resolves to a
+      // CLI-backed model that spawns a process before it answers — measured at
+      // 33.5s, i.e. past a 30s wait. Too tight a bound on a real-LLM test
+      // manufactures red rather than catching slowness.
+      await ws.waitForEvent('chat.response', 120_000);
 
       const cmdArgs = args ? { name: args } : undefined;
       ws.send({ type: 'command', name: 'expert', args: cmdArgs });

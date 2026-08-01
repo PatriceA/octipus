@@ -27,7 +27,13 @@ export const whatsappWebhookRoutes = new Elysia({ prefix: '/channels/whatsapp' }
 
       if (!channel) {
         apiLogger.warn('WhatsApp webhook verification attempted but channel not registered');
-        return new Response('Channel not configured', { status: 503 });
+        // 404, not 503. An unregistered channel is a permanent condition on
+        // this install, not a service that is temporarily down: 503 invites
+        // Meta to retry a verification that can never succeed, and it makes a
+        // deployment that simply doesn't use WhatsApp look like a failing
+        // server to any 5xx-based alerting. The POST branch below already
+        // treats the same state as non-fatal.
+        return new Response('Channel not configured', { status: 404 });
       }
 
       const whatsapp = channel as import('@/channels/whatsapp').WhatsAppChannel;
