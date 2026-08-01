@@ -51,9 +51,20 @@ unexplained wedge. Three distinct states are represented:
    approval wait is never killed. Do not remove that exemption.
 2. **Waiting for a child** (582s, 245s) — `collect_children`. Correct; the wait
    is credited back via `pausedMs` so the parent isn't penalised.
-3. **Stuck on something that will never succeed** (901s, 469s) — a 21GB model
-   that cannot load in available RAM, burning ollama's full 15-minute timeout
-   before failing. See `project_octipus_ornith_wont_load`.
+3. **Stuck behind a load that could not fit at that moment** (901s, 469s) — a
+   21GB model burning ollama's full 15-minute timeout before failing.
+
+   **Corrected 2026-08-02:** the original write-up said this model "cannot load
+   on this box". It can — verified with `OLLAMA_DEBUG=1`:
+   `load_tensors: offloaded 41/41 layers to GPU`, `ROCm0 model buffer size =
+   19902.90 MiB`, and the 2026-07-09 benchmark clocks it at ~2x qwen3.5:9b.
+   Free RAM was ~17 GiB during those runs versus 38 GiB on retest, because the
+   measuring session was itself running a full test suite, a Next build,
+   Playwright, and stacked 8-10GB leftovers from its own failed attempts.
+
+   This makes the case *more* interesting, not less: the model was fine, the
+   moment was not. A fixed "is this model too big for this box" check would have
+   been wrong. See `project_octipus_ornith_wont_load`.
 
 **They are indistinguishable from outside.** The event stream shows the same
 thing for all three: nothing. That is the actual defect. The user cannot tell
@@ -98,21 +109,34 @@ keeping as a test helper.
 **Check:** a REST-driven pipeline run can be carried to completion without a
 human, and never looks like a hang.
 
-## Phase 3 — fail fast on a model that cannot load
+## Phase 3 — fail fast when a load cannot fit *right now*
 
-901s spent to discover a model won't load is the worst of the three cases: it is
-pure loss, and it looks exactly like the two healthy ones. `OLLAMA_LOAD_TIMEOUT`
-is 15m to accommodate genuinely slow first loads, so the fix is not simply
-lowering it.
+901s spent to discover a load won't complete is the worst of the three cases: it
+is pure loss, and it looks exactly like the two healthy ones.
+`OLLAMA_LOAD_TIMEOUT` is 15m to accommodate genuinely slow first loads, so the
+fix is not simply lowering it.
 
-Cheapest honest option: before binding work to a local model, check
-`GET /api/ps` plus available RAM against the model's size, and fail loud with
-"model X needs ~21GB, ~17GB available" rather than blocking for 15 minutes. The
-sizing data already exists — the hwfit catalog reads live registry manifest
-sizes (`project_octipus_hwfit`).
+**The check must be about the moment, not the model.** The model in question
+loads fine — 41/41 layers to GPU — and outruns the smaller alternative when it
+has room. A static "this model is too big for this hardware" rule would
+permanently disable the *faster* option because of a transient condition. Gate
+on live free memory versus the model's size at request time, and re-evaluate on
+every load rather than caching a verdict.
 
-**Check:** binding a lane to a model too large for current free RAM surfaces an
-actionable error in seconds, not a 15-minute stall.
+Cheapest honest option: before dispatching to a local model that is not already
+resident (`GET /api/ps`), compare its size against currently available RAM and
+fail loud — "ornith:35b needs ~20GB, 17GB available; free memory or use a
+smaller lane model" — rather than blocking for 15 minutes. The sizing data
+already exists: the hwfit catalog reads live registry manifest sizes
+(`project_octipus_hwfit`).
+
+Worth pairing with a cheap sweep for orphaned `llama-server` processes from
+prior failed loads, which is what turned one tight-memory moment into a
+cascade of them.
+
+**Check:** with free RAM artificially constrained below the model size, a lane
+dispatch surfaces an actionable error in seconds. With RAM available, the same
+model loads and serves normally — no permanent blacklist.
 
 ## Risk
 
