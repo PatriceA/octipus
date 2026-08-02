@@ -20,6 +20,23 @@ import { apiLogger } from '@/utils/logger';
  *   userId field to make this filter possible.
  * - POST /chat/approve: was reachable by anyone with the requestId.
  *   Now verifies the principal owns the approval before resolving.
+ *
+ * ## Blocking contract (docs/plans/blocked-vs-stuck.md Phase 2)
+ *
+ * `POST /chat` BLOCKS until the turn finishes. If the turn raises an approval
+ * it blocks until a human answers or `orchestrator.approvalTimeoutMs` (1h)
+ * expires. This is deliberate — the web UI and TUI expect the finished answer
+ * on the response — but it means a REST caller sees only a quiet socket.
+ *
+ * A REST caller MUST drive approvals out-of-band on a second connection:
+ * poll `GET /chat/approvals/pending` and answer via `POST /chat/approve` while
+ * the original request is still in flight. `scripts/e2e/approvals.ts`
+ * (`autoApproveLoop`) is the supported helper.
+ *
+ * WebSocket clients need none of this: the approval is pushed as
+ * `orchestrator.approval_required`. Since Phase 1, `agent.blocked` also names
+ * WHAT a quiet turn is waiting for (your approval / a child / a long tool),
+ * every ~20s — so the silence is legible even before the approval lands.
  */
 export const chatRoutes = new Elysia({ prefix: '/chat' })
   .use(apiContext)

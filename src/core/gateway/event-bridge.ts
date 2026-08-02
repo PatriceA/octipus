@@ -53,12 +53,22 @@ export function connectEventBridge(hub: GatewayHub): () => void {
       // of-thought) stay internal — surfacing them as gateway events
       // would explode bandwidth and leak reasoning.
       if (event.type === 'thought') {
-        const data = event.data as { type?: string; iteration?: number } | undefined;
+        const data = event.data as { type?: string; iteration?: number; reason?: string; blockedForMs?: number } | undefined;
         if (data?.type === 'iteration_update' && typeof data.iteration === 'number') {
           hub.publishEvent({
             type: 'agent.iteration',
             source: `agent:${event.agentId}`,
             payload: { agentId: event.agentId, iteration: data.iteration },
+          });
+        }
+        // A long silence is indistinguishable from a hang unless we say what we
+        // are waiting for. Low volume by construction — one every 20s, and only
+        // while genuinely blocked (docs/plans/blocked-vs-stuck.md Phase 1).
+        if (data?.type === 'blocked_progress' && typeof data.reason === 'string') {
+          hub.publishEvent({
+            type: 'agent.blocked',
+            source: `agent:${event.agentId}`,
+            payload: { agentId: event.agentId, reason: data.reason, blockedForMs: data.blockedForMs ?? 0 },
           });
         }
         return;

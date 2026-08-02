@@ -359,6 +359,15 @@ export class LiteLLMClient {
     // logging only the direct branch gives exactly-once coverage with no
     // double logging. Before this, the direct branch was silent, so a research
     // run on a custom-openai model produced no "LLM request" line at all.
+    // Fail fast when a local model demonstrably cannot fit in memory right now,
+    // rather than blocking up to 15 minutes on ollama's load timeout to find
+    // out. Fails OPEN on any uncertainty — see checkLocalModelFit.
+    if (provider.name === 'ollama') {
+      const { checkLocalModelFit } = await import('@/models/local-fit');
+      const fit = await checkLocalModelFit(resolvedModel, enriched.endpoint || 'http://localhost:11434');
+      if (!fit.ok) throw new Error(fit.reason);
+    }
+
     modelLogger.info(
       { model: resolvedModel, provider: provider.name, messageCount: options.messages.length },
       'LLM request',

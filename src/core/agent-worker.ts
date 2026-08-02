@@ -65,6 +65,52 @@ export const TOOLSHIM_TIMEOUT_MS = 30_000;
  */
 export const DEFAULT_UNRACED_TURN_CEILING_MS = 5 * 60_000;
 
+/**
+ * How often a blocked worker says what it is waiting for. This is a REPORTING
+ * interval, never a deadline — nothing is cancelled when it fires. Long enough
+ * that a normal tool call stays silent, short enough that a human watching a
+ * quiet screen learns the cause well before they conclude it has hung.
+ */
+export const BLOCKED_PROGRESS_INTERVAL_MS = 20_000;
+
+/**
+ * Human-readable answer to "what is it waiting for?" for a batch of tool calls.
+ * The three states the user currently cannot tell apart are exactly the three
+ * branches here: a human's approval, a child's work, and an ordinary long tool.
+ */
+export function blockedReason(
+  toolCalls: Array<{ name: string }>,
+  isFinal: boolean,
+  isCollect: boolean,
+): string {
+  if (isFinal) return 'awaiting your approval';
+  if (isCollect) return 'waiting for spawned children to finish';
+  const names = [...new Set(toolCalls.map((tc) => tc.name))];
+  return names.length === 1 ? `running ${names[0]}` : `running ${names.length} tools (${names.slice(0, 3).join(', ')})`;
+}
+
+/**
+ * Start the "still waiting, here's why" heartbeat. Returns the stop function.
+ *
+ * Nothing here cancels anything — the wait is legitimate and a wall-clock
+ * ceiling on it would kill real work (a human may take an hour to approve).
+ * This is observability only, which is the actual defect being fixed.
+ */
+export function startBlockedHeartbeat(
+  reason: string,
+  emit: (payload: { type: 'blocked_progress'; reason: string; blockedForMs: number }) => void,
+  intervalMs: number = BLOCKED_PROGRESS_INTERVAL_MS,
+  now: () => number = Date.now,
+): () => void {
+  const since = now();
+  const timer = setInterval(() => {
+    emit({ type: 'blocked_progress', reason, blockedForMs: now() - since });
+  }, intervalMs);
+  // Never let a heartbeat hold the process open at shutdown.
+  (timer as unknown as { unref?: () => void }).unref?.();
+  return () => clearInterval(timer);
+}
+
 export class AgentWorker extends BaseAgentWorker {
   private toolExecutor: ToolExecutor;
   private abortController: AbortController;
@@ -216,14 +262,27 @@ export class AgentWorker extends BaseAgentWorker {
    * Run a legitimately-long blocking wait while marking the worker `blocked` so
    * the reaper won't mistake the idle-looking wait for a wedge. Cleared in
    * `finally` even on throw. Nested waits keep the earliest `blockedSince`.
+   *
+   * `reason` names WHAT is being waited on ("collect_children (3 pending)",
+   * "awaiting approval"). While blocked, a heartbeat emits it every
+   * `BLOCKED_PROGRESS_INTERVAL_MS` — see `emitBlockedProgress`. Every
+   * legitimately-long wait already funnels through here, so this is the one
+   * place that has to know, and a new blocking region gets the heartbeat by
+   * construction (docs/plans/blocked-vs-stuck.md Phase 1).
    */
-  private async whileBlocked<T>(fn: () => Promise<T>): Promise<T> {
+  private async whileBlocked<T>(reason: string, fn: () => Promise<T>): Promise<T> {
     const already = this.blockedSince !== null;
-    if (!already) this.blockedSince = Date.now();
+    if (already) return fn();
+
+    this.blockedSince = Date.now();
+    // A silent wait is indistinguishable from a hang from outside — that IS the
+    // defect. Say what we are waiting for, and for how long.
+    const stopHeartbeat = startBlockedHeartbeat(reason, (payload) => this.emit('thought', payload));
     try {
       return await fn();
     } finally {
-      if (!already) this.blockedSince = null;
+      stopHeartbeat();
+      this.blockedSince = null;
     }
   }
 
@@ -448,7 +507,10 @@ export class AgentWorker extends BaseAgentWorker {
           { agentId: this.context.id, pending: this.detached.count(), autoTimeoutMs },
           'Auto-collecting forgotten detached children before finalizing',
         );
-        const collected = await this.whileBlocked(() => this.collectAllDetached(autoTimeoutMs));
+        const collected = await this.whileBlocked(
+          `auto-collecting ${this.detached.count()} detached ${this.detached.count() === 1 ? 'child' : 'children'}`,
+          () => this.collectAllDetached(autoTimeoutMs),
+        );
         if (collected.length > 0) {
           // P1.2 — give each child a real relay budget instead of a 500-char
           // stub (which turned multi-thousand-char research summaries into two
@@ -1155,7 +1217,7 @@ export class AgentWorker extends BaseAgentWorker {
         // doesn't kill a healthy worker mid tool call (a long deep-research /
         // shell / MCP fetch can outlast the reaper's inactivity window). The
         // wall race below still bounds normal tools independently.
-        const toolMessages: AgentMessage[] = await this.whileBlocked(() => {
+        const toolMessages: AgentMessage[] = await this.whileBlocked(blockedReason(toolCalls, isFinal, isCollect), () => {
           if (isFinal) {
             // Legitimately long (may await human approval) — no wall race.
             return this.toolExecutor.handleToolCalls(toolCalls);
@@ -1757,10 +1819,12 @@ export class AgentWorker extends BaseAgentWorker {
     // Mark blocked for the whole execution (same as the structured path) so the
     // reaper's heartbeat check doesn't kill a healthy worker mid tool call —
     // including a recovered `final` tool awaiting human approval.
-    const toolMessages = await this.whileBlocked(() =>
-      isSelfTimedTool
-        ? this.toolExecutor.handleToolCalls(toolCalls)
-        : this.raceTimeout(this.toolExecutor.handleToolCalls(toolCalls), 'handleToolCalls'),
+    const toolMessages = await this.whileBlocked(
+      blockedReason(toolCalls, this.toolExecutor.hasFinalToolCall(toolCalls), toolCalls.some((tc) => tc.name === 'collect_children')),
+      () =>
+        isSelfTimedTool
+          ? this.toolExecutor.handleToolCalls(toolCalls)
+          : this.raceTimeout(this.toolExecutor.handleToolCalls(toolCalls), 'handleToolCalls'),
     );
     this.messages.push(...toolMessages);
 

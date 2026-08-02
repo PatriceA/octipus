@@ -52,6 +52,11 @@ export type GatewayEventType =
   // chat/TUI UIs can show a "thinking …" indicator with a progress
   // count instead of a frozen spinner.
   | 'agent.iteration'
+  // Emitted every ~20s while a worker sits in a legitimately-long wait, naming
+  // WHAT it is waiting for (your approval / a child / a long tool) and for how
+  // long. Purely informational — nothing is cancelled. Exists because all three
+  // of those states look identical from outside: silence.
+  | 'agent.blocked'
   // Worker (orchestrator-spawned) lifecycle
   | 'worker_spawned'
   | 'worker_completed'
