@@ -354,9 +354,24 @@ Report: FIXED / NOT FIXED / PARTIALLY FIXED with evidence.`,
  * explicitly set to `false` stays false, and every other field is untouched.
  * No-ops (no write) when nothing is missing, which is the steady state.
  */
+export function planProducesArtifactsBackfill(
+  stored: PipelineStepConfig[],
+  shipped: PipelineStepConfig[],
+): { steps: PipelineStepConfig[]; changed: boolean } {
+  const declared = new Set(shipped.filter((s) => s.producesArtifacts).map((s) => s.name));
+  let changed = false;
+  const steps = stored.map((step) => {
+    // `!== undefined` and not a truthiness test: an explicit `false` is a user
+    // decision to opt this stage OUT of gating, and must survive the backfill.
+    if (step.producesArtifacts !== undefined || !declared.has(step.name)) return step;
+    changed = true;
+    return { ...step, producesArtifacts: true };
+  });
+  return { steps, changed };
+}
+
 async function backfillPresetStepFlags(name: string, shipped: PipelineStepConfig[]): Promise<void> {
-  const declared = new Map(shipped.filter((s) => s.producesArtifacts).map((s) => [s.name, true]));
-  if (declared.size === 0) return;
+  if (!shipped.some((s) => s.producesArtifacts)) return;
 
   const db = getDb();
   const [row] = await db
@@ -366,16 +381,10 @@ async function backfillPresetStepFlags(name: string, shipped: PipelineStepConfig
     .limit(1);
   if (!row) return;
 
-  const steps = (row.steps as PipelineStepConfig[]) ?? [];
-  let changed = false;
-  const patched = steps.map((step) => {
-    if (step.producesArtifacts !== undefined || !declared.has(step.name)) return step;
-    changed = true;
-    return { ...step, producesArtifacts: true };
-  });
+  const { steps, changed } = planProducesArtifactsBackfill((row.steps as PipelineStepConfig[]) ?? [], shipped);
   if (!changed) return;
 
-  await db.update(pipelineTemplates).set({ steps: patched, updatedAt: new Date() }).where(eq(pipelineTemplates.id, row.id));
+  await db.update(pipelineTemplates).set({ steps, updatedAt: new Date() }).where(eq(pipelineTemplates.id, row.id));
   logger.info({ template: name }, 'Backfilled producesArtifacts on preset pipeline template');
 }
 
