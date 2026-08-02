@@ -30,6 +30,19 @@ interface EventResponse {
 }
 
 /**
+ * Cap on retained timeline events.
+ *
+ * This hook polls every 1.5s and appended forever, so a tab left open on a
+ * long-running agent grew without bound — and the per-poll dedupe rebuilt a Set
+ * over every event ever seen, so the cost grew with it too. A browser tab is
+ * the one process in this system that nobody ever restarts.
+ *
+ * The timeline is a live activity view, not an archive: the full history stays
+ * in `agent_events` and is refetchable by cursor. Oldest are dropped first.
+ */
+const MAX_TIMELINE_EVENTS = 500;
+
+/**
  * Hook to fetch agent events via polling.
  * Polls GET /agents/:id/events?after=<cursor> every 1.5 seconds.
  */
@@ -78,7 +91,9 @@ export function useAgentEvents(agentId?: string) {
             const existingIds = new Set(prev.map(e => e.id));
             const newEvents = incoming.filter(e => !existingIds.has(e.id));
             if (newEvents.length === 0) return prev;
-            return [...prev, ...newEvents];
+            const next = [...prev, ...newEvents];
+            // Bounded retention — see MAX_TIMELINE_EVENTS.
+            return next.length > MAX_TIMELINE_EVENTS ? next.slice(-MAX_TIMELINE_EVENTS) : next;
           });
         }
       } catch {
