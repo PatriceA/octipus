@@ -27,6 +27,23 @@ export interface PipelineStepConfig {
    * failing work that actually succeeded is worse than no gate at all.
    */
   producesArtifacts?: boolean;
+  /**
+   * DECLARES that this stage's whole purpose is to EXECUTE something — run the
+   * test suite, the linter, the build — not merely to read and reason about it.
+   * A declared stage that finishes having run zero commands fails.
+   *
+   * The failure this closes, measured on 2026-08-03: a Testing agent whose tool
+   * set had been intersected down to `filesystem` announced "I cannot run shell
+   * commands… I'll simulate execution by analyzing the test logic", then emitted
+   * a full per-test PASS table and "18 passed, 0 failed". Its receipt was
+   * honest (`commandsRun: 0`) and nothing compared that honest receipt against
+   * what the stage was for, so a simulation was accepted as a test run. The
+   * claim happened to be true, which is luck, not verification.
+   *
+   * Opt-in for the same reason as `producesArtifacts`: it is a declaration of
+   * purpose, never inferred from a stage's name or prompt wording.
+   */
+  runsCommands?: boolean;
 }
 
 /**

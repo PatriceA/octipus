@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { expandPromptTemplate, parseRecipeExport } from './templates';
+import { buildStagesFromTemplate, expandPromptTemplate, parseRecipeExport, stepConfigToStageTemplate } from './templates';
 
 describe('expandPromptTemplate', () => {
   test('substitutes the existing description/previousOutput vars', () => {
@@ -66,5 +66,44 @@ describe('parseRecipeExport', () => {
       parameters: [{ key: 'env', inputType: 'select', requirement: 'optional' }], // no options
     });
     expect(() => parseRecipeExport(bad)).toThrow(/options/);
+  });
+});
+
+// A stage's DECLARATIONS have to survive the trip from the stored template to
+// the gate that reads them. `stepConfigToStageTemplate` and
+// `buildStagesFromTemplate` both enumerate fields, so a flag nobody adds to
+// those lists is dropped silently: the template declares it, the gate never
+// hears about it, and the stage passes ungated while looking configured.
+//
+// That is not hypothetical — it happened to `runsCommands` on its first live
+// run. The Testing stage carried the declaration in the DB, wrote no evidence
+// row at all, and the simulation hole it was written to close stayed open.
+describe('stage declarations survive the template round-trip', () => {
+  const step = {
+    name: 'Testing',
+    topic: 'qa',
+    toolIds: ['shell'],
+    requiresApproval: false,
+    producesArtifacts: true,
+    runsCommands: true,
+  };
+
+  test('buildStagesFromTemplate keeps producesArtifacts and runsCommands', () => {
+    const [built] = buildStagesFromTemplate(
+      { type: 't', stages: [stepConfigToStageTemplate(step)], parameters: [] },
+      'a task',
+    );
+    expect(built.producesArtifacts).toBe(true);
+    expect(built.runsCommands).toBe(true);
+  });
+
+  test('an undeclared stage stays undeclared — the gate must not invent a claim', () => {
+    const plain = { name: 'Research', topic: 'research', toolIds: [], requiresApproval: false };
+    const [built] = buildStagesFromTemplate(
+      { type: 't', stages: [stepConfigToStageTemplate(plain)], parameters: [] },
+      'a task',
+    );
+    expect(built.producesArtifacts).toBeUndefined();
+    expect(built.runsCommands).toBeUndefined();
   });
 });

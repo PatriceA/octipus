@@ -78,9 +78,15 @@ Present this clearly so the user can review and approve before coding begins.`,
         toolIds: ['filesystem', 'shell', 'git'],
         requiresApproval: false,
         // The one stage here whose whole purpose is to leave code behind, so it
-        // is the one that gets evidence-gated. Testing / Code Review / QA are
-        // deliberately NOT declared: each can legitimately pass by only reading
-        // and running things, and a wrong gate fails work that succeeded.
+        // is the only one declaring `producesArtifacts`. Testing and QA
+        // legitimately change nothing — they are held to `runsCommands`
+        // instead, which is what THEY are for.
+        //
+        // Code Review is deliberately held to NEITHER, and that is a judgement
+        // call worth seeing: its prompt does tell it to run the suite, but its
+        // purpose is reading code, and a review of a tree with nothing runnable
+        // in it is still a real review. Declaring it would trade a caught lie
+        // for a failed honest run, which is the trade this gate refuses.
         producesArtifacts: true,
         promptTemplate: `Implement the approved plan. Write clean, well-documented code following project conventions.
 
@@ -105,6 +111,11 @@ Report what you implemented and any deviations from the plan.`,
         topic: 'qa',
         toolIds: ['filesystem', 'shell', 'browser'],
         requiresApproval: false,
+        // Its whole purpose is to EXECUTE the suite. A Testing agent that ran no
+        // commands did not test anything, however complete its PASS table looks
+        // — one of them announced it had no shell tool, simulated the run, and
+        // reported "18 passed, 0 failed".
+        runsCommands: true,
         promptTemplate: `Write tests for the implementation and run them.
 
 Task: {{description}}
@@ -180,6 +191,9 @@ Rate overall quality: Excellent / Good / Needs Work / Critical Issues.`,
         // `rubberStampRate` was empty because the gate was unreachable, not
         // because nobody had run a pipeline.
         stageType: 'qa_validation',
+        // And it validates by RUNNING the suite end to end — a QA stage that
+        // executed nothing has an opinion, not a validation.
+        runsCommands: true,
         // Retry the Implementation stage (index 2), not the stage immediately
         // before this one. A QA failure faults the code; re-running Code Review
         // would re-review the same unchanged tree. (An audit-GATE rejection is
@@ -347,6 +361,8 @@ Report what was changed and why.`,
         // gate can hold to account. Default retry target (the previous stage,
         // `Implement Fix`) is already the right one here.
         stageType: 'qa_validation',
+        // "Try the original reproduction steps" is an instruction to execute.
+        runsCommands: true,
         promptTemplate: `Verify the bug fix is correct and complete.
 
 Bug: {{description}}
@@ -367,22 +383,24 @@ Report: FIXED / NOT FIXED / PARTIALLY FIXED with evidence.`,
 ];
 
 /**
- * Add the two gating flags — `producesArtifacts` and `stageType` — to an
- * already-seeded preset's steps when the stored step has no such key at all.
- * Matches steps BY NAME (a user may have added, removed or reordered steps) and
- * only ever *adds* a key — a step the user explicitly set stays as they set it,
- * and every other field is untouched. No-ops (no write) when nothing is
- * missing, which is the steady state.
+ * Add the gating flags — `producesArtifacts`, `runsCommands` and `stageType` —
+ * to an already-seeded preset's steps when the stored step has no such key at
+ * all. Matches steps BY NAME (a user may have added, removed or reordered
+ * steps) and only ever *adds* a key — a step the user explicitly set stays as
+ * they set it, and every other field is untouched. No-ops (no write) when
+ * nothing is missing, which is the steady state.
  *
- * `stageType` is here for the same reason `producesArtifacts` was: an install
- * seeded before the flag existed keeps its old steps forever, so the gate that
- * reads the flag stays unreachable on exactly the installs that have history.
+ * Every flag added here has the same failure mode: an install seeded before the
+ * flag existed keeps its old steps forever, so the gate that reads it stays
+ * unreachable on exactly the installs that have history. `stageType` proved it
+ * — the audit-coverage gate could not fire on any install until this ran.
  */
 export function planProducesArtifactsBackfill(
   stored: PipelineStepConfig[],
   shipped: PipelineStepConfig[],
 ): { steps: PipelineStepConfig[]; changed: boolean } {
   const declared = new Set(shipped.filter((s) => s.producesArtifacts).map((s) => s.name));
+  const executors = new Set(shipped.filter((s) => s.runsCommands).map((s) => s.name));
   const auditors = new Map(
     shipped.filter((s) => s.stageType === 'qa_validation').map((s) => [s.name, s] as const),
   );
@@ -394,6 +412,10 @@ export function planProducesArtifactsBackfill(
     if (next.producesArtifacts === undefined && declared.has(next.name)) {
       changed = true;
       next = { ...next, producesArtifacts: true };
+    }
+    if (next.runsCommands === undefined && executors.has(next.name)) {
+      changed = true;
+      next = { ...next, runsCommands: true };
     }
     const auditor = auditors.get(next.name);
     if (auditor && next.stageType === undefined) {
@@ -414,7 +436,7 @@ export function planProducesArtifactsBackfill(
 }
 
 async function backfillPresetStepFlags(name: string, shipped: PipelineStepConfig[]): Promise<void> {
-  if (!shipped.some((s) => s.producesArtifacts || s.stageType === 'qa_validation')) return;
+  if (!shipped.some((s) => s.producesArtifacts || s.runsCommands || s.stageType === 'qa_validation')) return;
 
   const db = getDb();
   const [row] = await db

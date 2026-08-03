@@ -18,6 +18,8 @@ export interface StageTemplate {
   model?: string;
   /** Declares the stage must leave files behind — see PipelineStepConfig. */
   producesArtifacts?: boolean;
+  /** Declares the stage must EXECUTE something — see PipelineStepConfig. */
+  runsCommands?: boolean;
 }
 
 export interface PipelineTemplate {
@@ -30,7 +32,7 @@ export interface PipelineTemplate {
 /**
  * Convert a DB PipelineStepConfig to a StageTemplate.
  */
-function stepConfigToStageTemplate(step: PipelineStepConfig): StageTemplate {
+export function stepConfigToStageTemplate(step: PipelineStepConfig): StageTemplate {
   return {
     name: step.name,
     role: step.topic as AgentRole,
@@ -40,7 +42,12 @@ function stepConfigToStageTemplate(step: PipelineStepConfig): StageTemplate {
     maxRetries: step.maxRetries,
     retryTargetStage: step.retryTargetStage,
     model: step.model,
+    // Both declarations must be carried explicitly. This mapper enumerates
+    // fields, so a new flag that is not listed here is silently dropped between
+    // the template and the gate that reads it — the stage then declares
+    // something the gate never hears about.
     producesArtifacts: step.producesArtifacts,
+    runsCommands: step.runsCommands,
   };
 }
 
@@ -289,6 +296,7 @@ export function buildStagesFromTemplate(
       retryTargetStage: stage.retryTargetStage,
       model: stage.model,
       producesArtifacts: stage.producesArtifacts,
+      runsCommands: stage.runsCommands,
     };
   });
 }

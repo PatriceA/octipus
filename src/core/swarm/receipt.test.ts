@@ -4,6 +4,7 @@ import {
   RECEIPT_NOT_CERTIFIED,
   buildReceipt,
   emptyCounters,
+  mergeCounters,
 } from './receipt';
 
 function counters(overrides: Partial<SideEffectCounters> = {}): SideEffectCounters {
@@ -28,6 +29,42 @@ describe('emptyCounters', () => {
     // Distinct instances — byName must not be shared.
     a.byName.foo = 1;
     expect(b.byName.foo).toBeUndefined();
+  });
+});
+
+// A pipeline STAGE is a tree: a worker that delegates records `spawn_child` and
+// nothing else, while the shell commands live in its children's receipts.
+describe('mergeCounters', () => {
+  it('sums every tally and the per-tool breakdown', () => {
+    const parent = counters({ toolCalls: 1, byName: { spawn_child: 1 } });
+    const child = counters({
+      toolCalls: 5, commandsRun: 3, filesChanged: 2, toolErrors: 1,
+      byName: { shell__run: 3, filesystem__write_file: 2 },
+    });
+    const merged = mergeCounters(parent, child);
+    expect(merged.toolCalls).toBe(6);
+    expect(merged.commandsRun).toBe(3);
+    expect(merged.filesChanged).toBe(2);
+    expect(merged.toolErrors).toBe(1);
+    expect(merged.byName).toEqual({ spawn_child: 1, shell__run: 3, filesystem__write_file: 2 });
+  });
+
+  it('adds counts for a tool both sides used', () => {
+    const merged = mergeCounters(
+      counters({ commandsRun: 2, byName: { shell__run: 2 } }),
+      counters({ commandsRun: 4, byName: { shell__run: 4 } }),
+    );
+    expect(merged.byName.shell__run).toBe(6);
+    expect(merged.commandsRun).toBe(6);
+  });
+
+  it('does not mutate either input', () => {
+    const a = counters({ toolCalls: 1, byName: { x: 1 } });
+    const b = counters({ toolCalls: 2, byName: { y: 2 } });
+    mergeCounters(a, b);
+    expect(a.byName).toEqual({ x: 1 });
+    expect(b.byName).toEqual({ y: 2 });
+    expect(a.toolCalls).toBe(1);
   });
 });
 

@@ -141,16 +141,24 @@ async function resolveStageModelId(
   return model.modelId;
 }
 
+/** What a stage said it was for. Both flags are opt-in declarations from the
+ *  template — never inferred from a stage's name or its prompt wording. */
+export interface StageDeclaration {
+  producesArtifacts?: boolean;
+  runsCommands?: boolean;
+}
+
 /**
  * The evidence-gate decision, with no IO so it is directly testable.
  *
- * Returns the failure reason when a stage that DECLARED it produces artifacts
- * demonstrably changed nothing, else null (= let the stage complete).
+ * Returns the failure reason when a stage did demonstrably none of what it
+ * DECLARED it was for, else null (= let the stage complete). Two declarations,
+ * checked independently — a stage may make either, both, or neither.
  *
- * TWO independent signals, and either one showing work is enough:
+ * **`producesArtifacts`** — TWO signals, and either one showing work is enough:
  *
- * - `counters.filesChanged` — file-mutating TOOL calls the worker made. Blind to
- *   anything written through `shell__run` (heredoc, `sed -i`, a generator).
+ * - `counters.filesChanged` — file-mutating TOOL calls. Blind to anything
+ *   written through `shell__run` (heredoc, `sed -i`, a generator).
  * - `filesTouched` — files that actually differ on disk across the stage
  *   (`workspace-snapshot.ts`). Blind to which tool did it, which is the point,
  *   but sees the whole workspace including a concurrent pipeline's writes.
@@ -160,7 +168,17 @@ async function resolveStageModelId(
  * which is precisely the false positive this gate had: a real `Implement Fix`
  * stage rewrote two files through the shell and was failed for "changed 0 files".
  *
- * Both "we could not measure" cases pass:
+ * **`runsCommands`** — a stage whose purpose is to EXECUTE (run the suite, the
+ * linter, the build) and which ran zero commands did not do its job, however
+ * confident its prose. This is the "declared purpose vs receipt" check: a
+ * Testing agent that announced it could not run shell, simulated the run, and
+ * reported "18 passed, 0 failed" was previously accepted because nothing
+ * compared its honest `commandsRun: 0` against what the stage was for.
+ *
+ * `counters` here are the STAGE's, not one worker's — `stageCounters()` folds in
+ * every swarm child, so a stage that delegated its shell work still counts it.
+ *
+ * "We could not measure" always passes, for every signal:
  * - `counters === null` — the worker exposed no tally (a CLI worker, say).
  * - `filesTouched === null` — no usable snapshot (root unreadable, tree too big).
  * Failing a run we merely failed to observe is the worse error: it fails work
@@ -168,25 +186,33 @@ async function resolveStageModelId(
  * nothing happened.
  */
 export function stageEvidenceFailure(
-  producesArtifacts: boolean | undefined,
+  declared: StageDeclaration,
   counters: SideEffectCounters | null,
   filesTouched: number | null = null,
 ): string | null {
-  if (!producesArtifacts) return null;
-  if (filesTouched !== null && filesTouched > 0) return null;
   if (counters === null) return null;
-  if (counters.filesChanged > 0) return null;
-  // Name which evidence was actually consulted, so a failure is auditable
-  // without re-running it: "0 files" from counters alone is a much weaker claim
-  // than "0 files, and the workspace is byte-identical".
-  const onDisk =
-    filesTouched === null
-      ? 'no workspace snapshot'
-      : 'workspace unchanged on disk';
-  return (
-    `changed 0 files (${counters.toolCalls} tool calls, ${counters.commandsRun} commands, ` +
-    `${counters.toolErrors} tool errors; ${onDisk})`
-  );
+
+  const reasons: string[] = [];
+
+  if (declared.producesArtifacts && !(filesTouched !== null && filesTouched > 0) && counters.filesChanged === 0) {
+    // Name which evidence was actually consulted, so a failure is auditable
+    // without re-running it: "0 files" from counters alone is a much weaker claim
+    // than "0 files, and the workspace is byte-identical".
+    const onDisk = filesTouched === null ? 'no workspace snapshot' : 'workspace unchanged on disk';
+    reasons.push(
+      `changed 0 files (${counters.toolCalls} tool calls, ${counters.commandsRun} commands, ` +
+        `${counters.toolErrors} tool errors; ${onDisk})`,
+    );
+  }
+
+  if (declared.runsCommands && counters.commandsRun === 0) {
+    reasons.push(
+      `ran 0 commands (${counters.toolCalls} tool calls, ${counters.toolErrors} tool errors) — ` +
+        `a stage that verifies by executing cannot have executed nothing`,
+    );
+  }
+
+  return reasons.length === 0 ? null : reasons.join('; and ');
 }
 
 export class PipelineManager {
@@ -399,7 +425,7 @@ export class PipelineManager {
           sessionId,
           pipelineId: pipeline.id,
           stageName: stage.name,
-          producesArtifacts: builtStage.producesArtifacts,
+          declared: builtStage,
           before,
           workspaceRoot,
           counters,
@@ -539,8 +565,8 @@ export class PipelineManager {
                   const retryTopicModel = await registry.getModelForTopic(retryTargetStage.role);
                   const retryModelOverride = retryStageModelId || retryTopicModel?.modelId || undefined;
 
-                  const retryProduces = template.stages[retryTargetIndex]?.producesArtifacts;
-                  const retryBefore = await this.snapshotStage(retryProduces, workspaceRoot);
+                  const retryDeclared = template.stages[retryTargetIndex];
+                  const retryBefore = await this.snapshotStage(retryDeclared?.producesArtifacts, workspaceRoot);
 
                   let retryCounters: SideEffectCounters | null = null;
                   const retryResult = await orchestrator.spawnWorker(
@@ -564,7 +590,7 @@ export class PipelineManager {
                     sessionId,
                     pipelineId: pipeline.id,
                     stageName: retryTargetStage.name,
-                    producesArtifacts: retryProduces,
+                    declared: retryDeclared,
                     before: retryBefore,
                     workspaceRoot,
                     counters: retryCounters,
@@ -630,7 +656,7 @@ export class PipelineManager {
                   sessionId,
                   pipelineId: pipeline.id,
                   stageName: stage.name,
-                  producesArtifacts: builtStage.producesArtifacts,
+                  declared: builtStage,
                   before: qaRetryBefore,
                   workspaceRoot,
                   counters: qaRetryCounters,
@@ -936,7 +962,7 @@ export class PipelineManager {
           sessionId,
           pipelineId: pipeline.id,
           stageName: stage.name,
-          producesArtifacts: stepConfig?.producesArtifacts,
+          declared: stepConfig,
           before,
           workspaceRoot,
           counters,
@@ -1038,8 +1064,8 @@ export class PipelineManager {
               if (!auditorOnly) {
                 await this.updateStage(retryTargetStage.id, { input: retryInput, status: 'running' });
 
-                const retryProduces = stepConfigs[retryTargetIndex]?.producesArtifacts;
-                const retryBefore = await this.snapshotStage(retryProduces, workspaceRoot);
+                const retryDeclared = stepConfigs[retryTargetIndex];
+                const retryBefore = await this.snapshotStage(retryDeclared?.producesArtifacts, workspaceRoot);
 
                 let retryCounters: SideEffectCounters | null = null;
                 const retryResult = await orchestrator.spawnWorker(
@@ -1062,7 +1088,7 @@ export class PipelineManager {
                   sessionId,
                   pipelineId: pipeline.id,
                   stageName: retryTargetStage.name,
-                  producesArtifacts: retryProduces,
+                  declared: retryDeclared,
                   before: retryBefore,
                   workspaceRoot,
                   counters: retryCounters,
@@ -1112,7 +1138,7 @@ export class PipelineManager {
                 sessionId,
                 pipelineId: pipeline.id,
                 stageName: stage.name,
-                producesArtifacts: stepConfig?.producesArtifacts,
+                declared: stepConfig,
                 before: qaRetryBefore,
                 workspaceRoot,
                 counters: qaRetryCounters,
@@ -1275,12 +1301,13 @@ export class PipelineManager {
    * swallowed. Append-only — every verdict (initial + each retry) is a row.
    */
   /**
-   * Evidence gate for a stage that DECLARED it produces artifacts
-   * (`PipelineStepConfig.producesArtifacts`). Throws when the stage's worker
-   * changed zero files, so the caller's existing error path marks the stage —
-   * and the pipeline — failed. Without this a "Full Development Cycle" reports
-   * seven green stages over an empty workspace, which is the exact failure this
-   * gate exists for (docs/plans/pipeline-evidence-gate.md).
+   * Evidence gate for a stage that DECLARED what it is for — leaving files
+   * behind (`producesArtifacts`), executing something (`runsCommands`), or
+   * both. Throws when the stage did none of what it declared, so the caller's
+   * existing error path marks the stage — and the pipeline — failed. Without
+   * this a "Full Development Cycle" reports seven green stages over an empty
+   * workspace, which is the exact failure this gate exists for
+   * (docs/plans/pipeline-evidence-gate.md).
    *
    * Three deliberate non-behaviours:
    * - An UNDECLARED stage is never gated and never even writes a row. Research
@@ -1296,14 +1323,18 @@ export class PipelineManager {
     sessionId: string;
     pipelineId: string;
     stageName: string;
-    producesArtifacts?: boolean;
+    declared: StageDeclaration | undefined;
     counters: SideEffectCounters | null;
     /** Workspace state captured before the stage ran — see `snapshotStage`. */
     before?: WorkspaceSnapshot | null;
     /** Root the stage's worker writes to, re-walked here for the "after" side. */
     workspaceRoot?: string | null;
   }): Promise<void> {
-    if (!args.producesArtifacts) return;
+    const declared: StageDeclaration = {
+      producesArtifacts: args.declared?.producesArtifacts,
+      runsCommands: args.declared?.runsCommands,
+    };
+    if (!declared.producesArtifacts && !declared.runsCommands) return;
 
     const { counters, stageName, pipelineId } = args;
     const measured = counters !== null;
@@ -1315,7 +1346,7 @@ export class PipelineManager {
       args.before && args.workspaceRoot ? await snapshotWorkspace(args.workspaceRoot) : null;
     const filesTouched = countChangedFiles(args.before ?? null, after);
 
-    const failure = stageEvidenceFailure(args.producesArtifacts, counters, filesTouched);
+    const failure = stageEvidenceFailure(declared, counters, filesTouched);
     const passed = failure === null;
 
     try {
@@ -1345,23 +1376,28 @@ export class PipelineManager {
       coreLogger.warn({ err: (err as Error).message, pipelineId, stage: stageName }, 'Failed to record side-effect verification evidence');
     }
 
-    // A snapshot showing work stands on its own: the worker's counters can be
-    // absent (CLI worker) or blind (shell writes) while the files are plainly
-    // there. Checked before the `!measured` bail so that case is a real pass,
-    // not an ungated one.
-    if (filesTouched !== null && filesTouched > 0) return;
-
     if (!measured) {
-      coreLogger.warn(
-        { pipelineId, stage: stageName, filesTouched },
-        'Stage declares producesArtifacts but its worker exposed no counters — passing ungated (unknown is not zero)',
-      );
+      // The snapshot can still have seen the work even when the worker exposed
+      // no tally (a CLI worker). That is a measured pass, not an ungated one —
+      // worth distinguishing in the log, because "ungated" is a gap to fix and
+      // this is not.
+      if (filesTouched !== null && filesTouched > 0) {
+        coreLogger.info(
+          { pipelineId, stage: stageName, filesTouched },
+          'Stage exposed no counters, but the workspace shows its work — passing on filesystem evidence',
+        );
+      } else {
+        coreLogger.warn(
+          { pipelineId, stage: stageName, filesTouched },
+          'Stage made a declaration but its worker exposed no counters — passing ungated (unknown is not zero)',
+        );
+      }
       return;
     }
 
     if (failure) {
       throw new Error(
-        `Stage "${stageName}" declares it produces artifacts but ${failure}. ` +
+        `Stage "${stageName}" did not do what it declared: ${failure}. ` +
           `Reporting it complete would claim work that did not happen.`,
       );
     }

@@ -4,6 +4,7 @@ import { getAgentManager } from '@/core/agent-manager';
 import { getGatewayHub } from '@/core/gateway/hub';
 import { getNotificationService } from '@/core/notification-service';
 import { swarmNodeRepository } from '@/core/swarm/node-repository';
+import { mergeCounters, type SideEffectCounters } from '@/core/swarm/receipt';
 import { taskFingerprint } from '@/core/swarm/spawner';
 import { createSpawnChildTool } from '@/core/swarm/swarm-tool';
 import { type AgentNode, getLevelDefault } from '@/core/swarm/types';
@@ -12,6 +13,7 @@ import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import type { ProfileFact } from '@/db/schema/profiles';
 import { getModelRegistry } from '@/models/model-registry';
+import { QuotaExceededError } from '@/security/quota-error';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
 import { truncateToTokens } from '@/utils/token-count';
@@ -271,6 +273,51 @@ export async function handleExpertMessage(
       classification: { type: 'task', confidence: 1 },
     };
   }
+}
+
+/**
+ * What a pipeline STAGE did — the worker's own tool counters folded together
+ * with every swarm child it spawned.
+ *
+ * The evidence gate judges a stage, and a stage is a tree. A worker that
+ * delegates records `spawn_child` and nothing else: the shell commands and file
+ * writes are in its children's receipts. Gating on the parent's counters alone
+ * would fail every stage that delegated — the same false positive as the
+ * shell-write one, a level up. Measured on the 7-stage run of 2026-08-03, where
+ * four subagents did the work of a stage whose own worker ran almost nothing.
+ *
+ * `nodeId` is null for workers with no swarm node (no children are possible, so
+ * there is nothing to fold). A child whose receipt is missing contributes
+ * nothing rather than zeroing the total — an unreadable child is unknown, not
+ * idle, and the same unknown-is-not-zero rule the gate itself follows.
+ */
+async function stageCounters(
+  worker: { getSideEffectCounters(): SideEffectCounters | null },
+  nodeId: string | null,
+): Promise<SideEffectCounters | null> {
+  const own = worker.getSideEffectCounters();
+  if (!nodeId) return own;
+
+  let children: Awaited<ReturnType<typeof swarmNodeRepository.findDescendants>>;
+  try {
+    children = await swarmNodeRepository.findDescendants(nodeId);
+  } catch (err) {
+    coreLogger.warn({ err: (err as Error).message, nodeId }, 'Could not read stage children for counter aggregation');
+    return own;
+  }
+  if (children.length === 0) return own;
+
+  let merged = own;
+  for (const child of children) {
+    const side = (child.result as { receipt?: { sideEffects?: SideEffectCounters } } | null)
+      ?.receipt?.sideEffects;
+    if (!side) continue;
+    // A delegating worker can itself be counter-blind (a CLI worker) while its
+    // children are not. Starting from the child's counters keeps that evidence
+    // instead of discarding it with the parent's `null`.
+    merged = merged ? mergeCounters(merged, side) : side;
+  }
+  return merged;
 }
 
 /**
@@ -983,7 +1030,7 @@ Use these MCP tools when the task benefits from them — especially for people-r
 
     const result = await worker.run(workerMessage);
     const durationMs = Date.now() - startTime;
-    overrides?.onCounters?.(worker.getSideEffectCounters());
+    overrides?.onCounters?.(await stageCounters(worker, overrides?.swarmParent ? workerId : null));
 
     coreLogger.info({
       workerId, role: agentRole, model: finalModel,
@@ -1160,6 +1207,33 @@ async function handleWorkerFailure(
     throw error; // Propagate to caller (handleExpertMessage or orchestrator)
   }
 
+  // Quota exhaustion aborts like a stop but is NOT one, and it must never be
+  // reported as one. Checked BEFORE `wasUserStopped`, which is a substring match
+  // that a quota abort otherwise satisfies (the worker's status is 'stopped' by
+  // then). A real run died at "QA Validation" with `Agent was stopped by user`
+  // when what actually happened was `tokensPerDay: 10118911/10000000` — the
+  // operator is sent looking for a person who cancelled, and the one line that
+  // would have told them where to raise the cap is thrown away.
+  //
+  // `instanceof` is deliberate: the structured error exists precisely so callers
+  // do not re-parse the message (`security/quota-error.ts`).
+  if (error instanceof QuotaExceededError) {
+    coreLogger.warn(
+      { workerId, role: agentRole, reason: error.reason },
+      'Worker hit the user token quota, not retrying',
+    );
+    deps.emit({
+      type: 'worker_completed',
+      sessionId: context.sessionId,
+      userId: context.userId,
+      data: { workerId, role: agentRole, status: 'failed', totalTokens: failedTokens, durationMs: Date.now() - startTime },
+      timestamp: new Date(),
+    });
+    // Propagate the original — its message names the cap, the current usage and
+    // where to change it. Wrapping it would lose all three.
+    throw error;
+  }
+
   const wasUserStopped = errorMsg.includes('aborted') || errorMsg.includes('stopped')
     || worker.getStatus() === 'stopped';
   if (wasUserStopped) {
@@ -1195,7 +1269,10 @@ async function handleWorkerFailure(
       ? `${task}\n\n--- Context from previous steps ---\n${input}`
       : task;
     const result = await retryWorker.run(workerMessage);
-    respawnCtx.onCounters?.(retryWorker.getSideEffectCounters());
+    // The respawned worker is a fresh agent id with no swarm node of its own,
+    // so there are no children to fold in — its own counters are the whole
+    // story. Routed through the same helper so both paths stay in step.
+    respawnCtx.onCounters?.(await stageCounters(retryWorker, null));
     deps.emit({
       type: 'worker_completed',
       sessionId: context.sessionId,

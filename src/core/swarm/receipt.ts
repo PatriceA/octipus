@@ -51,6 +51,34 @@ export interface SideEffectCounters {
   byName: Record<string, number>;
 }
 
+/**
+ * Fold one counter set into another, returning a new set.
+ *
+ * Exists so a pipeline STAGE can be judged on what the stage did, not on what
+ * its top worker happened to do personally. A worker that delegates records
+ * `spawn_child` and nothing else; the shell commands and file writes live in its
+ * children's receipts. Gating the stage on the parent's counters alone would
+ * fail every stage that delegated — the same shape as the shell-write false
+ * positive, one level up.
+ *
+ * `byName` sums per tool so the derived totals stay reconstructible from it.
+ */
+export function mergeCounters(a: SideEffectCounters, b: SideEffectCounters): SideEffectCounters {
+  const byName: Record<string, number> = { ...a.byName };
+  for (const [name, n] of Object.entries(b.byName)) byName[name] = (byName[name] ?? 0) + n;
+  return {
+    toolCalls: a.toolCalls + b.toolCalls,
+    filesChanged: a.filesChanged + b.filesChanged,
+    commandsRun: a.commandsRun + b.commandsRun,
+    approvalsRequired: a.approvalsRequired + b.approvalsRequired,
+    approvalsDenied: a.approvalsDenied + b.approvalsDenied,
+    autoApproved: a.autoApproved + b.autoApproved,
+    permissionDenials: a.permissionDenials + b.permissionDenials,
+    toolErrors: a.toolErrors + b.toolErrors,
+    byName,
+  };
+}
+
 /** A fresh, zeroed counter set. */
 export function emptyCounters(): SideEffectCounters {
   return {

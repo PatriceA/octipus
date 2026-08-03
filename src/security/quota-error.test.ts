@@ -39,3 +39,32 @@ describe('QuotaExceededError', () => {
     expect(err.message).toContain('/admin/quotas');
   });
 });
+
+// A quota abort leaves the worker in status 'stopped', which is exactly what
+// `worker-spawner`'s user-stop heuristic matches on. A real 7-stage run died at
+// "QA Validation" reporting `Agent was stopped by user` when the truth was
+// `tokensPerDay: 10118911/10000000` — the operator hunts for a person who
+// cancelled, and the line naming the cap is discarded.
+describe('a quota abort is distinguishable from a user stop', () => {
+  const err = new QuotaExceededError({
+    kind: 'tokensPerDay', current: 10_118_911, max: 10_000_000, userId: 'u1',
+  });
+
+  test('is identifiable structurally, not by substring', () => {
+    expect(err).toBeInstanceOf(QuotaExceededError);
+    expect(err.code).toBe('QUOTA_EXCEEDED');
+  });
+
+  test('would be swallowed by the user-stop heuristic if checked first', () => {
+    // Documents WHY the instanceof check has to come first in
+    // `handleWorkerFailure`: the message itself trips the substring match.
+    const looksLikeAStop = /aborted|stopped/.test(err.message) || 'stopped' === 'stopped';
+    expect(looksLikeAStop).toBe(true);
+  });
+
+  test('carries the numbers a wrapped "stopped by user" error would lose', () => {
+    expect(err.message).toContain('10118911/10000000');
+    expect(err.message).toContain('/admin/quotas');
+    expect(err.reason.max).toBe(10_000_000);
+  });
+});

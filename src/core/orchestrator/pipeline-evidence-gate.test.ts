@@ -15,24 +15,24 @@ const counters = (over: Partial<ReturnType<typeof emptyCounters>> = {}) => ({ ..
 
 describe('stageEvidenceFailure', () => {
   test('fails a declared stage that changed no files', () => {
-    const reason = stageEvidenceFailure(true, counters({ toolCalls: 12, commandsRun: 3 }));
+    const reason = stageEvidenceFailure({ producesArtifacts: true }, counters({ toolCalls: 12, commandsRun: 3 }));
     expect(reason).toContain('changed 0 files');
     expect(reason).toContain('12 tool calls');
   });
 
   test('passes a declared stage that changed a file', () => {
-    expect(stageEvidenceFailure(true, counters({ filesChanged: 1, toolCalls: 4 }))).toBeNull();
+    expect(stageEvidenceFailure({ producesArtifacts: true }, counters({ filesChanged: 1, toolCalls: 4 }))).toBeNull();
   });
 
   test('never gates an undeclared stage — research/review legitimately write nothing', () => {
-    expect(stageEvidenceFailure(undefined, counters())).toBeNull();
-    expect(stageEvidenceFailure(false, counters())).toBeNull();
+    expect(stageEvidenceFailure({}, counters())).toBeNull();
+    expect(stageEvidenceFailure({ producesArtifacts: false }, counters())).toBeNull();
   });
 
   test('treats absent counters as unknown, not as zero', () => {
     // A worker that exposes no tally must NOT be failed — that would fail work
     // that actually succeeded, the one outcome worse than no gate.
-    expect(stageEvidenceFailure(true, null)).toBeNull();
+    expect(stageEvidenceFailure({ producesArtifacts: true }, null)).toBeNull();
   });
 
   // The false positive this signal exists to kill: on 2026-08-03 a real
@@ -42,31 +42,71 @@ describe('stageEvidenceFailure', () => {
   describe('filesystem evidence', () => {
     test('passes a shell-only writer that the counters could not see', () => {
       const shellWriter = counters({ toolCalls: 18, commandsRun: 11, toolErrors: 2 });
-      expect(stageEvidenceFailure(true, shellWriter)).not.toBeNull();
-      expect(stageEvidenceFailure(true, shellWriter, 2)).toBeNull();
+      expect(stageEvidenceFailure({ producesArtifacts: true }, shellWriter)).not.toBeNull();
+      expect(stageEvidenceFailure({ producesArtifacts: true }, shellWriter, 2)).toBeNull();
     });
 
     test('still fails when BOTH signals say nothing happened', () => {
-      const reason = stageEvidenceFailure(true, counters({ toolCalls: 9 }), 0);
+      const reason = stageEvidenceFailure({ producesArtifacts: true }, counters({ toolCalls: 9 }), 0);
       expect(reason).toContain('changed 0 files');
       expect(reason).toContain('workspace unchanged on disk');
     });
 
     test('names an unavailable snapshot rather than implying it was checked', () => {
-      const reason = stageEvidenceFailure(true, counters({ toolCalls: 9 }), null);
+      const reason = stageEvidenceFailure({ producesArtifacts: true }, counters({ toolCalls: 9 }), null);
       expect(reason).toContain('no workspace snapshot');
     });
 
     test('a snapshot showing work passes even with no counters at all', () => {
       // A CLI worker exposes no tally; the files are still plainly there.
-      expect(stageEvidenceFailure(true, null, 3)).toBeNull();
+      expect(stageEvidenceFailure({ producesArtifacts: true }, null, 3)).toBeNull();
     });
 
     test('either signal alone is enough — the two are blind in opposite ways', () => {
       // Counters see the tool but not the shell; the snapshot sees the disk but
       // not who wrote it. Requiring both would fail every stage using only one.
-      expect(stageEvidenceFailure(true, counters({ filesChanged: 2 }), 0)).toBeNull();
-      expect(stageEvidenceFailure(true, counters({ filesChanged: 0 }), 2)).toBeNull();
+      expect(stageEvidenceFailure({ producesArtifacts: true }, counters({ filesChanged: 2 }), 0)).toBeNull();
+      expect(stageEvidenceFailure({ producesArtifacts: true }, counters({ filesChanged: 0 }), 2)).toBeNull();
+    });
+  });
+
+  // Declared purpose vs receipt. The failure: a Testing agent whose tools were
+  // intersected down to `filesystem` said "I cannot run shell commands… I'll
+  // simulate execution", then reported "18 passed, 0 failed". Its receipt said
+  // `commandsRun: 0` and nothing compared that to what the stage was for.
+  describe('runsCommands', () => {
+    test('fails a verify-by-executing stage that executed nothing', () => {
+      const simulated = counters({ toolCalls: 2, byName: { filesystem__read_file: 2 } });
+      const reason = stageEvidenceFailure({ runsCommands: true }, simulated);
+      expect(reason).toContain('ran 0 commands');
+      expect(reason).toContain('cannot have executed nothing');
+    });
+
+    test('passes once it actually ran something', () => {
+      expect(stageEvidenceFailure({ runsCommands: true }, counters({ commandsRun: 1, toolCalls: 3 }))).toBeNull();
+    });
+
+    test('is independent of producesArtifacts — a test run need not write files', () => {
+      // Testing/Code Review legitimately change nothing; they must still run.
+      expect(stageEvidenceFailure({ runsCommands: true }, counters({ commandsRun: 4, filesChanged: 0 }))).toBeNull();
+    });
+
+    test('reports BOTH misses when a stage declared both and did neither', () => {
+      const reason = stageEvidenceFailure({ producesArtifacts: true, runsCommands: true }, counters(), 0);
+      expect(reason).toContain('changed 0 files');
+      expect(reason).toContain('ran 0 commands');
+    });
+
+    test('files on disk do not excuse a stage that never executed', () => {
+      // The snapshot answers "did anything change", never "was it verified".
+      // Letting it satisfy runsCommands would reopen the simulation hole.
+      const reason = stageEvidenceFailure({ producesArtifacts: true, runsCommands: true }, counters({ filesChanged: 3 }), 3);
+      expect(reason).toContain('ran 0 commands');
+      expect(reason).not.toContain('changed 0 files');
+    });
+
+    test('absent counters stay unknown here too', () => {
+      expect(stageEvidenceFailure({ runsCommands: true }, null)).toBeNull();
     });
   });
 });
@@ -158,6 +198,29 @@ describe('planProducesArtifactsBackfill', () => {
       expect(planProducesArtifactsBackfill(once.steps, withAuditor).changed).toBe(false);
     });
   });
+
+  describe('runsCommands', () => {
+    const withExecutor = [
+      ...shipped,
+      { name: 'Testing', topic: 'qa', toolIds: [], requiresApproval: false, runsCommands: true },
+    ];
+
+    test('adds the declaration to an install seeded before the flag existed', () => {
+      const stored = [{ name: 'Testing', topic: 'qa', toolIds: [], requiresApproval: false }];
+      const { steps, changed } = planProducesArtifactsBackfill(stored, withExecutor);
+      expect(changed).toBe(true);
+      expect(steps[0].runsCommands).toBe(true);
+    });
+
+    test('preserves an explicit false and stays idempotent', () => {
+      const optedOut = [{ name: 'Testing', topic: 'qa', toolIds: [], requiresApproval: false, runsCommands: false }];
+      expect(planProducesArtifactsBackfill(optedOut, withExecutor).changed).toBe(false);
+
+      const stored = [{ name: 'Testing', topic: 'qa', toolIds: [], requiresApproval: false }];
+      const once = planProducesArtifactsBackfill(stored, withExecutor);
+      expect(planProducesArtifactsBackfill(once.steps, withExecutor).changed).toBe(false);
+    });
+  });
 });
 
 // ── The gate as wired (ledger write + throw) ───────────────────────────────
@@ -180,7 +243,7 @@ describe('PipelineManager.assertStageEvidence', () => {
 
   test('throws and records a failed row when a declared stage wrote nothing', async () => {
     const { rows, spy, call } = setup();
-    await expect(call({ producesArtifacts: true, counters: counters({ toolCalls: 7 }) })).rejects.toThrow(/produces artifacts/);
+    await expect(call({ declared: { producesArtifacts: true }, counters: counters({ toolCalls: 7 }) })).rejects.toThrow(/changed 0 files/);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ kind: 'side_effect', passed: false, stage: 'Implementation' });
     spy.mockRestore();
@@ -188,7 +251,7 @@ describe('PipelineManager.assertStageEvidence', () => {
 
   test('passes and records evidence when the stage wrote a file', async () => {
     const { rows, spy, call } = setup();
-    await call({ producesArtifacts: true, counters: counters({ filesChanged: 2, toolCalls: 5 }) });
+    await call({ declared: { producesArtifacts: true }, counters: counters({ filesChanged: 2, toolCalls: 5 }) });
     expect(rows[0]).toMatchObject({ kind: 'side_effect', passed: true });
     expect((rows[0].detail as { filesChanged: number }).filesChanged).toBe(2);
     spy.mockRestore();
@@ -196,14 +259,14 @@ describe('PipelineManager.assertStageEvidence', () => {
 
   test('an undeclared stage is not gated and writes no row at all', async () => {
     const { rows, spy, call } = setup();
-    await call({ producesArtifacts: undefined, counters: counters() });
+    await call({ declared: undefined, counters: counters() });
     expect(rows).toHaveLength(0);
     spy.mockRestore();
   });
 
   test('absent counters pass, but the gap is recorded rather than silently zeroed', async () => {
     const { rows, spy, call } = setup();
-    await call({ producesArtifacts: true, counters: null });
+    await call({ declared: { producesArtifacts: true }, counters: null });
     expect(rows[0]).toMatchObject({ passed: true });
     expect(rows[0].detail).toHaveProperty('unavailable');
     spy.mockRestore();
@@ -217,9 +280,9 @@ describe('PipelineManager.assertStageEvidence', () => {
       (new PipelineManager() as unknown as { assertStageEvidence: (x: Record<string, unknown>) => Promise<void> })
         .assertStageEvidence({ sessionId: 's', pipelineId: 'p', stageName: 'Implementation', ...a });
     // Still passes a good stage …
-    await call({ producesArtifacts: true, counters: counters({ filesChanged: 1 }) });
+    await call({ declared: { producesArtifacts: true }, counters: counters({ filesChanged: 1 }) });
     // … and still fails a bad one.
-    await expect(call({ producesArtifacts: true, counters: counters() })).rejects.toThrow();
+    await expect(call({ declared: { producesArtifacts: true }, counters: counters() })).rejects.toThrow();
     spy.mockRestore();
   });
 });
