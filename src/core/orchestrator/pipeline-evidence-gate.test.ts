@@ -85,6 +85,44 @@ describe('planProducesArtifactsBackfill', () => {
     const { steps } = planProducesArtifactsBackfill(stored, shipped);
     expect(steps[0]).toMatchObject({ toolIds: ['git'], requiresApproval: true, promptTemplate: 'mine', maxRetries: 9 });
   });
+
+  // `stageType` has the same failure mode producesArtifacts had, and it bit for
+  // real: a full 7-stage run reported green while the audit-coverage gate never
+  // fired, because no seeded template carried the flag the gate reads.
+  describe('stageType', () => {
+    const withAuditor = [
+      ...shipped,
+      { name: 'QA Validation', topic: 'qa', toolIds: [], requiresApproval: false, stageType: 'qa_validation' as const, retryTargetStage: 2 },
+    ];
+
+    test('marks the auditor and carries its retry target', () => {
+      const stored = [{ name: 'QA Validation', topic: 'qa', toolIds: [], requiresApproval: false }];
+      const { steps, changed } = planProducesArtifactsBackfill(stored, withAuditor);
+      expect(changed).toBe(true);
+      expect(steps[0].stageType).toBe('qa_validation');
+      expect(steps[0].retryTargetStage).toBe(2);
+    });
+
+    test("preserves a user's explicit 'standard' — opting a stage out of auditing", () => {
+      const stored = [{ name: 'QA Validation', topic: 'qa', toolIds: [], requiresApproval: false, stageType: 'standard' as const }];
+      const { steps, changed } = planProducesArtifactsBackfill(stored, withAuditor);
+      expect(changed).toBe(false);
+      expect(steps[0].stageType).toBe('standard');
+    });
+
+    test('preserves a user-chosen retry target while still adding the type', () => {
+      const stored = [{ name: 'QA Validation', topic: 'qa', toolIds: [], requiresApproval: false, retryTargetStage: 0 }];
+      const { steps } = planProducesArtifactsBackfill(stored, withAuditor);
+      expect(steps[0].stageType).toBe('qa_validation');
+      expect(steps[0].retryTargetStage).toBe(0);
+    });
+
+    test('is idempotent', () => {
+      const stored = [{ name: 'QA Validation', topic: 'qa', toolIds: [], requiresApproval: false }];
+      const once = planProducesArtifactsBackfill(stored, withAuditor);
+      expect(planProducesArtifactsBackfill(once.steps, withAuditor).changed).toBe(false);
+    });
+  });
 });
 
 // ── The gate as wired (ledger write + throw) ───────────────────────────────

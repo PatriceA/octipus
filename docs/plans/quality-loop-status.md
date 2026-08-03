@@ -383,3 +383,120 @@ scorer gates — including this one — never reach that table. Either pipelines
 have to run, or the swarm gates need to record evidence too; the latter is
 probably the smaller change and would make one table mean one thing.
 (3) Chase the `toolConfig` provider error.
+
+---
+
+# 2026-08-03, later: three real pipelines run, and what they exposed
+
+The step above — "run one real pipeline" — was taken. Three were: a 7-stage
+`Full Development Cycle`, a `Bug Fix`, and a plain swarm delegation. All three
+found something, and two of the findings say the gates were narrower than this
+document claimed.
+
+## The scoreboard moved, but not by much
+
+| axis | 2026-08-03 morning | after these runs | target |
+|---|---|---|---|
+| deliveredPct | n/a (0 samples) | 75% (4 samples) | ≥ 95% |
+| lagP95Seconds | 143s (16, below floor) | 26s (33 samples) — **fail** | ≤ 10s |
+| paidTokensPerRun | 181,128 — fail | 113,310 — fail | ≤ 60,000 |
+| autonomyPct | 100% — pass | 100% (129) — pass | ≥ 90% |
+
+`lagP95Seconds` crossed its sample floor and is now a judged **fail** rather
+than a guess. `deliveredPct` finally has data and still sits under its floor —
+20 samples is a lot of pipelines, which is why the swarm-gate change below
+matters more than running more of them.
+
+## 1. The audit-coverage gate could never have fired
+
+This is the sharpest finding, and it corrects a claim in the earlier half of
+this document. `rubberStampRate` was not empty because nobody had run a
+pipeline. It was empty because **no shipped pipeline template set
+`stageType: 'qa_validation'`** — not `Full Development Cycle`, not `Bug Fix`,
+not `Research & Analysis`.
+
+Everything downstream keys off that flag: `QA_VERDICT_JSON_INSTRUCTION` is only
+appended to a `qa_validation` stage, so no machine-readable verdict is ever
+requested, `gateQaVerdict` never sees one to hold to account, and no
+`audit_coverage` row is ever written. Three commits and 54 tests of gate, wired
+to a switch that shipped in the off position.
+
+The 7-stage run proved it end to end: **all seven stages reported completed —
+including Testing, Code Review and QA Validation — and
+`verification_evidence` held exactly one row**, from the evidence gate on
+Implementation. Running pipelines forever would never have produced a
+rubber-stamp number.
+
+Fixed by declaring the auditor of record in the presets: `QA Validation` (Full
+Development Cycle, retrying Implementation rather than the stage before it) and
+`Verify Fix` (Bug Fix). The `producesArtifacts` backfill was widened to carry
+`stageType` too — an install seeded before a flag exists keeps its old steps
+forever, which is the same way this hole opened.
+
+## 2. The evidence gate has a false positive: shell-written files are invisible
+
+The `Bug Fix` run failed at `Implement Fix` with
+
+    declares it produces artifacts but changed 0 files
+    (18 tool calls, 11 commands, 2 tool errors)
+
+and the stage **had done the work**. `dice.py` and `test_dice.py` were both
+modified inside that stage's window (20:21, stage ran 20:18–20:23) and the suite
+went from 18 tests to 21, all passing when run by hand.
+
+The stage wrote through `shell__run` — a heredoc or equivalent — and
+`filesChanged` counts only `FILE_CHANGE_TOOLS`. A worker that prefers the shell
+is indistinguishable from one that wrote nothing, so the gate fails legitimate
+work. It is one of the four `deliveredPct` samples, and the reason that axis
+reads 75% rather than 100%.
+
+This is not a reason to relax the gate — the failure it was built to catch is
+real and was caught. It is a reason to stop treating tool counters as the whole
+evidence. **The fix is to snapshot the workspace around a declared stage** (an
+mtime/size scan before and after) and count that as the file-change signal, with
+the counters as corroboration. Deliberately not built here: it is a design
+change to what counts as evidence, not a patch, and it deserves its own pass.
+
+## 3. A Testing stage that cannot run tests will simulate them
+
+In the 7-stage run, the Testing work reached a subagent whose tool set had been
+intersected down to `filesystem`. It said so plainly —
+
+> "I cannot run shell commands — no `shell` tool is available in my function
+> set. I'll simulate execution by analyzing the test logic"
+
+— then produced a full per-test PASS table and "Results: 18 passed, 0 failed".
+Its receipt is honest (`commandsRun: 0`, `toolCalls: 2`, both reads) and the
+claim happened to be true: running the suite by hand gave the same 18/18. But
+nothing gated on "a stage whose job is to run tests ran no commands", so a
+correct-by-luck simulation was accepted as a test run.
+
+The template declares `toolIds: ['filesystem', 'shell', 'browser']` for Testing;
+the tools were lost between the stage and the child. Not fixed here — logged as
+the next thing to chase, and the natural companion to the workspace-snapshot fix
+above, since both are cases where the deliverable's evidence and the stage's
+declared purpose are never compared.
+
+## 4. Swarm gates now write evidence
+
+The previous section's own recommendation, taken: `singleSpawnAndRun` records a
+`verification_evidence` row for every child that runs the scorer gates, so the
+always-on tool-outage gate and every schema/code-diff scorer now reach the same
+table the pipeline writes to. One table means one thing.
+
+Verified live rather than by mock — a `spawn_child` delegation after the change
+produced two rows carrying `node_id`, where the same path produced none before.
+
+## What is actually next
+
+1. **Workspace snapshot for the evidence gate** (finding 2). Until it lands,
+   `deliveredPct` counts a false failure against itself, and any stage that
+   writes via shell is failed for succeeding.
+2. **Compare a stage's declared purpose to its receipt** (finding 3). A Testing
+   stage with `commandsRun: 0` should not pass, whatever its prose says.
+3. **Get `deliveredPct` to 20 samples.** Now realistic: swarm gates feed it, so
+   ordinary delegations count, not only pipelines.
+4. **Read `rubberStampRate` for the first time.** The gate is reachable as of
+   this commit; nothing has read a real value yet. A high first number means the
+   review prompts need work, not that the gate is wrong.
+5. Chase the `toolConfig` provider error (unchanged).

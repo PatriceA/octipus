@@ -12,6 +12,7 @@ import { applyToolCap, isSmallModel } from '@/core/orchestrator/small-model';
 import type { AgentRole } from '@/core/orchestrator/types';
 import type { AgentContext } from '@/core/types';
 import { agentRepository } from '@/db/repositories/agent-repository';
+import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
 import { getModelRegistry } from '@/models/model-registry';
 import { getTopicConfig } from '@/models/topic-config';
 import { coreLogger } from '@/utils/logger';
@@ -1035,6 +1036,34 @@ export class SwarmSpawner {
         coreLogger.info(
           { parentNodeId: opts.parent.id, childId, failures: outcome.failures.length },
           'Swarm child failed scorer gate — marking contract_failed',
+        );
+      }
+
+      // Record the verdict in the evidence ledger. Until now only
+      // `pipeline-manager.ts` wrote to `verification_evidence`, so every swarm
+      // gate — including the always-on tool-outage one — passed or failed
+      // without leaving a queryable trace, and `deliveredPct` in
+      // `scripts/quality-score.ts` could only ever see pipeline runs. One table
+      // now means one thing: every gated deliverable, whoever gated it.
+      //
+      // Best-effort, exactly like the pipeline's own write: a ledger failure
+      // must never turn a good child into a failed one.
+      try {
+        await verificationEvidenceRepository.record({
+          sessionId: opts.parent.rootSessionId,
+          nodeId: childId,
+          stage: opts.childRole,
+          kind: 'side_effect',
+          passed: outcome.passed,
+          detail: {
+            scorers: effectiveScorers.length,
+            failures: outcome.failures.map((f) => ({ scorer: f.scorer, reason: f.reason })),
+          },
+        });
+      } catch (err) {
+        coreLogger.warn(
+          { err: (err as Error).message, childId },
+          'Failed to record swarm scorer verification evidence',
         );
       }
     }

@@ -171,6 +171,20 @@ Rate overall quality: Excellent / Good / Needs Work / Critical Issues.`,
         topic: 'qa',
         toolIds: ['browser', 'browser-ext', 'shell', 'filesystem'],
         requiresApproval: false,
+        // The auditor of record. Without this type the stage runs as prose: no
+        // machine-readable verdict is requested, `gateQaVerdict` never sees a
+        // verdict to hold to account, and the audit-coverage gate cannot fire —
+        // which is exactly what a full 7-stage run on 2026-08-03 showed. All
+        // seven stages reported completed and `verification_evidence` held one
+        // row, from the evidence gate. No shipped template set this flag, so
+        // `rubberStampRate` was empty because the gate was unreachable, not
+        // because nobody had run a pipeline.
+        stageType: 'qa_validation',
+        // Retry the Implementation stage (index 2), not the stage immediately
+        // before this one. A QA failure faults the code; re-running Code Review
+        // would re-review the same unchanged tree. (An audit-GATE rejection is
+        // handled separately and re-runs this auditor alone.)
+        retryTargetStage: 2,
         promptTemplate: `Perform QA validation on the implementation. Test it end-to-end.
 
 Task: {{description}}
@@ -328,6 +342,11 @@ Report what was changed and why.`,
         topic: 'coding',
         toolIds: ['filesystem', 'shell'],
         requiresApproval: false,
+        // Same reason as QA Validation above: this is the stage that decides
+        // whether the fix holds, so it has to emit a verdict the audit-coverage
+        // gate can hold to account. Default retry target (the previous stage,
+        // `Implement Fix`) is already the right one here.
+        stageType: 'qa_validation',
         promptTemplate: `Verify the bug fix is correct and complete.
 
 Bug: {{description}}
@@ -348,30 +367,54 @@ Report: FIXED / NOT FIXED / PARTIALLY FIXED with evidence.`,
 ];
 
 /**
- * Add `producesArtifacts` to an already-seeded preset's steps when the stored
- * step has no such key at all. Matches steps BY NAME (a user may have added,
- * removed or reordered steps) and only ever *adds* the key — a step the user
- * explicitly set to `false` stays false, and every other field is untouched.
- * No-ops (no write) when nothing is missing, which is the steady state.
+ * Add the two gating flags — `producesArtifacts` and `stageType` — to an
+ * already-seeded preset's steps when the stored step has no such key at all.
+ * Matches steps BY NAME (a user may have added, removed or reordered steps) and
+ * only ever *adds* a key — a step the user explicitly set stays as they set it,
+ * and every other field is untouched. No-ops (no write) when nothing is
+ * missing, which is the steady state.
+ *
+ * `stageType` is here for the same reason `producesArtifacts` was: an install
+ * seeded before the flag existed keeps its old steps forever, so the gate that
+ * reads the flag stays unreachable on exactly the installs that have history.
  */
 export function planProducesArtifactsBackfill(
   stored: PipelineStepConfig[],
   shipped: PipelineStepConfig[],
 ): { steps: PipelineStepConfig[]; changed: boolean } {
   const declared = new Set(shipped.filter((s) => s.producesArtifacts).map((s) => s.name));
+  const auditors = new Map(
+    shipped.filter((s) => s.stageType === 'qa_validation').map((s) => [s.name, s] as const),
+  );
   let changed = false;
   const steps = stored.map((step) => {
+    let next = step;
     // `!== undefined` and not a truthiness test: an explicit `false` is a user
     // decision to opt this stage OUT of gating, and must survive the backfill.
-    if (step.producesArtifacts !== undefined || !declared.has(step.name)) return step;
-    changed = true;
-    return { ...step, producesArtifacts: true };
+    if (next.producesArtifacts === undefined && declared.has(next.name)) {
+      changed = true;
+      next = { ...next, producesArtifacts: true };
+    }
+    const auditor = auditors.get(next.name);
+    if (auditor && next.stageType === undefined) {
+      changed = true;
+      next = {
+        ...next,
+        stageType: 'qa_validation',
+        // Carried together: the retry target is meaningless without the type,
+        // and a wrong target sends a failed audit at the wrong stage.
+        ...(auditor.retryTargetStage !== undefined && next.retryTargetStage === undefined
+          ? { retryTargetStage: auditor.retryTargetStage }
+          : {}),
+      };
+    }
+    return next;
   });
   return { steps, changed };
 }
 
 async function backfillPresetStepFlags(name: string, shipped: PipelineStepConfig[]): Promise<void> {
-  if (!shipped.some((s) => s.producesArtifacts)) return;
+  if (!shipped.some((s) => s.producesArtifacts || s.stageType === 'qa_validation')) return;
 
   const db = getDb();
   const [row] = await db
@@ -385,7 +428,7 @@ async function backfillPresetStepFlags(name: string, shipped: PipelineStepConfig
   if (!changed) return;
 
   await db.update(pipelineTemplates).set({ steps, updatedAt: new Date() }).where(eq(pipelineTemplates.id, row.id));
-  logger.info({ template: name }, 'Backfilled producesArtifacts on preset pipeline template');
+  logger.info({ template: name }, 'Backfilled gating flags on preset pipeline template');
 }
 
 /**
