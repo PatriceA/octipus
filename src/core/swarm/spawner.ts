@@ -9,7 +9,9 @@ import { buildSecurityReminder, guardInput } from '@/core/orchestrator/input-gua
 import { formatCriticalRules, getRoleConfig, getToolsForRole } from '@/core/orchestrator/roles';
 import { logPromptComposition } from '@/core/orchestrator/prompt-budget';
 import { applyToolCap, isSmallModel } from '@/core/orchestrator/small-model';
+import { countChangedFiles, snapshotWorkspace } from '@/core/orchestrator/workspace-snapshot';
 import type { AgentRole } from '@/core/orchestrator/types';
+import { WorkspaceFS } from '@/security/workspace-fs';
 import type { AgentContext } from '@/core/types';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
@@ -919,6 +921,21 @@ export class SwarmSpawner {
       retryAttempt: isCrashRetry ? 1 : 0,
     });
 
+    // Filesystem evidence, for the same reason the pipeline gate takes it: a
+    // `minFilesChanged` scorer reads `SideEffectCounters.filesChanged`, which
+    // counts only FILE_CHANGE_TOOLS and is blind to anything written through
+    // `shell__run`. Only walked when a scorer actually asks about files —
+    // otherwise this is pure cost on every spawn.
+    const wantsFileEvidence =
+      opts.brief.expectedOutput?.shape === 'code-diff' ||
+      (opts.scorers ?? []).some((s) => s.kind === 'side_effect' && s.minFilesChanged !== undefined);
+    // `forAgent`, matching the `file_exists` scorer's own resolution, so both
+    // file-aware scorers judge the same directory.
+    const scorerWorkspaceRoot = wantsFileEvidence
+      ? WorkspaceFS.forAgent({ userId: opts.parentContext.userId }).root
+      : null;
+    const fsBefore = scorerWorkspaceRoot ? await snapshotWorkspace(scorerWorkspaceRoot) : null;
+
     // ── Run child (with provider_error single retry on same node) ──
     let status: ChildResultStatus = 'ok';
     let output: unknown = '';
@@ -1016,10 +1033,13 @@ export class SwarmSpawner {
       ...(opts.scorers ?? []),
     ];
     if (status === 'ok' && effectiveScorers.length > 0) {
+      const filesTouched = scorerWorkspaceRoot
+        ? countChangedFiles(fsBefore, await snapshotWorkspace(scorerWorkspaceRoot))
+        : null;
       const outcome = await runScorers(
         effectiveScorers,
         { output: result.output, notes: result.notes, receipt: result.receipt },
-        { userId: opts.parentContext.userId },
+        { userId: opts.parentContext.userId, filesTouched },
       );
       result.scorerOutcome = outcome;
       if (!outcome.passed) {

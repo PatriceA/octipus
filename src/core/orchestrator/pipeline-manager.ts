@@ -4,6 +4,7 @@ import type { AgentContext } from '@/core/types';
 import { getDb } from '@/db/postgres';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { pipelineRepository } from '@/db/repositories/pipeline-repository';
+import { sessionRepository } from '@/db/repositories/session-repository';
 import type { PipelineStepConfig } from '@/db/schema/pipeline-templates';
 import { pipelineTemplates } from '@/db/schema/pipeline-templates';
 import type { NewPipeline, NewPipelineStage, Pipeline, PipelineStageRow } from '@/db/schema/pipelines';
@@ -70,7 +71,9 @@ import { paramTemplateVars, resolveRecipeParams } from './recipe-params';
 import { getOrchestratorService } from './service';
 import { buildStagesFromTemplate, expandPromptTemplate, getPipelineTemplate } from './templates';
 import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
+import { WorkspaceFS } from '@/security/workspace-fs';
 import type { SideEffectCounters } from '@/core/swarm/receipt';
+import { countChangedFiles, snapshotWorkspace, type WorkspaceSnapshot } from './workspace-snapshot';
 import { appendSources, type QAValidationResult } from './types';
 import { type AuditScopeStage, auditVerdictFailure, coverageScope, unaddressedDoubt, uncoveredStages } from './audit-coverage';
 
@@ -144,20 +147,45 @@ async function resolveStageModelId(
  * Returns the failure reason when a stage that DECLARED it produces artifacts
  * demonstrably changed nothing, else null (= let the stage complete).
  *
- * `counters === null` means the worker exposed no tally — "we could not
- * measure", which is NOT "it did nothing". It passes. Failing a run we simply
- * failed to observe is the worse error: it fails work that actually succeeded.
+ * TWO independent signals, and either one showing work is enough:
+ *
+ * - `counters.filesChanged` — file-mutating TOOL calls the worker made. Blind to
+ *   anything written through `shell__run` (heredoc, `sed -i`, a generator).
+ * - `filesTouched` — files that actually differ on disk across the stage
+ *   (`workspace-snapshot.ts`). Blind to which tool did it, which is the point,
+ *   but sees the whole workspace including a concurrent pipeline's writes.
+ *
+ * Requiring only one is deliberate. Each is blind where the other sees, so an
+ * AND would fail every stage that used only the tool the other signal misses —
+ * which is precisely the false positive this gate had: a real `Implement Fix`
+ * stage rewrote two files through the shell and was failed for "changed 0 files".
+ *
+ * Both "we could not measure" cases pass:
+ * - `counters === null` — the worker exposed no tally (a CLI worker, say).
+ * - `filesTouched === null` — no usable snapshot (root unreadable, tree too big).
+ * Failing a run we merely failed to observe is the worse error: it fails work
+ * that actually succeeded. The gate only bites when a signal is present AND says
+ * nothing happened.
  */
 export function stageEvidenceFailure(
   producesArtifacts: boolean | undefined,
   counters: SideEffectCounters | null,
+  filesTouched: number | null = null,
 ): string | null {
   if (!producesArtifacts) return null;
+  if (filesTouched !== null && filesTouched > 0) return null;
   if (counters === null) return null;
   if (counters.filesChanged > 0) return null;
+  // Name which evidence was actually consulted, so a failure is auditable
+  // without re-running it: "0 files" from counters alone is a much weaker claim
+  // than "0 files, and the workspace is byte-identical".
+  const onDisk =
+    filesTouched === null
+      ? 'no workspace snapshot'
+      : 'workspace unchanged on disk';
   return (
     `changed 0 files (${counters.toolCalls} tool calls, ${counters.commandsRun} commands, ` +
-    `${counters.toolErrors} tool errors)`
+    `${counters.toolErrors} tool errors; ${onDisk})`
   );
 }
 
@@ -237,6 +265,9 @@ export class PipelineManager {
     const stages = await this.getStages(pipeline.id);
     const stageConfBuilt = buildStagesFromTemplate(template, description);
     const retryCounts: Record<number, number> = {}; // Track retries per stage index
+    // Filesystem half of the evidence gate — resolved once, used by every
+    // declared stage and every retry of one.
+    const workspaceRoot = await this.resolveWorkspaceRoot(sessionId);
 
     for (let i = 0; i < stages.length; i++) {
       const stage = stages[i];
@@ -342,6 +373,8 @@ export class PipelineManager {
         // exact same question instead of reconstructing it.
         const stageContext = handoffText || previousOutput;
 
+        const before = await this.snapshotStage(builtStage.producesArtifacts, workspaceRoot);
+
         let counters: SideEffectCounters | null = null;
         const result = await orchestrator.spawnWorker(
           stage.role,
@@ -367,6 +400,8 @@ export class PipelineManager {
           pipelineId: pipeline.id,
           stageName: stage.name,
           producesArtifacts: builtStage.producesArtifacts,
+          before,
+          workspaceRoot,
           counters,
         });
 
@@ -504,6 +539,9 @@ export class PipelineManager {
                   const retryTopicModel = await registry.getModelForTopic(retryTargetStage.role);
                   const retryModelOverride = retryStageModelId || retryTopicModel?.modelId || undefined;
 
+                  const retryProduces = template.stages[retryTargetIndex]?.producesArtifacts;
+                  const retryBefore = await this.snapshotStage(retryProduces, workspaceRoot);
+
                   let retryCounters: SideEffectCounters | null = null;
                   const retryResult = await orchestrator.spawnWorker(
                     retryTargetStage.role,
@@ -526,7 +564,9 @@ export class PipelineManager {
                     sessionId,
                     pipelineId: pipeline.id,
                     stageName: retryTargetStage.name,
-                    producesArtifacts: template.stages[retryTargetIndex]?.producesArtifacts,
+                    producesArtifacts: retryProduces,
+                    before: retryBefore,
+                    workspaceRoot,
                     counters: retryCounters,
                   });
 
@@ -566,6 +606,8 @@ export class PipelineManager {
                 const qaTopicModel = await registry.getModelForTopic(stage.role);
                 const qaModelOverride = qaStageModelId || qaTopicModel?.modelId || undefined;
 
+                const qaRetryBefore = await this.snapshotStage(builtStage.producesArtifacts, workspaceRoot);
+
                 let qaRetryCounters: SideEffectCounters | null = null;
                 const qaRetryResult = await orchestrator.spawnWorker(
                   stage.role,
@@ -589,6 +631,8 @@ export class PipelineManager {
                   pipelineId: pipeline.id,
                   stageName: stage.name,
                   producesArtifacts: builtStage.producesArtifacts,
+                  before: qaRetryBefore,
+                  workspaceRoot,
                   counters: qaRetryCounters,
                 });
 
@@ -796,6 +840,9 @@ export class PipelineManager {
       .limit(1);
     const stepConfigs = (templateRecord?.steps as PipelineStepConfig[]) || [];
     const retryCounts: Record<number, number> = {};
+    // Filesystem half of the evidence gate — resolved once, used by every
+    // declared stage and every retry of one.
+    const workspaceRoot = await this.resolveWorkspaceRoot(sessionId);
 
     for (let i = 0; i < stages.length; i++) {
       const stage = stages[i];
@@ -865,6 +912,8 @@ export class PipelineManager {
         // so an auditor-only re-run can re-ask the same question.
         const stageContext = handoffText || previousOutput;
 
+        const before = await this.snapshotStage(stepConfig?.producesArtifacts, workspaceRoot);
+
         let counters: SideEffectCounters | null = null;
         const result = await orchestrator.spawnWorker(
           stage.role,
@@ -888,6 +937,8 @@ export class PipelineManager {
           pipelineId: pipeline.id,
           stageName: stage.name,
           producesArtifacts: stepConfig?.producesArtifacts,
+          before,
+          workspaceRoot,
           counters,
         });
 
@@ -987,6 +1038,9 @@ export class PipelineManager {
               if (!auditorOnly) {
                 await this.updateStage(retryTargetStage.id, { input: retryInput, status: 'running' });
 
+                const retryProduces = stepConfigs[retryTargetIndex]?.producesArtifacts;
+                const retryBefore = await this.snapshotStage(retryProduces, workspaceRoot);
+
                 let retryCounters: SideEffectCounters | null = null;
                 const retryResult = await orchestrator.spawnWorker(
                   retryTargetStage.role,
@@ -1008,7 +1062,9 @@ export class PipelineManager {
                   sessionId,
                   pipelineId: pipeline.id,
                   stageName: retryTargetStage.name,
-                  producesArtifacts: stepConfigs[retryTargetIndex]?.producesArtifacts,
+                  producesArtifacts: retryProduces,
+                  before: retryBefore,
+                  workspaceRoot,
                   counters: retryCounters,
                 });
 
@@ -1033,6 +1089,8 @@ export class PipelineManager {
 
               await this.updateStage(stage.id, { input: qaRetryInput, status: 'running' });
 
+              const qaRetryBefore = await this.snapshotStage(stepConfig?.producesArtifacts, workspaceRoot);
+
               let qaRetryCounters: SideEffectCounters | null = null;
               const qaRetryResult = await orchestrator.spawnWorker(
                 stage.role,
@@ -1055,6 +1113,8 @@ export class PipelineManager {
                 pipelineId: pipeline.id,
                 stageName: stage.name,
                 producesArtifacts: stepConfig?.producesArtifacts,
+                before: qaRetryBefore,
+                workspaceRoot,
                 counters: qaRetryCounters,
               });
 
@@ -1238,12 +1298,24 @@ export class PipelineManager {
     stageName: string;
     producesArtifacts?: boolean;
     counters: SideEffectCounters | null;
+    /** Workspace state captured before the stage ran — see `snapshotStage`. */
+    before?: WorkspaceSnapshot | null;
+    /** Root the stage's worker writes to, re-walked here for the "after" side. */
+    workspaceRoot?: string | null;
   }): Promise<void> {
     if (!args.producesArtifacts) return;
 
     const { counters, stageName, pipelineId } = args;
     const measured = counters !== null;
-    const failure = stageEvidenceFailure(args.producesArtifacts, counters);
+
+    // The "after" side of the snapshot. Taken here rather than at the call site
+    // so it is impossible to gate on a stale reading: this runs immediately
+    // before the decision that uses it.
+    const after =
+      args.before && args.workspaceRoot ? await snapshotWorkspace(args.workspaceRoot) : null;
+    const filesTouched = countChangedFiles(args.before ?? null, after);
+
+    const failure = stageEvidenceFailure(args.producesArtifacts, counters, filesTouched);
     const passed = failure === null;
 
     try {
@@ -1253,23 +1325,35 @@ export class PipelineManager {
         stage: stageName,
         kind: 'side_effect',
         passed,
-        detail: measured
-          ? {
-              filesChanged: counters.filesChanged,
-              toolCalls: counters.toolCalls,
-              commandsRun: counters.commandsRun,
-              toolErrors: counters.toolErrors,
-              byName: counters.byName,
-            }
-          : { unavailable: 'worker exposed no side-effect counters — not gated' },
+        detail: {
+          // Recorded even when null, so a later reader can tell "the snapshot
+          // said nothing changed" from "there was no snapshot" — the two reasons
+          // a counters-only failure can happen.
+          filesTouched,
+          ...(measured
+            ? {
+                filesChanged: counters.filesChanged,
+                toolCalls: counters.toolCalls,
+                commandsRun: counters.commandsRun,
+                toolErrors: counters.toolErrors,
+                byName: counters.byName,
+              }
+            : { unavailable: 'worker exposed no side-effect counters — not gated' }),
+        },
       });
     } catch (err) {
       coreLogger.warn({ err: (err as Error).message, pipelineId, stage: stageName }, 'Failed to record side-effect verification evidence');
     }
 
+    // A snapshot showing work stands on its own: the worker's counters can be
+    // absent (CLI worker) or blind (shell writes) while the files are plainly
+    // there. Checked before the `!measured` bail so that case is a real pass,
+    // not an ungated one.
+    if (filesTouched !== null && filesTouched > 0) return;
+
     if (!measured) {
       coreLogger.warn(
-        { pipelineId, stage: stageName },
+        { pipelineId, stage: stageName, filesTouched },
         'Stage declares producesArtifacts but its worker exposed no counters — passing ungated (unknown is not zero)',
       );
       return;
@@ -1281,6 +1365,43 @@ export class PipelineManager {
           `Reporting it complete would claim work that did not happen.`,
       );
     }
+  }
+
+  /**
+   * The workspace root this session's stage workers actually write to.
+   *
+   * `WorkspaceFS.forSession` is the shared resolver — a dev-mode session with a
+   * `projectPath` runs its agents inside that project, everyone else gets the
+   * per-user nested workspace. Reused rather than reimplemented so the gate can
+   * never snapshot a different directory than the one the worker wrote to; a
+   * mismatch would report "workspace unchanged" for every stage.
+   *
+   * Resolved once per pipeline run: it cannot change mid-run, and the session
+   * lookup is a DB round-trip we do not need per stage.
+   */
+  private async resolveWorkspaceRoot(sessionId: string): Promise<string | null> {
+    try {
+      const session = await sessionRepository.findById(sessionId);
+      if (!session) return null;
+      return WorkspaceFS.forSession(session).root;
+    } catch (err) {
+      coreLogger.warn({ err: (err as Error).message, sessionId }, 'Could not resolve workspace root for the evidence gate');
+      return null;
+    }
+  }
+
+  /**
+   * The "before" half of a stage's filesystem evidence.
+   *
+   * Only walks the tree for a stage that DECLARED it produces artifacts —
+   * everything else is not gated, so the scan would be pure cost.
+   */
+  private async snapshotStage(
+    producesArtifacts: boolean | undefined,
+    workspaceRoot: string | null,
+  ): Promise<WorkspaceSnapshot | null> {
+    if (!producesArtifacts || !workspaceRoot) return null;
+    return snapshotWorkspace(workspaceRoot);
   }
 
   /**

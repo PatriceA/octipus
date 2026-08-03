@@ -113,9 +113,19 @@ export interface ScorableResult {
   receipt?: SwarmReceipt;
 }
 
-/** Context a scorer may need — currently just the user scope for file checks. */
+/** Context a scorer may need: the user scope for file checks, plus any
+ *  filesystem evidence the spawner measured around the child's run. */
 export interface ScorerContext {
   userId?: string;
+  /**
+   * Files that actually differ in the workspace across the child's run, from
+   * `workspace-snapshot.ts`. `null` = not measured (no file-aware scorer asked
+   * for it, or the workspace could not be walked) — never "nothing changed".
+   *
+   * Exists because `filesChanged` counts only file-mutating TOOL calls, so a
+   * child that writes through `shell__run` reads as having changed nothing.
+   */
+  filesTouched?: number | null;
 }
 
 /**
@@ -262,7 +272,18 @@ async function evaluate(
       const s = receipt.sideEffects;
       const misses: string[] = [];
       if (scorer.minFilesChanged !== undefined && s.filesChanged < scorer.minFilesChanged) {
-        misses.push(`filesChanged=${s.filesChanged} (expected >= ${scorer.minFilesChanged})`);
+        // Second opinion before failing: `filesChanged` only counts
+        // file-mutating TOOL calls, so a child that wrote through `shell__run`
+        // reads as zero here while the files are plainly on disk. The workspace
+        // diff sees those. `null` means nothing measured, which cannot rescue
+        // the miss — only a positive count does.
+        const onDisk = ctx.filesTouched ?? null;
+        if (onDisk === null || onDisk < scorer.minFilesChanged) {
+          misses.push(
+            `filesChanged=${s.filesChanged} (expected >= ${scorer.minFilesChanged})` +
+              (onDisk === null ? '' : `, and only ${onDisk} file(s) differ in the workspace`),
+          );
+        }
       }
       if (scorer.minCommandsRun !== undefined && s.commandsRun < scorer.minCommandsRun) {
         misses.push(`commandsRun=${s.commandsRun} (expected >= ${scorer.minCommandsRun})`);

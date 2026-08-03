@@ -433,7 +433,11 @@ Development Cycle, retrying Implementation rather than the stage before it) and
 `stageType` too — an install seeded before a flag exists keeps its old steps
 forever, which is the same way this hole opened.
 
-## 2. The evidence gate has a false positive: shell-written files are invisible
+## 2. The evidence gate had a false positive: shell-written files were invisible
+
+**Fixed — see "The workspace snapshot" below.** The diagnosis stands as written;
+only the last paragraph's "deliberately not built here" no longer holds.
+
 
 The `Bug Fix` run failed at `Implement Fix` with
 
@@ -452,10 +456,78 @@ reads 75% rather than 100%.
 
 This is not a reason to relax the gate — the failure it was built to catch is
 real and was caught. It is a reason to stop treating tool counters as the whole
-evidence. **The fix is to snapshot the workspace around a declared stage** (an
-mtime/size scan before and after) and count that as the file-change signal, with
-the counters as corroboration. Deliberately not built here: it is a design
-change to what counts as evidence, not a patch, and it deserves its own pass.
+evidence.
+
+### The workspace snapshot
+
+`src/core/orchestrator/workspace-snapshot.ts`. A snapshot is
+`relative path → "<mtimeMs>:<size>"` for every regular file under the root the
+stage's worker actually writes to; diffing the before and after counts
+creations, rewrites and deletions, and is blind to which tool did the writing.
+
+The gate now reads **two independent signals and requires only one** to show
+work:
+
+| signal | sees | blind to |
+|---|---|---|
+| `counters.filesChanged` | file-mutating tool calls | anything written via `shell__run` |
+| `filesTouched` (snapshot) | the disk, whoever wrote it | which stage wrote it (a concurrent pipeline counts) |
+
+Requiring both would fail every stage that used only the tool the other signal
+misses — which is the bug. Both "could not measure" cases still pass: absent
+counters (a CLI worker) and an unusable snapshot (unreadable root, tree over the
+20k-file cap) are `null`, and `null` never reads as zero. The gate bites only
+when a signal is present *and* says nothing happened, and the failure message
+now names which evidence was consulted (`workspace unchanged on disk` vs
+`no workspace snapshot`), so a rejection is auditable without re-running it.
+
+Three details that are load-bearing rather than incidental:
+
+- **The root comes from `WorkspaceFS.forSession`,** the same resolver the worker
+  uses — a dev-mode session with a `projectPath` runs its agents inside that
+  project, everyone else gets the per-user nested workspace. Reimplementing that
+  choice would have snapshotted a different directory than the one being
+  written, reporting "unchanged" for every stage. Verified against a real run:
+  the resolver returns the exact directory the earlier pipelines wrote `dice.py`
+  into.
+- **A root that does not exist yet is an EMPTY snapshot, not an unavailable
+  one.** Otherwise the first stage to create the workspace has no baseline and
+  everything it writes goes unmeasured.
+- **A truncated walk is never diffed.** The traversal cut-off shifts as files
+  appear, which would manufacture differences no stage caused; `node_modules`
+  and `.git` are pruned for cost, and the walk is sorted so two passes over an
+  unchanged tree agree.
+
+The same blindness existed in the swarm's `code-diff` scorer
+(`deriveCodeDiffScorer` → `minFilesChanged`), which reads the identical counter
+from the child's receipt. It takes the same second opinion now: the spawner
+snapshots around any child whose brief asks about files — and only those, so
+this is not a cost on every spawn.
+
+### Verified by reproducing the original failure
+
+A `Bug Fix` pipeline was re-run with the implementing stage told to make every
+edit through the shell — the exact shape that failed before. The ledger row:
+
+| | counters | snapshot |
+|---|---|---|
+| `Implement Fix` | `filesChanged: 0`, `commandsRun: 22` | `filesTouched: 1` |
+
+**Passed**, where the same shape was a hard failure two hours earlier. The change
+is real: `dice.py` gained `roll_one(sides, seed=None)` and the suite went 21 → 22
+passing when run by hand.
+
+Two things came free with it, because the run finally reached stages that had
+never executed:
+
+- **`rubberStampRate` has its first real value: 0% (2 passing verdicts, 0
+  rejected).** The audit-coverage gate fired for the first time since it was
+  written — `audit_coverage` and `qa_verdict` rows for `Verify Fix`, both
+  `high` confidence. Two verdicts is not a baseline, but it is no longer zero,
+  and the prompt contracts survived contact with a real model.
+- **`deliveredPct` moved 75% → 90% over 10 samples.** The single remaining
+  failure is the pre-fix run that motivated all this; it ages out of the window
+  on its own.
 
 ## 3. A Testing stage that cannot run tests will simulate them
 
@@ -489,14 +561,16 @@ produced two rows carrying `node_id`, where the same path produced none before.
 
 ## What is actually next
 
-1. **Workspace snapshot for the evidence gate** (finding 2). Until it lands,
-   `deliveredPct` counts a false failure against itself, and any stage that
-   writes via shell is failed for succeeding.
-2. **Compare a stage's declared purpose to its receipt** (finding 3). A Testing
-   stage with `commandsRun: 0` should not pass, whatever its prose says.
-3. **Get `deliveredPct` to 20 samples.** Now realistic: swarm gates feed it, so
-   ordinary delegations count, not only pipelines.
-4. **Read `rubberStampRate` for the first time.** The gate is reachable as of
-   this commit; nothing has read a real value yet. A high first number means the
-   review prompts need work, not that the gate is wrong.
-5. Chase the `toolConfig` provider error (unchanged).
+1. **Compare a stage's declared purpose to its receipt** (finding 3). A Testing
+   stage with `commandsRun: 0` should not pass, whatever its prose says. This is
+   the last of the three findings above still open, and it is the one where the
+   system currently accepts a simulation as a test run.
+2. **Get `deliveredPct` to 20 samples.** Now realistic: swarm gates feed it, so
+   ordinary delegations count, not only pipelines. The one false failure in the
+   current sample is a pre-fix run and will age out of the window.
+3. **Get `rubberStampRate` past two verdicts.** It reads 0% today, which is the
+   best possible number and also the least informative one — two verdicts from a
+   single pipeline. A rate that stays at zero across a real spread of runs is
+   the signal that the gate could relax to sampling; a rate that climbs means
+   the review prompts need work, not that the gate is wrong.
+4. Chase the `toolConfig` provider error (unchanged).

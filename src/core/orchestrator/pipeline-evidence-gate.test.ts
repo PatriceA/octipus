@@ -34,6 +34,41 @@ describe('stageEvidenceFailure', () => {
     // that actually succeeded, the one outcome worse than no gate.
     expect(stageEvidenceFailure(true, null)).toBeNull();
   });
+
+  // The false positive this signal exists to kill: on 2026-08-03 a real
+  // `Implement Fix` stage rewrote dice.py and test_dice.py through `shell__run`
+  // (18 → 21 passing tests) and was failed for "changed 0 files", because
+  // `filesChanged` counts only FILE_CHANGE_TOOLS.
+  describe('filesystem evidence', () => {
+    test('passes a shell-only writer that the counters could not see', () => {
+      const shellWriter = counters({ toolCalls: 18, commandsRun: 11, toolErrors: 2 });
+      expect(stageEvidenceFailure(true, shellWriter)).not.toBeNull();
+      expect(stageEvidenceFailure(true, shellWriter, 2)).toBeNull();
+    });
+
+    test('still fails when BOTH signals say nothing happened', () => {
+      const reason = stageEvidenceFailure(true, counters({ toolCalls: 9 }), 0);
+      expect(reason).toContain('changed 0 files');
+      expect(reason).toContain('workspace unchanged on disk');
+    });
+
+    test('names an unavailable snapshot rather than implying it was checked', () => {
+      const reason = stageEvidenceFailure(true, counters({ toolCalls: 9 }), null);
+      expect(reason).toContain('no workspace snapshot');
+    });
+
+    test('a snapshot showing work passes even with no counters at all', () => {
+      // A CLI worker exposes no tally; the files are still plainly there.
+      expect(stageEvidenceFailure(true, null, 3)).toBeNull();
+    });
+
+    test('either signal alone is enough — the two are blind in opposite ways', () => {
+      // Counters see the tool but not the shell; the snapshot sees the disk but
+      // not who wrote it. Requiring both would fail every stage using only one.
+      expect(stageEvidenceFailure(true, counters({ filesChanged: 2 }), 0)).toBeNull();
+      expect(stageEvidenceFailure(true, counters({ filesChanged: 0 }), 2)).toBeNull();
+    });
+  });
 });
 
 // ── Preset backfill ────────────────────────────────────────────────────────

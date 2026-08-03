@@ -280,6 +280,38 @@ describe('side_effect scorer (receipt-vs-claim)', () => {
     expect(out.passed).toBe(true);
   });
 
+  // Same false positive the pipeline evidence gate had: `filesChanged` counts
+  // only file-mutating TOOL calls, so a child that wrote via `shell__run` reads
+  // as zero while the files are plainly on disk.
+  it('passes a shell-only writer when the workspace diff shows the files', async () => {
+    const out = await runScorers(
+      [{ kind: 'side_effect', minFilesChanged: 1 }],
+      { output: 'wrote it with a heredoc', receipt: receipt({ commandsRun: 4 }) },
+      { ...ctx, filesTouched: 2 },
+    );
+    expect(out.passed).toBe(true);
+  });
+
+  it('still fails when the workspace diff agrees nothing changed', async () => {
+    const out = await runScorers(
+      [{ kind: 'side_effect', minFilesChanged: 1 }],
+      { output: 'Implemented it!', receipt: receipt() },
+      { ...ctx, filesTouched: 0 },
+    );
+    expect(out.passed).toBe(false);
+    expect(out.failures[0].reason).toContain('0 file(s) differ in the workspace');
+  });
+
+  it('an unmeasured workspace cannot rescue the miss — null is not evidence', async () => {
+    const out = await runScorers(
+      [{ kind: 'side_effect', minFilesChanged: 1 }],
+      { output: 'Implemented it!', receipt: receipt() },
+      { ...ctx, filesTouched: null },
+    );
+    expect(out.passed).toBe(false);
+    expect(out.failures[0].reason).not.toContain('differ in the workspace');
+  });
+
   it('checks commandsRun and toolErrors bounds', async () => {
     const noCmds = await runScorers(
       [{ kind: 'side_effect', minCommandsRun: 1 }],
