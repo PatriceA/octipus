@@ -7,6 +7,27 @@ import { BaseTool, createParameterSchema } from '../base-tool';
  * Web search tool — tries SearXNG first, falls back to DuckDuckGo via Playwright.
  * Provides search and page fetch capabilities for research agents.
  */
+/**
+ * Build the SearXNG query string.
+ *
+ * `categories` and `engines` do NOT compose the way they look like they do:
+ * SearXNG treats them as a UNION, so `categories=general&engines=bing` runs
+ * bing *plus* every other general-category engine. Measured: that combination
+ * returns 30 results (10 bing + 20 google cse) where `engines=bing` alone
+ * returns 10. An allowlist sent alongside `categories` is therefore not an
+ * allowlist at all — it can only add engines, never restrict to them, which is
+ * the exact opposite of why an operator would set one.
+ *
+ * So when an allowlist is configured we send `engines` ALONE. Otherwise we
+ * send `categories` alone and let the instance choose.
+ */
+export function buildSearxngParams(query: string, engines: string | null): URLSearchParams {
+  const params = new URLSearchParams({ q: query, format: 'json' });
+  if (engines) params.set('engines', engines);
+  else params.set('categories', 'general');
+  return params;
+}
+
 export class WebSearchTool extends BaseTool {
   readonly id = 'websearch';
   readonly name = 'Web Search';
@@ -119,13 +140,7 @@ export class WebSearchTool extends BaseTool {
   }
 
   private async searchViaSearxng(query: string, maxResults: number): Promise<unknown> {
-    const params = new URLSearchParams({
-      q: query,
-      categories: 'general',
-      format: 'json',
-    });
-    const engines = this.searxngEngines;
-    if (engines) params.set('engines', engines);
+    const params = buildSearxngParams(query, this.searxngEngines);
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);

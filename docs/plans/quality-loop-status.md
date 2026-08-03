@@ -242,9 +242,35 @@ attempts on dead tools.
   Anyone "fixing" search by enabling Bing would convert a caught failure into
   an uncaught one.
 
-A `SEARXNG_ENGINES` env allowlist (e.g. `SEARXNG_ENGINES=google`) was added so
-an operator can pin the engines they trust without editing SearXNG's own
-config. Unset by default — current behaviour is unchanged.
+A `SEARXNG_ENGINES` env allowlist was added so an operator can pin the engines
+they trust without editing SearXNG's own config. Unset by default.
+
+Two things about it are worth writing down, because both were wrong on the
+first attempt and only measurement caught them:
+
+- **`categories` and `engines` are a UNION, not a filter.** Sending
+  `categories=general&engines=bing` runs bing *plus* every other general
+  engine — 30 results (20 google cse + 10 bing) where `engines=bing` alone
+  returns 10. The allowlist as first shipped kept `categories=general`, so it
+  could only ever *add* engines, never restrict to them. It now sends
+  `engines` alone when set, and `categories` alone when not.
+- **The param takes full engine names, not shortcuts.** `engines=bi` does not
+  select bing; it is ignored and the defaults run. The engine that actually
+  works here is named `google cse` — with a space — so
+  `SEARXNG_ENGINES=google cse` is the correct value, not `goc`.
+
+**Turning an engine off properly** belongs in SearXNG, not here, because it
+then applies to everything using the instance. Their `settings.yml` is just
+`use_default_settings: true`, so appending
+
+    engines:
+      - name: bing
+        disabled: true
+
+and restarting is enough — verified on a scratch instance (`/config` then
+reports `"enabled": false` for bing and it drops out of default searches).
+Note `disabled` means "not in the default set", not "forbidden": an explicit
+`engines=bing` request still activates it.
 
 Still open: the `toolConfig` provider error needs chasing in the provider
 layer.
