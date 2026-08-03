@@ -30,6 +30,17 @@ export interface HandoffContext {
   artifacts: string[];
   /** Specific instructions for next stage */
   instructions: string;
+  /**
+   * The stage's own confidence in what it handed off. Undefined when the stage
+   * did not state one (never defaulted — a missing signal stays missing).
+   *
+   * Read by the audit gate's doubt-debt rule: a stage that says `low` must be
+   * addressed by name before an auditor may pass, EVEN when it produced no
+   * artifacts and is therefore outside the coverage scope. A shaky
+   * `Requirements & Architecture` stage is exactly the kind of doubt that gets
+   * inherited silently otherwise.
+   */
+  confidence?: 'high' | 'medium' | 'low';
 }
 
 // ── Patterns for extracting structured info from raw output ──────
@@ -160,6 +171,7 @@ export async function createHandoffContext(params: {
     openQuestions,
     artifacts,
     instructions,
+    confidence: structured?.confidence,
   };
 
   coreLogger.debug(
@@ -184,6 +196,7 @@ interface StructuredHandoff {
   artifacts: string[];
   instructions: string;
   completedWork: string;
+  confidence?: 'high' | 'medium' | 'low';
 }
 
 const HANDOFF_ITEM_MAX = 500; // per-item char bound, matches the regex extractors
@@ -218,6 +231,13 @@ export function parseStructuredHandoff(output: string): StructuredHandoff | null
           .slice(0, 20)
       : [];
   const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+  // Case- and whitespace-insensitive: a stage writing "High" has stated its
+  // confidence. Anything else stays undefined rather than being guessed.
+  const conf = (v: unknown): 'high' | 'medium' | 'low' | undefined => {
+    if (typeof v !== 'string') return undefined;
+    const c = v.trim().toLowerCase();
+    return c === 'high' || c === 'medium' || c === 'low' ? c : undefined;
+  };
 
   return {
     decisions: strArray(h.decisions),
@@ -226,6 +246,7 @@ export function parseStructuredHandoff(output: string): StructuredHandoff | null
     // Accept either name — plan calls it nextStageInstructions.
     instructions: str(h.instructions) || str(h.nextStageInstructions),
     completedWork: str(h.completedWork),
+    confidence: conf(h.confidence),
   };
 }
 
@@ -250,6 +271,7 @@ PIPELINE HANDOFF — after your normal report above, append a fenced code block 
 - artifacts (string[]): file paths / URLs you created or changed
 - openQuestions (string[]): anything unresolved the next stage should address
 - nextStageInstructions (string): explicit, actionable instruction for the next stage
+- confidence ("high" | "medium" | "low"): how confident you are in what you are handing off. An honest "low" is welcome — it routes a closer look at this stage rather than counting against you
 
 Use [] for any list with nothing to report. Emit the block exactly once — do not copy these field descriptions. It is internal pipeline data (stripped before the user sees it); keep your prose report above it.`;
 

@@ -72,24 +72,50 @@ import { buildStagesFromTemplate, expandPromptTemplate, getPipelineTemplate } fr
 import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
 import type { SideEffectCounters } from '@/core/swarm/receipt';
 import { appendSources, type QAValidationResult } from './types';
-import { type AuditScopeStage, auditVerdictFailure, uncoveredStages } from './audit-coverage';
+import { type AuditScopeStage, auditVerdictFailure, coverageScope, unaddressedDoubt, uncoveredStages } from './audit-coverage';
 
 /**
- * The stages an auditor at `qaIndex` is accountable for: every earlier stage
- * that DECLARED it produces artifacts. Declared, never inferred from the stage
- * name — a `Research & Discovery` stage legitimately produces nothing and must
- * not land in an auditor's scope.
+ * The stages an auditor at `qaIndex` is accountable for.
+ *
+ * Two ways in, and they are deliberately different:
+ * - it DECLARED it produces artifacts (the coverage rule). Declared, never
+ *   inferred from the stage name — a `Research & Discovery` stage legitimately
+ *   produces nothing and must not be gated for coverage.
+ * - it handed off saying its own confidence was `low` (the doubt rule), which
+ *   applies whether or not it wrote anything. A shaky architecture stage is
+ *   exactly the doubt that would otherwise be inherited in silence.
+ *
+ * Confidence comes from each stage's handoff block, keyed by STAGE INDEX. A
+ * pipeline recipe may legitimately reuse a stage name (nothing enforces
+ * uniqueness on imported recipes), and keying by name would let a later
+ * occurrence's confidence overwrite an earlier one's — losing real doubt in one
+ * direction and inventing it in the other. A stage that emitted no handoff
+ * simply carries no confidence: a missing signal, not a low one.
  */
 export function auditScopeBefore(
   qaIndex: number,
   names: string[],
   producesArtifacts: Array<boolean | undefined>,
+  confidenceByIndex: Map<number, 'high' | 'medium' | 'low'> = new Map(),
 ): AuditScopeStage[] {
   const scope: AuditScopeStage[] = [];
   for (let k = 0; k < qaIndex && k < names.length; k++) {
-    if (producesArtifacts[k]) scope.push({ name: names[k] });
+    const confidence = confidenceByIndex.get(k);
+    if (producesArtifacts[k] || confidence === 'low') {
+      scope.push({ name: names[k], producesArtifacts: !!producesArtifacts[k], confidence });
+    }
   }
   return scope;
+}
+
+/** Each stage's self-reported handoff confidence, keyed by stage index. */
+export function handoffConfidenceByStage(chain: HandoffContext[]): Map<number, 'high' | 'medium' | 'low'> {
+  const byIndex = new Map<number, 'high' | 'medium' | 'low'>();
+  for (const handoff of chain) {
+    const index = handoff.from.stageIndex;
+    if (typeof index === 'number' && handoff.confidence) byIndex.set(index, handoff.confidence);
+  }
+  return byIndex;
 }
 
 /**
@@ -417,6 +443,7 @@ export class PipelineManager {
               i,
               stages.map((s) => s.name),
               template.stages.map((s) => s.producesArtifacts),
+              handoffConfidenceByStage(handoffChain),
             );
             const qaEvidence = { sessionId, pipelineId: pipeline.id, stageName: stage.name };
 
@@ -931,6 +958,7 @@ export class PipelineManager {
               i,
               stages.map((s) => s.name),
               stepConfigs.map((s) => s?.producesArtifacts),
+              handoffConfidenceByStage(handoffChain),
             );
             const qaEvidence = { sessionId, pipelineId: pipeline.id, stageName: stage.name };
 
@@ -1293,8 +1321,10 @@ export class PipelineManager {
         passed: failure === null,
         confidence: parsed.confidence ?? null,
         detail: {
-          scope: scope.map((s) => s.name),
-          uncovered: uncoveredStages(parsed, scope),
+          scope: coverageScope(scope).map((s) => s.name),
+          doubtScope: scope.filter((s) => s.confidence === 'low').map((s) => s.name),
+          uncovered: uncoveredStages(parsed, coverageScope(scope)),
+          unaddressedDoubt: unaddressedDoubt(parsed, scope),
           source: parsed.source ?? 'unknown',
           whatIDidNotCheck: parsed.whatIDidNotCheck ?? [],
           ...(failure ? { reason: failure } : {}),

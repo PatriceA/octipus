@@ -114,3 +114,36 @@ describe('createHandoffContext', () => {
     expect(/errors or warnings/i.test(h.instructions)).toBe(true);
   });
 });
+
+// ── Stage self-reported confidence (audit gate, phase 3) ───────────────────
+// The doubt signal the audit gate reads: a stage that says `low` must be
+// addressed by the auditor even when it produced no artifacts.
+
+describe('handoff confidence', () => {
+  const block = (body: string) => `Report.\n\`\`\`handoff\n${body}\n\`\`\``;
+
+  test('parses a stated confidence, case-insensitively', () => {
+    expect(parseStructuredHandoff(block('{"confidence": "low"}'))?.confidence).toBe('low');
+    expect(parseStructuredHandoff(block('{"confidence": " High "}'))?.confidence).toBe('high');
+  });
+
+  test('leaves an unstated or unusable confidence undefined rather than guessing', () => {
+    expect(parseStructuredHandoff(block('{"decisions": []}'))?.confidence).toBeUndefined();
+    expect(parseStructuredHandoff(block('{"confidence": "pretty sure"}'))?.confidence).toBeUndefined();
+    expect(parseStructuredHandoff(block('{"confidence": 0.9}'))?.confidence).toBeUndefined();
+  });
+
+  test('carries onto the handoff context', async () => {
+    const h = await createHandoffContext({
+      from: { role: 'architecture', stageName: 'Requirements & Architecture' },
+      to: { role: 'coding', stageName: 'Implementation' },
+      originalRequest: 'build it',
+      stageOutput: block('{"completedWork": "drafted the API", "confidence": "low"}'),
+    });
+    expect(h.confidence).toBe('low');
+  });
+
+  test('asks for the field in the emit instruction, or no stage would ever send one', () => {
+    expect(HANDOFF_EMIT_INSTRUCTION).toContain('confidence');
+  });
+});

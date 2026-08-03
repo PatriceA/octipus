@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'bun:test';
-import { auditVerdictFailure, normalizeForMatch, thinVerdictFailure, uncoveredStages } from './audit-coverage';
+import { auditVerdictFailure, normalizeForMatch, thinVerdictFailure, unaddressedDoubt, uncoveredStages } from './audit-coverage';
 import type { QAValidationResult } from './types';
 
 function verdict(over: Partial<QAValidationResult> = {}): QAValidationResult {
   return { passed: true, issues: [], feedback: '', retryCount: 0, ...over };
 }
 
-const SCOPE = [{ name: 'Implementation' }, { name: 'Testing' }, { name: 'Code Review' }];
+const A = (name: string) => ({ name, producesArtifacts: true });
+const SCOPE = [A('Implementation'), A('Testing'), A('Code Review')];
 
 describe('normalizeForMatch', () => {
   it('folds case, punctuation and whitespace to one comparable form', () => {
@@ -47,7 +48,7 @@ describe('uncoveredStages', () => {
   });
 
   it('skips a stage whose name has nothing matchable in it', () => {
-    expect(uncoveredStages(verdict({ feedback: '' }), [{ name: '***' }])).toEqual([]);
+    expect(uncoveredStages(verdict({ feedback: '' }), [A('***')])).toEqual([]);
   });
 });
 
@@ -152,5 +153,59 @@ describe('auditVerdictFailure composes both rules', () => {
   it('passes a verdict that is both accountable and non-thin', () => {
     const v = verdict({ source: 'json', feedback: covered, whatIDidNotCheck: ['load testing'], confidence: 'medium' });
     expect(auditVerdictFailure(v, SCOPE)).toBeNull();
+  });
+});
+
+// ── Phase 3: doubt debt ────────────────────────────────────────────────────
+// A stage that handed off saying it was unsure must be addressed even when it
+// produced no artifacts and is therefore outside the coverage scope.
+
+describe('unaddressedDoubt', () => {
+  const SHAKY = { name: 'Requirements & Architecture', confidence: 'low' as const };
+  const SCOPE_WITH_DOUBT = [...SCOPE, SHAKY];
+
+  it('flags a low-confidence non-producer the verdict passed over', () => {
+    const v = verdict({ feedback: 'Implementation, Testing and Code Review all fine.' });
+    expect(unaddressedDoubt(v, SCOPE_WITH_DOUBT)).toEqual(['Requirements & Architecture']);
+  });
+
+  it('is satisfied once the verdict names it', () => {
+    const v = verdict({ feedback: 'Requirements & Architecture was thin, so I re-derived the API shape.' });
+    expect(unaddressedDoubt(v, SCOPE_WITH_DOUBT)).toEqual([]);
+  });
+
+  it('does NOT accept it being named only in whatIDidNotCheck', () => {
+    // jcode's sharp edge: declaring "I did not check X" is the opposite of
+    // addressing X. Locked in with a test so a future change that folds
+    // whatIDidNotCheck into the haystack fails loudly instead of silently.
+    const v = verdict({ feedback: 'All good.', whatIDidNotCheck: ['Requirements & Architecture'] });
+    expect(unaddressedDoubt(v, SCOPE_WITH_DOUBT)).toEqual(['Requirements & Architecture']);
+  });
+
+  it('ignores stages that stated medium, high, or nothing at all', () => {
+    const quiet = [{ name: 'Design', confidence: 'medium' as const }, { name: 'Spike' }];
+    expect(unaddressedDoubt(verdict({ feedback: '' }), quiet)).toEqual([]);
+  });
+
+  it('does not double-report a producer — the coverage rule already has it', () => {
+    const shakyProducer = [{ name: 'Implementation', producesArtifacts: true, confidence: 'low' as const }];
+    expect(unaddressedDoubt(verdict({ feedback: '' }), shakyProducer)).toEqual([]);
+  });
+
+  it('never gates a failing verdict', () => {
+    const v = verdict({ passed: false, feedback: '' });
+    expect(auditVerdictFailure(v, SCOPE_WITH_DOUBT)).toBeNull();
+  });
+
+  it('rejects the pass through auditVerdictFailure, naming the doubtful stage', () => {
+    const v = verdict({
+      source: 'json',
+      feedback: 'Implementation ok. Testing ok. Code Review ok.',
+      whatIDidNotCheck: ['load'],
+      confidence: 'high',
+    });
+    const failure = auditVerdictFailure(v, SCOPE_WITH_DOUBT);
+    expect(failure).toContain('LOW confidence');
+    expect(failure).toContain('Requirements & Architecture');
   });
 });

@@ -30,6 +30,21 @@ import type { QAValidationResult } from './types';
 export interface AuditScopeStage {
   /** Stage name as the pipeline knows it, e.g. `Implementation`. */
   name: string;
+  /**
+   * What the stage said about its own work in its handoff. Only `low` matters
+   * to the gate; `undefined` means it never said, which is not doubt.
+   */
+  confidence?: 'high' | 'medium' | 'low';
+  /**
+   * Whether the stage DECLARED it produces artifacts. Drives the coverage
+   * rule; a stage without it can still reach the gate through doubt debt.
+   */
+  producesArtifacts?: boolean;
+}
+
+/** The stages the coverage rule holds an auditor to: the declared producers. */
+export function coverageScope(scope: AuditScopeStage[]): AuditScopeStage[] {
+  return scope.filter((s) => s.producesArtifacts);
 }
 
 /**
@@ -66,6 +81,31 @@ export function uncoveredStages(verdict: QAValidationResult, scope: AuditScopeSt
 }
 
 /**
+ * Stages that handed off with LOW confidence and that the verdict never
+ * addresses — port of jcode's `UnaddressedLowConfidence` (`ops.rs:822`).
+ *
+ * Not redundant with `uncoveredStages`, and the difference is the whole point:
+ * coverage scope is the stages that DECLARED they produce artifacts, so a
+ * `Requirements & Architecture` or `Research` stage is deliberately outside it.
+ * A stage like that can still hand off saying it is unsure, and that doubt must
+ * not be inherited in silence just because the stage wrote no files.
+ *
+ * Carries jcode's sharp edge verbatim: `whatIDidNotCheck` is NOT part of the
+ * haystack (it never is — `uncoveredStages` reads feedback + issues only).
+ * Declaring "I did not check X" is the opposite of addressing X, so an auditor
+ * cannot discharge doubt by listing it as another thing it skipped.
+ */
+export function unaddressedDoubt(
+  verdict: QAValidationResult,
+  scope: AuditScopeStage[],
+): string[] {
+  // Producers are already on the hook via the coverage rule; reporting them
+  // twice would just make one fault read as two.
+  const doubted = scope.filter((s) => s.confidence === 'low' && !s.producesArtifacts);
+  return doubted.length > 0 ? uncoveredStages(verdict, doubted) : [];
+}
+
+/**
  * The audit-gate decision for one parsed verdict.
  *
  * Returns a human-readable failure reason when a PASSING verdict is not
@@ -92,12 +132,22 @@ export function auditVerdictFailure(
 
   const reasons: string[] = [];
 
-  const uncovered = uncoveredStages(verdict, scope);
+  const uncovered = uncoveredStages(verdict, coverageScope(scope));
   if (uncovered.length > 0) {
     reasons.push(
       `the verdict passed without addressing ${uncovered.length} audited stage(s): ` +
         `${uncovered.join(', ')}. Name each stage you checked and what you checked ` +
         `about it — a pass that does not account for the work it covers is a rubber stamp.`,
+    );
+  }
+
+  const doubted = unaddressedDoubt(verdict, scope);
+  if (doubted.length > 0) {
+    reasons.push(
+      `${doubted.length} stage(s) handed off with LOW confidence and the verdict ` +
+        `never addresses them: ${doubted.join(', ')}. Say what you did about each ` +
+        `— passing over a stage that told you it was unsure is how doubt gets ` +
+        `inherited silently.`,
     );
   }
 

@@ -109,7 +109,7 @@ Follow jcode's phrasing on confidence — *"honest 'low' is welcome: it routes
 follow-up work instead of penalizing you"* — or the model learns to always
 answer `high`.
 
-## Phase 3 — Confidence debt
+## Phase 3 — Confidence debt (shipped as "doubt debt")
 
 Port of `DagError::UnaddressedLowConfidence` (`ops.rs:822-838`). Reuses
 Phase 1's matcher, so it is nearly free once that lands.
@@ -123,6 +123,27 @@ auditor may pass. Carry over jcode's one sharp detail:
 
 So Phase 3 matches against `feedback`/`issues` only, never against
 `whatIDidNotCheck`.
+
+**What it took, versus what this plan assumed.** Octipus stages had no
+self-reported confidence at all — only `qa_validation` stages emit a verdict,
+and those are not in anyone's coverage scope. So the signal had to be created:
+`confidence` is now a field on the **handoff block** every stage emits
+(`HANDOFF_EMIT_INSTRUCTION` / `parseStructuredHandoff` / `HandoffContext`).
+
+That also settles the redundancy question this phase raises. Without the
+enumeration cap, the coverage rule already requires every *producer* to be
+named, so a doubt rule scoped to producers would be dead code. The rule earns
+its place on the **non-producers**: a `Requirements & Architecture` or
+`Research` stage is deliberately outside the coverage scope, can still hand off
+saying it is unsure, and that doubt must not be inherited in silence just
+because the stage wrote no files. `unaddressedDoubt` therefore filters
+`confidence === 'low' && !producesArtifacts` — a producer stays the coverage
+rule's business and is never reported twice.
+
+Confidence is keyed by **stage index, not stage name**: nothing stops an
+imported recipe from reusing a name, and name-keying let a later occurrence's
+`high` erase an earlier occurrence's `low` (losing real doubt) or vice versa
+(inventing it).
 
 ## Explicitly not in this plan
 

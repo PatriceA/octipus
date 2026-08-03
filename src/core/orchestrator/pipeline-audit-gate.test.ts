@@ -8,7 +8,7 @@
  */
 import { describe, expect, spyOn, test } from 'bun:test';
 import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
-import { auditScopeBefore, PipelineManager } from './pipeline-manager';
+import { auditScopeBefore, handoffConfidenceByStage, PipelineManager } from './pipeline-manager';
 import type { QAValidationResult } from './types';
 
 describe('auditScopeBefore', () => {
@@ -16,11 +16,16 @@ describe('auditScopeBefore', () => {
   const declared = [undefined, true, true, undefined];
 
   test('scopes an auditor to the earlier stages that DECLARED artifacts', () => {
-    expect(auditScopeBefore(3, names, declared)).toEqual([{ name: 'Implementation' }, { name: 'Testing' }]);
+    expect(auditScopeBefore(3, names, declared)).toEqual([
+      { name: 'Implementation', producesArtifacts: true, confidence: undefined },
+      { name: 'Testing', producesArtifacts: true, confidence: undefined },
+    ]);
   });
 
   test('never includes the auditor itself or anything after it', () => {
-    expect(auditScopeBefore(2, names, declared)).toEqual([{ name: 'Implementation' }]);
+    expect(auditScopeBefore(2, names, declared)).toEqual([
+      { name: 'Implementation', producesArtifacts: true, confidence: undefined },
+    ]);
   });
 
   test('is empty for a research-only pipeline — nothing to enumerate', () => {
@@ -32,14 +37,73 @@ describe('auditScopeBefore', () => {
   });
 
   test('tolerates a producesArtifacts array shorter than the stage list', () => {
-    expect(auditScopeBefore(3, names, [undefined, true])).toEqual([{ name: 'Implementation' }]);
+    expect(auditScopeBefore(3, names, [undefined, true])).toEqual([
+      { name: 'Implementation', producesArtifacts: true, confidence: undefined },
+    ]);
+  });
+
+  test('pulls in a low-confidence stage even though it produced no artifacts', () => {
+    const conf = new Map<number, 'high' | 'medium' | 'low'>([[0, 'low']]);
+    expect(auditScopeBefore(3, names, declared, conf)).toEqual([
+      { name: 'Research', producesArtifacts: false, confidence: 'low' },
+      { name: 'Implementation', producesArtifacts: true, confidence: undefined },
+      { name: 'Testing', producesArtifacts: true, confidence: undefined },
+    ]);
+  });
+
+  test('leaves a confident non-producer out — only doubt earns a place', () => {
+    const conf = new Map<number, 'high' | 'medium' | 'low'>([[0, 'high']]);
+    expect(auditScopeBefore(3, names, declared, conf).map((s) => s.name)).toEqual([
+      'Implementation',
+      'Testing',
+    ]);
+  });
+});
+
+describe('handoffConfidenceByStage', () => {
+  const h = (stageIndex: number | undefined, confidence?: 'high' | 'medium' | 'low') =>
+    ({ from: { role: 'r', stageName: 'Stage', stageIndex }, confidence }) as unknown as Parameters<
+      typeof handoffConfidenceByStage
+    >[0][number];
+
+  test('keys each stage to what it said about itself', () => {
+    const map = handoffConfidenceByStage([h(0, 'low'), h(1, 'high')]);
+    expect(map.get(0)).toBe('low');
+    expect(map.get(1)).toBe('high');
+  });
+
+  test('skips handoffs with no stated confidence or no stage index', () => {
+    expect(handoffConfidenceByStage([h(0), h(undefined, 'low')]).size).toBe(0);
+  });
+
+  test('keeps same-named stages apart — a recipe may reuse a name', () => {
+    // Keyed by name, the later `high` would erase the earlier `low` and the
+    // doubt would be lost; keyed by index, both survive.
+    const map = handoffConfidenceByStage([h(2, 'low'), h(4, 'high')]);
+    expect(map.get(2)).toBe('low');
+    expect(map.get(4)).toBe('high');
+  });
+
+  test('a duplicate stage name does not leak confidence between occurrences', () => {
+    const names = ['Code Review', 'Implementation', 'Code Review', 'QA'];
+    const declared = [undefined, true, undefined, undefined];
+    const conf = handoffConfidenceByStage([h(0, 'low'), h(2, 'high')]);
+    const scope = auditScopeBefore(3, names, declared, conf);
+    // Index 0 keeps its doubt; index 2 is confident and stays out.
+    expect(scope).toEqual([
+      { name: 'Code Review', producesArtifacts: false, confidence: 'low' },
+      { name: 'Implementation', producesArtifacts: true, confidence: undefined },
+    ]);
   });
 });
 
 // ── The gate as wired (parse → ledger write → downgrade) ────────────────────
 
 describe('PipelineManager.gateQaVerdict', () => {
-  const SCOPE = [{ name: 'Implementation' }, { name: 'Testing' }];
+  const SCOPE = [
+    { name: 'Implementation', producesArtifacts: true },
+    { name: 'Testing', producesArtifacts: true },
+  ];
   const evidence = { sessionId: 's', pipelineId: 'p', stageName: 'QA Validation' };
 
   const setup = () => {
@@ -206,6 +270,32 @@ describe('PipelineManager.gateQaVerdict', () => {
     );
     // An honest `low` must not itself be a failure, or models learn to lie.
     expect(result?.passed).toBe(true);
+    spy.mockRestore();
+  });
+
+  test('rejects a pass that walks past a stage which said it was unsure', async () => {
+    const { auditRows, spy, call } = setup();
+    const withDoubt = [
+      ...SCOPE,
+      { name: 'Requirements & Architecture', producesArtifacts: false, confidence: 'low' as const },
+    ];
+    const result = await call(
+      verdictBlock({
+        passed: true,
+        issues: [],
+        feedback: 'Implementation and Testing both check out.',
+        confidence: 'high',
+        // Naming it here must NOT discharge the doubt — that is the point.
+        whatIDidNotCheck: ['Requirements & Architecture'],
+      }),
+      withDoubt,
+    );
+
+    expect(result?.passed).toBe(false);
+    expect(result?.issues.join(' ')).toContain('LOW confidence');
+    expect((auditRows()[0].detail as { unaddressedDoubt: string[] }).unaddressedDoubt).toEqual([
+      'Requirements & Architecture',
+    ]);
     spy.mockRestore();
   });
 
