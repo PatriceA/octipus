@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { fmt, percentile } from './run-health';
+import { fmt, percentile, rubberStampRate } from './run-health';
 
 describe('percentile (nearest-rank)', () => {
   test('returns a value that a real run actually had', () => {
@@ -39,5 +39,18 @@ describe('fmt', () => {
     expect(fmt(60)).toBe('1m00s');
     expect(fmt(897.9)).toBe('14m58s');
     expect(fmt(6210)).toBe('103m30s');
+  });
+});
+
+describe('rubberStampRate', () => {
+  test('is the share of passing audit verdicts the gate rejected', () => {
+    expect(rubberStampRate(10, 3)).toBeCloseTo(0.3);
+    expect(rubberStampRate(4, 4)).toBe(1);
+    expect(rubberStampRate(4, 0)).toBe(0);
+  });
+
+  test('reports 0 when nothing was audited — no audits is not a clean record', () => {
+    expect(rubberStampRate(0, 0)).toBe(0);
+    expect(rubberStampRate(-1, 0)).toBe(0);
   });
 });

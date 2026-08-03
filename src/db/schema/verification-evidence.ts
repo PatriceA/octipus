@@ -18,6 +18,7 @@ export const verificationKindEnum = pgEnum('verification_kind', [
   'pre_verify', // a project-defined pre-verify command/tool (tests, build, lint)
   'adhoc', // an ad-hoc verification script result
   'side_effect', // deterministic tool-execution counters for a stage that declared it produces artifacts
+  'audit_coverage', // an auditor's pass checked against the stages it was accountable for
 ]);
 
 export const verificationEvidence = pgTable(

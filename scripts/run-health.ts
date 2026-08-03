@@ -110,6 +110,44 @@ async function loadRuns(days: number): Promise<RunRow[]> {
   return rows<RunRow>(res);
 }
 
+/**
+ * Rubber-stamp rate — the share of PASSING audit verdicts the audit-coverage
+ * gate had to reject because the auditor could not name the stages it covered
+ * (docs/plans/audit-coverage-gate.md).
+ *
+ * The second dimension this script measures, and the reason the gate is worth
+ * more than a unit test: it gives a baseline the day it lands and a target to
+ * loop against. Read it as a signal about the PROMPTS, not the gate — a rate
+ * that stays high means review stages are being asked the wrong question; a
+ * rate that sits at zero for a long window means the gate could relax to
+ * sampling.
+ *
+ * Returns 0 when nothing was audited: no audits is not a clean record.
+ */
+export function rubberStampRate(total: number, rejected: number): number {
+  if (total <= 0) return 0;
+  return rejected / total;
+}
+
+interface AuditTally {
+  total: number;
+  rejected: number;
+}
+
+/** Audit-coverage verdicts in the window. Only PASSING verdicts are gated, so
+ *  every row here is a verdict that claimed success. */
+async function loadAuditTally(days: number): Promise<AuditTally> {
+  const res = await getDb().execute(sql`
+    SELECT COUNT(*)::int                                   AS total,
+           COUNT(*) FILTER (WHERE passed = false)::int      AS rejected
+      FROM verification_evidence
+     WHERE kind = 'audit_coverage'
+       AND created_at > now() - (${days}::text || ' days')::interval
+  `);
+  const [row] = rows<AuditTally>(res);
+  return { total: row?.total ?? 0, rejected: row?.rejected ?? 0 };
+}
+
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
   const arg = (name: string): string | undefined => {
@@ -126,6 +164,16 @@ async function main(): Promise<number> {
   await initializeVault();
 
   try {
+    const audits = await loadAuditTally(days);
+    if (audits.total > 0) {
+      const rate = rubberStampRate(audits.total, audits.rejected);
+      console.log(`\nRubber-stamp rate — passing audit verdicts that named nothing they audited`);
+      console.log(`  window        ${days}d · ${audits.total} passing verdicts`);
+      console.log(`  rejected      ${audits.rejected} (${(rate * 100).toFixed(0)}%)`);
+    } else {
+      console.log(`\nRubber-stamp rate — no audit-coverage verdicts recorded in the last ${days} days.`);
+    }
+
     const runs = await loadRuns(days);
     if (runs.length === 0) {
       console.log(`No completed runs with a recorded answer in the last ${days} days.`);

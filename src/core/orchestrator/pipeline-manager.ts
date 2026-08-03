@@ -51,6 +51,25 @@ import { buildStagesFromTemplate, expandPromptTemplate, getPipelineTemplate } fr
 import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
 import type { SideEffectCounters } from '@/core/swarm/receipt';
 import { appendSources, type QAValidationResult } from './types';
+import { type AuditScopeStage, auditVerdictFailure, uncoveredStages } from './audit-coverage';
+
+/**
+ * The stages an auditor at `qaIndex` is accountable for: every earlier stage
+ * that DECLARED it produces artifacts. Declared, never inferred from the stage
+ * name — a `Research & Discovery` stage legitimately produces nothing and must
+ * not land in an auditor's scope.
+ */
+export function auditScopeBefore(
+  qaIndex: number,
+  names: string[],
+  producesArtifacts: Array<boolean | undefined>,
+): AuditScopeStage[] {
+  const scope: AuditScopeStage[] = [];
+  for (let k = 0; k < qaIndex && k < names.length; k++) {
+    if (producesArtifacts[k]) scope.push({ name: names[k] });
+  }
+  return scope;
+}
 
 /**
  * Resolve a per-stage model override (a bound model name or id) to a concrete
@@ -271,11 +290,16 @@ export class PipelineManager {
         const topicModel = await registry.getModelForTopic(stageTopic);
         const modelOverride = stageModelId || topicModel?.modelId || undefined;
 
+        // Captured before `previousOutput` is reassigned below, so an
+        // auditor-only re-run (audit-coverage gate) can re-ask this stage the
+        // exact same question instead of reconstructing it.
+        const stageContext = handoffText || previousOutput;
+
         let counters: SideEffectCounters | null = null;
         const result = await orchestrator.spawnWorker(
           stage.role,
           input,
-          handoffText || previousOutput,
+          stageContext,
           { ...context, stageName: stage.name } as any,
           {
             ...(modelOverride ? { model: modelOverride } : {}),
@@ -368,17 +392,33 @@ export class PipelineManager {
               ...paramVars,
             });
 
-            let qaResult = this.parseQAResult(previousOutput);
-            if (qaResult) void this.recordQaEvidence(sessionId, pipeline.id, stage.name, qaResult);
+            const auditScope = auditScopeBefore(
+              i,
+              stages.map((s) => s.name),
+              template.stages.map((s) => s.producesArtifacts),
+            );
+            const qaEvidence = { sessionId, pipelineId: pipeline.id, stageName: stage.name };
+
+            let qaResult = await this.gateQaVerdict(previousOutput, auditScope, qaEvidence);
             retryCounts[i] = retryCounts[i] || 0;
+            // The work the auditor is judging, carried ACROSS retries. An
+            // auditor-only re-run must re-read the newest implementation
+            // output, not the one captured before the loop — otherwise a real
+            // retry followed by a rubber stamp re-judges superseded work.
+            let auditedOutput = stageContext;
 
             while (qaResult && !qaResult.passed && retryCounts[i] < maxRetries) {
               retryCounts[i]++;
               const attempt = retryCounts[i];
+              // An audit-gate rejection faults the REPORT, not the code: re-run
+              // the auditor alone. Re-running the implementation would burn a
+              // paid run on work that was fine and can trip its own evidence
+              // gate (a re-run with nothing to do changes 0 files).
+              const auditorOnly = qaResult.auditGateFailed === true;
 
               coreLogger.info(
-                { pipelineId: pipeline.id, qaStage: stage.name, retryTarget: retryTargetStage.name, attempt, maxRetries },
-                'QA validation failed, retrying implementation stage',
+                { pipelineId: pipeline.id, qaStage: stage.name, retryTarget: retryTargetStage.name, attempt, maxRetries, auditorOnly },
+                auditorOnly ? 'Audit-coverage gate rejected the verdict, re-running the QA stage' : 'QA validation failed, retrying implementation stage',
               );
 
               orchestrator['emit']({
@@ -399,64 +439,77 @@ export class PipelineManager {
               // Re-run the target stage with QA feedback
               const retryInput = `Previous attempt had issues:\n${qaResult.feedback}\n\nPlease fix these issues:\n${qaResult.issues.join('\n')}\n\nOriginal task:\n${originalTargetInput}`;
 
-              await this.updateStage(retryTargetStage.id, { input: retryInput, status: 'running' });
+              if (!auditorOnly) {
+                await this.updateStage(retryTargetStage.id, { input: retryInput, status: 'running' });
+              }
 
               try {
-                // Per-stage model override wins over the topic binding (same as
-                // the initial run) so retries don't silently switch models.
-                const retryStageModelId = await resolveStageModelId(retryTargetTemplate.model, registry);
-                const retryTopicModel = await registry.getModelForTopic(retryTargetStage.role);
-                const retryModelOverride = retryStageModelId || retryTopicModel?.modelId || undefined;
+                // What the re-run auditor will read. On the auditor-only path
+                // the target stage is not re-run, so this stays the newest
+                // output the auditor already had — same work, re-judged.
+                let retryOutput = auditedOutput;
 
-                let retryCounters: SideEffectCounters | null = null;
-                const retryResult = await orchestrator.spawnWorker(
-                  retryTargetStage.role,
-                  retryInput,
-                  '',
-                  context,
-                  {
-                    ...(retryModelOverride ? { model: retryModelOverride } : {}),
-                    swarmParent: {
-                      id: orchestratorAgentId,
-                      rootSessionId: sessionId,
-                      topicPath: `pipeline/${pipeline.id}/${retryTargetStage.name}#retry${attempt}`,
-                      subtopic: `${retryTargetStage.name} (retry ${attempt})`,
+                if (!auditorOnly) {
+                  // Per-stage model override wins over the topic binding (same as
+                  // the initial run) so retries don't silently switch models.
+                  const retryStageModelId = await resolveStageModelId(retryTargetTemplate.model, registry);
+                  const retryTopicModel = await registry.getModelForTopic(retryTargetStage.role);
+                  const retryModelOverride = retryStageModelId || retryTopicModel?.modelId || undefined;
+
+                  let retryCounters: SideEffectCounters | null = null;
+                  const retryResult = await orchestrator.spawnWorker(
+                    retryTargetStage.role,
+                    retryInput,
+                    '',
+                    context,
+                    {
+                      ...(retryModelOverride ? { model: retryModelOverride } : {}),
+                      swarmParent: {
+                        id: orchestratorAgentId,
+                        rootSessionId: sessionId,
+                        topicPath: `pipeline/${pipeline.id}/${retryTargetStage.name}#retry${attempt}`,
+                        subtopic: `${retryTargetStage.name} (retry ${attempt})`,
+                      },
+                      onCounters: (c) => { retryCounters = c; },
                     },
-                    onCounters: (c) => { retryCounters = c; },
-                  },
-                );
+                  );
 
-                await this.assertStageEvidence({
-                  sessionId,
-                  pipelineId: pipeline.id,
-                  stageName: retryTargetStage.name,
-                  producesArtifacts: template.stages[retryTargetIndex]?.producesArtifacts,
-                  counters: retryCounters,
-                });
+                  await this.assertStageEvidence({
+                    sessionId,
+                    pipelineId: pipeline.id,
+                    stageName: retryTargetStage.name,
+                    producesArtifacts: template.stages[retryTargetIndex]?.producesArtifacts,
+                    counters: retryCounters,
+                  });
 
-                const retryOutput = String(retryResult || '');
-                await this.updateStage(retryTargetStage.id, {
-                  status: 'completed',
-                  output: retryOutput,
-                  completedAt: new Date(),
-                });
+                  retryOutput = String(retryResult || '');
+                  auditedOutput = retryOutput;
+                  await this.updateStage(retryTargetStage.id, {
+                    status: 'completed',
+                    output: retryOutput,
+                    completedAt: new Date(),
+                  });
 
-                orchestrator['emit']({
-                  type: 'pipeline_event',
-                  sessionId,
-                  data: { event: 'stage_completed', pipelineId: pipeline.id, stageId: retryTargetStage.id, name: retryTargetStage.name, note: `retry attempt ${attempt}` },
-                  timestamp: new Date(),
-                });
+                  orchestrator['emit']({
+                    type: 'pipeline_event',
+                    sessionId,
+                    data: { event: 'stage_completed', pipelineId: pipeline.id, stageId: retryTargetStage.id, name: retryTargetStage.name, note: `retry attempt ${attempt}` },
+                    timestamp: new Date(),
+                  });
+                }
 
-                // Re-run QA stage with the new output. Re-append the JSON
-                // verdict instruction (B2) — without it the retried QA falls
-                // back to prose parsing, which can return null and silently
-                // pass a still-failing stage.
+                // Re-run QA stage with the newest output. Built the same way on
+                // both paths so an auditor-only re-run cannot drift from a
+                // normal one; only the rejection notice differs. Re-append the
+                // JSON verdict instruction (B2) — without it the retried QA
+                // falls back to prose parsing, which can return null and
+                // silently pass a still-failing stage.
                 const qaRetryInput = expandPromptTemplate(stageTemplate.promptTemplate, {
-                  description,
-                  previousOutput: retryOutput,
-                  ...paramVars,
-                }) + QA_VERDICT_JSON_INSTRUCTION;
+                    description,
+                    previousOutput: retryOutput,
+                    ...paramVars,
+                  }) + QA_VERDICT_JSON_INSTRUCTION
+                  + (auditorOnly ? `\n\n---\nYOUR PREVIOUS VERDICT WAS REJECTED — ${qaResult.feedback}` : '');
 
                 await this.updateStage(stage.id, { input: qaRetryInput, status: 'running' });
 
@@ -498,12 +551,15 @@ export class PipelineManager {
                   completedAt: new Date(),
                 });
 
-                qaResult = this.parseQAResult(previousOutput);
-                if (qaResult) void this.recordQaEvidence(sessionId, pipeline.id, stage.name, qaResult);
+                qaResult = await this.gateQaVerdict(previousOutput, auditScope, qaEvidence);
               } catch (retryError) {
                 const errorMsg = (retryError as Error).message;
-                coreLogger.error({ error: retryError, pipelineId: pipeline.id, attempt }, 'QA retry stage failed');
-                await this.updateStage(retryTargetStage.id, { status: 'failed', error: errorMsg });
+                coreLogger.error({ error: retryError, pipelineId: pipeline.id, attempt, auditorOnly }, 'QA retry stage failed');
+                // Fail the stage that actually ran. On the auditor-only path
+                // the target stage was never touched this attempt, so marking
+                // it failed would corrupt the audit trail this gate exists to
+                // keep honest.
+                await this.updateStage(auditorOnly ? stage.id : retryTargetStage.id, { status: 'failed', error: errorMsg });
                 await this.updatePipeline(pipeline.id, { status: 'failed', summary: `Failed during QA retry attempt ${attempt}: ${errorMsg}` });
                 return { pipelineId: pipeline.id, result: `Pipeline failed during QA retry attempt ${attempt}: ${errorMsg}` };
               }
@@ -757,11 +813,15 @@ export class PipelineManager {
       }
 
       try {
+        // See the sibling loop: captured before `previousOutput` is reassigned
+        // so an auditor-only re-run can re-ask the same question.
+        const stageContext = handoffText || previousOutput;
+
         let counters: SideEffectCounters | null = null;
         const result = await orchestrator.spawnWorker(
           stage.role,
           input,
-          handoffText || previousOutput,
+          stageContext,
           context,
           {
             swarmParent: {
@@ -846,60 +906,81 @@ export class PipelineManager {
               ? `${retryTargetStage.systemPrompt}\n\nContext: ${description}\n\n${retryTargetIndex > 0 ? (stages[retryTargetIndex - 1] as any).output || '' : ''}`
               : description;
 
-            let qaResult = this.parseQAResult(previousOutput);
-            if (qaResult) void this.recordQaEvidence(sessionId, pipeline.id, stage.name, qaResult);
+            const auditScope = auditScopeBefore(
+              i,
+              stages.map((s) => s.name),
+              stepConfigs.map((s) => s?.producesArtifacts),
+            );
+            const qaEvidence = { sessionId, pipelineId: pipeline.id, stageName: stage.name };
+
+            let qaResult = await this.gateQaVerdict(previousOutput, auditScope, qaEvidence);
             retryCounts[i] = retryCounts[i] || 0;
+            // See the sibling loop: the newest work under audit, carried across
+            // retries so an auditor-only re-run never re-judges superseded output.
+            let auditedOutput = stageContext;
 
             while (qaResult && !qaResult.passed && retryCounts[i] < maxRetries) {
               retryCounts[i]++;
               const attempt = retryCounts[i];
+              // See the sibling loop: an audit-gate rejection re-runs the
+              // auditor alone, never the implementation stage.
+              const auditorOnly = qaResult.auditGateFailed === true;
 
               coreLogger.info(
-                { pipelineId: pipeline.id, qaStage: stage.name, retryTarget: retryTargetStage.name, attempt, maxRetries },
-                'QA validation failed, retrying implementation stage',
+                { pipelineId: pipeline.id, qaStage: stage.name, retryTarget: retryTargetStage.name, attempt, maxRetries, auditorOnly },
+                auditorOnly ? 'Audit-coverage gate rejected the verdict, re-running the QA stage' : 'QA validation failed, retrying implementation stage',
               );
 
               const retryInput = `Previous attempt had issues:\n${qaResult.feedback}\n\nPlease fix these issues:\n${qaResult.issues.join('\n')}\n\nOriginal task:\n${originalTargetInput}`;
-              await this.updateStage(retryTargetStage.id, { input: retryInput, status: 'running' });
 
-              let retryCounters: SideEffectCounters | null = null;
-              const retryResult = await orchestrator.spawnWorker(
-                retryTargetStage.role,
-                retryInput,
-                '',
-                context,
-                {
-                  swarmParent: {
-                    id: pipeline.orchestratorAgentId,
-                    rootSessionId: sessionId,
-                    topicPath: `pipeline/${pipeline.id}/${retryTargetStage.name}#retry${attempt}`,
-                    subtopic: `${retryTargetStage.name} (retry ${attempt})`,
+              let retryOutput = auditedOutput;
+
+              if (!auditorOnly) {
+                await this.updateStage(retryTargetStage.id, { input: retryInput, status: 'running' });
+
+                let retryCounters: SideEffectCounters | null = null;
+                const retryResult = await orchestrator.spawnWorker(
+                  retryTargetStage.role,
+                  retryInput,
+                  '',
+                  context,
+                  {
+                    swarmParent: {
+                      id: pipeline.orchestratorAgentId,
+                      rootSessionId: sessionId,
+                      topicPath: `pipeline/${pipeline.id}/${retryTargetStage.name}#retry${attempt}`,
+                      subtopic: `${retryTargetStage.name} (retry ${attempt})`,
+                    },
+                    onCounters: (c) => { retryCounters = c; },
                   },
-                  onCounters: (c) => { retryCounters = c; },
-                },
-              );
+                );
 
-              await this.assertStageEvidence({
-                sessionId,
-                pipelineId: pipeline.id,
-                stageName: retryTargetStage.name,
-                producesArtifacts: stepConfigs[retryTargetIndex]?.producesArtifacts,
-                counters: retryCounters,
-              });
+                await this.assertStageEvidence({
+                  sessionId,
+                  pipelineId: pipeline.id,
+                  stageName: retryTargetStage.name,
+                  producesArtifacts: stepConfigs[retryTargetIndex]?.producesArtifacts,
+                  counters: retryCounters,
+                });
 
-              const retryOutput = String(retryResult || '');
-              await this.updateStage(retryTargetStage.id, {
-                status: 'completed',
-                output: retryOutput,
-                completedAt: new Date(),
-              });
+                retryOutput = String(retryResult || '');
+                auditedOutput = retryOutput;
+                await this.updateStage(retryTargetStage.id, {
+                  status: 'completed',
+                  output: retryOutput,
+                  completedAt: new Date(),
+                });
+              }
 
-              // Re-run QA stage
-              // Re-append the JSON verdict instruction (B2) so the retried QA
-              // emits a parseable verdict instead of falling back to prose.
+              // Re-run QA stage. Built the same way on both paths so an
+              // auditor-only re-run cannot drift from a normal one; only the
+              // rejection notice differs. Re-append the JSON verdict
+              // instruction (B2) so the retried QA emits a parseable verdict
+              // instead of falling back to prose.
               const qaRetryInput = (stage.systemPrompt
-                ? `${stage.systemPrompt}\n\nContext: ${description}\n\n${retryOutput}`
-                : `${description}\n\n${retryOutput}`) + QA_VERDICT_JSON_INSTRUCTION;
+                  ? `${stage.systemPrompt}\n\nContext: ${description}\n\n${retryOutput}`
+                  : `${description}\n\n${retryOutput}`) + QA_VERDICT_JSON_INSTRUCTION
+                + (auditorOnly ? `\n\n---\nYOUR PREVIOUS VERDICT WAS REJECTED — ${qaResult.feedback}` : '');
 
               await this.updateStage(stage.id, { input: qaRetryInput, status: 'running' });
 
@@ -935,8 +1016,7 @@ export class PipelineManager {
                 completedAt: new Date(),
               });
 
-              qaResult = this.parseQAResult(previousOutput);
-              if (qaResult) void this.recordQaEvidence(sessionId, pipeline.id, stage.name, qaResult);
+              qaResult = await this.gateQaVerdict(previousOutput, auditScope, qaEvidence);
             }
 
             // Escalate if max retries exhausted
@@ -1152,6 +1232,71 @@ export class PipelineManager {
           `Reporting it complete would claim work that did not happen.`,
       );
     }
+  }
+
+  /**
+   * Parse a QA/review stage's output and hold its verdict to account.
+   *
+   * Wraps `parseQAResult` so every verdict — both run loops, both the initial
+   * pass and each retry — goes through one chokepoint. A PASSING verdict that
+   * cannot account for the stages it covered (`auditVerdictFailure`) is
+   * downgraded to a failure carrying the gate's reason, which puts it on the
+   * existing retry path instead of turning the pipeline green.
+   *
+   * `scope` is the artifact-producing stages completed before this auditor,
+   * derived from the DECLARED `producesArtifacts` flag rather than inferred
+   * from stage names — same discipline as `stageEvidenceFailure`.
+   *
+   * Returns null when the output carried no parseable verdict at all; callers
+   * already treat that as "no QA signal" and skip the retry loop.
+   */
+  private async gateQaVerdict(
+    output: string,
+    scope: AuditScopeStage[],
+    evidence: { sessionId: string; pipelineId: string; stageName: string },
+  ): Promise<QAValidationResult | null> {
+    const parsed = this.parseQAResult(output);
+    if (!parsed) return null;
+
+    void this.recordQaEvidence(evidence.sessionId, evidence.pipelineId, evidence.stageName, parsed);
+
+    const failure = auditVerdictFailure(parsed, scope);
+    if (!parsed.passed) return parsed;
+
+    try {
+      await verificationEvidenceRepository.record({
+        sessionId: evidence.sessionId,
+        pipelineId: evidence.pipelineId,
+        stage: evidence.stageName,
+        kind: 'audit_coverage',
+        passed: failure === null,
+        confidence: parsed.confidence ?? null,
+        detail: {
+          scope: scope.map((s) => s.name),
+          uncovered: uncoveredStages(parsed, scope),
+          ...(failure ? { reason: failure } : {}),
+        },
+      });
+    } catch (err) {
+      coreLogger.warn(
+        { err: (err as Error).message, pipelineId: evidence.pipelineId, stage: evidence.stageName },
+        'Failed to record audit-coverage verification evidence',
+      );
+    }
+
+    if (!failure) return parsed;
+
+    coreLogger.warn(
+      { pipelineId: evidence.pipelineId, stage: evidence.stageName, failure },
+      'Audit-coverage gate rejected a passing verdict — re-running the auditor',
+    );
+    return {
+      ...parsed,
+      passed: false,
+      auditGateFailed: true,
+      feedback: `Your PASS verdict was rejected: ${failure}\n\n${parsed.feedback}`.trim(),
+      issues: [...parsed.issues, failure],
+    };
   }
 
   private async recordQaEvidence(

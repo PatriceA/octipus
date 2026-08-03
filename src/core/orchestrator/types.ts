@@ -23,6 +23,16 @@ export interface QAValidationResult {
    * is true.
    */
   confidence?: 'high' | 'medium' | 'low';
+  /**
+   * Set when the audit-coverage gate (`auditVerdictFailure`) downgraded a
+   * PASSING verdict to a failure because the auditor could not account for the
+   * stages it covered. The distinction matters to the retry loop: the fault is
+   * in the *report*, not in the implementation, so the retry re-runs the
+   * auditor alone and must NOT re-run the implementation stage — which would
+   * both waste a paid run and risk tripping that stage's own evidence gate
+   * (a re-run with nothing to do can legitimately change 0 files).
+   */
+  auditGateFailed?: boolean;
 }
 
 export interface RoleConfig {
