@@ -40,7 +40,21 @@ export type Scorer =
    * counters the ToolExecutor observed, so "claims success but wrote no files"
    * is caught without parsing prose.
    */
-  | { kind: 'side_effect'; minFilesChanged?: number; minCommandsRun?: number; maxToolErrors?: number };
+  | {
+      kind: 'side_effect';
+      minFilesChanged?: number;
+      minCommandsRun?: number;
+      maxToolErrors?: number;
+      /**
+       * Fail a child that attempted tools and had EVERY attempt error out.
+       * Not the same as `maxToolErrors`: a child with 20 successes and 5
+       * errors worked fine, while one with 0 successes and 1 error had no
+       * working tools at all and answered from memory. Applied to every
+       * spawn (see `deriveToolOutageScorer`), because an answer produced
+       * during a total tool outage is unverified no matter how it reads.
+       */
+      requireWorkingTools?: boolean;
+    };
 
 export interface ScorerFailure {
   /** Human-readable scorer label, e.g. `regex(/PASS/)` or `file_exists`. */
@@ -56,6 +70,12 @@ export interface ScorerOutcome {
   /** Empty when `passed` is true. */
   failures: ScorerFailure[];
 }
+
+/**
+ * Delegation/meta tools. They move work rather than produce evidence, so they
+ * do not count as "a tool that worked" for the outage gate.
+ */
+const META_TOOLS = new Set(['spawn_child', 'collect_children', 'escalate_to_different_expert']);
 
 /** Cap on the text a `contains` scorer scans — bounds pathological input. */
 const MAX_SCAN_CHARS = 100_000;
@@ -250,6 +270,26 @@ async function evaluate(
       if (scorer.maxToolErrors !== undefined && s.toolErrors > scorer.maxToolErrors) {
         misses.push(`toolErrors=${s.toolErrors} (expected <= ${scorer.maxToolErrors})`);
       }
+      // Total tool outage: it reached for tools and not one of them worked.
+      // `toolCalls` counts only SUCCESSFUL calls (see SideEffectCounters), so
+      // zero successes beside a non-zero error count means every attempt
+      // failed and whatever the child returned came from its own memory.
+      //
+      // Delegation does not count as a working tool. In the run that motivated
+      // this gate the child's 5 web searches all failed while `spawn_child`
+      // succeeded, which left `toolCalls = 1` and hid a total outage behind a
+      // meta-call. Handing the problem to someone else is not evidence.
+      if (scorer.requireWorkingTools) {
+        const substantive = Object.entries(s.byName)
+          .filter(([name]) => !META_TOOLS.has(name))
+          .reduce((a, [, n]) => a + n, 0);
+        if (s.toolErrors > 0 && substantive === 0) {
+          misses.push(
+            `every tool call failed (${s.toolErrors} error(s), 0 succeeded) — ` +
+              `the deliverable cannot be based on anything the tools returned`,
+          );
+        }
+      }
       return misses.length === 0
         ? null
         : {
@@ -317,6 +357,28 @@ export function deriveSchemaScorer(schema: unknown): Scorer | null {
  */
 export function deriveCodeDiffScorer(shape: string | undefined): Scorer | null {
   return shape === 'code-diff' ? { kind: 'side_effect', minFilesChanged: 1 } : null;
+}
+
+/**
+ * The one gate that applies to EVERY spawn: a child whose every tool call
+ * failed did not gather anything, so its answer is unverified regardless of
+ * how confident the prose sounds.
+ *
+ * This exists because of a measured failure, not a hypothetical (see
+ * docs/plans/quality-loop-status.md): a research child made 5 web searches,
+ * all 5 failed because every search engine was blocked, it died on a provider
+ * error, the spawner retried, and the retry answered from model memory. The
+ * run was reported `ok` and the user got a polished, entirely unsourced
+ * itinerary with no indication that fact-checking had failed completely.
+ *
+ * Unconditional — unlike `deriveCodeDiffScorer`, which needs an explicit
+ * declaration — because it cannot produce a false failure: a child that never
+ * touched a tool has `toolErrors === 0` and is untouched, and a child with any
+ * successful call is untouched. It only fires when tools were tried and none
+ * worked, which is never a healthy run.
+ */
+export function deriveToolOutageScorer(): Scorer {
+  return { kind: 'side_effect', requireWorkingTools: true };
 }
 
 /**
@@ -393,10 +455,18 @@ export function parseScorers(raw: unknown): { scorers: Scorer[] } | { error: str
           }
           bounds[key] = v;
         }
-        if (Object.keys(bounds).length === 0) {
-          return { error: `scorers[${i}] (side_effect) needs at least one of minFilesChanged, minCommandsRun, maxToolErrors` };
+        const requireWorkingTools = e.requireWorkingTools;
+        if (requireWorkingTools !== undefined && typeof requireWorkingTools !== 'boolean') {
+          return { error: `scorers[${i}].requireWorkingTools (side_effect) must be a boolean` };
         }
-        scorers.push({ kind: 'side_effect', ...bounds });
+        if (Object.keys(bounds).length === 0 && !requireWorkingTools) {
+          return { error: `scorers[${i}] (side_effect) needs at least one of minFilesChanged, minCommandsRun, maxToolErrors, requireWorkingTools` };
+        }
+        scorers.push({
+          kind: 'side_effect',
+          ...bounds,
+          ...(requireWorkingTools ? { requireWorkingTools } : {}),
+        });
         break;
       }
       default:

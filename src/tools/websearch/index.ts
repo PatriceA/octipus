@@ -20,6 +20,24 @@ export class WebSearchTool extends BaseTool {
     return process.env.SEARXNG_URL || 'http://localhost:8888';
   }
 
+  /**
+   * Optional comma-separated engine allowlist, e.g. `SEARXNG_ENGINES=google`.
+   * Unset (the default) leaves engine selection to the SearXNG instance.
+   *
+   * This exists because engine health varies wildly and fails in two very
+   * different ways. Measured 2026-08-03 on a stock instance: duckduckgo,
+   * brave and startpage were all CAPTCHA'd or rate-limited (they fail loudly,
+   * which the caller can see), while bing returned ten confident, well-formed
+   * results that had nothing to do with the query — `zzzqqq Berchtesgaden`
+   * came back with furniture shops. A silently-wrong engine is far more
+   * dangerous to an agent than a dead one, and no amount of code here can
+   * detect it, so the operator needs a way to pin the engines they trust.
+   */
+  private get searxngEngines(): string | null {
+    const raw = (process.env.SEARXNG_ENGINES || '').trim();
+    return raw.length > 0 ? raw : null;
+  }
+
   getManifest(): ToolManifest {
     return {
       id: this.id,
@@ -106,6 +124,8 @@ export class WebSearchTool extends BaseTool {
       categories: 'general',
       format: 'json',
     });
+    const engines = this.searxngEngines;
+    if (engines) params.set('engines', engines);
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);

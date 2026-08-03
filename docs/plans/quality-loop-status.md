@@ -149,12 +149,87 @@ That last step is the defect. It is the same class as the failure this whole
 document exists to stop — a green result over work that did not happen — only
 here the cover is better, because the answer is articulate and self-flags
 uncertainty in prose while the machinery stays silent about a total tool
-outage. A run that loses every one of its information-gathering tools should
-not be able to return `ok`.
+outage.
 
-Two follow-ups fall out of this, neither done here: web search has no working
-engine on this install (an infra/credentials problem, not a code bug), and the
-`toolConfig` provider error needs chasing in the provider layer.
+### Fixed: a run that loses every tool can no longer return `ok`
+
+Two changes, both in the swarm spawner, both keyed off the deterministic
+receipt rather than anything the model said:
+
+1. **A tool-outage gate on every spawn** (`deriveToolOutageScorer`). If a child
+   attempted tools and *none* succeeded, the result is `contract_failed`, not
+   `ok`. It reuses the existing `side_effect` scorer, so it inherits the rule
+   that a CLI worker exposing no counters is never gated on evidence it cannot
+   emit.
+
+   **Delegation does not count as a working tool.** This is the part that
+   matters: in the measured run the child's 5 web searches all failed while
+   `spawn_child` succeeded, leaving `toolCalls = 1` — a naive "did any tool
+   work?" check passes that, and the outage stays hidden behind a meta-call.
+   The gate counts only substantive tools, excluding `spawn_child` /
+   `collect_children` / `escalate_to_different_expert`.
+
+   It cannot produce a false failure: a child that never touched a tool has
+   zero errors and is untouched, and any single successful substantive call is
+   enough to pass.
+
+2. **A retry can no longer erase the attempt it replaced.** `runChildWithRetry`
+   discarded the failed result once a later attempt succeeded, so the parent
+   saw a clean `ok`. The returned result now carries
+   `Recovered after N failed attempt(s): …` in its notes, including the failed
+   tool-call count. The status is left alone — the recovered answer may be
+   perfectly good — but nobody has to infer a clean run any more.
+
+Verified against the original failure, not just unit tests: re-running the
+trip-planning scenario with search still broken now yields
+
+    contract_failed · 3 tool calls · every tool call failed (3 error(s),
+    0 succeeded) — the deliverable cannot be based on anything the tools
+    returned
+
+where the same run previously returned `ok` with a polished itinerary.
+
+### The search outage itself: mostly a stale container, partly bot defense
+
+Measured rather than assumed. The egress IP is a clean residential German
+Vodafone address, so this is not datacenter-IP reputation, and the URLs and
+parsers are not "wrong pages":
+
+| engine | running instance (2026.3.1, 5 months old) | current image |
+|---|---|---|
+| google | 0 results | **20, all relevant** |
+| bing | 10 **irrelevant** results | 10 **irrelevant** results |
+| duckduckgo | CAPTCHA | CAPTCHA |
+| brave | rate-limited | rate-limited |
+| startpage | CAPTCHA | CAPTCHA |
+| mojeek / qwant | access denied | 0 |
+
+Two separate things are going on:
+
+- **DuckDuckGo, Brave and Startpage are genuine bot defense.** They block
+  SearXNG-style scraping regardless of IP, and updating changes nothing. Those
+  fail *loudly*, which is the harmless kind.
+- **The installed SearXNG is five months old and its Google parser had rotted.**
+  Querying the running instance exactly as the tool does (`categories=general`,
+  no engine pin) returns **0 results**; the same query against a current image
+  returns **38 relevant results**. So the outage is fixed by
+  `docker compose pull searxng && docker compose up -d searxng` in
+  `~/docker-services/` — no code change required. (That stack is outside this
+  repo, so it was not touched here.)
+- **Bing is the dangerous one and must stay off.** On *both* image versions it
+  returns ten confident, well-formed, irrelevant results for any input —
+  `zzzqqq Berchtesgaden` comes back with furniture shops, and it never returns
+  zero. A silently-wrong engine is far worse for an agent than a dead one:
+  the loud failures above are what let the outage gate above work at all.
+  Anyone "fixing" search by enabling Bing would convert a caught failure into
+  an uncaught one.
+
+A `SEARXNG_ENGINES` env allowlist (e.g. `SEARXNG_ENGINES=google`) was added so
+an operator can pin the engines they trust without editing SearXNG's own
+config. Unset by default — current behaviour is unchanged.
+
+Still open: the `toolConfig` provider error needs chasing in the provider
+layer.
 
 One finding was **a bug in the harness, not the product**, recorded because it
 is an easy trap: the first attempt granted the child only
@@ -206,13 +281,13 @@ non-coding request it produced work a person could use. On coding tasks it
 recovers from a dead end by trying another route — the plan-less arm did
 exactly that.
 
-But the trip-planning run is the sharpest answer available, and it is not
-reassuring: octipus lost every one of its research tools, hit a provider
-error, silently retried without them, and returned a confident answer marked
-`ok`. The result *reads* like competence. Nothing in the output or the status
-distinguishes it from an answer that was actually checked. "Half-done,
+The trip-planning run gave the sharpest answer, and it was not reassuring:
+octipus lost every one of its research tools, hit a provider error, silently
+retried without them, and returned a confident answer marked `ok`. "Half-done,
 low-quality stuff" was not the failure — **well-written, unverified,
-confidently delivered** was.
+confidently delivered** was. That specific hole is now closed: the same run
+returns `contract_failed` and names the outage. The underlying search outage
+turned out to be a five-month-old container, not an unfixable wall.
 
 Alongside that: the evidence gate has still never fired on a real run, cost per
 run is 3× the target, delivery lag looks ~14× the target on the samples that
@@ -220,7 +295,11 @@ exist, and the cheap-executor path gave up where the expensive one persisted.
 Two of four quality axes still have no data, so there is a scoreboard now but
 not yet a loop.
 
-**Next, in order:** (1) make a run that loses its tools unable to report `ok`
-— that is the defect with a user-visible blast radius; (2) get `deliveredPct`
-and `lagP95Seconds` above their sample floors, not because the numbers will be
-good but because until they exist "are we done?" still has no answer.
+**Next, in order:** (1) update the SearXNG container so research tasks have
+working search at all; (2) get `deliveredPct` and `lagP95Seconds` above their
+sample floors. Note that the new outage gate does *not* help `deliveredPct`:
+`verification_evidence` is written only by `pipeline-manager.ts`, so swarm
+scorer gates — including this one — never reach that table. Either pipelines
+have to run, or the swarm gates need to record evidence too; the latter is
+probably the smaller change and would make one table mean one thing.
+(3) Chase the `toolConfig` provider error.

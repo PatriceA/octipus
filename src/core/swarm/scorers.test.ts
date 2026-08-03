@@ -2,7 +2,14 @@ import { describe, expect, it } from 'bun:test';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type Scorer, deriveCodeDiffScorer, deriveSchemaScorer, parseScorers, runScorers } from './scorers';
+import {
+  type Scorer,
+  deriveCodeDiffScorer,
+  deriveSchemaScorer,
+  deriveToolOutageScorer,
+  parseScorers,
+  runScorers,
+} from './scorers';
 
 const ctx = { userId: 'system' as const };
 
@@ -216,14 +223,14 @@ describe('parseScorers — validation', () => {
 });
 
 describe('side_effect scorer (receipt-vs-claim)', () => {
-  function receipt(over: Partial<{ filesChanged: number; commandsRun: number; toolErrors: number; unavailable: string[] }> = {}) {
+  function receipt(over: Partial<{ filesChanged: number; commandsRun: number; toolErrors: number; toolCalls: number; unavailable: string[] }> = {}) {
     return {
       schemaVersion: 1 as const,
       nodeId: 'n1',
       kind: 'agent' as const,
       status: 'ok' as const,
       sideEffects: {
-        toolCalls: 5,
+        toolCalls: over.toolCalls ?? 5,
         filesChanged: over.filesChanged ?? 0,
         commandsRun: over.commandsRun ?? 0,
         approvalsRequired: 0,
@@ -310,5 +317,115 @@ describe('deriveCodeDiffScorer', () => {
     for (const shape of ['summary', 'markdown', 'list', 'json', undefined]) {
       expect(deriveCodeDiffScorer(shape)).toBeNull();
     }
+  });
+});
+
+describe('tool-outage gate (requireWorkingTools)', () => {
+  // Regression for a measured failure: a research child made 5 web searches,
+  // every one failed because every search engine was blocked, and after a
+  // retry the run returned a confident, entirely unsourced answer as `ok`.
+  //
+  // `byName` is the source of truth (the real counters derive `toolCalls`
+  // from it), so the fixture takes byName and derives the total the same way.
+  function receipt(over: { byName?: Record<string, number>; toolErrors?: number; unavailable?: string[] } = {}) {
+    const byName = over.byName ?? {};
+    return {
+      schemaVersion: 1 as const,
+      nodeId: 'n1',
+      kind: 'agent' as const,
+      status: 'ok' as const,
+      sideEffects: {
+        toolCalls: Object.values(byName).reduce((a, b) => a + b, 0),
+        filesChanged: 0,
+        commandsRun: 0,
+        approvalsRequired: 0,
+        approvalsDenied: 0,
+        autoApproved: 0,
+        permissionDenials: 0,
+        toolErrors: over.toolErrors ?? 0,
+        byName,
+      },
+      tokens: { used: 1, cap: 100 },
+      durationMs: 1,
+      unavailable: over.unavailable ?? [],
+      notCertified: ['correctness', 'security'],
+    };
+  }
+
+  it('fails a polished answer produced while every tool call was failing', async () => {
+    const out = await runScorers(
+      [deriveToolOutageScorer()],
+      {
+        output: 'Day 1: drive to Berchtesgaden, eat at Gasthof Malerwinkel...',
+        receipt: receipt({ toolErrors: 5 }),
+      },
+      ctx,
+    );
+    expect(out.passed).toBe(false);
+    expect(out.failures[0].reason).toContain('every tool call failed');
+  });
+
+  it('delegation does not count as a working tool — the exact shape of the measured failure', () => {
+    // The real node: 5 web searches failed, spawn_child succeeded. Counting
+    // that meta-call as "a tool that worked" is what let the outage through.
+    return runScorers(
+      [deriveToolOutageScorer()],
+      { output: 'Here is your itinerary...', receipt: receipt({ byName: { spawn_child: 1 }, toolErrors: 5 }) },
+      ctx,
+    ).then((out) => {
+      expect(out.passed).toBe(false);
+      expect(out.failures[0].reason).toContain('every tool call failed');
+    });
+  });
+
+  it('a real tool alongside a delegation still counts as working', async () => {
+    const out = await runScorers(
+      [deriveToolOutageScorer()],
+      { output: 'ok', receipt: receipt({ byName: { spawn_child: 1, websearch__search: 1 }, toolErrors: 3 }) },
+      ctx,
+    );
+    expect(out.passed).toBe(true);
+  });
+
+  it('leaves a child that never used a tool alone — reasoning is not an outage', async () => {
+    const out = await runScorers(
+      [deriveToolOutageScorer()],
+      { output: 'the answer is 4', receipt: receipt({}) },
+      ctx,
+    );
+    expect(out.passed).toBe(true);
+  });
+
+  it('leaves a mostly-failing-but-working child alone — one success is evidence', async () => {
+    // 1 successful search out of 4 is degraded, not an outage. `maxToolErrors`
+    // is the knob for "too many errors"; this gate is only about zero working.
+    const out = await runScorers(
+      [deriveToolOutageScorer()],
+      { output: 'found it', receipt: receipt({ byName: { websearch__search: 1 }, toolErrors: 3 }) },
+      ctx,
+    );
+    expect(out.passed).toBe(true);
+  });
+
+  it('does not gate a CLI worker that cannot emit counters', async () => {
+    const out = await runScorers(
+      [deriveToolOutageScorer()],
+      {
+        output: 'done',
+        receipt: receipt({
+          toolErrors: 2,
+          unavailable: ['sideEffects: worker did not expose tool-execution counters'],
+        }),
+      },
+      ctx,
+    );
+    expect(out.passed).toBe(true);
+  });
+
+  it('is accepted by parseScorers on its own, without any numeric bound', () => {
+    expect(parseScorers([{ kind: 'side_effect', requireWorkingTools: true }])).toEqual({
+      scorers: [{ kind: 'side_effect', requireWorkingTools: true }],
+    });
+    expect(parseScorers([{ kind: 'side_effect', requireWorkingTools: 'yes' }])).toHaveProperty('error');
   });
 });

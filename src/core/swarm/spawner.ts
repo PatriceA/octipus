@@ -40,7 +40,13 @@ import {
   checkSameRole,
   denialResult as denialResultFn,
 } from './spawn-validator';
-import { type Scorer, deriveCodeDiffScorer, deriveSchemaScorer, runScorers } from './scorers';
+import {
+  type Scorer,
+  deriveCodeDiffScorer,
+  deriveSchemaScorer,
+  deriveToolOutageScorer,
+  runScorers,
+} from './scorers';
 import { applyRoleFit, buildDelegationGuidance } from './swarm-tool';
 import { recordChildScope, buildSiblingScopeBrief } from './session-scope';
 import {
@@ -610,6 +616,19 @@ export class SwarmSpawner {
     let attemptNewNode = 0;
     const MAX_NEW_NODE_RETRIES = 1;
     let lastResult: ChildResult | null = null;
+    // Every attempt that failed before the one we ultimately return. Without
+    // this the retry's clean `ok` is all the parent ever sees, and a run where
+    // the first attempt lost every tool it had is indistinguishable from one
+    // that worked first time — measured, see docs/plans/quality-loop-status.md.
+    const priorFailures: string[] = [];
+    const noteFailure = (r: ChildResult): void => {
+      const errs = (r.receipt as { sideEffects?: { toolErrors?: number } } | undefined)?.sideEffects
+        ?.toolErrors;
+      priorFailures.push(
+        `${r.status}${errs ? ` after ${errs} failed tool call(s)` : ''}` +
+          `${r.notes ? `: ${r.notes.slice(0, 200)}` : ''}`,
+      );
+    };
 
     while (attemptNewNode <= MAX_NEW_NODE_RETRIES) {
       const result = await this.singleSpawnAndRun(opts, attemptNewNode > 0);
@@ -617,6 +636,7 @@ export class SwarmSpawner {
       if (result.status !== 'tool_error' || attemptNewNode >= MAX_NEW_NODE_RETRIES) {
         break;
       }
+      noteFailure(result);
       // Crash retry on new node.
       coreLogger.warn(
         { parentNodeId: opts.parent.id, status: result.status, attempt: attemptNewNode + 1 },
@@ -637,6 +657,7 @@ export class SwarmSpawner {
             { parentNodeId: opts.parent.id, failedModel: opts.childModel, backupModel: backup.modelId, topic: opts.childLane },
             'Swarm child failed on primary model — retrying once on topic backup model',
           );
+          noteFailure(lastResult);
           lastResult = await this.singleSpawnAndRun(
             { ...opts, childModel: backup.modelId, reason: 'retry' },
             true,
@@ -648,6 +669,18 @@ export class SwarmSpawner {
           'Topic backup-model retry failed — surfacing original child result',
         );
       }
+    }
+    // Carry the discarded attempts into the result the parent actually reads.
+    // The answer may well be fine, so this does not change the status — but a
+    // parent synthesizing against it, and a human reading the node row, must be
+    // able to see that an earlier attempt failed rather than infer a clean run.
+    if (lastResult && priorFailures.length > 0) {
+      const trail = `Recovered after ${priorFailures.length} failed attempt(s): ${priorFailures.join(' | ')}`;
+      lastResult.notes = lastResult.notes ? `${lastResult.notes}\n${trail}` : trail;
+      coreLogger.warn(
+        { parentNodeId: opts.parent.id, attempts: priorFailures.length, status: lastResult.status },
+        'Swarm child succeeded only after earlier failed attempts — annotating result',
+      );
     }
     return lastResult!;
   }
@@ -976,6 +1009,9 @@ export class SwarmSpawner {
     const effectiveScorers: Scorer[] = [
       ...(schemaScorer ? [schemaScorer] : []),
       ...(codeDiffScorer ? [codeDiffScorer] : []),
+      // Always on: a child whose every tool call failed answered from memory,
+      // and `ok` would hide a total tool outage behind confident prose.
+      deriveToolOutageScorer(),
       ...(opts.scorers ?? []),
     ];
     if (status === 'ok' && effectiveScorers.length > 0) {
