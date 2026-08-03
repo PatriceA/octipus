@@ -33,6 +33,21 @@ export interface QAValidationResult {
    * (a re-run with nothing to do can legitimately change 0 files).
    */
   auditGateFailed?: boolean;
+  /**
+   * What the auditor states it did NOT check. jcode's `validate_artifact`
+   * calls this the cheat code: forcing an agent to list what it did not
+   * explore is what surfaces the unexplored crannies. An explicit "nothing —
+   * the diff is three lines" is a legal answer; silence is not.
+   */
+  whatIDidNotCheck?: string[];
+  /**
+   * Which parser tier produced this verdict. `json` is the structured block
+   * `QA_VERDICT_JSON_INSTRUCTION` asks for; `inline` recovered fields from
+   * prose; `prose` matched a PASS/FAIL headline only. The thin-verdict rules
+   * apply to `json` alone — a tier that was never asked for the fields must
+   * not be failed for lacking them.
+   */
+  source?: 'json' | 'inline' | 'prose';
 }
 
 export interface RoleConfig {

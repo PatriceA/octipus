@@ -83,6 +83,7 @@ describe('PipelineManager.gateQaVerdict', () => {
         issues: [],
         feedback: 'Implementation added calc/percent.ts; Testing covers the rounding path.',
         confidence: 'high',
+        whatIDidNotCheck: ['performance under load'],
       }),
     );
 
@@ -104,7 +105,106 @@ describe('PipelineManager.gateQaVerdict', () => {
 
   test('a research-only pipeline (empty scope) still passes', async () => {
     const { spy, call } = setup();
-    const result = await call(verdictBlock({ passed: true, issues: [], feedback: 'Nothing to build.' }), []);
+    const result = await call(
+      verdictBlock({
+        passed: true,
+        issues: [],
+        feedback: 'Nothing to build.',
+        confidence: 'high',
+        whatIDidNotCheck: ['nothing — no artifacts were produced'],
+      }),
+      [],
+    );
+    expect(result?.passed).toBe(true);
+    spy.mockRestore();
+  });
+
+  test('rejects an accountable pass that never states what it did not check', async () => {
+    const { auditRows, spy, call } = setup();
+    const result = await call(
+      verdictBlock({
+        passed: true,
+        issues: [],
+        feedback: 'Implementation and Testing are both fine.',
+        confidence: 'high',
+      }),
+    );
+
+    expect(result?.passed).toBe(false);
+    expect(result?.auditGateFailed).toBe(true);
+    expect(result?.issues.join(' ')).toContain('did NOT check');
+    expect(auditRows()[0]).toMatchObject({ passed: false });
+    spy.mockRestore();
+  });
+
+  test('rejects an accountable pass that states no confidence', async () => {
+    const { spy, call } = setup();
+    const result = await call(
+      verdictBlock({
+        passed: true,
+        issues: [],
+        feedback: 'Implementation and Testing are both fine.',
+        whatIDidNotCheck: ['the CLI path'],
+      }),
+    );
+    expect(result?.passed).toBe(false);
+    expect(result?.issues.join(' ')).toContain('confidence');
+    spy.mockRestore();
+  });
+
+  test('a prose-tier pass is still coverage-gated but exempt from the thin rules', async () => {
+    const { auditRows, spy, call } = setup();
+    // No JSON block at all — tier 3. It names its scope, so coverage is met;
+    // it cannot carry whatIDidNotCheck because it was never asked for one.
+    const covered = await call('Implementation and Testing both look right.\n\nOverall status: PASS');
+    expect(covered?.passed).toBe(true);
+    expect((auditRows()[0].detail as { source: string }).source).toBe('prose');
+
+    const stamped = await call('Everything looks great.\n\nOverall status: PASS');
+    expect(stamped?.passed).toBe(false);
+    expect(stamped?.auditGateFailed).toBe(true);
+    spy.mockRestore();
+  });
+
+  test('accepts a capitalised confidence — casing must not fail an accountable audit', async () => {
+    const { spy, call } = setup();
+    const result = await call(
+      verdictBlock({
+        passed: true,
+        issues: [],
+        feedback: 'Implementation and Testing are both accounted for.',
+        confidence: 'High',
+        whatIDidNotCheck: ['the migration path'],
+      }),
+    );
+    expect(result?.passed).toBe(true);
+    spy.mockRestore();
+  });
+
+  test('an inline-tier pass falls back to the report when no feedback field parses', async () => {
+    const { spy, call } = setup();
+    // Malformed JSON (trailing comma) → tier 2. No usable "feedback" field,
+    // so the report itself must become the haystack, else an honest audit
+    // that names its scope gets rejected for naming nothing.
+    const result = await call(
+      'Implementation and Testing were both reviewed.\n```json\n{"passed": true, "issues": [],}\n```',
+    );
+    expect(result?.passed).toBe(true);
+    spy.mockRestore();
+  });
+
+  test('accepts a bare-string whatIDidNotCheck — that is answering the question', async () => {
+    const { spy, call } = setup();
+    const result = await call(
+      verdictBlock({
+        passed: true,
+        issues: [],
+        feedback: 'Implementation and Testing are accounted for.',
+        confidence: 'low',
+        whatIDidNotCheck: 'nothing, the diff is three lines',
+      }),
+    );
+    // An honest `low` must not itself be a failure, or models learn to lie.
     expect(result?.passed).toBe(true);
     spy.mockRestore();
   });
@@ -127,7 +227,13 @@ describe('PipelineManager.gateQaVerdict', () => {
     const stamped = await call(verdictBlock({ passed: true, issues: [], feedback: 'Looks fine.' }));
     expect(stamped?.passed).toBe(false);
     const accounted = await call(
-      verdictBlock({ passed: true, issues: [], feedback: 'Implementation and Testing both check out.' }),
+      verdictBlock({
+        passed: true,
+        issues: [],
+        feedback: 'Implementation and Testing both check out.',
+        confidence: 'medium',
+        whatIDidNotCheck: ['integration with the live DB'],
+      }),
     );
     expect(accounted?.passed).toBe(true);
     spy.mockRestore();

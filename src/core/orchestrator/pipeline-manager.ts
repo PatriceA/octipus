@@ -12,9 +12,29 @@ import { getModelRegistry, type ModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
 import { createHandoffContext, formatHandoffChain, HANDOFF_EMIT_INSTRUCTION, stripHandoffBlock, type HandoffContext } from './handoff';
 
-/** Coerce an arbitrary value to the enumerated QA confidence (or undefined). */
+/**
+ * Coerce an arbitrary value to the enumerated QA confidence (or undefined).
+ *
+ * Case- and whitespace-insensitive: a model writing `"High"` has stated its
+ * confidence, and since the thin-verdict rule now REJECTS a pass with no
+ * usable confidence, exact-literal matching would fail an accountable audit
+ * over capitalisation.
+ */
 function normalizeConfidence(v: unknown): QAValidationResult['confidence'] {
-  return v === 'high' || v === 'medium' || v === 'low' ? v : undefined;
+  if (typeof v !== 'string') return undefined;
+  const s = v.trim().toLowerCase();
+  return s === 'high' || s === 'medium' || s === 'low' ? s : undefined;
+}
+/**
+ * Coerce a JSON field to a list of non-empty strings. A model that answers
+ * `"nothing"` instead of `["nothing"]` is answering the question, so a bare
+ * string is accepted; anything else yields an empty list, which the
+ * thin-verdict rule treats as "did not state it".
+ */
+function normalizeStringList(v: unknown): string[] {
+  if (typeof v === 'string') return v.trim() ? [v.trim()] : [];
+  if (!Array.isArray(v)) return [];
+  return v.map((x) => String(x).trim()).filter(Boolean);
 }
 /** Pull a stated `confidence: high|medium|low` (JSON or prose) from raw text. */
 function parseConfidence(text: string): QAValidationResult['confidence'] {
@@ -40,9 +60,10 @@ export const QA_VERDICT_JSON_INSTRUCTION = `
 ---
 QA VERDICT (required) — after your report above, append your verdict as a fenced code block tagged \`json\` (open the fence with three backticks then the word json) containing ONLY an object with these fields and YOUR real values:
 - passed (boolean): true only if the implementation is acceptable; false if ANY critical or major issue remains
-- confidence ("high" | "medium" | "low"): your confidence in this verdict
+- confidence ("high" | "medium" | "low"): your confidence in this verdict. An honest "low" is welcome — it routes follow-up work rather than counting against you
 - issues (string[]): each blocking issue as one short string ([] when none)
-- feedback (string): a one-paragraph, actionable summary for the retry
+- feedback (string): a one-paragraph, actionable summary for the retry. To pass, this must NAME each stage you audited and what you checked about it — a pass that does not account for the work it covers is rejected and re-run
+- whatIDidNotCheck (string[]): what you did NOT verify, one short string each. Never empty on a pass: write ["nothing — the change is trivial"] if you truly covered everything
 
 Emit the block exactly once — do not copy these field descriptions.`;
 import { paramTemplateVars, resolveRecipeParams } from './recipe-params';
@@ -1274,6 +1295,8 @@ export class PipelineManager {
         detail: {
           scope: scope.map((s) => s.name),
           uncovered: uncoveredStages(parsed, scope),
+          source: parsed.source ?? 'unknown',
+          whatIDidNotCheck: parsed.whatIDidNotCheck ?? [],
           ...(failure ? { reason: failure } : {}),
         },
       });
@@ -1284,7 +1307,18 @@ export class PipelineManager {
       );
     }
 
-    if (!failure) return parsed;
+    if (!failure) {
+      // No silent caps: a pass that never went through the structured tier was
+      // exempt from the thin-verdict rules. Say so, rather than let a degraded
+      // parse read as a fully-gated pass.
+      if (parsed.source !== 'json') {
+        coreLogger.warn(
+          { pipelineId: evidence.pipelineId, stage: evidence.stageName, source: parsed.source ?? 'unknown' },
+          'Audit gate passed a verdict that never reached the structured tier — thin-verdict rules did not apply',
+        );
+      }
+      return parsed;
+    }
 
     coreLogger.warn(
       { pipelineId: evidence.pipelineId, stage: evidence.stageName, failure },
@@ -1340,6 +1374,8 @@ export class PipelineManager {
             feedback: typeof parsed.feedback === 'string' ? parsed.feedback : '',
             retryCount: typeof parsed.retryCount === 'number' ? parsed.retryCount : 0,
             confidence: normalizeConfidence(parsed.confidence),
+            whatIDidNotCheck: normalizeStringList(parsed.whatIDidNotCheck),
+            source: 'json',
           };
         }
       } catch { /* try the next candidate */ }
@@ -1356,9 +1392,14 @@ export class PipelineManager {
         issues: issuesMatch
           ? issuesMatch[1].split(',').map(s => s.trim().replace(/^"|"$/g, '')).filter(Boolean)
           : [],
-        feedback: feedbackMatch ? feedbackMatch[1] : '',
+        // Same reason as the prose tier: an empty `feedback` gives the
+        // audit-coverage gate nothing to match, so a verdict whose feedback
+        // field did not parse falls back to the report itself rather than to
+        // an empty string that would read as "named nothing".
+        feedback: feedbackMatch ? feedbackMatch[1] : output.slice(0, 2000),
         retryCount: 0,
         confidence: parseConfidence(output),
+        source: 'inline',
       };
     }
 
@@ -1423,9 +1464,15 @@ export class PipelineManager {
     return {
       passed,
       issues,
-      feedback: passed ? '' : (output.slice(0, 2000)),
+      // The prose report IS the verdict's reasoning, on a pass as much as on a
+      // failure. It used to be dropped for a pass (nothing read it), but the
+      // audit-coverage gate matches the audited stage names against `feedback`
+      // — blanking it here would reject every honest prose audit for naming
+      // nothing, the one outcome worse than no gate.
+      feedback: output.slice(0, 2000),
       retryCount: 0,
       confidence: parseConfidence(output),
+      source: 'prose',
     };
   }
 
