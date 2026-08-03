@@ -13,7 +13,7 @@ not all come out favourably, which is the point.
 | | |
 |---|---|
 | Branch | `worktree-quality-loop` (off `895850ca`) |
-| Backend tests | 3650 pass / 0 fail / 175 skip (`bun test src scripts`) |
+| Backend tests | 3657 pass / 0 fail / 175 skip (`bun test src scripts`) |
 | Typecheck | clean |
 | Providers | unchanged; `grok` still holds no topic role |
 
@@ -206,16 +206,34 @@ parsers are not "wrong pages":
 
 Two separate things are going on:
 
-- **DuckDuckGo, Brave and Startpage are genuine bot defense.** They block
-  SearXNG-style scraping regardless of IP, and updating changes nothing. Those
-  fail *loudly*, which is the harmless kind.
-- **The installed SearXNG is five months old and its Google parser had rotted.**
-  Querying the running instance exactly as the tool does (`categories=general`,
-  no engine pin) returns **0 results**; the same query against a current image
-  returns **38 relevant results**. So the outage is fixed by
-  `docker compose pull searxng && docker compose up -d searxng` in
-  `~/docker-services/` — no code change required. (That stack is outside this
-  repo, so it was not touched here.)
+- **The installed SearXNG was five months old and its engine parsers had
+  rotted.** Querying the running instance exactly as the tool does
+  (`categories=general`, no engine pin) returned **0 results**; the same query
+  against a current image returned **38 relevant results**. The outage was a
+  container update, not a code bug.
+- **Brave and Startpage are genuine bot defense.** They block SearXNG-style
+  scraping regardless of IP or version. They fail *loudly*, which is the
+  harmless kind — the aggregate works without them.
+
+**Resolved 2026-08-03: the container was updated (→ `2026.8.3`) and search
+works.** A correction to the first reading above: DuckDuckGo's block was *not*
+pure bot defense — it came back with the update too, so only Brave and
+Startpage remain unresponsive. The live engine mix is now `google cse` (20
+results) + `duckduckgo` (10), Bing absent, so nothing pollutes the aggregate.
+
+End-to-end re-run of the trip scenario after the update, which is also the
+negative control for the new gate:
+
+| | before (broken search) | after update |
+|---|---|---|
+| search calls | 5, **all failed** | **7 searches + 1 fetch_page, 0 failures** |
+| outcome | provider error → retry → `ok`, unsourced | `ok`, sourced |
+| with the new gate | `contract_failed` | `ok` — **gate correctly silent** |
+| wall clock | 86–129s | 44s |
+
+The gate not firing here is the important half: it fails total outages without
+failing healthy runs, and the run is *faster* now because it is not burning
+attempts on dead tools.
 - **Bing is the dangerous one and must stay off.** On *both* image versions it
   returns ten confident, well-formed, irrelevant results for any input —
   `zzzqqq Berchtesgaden` comes back with furniture shops, and it never returns
@@ -295,8 +313,8 @@ exist, and the cheap-executor path gave up where the expensive one persisted.
 Two of four quality axes still have no data, so there is a scoreboard now but
 not yet a loop.
 
-**Next, in order:** (1) update the SearXNG container so research tasks have
-working search at all; (2) get `deliveredPct` and `lagP95Seconds` above their
+**Next, in order:** (1) ~~update the SearXNG container~~ — done, search works
+again and the trip scenario now answers from real sources; (2) get `deliveredPct` and `lagP95Seconds` above their
 sample floors. Note that the new outage gate does *not* help `deliveredPct`:
 `verification_evidence` is written only by `pipeline-manager.ts`, so swarm
 scorer gates — including this one — never reach that table. Either pipelines
