@@ -847,6 +847,9 @@ export class SwarmSpawner {
         briefHash: opts.briefHash,
         taskBriefPreview: opts.brief.taskBrief.slice(0, TASK_BRIEF_PREVIEW_MAX),
         spawnMode: opts.spawnMode,
+        // Same predicate the model-routing block above uses (`hasPlan`), so the
+        // recorded flag and the routing decision can never disagree.
+        planned: !!opts.brief.plan?.length,
       });
     } catch (err) {
       coreLogger.error({ err, childId }, 'Failed to persist swarm_node row');

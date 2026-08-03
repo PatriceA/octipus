@@ -294,6 +294,21 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
       return out;
     }
 
+    // The backend has emitted this since blocked-vs-stuck Phase 1, and the
+    // protocol has carried it, but nothing rendered it — so a worker waiting
+    // on a lock or a slow provider still looked identical to a hung one, which
+    // was the entire point of adding the event. Rendered as a system line
+    // because it is periodic (one every 20s while genuinely blocked) and
+    // belongs in the transcript next to the silence it explains.
+    case 'agent.blocked': {
+      const reason = pickString(payload, 'reason');
+      if (!reason) return out;
+      const blockedForMs = pickNumber(payload, 'blockedForMs') ?? 0;
+      const waited = blockedForMs > 0 ? ` (${formatDurationMs(blockedForMs)})` : '';
+      out.push({ kind: 'message', role: 'system', content: `Waiting: ${reason}${waited}` });
+      return out;
+    }
+
     case 'agent.iteration': {
       const agentId = pickString(payload, 'agentId') ?? '';
       const iteration = pickNumber(payload, 'iteration');

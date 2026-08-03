@@ -1,0 +1,1 @@
+ALTER TABLE "swarm_nodes" ADD COLUMN "planned" boolean DEFAULT false NOT NULL;

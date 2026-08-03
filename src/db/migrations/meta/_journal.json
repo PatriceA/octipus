@@ -575,6 +575,13 @@
       "when": 1785624068960,
       "tag": "0081_rich_speed",
       "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1785757787676,
+      "tag": "0082_shocking_wind_dancer",
+      "breakpoints": true
     }
   ]
 }

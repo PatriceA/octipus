@@ -1,0 +1,38 @@
+{
+  "_comment": "Targets for scripts/quality-score.ts — the stopping condition the brief asked for. Four axes, no rollup: a weighted score lets a cheap run that delivered nothing cancel a good one. `targets` is what 'done' means; `measured` is the last observed baseline, rewritten by --write. An axis with fewer than minSamples observations reports n/a and is never counted as a pass.",
+  "targets": {
+    "deliveredPct": 95,
+    "lagP95Seconds": 10,
+    "paidTokensPerRun": 60000,
+    "autonomyPct": 90,
+    "minSamples": 20
+  },
+  "_targetRationale": {
+    "deliveredPct": "A stage that declares an artifact and writes nothing is the failure that started this work (run of 2026-08-01: 7 green stages, 0 files). Near-100 is the only defensible target for 'did it do what it said'.",
+    "lagP95Seconds": "run-health.ts measured a 43s median and a 14m worst case of pure post-answer waiting. 10s is the budget already used by `run-health.ts --p95`; keeping the same number means the two tools cannot disagree.",
+    "paidTokensPerRun": "Set from the measured A/B control arm (83k paid tokens for a three-step file-reading task). 60k is a deliberate ratchet below that, not a number the current system already meets.",
+    "autonomyPct": "No approval has ever been raised on this install, so this axis has no baseline yet — 90 is a placeholder that must be re-set from real data before it means anything."
+  },
+  "measured": {
+    "at": "2026-08-03T12:15:35.717Z",
+    "windowDays": 30,
+    "axes": {
+      "deliveredPct": {
+        "value": null,
+        "n": 0
+      },
+      "lagP95Seconds": {
+        "value": 142.506206,
+        "n": 16
+      },
+      "paidTokensPerRun": {
+        "value": 181128,
+        "n": 30
+      },
+      "autonomyPct": {
+        "value": 100,
+        "n": 110
+      }
+    }
+  }
+}
