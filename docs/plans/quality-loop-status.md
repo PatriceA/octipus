@@ -1,6 +1,6 @@
 # The quality loop: what the brief asked, what is done, what is next
 
-Status as of 2026-08-02. Every claim below is either a commit SHA, a command
+Status as of 2026-08-03. Every claim below is either a commit SHA, a command
 output, or explicitly marked as unverified. Where something was *not* done, it
 says so plainly rather than being folded into a neighbouring item that was.
 
@@ -8,12 +8,13 @@ says so plainly rather than being folded into a neighbouring item that was.
 
 | | |
 |---|---|
-| main | `8d218063` |
-| CI | all 7 workflows green |
-| Backend tests | 3629 pass / 0 fail / 175 skip |
-| Web E2E | green · Integration green · CodeQL green · Semgrep green |
-| Coverage | 52.54% lines / 61.29% functions (floor 52.30%) |
-| Providers | all healthy except `grok` (holds no topic role — nothing routes there) |
+| main | `126b501d` |
+| CI | **not re-run this session** — last known green at `8d218063` (all 7 workflows) |
+| Backend tests | 3689 pass / 0 fail / 175 skip (`bun run test`) |
+| Integration | 3736 pass / 0 fail / 84 skip (`bun run test:integration`, own DB on 5443, full migration chain from scratch) |
+| Web E2E / API e2e / CodeQL / Semgrep | **not re-run this session** |
+| Coverage | 52.63% lines / 61.49% functions (floor 52.8/61.1, tolerance 0.5) — ✅ at or above the ratchet |
+| Providers | unverified this session — the dev DB on `localhost:5432` was not running |
 
 ## Scorecard against the original brief
 
@@ -21,7 +22,7 @@ says so plainly rather than being folded into a neighbouring item that was.
 
 | Ask | Status | Evidence |
 |---|---|---|
-| Everything on main, no PRs, merge direct | done | 4 commits merged ff-only this session |
+| Everything on main, no PRs, merge direct | done | 4 commits merged ff-only on 2026-08-02; 3 more direct to main on 2026-08-03 (`fdeaf5ab`, `9bc0df16`, `126b501d`) |
 | The 14-minute delivery lag — *why?* | **root-caused and fixed** | toolshim burned a turn after the answer was written (`a0e9ff5e`, `675d71d2`); `scripts/run-health.ts` measures `deliveryLag = complete − last assistant text` so it cannot regress unnoticed |
 | Silence is unreadable | done | `27dd9477` — a blocked worker now names what it waits on every 20s (`agent.blocked`) |
 | "resume.md, implement all open points" — what would octipus do? | **measured, and it was bad** | It built a 7-stage pipeline, marked all 7 green, and wrote **zero files**. Fixed by `131ff1bc`: a stage that declares it produces artifacts and changes nothing now fails |
@@ -32,7 +33,25 @@ says so plainly rather than being folded into a neighbouring item that was.
 | MCP set up correctly | verified | all providers healthy via `octipus_health_models` |
 | E2E tests exist | verified | 20+ suites in `scripts/e2e/tests/`, 64 web E2E, 141/142 API e2e |
 | TUI as test ground | available | `src/tui-pi`, `src/tui-editor`, `bun run test:tui` |
-| Features as last resort | followed | this session shipped no new user-facing feature |
+| Features as last resort | followed | neither session shipped a user-facing feature; the 2026-08-03 work is an internal gate |
+| Auditors report green over work they never inspected | **fixed 2026-08-03** | `fdeaf5ab` / `9bc0df16` / `126b501d` — a QA/review PASS is rejected unless it names every stage it audited, states what it did NOT check with a confidence, and addresses any stage that handed off unsure. Ported from jcode's `validate_gate_pass` / `validate_artifact` / `UnaddressedLowConfidence`. Plan: `docs/plans/audit-coverage-gate.md` |
+
+Each of the three 2026-08-03 commits was reviewed before merge; six real
+defects were found and fixed, the sharpest being that an auditor-only re-run
+re-judged the *pre-fix* output after a genuine implementation retry, and that
+disclosing the gate's faults one per round would have eaten the whole 3-retry
+budget on formatting before the substance was ever re-judged. Writing the tests
+also caught a live defect in the first commit: `parseProseVerdict` blanked
+`feedback` on a PASS, which gave the coverage rule an empty haystack and would
+have rejected *every* honest prose-tier audit.
+
+`bun run eval -- --suite capability-quality` on `ornith:35b`: 7/11, with the one
+new case (`qual-review-names-its-scope`) passing. The 4 failures
+(`qual-code-block`, `qual-structured-list`, `qual-cite-sources`,
+`qual-step-by-step`) are pre-existing — the diff to that file is insertion-only
+— and their latencies cluster at ~60s, which looks like response truncation on a
+slow local model rather than a quality regression. Unverified; worth a look on
+its own.
 
 ### Not done — and these are the two the brief made *measurable*
 
@@ -51,17 +70,33 @@ measurement of the token split, so the one thing the brief asked to be sure of
 is precisely the thing not evidenced. The routing works; whether it *saves* is
 unknown.
 
-**2. There is no benchmark, so there is no loop.**
+**2. There is no benchmark, so there is no loop.** *(partially closed
+2026-08-03 — a second dimension exists now, a baseline still does not.)*
 
 > *"After you get a baseline, set a benchmark which fits our goal and
 > loop/improve/test/fix till this goal is reached."*
 
-What exists: `eval/*.yaml` (capability pass/fail), `scripts/run-health.ts` (one
-dimension — delivery lag), `coverage-baseline.json` (a ratchet, not a quality
-measure). What does not exist: a single scored baseline with a target to loop
-against. Work so far has been defect-driven — find a real failure, fix it —
-which is honest and has produced real fixes, but it is not the measurable loop
-that was asked for, and it has no stopping condition.
+What exists: `eval/*.yaml` (capability pass/fail), `coverage-baseline.json` (a
+ratchet, not a quality measure), and `scripts/run-health.ts`, which now reports
+**two** dimensions rather than one:
+
+- `deliveryLag` — time users waited after the answer was written.
+- `rubberStampRate` — the share of PASSING audit verdicts the audit-coverage
+  gate rejected, over `verification_evidence` rows of kind `audit_coverage`
+  (`126b501d`).
+
+What still does not exist: a single scored baseline with a target to loop
+against. Two of the four axes named under Phase 2 below are now instrumented;
+nobody has run the fixed task set that would turn them into a number.
+
+**And the honest caveat on `rubberStampRate`: it has never been read against
+real data.** The gate is covered by 54 tests in `audit-coverage.test.ts` +
+`pipeline-audit-gate.test.ts` (plus 4 in `handoff.test.ts`) and by the
+integration suite, but no pipeline has run since it landed, so
+`verification_evidence` holds zero `audit_coverage` rows and the metric
+currently reports "no verdicts recorded".
+Its first real value is unknown, and a high first reading would mean the review
+prompts need work, not that the gate is wrong.
 
 ### Not done — scenarios never run
 
@@ -111,15 +146,25 @@ An A/B harness over a fixed task set gives the number. Without it, Phase 5
 ### Phase 2 — One baseline, one target, then loop
 
 Define a small scored suite that reflects the actual goal ("output/quality"),
-not component health. Suggested axes, each already partly instrumented:
+not component health. Suggested axes:
 
-1. **Did it produce the artifact?** (evidence gate — now measurable)
-2. **Delivery lag** (`run-health.ts` — already measurable)
-3. **Cost per completed task** (needs Phase 1's accounting)
-4. **Did it need a human?** (approvals raised per task)
+1. **Did it produce the artifact?** (evidence gate — measurable, `131ff1bc`)
+2. **Was the check that passed it real?** (audit gate → `rubberStampRate` in
+   `run-health.ts` — measurable as of `126b501d`, but see the caveat above:
+   never yet read against real data)
+3. **Delivery lag** (`run-health.ts` — already measurable)
+4. **Cost per completed task** (needs Phase 1's accounting)
+5. **Did it need a human?** (approvals raised per task)
 
 Score a fixed task set once → that is the baseline. Set the target. Loop.
 The point is the stopping condition, which today does not exist.
+
+**Cheapest next step, and it is now the blocker for two axes at once:** run one
+real pipeline. Axes 1 and 2 are both instrumented and both unread. A single
+`create_pipeline` run over the `resume.md` scenario would produce the first
+`side_effect` and `audit_coverage` rows, prove the two prompt contracts
+(`QA_VERDICT_JSON_INSTRUCTION`, `HANDOFF_EMIT_INSTRUCTION`) survive contact
+with a real model, and cost one run.
 
 ### Phase 3 — Run the three unrun scenarios
 
@@ -141,6 +186,18 @@ is currently unevidenced outside coding.
 - Legacy `deepseek-chat` / `deepseek-reasoner` entries in the LiteLLM config now
   silently alias to `deepseek-v4-flash` upstream. Unused today; misleading if
   anyone binds a lane to them expecting a reasoning model.
+- **Migration `0082` has not been applied to the dev database.** It adds the
+  `audit_coverage` value to the `verification_kind` enum and was verified twice
+  on throwaway databases (the integration run's fresh DB, and a scratch compose
+  DB), but `localhost:5432` was not running on 2026-08-03. Run `bun run
+  db:migrate` before the next pipeline run, or the gate's ledger write fails and
+  the rejection is logged instead of recorded.
+- **`.env` and `docker-compose.yml` disagree on the Postgres port.** `.env` has
+  `DATABASE_URL=…@localhost:5432`, compose publishes `octipus-db` on
+  `${POSTGRES_PORT:-5442}` (and valkey on 6389). `docker compose up -d
+  octipus-db` therefore does *not* give you the database `.env` points at — it
+  silently creates an empty unrelated one. Cost real time on 2026-08-03; either
+  align them or document which is authoritative.
 
 ## The honest answer to the brief's own test
 
@@ -157,3 +214,17 @@ But the general answer is still no, and the reason is the gap above: octipus can
 now be *caught* producing nothing, which is a real improvement over silently
 claiming success. It cannot yet be shown to produce *good* work, because nothing
 scores quality. Phase 2 is what changes that.
+
+**Update 2026-08-03.** One layer was added between those two states. Until now
+the only thing standing between "produced nothing" and "reported green" was a
+reviewer's word, and a reviewer could pass with `{"passed": true, "issues": []}`
+without naming a single thing it looked at. That is no longer accepted: an
+auditor that cannot account for its scope is rejected and re-run, and the
+rejection is recorded.
+
+This does **not** mean quality is scored. The gate judges whether the *audit*
+was accountable, never whether the *code* was good — the same claim ceiling
+`receipt.ts` states for receipts (`notCertified: ['correctness', 'security']`).
+What changed is narrower and worth stating exactly: a green pipeline now costs
+more than a sentence. Whether the work behind it is good is still unmeasured,
+and Phase 2 is still what changes that.
