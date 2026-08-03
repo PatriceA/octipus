@@ -1,4 +1,4 @@
-import { index, integer, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, index, integer, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 /**
  * Swarm node schema — sibling table to `agents` representing a node in the
@@ -92,6 +92,15 @@ export const swarmNodes = pgTable('swarm_nodes', {
   fanOutCap: integer('fan_out_cap').notNull(),
   fanOutUsed: integer('fan_out_used').notNull().default(0),
   briefHash: text('brief_hash').notNull(),
+  /**
+   * Did the parent hand this child an explicit execution plan? A plan is what
+   * routes the child to the lane's cheap `executorModel` (W9 planner→executor
+   * split), so this is the column that makes the split's *value* measurable
+   * after the fact: without it, an executor-model row is indistinguishable
+   * from a lane that simply happens to be bound to a cheap model.
+   * See `scripts/executor-split.ts`.
+   */
+  planned: boolean('planned').notNull().default(false),
   /** First ~4KB of the task brief the parent handed the child. Lets the
    *  live-tree UI show "what was this child asked to do?" without a separate
    *  events lookup. Truncated at insert to keep the row small. */

@@ -4,227 +4,382 @@ Status as of 2026-08-03. Every claim below is either a commit SHA, a command
 output, or explicitly marked as unverified. Where something was *not* done, it
 says so plainly rather than being folded into a neighbouring item that was.
 
-## Where main stands
+The 2026-08-02 revision named two gaps and called them "the two the brief made
+*measurable*". Both are now measured, and the measurements are below. They did
+not all come out favourably, which is the point.
+
+## Where things stand
 
 | | |
 |---|---|
-| main | `126b501d` |
-| CI | **not re-run this session** — last known green at `8d218063` (all 7 workflows) |
-| Backend tests | 3689 pass / 0 fail / 175 skip (`bun run test`) |
-| Integration | 3736 pass / 0 fail / 84 skip (`bun run test:integration`, own DB on 5443, full migration chain from scratch) |
-| Web E2E / API e2e / CodeQL / Semgrep | **not re-run this session** |
-| Coverage | 52.63% lines / 61.49% functions (floor 52.8/61.1, tolerance 0.5) — ✅ at or above the ratchet |
-| Providers | unverified this session — the dev DB on `localhost:5432` was not running |
+| Branch | merged to `main` 2026-08-03 — this work no longer lives on `worktree-quality-loop` |
+| Backend tests | 3657 pass / 0 fail / 175 skip (`bun test src scripts`) |
+| Typecheck | clean |
+| Providers | unchanged; `grok` still holds no topic role, and its account is out of credits |
+| Dev DB | migrated through `0083`; `verification_evidence` is no longer empty |
 
-## Scorecard against the original brief
+## The audit-coverage gate (merged separately, on `main`)
 
-### Done, with evidence
+Three commits landed on `main` while this branch was open — `fdeaf5ab`,
+`9bc0df16`, `126b501d`, plan in `docs/plans/audit-coverage-gate.md`. They are a
+third gate, distinct from the evidence gate and the outage gate below: a QA or
+review PASS is rejected unless it names every stage it audited, states what it
+did *not* check with a confidence, and addresses any stage that handed off
+unsure. Ported from jcode's `validate_gate_pass` / `validate_artifact` /
+`UnaddressedLowConfidence`.
 
-| Ask | Status | Evidence |
+`scripts/run-health.ts` reports its `rubberStampRate` — the share of *passing*
+audit verdicts the gate had to reject. Read it as a signal about the review
+prompts, not the gate: a high first reading means stages are being asked the
+wrong question.
+
+The gate judges whether the *audit* was accountable, never whether the *code*
+was good — the same claim ceiling `receipt.ts` states for receipts
+(`notCertified: ['correctness', 'security']`). What it buys is narrow and worth
+stating exactly: a green pipeline now costs more than a sentence.
+
+### Migration `0082` was a collision, and it hid the enum
+
+Both this branch and `main` generated a migration numbered `0082`
+(`0082_shocking_wind_dancer`, the `planned` column, vs `0082_public_mysterio`,
+the `audit_coverage` enum value). The merge keeps `main`'s and renumbers this
+branch's to `0083_overconfident_ultimatum`, restamped so it sorts *after*
+`0082` — drizzle applies by timestamp, not by filename, so a renumber that
+kept the old `when` would have been silently skipped on every fresh database.
+
+`0083` is written `ADD COLUMN IF NOT EXISTS` because any database that ran the
+branch already has the column. One consequence on this dev database, harmless
+but worth knowing: `drizzle.__drizzle_migrations` still holds a row for the
+retired `0082_shocking_wind_dancer` hash. Drizzle only ever compares
+timestamps, so it is inert.
+
+## The two measurable gaps — now closed
+
+### 1. The planner→executor split: measured, and the answer is "yes, but"
+
+The routing shipped in `#259`–`#262`; nothing had ever measured whether it
+*saves*. It now can, three ways:
+
+- `swarm_nodes.planned` (migration `0082`) records whether the parent supplied
+  a plan. Without it an executor-model row is indistinguishable from a lane
+  that merely happens to be bound to a cheap model. The column defaults to
+  `false`, so history cannot be scored retroactively — only runs from here on
+  count.
+- `scripts/executor-split.ts` scores planned spawns that already happened.
+- `scripts/executor-ab.ts` runs the experiment that produces them: the same
+  task brief, twice, on the same lane, with and without a plan.
+
+The A/B, run against the live install. Arm A (no plan) routes to the `agents`
+lane primary `deepseek-v4-flash` (metered); arm B (planned) routes to the
+lane's `executorModel` `ornith:35b` (local, free):
+
+| task | A tokens | A tools | A secs | B tokens | B tools | B secs |
+|---|---|---|---|---|---|---|
+| read-types | 83,075 | 12 | 22 | 52,923 | 9 | 116 |
+| count-migrations | 53,323 | 7 | 14 | 9,626 | **1** | 17 |
+| find-script | 177,928 | 24 | 46 | 139,947 | 17 | 405 |
+| **total** | **314,326** | 43 | **82** | 202,496 | 27 | **538** |
+
+What that says, against the pass conditions this document set:
+
+- **Paid tokens: 314,326 → 0.** Every executor token was local. The saving on
+  the child is real, not a rounding artefact.
+- **The executor does real work — on 2 of 3 tasks.** 9 and 17 tool calls clear
+  the ≥3 bar comfortably. It is not transcribing a finished answer.
+- **1 of 3 is exactly the anti-pattern the brief named.** `count-migrations`
+  yielded a single executor tool call. That plan did the thinking; the
+  executor ran one command and reported. On that task the split moved cost
+  rather than removing it.
+- **The saving costs 6.6× wall clock.** 82s → 538s. Nothing in the original
+  plan mentioned latency, and it is the largest single effect measured here.
+  A user waiting 6.7 minutes instead of 46 seconds may not consider free
+  tokens a good trade.
+- **On one task the split traded a correct answer for a cheap one.** In
+  `read-types`, arm A improvised past a missing path (it fell back to shell,
+  found the file, returned the correct union) while arm B concluded the file
+  did not exist and stopped. Cheaper, faster to give up, wrong.
+
+Two caveats that keep the numbers honest, both printed by the harness itself:
+
+- The harness authors the plan, so arm B excludes whatever a real parent would
+  have spent writing it. **The saving is an upper bound.**
+- Child agents run in a sandboxed workspace that does not contain this
+  repository, so both arms worked harder than the tasks imply. The comparison
+  is still like-for-like — both arms faced the identical sandbox — but the
+  absolute token counts are inflated.
+
+**Verdict on the brief's actual question:** the local model is not "just using
+a few tokens to run 5 commands" — on two of three tasks it did substantive
+tool work. But the failure mode the brief predicted is real and reproducible,
+it appeared in one run of three, and the split buys its savings with a large
+latency penalty and at least one correctness regression. Phase 5 (semantic
+accept) should still not be built on this evidence.
+
+### 2. There is now a baseline, a target, and a stopping condition
+
+`scripts/quality-score.ts` + `scripts/quality-baseline.json`. Four axes, no
+rollup — a weighted single score lets a cheap run that delivered nothing
+cancel out an expensive run that did.
+
+Measured over the last 30 days (recorded in `quality-baseline.json`):
+
+| axis | value | target | n | status |
+|---|---|---|---|---|
+| deliveredPct | **n/a** | ≥ 95% | 0 | no data |
+| lagP95Seconds | 143s | ≤ 10s | 16 | below the 20-sample floor |
+| paidTokensPerRun | 181,128 | ≤ 60,000 | 30 | **fail** |
+| autonomyPct | 100% | ≥ 90% | 110 | pass |
+
+Two axes cannot be judged yet, and that is the truthful reading rather than a
+defect in the tool:
+
+- **deliveredPct has no data at all.** `verification_evidence` is empty: the
+  evidence gate merged (`131ff1bc`) *after* the last recorded runs. The gate
+  this whole effort was built around has never once fired on this install. It
+  is untested in production, not proven.
+- **lagP95** has 16 samples against a floor of 20. The observed 143s is 14×
+  the target, so this is very likely a fail once it has the samples — but a
+  target met or missed on 16 runs is not a measurement, and the tool says so
+  rather than rounding it into a verdict.
+
+`--gate` requires *both* that nothing is below target and that nothing is
+unmeasured, so an install with no data exits non-zero instead of printing a
+green board over an empty table. That is the same failure this document was
+opened to stop.
+
+## Phase 3 — the unrun scenarios
+
+**Trip planning: run — and it found the most serious defect in this document.**
+The brief's only non-coding scenario, and the only test of whether octipus is a
+general assistant rather than a coding agent.
+
+The output is genuinely good. Routed to the `research` lane
+(`claude-sonnet-4-6`), fanned out to two `gemini-flash-lite` subagents, and
+produced a usable 3-day Munich→Berchtesgaden itinerary: day-by-day structure,
+concrete places, rough drive times, per-stop food, dog-specific constraints
+that are actually correct (dogs are not permitted on the Königssee boats), and
+— unprompted — a "verify before you go" section flagging exactly the claims
+that drift. As a piece of writing it is what the brief hoped for.
+
+**It is also entirely unverified, and the system never said so.** Across every
+attempt, the number of successful web searches was zero:
+
+- `websearch` tries SearXNG, then falls back to DuckDuckGo via Playwright.
+  SearXNG is up (HTTP 200 on `localhost:8888`) but every upstream engine is
+  blocked: `brave: Suspended: too many requests`, `duckduckgo: CAPTCHA`,
+  `startpage: Suspended: CAPTCHA`. It returns 0 results with a populated
+  `unresponsive_engines`, which the tool correctly treats as infra failure
+  rather than "no results" — and then the browser fallback hits the same
+  CAPTCHA wall and fails with "No results extracted from DuckDuckGo".
+- The research child made 5 web searches. All 5 failed (`toolErrors: 5` in the
+  node receipt).
+- It then died with a provider error — `The toolConfig field must be defined
+  when using toolUse and toolResult content blocks` — and the node was marked
+  `tool_error`.
+- **The spawner's retry then answered the question with no searches at all,
+  and the run was reported `ok`.** The polished itinerary above is the retry's
+  output: model recall, presented to the user with no indication that every
+  attempt to check a fact had failed.
+
+That last step is the defect. It is the same class as the failure this whole
+document exists to stop — a green result over work that did not happen — only
+here the cover is better, because the answer is articulate and self-flags
+uncertainty in prose while the machinery stays silent about a total tool
+outage.
+
+### Fixed: a run that loses every tool can no longer return `ok`
+
+Two changes, both in the swarm spawner, both keyed off the deterministic
+receipt rather than anything the model said:
+
+1. **A tool-outage gate on every spawn** (`deriveToolOutageScorer`). If a child
+   attempted tools and *none* succeeded, the result is `contract_failed`, not
+   `ok`. It reuses the existing `side_effect` scorer, so it inherits the rule
+   that a CLI worker exposing no counters is never gated on evidence it cannot
+   emit.
+
+   **Delegation does not count as a working tool.** This is the part that
+   matters: in the measured run the child's 5 web searches all failed while
+   `spawn_child` succeeded, leaving `toolCalls = 1` — a naive "did any tool
+   work?" check passes that, and the outage stays hidden behind a meta-call.
+   The gate counts only substantive tools, excluding `spawn_child` /
+   `collect_children` / `escalate_to_different_expert`.
+
+   It cannot produce a false failure: a child that never touched a tool has
+   zero errors and is untouched, and any single successful substantive call is
+   enough to pass.
+
+2. **A retry can no longer erase the attempt it replaced.** `runChildWithRetry`
+   discarded the failed result once a later attempt succeeded, so the parent
+   saw a clean `ok`. The returned result now carries
+   `Recovered after N failed attempt(s): …` in its notes, including the failed
+   tool-call count. The status is left alone — the recovered answer may be
+   perfectly good — but nobody has to infer a clean run any more.
+
+Verified against the original failure, not just unit tests: re-running the
+trip-planning scenario with search still broken now yields
+
+    contract_failed · 3 tool calls · every tool call failed (3 error(s),
+    0 succeeded) — the deliverable cannot be based on anything the tools
+    returned
+
+where the same run previously returned `ok` with a polished itinerary.
+
+### The search outage itself: mostly a stale container, partly bot defense
+
+Measured rather than assumed. The egress IP is a clean residential German
+Vodafone address, so this is not datacenter-IP reputation, and the URLs and
+parsers are not "wrong pages":
+
+| engine | running instance (2026.3.1, 5 months old) | current image |
 |---|---|---|
-| Everything on main, no PRs, merge direct | done | 4 commits merged ff-only on 2026-08-02; 3 more direct to main on 2026-08-03 (`fdeaf5ab`, `9bc0df16`, `126b501d`) |
-| The 14-minute delivery lag — *why?* | **root-caused and fixed** | toolshim burned a turn after the answer was written (`a0e9ff5e`, `675d71d2`); `scripts/run-health.ts` measures `deliveryLag = complete − last assistant text` so it cannot regress unnoticed |
-| Silence is unreadable | done | `27dd9477` — a blocked worker now names what it waits on every 20s (`agent.blocked`) |
-| "resume.md, implement all open points" — what would octipus do? | **measured, and it was bad** | It built a 7-stage pipeline, marked all 7 green, and wrote **zero files**. Fixed by `131ff1bc`: a stage that declares it produces artifacts and changes nothing now fails |
-| Pipelines report green over empty workspace | done | `131ff1bc` + Phase B counters for CLI-backed stages |
-| Fail fast when a local model can't fit | done | `27dd9477` — gates on live `MemAvailable`, fails open on uncertainty |
-| Notes: images by paste/drop/picker | done | `f3fd8436` |
-| Notes: links | done | `[[wikilinks]]`, backlinks, link suggestions in `src/tools/notes` |
-| MCP set up correctly | verified | all providers healthy via `octipus_health_models` |
-| E2E tests exist | verified | 20+ suites in `scripts/e2e/tests/`, 64 web E2E, 141/142 API e2e |
-| TUI as test ground | available | `src/tui-pi`, `src/tui-editor`, `bun run test:tui` |
-| Features as last resort | followed | neither session shipped a user-facing feature; the 2026-08-03 work is an internal gate |
-| Auditors report green over work they never inspected | **fixed 2026-08-03** | `fdeaf5ab` / `9bc0df16` / `126b501d` — a QA/review PASS is rejected unless it names every stage it audited, states what it did NOT check with a confidence, and addresses any stage that handed off unsure. Ported from jcode's `validate_gate_pass` / `validate_artifact` / `UnaddressedLowConfidence`. Plan: `docs/plans/audit-coverage-gate.md` |
+| google | 0 results | **20, all relevant** |
+| bing | 10 **irrelevant** results | 10 **irrelevant** results |
+| duckduckgo | CAPTCHA | CAPTCHA |
+| brave | rate-limited | rate-limited |
+| startpage | CAPTCHA | CAPTCHA |
+| mojeek / qwant | access denied | 0 |
 
-Each of the three 2026-08-03 commits was reviewed before merge; six real
-defects were found and fixed, the sharpest being that an auditor-only re-run
-re-judged the *pre-fix* output after a genuine implementation retry, and that
-disclosing the gate's faults one per round would have eaten the whole 3-retry
-budget on formatting before the substance was ever re-judged. Writing the tests
-also caught a live defect in the first commit: `parseProseVerdict` blanked
-`feedback` on a PASS, which gave the coverage rule an empty haystack and would
-have rejected *every* honest prose-tier audit.
+Two separate things are going on:
 
-`bun run eval -- --suite capability-quality` on `ornith:35b`: 7/11, with the one
-new case (`qual-review-names-its-scope`) passing. The 4 failures
-(`qual-code-block`, `qual-structured-list`, `qual-cite-sources`,
-`qual-step-by-step`) are pre-existing — the diff to that file is insertion-only
-— and their latencies cluster at ~60s, which looks like response truncation on a
-slow local model rather than a quality regression. Unverified; worth a look on
-its own.
+- **The installed SearXNG was five months old and its engine parsers had
+  rotted.** Querying the running instance exactly as the tool does
+  (`categories=general`, no engine pin) returned **0 results**; the same query
+  against a current image returned **38 relevant results**. The outage was a
+  container update, not a code bug.
+- **Brave and Startpage are genuine bot defense.** They block SearXNG-style
+  scraping regardless of IP or version. They fail *loudly*, which is the
+  harmless kind — the aggregate works without them.
 
-### Not done — and these are the two the brief made *measurable*
+**Resolved 2026-08-03: the container was updated (→ `2026.8.3`) and search
+works.** A correction to the first reading above: DuckDuckGo's block was *not*
+pure bot defense — it came back with the update too, so only Brave and
+Startpage remain unresponsive. The live engine mix is now `google cse` (20
+results) + `duckduckgo` (10), Bing absent, so nothing pollutes the aggregate.
 
-**1. Nobody has verified the planner→executor split actually saves money.**
+End-to-end re-run of the trip scenario after the update, which is also the
+negative control for the new gate:
 
-Phases 1–4 shipped (`#259`–`#262`, `b8fa63bb`, `7cda1a5e`, `ad938fb8`): a plan
-routes a child to the cheap executor and it runs mechanically. But the brief's
-actual requirement was sharper than "it routes":
+| | before (broken search) | after update |
+|---|---|---|
+| search calls | 5, **all failed** | **7 searches + 1 fetch_page, 0 failures** |
+| outcome | provider error → retry → `ok`, unsourced | `ok`, sourced |
+| with the new gate | `contract_failed` | `ok` — **gate correctly silent** |
+| wall clock | 86–129s | 44s |
 
-> *"Make sure it is like that, and not the 'big' model actually did all the work
-> beforehand (planned in such detail that doing it would be nearly no
-> difference) and the local model just uses a few tokens to run 5 commands."*
+The gate not firing here is the important half: it fails total outages without
+failing healthy runs, and the run is *faster* now because it is not burning
+attempts on dead tools.
+- **Bing is the dangerous one and must stay off.** On *both* image versions it
+  returns ten confident, well-formed, irrelevant results for any input —
+  `zzzqqq Berchtesgaden` comes back with furniture shops, and it never returns
+  zero. A silently-wrong engine is far worse for an agent than a dead one:
+  the loud failures above are what let the outage gate above work at all.
+  Anyone "fixing" search by enabling Bing would convert a caught failure into
+  an uncaught one.
 
-`grep` over `eval/*.yaml` for `planner|executor` returns **nothing**. There is no
-measurement of the token split, so the one thing the brief asked to be sure of
-is precisely the thing not evidenced. The routing works; whether it *saves* is
-unknown.
+A `SEARXNG_ENGINES` env allowlist was added so an operator can pin the engines
+they trust without editing SearXNG's own config. Unset by default.
 
-**2. There is no benchmark, so there is no loop.** *(partially closed
-2026-08-03 — a second dimension exists now, a baseline still does not.)*
+Two things about it are worth writing down, because both were wrong on the
+first attempt and only measurement caught them:
 
-> *"After you get a baseline, set a benchmark which fits our goal and
-> loop/improve/test/fix till this goal is reached."*
+- **`categories` and `engines` are a UNION, not a filter.** Sending
+  `categories=general&engines=bing` runs bing *plus* every other general
+  engine — 30 results (20 google cse + 10 bing) where `engines=bing` alone
+  returns 10. The allowlist as first shipped kept `categories=general`, so it
+  could only ever *add* engines, never restrict to them. It now sends
+  `engines` alone when set, and `categories` alone when not.
+- **The param takes full engine names, not shortcuts.** `engines=bi` does not
+  select bing; it is ignored and the defaults run. The engine that actually
+  works here is named `google cse` — with a space — so
+  `SEARXNG_ENGINES=google cse` is the correct value, not `goc`.
 
-What exists: `eval/*.yaml` (capability pass/fail), `coverage-baseline.json` (a
-ratchet, not a quality measure), and `scripts/run-health.ts`, which now reports
-**two** dimensions rather than one:
+**Turning an engine off properly** belongs in SearXNG, not here, because it
+then applies to everything using the instance. Their `settings.yml` is just
+`use_default_settings: true`, so appending
 
-- `deliveryLag` — time users waited after the answer was written.
-- `rubberStampRate` — the share of PASSING audit verdicts the audit-coverage
-  gate rejected, over `verification_evidence` rows of kind `audit_coverage`
-  (`126b501d`).
+    engines:
+      - name: bing
+        disabled: true
 
-What still does not exist: a single scored baseline with a target to loop
-against. Two of the four axes named under Phase 2 below are now instrumented;
-nobody has run the fixed task set that would turn them into a number.
+and restarting is enough — verified on a scratch instance (`/config` then
+reports `"enabled": false` for bing and it drops out of default searches).
+Note `disabled` means "not in the default set", not "forbidden": an explicit
+`engines=bing` request still activates it.
 
-**And the honest caveat on `rubberStampRate`: it has never been read against
-real data.** The gate is covered by 54 tests in `audit-coverage.test.ts` +
-`pipeline-audit-gate.test.ts` (plus 4 in `handoff.test.ts`) and by the
-integration suite, but no pipeline has run since it landed, so
-`verification_evidence` holds zero `audit_coverage` rows and the metric
-currently reports "no verdicts recorded".
-Its first real value is unknown, and a high first reading would mean the review
-prompts need work, not that the gate is wrong.
+Still open: the `toolConfig` provider error needs chasing in the provider
+layer.
 
-### Not done — scenarios never run
+One finding was **a bug in the harness, not the product**, recorded because it
+is an easy trap: the first attempt granted the child only
+`filesystem`/`shell`/`git`, so `websearch` was intersected away and the tree
+"researched" a German road trip by grepping the local filesystem and listing
+skills. In the logs that looks identical to a product failure. The harness now
+grants a superset of what the task's role needs, with a comment saying why.
 
-Three of the brief's scenarios were never exercised, so we have no idea how
-octipus handles them:
+**Still unrun:** Hermes-style install UX, and "one UI over 3 existing tools,
+end2end, with test coverage". Neither is a measurement — both are product work
+that needs a person to say what "good" looks like first.
 
-- **Hermes-style install UX.** "Installation of Hermes sucks, but is optically
-  nice — see how to improve octipus." No install-UX work in history.
-- **"One UI over 3 existing tools, end2end, with test coverage."** Never run.
-- **Trip planning** (3 days, car, dog, food, walks, nature). Never run. This is
-  the only non-coding scenario in the brief and therefore the only test of
-  whether octipus is a general assistant or just a coding agent.
+## Phase 4 — deferred items
 
-### Partially covered — capability targets from the user stories
+- **`agent.blocked` now renders.** The backend has emitted it since
+  blocked-vs-stuck Phase 1 and the protocol carried it, but no client showed
+  it, so a worker waiting on a slow provider still looked exactly like a hung
+  one — the entire point of the event. The TUI gateway adapter now renders it
+  as `Waiting: <reason> (<duration>)`, with tests including the case where a
+  missing reason must produce nothing rather than `Waiting: undefined`.
+- **`TPG_API_KEY` is still `scope=user`** while the models referencing it are
+  global. Unchanged: it is a secret and an owner decision.
+- **Dependabot #303** still open.
+- **Planner→executor Phase 5** — still gated, see the verdict above.
+- **Legacy `deepseek-chat` / `deepseek-reasoner` LiteLLM aliases** unchanged.
 
-The Hermes/openclaw stories are *capability targets*, not defects. Much of the
-substrate exists (swarms, cron, skills, voice, memory, channels; `#204` shipped
-`tool_search`, WS1–WS7 tracked in `openclaw-gap-integration.md`). What is absent
-is any evaluation that these hold up end-to-end — e.g. "day 10 is measurably
-better than day 1" (self-taught codebase navigation) is a claim nobody has
-tested.
+## Two things found along the way that affect every number here
 
-## Plan
-
-Ordered so that the measurable gaps close first, because without them the loop
-the brief asked for cannot start.
-
-### Phase 1 — Make the executor claim true or false (highest value)
-
-Instrument and measure the planner→executor split. Concretely: record planner
-tokens vs executor tokens per delegated run, and report the ratio.
-
-The failure the brief names is specific and worth stating as a pass condition:
-if the planner's output is so detailed that execution is mechanical
-transcription, the split saved nothing — it just moved the work and added a
-hop. So:
-
-- **Measure:** `plannerTokens`, `executorTokens`, `executorToolCalls` per run.
-- **Pass:** executor does non-trivial work (≥3 tool calls) *and* total paid-API
-  tokens drop meaningfully versus the same task run without a plan.
-- **Fail loud:** a plan that yields ≤1 executor tool call is the anti-pattern —
-  surface it rather than counting it as a success.
-
-An A/B harness over a fixed task set gives the number. Without it, Phase 5
-(semantic accept) should not be built — it would optimise an unmeasured path.
-
-### Phase 2 — One baseline, one target, then loop
-
-Define a small scored suite that reflects the actual goal ("output/quality"),
-not component health. Suggested axes:
-
-1. **Did it produce the artifact?** (evidence gate — measurable, `131ff1bc`)
-2. **Was the check that passed it real?** (audit gate → `rubberStampRate` in
-   `run-health.ts` — measurable as of `126b501d`, but see the caveat above:
-   never yet read against real data)
-3. **Delivery lag** (`run-health.ts` — already measurable)
-4. **Cost per completed task** (needs Phase 1's accounting)
-5. **Did it need a human?** (approvals raised per task)
-
-Score a fixed task set once → that is the baseline. Set the target. Loop.
-The point is the stopping condition, which today does not exist.
-
-**Cheapest next step, and it is now the blocker for two axes at once:** run one
-real pipeline. Axes 1 and 2 are both instrumented and both unread. A single
-`create_pipeline` run over the `resume.md` scenario would produce the first
-`side_effect` and `audit_coverage` rows, prove the two prompt contracts
-(`QA_VERDICT_JSON_INSTRUCTION`, `HANDOFF_EMIT_INSTRUCTION`) survive contact
-with a real model, and cost one run.
-
-### Phase 3 — Run the three unrun scenarios
-
-Cheapest way to find real defects; the two scenarios that *were* run produced
-two genuine, now-fixed bugs. Run trip-planning first — it is the only test of
-non-coding competence, and the brief's vision ("perform at claude-code level")
-is currently unevidenced outside coding.
-
-### Phase 4 — Close the deferred items
-
-- `TPG_API_KEY` is `scope=user` while the models referencing it are global
-  (`Gemini 3.1 Flash Lite`, `claude-sonnet-4-6`). Every other user, and any
-  swarm child running as them, resolves no key. **This is the single remaining
-  e2e failure (141/142)** and is an owner decision — it is a secret.
-- Dependabot #303 open.
-- No client renders `agent.blocked` yet; the backend emits it and the protocol
-  carries it, but nothing surfaces it visually.
-- Planner→executor Phase 5 (semantic accept) — gated on Phase 1 above.
-- Legacy `deepseek-chat` / `deepseek-reasoner` entries in the LiteLLM config now
-  silently alias to `deepseek-v4-flash` upstream. Unused today; misleading if
-  anyone binds a lane to them expecting a reasoning model.
-- **Migration `0082` has not been applied to the dev database.** It adds the
-  `audit_coverage` value to the `verification_kind` enum and was verified twice
-  on throwaway databases (the integration run's fresh DB, and a scratch compose
-  DB), but `localhost:5432` was not running on 2026-08-03. Run `bun run
-  db:migrate` before the next pipeline run, or the gate's ledger write fails and
-  the rejection is logged instead of recorded.
-- **`.env` and `docker-compose.yml` disagree on the Postgres port.** `.env` has
-  `DATABASE_URL=…@localhost:5432`, compose publishes `octipus-db` on
-  `${POSTGRES_PORT:-5442}` (and valkey on 6389). `docker compose up -d
-  octipus-db` therefore does *not* give you the database `.env` points at — it
-  silently creates an empty unrelated one. Cost real time on 2026-08-03; either
-  align them or document which is authoritative.
+- **Cost in currency is not available.** `cost_log` has 2,134 rows and
+  `total_cost` is `0` in every one of them, because only 1 of 20 registered
+  models has a price configured. Anything reporting money today would report a
+  confident zero. Both new tools therefore price work in *paid-provider
+  tokens*, classifying by `model_config.provider` (`ollama`/`cli` are free).
+  Configuring per-model prices would upgrade every cost number here.
+- **`agent_events` triple-counts tool calls.** One invocation emits up to
+  three `action` rows (`tool_call`, `tool_call_complete`, and an untyped batch
+  row carrying a `toolCalls` array). Counting every `action` row inflates tool
+  calls ~3×, which would have let a single-tool-call executor clear the
+  "did real work" bar. Both tools count `data->>'type' IN ('tool_call',
+  'cli_tool_use')` — the same predicate the TUI adapter already used.
 
 ## The honest answer to the brief's own test
 
 > *"Could octipus perform the same task I just gave you, or would it fail or
 > output half-done, low-quality stuff?"*
 
-Measured, not guessed: on 2026-08-01 it was given a smaller version of this task
-and **reported a full green 7-stage development cycle over an empty workspace**.
-That specific failure is now fixed — a declared stage that writes nothing fails,
-and CLI-backed stages carry the counters that make the gate bite on the default
-`agents` lane.
+Mixed, and now with numbers behind it rather than an impression. On a real
+non-coding request it produced work a person could use. On coding tasks it
+recovers from a dead end by trying another route — the plan-less arm did
+exactly that.
 
-But the general answer is still no, and the reason is the gap above: octipus can
-now be *caught* producing nothing, which is a real improvement over silently
-claiming success. It cannot yet be shown to produce *good* work, because nothing
-scores quality. Phase 2 is what changes that.
+The trip-planning run gave the sharpest answer, and it was not reassuring:
+octipus lost every one of its research tools, hit a provider error, silently
+retried without them, and returned a confident answer marked `ok`. "Half-done,
+low-quality stuff" was not the failure — **well-written, unverified,
+confidently delivered** was. That specific hole is now closed: the same run
+returns `contract_failed` and names the outage. The underlying search outage
+turned out to be a five-month-old container, not an unfixable wall.
 
-**Update 2026-08-03.** One layer was added between those two states. Until now
-the only thing standing between "produced nothing" and "reported green" was a
-reviewer's word, and a reviewer could pass with `{"passed": true, "issues": []}`
-without naming a single thing it looked at. That is no longer accepted: an
-auditor that cannot account for its scope is rejected and re-run, and the
-rejection is recorded.
+Alongside that: the evidence gate has still never fired on a real run, cost per
+run is 3× the target, delivery lag looks ~14× the target on the samples that
+exist, and the cheap-executor path gave up where the expensive one persisted.
+Two of four quality axes still have no data, so there is a scoreboard now but
+not yet a loop.
 
-This does **not** mean quality is scored. The gate judges whether the *audit*
-was accountable, never whether the *code* was good — the same claim ceiling
-`receipt.ts` states for receipts (`notCertified: ['correctness', 'security']`).
-What changed is narrower and worth stating exactly: a green pipeline now costs
-more than a sentence. Whether the work behind it is good is still unmeasured,
-and Phase 2 is still what changes that.
+**Next, in order:** (1) ~~update the SearXNG container~~ — done, search works
+again and the trip scenario now answers from real sources; (2) get `deliveredPct` and `lagP95Seconds` above their
+sample floors. Note that the new outage gate does *not* help `deliveredPct`:
+`verification_evidence` is written only by `pipeline-manager.ts`, so swarm
+scorer gates — including this one — never reach that table. Either pipelines
+have to run, or the swarm gates need to record evidence too; the latter is
+probably the smaller change and would make one table mean one thing.
+(3) Chase the `toolConfig` provider error.

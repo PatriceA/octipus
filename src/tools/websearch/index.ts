@@ -7,6 +7,27 @@ import { BaseTool, createParameterSchema } from '../base-tool';
  * Web search tool — tries SearXNG first, falls back to DuckDuckGo via Playwright.
  * Provides search and page fetch capabilities for research agents.
  */
+/**
+ * Build the SearXNG query string.
+ *
+ * `categories` and `engines` do NOT compose the way they look like they do:
+ * SearXNG treats them as a UNION, so `categories=general&engines=bing` runs
+ * bing *plus* every other general-category engine. Measured: that combination
+ * returns 30 results (10 bing + 20 google cse) where `engines=bing` alone
+ * returns 10. An allowlist sent alongside `categories` is therefore not an
+ * allowlist at all — it can only add engines, never restrict to them, which is
+ * the exact opposite of why an operator would set one.
+ *
+ * So when an allowlist is configured we send `engines` ALONE. Otherwise we
+ * send `categories` alone and let the instance choose.
+ */
+export function buildSearxngParams(query: string, engines: string | null): URLSearchParams {
+  const params = new URLSearchParams({ q: query, format: 'json' });
+  if (engines) params.set('engines', engines);
+  else params.set('categories', 'general');
+  return params;
+}
+
 export class WebSearchTool extends BaseTool {
   readonly id = 'websearch';
   readonly name = 'Web Search';
@@ -18,6 +39,24 @@ export class WebSearchTool extends BaseTool {
 
   private get searxngUrl(): string {
     return process.env.SEARXNG_URL || 'http://localhost:8888';
+  }
+
+  /**
+   * Optional comma-separated engine allowlist, e.g. `SEARXNG_ENGINES=google`.
+   * Unset (the default) leaves engine selection to the SearXNG instance.
+   *
+   * This exists because engine health varies wildly and fails in two very
+   * different ways. Measured 2026-08-03 on a stock instance: duckduckgo,
+   * brave and startpage were all CAPTCHA'd or rate-limited (they fail loudly,
+   * which the caller can see), while bing returned ten confident, well-formed
+   * results that had nothing to do with the query — `zzzqqq Berchtesgaden`
+   * came back with furniture shops. A silently-wrong engine is far more
+   * dangerous to an agent than a dead one, and no amount of code here can
+   * detect it, so the operator needs a way to pin the engines they trust.
+   */
+  private get searxngEngines(): string | null {
+    const raw = (process.env.SEARXNG_ENGINES || '').trim();
+    return raw.length > 0 ? raw : null;
   }
 
   getManifest(): ToolManifest {
@@ -101,11 +140,7 @@ export class WebSearchTool extends BaseTool {
   }
 
   private async searchViaSearxng(query: string, maxResults: number): Promise<unknown> {
-    const params = new URLSearchParams({
-      q: query,
-      categories: 'general',
-      format: 'json',
-    });
+    const params = buildSearxngParams(query, this.searxngEngines);
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);

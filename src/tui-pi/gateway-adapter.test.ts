@@ -180,3 +180,29 @@ describe('decodeGatewayEvent', () => {
     expect(out.length).toBe(0);
   });
 });
+
+describe('agent.blocked — a quiet worker says what it waits on', () => {
+  test('renders the reason and how long it has been waiting', () => {
+    const event = single(decodeGatewayEvent({
+      type: 'agent.blocked',
+      payload: { agentId: 'a1', reason: 'waiting on model ornith:35b', blockedForMs: 42_000 },
+    }));
+    expect(event.kind).toBe('message');
+    if (event.kind !== 'message') return;
+    expect(event.role).toBe('system');
+    expect(event.content).toBe('Waiting: waiting on model ornith:35b (42.0s)');
+  });
+
+  test('a missing duration still renders the reason', () => {
+    const event = single(decodeGatewayEvent({
+      type: 'agent.blocked',
+      payload: { agentId: 'a1', reason: 'awaiting child result' },
+    }));
+    if (event.kind !== 'message') throw new Error('expected message');
+    expect(event.content).toBe('Waiting: awaiting child result');
+  });
+
+  test('no reason means nothing to say — emit nothing rather than "Waiting: undefined"', () => {
+    expect(decodeGatewayEvent({ type: 'agent.blocked', payload: { agentId: 'a1' } })).toEqual([]);
+  });
+});
