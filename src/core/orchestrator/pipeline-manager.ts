@@ -432,6 +432,20 @@ export class PipelineManager {
           },
         );
 
+
+        // A stage that returns nothing has not reported, whatever its status.
+        // Measured: an Implementation worker was truncated mid-write, compacted,
+        // and completed with an empty string — the evidence gate happened to
+        // catch it because that stage declares artifacts, but an undeclared
+        // stage would have handed "" to the next one as its context and the
+        // pipeline would have carried on against nothing.
+        if (String(result ?? '').trim() === '') {
+          throw new Error(
+            `Stage "${stage.name}" returned an empty result. The worker ended without producing ` +
+              `any output (commonly a truncated turn or an exhausted budget), so there is nothing ` +
+              `to hand to the next stage.`,
+          );
+        }
         // Evidence gate BEFORE the stage is marked complete — throws into the
         // catch below, which already fails the stage and the pipeline.
         await this.assertStageEvidence({
@@ -973,6 +987,20 @@ export class PipelineManager {
           },
         );
 
+
+        // A stage that returns nothing has not reported, whatever its status.
+        // Measured: an Implementation worker was truncated mid-write, compacted,
+        // and completed with an empty string — the evidence gate happened to
+        // catch it because that stage declares artifacts, but an undeclared
+        // stage would have handed "" to the next one as its context and the
+        // pipeline would have carried on against nothing.
+        if (String(result ?? '').trim() === '') {
+          throw new Error(
+            `Stage "${stage.name}" returned an empty result. The worker ended without producing ` +
+              `any output (commonly a truncated turn or an exhausted budget), so there is nothing ` +
+              `to hand to the next stage.`,
+          );
+        }
         // Evidence gate BEFORE completion — throws into the catch below.
         await this.assertStageEvidence({
           sessionId,
