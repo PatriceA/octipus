@@ -343,12 +343,51 @@ export async function spawnWorker(
      * so the counters always describe the run whose output is returned.
      */
     onCounters?: (counters: import('@/core/swarm/receipt').SideEffectCounters | null) => void;
+    /**
+     * Tool ids this worker may use, narrowing the role's default set. Pipeline
+     * stages pass their DECLARED `toolIds` here.
+     *
+     * Without it the declaration was dead config: every stage got its role's
+     * full tool set, so `Research & Discovery` — declared `browser` +
+     * `websearch` — delegated to a child that wrote the entire product before
+     * `Implementation` ever ran, and Implementation was then correctly failed
+     * by the evidence gate for changing nothing. Stages did each other's jobs
+     * because nothing held them to what they said they were.
+     *
+     * Narrowing only: a stage cannot grant itself a tool its role lacks. Swarm
+     * children intersect against the parent's set, so bounding the stage bounds
+     * its whole subtree — which is the point.
+     */
+    toolIds?: string[];
   },
 ): Promise<unknown> {
   const agentManager = getAgentManager();
   const agentRole = role as AgentRole;
   const roleConfig = getRoleConfig(agentRole);
   let roleTools = getToolsForRole(agentRole);
+
+  if (overrides?.toolIds && overrides.toolIds.length > 0) {
+    const allowed = new Set(overrides.toolIds);
+    // Match on the tool's id/group prefix (`filesystem__read_file` → `filesystem`)
+    // so a declaration names a tool GROUP, the same shape `PipelineStepConfig`
+    // and the role config already use.
+    const narrowed = roleTools.filter((t) => allowed.has(t.name) || allowed.has(t.name.split('__')[0]));
+    if (narrowed.length > 0) {
+      coreLogger.info(
+        { role: agentRole, declared: overrides.toolIds, from: roleTools.length, to: narrowed.length },
+        'Worker tools narrowed to the stage declaration',
+      );
+      roleTools = narrowed;
+    } else {
+      // Fail open, loudly: a declaration that matches nothing is a template
+      // bug, and a toolless worker would fail in a way that looks like the
+      // model refusing to work rather than like a misconfiguration.
+      coreLogger.warn(
+        { role: agentRole, declared: overrides.toolIds, available: roleTools.map((t) => t.name) },
+        'Stage declared toolIds that match none of the role tools — ignoring the declaration',
+      );
+    }
+  }
 
   if (context.userId && context.userId !== 'system' && context.userId !== 'local') {
     try {

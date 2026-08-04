@@ -299,9 +299,25 @@ describe('PipelineManager.gateQaVerdict', () => {
     spy.mockRestore();
   });
 
-  test('returns null when the output carries no verdict at all', async () => {
-    const { spy, call } = setup();
-    expect(await call('Just some prose with no verdict in it whatsoever.')).toBeNull();
+  // Previously this returned null, which callers read as "no QA signal" and
+  // skipped the retry loop — so an auditor could opt itself out of being audited
+  // by simply not answering. Measured: a QA stage ended with a prose
+  // "**Verdict:** implementation is correct" instead of the requested JSON, no
+  // `audit_coverage` row was written, and the pipeline went green on a verdict
+  // nobody had checked.
+  test('an unreadable verdict is an audit-gate FAILURE, not an absence of one', async () => {
+    const { spy, call, auditRows } = setup();
+    const result = await call('Just some prose with no verdict in it whatsoever.');
+
+    expect(result?.passed).toBe(false);
+    // Auditor-only retry: the deliverable may be fine, it is the REPORT that is
+    // unusable, so re-running the implementation would burn a run on good work.
+    expect(result?.auditGateFailed).toBe(true);
+    expect(result?.feedback).toContain('no machine-readable verdict');
+
+    const [row] = auditRows();
+    expect(row).toMatchObject({ kind: 'audit_coverage', passed: false });
+    expect((row.detail as { source: string }).source).toBe('unparseable');
     spy.mockRestore();
   });
 

@@ -20,6 +20,10 @@ export interface StageTemplate {
   producesArtifacts?: boolean;
   /** Declares the stage must EXECUTE something — see PipelineStepConfig. */
   runsCommands?: boolean;
+  /** Tool ids this stage may use, narrowing its role's default set. */
+  toolIds?: string[];
+  /** Declares the stage must NOT change the workspace — see PipelineStepConfig. */
+  readOnly?: boolean;
 }
 
 export interface PipelineTemplate {
@@ -48,6 +52,8 @@ export function stepConfigToStageTemplate(step: PipelineStepConfig): StageTempla
     // something the gate never hears about.
     producesArtifacts: step.producesArtifacts,
     runsCommands: step.runsCommands,
+    readOnly: step.readOnly,
+    toolIds: step.toolIds,
   };
 }
 
@@ -286,7 +292,12 @@ export function buildStagesFromTemplate(
     return {
       name: stage.name,
       role: stage.role,
-      toolIds: roleConfig.toolIds,
+      // The stage's DECLARED tools when it has them, the role's set otherwise.
+      // These are what the stage worker actually runs with — see the `toolIds`
+      // override in `spawnWorker`. Before that they were stored on the stage row
+      // and never enforced, so every stage silently ran with its role's full
+      // surface and stages did each other's jobs.
+      toolIds: stage.toolIds?.length ? stage.toolIds : roleConfig.toolIds,
       systemPrompt: roleConfig.systemPromptTemplate,
       requiresApproval: stage.requiresApproval,
       stageIndex: index,
@@ -297,6 +308,7 @@ export function buildStagesFromTemplate(
       model: stage.model,
       producesArtifacts: stage.producesArtifacts,
       runsCommands: stage.runsCommands,
+      readOnly: stage.readOnly,
     };
   });
 }

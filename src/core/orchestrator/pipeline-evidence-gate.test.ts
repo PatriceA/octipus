@@ -109,6 +109,31 @@ describe('stageEvidenceFailure', () => {
       expect(stageEvidenceFailure({ runsCommands: true }, null)).toBeNull();
     });
   });
+
+  // The mirror of producesArtifacts. A QA stage reported "I did not mutate the
+  // repo under test" having patched the module through the shell — invisible to
+  // `filesChanged`, which is why this is judged on the snapshot alone.
+  describe('readOnly', () => {
+    test('fails a validator that edited what it was validating', () => {
+      const reason = stageEvidenceFailure({ readOnly: true, runsCommands: true }, counters({ commandsRun: 51 }), 2);
+      expect(reason).toContain('changed 2 file(s) in a read-only stage');
+    });
+
+    test('passes when it inspected and reported without touching anything', () => {
+      expect(stageEvidenceFailure({ readOnly: true, runsCommands: true }, counters({ commandsRun: 11 }), 0)).toBeNull();
+    });
+
+    test('is judged on the snapshot, not the counters', () => {
+      // Counters say nothing changed; the disk says otherwise. The disk wins,
+      // because the shell edit never reaches a counter.
+      const reason = stageEvidenceFailure({ readOnly: true }, counters({ filesChanged: 0 }), 3);
+      expect(reason).toContain('read-only');
+    });
+
+    test('no snapshot means unknown, not innocent — and not guilty either', () => {
+      expect(stageEvidenceFailure({ readOnly: true }, counters(), null)).toBeNull();
+    });
+  });
 });
 
 // ── Preset backfill ────────────────────────────────────────────────────────

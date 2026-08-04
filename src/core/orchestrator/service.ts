@@ -702,6 +702,8 @@ export class OrchestratorService {
       model?: string;
       swarmParent?: import('./worker-spawner').WorkerSwarmParent;
       onCounters?: (counters: import('@/core/swarm/receipt').SideEffectCounters | null) => void;
+      /** Stage-declared tool ids, narrowing the role's set. See spawnWorker. */
+      toolIds?: string[];
     },
   ): Promise<unknown> {
     return spawnWorker(role, task, input, context, this.deps, overrides);

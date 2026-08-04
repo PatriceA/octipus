@@ -145,3 +145,26 @@ describe('paramTemplateVars', () => {
     expect(paramTemplateVars({ repo: 'octipus', count: '3' })).toEqual({ 'param.repo': 'octipus', 'param.count': '3' });
   });
 });
+
+// A model told "do not pause for approval" invented `{skipApproval: true}` on a
+// template that declares no parameters. `resolveRecipeParams` threw, the
+// seven-stage run never started, and the user saw "I was unable to generate a
+// response" with nothing in the log. Noise on a parameterless template is not a
+// typo — there is nothing to have mistyped — so it is dropped, not fatal.
+describe('parameterless templates tolerate stray params', () => {
+  test('ignores anything supplied instead of killing the run', () => {
+    expect(resolveRecipeParams([], { skipApproval: true, approval: 'none' })).toEqual({});
+  });
+
+  test('still resolves normally when nothing is supplied', () => {
+    expect(resolveRecipeParams([], {})).toEqual({});
+  });
+
+  test('a recipe WITH parameters keeps the strict check, and names the valid keys', () => {
+    const defs = [
+      { key: 'repo', inputType: 'string' as const, requirement: 'optional' as const, default: 'octipus' },
+    ];
+    expect(() => resolveRecipeParams(defs, { rebo: 'x' })).toThrow(/unknown recipe parameter: rebo/);
+    expect(() => resolveRecipeParams(defs, { rebo: 'x' })).toThrow(/accepts: repo/);
+  });
+});

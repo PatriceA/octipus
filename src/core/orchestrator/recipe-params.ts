@@ -6,6 +6,7 @@
 
 import { z } from 'zod';
 import type { PipelineStepConfig, RecipeParameter } from '@/db/schema/pipeline-templates';
+import { coreLogger as logger } from '@/utils/logger';
 
 /** Zod schema for a single recipe parameter definition (validate on create). */
 export const recipeParameterSchema = z
@@ -109,9 +110,32 @@ export function resolveRecipeParams(
 ): Record<string, string> {
   const defByKey = new Map(defs.map((d) => [d.key, d]));
 
+  // A template that declares NO parameters cannot consume any, so params handed
+  // to it are noise, not a typo — there is nothing to have mistyped. Dropping
+  // them is strictly better than failing: rejecting killed whole runs. A model
+  // told "do not pause for approval" invented `{skipApproval: true}` on a
+  // parameterless template, `create_pipeline` threw, the seven-stage run never
+  // started, and the user saw "I was unable to generate a response".
+  //
+  // Recipes WITH parameters keep the strict check, which is where it earns its
+  // keep: there, an unknown key really is a typo for a real one.
+  if (defs.length === 0) {
+    if (Object.keys(provided).length > 0) {
+      logger.warn(
+        { ignored: Object.keys(provided) },
+        'Template declares no parameters — ignoring the supplied params instead of failing the run',
+      );
+    }
+    return {};
+  }
+
   // Reject unknown keys — fail loud rather than silently ignore a typo.
   for (const key of Object.keys(provided)) {
-    if (!defByKey.has(key)) throw new Error(`unknown recipe parameter: ${key}`);
+    if (!defByKey.has(key)) {
+      throw new Error(
+        `unknown recipe parameter: ${key}. This recipe accepts: ${[...defByKey.keys()].join(', ')}`,
+      );
+    }
   }
 
   const resolved: Record<string, string> = {};

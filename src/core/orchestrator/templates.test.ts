@@ -88,6 +88,29 @@ describe('stage declarations survive the template round-trip', () => {
     runsCommands: true,
   };
 
+  test('the declared toolIds reach the built stage, not the role defaults', () => {
+    // The fourth declaration to go missing this way, and the most damaging:
+    // `Research & Discovery` declares browser+websearch, silently ran with its
+    // role's full surface, and delegated to a child that wrote the entire
+    // product before `Implementation` ever started.
+    const [built] = buildStagesFromTemplate(
+      { type: 't', stages: [stepConfigToStageTemplate(step)], parameters: [] },
+      'a task',
+    );
+    expect(built.toolIds).toEqual(['shell']);
+  });
+
+  test('a stage with no declared tools falls back to its role defaults', () => {
+    const noTools = { name: 'Testing', topic: 'qa', toolIds: [], requiresApproval: false };
+    const [built] = buildStagesFromTemplate(
+      { type: 't', stages: [stepConfigToStageTemplate(noTools)], parameters: [] },
+      'a task',
+    );
+    // Not the empty list: a stage that declares nothing is unconstrained, and a
+    // toolless worker fails in a way that looks like the model refusing to work.
+    expect(built.toolIds.length).toBeGreaterThan(0);
+  });
+
   test('buildStagesFromTemplate keeps producesArtifacts and runsCommands', () => {
     const [built] = buildStagesFromTemplate(
       { type: 't', stages: [stepConfigToStageTemplate(step)], parameters: [] },

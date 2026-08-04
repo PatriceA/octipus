@@ -42,7 +42,11 @@ Be thorough but concise. Cite sources where possible.`,
         name: 'Requirements & Architecture',
         description: 'Define requirements and design the architecture. Requires user approval before proceeding.',
         topic: 'architecture',
-        toolIds: ['filesystem'],
+        // `git` because this stage writes a design document into the workspace
+        // and previously had no way to commit it: a 17KB requirements file sat
+        // untracked next to the product forever, which is not a deliverable, it
+        // is litter.
+        toolIds: ['filesystem', 'git'],
         requiresApproval: true,
         promptTemplate: `Based on the research findings, create a detailed requirements document and architecture plan.
 
@@ -69,6 +73,10 @@ Produce:
    - Integration test plan
    - Edge cases to cover
 
+Keep it PROPORTIONATE to the task: a three-function module needs a page, not a
+treatise. If you write the plan to a file, commit it — an untracked document
+beside the product is litter, not a deliverable.
+
 Present this clearly so the user can review and approve before coding begins.`,
       },
       {
@@ -82,11 +90,16 @@ Present this clearly so the user can review and approve before coding begins.`,
         // legitimately change nothing — they are held to `runsCommands`
         // instead, which is what THEY are for.
         //
-        // Code Review is deliberately held to NEITHER, and that is a judgement
-        // call worth seeing: its prompt does tell it to run the suite, but its
-        // purpose is reading code, and a review of a tree with nothing runnable
-        // in it is still a real review. Declaring it would trade a caught lie
-        // for a failed honest run, which is the trade this gate refuses.
+        // Code Review was ALSO deliberately left undeclared, on the argument
+        // that its purpose is reading code and a review of a tree with nothing
+        // runnable is still a real review. The first clean run refuted that
+        // measured: the reviewer made ZERO tool calls — no reads, no commands —
+        // and returned "I independently verified the deliverable, ran both test
+        // suites, and executed lint/type/compile checks on the actual files",
+        // complete with `mypy` clean, `ruff` clean, a finding "empirically
+        // confirmed", and cited line numbers. All of it invented from the
+        // previous stage's prose. Its prompt's FIRST instruction is to run the
+        // suite, so `runsCommands` is simply the honest reading of what it is.
         producesArtifacts: true,
         promptTemplate: `Implement the approved plan. Write clean, well-documented code following project conventions.
 
@@ -109,7 +122,10 @@ Report what you implemented and any deviations from the plan.`,
         name: 'Testing',
         description: 'Discover, write, and run tests for the implementation.',
         topic: 'qa',
-        toolIds: ['filesystem', 'shell', 'browser'],
+        // `git` because this stage writes test files and must be able to commit
+        // them. Its declared tools are now enforced, and without git it left the
+        // suites it wrote uncommitted beside the product.
+        toolIds: ['filesystem', 'shell', 'browser', 'git'],
         requiresApproval: false,
         // Its whole purpose is to EXECUTE the suite. A Testing agent that ran no
         // commands did not test anything, however complete its PASS table looks
@@ -152,6 +168,13 @@ Report:
         topic: 'review',
         toolIds: ['filesystem', 'shell', 'git', 'knowledge'],
         requiresApproval: false,
+        // See the note on Implementation above: this stage had every tool it
+        // needed and used none of them, then claimed it had. A review that ran
+        // nothing is an opinion about text it was handed, not a review.
+        runsCommands: true,
+        // Its own prompt says "Do NOT modify any code files" — declared so that
+        // instruction is enforced rather than hoped for.
+        readOnly: true,
         promptTemplate: `Review the implementation and test results for quality, bugs, and security.
 
 Task: {{description}}
@@ -194,6 +217,13 @@ Rate overall quality: Excellent / Good / Needs Work / Critical Issues.`,
         // And it validates by RUNNING the suite end to end — a QA stage that
         // executed nothing has an opinion, not a validation.
         runsCommands: true,
+        // It must not mutate what it is validating. One run reported "I did not
+        // commit myself — QA validated the working tree and did not mutate the
+        // repo under test" having patched the module and added five tests
+        // through the shell, leaving the deliverable modified and uncommitted.
+        // A defect QA finds belongs in a FAILED verdict, which routes the work
+        // back to Implementation, which owns the code and can commit it.
+        readOnly: true,
         // Retry the Implementation stage (index 2), not the stage immediately
         // before this one. A QA failure faults the code; re-running Code Review
         // would re-review the same unchanged tree. (An audit-GATE rejection is
@@ -221,6 +251,11 @@ Validation steps:
 4. Test error scenarios and edge cases
 5. Check UI/UX if applicable (responsiveness, accessibility)
 6. Performance spot-check (response times, memory usage)
+
+SCRATCH FILES: write probe/experiment scripts to a temp directory (e.g. via
+mktemp -d), never into the workspace beside the deliverable. A QA run that
+leaves qa_probe_*.py next to the product has changed the thing it was
+validating. Delete anything you did create there before reporting.
 
 Report:
 - Overall status: PASS / FAIL / PASS WITH NOTES
@@ -401,6 +436,7 @@ export function planProducesArtifactsBackfill(
 ): { steps: PipelineStepConfig[]; changed: boolean } {
   const declared = new Set(shipped.filter((s) => s.producesArtifacts).map((s) => s.name));
   const executors = new Set(shipped.filter((s) => s.runsCommands).map((s) => s.name));
+  const readers = new Set(shipped.filter((s) => s.readOnly).map((s) => s.name));
   const auditors = new Map(
     shipped.filter((s) => s.stageType === 'qa_validation').map((s) => [s.name, s] as const),
   );
@@ -416,6 +452,10 @@ export function planProducesArtifactsBackfill(
     if (next.runsCommands === undefined && executors.has(next.name)) {
       changed = true;
       next = { ...next, runsCommands: true };
+    }
+    if (next.readOnly === undefined && readers.has(next.name)) {
+      changed = true;
+      next = { ...next, readOnly: true };
     }
     const auditor = auditors.get(next.name);
     if (auditor && next.stageType === undefined) {
@@ -436,7 +476,7 @@ export function planProducesArtifactsBackfill(
 }
 
 async function backfillPresetStepFlags(name: string, shipped: PipelineStepConfig[]): Promise<void> {
-  if (!shipped.some((s) => s.producesArtifacts || s.runsCommands || s.stageType === 'qa_validation')) return;
+  if (!shipped.some((s) => s.producesArtifacts || s.runsCommands || s.readOnly || s.stageType === 'qa_validation')) return;
 
   const db = getDb();
   const [row] = await db

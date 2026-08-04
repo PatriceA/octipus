@@ -44,6 +44,23 @@ export interface PipelineStepConfig {
    * purpose, never inferred from a stage's name or prompt wording.
    */
   runsCommands?: boolean;
+  /**
+   * DECLARES that this stage must NOT change the workspace — it inspects, runs
+   * and reports, and the thing it is judging must be the same afterwards.
+   *
+   * The mirror of `producesArtifacts`, and it needs the workspace snapshot for
+   * the same reason: tool counters cannot see a `shell__run` edit. Measured on
+   * 2026-08-04 — a QA stage reported "I did not commit myself — QA validated the
+   * working tree and did not mutate the repo under test" while having patched
+   * `roman.py` and added five tests through the shell. Its `filesChanged` read
+   * 0, so nothing contradicted the claim, and the pipeline finished with the
+   * deliverable modified and uncommitted.
+   *
+   * A validator that edits the thing it is validating has invalidated its own
+   * verdict; the right route for a defect it finds is to FAIL, which sends the
+   * work back to the stage that owns it.
+   */
+  readOnly?: boolean;
 }
 
 /**

@@ -146,6 +146,7 @@ async function resolveStageModelId(
 export interface StageDeclaration {
   producesArtifacts?: boolean;
   runsCommands?: boolean;
+  readOnly?: boolean;
 }
 
 /**
@@ -209,6 +210,16 @@ export function stageEvidenceFailure(
     reasons.push(
       `ran 0 commands (${counters.toolCalls} tool calls, ${counters.toolErrors} tool errors) — ` +
         `a stage that verifies by executing cannot have executed nothing`,
+    );
+  }
+
+  // Read-only is judged on the SNAPSHOT alone. `filesChanged` counts only
+  // file-mutating tools, and the whole failure this catches came through the
+  // shell, invisible to it. `null` (no snapshot) is unknown, so it passes.
+  if (declared.readOnly && filesTouched !== null && filesTouched > 0) {
+    reasons.push(
+      `changed ${filesTouched} file(s) in a read-only stage — it was asked to inspect and report, ` +
+        `and a validator that edits what it is validating has invalidated its own verdict`,
     );
   }
 
@@ -399,7 +410,7 @@ export class PipelineManager {
         // exact same question instead of reconstructing it.
         const stageContext = handoffText || previousOutput;
 
-        const before = await this.snapshotStage(builtStage.producesArtifacts, workspaceRoot);
+        const before = await this.snapshotStage(builtStage, workspaceRoot);
 
         let counters: SideEffectCounters | null = null;
         const result = await orchestrator.spawnWorker(
@@ -409,6 +420,8 @@ export class PipelineManager {
           { ...context, stageName: stage.name } as any,
           {
             ...(modelOverride ? { model: modelOverride } : {}),
+            // What the stage DECLARED it may touch. Enforced, not decorative.
+            toolIds: builtStage.toolIds,
             swarmParent: {
               id: orchestratorAgentId,
               rootSessionId: sessionId,
@@ -566,7 +579,7 @@ export class PipelineManager {
                   const retryModelOverride = retryStageModelId || retryTopicModel?.modelId || undefined;
 
                   const retryDeclared = template.stages[retryTargetIndex];
-                  const retryBefore = await this.snapshotStage(retryDeclared?.producesArtifacts, workspaceRoot);
+                  const retryBefore = await this.snapshotStage(retryDeclared, workspaceRoot);
 
                   let retryCounters: SideEffectCounters | null = null;
                   const retryResult = await orchestrator.spawnWorker(
@@ -576,6 +589,7 @@ export class PipelineManager {
                     context,
                     {
                       ...(retryModelOverride ? { model: retryModelOverride } : {}),
+                      toolIds: stageConfBuilt[retryTargetIndex]?.toolIds,
                       swarmParent: {
                         id: orchestratorAgentId,
                         rootSessionId: sessionId,
@@ -632,7 +646,7 @@ export class PipelineManager {
                 const qaTopicModel = await registry.getModelForTopic(stage.role);
                 const qaModelOverride = qaStageModelId || qaTopicModel?.modelId || undefined;
 
-                const qaRetryBefore = await this.snapshotStage(builtStage.producesArtifacts, workspaceRoot);
+                const qaRetryBefore = await this.snapshotStage(builtStage, workspaceRoot);
 
                 let qaRetryCounters: SideEffectCounters | null = null;
                 const qaRetryResult = await orchestrator.spawnWorker(
@@ -642,6 +656,7 @@ export class PipelineManager {
                   context,
                   {
                     ...(qaModelOverride ? { model: qaModelOverride } : {}),
+                    toolIds: builtStage.toolIds,
                     swarmParent: {
                       id: orchestratorAgentId,
                       rootSessionId: sessionId,
@@ -938,7 +953,7 @@ export class PipelineManager {
         // so an auditor-only re-run can re-ask the same question.
         const stageContext = handoffText || previousOutput;
 
-        const before = await this.snapshotStage(stepConfig?.producesArtifacts, workspaceRoot);
+        const before = await this.snapshotStage(stepConfig, workspaceRoot);
 
         let counters: SideEffectCounters | null = null;
         const result = await orchestrator.spawnWorker(
@@ -947,6 +962,7 @@ export class PipelineManager {
           stageContext,
           context,
           {
+            toolIds: stage.toolIds ?? undefined,
             swarmParent: {
               id: pipeline.orchestratorAgentId,
               rootSessionId: sessionId,
@@ -1065,7 +1081,7 @@ export class PipelineManager {
                 await this.updateStage(retryTargetStage.id, { input: retryInput, status: 'running' });
 
                 const retryDeclared = stepConfigs[retryTargetIndex];
-                const retryBefore = await this.snapshotStage(retryDeclared?.producesArtifacts, workspaceRoot);
+                const retryBefore = await this.snapshotStage(retryDeclared, workspaceRoot);
 
                 let retryCounters: SideEffectCounters | null = null;
                 const retryResult = await orchestrator.spawnWorker(
@@ -1074,6 +1090,7 @@ export class PipelineManager {
                   '',
                   context,
                   {
+                    toolIds: retryTargetStage.toolIds ?? undefined,
                     swarmParent: {
                       id: pipeline.orchestratorAgentId,
                       rootSessionId: sessionId,
@@ -1115,7 +1132,7 @@ export class PipelineManager {
 
               await this.updateStage(stage.id, { input: qaRetryInput, status: 'running' });
 
-              const qaRetryBefore = await this.snapshotStage(stepConfig?.producesArtifacts, workspaceRoot);
+              const qaRetryBefore = await this.snapshotStage(stepConfig, workspaceRoot);
 
               let qaRetryCounters: SideEffectCounters | null = null;
               const qaRetryResult = await orchestrator.spawnWorker(
@@ -1124,6 +1141,7 @@ export class PipelineManager {
                 retryOutput,
                 context,
                 {
+                  toolIds: stage.toolIds ?? undefined,
                   swarmParent: {
                     id: pipeline.orchestratorAgentId,
                     rootSessionId: sessionId,
@@ -1333,8 +1351,9 @@ export class PipelineManager {
     const declared: StageDeclaration = {
       producesArtifacts: args.declared?.producesArtifacts,
       runsCommands: args.declared?.runsCommands,
+      readOnly: args.declared?.readOnly,
     };
-    if (!declared.producesArtifacts && !declared.runsCommands) return;
+    if (!declared.producesArtifacts && !declared.runsCommands && !declared.readOnly) return;
 
     const { counters, stageName, pipelineId } = args;
     const measured = counters !== null;
@@ -1433,10 +1452,12 @@ export class PipelineManager {
    * everything else is not gated, so the scan would be pure cost.
    */
   private async snapshotStage(
-    producesArtifacts: boolean | undefined,
+    declared: StageDeclaration | undefined,
     workspaceRoot: string | null,
   ): Promise<WorkspaceSnapshot | null> {
-    if (!producesArtifacts || !workspaceRoot) return null;
+    // Both declarations need the filesystem: one to prove work happened, the
+    // other to prove it did not.
+    if (!workspaceRoot || !(declared?.producesArtifacts || declared?.readOnly)) return null;
     return snapshotWorkspace(workspaceRoot);
   }
 
@@ -1462,7 +1483,39 @@ export class PipelineManager {
     evidence: { sessionId: string; pipelineId: string; stageName: string },
   ): Promise<QAValidationResult | null> {
     const parsed = this.parseQAResult(output);
-    if (!parsed) return null;
+    if (!parsed) {
+      // A `qa_validation` stage that emits nothing parseable used to mean "no QA
+      // signal — skip the retry loop", which let an auditor opt itself out of
+      // being audited simply by not answering the question. Measured: a QA stage
+      // ended with a prose "**Verdict:** implementation is correct" instead of
+      // the requested JSON, so `audit_coverage` never fired and the pipeline
+      // went green on an unexamined verdict.
+      //
+      // Treated as a FAILED audit gate: the deliverable may be perfectly fine,
+      // it is the report that is unusable, so this takes the auditor-only retry
+      // path (`auditGateFailed`) rather than re-running the implementation.
+      const reason =
+        'the stage produced no machine-readable verdict. Emit the required ```json block with ' +
+        'passed / confidence / issues / feedback / whatIDidNotCheck — a verdict nobody can read ' +
+        'cannot be audited, and an unaudited pass is not a pass.';
+      coreLogger.warn(
+        { pipelineId: evidence.pipelineId, stage: evidence.stageName },
+        'QA stage emitted no parseable verdict — treating as an audit-gate failure',
+      );
+      try {
+        await verificationEvidenceRepository.record({
+          sessionId: evidence.sessionId,
+          pipelineId: evidence.pipelineId,
+          stage: evidence.stageName,
+          kind: 'audit_coverage',
+          passed: false,
+          detail: { reason, source: 'unparseable', scope: coverageScope(scope).map((s) => s.name) },
+        });
+      } catch (err) {
+        coreLogger.warn({ err: (err as Error).message }, 'Failed to record unparseable-verdict evidence');
+      }
+      return { passed: false, issues: [reason], feedback: reason, retryCount: 0, auditGateFailed: true };
+    }
 
     void this.recordQaEvidence(evidence.sessionId, evidence.pipelineId, evidence.stageName, parsed);
 

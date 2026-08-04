@@ -1,4 +1,5 @@
 import type { AgentWorker, ToolHandler } from '@/core/agent-worker';
+import { coreLogger } from '@/utils/logger';
 import { createCollectChildrenTool } from '@/core/swarm/collect-tool';
 import { createSpawnChildTool } from '@/core/swarm/swarm-tool';
 import {
@@ -191,6 +192,16 @@ export function createMetaTools(
           // — release the one-shot gate so the model can retry with fixed params
           // in the same turn. Surface the reason.
           pipelineCreated = false;
+          // …and LOG it. Returning the reason only to the model made this
+          // failure invisible: a run died here, the model then emitted three
+          // thinking-only turns and gave up, and the operator saw "I was unable
+          // to generate a response" with not one line in the log saying a
+          // pipeline had failed to start. The model's transcript is not an
+          // operator-visible surface.
+          coreLogger.error(
+            { err: (err as Error).message, template: match.name, params: args.params },
+            'create_pipeline failed to start the pipeline',
+          );
           return `Pipeline could not start: ${(err as Error).message}`;
         }
       },
