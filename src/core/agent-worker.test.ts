@@ -1,5 +1,6 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import { sanitizeToolOutput } from '@/utils/sanitize';
+import { BaseAgentWorker } from '@/core/agent-base';
 
 // Note: Full AgentWorker integration tests require mocking LLM client, repositories,
 // and permission manager. We test the key sub-systems in isolation.
@@ -235,5 +236,16 @@ describe('sanitizeToolOutput', () => {
     const input = 'x'.repeat(200);
     const result = sanitizeToolOutput(input, { maxLength: 100 });
     expect(result.length).toBeLessThanOrEqual(112); // 100 + ' [truncated]'
+  });
+});
+
+// A truncated FINAL turn used to become the answer: a Testing stage "reported"
+// 95 characters ending mid-sentence and the pipeline handed that on as its
+// account of the test run. The fragment is still returned (chat can show it),
+// but it is now flagged so callers whose output feeds another stage can refuse.
+describe('wasTruncated', () => {
+  test('a base worker reports false — it cannot know, and unknown is not a failure', () => {
+    const base = Object.create(BaseAgentWorker.prototype) as BaseAgentWorker;
+    expect(base.wasTruncated()).toBe(false);
   });
 });

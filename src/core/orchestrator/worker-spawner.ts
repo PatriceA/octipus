@@ -1071,6 +1071,22 @@ Use these MCP tools when the task benefits from them — especially for people-r
     const durationMs = Date.now() - startTime;
     overrides?.onCounters?.(await stageCounters(worker, overrides?.swarmParent ? workerId : null));
 
+    // A pipeline stage's report IS the next stage's input, so a fragment of a
+    // cut-off turn cannot be allowed to stand in for one. Measured: a Testing
+    // stage "reported" 95 characters ending mid-sentence, and the pipeline
+    // carried on to Code Review with that as the account of the test run.
+    //
+    // Scoped to swarm-parented workers (i.e. pipeline stages) on purpose — in
+    // chat, a truncated answer is still worth showing the user, who can see it
+    // is cut off and ask again. Nobody is reading a stage handoff.
+    if (overrides?.swarmParent && worker.wasTruncated()) {
+      throw new Error(
+        `Worker output was truncated mid-turn (${String(result ?? '').length} chars). ` +
+          `The model hit its token limit before finishing, so this report is a fragment, ` +
+          `not an account of what happened.`,
+      );
+    }
+
     coreLogger.info({
       workerId, role: agentRole, model: finalModel,
       durationMs, iterations: worker.getIteration(),

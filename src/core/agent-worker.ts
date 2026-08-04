@@ -163,6 +163,8 @@ export class AgentWorker extends BaseAgentWorker {
    * thinking can't starve the tool call a second time.
    */
   private lengthRetried: boolean = false;
+  /** Set when the FINAL turn was cut off by the token limit — see `wasTruncated`. */
+  private finishedTruncated: boolean = false;
   private lengthRetryBoost: number = 0;
   /** Tool-call loop/spam detection (same-args + same-name state machines). */
   private loopDetector = new ToolLoopDetector();
@@ -387,6 +389,11 @@ export class AgentWorker extends BaseAgentWorker {
    * `SwarmReceipt`. Overrides the base default (`null`) — CLI workers own no
    * executor and keep the null.
    */
+  /** True when this run's final answer was a fragment of a cut-off turn. */
+  override wasTruncated(): boolean {
+    return this.finishedTruncated;
+  }
+
   override getSideEffectCounters(): import('./swarm/receipt').SideEffectCounters {
     return this.toolExecutor.getSideEffectCounters();
   }
@@ -1354,6 +1361,23 @@ export class AgentWorker extends BaseAgentWorker {
           continue;
         }
         agentLogger.warn({ agentId: this.context.id }, 'Max empty retries reached, returning fallback');
+      }
+
+      // The turn that produced this answer was cut off mid-stream. The one
+      // `lengthRetried` retry above has already been spent by the time a second
+      // truncation lands here, so the fragment becomes the final answer — a
+      // Testing stage once "reported" 95 characters ending mid-sentence
+      // ("Before running, I need to fix one assertion I got wrong in my own
+      // analysis: at the GiB boundary") and the pipeline handed that on as its
+      // result. Recorded, not repaired: callers that care (pipeline stages,
+      // whose report becomes the next stage's input) can refuse it, while chat
+      // still shows the user whatever was produced.
+      if (completion.finishReason === 'length') {
+        this.finishedTruncated = true;
+        agentLogger.warn(
+          { agentId: this.context.id, iteration: this.iteration, contentLength: completion.content?.length ?? 0 },
+          'Final turn was truncated — the answer is a fragment',
+        );
       }
 
       let response = completion.content || 'I was unable to generate a response.';

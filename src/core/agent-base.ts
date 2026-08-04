@@ -143,6 +143,15 @@ export abstract class BaseAgentWorker {
    * receipt. Declared here so the read is type-safe and a rename breaks the
    * build rather than silently yielding `null`.
    */
+  /**
+   * Did this run end on a turn the model could not finish? Base workers cannot
+   * know, so they report false — the same unknown-is-not-a-failure rule the
+   * evidence gate follows.
+   */
+  wasTruncated(): boolean {
+    return false;
+  }
+
   getSideEffectCounters(): import('./swarm/receipt').SideEffectCounters | null {
     return null;
   }
