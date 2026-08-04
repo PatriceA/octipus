@@ -544,10 +544,51 @@ nothing gated on "a stage whose job is to run tests ran no commands", so a
 correct-by-luck simulation was accepted as a test run.
 
 The template declares `toolIds: ['filesystem', 'shell', 'browser']` for Testing;
-the tools were lost between the stage and the child. Not fixed here — logged as
-the next thing to chase, and the natural companion to the workspace-snapshot fix
-above, since both are cases where the deliverable's evidence and the stage's
-declared purpose are never compared.
+the tools were lost between the stage and the child.
+
+### Fixed: `runsCommands`
+
+`PipelineStepConfig.runsCommands` declares a stage whose purpose is to EXECUTE.
+A declared stage that finishes having run zero commands fails, whatever its
+prose says. Declared on Testing and QA Validation (Full Development Cycle) and
+Verify Fix (Bug Fix).
+
+**Filesystem evidence deliberately does not satisfy it.** The snapshot answers
+"did anything change", never "was it verified"; letting it stand in would reopen
+the exact hole.
+
+**Code Review is held to NEITHER declaration**, and that is a judgement call
+rather than an oversight: its prompt does tell it to run the suite, but its
+purpose is reading code, and a review of a tree with nothing runnable in it is
+still a real review. Declaring it would trade a caught lie for a failed honest
+run — the trade this gate exists to refuse.
+
+**A stage is a tree, so the counters are too.** `mergeCounters` folds every swarm
+child's receipt into the stage's tally before the gate reads it. A worker that
+delegates records `spawn_child` and nothing else, so gating on the parent alone
+would have failed every stage that delegated — the same false positive as the
+shell-write one, a level up. In the run that produced this finding, four
+subagents did the work of a stage whose own worker ran almost nothing.
+
+### Two defects the first live run of that gate exposed
+
+Both are the same species — a declaration that never reaches the thing that
+reads it, and a failure reported as something it was not.
+
+- **The declaration was dropped in transit.** `stepConfigToStageTemplate` and
+  `buildStagesFromTemplate` enumerate fields, so `runsCommands` never reached
+  the gate: the Testing stage carried it in the DB and wrote no evidence row at
+  all. Both mappers carry it now, and a round-trip test fails if a future flag
+  is added without being listed. This was the **third** time a declaration went
+  missing between where it is written and where it is read (`producesArtifacts`,
+  `stageType`, `runsCommands`) — the test exists so there is no fourth.
+- **A quota abort was reported as a user stop.** The run died at QA Validation
+  with `Agent was stopped by user`; the truth was
+  `tokensPerDay: 10118911/10000000`. `wasUserStopped` is a substring match that a
+  quota abort satisfies, so an operator is sent looking for a person who
+  cancelled while the one line naming the cap — and where to raise it — is
+  discarded. `QuotaExceededError` is matched structurally now, before that
+  heuristic, and propagated intact.
 
 ## 4. Swarm gates now write evidence
 
@@ -559,18 +600,63 @@ table the pipeline writes to. One table means one thing.
 Verified live rather than by mock — a `spawn_child` delegation after the change
 produced two rows carrying `node_id`, where the same path produced none before.
 
+## 5. The whole loop, run end to end and checked against reality
+
+2026-08-04. A clean 7-stage `Full Development Cycle` (build `vectors.py` —
+`dot`/`norm`/`scale`) on the fixed code. Every gate fired, and every claim was
+checked against the filesystem rather than read from the report:
+
+| stage | commands | files | verdict |
+|---|---|---|---|
+| Implementation | 8 | `filesTouched: 1`, `filesChanged: 3` | pass |
+| Testing | **25** | 2 written | pass |
+| QA Validation (1st) | 17 | — | `qa_verdict` pass → **`audit_coverage` FAIL** |
+| QA Validation (retry) | 20 | — | `qa_verdict` pass → `audit_coverage` pass |
+
+**The QA loop closed by itself.** The first verdict came back as prose with
+`uncovered: ["Implementation"]` and an empty `whatIDidNotCheck` — a bare pass
+naming nothing. The gate rejected it and re-ran the auditor alone. The second
+verdict came back as JSON, covered its scope, and listed four real limits it had
+not checked (other Python versions, mypy on the test files, the ADR sections,
+whether the design doc gets committed). Rejected → re-run → accountable pass, with
+no human in the loop.
+
+**Agent reports vs reality — checked, not trusted:**
+
+- `test_vectors.py` → the report claims 7 tests; running it gives **7/7**.
+- `test_vectors_edge_cases.py` → claims 31; running it gives **31/31**.
+- The Testing stage cited commit `4f5c7cf` as the baseline suite. That commit
+  exists in the workspace repo and is exactly "Add assert-based test suite for
+  vectors module (7 tests)".
+- Its receipt shows `shell__run: 25` — this stage really executed, which is the
+  thing `runsCommands` now guarantees rather than hopes for.
+
+**All four quality axes are measured for the first time**, which was the whole
+point of Phase 2 — until now the scoreboard always had an axis reading `n/a`:
+
+| axis | value | target | n | status |
+|---|---|---|---|---|
+| deliveredPct | 89% | ≥ 95% | 27 | fail |
+| lagP95Seconds | 0s | ≤ 10s | 33 | **pass** |
+| paidTokensPerRun | 182,653 | ≤ 60,000 | 77 | fail |
+| autonomyPct | 100% | ≥ 90% | 156 | pass |
+
+`rubberStampRate`: **40% — 2 of 5 passing verdicts rejected.** That is the first
+informative reading (the earlier 0% was two verdicts from one pipeline), and it
+says what the metric was built to say: two in five auditors would have rubber
+stamped, and the gate caught both. Read it as a signal about the review prompts.
+
+There is a scoreboard AND a loop now. What there is not yet is a passing board:
+two axes are below target, which is the honest state to leave this in.
+
 ## What is actually next
 
-1. **Compare a stage's declared purpose to its receipt** (finding 3). A Testing
-   stage with `commandsRun: 0` should not pass, whatever its prose says. This is
-   the last of the three findings above still open, and it is the one where the
-   system currently accepts a simulation as a test run.
-2. **Get `deliveredPct` to 20 samples.** Now realistic: swarm gates feed it, so
-   ordinary delegations count, not only pipelines. The one false failure in the
-   current sample is a pre-fix run and will age out of the window.
-3. **Get `rubberStampRate` past two verdicts.** It reads 0% today, which is the
-   best possible number and also the least informative one — two verdicts from a
-   single pipeline. A rate that stays at zero across a real spread of runs is
-   the signal that the gate could relax to sampling; a rate that climbs means
-   the review prompts need work, not that the gate is wrong.
+1. **`paidTokensPerRun` is 3× its target** and is now the worst axis. The
+   planner→executor split exists to move exactly this number and has never been
+   pointed at pipeline stages — every stage above ran on the paid lane.
+2. **`deliveredPct` 89% → ≥95%.** It is measured now (27 samples); the remaining
+   failures need reading one by one rather than assuming they are all stale.
+3. **Watch `rubberStampRate`.** 40% on five verdicts is a signal, not a
+   baseline. If it stays high the review prompts need work; if it falls to zero
+   across a real spread of runs, the gate could relax to sampling.
 4. Chase the `toolConfig` provider error (unchanged).
