@@ -156,6 +156,12 @@ Instructions:
 5. Run all tests and report results
 6. Fix any failing tests
 
+COMMIT YOUR WORK: the tests you write are part of the deliverable. Commit them
+before reporting, the same way the implementation stage commits its code. A run
+that ends with test files modified-but-uncommitted leaves the repository saying
+something different from the working tree, and the next reader cannot tell which
+one is the product.
+
 Report:
 - Tests written (file paths and descriptions)
 - Test results (pass/fail counts)
