@@ -649,14 +649,73 @@ stamped, and the gate caught both. Read it as a signal about the review prompts.
 There is a scoreboard AND a loop now. What there is not yet is a passing board:
 two axes are below target, which is the honest state to leave this in.
 
+## 6. The finished product — 2026-08-07
+
+A clean seven-stage `Full Development Cycle` building `ipv4.py`
+(`parse` / `format_int` / `in_cidr`) plus its suite. Every stage did its own job,
+and every claim was checked against the filesystem:
+
+| stage | commands | files changed | verdict |
+|---|---|---|---|
+| Implementation | 11 | 8 (2 declared artifacts) | pass |
+| Testing | 17 | committed its suite | pass |
+| Code Review | 15 | **0** | pass |
+| QA Validation | 17 / 23 / 16 | **0** | 3 audit rejections → human escalation |
+
+Independently verified rather than believed: `python3 test_ipv4.py` → **20 of 20
+test groups pass**, committed as `2e549db`, and `git status` is **clean** — no
+modified-but-uncommitted deliverable, which took one more fix (Testing now
+commits the suites it writes, the way Implementation always committed its code).
+
+Read-only held: Code Review and QA each ran 15–23 commands and changed nothing.
+That is the instruction their prompts always carried and nothing had ever
+enforced.
+
+### Four false starts on the way, each a real defect
+
+- **`readOnly` fired on its own by-product.** Code Review ran the suite exactly
+  as instructed, Python wrote `__pycache__/*.pyc`, and the gate failed it for
+  editing what it was reviewing. Running the code is what these stages are FOR,
+  so the snapshot now prunes tool caches and bytecode — but not `dist/`, which a
+  stage may legitimately be asked to produce.
+- **A truncated turn became a report.** A Testing stage "reported" 95 characters
+  ending mid-sentence and the pipeline handed that on as its account of the test
+  run, leaving a failing test behind. A cut-off final turn is now recorded and
+  refused for pipeline stages.
+- **An empty result was accepted.** A worker completed with `''` after
+  compaction; only the evidence gate caught it, and only because that stage
+  declared artifacts.
+- **A re-run over finished work fails the gate.** Implementation found
+  `slugify.py` already complete and correctly changed nothing — the gate failed
+  it. Correct by rule, wrong in spirit; noted, not fixed, because relaxing it is
+  how the original "green over an empty workspace" failure got in.
+
+### The open one: the auditor cannot reliably emit its verdict
+
+`rubberStampRate` is **60% over 7 days (6 of 10 passing verdicts rejected)** —
+and the reason has shifted. Most rejections are no longer "named nothing it
+audited" but "produced no machine-readable verdict at all": the QA stage writes
+a good prose report and omits the required ```json block. On this run it did so
+three times in a row, burning the entire retry budget on formatting before the
+substance was ever re-judged — exactly the failure mode this document warned
+about when the gate was written.
+
+The escalation that followed is the system working: three rejections, then a
+human asked "continue despite QA failures, or abort?" rather than a silent pass
+or a silent fail. But the budget should be spent on substance. The fix belongs
+in the prompt/verdict contract, not the gate.
+
 ## What is actually next
 
-1. **`paidTokensPerRun` is 3× its target** and is now the worst axis. The
+1. **Make the QA verdict contract stick** (finding above). Three of four
+   attempts omitted the JSON block. Until that lands, every audited pipeline
+   risks spending its retries on formatting.
+2. **`paidTokensPerRun` is 3× its target** and is now the worst axis. The
    planner→executor split exists to move exactly this number and has never been
    pointed at pipeline stages — every stage above ran on the paid lane.
-2. **`deliveredPct` 89% → ≥95%.** It is measured now (27 samples); the remaining
+3. **`deliveredPct` 86% → ≥95%** (81 samples now, comfortably measured). It is measured now (27 samples); the remaining
    failures need reading one by one rather than assuming they are all stale.
 3. **Watch `rubberStampRate`.** 40% on five verdicts is a signal, not a
    baseline. If it stays high the review prompts need work; if it falls to zero
    across a real spread of runs, the gate could relax to sampling.
-4. Chase the `toolConfig` provider error (unchanged).
+5. Chase the `toolConfig` provider error (unchanged).
