@@ -52,6 +52,34 @@ describe('snapshotWorkspace', () => {
     expect([...(snap?.files.keys() ?? [])]).toEqual(['real.py']);
   });
 
+  test('ignores what RUNNING the code leaves behind', async () => {
+    // The false positive this closes: a read-only Code Review stage ran the
+    // test suite exactly as instructed, Python wrote __pycache__/*.pyc, and the
+    // gate failed it for editing the thing it was reviewing.
+    await writeFile(join(root, 'slugify.py'), 'def slugify(): ...');
+    const before = await snapshotWorkspace(root);
+
+    await mkdir(join(root, '__pycache__'), { recursive: true });
+    await writeFile(join(root, '__pycache__', 'slugify.cpython-314.pyc'), 'bytecode');
+    await writeFile(join(root, 'stray.pyc'), 'bytecode');
+    await mkdir(join(root, '.pytest_cache'), { recursive: true });
+    await writeFile(join(root, '.pytest_cache', 'lastfailed'), '{}');
+    const after = await snapshotWorkspace(root);
+
+    expect(countChangedFiles(before, after)).toBe(0);
+  });
+
+  test('still sees a real edit made in the same run as the caches', async () => {
+    await writeFile(join(root, 'slugify.py'), 'v1');
+    const before = await snapshotWorkspace(root);
+    await mkdir(join(root, '__pycache__'), { recursive: true });
+    await writeFile(join(root, '__pycache__', 'x.cpython-314.pyc'), 'bytecode');
+    await writeFile(join(root, 'slugify.py'), 'v2 — actually edited');
+    await touchLater(join(root, 'slugify.py'));
+    const after = await snapshotWorkspace(root);
+    expect(countChangedFiles(before, after)).toBe(1);
+  });
+
   test('a root that does not exist yet is EMPTY, not unavailable', async () => {
     // Otherwise the first stage to create the workspace has no baseline, and
     // everything it writes goes unmeasured.
