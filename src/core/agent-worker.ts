@@ -74,6 +74,26 @@ export const DEFAULT_UNRACED_TURN_CEILING_MS = 5 * 60_000;
 export const BLOCKED_PROGRESS_INTERVAL_MS = 20_000;
 
 /**
+ * Whether the conversation so far REFERENCES tools — an assistant turn that
+ * called one, or a `tool` result answering it.
+ *
+ * Once it does, the request may never be sent without the tool definitions,
+ * even on a turn where tools are disabled: the blocks name tools the request
+ * would no longer declare. Anthropic-family providers reject that outright
+ * ("The toolConfig field must be defined when using toolUse and toolResult
+ * content blocks"). Two shapes count, because both appear in `this.messages` —
+ * the result message and the call that produced it (a compacted history can
+ * retain either one alone).
+ */
+export function historyReferencesTools(
+  messages: Array<{ role: string; toolCalls?: unknown }>,
+): boolean {
+  return messages.some(
+    (m) => m.role === 'tool' || (Array.isArray(m.toolCalls) && m.toolCalls.length > 0),
+  );
+}
+
+/**
  * Human-readable answer to "what is it waiting for?" for a batch of tool calls.
  * The three states the user currently cannot tell apart are exactly the three
  * branches here: a human's approval, a child's work, and an ordinary long tool.
@@ -1867,16 +1887,15 @@ export class AgentWorker extends BaseAgentWorker {
 
     const litellmModel = model.modelId;
     const advertisedTools = this.getAdvertisedToolHandlers();
-    const tools: ChatCompletionTool[] = this.toolExecutor.toolsDisabled
-      ? []
-      : advertisedTools.map((tool) => ({
-          type: 'function' as const,
-          function: {
-            name: tool.name,
-            description: tool.description,
-            parameters: tool.parameters,
-          },
-        }));
+    const declarableTools: ChatCompletionTool[] = advertisedTools.map((tool) => ({
+      type: 'function' as const,
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+      },
+    }));
+    const tools: ChatCompletionTool[] = this.toolExecutor.toolsDisabled ? [] : declarableTools;
 
     this.emit('thought', { model: litellmModel, messageCount: this.messages.length });
 
@@ -1919,11 +1938,33 @@ export class AgentWorker extends BaseAgentWorker {
     const escalateToolChoice = this.forceToolChoiceNextTurn && tools.length > 0;
     this.forceToolChoiceNextTurn = false;
 
+    // Dropping the tool definitions on a turn where tools are DISABLED (a
+    // `final` tool ran, the budget is spent) breaks the request outright once
+    // the conversation already contains tool_use/tool_result blocks: they
+    // reference tools the request no longer declares. Anthropic-family
+    // providers reject exactly that — "The toolConfig field must be defined
+    // when using toolUse and toolResult content blocks" — which is how a
+    // research child died mid-run on 2026-08-02 and the spawner's retry then
+    // answered from model recall with no searches at all.
+    //
+    // `toolChoice: 'none'` is the supported way to say "no more tool calls"
+    // (every provider here maps it), so the history stays valid while the
+    // disable still holds. Nothing changes on a turn that has tools.
+    const declareToolsOnly =
+      tools.length === 0 && declarableTools.length > 0 && historyReferencesTools(this.messages);
+    if (declareToolsOnly) {
+      agentLogger.debug(
+        { agentId: this.context.id, toolCount: declarableTools.length },
+        'Tools disabled but the history references them — declaring them with toolChoice:none',
+      );
+    }
+
     const completionOpts = applyTopicParamOverrides(
       {
         model: litellmModel,
         messages: this.messages,
-        tools: tools.length > 0 ? tools : undefined,
+        tools: tools.length > 0 ? tools : declareToolsOnly ? declarableTools : undefined,
+        ...(declareToolsOnly ? { toolChoice: 'none' as const } : {}),
         // G6: nullish coalescing — a configured temperature of 0 must survive
         // (|| turned it into 0.7, hurting small-model tool-call fidelity).
         temperature: model.defaultTemperature ?? 0.7,
