@@ -114,6 +114,14 @@ describe('extractInteractiveScript', () => {
     expect(r.warnings[0]).toMatch(/application\/json/);
   });
 
+  test('the dropped-type warning cannot carry markup into chat', () => {
+    // The warning is relayed to the user; the type attribute is author-controlled.
+    const r = extractInteractiveScript(
+      `<script type='x"><img src=x onerror=alert(1)>'>{}</script>`,
+    );
+    expect(r.warnings[0]).not.toMatch(/[<>"']/);
+  });
+
   test('type="module" and explicit JS mime types still bundle', () => {
     expect(extractInteractiveScript('<script type="module">let a=1;</script>').source).toContain('let a=1;');
     expect(extractInteractiveScript('<script type="text/javascript">let b=2;</script>').source).toContain('let b=2;');

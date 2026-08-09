@@ -74,6 +74,16 @@ function scriptTypeOf(attrs: string): string {
   return (m ? (m[1] ?? m[2] ?? m[3] ?? '') : '').trim();
 }
 
+/**
+ * Reduce a `type` to the characters a MIME type may contain, for quoting back
+ * in a warning. That warning travels to the agent and on to the user's chat,
+ * so echoing the raw attribute would carry whatever markup the author put in
+ * it into a surface that may render HTML.
+ */
+function safeTypeLabel(type: string): string {
+  return type.replace(/[^a-zA-Z0-9/+._-]/g, '').slice(0, 40) || 'unknown';
+}
+
 const BIND_HELPER = `function __octiBind(id, ev, fn) {
   var els = document.querySelectorAll('[data-octi-h="' + id + '"]');
   for (var i = 0; i < els.length; i++) els[i].addEventListener(ev, fn);
@@ -115,7 +125,7 @@ export function extractInteractiveScript(html: string): ExtractedScript {
     const type = scriptTypeOf(attrs);
     if (!JS_TYPE_RE.test(type)) {
       warnings.push(
-        `A \`<script type="${type}">\` block was dropped — only JavaScript is supported, and feeding a non-JS block to the bundler would break every other script on the page. Put the data in the markup or in a data source instead.`,
+        `A script block of type ${safeTypeLabel(type)} was dropped — only JavaScript is supported, and feeding a non-JS block to the bundler would break every other script on the page. Put the data in the markup or in a data source instead.`,
       );
       return '';
     }
