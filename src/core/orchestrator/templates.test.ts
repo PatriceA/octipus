@@ -111,13 +111,48 @@ describe('stage declarations survive the template round-trip', () => {
     expect(built.toolIds.length).toBeGreaterThan(0);
   });
 
-  test('buildStagesFromTemplate keeps producesArtifacts and runsCommands', () => {
+  // One fully-populated step, checked KEY BY KEY through both mappers, instead
+  // of one assertion per flag. Adding a declaration to `PipelineStepConfig` now
+  // costs one line here and the round trip is guarded automatically — which is
+  // the shape this bug keeps exploiting: the guard enumerated fields too, so a
+  // new flag was missing from the mapper AND from the test that checks mappers.
+  const everyDeclaration = {
+    name: 'Implementation',
+    topic: 'coding',
+    toolIds: ['shell'],
+    requiresApproval: true,
+    promptTemplate: 'do the thing',
+    stageType: 'qa_validation' as const,
+    maxRetries: 2,
+    retryTargetStage: 1,
+    model: 'some-model',
+    producesArtifacts: true,
+    runsCommands: true,
+    readOnly: true,
+    mechanical: true,
+  };
+  // Carried under a different name (`topic` → `role`) or deliberately not
+  // carried at all — everything else must survive byte for byte.
+  const RENAMED_OR_DROPPED = new Set(['topic', 'description']);
+
+  test('stepConfigToStageTemplate drops no declaration', () => {
+    const mapped = stepConfigToStageTemplate(everyDeclaration) as unknown as Record<string, unknown>;
+    for (const key of Object.keys(everyDeclaration)) {
+      if (RENAMED_OR_DROPPED.has(key)) continue;
+      expect([key, mapped[key]]).toEqual([key, (everyDeclaration as Record<string, unknown>)[key]]);
+    }
+    expect(mapped.role).toBe('coding');
+  });
+
+  test('buildStagesFromTemplate drops no declaration', () => {
     const [built] = buildStagesFromTemplate(
-      { type: 't', stages: [stepConfigToStageTemplate(step)], parameters: [] },
+      { type: 't', stages: [stepConfigToStageTemplate(everyDeclaration)], parameters: [] },
       'a task',
-    );
-    expect(built.producesArtifacts).toBe(true);
-    expect(built.runsCommands).toBe(true);
+    ) as unknown as Array<Record<string, unknown>>;
+    for (const key of Object.keys(everyDeclaration)) {
+      if (RENAMED_OR_DROPPED.has(key)) continue;
+      expect([key, built[key]]).toEqual([key, (everyDeclaration as Record<string, unknown>)[key]]);
+    }
   });
 
   test('an undeclared stage stays undeclared — the gate must not invent a claim', () => {
@@ -128,5 +163,7 @@ describe('stage declarations survive the template round-trip', () => {
     );
     expect(built.producesArtifacts).toBeUndefined();
     expect(built.runsCommands).toBeUndefined();
+    expect(built.readOnly).toBeUndefined();
+    expect(built.mechanical).toBeUndefined();
   });
 });

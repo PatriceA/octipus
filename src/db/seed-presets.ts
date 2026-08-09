@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import type { PipelineStepConfig } from '@/db/schema/pipeline-templates';
@@ -101,6 +102,13 @@ Present this clearly so the user can review and approve before coding begins.`,
         // previous stage's prose. Its prompt's FIRST instruction is to run the
         // suite, so `runsCommands` is simply the honest reading of what it is.
         producesArtifacts: true,
+        // The plan this stage runs on was written by `Requirements &
+        // Architecture` and APPROVED by the user — the judgment has already
+        // happened, and what is left is carrying it out. That is the pipeline's
+        // planner→executor split, so this binds to the lane's `executorModel`.
+        // Measured 2026-08-08: without it every stage of a full run was on a
+        // paid model and `paidTokensPerRun` sat at 3.4× target.
+        mechanical: true,
         promptTemplate: `Implement the approved plan. Write clean, well-documented code following project conventions.
 
 Task: {{description}}
@@ -132,6 +140,15 @@ Report what you implemented and any deviations from the plan.`,
         // — one of them announced it had no shell tool, simulated the run, and
         // reported "18 passed, 0 failed".
         runsCommands: true,
+        // Same argument as Implementation: the architecture plan already names
+        // the testing strategy and the edge cases to cover, so writing and
+        // running the suite is execution, not design.
+        //
+        // Code Review and QA Validation deliberately do NOT declare this. Their
+        // whole job is judgment, and a cheap auditor is precisely how a rubber
+        // stamp gets in — the number this split exists to move is paid tokens,
+        // not the ones spent deciding whether the work is right.
+        mechanical: true,
         promptTemplate: `Write tests for the implementation and run them.
 
 Task: {{description}}
@@ -376,6 +393,10 @@ Report:
         requiresApproval: false,
         // A bug fix that changed no file did not happen. See 'Implementation'.
         producesArtifacts: true,
+        // `Reproduce & Diagnose` is the planner here — it is the approval gate
+        // and it hands over a root cause plus a proposed fix approach. Applying
+        // that is execution.
+        mechanical: true,
         promptTemplate: `Implement the bug fix based on the diagnosis.
 
 Bug: {{description}}
@@ -443,6 +464,7 @@ export function planProducesArtifactsBackfill(
   const declared = new Set(shipped.filter((s) => s.producesArtifacts).map((s) => s.name));
   const executors = new Set(shipped.filter((s) => s.runsCommands).map((s) => s.name));
   const readers = new Set(shipped.filter((s) => s.readOnly).map((s) => s.name));
+  const executeOnly = new Set(shipped.filter((s) => s.mechanical).map((s) => s.name));
   const auditors = new Map(
     shipped.filter((s) => s.stageType === 'qa_validation').map((s) => [s.name, s] as const),
   );
@@ -463,6 +485,10 @@ export function planProducesArtifactsBackfill(
       changed = true;
       next = { ...next, readOnly: true };
     }
+    if (next.mechanical === undefined && executeOnly.has(next.name)) {
+      changed = true;
+      next = { ...next, mechanical: true };
+    }
     const auditor = auditors.get(next.name);
     if (auditor && next.stageType === undefined) {
       changed = true;
@@ -481,22 +507,90 @@ export function planProducesArtifactsBackfill(
   return { steps, changed };
 }
 
-async function backfillPresetStepFlags(name: string, shipped: PipelineStepConfig[]): Promise<void> {
-  if (!shipped.some((s) => s.producesArtifacts || s.runsCommands || s.readOnly || s.stageType === 'qa_validation')) return;
+/**
+ * Content hash of a preset's steps. Stable across restarts and machines, so it
+ * can be compared to a value written weeks ago: `JSON.stringify` over the
+ * literal in this file preserves key order, and the stored jsonb round-trips
+ * through the same serializer.
+ */
+function stepsHash(steps: PipelineStepConfig[]): string {
+  return createHash('sha256').update(JSON.stringify(steps)).digest('hex');
+}
 
+/**
+ * Reconcile one already-seeded preset against what this build ships.
+ *
+ * Three outcomes, in order:
+ *
+ * 1. **Untouched** (`shippedHash` matches the stored steps) — the user has
+ *    never edited this preset, so refresh it wholesale. This is what makes a
+ *    prompt or `toolIds` improvement reach an existing install at all; before
+ *    it, only the gating flags were ever backfilled and every content change
+ *    shipped dead.
+ * 2. **Adoptable** (no hash yet, but the stored steps already equal the
+ *    shipped ones) — record the hash. No content changes; it just moves a
+ *    legacy row into case 1 for next time, so an install seeded before this
+ *    column existed is not frozen forever.
+ * 3. **Edited** (anything else) — leave the content alone and backfill only
+ *    missing gating flags, exactly as before. An absent flag was never a user
+ *    choice; an edited prompt was.
+ */
+export type PresetReconcile =
+  | { action: 'noop' }
+  /** Content already matches; only record the hash so case 1 works next time. */
+  | { action: 'adopt'; shippedHash: string }
+  /** Untouched preset — take the shipped definition wholesale. */
+  | { action: 'refresh'; steps: PipelineStepConfig[]; shippedHash: string }
+  /** User-edited preset — add only the gating flags it is missing. */
+  | { action: 'backfill'; steps: PipelineStepConfig[] };
+
+/** The decision above, with no IO, so every branch is testable without a DB. */
+export function planPresetReconcile(
+  stored: PipelineStepConfig[],
+  storedShippedHash: string | null,
+  shipped: PipelineStepConfig[],
+): PresetReconcile {
+  const storedHash = stepsHash(stored);
+  const shippedHash = stepsHash(shipped);
+
+  if (storedHash === shippedHash) {
+    return storedShippedHash === shippedHash ? { action: 'noop' } : { action: 'adopt', shippedHash };
+  }
+  if (storedShippedHash && storedShippedHash === storedHash) {
+    return { action: 'refresh', steps: shipped, shippedHash };
+  }
+  const { steps, changed } = planProducesArtifactsBackfill(stored, shipped);
+  return changed ? { action: 'backfill', steps } : { action: 'noop' };
+}
+
+async function reconcilePreset(name: string, shipped: PipelineStepConfig[]): Promise<void> {
   const db = getDb();
   const [row] = await db
-    .select({ id: pipelineTemplates.id, steps: pipelineTemplates.steps })
+    .select({ id: pipelineTemplates.id, steps: pipelineTemplates.steps, shippedHash: pipelineTemplates.shippedHash })
     .from(pipelineTemplates)
     .where(eq(pipelineTemplates.name, name))
     .limit(1);
   if (!row) return;
 
-  const { steps, changed } = planProducesArtifactsBackfill((row.steps as PipelineStepConfig[]) ?? [], shipped);
-  if (!changed) return;
-
-  await db.update(pipelineTemplates).set({ steps, updatedAt: new Date() }).where(eq(pipelineTemplates.id, row.id));
-  logger.info({ template: name }, 'Backfilled gating flags on preset pipeline template');
+  const plan = planPresetReconcile((row.steps as PipelineStepConfig[]) ?? [], row.shippedHash, shipped);
+  switch (plan.action) {
+    case 'noop':
+      return;
+    case 'adopt':
+      // No content change, so no `updatedAt` bump — this is bookkeeping.
+      await db.update(pipelineTemplates).set({ shippedHash: plan.shippedHash }).where(eq(pipelineTemplates.id, row.id));
+      return;
+    case 'refresh':
+      await db
+        .update(pipelineTemplates)
+        .set({ steps: plan.steps, shippedHash: plan.shippedHash, updatedAt: new Date() })
+        .where(eq(pipelineTemplates.id, row.id));
+      logger.info({ template: name }, 'Refreshed an untouched preset pipeline template from the shipped definition');
+      return;
+    case 'backfill':
+      await db.update(pipelineTemplates).set({ steps: plan.steps, updatedAt: new Date() }).where(eq(pipelineTemplates.id, row.id));
+      logger.info({ template: name }, 'Backfilled gating flags on an edited preset pipeline template');
+  }
 }
 
 /**
@@ -515,12 +609,10 @@ export async function seedPresetTemplates(): Promise<void> {
       .limit(1);
 
     if (existing.length > 0) {
-      // Do not overwrite — users can edit preset templates and we must not
-      // clobber their changes on restart. The ONE exception is backfilling a
-      // step field the row predates entirely: an absent key was never a user
-      // choice, and without this an existing install never gets the evidence
-      // declaration, so the gate silently never fires.
-      await backfillPresetStepFlags(preset.name, preset.steps);
+      // Never blindly overwrite — users can edit preset templates. What we DO
+      // refresh is a preset they have provably not touched, plus the gating
+      // flags on one they have. See `reconcilePreset`.
+      await reconcilePreset(preset.name, preset.steps);
       continue;
     }
 
@@ -530,6 +622,7 @@ export async function seedPresetTemplates(): Promise<void> {
       isPreset: true,
       userId: null as any, // Presets have no owner — available to all users
       steps: preset.steps,
+      shippedHash: stepsHash(preset.steps),
     });
 
     logger.info({ template: preset.name }, 'Seeded preset pipeline template');

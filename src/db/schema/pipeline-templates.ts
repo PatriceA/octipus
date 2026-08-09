@@ -61,6 +61,33 @@ export interface PipelineStepConfig {
    * work back to the stage that owns it.
    */
   readOnly?: boolean;
+  /**
+   * DECLARES that this stage EXECUTES an already-approved plan rather than
+   * deciding what the plan should be — so it binds to its lane's cheap
+   * `executorModel` instead of the lane primary.
+   *
+   * This is the pipeline's half of the swarm's planner→executor split
+   * (`hasPlan` in `src/core/swarm/spawner.ts`). That machinery only ever fired
+   * for `spawn_child`; every pipeline stage goes through
+   * `orchestrator/worker-spawner.ts`, which has no notion of a plan, so the
+   * saving was unreachable from a pipeline. Measured 2026-08-08: every stage of
+   * a full seven-stage run was on a paid model, `paidTokensPerRun` 3.4× target.
+   *
+   * A pipeline's plan is a real artifact, not an inference: `Requirements &
+   * Architecture` is a user-APPROVED design document and the stages after it
+   * carry it out, which is exactly the condition `hasPlan` encodes.
+   *
+   * Opt-in and per-stage, like every other declaration here, because the split
+   * is a trade and not a free win: the A/B in `docs/plans/quality-loop-status.md`
+   * found the token saving real (314k paid → 0) at ~6.6× wall clock, and on one
+   * task the cheap arm gave up where the expensive one persisted. Judgment
+   * stages (review, QA, architecture) deliberately do NOT declare it — a cheap
+   * auditor is how a rubber stamp gets in.
+   *
+   * An explicit per-stage `model` still wins, and a lane with no
+   * `executorModel` falls through to the primary (planner == executor).
+   */
+  mechanical?: boolean;
 }
 
 /**
@@ -87,6 +114,24 @@ export const pipelineTemplates = pgTable('pipeline_templates', {
   steps: jsonb('steps').$type<PipelineStepConfig[]>().default([]).notNull(),
   /** Typed parameters the recipe accepts; substituted as `{{param.<key>}}`. */
   parameters: jsonb('parameters').$type<RecipeParameter[]>().default([]).notNull(),
+  /**
+   * For a PRESET row: a hash of the steps this install was last SHIPPED, so
+   * `seedPresetTemplates` can tell a preset the user has never touched from one
+   * they have edited.
+   *
+   * Without it, presets were insert-once-and-never-again: user edits survived a
+   * restart (correct) but so did stale prompts, and only the gating flags were
+   * ever backfilled. Every prompt and `toolIds` improvement therefore shipped
+   * dead — a real install would simply never receive it, and each change needed
+   * a throwaway script to push into the stored row.
+   *
+   * Null means "seeded before this column existed", which is deliberately read
+   * as EDITED: a row we cannot prove is untouched must not be overwritten, and
+   * silently discarding a user's pipeline is the one failure worse than a stale
+   * prompt. Such a row adopts the hash the first time its content happens to
+   * match what is shipped, and self-updates from then on.
+   */
+  shippedHash: text('shipped_hash'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });

@@ -24,6 +24,8 @@ export interface StageTemplate {
   toolIds?: string[];
   /** Declares the stage must NOT change the workspace — see PipelineStepConfig. */
   readOnly?: boolean;
+  /** Declares the stage executes an approved plan — see PipelineStepConfig. */
+  mechanical?: boolean;
 }
 
 export interface PipelineTemplate {
@@ -53,6 +55,7 @@ export function stepConfigToStageTemplate(step: PipelineStepConfig): StageTempla
     producesArtifacts: step.producesArtifacts,
     runsCommands: step.runsCommands,
     readOnly: step.readOnly,
+    mechanical: step.mechanical,
     toolIds: step.toolIds,
   };
 }
@@ -309,6 +312,7 @@ export function buildStagesFromTemplate(
       producesArtifacts: stage.producesArtifacts,
       runsCommands: stage.runsCommands,
       readOnly: stage.readOnly,
+      mechanical: stage.mechanical,
     };
   });
 }
