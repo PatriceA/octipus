@@ -2,7 +2,7 @@ import { afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { buildAndStoreBundle, readBundleSha, validateUserBundle } from './bundler';
+import { buildAndStoreBundle, pruneArtifactBundles, readBundleSha, validateUserBundle } from './bundler';
 
 let dir: string;
 beforeAll(() => {
@@ -46,4 +46,30 @@ describe('buildAndStoreBundle', () => {
 afterEach(() => {});
 process.on('exit', () => {
   if (dir) rmSync(dir, { recursive: true, force: true });
+});
+
+describe('pruneArtifactBundles', () => {
+  test('keeps exactly the named versions, drops the rest', async () => {
+    for (const v of ['v1', 'v2', 'v3', 'v4']) {
+      await buildAndStoreBundle({ artifactId: 'prune-me', versionId: v, source: `const v = "${v}";` });
+    }
+    // The live version is the OLDEST here — recency on disk is not the rule.
+    const removed = await pruneArtifactBundles('prune-me', ['v4', 'v1']);
+    expect(removed).toBe(2);
+    expect(await readBundleSha('prune-me', 'v4')).not.toBeNull();
+    expect(await readBundleSha('prune-me', 'v1')).not.toBeNull();
+    expect(await readBundleSha('prune-me', 'v2')).toBeNull();
+    expect(await readBundleSha('prune-me', 'v3')).toBeNull();
+  });
+
+  test('no-op when every version is kept', async () => {
+    await buildAndStoreBundle({ artifactId: 'under-cap', versionId: 'a', source: 'const a=1;' });
+    await buildAndStoreBundle({ artifactId: 'under-cap', versionId: 'b', source: 'const b=1;' });
+    expect(await pruneArtifactBundles('under-cap', ['a', 'b'])).toBe(0);
+    expect(await readBundleSha('under-cap', 'a')).not.toBeNull();
+  });
+
+  test('no-op on an artifact that never had a bundle', async () => {
+    expect(await pruneArtifactBundles('never-built', [])).toBe(0);
+  });
 });

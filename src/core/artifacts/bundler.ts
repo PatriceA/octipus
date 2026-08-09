@@ -8,7 +8,7 @@
  * No fs / child_process / network at build time.
  */
 
-import { copyFile, mkdir, readFile, rm, writeFile } from 'fs/promises';
+import { copyFile, mkdir, readdir, readFile, rm, writeFile } from 'fs/promises';
 import { createHash } from 'crypto';
 import { dirname, join } from 'path';
 import { coreLogger } from '@/utils/logger';
@@ -122,14 +122,46 @@ export async function buildAndStoreBundle(input: BundleInput): Promise<BundleRes
  * Drop every bundle an artifact owns. The DB row going away does not take the
  * files with it, so without this a purge leaves them on disk forever with
  * nothing left to reference them.
- *
- * ponytail: whole-artifact only. Superseded VERSION directories still
- * accumulate (a few KB each, and old versions must stay readable for rollback);
- * sweep them from `runArtifactCleanup` against `current_version_id` if that
- * ever grows into real disk.
  */
 export async function deleteArtifactBundles(artifactId: string): Promise<void> {
   await rm(join(bundlesRoot(), artifactId), { recursive: true, force: true });
+}
+
+/** How many superseded version bundles to keep per artifact. */
+export const KEEP_VERSION_BUNDLES = 5;
+
+/**
+ * Drop every version bundle except the ones named in `keepVersionIds`.
+ *
+ * Every edit mints a new versionId and therefore a new directory, and version
+ * ROWS are never pruned — so left alone this grows without bound. Which
+ * versions to keep is the CALLER's decision, taken from `created_at` in the
+ * database: directory mtime looks like the same information but is not, since
+ * `copyBundle` stamps a carried-forward bundle with the time it was copied,
+ * and version ids are random UUIDs that sort in no useful order.
+ */
+export async function pruneArtifactBundles(
+  artifactId: string,
+  keepVersionIds: Iterable<string>,
+): Promise<number> {
+  const dir = join(bundlesRoot(), artifactId);
+  let names: string[];
+  try {
+    names = (await readdir(dir, { withFileTypes: true }))
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name);
+  } catch {
+    return 0; // no bundles for this artifact
+  }
+
+  const keep = new Set(keepVersionIds);
+  let removed = 0;
+  for (const name of names) {
+    if (keep.has(name)) continue;
+    await rm(join(dir, name), { recursive: true, force: true });
+    removed++;
+  }
+  return removed;
 }
 
 /**

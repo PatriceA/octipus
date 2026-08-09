@@ -25,6 +25,18 @@ export interface ArtifactSettings {
 
 let cached: ArtifactSettings | null = null;
 
+/**
+ * The built browser SDK the embed page loads. Kept next to the sha reader so
+ * the file we serve and the hash we pin in CSP can never drift apart.
+ *
+ * It lives under `web/public/`, but the embed page is served by the BACKEND,
+ * so the backend has to serve this too — a root-relative `/octipus-artifact-
+ * client.js` resolves against the API origin, not the web app's.
+ */
+export function artifactSdkFilePath(): string {
+  return join(process.cwd(), 'web/public/octipus-artifact-client.js');
+}
+
 function readSdkShaFromDisk(): string {
   const path = join(process.cwd(), 'web/public/octipus-artifact-client.sha256.txt');
   if (!existsSync(path)) return '';

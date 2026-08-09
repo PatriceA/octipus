@@ -13,6 +13,7 @@
  */
 
 import { Elysia } from 'elysia';
+import { existsSync } from 'fs';
 import { apiContext } from '@/api/context';
 import { artifactsRepository } from '@/db/repositories/artifacts-repository';
 import { workspaces } from '@/db/schema/organizations';
@@ -35,7 +36,7 @@ import { checkRateLimit } from '@/core/artifacts/rate-limit';
 import { bundleFilePath } from '@/core/artifacts/bundler';
 import { artifactLifecycleBus } from '@/core/artifacts/lifecycle-bus';
 import { recordArtifactView } from '@/core/artifacts/scheduler';
-import { resolveArtifactSettings } from '@/core/artifacts/settings';
+import { artifactSdkFilePath, resolveArtifactSettings } from '@/core/artifacts/settings';
 import type { Artifact } from '@/db/schema/artifacts';
 import { coreLogger } from '@/utils/logger';
 
@@ -109,6 +110,39 @@ async function authorizeForRequest(opts: {
 }
 
 /**
+ * Is the built SDK on disk? Memoised — it cannot appear at runtime, and this
+ * is consulted on every embed render. A stored `artifacts.sdkSha256` is NOT
+ * sufficient evidence: the setting outlives the file (e.g. a backend image
+ * built without `web/public`), and advertising a script we then 404 on is how
+ * live refresh silently stopped working.
+ */
+let sdkPresent: boolean | null = null;
+function sdkAvailable(): boolean {
+  if (sdkPresent === null) {
+    sdkPresent = existsSync(artifactSdkFilePath());
+    if (!sdkPresent) {
+      coreLogger.warn(
+        { path: artifactSdkFilePath() },
+        'artifact.sdk.missing — embeds will render without live refresh; run `bun run scripts/build-artifact-sdk.ts`',
+      );
+    }
+  }
+  return sdkPresent;
+}
+
+/** Serve the SDK from the API origin, where the embed page's CSP `'self'` points. */
+async function handleSdk(ctx: HandlerCtx) {
+  const file = Bun.file(artifactSdkFilePath());
+  if (!(await file.exists())) {
+    ctx.set.status = 404;
+    return 'Not found';
+  }
+  ctx.set.headers['content-type'] = 'application/javascript; charset=utf-8';
+  ctx.set.headers['cache-control'] = 'public, max-age=300';
+  return file.text();
+}
+
+/**
  * NO `integrity=` on these script tags. The embed runs in a
  * `sandbox="allow-scripts"` iframe, i.e. an opaque origin, so the browser
  * treats even a same-path subresource as cross-origin and refuses to check SRI
@@ -145,7 +179,7 @@ ${settings.gatewayWss ? `<meta name="octipus-gateway-wss" content="${escapeHtml(
 <style>${input.css}</style>
 </head><body>
 ${input.templateBody}
-${settings.sdkSha256 ? `<script src="/octipus-artifact-client.js"></script>` : ''}
+${sdkAvailable() ? `<script src="/octipus-artifact-client.js"></script>` : ''}
 ${input.bundle ? `<script src="${escapeHtml(input.bundle.src)}"></script>` : ''}
 </body></html>`;
   return { html, csp };
@@ -402,6 +436,7 @@ function resolveBusPath(root: Record<string, unknown>, expr: string): unknown {
 /** Subdomain-mode mount (also catches direct hits to the main host). */
 export const artifactPageRoutes = new Elysia()
   .use(apiContext)
+  .get('/octipus-artifact-client.js', handleSdk)
   .get('/a/:slug', handleOuter)
   .get('/a/:slug/embed', handleEmbed)
   .get('/a/:slug/bundle.js', handleBundle)

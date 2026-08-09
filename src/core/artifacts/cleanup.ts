@@ -4,9 +4,10 @@
  * task type so it lives on the same primitive as refresh.
  */
 
-import { deleteArtifactBundles } from './bundler';
+import { deleteArtifactBundles, KEEP_VERSION_BUNDLES, pruneArtifactBundles } from './bundler';
 import { artifactsRepository } from '@/db/repositories/artifacts-repository';
 import { artifactDataSources } from '@/db/schema/artifact-data-sources';
+import { artifacts } from '@/db/schema/artifacts';
 import { getDb } from '@/db/postgres';
 import { getScheduler, type ScheduledTask } from '@/core/scheduler';
 import { coreLogger } from '@/utils/logger';
@@ -20,6 +21,8 @@ export interface CleanupReport {
   prunedSnapshots: number;
   purgedArtifacts: number;
   expiredShareLinks: number;
+  /** Superseded version bundles removed from disk. */
+  prunedBundles: number;
 }
 
 export async function runArtifactCleanup(): Promise<CleanupReport> {
@@ -38,11 +41,26 @@ export async function runArtifactCleanup(): Promise<CleanupReport> {
   const purgedArtifacts = purgedIds.length;
   const expiredShareLinks = await artifactsRepository.deleteExpiredShareLinks(new Date());
 
+  // Every edit mints a version directory under the bundles root and version
+  // rows are never pruned, so cap what each surviving artifact keeps.
+  let prunedBundles = 0;
+  const live = await db
+    .select({ id: artifacts.id, currentVersionId: artifacts.currentVersionId })
+    .from(artifacts);
+  for (const a of live) {
+    // listVersions is newest-first by created_at — the DB, not the filesystem,
+    // decides which versions are recent.
+    const recent = await artifactsRepository.listVersions(a.id, KEEP_VERSION_BUNDLES);
+    const keep = new Set(recent.map((v) => v.id));
+    if (a.currentVersionId) keep.add(a.currentVersionId);
+    prunedBundles += await pruneArtifactBundles(a.id, keep);
+  }
+
   coreLogger.info(
-    { prunedSnapshots, purgedArtifacts, expiredShareLinks },
+    { prunedSnapshots, purgedArtifacts, expiredShareLinks, prunedBundles },
     'artifact.cleanup.done',
   );
-  return { prunedSnapshots, purgedArtifacts, expiredShareLinks };
+  return { prunedSnapshots, purgedArtifacts, expiredShareLinks, prunedBundles };
 }
 
 export async function handleArtifactCleanupTask(_task: ScheduledTask): Promise<void> {
