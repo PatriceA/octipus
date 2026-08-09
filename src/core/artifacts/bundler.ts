@@ -8,9 +8,9 @@
  * No fs / child_process / network at build time.
  */
 
-import { mkdir, readFile, writeFile } from 'fs/promises';
+import { copyFile, mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { createHash } from 'crypto';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { coreLogger } from '@/utils/logger';
 
 export interface BundleInput {
@@ -37,6 +37,11 @@ export function bundlesRoot(): string {
   } catch {
     return process.env.ARTIFACT_BUNDLES_DIR ?? join(process.cwd(), 'data', 'artifacts');
   }
+}
+
+/** On-disk path of a version's built bundle. */
+export function bundleFilePath(artifactId: string, versionId: string): string {
+  return join(bundlesRoot(), artifactId, versionId, 'bundle.js');
 }
 
 /** Static allow-list of import specifiers permitted in user bundles. V1: empty. */
@@ -94,7 +99,7 @@ export async function buildAndStoreBundle(input: BundleInput): Promise<BundleRes
     throw new Error('bundler: no outputs produced');
   }
 
-  const bundlePath = join(outDir, 'bundle.js');
+  const bundlePath = bundleFilePath(input.artifactId, input.versionId);
   await writeFile(bundlePath, outBytes);
 
   const sha256Hex = createHash('sha256').update(outBytes).digest('hex');
@@ -113,9 +118,44 @@ export async function buildAndStoreBundle(input: BundleInput): Promise<BundleRes
   return { sha256Hex, bytes: outBytes.length, path: bundlePath, cssPath };
 }
 
+/**
+ * Drop every bundle an artifact owns. The DB row going away does not take the
+ * files with it, so without this a purge leaves them on disk forever with
+ * nothing left to reference them.
+ *
+ * ponytail: whole-artifact only. Superseded VERSION directories still
+ * accumulate (a few KB each, and old versions must stay readable for rollback);
+ * sweep them from `runArtifactCleanup` against `current_version_id` if that
+ * ever grows into real disk.
+ */
+export async function deleteArtifactBundles(artifactId: string): Promise<void> {
+  await rm(join(bundlesRoot(), artifactId), { recursive: true, force: true });
+}
+
+/**
+ * Carry a bundle forward to a new version. Bundles are keyed by versionId, so
+ * an edit that touches only the CSS (and reuses the stored template, whose JS
+ * was already lifted out) would otherwise land a version with no behaviour.
+ * Returns false when there was nothing to copy.
+ */
+export async function copyBundle(
+  artifactId: string,
+  fromVersionId: string,
+  toVersionId: string,
+): Promise<boolean> {
+  try {
+    const dest = bundleFilePath(artifactId, toVersionId);
+    await mkdir(dirname(dest), { recursive: true });
+    await copyFile(bundleFilePath(artifactId, fromVersionId), dest);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function readBundleSha(artifactId: string, versionId: string): Promise<string | null> {
   try {
-    const buf = await readFile(join(bundlesRoot(), artifactId, versionId, 'bundle.js'));
+    const buf = await readFile(bundleFilePath(artifactId, versionId));
     return createHash('sha256').update(buf).digest('hex');
   } catch {
     return null;

@@ -32,6 +32,7 @@ import {
 import { signArtifactToken } from '@/core/artifacts/token';
 import { verifyShareLinkToken } from '@/core/artifacts/share-link';
 import { checkRateLimit } from '@/core/artifacts/rate-limit';
+import { bundleFilePath } from '@/core/artifacts/bundler';
 import { artifactLifecycleBus } from '@/core/artifacts/lifecycle-bus';
 import { recordArtifactView } from '@/core/artifacts/scheduler';
 import { resolveArtifactSettings } from '@/core/artifacts/settings';
@@ -107,7 +108,25 @@ async function authorizeForRequest(opts: {
   return null;
 }
 
-function buildEmbedHtml(input: { artifact: Artifact; templateBody: string; css: string; token: string }): string {
+/**
+ * NO `integrity=` on these script tags. The embed runs in a
+ * `sandbox="allow-scripts"` iframe, i.e. an opaque origin, so the browser
+ * treats even a same-path subresource as cross-origin and refuses to check SRI
+ * without CORS ("the resource requires the request to be CORS enabled to check
+ * the integrity … has been blocked"). CORS is not available either: the bundle
+ * route authenticates by cookie or share token, and `Origin: null` cannot be
+ * paired with credentialed CORS. `script-src 'self'` is what actually gates
+ * these — and both files are served by this app, to a viewer this same handler
+ * already authorized, so SRI was guarding nothing.
+ */
+function buildEmbedHtml(input: {
+  artifact: Artifact;
+  templateBody: string;
+  css: string;
+  token: string;
+  /** Same-origin URL of this version's JS bundle, when it has one. */
+  bundle?: { src: string };
+}): { html: string; csp: string } {
   const settings = resolveArtifactSettings();
   const cspHashes = settings.sdkSha256 ? [settings.sdkSha256] : [];
   const csp = buildEmbedCsp({
@@ -115,7 +134,7 @@ function buildEmbedHtml(input: { artifact: Artifact; templateBody: string; css: 
     gatewayWss: settings.gatewayWss || undefined,
     frameAncestors: input.artifact.allowedEmbedOrigins ?? [],
   });
-  return `<!doctype html>
+  const html = `<!doctype html>
 <html><head>
 <meta charset="utf-8">
 <title>${escapeHtml(input.artifact.title)}</title>
@@ -126,12 +145,10 @@ ${settings.gatewayWss ? `<meta name="octipus-gateway-wss" content="${escapeHtml(
 <style>${input.css}</style>
 </head><body>
 ${input.templateBody}
-${settings.sdkSha256 ? `<script src="/octipus-artifact-client.js" integrity="sha256-${escapeHtml(toBase64(settings.sdkSha256))}"></script>` : ''}
+${settings.sdkSha256 ? `<script src="/octipus-artifact-client.js"></script>` : ''}
+${input.bundle ? `<script src="${escapeHtml(input.bundle.src)}"></script>` : ''}
 </body></html>`;
-}
-
-function toBase64(hex: string): string {
-  return Buffer.from(hex, 'hex').toString('base64');
+  return { html, csp };
 }
 
 function buildOuterHtml(artifact: Artifact, embedSrc: string): string {
@@ -249,8 +266,56 @@ async function handleEmbed(ctx: HandlerCtx) {
     viewerUserId: ctx.user?.id ?? null,
   });
 
+  // This version's own JS, lifted out of the template at author time and
+  // served from the artifact's origin (inline script can't run under the CSP).
+  // Existence only — the hash is not used (see buildEmbedHtml on why there is
+  // no SRI here), so do not read and digest the whole file on every request.
+  let bundle: { src: string } | undefined;
+  if (version && (await Bun.file(bundleFilePath(auth.artifact.id, version.id)).exists())) {
+    const qs = typeof ctx.query.t === 'string' ? `?t=${encodeURIComponent(ctx.query.t)}` : '';
+    // Derive from the request path so this works under both mounts.
+    const src = `${new URL(ctx.request.url).pathname.replace(/\/embed$/, '/bundle.js')}${qs}`;
+    bundle = { src };
+  }
+
+  const page = buildEmbedHtml({ artifact: auth.artifact, templateBody: body, css, token, bundle });
   ctx.set.headers['content-type'] = 'text/html; charset=utf-8';
-  return buildEmbedHtml({ artifact: auth.artifact, templateBody: body, css, token });
+  // Also as a header: `frame-ancestors` is ignored when delivered via <meta>,
+  // so `allowedEmbedOrigins` was never actually enforced. The <meta> copy stays
+  // for the rest of the policy.
+  ctx.set.headers['content-security-policy'] = page.csp;
+  return page.html;
+}
+
+/** Serve the current version's built JS bundle. Same auth as the embed. */
+async function handleBundle(ctx: HandlerCtx) {
+  const rl = checkRateLimit(`bundle:${clientIp(ctx.request)}`, { capacity: 30, refillPerSecond: 1 });
+  if (!rl.allowed) {
+    ctx.set.status = 429;
+    ctx.set.headers['retry-after'] = String(rl.retryAfterSeconds ?? 1);
+    return 'Too many requests';
+  }
+  const auth = await authorizeForRequest({
+    slug: ctx.params.slug,
+    user: ctx.user ?? null,
+    shareToken: typeof ctx.query.t === 'string' ? ctx.query.t : null,
+  });
+  if (!auth || !auth.artifact.currentVersionId) {
+    ctx.set.status = 404;
+    return 'Not found';
+  }
+
+  const file = Bun.file(bundleFilePath(auth.artifact.id, auth.artifact.currentVersionId));
+  if (!(await file.exists())) {
+    ctx.set.status = 404;
+    return 'Not found';
+  }
+  ctx.set.headers['content-type'] = 'application/javascript; charset=utf-8';
+  // The URL is slug-keyed, not version-keyed — publishing a new version reuses
+  // it. Caching would serve stale JS whose hash no longer matches the embed's
+  // `integrity`, i.e. a page that silently stops working.
+  ctx.set.headers['cache-control'] = 'no-cache';
+  return file.text();
 }
 
 async function handleExport(ctx: HandlerCtx) {
@@ -339,6 +404,7 @@ export const artifactPageRoutes = new Elysia()
   .use(apiContext)
   .get('/a/:slug', handleOuter)
   .get('/a/:slug/embed', handleEmbed)
+  .get('/a/:slug/bundle.js', handleBundle)
   .get('/a/:slug/export/:exportId', handleExport);
 
 /** Path-prefix fallback — works without any DNS configuration. */
@@ -346,4 +412,5 @@ export const artifactPageRoutesFallback = new Elysia({ prefix: '/__artifacts__' 
   .use(apiContext)
   .get('/a/:slug', handleOuter)
   .get('/a/:slug/embed', handleEmbed)
+  .get('/a/:slug/bundle.js', handleBundle)
   .get('/a/:slug/export/:exportId', handleExport);

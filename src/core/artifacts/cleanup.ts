@@ -4,6 +4,7 @@
  * task type so it lives on the same primitive as refresh.
  */
 
+import { deleteArtifactBundles } from './bundler';
 import { artifactsRepository } from '@/db/repositories/artifacts-repository';
 import { artifactDataSources } from '@/db/schema/artifact-data-sources';
 import { getDb } from '@/db/postgres';
@@ -29,9 +30,12 @@ export async function runArtifactCleanup(): Promise<CleanupReport> {
     prunedSnapshots += await artifactsRepository.pruneSnapshots(s.id, SNAPSHOT_RETENTION);
   }
 
-  const purgedArtifacts = await artifactsRepository.purgeSoftDeleted(
+  const purgedIds = await artifactsRepository.purgeSoftDeleted(
     new Date(Date.now() - SOFT_DELETE_TTL_MS),
   );
+  // The row is gone; the built JS on disk is not, and nothing else references it.
+  for (const id of purgedIds) await deleteArtifactBundles(id);
+  const purgedArtifacts = purgedIds.length;
   const expiredShareLinks = await artifactsRepository.deleteExpiredShareLinks(new Date());
 
   coreLogger.info(

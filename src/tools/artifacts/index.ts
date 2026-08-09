@@ -9,6 +9,8 @@ import { artifactsRepository } from '@/db/repositories/artifacts-repository';
 import type { ArtifactSourceKind } from '@/db/schema/artifact-data-sources';
 import type { ArtifactType, ArtifactVisibility } from '@/db/schema/artifacts';
 import { buildArtifactAppUrl, buildArtifactEmbedUrl, buildArtifactOuterUrl, pickShareableUrl } from '@/core/artifacts/host';
+import { buildAndStoreBundle, copyBundle, deleteArtifactBundles } from '@/core/artifacts/bundler';
+import { extractInteractiveScript } from '@/core/artifacts/render';
 import { refreshSource } from '@/core/artifacts/refresh';
 import { scheduleArtifactRefresh } from '@/core/artifacts/scheduler';
 import { publishArtifactVersionUpdated } from '@/core/artifacts/events';
@@ -43,6 +45,68 @@ function diffTemplateAndSources(template: string, sourceNames: string[]): {
   };
 }
 
+/** Does this template carry `data-octi-h` markers, i.e. bindings a bundle owns? */
+function hasBoundHandlers(template: string): boolean {
+  return /\sdata-octi-h\s*=/.test(template);
+}
+
+/**
+ * Write a new version, lifting the template's own JS into a CSP-pinned bundle.
+ *
+ * Inline `<script>` and `on*=` handlers cannot run under the embed CSP, so
+ * `extractInteractiveScript` moves them into one source string which is built
+ * to `bundle.js` and served from the artifact's own origin. A build failure
+ * (syntax error, disallowed import) is NOT fatal: the version still lands, the
+ * page renders without behaviour, and the caller gets the compiler message —
+ * losing the whole edit because one handler had a typo is worse.
+ */
+async function writeVersion(opts: {
+  artifactId: string;
+  template: string;
+  css: string;
+  changeSummary: string;
+  userId: string;
+  /** Current version, whose bundle may need to follow the template forward. */
+  previousVersionId?: string | null;
+  /** False when `template` was defaulted from the stored version, not supplied. */
+  templateProvided: boolean;
+}): Promise<{ versionId: string; warnings: string[] }> {
+  const extracted = extractInteractiveScript(opts.template);
+  const warnings = [...extracted.warnings];
+
+  const version = await artifactsRepository.createVersion({
+    artifactId: opts.artifactId,
+    htmlTemplate: extracted.template,
+    css: opts.css,
+    changeSummary: opts.changeSummary,
+    createdByUserId: opts.userId,
+  });
+  await artifactsRepository.setCurrentVersion(opts.artifactId, version.id);
+
+  if (extracted.source) {
+    try {
+      await buildAndStoreBundle({
+        artifactId: opts.artifactId,
+        versionId: version.id,
+        source: extracted.source,
+      });
+    } catch (err) {
+      warnings.push(
+        `The page's JavaScript did not build, so it will render without behaviour: ${(err as Error).message}. Fix the script and call update_live_artifact again.`,
+      );
+    }
+  } else if (opts.previousVersionId && (!opts.templateProvided || hasBoundHandlers(extracted.template))) {
+    // Nothing new to build, but the page still needs its behaviour. Two ways in:
+    // the caller changed only the CSS, or it round-tripped the STORED template
+    // (get_live_artifact → edit → update), which by then holds `data-octi-h`
+    // markers and no `<script>` — so extraction finds nothing and, without this,
+    // every handler on the page would go dead with no warning.
+    await copyBundle(opts.artifactId, opts.previousVersionId, version.id);
+  }
+
+  return { versionId: version.id, warnings };
+}
+
 const SOURCES_PARAM_DESCRIPTION =
   'Initial data sources. PREFERRED: pass `{ name, kind: "toolbox", tool_id: "<art_collect_*>", config: <params>, refresh_seconds? }` — ' +
   'discover ids via `art_toolbox_list({ family: "collect" })` / `art_toolbox_search` / `art_toolbox_describe`. ' +
@@ -63,7 +127,8 @@ const CREATE_DESCRIPTION =
   'IMPORTANT: ' +
   '(1) If you DO pass `html_template` with `{{data.<name>.…}}` placeholders, every `<name>` MUST exist in `sources[]` or in a transform attached later. ' +
   '(2) Default `visibility` is `workspace`, which means the public URL returns 404 to anyone not signed in. Pass `visibility: "public"` for a shareable link or `"signed"` for share-token only. ' +
-  '(3) After create, the page only auto-refreshes when at least one viewer has loaded it recently — open the `outerUrl` to confirm the first render.';
+  '(3) After create, the page only auto-refreshes when at least one viewer has loaded it recently — open the `outerUrl` to confirm the first render. ' +
+  '(4) Interactive pages work: `<script>` blocks and `onclick="…"` handlers in `html_template` are compiled into a CSP-pinned bundle served with the page. Third-party/CDN `<script src>` is not allowed — inline the code.';
 
 const UPDATE_DESCRIPTION =
   'Update an artifact. Body changes (template/css) create a new version. ' +
@@ -158,15 +223,17 @@ export class ArtifactsTool extends BaseTool {
           visibility,
         });
         const template = (args.html_template as string) ?? '';
+        const versionWarnings: string[] = [];
         if (template || args.css) {
-          const v = await artifactsRepository.createVersion({
+          const written = await writeVersion({
             artifactId: a.id,
-            htmlTemplate: template,
+            template,
             css: (args.css as string) ?? '',
             changeSummary: 'initial',
-            createdByUserId: context.userId,
+            userId: context.userId,
+            templateProvided: true,
           });
-          await artifactsRepository.setCurrentVersion(a.id, v.id);
+          versionWarnings.push(...written.warnings);
         }
 
         const sources = (args.sources as Array<{ name: string; kind: ArtifactSourceKind; tool_id?: string; config?: Record<string, unknown>; refresh_seconds?: number }> | undefined) ?? [];
@@ -208,7 +275,7 @@ export class ArtifactsTool extends BaseTool {
           scheduleArtifactRefresh(created.id).catch(() => {});
         }
 
-        const warnings: string[] = [];
+        const warnings: string[] = [...versionWarnings];
         if (template) {
           const { missingSources, unusedSources } = diffTemplateAndSources(template, sources.map((s) => s.name));
           if (missingSources.length > 0) {
@@ -280,16 +347,18 @@ export class ArtifactsTool extends BaseTool {
         if (args.html_template !== undefined || args.css !== undefined) {
           const prev = a.currentVersionId ? await artifactsRepository.getVersion(a.currentVersionId) : null;
           const template = (args.html_template as string) ?? prev?.htmlTemplate ?? '';
-          const v = await artifactsRepository.createVersion({
+          const written = await writeVersion({
             artifactId: a.id,
-            htmlTemplate: template,
+            template,
             css: (args.css as string) ?? prev?.css ?? '',
             changeSummary: (args.change_summary as string) ?? '',
-            createdByUserId: context.userId,
+            userId: context.userId,
+            previousVersionId: prev?.id,
+            templateProvided: args.html_template !== undefined,
           });
-          await artifactsRepository.setCurrentVersion(a.id, v.id);
-          publishArtifactVersionUpdated(a.id, v.id);
-          artifactLifecycleBus.emitEvent({ type: 'artifact:updated', artifactId: a.id, versionId: v.id });
+          warnings.push(...written.warnings);
+          publishArtifactVersionUpdated(a.id, written.versionId);
+          artifactLifecycleBus.emitEvent({ type: 'artifact:updated', artifactId: a.id, versionId: written.versionId });
 
           if (template) {
             const existingSources = await artifactsRepository.listSources(a.id);
@@ -419,6 +488,8 @@ export class ArtifactsTool extends BaseTool {
           const { artifacts: artifactsTable } = await import('@/db/schema/artifacts');
           const { eq } = await import('drizzle-orm');
           await getDb().delete(artifactsTable).where(eq(artifactsTable.id, a.id));
+          // Built JS lives on disk, not in the row — drop it with the artifact.
+          await deleteArtifactBundles(a.id);
           return { id: a.id, purged: true, message: `Artifact "${a.title}" purged` };
         }
         await artifactsRepository.softDelete(a.id);

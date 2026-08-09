@@ -341,12 +341,13 @@ export class ArtifactsRepository {
   }
 
   // ── soft-delete cleanup ──────────────────────────────────────
-  async purgeSoftDeleted(olderThan: Date): Promise<number> {
+  /** Returns the ids purged — the caller also has on-disk bundles to drop. */
+  async purgeSoftDeleted(olderThan: Date): Promise<string[]> {
     const result = await this.db
       .delete(artifacts)
       .where(and(lt(artifacts.deletedAt, olderThan)))
       .returning({ id: artifacts.id });
-    return result.length;
+    return result.map((r) => r.id);
   }
 }
 
