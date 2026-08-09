@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { buildArtifactAppUrl, pickShareableUrl } from './host';
+import { buildArtifactAppUrl, buildArtifactOuterUrl, pickShareableUrl } from './host';
 
 describe('buildArtifactAppUrl', () => {
   const originalEnv = process.env.PUBLIC_URL;
@@ -29,6 +29,21 @@ describe('buildArtifactAppUrl', () => {
 
   test('encodes the id', () => {
     expect(buildArtifactAppUrl('a/b c')).toMatch(/\/artifacts\/a%2Fb%20c$/);
+  });
+});
+
+describe('buildArtifactOuterUrl', () => {
+  const originalEnv = process.env.PUBLIC_URL;
+  afterEach(() => {
+    if (originalEnv === undefined) delete process.env.PUBLIC_URL;
+    else process.env.PUBLIC_URL = originalEnv;
+  });
+
+  // The link gets pasted into Telegram/Slack; a bare `/__artifacts__/...`
+  // is not a link there.
+  test('path-prefix mode returns an absolute URL when PUBLIC_URL is set', () => {
+    process.env.PUBLIC_URL = 'https://octi.example.com/';
+    expect(buildArtifactOuterUrl('qa-issues')).toBe('https://octi.example.com/__artifacts__/a/qa-issues');
   });
 });
 

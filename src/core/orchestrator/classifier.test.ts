@@ -82,3 +82,39 @@ describe('classifyMessage — call/delivery intent beats topical tie', () => {
     expect(classifyMessage('tell me about octipus').topic).toBe('research');
   });
 });
+
+describe('classifyMessage — pasted code is payload, not intent', () => {
+  const PAGE = `<!DOCTYPE html><html lang="en"><head><style>.card{background:white}</style></head>
+<body><div class="card"><button onclick="newPrompt()">New</button></div>
+<script>function newPrompt(){ const words=[["Love","Liebe"]]; }`;
+
+  test('"create an artifact with this code" + an HTML dump still routes to data', () => {
+    expect(classifyMessage(`Create an artifact with this code. Send me the link.\n${PAGE}`).topic).toBe('data');
+  });
+
+  test('a fenced code block does not steal routing from the prose ask', () => {
+    const msg = 'Create an artifact with this code:\n```html\n' + PAGE + '\n```';
+    expect(classifyMessage(msg).topic).toBe('data');
+  });
+
+  test('prose-level coding asks are unaffected', () => {
+    expect(classifyMessage('Refactor the typescript module and add a unit test').topic).toBe('coding');
+  });
+});
+
+describe('classifyMessage — an unclosed snippet must not eat the prose after it', () => {
+  const ASK = 'Also, please refactor the typescript module and add unit tests.';
+
+  test('prose after a truncated <script> still routes', () => {
+    expect(classifyMessage(`<div><script>function foo(){ var a = 1;\n\n${ASK}`).topic).toBe('coding');
+  });
+
+  test('prose after a forgotten closing fence still routes', () => {
+    expect(classifyMessage('```js\nfunction foo(){}\n\n' + ASK).topic).toBe('coding');
+  });
+
+  test('a closed <script> containing a blank line is still fully stripped', () => {
+    const msg = 'Create an artifact with this code.\n<script>\nconst a = 1;\n\nfunction render(){ return html`x` }\n</script>';
+    expect(classifyMessage(msg).topic).toBe('data');
+  });
+});

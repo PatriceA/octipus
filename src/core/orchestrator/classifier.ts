@@ -222,7 +222,22 @@ function classifyMessageBase(message: string): MessageClassification {
   // `qa-issues` are user-chosen labels, not intent — without this the bare
   // `qa` keyword (and other short tokens) get spurious matches inside
   // arbitrary identifiers and pull routing to the wrong specialist.
-  const stripped = message.replace(/`[^`]*`/g, ' ');
+  // Pasted code is payload, not intent. Strip fenced blocks, <script>/<style>
+  // bodies (closed or truncated), and raw markup tags before scoring: a pasted
+  // HTML page is full of 'html'/'css'/'function'/'class' and outvoted the
+  // actual ask — "create an artifact with this code" scored `coding`, whose
+  // toolset has no artifacts tool, so the arm wrote a file instead.
+  // Closed blocks go first and whole. An UNCLOSED opener (truncated paste,
+  // forgotten fence) then stops at the next blank line rather than running to
+  // end-of-string: prose after the snippet is the actual ask, and eating it
+  // routed "…<script>…\n\nAlso refactor the module and add tests" to casual.
+  const stripped = message
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/```[\s\S]*?(\n\s*\n|$)/g, ' ')
+    .replace(/<(script|style)\b[\s\S]*?(\n\s*\n|$)/gi, ' ')
+    .replace(/<\/?[a-z!][^>]*>/gi, ' ')
+    .replace(/`[^`]*`/g, ' ');
   const normalized = stripped.trim().toLowerCase();
   const complexity = scoreComplexity(message);
 

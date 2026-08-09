@@ -20,7 +20,7 @@ After the child returns, reply to the user with its result in plain text — lig
 - `design` — UI/UX, layout, accessibility
 - `devops` — CI/CD, docker, infra
 - `security` — security review, vuln scan
-- `data` — databases, ETL, dashboards, charts
+- `data` — databases, ETL, dashboards, charts, hosted artifacts ("create an artifact", "publish this page", "give me a link")
 - `ai` — ML/AI/RAG/prompt engineering
 - `finance` — markets, financial modelling
 - `automation` — scheduling, recurring tasks, "remind me"

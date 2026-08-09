@@ -23,13 +23,32 @@ export function _resetArtifactsHostMode(): void {
   // delegated to resolveArtifactSettings cache via resetArtifactSettingsCache()
 }
 
-/** Build the public URL for a hosted artifact slug. */
+/**
+ * Absolute base for links handed to a human (`oauth.publicUrl`, env
+ * `PUBLIC_URL`). Empty string when neither is configured — callers then
+ * emit a root-relative path, which only works inside the web app.
+ */
+function publicBase(): string {
+  try {
+    const raw = getSettingsService().getSync('oauth.publicUrl');
+    if (typeof raw === 'string' && raw) return raw.replace(/\/$/, '');
+  } catch {
+    // settings service not initialised (e.g. test boot order) — fall through.
+  }
+  return process.env.PUBLIC_URL?.replace(/\/$/, '') ?? '';
+}
+
+/**
+ * Build the public URL for a hosted artifact slug. In path-prefix mode this
+ * MUST be absolute — the link is pasted into Telegram/Slack, where a bare
+ * `/__artifacts__/a/<slug>` is not a link at all.
+ */
 export function buildArtifactEmbedUrl(slug: string, opts?: { mainHost?: string }): string {
   const mode = getArtifactsHostMode();
   if (mode.mode === 'subdomain') {
     return `${mode.proto}://${mode.host}/a/${encodeURIComponent(slug)}/embed`;
   }
-  const base = opts?.mainHost ?? '';
+  const base = opts?.mainHost ?? publicBase();
   return `${base}${mode.pathPrefix}/a/${encodeURIComponent(slug)}/embed`;
 }
 
@@ -39,7 +58,7 @@ export function buildArtifactOuterUrl(slug: string, opts?: { mainHost?: string }
   if (mode.mode === 'subdomain') {
     return `${mode.proto}://${mode.host}/a/${encodeURIComponent(slug)}`;
   }
-  return `${opts?.mainHost ?? ''}${mode.pathPrefix}/a/${encodeURIComponent(slug)}`;
+  return `${opts?.mainHost ?? publicBase()}${mode.pathPrefix}/a/${encodeURIComponent(slug)}`;
 }
 
 /**
@@ -53,18 +72,7 @@ export function buildArtifactOuterUrl(slug: string, opts?: { mainHost?: string }
  * which still works from anywhere inside the web app.
  */
 export function buildArtifactAppUrl(id: string): string {
-  const path = `/artifacts/${encodeURIComponent(id)}`;
-  try {
-    const raw = getSettingsService().getSync('oauth.publicUrl');
-    if (typeof raw === 'string' && raw) {
-      const base = raw.endsWith('/') ? raw.slice(0, -1) : raw;
-      return `${base}${path}`;
-    }
-  } catch {
-    // settings service not initialised (e.g. test boot order) — fall through.
-  }
-  const envBase = process.env.PUBLIC_URL?.replace(/\/$/, '') ?? '';
-  return envBase ? `${envBase}${path}` : path;
+  return `${publicBase()}/artifacts/${encodeURIComponent(id)}`;
 }
 
 export type ArtifactVisibility = 'public' | 'workspace' | 'private' | 'signed';
