@@ -22,6 +22,23 @@ import { getCLIToolConfig } from './cli-agent-factory';
 import type { AgentContext, AgentMessage } from './types';
 
 /**
+ * Whether this session's cwd is a directory someone ELSE owns — a dev-mode
+ * `projectPath` — rather than the per-user workspace octipus materialises
+ * lazily.
+ *
+ * It decides what a MISSING cwd means. Ours: routine, create it. Theirs: the
+ * project has been moved, deleted or unmounted since the session was created
+ * (`checkProjectPath` runs once, at creation, and never again), and creating it
+ * would drop a write-enabled agent into an empty tree where it can report
+ * success against no code at all.
+ */
+export function isBorrowedProjectDir(
+  sessionContext: { devMode?: boolean; projectPath?: string } | undefined | null,
+): boolean {
+  return !!(sessionContext?.devMode && sessionContext.projectPath);
+}
+
+/**
  * CLIAgentWorker — spawns a CLI binary (Claude Code, Antigravity, Codex, Mistral Vibe)
  * as an autonomous sub-agent.
  */
@@ -363,8 +380,10 @@ export class CLIAgentWorker extends BaseAgentWorker {
     // function; it was written with the fix and this side never caught up —
     // the same divergence the shell tool's default cwd had.)
     //
-    // Fail loud (C12) is preserved: never fall back to process.cwd(), since a
-    // write-enabled CLI agent inside the octipus server repo could corrupt it.
+    // Fail loud (C12) is preserved on both counts: never fall back to
+    // process.cwd(), since a write-enabled CLI agent inside the octipus server
+    // repo could corrupt it — and never invent a dev-mode project directory
+    // that has gone missing (see below).
     let workspaceCwd: string;
     {
       const session = await sessionRepository.findById(this.context.sessionId);
@@ -372,9 +391,31 @@ export class CLIAgentWorker extends BaseAgentWorker {
         throw new Error(`CLI agent cwd resolution failed: no session ${this.context.sessionId}`);
       }
       workspaceCwd = resolvePath(WorkspaceFS.forSession(session).root);
-      // A per-user workspace is materialised lazily, so "not there yet" is the
-      // normal first-run state, not an error — but anything else still throws.
-      if (!existsSync(workspaceCwd)) mkdirSync(workspaceCwd, { recursive: true });
+
+      if (!existsSync(workspaceCwd)) {
+        // Whether a missing directory is routine or alarming depends on WHOSE
+        // it is, so the two cases are kept apart deliberately.
+        //
+        // A dev-mode `projectPath` is a directory someone else owns. It is
+        // checked once, when the session is created (`checkProjectPath`), and
+        // never again — so by the time a later turn runs it may have been
+        // deleted, renamed or unmounted. Creating it would spawn a
+        // write-enabled agent into an EMPTY tree and let it report success
+        // against no code at all, with nothing saying the project had gone.
+        // That is the same class of silent-success this whole session's work is
+        // about, so it stays fail-loud.
+        //
+        // A per-user workspace, by contrast, is ours and is materialised
+        // lazily: "not there yet" is the normal first-run state.
+        if (isBorrowedProjectDir(session.context as import('@/db/schema/sessions').SessionContext | undefined)) {
+          throw new Error(
+            `CLI agent cwd does not exist: ${workspaceCwd}. This session is pinned to a dev-mode ` +
+              `project path; it was present when the session was created, so it has since been ` +
+              `moved, deleted or unmounted. Refusing to run an agent in an empty directory.`,
+          );
+        }
+        mkdirSync(workspaceCwd, { recursive: true });
+      }
     }
 
     const parser = this.parser = new CLIOutputParser(

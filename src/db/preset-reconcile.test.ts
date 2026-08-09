@@ -52,6 +52,32 @@ describe('planPresetReconcile', () => {
     expect(planPresetReconcile(shipped, adopted.shippedHash, shipped).action).toBe('noop');
   });
 
+  // The bug the other tests could not see: they build `stored` and `shipped`
+  // as JS literals in the SAME key order, but `steps` is a jsonb column and
+  // Postgres re-serializes object keys sorted by length then lexicographically.
+  // Hashing `JSON.stringify` directly therefore made every stored preset look
+  // EDITED from the second boot onward — the exact "preset changes ship dead"
+  // failure this hash exists to end. Reordering the keys here is the cheap
+  // stand-in for that round trip.
+  const reorderKeys = <T,>(steps: T[]): T[] =>
+    steps.map((s) => {
+      const src = s as Record<string, unknown>;
+      const out: Record<string, unknown> = {};
+      for (const k of Object.keys(src).sort((a, b) => b.length - a.length)) out[k] = src[k];
+      return out as T;
+    });
+
+  test('key order from the jsonb round-trip does not make a preset look edited', () => {
+    const roundTripped = reorderKeys(asShippedBefore);
+    expect(JSON.stringify(roundTripped)).not.toBe(JSON.stringify(asShippedBefore));
+    // Same content, keys in the order Postgres hands back — must still refresh.
+    expect(planPresetReconcile(roundTripped, v1Hash, shipped).action).toBe('refresh');
+  });
+
+  test('a legacy row read back from jsonb still adopts the hash', () => {
+    expect(planPresetReconcile(reorderKeys(shipped), null, shipped).action).toBe('adopt');
+  });
+
   test('a refresh is idempotent — the second boot is a no-op', () => {
     const first = planPresetReconcile(asShippedBefore, v1Hash, shipped);
     if (first.action !== 'refresh') throw new Error('expected refresh');

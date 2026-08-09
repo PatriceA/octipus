@@ -1069,7 +1069,17 @@ export class PipelineManager {
                 toolErrors: counters.toolErrors,
                 byName: counters.byName,
               }
-            : { unavailable: 'worker exposed no side-effect counters — not gated' }),
+            : {
+                // Two different states, and conflating them makes the ledger
+                // contradict itself. A counter-less worker is normally passed
+                // ungated — but the snapshot alone can still condemn it
+                // (`readOnly`), and labelling THAT row "not gated" would leave a
+                // reader looking at a failed row that claims nothing judged it.
+                unavailable: passed
+                  ? 'worker exposed no side-effect counters — not gated'
+                  : 'worker exposed no side-effect counters — gated on the workspace snapshot alone',
+                ...(failure ? { reason: failure } : {}),
+              }),
         },
       });
     } catch (err) {

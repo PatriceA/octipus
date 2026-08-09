@@ -508,13 +508,41 @@ export function planProducesArtifactsBackfill(
 }
 
 /**
- * Content hash of a preset's steps. Stable across restarts and machines, so it
- * can be compared to a value written weeks ago: `JSON.stringify` over the
- * literal in this file preserves key order, and the stored jsonb round-trips
- * through the same serializer.
+ * Recursively sort object keys so two structurally equal values serialize
+ * identically. Arrays keep their order — step order is meaningful, key order is
+ * not.
+ */
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value === null || typeof value !== 'object') return value;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+    out[key] = canonical((value as Record<string, unknown>)[key]);
+  }
+  return out;
+}
+
+/**
+ * Content hash of a preset's steps. It is compared against a value written
+ * weeks earlier, so it has to survive the round trip the steps actually make.
+ *
+ * It MUST canonicalize first. `steps` is a `jsonb` column and Postgres jsonb
+ * does not preserve key order — it re-serializes sorted by key length, then
+ * lexicographically. The shipped literal in this file therefore hashes one way
+ * and the very same content read back from the database hashes another.
+ *
+ * Hashing `JSON.stringify` directly made every stored preset look EDITED from
+ * the second boot onward, which silently restored the exact "preset changes
+ * ship dead" failure this hash exists to end — and no unit test could see it,
+ * because a test builds both sides as JS literals in the same order.
+ *
+ * Verified against Postgres rather than assumed: a step declared
+ * `{name, description, topic, toolIds, requiresApproval, producesArtifacts,
+ * mechanical}` reads back as `{name, topic, toolIds, mechanical, description,
+ * requiresApproval, producesArtifacts}`.
  */
 function stepsHash(steps: PipelineStepConfig[]): string {
-  return createHash('sha256').update(JSON.stringify(steps)).digest('hex');
+  return createHash('sha256').update(JSON.stringify(canonical(steps))).digest('hex');
 }
 
 /**

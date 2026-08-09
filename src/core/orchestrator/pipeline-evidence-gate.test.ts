@@ -5,11 +5,15 @@
  * Regression target (docs/plans/pipeline-evidence-gate.md): a 7-stage "Full
  * Development Cycle" reported every stage green over an empty workspace.
  */
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, spyOn, test } from 'bun:test';
 import { emptyCounters } from '@/core/swarm/receipt';
 import { PipelineManager, stageEvidenceFailure } from './pipeline-manager';
 import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
 import { planProducesArtifactsBackfill } from '@/db/seed-presets';
+import { snapshotWorkspace } from './workspace-snapshot';
 
 const counters = (over: Partial<ReturnType<typeof emptyCounters>> = {}) => ({ ...emptyCounters(), ...over });
 
@@ -329,6 +333,33 @@ describe('PipelineManager.assertStageEvidence', () => {
     expect(rows[0]).toMatchObject({ passed: true });
     expect(rows[0].detail).toHaveProperty('unavailable');
     spy.mockRestore();
+  });
+
+  // The combination the read-only fix newly made possible, and which nothing
+  // covered: no counters AND a real failure. The ledger used to label every
+  // counter-less row "not gated", so this row would have read as failed-yet-
+  // unjudged — a self-contradiction in the one record meant to make a failure
+  // auditable without re-running it.
+  test('a snapshot-only failure is not labelled "not gated"', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'evidence-gate-'));
+    try {
+      const before = await snapshotWorkspace(root);
+      writeFileSync(join(root, 'edited-by-the-validator.py'), 'print(1)\n');
+
+      const { rows, spy, call } = setup();
+      await expect(
+        call({ declared: { readOnly: true }, counters: null, before, workspaceRoot: root }),
+      ).rejects.toThrow(/read-only stage/);
+
+      expect(rows[0]).toMatchObject({ passed: false });
+      const detail = rows[0].detail as { unavailable: string; reason?: string };
+      expect(detail.unavailable).toContain('workspace snapshot alone');
+      expect(detail.unavailable).not.toContain('not gated');
+      expect(detail.reason).toContain('read-only stage');
+      spy.mockRestore();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test('a ledger failure never breaks the run, and never masks the gate verdict', async () => {
