@@ -3,7 +3,6 @@ import { type ChildProcess, spawn } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join as joinPath, resolve as resolvePath } from 'path';
-import { getConfig } from '@/config';
 import { recordAgentCompletion } from '@/core/agent-task-recorder';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
