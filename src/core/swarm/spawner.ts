@@ -7,7 +7,7 @@ import type { GatewayHub } from '@/core/gateway/hub';
 import { getGatewayHub } from '@/core/gateway/hub';
 import { buildSecurityReminder, guardInput } from '@/core/orchestrator/input-guard';
 import { formatCriticalRules, getRoleConfig, getToolsForRole } from '@/core/orchestrator/roles';
-import { logPromptComposition } from '@/core/orchestrator/prompt-budget';
+import { estimateToolSchemaTokens, logPromptComposition } from '@/core/orchestrator/prompt-budget';
 import { applyToolCap, isSmallModel } from '@/core/orchestrator/small-model';
 import { countChangedFiles, snapshotWorkspace } from '@/core/orchestrator/workspace-snapshot';
 import type { AgentRole } from '@/core/orchestrator/types';
@@ -481,7 +481,14 @@ export class SwarmSpawner {
       // Break the input down per section. The warning below says "you are over
       // the window"; this says WHICH block to cut, which is the actionable half.
       logPromptComposition(
-        { role: childRole, model: childModel, isSmall, contextWindow: ctx || undefined },
+        {
+          role: childRole,
+          model: childModel,
+          isSmall,
+          contextWindow: ctx || undefined,
+          toolCount: childTools.length,
+          toolSchemaTokens: estimateToolSchemaTokens(childTools),
+        },
         { system: [childSystemPrompt ?? ''], brief: [childMessage] },
       );
       if (ctx > 0 && estTokens > ctx * 0.9) {

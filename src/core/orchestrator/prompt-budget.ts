@@ -26,6 +26,21 @@ function estimateTokens(chars: number): number {
 }
 
 /**
+ * Token cost of the JSON tool block sent alongside the system prompt. Same
+ * chars/4 heuristic; providers serialise the schemas slightly differently, so
+ * this is an estimate, not a bill.
+ */
+export function estimateToolSchemaTokens(
+  tools: Array<{ name: string; description: string; parameters: unknown }>,
+): number {
+  const chars = tools.reduce(
+    (n, t) => n + JSON.stringify({ name: t.name, description: t.description, parameters: t.parameters }).length,
+    0,
+  );
+  return estimateTokens(chars);
+}
+
+/**
  * Derive a short, stable label from a section's leading text. Sections start
  * with a markdown heading, an ALL-CAPS lead-in, or a `---` rule; any of those
  * makes a serviceable name.
@@ -82,25 +97,47 @@ export function summarizePromptSections(
 }
 
 /**
- * Log the breakdown. `debug` level: this fires on every spawn and is a
- * diagnostic, not an event — but the top consumer is promoted into the message
- * so a `grep` over info-level logs still answers "what is eating the prompt".
+ * Prompt size at which the breakdown is worth an `info` line. Below it the log
+ * is a per-spawn diagnostic (`debug`); at or above it, it is the answer to
+ * "why is this request so expensive" and must be visible at the default level.
+ */
+export const LARGE_PROMPT_TOKENS = 8_000;
+
+/**
+ * Log the breakdown, with the top consumer promoted into the message so a
+ * `grep` answers "what is eating the prompt".
+ *
+ * `toolSchemaTokens` is counted into the total: the JSON tool block is sent on
+ * every request and is the single largest contributor for tool-heavy roles
+ * (`general` is ~12k tok of schema against a ~900 tok role prompt), so a
+ * breakdown that omits it understates the real prompt by an order of magnitude.
  */
 export function logPromptComposition(
-  ctx: { role: string; model: string; isSmall?: boolean; contextWindow?: number },
+  ctx: {
+    role: string;
+    model: string;
+    isSmall?: boolean;
+    contextWindow?: number;
+    toolCount?: number;
+    toolSchemaTokens?: number;
+  },
   buckets: Record<string, string[]>,
 ): void {
   const { total, sections } = summarizePromptSections(buckets);
   const top = sections[0];
-  coreLogger.debug(
+  const grandTotal = total.tokens + (ctx.toolSchemaTokens ?? 0);
+  const log = grandTotal >= LARGE_PROMPT_TOKENS ? coreLogger.info : coreLogger.debug;
+  log.call(
+    coreLogger,
     {
       ...ctx,
       promptChars: total.chars,
       promptTokens: total.tokens,
-      contextShare: ctx.contextWindow ? +(total.tokens / ctx.contextWindow).toFixed(3) : undefined,
+      totalTokens: grandTotal,
+      contextShare: ctx.contextWindow ? +(grandTotal / ctx.contextWindow).toFixed(3) : undefined,
       sections: sections.slice(0, 12),
     },
-    `Prompt composition: ${total.tokens} tok across ${sections.length} sections` +
-      (top ? `, largest "${top.label}" at ${top.tokens} tok (${Math.round(top.share * 100)}%)` : ''),
+    `Prompt composition: ${grandTotal} tok (${total.tokens} text + ${ctx.toolSchemaTokens ?? 0} tool schema)` +
+      (top ? `, largest text section "${top.label}" at ${top.tokens} tok (${Math.round(top.share * 100)}%)` : ''),
   );
 }

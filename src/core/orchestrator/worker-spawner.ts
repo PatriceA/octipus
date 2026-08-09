@@ -22,7 +22,7 @@ import { buildSecurityReminder } from './input-guard';
 import type { ModelSelector } from './model-selector';
 import { buildOutputDirective } from './output-directive';
 import { formatCriticalRules, getBoundConnectorIds, getRoleConfig, getToolsForRole, SECURITY_PREAMBLE, stripSecurityPreamble } from './roles';
-import { logPromptComposition } from './prompt-budget';
+import { estimateToolSchemaTokens, logPromptComposition } from './prompt-budget';
 import { applyToolCap, isSmallModel } from './small-model';
 import type { OrchestratorEvent } from './service';
 import { appendSources } from './types';
@@ -594,8 +594,11 @@ export async function spawnWorker(
   // Small-tier worker: cap the tool surface. Role tool lists are
   // priority-ordered so the core tools survive; the long tail (and MCP
   // meta-tools / connector handlers appended above) is dropped. Skipped for
-  // larger models, which keep the full surface.
-  if (isSmall) {
+  // larger models, which keep the full surface. Keyed off `finalIsSmall` (the
+  // model that actually runs), not the topic model — an expert modelPreference
+  // or override otherwise capped a big model to 7 tools, or handed a small one
+  // the full ~12k-token surface.
+  if (finalIsSmall) {
     roleTools = applyToolCap(roleTools, orchCfg.smallModelMaxTools, { role: agentRole, modelId: finalModel });
   }
 
@@ -826,7 +829,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   // "how do I set up / configure / connect X" questions are answered from
   // the shipped manual instead of a guess. Small models get the leaner
   // surface (they tend to misfire on extra tool guidance).
-  if (!isSmall && roleTools.some((t) => t.toolId === 'knowledge')) {
+  if (!finalIsSmall && roleTools.some((t) => t.toolId === 'knowledge')) {
     staticParts.push(`\n\nPRODUCT DOCS: Octipus's own product documentation (setup, channels, model providers, configuration) is indexed in the knowledge base (source "octipus-docs"). For any "how do I set up / configure / connect / enable X" question about Octipus itself, call search_knowledge FIRST and answer from the retrieved docs — cite the source file — rather than guessing.`);
   }
 
@@ -869,7 +872,13 @@ Use these MCP tools when the task benefits from them — especially for people-r
   // What did we just build? Measured per section so an over-long prompt names
   // its own biggest contributor instead of just reporting a total.
   logPromptComposition(
-    { role: agentRole, model: finalModel, isSmall: finalIsSmall },
+    {
+      role: agentRole,
+      model: finalModel,
+      isSmall: finalIsSmall,
+      toolCount: roleTools.length,
+      toolSchemaTokens: estimateToolSchemaTokens(roleTools),
+    },
     { static: staticParts, semiStatic: semiStaticParts, volatile: volatileParts },
   );
 
@@ -922,7 +931,10 @@ Use these MCP tools when the task benefits from them — especially for people-r
   // they keep the capped full-schema path above.
   let toolAdvertisement: import('@/core/agent-base').ToolAdvertisement = { mode: 'full' };
   let workerTools = roleTools;
-  if (!isSmall && roleConfig.coreToolIds !== undefined) {
+  // Smallness is judged on finalModel (line 932) only — gating on the topic
+  // model here as well skipped lazy discovery for a big Ollama worker whose
+  // topic tier happened to be small, handing it the full ~12k schema.
+  if (roleConfig.coreToolIds !== undefined) {
     try {
       // finalIsSmall / finalModelEntry hoisted above (re-derived against the
       // actual finalModel, which an expert modelPreference can pin small).
