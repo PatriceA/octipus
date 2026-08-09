@@ -1,5 +1,6 @@
 import { resolve } from 'path';
 import { getConfig } from '@/config';
+import { WorkspaceFS } from '@/security/workspace-fs';
 import type { ToolManifest } from '@/core/types';
 import { toolLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema } from '../base-tool';
@@ -115,7 +116,7 @@ export class ShellTool extends BaseTool {
         }
         const command = args.command;
         const projectPath = (context?.metadata as Record<string, unknown>)?.projectPath as string | undefined;
-        const cwd = (args.cwd as string) || projectPath || this.getWorkspaceRoot();
+        const cwd = (args.cwd as string) || projectPath || this.getWorkspaceRoot(context);
         const timeout = (args.timeout as number) || DEFAULT_TIMEOUT;
         const env = args.env as Record<string, string> | undefined;
         const unsafe = args.useShell === true;
@@ -172,7 +173,7 @@ export class ShellTool extends BaseTool {
           throw new Error('Missing required parameter "command". The tool call arguments may have been truncated or malformed.');
         }
         const command = args.command;
-        const cwd = (args.cwd as string) || this.getWorkspaceRoot();
+        const cwd = (args.cwd as string) || this.getWorkspaceRoot(context);
         const env = args.env as Record<string, string> | undefined;
         const unsafe = args.useShell === true;
 
@@ -231,11 +232,37 @@ export class ShellTool extends BaseTool {
     );
   }
 
-  private getWorkspaceRoot(): string {
+  /**
+   * The directory a command runs in when the caller names none.
+   *
+   * MUST be the same root the filesystem sandbox enforces —
+   * `WorkspaceFS.forAgent` nests every real user under
+   * `<rootPath>/users/<uid>/workspaces/default/files`, while the flat
+   * `config.workspace.rootPath` is two levels above it. Defaulting to the flat
+   * path meant `shell__run` started in a different directory than every
+   * `filesystem__*` call, so a relative `python3 test_ipv4.py` could not find
+   * the file the agent had just written, and a heredoc landed OUTSIDE the
+   * user's workspace.
+   *
+   * That is not only a usability wart: it fails runs. On 2026-08-07 an
+   * Implementation stage made 27 tool calls, ran 13 commands and committed —
+   * and the evidence gate recorded `filesChanged: 0, filesTouched: 0`, because
+   * the work went somewhere the workspace snapshot does not look. The stage was
+   * failed for doing nothing while it had in fact done the job in the wrong
+   * place.
+   *
+   * `.root` is a pure path computation with no filesystem side effects. Same
+   * fix, same reason as the workspace hint in `worker-spawner.ts`.
+   */
+  private getWorkspaceRoot(context?: { userId?: string }): string {
     try {
-      return resolve(getConfig().workspace.rootPath);
+      return WorkspaceFS.forAgent({ userId: context?.userId }).root;
     } catch {
-      return process.cwd();
+      try {
+        return resolve(getConfig().workspace.rootPath);
+      } catch {
+        return process.cwd();
+      }
     }
   }
 

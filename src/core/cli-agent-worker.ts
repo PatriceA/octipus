@@ -9,6 +9,7 @@ import { agentRepository } from '@/db/repositories/agent-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
+import { WorkspaceFS } from '@/security/workspace-fs';
 import type { CLIAgentConfig } from '@/db/schema/models';
 import { getModelRegistry } from '@/models/model-registry';
 import { getQuotaTracker } from '@/models/quota-tracker';
@@ -350,23 +351,31 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
     const startTime = Date.now();
 
-    // Resolve cwd: dev mode sessions use project path, otherwise workspace root.
-    // Fail loud (C12): NEVER fall back to process.cwd() — a write-enabled CLI
-    // agent running inside the octipus server repo could corrupt it.
+    // Resolve cwd through the SHARED resolver, which already encodes the rule
+    // this block used to reimplement: a dev-mode session with a `projectPath`
+    // runs inside that project, everyone else gets their own nested workspace.
+    //
+    // The hand-rolled version used the FLAT `workspace.rootPath`, two levels
+    // above `<root>/users/<uid>/workspaces/default/files` — so a CLI agent
+    // wrote outside the user's workspace, where neither the file browser, the
+    // Changes tab, nor the pipeline evidence gate's snapshot looks. A CLI stage
+    // could therefore build the whole deliverable and be failed for changing
+    // nothing. (`WorkspaceFS.forSession`'s own doc says it mirrors this
+    // function; it was written with the fix and this side never caught up —
+    // the same divergence the shell tool's default cwd had.)
+    //
+    // Fail loud (C12) is preserved: never fall back to process.cwd(), since a
+    // write-enabled CLI agent inside the octipus server repo could corrupt it.
     let workspaceCwd: string;
     {
       const session = await sessionRepository.findById(this.context.sessionId);
-      const sessionCtx = session?.context as import('@/db/schema/sessions').SessionContext | undefined;
-      if (sessionCtx?.devMode && sessionCtx.projectPath) {
-        workspaceCwd = resolvePath(sessionCtx.projectPath);
-      } else {
-        const root = getConfig().workspace.rootPath;
-        if (!root) throw new Error('CLI agent cwd resolution failed: workspace.rootPath is unset');
-        workspaceCwd = resolvePath(root);
+      if (!session) {
+        throw new Error(`CLI agent cwd resolution failed: no session ${this.context.sessionId}`);
       }
-      if (!existsSync(workspaceCwd)) {
-        throw new Error(`CLI agent cwd does not exist: ${workspaceCwd}`);
-      }
+      workspaceCwd = resolvePath(WorkspaceFS.forSession(session).root);
+      // A per-user workspace is materialised lazily, so "not there yet" is the
+      // normal first-run state, not an error — but anything else still throws.
+      if (!existsSync(workspaceCwd)) mkdirSync(workspaceCwd, { recursive: true });
     }
 
     const parser = this.parser = new CLIOutputParser(
