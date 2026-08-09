@@ -1,17 +1,26 @@
 import { desc, eq } from 'drizzle-orm';
 import { getNotificationService } from '@/core/notification-service';
+import type { SideEffectCounters } from '@/core/swarm/receipt';
 import type { AgentContext } from '@/core/types';
 import { getDb } from '@/db/postgres';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { pipelineRepository } from '@/db/repositories/pipeline-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
-import type { PipelineStepConfig } from '@/db/schema/pipeline-templates';
+import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
 import { pipelineTemplates } from '@/db/schema/pipeline-templates';
 import type { NewPipeline, NewPipelineStage, Pipeline, PipelineStageRow } from '@/db/schema/pipelines';
 import { pipelineStages, pipelines } from '@/db/schema/pipelines';
 import { getModelRegistry, type ModelRegistry } from '@/models/model-registry';
+import { getTopicConfig } from '@/models/topic-config';
+import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
-import { createHandoffContext, formatHandoffChain, HANDOFF_EMIT_INSTRUCTION, stripHandoffBlock, type HandoffContext } from './handoff';
+import { type AuditScopeStage, auditVerdictFailure, coverageScope, unaddressedDoubt, uncoveredStages } from './audit-coverage';
+import { createHandoffContext, formatHandoffChain, HANDOFF_EMIT_INSTRUCTION, type HandoffContext, stripHandoffBlock } from './handoff';
+import { paramTemplateVars, resolveRecipeParams } from './recipe-params';
+import { getOrchestratorService } from './service';
+import { buildStagesFromTemplate, expandPromptTemplate, getPipelineTemplate } from './templates';
+import { appendSources, type QAValidationResult } from './types';
+import { countChangedFiles, snapshotWorkspace, type WorkspaceSnapshot } from './workspace-snapshot';
 
 /**
  * Coerce an arbitrary value to the enumerated QA confidence (or undefined).
@@ -47,35 +56,69 @@ function parseConfidence(text: string): QAValidationResult['confidence'] {
  * Appended to `qa_validation` stages so they emit a machine-readable verdict
  * `parseQAResult`'s strict-JSON tier (1) consumes — instead of relying on the
  * prose-verdict fallback (`parseProseVerdict`, tier 3) to recover PASS/FAIL from
- * free text (Phase B2). Kept as a runtime injection (both run loops) so it
- * reaches ad-hoc pipelines and existing installs, not only reseeded templates.
+ * free text (Phase B2). Kept as a runtime injection so it reaches ad-hoc
+ * pipelines and existing installs, not only reseeded templates.
  *
- * Describes the shape as a field list with NO literal ```json fence: if this
- * text is echoed, `parseQAResult`'s first-fence match would otherwise grab the
- * placeholder instead of the model's real verdict (the B3 anti-echo lesson).
+ * Shows the shape with PLACEHOLDER values and no ```json fence: if this text is
+ * echoed, `parseQAResult` scans every fenced block for one that parses with a
+ * boolean `passed`, and would otherwise read the example as the verdict (the B3
+ * anti-echo lesson). `<true|false>` parses as neither JSON nor the inline regex.
  * `parseProseVerdict` stays as the loud fallback until eval proves the JSON path
  * fires on 100% of QA stages — its deletion is deferred (follow-ups plan B2).
  */
 export const QA_VERDICT_JSON_INSTRUCTION = `
 
 ---
-QA VERDICT (required) — after your report above, append your verdict as a fenced code block tagged \`json\` (open the fence with three backticks then the word json) containing ONLY an object with these fields and YOUR real values:
-- passed (boolean): true only if the implementation is acceptable; false if ANY critical or major issue remains
-- confidence ("high" | "medium" | "low"): your confidence in this verdict. An honest "low" is welcome — it routes follow-up work rather than counting against you
-- issues (string[]): each blocking issue as one short string ([] when none)
-- feedback (string): a one-paragraph, actionable summary for the retry. To pass, this must NAME each stage you audited and what you checked about it — a pass that does not account for the work it covers is rejected and re-run
-- whatIDidNotCheck (string[]): what you did NOT verify, one short string each. Never empty on a pass: write ["nothing — the change is trivial"] if you truly covered everything
+QA VERDICT (required) — append your verdict now, as a fenced code block tagged \`json\` (three backticks then the word json) containing ONLY an object of this shape, with YOUR values in place of the placeholders:
 
-Emit the block exactly once — do not copy these field descriptions.`;
-import { paramTemplateVars, resolveRecipeParams } from './recipe-params';
-import { getOrchestratorService } from './service';
-import { buildStagesFromTemplate, expandPromptTemplate, getPipelineTemplate } from './templates';
-import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
-import { WorkspaceFS } from '@/security/workspace-fs';
-import type { SideEffectCounters } from '@/core/swarm/receipt';
-import { countChangedFiles, snapshotWorkspace, type WorkspaceSnapshot } from './workspace-snapshot';
-import { appendSources, type QAValidationResult } from './types';
-import { type AuditScopeStage, auditVerdictFailure, coverageScope, unaddressedDoubt, uncoveredStages } from './audit-coverage';
+    {
+      "passed": <true|false>,
+      "confidence": <"high"|"medium"|"low">,
+      "issues": [<one short string per blocking issue; [] when none>],
+      "feedback": <one paragraph that NAMES each stage you audited and what you checked about it>,
+      "whatIDidNotCheck": [<one short string per thing you did not verify; never empty on a pass — "nothing, the change is trivial" is a valid entry>]
+    }
+
+\`passed\` is false if ANY critical or major issue remains. An honest \`"low"\` confidence is welcome — it routes follow-up work rather than counting against you. A pass whose \`feedback\` does not account for the stages it covers is rejected and re-run.
+
+Emit the block exactly once, as the LAST thing in your reply.`;
+
+/**
+ * The same contract, stated up front. Position is the fix: on the 2026-08-07
+ * run the auditor omitted the verdict block three times in a row with the
+ * instruction appended *after* a ~3000-word prompt, so all three retries went
+ * on formatting and the substance was never re-judged. Stating the requirement
+ * before the work — and again after it — is the cheapest lever available, and
+ * it changes what is asked for rather than what the gate will accept.
+ *
+ * Deliberately carries no ```json fence and no literal `"passed": true` for the
+ * same anti-echo reason as the instruction itself: `parseQAResult` scans every
+ * fenced block for one that parses with a boolean `passed`, so an echoed
+ * example would be read as the verdict. The placeholder shape (`<true|false>`)
+ * parses as neither JSON nor the inline regex, so echoing it is inert.
+ */
+export const QA_VERDICT_JSON_LEAD = `OUTPUT CONTRACT — read this first.
+
+Your reply MUST END with a fenced \`json\` verdict block. A report without one is rejected unread and re-run: the substance is never judged, so writing a thorough report and forgetting the block wastes the whole stage. The field list is repeated at the end of this message.
+
+---
+
+`;
+
+/**
+ * Wrap a QA stage's input in the verdict contract — stated before the work and
+ * specified after it. One chokepoint for every injection site (initial pass,
+ * implementation retry, auditor-only re-run) so a retried auditor can never be
+ * asked for something different from a first-pass one.
+ */
+export function withQaVerdictContract(input: string, rejection?: string): string {
+  return (
+    QA_VERDICT_JSON_LEAD +
+    (rejection ? `YOUR PREVIOUS VERDICT WAS REJECTED — ${rejection}\n\n---\n\n` : '') +
+    input +
+    QA_VERDICT_JSON_INSTRUCTION
+  );
+}
 
 /**
  * The stages an auditor at `qaIndex` is accountable for.
@@ -141,6 +184,52 @@ async function resolveStageModelId(
   return model.modelId;
 }
 
+/**
+ * The model a pipeline stage actually runs on, in order of precedence:
+ *
+ *   1. the recipe's per-stage `model` override — an explicit choice wins
+ *   2. the lane's `executorModel`, but ONLY for a stage that DECLARED itself
+ *      `mechanical` (the pipeline's planner→executor split — see
+ *      `PipelineStepConfig.mechanical`). A plan-less stage skips this branch
+ *      entirely, exactly as a plan-less swarm child does
+ *   3. the topic's primary binding
+ *
+ * Every spawn a stage can make — first pass, implementation retry, auditor
+ * re-run — resolves through here, so a retry can never silently land on a
+ * different model than the attempt it is repeating.
+ *
+ * Fails loud on a misconfigured `executorModel` rather than quietly falling
+ * back to the primary: a typo that silently costs full price is the failure
+ * this whole declaration exists to end.
+ */
+async function resolveStageModel(
+  declared: { model?: string; mechanical?: boolean } | undefined,
+  topic: string,
+  registry: ModelRegistry,
+): Promise<string | undefined> {
+  const explicit = await resolveStageModelId(declared?.model, registry);
+  if (explicit) return explicit;
+
+  const executorName = declared?.mechanical ? getTopicConfig(topic).executorModel : null;
+  if (executorName) {
+    const executor =
+      (await registry.getModel(executorName)) || (await registry.getModelByModelId(executorName));
+    if (!executor) {
+      throw new Error(
+        `Topic '${topic}' has executorModel '${executorName}' but no such model is registered. ` +
+          `Fix it on the Topics page or clear the executor binding.`,
+      );
+    }
+    coreLogger.info(
+      { topic, executorModel: executor.modelId },
+      'Mechanical pipeline stage routed to the lane executorModel (cheap executor path)',
+    );
+    return executor.modelId;
+  }
+
+  return (await registry.getModelForTopic(topic))?.modelId || undefined;
+}
+
 /** What a stage said it was for. Both flags are opt-in declarations from the
  *  template — never inferred from a stage's name or its prompt wording. */
 export interface StageDeclaration {
@@ -191,9 +280,31 @@ export function stageEvidenceFailure(
   counters: SideEffectCounters | null,
   filesTouched: number | null = null,
 ): string | null {
-  if (counters === null) return null;
-
   const reasons: string[] = [];
+
+  // Read-only is judged on the SNAPSHOT alone, so it is checked BEFORE the
+  // no-counters bail-out below. `filesChanged` counts only file-mutating tools,
+  // and the whole failure this catches came through the shell, invisible to it.
+  // `null` (no snapshot) is unknown, so it passes.
+  //
+  // This used to sit after `if (counters === null) return null`, which made it
+  // unreachable for exactly the workers that need it most: a CLI worker keeps
+  // no tally, so every CLI stage skipped the rule while the snapshot already
+  // held the answer. Measured 2026-08-08 on a seven-stage CLI run — QA
+  // Validation is declared read-only, the snapshot recorded `filesTouched: 2`,
+  // it left a `test_bug.py` probe beside the product and handed back the
+  // deliverable modified and uncommitted, and the gate passed it.
+  if (declared.readOnly && filesTouched !== null && filesTouched > 0) {
+    reasons.push(
+      `changed ${filesTouched} file(s) in a read-only stage — it was asked to inspect and report, ` +
+        `and a validator that edits what it is validating has invalidated its own verdict`,
+    );
+  }
+
+  // Everything below needs the worker's own tally. No tally is "we could not
+  // measure", never "it did nothing" — failing work that actually succeeded is
+  // the worse error.
+  if (counters === null) return reasons.length === 0 ? null : reasons.join('; and ');
 
   if (declared.producesArtifacts && !(filesTouched !== null && filesTouched > 0) && counters.filesChanged === 0) {
     // Name which evidence was actually consulted, so a failure is auditable
@@ -210,16 +321,6 @@ export function stageEvidenceFailure(
     reasons.push(
       `ran 0 commands (${counters.toolCalls} tool calls, ${counters.toolErrors} tool errors) — ` +
         `a stage that verifies by executing cannot have executed nothing`,
-    );
-  }
-
-  // Read-only is judged on the SNAPSHOT alone. `filesChanged` counts only
-  // file-mutating tools, and the whole failure this catches came through the
-  // shell, invisible to it. `null` (no snapshot) is unknown, so it passes.
-  if (declared.readOnly && filesTouched !== null && filesTouched > 0) {
-    reasons.push(
-      `changed ${filesTouched} file(s) in a read-only stage — it was asked to inspect and report, ` +
-        `and a validator that edits what it is validating has invalidated its own verdict`,
     );
   }
 
@@ -324,7 +425,7 @@ export class PipelineManager {
       // QA stages also emit a machine-readable JSON verdict for parseQAResult
       // (B2). The two compose: B3 strips the handoff block from previousOutput
       // before parseQAResult runs, so the verdict is what the QA parser sees.
-      if (builtStage.stageType === 'qa_validation') input += QA_VERDICT_JSON_INSTRUCTION;
+      if (builtStage.stageType === 'qa_validation') input = withQaVerdictContract(input);
 
       // Update stage input
       await this.updateStage(stage.id, { input, status: 'running' });
@@ -400,10 +501,8 @@ export class PipelineManager {
         // correct topic-specific model instead of the role's defaultTopic.
         const stageTopic = stage.role; // role is set from the step's topic field
         const registry = getModelRegistry();
-        // Per-stage model override (recipes) wins over the topic binding when set.
-        const stageModelId = await resolveStageModelId(stageTemplate.model, registry);
-        const topicModel = await registry.getModelForTopic(stageTopic);
-        const modelOverride = stageModelId || topicModel?.modelId || undefined;
+        // Stage override → mechanical stage's lane executor → topic binding.
+        const modelOverride = await resolveStageModel(stageTemplate, stageTopic, registry);
 
         // Captured before `previousOutput` is reassigned below, so an
         // auditor-only re-run (audit-coverage gate) can re-ask this stage the
@@ -586,11 +685,13 @@ export class PipelineManager {
                 let retryOutput = auditedOutput;
 
                 if (!auditorOnly) {
-                  // Per-stage model override wins over the topic binding (same as
-                  // the initial run) so retries don't silently switch models.
-                  const retryStageModelId = await resolveStageModelId(retryTargetTemplate.model, registry);
-                  const retryTopicModel = await registry.getModelForTopic(retryTargetStage.role);
-                  const retryModelOverride = retryStageModelId || retryTopicModel?.modelId || undefined;
+                  // Same resolution as the initial run (override → mechanical
+                  // executor → topic) so a retry never silently switches model.
+                  const retryModelOverride = await resolveStageModel(
+                    retryTargetTemplate,
+                    retryTargetStage.role,
+                    registry,
+                  );
 
                   const retryDeclared = template.stages[retryTargetIndex];
                   const retryBefore = await this.snapshotStage(retryDeclared, workspaceRoot);
@@ -646,19 +747,21 @@ export class PipelineManager {
                 // JSON verdict instruction (B2) — without it the retried QA
                 // falls back to prose parsing, which can return null and
                 // silently pass a still-failing stage.
-                const qaRetryInput = expandPromptTemplate(stageTemplate.promptTemplate, {
+                const qaRetryInput = withQaVerdictContract(
+                  expandPromptTemplate(stageTemplate.promptTemplate, {
                     description,
                     previousOutput: retryOutput,
                     ...paramVars,
-                  }) + QA_VERDICT_JSON_INSTRUCTION
-                  + (auditorOnly ? `\n\n---\nYOUR PREVIOUS VERDICT WAS REJECTED — ${qaResult.feedback}` : '');
+                  }),
+                  auditorOnly ? qaResult.feedback : undefined,
+                );
 
                 await this.updateStage(stage.id, { input: qaRetryInput, status: 'running' });
 
-                // Per-stage model override wins over the topic binding.
-                const qaStageModelId = await resolveStageModelId(stageTemplate.model, registry);
-                const qaTopicModel = await registry.getModelForTopic(stage.role);
-                const qaModelOverride = qaStageModelId || qaTopicModel?.modelId || undefined;
+                // Same resolution as the initial run. A QA stage does not
+                // declare `mechanical` — judging is the opposite of mechanical —
+                // so in practice this is the override-or-topic path.
+                const qaModelOverride = await resolveStageModel(stageTemplate, stage.role, registry);
 
                 const qaRetryBefore = await this.snapshotStage(builtStage, workspaceRoot);
 
@@ -799,69 +902,6 @@ export class PipelineManager {
   }
 
   /**
-   * Create and run a pipeline from a DB template.
-   */
-  async createFromTemplate(
-    templateId: string,
-    orchestratorAgentId: string,
-    sessionId: string,
-    userId: string,
-    description: string,
-    context: AgentContext,
-  ): Promise<{ pipelineId: string; result: string }> {
-    const [template] = await this.db
-      .select()
-      .from(pipelineTemplates)
-      .where(eq(pipelineTemplates.id, templateId))
-      .limit(1);
-
-    if (!template) {
-      return { pipelineId: '', result: `Template "${templateId}" not found.` };
-    }
-
-    const steps = template.steps as PipelineStepConfig[];
-    const registry = getModelRegistry();
-
-    // Create pipeline record
-    const pipeline = await pipelineRepository.create({
-      orchestratorAgentId,
-      sessionId,
-      userId,
-      title: template.name,
-      type: 'template',
-      description,
-      status: 'running',
-      currentStageIndex: 0,
-    });
-
-    // Create stages from template steps
-    const stageRows: NewPipelineStage[] = [];
-    for (let i = 0; i < steps.length; i++) {
-      const step = steps[i];
-      // Per-stage model override (recipes) wins over the topic binding when set.
-      const stageModelId = await resolveStageModelId(step.model, registry);
-      const model = stageModelId ? null : await registry.getModelForTopic(step.topic);
-      stageRows.push({
-        pipelineId: pipeline.id,
-        name: step.name,
-        role: step.topic,
-        model: stageModelId || model?.modelId || undefined,
-        toolIds: step.toolIds || [],
-        systemPrompt: step.promptTemplate || `Execute: ${step.name}`,
-        input: '',
-        requiresApproval: step.requiresApproval,
-        stageIndex: i,
-      });
-    }
-    await pipelineRepository.createStages(stageRows);
-
-    coreLogger.info({ pipelineId: pipeline.id, template: template.name, stages: steps.length }, 'Pipeline created from template');
-
-    // Run using the same stage execution logic as createAndRun
-    return this.runStages(pipeline, context, description, sessionId);
-  }
-
-  /**
    * List pipeline templates for a user.
    */
   async listTemplates(userId: string) {
@@ -870,393 +910,6 @@ export class PipelineManager {
       .from(pipelineTemplates)
       .where(eq(pipelineTemplates.userId, userId))
       .orderBy(desc(pipelineTemplates.createdAt));
-  }
-
-  /**
-   * Run pipeline stages sequentially (shared logic for DB template pipelines).
-   */
-  private async runStages(
-    pipeline: Pipeline,
-    context: AgentContext,
-    description: string,
-    sessionId: string,
-  ): Promise<{ pipelineId: string; result: string }> {
-    const orchestrator = getOrchestratorService();
-    const stages = await this.getStages(pipeline.id);
-    let previousOutput = '';
-    const handoffChain: HandoffContext[] = [];
-    const pipelineSources: string[] = [];
-
-    // Retrieve step configs from the DB template to check stageType
-    const [templateRecord] = await this.db
-      .select()
-      .from(pipelineTemplates)
-      .where(eq(pipelineTemplates.name, pipeline.title))
-      .limit(1);
-    const stepConfigs = (templateRecord?.steps as PipelineStepConfig[]) || [];
-    const retryCounts: Record<number, number> = {};
-    // Filesystem half of the evidence gate — resolved once, used by every
-    // declared stage and every retry of one.
-    const workspaceRoot = await this.resolveWorkspaceRoot(sessionId);
-
-    for (let i = 0; i < stages.length; i++) {
-      const stage = stages[i];
-      const stepConfig = stepConfigs[i];
-      // Build input using structured handoff chain when available
-      const handoffText = handoffChain.length > 0 ? formatHandoffChain(handoffChain) : '';
-      const contextInput = handoffText || previousOutput;
-      let input = stage.systemPrompt ? `${stage.systemPrompt}\n\nContext: ${description}\n\n${contextInput}` : description;
-      // Non-final stages emit a structured ```handoff block (Phase B3).
-      if (i < stages.length - 1) input += HANDOFF_EMIT_INSTRUCTION;
-      // QA stages also emit a JSON verdict for parseQAResult (B2); composes
-      // with B3 (the handoff block is stripped before parseQAResult).
-      if (stepConfig?.stageType === 'qa_validation') input += QA_VERDICT_JSON_INSTRUCTION;
-
-      await this.updateStage(stage.id, { input, status: 'running' });
-      await this.updatePipeline(pipeline.id, { currentStageIndex: i, status: 'running' });
-
-      // Emit stage_started event for UI
-      orchestrator['emit']({
-        type: 'pipeline_event',
-        sessionId,
-        data: { event: 'stage_started', pipelineId: pipeline.id, stageId: stage.id, name: stage.name, role: stage.role, index: i },
-        timestamp: new Date(),
-      });
-
-      // Persist stage start as system message
-      messageRepository.create({
-        sessionId,
-        role: 'system',
-        content: `**Stage ${i + 1}: ${stage.name}** (${stage.role || 'agent'}) started`,
-        metadata: { pipelineId: pipeline.id, stageId: stage.id, pipelineEvent: 'stage_started' },
-      }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
-
-      if (stage.requiresApproval && previousOutput) {
-        await this.updateStage(stage.id, { status: 'awaiting_approval' });
-        await this.updatePipeline(pipeline.id, { status: 'awaiting_approval' });
-
-        // Show handoff summary in approval message if available
-        const latestHandoff = handoffChain[handoffChain.length - 1];
-        const approvalSummary = latestHandoff
-          ? `Stage "${stage.name}" ready.\n\n**Previous work:** ${latestHandoff.completedWork.slice(0, 1500)}`
-            + (latestHandoff.decisions.length > 0 ? `\n\n**Decisions:** ${latestHandoff.decisions.join('; ')}` : '')
-          : `Stage "${stage.name}" ready.\n\nPrevious result:\n${(previousOutput || '').slice(0, 2000)}`;
-
-        const approvalResult = await orchestrator.requestApproval(
-          `Pipeline "${pipeline.title}" — ${approvalSummary}`,
-          `Proceed with "${stage.name}"?`,
-          context,
-          ['Approve', 'Skip', 'Stop Pipeline'],
-        ) as { approved: boolean; response?: string };
-
-        if (!approvalResult.approved || approvalResult.response === 'Stop Pipeline') {
-          await this.updateStage(stage.id, { status: 'skipped' });
-          await this.updatePipeline(pipeline.id, { status: 'paused', summary: `Stopped at: ${stage.name}` });
-          return { pipelineId: pipeline.id, result: `Pipeline stopped at "${stage.name}".` };
-        }
-        if (approvalResult.response === 'Skip') {
-          await this.updateStage(stage.id, { status: 'skipped' });
-          continue;
-        }
-        await this.updateStage(stage.id, { status: 'approved', approvedAt: new Date() });
-        await this.updatePipeline(pipeline.id, { status: 'running' });
-      }
-
-      try {
-        // See the sibling loop: captured before `previousOutput` is reassigned
-        // so an auditor-only re-run can re-ask the same question.
-        const stageContext = handoffText || previousOutput;
-
-        const before = await this.snapshotStage(stepConfig, workspaceRoot);
-
-        let counters: SideEffectCounters | null = null;
-        const result = await orchestrator.spawnWorker(
-          stage.role,
-          input,
-          stageContext,
-          context,
-          {
-            toolIds: stage.toolIds ?? undefined,
-            swarmParent: {
-              id: pipeline.orchestratorAgentId,
-              rootSessionId: sessionId,
-              topicPath: `pipeline/${pipeline.id}/${stage.name}`,
-              subtopic: stage.name,
-            },
-            onCounters: (c) => { counters = c; },
-          },
-        );
-
-
-        // A stage that returns nothing has not reported, whatever its status.
-        // Measured: an Implementation worker was truncated mid-write, compacted,
-        // and completed with an empty string — the evidence gate happened to
-        // catch it because that stage declares artifacts, but an undeclared
-        // stage would have handed "" to the next one as its context and the
-        // pipeline would have carried on against nothing.
-        if (String(result ?? '').trim() === '') {
-          throw new Error(
-            `Stage "${stage.name}" returned an empty result. The worker ended without producing ` +
-              `any output (commonly a truncated turn or an exhausted budget), so there is nothing ` +
-              `to hand to the next stage.`,
-          );
-        }
-        // Evidence gate BEFORE completion — throws into the catch below.
-        await this.assertStageEvidence({
-          sessionId,
-          pipelineId: pipeline.id,
-          stageName: stage.name,
-          declared: stepConfig,
-          before,
-          workspaceRoot,
-          counters,
-        });
-
-        // Strip the internal ```handoff block before persist/forward (B3);
-        // parse the handoff chain from the raw output that still carries it.
-        const rawOutput = String(result || '');
-        previousOutput = stripHandoffBlock(rawOutput);
-        pipelineSources.push(`stage(${i + 1}: ${stage.name}/${stage.role})`);
-        await this.updateStage(stage.id, {
-          status: 'completed',
-          output: previousOutput,
-          completedAt: new Date(),
-        });
-
-        // Build structured handoff for the next stage
-        if (i < stages.length - 1) {
-          const nextStage = stages[i + 1];
-          const handoff = await createHandoffContext({
-            from: { role: stage.role, stageName: stage.name, stageIndex: i },
-            to: { role: nextStage.role, stageName: nextStage.name, stageIndex: i + 1 },
-            originalRequest: description,
-            stageOutput: rawOutput,
-          });
-          handoffChain.push(handoff);
-        }
-
-        // Emit stage_completed event for UI
-        const stageSummary = previousOutput.length > 300
-          ? previousOutput.slice(0, 300).replace(/\n/g, ' ').trim() + '...'
-          : previousOutput.replace(/\n/g, ' ').trim();
-
-        orchestrator['emit']({
-          type: 'pipeline_event',
-          sessionId,
-          data: {
-            event: 'stage_completed',
-            pipelineId: pipeline.id,
-            stageId: stage.id,
-            name: stage.name,
-            role: stage.role,
-            summary: stageSummary.slice(0, 200),
-          },
-          timestamp: new Date(),
-        });
-
-        // Persist stage completion as system message
-        messageRepository.create({
-          sessionId,
-          role: 'system',
-          content: `**${stage.name}** (${stage.role || 'agent'}) completed: ${stageSummary.slice(0, 200)}`,
-          metadata: { pipelineId: pipeline.id, stageId: stage.id, pipelineEvent: 'stage_completed' },
-        }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
-
-        // --- QA Validation retry loop for DB template pipelines ---
-        if (stepConfig?.stageType === 'qa_validation') {
-          const maxRetries = stepConfig.maxRetries ?? 3;
-          const retryTargetIndex = stepConfig.retryTargetStage ?? (i > 0 ? i - 1 : 0);
-          const retryTargetStage = stages[retryTargetIndex];
-
-          if (!retryTargetStage) {
-            coreLogger.warn({ pipelineId: pipeline.id, stageIndex: i, retryTargetIndex }, 'QA retry target stage not found');
-          } else {
-            const originalTargetInput = retryTargetStage.systemPrompt
-              ? `${retryTargetStage.systemPrompt}\n\nContext: ${description}\n\n${retryTargetIndex > 0 ? (stages[retryTargetIndex - 1] as any).output || '' : ''}`
-              : description;
-
-            const auditScope = auditScopeBefore(
-              i,
-              stages.map((s) => s.name),
-              stepConfigs.map((s) => s?.producesArtifacts),
-              handoffConfidenceByStage(handoffChain),
-            );
-            const qaEvidence = { sessionId, pipelineId: pipeline.id, stageName: stage.name };
-
-            let qaResult = await this.gateQaVerdict(previousOutput, auditScope, qaEvidence);
-            retryCounts[i] = retryCounts[i] || 0;
-            // See the sibling loop: the newest work under audit, carried across
-            // retries so an auditor-only re-run never re-judges superseded output.
-            let auditedOutput = stageContext;
-
-            while (qaResult && !qaResult.passed && retryCounts[i] < maxRetries) {
-              retryCounts[i]++;
-              const attempt = retryCounts[i];
-              // See the sibling loop: an audit-gate rejection re-runs the
-              // auditor alone, never the implementation stage.
-              const auditorOnly = qaResult.auditGateFailed === true;
-
-              coreLogger.info(
-                { pipelineId: pipeline.id, qaStage: stage.name, retryTarget: retryTargetStage.name, attempt, maxRetries, auditorOnly },
-                auditorOnly ? 'Audit-coverage gate rejected the verdict, re-running the QA stage' : 'QA validation failed, retrying implementation stage',
-              );
-
-              const retryInput = `Previous attempt had issues:\n${qaResult.feedback}\n\nPlease fix these issues:\n${qaResult.issues.join('\n')}\n\nOriginal task:\n${originalTargetInput}`;
-
-              let retryOutput = auditedOutput;
-
-              if (!auditorOnly) {
-                await this.updateStage(retryTargetStage.id, { input: retryInput, status: 'running' });
-
-                const retryDeclared = stepConfigs[retryTargetIndex];
-                const retryBefore = await this.snapshotStage(retryDeclared, workspaceRoot);
-
-                let retryCounters: SideEffectCounters | null = null;
-                const retryResult = await orchestrator.spawnWorker(
-                  retryTargetStage.role,
-                  retryInput,
-                  '',
-                  context,
-                  {
-                    toolIds: retryTargetStage.toolIds ?? undefined,
-                    swarmParent: {
-                      id: pipeline.orchestratorAgentId,
-                      rootSessionId: sessionId,
-                      topicPath: `pipeline/${pipeline.id}/${retryTargetStage.name}#retry${attempt}`,
-                      subtopic: `${retryTargetStage.name} (retry ${attempt})`,
-                    },
-                    onCounters: (c) => { retryCounters = c; },
-                  },
-                );
-
-                await this.assertStageEvidence({
-                  sessionId,
-                  pipelineId: pipeline.id,
-                  stageName: retryTargetStage.name,
-                  declared: retryDeclared,
-                  before: retryBefore,
-                  workspaceRoot,
-                  counters: retryCounters,
-                });
-
-                retryOutput = String(retryResult || '');
-                auditedOutput = retryOutput;
-                await this.updateStage(retryTargetStage.id, {
-                  status: 'completed',
-                  output: retryOutput,
-                  completedAt: new Date(),
-                });
-              }
-
-              // Re-run QA stage. Built the same way on both paths so an
-              // auditor-only re-run cannot drift from a normal one; only the
-              // rejection notice differs. Re-append the JSON verdict
-              // instruction (B2) so the retried QA emits a parseable verdict
-              // instead of falling back to prose.
-              const qaRetryInput = (stage.systemPrompt
-                  ? `${stage.systemPrompt}\n\nContext: ${description}\n\n${retryOutput}`
-                  : `${description}\n\n${retryOutput}`) + QA_VERDICT_JSON_INSTRUCTION
-                + (auditorOnly ? `\n\n---\nYOUR PREVIOUS VERDICT WAS REJECTED — ${qaResult.feedback}` : '');
-
-              await this.updateStage(stage.id, { input: qaRetryInput, status: 'running' });
-
-              const qaRetryBefore = await this.snapshotStage(stepConfig, workspaceRoot);
-
-              let qaRetryCounters: SideEffectCounters | null = null;
-              const qaRetryResult = await orchestrator.spawnWorker(
-                stage.role,
-                qaRetryInput,
-                retryOutput,
-                context,
-                {
-                  toolIds: stage.toolIds ?? undefined,
-                  swarmParent: {
-                    id: pipeline.orchestratorAgentId,
-                    rootSessionId: sessionId,
-                    topicPath: `pipeline/${pipeline.id}/${stage.name}#qa-retry${attempt}`,
-                    subtopic: `${stage.name} QA (retry ${attempt})`,
-                  },
-                  onCounters: (c) => { qaRetryCounters = c; },
-                },
-              );
-
-              await this.assertStageEvidence({
-                sessionId,
-                pipelineId: pipeline.id,
-                stageName: stage.name,
-                declared: stepConfig,
-                before: qaRetryBefore,
-                workspaceRoot,
-                counters: qaRetryCounters,
-              });
-
-              previousOutput = String(qaRetryResult || '');
-              await this.updateStage(stage.id, {
-                status: 'completed',
-                output: previousOutput,
-                completedAt: new Date(),
-              });
-
-              qaResult = await this.gateQaVerdict(previousOutput, auditScope, qaEvidence);
-            }
-
-            // Escalate if max retries exhausted
-            if (qaResult && !qaResult.passed && retryCounts[i] >= maxRetries) {
-              coreLogger.warn({ pipelineId: pipeline.id, attempts: retryCounts[i] }, 'QA validation exhausted retries');
-
-              await this.updatePipeline(pipeline.id, { status: 'awaiting_approval' });
-
-              const escalationResult = await orchestrator.requestApproval(
-                `QA validation failed after ${retryCounts[i]} attempts.\n\nRemaining issues:\n${qaResult.issues.join('\n')}\n\nFeedback: ${qaResult.feedback}`,
-                `Continue pipeline despite QA failures, or abort?`,
-                context,
-                ['Continue Anyway', 'Abort Pipeline'],
-              ) as { approved: boolean; response?: string };
-
-              if (!escalationResult.approved || escalationResult.response === 'Abort Pipeline') {
-                await this.updatePipeline(pipeline.id, {
-                  status: 'failed',
-                  summary: `QA failed after ${retryCounts[i]} attempts. Aborted by user.\n\nIssues:\n${qaResult.issues.join('\n')}`,
-                });
-                return {
-                  pipelineId: pipeline.id,
-                  result: `Pipeline aborted: QA failed after ${retryCounts[i]} attempts.`,
-                };
-              }
-
-              await this.updatePipeline(pipeline.id, { status: 'running' });
-            }
-          }
-        }
-      } catch (error) {
-        const errorMsg = (error as Error).message;
-        await this.updateStage(stage.id, { status: 'failed', error: errorMsg });
-        await this.updatePipeline(pipeline.id, { status: 'failed', summary: `Failed at: ${stage.name} — ${errorMsg}` });
-        return { pipelineId: pipeline.id, result: `Pipeline failed at "${stage.name}": ${errorMsg}` };
-      }
-    }
-
-    const baseSummary = `Pipeline "${pipeline.title}" completed.\n\n${previousOutput}`;
-    const summary = appendSources(baseSummary, pipelineSources);
-    await this.updatePipeline(pipeline.id, { status: 'completed', summary, completedAt: new Date() });
-
-    // Emit pipeline_completed event for UI
-    orchestrator['emit']({
-      type: 'pipeline_event',
-      sessionId,
-      data: { event: 'pipeline_completed', pipelineId: pipeline.id, title: pipeline.title },
-      timestamp: new Date(),
-    });
-
-    getNotificationService().notify(
-      pipeline.userId,
-      'pipeline_complete',
-      `Pipeline "${pipeline.title}" completed`,
-      (previousOutput || '').slice(0, 200),
-      { pipelineId: pipeline.id },
-    ).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
-
-    return { pipelineId: pipeline.id, result: summary };
   }
 
   /**
@@ -1423,11 +1076,16 @@ export class PipelineManager {
       coreLogger.warn({ err: (err as Error).message, pipelineId, stage: stageName }, 'Failed to record side-effect verification evidence');
     }
 
-    if (!measured) {
+    if (!measured && !failure) {
       // The snapshot can still have seen the work even when the worker exposed
       // no tally (a CLI worker). That is a measured pass, not an ungated one —
       // worth distinguishing in the log, because "ungated" is a gap to fix and
       // this is not.
+      //
+      // Guarded on `!failure` so a rule the SNAPSHOT can decide by itself still
+      // bites here: `readOnly` needs no counters, and returning early on a
+      // counter-less worker is what let a CLI QA stage edit the deliverable it
+      // was validating and pass.
       if (filesTouched !== null && filesTouched > 0) {
         coreLogger.info(
           { pipelineId, stage: stageName, filesTouched },

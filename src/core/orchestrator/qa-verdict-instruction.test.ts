@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { PipelineManager, QA_VERDICT_JSON_INSTRUCTION } from './pipeline-manager';
+import {
+  PipelineManager,
+  QA_VERDICT_JSON_INSTRUCTION,
+  QA_VERDICT_JSON_LEAD,
+  withQaVerdictContract,
+} from './pipeline-manager';
 
 // parseQAResult is private + pure (no DB) — reach it through the class.
 const parseQA = (out: string) => (new PipelineManager() as unknown as { parseQAResult(o: string): unknown }).parseQAResult(out);
@@ -20,6 +25,32 @@ describe('QA_VERDICT_JSON_INSTRUCTION (Phase B2)', () => {
     // tier-2 (/"passed"\s*:\s*(true|false)/) must not match the description.
     expect(QA_VERDICT_JSON_INSTRUCTION).not.toContain('```json');
     expect(/"passed"\s*:\s*(true|false)/.test(QA_VERDICT_JSON_INSTRUCTION)).toBe(false);
+  });
+});
+
+// The contract wrapper. The failure it exists for: on 2026-08-07 the auditor
+// omitted the verdict block three runs in a row with the requirement appended
+// after a ~3000-word prompt, so every retry was spent on formatting and the
+// substance was never re-judged.
+describe('withQaVerdictContract', () => {
+  test('states the requirement before the work AND specifies it after', () => {
+    const wrapped = withQaVerdictContract('THE STAGE PROMPT');
+    expect(wrapped.indexOf(QA_VERDICT_JSON_LEAD)).toBe(0);
+    expect(wrapped.indexOf('THE STAGE PROMPT')).toBeLessThan(
+      wrapped.indexOf(QA_VERDICT_JSON_INSTRUCTION),
+    );
+  });
+
+  test('a rejection notice leads, so a retry cannot bury why it is retrying', () => {
+    const wrapped = withQaVerdictContract('THE STAGE PROMPT', 'no verdict block');
+    expect(wrapped).toContain('YOUR PREVIOUS VERDICT WAS REJECTED — no verdict block');
+    expect(wrapped.indexOf('REJECTED')).toBeLessThan(wrapped.indexOf('THE STAGE PROMPT'));
+  });
+
+  test('the whole wrapper stays anti-echo — an echoed contract is not a verdict', () => {
+    // The real regression risk: adding a friendlier filled-in example to the
+    // lead would make an echoing model's own prompt parse as its verdict.
+    expect(parseQA(withQaVerdictContract('a prompt'))).toBeNull();
   });
 });
 

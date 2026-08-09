@@ -133,6 +133,30 @@ describe('stageEvidenceFailure', () => {
     test('no snapshot means unknown, not innocent — and not guilty either', () => {
       expect(stageEvidenceFailure({ readOnly: true }, counters(), null)).toBeNull();
     });
+
+    // The rule is snapshot-only by design, so a worker that keeps no tally must
+    // not escape it. It used to: `stageEvidenceFailure` returned early on
+    // `counters === null`, which is EVERY CLI worker — so the one class of
+    // worker that cannot be counted was also the one class never gated.
+    // Measured 2026-08-08 on a seven-stage CLI run: QA Validation, declared
+    // read-only, left a probe script beside the product and handed the
+    // deliverable back modified and uncommitted, snapshot `filesTouched: 2`,
+    // and the gate passed it.
+    test('a counter-less worker is still judged on the snapshot', () => {
+      const reason = stageEvidenceFailure({ readOnly: true }, null, 2);
+      expect(reason).toContain('changed 2 file(s) in a read-only stage');
+    });
+
+    test('a counter-less worker that touched nothing still passes', () => {
+      expect(stageEvidenceFailure({ readOnly: true }, null, 0)).toBeNull();
+    });
+
+    test('the counter-only rules stay ungated without counters', () => {
+      // `runsCommands` and `producesArtifacts` genuinely need the tally, so
+      // "we could not measure" must keep passing for them — failing work that
+      // actually succeeded is the worse error.
+      expect(stageEvidenceFailure({ runsCommands: true, producesArtifacts: true }, null, 0)).toBeNull();
+    });
   });
 });
 
@@ -224,28 +248,38 @@ describe('planProducesArtifactsBackfill', () => {
     });
   });
 
-  describe('runsCommands', () => {
-    const withExecutor = [
-      ...shipped,
-      { name: 'Testing', topic: 'qa', toolIds: [], requiresApproval: false, runsCommands: true },
-    ];
+  // Every boolean declaration, one table, because this is the touch point the
+  // round-trip test does NOT cover: a flag added to the schema, the mappers and
+  // the gate but not here reaches only FRESH installs, so the gate stays dead
+  // on exactly the installs that have history. Named as the next variant of
+  // this bug in docs/plans/quality-loop-next-session.md — adding a flag to this
+  // list is now the whole cost of guarding it.
+  describe.each(['producesArtifacts', 'runsCommands', 'readOnly', 'mechanical'] as const)(
+    'backfills %s',
+    (flag) => {
+      const withFlag = [
+        ...shipped,
+        { name: 'Testing', topic: 'qa', toolIds: [], requiresApproval: false, [flag]: true },
+      ];
+      const bare = [{ name: 'Testing', topic: 'qa', toolIds: [], requiresApproval: false }];
 
-    test('adds the declaration to an install seeded before the flag existed', () => {
-      const stored = [{ name: 'Testing', topic: 'qa', toolIds: [], requiresApproval: false }];
-      const { steps, changed } = planProducesArtifactsBackfill(stored, withExecutor);
-      expect(changed).toBe(true);
-      expect(steps[0].runsCommands).toBe(true);
-    });
+      test('adds the declaration to an install seeded before the flag existed', () => {
+        const { steps, changed } = planProducesArtifactsBackfill(bare, withFlag);
+        expect(changed).toBe(true);
+        expect(steps[0][flag]).toBe(true);
+      });
 
-    test('preserves an explicit false and stays idempotent', () => {
-      const optedOut = [{ name: 'Testing', topic: 'qa', toolIds: [], requiresApproval: false, runsCommands: false }];
-      expect(planProducesArtifactsBackfill(optedOut, withExecutor).changed).toBe(false);
+      test('preserves an explicit false — a user opting this stage OUT', () => {
+        const optedOut = [{ ...bare[0], [flag]: false }];
+        expect(planProducesArtifactsBackfill(optedOut, withFlag).changed).toBe(false);
+      });
 
-      const stored = [{ name: 'Testing', topic: 'qa', toolIds: [], requiresApproval: false }];
-      const once = planProducesArtifactsBackfill(stored, withExecutor);
-      expect(planProducesArtifactsBackfill(once.steps, withExecutor).changed).toBe(false);
-    });
-  });
+      test('is idempotent', () => {
+        const once = planProducesArtifactsBackfill(bare, withFlag);
+        expect(planProducesArtifactsBackfill(once.steps, withFlag).changed).toBe(false);
+      });
+    },
+  );
 });
 
 // ── The gate as wired (ledger write + throw) ───────────────────────────────
