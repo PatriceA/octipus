@@ -31,7 +31,7 @@ Add models in the **Models** page (or seed via API) with `provider: 'ollama'`.
 Octipus talks to Ollama's native `/api/chat` endpoint (not the `/v1` shim — the
 native format gives reliable tool calls and JSON mode). Default endpoint is
 `http://localhost:11434`; override per-model via the `endpoint` field or globally
-with `OLLAMA_HOST`.
+with `OLLAMA_URL`.
 
 Pull the weights first (`ollama pull qwen3:8b`), or use the hardware-aware
 onboarding (`octi capabilities` / hwfit), which reads your VRAM and recommends

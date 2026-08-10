@@ -157,6 +157,7 @@ User-overridable at `~/.octipus/keybindings.json`. Defaults:
 | `Ctrl+E` | MCP server list | `Ctrl+M` collides with `Enter` |
 | `Ctrl+P` / `F4` | Command palette | |
 | `F5` | Hotkeys overlay | `F1` is hijacked by many terminals |
+| `Alt+T` / `F8` | Push-to-talk: start/stop voice input | |
 | `Ctrl+Q` | Quit | |
 | `Esc` | Cancel current overlay | Inside the editor: leave INSERT mode (vim) |
 

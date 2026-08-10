@@ -71,7 +71,7 @@ Experts are pre-configured personas that add structure on top of roles. Each exp
 | Coder | `coding` | software-architecture, data-structures, api-design, performance-engineering, plugin-development |
 | Architect | `architecture` | software-architecture, api-design, database-design |
 | Reviewer | `review` | software-architecture, test-automation, security-practices, performance-engineering |
-| Researcher | `research` | technical-writing |
+| Researcher | `research` | — |
 | UI/UX Designer | `design` | design-principles, design-frameworks |
 | DevOps Engineer | `devops` | devops-practices, container-orchestration, cloud-platforms, networking |
 | Security Analyst | `security` | security-practices, networking, cloud-platforms |

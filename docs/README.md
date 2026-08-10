@@ -26,6 +26,7 @@ The map for everything under `docs/`. Start with **Getting Started**, then jump 
 |-----|----------------|
 | [MODEL-ROUTING.md](MODEL-ROUTING.md) | Per-topic primary/backup/executor model bindings, resolution order, and the planner→executor cost split. |
 | [LITELLM.md](LITELLM.md) | Routing every model call through a LiteLLM proxy; authentication and the "401 unreachable" fix. |
+| [OLLAMA.md](OLLAMA.md) | Running Octipus on Ollama: model sizing, tool support, context length, iGPU, and lazy tool discovery. |
 | [CUSTOM-PROVIDERS.md](CUSTOM-PROVIDERS.md) | Custom OpenAI-, Gemini-, and Anthropic-compatible endpoints that aren't backed by a first-party provider. |
 | [EVALUATIONS.md](EVALUATIONS.md) | Model evaluation and provider conformance testing. |
 | [CAPABILITY-COMPARISON.md](CAPABILITY-COMPARISON.md) | Feature-by-feature comparison against other platforms. |
@@ -43,11 +44,13 @@ The map for everything under `docs/`. Start with **Getting Started**, then jump 
 | [ARTIFACTS.md](ARTIFACTS.md) | Live hosted HTML artifacts produced by agents. |
 | [ARTIFACTS-COOKBOOK.md](ARTIFACTS-COOKBOOK.md) | Worked examples and recipes for building artifacts. |
 | [HOOKS.md](HOOKS.md) | Event hooks and scheduled / recurring tasks. |
+| [HEARTBEAT.md](HEARTBEAT.md) | Proactive periodic checks for due tasks and notifications, with per-user standing instructions. |
 | [PLUGINS.md](PLUGINS.md) | Installing and building host-side plugins / extensions. |
 | [MCP-INTEGRATION.md](MCP-INTEGRATION.md) | Connecting external MCP servers (client side) with lazy tool discovery. |
 | [MCP-SERVER.md](MCP-SERVER.md) | The standalone MCP server Octipus exposes to CLI models. |
 | [PROFILES.md](PROFILES.md) | People & profiles. |
 | [PROMPTING.md](PROMPTING.md) | Prompting guidance, including the orchestrator persona. |
+| [DESKTOP.md](DESKTOP.md) | The native desktop client (Tauri): thin-client connection to any backend, installation, and configuration. |
 
 ## Architecture
 
@@ -70,6 +73,7 @@ The map for everything under `docs/`. Start with **Getting Started**, then jump 
 | [DEVELOPMENT.md](DEVELOPMENT.md) | Project layout, commands (`octi`, `bun run …`), and how to add tools / skills / experts. |
 | [TESTING.md](TESTING.md) | Unit, integration, E2E, and web test suites. |
 | [QA.md](QA.md) | Manual QA / feature-validation walkthroughs. |
+| [OBSERVABILITY.md](OBSERVABILITY.md) | Prometheus metrics, run correlation, and logging. |
 | [guides/channel-adapter.md](guides/channel-adapter.md) | Guide: writing a new channel adapter. |
 | [guides/tui.md](guides/tui.md) | Guide: the TUI client. |
 | [CHANGELOG.md](CHANGELOG.md) | Release history. |

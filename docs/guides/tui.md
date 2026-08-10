@@ -81,7 +81,9 @@ intercepted before reaching the gateway:
 | `/compact [focus]` | gateway | Compact session context |
 | `/clear` (`/cls`, `/reset`) | gateway | Reset orchestrator + clear chat |
 | `/diff` | gateway | Workspace git diff |
-| `/reload` | gateway | Re-discover user extensions |
+| `/changes [file]` | gateway | Review workspace changes — list, or a file diff |
+| `/reload-extensions` (`/reload`) | gateway | Re-discover and reload user extensions |
+| `/persona` | gateway | Configure the orchestrator persona |
 | `/version` (`/v`) | gateway | Build info |
 
 ### Keybindings (chat shell)
@@ -90,6 +92,7 @@ intercepted before reaching the gateway:
 |---|---|
 | `Ctrl+P` / `F4` | Command palette |
 | `F5` | Hotkeys overlay |
+| `Alt+T` / `F8` | Push-to-talk: start/stop voice input |
 | `Ctrl+Q` | Quit |
 | `Up` / `Down` (in composer) | Navigate chat input history |
 | `Tab` (in composer) | Accept completion / fuzzy file completion |

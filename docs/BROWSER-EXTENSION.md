@@ -176,7 +176,7 @@ The `browser-ext` tool is available to these roles:
 
 ## Security
 
-- WebSocket authenticated via master key (query parameter)
+- WebSocket authenticated via API token or master key (passed as `token` query parameter)
 - `evaluate`, `get_cookies`, `set_cookies`, `get_storage`, `set_storage`, and `get_network` marked as dangerous — require explicit permission approval
 - Navigation, tab management, and interaction commands require ASK-level approval
 - Screenshots, content extraction, console capture, and element highlighting default to ALLOW
@@ -186,7 +186,7 @@ The `browser-ext` tool is available to these roles:
 
 **Extension won't connect:**
 - Check that the backend is running (`bun run dev`)
-- Verify the API key matches `MASTER_KEY` in `.env`
+- Verify the API key is either a valid API token (from Settings → API Tokens) or the `MASTER_KEY` in `.env`
 - Check the service worker console in `chromium://extensions` for errors
 
 **Commands time out:**

@@ -8,86 +8,84 @@ Channel adapters bridge external messaging platforms to Octipus via the Gateway 
 External Platform (e.g., Slack, Teams, custom platform)
     │
     ▼
-GatewayAdapter (your code)
+YourChannel extends BaseChannel (your code)
     │
-    ├── emitMessage()  ──► Gateway Hub ──► Orchestrator
+    ├── emitMessage()  ──► UMI ──► Gateway Hub ──► Orchestrator
     │
-    ◄── handleSend()   ◄── Gateway Hub ◄── Orchestrator response
-    ◄── handleReact()  ◄── Gateway Hub ◄── Feedback emoji
-    ◄── handleTyping() ◄── Gateway Hub ◄── Typing indicator
+    ◄── send()         ◄── UMI ◄── Gateway Hub ◄── Orchestrator response
+    ◄── setReaction()  ◄── UMI ◄── Gateway Hub ◄── Feedback emoji
+    ◄── sendTyping()   ◄── UMI ◄── Gateway Hub ◄── Typing indicator
 ```
 
 ## Creating an Adapter
 
-### 1. Extend GatewayAdapter
+### 1. Extend BaseChannel
 
 ```typescript
-// src/channels/adapters/my-platform-adapter.ts
-import { GatewayAdapter } from '../adapter-base';
-import type { GatewayToAdapter } from '../adapter-base';
-import type { ChannelType } from '@/core/types';
+// src/channels/my-platform/index.ts
+import { BaseChannel } from '../interface';
+import type { ChannelResponse, ChannelType } from '@/core/types';
 
-export class MyPlatformGatewayAdapter extends GatewayAdapter {
-  readonly channelType: ChannelType = 'my-platform';
+export class MyPlatformChannel extends BaseChannel {
+  readonly type: ChannelType = 'my-platform';
   readonly name = 'My Platform';
 
   private client: any = null;
 
-  async start(): Promise<void> {
+  async connect(): Promise<void> {
     // Initialize your platform SDK
     this.client = new MyPlatformClient(process.env.MY_PLATFORM_TOKEN);
 
-    // Bridge: platform messages → gateway
+    // Bridge: platform messages → channel
     this.client.on('message', (msg) => {
-      this.emitMessage({
-        channel: 'my-platform',
-        channelId: msg.channelId,
-        userId: msg.author.id,
-        userName: msg.author.username,
-        content: msg.content,
-        metadata: { messageId: msg.id },
-      });
+      this.emitMessage(
+        this.createUnifiedMessage(msg.channelId, msg.author.id, msg.content, {
+          userName: msg.author.username,
+          metadata: { messageId: msg.id },
+        })
+      );
     });
 
     await this.client.connect();
-    this.emitStatus(true);
+    this.setConnected(true);
   }
 
-  async stop(): Promise<void> {
+  async disconnect(): Promise<void> {
     await this.client?.disconnect();
-    this.emitStatus(false);
+    this.setConnected(false);
   }
 
-  // Gateway sends response → deliver to platform
-  async handleSend(payload: GatewayToAdapter['channel.send']): Promise<void> {
-    await this.client.sendMessage(payload.channelId, payload.content);
+  // Channel sends response → deliver to platform
+  async send(channelId: string, response: ChannelResponse): Promise<string> {
+    await this.client.sendMessage(channelId, response.content);
+    return 'message-sent';
   }
 
   // Optional: emoji reactions
-  async handleReact(payload: GatewayToAdapter['channel.react']): Promise<void> {
-    await this.client.addReaction(payload.messageId, payload.emoji);
+  async setReaction(channelId: string, messageId: string, emoji: string): Promise<void> {
+    await this.client.addReaction(messageId, emoji);
   }
 
   // Optional: typing indicator
-  async handleTyping(payload: GatewayToAdapter['channel.typing']): Promise<void> {
-    if (payload.active) {
-      await this.client.startTyping(payload.channelId);
+  async sendTyping(channelId: string, active: boolean = true): Promise<void> {
+    if (active) {
+      await this.client.startTyping(channelId);
     }
   }
 }
 ```
 
-### 2. Register with the Gateway
+### 2. Register with the UMI
 
-Add your adapter to the channel initialization in `src/channels/index.ts`:
+Add your channel to the channel initialization in `src/channels/index.ts`:
 
 ```typescript
-import { MyPlatformGatewayAdapter } from './adapters/my-platform-adapter';
+import { MyPlatformChannel } from './my-platform';
 
 // In initializeChannels():
 if (config.myPlatform?.enabled) {
-  const adapter = new MyPlatformGatewayAdapter();
-  adapterRegistry.register(adapter);
+  const channel = new MyPlatformChannel();
+  umi.register(channel);
 }
 ```
 
@@ -99,72 +97,121 @@ Add your channel type to `src/core/types.ts`:
 export type ChannelType = 'telegram' | 'slack' | 'teams' | 'whatsapp' | 'webchat' | 'my-platform';
 ```
 
-## Adapter Protocol
+And update the configuration schema in `src/config/schema.ts` to include settings for your channel if needed.
 
-### Messages You Send (Adapter → Gateway)
+## Channel Interface
 
-**`channel.message`** — When a user sends a message on the platform:
+### Methods to Override
+
+Your channel must implement these abstract methods from `BaseChannel`:
+
+**`connect(): Promise<void>`** — Initialize the channel
 ```typescript
-this.emitMessage({
-  channel: 'my-platform',    // Your channel type
-  channelId: '123456',       // Platform-specific chat/channel ID
-  userId: 'user789',         // Platform user ID
-  userName: 'Alice',         // Display name (optional)
-  content: 'Hello!',         // Message text
-  attachments: [],            // Optional file attachments
-  threadId: 'thread1',       // Optional thread/reply chain
-  metadata: { messageId: 'msg1' },  // Platform-specific metadata
-});
-```
-
-**`channel.status`** — Connection state changes:
-```typescript
-this.emitStatus(true);                    // Connected
-this.emitStatus(false, 'Token expired');  // Disconnected with reason
-```
-
-### Messages You Receive (Gateway → Adapter)
-
-**`handleSend`** — Deliver a response to the user:
-```typescript
-async handleSend(payload) {
-  // payload.channelId — where to send
-  // payload.content — message text
-  // payload.replyTo — optional message ID to reply to
-  // payload.threadId — optional thread to post in
+async connect(): Promise<void> {
+  // Set up client, register event listeners, connect to platform
+  this.setConnected(true);
 }
 ```
 
-**`handleReact`** — Add emoji reaction (optional):
+**`disconnect(): Promise<void>`** — Clean up and disconnect
 ```typescript
-async handleReact(payload) {
-  // payload.messageId — message to react to
-  // payload.emoji — emoji string (e.g., '✅')
+async disconnect(): Promise<void> {
+  // Close connections, clear state
+  this.setConnected(false);
 }
 ```
 
-**`handleTyping`** — Typing indicator (optional):
+**`send(channelId: string, response: ChannelResponse): Promise<string>`** — Deliver a response to the user
 ```typescript
-async handleTyping(payload) {
-  // payload.channelId — where to show typing
-  // payload.active — true to start, false to stop
+async send(channelId: string, response: ChannelResponse): Promise<string> {
+  // response.content — message text
+  // response.attachments — array of files to send
+  // response.replyTo — optional message ID to reply to
+  // response.threadId — optional thread to post in
+  // Return the platform-specific message ID
 }
+```
+
+### Optional Methods
+
+**`setReaction(channelId: string, messageId: string, emoji: string): Promise<void>`** — Add emoji reaction
+```typescript
+async setReaction(channelId: string, messageId: string, emoji: string): Promise<void> {
+  // Add emoji to a message (skip if platform doesn't support)
+}
+```
+
+**`sendTyping(channelId: string, active: boolean): Promise<void>`** — Typing indicator
+```typescript
+async sendTyping(channelId: string, active: boolean = true): Promise<void> {
+  // Show/hide typing indicator (skip if platform doesn't support)
+}
+```
+
+### Sending Messages from Your Platform
+
+When a user sends a message on your platform, emit it to the UMI:
+
+```typescript
+this.emitMessage(
+  this.createUnifiedMessage(
+    'channel-123',              // Platform-specific chat/channel ID
+    'user-456',                 // Platform user ID
+    'Hello!',                   // Message text
+    {
+      userName: 'Alice',        // Display name (optional)
+      attachments: [],          // Optional file attachments
+      threadId: 'thread-1',     // Optional thread/reply chain
+      metadata: { messageId: 'msg-789' },  // Platform-specific metadata
+    }
+  )
+);
+```
+
+### Connection State Changes
+
+Update the connection state when the channel connects or disconnects:
+
+```typescript
+this.setConnected(true);   // Connected
+this.setConnected(false);  // Disconnected
+```
+
+To emit errors, use:
+
+```typescript
+this.emitError(new Error('Connection failed'));
 ```
 
 ## Testing
 
-Mock the gateway send callback in tests:
+Test your channel by subscribing to UMI events:
 
 ```typescript
-import { MyPlatformGatewayAdapter } from './my-platform-adapter';
+import { MyPlatformChannel } from './my-platform';
+import { getUMI } from '@/channels';
 
-const adapter = new MyPlatformGatewayAdapter();
-const sent: any[] = [];
-adapter.setGatewaySend((type, payload) => sent.push({ type, payload }));
+const channel = new MyPlatformChannel();
+const umi = getUMI();
+umi.register(channel);
+
+// Listen for messages from the platform
+const messages: any[] = [];
+umi.on('message', (msg) => {
+  messages.push(msg);
+});
+
+await channel.connect();
 
 // Simulate platform message
-adapter.emitMessage({ channel: 'my-platform', channelId: '1', userId: 'u1', content: 'test' });
+channel.emitMessage(
+  channel.createUnifiedMessage('ch-1', 'u-1', 'test', {
+    userName: 'Alice',
+  })
+);
 
-expect(sent).toHaveLength(1);
-expect(sent[0].type).toBe('channel.message');
+expect(messages).toHaveLength(1);
+expect(messages[0].content).toBe('test');
+
+await channel.disconnect();
 ```

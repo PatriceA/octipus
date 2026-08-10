@@ -2,7 +2,7 @@
 
 ## Overview
 
-Octipus uses three Postgres-backed surfaces to remember things across
+Octipus uses four Postgres-backed surfaces to remember things across
 turns and sessions, all sharing the same pgvector install:
 
 | Surface | What it stores | Schema | Hot files |
@@ -10,10 +10,18 @@ turns and sessions, all sharing the same pgvector install:
 | **Knowledge base** | Document chunks, message chunks, image captions, per-repo maps + `AGENTS.md`, agent-flagged knowledge artefacts. **Never raw source code** — see [Code-exclusion policy](#code-exclusion-policy-raw-code-is-never-indexed). | `embeddings` | `src/core/rag/embeddings.ts`, `src/core/rag/retention-service.ts` |
 | **Long-term memory** | Atomic user-scoped facts (preference, profile, relationship, …) with supersession history | `memories` (+ `memories_active` view) | `src/core/memory/*` |
 | **Workflow state** | Typed sibling-agent outputs scoped to a session, with LISTEN/NOTIFY fan-out | `task_state` | `src/core/agent-task-recorder.ts`, `src/db/repositories/task-state-repository.ts`, `src/db/task-state-listener.ts` |
+| **Knowledge graph** | Authored markdown notes and the explicit edges between knowledge entities (`[[wikilinks]]`, `#tags`) — see [KNOWLEDGE-GRAPH.md](KNOWLEDGE-GRAPH.md) | `notes`, `knowledge_links` | `src/core/knowledge/*` |
 
-The original RAG layer (this doc's subject) is the bottom row of the
-trio. The memory and task-state surfaces shipped May 2026; runtime
-behaviour lives in `src/core/memory/` and `src/db/schema/`.
+The original RAG layer (this doc's subject) is the first row. The memory
+and task-state surfaces shipped May 2026, the knowledge graph after them;
+runtime behaviour lives in `src/core/memory/`, `src/core/knowledge/`, and
+`src/db/schema/`.
+
+The graph is the *authored* counterpart to this doc's *ingested* content:
+the knowledge base stores what was uploaded or written to disk, the graph
+stores what someone deliberately wrote down and connected. Notes are
+indexed into `embeddings` (`purpose='note'`) so both are reachable from
+one hybrid search.
 
 - **Embedding model:** anything mapped to topic `embedding` in the
   model registry (defaults to `nomic-embed-text` via Ollama through
@@ -58,6 +66,7 @@ PR #28 / migration 0056). Valid values:
 | `image_description` | Vision-LLM caption + OCR text written by `documents/processor.ts` for image uploads | Tied to the parent `documents` row |
 | `knowledge_artifact` | Reserved for agent-flagged outputs worth long-term storage | 365 days, LFU prune below 1 access after 180 days |
 | `message` | Conversation chunks indexed for recall (not currently auto-written; compaction handles long-term recall via `compaction_entries`) | 90 days |
+| `note` | Note bodies chunked by `NoteService.save` (`source_id='note:<id>'`) — see [KNOWLEDGE-GRAPH.md](KNOWLEDGE-GRAPH.md) | **No policy row**: never age-reaped. Chunks are replaced on every save and deleted with the note |
 | `ephemeral` | Health probes, transient observations | 7 days |
 
 `agent_output` is no longer a value. Memory-redesign Phase B moved

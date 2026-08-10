@@ -35,11 +35,11 @@ through its toolbox tool), then either splices into the template via
 
 ```ts
 // 1. Discover. The agent never invents tool ids.
-art_toolbox_search({ query: "github issues" })
-art_toolbox_describe({ id: "art_collect_http_json" })
+artifacts_toolbox__search({ query: "github issues" })
+artifacts_toolbox__describe({ id: "art_collect_http_json" })
 
 // 2. Validate the wiring before creating anything.
-art_toolbox_validate({
+artifacts_toolbox__validate({
   sources: [
     { name: "issues", toolId: "art_collect_http_json",
       params: { url: "https://api.github.com/repos/PatriceA/octipus/issues" },
@@ -93,8 +93,8 @@ Download: `https://artifacts.<host>/a/octipus-issues/export/csv`.
 
 ## Toolbox catalogue (Phase 3 baseline)
 
-Discovery surface: `art_toolbox_list`, `art_toolbox_search`,
-`art_toolbox_describe`, `art_toolbox_validate`. All four are permission
+Discovery surface: `artifacts_toolbox__list`, `artifacts_toolbox__search`,
+`artifacts_toolbox__describe`, `artifacts_toolbox__validate`. All four are permission
 tier ALLOW — the agent can browse freely.
 
 | Family    | Tool                                                                 | One-liner |
@@ -124,7 +124,7 @@ tier ALLOW — the agent can browse freely.
 | export    | `art_export_json`                                                    | Pretty JSON. |
 | export    | `art_export_markdown`                                                | Markdown table (optional title). |
 
-See `art_toolbox_describe({ id })` for parameters, return shape, examples,
+See `artifacts_toolbox__describe({ id })` for parameters, return shape, examples,
 and tips on any of them.
 
 ## Render pipeline
@@ -165,7 +165,7 @@ The toolbox itself is auto-discovered on first import via folder scan
 of `src/core/artifacts/toolbox/{collectors,transforms,widgets,exports}/`.
 Drop a new tool file in the right folder and it appears in the
 catalogue on next restart — no manual registration. The four
-discovery tools (`art_toolbox_list/search/describe/validate`) are
+discovery tools (`artifacts_toolbox__list/search/describe/validate`) are
 the ONLY agent-facing surface for the toolbox; widget and transform
 ids are referenced by name in pipeline JSON, never invoked by the
 LLM directly.

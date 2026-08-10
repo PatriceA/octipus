@@ -11,7 +11,7 @@ Standalone MCP server (`mcp-server/`) that exposes Octipus capabilities as MCP t
 | `octipus_list_agents` | List running agents with status |
 | `octipus_spawn_agent` | Spawn a new autonomous agent |
 | `octipus_stop_agent` | Stop a running agent |
-| `octipus_send_message` | Send a message to a running agent |
+| `octipus_send_agent_message` | Send a message to a running agent |
 | `octipus_get_agent_events` | Get agent events (polling with cursor) |
 | `octipus_list_sessions` | List recent chat sessions |
 | `octipus_get_messages` | Get messages from a session |
@@ -33,6 +33,8 @@ Standalone MCP server (`mcp-server/`) that exposes Octipus capabilities as MCP t
 | `octipus_list_recurring_tasks` | List recurring tasks |
 | `octipus_update_recurring_task` | Update a recurring task |
 | `octipus_delete_recurring_task` | Delete a recurring task |
+
+The table above shows commonly used tools. The server registers 88 tools in total — see `mcp-server/src/tools/` for the complete list.
 
 ## Setup
 

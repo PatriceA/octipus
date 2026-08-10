@@ -1,6 +1,6 @@
 # Troubleshooting
 
-> **First stop: run `octi doctor`.** It runs 15 environment checks (bun, .env, vault keys, storage mode, base persona, Ollama, LiteLLM, postgres, redis, backend, MCP server build, browser extension, log sanity, disk space) and prints exactly what's wired and what's missing, with a one-line hint per failure. Add `--json` for machine-readable output. Most of the sections below are reachable from a doctor warning.
+> **First stop: run `octi doctor`.** It runs 16 environment checks (bun, .env, vault keys, storage mode, base persona, Octipus home, Ollama, LiteLLM, postgres, redis, backend, capabilities, MCP server build, browser extension, log sanity, disk space) and prints exactly what's wired and what's missing, with a one-line hint per failure. Add `--json` for machine-readable output. Most of the sections below are reachable from a doctor warning.
 
 ## pgvector Extension Requires Superuser
 

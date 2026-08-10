@@ -18,15 +18,16 @@ Chat commands are slash commands you can use in any channel (WebChat, Telegram, 
 | `/model [name]` | Switch to a specific model for the session |
 | `/models` | List available models |
 | `/plan` | Start an interactive project planning questionnaire |
+| `/capture <text>` | Append a timestamped line to today's daily note; `[[wikilinks]]` and `#tags` in the text are wired into the [knowledge graph](KNOWLEDGE-GRAPH.md) immediately |
 | `/cost` | Show token usage and cost for the session |
 | `/cancel` | Abort a multi-step command (e.g., active `/plan`); works during any command |
 | `/eval` | Run evaluation scenarios or compare models |
 
-### Persona (Web UI only)
+### Persona
 
-Persona controls (name, tone, narration, self-facts, presets) are accessible via the **web UI** at `/persona` and do not have chat command equivalents. Once set, your chosen persona applies across all channels.
+Persona controls (name, tone, narration, self-facts, presets) are accessible via the **web UI** at `/persona`, or via the `/persona` gateway command in the TUI (see [TUI / Gateway Commands](#tui--gateway-commands-additional) — not available from web/channel clients). Once set, your chosen persona applies across all channels.
 
-**Available persona controls** (in `/persona` page):
+**Available persona controls** (in the `/persona` page or via the `/persona` gateway command):
 
 | Control | Options | Description |
 |---------|---------|-------------|
@@ -54,15 +55,18 @@ These commands are available in the TUI and gateway clients (not web/channel cli
 | `/compact` | — | Compact session context (summarize old messages); optional: `/compact <focus instructions>` |
 | `/clear` | `/cls`, `/reset` | Reset orchestrator context and clear TUI display |
 | `/diff` | — | Show `git diff --stat` for workspace changes |
+| `/changes` | — | Review git changes in the workspace — `/changes` for the list, `/changes <path>` for a file diff |
 | `/help` | `/h`, `/?` | List available commands |
 | `/reload-extensions` | `/reload` | Re-discover and reload user extensions from `.octipus/extensions/` (local trust only) |
+| `/persona` | — | Configure the orchestrator persona — name, tone, narration, free-form facts |
+| `/version` | `/v` | Show Octipus version and build info |
 
 ### Channel-Specific
 
 | Command | Where | Description |
 |---------|-------|-------------|
-| `/start` | Telegram | Initialize bot connection |
-| `/link` | Telegram, Slack, Teams, WhatsApp | Get a 6-character code to link your channel account to your web account |
+| `/start` | Telegram, WhatsApp | Initialize bot connection |
+| `/link` | Telegram, Slack, WhatsApp | Get a 6-character code to link your channel account to your web account |
 
 ---
 

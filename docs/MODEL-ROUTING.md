@@ -13,7 +13,7 @@ Every topic (lane) can bind up to three models:
 |---|---|---|---|
 | **Primary** | Models page → topic assignment (`topicRoles` = `primary`) | The full-capability specialist model for this topic | Default for every agent spawned into the topic |
 | **Backup** | Models page → topic assignment (`topicRoles` = `backup`) | Failure fallback | Only after the primary FAILS (provider/tool error) — one retry. Never chosen for cost or capability reasons |
-| **Executor** | Topics page → `executorModel` (`topics_config` table) | Cheap model that runs pre-planned steps mechanically | Only when the spawning agent supplies a `plan` in `spawn_child` (planner→executor split, see below) |
+| **Executor** | Topics page → `executorModel` (`topics_config` table) | Cheap model that runs pre-planned steps mechanically | Only when the spawning agent supplies a `plan` in `spawn_child` (planner→executor split, see below). On planned spawns, overrides expert `modelPreference` because a plan means the work is pre-decided and mechanical, not requiring expert judgment. |
 
 All three are optional. An unbound topic **fails loud** at spawn time — there
 is no silent default-model fallback for workers (only the orchestrator has a
@@ -26,10 +26,11 @@ Both spawn paths — direct workers (`worker-spawner.ts`) and swarm children
 
 ```
 1. explicit override            (caller-pinned model, e.g. session override)
-2. expert.modelPreference       (the matched expert's explicit choice — WINS
-                                 over everything below, including the executor)
-3. lane executorModel           ONLY if the spawn carried a `plan`
-                                 (misconfigured/unregistered executor → loud error)
+2. lane executorModel           ONLY if the spawn carried a `plan` AND the lane
+                                 has an executor configured (overrides expert
+                                 preference for planned/mechanical spawns)
+3. expert.modelPreference       (the matched expert's explicit choice —
+                                 authoritative for plan-less delegations)
 4. lane primary                 getModelForTopic(lane)
 5. fail loud                    no inheritance of the parent's model
 ```
@@ -80,11 +81,13 @@ The agent learns this from two prompt surfaces (both depth-1 only):
 
 Notes and edge cases:
 
-- **Expert `modelPreference` shadows the executor.** If the matched expert
-  pins a model, a planned child runs on that pin, not the executor (logged at
-  info: `Planned child: expert modelPreference overrides the lane
-  executorModel`). Clear the expert's model preference if you want the
-  executor to win.
+- **Executor overrides expert `modelPreference` on planned spawns.** When a plan is
+  supplied and the lane has an executor configured, the cheap executor model runs
+  the planned steps, even if the matched expert has a `modelPreference`. A plan
+  signals that the thinking is done and only mechanical execution remains, so the
+  executor's cost savings apply. If an expert must run on a specific model even
+  for planned work, either leave the lane's `executorModel` empty (planner == executor)
+  or remove the expert's `modelPreference` and rely on topic bindings.
 - **Executor bound but never used** means agents aren't sending plans. This is
   now observable (below) instead of silent.
 - **Unregistered executor name** fails loud — but only when a plan actually

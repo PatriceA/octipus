@@ -2,7 +2,7 @@
 
 Agent-facing reference for building and debugging hosted artifacts (dashboards, RSS feeds, tables, news pages). Source of truth for *what's possible right now* — if a capability isn't documented here it almost certainly isn't wired.
 
-If you're an LLM, read this end-to-end before grepping source. The toolbox is self-introspecting via `artifacts_toolbox.art_toolbox_{list,search,describe,validate}`; this file just spells out the things you can't see from the introspection calls (intent, recipes, current limitations).
+If you're an LLM, read this end-to-end before grepping source. The toolbox is self-introspecting via `artifacts_toolbox__{list,search,describe,validate}`; this file just spells out the things you can't see from the introspection calls (intent, recipes, current limitations).
 
 ---
 
@@ -29,7 +29,7 @@ Each source produces a named value. Each transform reads `inputName` and produce
 
 ## 2. Pipeline shape (the canonical JSON)
 
-The shape `art_toolbox_validate` accepts and `artifacts.get_live_artifact` returns:
+The shape `artifacts_toolbox__validate` accepts and `artifacts.get_live_artifact` returns:
 
 ```json
 {
@@ -194,7 +194,7 @@ For **private repos or higher limits**, you need an `Authorization: Bearer <toke
 
 ## 5. Worked example — the `qa-issues` dashboard
 
-This is the spec the user actually wants: open/closed issues, all PRs, last 100 commits on `main`. Paste it as the body of an `art_toolbox_validate` call, then mirror it into `create_live_artifact` + `add_artifact_*` calls (or fix the existing artifact's wiring).
+This is the spec the user actually wants: open/closed issues, all PRs, last 100 commits on `main`. Paste it as the body of an `artifacts_toolbox__validate` call, then mirror it into `create_live_artifact` + `add_artifact_*` calls (or fix the existing artifact's wiring).
 
 ```json
 {
@@ -405,7 +405,7 @@ Rule of thumb: if you're sending a link in chat to the workspace owner, `shareUr
 Use the agent path:
 
 1. `artifacts.get_live_artifact({ slug: "qa-issues" })` → full spec (sources/transforms/widgets/exports).
-2. `artifacts_toolbox.art_toolbox_validate` on those four arrays → see structural errors.
+2. `artifacts_toolbox__validate` on those four arrays → see structural errors.
 3. If `ok: true` but data is empty → `artifacts.refresh_live_artifact({ id })` and read `last_status` + `last_error` per source.
 4. Only after that — verify the upstream actually has data. For GitHub, `gh api` with the same URL is the ground truth.
 

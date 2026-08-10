@@ -33,7 +33,7 @@ octipus/
 ├── browser-extension/      # Chrome extension for real browser control
 ├── eval/                   # YAML-based capability eval suites
 ├── scripts/
-│   ├── e2e/                # E2E test suite (22 modules, 112 tests)
+│   ├── e2e/                # E2E test suite (27 modules, 142 tests)
 │   └── setup.ts            # Bootstrap setup wizard
 └── docs/                   # Documentation
 ```

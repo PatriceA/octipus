@@ -52,8 +52,7 @@ A custom-provider model row uses the existing `model_config` columns plus a
   metadata: {
     customProvider: {
       auth: { type: 'bearer' },              // 'bearer' | 'header' | 'query'
-      requestEnvelope: 'gemini-blocks-config',
-      // pathOverride: '/generate',          // optional, defaults per envelope
+      // pathOverride: '/generate',          // optional, replaces the default path
       // extraHeaders: { 'X-Org': 'foo' },   // optional
     },
   },
@@ -78,18 +77,14 @@ A custom-provider model row uses the existing `model_config` columns plus a
 
 Use `env:` for local development, vault for shared/production.
 
-## Request envelopes (Gemini-compat only)
+## Request format (Gemini-compat only)
 
-The `requestEnvelope` field controls how the request body is shaped:
+The **custom-gemini** provider always sends requests in native Google Gemini wire format:
 
-### `standard` (default)
+- **Path** (defaults to): `POST {endpoint}/v1beta/models/{modelId}:generateContent` (or `:streamGenerateContent` for streaming)
+- **Override**: Use `metadata.customProvider.pathOverride` to point at a different endpoint path if needed
 
-Native Google Gemini wire format. Path defaults to:
-
-- `POST {endpoint}/v1beta/models/{modelId}:generateContent`
-- `POST {endpoint}/v1beta/models/{modelId}:streamGenerateContent` (streaming)
-
-Body:
+**Request body** follows Google Gemini's native structure:
 
 ```json
 {
@@ -100,32 +95,9 @@ Body:
 }
 ```
 
-Use for: real Google Gemini API, Vertex AI generative endpoints.
+Use for: real Google Gemini API, Vertex AI generative endpoints, or Gemini-API-compatible proxies that expect this exact wire format.
 
-### `gemini-blocks-config`
-
-Bespoke envelope used by some Gemini-fronting proxies. Single path
-(default `/generate`), with Anthropic-style content blocks and a camelCase
-`config:{}` wrapper.
-
-Body:
-
-```json
-{
-  "mode": "text",
-  "model": "gemini-3-flash-preview",
-  "messages": [{ "role": "user", "content": [{ "type": "text", "text": "..." }] }],
-  "stream": false,
-  "config": {
-    "temperature": 0.7,
-    "maxTokens": 4096,
-    "response_schema": { "type": "OBJECT", "properties": { ... } },
-    "tools": [{ "name": "...", "description": "...", "parameters": { ... } }]
-  }
-}
-```
-
-Response shape is identical to `standard` (native Gemini `candidates[]`).
+For proxies with non-standard request/response shapes, use `custom-openai` with a compatible endpoint instead.
 
 ## Streaming
 
@@ -147,13 +119,6 @@ on the way in.
 - Image / multi-modal input — text only for now
 - Embeddings — no custom flavor implements `embed()`
 - Batch / parallel mode (proxy-specific feature)
-
-## Adding a new envelope
-
-If you need a third request shape, add a new branch to
-`src/models/providers/custom/gemini-envelope.ts` and extend the
-`requestEnvelope` enum in `src/db/schema/models.ts`. Each new envelope
-should ship with unit tests in `gemini-envelope.test.ts`.
 
 ## Local-runtime presets (one-click self-hosted models)
 
