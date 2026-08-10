@@ -32,7 +32,7 @@ to the repos that matter.
    repos", or call the API:
 
    ```bash
-   curl -X POST localhost:3005/workspace/repos/scan -H "Authorization: Bearer $TOKEN"
+   curl -X POST localhost:3005/api/workspace/repos/scan -H "Authorization: Bearer $TOKEN"
    ```
 
 3. Give each repo a curated `AGENTS.md` at its root. Agents read it on entry and
@@ -78,10 +78,10 @@ and [→ Code-exclusion policy](./RAG.md#code-exclusion-policy-raw-code-is-never
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/workspace/repos` | List registry repos + derived dependency edges. |
-| POST | `/workspace/repos/scan` | Scan the workspace and refresh the registry. |
-| GET | `/workspace/repos/:id` | One repo with its dependencies/dependents. |
-| DELETE | `/workspace/repos/:id` | Remove a repo from the registry. |
+| GET | `/api/workspace/repos` | List registry repos + derived dependency edges. |
+| POST | `/api/workspace/repos/scan` | Scan the workspace and refresh the registry. |
+| GET | `/api/workspace/repos/:id` | One repo with its dependencies/dependents. |
+| DELETE | `/api/workspace/repos/:id` | Remove a repo from the registry. |
 
 ## Limitations / roadmap
 

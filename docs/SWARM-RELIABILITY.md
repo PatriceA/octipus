@@ -112,6 +112,7 @@ synthesizing against output that missed the brief.
 | `regex` | output/notes matches a pattern | `pattern`, `flags`, `on` |
 | `json` | output parses as JSON (+ required top-level keys) | `requiredKeys[]` |
 | `file_exists` | a path exists in the child's workspace | `path` |
+| `side_effect` | the child's deterministic receipt meets thresholds | `minFilesChanged`, `minCommandsRun`, `maxToolErrors`, `requireWorkingTools` |
 
 Scorers are **opt-in** and validated at the spawn boundary — a malformed spec is
 rejected loudly (`spawn_child: invalid scorers: …`), not silently dropped.

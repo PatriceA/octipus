@@ -33,7 +33,7 @@ Every system expert includes three structured prompt sections that are automatic
 | **Deliverable Template** | `deliverableTemplate` (text) | Expected output format — defines the structure of the agent's final response (e.g., code review format with sections for issues, suggestions, summary) |
 | **Success Metrics** | `successMetrics` (string[]) | Evaluation criteria for the agent's output (e.g., "All tests pass", "No security vulnerabilities introduced") |
 
-These fields are defined on the `presets` table and populated for all 15 system experts. Custom experts can also define them via the API or web UI.
+These fields are defined on the `presets` table and populated for all 16 system experts. Custom experts can also define them via the API or web UI.
 
 ### Agents (Workers)
 Runtime instances that execute tasks using an LLM tool loop. Each agent has a context (session, user, model, role) and iterates: call LLM → parse tool calls → execute tools → repeat.
@@ -52,8 +52,8 @@ The orchestrator uses two layers of classification with different vocabularies:
 **Layer A — src/core/router.ts** (legacy, 15 topics):
 coding, research, architecture, chat, embedding, design, devops, security, data, ai, qa, finance, automation, pm, writing (+ 'general' fallback).
 
-**Layer B — src/core/orchestrator/classifier.ts** (live, 13 categories):
-coding, research, devops, security, qa, data, writing, architecture, design, finance, communication, automation, general.
+**Layer B — src/core/orchestrator/classifier.ts** (live, 14 categories):
+coding, research, devops, security, review, qa, data, writing, architecture, design, finance, communication, automation, general.
 
 Layer B is the active classification path (injected into orchestrator context at service.ts:704). Every category name is a valid worker role, so the classifier topic feeds straight into `spawn_child` with no remapping. `TOPIC_TO_ROLE_ALIAS` (swarm-tool.ts) still catches natural-language synonyms the orchestrator LLM may use (e.g. `development`→`coding`, `database`→`data`). Divergences from Layer A: Layer B has distinct 'communication' category and lacks 'chat'/'embedding'/'ai'/'pm' (handled via LLM fallback).
 
@@ -137,8 +137,8 @@ Every node has a hard budget envelope enforced pre-LLM-call inside `AgentWorker.
 | Level | Tokens (cap) | Wall-clock (cap) | Fan-out (cap) |
 |---|---|---|---|
 | Orchestrator (0) | 200k | 10 min | 6 |
-| Agent (1) | 80k | 4 min | 4 |
-| Subagent (2) | 30k | 4 min | 0 |
+| Agent (1) | 80k | 10 min | 4 |
+| Subagent (2) | 30k | 10 min | 0 |
 
 - **Tokens cascade** (pool-shared): `child.tokens.cap = min(LEVEL_DEFAULT[depth], parent.remaining.tokens − 10% RESERVE)`.
 - **Wall-clock does NOT cascade**: each node gets its own `LEVEL_DEFAULT` wall cap. Parent's clock excludes time spent awaiting children via `AgentWorker.pausedMs`.

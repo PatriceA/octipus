@@ -14,8 +14,9 @@ import { getNoteService, type NoteService } from './notes';
  *
  * Reads the week's daily notes + completed task_state + new memories and
  * asks an LLM to write a review note that links the projects/notes it
- * references. The model binds to the `knowledge_review` registry topic —
- * never a hardcoded model (house rule 2); an unbound topic throws.
+ * references. The model comes from the `background` registry topic (the
+ * canonical lane the retired `knowledge_review` topic aliases to) — never a
+ * hardcoded model (house rule 2); an unbound topic throws.
  *
  * Dependencies are injectable so the assembly + save logic is testable
  * without a live model.

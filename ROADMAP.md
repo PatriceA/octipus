@@ -878,7 +878,7 @@ Three deferred items moved to **Now** above.
 ### Earlier
 
 - Gateway hub with typed Zod protocol, multi-client auth (session, local, HMAC, API key), connection budgets, rate limiting
-- 16 roles + 15 expert personas + 20 domain skills, all DB-seeded for runtime editing
+- 16 roles + 16 expert personas + 22 domain skills, all DB-seeded for runtime editing
 - 59+ MCP tools across 19 groups (filesystem, shell, git, browser, web search, Docker, Workspace, M365, GitHub/GitLab, knowledge base, profiles, scheduling, voice, cross-channel messaging, and more)
 - Three-tier permission system (ALLOW / ASK / DENY) with rule matchers, pre/post hooks, audit trail
 - Three-layer prompt-injection defense (system preamble + 39-pattern input guard + LLM output guard)

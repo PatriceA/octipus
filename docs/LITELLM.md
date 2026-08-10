@@ -38,7 +38,7 @@ At call time Octipus resolves the key as:
 config.litellm.apiKey  ||  process.env.LITELLM_MASTER_KEY
 ```
 
-(`src/api/routes/models.ts`, `src/models/litellm-client.ts:96`). If **neither**
+(`src/services/provider-service.ts:26`). If **neither**
 is set, Octipus sends the request with **no `Authorization` header**. A proxy
 started with a `master_key` / `LITELLM_MASTER_KEY` will reject that with
 **HTTP 401** — which surfaces in the UI as *"unreachable 401"* / *"LiteLLM

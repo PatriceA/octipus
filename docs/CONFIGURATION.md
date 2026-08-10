@@ -4,10 +4,17 @@ Create a `.env` file or use `bun run setup` to generate one interactively.
 
 ## Ports
 
-| Service | Default Port | Env Var |
-|---------|-------------|---------|
-| Backend API | 3005 | `API_PORT` |
-| Web UI | 3007 | `WEB_PORT` |
+| Service | Port | Env Var |
+|---------|------|---------|
+| Backend API | 3005 | `API_PORT` (or `PORT`) |
+| Web UI | 3007 | — (fixed in `web/package.json`) |
+
+`.env.example` ships `PORT=3005`, so that is the port you get from a normal
+install; with neither `API_PORT` nor `PORT` set, the code falls back to 3000
+(`src/config/bootstrap-loader.ts`). The web dev server is pinned to 3007 by
+`next dev -p 3007` and is not read from the environment — under Docker
+Compose the host-side ports are `OCTIPUS_API_PORT` (default 3015) and
+`OCTIPUS_WEB_PORT` (default 3017), mapped onto 3005/3007 in the container.
 
 ## Environment Variables
 
@@ -26,7 +33,7 @@ SESSION_SECRET=your-session-secret-at-least-32-chars
 API_PORT=3005
 API_HOST=0.0.0.0
 LOG_LEVEL=info
-CORS_ORIGINS=http://localhost:3006,http://localhost:3007
+CORS_ORIGINS=http://localhost:3007   # your web origin; code default is http://localhost:3001
 
 # ─── Models ───────────────────────────────────────────────────
 LITELLM_URL=http://localhost:4000      # LiteLLM proxy (optional)
@@ -58,7 +65,7 @@ WHATSAPP_APP_SECRET=                   # Meta App Secret
 
 # ─── Agent Limits ────────────────────────────────────────────
 AGENT_MAX_TOKEN_BUDGET=100000         # Per-agent token limit (0 = unlimited)
-AGENT_DEFAULT_TIMEOUT=300000          # Per-agent timeout in ms (default: 5min)
+AGENT_DEFAULT_TIMEOUT=900000          # Per-agent timeout in ms (default: 15min)
 AGENT_MAX_ITERATIONS=50               # Max iterations per agent loop
 
 WORKSPACE_PATH=./workspace

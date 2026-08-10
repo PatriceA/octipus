@@ -33,14 +33,17 @@ curl -H "Authorization: Bearer $OCTIPUS_API_TOKEN" http://localhost:3005/api/aut
 |--------|----------|------|-------------|
 | POST | `/api/auth/register` | No | Register new user |
 | POST | `/api/auth/login` | No | Login with credentials (+ optional TOTP) |
+| POST | `/api/auth/login-mobile` | No | Login returning bearer token in response body (for native clients) |
 | POST | `/api/auth/logout` | Yes | Logout and invalidate session |
 | GET | `/api/auth/me` | Yes | Get current user info |
-| POST | `/api/auth/passkey/register` | Yes | Register WebAuthn passkey |
-| POST | `/api/auth/passkey/authenticate` | No | Authenticate with passkey |
+| GET | `/api/auth/ws-ticket` | Yes | Get short-lived token for WebSocket authentication |
+| POST | `/api/auth/passkey/register/options` | Yes | Generate WebAuthn registration options |
+| POST | `/api/auth/passkey/register/verify` | Yes | Verify WebAuthn registration response |
+| POST | `/api/auth/passkey/auth/options` | No | Generate WebAuthn authentication options |
+| POST | `/api/auth/passkey/auth/verify` | No | Verify WebAuthn authentication response |
 | POST | `/api/auth/totp/setup` | Yes | Setup TOTP 2FA |
 | POST | `/api/auth/totp/enable` | Yes | Enable TOTP after verification |
 | POST | `/api/auth/totp/disable` | Yes | Disable TOTP 2FA |
-| POST | `/api/auth/totp/verify` | Yes | Verify TOTP code |
 | POST | `/api/auth/link` | Yes | Redeem channel link code |
 
 ## Agents
@@ -64,6 +67,12 @@ curl -H "Authorization: Bearer $OCTIPUS_API_TOKEN" http://localhost:3005/api/aut
 | GET | `/api/sessions/:id` | Get session details |
 | GET | `/api/sessions/:id/messages` | Get session messages |
 
+## Verification
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/verification/:sessionId` | Get verification evidence and status for a session |
+
 ## Models
 
 | Method | Endpoint | Description |
@@ -73,7 +82,7 @@ curl -H "Authorization: Bearer $OCTIPUS_API_TOKEN" http://localhost:3005/api/aut
 | GET | `/api/models/:name` | Get model details |
 | PATCH | `/api/models/:name` | Update model config |
 | DELETE | `/api/models/:name` | Delete model |
-| POST | `/api/models/:id/default` | Set as default model |
+| POST | `/api/models/:name/default` | Set as default model |
 | GET | `/api/models/routing` | Get topic routing |
 | GET | `/api/models/health` | Check provider health |
 | GET | `/api/models/cli/status` | CLI tool availability |
@@ -81,6 +90,22 @@ curl -H "Authorization: Bearer $OCTIPUS_API_TOKEN" http://localhost:3005/api/aut
 | GET | `/api/models/providers/ollama/models` | List available Ollama models |
 | GET | `/api/models/providers/litellm/models` | List LiteLLM models |
 | GET | `/api/models/providers/:provider/known` | Known models for a provider |
+
+## Roles
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/roles` | List all roles with current tool bindings |
+| PATCH | `/api/roles/:role` | Update role's tool allowlist (admin) |
+
+## Topics
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/topics` | List all topics with current model bindings and config |
+| PATCH | `/api/topics/:topic/config` | Update topic config (executorModel, temperature, maxTokens) (admin) |
+| PUT | `/api/topics/:topic/binding` | Set topic's primary/backup model binding (admin) |
+| POST | `/api/topics/assign-all` | Bind one model as primary for all text topics (admin) |
 
 ## Hooks
 
@@ -183,6 +208,17 @@ Per-user orchestrator persona — name, tone, narration volume, free-form self-f
 | POST | `/api/reader` | Fetch and extract article/page content |
 | GET | `/api/reader/:id` | Get reader result |
 
+## Documents
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/documents/upload` | Upload one or more documents |
+| GET | `/api/documents` | List documents (with optional filtering by category/status) |
+| GET | `/api/documents/:id` | Get document details |
+| GET | `/api/documents/:id/raw` | Stream original file (with `?download=1` for attachment mode) |
+| DELETE | `/api/documents/:id` | Delete document |
+| POST | `/api/documents/:id/cancel` | Cancel document processing |
+
 ## Research
 
 | Method | Endpoint | Description |
@@ -222,10 +258,6 @@ Per-user orchestrator persona — name, tone, narration volume, free-form self-f
 |--------|----------|-------------|
 | GET | `/api/capabilities/hwfit` | Get hardware-fit model recommendations |
 
-## Vault
-
-Already listed above under [Vault](#vault).
-
 ## SAML & SSO
 
 | Method | Endpoint | Description |
@@ -253,9 +285,17 @@ Already listed above under [Vault](#vault).
 | GET | `/api/orgs/:id` | Get org details |
 | PATCH | `/api/orgs/:id` | Update org |
 | DELETE | `/api/orgs/:id` | Delete org |
-| GET | `/api/admin/audit` | Audit log (admin) |
-| GET | `/api/admin/quotas` | Usage quotas (admin) |
 | GET | `/api/admin/users` | List all users (admin) |
+| POST | `/api/admin/users` | Create user (admin) |
+| PATCH | `/api/admin/users/:id` | Update user (admin) |
+| GET | `/api/admin/quotas` | List usage quotas (admin) |
+| GET | `/api/admin/quotas/:userId` | Get user quota details (admin) |
+| PATCH | `/api/admin/quotas/:userId` | Update user quota overrides (admin) |
+| DELETE | `/api/admin/quotas/:userId` | Clear user quota overrides (admin) |
+| POST | `/api/admin/impersonate/:userId` | Start impersonation session (admin) |
+| POST | `/api/admin/impersonate/stop` | Stop impersonation session |
+| GET | `/api/admin/impersonate` | List recent impersonation sessions (admin) |
+| GET | `/api/admin/audit` | Audit log (admin) |
 
 ## Swarm
 
@@ -293,6 +333,34 @@ Already listed above under [Vault](#vault).
 | POST | `/api/knowledge/cleanup` | Orphan / stale / short / duplicate cleanup with optional `dryRun`. |
 | GET | `/api/knowledge/cleanup-history` | Recent cleanup runs. |
 | POST | `/api/knowledge/index` | Index a file or directory. 503 if KB not ready. |
+
+`mode='graph'` is available to agents through the `knowledge` tool, not on
+this route — see [KNOWLEDGE-GRAPH.md](KNOWLEDGE-GRAPH.md).
+
+## Notes
+
+Authored markdown notes — the knowledge graph's Tier 2 surface. Full model in
+[KNOWLEDGE-GRAPH.md](KNOWLEDGE-GRAPH.md).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/notes` | List notes. Query: `kind`, `tag`, `includeArchived`, `limit` (max 500). |
+| POST | `/api/notes` | Create or update a note (re-links `[[wikilinks]]`/`#tags` and re-indexes). |
+| POST | `/api/notes/query` | Property query: `{ kind?, tag?, frontmatter?, sort?, order?, limit? }`. |
+| GET | `/api/notes/index` | Lightweight `{id,title,slug,kind}` list — the source for `[[` autocomplete. |
+| GET | `/api/notes/tags` | Tag → count across active notes. |
+| POST | `/api/notes/capture` | Append `{ text, date?, workspaceId? }` to a daily note. |
+| GET | `/api/notes/:id` | Read a note with its backlinks. |
+| GET | `/api/notes/:id/suggestions` | Semantically related, not-yet-linked entities (computed, not persisted). |
+| PATCH | `/api/notes/:id/pin` | `{ pinned: boolean }`. |
+| DELETE | `/api/notes/:id` | Archive (soft). `?hard=true` also deletes the note's chunks and edges. |
+
+## Graph
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/graph` | Global mode: active notes + resolved edges (max 2000 nodes / 5000 edges). With `entryType` + `entryId`: local neighbourhood, `hops` clamped 1–5. Ghost (unresolved) edges are never returned. |
+| GET | `/api/graph/canvas` | [JSON Canvas](https://jsoncanvas.org/) projection of a neighbourhood. Query: `entryType`, `entryId`, `hops` (1–5). |
 
 ## MCP
 
@@ -453,6 +521,29 @@ Already listed above under [Vault](#vault).
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/eval` | Execute eval scenario |
+
+## Artifacts
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/artifacts/_meta` | Get artifact host mode (subdomain or DNS-less) |
+| GET | `/api/artifacts` | List artifacts in workspace |
+| POST | `/api/artifacts` | Create new artifact |
+| GET | `/api/artifacts/spec/:slugOrId` | Get full artifact spec for validation |
+| GET | `/api/artifacts/:id` | Get artifact details |
+| PUT | `/api/artifacts/:id` | Update artifact |
+| DELETE | `/api/artifacts/:id` | Delete artifact |
+| GET | `/api/artifacts/:id/versions` | List artifact versions |
+| POST | `/api/artifacts/:id/versions/:versionId/restore` | Restore artifact to previous version |
+| GET | `/api/artifacts/:id/data-sources` | List artifact data sources |
+| POST | `/api/artifacts/:id/data-sources` | Add data source |
+| DELETE | `/api/artifacts/:id/data-sources/:sourceId` | Remove data source |
+| POST | `/api/artifacts/:id/refresh` | Refresh artifact data |
+| GET | `/api/artifacts/:id/data/:sourceName` | Get data from source |
+| POST | `/api/artifacts/:id/share-links` | Create share link |
+| GET | `/api/artifacts/:id/share-links` | List share links |
+| DELETE | `/api/artifacts/:id/share-links/:linkId` | Delete share link |
+| GET | `/api/artifacts/:id/feed.rss` | Get RSS feed |
 
 ## Artifact Pages
 

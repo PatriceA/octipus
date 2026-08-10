@@ -39,7 +39,7 @@ bun run setup          # Interactive wizard — "Embedded" mode for zero-deps
 bin/octi start
 ```
 
-Open http://localhost:3017. If anything crashes or refuses to start, that is a bug — file it.
+Open http://localhost:3007. If anything crashes or refuses to start, that is a bug — file it.
 
 Working on the **desktop app** (`octi desktop`)? Install its extra deps once —
 the Rust toolchain plus Tauri's per-distro system libraries — with:
@@ -92,11 +92,11 @@ Never duplicate config between backend and web. Shared types live in `src/types`
 
 ## How to add a role
 
-Octipus roles follow a **node-folder pattern** inspired by [Weft](https://github.com/WeaveMindAI/weft). One folder per role under `src/core/orchestrator/roles/<name>/` with three files:
+Octipus roles follow a **node-folder pattern** inspired by [Weft](https://github.com/WeaveMindAI/weft). One folder per role under `src/core/orchestrator/roles/<name>/` with two or three files:
 
-- `config.ts` — role metadata (model preferences, tool allowlist, complexity profile)
+- `config.ts` — role metadata (model preferences, tool allowlist via `toolIds` array, complexity profile)
 - `prompt.md` — system prompt (markdown, hot-reloadable)
-- `tools.ts` — tool bindings (which MCP tools this role can call)
+- `prompt.lite.md` — optional compact system prompt for low-context-window models
 
 The registry auto-discovers everything in `roles/*` at startup. Adding a role is three files in one folder. No other code change needed.
 
@@ -121,24 +121,31 @@ These come from [DESIGN.md](./DESIGN.md) — do not skip them.
 
 ## How to add a skill
 
-Skills inject domain knowledge into a role's system prompt.
+Skills inject domain knowledge into a role's system prompt. There are two types:
 
-Files under `src/core/skills/<skill-name>/`:
+**System skills** (DB-backed, with embeddings):
+- Seeded in `src/db/seed-skills.ts`
+- Managed via the web UI at Settings > Skills
 
-- `skill.json` — metadata (name, version, domain, applicable roles)
-- `knowledge.md` — the prompt content (injected verbatim)
-
-Skills are auto-loaded from `src/core/skills/*`. See existing skills for shape.
+**Filesystem skills** (agentskills.io spec):
+- Create a `SKILL.md` (or flat `*.md`) file in one of these locations:
+  - `.octipus/skills/` (project-level)
+  - `~/.octipus/agent/skills/` (user-level)
+  - `~/.claude/skills/` (Claude Code convention)
+  - `.agents/skills/` or `~/.agents/skills/` (agents.io spec)
+  - Any custom directory in `skills.externalDirectories` config
+- Auto-discovered by `src/skills/external-loader.ts` at startup
+- No registration needed; external skills get synthetic IDs prefixed `external:`
 
 ---
 
 ## How to add an MCP tool
 
-The MCP server lives in `mcp-server/`. Each tool is one file in `mcp-server/src/tools/<group>/<tool>.ts` with:
+The MCP server lives in `mcp-server/`. Each tool is one file in `mcp-server/src/tools/<tool>.ts` with:
 
 - A Zod schema for input
 - A handler function
-- A `register` call at module load
+- A `server.tool()` registration call
 
 The server's `inventory` auto-discovers all tool modules at startup.
 

@@ -83,7 +83,8 @@ Pick the engine in **Settings → Voice → "Which engine transcribes your speec
 | `voice.sttProvider` | Type | Notes |
 |--------|------|-------|
 | **auto** (default) | — | Best available: a configured cloud realtime engine, else local Whisper |
-| **whisper** | Local | whisper.cpp — offline, no key, free. Needs the model installed (`octi setup`); higher latency |
+| **whisper** | Local | whisper.cpp (Python reference) — offline, no key, free. Needs the model installed (`octi setup`); higher latency; capped at `base` model on CPU |
+| **fasterwhisper** | Local | CTranslate2 — offline, no key. Configurable model size (tiny–large); ~4x faster than whisper.cpp so `small`/`medium` run in realtime on fast hardware. Needs HuggingFace CLI (`huggingface-cli`). Preferred for local accuracy. |
 | **mistral** (Voxtral) | Cloud | `voxtral-mini` realtime streaming. Needs a Mistral API key |
 | **openai** | Cloud | `gpt-realtime-whisper` realtime streaming (natively-streaming, low latency). Needs an OpenAI API key |
 
@@ -104,7 +105,8 @@ Pick the engine in **Settings → Voice → "Which engine speaks replies aloud"*
 |--------|------|-------|
 | **mistral** (Voxtral, default) | Cloud | `voxtral-mini-tts`. Needs a Mistral API key |
 | **openai** | Cloud | `gpt-4o-mini-tts`. Needs an OpenAI API key |
-| **piper** | Local | Neural TTS — offline, no key. Needs the Piper binary + a `.onnx` voice |
+| **kokoro** | Local | Kokoro-82M via the `kokoro-tts` CLI — offline, no key. Leading open-source TTS on quality (2026); auto-downloads model on first use. Needs `kokoro-tts` installed. |
+| **piper** | Local | Piper neural TTS — offline, no key. Needs the Piper binary + a `.onnx` voice file. Lightweight fallback for constrained environments. |
 
 ### Wake Word Detection
 
@@ -402,10 +404,13 @@ https://your-public-url/api/voice/webhook/twilio
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/voice/transcribe` | Transcribe audio (local STT) |
-| GET | `/api/voice/status` | Voice subsystem status |
+| POST | `/api/voice/transcribe` | Transcribe audio (local or cloud STT) |
+| POST | `/api/voice/speak` | Synthesize text to speech (TTS) and return audio |
+| GET | `/api/voice/status` | Voice subsystem status and availability |
+| POST | `/api/voice/install` | Download and install Whisper model |
 | POST | `/api/voice/webhook/:provider` | Telephony webhook (call events) |
-| GET | `/api/voice/calls` | List active calls |
+| POST | `/api/voice/webhook/:provider/status` | Telephony status callback |
+| GET | `/api/voice/calls` | List active phone calls |
 | GET | `/api/voice/telephony/health` | Provider connection health |
 
 ### Settings

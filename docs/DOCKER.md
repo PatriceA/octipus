@@ -30,7 +30,7 @@ docker compose logs -f octipus
 | Host API | 3015 | Backend (internal 3005) | `OCTIPUS_API_PORT` |
 | Host Web UI | 3017 | Web UI (internal 3007) | `OCTIPUS_WEB_PORT` |
 | Host PostgreSQL | 5442 | Database | `POSTGRES_PORT` |
-| Host Valkey | 6379 | Cache (default Redis port) | — |
+| Host Valkey | 6389 | Cache (internal 6379, default Redis port) | `REDIS_PORT` |
 
 ## Volumes
 

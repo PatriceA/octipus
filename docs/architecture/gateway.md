@@ -55,6 +55,8 @@ Clients connect to `ws://host:port/gateway` and must send an auth message within
 |---|---|
 | `auth` | Authentication handshake (must be first message) |
 | `chat.send` | Send a chat message to the orchestrator |
+| `chat.interject` | Side-channel question sent while orchestrator is running (non-blocking) |
+| `chat.steer` | Inject a message into the running orchestrator turn to change course mid-flight |
 | `command` | Execute a gateway command (e.g., `/expert`, `/status`) |
 | `subscribe` | Subscribe to event patterns (e.g., `agent.*`) |
 | `unsubscribe` | Remove event subscriptions |
@@ -73,6 +75,7 @@ Clients connect to `ws://host:port/gateway` and must send an auth message within
 | `command.result` | Result of a command execution |
 | `error` | Error message (rate limit, validation, etc.) |
 | `pong` | Heartbeat response with server time |
+| `events_dropped` | Notification that events were dropped from the replay buffer |
 
 ## Event Bus
 
@@ -88,11 +91,13 @@ The `GatewayEventBus` is a typed pub/sub system that replaces scattered EventEmi
 | Family | Events | Emitter |
 |---|---|---|
 | `chat.*` | `chat.message`, `chat.response`, `chat.typing` | Orchestrator |
-| `agent.*` | `agent.spawned`, `agent.completed`, `agent.failed`, `agent.stopped`, `agent.status`, `agent.event` | AgentManager |
-| `swarm.*` | `swarm.node_spawned`, `swarm.node_completed`, `swarm.node_status`, `swarm.budget_warning`, `swarm.call_graph_cycle_blocked` | SwarmSpawner / AgentWorker / SwarmCallGraph |
+| `agent.*` | `agent.spawned`, `agent.completed`, `agent.failed`, `agent.stopped`, `agent.status`, `agent.event`, `agent.action`, `agent.iteration`, `agent.blocked` | AgentManager / Executor |
+| `swarm.*` | `swarm.node_spawned`, `swarm.node_completed`, `swarm.node_status`, `swarm.budget_warning`, `swarm.call_graph_cycle_blocked`, `swarm.narration` | SwarmSpawner / AgentWorker / SwarmCallGraph |
 | `permission.*` | `permission.request`, `permission.response` | PermissionManager |
 | `approval.*` | `approval.request`, `approval.response` | PipelineManager |
 | `tool.*` | `tool.invoked`, `tool.result` | ToolExecutor |
+
+Additional event families exist for worker lifecycle, pipelines, sessions, and extensions. See `src/core/gateway/protocol.ts` for the complete list of `GatewayEventType` definitions.
 
 `swarm.node_spawned` payload includes `rootSessionId`, `nodeId`, `parentNodeId`, `kind`, `depth`, `topicPath`, `role`, `expertId`, `model`, `budgets`, and a `taskBriefPreview` (first 200 chars). The web UI composes the live swarm tree from these events and falls back to `GET /api/swarm/nodes` for rehydration.
 
@@ -126,9 +131,12 @@ Built-in commands available via the gateway protocol:
 | `/abort` | `/stop`, `/cancel` | Cancel all running agents |
 | `/clear` | `/cls` | Clear conversation display |
 | `/compact` | | Compact session context |
-| `/think` | | Set thinking depth (off/low/medium/high) |
-| `/verbose` | `/v` | Toggle verbose output |
-| `/usage` | | Set usage display (off/tokens/full) |
+| `/cost` | | Show cumulative token usage and cost for this session |
+| `/diff` | | Show git diff for workspace changes |
+| `/changes` | | Review git changes — list, or a file diff |
+| `/reload-extensions` | `/reload` | Re-discover and reload user extensions |
+| `/persona` | | Configure the orchestrator persona |
+| `/version` | `/v` | Show Octipus version and build info |
 
 ## Feedback System
 
@@ -149,11 +157,16 @@ The `FeedbackManager` maps agent lifecycle events to emoji reactions:
 Channel adapters connect to the gateway using the adapter protocol:
 
 ```
-GatewayAdapter (abstract)
-  ├── TelegramGatewayAdapter (wraps Grammy)
-  ├── SlackGatewayAdapter (wraps Bolt)
-  └── (future: Teams, WhatsApp, custom)
+BaseChannel (abstract, src/channels/interface.ts)
+  ├── TelegramChannel (wraps Grammy)
+  ├── SlackChannel (wraps Bolt, Socket Mode)
+  ├── TeamsChannel
+  ├── WhatsAppChannel
+  └── WebChatChannel
 ```
+
+Adapters are reached through the `UnifiedMessageInterface` (`getUMI()`), which
+owns registration and routing — see [the channel-adapter guide](../guides/channel-adapter.md).
 
 ### Adapter ↔ Gateway Messages
 
@@ -188,16 +201,20 @@ src/core/gateway/
 ├── feedback.ts           # Emoji reactions + stall detection
 ├── message-handler.ts    # Routes messages to orchestrator/permissions
 ├── event-bridge.ts       # Bridges orchestrator events to event bus
-├── adapter-registry.ts   # Manages channel adapters
+├── connection-manager.ts # Per-connection state, budgets, subscriptions
+├── message-handler.ts    # Dispatches inbound client messages
+├── presence.ts           # Presence tracking
+├── rate-limiter.ts       # Per-connection rate limits
+├── local-auth.ts         # Local/HMAC trust levels
+├── steering.ts           # chat.steer / chat.interject handling
 ├── hub.ts                # GatewayHub singleton (wires everything)
-├── index.ts              # Public exports
-└── gateway.test.ts       # 56 unit tests
+└── index.ts              # Public exports
 
 src/channels/
-├── adapter-base.ts       # GatewayAdapter abstract base class
-└── adapters/
-    ├── telegram-adapter.ts
-    └── slack-adapter.ts
+├── interface.ts          # BaseChannel + UnifiedMessageInterface (getUMI)
+├── discovery.ts          # Channel discovery / enablement
+├── linking.ts            # Account-linking codes
+├── telegram/  slack/  teams/  whatsapp/  webchat/
 
 src/api/
 ├── gateway-ws.ts         # /gateway WebSocket endpoint

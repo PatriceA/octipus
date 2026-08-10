@@ -11,7 +11,7 @@ pure in-process and are fine offline.
 
 ```
 bun test               # unit + integration under src/ and scripts/
-bun run test:tui       # just the TUI tests (src/tui/*.test.{ts,tsx})
+bun run test:tui       # just the TUI tests (src/tui-pi and src/tui-editor)
 ```
 
 The TUI suite uses `ink-testing-library` with a compatibility shim (see

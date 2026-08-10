@@ -47,7 +47,7 @@ OpenClaw structurally cannot match.
 | Multiple external agent harnesses | Yes | Partial | OpenClaw runs Codex, GitHub Copilot CLI, OpenCode as engines. Octipus wraps CLIs as providers (`cli-provider`) |
 | Mid-run steering queue | Yes | No | OpenClaw `steer` tool + steering queue |
 | Topic → model config-driven routing | Partial | Yes | Octipus `ModelRegistry.getModelForTopic()`, fail-loud on unbound |
-| Personas / identity | Yes | Yes | OpenClaw "soul"/identity; Octipus 6 orchestrator personas + 15 experts |
+| Personas / identity | Yes | Yes | OpenClaw "soul"/identity; Octipus 6 orchestrator personas + 16 experts |
 
 ## Channels
 
@@ -190,7 +190,7 @@ multi-user platform; OpenClaw's is better for a personal assistant.
 | Plugin system | Yes — SDK package, package contract, 152 bundled plugins; plugins can add tools/providers/channels/speech | Partial — loader + plugin-as-tool, one example plugin |
 | Plugin distribution | Yes (ClawHub registry, npm, git, archive) | No (local `extensions/` dir only) |
 | Plugin contract tests | Yes (sharded in CI) | No |
-| Skills | Yes (52 bundled, `SKILL.md`, Skill Workshop UI) | Yes (20 domain skills, DB + `SKILL.md` agentskills.io spec, proposal/curator lifecycle) |
+| Skills | Yes (52 bundled, `SKILL.md`, Skill Workshop UI) | Yes (22 domain skills, DB + `SKILL.md` agentskills.io spec, proposal/curator lifecycle) |
 | Eval framework | Partial (QA harness, maturity scorecard) | Yes (`src/eval/` + YAML suites + red-team) |
 | Protocol client SDK | Yes (`gateway-client`, generated Swift models) | Partial (typed Zod protocol, no published client pkg) |
 | OpenAI-compatible HTTP API | Yes | No |
