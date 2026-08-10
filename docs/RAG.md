@@ -19,6 +19,8 @@ behaviour lives in `src/core/memory/` and `src/db/schema/`.
   model registry (defaults to `nomic-embed-text` via Ollama through
   LiteLLM). The dimension is auto-detected and pinned by migration
   0055 once the table has data — see [Vector indexing](#vector-indexing).
+  If the model is asymmetric, configure its prefixes — see
+  [Asymmetric retrieval prefixes](#asymmetric-retrieval-prefixes).
 - **Vector storage:** PostgreSQL with pgvector. Column type is
   `vector` (dimensionless) until 0055 pins it at the prevailing
   dimension; index is HNSW with cosine ops once pinned.
@@ -30,6 +32,12 @@ behaviour lives in `src/core/memory/` and `src/db/schema/`.
   structural Markdown chunker emits one chunk per heading + one per
   body block and threads the `section_path` so retrieval can pull
   the matching clause plus its ancestor headings.
+- **Batched embedding:** chunks are embedded `EMBED_BATCH_SIZE` (64) at a
+  time via `EmbeddingService.embedBatch`, not one HTTP call per chunk.
+  Failures are still accounted per chunk: a failed batch marks only its
+  own chunks, so partial indexing stores what worked and "every chunk
+  failed" still throws. A provider that returns the wrong number of
+  vectors fails the batch rather than misattributing them.
 - **Tiered content:** Each chunk stores an `abstract` (L0, ~1-2
   sentences, generated async post-indexing), an `overview` (L1, key
   points), and full `content` (L2).
@@ -281,6 +289,33 @@ curl -X POST http://localhost:3005/api/knowledge/cleanup \
 
 Agents can call `cleanup_knowledge(dry_run?, max_age_days?,
 min_content_length?)` via the knowledge tool.
+
+### Asymmetric retrieval prefixes
+
+Many retrieval models are trained with a task instruction on each side
+and lose recall without it: `nomic-embed-text` expects
+`search_document: ` on stored chunks and `search_query: ` on the query;
+instruct-style models want a preamble on the query only; most hosted
+APIs (OpenAI, and anything symmetric) want neither.
+
+Nothing is inferred from the model id — which model is bound to topic
+`embedding` is a per-install choice, and the model may not even exist on
+another machine. The prefixes live on the model row itself, in
+`model_config.metadata`:
+
+```json
+{ "embedPrefixes": { "document": "search_document: ", "query": "search_query: " } }
+```
+
+Unset (the default) = no prefix on either side, which is correct for
+symmetric models. Consult the model card of whatever you bind; a wrong
+prefix is worse than none.
+
+Every embedding call declares its side (`generateEmbedding(text, 'query')`);
+storage paths default to `'document'`. When prefixes are configured, the
+row's `embedding_version` gains a `+p<hash>` suffix, so switching schemes
+on a populated table shows up as drift instead of silently degrading
+similarity — re-index those rows.
 
 ### Embedding-drift check
 

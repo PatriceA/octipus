@@ -44,9 +44,12 @@ describe('NoteService', () => {
     // network and zero cross-file leakage.
     const { EmbeddingService } = await import('@/core/rag/embeddings');
     const embeddings = new EmbeddingService('test-model');
-    spyOn(embeddings, 'generateEmbedding').mockRejectedValue(
-      new Error('No embedding model configured (test) — re-index degrades to indexed:false'),
-    );
+    const noModel = new Error('No embedding model configured (test) — re-index degrades to indexed:false');
+    spyOn(embeddings, 'generateEmbedding').mockRejectedValue(noModel);
+    // Indexing embeds in batches, so `embedBatch` is the network seam that
+    // matters for the degradation contract — stubbing only generateEmbedding
+    // would let indexText reach a configured proxy for real.
+    spyOn(embeddings, 'embedBatch').mockImplementation(async (texts: string[]) => texts.map(() => noModel));
     const mod = await import('./notes');
     svc = new mod.NoteService(undefined, undefined, embeddings);
   });

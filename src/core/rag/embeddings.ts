@@ -30,9 +30,39 @@ export function sha256Hex(content: string): string {
   return createHash('sha256').update(content, 'utf8').digest('hex');
 }
 
-/** Stable embedding identity: model id + vector dimension. */
-export function buildEmbeddingVersion(model: string, dimension: number): string {
-  return `${model}/${dimension}`;
+/**
+ * Which side of a retrieval pair a text is embedded as. Retrieval models are
+ * commonly asymmetric — the stored chunk and the query get different task
+ * instructions — so the side has to reach `generateEmbedding`. Symmetric
+ * models (the default, no configured prefixes) ignore it.
+ */
+export type EmbedSide = 'document' | 'query';
+
+export interface EmbedPrefixes {
+  document?: string;
+  query?: string;
+}
+
+/**
+ * Short, stable identity for a prefix pair, or '' when no prefix is configured.
+ * Empty means the version string is byte-identical to what it was before
+ * prefixes existed, so installs on a symmetric model see no churn.
+ */
+export function embedPrefixTag(prefixes?: EmbedPrefixes): string {
+  const doc = prefixes?.document ?? '';
+  const query = prefixes?.query ?? '';
+  if (!doc && !query) return '';
+  return `+p${sha256Hex(`${doc}\u0000${query}`).slice(0, 8)}`;
+}
+
+/**
+ * Stable embedding identity: model id + vector dimension, plus a prefix tag
+ * when the model is configured with asymmetric retrieval prefixes. Rows written
+ * under a different prefix scheme live in a different vector space in practice,
+ * so they must be distinguishable for re-indexing.
+ */
+export function buildEmbeddingVersion(model: string, dimension: number, prefixTag = ''): string {
+  return `${model}/${dimension}${prefixTag}`;
 }
 
 export interface SearchResult {
@@ -60,6 +90,15 @@ export interface SearchResult {
 }
 
 const MAX_CHUNK_SIZE = 1000; // chars per chunk
+/**
+ * Chunks embedded per provider call. `client.embed` already takes an array and
+ * returns one vector per input — indexing used to spend one HTTP round-trip per
+ * chunk, so a 200-chunk document was 200 sequential calls.
+ * ponytail: fixed size, batches run serially — raise it or add concurrency only
+ * if a provider's rate limits are known to allow it (OpenAI caps input arrays at
+ * 2048; local Ollama is happiest with modest batches).
+ */
+const EMBED_BATCH_SIZE = 64;
 
 /** Provenance tag for the auto-indexed product documentation corpus. */
 const DOCS_SOURCE = 'octipus-docs';
@@ -123,22 +162,31 @@ export class EmbeddingService {
     this.model = model || '';
   }
 
-  private async resolveModel(): Promise<string> {
-    if (this.model) return this.model;
+  /**
+   * Resolve the embedding model AND its configured retrieval prefixes.
+   * Nothing is inferred from the model id — the prefixes come from the
+   * `metadata.embedPrefixes` of whichever model is bound to topic='embedding',
+   * so a different model (local or hosted) just carries different (or no)
+   * prefixes. An explicit constructor override has no registry row, hence no
+   * prefixes.
+   */
+  private async resolveModel(): Promise<{ modelId: string; prefixes: EmbedPrefixes }> {
+    if (this.model) return { modelId: this.model, prefixes: {} };
     const { getModelRegistry } = await import('@/models/model-registry');
     const registry = getModelRegistry();
     const m = await registry.getModelForTopic('embedding');
     if (!m) {
       throw new Error('No model mapped to topic "embedding". Assign one in the Models page.');
     }
-    return m.modelId;
+    return { modelId: m.modelId, prefixes: m.metadata?.embedPrefixes ?? {} };
   }
 
-  async generateEmbedding(text: string): Promise<number[]> {
+  async generateEmbedding(text: string, side: EmbedSide = 'document'): Promise<number[]> {
     const client = getLiteLLMClient();
     let modelId: string;
+    let prefixes: EmbedPrefixes;
     try {
-      modelId = await this.resolveModel();
+      ({ modelId, prefixes } = await this.resolveModel());
     } catch (err) {
       coreLogger.error(
         { err, component: 'embeddings' },
@@ -146,8 +194,11 @@ export class EmbeddingService {
       );
       throw err;
     }
+    // Prepend the configured task instruction for this side. Unconfigured
+    // (symmetric) models get the text verbatim — same behaviour as before.
+    const input = `${prefixes[side] ?? ''}${text}`;
     try {
-      const [embedding] = await client.embed(text, modelId);
+      const [embedding] = await client.embed(input, modelId);
       if (!Array.isArray(embedding) || embedding.length === 0) {
         throw new Error(`Embedding provider returned empty vector for model ${modelId}`);
       }
@@ -157,11 +208,68 @@ export class EmbeddingService {
       const message = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : undefined;
       coreLogger.error(
-        { err, message, stack, model: modelId, textLength: text.length, component: 'embeddings' },
+        { err, message, stack, model: modelId, side, textLength: input.length, component: 'embeddings' },
         'Embedding generation failed — provider/model unreachable or rejected the request',
       );
       throw err;
     }
+  }
+
+  /**
+   * Embed many texts in provider-sized batches, one entry per input in input
+   * order. NEVER throws and never short-circuits: a failed batch yields an
+   * `Error` in each of its slots, so callers keep the per-chunk failure
+   * accounting they had when every chunk was its own call (partial indexing
+   * still stores what worked, and "every chunk failed" still fails loud).
+   */
+  async embedBatch(texts: string[], side: EmbedSide = 'document'): Promise<Array<number[] | Error>> {
+    const out: Array<number[] | Error> = new Array(texts.length);
+    if (texts.length === 0) return out;
+
+    const client = getLiteLLMClient();
+    let modelId: string;
+    let prefixes: EmbedPrefixes;
+    try {
+      ({ modelId, prefixes } = await this.resolveModel());
+    } catch (err) {
+      coreLogger.error(
+        { err, component: 'embeddings' },
+        'Embedding failed: no model mapped to topic="embedding". Assign one in the Models page.',
+      );
+      return out.fill(err instanceof Error ? err : new Error(String(err)));
+    }
+
+    for (let start = 0; start < texts.length; start += EMBED_BATCH_SIZE) {
+      const slice = texts.slice(start, start + EMBED_BATCH_SIZE);
+      const input = slice.map((t) => `${prefixes[side] ?? ''}${t}`);
+      try {
+        const vectors = await client.embed(input, modelId);
+        // A provider that returns a different count has silently dropped or
+        // reordered inputs — vectors would be attributed to the wrong chunk,
+        // which is worse than not indexing. Fail the batch instead.
+        if (!Array.isArray(vectors) || vectors.length !== slice.length) {
+          throw new Error(
+            `Embedding provider returned ${Array.isArray(vectors) ? vectors.length : 'no'} vectors for ${slice.length} inputs (model ${modelId})`,
+          );
+        }
+        for (let i = 0; i < slice.length; i++) {
+          const v = vectors[i];
+          out[start + i] = Array.isArray(v) && v.length > 0
+            ? v
+            : new Error(`Embedding provider returned empty vector for model ${modelId}`);
+        }
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        const stack = err instanceof Error ? err.stack : undefined;
+        coreLogger.error(
+          { err, message: error.message, stack, model: modelId, side, batchStart: start, batchSize: slice.length, component: 'embeddings' },
+          'Embedding batch failed — provider/model unreachable or rejected the request',
+        );
+        for (let i = 0; i < slice.length; i++) out[start + i] = error;
+      }
+    }
+
+    return out;
   }
 
   /**
@@ -187,7 +295,8 @@ export class EmbeddingService {
     repoId?: string | null,
   ): Promise<string> {
     const db = getDb();
-    const model = this.model || await this.resolveModel().catch(() => 'unknown');
+    const resolved = await this.resolveModel().catch(() => ({ modelId: 'unknown', prefixes: {} as EmbedPrefixes }));
+    const model = resolved.modelId;
     const result = await db.insert(embeddings).values({
       sourceId,
       content,
@@ -198,7 +307,7 @@ export class EmbeddingService {
       metadata: metadata || {},
       purpose,
       contentSha256: sha256Hex(content),
-      embeddingVersion: buildEmbeddingVersion(model, embedding.length),
+      embeddingVersion: buildEmbeddingVersion(model, embedding.length, embedPrefixTag(resolved.prefixes)),
       parentChunkId: structural?.parentChunkId ?? null,
       sectionPath: structural?.sectionPath ?? null,
       headingLevel: structural?.headingLevel ?? null,
@@ -250,10 +359,12 @@ export class EmbeddingService {
     let stored = 0;
     const storedIds: string[] = [];
     const errors: Array<{ chunk: number; message: string }> = [];
+    const vectors = await this.embedBatch(chunks);
 
     for (let i = 0; i < chunks.length; i++) {
       try {
-        const embedding = await this.generateEmbedding(chunks[i]);
+        const embedding = vectors[i];
+        if (embedding instanceof Error) throw embedding;
         const id = await this.store(
           purpose,
           sourceId,
@@ -341,12 +452,16 @@ export class EmbeddingService {
     const errors: Array<{ chunk: number; message: string }> = [];
     const storedTexts: string[] = [];
     const storedIds: string[] = [];
+    // Embedding is batched up front; the STORE loop stays serial and in array
+    // order because each child resolves its parent's freshly-inserted UUID.
+    const vectors = await this.embedBatch(chunks.map((c) => c.content));
 
     for (let i = 0; i < chunks.length; i++) {
       const c = chunks[i];
       const parentId = c.parentIndex != null ? insertedIds[c.parentIndex] : null;
       try {
-        const embedding = await this.generateEmbedding(c.content);
+        const embedding = vectors[i];
+        if (embedding instanceof Error) throw embedding;
         const id = await this.store(
           purpose,
           sourceId,
@@ -463,7 +578,7 @@ export class EmbeddingService {
   async search(query: string, limit = 5, purpose?: EmbeddingPurpose, minSimilarity = 0, userId?: string, scope?: SearchScope): Promise<SearchResult[]> {
     let queryEmbedding: number[];
     try {
-      queryEmbedding = await this.generateEmbedding(query);
+      queryEmbedding = await this.generateEmbedding(query, 'query');
     } catch (err) {
       coreLogger.error(
         { err, queryLength: query.length },
@@ -586,7 +701,7 @@ export class EmbeddingService {
   ): Promise<SearchResult[]> {
     let queryEmbedding: number[];
     try {
-      queryEmbedding = await this.generateEmbedding(query);
+      queryEmbedding = await this.generateEmbedding(query, 'query');
     } catch (err) {
       coreLogger.warn(
         { err, queryLength: query.length },

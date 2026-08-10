@@ -71,6 +71,19 @@ export interface ModelMetadata {
   customHeaders?: Record<string, string>;
   /** Extra body parameters passed to LiteLLM/provider (e.g. { think: false } for Ollama Qwen3) */
   extraBody?: Record<string, unknown>;
+  /**
+   * Asymmetric retrieval prefixes for an EMBEDDING model (topic='embedding').
+   * Many retrieval models are trained with a task instruction on each side and
+   * lose recall without it (nomic wants `search_document: ` on stored chunks and
+   * `search_query: ` on the query; instruct-style models want an `Instruct: …`
+   * preamble on the query only; OpenAI/Voyage-style APIs want neither).
+   * Left unset = no prefix, which is the correct default for symmetric models —
+   * nothing is inferred from the model id, since which model is bound to the
+   * embedding topic is a per-install choice. Changing these changes the vector
+   * space: `buildEmbeddingVersion` stamps a `+p<hash>` tag so already-indexed
+   * rows are identifiable as stale and can be re-indexed.
+   */
+  embedPrefixes?: { document?: string; query?: string };
   /** CLI sub-agent configuration (only for provider='cli') */
   cliAgent?: CLIAgentConfig;
   /** Custom provider configuration (only for provider='custom-openai', 'custom-anthropic', or 'custom-gemini') */
