@@ -116,6 +116,30 @@ describe('NoteService', () => {
     expect(resolved.toType).toBe('note');
   });
 
+  test('an exact match reclaims an edge a similarity guess had bound', async () => {
+    // The ghost-link resolver (link-resolver.ts) may bind [[Target]] to a
+    // near-miss note by similarity, marking the binding with a confidence.
+    // When a note with the *exact* slug later appears, the exact match must
+    // win — a guess is never allowed to outlive the real thing.
+    const guessed = await svc.save({ userId, title: 'Nearly Target' });
+    const b = await svc.save({ userId, title: 'Guess Source', body: 'see [[Target]]' });
+
+    await links.resolveTo({ userId, toRef: 'target', toType: 'note', toId: guessed.note.id, confidence: 0.71 });
+    let edge = (await links.getOutgoing(userId, 'note', b.note.id)).find((e) => e.linkType === 'references');
+    expect(edge?.toId).toBe(guessed.note.id);
+    expect(edge?.confidence).toBeCloseTo(0.71, 2);
+
+    // A second guess must not churn an already-guessed edge.
+    const other = await svc.save({ userId, title: 'Another Near Miss' });
+    expect(await links.resolveTo({ userId, toRef: 'target', toType: 'note', toId: other.note.id, confidence: 0.9 })).toBe(0);
+
+    // Creating the real note reclaims the edge and clears the guess score.
+    const real = await svc.save({ userId, title: 'Target' });
+    edge = (await links.getOutgoing(userId, 'note', b.note.id)).find((e) => e.linkType === 'references');
+    expect(edge?.toId).toBe(real.note.id);
+    expect(edge?.confidence).toBeNull();
+  });
+
   test('linking to an ALREADY-EXISTING note resolves the edge immediately (graph line shows)', async () => {
     // The QA bug: B exists first, then A links to it. The A→B edge used to
     // stay a ghost (to_id NULL) until B was next saved, so the graph (which

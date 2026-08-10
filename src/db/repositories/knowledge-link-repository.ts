@@ -207,22 +207,49 @@ export class KnowledgeLinkRepository {
    * Bind ghost edges (`to_id IS NULL`) whose `to_ref` matches a
    * now-existing entity. Called when an entity is created or renamed.
    * Returns the number of edges resolved.
+   *
+   * `confidence` marks a *guessed* binding (see `LinkResolverService`): the
+   * `to_ref` never named this target exactly, similarity did. Such an edge is
+   * still re-bindable, so an exact-slug resolution later takes it back — an
+   * exact match always outranks a guess. An exact binding (no `confidence`)
+   * clears any prior guess score, and is never overwritten by another one.
    */
   async resolveTo(params: {
     userId: string;
     toRef: string;
     toType: string;
     toId: string;
+    /** Retrieval score when the binding is a similarity guess; omit for exact. */
+    confidence?: number;
   }): Promise<number> {
-    const { userId, toRef, toType, toId } = params;
+    const { userId, toRef, toType, toId, confidence } = params;
+    const isGuess = confidence !== undefined;
     const result = await this.db
       .update(knowledgeLinks)
-      .set({ toType, toId, updatedAt: new Date() })
+      .set({
+        toType,
+        toId,
+        // Exact bindings clear a reclaimed guess score but must leave the
+        // confidence of an agent/suggestion ghost edge alone.
+        confidence: isGuess
+          ? confidence
+          : sql`CASE WHEN ${knowledgeLinks.origin} = 'wikilink' THEN NULL ELSE ${knowledgeLinks.confidence} END`,
+        updatedAt: new Date(),
+      })
       .where(
         and(
           eq(knowledgeLinks.userId, userId),
           eq(knowledgeLinks.toRef, toRef),
-          isNull(knowledgeLinks.toId),
+          isGuess
+            // A guess only ever fills an empty slot on an authored wikilink;
+            // it must not displace an exact binding, churn a previous guess,
+            // or touch an agent/suggestion edge (whose `confidence` means
+            // something else entirely).
+            ? and(isNull(knowledgeLinks.toId), eq(knowledgeLinks.origin, 'wikilink'))
+            // An exact match binds ghosts AND reclaims what a guess bound —
+            // scoped to wikilink edges so an agent edge that legitimately
+            // carries a confidence is never repointed.
+            : sql`(${knowledgeLinks.toId} IS NULL OR (${knowledgeLinks.confidence} IS NOT NULL AND ${knowledgeLinks.origin} = 'wikilink'))`,
           // `tagged` edges are intentionally never resolved to an id —
           // a tag is a pseudo-entity, not a row.
           sql`${knowledgeLinks.linkType} <> 'tagged'`,
