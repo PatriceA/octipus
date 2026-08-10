@@ -224,6 +224,7 @@ Open directions (later): federation between Octipus instances, local-first sync 
 | **[Configuration Precedence](docs/CONFIGURATION-PRECEDENCE.md)** | `.env`-bootstrap vs DB-runtime split |
 | **[Browser Extension](docs/BROWSER-EXTENSION.md)** | Chrome extension for real browser control |
 | **[RAG / Knowledge Base](docs/RAG.md)** | Hybrid search, tiered content, auto-indexing |
+| **[Knowledge Graph](docs/KNOWLEDGE-GRAPH.md)** | Notes, `[[wikilinks]]`, authored edges, graph traversal, Obsidian vault + Canvas |
 | **[MCP Server](docs/MCP-SERVER.md)** | Expose Octipus as MCP tools |
 | **[MCP Integration](docs/MCP-INTEGRATION.md)** | Connect external MCP servers |
 | **[Hooks & Automation](docs/HOOKS.md)** | Event hooks, webhooks, cron, execution control |

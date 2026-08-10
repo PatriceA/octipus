@@ -3,6 +3,7 @@ import { getNoteRepository, type NoteRepository } from '@/db/repositories/note-r
 import type { Note } from '@/db/schema/notes';
 import { coreLogger } from '@/utils/logger';
 import { type EmbeddingService, getEmbeddingService, sha256Hex } from '@/core/rag/embeddings';
+import { getLinkResolverService, type LinkResolverService } from './link-resolver';
 import { parseLinks, slugify } from './wikilink';
 
 /**
@@ -14,7 +15,8 @@ import { parseLinks, slugify } from './wikilink';
  *   1. change-detect via body sha — an unchanged body skips re-link and
  *      re-index entirely;
  *   2. re-link — parse `[[wikilinks]]`/`#tags`, sync `knowledge_links`,
- *      and resolve any ghost edges that pointed at this note's slug;
+ *      resolve any ghost edges that pointed at this note's slug, then give
+ *      the leftovers one similarity guess (`link-resolver.ts`);
  *   3. re-index — chunk the body into `embeddings` (`purpose='note'`).
  *
  * Re-index degradation: indexing needs an embedding model. If none is
@@ -61,6 +63,7 @@ export class NoteService {
     private readonly notes: NoteRepository = getNoteRepository(),
     private readonly links: KnowledgeLinkRepository = getKnowledgeLinkRepository(),
     private readonly embeddings: EmbeddingService = getEmbeddingService(),
+    private readonly resolver: LinkResolverService = getLinkResolverService(),
   ) {}
 
   async save(input: SaveNoteInput): Promise<SaveNoteResult> {
@@ -154,6 +157,20 @@ export class NoteService {
       if (target) {
         await this.links.resolveTo({ userId, toRef: ref, toType: SOURCE_PREFIX, toId: target.id });
       }
+    }
+
+    // Refs with no note of that exact slug get one similarity guess (see
+    // `link-resolver.ts`). Never throws: an unresolved link is a worse graph,
+    // a failed save is a lost note.
+    try {
+      await this.resolver.resolveGhostRefs({
+        userId,
+        workspaceId,
+        noteId: note.id,
+        wikilinks: parsed.wikilinks.filter((w) => w.ref !== note.slug),
+      });
+    } catch (err) {
+      coreLogger.warn({ err, component: 'notes', noteId: note.id }, 'Ghost-link resolution pass failed — links left unresolved');
     }
 
     // 3. Re-index (degrades loudly if no embedding model).
