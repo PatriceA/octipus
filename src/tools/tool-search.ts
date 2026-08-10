@@ -11,7 +11,7 @@
  * Degrades gracefully: any failure (no query, no embedding provider, error)
  * returns `null` so the caller falls back to the full unranked list.
  */
-import { getEmbeddingService, sha256Hex } from '@/core/rag/embeddings';
+import { type EmbedSide, getEmbeddingService, sha256Hex } from '@/core/rag/embeddings';
 import { toolLogger } from '@/utils/logger';
 
 export interface ToolSummary {
@@ -19,10 +19,10 @@ export interface ToolSummary {
   description: string;
 }
 
-/** `(text) => embedding`. Injectable so ranking is unit-testable without a live provider. */
-export type Embedder = (text: string) => Promise<number[]>;
+/** `(text, side) => embedding`. Injectable so ranking is unit-testable without a live provider. */
+export type Embedder = (text: string, side?: EmbedSide) => Promise<number[]>;
 
-const defaultEmbedder: Embedder = (text) => getEmbeddingService().generateEmbedding(text);
+const defaultEmbedder: Embedder = (text, side) => getEmbeddingService().generateEmbedding(text, side);
 
 /** In-memory cache of tool embeddings, keyed by a hash of `name\ndescription`. */
 const toolEmbeddingCache = new Map<string, number[]>();
@@ -67,13 +67,13 @@ export async function rankToolsByQuery(
   if (!q || tools.length === 0) return null;
 
   try {
-    const queryVec = await embed(q);
+    const queryVec = await embed(q, 'query');
     const scored = await Promise.all(
       tools.map(async (t) => {
         const key = sha256Hex(toolText(t));
         let vec = toolEmbeddingCache.get(key);
         if (!vec) {
-          vec = await embed(toolText(t));
+          vec = await embed(toolText(t), 'document');
           toolEmbeddingCache.set(key, vec);
         }
         return { tool: t, score: cosineSimilarity(queryVec, vec) };

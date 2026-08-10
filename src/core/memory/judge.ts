@@ -16,7 +16,7 @@
  * is enough.
  */
 
-import { buildEmbeddingVersion, EmbeddingService } from '@/core/rag/embeddings';
+import { buildEmbeddingVersion, embedPrefixTag, EmbeddingService } from '@/core/rag/embeddings';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
@@ -166,10 +166,17 @@ export async function judgeAndApply(
   // versioning scheme.
   const embeddingModel = await getModelRegistry().getModelForTopic('embedding');
   const embeddingModelId = embeddingModel?.modelId ?? 'unknown';
+  // Same prefix tag the embeddings table stamps, so memory rows and KB rows
+  // agree on what "written under this vector space" means.
+  const embeddingPrefixTag = embedPrefixTag(embeddingModel?.metadata?.embedPrefixes);
 
   for (const candidate of safeCandidates) {
     let queryVec: number[];
     try {
+      // Document side on purpose: this vector is BOTH the dedup probe and the
+      // vector persisted for the memory row, and every memory goes through this
+      // one path — so the corpus stays self-consistent. Switching it to 'query'
+      // would compare a query-prefixed vector against document-prefixed rows.
       queryVec = await embeddings.generateEmbedding(candidate.content);
     } catch (err) {
       coreLogger.warn({ err, fact: candidate.content.slice(0, 60) }, 'memory.judge: embed failed — skipping');
@@ -196,7 +203,7 @@ export async function judgeAndApply(
       ? { id: closest.id, content: closest.content, similarity: closest.similarity }
       : undefined;
 
-    const embeddingVersion = buildEmbeddingVersion(embeddingModelId, queryVec.length);
+    const embeddingVersion = buildEmbeddingVersion(embeddingModelId, queryVec.length, embeddingPrefixTag);
 
     try {
       if (action === 'ADD') {

@@ -143,7 +143,7 @@ async function fetchVectorMatchIds(
 ): Promise<string[]> {
   let embedding: number[];
   try {
-    embedding = await getEmbeddingService().generateEmbedding(message);
+    embedding = await getEmbeddingService().generateEmbedding(message, 'query');
   } catch (err) {
     if (isNoEmbeddingModelError(err)) {
       if (!warnedNoEmbeddingModel) {

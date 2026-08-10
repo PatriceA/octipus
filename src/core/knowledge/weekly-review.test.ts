@@ -33,6 +33,11 @@ describe('weekly review', () => {
     spyOn(embeddings, 'generateEmbedding').mockRejectedValue(
       new Error('No embedding model configured (test) — re-index degrades to indexed:false'),
     );
+    // indexText embeds in batches, so `embedBatch` is the seam that must fail
+    // locally too — otherwise indexing reaches a configured proxy for real.
+    spyOn(embeddings, 'embedBatch').mockImplementation(async (texts: string[]) =>
+      texts.map(() => new Error('No embedding model configured (test) — re-index degrades to indexed:false')),
+    );
     svc = new (await import('./notes')).NoteService(undefined, undefined, embeddings);
     links = new (await import('@/db/repositories/knowledge-link-repository')).KnowledgeLinkRepository();
   });
