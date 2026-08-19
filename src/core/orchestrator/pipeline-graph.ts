@@ -15,7 +15,7 @@
  */
 import type { StageTemplate } from './templates';
 
-export type NodeKind = 'step' | 'foreach';
+export type NodeKind = 'step' | 'foreach' | 'human';
 
 export type EdgeCondition =
   | 'always'
@@ -113,7 +113,10 @@ export function compileTemplateToGraph(stages: StageTemplate[]): PipelineGraph {
   const pushStep = (index: number, parentKey?: string) => {
     nodes.push({
       key: nodeKeyFor(index),
-      kind: 'step',
+      // A `human_input` step runs no worker: the walk stops there and asks a
+      // person. Kind rather than a flag, so the walker dispatches on it the
+      // same way it dispatches a loop head.
+      kind: stages[index].stageType === 'human_input' ? 'human' : 'step',
       name: stages[index].name,
       templateIndex: index,
       parentKey,

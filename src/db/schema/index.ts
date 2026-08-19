@@ -30,6 +30,7 @@ export * from './organizations';
 export * from './org-sso';
 export * from './permissions';
 export * from './pipeline-templates';
+export * from './pipeline-checkpoints';
 export * from './pipelines';
 export * from './profiles';
 export * from './recurring-tasks';

@@ -617,6 +617,20 @@
       "when": 1785780449096,
       "tag": "0086_run_events",
       "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1785780449097,
+      "tag": "0087_pipeline_checkpoints",
+      "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1785780449098,
+      "tag": "0088_human_nodes",
+      "breakpoints": true
     }
   ]
 }

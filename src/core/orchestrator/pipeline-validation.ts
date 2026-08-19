@@ -25,7 +25,8 @@ export function validatePipelineStages(steps: PipelineStageInput[]): string[] {
     if (!s.name || !s.name.trim()) {
       errors.push(`Stage ${i + 1}: name is required.`);
     }
-    if (!s.topic || !s.topic.trim()) {
+    // A `human_input` stage runs no worker, so it binds no topic/model.
+    if ((!s.topic || !s.topic.trim()) && s.stageType !== 'human_input') {
       errors.push(`Stage ${i + 1}: topic is required.`);
     }
     if (s.stageType === 'qa_validation') {

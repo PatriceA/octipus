@@ -18,8 +18,12 @@ export const stageStatusEnum = pgEnum('stage_status', [
  *   itself; it is the loop head, and it re-reads `plan_items` on every visit so
  *   items appended mid-run by a review or QA node are picked up (see
  *   `plan_items` below).
+ * - `human` — runs no worker either: the walk stops and asks a person, and
+ *   their answer becomes the node's output and the next node's input. A
+ *   first-class node rather than a flag on a step, so a graph can ask a
+ *   question anywhere without a stage having to pretend to be an agent.
  */
-export const pipelineNodeKindEnum = pgEnum('pipeline_node_kind', ['step', 'foreach']);
+export const pipelineNodeKindEnum = pgEnum('pipeline_node_kind', ['step', 'foreach', 'human']);
 
 /**
  * How the walker chooses an outgoing edge. Conditions are matched against the

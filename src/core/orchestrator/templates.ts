@@ -30,6 +30,8 @@ export interface StageTemplate {
   loopOverPlan?: boolean;
   /** Declares the stage writes the plan — see PipelineStepConfig. */
   producesPlan?: boolean;
+  /** Answer shape for a `human_input` stage — see PipelineStepConfig. */
+  humanFields?: { key: string; label: string; options?: string[] }[];
 }
 
 export interface PipelineTemplate {
@@ -45,7 +47,9 @@ export interface PipelineTemplate {
 export function stepConfigToStageTemplate(step: PipelineStepConfig): StageTemplate {
   return {
     name: step.name,
-    role: step.topic as AgentRole,
+    // A `human_input` step has no worker to route, so its topic is optional;
+    // the role is carried for display only.
+    role: (step.topic || 'general') as AgentRole,
     requiresApproval: step.requiresApproval,
     promptTemplate: step.promptTemplate || `Execute: ${step.name}\n\n{{description}}\n\n{{previousOutput}}`,
     stageType: step.stageType,
@@ -62,6 +66,7 @@ export function stepConfigToStageTemplate(step: PipelineStepConfig): StageTempla
     mechanical: step.mechanical,
     loopOverPlan: step.loopOverPlan,
     producesPlan: step.producesPlan,
+    humanFields: step.humanFields,
     toolIds: step.toolIds,
   };
 }

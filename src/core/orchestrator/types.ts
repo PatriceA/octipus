@@ -8,7 +8,15 @@ export type PipelineStatus = 'planning' | 'running' | 'paused' | 'awaiting_appro
 
 export type StageStatus = 'pending' | 'running' | 'awaiting_approval' | 'approved' | 'completed' | 'failed' | 'skipped';
 
-export type PipelineStageType = 'standard' | 'qa_validation';
+/**
+ * What a pipeline step IS.
+ *
+ * - `standard` — a worker runs it.
+ * - `qa_validation` — a worker runs it and its verdict routes the graph.
+ * - `human_input` — NO worker runs it. The walk stops and asks a person; their
+ *   answer becomes the step's output and the next step's input.
+ */
+export type PipelineStageType = 'standard' | 'qa_validation' | 'human_input';
 
 export interface QAValidationResult {
   passed: boolean;

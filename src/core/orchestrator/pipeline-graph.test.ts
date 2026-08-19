@@ -186,4 +186,15 @@ describe('shipped presets compile to runnable graphs', () => {
     // ...and nothing outside the body is caught by that same filter.
     expect(bodyEdges.every((e) => bodyKeys.has(e.from))).toBe(true);
   });
+  test('a human_input step compiles to a human node that still chains', () => {
+    const g = compileTemplateToGraph([
+      { name: 'Draft', role: 'coding', requiresApproval: false, promptTemplate: 'do it' },
+      { name: 'Sign off?', role: 'general', requiresApproval: false, promptTemplate: 'ok?', stageType: 'human_input' },
+      { name: 'Ship', role: 'coding', requiresApproval: false, promptTemplate: 'ship it' },
+    ]);
+    expect(validateGraph(g)).toEqual([]);
+    expect(g.nodes.map((n) => n.kind)).toEqual(['step', 'human', 'step']);
+    // It is a node in the chain, not a flag on one: work flows through it.
+    expect(g.edges.map((e) => `${e.from}->${e.to}`)).toEqual(['n0->n1', 'n1->n2']);
+  });
 });

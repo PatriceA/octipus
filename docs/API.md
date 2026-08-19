@@ -134,12 +134,27 @@ curl -H "Authorization: Bearer $OCTIPUS_API_TOKEN" http://localhost:3005/api/aut
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/pipelines` | List user's pipeline runs |
-| GET | `/api/pipelines/:id` | Get pipeline detail with stages |
+| GET | `/api/pipelines/:id` | Get pipeline detail with nodes |
 | POST | `/api/pipelines/:id/stop` | Stop a running pipeline |
+| GET | `/api/pipelines/:id/plan` | List the plan a `foreach` node iterates |
+| POST | `/api/pipelines/:id/plan` | Append plan items (editable while running) |
+| PATCH | `/api/pipelines/:id/plan/:itemId` | Edit or reorder a plan item |
+| DELETE | `/api/pipelines/:id/plan/:itemId` | Drop a still-pending plan item |
+| POST | `/api/pipelines/:id/pause` | Pause at the next node boundary |
+| POST | `/api/pipelines/:id/resume` | Resume from the newest checkpoint, or from `fromSeq` (rewind) |
+| GET | `/api/pipelines/:id/checkpoints` | List checkpoints (node-boundary snapshots) |
+| PATCH | `/api/pipelines/:id/checkpoints/:seq` | Edit what the next node will read |
 | GET | `/api/pipelines/templates` | List pipeline templates |
 | POST | `/api/pipelines/templates` | Create pipeline template |
 | PUT | `/api/pipelines/templates/:id` | Update pipeline template |
 | DELETE | `/api/pipelines/templates/:id` | Delete pipeline template |
+
+## Runs
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/runs/:sessionId/events` | The run log — one ordered stream of node, plan and tool events |
+| GET | `/api/runs/:sessionId/trace` | The same log folded into spans, with per-span duration and cost |
 
 ## Experts
 

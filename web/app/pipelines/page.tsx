@@ -30,7 +30,7 @@ interface PipelineStep {
   skillIds?: string[];
   requiresApproval?: boolean;
   promptTemplate?: string;
-  stageType?: 'standard' | 'qa_validation';
+  stageType?: 'standard' | 'qa_validation' | 'human_input';
   maxRetries?: number;
   retryTargetStage?: number;
 }
@@ -593,12 +593,31 @@ function TemplateEditor({
                           <span className="text-sm text-on-surface-variant">Require approval before running</span>
                         </label>
 
+                        {/* Ask a person instead of an agent. Mutually exclusive
+                            with QA: a human step runs no worker, so it has no
+                            verdict to route on. */}
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={step.stageType === 'human_input'}
+                            onChange={e => updateStep(i, {
+                              stageType: e.target.checked ? 'human_input' : 'standard',
+                              ...(e.target.checked ? { maxRetries: undefined, retryTargetStage: undefined } : {}),
+                            })}
+                            className="rounded border-outline-variant text-primary focus:ring-primary"
+                          />
+                          <span className="text-sm text-on-surface-variant">
+                            Ask me (human step — the prompt is the question, my answer is the output)
+                          </span>
+                        </label>
+
                         {/* QA Validation / Retry config */}
                         <div className="border-t border-outline-variant/10 pt-3 mt-1">
                           <label className="flex items-center gap-2 cursor-pointer">
                             <input
                               type="checkbox"
                               checked={step.stageType === 'qa_validation'}
+                              disabled={step.stageType === 'human_input'}
                               onChange={e => updateStep(i, {
                                 stageType: e.target.checked ? 'qa_validation' : 'standard',
                                 ...(e.target.checked ? { maxRetries: 3, retryTargetStage: Math.max(0, i - 1) } : { maxRetries: undefined, retryTargetStage: undefined }),

@@ -91,26 +91,46 @@ All four landed. What each actually became:
   building the seam first bought. Shape, timing and status only: argument values
   and results are never stored. Read at `GET /api/runs/:sessionId/events`.
 
-### Wave 2 — visible parity (falls out of wave 1)
+### Wave 2 — visible parity — SHIPPED (2026-08-19)
 
-- **Checkpoint, resume, and edit-state.** With a graph runtime plus a durable
-  event log, a checkpoint is a materialized node-boundary snapshot. Ship
-  pause-mid-run, inspect state, edit it, resume — and rewind-to-node
-  ("time travel") for debugging a bad run without re-paying for the good half.
-  Today only a crude resume exists via stage rows and the `paused` /
-  `awaiting_approval` statuses.
-- **Trace and cost dashboard.** Prometheus metrics and `runId` correlation
-  shipped (WS4); spans and a UI did not. Emit spans from the wave-1 waterfall,
-  read the graph shape from the run log, and render execution graph +
-  per-span cost and latency in the web UI. Keep the OTel *export* path
-  (see the packaging blocker below) separate from the in-app view so the
-  dashboard is not blocked on the dependency proxy.
-- **Human-in-the-loop as a first-class node.** Supersedes the older
-  "Better human-in-the-loop" item. Today HITL is a per-stage
-  `requiresApproval` flag plus tool-level ASK gates. Make it a node any graph
-  can contain: pause-before / pause-after, an optional form schema for the
-  answer, and replay across restarts. The plan-approval gate in the `foreach`
-  design above is the first consumer.
+All three landed. What each actually became:
+
+- **Checkpoint, resume, and edit-state.** `pipeline_checkpoints` holds one
+  materialized snapshot of the walker per node ENTRY — cursor, handoff chain,
+  per-edge traversal counts, QA feedback in flight, the plan item being worked.
+  That boundary choice is what makes pause, crash recovery and rewind the same
+  mechanism: resuming re-enters the node that was interrupted (a worker turn is
+  not itself resumable, and re-running one node is the cheap half), and
+  rewinding is `POST /api/pipelines/:id/resume` with an older `fromSeq`, which
+  drops the checkpoints after it because they describe a future being replaced.
+  Pause is cooperative — the walker checks the request where it writes the
+  snapshot, so a pause always lands somewhere resumable. Edit-state is
+  `PATCH /api/pipelines/:id/checkpoints/:seq`, restricted to `previousOutput`:
+  what the next node reads is the field a human can meaningfully rewrite, while
+  hand-editing the counters would turn a resume into an unexplainable run. A
+  boot sweep pauses pipelines left `running` by a dead process rather than
+  auto-resuming them — restarting paid work unasked is the wrong default.
+- **Trace and cost dashboard.** `GET /api/runs/:sessionId/trace` folds the
+  wave-1 event stream into spans (`src/core/run-trace.ts`, pure), and
+  `/runs/view?id=<sessionId>` renders duration, cost, tokens, an execution
+  timeline and tool calls grouped by name. Cost is attributed by TIME WINDOW
+  against `cost_log` rather than by a second counter threaded through the
+  walker: a model call already records its session and its price, so the trace
+  cannot disagree with the bill. Cost billed outside every span is reported
+  separately instead of being silently spread over nodes. The OTel export path
+  stays out of this — the in-app view is not blocked on the dependency proxy.
+- **Human-in-the-loop as a first-class node.** `stageType: 'human_input'`
+  compiles to a `human` node: no worker, no model, no cost. The question is the
+  node's prompt template with the usual substitutions, and the answer becomes
+  the node's output and the next node's input, so a person is just another
+  participant in the chain rather than a flag on an agent. `humanFields`
+  describes the answer shape for a client to draw a form; it is advisory,
+  because validating a typed answer means a second round trip to someone who
+  has already answered. Pause-before/pause-after needed no syntax — a node is
+  placed where the pause belongs. Replay across restarts falls out of
+  checkpointing: the snapshot precedes the ask, so an interrupted question is
+  asked again on resume, which is the honest recovery when an in-memory
+  approval promise dies with its process.
 
 ### Wave 3 — contracts, policy, cost
 
@@ -126,7 +146,7 @@ All four landed. What each actually became:
   which is what the "open-ended roster" framing already promises.
 - **Deterministic policy layer.** Guards exist but are scattered and
   hardcoded across `spawn-validator`, `input-guard`, `output-guard`,
-  `audit-coverage`, and `pipeline-evidence-gate`. Once wave 1 lands, move them
+  `audit-coverage`, and `pipeline-evidence-gate`. Now that wave 1 has landed, move them
   behind the waterfall as declarative policy: quotas, sandbox selection,
   egress rules, and approval requirements evaluated in one place, testable
   without booting an agent.

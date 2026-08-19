@@ -9,7 +9,7 @@ interface PipelineNode {
   name: string;
   role: string;
   status: 'pending' | 'running' | 'awaiting_approval' | 'approved' | 'completed' | 'failed' | 'skipped';
-  kind?: 'step' | 'foreach';
+  kind?: 'step' | 'foreach' | 'human';
   ordinal: number;
   /** Set on a loop-body node — the `foreach` head it belongs to. */
   parentNodeKey?: string | null;
@@ -100,7 +100,11 @@ export function PipelineView({ nodes, currentNodeKey, plan, onApprove, className
                 {stage.name}
               </span>
               <span className="text-[10px] text-on-surface-variant">
-                {stage.kind === 'foreach' && plan ? `${done}/${plan.length} items` : stage.role}
+                {stage.kind === 'foreach' && plan
+                  ? `${done}/${plan.length} items`
+                  : stage.kind === 'human'
+                    ? 'you'
+                    : stage.role}
               </span>
               {stage.status === 'awaiting_approval' && onApprove && (
                 <button

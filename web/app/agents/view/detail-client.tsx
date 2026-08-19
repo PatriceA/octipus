@@ -2,7 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import {
-  ArrowLeft, Loader2, Square, Trash2,
+  ArrowLeft, Activity, Loader2, Pause, Play, Square, Trash2,
 } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AgentTimeline } from '@/components/agent-timeline';
@@ -38,7 +38,7 @@ interface PipelineDetail {
     name: string;
     role: string;
     status: string;
-    kind?: 'step' | 'foreach';
+    kind?: 'step' | 'foreach' | 'human';
     ordinal: number;
     parentNodeKey?: string | null;
     output?: string;
@@ -91,6 +91,27 @@ export default function AgentDetailPage() {
     },
     refetchInterval: 5000,
   });
+
+  // Pause is cooperative: the walker stops at its next node boundary, where it
+  // has just written a checkpoint. Resume walks on from that checkpoint.
+  const handlePause = async (pipelineId: string) => {
+    try {
+      await api.post(`/pipelines/${pipelineId}/pause`);
+    } catch (error) {
+      console.error('Failed to pause pipeline:', error);
+    }
+  };
+
+  const handleResume = async (pipelineId: string) => {
+    try {
+      await api.post(`/pipelines/${pipelineId}/resume`, {});
+    } catch (error) {
+      // The route answers 404/409 for a stale click (checkpoint gone, walker
+      // still live); surfacing it beats a silent no-op.
+      console.error('Failed to resume pipeline:', error);
+      window.alert(`Could not resume: ${(error as Error).message}`);
+    }
+  };
 
   const handleStop = async () => {
     try {
@@ -230,6 +251,35 @@ export default function AgentDetailPage() {
             currentNodeKey={pipelineData.pipeline.currentNodeKey}
             plan={pipelineData.plan}
           />
+          <div className="mt-3 flex items-center gap-3 text-sm">
+            {pipelineData.pipeline.status === 'running' && (
+              <button
+                onClick={() => handlePause(pipelineData.pipeline.id)}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-full hover:bg-surface-variant/40 cursor-pointer"
+              >
+                <Pause className="w-4 h-4" />
+                Pause
+              </button>
+            )}
+            {/* Only a paused run resumes. A completed or failed one would
+                re-run its last node against a paid model on a stray click. */}
+            {pipelineData.pipeline.status === 'paused' && (
+              <button
+                onClick={() => handleResume(pipelineData.pipeline.id)}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-full hover:bg-surface-variant/40 cursor-pointer"
+              >
+                <Play className="w-4 h-4" />
+                Resume
+              </button>
+            )}
+            <button
+              onClick={() => router.push(`/runs/view?id=${agent.sessionId}`)}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-full hover:bg-surface-variant/40 cursor-pointer"
+            >
+              <Activity className="w-4 h-4" />
+              Trace
+            </button>
+          </div>
         </div>
       )}
 

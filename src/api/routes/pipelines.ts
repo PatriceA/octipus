@@ -2,6 +2,7 @@ import { desc, eq, or } from 'drizzle-orm';
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { getPipelineManager } from '@/core/orchestrator';
+import { validatePipelineStages } from '@/core/orchestrator/pipeline-validation';
 import { validateRecipeParameterDefs, validateRecipeParameterRefs } from '@/core/orchestrator/recipe-params';
 import {
   exportRecipe,
@@ -14,21 +15,36 @@ import { pipelineRepository } from '@/db/repositories/pipeline-repository';
 import { scopedRepos } from '@/db/repositories/scoped';
 import { pipelineTemplates } from '@/db/schema/pipeline-templates';
 import { isAuthenticated } from '@/security/principal';
+import { coreLogger } from '@/utils/logger';
 
 /** Shared Elysia body schema for a recipe stage (incl. per-stage model override). */
 const recipeStepBodySchema = t.Object({
   name: t.String(),
   description: t.Optional(t.String()),
-  topic: t.String(),
+  // Optional at the transport level because a `human_input` step binds no
+  // worker and therefore no topic. `validatePipelineStages` is what decides
+  // whether THIS step needed one — one place, one answer.
+  topic: t.Optional(t.String()),
   toolIds: t.Optional(t.Array(t.String())),
   requiresApproval: t.Optional(t.Boolean()),
   promptTemplate: t.Optional(t.String()),
-  stageType: t.Optional(t.Union([t.Literal('standard'), t.Literal('qa_validation')])),
+  stageType: t.Optional(
+    t.Union([t.Literal('standard'), t.Literal('qa_validation'), t.Literal('human_input')]),
+  ),
   maxRetries: t.Optional(t.Number()),
   retryTargetStage: t.Optional(t.Number()),
   model: t.Optional(t.String()),
   loopOverPlan: t.Optional(t.Boolean()),
   producesPlan: t.Optional(t.Boolean()),
+  humanFields: t.Optional(
+    t.Array(
+      t.Object({
+        key: t.String(),
+        label: t.String(),
+        options: t.Optional(t.Array(t.String())),
+      }),
+    ),
+  ),
 });
 
 /** Shared Elysia body schema for a recipe parameter (deep-validated by Zod). */
@@ -230,6 +246,142 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
     { params: t.Object({ id: t.String(), itemId: t.String() }), detail: { tags: ['pipelines'] } },
   )
 
+  // ── Checkpoints: pause, inspect, edit, resume, rewind ───────────
+  // A checkpoint is written at every node boundary, so these four routes are
+  // the same mechanism seen from four angles: pause asks the walker to stop at
+  // the next one, resume walks on from one, PATCH edits what the next node
+  // will read, and resume with an older `fromSeq` is a rewind.
+
+  .get(
+    '/:id/checkpoints',
+    async ({ user, principal, params, set }) => {
+      if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
+      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      if (!pipeline) {
+        set.status = 404;
+        return { error: 'Pipeline not found' };
+      }
+      const rows = await pipelineRepository.getCheckpoints(params.id);
+      // The state blob is returned whole: inspecting it is the point, and it is
+      // the same prose the user already sees on the node rows.
+      return { checkpoints: rows };
+    },
+    { params: t.Object({ id: t.String() }), detail: { tags: ['pipelines'] } },
+  )
+
+  .patch(
+    '/:id/checkpoints/:seq',
+    async ({ user, principal, params, body, set }) => {
+      if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
+      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      if (!pipeline) {
+        set.status = 404;
+        return { error: 'Pipeline not found' };
+      }
+      if (pipeline.status === 'running') {
+        set.status = 409;
+        return { error: 'Pause the pipeline before editing its state.' };
+      }
+
+      // A non-numeric segment would reach Postgres as NaN and 500 there.
+      const seq = Number(params.seq);
+      if (!Number.isInteger(seq)) {
+        set.status = 400;
+        return { error: 'Checkpoint seq must be an integer.' };
+      }
+      const existing = await pipelineRepository.getCheckpoint(params.id, seq);
+      if (!existing) {
+        set.status = 404;
+        return { error: 'Checkpoint not found' };
+      }
+
+      // Only the field a human can meaningfully rewrite: what the next node
+      // reads. The counters and the cursor are the walker's bookkeeping, and
+      // hand-editing them turns a resume into an unexplainable run.
+      const updated = await pipelineRepository.updateCheckpointState(params.id, seq, {
+        ...existing.state,
+        previousOutput: body.previousOutput,
+      });
+      return { checkpoint: updated };
+    },
+    {
+      params: t.Object({ id: t.String(), seq: t.String() }),
+      body: t.Object({ previousOutput: t.String() }),
+      detail: { tags: ['pipelines'] },
+    },
+  )
+
+  .post(
+    '/:id/pause',
+    async ({ user, principal, params, set }) => {
+      if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
+      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      if (!pipeline) {
+        set.status = 404;
+        return { error: 'Pipeline not found' };
+      }
+      const paused = await getPipelineManager().pause(params.id);
+      return paused
+        ? { pausing: true, message: 'The pipeline will pause at the next node boundary.' }
+        : { pausing: false, message: `Pipeline is ${pipeline.status}, not running.` };
+    },
+    { params: t.Object({ id: t.String() }), detail: { tags: ['pipelines'] } },
+  )
+
+  .post(
+    '/:id/resume',
+    async ({ user, principal, params, body, set }) => {
+      if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
+      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      if (!pipeline) {
+        set.status = 404;
+        return { error: 'Pipeline not found' };
+      }
+
+      const manager = getPipelineManager();
+      // Validate before answering — a bad seq or a live walker must be an error
+      // the caller sees, not a background failure nobody reads.
+      if (body?.fromSeq != null) {
+        const target = await pipelineRepository.getCheckpoint(params.id, body.fromSeq);
+        if (!target) {
+          set.status = 404;
+          return { error: 'Checkpoint not found' };
+        }
+      }
+      // `awaiting_approval` still has a walker holding the run — see
+      // PipelineManager.resume.
+      if (pipeline.status === 'running' || pipeline.status === 'awaiting_approval') {
+        set.status = 409;
+        return { error: `Pipeline is ${pipeline.status}` };
+      }
+
+      // Fire-and-forget: a walk is minutes to hours of worker turns, so the
+      // request returns as soon as the run is under way. Progress arrives on
+      // the pipeline event stream, exactly as it does for a fresh run.
+      void manager.resume(params.id, { fromSeq: body?.fromSeq }).catch((err: unknown) => {
+        coreLogger.error({ err, pipelineId: params.id }, 'Resume failed');
+      });
+      return { resuming: true, fromSeq: body?.fromSeq ?? null };
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      body: t.Optional(t.Object({ fromSeq: t.Optional(t.Number()) })),
+      detail: { tags: ['pipelines'] },
+    },
+  )
+
   // Stop a pipeline
   .post(
     '/:id/stop',
@@ -298,7 +450,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       const steps = (body.steps || []).map(s => ({
         name: s.name,
         description: s.description,
-        topic: s.topic,
+        topic: s.topic ?? '',
         toolIds: s.toolIds || [],
         requiresApproval: s.requiresApproval ?? false,
         promptTemplate: s.promptTemplate,
@@ -306,7 +458,18 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         maxRetries: s.maxRetries,
         retryTargetStage: s.retryTargetStage,
         model: s.model,
+        // Every declaration the body schema accepts must be carried here.
+        // This mapper enumerates fields, so a flag missing from it is accepted
+        // by the API, dropped on the way to the row, and then never seen by the
+        // gate that reads it — the same way `loopOverPlan`/`producesPlan` were
+        // silently discarded from every user-authored recipe until now.
+        loopOverPlan: s.loopOverPlan,
+        producesPlan: s.producesPlan,
+        humanFields: s.humanFields,
       }));
+      const stepErrors = validatePipelineStages(steps);
+      if (stepErrors.length > 0) return { error: stepErrors.join(' ') };
+
       let parameters;
       try {
         parameters = validateRecipeParameterDefs(body.parameters ?? []);
@@ -351,7 +514,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       const steps = (body.steps || []).map(s => ({
         name: s.name,
         description: s.description,
-        topic: s.topic,
+        topic: s.topic ?? '',
         toolIds: s.toolIds || [],
         requiresApproval: s.requiresApproval ?? false,
         promptTemplate: s.promptTemplate,
@@ -359,7 +522,18 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         maxRetries: s.maxRetries,
         retryTargetStage: s.retryTargetStage,
         model: s.model,
+        // Every declaration the body schema accepts must be carried here.
+        // This mapper enumerates fields, so a flag missing from it is accepted
+        // by the API, dropped on the way to the row, and then never seen by the
+        // gate that reads it — the same way `loopOverPlan`/`producesPlan` were
+        // silently discarded from every user-authored recipe until now.
+        loopOverPlan: s.loopOverPlan,
+        producesPlan: s.producesPlan,
+        humanFields: s.humanFields,
       }));
+      const stepErrors = validatePipelineStages(steps);
+      if (stepErrors.length > 0) return { error: stepErrors.join(' ') };
+
       let parameters;
       try {
         parameters = validateRecipeParameterDefs(body.parameters ?? []);

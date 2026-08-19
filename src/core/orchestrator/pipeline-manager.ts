@@ -1,4 +1,4 @@
-import { desc, eq } from 'drizzle-orm';
+import { desc, eq, inArray } from 'drizzle-orm';
 import { getNotificationService } from '@/core/notification-service';
 import { recordRunEvent } from '@/core/run-log';
 import type { SideEffectCounters } from '@/core/swarm/receipt';
@@ -348,8 +348,76 @@ export function stageEvidenceFailure(
   return reasons.length === 0 ? null : reasons.join('; and ');
 }
 
+/**
+ * Everything the graph walker carries that no table already holds.
+ *
+ * Node outputs, plan items and edge traversal totals are durable on their own
+ * rows; this is the rest — where the cursor is, what the next node will read,
+ * which QA feedback is in flight, and the per-item counters the loop resets.
+ * Serialized into one `pipeline_checkpoints.state` at every node boundary,
+ * which is what makes pause/resume and rewind-to-node the same mechanism.
+ */
+export interface WalkState {
+  cursor: string;
+  previousOutput: string;
+  handoffChain: HandoffContext[];
+  pipelineSources: string[];
+  /** Per-edge traversal counts, keyed by `edgeId`. Reset per plan item. */
+  traversals: Record<string, number>;
+  /** Handoff-chain length when each loop was entered. */
+  loopMarks: Record<string, number>;
+  pendingFeedback: Record<string, QAValidationResult>;
+  judgedContext: Record<string, string>;
+  pendingRejection?: string;
+  currentItemId: string | null;
+  steps: number;
+}
+
+/** JSON form of a walk state. Plain data — `Map`s are already objects here. */
+export function serializeWalk(state: WalkState): Record<string, unknown> {
+  return { ...state } as unknown as Record<string, unknown>;
+}
+
+/**
+ * Read a stored state back, or `null` when it is not one.
+ *
+ * Defensive on purpose: a checkpoint is user-editable (that is the point of
+ * "inspect state, edit it, resume"), and a walk resumed from a malformed
+ * snapshot would fail somewhere far from the cause.
+ */
+export function hydrateWalk(raw: unknown): WalkState | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.cursor !== 'string' || !r.cursor) return null;
+  const record = <T>(v: unknown): Record<string, T> =>
+    v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, T>) : {};
+  const list = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
+  return {
+    cursor: r.cursor,
+    previousOutput: typeof r.previousOutput === 'string' ? r.previousOutput : '',
+    handoffChain: list<HandoffContext>(r.handoffChain),
+    pipelineSources: list<string>(r.pipelineSources),
+    traversals: record<number>(r.traversals),
+    loopMarks: record<number>(r.loopMarks),
+    pendingFeedback: record<QAValidationResult>(r.pendingFeedback),
+    judgedContext: record<string>(r.judgedContext),
+    pendingRejection: typeof r.pendingRejection === 'string' ? r.pendingRejection : undefined,
+    currentItemId: typeof r.currentItemId === 'string' ? r.currentItemId : null,
+    steps: typeof r.steps === 'number' && r.steps >= 0 ? r.steps : 0,
+  };
+}
+
 export class PipelineManager {
   private get db() { return getDb(); }
+
+  /**
+   * Pipelines this process is walking right now.
+   *
+   * The status column is the cross-process guard; this is the same-process one,
+   * because a status write and a second `resume` can interleave between them.
+   * Two walkers on one pipeline pay for every remaining node twice.
+   */
+  private readonly walking = new Set<string>();
 
   /**
    * Create a pipeline from a template type and start it.
@@ -400,6 +468,12 @@ export class PipelineManager {
       description,
       status: 'running',
       currentNodeKey: graph.entryKey,
+      // Kept so a resume in another process can rebuild the same prompts. The
+      // template is re-read by `type`; the params were only ever in memory.
+      metadata: {
+        params: options?.params ?? {},
+        ...(options?.maxRetries != null ? { maxRetries: options.maxRetries } : {}),
+      },
     });
 
     // A `foreach` head adopts the approval flag of its first body node, and the
@@ -433,7 +507,7 @@ export class PipelineManager {
         return {
           pipelineId: pipeline.id,
           nodeKey: n.key,
-          kind: 'step' as const,
+          kind: n.kind === 'human' ? ('human' as const) : ('step' as const),
           name: b.name,
           role: b.role,
           toolIds: b.toolIds,
@@ -524,7 +598,23 @@ export class PipelineManager {
     context: AgentContext;
     orchestratorAgentId: string;
     sessionId: string;
+    /** Set when continuing an interrupted, paused, or rewound run. */
+    resumeState?: WalkState;
   }): Promise<{ pipelineId: string; result: string }> {
+    const { pipeline } = args;
+    if (this.walking.has(pipeline.id)) {
+      throw new Error(`Pipeline ${pipeline.id} is already being walked in this process.`);
+    }
+    this.walking.add(pipeline.id);
+    try {
+      return await this.walk(args);
+    } finally {
+      this.walking.delete(pipeline.id);
+    }
+  }
+
+  /** The walk itself. `runGraph` owns the one-walker-per-pipeline lease. */
+  private async walk(args: Parameters<PipelineManager['runGraph']>[0]): Promise<{ pipelineId: string; result: string }> {
     const { pipeline, graph, built, template, paramVars, description, title, context, sessionId } = args;
     const orchestrator = getOrchestratorService();
     const registry = getModelRegistry();
@@ -556,7 +646,61 @@ export class PipelineManager {
     let steps = 0;
     const MAX_STEPS = 500;
 
+    // Resuming or rewinding: adopt the snapshot taken when the target node was
+    // last entered. Everything the walker carries is restored except the plan
+    // item, which is re-read from the row (the user may have edited it while
+    // the run sat paused).
+    if (args.resumeState) {
+      const r = args.resumeState;
+      cursor = r.cursor;
+      previousOutput = r.previousOutput;
+      handoffChain.push(...r.handoffChain);
+      pipelineSources.push(...r.pipelineSources);
+      for (const [k, v] of Object.entries(r.traversals)) traversals.set(k, v);
+      for (const [k, v] of Object.entries(r.loopMarks)) loopMarks.set(k, v);
+      for (const [k, v] of Object.entries(r.pendingFeedback)) pendingFeedback.set(k, v);
+      for (const [k, v] of Object.entries(r.judgedContext)) judgedContext.set(k, v);
+      pendingRejection = r.pendingRejection;
+      steps = r.steps;
+      currentItem = r.currentItemId
+        ? (await pipelineRepository.getPlanItems(pipeline.id)).find((i) => i.id === r.currentItemId) ?? null
+        : null;
+    }
+
     while (cursor) {
+      // Node boundary: snapshot first, then honour a pause request. Snapshot
+      // BEFORE the node runs, so resuming re-enters this node rather than
+      // trying to continue a worker turn mid-flight.
+      const snapshot: WalkState = {
+        cursor,
+        previousOutput,
+        handoffChain,
+        pipelineSources,
+        traversals: Object.fromEntries(traversals),
+        loopMarks: Object.fromEntries(loopMarks),
+        pendingFeedback: Object.fromEntries(pendingFeedback),
+        judgedContext: Object.fromEntries(judgedContext),
+        pendingRejection,
+        currentItemId: currentItem?.id ?? null,
+        steps,
+      };
+      await pipelineRepository.saveCheckpoint({
+        pipelineId: pipeline.id,
+        nodeKey: cursor,
+        state: serializeWalk(snapshot),
+      });
+
+      if (await this.pauseRequested(pipeline.id)) {
+        await this.updatePipeline(pipeline.id, {
+          status: 'paused',
+          summary: `Paused at "${byKey.get(cursor)?.name ?? cursor}". Resume to continue from here.`,
+        });
+        return {
+          pipelineId: pipeline.id,
+          result: `Pipeline paused before "${byKey.get(cursor)?.name ?? cursor}".`,
+        };
+      }
+
       if (++steps > MAX_STEPS) {
         await this.updatePipeline(pipeline.id, {
           status: 'failed',
@@ -618,7 +762,28 @@ export class PipelineManager {
         }
       }
 
-      if (gnode.kind === 'foreach') {
+      if (gnode.kind === 'human') {
+        // A QA node can route its rejection here (a human node is a legal retry
+        // target). Consume it like a step does, or the person is re-asked the
+        // original question with no idea what was rejected.
+        const humanFeedback = pendingFeedback.get(cursor);
+        if (humanFeedback) pendingFeedback.delete(cursor);
+        const asked = await this.runHumanNode({
+          pipeline,
+          node,
+          stageTemplate: template.stages[gnode.templateIndex],
+          description,
+          paramVars,
+          previousOutput,
+          feedback: humanFeedback,
+          context,
+          title,
+        });
+        if (asked.stopped) return asked.stopped;
+        previousOutput = asked.output;
+        pipelineSources.push(`stage(${node.ordinal + 1}: ${node.name}/human)`);
+        outcome = 'ok';
+      } else if (gnode.kind === 'foreach') {
         const stepResult = await this.runForeachNode({
           pipeline,
           node,
@@ -775,7 +940,10 @@ export class PipelineManager {
       // A handoff is only built when moving FORWARD. A retry re-does work the
       // chain already describes; appending there would grow the chain without
       // bound and tell the next reader the same story twice.
-      if (gnode.kind === 'step' && (edge.condition === 'always' || edge.condition === 'qa_pass')) {
+      // `foreach` is the only kind with nothing to hand off — it runs no work.
+      // A human node MUST hand off: the next node builds its prompt from the
+      // chain when one exists, so an answer left out of it is silently dropped.
+      if (gnode.kind !== 'foreach' && (edge.condition === 'always' || edge.condition === 'qa_pass')) {
         const target = nodes.get(edge.to);
         if (target) {
           handoffChain.push(
@@ -878,6 +1046,186 @@ export class PipelineManager {
   /**
    * Stop a running pipeline.
    */
+  /**
+   * Ask a running pipeline to stop at its next node boundary.
+   *
+   * Cooperative rather than a kill: the walker checks this flag where it also
+   * writes its checkpoint, so a pause always lands on a state that can be
+   * resumed. A node already in flight finishes — killing a worker mid-turn
+   * loses its work and buys nothing back.
+   */
+  async pause(pipelineId: string): Promise<boolean> {
+    const pipeline = await this.getPipeline(pipelineId);
+    if (!pipeline || pipeline.status !== 'running') return false;
+    await this.updatePipeline(pipelineId, {
+      metadata: { ...(pipeline.metadata ?? {}), pauseRequested: true },
+    });
+    return true;
+  }
+
+  /**
+   * Boot sweep: a pipeline left `running` by a dead process is paused, so its
+   * newest checkpoint becomes resumable. Returns how many were reconciled.
+   *
+   * Deliberately not an auto-resume: restarting paid work without being asked
+   * is the wrong default, and the run may have been killed on purpose.
+   */
+  async reconcileInterrupted(): Promise<number> {
+    const rows = await this.db
+      .update(pipelines)
+      .set({
+        status: 'paused',
+        summary: 'Interrupted by a restart — resume to continue from the last checkpoint.',
+        updatedAt: new Date(),
+      })
+      // `awaiting_approval` is just as dead after a restart: the walker that was
+      // blocked on the question is gone, and nothing will ever answer it.
+      .where(inArray(pipelines.status, ['running', 'awaiting_approval']))
+      .returning({ id: pipelines.id });
+    return rows.length;
+  }
+
+  /** True once, then cleared — a pause request is consumed by the walker. */
+  private async pauseRequested(pipelineId: string): Promise<boolean> {
+    const pipeline = await this.getPipeline(pipelineId);
+    const meta = (pipeline?.metadata ?? {}) as Record<string, unknown>;
+    if (!meta.pauseRequested) return false;
+    const { pauseRequested: _drop, ...rest } = meta;
+    await this.updatePipeline(pipelineId, { metadata: rest });
+    return true;
+  }
+
+  /**
+   * Continue a pipeline that is not running — after a pause, a crash, or a
+   * rewind.
+   *
+   * `fromSeq` selects which checkpoint to walk from; without it the newest one
+   * wins, which is "carry on". Rewinding is the same call with an older seq:
+   * the checkpoints after it are dropped (they describe a future that is being
+   * replaced) and the walk re-enters that node with the state it had then.
+   *
+   * The node that was interrupted RE-RUNS. Its previous output is already on
+   * its row, and a worker turn cannot be resumed halfway.
+   */
+  async resume(
+    pipelineId: string,
+    opts: { fromSeq?: number } = {},
+  ): Promise<{ pipelineId: string; result: string }> {
+    const pipeline = await this.getPipeline(pipelineId);
+    if (!pipeline) throw new Error(`Pipeline ${pipelineId} not found.`);
+    // Two walkers on one pipeline would write the same node rows and pay for
+    // the same workers twice. `awaiting_approval` counts as live: a walker is
+    // sitting inside `requestApproval` with the run in hand. After a restart
+    // that promise is gone, and the boot sweep is what turns those rows into
+    // `paused` so this guard stops applying.
+    if (pipeline.status === 'running' || pipeline.status === 'awaiting_approval') {
+      throw new Error(`Pipeline ${pipelineId} is already ${pipeline.status}.`);
+    }
+    if (this.walking.has(pipelineId)) {
+      throw new Error(`Pipeline ${pipelineId} is already being walked in this process.`);
+    }
+
+    const checkpoint = opts.fromSeq != null
+      ? await pipelineRepository.getCheckpoint(pipelineId, opts.fromSeq)
+      : (await pipelineRepository.getCheckpoints(pipelineId, 1))[0] ?? null;
+    if (!checkpoint) {
+      throw new Error(`Pipeline ${pipelineId} has no checkpoint to resume from.`);
+    }
+    const resumeState = hydrateWalk(checkpoint.state);
+    if (!resumeState) {
+      throw new Error(`Checkpoint ${checkpoint.seq} does not hold a readable walk state.`);
+    }
+
+    // A pause request the walker never reached (it was inside the last node
+    // when the run ended) would otherwise fire on the first boundary of THIS
+    // walk and pause it before it did anything.
+    const meta = (pipeline.metadata ?? {}) as Record<string, unknown>;
+    if (meta.pauseRequested) {
+      const { pauseRequested: _drop, ...rest } = meta;
+      await this.updatePipeline(pipelineId, { metadata: rest });
+    }
+
+    // Rewind: anything recorded after the target describes a walk that is being
+    // replaced. Dropping it keeps "resume from the newest" honest.
+    if (opts.fromSeq != null) {
+      await pipelineRepository.deleteCheckpointsAfter(pipelineId, checkpoint.seq);
+    }
+
+    // Rebuild what the run was compiled from. The template is read by type and
+    // recompiled rather than stored: a graph is a pure function of the template,
+    // and the node/edge rows the walker reads are already persisted.
+    const template = await getPipelineTemplate(pipeline.type);
+    // The creation-time override only ever lived in memory; without re-applying
+    // it here every QA edge silently reverts to the default of 3.
+    const resumeMaxRetries = ((pipeline.metadata ?? {}) as { maxRetries?: number }).maxRetries;
+    if (resumeMaxRetries != null) {
+      for (const stage of template.stages) {
+        if (stage.stageType === 'qa_validation') stage.maxRetries = resumeMaxRetries;
+      }
+    }
+    const built = buildStagesFromTemplate(template, pipeline.description ?? '');
+    const graph = compileTemplateToGraph(template.stages);
+    const graphErrors = validateGraph(graph);
+    if (graphErrors.length > 0) {
+      throw new Error(`Pipeline "${pipeline.type}" no longer compiles: ${graphErrors.join('; ')}`);
+    }
+    // The persisted nodes are the run; the template is only how they were
+    // produced. If a recipe was edited while this run sat paused, the recompiled
+    // keys no longer line up — an inserted stage points the walk at a node row
+    // that does not exist, and a reorder runs one stage's prompt through
+    // another's role. Refuse rather than half-run a graph nobody designed.
+    const persistedKeys = new Set((await pipelineRepository.getNodes(pipelineId)).map((n) => n.nodeKey));
+    const missing = graph.nodes.filter((n) => !persistedKeys.has(n.key)).map((n) => n.key);
+    if (missing.length > 0 || persistedKeys.size !== graph.nodes.length) {
+      throw new Error(
+        `Recipe "${pipeline.type}" has changed since this run started ` +
+          `(${missing.length > 0 ? `new nodes ${missing.join(', ')}` : 'node count differs'}). ` +
+          `Start a new run instead of resuming this one.`,
+      );
+    }
+
+    const storedParams = ((pipeline.metadata ?? {}) as { params?: Record<string, unknown> }).params ?? {};
+    const paramVars = paramTemplateVars(resolveRecipeParams(template.parameters, storedParams));
+
+    // The context is rebuilt from the pipeline row rather than passed in: the
+    // caller of a resume is an HTTP request or a boot-time sweep, neither of
+    // which holds the agent context the original run was started with, and
+    // everything downstream needs from it is on the row.
+    const context: AgentContext = {
+      id: pipeline.orchestratorAgentId,
+      sessionId: pipeline.sessionId,
+      userId: pipeline.userId,
+      workspaceId: pipeline.workspaceId,
+      topic: 'general',
+      model: '',
+      role: 'orchestrator',
+      status: 'running',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      metadata: { pipelineId, resumed: true },
+    };
+
+    await this.updatePipeline(pipelineId, { status: 'running', currentNodeKey: resumeState.cursor });
+    coreLogger.info(
+      { pipelineId, fromSeq: checkpoint.seq, nodeKey: resumeState.cursor },
+      'Resuming pipeline from checkpoint',
+    );
+
+    return this.runGraph({
+      pipeline: { ...pipeline, status: 'running' },
+      graph,
+      built,
+      template,
+      paramVars,
+      description: pipeline.description ?? '',
+      title: pipeline.title,
+      context,
+      orchestratorAgentId: pipeline.orchestratorAgentId,
+      sessionId: pipeline.sessionId,
+      resumeState,
+    });
+  }
+
   async stop(pipelineId: string): Promise<boolean> {
     const pipeline = await this.getPipeline(pipelineId);
     if (!pipeline || pipeline.status === 'completed' || pipeline.status === 'failed') {
@@ -1657,6 +2005,127 @@ export class PipelineManager {
    * Returns a stop result when the user aborts; `null` means "continue anyway",
    * which the walker treats as a pass.
    */
+  /**
+   * Run a `human` node: stop the walk and ask a person.
+   *
+   * No worker, no model, no cost. The question is the node's prompt template
+   * with the same substitutions a step gets (`{{description}}`,
+   * `{{previousOutput}}`, recipe params), and the answer becomes the node's
+   * output — so the next node reads it exactly as it would read an agent's.
+   *
+   * Restart behaviour falls out of checkpointing: the snapshot is written
+   * BEFORE the node runs, so a pause or a crash while the question is
+   * outstanding resumes by asking again. An in-memory approval promise cannot
+   * survive a restart, and re-asking is the honest recovery — the person may
+   * never have seen the first one.
+   */
+  private async runHumanNode(args: {
+    pipeline: Pipeline;
+    node: PipelineNodeRow;
+    stageTemplate: StageTemplate;
+    description: string;
+    paramVars: Record<string, string>;
+    previousOutput: string;
+    /** A QA verdict that sent the walk back here. */
+    feedback?: QAValidationResult;
+    context: AgentContext;
+    title: string;
+  }): Promise<{ output: string; stopped?: { pipelineId: string; result: string } }> {
+    const { pipeline, node, stageTemplate, description, paramVars, previousOutput, feedback, context, title } = args;
+    const orchestrator = getOrchestratorService();
+
+    let question = expandPromptTemplate(stageTemplate.promptTemplate, {
+      description,
+      previousOutput,
+      ...paramVars,
+    });
+    if (feedback) {
+      question = `QA rejected the previous attempt:\n${feedback.feedback}\n` +
+        `${feedback.issues.map((i) => `- ${i}`).join('\n')}\n\n${question}`;
+    }
+    const fields = stageTemplate.humanFields ?? [];
+    const fieldText = fields.length
+      ? `\n\nAnswer with one line per field:\n${fields
+          .map((f) => `- ${f.label}${f.options?.length ? ` (${f.options.join(' / ')})` : ''}`)
+          .join('\n')}`
+      : '';
+
+    await this.updateNode(node.id, { input: question, status: 'awaiting_approval' });
+    await this.updatePipeline(pipeline.id, { status: 'awaiting_approval' });
+
+    orchestrator['emit']({
+      type: 'pipeline_event',
+      sessionId: pipeline.sessionId,
+      // `fields` rides along so a client can draw a form. The answer comes back
+      // as text either way — see `humanFields`, which is advisory by design.
+      data: {
+        event: 'human_input_required',
+        pipelineId: pipeline.id,
+        stageId: node.id,
+        name: node.name,
+        question,
+        fields,
+      },
+      timestamp: new Date(),
+    });
+
+    const answer = await orchestrator.requestApproval(
+      `Pipeline "${title}" — ${node.name}${fieldText}`,
+      question,
+      context,
+      // Buttons only when a single choice IS the answer; anything richer is
+      // free text, which the approval channel already carries.
+      fields.length === 1 && fields[0].options?.length ? fields[0].options : undefined,
+    ) as { approved: boolean; response?: string };
+
+    if (!answer.approved) {
+      await this.updateNode(node.id, { status: 'skipped' });
+      await this.updatePipeline(pipeline.id, {
+        status: 'paused',
+        summary: `Waiting on "${node.name}" — the question was not answered.`,
+      });
+      recordRunEvent({
+        runId: pipeline.sessionId,
+        subject: 'pipeline_node',
+        subjectId: node.nodeKey,
+        event: 'node_failed',
+        payload: { pipelineId: pipeline.id, name: node.name, reason: 'unanswered' },
+      });
+      return {
+        output: '',
+        stopped: {
+          pipelineId: pipeline.id,
+          result: `Pipeline paused at "${node.name}": no answer. Resume to ask again.`,
+        },
+      };
+    }
+
+    const output = (answer.response ?? '').trim();
+    await this.updateNode(node.id, {
+      status: 'completed',
+      output,
+      completedAt: new Date(),
+      approvedAt: new Date(),
+    });
+    await this.updatePipeline(pipeline.id, { status: 'running' });
+    recordRunEvent({
+      runId: pipeline.sessionId,
+      subject: 'pipeline_node',
+      subjectId: node.nodeKey,
+      event: 'node_completed',
+      payload: { pipelineId: pipeline.id, name: node.name, visit: node.visits, human: true },
+    });
+
+    orchestrator['emit']({
+      type: 'pipeline_event',
+      sessionId: pipeline.sessionId,
+      data: { event: 'stage_completed', pipelineId: pipeline.id, stageId: node.id, name: node.name },
+      timestamp: new Date(),
+    });
+
+    return { output };
+  }
+
   /**
    * Ask the user before a step that declared `requiresApproval` runs.
    * Approve / Skip / Stop, over the last handoff so the decision is made on

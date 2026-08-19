@@ -8,7 +8,7 @@ export interface PipelineStepConfig {
   toolIds: string[];
   requiresApproval: boolean;
   promptTemplate?: string;
-  stageType?: 'standard' | 'qa_validation';
+  stageType?: 'standard' | 'qa_validation' | 'human_input';
   maxRetries?: number;
   retryTargetStage?: number;
   /**
@@ -112,6 +112,17 @@ export interface PipelineStepConfig {
    * looping zero times would otherwise read as success.
    */
   producesPlan?: boolean;
+  /**
+   * The answer shape a `human_input` step asks for — one entry per field the
+   * person is being asked to fill in. Optional: without it the step is a plain
+   * free-text question.
+   *
+   * Advisory, not enforced: the fields are rendered into the question and sent
+   * on the approval event so a client can draw a form, and the answer comes
+   * back as text either way. Validating a typed answer would mean a second
+   * round trip to a human who has already answered.
+   */
+  humanFields?: { key: string; label: string; options?: string[] }[];
 }
 
 /**

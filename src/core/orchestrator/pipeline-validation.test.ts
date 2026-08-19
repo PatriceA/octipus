@@ -227,3 +227,17 @@ describe('reorderStages', () => {
     expect(out[2].retryTargetStage).toBe(3);
   });
 });
+
+describe('human_input stages', () => {
+  test('a human step needs no topic — it binds no worker', () => {
+    expect(
+      validatePipelineStages([{ name: 'Sign off?', topic: '', stageType: 'human_input' }]),
+    ).toEqual([]);
+  });
+
+  test('every other step still needs one', () => {
+    expect(validatePipelineStages([{ name: 'Build', topic: '' }])).toEqual([
+      'Stage 1: topic is required.',
+    ]);
+  });
+});

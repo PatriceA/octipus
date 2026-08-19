@@ -1,5 +1,10 @@
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, sql } from 'drizzle-orm';
 import { getDb } from '../postgres';
+import {
+  type NewPipelineCheckpoint,
+  type PipelineCheckpointRow,
+  pipelineCheckpoints,
+} from '../schema/pipeline-checkpoints';
 import {
   type NewPipeline,
   type NewPipelineEdge,
@@ -22,6 +27,9 @@ import {
  * repository instead of touching `getDb()` directly so the data layer stays
  * swappable and conforms to the rest of the codebase.
  */
+/** How many node-boundary snapshots one pipeline keeps. */
+const CHECKPOINT_HISTORY = 50;
+
 export class PipelineRepository {
   private get db() { return getDb(); }
 
@@ -116,6 +124,80 @@ export class PipelineRepository {
 
   async deletePlanItem(id: string): Promise<void> {
     await this.db.delete(planItems).where(eq(planItems.id, id));
+  }
+
+  // ── Checkpoints ──────────────────────────────────────────────────
+
+  /**
+   * Snapshot the walker at a node boundary, keeping only the newest
+   * `CHECKPOINT_HISTORY` rows for the pipeline.
+   *
+   * ponytail: a fixed window rather than a retention policy. Each snapshot
+   * carries the whole handoff chain, which grows as the walk proceeds, so an
+   * unbounded history is quadratic in prose for a long plan loop. Rewinding
+   * further back than the window is not offered; upgrade path if it is ever
+   * wanted: store the chain by reference instead of by value.
+   */
+  async saveCheckpoint(row: NewPipelineCheckpoint): Promise<PipelineCheckpointRow> {
+    const [saved] = await this.db.insert(pipelineCheckpoints).values(row).returning();
+    // Pruned by COUNT, not by seq arithmetic: `seq` is global, so "newest minus
+    // fifty" would mean "fifty rows written anywhere", which deletes a quiet
+    // pipeline's whole history the moment a busy one runs alongside it.
+    await this.db.execute(sql`
+      DELETE FROM ${pipelineCheckpoints}
+      WHERE ${pipelineCheckpoints.pipelineId} = ${row.pipelineId}
+        AND ${pipelineCheckpoints.seq} < (
+          SELECT MIN(seq) FROM (
+            SELECT seq FROM ${pipelineCheckpoints}
+            WHERE ${pipelineCheckpoints.pipelineId} = ${row.pipelineId}
+            ORDER BY seq DESC LIMIT ${CHECKPOINT_HISTORY}
+          ) keep
+        )`);
+    return saved;
+  }
+
+  /** Checkpoints newest-first — the shape the UI lists and `resume` picks from. */
+  async getCheckpoints(pipelineId: string, limit = 100): Promise<PipelineCheckpointRow[]> {
+    return this.db
+      .select()
+      .from(pipelineCheckpoints)
+      .where(eq(pipelineCheckpoints.pipelineId, pipelineId))
+      .orderBy(desc(pipelineCheckpoints.seq))
+      .limit(limit);
+  }
+
+  /** One checkpoint, scoped to its pipeline so a foreign seq cannot resolve. */
+  async getCheckpoint(pipelineId: string, seq: number): Promise<PipelineCheckpointRow | null> {
+    const [row] = await this.db
+      .select()
+      .from(pipelineCheckpoints)
+      .where(and(eq(pipelineCheckpoints.pipelineId, pipelineId), eq(pipelineCheckpoints.seq, seq)))
+      .limit(1);
+    return row ?? null;
+  }
+
+  async updateCheckpointState(
+    pipelineId: string,
+    seq: number,
+    state: Record<string, unknown>,
+  ): Promise<PipelineCheckpointRow | null> {
+    const [row] = await this.db
+      .update(pipelineCheckpoints)
+      .set({ state })
+      .where(and(eq(pipelineCheckpoints.pipelineId, pipelineId), eq(pipelineCheckpoints.seq, seq)))
+      .returning();
+    return row ?? null;
+  }
+
+  /**
+   * Drop every checkpoint after `seq`. Rewinding makes them unreachable — the
+   * walk that produced them is being replaced — and leaving them would offer
+   * the user a future to resume into. The run log keeps the history.
+   */
+  async deleteCheckpointsAfter(pipelineId: string, seq: number): Promise<void> {
+    await this.db
+      .delete(pipelineCheckpoints)
+      .where(and(eq(pipelineCheckpoints.pipelineId, pipelineId), gt(pipelineCheckpoints.seq, seq)));
   }
 
   /** Next ordinal for an appended item, so a late finding lands at the end. */

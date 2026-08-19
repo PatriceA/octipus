@@ -226,6 +226,15 @@ async function main() {
       logger.info('Run log installed (tool:after subscriber)');
     }
 
+    // A pipeline still marked `running` is a lie after a restart: the process
+    // that walked it is gone. Mark those paused so their last checkpoint is
+    // resumable instead of the run looking live forever.
+    {
+      const { getPipelineManager } = await import('@/core/orchestrator');
+      const interrupted = await getPipelineManager().reconcileInterrupted();
+      if (interrupted > 0) logger.info({ interrupted }, 'Paused pipelines interrupted by a restart');
+    }
+
     // Load user-authored extensions (.octipus/extensions/)
     try {
       const { getExtensionRegistry } = await import('@/extensions');
