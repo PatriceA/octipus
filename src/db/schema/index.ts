@@ -40,7 +40,7 @@ export * from './settings';
 export * from './skill-proposals';
 export * from './skill-topic-assignments';
 export * from './skills';
-export * from './swarm-ledger';
+export * from './run-events';
 export * from './swarm-nodes';
 export * from './task-state';
 export * from './tasks';

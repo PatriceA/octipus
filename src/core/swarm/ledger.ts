@@ -24,8 +24,13 @@ import { type SwarmLedgerRepository, swarmLedgerRepository } from './ledger-repo
 import { type SwarmNodeRepository, swarmNodeRepository } from './node-repository';
 import type { SwarmNodeStatus } from './types';
 
-/** Event kinds in the ledger. Mirrors the `swarm_ledger_event` pg enum. */
-export type SwarmLedgerEventType = 'spawn' | 'result' | 'cancel' | 'reconcile';
+/**
+ * Event kinds a swarm node goes through — a subset of the `run_event_type` pg
+ * enum, which also carries pipeline and tool events. Defined at the repository
+ * boundary and re-exported here, where every existing importer expects it.
+ */
+export type { SwarmLedgerEventType } from './ledger-repository';
+import type { SwarmLedgerEventType } from './ledger-repository';
 
 /** Events that close out a node — after one, the node is no longer in-flight. */
 const TERMINAL_EVENTS: ReadonlySet<SwarmLedgerEventType> = new Set([

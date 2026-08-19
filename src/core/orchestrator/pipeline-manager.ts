@@ -1,5 +1,6 @@
 import { desc, eq } from 'drizzle-orm';
 import { getNotificationService } from '@/core/notification-service';
+import { recordRunEvent } from '@/core/run-log';
 import type { SideEffectCounters } from '@/core/swarm/receipt';
 import type { AgentContext } from '@/core/types';
 import { getDb } from '@/db/postgres';
@@ -576,6 +577,18 @@ export class PipelineManager {
       await this.updateNode(node.id, { visits: node.visits + 1 });
       node.visits += 1;
 
+      // The run log records the WALK, which the node rows cannot: a row's
+      // `status` is overwritten on every revisit, so a retry or a loop pass
+      // leaves no trace there. Ordering, timing and checkpoint boundaries all
+      // read from here.
+      recordRunEvent({
+        runId: sessionId,
+        subject: 'pipeline_node',
+        subjectId: node.nodeKey,
+        event: 'node_entered',
+        payload: { pipelineId: pipeline.id, name: node.name, role: node.role, kind: gnode.kind, visit: node.visits },
+      });
+
       let outcome: NodeOutcome;
 
       if (gnode.kind === 'foreach') {
@@ -703,6 +716,19 @@ export class PipelineManager {
 
       traversals.set(edgeId(edge), (traversals.get(edgeId(edge)) ?? 0) + 1);
       await pipelineRepository.recordTraversal(pipeline.id, edge.from, edge.to, edge.condition);
+      recordRunEvent({
+        runId: sessionId,
+        subject: 'pipeline_node',
+        subjectId: edge.from,
+        parentSubjectId: edge.to,
+        event: 'edge_traversed',
+        payload: {
+          pipelineId: pipeline.id,
+          condition: edge.condition,
+          outcome,
+          traversals: traversals.get(edgeId(edge)),
+        },
+      });
 
       // A handoff is only built when moving FORWARD. A retry re-does work the
       // chain already describes; appending there would grow the chain without
@@ -1379,6 +1405,13 @@ export class PipelineManager {
       const output = stripHandoffBlock(String(result || ''));
 
       await this.updateNode(node.id, { status: 'completed', output, completedAt: new Date() });
+      recordRunEvent({
+        runId: sessionId,
+        subject: 'pipeline_node',
+        subjectId: node.nodeKey,
+        event: 'node_completed',
+        payload: { pipelineId: pipeline.id, name: node.name, visit: node.visits, outputChars: output.length },
+      });
 
       const stageSummary = output.length > 300
         ? `${output.slice(0, 300).replace(/\n/g, ' ').trim()}...`
@@ -1409,6 +1442,13 @@ export class PipelineManager {
     } catch (error) {
       const errorMsg = (error as Error).message;
       await this.updateNode(node.id, { status: 'failed', error: errorMsg });
+      recordRunEvent({
+        runId: sessionId,
+        subject: 'pipeline_node',
+        subjectId: node.nodeKey,
+        event: 'node_failed',
+        payload: { pipelineId: pipeline.id, name: node.name, visit: node.visits, reason: errorMsg },
+      });
       await this.updatePipeline(pipeline.id, {
         status: 'failed',
         summary: `Failed at stage: ${node.name} — ${errorMsg}`,
@@ -1456,6 +1496,13 @@ export class PipelineManager {
         status: 'done',
         result: lastOutput.slice(0, 4000),
         completedAt: new Date(),
+      });
+      recordRunEvent({
+        runId: pipeline.sessionId,
+        subject: 'plan_item',
+        subjectId: currentItem.id,
+        event: 'item_finished',
+        payload: { pipelineId: pipeline.id, title: currentItem.title, ordinal: currentItem.ordinal },
       });
     }
 
@@ -1519,6 +1566,13 @@ export class PipelineManager {
       return { outcome: 'loop_done', item: null };
     }
     const claimed = await pipelineRepository.updatePlanItem(next.id, { status: 'running' });
+    recordRunEvent({
+      runId: pipeline.sessionId,
+      subject: 'plan_item',
+      subjectId: next.id,
+      event: 'item_started',
+      payload: { pipelineId: pipeline.id, title: next.title, ordinal: next.ordinal },
+    });
 
     getOrchestratorService()['emit']({
       type: 'pipeline_event',

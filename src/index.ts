@@ -218,6 +218,14 @@ async function main() {
       logger.info('Persona system installed (before-agent-start hook + narration bridge)');
     }
 
+    // Run log — subscribes to the tool dispatch waterfall, so every tool call in
+    // the system is recorded from one place instead of from each call site.
+    {
+      const { installRunLogHooks } = await import('@/core/run-log');
+      installRunLogHooks();
+      logger.info('Run log installed (tool:after subscriber)');
+    }
+
     // Load user-authored extensions (.octipus/extensions/)
     try {
       const { getExtensionRegistry } = await import('@/extensions');
