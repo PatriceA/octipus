@@ -1,5 +1,6 @@
 import { desc, eq } from 'drizzle-orm';
 import { getNotificationService } from '@/core/notification-service';
+import { recordRunEvent } from '@/core/run-log';
 import type { SideEffectCounters } from '@/core/swarm/receipt';
 import type { AgentContext } from '@/core/types';
 import { getDb } from '@/db/postgres';
@@ -8,17 +9,37 @@ import { pipelineRepository } from '@/db/repositories/pipeline-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
 import { pipelineTemplates } from '@/db/schema/pipeline-templates';
-import type { NewPipeline, NewPipelineStage, Pipeline, PipelineStageRow } from '@/db/schema/pipelines';
-import { pipelineStages, pipelines } from '@/db/schema/pipelines';
+import type {
+  NewPipeline,
+  NewPipelineNode,
+  Pipeline,
+  PipelineNodeRow,
+  PlanItemRow,
+} from '@/db/schema/pipelines';
+import { pipelineNodes, pipelines } from '@/db/schema/pipelines';
 import { getModelRegistry, type ModelRegistry } from '@/models/model-registry';
 import { getTopicConfig } from '@/models/topic-config';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
 import { type AuditScopeStage, auditVerdictFailure, coverageScope, unaddressedDoubt, uncoveredStages } from './audit-coverage';
 import { createHandoffContext, formatHandoffChain, HANDOFF_EMIT_INSTRUCTION, type HandoffContext, stripHandoffBlock } from './handoff';
+import {
+  compileTemplateToGraph,
+  edgeId,
+  isRetryExhausted,
+  type NodeOutcome,
+  type PipelineGraph,
+  selectEdge,
+  validateGraph,
+} from './pipeline-graph';
 import { paramTemplateVars, resolveRecipeParams } from './recipe-params';
 import { getOrchestratorService } from './service';
-import { buildStagesFromTemplate, expandPromptTemplate, getPipelineTemplate } from './templates';
+import {
+  buildStagesFromTemplate,
+  expandPromptTemplate,
+  getPipelineTemplate,
+  type StageTemplate,
+} from './templates';
 import { appendSources, type QAValidationResult } from './types';
 import { countChangedFiles, snapshotWorkspace, type WorkspaceSnapshot } from './workspace-snapshot';
 
@@ -356,9 +377,20 @@ export class PipelineManager {
     // (fail loud on missing-required / unknown / type-mismatch). Substituted
     // into stage prompts as {{param.<key>}}.
     const paramVars = paramTemplateVars(resolveRecipeParams(template.parameters, options?.params ?? {}));
-    const stageConfigs = buildStagesFromTemplate(template, description);
+    const built = buildStagesFromTemplate(template, description);
 
-    // Create pipeline record
+    // Compile the template into an execution graph and REFUSE to run a bad one.
+    // Every defect `validateGraph` catches (unreachable node, unbounded cycle)
+    // is an infinite loop or silently skipped work at runtime, and both are
+    // vastly more expensive to discover halfway through a paid run.
+    const graph = compileTemplateToGraph(template.stages);
+    const graphErrors = validateGraph(graph);
+    if (graphErrors.length > 0) {
+      throw new Error(
+        `Pipeline template "${type}" does not compile to a runnable graph: ${graphErrors.join('; ')}`,
+      );
+    }
+
     const pipeline = await pipelineRepository.create({
       orchestratorAgentId,
       sessionId,
@@ -367,514 +399,399 @@ export class PipelineManager {
       type,
       description,
       status: 'running',
-      currentStageIndex: 0,
+      currentNodeKey: graph.entryKey,
     });
 
-    // Create stage records
-    await pipelineRepository.createStages(stageConfigs.map(stageConfig => ({
-      pipelineId: pipeline.id,
-      name: stageConfig.name,
-      role: stageConfig.role,
-      toolIds: stageConfig.toolIds,
-      systemPrompt: stageConfig.systemPrompt,
-      input: '',
-      requiresApproval: stageConfig.requiresApproval,
-      stageIndex: stageConfig.stageIndex,
-    })));
+    // A `foreach` head adopts the approval flag of its first body node, and the
+    // body node drops it: the user approves the PLAN once, before the loop
+    // starts, rather than being asked again for every item.
+    const firstBodyKey = new Map<string, string>();
+    for (const n of graph.nodes) {
+      if (n.parentKey && !firstBodyKey.has(n.parentKey)) firstBodyKey.set(n.parentKey, n.key);
+    }
+    const byKey = new Map(graph.nodes.map((n) => [n.key, n]));
+
+    await pipelineRepository.createNodes(
+      graph.nodes.map((n) => {
+        if (n.kind === 'foreach') {
+          const bodyHead = byKey.get(firstBodyKey.get(n.key) ?? '');
+          return {
+            pipelineId: pipeline.id,
+            nodeKey: n.key,
+            kind: 'foreach' as const,
+            name: n.name,
+            // A loop head runs no worker; the role is carried for display only.
+            role: bodyHead ? built[bodyHead.templateIndex].role : 'general',
+            toolIds: [],
+            systemPrompt: '',
+            input: '',
+            requiresApproval: bodyHead ? built[bodyHead.templateIndex].requiresApproval : false,
+            ordinal: n.ordinal,
+          };
+        }
+        const b = built[n.templateIndex];
+        return {
+          pipelineId: pipeline.id,
+          nodeKey: n.key,
+          kind: 'step' as const,
+          name: b.name,
+          role: b.role,
+          toolIds: b.toolIds,
+          systemPrompt: b.systemPrompt,
+          input: '',
+          // Asked on the loop head instead — see above.
+          requiresApproval: n.parentKey ? false : b.requiresApproval,
+          ordinal: n.ordinal,
+          parentNodeKey: n.parentKey ?? null,
+        };
+      }),
+    );
+
+    await pipelineRepository.createEdges(
+      graph.edges.map((e) => ({
+        pipelineId: pipeline.id,
+        fromNodeKey: e.from,
+        toNodeKey: e.to,
+        condition: e.condition,
+        maxTraversals: e.maxTraversals ?? null,
+        ordinal: e.ordinal,
+      })),
+    );
 
     const orchestrator = getOrchestratorService();
     orchestrator['emit']({
       type: 'pipeline_event',
       sessionId,
-      data: { event: 'pipeline_created', pipelineId: pipeline.id, title, type, stageCount: stageConfigs.length },
+      data: {
+        event: 'pipeline_created',
+        pipelineId: pipeline.id,
+        title,
+        type,
+        stageCount: graph.nodes.length,
+      },
       timestamp: new Date(),
     });
 
-    coreLogger.info({ pipelineId: pipeline.id, type, stages: stageConfigs.length }, 'Pipeline created');
+    coreLogger.info(
+      { pipelineId: pipeline.id, type, nodes: graph.nodes.length, edges: graph.edges.length },
+      'Pipeline created',
+    );
 
-    // Run stages sequentially with structured handoff context
-    let previousOutput = '';
-    const handoffChain: HandoffContext[] = [];
-    // Source attribution: every successfully completed stage (incl. QA
-    // retries) appends one entry. Rendered into the pipeline summary as
-    // `_Sources: stage(...), stage(...)_` to match the directResponse
-    // and orchestrator footers.
-    const pipelineSources: string[] = [];
-    const stages = await this.getStages(pipeline.id);
-    const stageConfBuilt = buildStagesFromTemplate(template, description);
-    const retryCounts: Record<number, number> = {}; // Track retries per stage index
-    // Filesystem half of the evidence gate — resolved once, used by every
-    // declared stage and every retry of one.
+    return this.runGraph({
+      pipeline,
+      graph,
+      built,
+      template,
+      paramVars,
+      description,
+      title,
+      context,
+      orchestratorAgentId,
+      sessionId,
+    });
+  }
+
+  /**
+   * Tools the RUNTIME grants a node on top of its role's set.
+   *
+   * `plan` for any node that writes or revises the plan: the planner needs it
+   * to emit the items, and every loop-body node needs it so a review or QA node
+   * can append the work it just discovered. Granted rather than declared,
+   * because a template author declares INTENT (`producesPlan`, `loopOverPlan`)
+   * and having to also remember a tool id would make the declaration a trap
+   * rather than a contract.
+   */
+  private grantedToolIds(b: { producesPlan?: boolean; loopOverPlan?: boolean }): string[] | undefined {
+    return b.producesPlan || b.loopOverPlan ? ['plan'] : undefined;
+  }
+
+  /**
+   * Walk the graph.
+   *
+   * One loop, one cursor. Every routing decision goes through `selectEdge`, so
+   * the shape of a run is decided by the graph rather than by control flow
+   * scattered through this method — which is what the old nested
+   * stage-loop-plus-retry-while-loop was.
+   */
+  private async runGraph(args: {
+    pipeline: Pipeline;
+    graph: PipelineGraph;
+    built: ReturnType<typeof buildStagesFromTemplate>;
+    template: { stages: StageTemplate[] };
+    paramVars: Record<string, string>;
+    description: string;
+    title: string;
+    context: AgentContext;
+    orchestratorAgentId: string;
+    sessionId: string;
+  }): Promise<{ pipelineId: string; result: string }> {
+    const { pipeline, graph, built, template, paramVars, description, title, context, sessionId } = args;
+    const orchestrator = getOrchestratorService();
+    const registry = getModelRegistry();
+    const nodes = new Map((await pipelineRepository.getNodes(pipeline.id)).map((r) => [r.nodeKey, r]));
+    const byKey = new Map(graph.nodes.map((n) => [n.key, n]));
     const workspaceRoot = await this.resolveWorkspaceRoot(sessionId);
 
-    for (let i = 0; i < stages.length; i++) {
-      const stage = stages[i];
-      const stageTemplate = template.stages[i];
-      const builtStage = stageConfBuilt[i];
+    let previousOutput = '';
+    const handoffChain: HandoffContext[] = [];
+    // Source attribution: every successfully completed node (incl. retries)
+    // appends one entry, rendered into the summary as `_Sources: ..._`.
+    const pipelineSources: string[] = [];
+    const traversals = new Map<string, number>();
+    /** QA feedback waiting to be injected into the node it was sent back to. */
+    const pendingFeedback = new Map<string, QAValidationResult>();
+    /** The work a QA node judged, so an auditor-only re-run re-judges the same thing. */
+    const judgedContext = new Map<string, string>();
+    /** Rejection notice for a QA node re-running because its report was unaccountable. */
+    let pendingRejection: string | undefined;
+    /** The plan item currently in flight, when inside a `foreach` body. */
+    let currentItem: PlanItemRow | null = null;
+    /** Handoff-chain length when each loop was first entered — the per-item reset point. */
+    const loopMarks = new Map<string, number>();
 
-      // Build input from template, using structured handoff chain when available
-      const handoffText = handoffChain.length > 0 ? formatHandoffChain(handoffChain) : '';
-      let input = expandPromptTemplate(stageTemplate.promptTemplate, {
-        description,
-        previousOutput: handoffText || previousOutput,
-        ...paramVars,
-      });
-      // Non-final stages emit a structured ```handoff block for the next stage
-      // (Phase B3) — createHandoffContext below prefers it over regex scraping.
-      if (i < stages.length - 1) input += HANDOFF_EMIT_INSTRUCTION;
-      // QA stages also emit a machine-readable JSON verdict for parseQAResult
-      // (B2). The two compose: B3 strips the handoff block from previousOutput
-      // before parseQAResult runs, so the verdict is what the QA parser sees.
-      if (builtStage.stageType === 'qa_validation') input = withQaVerdictContract(input);
+    let cursor: string | null = graph.entryKey;
+    // Backstop. Every cycle is individually bounded, but a template that
+    // compiles to something pathological must fail loudly rather than bill for
+    // an afternoon.
+    let steps = 0;
+    const MAX_STEPS = 500;
 
-      // Update stage input
-      await this.updateStage(stage.id, { input, status: 'running' });
-      await this.updatePipeline(pipeline.id, { currentStageIndex: i, status: 'running' });
-
-      orchestrator['emit']({
-        type: 'pipeline_event',
-        sessionId,
-        data: { event: 'stage_started', pipelineId: pipeline.id, stageId: stage.id, name: stage.name, index: i },
-        timestamp: new Date(),
-      });
-
-      // Persist stage start as system message so it survives page reloads
-      messageRepository.create({
-        sessionId,
-        role: 'system',
-        content: `**Stage ${i + 1}: ${stage.name}** (${stage.role || 'agent'}) started`,
-        metadata: { pipelineId: pipeline.id, stageId: stage.id, pipelineEvent: 'stage_started' },
-      }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
-
-      // Check if this stage requires approval
-      if (stage.requiresApproval && previousOutput) {
-        await this.updateStage(stage.id, { status: 'awaiting_approval' });
-        await this.updatePipeline(pipeline.id, { status: 'awaiting_approval' });
-
-        orchestrator['emit']({
-          type: 'pipeline_event',
-          sessionId,
-          data: { event: 'approval_required', pipelineId: pipeline.id, stageId: stage.id, name: stage.name },
-          timestamp: new Date(),
+    while (cursor) {
+      if (++steps > MAX_STEPS) {
+        await this.updatePipeline(pipeline.id, {
+          status: 'failed',
+          summary: `Pipeline exceeded ${MAX_STEPS} node visits — the graph is not converging.`,
         });
+        return {
+          pipelineId: pipeline.id,
+          result: `Pipeline stopped: exceeded ${MAX_STEPS} node visits without finishing.`,
+        };
+      }
 
-        // Request approval from user — show handoff summary if available
-        const prevStageName = i > 0 ? stages[i - 1].name : 'Initial';
-        const latestHandoff = handoffChain[handoffChain.length - 1];
-        const approvalSummary = latestHandoff
-          ? `Stage "${prevStageName}" completed.\n\n**Work done:** ${latestHandoff.completedWork.slice(0, 1500)}`
-            + (latestHandoff.decisions.length > 0 ? `\n\n**Decisions:** ${latestHandoff.decisions.join('; ')}` : '')
-          : `Stage "${prevStageName}" completed.\n\nResult:\n${(previousOutput || '').slice(0, 2000)}`;
-        const approvalResult = await orchestrator.requestApproval(
-          `Pipeline "${title}" — ${approvalSummary}`,
-          `Proceed with next stage: "${stage.name}"?`,
-          context,
-          ['Approve', 'Skip', 'Stop Pipeline'],
-        ) as { approved: boolean; response?: string };
+      const gnode = byKey.get(cursor);
+      const node = nodes.get(cursor);
+      if (!gnode || !node) {
+        await this.updatePipeline(pipeline.id, { status: 'failed', summary: `Unknown node '${cursor}'.` });
+        return { pipelineId: pipeline.id, result: `Pipeline failed: unknown node '${cursor}'.` };
+      }
 
-        if (!approvalResult.approved || approvalResult.response === 'Stop Pipeline') {
-          await this.updateStage(stage.id, { status: 'skipped' });
-          await this.updatePipeline(pipeline.id, { status: 'paused', summary: `Stopped by user at stage: ${stage.name}` });
-          return { pipelineId: pipeline.id, result: `Pipeline stopped at "${stage.name}".` };
+      await this.updatePipeline(pipeline.id, { currentNodeKey: cursor, status: 'running' });
+      await this.updateNode(node.id, { visits: node.visits + 1 });
+      node.visits += 1;
+
+      // The run log records the WALK, which the node rows cannot: a row's
+      // `status` is overwritten on every revisit, so a retry or a loop pass
+      // leaves no trace there. Ordering, timing and checkpoint boundaries all
+      // read from here.
+      recordRunEvent({
+        runId: sessionId,
+        subject: 'pipeline_node',
+        subjectId: node.nodeKey,
+        event: 'node_entered',
+        payload: { pipelineId: pipeline.id, name: node.name, role: node.role, kind: gnode.kind, visit: node.visits },
+      });
+
+      let outcome: NodeOutcome;
+
+      // Per-step sign-off, unchanged from the linear runtime: a step declaring
+      // `requiresApproval` pauses before it runs. Gated on `previousOutput`
+      // because there is nothing to approve before the first stage produced
+      // anything. The `foreach` head asks its own, different question (the
+      // whole plan, once) in `runForeachNode`.
+      if (gnode.kind === 'step' && node.requiresApproval && previousOutput) {
+        const decision = await this.approveStepNode({
+          pipeline, node, handoffChain, previousOutput, context, title,
+        });
+        if (decision === 'stop') {
+          return { pipelineId: pipeline.id, result: `Pipeline stopped at "${node.name}".` };
         }
-
-        if (approvalResult.response === 'Skip') {
-          await this.updateStage(stage.id, { status: 'skipped' });
+        if (decision === 'skip') {
+          await this.updateNode(node.id, { status: 'skipped' });
+          // A skipped QA node must still take its `qa_pass` edge — it has no
+          // unconditional one, and "no edge" would end the walk silently.
+          outcome = built[gnode.templateIndex].stageType === 'qa_validation' ? 'qa_pass' : 'ok';
+          const skipEdge = selectEdge(graph, cursor, outcome, traversals);
+          if (!skipEdge) break;
+          traversals.set(edgeId(skipEdge), (traversals.get(edgeId(skipEdge)) ?? 0) + 1);
+          cursor = skipEdge.to;
           continue;
         }
-
-        await this.updateStage(stage.id, { status: 'approved', approvedAt: new Date() });
-        await this.updatePipeline(pipeline.id, { status: 'running' });
       }
 
-      // Emit stage_started so UI can show which pipeline stage is active
-      orchestrator['emit']({
-        type: 'pipeline_event',
-        sessionId,
-        data: { event: 'stage_started', pipelineId: pipeline.id, stageId: stage.id, name: stage.name, role: stage.role, index: i },
-        timestamp: new Date(),
-      });
+      if (gnode.kind === 'foreach') {
+        const stepResult = await this.runForeachNode({
+          pipeline,
+          node,
+          currentItem,
+          lastOutput: previousOutput,
+          context,
+          title,
+        });
+        if (stepResult.stopped) return stepResult.stopped;
+        currentItem = stepResult.item;
+        outcome = stepResult.outcome;
 
-      // Spawn worker for this stage with structured handoff context
-      try {
-        // Resolve the model for the stage's topic so pipeline steps use the
-        // correct topic-specific model instead of the role's defaultTopic.
-        const stageTopic = stage.role; // role is set from the step's topic field
-        const registry = getModelRegistry();
-        // Stage override → mechanical stage's lane executor → topic binding.
-        const modelOverride = await resolveStageModel(stageTemplate, stageTopic, registry);
-
-        // Captured before `previousOutput` is reassigned below, so an
-        // auditor-only re-run (audit-coverage gate) can re-ask this stage the
-        // exact same question instead of reconstructing it.
-        const stageContext = handoffText || previousOutput;
-
-        const before = await this.snapshotStage(builtStage, workspaceRoot);
-
-        let counters: SideEffectCounters | null = null;
-        const result = await orchestrator.spawnWorker(
-          stage.role,
-          input,
-          stageContext,
-          { ...context, stageName: stage.name } as any,
-          {
-            ...(modelOverride ? { model: modelOverride } : {}),
-            // What the stage DECLARED it may touch. Enforced, not decorative.
-            toolIds: builtStage.toolIds,
-            swarmParent: {
-              id: orchestratorAgentId,
-              rootSessionId: sessionId,
-              topicPath: `pipeline/${pipeline.id}/${stage.name}`,
-              subtopic: stage.name,
-            },
-            onCounters: (c) => { counters = c; },
-          },
-        );
-
-
-        // A stage that returns nothing has not reported, whatever its status.
-        // Measured: an Implementation worker was truncated mid-write, compacted,
-        // and completed with an empty string — the evidence gate happened to
-        // catch it because that stage declares artifacts, but an undeclared
-        // stage would have handed "" to the next one as its context and the
-        // pipeline would have carried on against nothing.
-        if (String(result ?? '').trim() === '') {
-          throw new Error(
-            `Stage "${stage.name}" returned an empty result. The worker ended without producing ` +
-              `any output (commonly a truncated turn or an exhausted budget), so there is nothing ` +
-              `to hand to the next stage.`,
+        if (outcome === 'loop_next') {
+          // Each item starts from the state the loop was entered in. Two things
+          // are per-item, not per-run: the retry budget on the body's QA edges
+          // (item 1 burning three retries must not leave item 7 with zero), and
+          // the handoff chain (every entry is concatenated into every later
+          // prompt, so an unreset chain grows by one body pass per item until
+          // it swamps the context).
+          if (!loopMarks.has(cursor)) loopMarks.set(cursor, handoffChain.length);
+          handoffChain.length = loopMarks.get(cursor) as number;
+          const bodyKeys = new Set(
+            graph.nodes.filter((n) => n.parentKey === cursor).map((n) => n.key),
           );
+          for (const e of graph.edges) if (bodyKeys.has(e.from)) traversals.delete(edgeId(e));
         }
-        // Evidence gate BEFORE the stage is marked complete — throws into the
-        // catch below, which already fails the stage and the pipeline.
-        await this.assertStageEvidence({
-          sessionId,
-          pipelineId: pipeline.id,
-          stageName: stage.name,
-          declared: builtStage,
-          before,
+      } else {
+        const b = built[gnode.templateIndex];
+        const stageTemplate = template.stages[gnode.templateIndex];
+        const isQa = b.stageType === 'qa_validation';
+
+        // An auditor-only re-run must re-read the work it judged, not its own
+        // previous verdict — otherwise a real retry followed by a rubber stamp
+        // re-judges superseded work.
+        if (isQa && pendingRejection) previousOutput = judgedContext.get(cursor) ?? previousOutput;
+
+        const handoffText = handoffChain.length > 0 ? formatHandoffChain(handoffChain) : '';
+        let input = expandPromptTemplate(stageTemplate.promptTemplate, {
+          description,
+          previousOutput: handoffText || previousOutput,
+          ...paramVars,
+        });
+
+        // The item this pass is for. Appended rather than only substituted, so
+        // a template written before plan loops existed still sees it.
+        if (currentItem && gnode.parentKey) {
+          input += `\n\n---\nCURRENT PLAN ITEM (#${currentItem.ordinal + 1}): ${currentItem.title}` +
+            (currentItem.detail ? `\n${currentItem.detail}` : '') +
+            `\n\nWork ONLY on this item. Anything else you discover: add it to the plan with ` +
+            `\`plan__add_items\` instead of doing it here.`;
+        }
+
+        const feedback = pendingFeedback.get(cursor);
+        if (feedback) {
+          pendingFeedback.delete(cursor);
+          input = `Previous attempt had issues:\n${feedback.feedback}\n\nPlease fix these issues:\n` +
+            `${feedback.issues.join('\n')}\n\nOriginal task:\n${input}`;
+        }
+
+        // Non-terminal nodes emit a structured ```handoff block for whoever
+        // runs next; `createHandoffContext` prefers it over regex scraping.
+        if (graph.edges.some((e) => e.from === cursor)) input += HANDOFF_EMIT_INSTRUCTION;
+        if (isQa) {
+          input = withQaVerdictContract(input, pendingRejection);
+          judgedContext.set(cursor, handoffText || previousOutput);
+        }
+
+        const stepResult = await this.runStepNode({
+          pipeline,
+          node,
+          declared: b,
+          stageTemplate,
+          input,
+          stageContext: handoffText || previousOutput,
+          graph,
+          context,
+          registry,
           workspaceRoot,
-          counters,
+          orchestratorAgentId: args.orchestratorAgentId,
+          title,
         });
+        if (stepResult.stopped) return stepResult.stopped;
 
-        // Parse the handoff from the RAW output (which carries the ```handoff
-        // block), but persist/forward the STRIPPED output so the internal block
-        // is never shown to the user or bled into the next stage's prose (B3).
-        const rawOutput = String(result || '');
-        previousOutput = stripHandoffBlock(rawOutput);
-        pipelineSources.push(`stage(${i + 1}: ${stage.name}/${stage.role})`);
+        previousOutput = stepResult.output;
+        pipelineSources.push(`stage(${node.ordinal + 1}: ${node.name}/${node.role})`);
+        pendingRejection = undefined;
 
-        await this.updateStage(stage.id, {
-          status: 'completed',
-          output: previousOutput,
-          completedAt: new Date(),
-        });
-
-        // Build structured handoff for the next stage
-        if (i < stages.length - 1) {
-          const nextStage = stages[i + 1];
-          const handoff = await createHandoffContext({
-            from: { role: stage.role, stageName: stage.name, stageIndex: i },
-            to: { role: nextStage.role, stageName: nextStage.name, stageIndex: i + 1 },
-            originalRequest: description,
-            stageOutput: rawOutput,
-          });
-          handoffChain.push(handoff);
-        }
-
-        // Generate a brief summary of what this stage accomplished
-        const stageSummary = previousOutput.length > 300
-          ? previousOutput.slice(0, 300).replace(/\n/g, ' ').trim() + '...'
-          : previousOutput.replace(/\n/g, ' ').trim();
-
-        orchestrator['emit']({
-          type: 'pipeline_event',
-          sessionId,
-          data: {
-            event: 'stage_completed',
+        if (isQa) {
+          const auditScope = auditScopeBefore(
+            node.ordinal,
+            graph.nodes.map((n) => n.name),
+            graph.nodes.map((n) => (n.templateIndex >= 0 ? built[n.templateIndex].producesArtifacts : false)),
+            handoffConfidenceByStage(handoffChain),
+          );
+          const qaResult = await this.gateQaVerdict(previousOutput, auditScope, {
+            sessionId,
             pipelineId: pipeline.id,
-            stageId: stage.id,
-            name: stage.name,
-            role: stage.role,
-            summary: stageSummary.slice(0, 200),
-          },
-          timestamp: new Date(),
-        });
-
-        // Persist stage completion as system message
-        messageRepository.create({
-          sessionId,
-          role: 'system',
-          content: `**${stage.name}** (${stage.role || 'agent'}) completed: ${stageSummary.slice(0, 200)}`,
-          metadata: { pipelineId: pipeline.id, stageId: stage.id, pipelineEvent: 'stage_completed' },
-        }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
-
-        // --- QA Validation retry loop ---
-        if (builtStage.stageType === 'qa_validation') {
-          const maxRetries = builtStage.maxRetries ?? 3;
-          const retryTargetIndex = builtStage.retryTargetStage ?? (i > 0 ? i - 1 : 0);
-          const retryTargetStage = stages[retryTargetIndex];
-          const retryTargetTemplate = template.stages[retryTargetIndex];
-
-          if (!retryTargetStage || !retryTargetTemplate) {
-            coreLogger.warn({ pipelineId: pipeline.id, stageIndex: i, retryTargetIndex }, 'QA retry target stage not found, skipping retry logic');
+            stageName: node.name,
+          });
+          if (!qaResult || qaResult.passed) {
+            outcome = 'qa_pass';
+          } else if (qaResult.auditGateFailed) {
+            // The REPORT was rejected, not the work. Re-run the auditor alone.
+            outcome = 'audit_gate_failed';
+            pendingRejection = qaResult.feedback;
           } else {
-            // Store the original input for the retry target stage
-            const originalTargetInput = expandPromptTemplate(retryTargetTemplate.promptTemplate, {
-              description,
-              previousOutput: retryTargetIndex > 0 ? (stages[retryTargetIndex - 1] as any).output || '' : '',
-              ...paramVars,
-            });
-
-            const auditScope = auditScopeBefore(
-              i,
-              stages.map((s) => s.name),
-              template.stages.map((s) => s.producesArtifacts),
-              handoffConfidenceByStage(handoffChain),
-            );
-            const qaEvidence = { sessionId, pipelineId: pipeline.id, stageName: stage.name };
-
-            let qaResult = await this.gateQaVerdict(previousOutput, auditScope, qaEvidence);
-            retryCounts[i] = retryCounts[i] || 0;
-            // The work the auditor is judging, carried ACROSS retries. An
-            // auditor-only re-run must re-read the newest implementation
-            // output, not the one captured before the loop — otherwise a real
-            // retry followed by a rubber stamp re-judges superseded work.
-            let auditedOutput = stageContext;
-
-            while (qaResult && !qaResult.passed && retryCounts[i] < maxRetries) {
-              retryCounts[i]++;
-              const attempt = retryCounts[i];
-              // An audit-gate rejection faults the REPORT, not the code: re-run
-              // the auditor alone. Re-running the implementation would burn a
-              // paid run on work that was fine and can trip its own evidence
-              // gate (a re-run with nothing to do changes 0 files).
-              const auditorOnly = qaResult.auditGateFailed === true;
-
-              coreLogger.info(
-                { pipelineId: pipeline.id, qaStage: stage.name, retryTarget: retryTargetStage.name, attempt, maxRetries, auditorOnly },
-                auditorOnly ? 'Audit-coverage gate rejected the verdict, re-running the QA stage' : 'QA validation failed, retrying implementation stage',
-              );
-
-              orchestrator['emit']({
-                type: 'pipeline_event',
-                sessionId,
-                data: {
-                  event: 'qa_retry',
-                  pipelineId: pipeline.id,
-                  qaStageId: stage.id,
-                  retryTargetStageId: retryTargetStage.id,
-                  attempt,
-                  maxRetries,
-                  issues: qaResult.issues,
-                },
-                timestamp: new Date(),
-              });
-
-              // Re-run the target stage with QA feedback
-              const retryInput = `Previous attempt had issues:\n${qaResult.feedback}\n\nPlease fix these issues:\n${qaResult.issues.join('\n')}\n\nOriginal task:\n${originalTargetInput}`;
-
-              if (!auditorOnly) {
-                await this.updateStage(retryTargetStage.id, { input: retryInput, status: 'running' });
-              }
-
-              try {
-                // What the re-run auditor will read. On the auditor-only path
-                // the target stage is not re-run, so this stays the newest
-                // output the auditor already had — same work, re-judged.
-                let retryOutput = auditedOutput;
-
-                if (!auditorOnly) {
-                  // Same resolution as the initial run (override → mechanical
-                  // executor → topic) so a retry never silently switches model.
-                  const retryModelOverride = await resolveStageModel(
-                    retryTargetTemplate,
-                    retryTargetStage.role,
-                    registry,
-                  );
-
-                  const retryDeclared = template.stages[retryTargetIndex];
-                  const retryBefore = await this.snapshotStage(retryDeclared, workspaceRoot);
-
-                  let retryCounters: SideEffectCounters | null = null;
-                  const retryResult = await orchestrator.spawnWorker(
-                    retryTargetStage.role,
-                    retryInput,
-                    '',
-                    context,
-                    {
-                      ...(retryModelOverride ? { model: retryModelOverride } : {}),
-                      toolIds: stageConfBuilt[retryTargetIndex]?.toolIds,
-                      swarmParent: {
-                        id: orchestratorAgentId,
-                        rootSessionId: sessionId,
-                        topicPath: `pipeline/${pipeline.id}/${retryTargetStage.name}#retry${attempt}`,
-                        subtopic: `${retryTargetStage.name} (retry ${attempt})`,
-                      },
-                      onCounters: (c) => { retryCounters = c; },
-                    },
-                  );
-
-                  await this.assertStageEvidence({
-                    sessionId,
-                    pipelineId: pipeline.id,
-                    stageName: retryTargetStage.name,
-                    declared: retryDeclared,
-                    before: retryBefore,
-                    workspaceRoot,
-                    counters: retryCounters,
-                  });
-
-                  retryOutput = String(retryResult || '');
-                  auditedOutput = retryOutput;
-                  await this.updateStage(retryTargetStage.id, {
-                    status: 'completed',
-                    output: retryOutput,
-                    completedAt: new Date(),
-                  });
-
-                  orchestrator['emit']({
-                    type: 'pipeline_event',
-                    sessionId,
-                    data: { event: 'stage_completed', pipelineId: pipeline.id, stageId: retryTargetStage.id, name: retryTargetStage.name, note: `retry attempt ${attempt}` },
-                    timestamp: new Date(),
-                  });
-                }
-
-                // Re-run QA stage with the newest output. Built the same way on
-                // both paths so an auditor-only re-run cannot drift from a
-                // normal one; only the rejection notice differs. Re-append the
-                // JSON verdict instruction (B2) — without it the retried QA
-                // falls back to prose parsing, which can return null and
-                // silently pass a still-failing stage.
-                const qaRetryInput = withQaVerdictContract(
-                  expandPromptTemplate(stageTemplate.promptTemplate, {
-                    description,
-                    previousOutput: retryOutput,
-                    ...paramVars,
-                  }),
-                  auditorOnly ? qaResult.feedback : undefined,
-                );
-
-                await this.updateStage(stage.id, { input: qaRetryInput, status: 'running' });
-
-                // Same resolution as the initial run. A QA stage does not
-                // declare `mechanical` — judging is the opposite of mechanical —
-                // so in practice this is the override-or-topic path.
-                const qaModelOverride = await resolveStageModel(stageTemplate, stage.role, registry);
-
-                const qaRetryBefore = await this.snapshotStage(builtStage, workspaceRoot);
-
-                let qaRetryCounters: SideEffectCounters | null = null;
-                const qaRetryResult = await orchestrator.spawnWorker(
-                  stage.role,
-                  qaRetryInput,
-                  retryOutput,
-                  context,
-                  {
-                    ...(qaModelOverride ? { model: qaModelOverride } : {}),
-                    toolIds: builtStage.toolIds,
-                    swarmParent: {
-                      id: orchestratorAgentId,
-                      rootSessionId: sessionId,
-                      topicPath: `pipeline/${pipeline.id}/${stage.name}#qa-retry${attempt}`,
-                      subtopic: `${stage.name} QA (retry ${attempt})`,
-                    },
-                    onCounters: (c) => { qaRetryCounters = c; },
-                  },
-                );
-
-                await this.assertStageEvidence({
-                  sessionId,
-                  pipelineId: pipeline.id,
-                  stageName: stage.name,
-                  declared: builtStage,
-                  before: qaRetryBefore,
-                  workspaceRoot,
-                  counters: qaRetryCounters,
-                });
-
-                previousOutput = String(qaRetryResult || '');
-                await this.updateStage(stage.id, {
-                  status: 'completed',
-                  output: previousOutput,
-                  completedAt: new Date(),
-                });
-
-                qaResult = await this.gateQaVerdict(previousOutput, auditScope, qaEvidence);
-              } catch (retryError) {
-                const errorMsg = (retryError as Error).message;
-                coreLogger.error({ error: retryError, pipelineId: pipeline.id, attempt, auditorOnly }, 'QA retry stage failed');
-                // Fail the stage that actually ran. On the auditor-only path
-                // the target stage was never touched this attempt, so marking
-                // it failed would corrupt the audit trail this gate exists to
-                // keep honest.
-                await this.updateStage(auditorOnly ? stage.id : retryTargetStage.id, { status: 'failed', error: errorMsg });
-                await this.updatePipeline(pipeline.id, { status: 'failed', summary: `Failed during QA retry attempt ${attempt}: ${errorMsg}` });
-                return { pipelineId: pipeline.id, result: `Pipeline failed during QA retry attempt ${attempt}: ${errorMsg}` };
-              }
-            }
-
-            // If still failing after max retries, escalate for human approval
-            if (qaResult && !qaResult.passed && retryCounts[i] >= maxRetries) {
-              coreLogger.warn({ pipelineId: pipeline.id, attempts: retryCounts[i] }, 'QA validation exhausted retries, requesting human approval');
-
-              orchestrator['emit']({
-                type: 'pipeline_event',
-                sessionId,
-                data: {
-                  event: 'qa_escalation',
-                  pipelineId: pipeline.id,
-                  qaStageId: stage.id,
-                  attempts: retryCounts[i],
-                  issues: qaResult.issues,
-                },
-                timestamp: new Date(),
-              });
-
-              await this.updatePipeline(pipeline.id, { status: 'awaiting_approval' });
-
-              const escalationResult = await orchestrator.requestApproval(
-                `QA validation failed after ${retryCounts[i]} attempts.\n\nRemaining issues:\n${qaResult.issues.join('\n')}\n\nFeedback: ${qaResult.feedback}`,
-                `Continue pipeline despite QA failures, or abort?`,
+            outcome = 'qa_fail';
+          }
+          if (qaResult && outcome !== 'qa_pass') {
+            // Carry the verdict to whichever node the edge sends the work to —
+            // the implementer on a retry, this same auditor on a re-report.
+            const nextEdge = selectEdge(graph, cursor, outcome, traversals);
+            if (nextEdge) {
+              pendingFeedback.set(nextEdge.to, qaResult);
+            } else if (outcome === 'qa_fail' && isRetryExhausted(graph, cursor, traversals)) {
+              // Retries used up and QA still says no: ask a human rather than
+              // looping, and rather than quietly accepting a failing verdict.
+              const retryEdge = graph.edges.find((e) => e.from === cursor && e.condition === 'qa_fail');
+              const escalated = await this.escalateQaFailure({
+                pipeline,
+                node,
+                qaResult,
+                attempts: retryEdge ? (traversals.get(edgeId(retryEdge)) ?? 0) : 0,
                 context,
-                ['Continue Anyway', 'Abort Pipeline'],
-              ) as { approved: boolean; response?: string };
-
-              if (!escalationResult.approved || escalationResult.response === 'Abort Pipeline') {
-                await this.updatePipeline(pipeline.id, {
-                  status: 'failed',
-                  summary: `QA failed after ${retryCounts[i]} attempts. Aborted by user.\n\nIssues:\n${qaResult.issues.join('\n')}`,
-                });
-                return {
-                  pipelineId: pipeline.id,
-                  result: `Pipeline aborted: QA failed after ${retryCounts[i]} attempts.\n\nUnresolved issues:\n${qaResult.issues.join('\n')}`,
-                };
-              }
-
-              await this.updatePipeline(pipeline.id, { status: 'running' });
-              coreLogger.info({ pipelineId: pipeline.id }, 'User approved continuing despite QA failures');
+              });
+              if (escalated) return escalated;
+              outcome = 'qa_pass';
             }
           }
+        } else {
+          outcome = 'ok';
         }
-      } catch (error) {
-        const errorMsg = (error as Error).message;
-        await this.updateStage(stage.id, { status: 'failed', error: errorMsg });
-        await this.updatePipeline(pipeline.id, { status: 'failed', summary: `Failed at stage: ${stage.name} — ${errorMsg}` });
-
-        coreLogger.error({ error, pipelineId: pipeline.id, stage: stage.name }, 'Pipeline stage failed');
-        getNotificationService().notify(
-          pipeline.userId,
-          'pipeline_error',
-          `Pipeline "${title}" failed`,
-          `Failed at stage "${stage.name}": ${errorMsg}`,
-          { pipelineId: pipeline.id, stage: stage.name },
-        ).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
-        return { pipelineId: pipeline.id, result: `Pipeline failed at "${stage.name}": ${errorMsg}` };
       }
+
+      const edge = selectEdge(graph, cursor, outcome, traversals);
+      if (!edge) break;
+
+      traversals.set(edgeId(edge), (traversals.get(edgeId(edge)) ?? 0) + 1);
+      await pipelineRepository.recordTraversal(pipeline.id, edge.from, edge.to, edge.condition);
+      recordRunEvent({
+        runId: sessionId,
+        subject: 'pipeline_node',
+        subjectId: edge.from,
+        parentSubjectId: edge.to,
+        event: 'edge_traversed',
+        payload: {
+          pipelineId: pipeline.id,
+          condition: edge.condition,
+          outcome,
+          traversals: traversals.get(edgeId(edge)),
+        },
+      });
+
+      // A handoff is only built when moving FORWARD. A retry re-does work the
+      // chain already describes; appending there would grow the chain without
+      // bound and tell the next reader the same story twice.
+      if (gnode.kind === 'step' && (edge.condition === 'always' || edge.condition === 'qa_pass')) {
+        const target = nodes.get(edge.to);
+        if (target) {
+          handoffChain.push(
+            await createHandoffContext({
+              from: { role: node.role, stageName: node.name, stageIndex: node.ordinal },
+              to: { role: target.role, stageName: target.name, stageIndex: target.ordinal },
+              originalRequest: description,
+              stageOutput: previousOutput,
+            }),
+          );
+        }
+      }
+
+      cursor = edge.to;
     }
 
-    // All stages complete
     const baseSummary = `Pipeline "${title}" completed successfully. Final output:\n\n${previousOutput}`;
     const summary = appendSources(baseSummary, pipelineSources);
     await this.updatePipeline(pipeline.id, {
@@ -920,14 +837,21 @@ export class PipelineManager {
   }
 
   /**
-   * Get stages for a pipeline, ordered by index.
+   * Get a pipeline's nodes, in display order. Execution order lives in the
+   * edges — see `getGraph`.
    */
-  async getStages(pipelineId: string): Promise<PipelineStageRow[]> {
-    return this.db
-      .select()
-      .from(pipelineStages)
-      .where(eq(pipelineStages.pipelineId, pipelineId))
-      .orderBy(pipelineStages.stageIndex);
+  async getNodes(pipelineId: string): Promise<PipelineNodeRow[]> {
+    return pipelineRepository.getNodes(pipelineId);
+  }
+
+  /** Nodes, edges, and the live plan — everything the UI needs to draw a run. */
+  async getGraph(pipelineId: string) {
+    const [nodes, edges, plan] = await Promise.all([
+      pipelineRepository.getNodes(pipelineId),
+      pipelineRepository.getEdges(pipelineId),
+      pipelineRepository.getPlanItems(pipelineId),
+    ]);
+    return { nodes, edges, plan };
   }
 
   /**
@@ -965,11 +889,10 @@ export class PipelineManager {
       summary: 'Pipeline stopped by user.',
     });
 
-    // Mark running stages as skipped
-    const stages = await this.getStages(pipelineId);
-    for (const stage of stages) {
-      if (stage.status === 'running' || stage.status === 'awaiting_approval') {
-        await this.updateStage(stage.id, { status: 'skipped' });
+    // Mark running nodes as skipped
+    for (const node of await this.getNodes(pipelineId)) {
+      if (node.status === 'running' || node.status === 'awaiting_approval') {
+        await this.updateNode(node.id, { status: 'skipped' });
       }
     }
 
@@ -1412,6 +1335,423 @@ export class PipelineManager {
     };
   }
 
+  /**
+   * Run one `step` node: approval gate, worker spawn, evidence gate, persist.
+   *
+   * Returns `{ stopped }` when the pipeline must end here (user stopped it, or
+   * the node failed) — the caller returns that verbatim, so every exit still
+   * goes through one place.
+   */
+  private async runStepNode(args: {
+    pipeline: Pipeline;
+    node: PipelineNodeRow;
+    declared: ReturnType<typeof buildStagesFromTemplate>[number];
+    stageTemplate: StageTemplate;
+    input: string;
+    stageContext: string;
+    graph: PipelineGraph;
+    context: AgentContext;
+    registry: ModelRegistry;
+    workspaceRoot: string | null;
+    orchestratorAgentId: string;
+    title: string;
+  }): Promise<{ output: string; stopped?: { pipelineId: string; result: string } }> {
+    const { pipeline, node, declared, stageTemplate, input, stageContext, context, registry, workspaceRoot, title } = args;
+    const orchestrator = getOrchestratorService();
+    const sessionId = pipeline.sessionId;
+
+    await this.updateNode(node.id, { input, status: 'running' });
+
+    orchestrator['emit']({
+      type: 'pipeline_event',
+      sessionId,
+      data: { event: 'stage_started', pipelineId: pipeline.id, stageId: node.id, name: node.name, role: node.role, index: node.ordinal },
+      timestamp: new Date(),
+    });
+
+    messageRepository.create({
+      sessionId,
+      role: 'system',
+      content: `**${node.name}** (${node.role || 'agent'}) started`,
+      metadata: { pipelineId: pipeline.id, stageId: node.id, pipelineEvent: 'stage_started' },
+    }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
+
+    try {
+      // Resolve the model for this node's topic. Node override → a mechanical
+      // node's lane executor → topic binding.
+      const modelOverride = await resolveStageModel(stageTemplate, node.role, registry);
+      const before = await this.snapshotStage(declared, workspaceRoot);
+
+      let counters: SideEffectCounters | null = null;
+      const result = await orchestrator.spawnWorker(
+        node.role,
+        input,
+        stageContext,
+        {
+          ...context,
+          stageName: node.name,
+          // Read by the `plan` tool to scope its writes to THIS pipeline. A
+          // worker cannot be trusted to pass a pipeline id it was told.
+          metadata: { ...(context.metadata ?? {}), pipelineId: pipeline.id, nodeKey: node.nodeKey },
+        } as AgentContext,
+        {
+          ...(modelOverride ? { model: modelOverride } : {}),
+          toolIds: node.toolIds ?? declared.toolIds,
+          ...(this.grantedToolIds(declared) ? { extraToolIds: this.grantedToolIds(declared) } : {}),
+          swarmParent: {
+            id: args.orchestratorAgentId,
+            rootSessionId: sessionId,
+            topicPath: node.visits > 1
+              ? `pipeline/${pipeline.id}/${node.name}#visit${node.visits}`
+              : `pipeline/${pipeline.id}/${node.name}`,
+            subtopic: node.visits > 1 ? `${node.name} (visit ${node.visits})` : node.name,
+          },
+          onCounters: (c) => { counters = c; },
+        },
+      );
+
+      // A node that returns nothing has not reported, whatever its status.
+      if (String(result ?? '').trim() === '') {
+        throw new Error(
+          `Stage "${node.name}" returned an empty result. The worker ended without producing ` +
+            `any output (commonly a truncated turn or an exhausted budget), so there is nothing ` +
+            `to hand to the next stage.`,
+        );
+      }
+
+      await this.assertStageEvidence({
+        sessionId,
+        pipelineId: pipeline.id,
+        stageName: node.name,
+        declared,
+        before,
+        workspaceRoot,
+        counters,
+      });
+
+      // A planner that produced no plan would send the loop straight past every
+      // item — zero iterations reading as success. Same shape as the artifacts
+      // gate: a declaration is a contract, not a hint.
+      if (declared.producesPlan) {
+        const items = await pipelineRepository.getPlanItems(pipeline.id);
+        if (items.length === 0) {
+          throw new Error(
+            `Stage "${node.name}" declares producesPlan but left no plan items. ` +
+              `It must call \`plan__add_items\` with the steps the pipeline should carry out.`,
+          );
+        }
+      }
+
+      // Parse handoffs from the RAW output but persist/forward the STRIPPED
+      // one, so the internal block is never shown or bled into the next node.
+      const output = stripHandoffBlock(String(result || ''));
+
+      await this.updateNode(node.id, { status: 'completed', output, completedAt: new Date() });
+      recordRunEvent({
+        runId: sessionId,
+        subject: 'pipeline_node',
+        subjectId: node.nodeKey,
+        event: 'node_completed',
+        payload: { pipelineId: pipeline.id, name: node.name, visit: node.visits, outputChars: output.length },
+      });
+
+      const stageSummary = output.length > 300
+        ? `${output.slice(0, 300).replace(/\n/g, ' ').trim()}...`
+        : output.replace(/\n/g, ' ').trim();
+
+      orchestrator['emit']({
+        type: 'pipeline_event',
+        sessionId,
+        data: {
+          event: 'stage_completed',
+          pipelineId: pipeline.id,
+          stageId: node.id,
+          name: node.name,
+          role: node.role,
+          summary: stageSummary.slice(0, 200),
+        },
+        timestamp: new Date(),
+      });
+
+      messageRepository.create({
+        sessionId,
+        role: 'system',
+        content: `**${node.name}** (${node.role || 'agent'}) completed: ${stageSummary.slice(0, 200)}`,
+        metadata: { pipelineId: pipeline.id, stageId: node.id, pipelineEvent: 'stage_completed' },
+      }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
+
+      return { output };
+    } catch (error) {
+      const errorMsg = (error as Error).message;
+      await this.updateNode(node.id, { status: 'failed', error: errorMsg });
+      recordRunEvent({
+        runId: sessionId,
+        subject: 'pipeline_node',
+        subjectId: node.nodeKey,
+        event: 'node_failed',
+        payload: { pipelineId: pipeline.id, name: node.name, visit: node.visits, reason: errorMsg },
+      });
+      await this.updatePipeline(pipeline.id, {
+        status: 'failed',
+        summary: `Failed at stage: ${node.name} — ${errorMsg}`,
+      });
+
+      coreLogger.error({ error, pipelineId: pipeline.id, stage: node.name }, 'Pipeline stage failed');
+      getNotificationService().notify(
+        pipeline.userId,
+        'pipeline_error',
+        `Pipeline "${title}" failed`,
+        `Failed at stage "${node.name}": ${errorMsg}`,
+        { pipelineId: pipeline.id, stage: node.name },
+      ).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
+
+      return { output: '', stopped: { pipelineId: pipeline.id, result: `Pipeline failed at "${node.name}": ${errorMsg}` } };
+    }
+  }
+
+  /**
+   * Run one `foreach` node: close out the item just finished, then hand the
+   * next PENDING one to the body.
+   *
+   * The plan is re-read here on every visit, which is the point of the whole
+   * node kind: an item appended mid-run by a review or QA node — or by the user
+   * in the UI — is picked up on the next pass instead of being deferred to a
+   * follow-up pipeline.
+   */
+  private async runForeachNode(args: {
+    pipeline: Pipeline;
+    node: PipelineNodeRow;
+    currentItem: PlanItemRow | null;
+    lastOutput: string;
+    context: AgentContext;
+    title: string;
+  }): Promise<{
+    outcome: NodeOutcome;
+    item: PlanItemRow | null;
+    stopped?: { pipelineId: string; result: string };
+  }> {
+    const { pipeline, node, currentItem, lastOutput, context, title } = args;
+    const orchestrator = getOrchestratorService();
+
+    if (currentItem) {
+      await pipelineRepository.updatePlanItem(currentItem.id, {
+        status: 'done',
+        result: lastOutput.slice(0, 4000),
+        completedAt: new Date(),
+      });
+      recordRunEvent({
+        runId: pipeline.sessionId,
+        subject: 'plan_item',
+        subjectId: currentItem.id,
+        event: 'item_finished',
+        payload: { pipelineId: pipeline.id, title: currentItem.title, ordinal: currentItem.ordinal },
+      });
+    }
+
+    const items = await pipelineRepository.getPlanItems(pipeline.id);
+    const pending = items.filter((i) => i.status === 'pending');
+
+    // An empty plan on the FIRST visit is a failure, not an empty success: the
+    // template declared per-item work and nothing produced items (a template
+    // whose steps declare `loopOverPlan` with no `producesPlan` step ahead of
+    // them compiles fine, and would otherwise run zero iterations and report
+    // "completed successfully").
+    if (items.length === 0 && node.visits === 1) {
+      const summary =
+        `Pipeline "${title}" reached its plan loop with an empty plan. A step before the loop ` +
+        `must declare producesPlan and call \`plan__add_items\`.`;
+      await this.updateNode(node.id, { status: 'failed' });
+      await this.updatePipeline(pipeline.id, { status: 'failed', summary });
+      return {
+        outcome: 'loop_done',
+        item: null,
+        stopped: { pipelineId: pipeline.id, result: summary },
+      };
+    }
+
+    // First visit and the plan needs sign-off: show the whole list, once.
+    if (node.requiresApproval && node.visits === 1) {
+      await this.updateNode(node.id, { status: 'awaiting_approval' });
+      await this.updatePipeline(pipeline.id, { status: 'awaiting_approval' });
+
+      orchestrator['emit']({
+        type: 'pipeline_event',
+        sessionId: pipeline.sessionId,
+        data: { event: 'plan_approval_required', pipelineId: pipeline.id, stageId: node.id, items: items.length },
+        timestamp: new Date(),
+      });
+
+      const list = items.map((i, n) => `${n + 1}. ${i.title}${i.detail ? ` — ${i.detail}` : ''}`).join('\n');
+      const approval = await orchestrator.requestApproval(
+        `Pipeline "${title}" — plan (${items.length} item${items.length === 1 ? '' : 's'}):\n\n${list}` +
+          `\n\nYou can edit, reorder, or remove items on the pipeline page before approving, and ` +
+          `the plan stays editable while the pipeline runs.`,
+        `Run the plan?`,
+        context,
+        ['Approve', 'Stop Pipeline'],
+      ) as { approved: boolean; response?: string };
+
+      if (!approval.approved || approval.response === 'Stop Pipeline') {
+        await this.updateNode(node.id, { status: 'skipped' });
+        await this.updatePipeline(pipeline.id, { status: 'paused', summary: 'Plan rejected by user.' });
+        return {
+          outcome: 'loop_done',
+          item: null,
+          stopped: { pipelineId: pipeline.id, result: `Pipeline stopped: plan not approved.` },
+        };
+      }
+
+      await this.updateNode(node.id, { status: 'approved', approvedAt: new Date() });
+      await this.updatePipeline(pipeline.id, { status: 'running' });
+      // Re-read: the user may have edited the plan while it sat for approval.
+      return this.nextPlanItem(pipeline, node);
+    }
+
+    if (pending.length === 0) {
+      await this.updateNode(node.id, { status: 'completed', completedAt: new Date() });
+      return { outcome: 'loop_done', item: null };
+    }
+    return this.nextPlanItem(pipeline, node);
+  }
+
+  /** Claim the next pending plan item, or report the plan finished. */
+  private async nextPlanItem(
+    pipeline: Pipeline,
+    node: PipelineNodeRow,
+  ): Promise<{ outcome: NodeOutcome; item: PlanItemRow | null }> {
+    const items = await pipelineRepository.getPlanItems(pipeline.id);
+    const next = items.find((i) => i.status === 'pending');
+    if (!next) {
+      await this.updateNode(node.id, { status: 'completed', completedAt: new Date() });
+      return { outcome: 'loop_done', item: null };
+    }
+    const claimed = await pipelineRepository.updatePlanItem(next.id, { status: 'running' });
+    recordRunEvent({
+      runId: pipeline.sessionId,
+      subject: 'plan_item',
+      subjectId: next.id,
+      event: 'item_started',
+      payload: { pipelineId: pipeline.id, title: next.title, ordinal: next.ordinal },
+    });
+
+    getOrchestratorService()['emit']({
+      type: 'pipeline_event',
+      sessionId: pipeline.sessionId,
+      data: {
+        event: 'plan_item_started',
+        pipelineId: pipeline.id,
+        itemId: next.id,
+        title: next.title,
+        remaining: items.filter((i) => i.status === 'pending').length - 1,
+      },
+      timestamp: new Date(),
+    });
+
+    return { outcome: 'loop_next', item: claimed ?? next };
+  }
+
+  /**
+   * Retries are used up and QA still says no. Ask a human instead of looping,
+   * and instead of quietly accepting a failing verdict.
+   *
+   * Returns a stop result when the user aborts; `null` means "continue anyway",
+   * which the walker treats as a pass.
+   */
+  /**
+   * Ask the user before a step that declared `requiresApproval` runs.
+   * Approve / Skip / Stop, over the last handoff so the decision is made on
+   * what the previous step actually produced.
+   */
+  private async approveStepNode(args: {
+    pipeline: Pipeline;
+    node: PipelineNodeRow;
+    handoffChain: HandoffContext[];
+    previousOutput: string;
+    context: AgentContext;
+    title: string;
+  }): Promise<'go' | 'skip' | 'stop'> {
+    const { pipeline, node, handoffChain, previousOutput, context, title } = args;
+    const orchestrator = getOrchestratorService();
+
+    await this.updateNode(node.id, { status: 'awaiting_approval' });
+    await this.updatePipeline(pipeline.id, { status: 'awaiting_approval' });
+
+    orchestrator['emit']({
+      type: 'pipeline_event',
+      sessionId: pipeline.sessionId,
+      data: { event: 'approval_required', pipelineId: pipeline.id, stageId: node.id, name: node.name },
+      timestamp: new Date(),
+    });
+
+    const latest = handoffChain[handoffChain.length - 1];
+    const summary = latest
+      ? `Previous stage completed.\n\n**Work done:** ${latest.completedWork.slice(0, 1500)}` +
+        (latest.decisions.length > 0 ? `\n\n**Decisions:** ${latest.decisions.join('; ')}` : '')
+      : `Previous stage completed.\n\nResult:\n${previousOutput.slice(0, 2000)}`;
+
+    const approval = await orchestrator.requestApproval(
+      `Pipeline "${title}" — ${summary}`,
+      `Proceed with next stage: "${node.name}"?`,
+      context,
+      ['Approve', 'Skip', 'Stop Pipeline'],
+    ) as { approved: boolean; response?: string };
+
+    if (!approval.approved || approval.response === 'Stop Pipeline') {
+      await this.updateNode(node.id, { status: 'skipped' });
+      await this.updatePipeline(pipeline.id, { status: 'paused', summary: `Stopped by user at stage: ${node.name}` });
+      return 'stop';
+    }
+    if (approval.response === 'Skip') return 'skip';
+
+    await this.updateNode(node.id, { status: 'approved', approvedAt: new Date() });
+    await this.updatePipeline(pipeline.id, { status: 'running' });
+    return 'go';
+  }
+
+  private async escalateQaFailure(args: {
+    pipeline: Pipeline;
+    node: PipelineNodeRow;
+    qaResult: QAValidationResult;
+    attempts: number;
+    context: AgentContext;
+  }): Promise<{ pipelineId: string; result: string } | null> {
+    const { pipeline, node, qaResult, attempts, context } = args;
+    const orchestrator = getOrchestratorService();
+
+    coreLogger.warn({ pipelineId: pipeline.id, attempts }, 'QA validation exhausted retries, requesting human approval');
+
+    orchestrator['emit']({
+      type: 'pipeline_event',
+      sessionId: pipeline.sessionId,
+      data: { event: 'qa_escalation', pipelineId: pipeline.id, qaStageId: node.id, attempts, issues: qaResult.issues },
+      timestamp: new Date(),
+    });
+
+    await this.updatePipeline(pipeline.id, { status: 'awaiting_approval' });
+
+    const escalation = await orchestrator.requestApproval(
+      `QA validation failed after ${attempts} attempts.\n\nRemaining issues:\n${qaResult.issues.join('\n')}\n\nFeedback: ${qaResult.feedback}`,
+      `Continue pipeline despite QA failures, or abort?`,
+      context,
+      ['Continue Anyway', 'Abort Pipeline'],
+    ) as { approved: boolean; response?: string };
+
+    if (!escalation.approved || escalation.response === 'Abort Pipeline') {
+      await this.updatePipeline(pipeline.id, {
+        status: 'failed',
+        summary: `QA failed after ${attempts} attempts. Aborted by user.\n\nIssues:\n${qaResult.issues.join('\n')}`,
+      });
+      return {
+        pipelineId: pipeline.id,
+        result: `Pipeline aborted: QA failed after ${attempts} attempts.\n\nUnresolved issues:\n${qaResult.issues.join('\n')}`,
+      };
+    }
+
+    await this.updatePipeline(pipeline.id, { status: 'running' });
+    coreLogger.info({ pipelineId: pipeline.id }, 'User approved continuing despite QA failures');
+    return null;
+  }
+
   private async updatePipeline(id: string, data: Partial<NewPipeline>) {
     await this.db
       .update(pipelines)
@@ -1419,11 +1759,11 @@ export class PipelineManager {
       .where(eq(pipelines.id, id));
   }
 
-  private async updateStage(id: string, data: Partial<NewPipelineStage>) {
+  private async updateNode(id: string, data: Partial<NewPipelineNode>) {
     await this.db
-      .update(pipelineStages)
+      .update(pipelineNodes)
       .set(data)
-      .where(eq(pipelineStages.id, id));
+      .where(eq(pipelineNodes.id, id));
   }
 }
 

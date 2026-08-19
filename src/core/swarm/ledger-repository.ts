@@ -1,37 +1,79 @@
-import { asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import {
-  type NewSwarmLedgerRecord,
-  type SwarmLedgerRecord,
-  swarmLedger,
-} from '@/db/schema/swarm-ledger';
+import { type NewRunEventRecord, runEvents } from '@/db/schema/run-events';
+
+/** The four event kinds a swarm node goes through. A subset of `run_event_type`. */
+export type SwarmLedgerEventType = 'spawn' | 'result' | 'cancel' | 'reconcile';
+
+/** One swarm-node event in the swarm's own vocabulary. */
+export interface SwarmLedgerRow {
+  seq: number;
+  nodeId: string;
+  parentNodeId: string | null;
+  event: SwarmLedgerEventType;
+  payload: unknown;
+  createdAt: Date;
+}
 
 /**
- * Thin Drizzle repository for the append-only `swarm_ledger`. Keeps raw SQL
- * out of the `SwarmLedger` orchestration logic. Rows are only ever inserted
- * or read — never updated/deleted.
+ * Thin Drizzle repository for the append-only `run_events`. Keeps raw SQL out
+ * of the `SwarmLedger` orchestration logic. Rows are only ever inserted or
+ * read — never updated/deleted.
+ *
+ * Every read here filters `subject = 'swarm_node'`: the table now carries
+ * pipeline and tool events too, and swarm replay must fold ONLY swarm node
+ * transitions. Without the filter a pipeline event would be replayed as a node
+ * with no spawn and reconciled into existence.
  */
 export class SwarmLedgerRepository {
   private get db() {
     return getDb();
   }
 
-  /** Append one event. Returns the assigned `seq`. */
-  async append(record: NewSwarmLedgerRecord): Promise<number> {
+  /**
+   * Append one swarm-node event. Returns the assigned `seq`.
+   *
+   * The swarm's vocabulary (root session, node, parent node) is kept at this
+   * boundary and translated to the log's generic columns here, so generalizing
+   * the table did not force a rename through the replay/reconcile logic that
+   * reads it.
+   */
+  async append(record: {
+    rootSessionId: string;
+    nodeId: string;
+    parentNodeId?: string | null;
+    event: SwarmLedgerEventType;
+    payload?: unknown;
+  }): Promise<number> {
     const [row] = await this.db
-      .insert(swarmLedger)
-      .values(record)
-      .returning({ seq: swarmLedger.seq });
+      .insert(runEvents)
+      .values({
+        runId: record.rootSessionId,
+        subject: 'swarm_node',
+        subjectId: record.nodeId,
+        parentSubjectId: record.parentNodeId ?? null,
+        event: record.event,
+        payload: (record.payload ?? null) as NewRunEventRecord['payload'],
+      })
+      .returning({ seq: runEvents.seq });
     return row.seq;
   }
 
-  /** All events for a root, in append (seq) order — the replay input. */
-  async findByRoot(rootSessionId: string): Promise<SwarmLedgerRecord[]> {
-    return this.db
+  /** A run's swarm-node events, in append (seq) order — the replay input. */
+  async findByRoot(rootSessionId: string): Promise<SwarmLedgerRow[]> {
+    const rows = await this.db
       .select()
-      .from(swarmLedger)
-      .where(eq(swarmLedger.rootSessionId, rootSessionId))
-      .orderBy(asc(swarmLedger.seq));
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, rootSessionId), eq(runEvents.subject, 'swarm_node')))
+      .orderBy(asc(runEvents.seq));
+    return rows.map((r) => ({
+      seq: r.seq,
+      nodeId: r.subjectId,
+      parentNodeId: r.parentSubjectId,
+      event: r.event as SwarmLedgerEventType,
+      payload: r.payload,
+      createdAt: r.createdAt,
+    }));
   }
 
   /**
@@ -42,13 +84,15 @@ export class SwarmLedgerRepository {
    */
   async findRootsWithIncomplete(): Promise<string[]> {
     const rows = await this.db.execute(sql`
-      SELECT DISTINCT s.root_session_id AS root
-      FROM ${swarmLedger} s
+      SELECT DISTINCT s.run_id AS root
+      FROM ${runEvents} s
       WHERE s.event = 'spawn'
+        AND s.subject = 'swarm_node'
         AND NOT EXISTS (
-          SELECT 1 FROM ${swarmLedger} t
-          WHERE t.node_id = s.node_id
-            AND t.root_session_id = s.root_session_id
+          SELECT 1 FROM ${runEvents} t
+          WHERE t.subject_id = s.subject_id
+            AND t.run_id = s.run_id
+            AND t.subject = 'swarm_node'
             AND t.event IN ('result', 'cancel', 'reconcile')
         )
     `);

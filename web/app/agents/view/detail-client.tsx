@@ -30,16 +30,26 @@ interface PipelineDetail {
     title: string;
     type: string;
     status: string;
-    currentStageIndex: number;
+    currentNodeKey: string | null;
   };
-  stages: Array<{
+  nodes: Array<{
     id: string;
+    nodeKey: string;
     name: string;
     role: string;
     status: string;
-    stageIndex: number;
+    kind?: 'step' | 'foreach';
+    ordinal: number;
+    parentNodeKey?: string | null;
     output?: string;
     error?: string;
+  }>;
+  plan?: Array<{
+    id: string;
+    ordinal: number;
+    title: string;
+    detail?: string | null;
+    status: 'pending' | 'running' | 'done' | 'failed' | 'skipped';
   }>;
 }
 
@@ -200,21 +210,25 @@ export default function AgentDetailPage() {
       </div>
 
       {/* Pipeline stepper (if applicable) */}
-      {pipelineData?.pipeline && pipelineData.stages && (
+      {pipelineData?.pipeline && pipelineData.nodes && (
         <div className="bg-surface-container rounded-xs border border-outline-variant/10 p-4">
           <h2 className="section-label mb-3">
             pipeline: {pipelineData.pipeline.title}
             <span className="ml-2 normal-case tracking-normal">({pipelineData.pipeline.type})</span>
           </h2>
           <PipelineView
-            stages={pipelineData.stages.map(s => ({
-              id: s.id,
-              name: s.name,
-              role: s.role,
-              status: s.status as any,
-              stageIndex: s.stageIndex,
+            nodes={pipelineData.nodes.map(n => ({
+              id: n.id,
+              nodeKey: n.nodeKey,
+              name: n.name,
+              role: n.role,
+              status: n.status as any,
+              kind: n.kind,
+              ordinal: n.ordinal,
+              parentNodeKey: n.parentNodeKey,
             }))}
-            currentStageIndex={pipelineData.pipeline.currentStageIndex}
+            currentNodeKey={pipelineData.pipeline.currentNodeKey}
+            plan={pipelineData.plan}
           />
         </div>
       )}

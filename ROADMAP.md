@@ -41,7 +41,118 @@ This doc lists what we are exploring. Order inside each section is rough priorit
   Worth doing once memory + artifacts each grow another 2-3 tables;
   not before.
 
-## Next (months)
+## Next (months) — field parity, then innovation
+
+Ordered as four waves. Wave 1 is load-bearing: waves 2 and 3 are cheap once it
+lands and expensive before it. Sources for the parity read: a gap analysis
+against the LangGraph/LangSmith-shaped field, and an architecture read of
+DeepSeek Harness (Cordis "everything is a plugin"). Both were checked against
+this codebase before being written down — items already shipped here
+(agentskills.io `SKILL.md` interop, full-duplex voice, the YAML eval harness,
+structured handoffs) are deliberately absent, and DSH's runtime
+self-introspection tool and resident-activation machinery were evaluated and
+rejected (security foot-gun / unnecessary for a dispatcher that keeps arms
+cheap).
+
+### Wave 1 — foundations — SHIPPED (2026-08-19)
+
+All four landed. What each actually became:
+
+- **Dispatch waterfall.** `hooks.ts` gained `fireWaterfall` (around-middleware)
+  plus `tool:before` / `tool:after` and `spawn:before` / `spawn:after`. Two
+  semantics, deliberately different: the `before` events FAIL CLOSED (a throwing
+  handler aborts the dispatch — a permission check that crashes must never read
+  as "allowed") and short-circuit on the first handler that sets
+  `ctx.shortCircuit` (deny, or a substituted result); the `after` events keep
+  swallow-and-continue, so a tracing subscriber cannot turn a successful call
+  into a failure. `spawnChild` is now a thin wrapper over `spawnChildInner` so
+  its many return paths each report exactly once, untouched.
+- **Graph runtime.** `pipeline_stages` is now `pipeline_nodes` + `pipeline_edges`;
+  `current_stage_index` is gone (a graph has no single ordinal position — a
+  backward edge or a loop body revisits nodes). `pipeline-graph.ts` holds
+  compilation, validation and edge selection, all pure, so routing is testable
+  without booting an agent. The QA retry loop is no longer a `while` nested in
+  the stage loop: it is an ordinary bounded backward edge, with
+  `audit_gate_failed` as a self-edge so an unaccountable REPORT re-runs the
+  auditor alone instead of re-running work that was fine.
+- **`foreach` nodes over a durable Plan.** A maximal run of consecutive steps
+  declaring `loopOverPlan` becomes one loop body — the grouping IS the
+  declaration, no nesting syntax. The loop re-reads `plan_items` every pass, so
+  an item appended mid-run by a review or QA node (the new `plan` tool) or
+  edited by the user (`/api/pipelines/:id/plan`) is picked up in the same run.
+  Plan approval is asked ONCE, on the loop head, over a concrete item list.
+  `validateGraph` refuses to run a template with an unreachable node or an
+  unbounded cycle; every shipped preset is compile-tested. The `Full Development
+  Cycle` preset now plans, then loops implement → test → review → QA per item.
+- **Unified run event log.** `swarm_ledger` became `run_events` with a `subject`
+  discriminator, carrying swarm node lifecycle (replay/reconcile unchanged),
+  graph node transitions, edge traversals, plan item progress, and tool dispatch
+  — the last from a single subscriber on the waterfall above, which is what
+  building the seam first bought. Shape, timing and status only: argument values
+  and results are never stored. Read at `GET /api/runs/:sessionId/events`.
+
+### Wave 2 — visible parity (falls out of wave 1)
+
+- **Checkpoint, resume, and edit-state.** With a graph runtime plus a durable
+  event log, a checkpoint is a materialized node-boundary snapshot. Ship
+  pause-mid-run, inspect state, edit it, resume — and rewind-to-node
+  ("time travel") for debugging a bad run without re-paying for the good half.
+  Today only a crude resume exists via stage rows and the `paused` /
+  `awaiting_approval` statuses.
+- **Trace and cost dashboard.** Prometheus metrics and `runId` correlation
+  shipped (WS4); spans and a UI did not. Emit spans from the wave-1 waterfall,
+  read the graph shape from the run log, and render execution graph +
+  per-span cost and latency in the web UI. Keep the OTel *export* path
+  (see the packaging blocker below) separate from the in-app view so the
+  dashboard is not blocked on the dependency proxy.
+- **Human-in-the-loop as a first-class node.** Supersedes the older
+  "Better human-in-the-loop" item. Today HITL is a per-stage
+  `requiresApproval` flag plus tool-level ASK gates. Make it a node any graph
+  can contain: pause-before / pause-after, an optional form schema for the
+  answer, and replay across restarts. The plan-approval gate in the `foreach`
+  design above is the first consumer.
+
+### Wave 3 — contracts, policy, cost
+
+- **Arm capability contracts + role seams.** Absorbs the older "Dynamic role
+  definition from the chat" item. `AgentRole` is a frozen 17-member union in
+  `src/core/orchestrator/types.ts`, and `spawn-validator.ts` checks depth,
+  same-role starvation, and budget — never whether the target arm can actually
+  do the requested job. Give each arm a declared capability set (tools it can
+  reach, output schemas it honors, depth limits, whether it may delegate) and
+  have dispatch verify it **before** spawning, failing loud instead of
+  returning a plausible generic answer. Then make each arm a seam — a contract
+  with swappable providers — so roles can be installed and replaced at runtime,
+  which is what the "open-ended roster" framing already promises.
+- **Deterministic policy layer.** Guards exist but are scattered and
+  hardcoded across `spawn-validator`, `input-guard`, `output-guard`,
+  `audit-coverage`, and `pipeline-evidence-gate`. Once wave 1 lands, move them
+  behind the waterfall as declarative policy: quotas, sandbox selection,
+  egress rules, and approval requirements evaluated in one place, testable
+  without booting an agent.
+- **Per-node token budgets in the graph.** `NodeBudget` (tokens, wall clock,
+  `childTokensUsed`) governs swarm nodes; pipeline stages have **no** budget at
+  all, which is also why the planner→executor split cannot reach a pipeline
+  stage. Reuse `NodeBudget` for graph nodes so per-task cost is bounded and
+  attributable, not just per-swarm.
+- **Eval: regression gating and memory-aware assertions.** The YAML harness,
+  nine assertion types, the `/eval` page, and CI runs already exist. What is
+  missing is the loop: score a prompt *diff* against a dataset and gate the
+  change on it, plus the memory-aware setup hook tracked under **Now**.
+
+### Wave 4 — after parity
+
+- **Per-arm persona shadowing.** One global persona today. Let a scoped persona
+  replace the global one for a single arm, so a specialist's voice and
+  constraints differ from the orchestrator's. Small; deliberately after the
+  seams land.
+- **Layout-grounded multimodal parsing.** Complex PDF and GUI understanding
+  beyond what upstream model vision returns.
+- **Native mobile clients.** iOS/Android over the gateway protocol. The web UI
+  is responsive but not installable; Telegram/Slack proxying covers the gap
+  for now.
+
+### Carried forward (unchanged, unblocked independently)
 
 - **Token-true streaming for `/v1/chat/completions`.** The OpenAI-compat
   API (shipped 2026-07-12) streams protocol-correct SSE that chunks the
@@ -58,37 +169,33 @@ This doc lists what we are exploring. Order inside each section is rough priorit
   harness — the same harness would serve Signal / Matrix (under
   **Later**). The email *triage* surface already shipped (2026-06-03 /
   2026-06-10); this is the missing *inbound conversational channel*.
-- **OpenTelemetry traces.** Prometheus metrics + `runId` correlation
+- **OpenTelemetry export.** Prometheus metrics + `runId` correlation
   shipped (WS4, 2026-07-12); spans are the remaining half. Blocked on
   packaging — the OTel SDK's ~20 transitive packages can't currently
   install through the build environment's package proxy. Pick up when
-  the dependency constraint lifts; the `runId` propagation it would key
-  on is already in place.
-
+  the dependency constraint lifts. The wave-2 dashboard deliberately
+  does not depend on this.
 - **TUI — remaining items.**
   - Mouse wheel scrolling once pi-tui exposes mouse APIs upstream.
     The messages pane already exposes `scrollUp/scrollDown`;
     wiring is a one-line change.
-
 - **Compaction — branch summarization.** The structured summary format
   (cumulative file-op tracker, iterative summary chaining via
   `firstKeptEntryId` walk-back, `/compact <instructions>` pass-through) shipped
   on the existing `CompactionState` + `compaction_entries` table. Still open:
   branch summarization for `/tree`-style navigation (paired with the
   session-as-tree item under **Later**).
-
 - **RPC stdio adapter for the gateway.** Today gateway is WS-only. Add a
   second `GatewayAdapter` that speaks strict-LF JSONL over stdin/stdout with
   the same typed protocol (`prompt` / `steer` / `followUp` /
   `streamingBehavior`, request-id correlation). Unlocks IDE / CI / subprocess
   embedding without a WS server. Mirrors pi-mono's `--mode rpc`.
-
 - **Per-tool `executionMode` override.** Today meta-tools all run through the
   orchestrator with global concurrency. Add `executionMode: "sequential"` on
   the tool definition itself for tools with shared-state hazards
   (`spawn_worker`, `create_pipeline`, swarm `spawn_child`). Pi's pattern;
-  small change to `BaseTool` + the orchestrator dispatch path.
-
+  small change to `BaseTool` + the orchestrator dispatch path. Cheapest as a
+  policy declaration once the wave-1 waterfall exists.
 - **Skill auto-extension — promotion path.** The pattern detector, cache,
   `skill_proposals` table, `/api/skills/proposals` API, and
   `/skills/proposals` web page landed. The
@@ -107,7 +214,6 @@ This doc lists what we are exploring. Order inside each section is rough priorit
   flagged-stale skills for a background distiller refresh pass). Plus the
   proposal review-UI polish (diff preview, rejection-timer visibility,
   user-scoped opt-out).
-
 - **Trajectory learning — consumers.** Recorder + JSONL + compress +
   `trajectory_runs` pointer table + `/api/trajectories` are live. The
   **consumer end shipped** in the Hermes B2 adoption (PR #243):
@@ -116,7 +222,6 @@ This doc lists what we are exploring. Order inside each section is rough priorit
   also reused as a **learning-loop source** — `skill_distill source=trajectory`
   distils a skill from a verified-good run (A1-M2, #245). Opt-out env
   `TRAJECTORY_LOGGING=false` already wired.
-
 - **Completion contracts — verify against evidence, not the model's word.**
   The **evidence ledger shipped** (Hermes B1, #242): QA verdicts persist to
   `verification_evidence` and are readable at `GET /api/verification/:sessionId`;
@@ -125,32 +230,39 @@ This doc lists what we are exploring. Order inside each section is rough priorit
   and a **verify-stop-loop** that blocks a role's deliverable until required
   evidence passes (bounded by the existing node budgets; on exhaustion a typed
   failure, never a coerced pass) — plus persisting the `expectedOutput.schema`
-  gate results alongside the QA verdicts.
-
-- **Dynamic role definition from the chat.** "Define a role that does X with tools Y" → orchestrator writes the three node-folder files, hot-reloads, and uses the new role on the next message.
-
-- **Skill marketplace.** Export/import skills as signed JSON. Discover and install community skills from the web UI.
-
-- **Pipeline templates from natural language.** Describe a multi-stage workflow, get a pipeline definition you can run, edit, and save.
-
-- **Better human-in-the-loop.** First-class "wait for human input" node with form schema + replay across restarts. Today this works through approval gates; we want it to be a primitive any role can call.
-
-- **Expert sessions with persistent threads.** Pin an expert to a thread; messages in that thread always go to it (per-channel). Today `/expert` is per-session.
-
-- **Mobile clients.** Native iOS/Android via the gateway protocol. Today the web UI is responsive but not installable.
+  gate results alongside the QA verdicts. Lands naturally as policy on the
+  wave-1 waterfall.
+- **Skill marketplace.** Export/import skills as signed JSON. Discover and
+  install community skills from the web UI. (Filesystem `SKILL.md` discovery
+  per the agentskills.io spec already ships — `src/skills/external-loader.ts`.)
+- **Pipeline templates from natural language.** Describe a multi-stage workflow,
+  get a pipeline definition you can run, edit, and save. Becomes more valuable
+  once the target is a graph rather than a linear chain.
+- **Expert sessions with persistent threads.** Pin an expert to a thread;
+  messages in that thread always go to it (per-channel). Today `/expert` is
+  per-session.
 
 ## Later (open directions)
 
 - **Federation.** Multiple octipus instances coordinating — your home octipus talks to your work octipus talks to a friend's octipus, with explicit consent and audit trails.
 - **Local-first sync.** PGlite + CRDTs for cross-device session continuity without a central server.
-- **Voice as a first-class channel.** Full-duplex realtime voice with barge-in and a propose-then-confirm conversation layer shipped 2026-07-13/14 (Phase 4 + #216/#217; see Done below). Remaining: emotion-aware routing, prefetched streaming TTS to close the inter-sentence gap, and Voxtral for the turn-based path too.
-- **Sandboxed tool execution.** Today shell/code tools run in the same process. We want WASI / lightweight VM isolation per worker.
+- **Voice — remaining polish.** Full-duplex realtime voice with barge-in and a propose-then-confirm conversation layer shipped 2026-07-13/14 (Phase 4 + #216/#217; see Done below). Remaining: emotion-aware routing, prefetched streaming TTS to close the inter-sentence gap, and Voxtral for the turn-based path too.
+- **Sandboxed tool execution.** Today shell/code tools run in the same process. We want WASI / lightweight VM isolation per worker — mounted as a provider behind the wave-1 waterfall rather than branched into the tool loop.
 - **Plugin signing & permissions.** Today plugins in `extensions/` run with full host trust. Capability declarations + signature verification. The versioned `@octipus/plugin-sdk` contract (manifest `capabilities`, apiVersion gating, `validatePlugin`) shipped 2026-07-12 (WS3); this item is the remaining phase-3 work — remote install (npm/git) plus signature verification on top of that contract.
 - **Cost-aware routing.** Router considers per-provider cost in addition to capability. Already partial; we want it tunable per user.
-- **Embedded eval-driven prompt iteration.** Edit a role prompt in the UI, run the eval suite, see the diff in metrics, accept or revert. Closes the loop on prompt engineering.
-- **Session-as-tree (fork/branch-aware sessions).** Today messages are a linear PG sequence per session. Add `parentId` on messages and a `/tree` navigation command so users can fork from any point, edit, and replay. Pi-mono's session v3. Defer until a real fork UX is on the table — linear is fine while it isn't.
+- **Embedded eval-driven prompt iteration.** Edit a role prompt in the UI, run the eval suite, see the diff in metrics, accept or revert. Closes the loop on prompt engineering; the wave-3 regression gate is the headless half of the same machinery.
+- **Session-as-tree (fork/branch-aware sessions).** Today messages are a linear PG sequence per session. Add `parentId` on messages and a `/tree` navigation command so users can fork from any point, edit, and replay. Pi-mono's session v3. Defer until a real fork UX is on the table — linear is fine while it isn't. Note the wave-2 checkpoint work is the *execution* analogue and may make this cheaper.
 - **Richer TUI editor (replace Ink `<TextInput>`).** Today the TUI input is a single-line Ink box with file-path completion. A real editor — multi-line, kill ring, undo/redo, kitty-keyboard protocol, stacked autocomplete providers (e.g. `#1234` GitHub issues + `@file` paths) — would close the gap with the web UI editor. Pi-mono's `editor.ts` (2231 lines) and `keybindings.ts` (TS-declaration-merging registry with conflict detection) are the reference. Big lift; only worth it if the TUI becomes a primary surface.
 - **Mixture-of-Agents / "council" (opt-in preset, NOT the default flow).** Fan the *same* prompt to N diverse models in parallel, then have an aggregator model synthesize one answer from their labeled outputs — error-cancellation and a quality lift on hard reasoning tasks (Hermes v0.18 ships this as a selectable "model"). Deliberately kept out of the normal routing path: it costs ~N+1× tokens and adds tail latency for a delta that's marginal on routine traffic. The only shape worth adopting is a **model preset** (configured/resolved/selected like a model via `ModelRegistry`), so it stays inside "config-driven models" and "no special cases" — never an orchestrator branch. Gate on evidence: spike first against `eval:quality`; ship the preset only if MoA-N beats the best single model by enough to justify the cost, otherwise record the numbers and leave it parked. Members must be genuinely diverse and individually decent — a strong+weak mix drags the aggregator down. Postponed; activate on demand, not by default.
+
+### Evaluated and rejected
+
+- **Model-facing runtime introspection** (DSH's `dsh-tool-cordis`, which lets the
+  model inspect and hot-patch the running plugin graph). Powerful, and a
+  security foot-gun: arms must not be able to rewrite their own runtime.
+- **Resident-activation / continuation-manager machinery.** Solves keeping
+  long-lived agents warm. Octipus arms are deliberately cheap and replaceable,
+  so the complexity buys nothing here.
 
 ## Done (recent)
 

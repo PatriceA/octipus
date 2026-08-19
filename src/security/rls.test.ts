@@ -129,7 +129,7 @@ describe('RLS wrapper — PGlite (no enforcement, just wiring)', () => {
       expect(tables.has(t)).toBe(true);
     }
     // Phase 3b-2 — ownership via FK subquery.
-    for (const t of ['messages', 'pipeline_stages']) {
+    for (const t of ['messages', 'pipeline_nodes', 'pipeline_edges', 'plan_items']) {
       expect(tables.has(t)).toBe(true);
     }
   });

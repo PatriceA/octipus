@@ -88,6 +88,30 @@ export interface PipelineStepConfig {
    * `executorModel` falls through to the primary (planner == executor).
    */
   mechanical?: boolean;
+  /**
+   * DECLARES that this step runs once per PLAN ITEM rather than once per
+   * pipeline. A maximal run of CONSECUTIVE steps declaring this becomes the
+   * body of a single `foreach` node — the grouping is the declaration, so
+   * there is no nesting syntax to get wrong.
+   *
+   * The shape this exists for: research -> architect produce a plan, the user
+   * approves it, and then implement -> review -> QA runs against each item in
+   * turn. Expressing that as a cycle would lose "item 3 of 7"; expressing it as
+   * copy-pasted stages loses the ability to plan at runtime.
+   *
+   * The loop re-reads `plan_items` on every pass, so an item appended mid-run
+   * by a review or QA step (or by the user) is picked up rather than deferred
+   * to a follow-up pipeline.
+   */
+  loopOverPlan?: boolean;
+  /**
+   * DECLARES that this step's job is to WRITE the plan the `foreach` loop will
+   * iterate. Such a step gets the `plan` tool container and is expected to
+   * leave `plan_items` behind; a declared step that produced none fails the
+   * same way a `producesArtifacts` step that wrote no files does — silently
+   * looping zero times would otherwise read as success.
+   */
+  producesPlan?: boolean;
 }
 
 /**

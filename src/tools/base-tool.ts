@@ -1,4 +1,5 @@
 import type { ToolHandler } from '@/core/agent-worker';
+import { getOrchestratorHooks } from '@/core/orchestrator/hooks';
 import { isCancellationError } from '@/core/swarm/errors';
 import { recordToolExecution } from '@/core/telemetry';
 import type { AgentContext, ToolManifest, } from '@/core/types';
@@ -103,6 +104,44 @@ export abstract class BaseTool {
     options?: ToolExecutionOptions
   ): Promise<unknown> {
     const toolContext: ToolContext = { ...context, toolId: this.id };
+    const hooks = getOrchestratorHooks();
+    const hookAgent = {
+      userId: context.userId,
+      sessionId: context.sessionId,
+      role: context.role,
+      workspaceId: (context as { workspaceId?: string | null }).workspaceId ?? null,
+      metadata: context.metadata as Record<string, unknown> | undefined,
+    };
+
+    // ── Dispatch waterfall: `tool:before` ────────────────────────────
+    // Around-middleware for every tool call. Subscribers may rewrite args or
+    // short-circuit (deny / substitute a result). Fail-closed by design — see
+    // `fireWaterfall`. Zero-subscriber cost is one Map lookup.
+    const before = await hooks.fireWaterfall('tool:before', {
+      toolId: this.id,
+      toolName,
+      args,
+      agent: hookAgent,
+    });
+    if (before.shortCircuit) {
+      const sc = before.shortCircuit;
+      const denied = 'deny' in sc;
+      await hooks.fire('tool:after', {
+        toolId: this.id,
+        toolName,
+        args: before.args,
+        agent: hookAgent,
+        status: denied ? 'denied' : 'success',
+        result: denied ? undefined : sc.result,
+        durationMs: 0,
+      });
+      // A denial is an error, never an empty success — the model must see that
+      // the work did not happen.
+      if (denied) throw new Error(`Tool ${this.id}.${toolName} denied by policy: ${sc.deny}`);
+      return sc.result;
+    }
+    // A `tool:before` handler may have rewritten the arguments.
+    args = before.args;
 
     // Permission check.
     //
@@ -181,8 +220,11 @@ export abstract class BaseTool {
     // the success returns (incl. the secret-redaction branch) and the throw.
     const execStart = Date.now();
     let execStatus: 'success' | 'error' | 'cancelled' = 'success';
+    let execResult: unknown;
+    let execError: unknown;
     try {
       const result = await execute(processedArgs, toolContext);
+      execResult = result;
       toolLogger.debug({ toolId: this.id, tool: toolName }, 'Tool executed successfully');
 
       // Egress control (M2): scrub any resolved secret value from the result so
@@ -198,7 +240,10 @@ export abstract class BaseTool {
               { toolId: this.id, tool: toolName },
               'Redacted resolved secret value(s) from tool output'
             );
-            return JSON.parse(redacted);
+            // Keep the hook payload in sync with what the model gets — a
+            // `tool:after` subscriber must never see the unredacted secret.
+            execResult = JSON.parse(redacted);
+            return execResult;
           }
         } catch {
           /* non-serializable result — nothing to redact */
@@ -206,6 +251,7 @@ export abstract class BaseTool {
       }
       return result;
     } catch (error) {
+      execError = error;
       if (isCancellationError(error)) {
         // Aborted by the agent's cancellation — not a real failure.
         execStatus = 'cancelled';
@@ -219,7 +265,23 @@ export abstract class BaseTool {
       }
       throw error;
     } finally {
-      recordToolExecution(toolName, execStatus, (Date.now() - execStart) / 1000);
+      const durationMs = Date.now() - execStart;
+      recordToolExecution(toolName, execStatus, durationMs / 1000);
+      // ── Dispatch waterfall: `tool:after` ──────────────────────────
+      // Observational, so it uses `fire` (a bad subscriber is logged and
+      // swallowed): a metrics or tracing hook must never turn a successful
+      // tool call into a failure. `result` is read-only here: the return value
+      // is already committed by the time this `finally` runs.
+      await hooks.fire('tool:after', {
+        toolId: this.id,
+        toolName,
+        args,
+        agent: hookAgent,
+        status: execStatus,
+        result: execResult,
+        error: execError,
+        durationMs,
+      });
     }
   }
 

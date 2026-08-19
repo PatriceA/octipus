@@ -603,6 +603,20 @@
       "when": 1785780449094,
       "tag": "0084_wise_stepford_cuckoos",
       "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "7",
+      "when": 1785780449095,
+      "tag": "0085_graph_pipelines",
+      "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1785780449096,
+      "tag": "0086_run_events",
+      "breakpoints": true
     }
   ]
 }

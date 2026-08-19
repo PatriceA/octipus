@@ -5,6 +5,7 @@ import { getAgentManager } from '@/core/agent-manager';
 import type { ToolHandler } from '@/core/agent-worker';
 import type { GatewayHub } from '@/core/gateway/hub';
 import { getGatewayHub } from '@/core/gateway/hub';
+import { getOrchestratorHooks } from '@/core/orchestrator/hooks';
 import { buildSecurityReminder, guardInput } from '@/core/orchestrator/input-guard';
 import { formatCriticalRules, getRoleConfig, getToolsForRole } from '@/core/orchestrator/roles';
 import { estimateToolSchemaTokens, logPromptComposition } from '@/core/orchestrator/prompt-budget';
@@ -125,8 +126,93 @@ export class SwarmSpawner {
   /**
    * Spawn a child agent and await its result. Returns a structured
    * `ChildResult` the parent LLM can synthesize against.
+   *
+   * Thin wrapper around `spawnChildInner` that runs the dispatch waterfall:
+   * `spawn:before` (may rewrite nothing, but may DENY or substitute a result)
+   * and `spawn:after` on every exit path. The wrapper exists so the many
+   * return points inside the spawn body stay untouched — every one of them
+   * still reports exactly once.
    */
   async spawnChild(
+    parent: AgentNode,
+    params: SpawnChildParams,
+    parentContext: AgentContext,
+    internal: SpawnChildInternalOpts = {},
+  ): Promise<ChildResult> {
+    const hooks = getOrchestratorHooks();
+    const childDepth = parent.depth + 1;
+    const startedAt = Date.now();
+
+    let childRole: AgentRole;
+    try {
+      childRole = this.resolveChildRole(params);
+    } catch (err) {
+      // A malformed spawn reports too: `spawn:after` is the seam subscribers
+      // count on, and this throw happens before `spawn:before` could fire.
+      await hooks.fire('spawn:after', {
+        parentNodeId: parent.id,
+        childRole: params.role ?? 'general',
+        childDepth,
+        status: 'failed',
+        reason: (err as Error)?.message,
+        durationMs: Date.now() - startedAt,
+      });
+      throw err;
+    }
+    // Resolved ONCE. The inner body resolves again from `params`, so the
+    // role-fit rewrite (and its log line) must already be baked in here.
+    const spawnParams = { ...params, role: childRole };
+
+    const before = await hooks.fireWaterfall('spawn:before', {
+      parentNodeId: parent.id,
+      parentRole: parent.role,
+      childDepth,
+      childRole,
+      topicPath: this.buildTopicPath(parent.topicPath, params.topic, params.subtopic),
+      planned: !!params.plan?.length,
+      agent: {
+        userId: parentContext.userId,
+        sessionId: parentContext.sessionId,
+        role: parent.role,
+        metadata: parentContext.metadata as Record<string, unknown> | undefined,
+      },
+    });
+
+    const reportAfter = (status: 'completed' | 'denied' | 'failed', reason?: string) =>
+      hooks.fire('spawn:after', {
+        parentNodeId: parent.id,
+        childRole,
+        childDepth,
+        status,
+        reason,
+        durationMs: Date.now() - startedAt,
+      });
+
+    if (before.shortCircuit) {
+      const sc = before.shortCircuit;
+      if ('deny' in sc) {
+        await reportAfter('denied', sc.deny);
+        return this.denialResult(parent, `spawn_child refused by policy: ${sc.deny}`);
+      }
+      await reportAfter('completed');
+      return sc.result as ChildResult;
+    }
+
+    let result: ChildResult;
+    try {
+      result = await this.spawnChildInner(parent, spawnParams, parentContext, internal);
+    } catch (err) {
+      await reportAfter('failed', (err as Error)?.message);
+      throw err;
+    }
+    await reportAfter(
+      result.status === 'ok' || result.status === 'cache_hit' ? 'completed' : 'failed',
+      result.status === 'ok' || result.status === 'cache_hit' ? undefined : result.status,
+    );
+    return result;
+  }
+
+  private async spawnChildInner(
     parent: AgentNode,
     params: SpawnChildParams,
     parentContext: AgentContext,

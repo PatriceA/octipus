@@ -9,7 +9,8 @@ import { logger } from '@/utils/logger';
  * Preset pipeline templates that ship out-of-the-box.
  * These are inserted with isPreset=true and no userId (available to all users).
  */
-const PRESET_TEMPLATES: Array<{
+/** Exported so tests can assert the shipped recipes compile to runnable graphs. */
+export const PRESET_TEMPLATES: Array<{
   name: string;
   description: string;
   steps: PipelineStepConfig[];
@@ -48,7 +49,14 @@ Be thorough but concise. Cite sources where possible.`,
         // untracked next to the product forever, which is not a deliverable, it
         // is litter.
         toolIds: ['filesystem', 'git'],
-        requiresApproval: true,
+        // The approval moved to the PLAN this stage now writes: the user
+        // approves a concrete item list once, on the loop head, instead of
+        // approving prose before the plan exists.
+        requiresApproval: false,
+        // Writes the item list the implement -> test -> review -> QA loop runs
+        // against. Enforced: a planner that leaves no items fails, because a
+        // loop over an empty plan would report success having done nothing.
+        producesPlan: true,
         promptTemplate: `Based on the research findings, create a detailed requirements document and architecture plan.
 
 Task: {{description}}
@@ -78,14 +86,26 @@ Keep it PROPORTIONATE to the task: a three-function module needs a page, not a
 treatise. If you write the plan to a file, commit it — an untracked document
 beside the product is litter, not a deliverable.
 
-Present this clearly so the user can review and approve before coding begins.`,
+Present this clearly so the user can review and approve before coding begins.
+
+FINALLY — and this is not optional — call \`plan__add_items\` with the implementation
+plan as a list of items, in the order they should be carried out. Each item is ONE
+independently completable piece of work (\`title\`, plus \`detail\` for the specifics
+the implementer will need). The pipeline runs implementation, testing, review and QA
+once PER ITEM, so an item that bundles five unrelated changes cannot be reviewed
+honestly, and an item too small to review on its own wastes a full loop.`,
       },
       {
         name: 'Implementation',
         description: 'Write the code following the approved architecture plan.',
         topic: 'coding',
         toolIds: ['filesystem', 'shell', 'git'],
-        requiresApproval: false,
+        // Runs once per PLAN ITEM. These four are consecutive, so they form one
+        // loop body: implement -> test -> review -> QA, per item.
+        loopOverPlan: true,
+        // Inherited by the loop head: the user approves the PLAN once, before
+        // the first item runs — not once per item, and not before it exists.
+        requiresApproval: true,
         // The one stage here whose whole purpose is to leave code behind, so it
         // is the only one declaring `producesArtifacts`. Testing and QA
         // legitimately change nothing — they are held to `runsCommands`
@@ -134,6 +154,9 @@ Report what you implemented and any deviations from the plan.`,
         // them. Its declared tools are now enforced, and without git it left the
         // suites it wrote uncommitted beside the product.
         toolIds: ['filesystem', 'shell', 'browser', 'git'],
+        // Runs once per PLAN ITEM. These four are consecutive, so they form one
+        // loop body: implement -> test -> review -> QA, per item.
+        loopOverPlan: true,
         requiresApproval: false,
         // Its whole purpose is to EXECUTE the suite. A Testing agent that ran no
         // commands did not test anything, however complete its PASS table looks
@@ -190,6 +213,9 @@ Report:
         description: 'Review the implementation for quality, bugs, and security. Run tests and linters.',
         topic: 'review',
         toolIds: ['filesystem', 'shell', 'git', 'knowledge'],
+        // Runs once per PLAN ITEM. These four are consecutive, so they form one
+        // loop body: implement -> test -> review -> QA, per item.
+        loopOverPlan: true,
         requiresApproval: false,
         // See the note on Implementation above: this stage had every tool it
         // needed and used none of them, then claimed it had. A review that ran
@@ -227,6 +253,9 @@ Rate overall quality: Excellent / Good / Needs Work / Critical Issues.`,
         description: 'Validate the implementation works end-to-end. Run full test suite and check for regressions.',
         topic: 'qa',
         toolIds: ['browser', 'browser-ext', 'shell', 'filesystem'],
+        // Runs once per PLAN ITEM. These four are consecutive, so they form one
+        // loop body: implement -> test -> review -> QA, per item.
+        loopOverPlan: true,
         requiresApproval: false,
         // The auditor of record. Without this type the stage runs as prose: no
         // machine-readable verdict is requested, `gateQaVerdict` never sees a
@@ -456,6 +485,16 @@ Report: FIXED / NOT FIXED / PARTIALLY FIXED with evidence.`,
  * flag existed keeps its old steps forever, so the gate that reads it stays
  * unreachable on exactly the installs that have history. `stageType` proved it
  * — the audit-coverage gate could not fire on any install until this ran.
+ *
+ * `producesPlan` and `loopOverPlan` are deliberately NOT backfilled, and the
+ * exception is the point: unlike every flag above, they depend on prompt text.
+ * `producesPlan` is enforced — a stage that declares it and writes no plan
+ * items FAILS — and an edited preset keeps its own prompt, which will not ask
+ * the model to call `plan__add_items`. Backfilling the flag onto it would break
+ * a working pipeline in the name of an improvement it never asked for. An
+ * untouched preset gets the shipped definition wholesale (case 1 above), prompt
+ * included, so it needs no backfill; an edited one adopts the loop when its
+ * owner opts in.
  */
 export function planProducesArtifactsBackfill(
   stored: PipelineStepConfig[],

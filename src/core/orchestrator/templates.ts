@@ -26,6 +26,10 @@ export interface StageTemplate {
   readOnly?: boolean;
   /** Declares the stage executes an approved plan — see PipelineStepConfig. */
   mechanical?: boolean;
+  /** Declares the stage repeats once per plan item — see PipelineStepConfig. */
+  loopOverPlan?: boolean;
+  /** Declares the stage writes the plan — see PipelineStepConfig. */
+  producesPlan?: boolean;
 }
 
 export interface PipelineTemplate {
@@ -56,6 +60,8 @@ export function stepConfigToStageTemplate(step: PipelineStepConfig): StageTempla
     runsCommands: step.runsCommands,
     readOnly: step.readOnly,
     mechanical: step.mechanical,
+    loopOverPlan: step.loopOverPlan,
+    producesPlan: step.producesPlan,
     toolIds: step.toolIds,
   };
 }
@@ -313,6 +319,8 @@ export function buildStagesFromTemplate(
       runsCommands: stage.runsCommands,
       readOnly: stage.readOnly,
       mechanical: stage.mechanical,
+      loopOverPlan: stage.loopOverPlan,
+      producesPlan: stage.producesPlan,
     };
   });
 }
