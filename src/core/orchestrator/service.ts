@@ -704,6 +704,8 @@ export class OrchestratorService {
       onCounters?: (counters: import('@/core/swarm/receipt').SideEffectCounters | null) => void;
       /** Stage-declared tool ids, narrowing the role's set. See spawnWorker. */
       toolIds?: string[];
+      /** Runtime-granted tool ids, on top of the role's set. See spawnWorker. */
+      extraToolIds?: string[];
     },
   ): Promise<unknown> {
     return spawnWorker(role, task, input, context, this.deps, overrides);

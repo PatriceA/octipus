@@ -21,6 +21,7 @@ import { loadAgentsMd } from './agents-md';
 import { buildSecurityReminder } from './input-guard';
 import type { ModelSelector } from './model-selector';
 import { buildOutputDirective } from './output-directive';
+import { getToolRegistry } from '@/tools/registry';
 import { formatCriticalRules, getBoundConnectorIds, getRoleConfig, getToolsForRole, SECURITY_PREAMBLE, stripSecurityPreamble } from './roles';
 import { estimateToolSchemaTokens, logPromptComposition } from './prompt-budget';
 import { applyToolCap, isSmallModel } from './small-model';
@@ -359,6 +360,18 @@ export async function spawnWorker(
      * its whole subtree — which is the point.
      */
     toolIds?: string[];
+    /**
+     * Tool ids the RUNTIME grants on top of the role's set — the one exception
+     * to "narrowing only" above, and deliberately not reachable from a template.
+     *
+     * The pipeline manager uses it for the `plan` container: a planning node has
+     * to be able to write the plan, and a loop-body node has to be able to
+     * append what it discovers, but adding `plan` to every role's config would
+     * put three extra tool schemas in front of every worker in the system for
+     * the sake of the few that run inside a pipeline — and tool JSON schema is
+     * the dominant term in prompt cost.
+     */
+    extraToolIds?: string[];
   },
 ): Promise<unknown> {
   const agentManager = getAgentManager();
@@ -386,6 +399,20 @@ export async function spawnWorker(
         { role: agentRole, declared: overrides.toolIds, available: roleTools.map((t) => t.name) },
         'Stage declared toolIds that match none of the role tools — ignoring the declaration',
       );
+    }
+  }
+
+  if (overrides?.extraToolIds?.length) {
+    const have = new Set(roleTools.map((t) => t.name));
+    const granted = getToolRegistry()
+      .getToolHandlersForTools(overrides.extraToolIds)
+      .filter((t) => !have.has(t.name));
+    if (granted.length > 0) {
+      coreLogger.info(
+        { role: agentRole, granted: overrides.extraToolIds, count: granted.length },
+        'Runtime granted extra tools to the worker',
+      );
+      roleTools = [...roleTools, ...granted];
     }
   }
 

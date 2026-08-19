@@ -10,6 +10,7 @@ import {
   parseRecipeExport,
 } from '@/core/orchestrator/templates';
 import { getDb } from '@/db/postgres';
+import { pipelineRepository } from '@/db/repositories/pipeline-repository';
 import { scopedRepos } from '@/db/repositories/scoped';
 import { pipelineTemplates } from '@/db/schema/pipeline-templates';
 import { isAuthenticated } from '@/security/principal';
@@ -26,6 +27,8 @@ const recipeStepBodySchema = t.Object({
   maxRetries: t.Optional(t.Number()),
   retryTargetStage: t.Optional(t.Number()),
   model: t.Optional(t.String()),
+  loopOverPlan: t.Optional(t.Boolean()),
+  producesPlan: t.Optional(t.Boolean()),
 });
 
 /** Shared Elysia body schema for a recipe parameter (deep-validated by Zod). */
@@ -89,8 +92,8 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       }
 
       const pipelineManager = getPipelineManager();
-      const stages = await pipelineManager.getStages(params.id);
-      return { pipeline, stages };
+      const { nodes, edges, plan } = await pipelineManager.getGraph(params.id);
+      return { pipeline, nodes, edges, plan };
     },
     {
       params: t.Object({ id: t.String() }),
@@ -131,6 +134,100 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       params: t.Object({ id: t.String(), stageId: t.String() }),
       detail: { tags: ['pipelines'] },
     },
+  )
+
+  // ── Plan items ──────────────────────────────────────────────────
+  // The plan a `foreach` node iterates. Editable WHILE the pipeline runs: the
+  // loop re-reads the list every pass, so an edit here lands on the next item
+  // rather than requiring a restart. Items already `running` or `done` are not
+  // retroactively changed — the run that happened is what happened.
+
+  .get(
+    '/:id/plan',
+    async ({ user, principal, params }) => {
+      if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
+      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      if (!pipeline) return { error: 'Pipeline not found' };
+      return { plan: await pipelineRepository.getPlanItems(params.id) };
+    },
+    { params: t.Object({ id: t.String() }), detail: { tags: ['pipelines'] } },
+  )
+
+  .post(
+    '/:id/plan',
+    async ({ user, principal, params, body }) => {
+      if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
+      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      if (!pipeline) return { error: 'Pipeline not found' };
+
+      const start = await pipelineRepository.nextPlanOrdinal(params.id);
+      const added = await pipelineRepository.addPlanItems(
+        body.items.map((item, i) => ({
+          pipelineId: params.id,
+          ordinal: start + i,
+          title: item.title,
+          detail: item.detail,
+          createdByUserId: user.id === 'system' ? null : user.id,
+        })),
+      );
+      return { added };
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      body: t.Object({
+        items: t.Array(t.Object({ title: t.String(), detail: t.Optional(t.String()) })),
+      }),
+      detail: { tags: ['pipelines'] },
+    },
+  )
+
+  .patch(
+    '/:id/plan/:itemId',
+    async ({ user, principal, params, body }) => {
+      if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
+      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      if (!pipeline) return { error: 'Pipeline not found' };
+
+      // Scope the item to the pipeline the caller was authorized for — an id
+      // from another pipeline must not resolve through this route.
+      const items = await pipelineRepository.getPlanItems(params.id);
+      if (!items.some((i) => i.id === params.itemId)) return { error: 'Plan item not found' };
+
+      const updated = await pipelineRepository.updatePlanItem(params.itemId, body);
+      return { item: updated };
+    },
+    {
+      params: t.Object({ id: t.String(), itemId: t.String() }),
+      body: t.Object({
+        title: t.Optional(t.String()),
+        detail: t.Optional(t.String()),
+        ordinal: t.Optional(t.Number()),
+        status: t.Optional(
+          t.Union([t.Literal('pending'), t.Literal('skipped')]),
+        ),
+      }),
+      detail: { tags: ['pipelines'] },
+    },
+  )
+
+  .delete(
+    '/:id/plan/:itemId',
+    async ({ user, principal, params }) => {
+      if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
+      const pipeline = await scopedRepos(principal).pipelines.findById(params.id);
+      if (!pipeline) return { error: 'Pipeline not found' };
+
+      const items = await pipelineRepository.getPlanItems(params.id);
+      const item = items.find((i) => i.id === params.itemId);
+      if (!item) return { error: 'Plan item not found' };
+      // A pending item can be dropped; one that already ran is history.
+      if (item.status !== 'pending') {
+        return { error: `Cannot delete a '${item.status}' item — mark it skipped instead.` };
+      }
+      await pipelineRepository.deletePlanItem(params.itemId);
+      return { deleted: true };
+    },
+    { params: t.Object({ id: t.String(), itemId: t.String() }), detail: { tags: ['pipelines'] } },
   )
 
   // Stop a pipeline

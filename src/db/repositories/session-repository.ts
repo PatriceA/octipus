@@ -118,13 +118,13 @@ export class SessionRepository {
     // from the Drizzle schema definition if the migration didn't include it.
     try {
       const { messages } = await import('../schema/messages');
-      const { pipelines, pipelineStages } = await import('../schema/pipelines');
+      const { pipelines, pipelineNodes } = await import('../schema/pipelines');
       const { agents } = await import('../schema/agents');
 
       // Delete pipeline stages first (FK to pipelines)
       const pipelineRows = await this.db.select({ id: pipelines.id }).from(pipelines).where(eq(pipelines.sessionId, id));
       for (const p of pipelineRows) {
-        await this.db.delete(pipelineStages).where(eq(pipelineStages.pipelineId, p.id));
+        await this.db.delete(pipelineNodes).where(eq(pipelineNodes.pipelineId, p.id));
       }
       await this.db.delete(pipelines).where(eq(pipelines.sessionId, id));
       await this.db.delete(messages).where(eq(messages.sessionId, id));
