@@ -160,7 +160,13 @@ export class PlanTool extends BaseTool {
         const id = String(args.id ?? '');
         const items = await pipelineRepository.getPlanItems(pipelineId);
         // Scope check: an id from another pipeline must not resolve here.
-        if (!items.some((i) => i.id === id)) return { error: `No plan item '${id}' on this pipeline.` };
+        const item = items.find((i) => i.id === id);
+        if (!item) return { error: `No plan item '${id}' on this pipeline.` };
+        // A settled item stays settled. Flipping `done` back to `pending` hands
+        // the loop the same item again on the next pass, forever.
+        if (item.status === 'done' || item.status === 'failed') {
+          return { error: `Plan item '${id}' is already ${item.status} and cannot be reopened.` };
+        }
 
         const patch: Record<string, unknown> = {};
         if (typeof args.title === 'string' && args.title.trim()) patch.title = args.title.trim();

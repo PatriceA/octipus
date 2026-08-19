@@ -73,8 +73,12 @@ export interface ToolResultContext {
   args: Record<string, unknown>;
   agent: HookAgentContext;
   status: 'success' | 'error' | 'cancelled' | 'denied';
-  /** Mutable on success — the DSH `finalizeContent` seam. */
-  result?: unknown;
+  /**
+   * The value the tool returned. READ-ONLY: `tool:after` fires after the return
+   * value is committed, so mutating this changes nothing. Rewriting a result
+   * needs a `tool:result` seam that does not exist yet — do not fake it here.
+   */
+  readonly result?: unknown;
   error?: unknown;
   durationMs: number;
 }

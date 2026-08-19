@@ -270,7 +270,8 @@ export abstract class BaseTool {
       // ── Dispatch waterfall: `tool:after` ──────────────────────────
       // Observational, so it uses `fire` (a bad subscriber is logged and
       // swallowed): a metrics or tracing hook must never turn a successful
-      // tool call into a failure. Handlers may still mutate `result`.
+      // tool call into a failure. `result` is read-only here: the return value
+      // is already committed by the time this `finally` runs.
       await hooks.fire('tool:after', {
         toolId: this.id,
         toolName,

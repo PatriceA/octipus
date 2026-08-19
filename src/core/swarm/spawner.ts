@@ -141,8 +141,27 @@ export class SwarmSpawner {
   ): Promise<ChildResult> {
     const hooks = getOrchestratorHooks();
     const childDepth = parent.depth + 1;
-    const childRole = this.resolveChildRole(params);
     const startedAt = Date.now();
+
+    let childRole: AgentRole;
+    try {
+      childRole = this.resolveChildRole(params);
+    } catch (err) {
+      // A malformed spawn reports too: `spawn:after` is the seam subscribers
+      // count on, and this throw happens before `spawn:before` could fire.
+      await hooks.fire('spawn:after', {
+        parentNodeId: parent.id,
+        childRole: params.role ?? 'general',
+        childDepth,
+        status: 'failed',
+        reason: (err as Error)?.message,
+        durationMs: Date.now() - startedAt,
+      });
+      throw err;
+    }
+    // Resolved ONCE. The inner body resolves again from `params`, so the
+    // role-fit rewrite (and its log line) must already be baked in here.
+    const spawnParams = { ...params, role: childRole };
 
     const before = await hooks.fireWaterfall('spawn:before', {
       parentNodeId: parent.id,
@@ -181,7 +200,7 @@ export class SwarmSpawner {
 
     let result: ChildResult;
     try {
-      result = await this.spawnChildInner(parent, params, parentContext, internal);
+      result = await this.spawnChildInner(parent, spawnParams, parentContext, internal);
     } catch (err) {
       await reportAfter('failed', (err as Error)?.message);
       throw err;

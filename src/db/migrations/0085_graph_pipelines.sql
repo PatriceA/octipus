@@ -33,8 +33,17 @@ ALTER TABLE "pipeline_nodes" ADD COLUMN IF NOT EXISTS "visits" integer DEFAULT 0
 --> statement-breakpoint
 
 -- Backfill: an existing stage's key is its position, which is exactly what the
--- compiler emits for a plain step today.
-UPDATE "pipeline_nodes" SET "node_key" = 'n' || "ordinal"::text WHERE "node_key" IS NULL;
+-- compiler emits for a plain step today. Keyed off row_number, not `ordinal`
+-- directly: nothing ever enforced uniqueness on the old `stage_index`, and one
+-- duplicated row would fail the unique index below and take the boot migration
+-- down with it.
+WITH keyed AS (
+  SELECT "id",
+         'n' || (row_number() OVER (PARTITION BY "pipeline_id" ORDER BY "ordinal", "id") - 1)::text AS k
+  FROM "pipeline_nodes"
+)
+UPDATE "pipeline_nodes" n SET "node_key" = keyed.k
+FROM keyed WHERE keyed."id" = n."id" AND n."node_key" IS NULL;
 --> statement-breakpoint
 ALTER TABLE "pipeline_nodes" ALTER COLUMN "node_key" SET NOT NULL;
 --> statement-breakpoint
@@ -60,11 +69,15 @@ CREATE INDEX IF NOT EXISTS "pipeline_edges_from_idx"
 -- Backfill the chain each existing pipeline already was: node N -> node N+1,
 -- unconditional. A finished pipeline gets its edges too, so the UI can render
 -- historical runs with the same code path as live ones.
+WITH seq AS (
+  SELECT "pipeline_id", "node_key",
+         row_number() OVER (PARTITION BY "pipeline_id" ORDER BY "ordinal", "id") AS rn
+  FROM "pipeline_nodes"
+)
 INSERT INTO "pipeline_edges" ("pipeline_id", "from_node_key", "to_node_key", "condition", "ordinal")
 SELECT a."pipeline_id", a."node_key", b."node_key", 'always', 0
-FROM "pipeline_nodes" a
-JOIN "pipeline_nodes" b
-  ON b."pipeline_id" = a."pipeline_id" AND b."ordinal" = a."ordinal" + 1;
+FROM seq a
+JOIN seq b ON b."pipeline_id" = a."pipeline_id" AND b.rn = a.rn + 1;
 --> statement-breakpoint
 
 CREATE TABLE IF NOT EXISTS "plan_items" (

@@ -16,7 +16,7 @@
  *    long, and how it ended — a durable copy of every tool payload is a
  *    data-retention problem nobody asked for.
  */
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import type { NewRunEventRecord, RunEventRecord } from '@/db/schema/run-events';
 import { runEvents } from '@/db/schema/run-events';
@@ -58,6 +58,9 @@ export async function appendRunEvent(input: RunEventInput): Promise<void> {
   }
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuid = (s: string | undefined): boolean => !!s && UUID_RE.test(s);
+
 /** Fire-and-forget helper for call sites that must not await. */
 export function recordRunEvent(input: RunEventInput): void {
   void appendRunEvent(input);
@@ -80,7 +83,10 @@ export function toolCallEvent(ctx: {
   status: string;
   durationMs: number;
 }): RunEventInput | null {
-  if (!ctx.agent.sessionId) return null;
+  // `run_id` is a uuid column, and synthetic contexts (artifact refresh, boot
+  // probes) carry ids like `artifact-refresh:<principal>`. Those are not runs;
+  // logging them would be one swallowed DB error per tool call.
+  if (!isUuid(ctx.agent.sessionId)) return null;
   return {
     runId: ctx.agent.sessionId,
     subject: 'tool',
@@ -134,6 +140,12 @@ export async function readRunEvents(
     ? and(eq(runEvents.runId, runId), eq(runEvents.subject, opts.subject))
     : eq(runEvents.runId, runId);
 
-  const rows = await getDb().select().from(runEvents).where(where).orderBy(asc(runEvents.seq));
-  return opts.limit && opts.limit > 0 ? rows.slice(-opts.limit) : rows;
+  // The bound is pushed into SQL: with a tool_call row per dispatch, a long run
+  // has thousands of them and a tail read must not drag all of them through.
+  if (opts.limit && opts.limit > 0) {
+    const newest = await getDb().select().from(runEvents).where(where)
+      .orderBy(desc(runEvents.seq)).limit(opts.limit);
+    return newest.reverse();
+  }
+  return getDb().select().from(runEvents).where(where).orderBy(asc(runEvents.seq));
 }

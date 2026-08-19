@@ -412,7 +412,10 @@ export async function spawnWorker(
         { role: agentRole, granted: overrides.extraToolIds, count: granted.length },
         'Runtime granted extra tools to the worker',
       );
-      roleTools = [...roleTools, ...granted];
+      // PREPENDED, not appended: `applyToolCap` below keeps the first N groups
+      // in list order, and a runtime grant is the one tool the stage cannot do
+      // its job without (a `producesPlan` stage without `plan` fails its gate).
+      roleTools = [...granted, ...roleTools];
     }
   }
 

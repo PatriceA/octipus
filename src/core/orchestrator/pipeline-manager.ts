@@ -546,6 +546,8 @@ export class PipelineManager {
     let pendingRejection: string | undefined;
     /** The plan item currently in flight, when inside a `foreach` body. */
     let currentItem: PlanItemRow | null = null;
+    /** Handoff-chain length when each loop was first entered — the per-item reset point. */
+    const loopMarks = new Map<string, number>();
 
     let cursor: string | null = graph.entryKey;
     // Backstop. Every cycle is individually bounded, but a template that
@@ -591,6 +593,31 @@ export class PipelineManager {
 
       let outcome: NodeOutcome;
 
+      // Per-step sign-off, unchanged from the linear runtime: a step declaring
+      // `requiresApproval` pauses before it runs. Gated on `previousOutput`
+      // because there is nothing to approve before the first stage produced
+      // anything. The `foreach` head asks its own, different question (the
+      // whole plan, once) in `runForeachNode`.
+      if (gnode.kind === 'step' && node.requiresApproval && previousOutput) {
+        const decision = await this.approveStepNode({
+          pipeline, node, handoffChain, previousOutput, context, title,
+        });
+        if (decision === 'stop') {
+          return { pipelineId: pipeline.id, result: `Pipeline stopped at "${node.name}".` };
+        }
+        if (decision === 'skip') {
+          await this.updateNode(node.id, { status: 'skipped' });
+          // A skipped QA node must still take its `qa_pass` edge — it has no
+          // unconditional one, and "no edge" would end the walk silently.
+          outcome = built[gnode.templateIndex].stageType === 'qa_validation' ? 'qa_pass' : 'ok';
+          const skipEdge = selectEdge(graph, cursor, outcome, traversals);
+          if (!skipEdge) break;
+          traversals.set(edgeId(skipEdge), (traversals.get(edgeId(skipEdge)) ?? 0) + 1);
+          cursor = skipEdge.to;
+          continue;
+        }
+      }
+
       if (gnode.kind === 'foreach') {
         const stepResult = await this.runForeachNode({
           pipeline,
@@ -603,6 +630,21 @@ export class PipelineManager {
         if (stepResult.stopped) return stepResult.stopped;
         currentItem = stepResult.item;
         outcome = stepResult.outcome;
+
+        if (outcome === 'loop_next') {
+          // Each item starts from the state the loop was entered in. Two things
+          // are per-item, not per-run: the retry budget on the body's QA edges
+          // (item 1 burning three retries must not leave item 7 with zero), and
+          // the handoff chain (every entry is concatenated into every later
+          // prompt, so an unreset chain grows by one body pass per item until
+          // it swamps the context).
+          if (!loopMarks.has(cursor)) loopMarks.set(cursor, handoffChain.length);
+          handoffChain.length = loopMarks.get(cursor) as number;
+          const bodyKeys = new Set(
+            graph.nodes.filter((n) => n.parentKey === cursor).map((n) => n.key),
+          );
+          for (const e of graph.edges) if (bodyKeys.has(e.from)) traversals.delete(edgeId(e));
+        }
       } else {
         const b = built[gnode.templateIndex];
         const stageTemplate = template.stages[gnode.templateIndex];
@@ -1509,6 +1551,24 @@ export class PipelineManager {
     const items = await pipelineRepository.getPlanItems(pipeline.id);
     const pending = items.filter((i) => i.status === 'pending');
 
+    // An empty plan on the FIRST visit is a failure, not an empty success: the
+    // template declared per-item work and nothing produced items (a template
+    // whose steps declare `loopOverPlan` with no `producesPlan` step ahead of
+    // them compiles fine, and would otherwise run zero iterations and report
+    // "completed successfully").
+    if (items.length === 0 && node.visits === 1) {
+      const summary =
+        `Pipeline "${title}" reached its plan loop with an empty plan. A step before the loop ` +
+        `must declare producesPlan and call \`plan__add_items\`.`;
+      await this.updateNode(node.id, { status: 'failed' });
+      await this.updatePipeline(pipeline.id, { status: 'failed', summary });
+      return {
+        outcome: 'loop_done',
+        item: null,
+        stopped: { pipelineId: pipeline.id, result: summary },
+      };
+    }
+
     // First visit and the plan needs sign-off: show the whole list, once.
     if (node.requiresApproval && node.visits === 1) {
       await this.updateNode(node.id, { status: 'awaiting_approval' });
@@ -1597,6 +1657,57 @@ export class PipelineManager {
    * Returns a stop result when the user aborts; `null` means "continue anyway",
    * which the walker treats as a pass.
    */
+  /**
+   * Ask the user before a step that declared `requiresApproval` runs.
+   * Approve / Skip / Stop, over the last handoff so the decision is made on
+   * what the previous step actually produced.
+   */
+  private async approveStepNode(args: {
+    pipeline: Pipeline;
+    node: PipelineNodeRow;
+    handoffChain: HandoffContext[];
+    previousOutput: string;
+    context: AgentContext;
+    title: string;
+  }): Promise<'go' | 'skip' | 'stop'> {
+    const { pipeline, node, handoffChain, previousOutput, context, title } = args;
+    const orchestrator = getOrchestratorService();
+
+    await this.updateNode(node.id, { status: 'awaiting_approval' });
+    await this.updatePipeline(pipeline.id, { status: 'awaiting_approval' });
+
+    orchestrator['emit']({
+      type: 'pipeline_event',
+      sessionId: pipeline.sessionId,
+      data: { event: 'approval_required', pipelineId: pipeline.id, stageId: node.id, name: node.name },
+      timestamp: new Date(),
+    });
+
+    const latest = handoffChain[handoffChain.length - 1];
+    const summary = latest
+      ? `Previous stage completed.\n\n**Work done:** ${latest.completedWork.slice(0, 1500)}` +
+        (latest.decisions.length > 0 ? `\n\n**Decisions:** ${latest.decisions.join('; ')}` : '')
+      : `Previous stage completed.\n\nResult:\n${previousOutput.slice(0, 2000)}`;
+
+    const approval = await orchestrator.requestApproval(
+      `Pipeline "${title}" — ${summary}`,
+      `Proceed with next stage: "${node.name}"?`,
+      context,
+      ['Approve', 'Skip', 'Stop Pipeline'],
+    ) as { approved: boolean; response?: string };
+
+    if (!approval.approved || approval.response === 'Stop Pipeline') {
+      await this.updateNode(node.id, { status: 'skipped' });
+      await this.updatePipeline(pipeline.id, { status: 'paused', summary: `Stopped by user at stage: ${node.name}` });
+      return 'stop';
+    }
+    if (approval.response === 'Skip') return 'skip';
+
+    await this.updateNode(node.id, { status: 'approved', approvedAt: new Date() });
+    await this.updatePipeline(pipeline.id, { status: 'running' });
+    return 'go';
+  }
+
   private async escalateQaFailure(args: {
     pipeline: Pipeline;
     node: PipelineNodeRow;

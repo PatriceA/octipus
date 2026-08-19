@@ -165,7 +165,10 @@ export function compileTemplateToGraph(stages: StageTemplate[]): PipelineGraph {
     pushStageEdges(edges, stages, seg.index, exitTo, undefined);
   }
 
-  return { nodes, edges, entryKey: headOf(segments[0]) };
+  // An empty template compiles to an empty graph rather than throwing, so
+  // `validateGraph` gets to report it ('graph has no nodes') like every other
+  // structural defect.
+  return { nodes, edges, entryKey: segments.length > 0 ? headOf(segments[0]) : '' };
 }
 
 /**

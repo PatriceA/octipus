@@ -170,4 +170,20 @@ describe('shipped presets compile to runnable graphs', () => {
       'Requirements & Architecture',
     ]);
   });
+  test('an empty template is a validation error, not a crash', () => {
+    const g = compileTemplateToGraph([]);
+    expect(validateGraph(g)).toEqual(['graph has no nodes']);
+  });
+
+  test('a loop body edge is identifiable, so retry budgets can reset per plan item', () => {
+    const dev = presets.find((p) => p.name === 'Full Development Cycle')!;
+    const g = compileTemplateToGraph(dev.steps.map(stepConfigToStageTemplate));
+    const loop = g.nodes.find((n) => n.kind === 'foreach')!;
+    const bodyKeys = new Set(g.nodes.filter((n) => n.parentKey === loop.key).map((n) => n.key));
+    const bodyEdges = g.edges.filter((e) => bodyKeys.has(e.from));
+    // The QA retry edge inside the body is the one whose budget must reset.
+    expect(bodyEdges.some((e) => e.condition === 'qa_fail' && e.maxTraversals != null)).toBe(true);
+    // ...and nothing outside the body is caught by that same filter.
+    expect(bodyEdges.every((e) => bodyKeys.has(e.from))).toBe(true);
+  });
 });
