@@ -54,43 +54,42 @@ self-introspection tool and resident-activation machinery were evaluated and
 rejected (security foot-gun / unnecessary for a dispatcher that keeps arms
 cheap).
 
-### Wave 1 — foundations
+### Wave 1 — foundations — SHIPPED (2026-08-19)
 
-- **Dispatch waterfall around every tool and every spawn.** `BaseTool.executeWithGuards`
-  is a *hardcoded* chain today: permission check → secret injection → execute →
-  secret redaction → metrics. `src/core/orchestrator/hooks.ts` has a real
-  registry but only fires on prompt build. Generalize it to `waterfall` dispatch
-  (around-middleware, short-circuiting) and mount it on tool execution *and*
-  `spawn_child`. Everything downstream — policy, sandboxing, quotas, spans,
-  audit — then attaches as a plugin instead of another `if` in the loop. This is
-  the seam the rest of the wave hangs on; do it first.
-- **Graph runtime for pipelines.** Today a pipeline is a strictly linear list:
-  `pipeline_stages.stageIndex` walked by `pipelines.currentStageIndex`. No
-  branches, no fan-out, no cycles — the QA rework loop is special-cased inside
-  `pipeline-manager.ts`. Replace with nodes + edges: conditional edges,
-  cycles (which subsume the QA retry as an ordinary backward edge), and two
-  node kinds — `step` and `foreach` (below). Migration keeps existing linear
-  recipes working as a chain of unconditional edges.
-- **`foreach` nodes over a durable Plan object.** The looping shape we actually
-  want is *data* iteration, not a control-flow cycle: research → architect emit
-  a plan; the user approves it; then `code → review → qa` runs **once per plan
-  item**. A cycle cannot express "item 3 of 7", so this gets its own node kind
-  plus one new table (`plan_items`: ordinal, title, status, owner node,
-  evidence). Two properties matter:
-  - the `foreach` node re-reads the item list **every iteration**, so a review
-    or QA node can append, reorder, split, or kill items mid-run — the plan
-    stays live instead of frozen at approval time;
-  - each iteration runs as a fresh child session and returns a bounded
-    `StructuredHandoff` (`src/core/orchestrator/handoff.ts`, already shipped)
-    rather than an unstructured blob. That is the "Ralph loop" pattern with no
-    extra engine: fresh agent per round, structured state across rounds, shared
-    workspace.
-  Progress reporting falls out of the item rows for free.
-- **Unified run event log.** `src/core/swarm/ledger.ts` is already event-sourced
-  for swarm nodes; pipelines and sessions are not. Generalize it to one
-  append-only run log covering orchestrator turns, graph node transitions, and
-  arm dispatch. Prerequisite for both checkpointing and span-level tracing —
-  build it once, not twice.
+All four landed. What each actually became:
+
+- **Dispatch waterfall.** `hooks.ts` gained `fireWaterfall` (around-middleware)
+  plus `tool:before` / `tool:after` and `spawn:before` / `spawn:after`. Two
+  semantics, deliberately different: the `before` events FAIL CLOSED (a throwing
+  handler aborts the dispatch — a permission check that crashes must never read
+  as "allowed") and short-circuit on the first handler that sets
+  `ctx.shortCircuit` (deny, or a substituted result); the `after` events keep
+  swallow-and-continue, so a tracing subscriber cannot turn a successful call
+  into a failure. `spawnChild` is now a thin wrapper over `spawnChildInner` so
+  its many return paths each report exactly once, untouched.
+- **Graph runtime.** `pipeline_stages` is now `pipeline_nodes` + `pipeline_edges`;
+  `current_stage_index` is gone (a graph has no single ordinal position — a
+  backward edge or a loop body revisits nodes). `pipeline-graph.ts` holds
+  compilation, validation and edge selection, all pure, so routing is testable
+  without booting an agent. The QA retry loop is no longer a `while` nested in
+  the stage loop: it is an ordinary bounded backward edge, with
+  `audit_gate_failed` as a self-edge so an unaccountable REPORT re-runs the
+  auditor alone instead of re-running work that was fine.
+- **`foreach` nodes over a durable Plan.** A maximal run of consecutive steps
+  declaring `loopOverPlan` becomes one loop body — the grouping IS the
+  declaration, no nesting syntax. The loop re-reads `plan_items` every pass, so
+  an item appended mid-run by a review or QA node (the new `plan` tool) or
+  edited by the user (`/api/pipelines/:id/plan`) is picked up in the same run.
+  Plan approval is asked ONCE, on the loop head, over a concrete item list.
+  `validateGraph` refuses to run a template with an unreachable node or an
+  unbounded cycle; every shipped preset is compile-tested. The `Full Development
+  Cycle` preset now plans, then loops implement → test → review → QA per item.
+- **Unified run event log.** `swarm_ledger` became `run_events` with a `subject`
+  discriminator, carrying swarm node lifecycle (replay/reconcile unchanged),
+  graph node transitions, edge traversals, plan item progress, and tool dispatch
+  — the last from a single subscriber on the waterfall above, which is what
+  building the seam first bought. Shape, timing and status only: argument values
+  and results are never stored. Read at `GET /api/runs/:sessionId/events`.
 
 ### Wave 2 — visible parity (falls out of wave 1)
 
