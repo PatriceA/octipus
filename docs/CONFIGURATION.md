@@ -113,6 +113,13 @@ Bind models to topics via the web UI (**Settings → Models → Edit → Topics*
 
 Swarm node hard budgets (tokens, wall-clock, fan-out) are baked into `src/core/swarm/types.ts` as `LEVEL_DEFAULT`. Overriding them is not a documented config knob — change the file and rebuild.
 
+## Pipeline Config
+
+| Key | Default | Purpose |
+|---|---|---|
+| `orchestrator.pipelineTokenBudget` | 2_000_000 | Token pool for one pipeline RUN, summed over every node visit and checked at each node boundary. `0` disables it. Per-node caps (a template step's `maxTokens`) bound a single visit; this bounds the run, which is the only bound a `foreach` loop respects — plan items can be appended while it runs, so the number of visits is not known when the run starts. Env: `PIPELINE_TOKEN_BUDGET`. |
+| `multiuser.unattendedDenyActions` | `[]` | Tool actions to REFUSE rather than auto-approve when the caller cannot reach a human (any spawned worker). Entries name a container (`shell`) or one action (`shell__run`). Empty means today's behaviour: an ASK-level action an unattended worker hits is auto-approved, because blocking it would hang the worker forever rather than protect anything. Env: `UNATTENDED_DENY_ACTIONS` (comma-separated). |
+
 ## Compaction Config
 
 | Key | Default | Purpose |

@@ -3,6 +3,7 @@ import { getOrchestratorHooks } from '@/core/orchestrator/hooks';
 import { isCancellationError } from '@/core/swarm/errors';
 import { recordToolExecution } from '@/core/telemetry';
 import type { AgentContext, ToolManifest, } from '@/core/types';
+import { canPromptHuman, routeApproval } from '@/security/approval-policy';
 import { getPermissionManager } from '@/security/permissions';
 import { injectSecrets, redactSecretValues } from '@/security/secret-injector';
 import { toolLogger } from '@/utils/logger';
@@ -152,22 +153,24 @@ export abstract class BaseTool {
     // user identity and rely on policy/allowlist.
     const isSystemUser = (context.metadata as Record<string, unknown>)?.isSystemUser === true;
     let enforce = false;
+    let unattendedDenyActions: string[] | undefined;
     try {
       const { getConfig } = await import('@/config');
-      enforce = !!getConfig().multiuser?.enforcePermissions;
+      const mu = getConfig().multiuser;
+      enforce = !!mu?.enforcePermissions;
+      unattendedDenyActions = mu?.unattendedDenyActions;
     } catch { /* config not loaded — fall through to legacy behavior */ }
 
     const skipForSystem = isSystemUser && !enforce;
-    // Autonomous workers (any role spawned by the orchestrator, i.e. not the
-    // orchestrator itself) cannot prompt a human. `tool-executor.ts` already
-    // gates and auto-approves ASK-level tools for these workers before
-    // dispatch; without this mirror check, base-tool re-runs the check and
-    // re-requests approval — the request blocks forever because the orchestrator
-    // never relays it to the user. Keep this in sync with the autonomous-worker
-    // policy in `src/core/tool-executor.ts`.
-    const isAutonomousWorker = !!context.role && context.role !== 'orchestrator';
-    const skipForAutonomousWorker = isAutonomousWorker;
-    if (options?.requiresPermission !== false && !skipForSystem && !skipForAutonomousWorker) {
+    // An unattended caller cannot be asked anything, so unless the operator has
+    // named actions to refuse in that case, the whole check is a DB round-trip
+    // whose only possible outcome is "carry on" — skipped here on the tool hot
+    // path, exactly as before. When the list IS set, we pay for the check and
+    // let the shared policy decide. (The agent loop checks every call anyway,
+    // so a stored DENY is still enforced there.)
+    const skipForUnattended =
+      !canPromptHuman(context.role) && !unattendedDenyActions?.length;
+    if (options?.requiresPermission !== false && !skipForSystem && !skipForUnattended) {
       const permissionManager = getPermissionManager();
       const action =
         typeof options?.permissionAction === 'function'
@@ -176,32 +179,49 @@ export abstract class BaseTool {
 
       const check = await permissionManager.check(context.userId, this.id, action, args);
 
-      if (!check.allowed) {
-        if (check.requiresApproval) {
-          // Request approval
-          const requestId = await permissionManager.requestApproval(
-            context.userId,
-            context.id,
-            this.id,
-            action,
-            args,
-            context.sessionId,
-            toolName,
-          );
+      // One shared policy with the agent loop — see `security/approval-policy.ts`.
+      // The rule this replaces (an inline "not the orchestrator ⇒ skip the
+      // check entirely") lived here as a copy of the one in
+      // `tool-executor.ts`, and is the reason a worker's approval request used
+      // to hang forever: nobody relays it. Asking the policy also means an
+      // operator's `unattendedDenyActions` is honoured on THIS path too, where
+      // the old skip could not express a refusal at all.
+      const decision = routeApproval({
+        level: check.allowed ? 'ALLOW' : check.requiresApproval ? 'ASK' : 'DENY',
+        role: context.role,
+        toolId: this.id,
+        action,
+        unattendedDenyActions,
+      });
 
-          toolLogger.info(
-            { toolId: this.id, tool: toolName, requestId },
-            'Awaiting permission approval'
-          );
+      if (decision.route === 'deny') {
+        throw new Error(
+          `Permission denied for ${this.id}.${action}: ${check.reason ?? decision.reason}`,
+        );
+      }
 
-          // Wait for approval (this will block until approved/denied/timeout)
-          const approved = await permissionManager.waitForApproval(requestId);
+      if (decision.route === 'ask_human') {
+        // Request approval
+        const requestId = await permissionManager.requestApproval(
+          context.userId,
+          context.id,
+          this.id,
+          action,
+          args,
+          context.sessionId,
+          toolName,
+        );
 
-          if (!approved) {
-            throw new Error(`Permission denied for ${this.id}.${action}`);
-          }
-        } else {
-          throw new Error(`Permission denied for ${this.id}.${action}: ${check.reason}`);
+        toolLogger.info(
+          { toolId: this.id, tool: toolName, requestId },
+          'Awaiting permission approval'
+        );
+
+        // Wait for approval (this will block until approved/denied/timeout)
+        const approved = await permissionManager.waitForApproval(requestId);
+
+        if (!approved) {
+          throw new Error(`Permission denied for ${this.id}.${action}`);
         }
       }
     }

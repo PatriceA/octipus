@@ -362,6 +362,17 @@ export const multiuserConfigSchema = z.object({
   auditShadow: z.boolean().default(true),
   enforcePermissions: z.boolean().default(true),
   /**
+   * Tool actions to REFUSE rather than auto-approve when the caller cannot
+   * reach a human (any spawned worker — see `security/approval-policy.ts`).
+   * Entries name a container (`shell`) or one action (`shell__run`).
+   *
+   * Empty by default: an autonomous stage legitimately does almost anything
+   * inside its workspace, so a list invented for everyone would break working
+   * runs. It exists so an operator can state their own limit in ONE place
+   * instead of patching the two dispatch paths.
+   */
+  unattendedDenyActions: z.array(z.string()).default([]),
+  /**
    * Postgres Row-Level Security — Phase 3b. When true, the connection
    * wrapper opens authenticated queries in a transaction and sets
    *   SET LOCAL app.current_user_id = <principal.userId>

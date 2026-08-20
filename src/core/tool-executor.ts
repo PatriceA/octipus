@@ -4,6 +4,8 @@ import { renderToolActivity } from '@/core/work-stream/renderers';
 import { stripWorkStreamMeta } from '@/shared/work-stream';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
+import { getConfig } from '@/config';
+import { routeApproval } from '@/security/approval-policy';
 import { getPermissionManager } from '@/security/permissions';
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { sanitizeToolOutput } from '@/utils/sanitize';
@@ -578,9 +580,22 @@ export class ToolExecutor {
         toolCall.arguments
       );
 
-      if (permResult.level === 'DENY') {
+      // ONE policy decision, shared with `base-tool.ts` — see
+      // `security/approval-policy.ts`. It answers what to do with the stored
+      // level given who is calling; the two dispatch paths used to answer that
+      // separately, in two copies asking each other to be kept in sync.
+      const decision = routeApproval({
+        level: permResult.level,
+        role: this.context.role,
+        toolId,
+        action: toolCall.name,
+        unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions,
+      });
+
+      if (decision.route === 'deny') {
+        const reason = permResult.reason || decision.reason;
         agentLogger.info(
-          { agentId: this.context.id, tool: toolCall.name, reason: permResult.reason },
+          { agentId: this.context.id, tool: toolCall.name, reason },
           'Tool call denied by permission policy'
         );
 
@@ -588,7 +603,7 @@ export class ToolExecutor {
         results.push({
           toolCallId: toolCall.id,
           result: null,
-          error: `Permission denied: ${permResult.reason || 'action is not allowed'}. Do NOT retry this action — it is blocked by policy.`,
+          error: `Permission denied: ${reason || 'action is not allowed'}. Do NOT retry this action — it is blocked by policy.`,
         });
 
         await auditRepository.logToolDenied(
@@ -596,17 +611,13 @@ export class ToolExecutor {
           this.context.sessionId,
           toolCall.name,
           toolId,
-          { args: toolCall.arguments, reason: permResult.reason }
+          { args: toolCall.arguments, reason }
         );
         continue;
       }
 
       if (permResult.level === 'ASK') {
-        // Autonomous agent workers (non-orchestrator roles spawned by the orchestrator)
-        // cannot prompt a human — auto-approve their tool calls at ASK level.
-        const isAutonomousWorker = this.context.role && this.context.role !== 'orchestrator';
-
-        if (!isAutonomousWorker) {
+        if (decision.route === 'ask_human') {
           this.counters.approvalsRequired++;
           const requestId = await permissionManager.requestApproval(
             this.context.userId,

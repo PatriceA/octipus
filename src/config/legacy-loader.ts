@@ -146,6 +146,10 @@ export function loadFromEnvLegacy(): Partial<Config> {
       enforcePermissions: process.env.MULTIUSER_ENFORCE_PERMISSIONS !== 'false',
       rlsEnabled: process.env.MULTIUSER_RLS === 'true',
       orgWorkspaces: process.env.MULTIUSER_ORG_WORKSPACES === 'true',
+      unattendedDenyActions: (process.env.UNATTENDED_DENY_ACTIONS || '')
+        .split(',')
+        .map((a) => a.trim())
+        .filter(Boolean),
     },
     workspace: {
       rootPath: process.env.WORKSPACE_PATH || WORKSPACE_ROOT,

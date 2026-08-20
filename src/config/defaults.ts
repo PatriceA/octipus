@@ -100,6 +100,8 @@ export const defaultConfig: Partial<Config> = {
     enforcePermissions: true,
     rlsEnabled: false,           // requires non-superuser app role; opt-in
     orgWorkspaces: true,
+    /** Refuse (don't auto-approve) these actions for unattended workers. */
+    unattendedDenyActions: [],
   },
   workspace: {
     rootPath: WORKSPACE_ROOT,
