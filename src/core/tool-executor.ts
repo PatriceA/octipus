@@ -111,8 +111,13 @@ export function resolvedFileChangePath(result: unknown): string | undefined {
  * timer — the agent is blocked waiting on the child, not doing work. */
 const DELEGATION_TOOLS = new Set(['spawn_child', 'escalate_to_different_expert']);
 
-/** Tools that run a shell command — counted as `commandsRun` in the receipt. */
-const COMMAND_TOOLS = new Set(['shell__run', 'shell__run_background']);
+/**
+ * Tools that run a shell command — counted as `commandsRun` in the receipt.
+ * Exported so the pre-spawn contract check (`role-contract.ts`) asks the same
+ * question the post-run evidence gate answers: a stage held to "you ran no
+ * commands" must be judged against the very set that does the counting.
+ */
+export const COMMAND_TOOLS = new Set(['shell__run', 'shell__run_background']);
 
 /**
  * One-line preview of a tool's return value for UI streaming. Strings are

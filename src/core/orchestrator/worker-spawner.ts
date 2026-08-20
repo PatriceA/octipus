@@ -24,6 +24,7 @@ import { buildOutputDirective } from './output-directive';
 import { getToolRegistry } from '@/tools/registry';
 import { formatCriticalRules, getBoundConnectorIds, getRoleConfig, getToolsForRole, SECURITY_PREAMBLE, stripSecurityPreamble } from './roles';
 import { estimateToolSchemaTokens, logPromptComposition } from './prompt-budget';
+import { type DeclaredPurpose, toolsetGaps } from './role-contract';
 import { applyToolCap, isSmallModel } from './small-model';
 import type { OrchestratorEvent } from './service';
 import { appendSources } from './types';
@@ -372,6 +373,13 @@ export async function spawnWorker(
      * the dominant term in prompt cost.
      */
     extraToolIds?: string[];
+    /**
+     * What the caller says this work IS (a pipeline stage's `producesArtifacts`
+     * / `runsCommands` declaration). Checked against the tools the worker is
+     * actually about to get, and the spawn is REFUSED when they cannot honor
+     * it — see `role-contract.ts`. Absent ⇒ no contract, no check.
+     */
+    purpose?: DeclaredPurpose,
   },
 ): Promise<unknown> {
   const agentManager = getAgentManager();
@@ -630,6 +638,24 @@ export async function spawnWorker(
   // the full ~12k-token surface.
   if (finalIsSmall) {
     roleTools = applyToolCap(roleTools, orchCfg.smallModelMaxTools, { role: agentRole, modelId: finalModel });
+  }
+
+  // ── Capability contract (wave 3) ────────────────────────────────
+  // Last point where the toolset is still the one the worker will run with,
+  // and the first where every subtraction has happened: stage narrowing,
+  // capability gating, the read-only strip, and the small-model cap above.
+  // A worker that cannot do what the stage is FOR produces a plausible
+  // paragraph instead of the work, which the evidence gate then fails after
+  // the tokens are spent — so refuse it here, loudly, for free.
+  if (overrides?.purpose) {
+    const gaps = toolsetGaps(overrides.purpose, roleTools.map((t) => t.name));
+    if (gaps.length > 0) {
+      throw new Error(
+        `Role "${agentRole}" cannot honor this stage's contract: ${gaps.join('; and ')}. ` +
+          `Tools available: ${roleTools.map((t) => t.name).join(', ') || '(none)'}. ` +
+          `Either give the role the tool, widen the stage's toolIds, or drop the declaration.`,
+      );
+    }
   }
 
   const startTime = Date.now();

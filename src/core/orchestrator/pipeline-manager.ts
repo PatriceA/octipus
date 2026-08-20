@@ -33,6 +33,7 @@ import {
   validateGraph,
 } from './pipeline-graph';
 import { paramTemplateVars, resolveRecipeParams } from './recipe-params';
+import { stageContractErrors } from './role-contract';
 import { getOrchestratorService } from './service';
 import {
   buildStagesFromTemplate,
@@ -452,7 +453,7 @@ export class PipelineManager {
     // is an infinite loop or silently skipped work at runtime, and both are
     // vastly more expensive to discover halfway through a paid run.
     const graph = compileTemplateToGraph(template.stages);
-    const graphErrors = validateGraph(graph);
+    const graphErrors = [...validateGraph(graph), ...stageContractErrors(template.stages)];
     if (graphErrors.length > 0) {
       throw new Error(
         `Pipeline template "${type}" does not compile to a runnable graph: ${graphErrors.join('; ')}`,
@@ -1165,7 +1166,7 @@ export class PipelineManager {
     }
     const built = buildStagesFromTemplate(template, pipeline.description ?? '');
     const graph = compileTemplateToGraph(template.stages);
-    const graphErrors = validateGraph(graph);
+    const graphErrors = [...validateGraph(graph), ...stageContractErrors(template.stages)];
     if (graphErrors.length > 0) {
       throw new Error(`Pipeline "${pipeline.type}" no longer compiles: ${graphErrors.join('; ')}`);
     }
@@ -1745,6 +1746,9 @@ export class PipelineManager {
         {
           ...(modelOverride ? { model: modelOverride } : {}),
           toolIds: node.toolIds ?? declared.toolIds,
+          // Held to the same declaration the evidence gate judges afterwards —
+          // but BEFORE the model runs, against the tools it will actually hold.
+          purpose: { producesArtifacts: declared.producesArtifacts, runsCommands: declared.runsCommands },
           ...(this.grantedToolIds(declared) ? { extraToolIds: this.grantedToolIds(declared) } : {}),
           swarmParent: {
             id: args.orchestratorAgentId,

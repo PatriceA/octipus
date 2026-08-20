@@ -706,6 +706,8 @@ export class OrchestratorService {
       toolIds?: string[];
       /** Runtime-granted tool ids, on top of the role's set. See spawnWorker. */
       extraToolIds?: string[];
+      /** Declared purpose, checked against the resolved toolset. See spawnWorker. */
+      purpose?: import('./role-contract').DeclaredPurpose;
     },
   ): Promise<unknown> {
     return spawnWorker(role, task, input, context, this.deps, overrides);
