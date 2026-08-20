@@ -25,7 +25,9 @@ export type AssertionType =
   | 'token_count_under'
   // Registered in assertions.ts and used by red-team.yaml, but was missing from
   // both this union and the loader's valid-type set — every run warned on it.
-  | 'defense_held';
+  | 'defense_held'
+  /** The reply used a fact seeded by `memorySetup`. Integration mode only. */
+  | 'recalls_memory';
 
 export interface Assertion {
   /** Assertion type */
@@ -54,6 +56,12 @@ export interface EvalTest {
   /** Expected output or behavior (for display/reference) */
   expected?: string;
   assertions: Assertion[];
+  /**
+   * Facts to write into the `memories` table for this test's user before the
+   * request, and to remove afterwards. Integration mode only — see
+   * `memory-setup.ts`.
+   */
+  memorySetup?: import('./memory-setup').MemorySeed[];
   /** For filtering: 'routing', 'tools', 'quality', 'safety' */
   tags?: string[];
   metadata?: Record<string, unknown>;

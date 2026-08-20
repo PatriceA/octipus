@@ -107,6 +107,58 @@ The chat command produces a markdown matrix:
 
 ---
 
+## Agent Eval Suites (YAML harness)
+
+`bun run eval` runs the YAML suites in `eval/` against the classifier (unit
+mode) or a live backend (`--integration`). Two capabilities are worth calling
+out because they change what a run can tell you.
+
+### Regression gating
+
+```bash
+bun run eval --baseline latest        # newest file in eval/results/
+bun run eval --baseline eval/baseline.json
+```
+
+Compares this run to a previous results file PER TEST and exits 1 when a test
+that passed in the baseline now fails — even if the overall score went up. The
+aggregate cannot answer this: one test fixed and one broken nets out to no
+movement. Recoveries, new tests, and tests missing from this run are reported
+and gate nothing.
+
+### Memory-aware tests
+
+A test may seed long-term memories for its user and assert that the reply used
+them:
+
+```yaml
+- id: recalls-home-city
+  description: The assistant answers local time from a remembered city
+  input: What time is it here?
+  context:
+    userId: 11111111-2222-4333-8444-555555555555   # a real user UUID
+  memorySetup:
+    - factType: profile
+      content: The user lives in Lisbon.
+  assertions:
+    - type: recalls_memory
+      value: Lisbon
+```
+
+The facts are written before the request and removed after it, whatever the
+outcome. Two constraints, both to keep a green run honest:
+
+- **Integration mode only.** Unit mode never reads the `memories` table, so the
+  assertion could only ever fail there.
+- **A real user UUID** in `context.userId`, because `memories.user_id` is a uuid
+  column and the fact has to belong to the user the request runs as.
+
+Facts are embedded through the normal embedding service, so a model must be
+bound to the `embedding` topic; a test that cannot be seeded is reported as a
+failed test naming the reason, never run without its facts.
+
+---
+
 ## Model Evaluation (Quality Scoring)
 
 Scores model output quality across 8 metrics. Results are stored per model and support cross-model comparison.

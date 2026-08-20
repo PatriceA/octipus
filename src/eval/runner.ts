@@ -6,6 +6,7 @@
  */
 
 import { evaluateAllAssertions, type GraderFunction } from './assertions';
+import { clearMemories, memorySetupBlocker, seedMemories } from './memory-setup';
 import type {
   EvalResult,
   EvalRunnerOptions,
@@ -249,10 +250,40 @@ export async function runTest(
   const model = options.model;
   const graderFn = options.graderModel ? createGraderFn(options.graderModel) : undefined;
 
+  // ── Memory setup ───────────────────────────────────────────────────
+  // Facts are written before the request and removed after it, whatever the
+  // outcome — a fixture left behind would change what the NEXT test recalls.
+  // A test that cannot be seeded is reported as a failed test with the reason,
+  // never quietly run without its facts: that would score a setup problem as a
+  // recall problem.
+  const blocker = memorySetupBlocker(test.memorySetup, {
+    integration: options.integration,
+    userId: test.context?.userId,
+  });
+  if (blocker) return errorResult(test, suiteId, blocker);
+
+  let seededIds: string[] = [];
+  if (test.memorySetup?.length) {
+    try {
+      seededIds = await seedMemories(test.context?.userId as string, test.memorySetup);
+    } catch (err) {
+      return errorResult(test, suiteId, (err as Error).message);
+    }
+  }
+
   // Execute the test
-  const ctx = options.integration
-    ? await runTestIntegration(test, options.baseUrl || 'http://localhost:3005', model)
-    : await runTestUnit(test, model);
+  let ctx: TestExecutionContext;
+  try {
+    ctx = options.integration
+      ? await runTestIntegration(test, options.baseUrl || 'http://localhost:3005', model)
+      : await runTestUnit(test, model);
+  } finally {
+    if (seededIds.length) {
+      await clearMemories(seededIds).catch((err: unknown) =>
+        console.warn(`Failed to clear seeded memories for "${test.id}": ${(err as Error).message}`),
+      );
+    }
+  }
 
   // Add input to metadata for grader context
   if (ctx.metadata) {
@@ -277,6 +308,34 @@ export async function runTest(
     latencyMs: ctx.latencyMs,
     tokenCount: ctx.tokenCount,
     metadata: ctx.metadata,
+    timestamp: new Date(),
+  };
+}
+
+/**
+ * A test that could not be RUN. Reported as a failed result carrying the
+ * reason, rather than thrown: one un-runnable test must not abort the suite,
+ * and a setup problem has to be visible in the report next to the tests that
+ * did run.
+ */
+function errorResult(test: EvalTest, suiteId: string, reason: string): EvalResult {
+  return {
+    suiteId,
+    testId: test.id,
+    input: test.input,
+    output: '',
+    assertions: [{
+      type: 'recalls_memory',
+      passed: false,
+      expected: 'test setup',
+      actual: 'SETUP_ERROR',
+      score: 0,
+      message: reason,
+    }],
+    passed: false,
+    score: 0,
+    latencyMs: 0,
+    metadata: { input: test.input, setupError: reason },
     timestamp: new Date(),
   };
 }

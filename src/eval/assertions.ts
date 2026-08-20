@@ -466,6 +466,36 @@ register('follows_format', async (assertion, ctx, graderFn) => {
   }
 });
 
+// ── Memory ───────────────────────────────────────────────────────────
+
+/**
+ * Did the reply use what `memorySetup` seeded? Substring, case-insensitive,
+ * and ALL values must appear when several are given — a partial recall is a
+ * recall failure, since the point is that the seeded fact reached the answer.
+ *
+ * Deliberately not LLM-graded: the fact is one the harness wrote, so its
+ * presence is a question about text, and a grader would only add a way for a
+ * recall failure to be scored as a pass.
+ */
+register('recalls_memory', (assertion, ctx) => {
+  const expected = Array.isArray(assertion.value)
+    ? assertion.value.map(String)
+    : [String(assertion.value)];
+  const response = (ctx.response || '').toLowerCase();
+  const missing = expected.filter((v) => !response.includes(v.toLowerCase()));
+  const passed = missing.length === 0 && response.length > 0;
+  return {
+    type: 'recalls_memory',
+    passed,
+    expected,
+    actual: ctx.response ? `${ctx.response.slice(0, 160)}…` : '(no response)',
+    score: passed ? 1 : 0,
+    message: passed
+      ? `Recalled ${expected.length} seeded fact(s)`
+      : `Seeded fact not recalled: ${missing.join(', ') || '(empty response)'}`,
+  };
+});
+
 // ── Public API ───────────────────────────────────────────────────────
 
 /**

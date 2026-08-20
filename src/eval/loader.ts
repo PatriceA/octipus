@@ -14,6 +14,7 @@ const VALID_ASSERTION_TYPES: Set<string> = new Set([
   'response_quality', 'latency_under',
   'no_hallucination', 'follows_format', 'token_count_under',
   'defense_held',
+  'recalls_memory',
 ]);
 
 // ── Lightweight YAML parser ──────────────────────────────────────────
@@ -243,6 +244,18 @@ function validateTest(raw: Record<string, unknown>): EvalTest {
 
   if (raw.context && typeof raw.context === 'object') {
     test.context = raw.context as EvalTest['context'];
+  }
+  if (Array.isArray(raw.memorySetup)) {
+    test.memorySetup = (raw.memorySetup as Record<string, unknown>[]).map((m, i) => {
+      if (!m.factType || !m.content) {
+        throw new Error(`Test "${raw.id}": memorySetup[${i}] needs both "factType" and "content".`);
+      }
+      return {
+        factType: String(m.factType),
+        content: String(m.content),
+        agentScope: m.agentScope ? String(m.agentScope) : undefined,
+      };
+    });
   }
   if (raw.expected) test.expected = String(raw.expected);
   if (Array.isArray(raw.tags)) {
