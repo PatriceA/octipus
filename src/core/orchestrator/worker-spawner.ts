@@ -682,7 +682,35 @@ export async function spawnWorker(
   // keyed off finalModel (the model that actually runs), not the topic model.
   // A custom expert's own prompt (expertPrompt) or an explicit override wins.
   const roleTemplate = (finalIsSmall && roleConfig.liteSystemPromptTemplate) || roleConfig.systemPromptTemplate;
-  const base = overrides?.systemPrompt || expertPrompt || roleTemplate;
+  let base = overrides?.systemPrompt || expertPrompt || roleTemplate;
+
+  // ── Per-arm persona shadowing (wave 4) ──────────────────────────
+  // The host persona has always been orchestrator-only. An arm the user has
+  // bound with `/persona arm <role> <preset>` speaks in that preset's voice
+  // instead; every other arm is untouched and carries no persona block at all,
+  // so this costs nothing until it is switched on.
+  //
+  // Placed like the orchestrator's block (`personas/persona-hook.ts`): AFTER
+  // SECURITY_PREAMBLE, before the role prompt, so the security rules stay the
+  // first thing the model reads (DESIGN.md rule #6). STATIC — it changes only
+  // when the binding does, so it belongs in the cacheable prefix.
+  try {
+    const { resolvePersonaForArm } = await import('@/core/personas/resolver');
+    const armPersona = await resolvePersonaForArm(context.userId, agentRole);
+    if (armPersona) {
+      base = base.startsWith(SECURITY_PREAMBLE)
+        ? SECURITY_PREAMBLE + armPersona.promptBlock + base.slice(SECURITY_PREAMBLE.length)
+        : armPersona.promptBlock + base;
+      coreLogger.info(
+        { role: agentRole, persona: armPersona.presetId },
+        'Arm persona applied — this worker speaks in a shadowed voice',
+      );
+    }
+  } catch (err) {
+    // A persona is decoration; a worker that cannot resolve one still works.
+    coreLogger.warn({ err, role: agentRole }, 'Arm persona resolve failed — worker runs without one');
+  }
+
   const staticParts: string[] = [base];
   const semiStaticParts: string[] = [];
   const volatileParts: string[] = [];

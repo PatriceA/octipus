@@ -1,4 +1,5 @@
-import { getPersonaProfileRepository } from './repository';
+import { ROLE_CONFIGS } from '@/core/orchestrator/roles';
+import { armFactKey, getPersonaProfileRepository, PersonaProfileRepository } from './repository';
 import { getPersonaRegistry } from './registry';
 import { resolvePersonaForUser } from './resolver';
 import { PersonaNarration, PersonaTone } from './types';
@@ -16,6 +17,8 @@ import { PersonaNarration, PersonaTone } from './types';
  *   /persona reset                    → restore Octipus default
  *   /persona personas                 → list available preset YAMLs
  *   /persona use <preset_id>          → switch to a different preset
+ *   /persona arms                     → list per-arm persona bindings
+ *   /persona arm <role> <preset|off>  → shadow one arm's voice
  */
 
 export interface PersonaCommandCtx {
@@ -69,6 +72,10 @@ export async function handlePersonaCommand(ctx: PersonaCommandCtx): Promise<Pers
       return listPresets();
     case 'use':
       return usePreset(ctx.userId, subRaw);
+    case 'arms':
+      return listArms(ctx.userId);
+    case 'arm':
+      return setArm(ctx.userId, subRaw);
     default:
       return {
         text:
@@ -80,7 +87,9 @@ export async function handlePersonaCommand(ctx: PersonaCommandCtx): Promise<Pers
           '  `/persona say <fact>`     — add a self-fact\n' +
           '  `/persona reset`          — restore Octipus default\n' +
           '  `/persona personas`       — list available presets\n' +
-          '  `/persona use <preset>`   — switch to a different preset',
+          '  `/persona use <preset>`   — switch to a different preset\n' +
+          '  `/persona arms`           — show which arms have their own voice\n' +
+          '  `/persona arm <role> <preset|off>` — shadow one arm\'s voice',
       };
   }
 }
@@ -146,6 +155,62 @@ async function resetPersona(userId: string): Promise<PersonaCommandResult> {
   const profile = await ensureProfile(userId);
   await getPersonaProfileRepository().reset(profile.id);
   return { text: 'Persona reset to Octipus default. Tone: dry. Narration: minimal.' };
+}
+
+/**
+ * `/persona arm <role> <preset|off>` — bind (or clear) the persona one arm
+ * speaks in. Unbound arms carry no persona at all, which is what every arm did
+ * before this existed, so `off` restores exactly the old behaviour.
+ */
+async function setArm(userId: string, args: string): Promise<PersonaCommandResult> {
+  const [roleRaw, presetRaw] = args.trim().split(/\s+/);
+  const role = (roleRaw || '').toLowerCase();
+  const preset = (presetRaw || '').toLowerCase();
+  if (!role || !preset) {
+    return { text: 'Usage: `/persona arm <role> <preset|off>`. Example: `/persona arm review terse-engineer`.' };
+  }
+  // ROLE_CONFIGS is the registry loaded from `roles/<name>/`, so it is the
+  // authority on which arms exist — a second hardcoded list would drift the
+  // first time a role folder is added.
+  if (!(role in ROLE_CONFIGS)) {
+    return { text: `Unknown role "${role}". Valid roles: ${Object.keys(ROLE_CONFIGS).sort().join(', ')}.` };
+  }
+  if (role === 'orchestrator') {
+    return {
+      text: 'The orchestrator wears the host persona — set that with `/persona use <preset>`. ' +
+        'Shadowing applies to the arms it dispatches to.',
+    };
+  }
+
+  const profile = await ensureProfile(userId);
+  const repo = getPersonaProfileRepository();
+
+  if (preset === 'off' || preset === 'none' || preset === 'clear') {
+    await repo.removeFact(profile.id, armFactKey(role));
+    return { text: `**${role}** no longer has its own voice — it runs with no persona, as before.` };
+  }
+
+  await getPersonaRegistry().ensureLoaded();
+  const found = getPersonaRegistry().get(preset);
+  if (!found) return { text: `Preset "${preset}" not found. Use \`/persona personas\` to list.` };
+
+  await repo.upsertFact(profile.id, armFactKey(role), found.id, 'user');
+  return { text: `**${role}** now speaks as **${found.id}** (${found.display_name}, tone: ${found.tone}).` };
+}
+
+async function listArms(userId: string): Promise<PersonaCommandResult> {
+  const repo = getPersonaProfileRepository();
+  const profile = await repo.findForUser(userId);
+  const arms = profile ? PersonaProfileRepository.toFields(profile).armPresets : {};
+  const entries = Object.entries(arms);
+  if (entries.length === 0) {
+    return {
+      text: 'No arm has its own voice yet — every specialist runs with no persona. ' +
+        'Bind one with `/persona arm <role> <preset>`.',
+    };
+  }
+  const lines = entries.map(([role, preset]) => `  • **${role}** → ${preset}`);
+  return { text: `Arms with their own voice:\n${lines.join('\n')}` };
 }
 
 async function listPresets(): Promise<PersonaCommandResult> {

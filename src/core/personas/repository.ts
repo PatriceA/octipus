@@ -13,6 +13,7 @@ import { type Profile, type ProfileFact, profiles } from '@/db/schema/profiles';
  *   - `tone`         — one of PersonaTone
  *   - `narration`    — one of PersonaNarration
  *   - `extra:<n>`    — user-added free-form facts via `/persona say`
+ *   - `arm:<role>`   — persona preset shadowing one arm (`/persona arm`)
  *
  * The profile's `name` column holds the renderable name ("Octipus",
  * or whatever the user picked).
@@ -25,7 +26,16 @@ export interface AssistantProfileFields {
   tone: string;
   narration: string;
   extras: string[];
+  /**
+   * Per-arm persona shadowing: role → preset id, from the `arm:<role>` facts.
+   * Empty for every role the user has not bound, which is the normal case — an
+   * unbound arm gets no persona block at all, exactly as before.
+   */
+  armPresets: Record<string, string>;
 }
+
+/** Fact key holding the persona bound to one arm. */
+export const armFactKey = (role: string) => `arm:${role}`;
 
 export class PersonaProfileRepository {
   private get db() { return getDb(); }
@@ -47,7 +57,12 @@ export class PersonaProfileRepository {
     return rows[0] ?? null;
   }
 
-  async create(userId: string, name: string, fields: AssistantProfileFields): Promise<Profile> {
+  /**
+   * Create a fresh assistant profile. Arm bindings are excluded from the
+   * argument on purpose — a new profile has none, and accepting them here
+   * would offer a second way to write what `/persona arm` owns.
+   */
+  async create(userId: string, name: string, fields: Omit<AssistantProfileFields, 'armPresets'>): Promise<Profile> {
     const facts: ProfileFact[] = [
       { key: 'preset_id', value: fields.presetId, source: 'system', learnedAt: new Date().toISOString() },
       { key: 'pronouns', value: fields.pronouns, source: 'system', learnedAt: new Date().toISOString() },
@@ -130,6 +145,19 @@ export class PersonaProfileRepository {
     return rows[0] ?? null;
   }
 
+  /** Drop one fact by key. Used to unbind an arm's persona. */
+  async removeFact(profileId: string, key: string): Promise<Profile | null> {
+    const existing = await this.findById(profileId);
+    if (!existing) return null;
+    const facts = ((existing.facts as ProfileFact[]) || []).filter(f => f.key !== key);
+    const rows = await this.db
+      .update(profiles)
+      .set({ facts, updatedAt: new Date() })
+      .where(eq(profiles.id, profileId))
+      .returning();
+    return rows[0] ?? null;
+  }
+
   async findById(profileId: string): Promise<Profile | null> {
     const rows = await this.db.select().from(profiles).where(eq(profiles.id, profileId)).limit(1);
     return rows[0] ?? null;
@@ -146,12 +174,17 @@ export class PersonaProfileRepository {
     const extras = facts
       .filter(f => f.key.startsWith('extra:'))
       .map(f => f.value);
+    const armPresets: Record<string, string> = {};
+    for (const f of facts) {
+      if (f.key.startsWith('arm:')) armPresets[f.key.slice('arm:'.length)] = f.value;
+    }
     return {
       presetId: find('preset_id', 'octipus'),
       pronouns: find('pronouns', 'it/we'),
       tone: find('tone', 'dry'),
       narration: find('narration', 'minimal'),
       extras,
+      armPresets,
     };
   }
 }

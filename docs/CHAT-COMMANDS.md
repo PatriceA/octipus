@@ -36,9 +36,27 @@ Persona controls (name, tone, narration, self-facts, presets) are accessible via
 | Narration | `off`, `minimal`, `chatty` | Volume of live swarm narration during agent execution |
 | Facts | Free-form text | Add custom self-facts ("always use bullets"; persists across sessions) |
 | Preset | Dropdown | Switch preset persona (keeps custom name) |
+| Arm voice | `/persona arm <role> <preset\|off>` | Give ONE specialist arm a different voice from the host (see below) |
 | Reset | Button | Restore Octipus default |
 
 Six presets ship by default: `octopus` (default, dry octopus-machine), `terse-engineer`, `mentor`, `nautilus` (maritime), `concierge`, `verbose-academic`. Each is a YAML file under `personas/` you can edit or copy as a new preset.
+
+**Per-arm voices.** The persona above is the orchestrator's. A single arm can
+speak differently — a blunt `review` under a playful host — by binding a preset
+to it:
+
+```
+/persona arm review terse-engineer   # review now speaks as terse-engineer
+/persona arms                        # list every arm that has its own voice
+/persona arm review off              # back to no persona for that arm
+```
+
+Shadowing is opt-in per arm, and an unbound arm carries no persona block at all
+— which is what every specialist did before this existed, and why turning it on
+for one arm costs nothing anywhere else. The preset supplies the voice; your
+chosen name, pronouns and self-facts carry over, because an arm is the same
+assistant speaking differently, not a second assistant you never named. The
+orchestrator itself is set with `/persona use`, not `/persona arm`.
 
 Full spec in [`docs/plans/ux-personality-revamp.md`](plans/ux-personality-revamp.md).
 

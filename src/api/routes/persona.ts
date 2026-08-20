@@ -1,7 +1,7 @@
 import { Elysia, t } from 'elysia';
 import { apiContext } from '@/api/context';
 import { handlePersonaCommand } from '@/core/personas/commands';
-import { getPersonaProfileRepository } from '@/core/personas/repository';
+import { getPersonaProfileRepository, PersonaProfileRepository } from '@/core/personas/repository';
 import { getPersonaRegistry } from '@/core/personas/registry';
 import { resolvePersonaForUser } from '@/core/personas/resolver';
 
@@ -15,6 +15,9 @@ import { resolvePersonaForUser } from '@/core/personas/resolver';
  *   POST   /persona/facts        — append a free-form user fact
  *   DELETE /persona/facts/:idx   — remove a free-form fact by index
  *   POST   /persona/reset        — restore base Octipus
+ *   GET    /persona/arms         — per-arm persona bindings
+ *   PUT    /persona/arms/:role   — shadow one arm's voice with a preset
+ *   DELETE /persona/arms/:role   — clear it (the arm runs with no persona)
  */
 export const personaRoutes = new Elysia({ prefix: '/persona' })
   .use(apiContext)
@@ -166,6 +169,67 @@ export const personaRoutes = new Elysia({ prefix: '/persona' })
         .where(eq(profiles.id, profile.id));
       const persona = await resolvePersonaForUser(user.id);
       return { persona };
+    },
+    { detail: { tags: ['persona'] } },
+  )
+
+  // ── Per-arm persona shadowing (wave 4) ────────────────────────────
+  // An arm with no binding carries NO persona, which is what every arm did
+  // before this existed — so the empty map is the normal, correct answer here.
+  .get(
+    '/arms',
+    async ({ user, set }) => {
+      if (!user || user.id === 'system') {
+        set.status = 401;
+        return { error: 'unauthenticated' };
+      }
+      const profile = await getPersonaProfileRepository().findForUser(user.id);
+      const arms = profile ? PersonaProfileRepository.toFields(profile).armPresets : {};
+      return { arms };
+    },
+    { detail: { tags: ['persona'] } },
+  )
+
+  .put(
+    '/arms/:role',
+    async ({ user, params, body, set }) => {
+      if (!user || user.id === 'system') {
+        set.status = 401;
+        return { error: 'unauthenticated' };
+      }
+      const r = await handlePersonaCommand({
+        userId: user.id,
+        rawArgs: `arm ${params.role} ${body.presetId}`,
+      });
+      // The command layer owns validation (unknown role, unknown preset, and
+      // the orchestrator's "use the host persona instead"). Rather than a
+      // second copy of those rules, treat a refusal as a 400 — the message is
+      // already the explanation.
+      const profile = await getPersonaProfileRepository().findForUser(user.id);
+      const arms = profile ? PersonaProfileRepository.toFields(profile).armPresets : {};
+      if (arms[params.role] !== body.presetId) {
+        set.status = 400;
+        return { error: r.text };
+      }
+      return { message: r.text, arms };
+    },
+    {
+      body: t.Object({ presetId: t.String({ minLength: 1 }) }),
+      detail: { tags: ['persona'] },
+    },
+  )
+
+  .delete(
+    '/arms/:role',
+    async ({ user, params, set }) => {
+      if (!user || user.id === 'system') {
+        set.status = 401;
+        return { error: 'unauthenticated' };
+      }
+      const r = await handlePersonaCommand({ userId: user.id, rawArgs: `arm ${params.role} off` });
+      const profile = await getPersonaProfileRepository().findForUser(user.id);
+      const arms = profile ? PersonaProfileRepository.toFields(profile).armPresets : {};
+      return { message: r.text, arms };
     },
     { detail: { tags: ['persona'] } },
   )

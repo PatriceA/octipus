@@ -89,6 +89,83 @@ export async function resolvePersonaForUser(userId: string): Promise<ResolvedPer
 }
 
 /**
+ * Resolve the persona SHADOWING one arm, or null when that arm has none.
+ *
+ * Per-arm shadowing (roadmap wave 4). One global persona is the orchestrator's
+ * voice; an arm may be given a different one — `review` blunt where the host is
+ * playful — by binding a preset with `/persona arm <role> <preset>`.
+ *
+ * Two decisions worth stating, because both could reasonably have gone the
+ * other way:
+ *
+ *  - **Null when unbound, never the global persona.** Workers have never
+ *    carried a persona block, and quietly starting to send one to every arm
+ *    would change every specialist prompt (and its token cost) as a side effect
+ *    of a feature nobody switched on. Shadowing is opt-in, per arm.
+ *  - **It shadows the VOICE, not the identity.** The user's chosen name,
+ *    pronouns and self-facts carry over; the preset supplies the prompt block,
+ *    tone and phrases. An arm is the same assistant speaking differently, not a
+ *    second assistant the user never named.
+ */
+export async function resolvePersonaForArm(
+  userId: string,
+  role: string,
+): Promise<ResolvedPersona | null> {
+  const registry = getPersonaRegistry();
+  await registry.ensureLoaded();
+
+  let profile: Awaited<ReturnType<PersonaProfileRepository['findForUser']>>;
+  try {
+    profile = await getPersonaProfileRepository().findForUser(userId);
+  } catch (err) {
+    coreLogger.warn({ err, userId, role }, 'persona resolve (arm): profile lookup failed — no shadow');
+    return null;
+  }
+  if (!profile) return null;
+
+  const fields = PersonaProfileRepository.toFields(profile);
+  const presetId = fields.armPresets[role];
+  if (!presetId) return null;
+
+  const preset = registry.get(presetId);
+  if (!preset) {
+    // Loud, but not fatal: a preset removed from disk should not take the arm
+    // down with it — it falls back to the no-persona behaviour it had before.
+    coreLogger.warn(
+      { userId, role, presetId },
+      'arm persona preset not found in registry — arm runs without a persona',
+    );
+    return null;
+  }
+
+  const name = profile.name;
+  const pronouns = fields.pronouns || preset.pronouns;
+  const promptBlock = renderPromptBlock({
+    preset,
+    name,
+    pronouns,
+    tone: preset.tone,
+    userFacts: fields.extras,
+  });
+
+  return {
+    id: preset.id,
+    profileId: profile.id,
+    name,
+    pronouns,
+    tone: preset.tone,
+    promptBlock,
+    // Narration is a host-level concern — an arm does not narrate its own work
+    // to the user, the orchestrator does.
+    narration: 'off',
+    narrationTemplates: preset.narration_templates,
+    signaturePhrases: preset.signature_phrases,
+    userFacts: fields.extras,
+    presetId: preset.id,
+  };
+}
+
+/**
  * Substitute `{{name}}` (and a few other placeholders) inside the
  * preset's prompt block, then append a normalized header + the user's
  * free-form facts. Result is ready to be prepended to the role prompt.

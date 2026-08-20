@@ -178,7 +178,7 @@ curl -H "Authorization: Bearer $OCTIPUS_API_TOKEN" http://localhost:3005/api/aut
 
 ## Persona
 
-Per-user orchestrator persona — name, tone, narration volume, free-form self-facts. Same controls as the `/persona` slash command (see [CHAT-COMMANDS.md](CHAT-COMMANDS.md#personas-orchestrator-identity)) and the web `/persona` page. Writes delegate to `handlePersonaCommand` so validation matches across all three surfaces.
+Per-user orchestrator persona — name, tone, narration volume, free-form self-facts — plus the per-arm voices that shadow it. Same controls as the `/persona` slash command (see [CHAT-COMMANDS.md](CHAT-COMMANDS.md#personas-orchestrator-identity)) and the web `/persona` page. Writes delegate to `handlePersonaCommand` so validation matches across all three surfaces.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -188,6 +188,9 @@ Per-user orchestrator persona — name, tone, narration volume, free-form self-f
 | POST | `/api/persona/facts` | Append a free-form self-fact (`{ fact }`, 4–280 chars) |
 | DELETE | `/api/persona/facts/:idx` | Remove the N-th free-form fact (0-indexed across `extra:*`) |
 | POST | `/api/persona/reset` | Restore Octipus default — drops custom name and facts |
+| GET | `/api/persona/arms` | Per-arm persona bindings (`{ arms: { review: "terse-engineer" } }`); `{}` when no arm has its own voice |
+| PUT | `/api/persona/arms/:role` | Shadow one arm's voice with `{ presetId }`. 400 with the reason for an unknown role/preset, or for `orchestrator` (use `PATCH /api/persona`) |
+| DELETE | `/api/persona/arms/:role` | Clear it — that arm runs with no persona, as before |
 
 ## Tools
 

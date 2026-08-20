@@ -65,3 +65,32 @@ describe('handlePersonaCommand — argument parsing', () => {
     expect(result.text).toContain('Provide a preset id');
   });
 });
+
+// `/persona arm` — only the branches that reject BEFORE any DB write, which is
+// where the rules that matter live (an unknown role or the orchestrator must
+// never reach the profile).
+describe('handlePersonaCommand — /persona arm', () => {
+  const userId = '00000000-0000-0000-0000-000000000000';
+
+  test('missing arguments explain the shape', async () => {
+    const r = await handlePersonaCommand({ userId, rawArgs: 'arm review' });
+    expect(r.text).toContain('/persona arm <role> <preset|off>');
+  });
+
+  test('an unknown role is rejected and the valid ones listed', async () => {
+    const r = await handlePersonaCommand({ userId, rawArgs: 'arm tentacle terse-engineer' });
+    expect(r.text).toContain('Unknown role "tentacle"');
+    expect(r.text).toContain('coding');
+  });
+
+  test('the orchestrator is redirected to the host persona', async () => {
+    const r = await handlePersonaCommand({ userId, rawArgs: 'arm orchestrator mentor' });
+    expect(r.text).toContain('/persona use');
+  });
+
+  test('the help banner advertises the arm subcommands', async () => {
+    const r = await handlePersonaCommand({ userId, rawArgs: 'fhqwhgads' });
+    expect(r.text).toContain('/persona arm');
+    expect(r.text).toContain('/persona arms');
+  });
+});
