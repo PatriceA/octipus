@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import { basename, dirname, extname, join } from 'path';
 import { getConfig } from '@/config';
 import { getEmbeddingService } from '@/core/rag/embeddings';
+import { type PdfTextItem, reconstructPageText } from './pdf-layout';
 import type { AgentMessage } from '@/core/types';
 import { documentRepository } from '@/db/repositories/document-repository';
 import { getLiteLLMClient } from '@/models/litellm-client';
@@ -99,6 +100,13 @@ async function runImageMagick(args: string[], timeoutMs = 15000): Promise<boolea
   const res = spawnSync(bin, args, { timeout: timeoutMs });
   return res.status === 0;
 }
+
+/**
+ * Pages read from one PDF. Beyond this the extractor stops and SAYS so in the
+ * text — an unmarked truncation reads downstream as "the document does not
+ * mention that".
+ */
+const PDF_MAX_PAGES = 50;
 
 let pdftoppmAvailable: boolean | undefined;
 async function hasPdftoppm(): Promise<boolean> {
@@ -419,12 +427,25 @@ export class DocumentProcessor {
       const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
       const pageTexts: string[] = [];
 
-      const maxPages = Math.min(pdf.numPages, 50);
+      const maxPages = Math.min(pdf.numPages, PDF_MAX_PAGES);
       for (let i = 1; i <= maxPages; i++) {
         const page = await pdf.getPage(i);
         const content = await page.getTextContent();
-        const text = content.items.map((item: any) => item.str).join(' ');
+        // Positions, not just strings: joining `item.str` with spaces threw the
+        // page geometry away, interleaving the columns of a two-column paper and
+        // flattening a table into one run of cell values. See `pdf-layout.ts`.
+        const text = reconstructPageText(content.items as PdfTextItem[]);
         if (text.trim()) pageTexts.push(text);
+      }
+
+      // A truncated document must SAY it was truncated. Silently indexing the
+      // first 50 pages of a 400-page manual reads downstream as "the manual
+      // says nothing about that".
+      if (pdf.numPages > maxPages) {
+        pageTexts.push(
+          `[Truncated: pages ${maxPages + 1}–${pdf.numPages} of ${pdf.numPages} were not extracted ` +
+            `(${PDF_MAX_PAGES}-page limit).]`,
+        );
       }
 
       const fullText = pageTexts.join('\n\n').trim();
