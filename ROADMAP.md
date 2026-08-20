@@ -134,27 +134,43 @@ All three landed. What each actually became:
 
 ### Wave 3 — contracts, policy, cost
 
-- **Arm capability contracts + role seams.** Absorbs the older "Dynamic role
-  definition from the chat" item. `AgentRole` is a frozen 17-member union in
-  `src/core/orchestrator/types.ts`, and `spawn-validator.ts` checks depth,
-  same-role starvation, and budget — never whether the target arm can actually
-  do the requested job. Give each arm a declared capability set (tools it can
-  reach, output schemas it honors, depth limits, whether it may delegate) and
-  have dispatch verify it **before** spawning, failing loud instead of
-  returning a plausible generic answer. Then make each arm a seam — a contract
-  with swappable providers — so roles can be installed and replaced at runtime,
-  which is what the "open-ended roster" framing already promises.
+- **Arm capability contracts — SHIPPED (2026-08-20), role seams still open.**
+  `role-contract.ts` asks, before a spawn is paid for, whether the arm can do
+  the job. Two altitudes: `stageContractErrors` is static (the role's declared
+  toolset, narrowed by the stage's own `toolIds`, against what the template says
+  the stage is FOR) and runs beside `validateGraph`, so an impossible template
+  is refused before the first node executes; `toolsetGaps` is runtime, checked
+  in `spawnWorker` at the last point the tool list is still the one the worker
+  will run with — after stage narrowing, capability gating, the read-only strip
+  and the small-model cap, each of which can remove the tool the declaration
+  depends on. Both judge against the sets the evidence gate counts with, so
+  nothing is refused here that the gate would have passed.
+  What is deliberately NOT built: declared *output schemas* and per-role depth
+  limits (no role needs a different depth today, and a shape nobody varies is a
+  knob with no user), and the **role seam** itself — swappable providers behind
+  a role contract, so roles can be installed and replaced at runtime. That last
+  one is the real remaining work here: `AgentRole` is a frozen 17-member union
+  in `src/core/orchestrator/types.ts` and every registry keys off it, so a
+  runtime-installable role is a type-level change, not a config one.
 - **Deterministic policy layer.** Guards exist but are scattered and
   hardcoded across `spawn-validator`, `input-guard`, `output-guard`,
   `audit-coverage`, and `pipeline-evidence-gate`. Now that wave 1 has landed, move them
   behind the waterfall as declarative policy: quotas, sandbox selection,
   egress rules, and approval requirements evaluated in one place, testable
   without booting an agent.
-- **Per-node token budgets in the graph.** `NodeBudget` (tokens, wall clock,
-  `childTokensUsed`) governs swarm nodes; pipeline stages have **no** budget at
-  all, which is also why the planner→executor split cannot reach a pipeline
-  stage. Reuse `NodeBudget` for graph nodes so per-task cost is bounded and
-  attributable, not just per-swarm.
+- **Per-node token budgets in the graph — SHIPPED (2026-08-20).** Two bounds,
+  because they answer different questions. A template step may declare
+  `maxTokens`, persisted on the node row and handed to the worker as its cap —
+  that bounds ONE visit. `orchestrator.pipelineTokenBudget` (2M default, 0
+  disables) is the pool for the whole run, checked at the node boundary against
+  every node's cumulative spend. The pool is the load-bearing one: a `foreach`
+  node is entered once per plan item and items can be appended mid-run, so the
+  visit count is not known when the run starts and no per-visit cap can bound
+  the run. Spend is charged in a `finally` — a stage that failed is charged for
+  what it burned — and `pipeline_nodes.tokens_used` accumulates across visits,
+  since a node the QA loop sent back three times cost all three visits.
+  Still open: the planner→executor split still cannot reach a pipeline stage,
+  and wall clock has no per-node bound — only the pipeline-wide worker timeout.
 - **Eval: regression gating and memory-aware assertions.** The YAML harness,
   nine assertion types, the `/eval` page, and CI runs already exist. What is
   missing is the loop: score a prompt *diff* against a dataset and gate the
