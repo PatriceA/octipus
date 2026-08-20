@@ -17,14 +17,6 @@ This doc lists what we are exploring. Order inside each section is rough priorit
   routing, cost tracking, rate limiting, and provider discovery
   can finally assert on what the client actually does. **Help wanted.**
 
-- **Memory-aware eval harness.** `eval/*.yaml` runs against
-  `classifyMessage` (unit mode) or the running backend (integration
-  mode); neither shape can pre-seed the `memories` table or assert
-  that a response surfaces a known fact. The harness needs a per-test
-  setup hook (`memorySetup: [{ factType, content, agentScope }]`)
-  and a new assertion type (`recalls_memory`). Without it, the
-  memory-redesign Phase D extractor + judge + retrieval pipeline
-  has integration-test coverage on the data layer only.
 
 - **Live Artifacts — BETA.** `src/core/artifacts/`, `/api/artifacts`,
   `web/app/artifacts/`, and the `create_live_artifact` meta-tool are
@@ -186,10 +178,21 @@ All three landed. What each actually became:
   since a node the QA loop sent back three times cost all three visits.
   Still open: the planner→executor split still cannot reach a pipeline stage,
   and wall clock has no per-node bound — only the pipeline-wide worker timeout.
-- **Eval: regression gating and memory-aware assertions.** The YAML harness,
-  nine assertion types, the `/eval` page, and CI runs already exist. What is
-  missing is the loop: score a prompt *diff* against a dataset and gate the
-  change on it, plus the memory-aware setup hook tracked under **Now**.
+- **Eval: regression gating and memory-aware assertions — SHIPPED (2026-08-20).**
+  `--baseline <path|latest>` compares a run to a previous results file PER TEST
+  and exits 1 on a regression — a test that passed then and fails now — whatever
+  happened to the aggregate, because one test fixed and one broken nets out to
+  no movement. Recoveries, new tests and tests this run filtered out are
+  reported and gate nothing.
+  `memorySetup` + the `recalls_memory` assertion close the other half: facts are
+  seeded for the test's user before the request and hard-deleted after it, so
+  the extractor → judge → retrieval pipeline finally has coverage above its data
+  layer. Seeded tests are integration-mode only (unit mode never reads the
+  table) and need a real user UUID and a bound `embedding` model; a test that
+  cannot be seeded is reported as failed with the reason rather than run without
+  its facts. See `docs/EVALUATIONS.md`.
+  Not wired into CI: gating there needs a committed baseline produced by a real
+  run against real models, which is a decision about which models CI pays for.
 
 ### Wave 4 — after parity
 
