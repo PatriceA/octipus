@@ -152,12 +152,27 @@ All three landed. What each actually became:
   one is the real remaining work here: `AgentRole` is a frozen 17-member union
   in `src/core/orchestrator/types.ts` and every registry keys off it, so a
   runtime-installable role is a type-level change, not a config one.
-- **Deterministic policy layer.** Guards exist but are scattered and
-  hardcoded across `spawn-validator`, `input-guard`, `output-guard`,
-  `audit-coverage`, and `pipeline-evidence-gate`. Now that wave 1 has landed, move them
-  behind the waterfall as declarative policy: quotas, sandbox selection,
-  egress rules, and approval requirements evaluated in one place, testable
-  without booting an agent.
+- **Deterministic policy layer — approvals SHIPPED (2026-08-20).** The part of
+  this that was genuinely scattered was the approval decision: whether an
+  ASK-level tool call blocks for a human was decided twice, in the agent loop
+  and in the tool middleware, as the same inline condition with a comment in
+  each asking the other to be kept in sync. `security/approval-policy.ts` is now
+  the one place, pure and exhaustively testable, and it can express what two
+  inline conditions could not — `multiuser.unattendedDenyActions`, the actions
+  an operator wants REFUSED rather than silently auto-approved when nobody is
+  watching (empty by default: a list invented for everyone would break working
+  runs).
+  The rest of the original item was re-read against the code and mostly does not
+  exist as a problem. Quotas are budgets, and they now live in two named places
+  (`LEVEL_DEFAULT` for swarm, `pipelineTokenBudget` + a step's `maxTokens` for
+  the graph). Sandbox selection is already one declarative knob
+  (`security.shellSandbox`). The remaining guards — `spawn-validator`,
+  `input-guard`, `output-guard`, `audit-coverage`, `pipeline-evidence-gate` —
+  are each already a single pure module with its own tests; moving them behind
+  the waterfall would buy a directory, not a property, and would put five
+  load-bearing checks through a rewrite for it. Left where they are, on purpose.
+  Still open: egress rules (there is secret scrubbing on tool results, but no
+  declarative allow/deny for what a tool may reach).
 - **Per-node token budgets in the graph — SHIPPED (2026-08-20).** Two bounds,
   because they answer different questions. A template step may declare
   `maxTokens`, persisted on the node row and handed to the worker as its cap —
