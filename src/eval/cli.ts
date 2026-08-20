@@ -17,6 +17,7 @@
 
 import { resolve } from 'path';
 import { loadSuites } from './loader';
+import { compareToBaseline, formatRegressionReport, hasRegressions } from './regression';
 import { reportDetailedToConsole, reportToConsole, saveResults, toJSON } from './reporter';
 import { runAllSuites } from './runner';
 import type { EvalRunnerOptions } from './types';
@@ -29,6 +30,7 @@ function parseArgs(argv: string[]): {
   jsonOnly: boolean;
   noSave: boolean;
   evalDir?: string;
+  baseline?: string;
   help: boolean;
 } {
   const options: EvalRunnerOptions = {};
@@ -36,6 +38,7 @@ function parseArgs(argv: string[]): {
   let jsonOnly = false;
   let noSave = false;
   let evalDir: string | undefined;
+  let baseline: string | undefined;
   let help = false;
 
   for (let i = 2; i < argv.length; i++) {
@@ -83,6 +86,9 @@ function parseArgs(argv: string[]): {
       case '--eval-dir':
         evalDir = argv[++i];
         break;
+      case '--baseline':
+        baseline = argv[++i];
+        break;
       case '--help':
       case '-h':
         help = true;
@@ -98,7 +104,7 @@ function parseArgs(argv: string[]): {
     }
   }
 
-  return { options, detailed, jsonOnly, noSave, evalDir, help };
+  return { options, detailed, jsonOnly, noSave, evalDir, baseline, help };
 }
 
 function printHelp() {
@@ -119,6 +125,10 @@ Options:
   --json, -j              Output JSON only (no console table)
   --no-save               Don't save results to eval/results/
   --eval-dir <path>       Custom eval directory (default: ./eval)
+  --baseline <path>       Gate on regressions against a previous results file.
+                          Pass "latest" for the newest file in eval/results/.
+                          A test that PASSED in the baseline and fails now exits 1,
+                          even if the overall score went up.
   --help, -h              Show this help message
 
 Examples:
@@ -146,8 +156,28 @@ async function exitClean(code: number): Promise<never> {
   process.exit(code);
 }
 
+/**
+ * Resolve `--baseline`. A path is used as given; `latest` picks the newest
+ * `eval-*.json` in the results directory, which is what a developer means by
+ * "compare against the last run" without having to name a timestamp.
+ */
+async function resolveBaselinePath(arg: string, resultsDir: string): Promise<string | null> {
+  if (arg !== 'latest') return (await Bun.file(arg).exists()) ? arg : null;
+  const { readdirSync } = await import('fs');
+  let names: string[];
+  try {
+    names = readdirSync(resultsDir).filter((n) => n.startsWith('eval-') && n.endsWith('.json'));
+  } catch {
+    return null;
+  }
+  // Filenames are ISO timestamps with `:`/`.` replaced, so they sort lexically
+  // in chronological order.
+  const newest = names.sort().pop();
+  return newest ? resolve(resultsDir, newest) : null;
+}
+
 async function main() {
-  const { options, detailed, jsonOnly, noSave, evalDir, help } = parseArgs(process.argv);
+  const { options, detailed, jsonOnly, noSave, evalDir, baseline, help } = parseArgs(process.argv);
 
   if (help) {
     printHelp();
@@ -255,8 +285,28 @@ async function main() {
     }
   }
 
+  // Regression gate. Deliberately independent of the pass/fail exit below: a
+  // suite with known-failing tests still has a meaningful baseline, and the
+  // question "did this change break something that worked" is not the same
+  // question as "is everything green".
+  let regressed = false;
+  if (baseline) {
+    const path = await resolveBaselinePath(baseline, resolve(dir, 'results'));
+    if (!path) {
+      console.error(`No baseline found (${baseline}). Run once without --baseline to create one.`);
+      if (dbInitialized) await exitClean(2);
+      process.exit(2);
+    }
+    const report = compareToBaseline(JSON.parse(await Bun.file(path).text()), results);
+    if (!jsonOnly) {
+      console.log(`\nBaseline: ${path}`);
+      console.log(formatRegressionReport(report));
+    }
+    regressed = hasRegressions(report);
+  }
+
   // Exit code: 0 if all passed, 1 if any failed
-  const anyFailed = results.some(r => r.failed > 0);
+  const anyFailed = results.some(r => r.failed > 0) || regressed;
   if (dbInitialized) await exitClean(anyFailed ? 1 : 0);
   process.exit(anyFailed ? 1 : 0);
 }

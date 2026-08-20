@@ -59,6 +59,7 @@ octipus/
 | `bun run db:studio` | Open Drizzle Studio |
 | `bun run setup` | Interactive setup wizard |
 | `bun run eval` | Run eval suite (can add `--suite routing` or `--suite quality`) |
+| `bun run eval --baseline latest` | Same, plus a regression gate: exits 1 if any test that PASSED in the newest `eval/results/*.json` now fails, even when the overall score improved. Pass a path instead of `latest` to pin a committed baseline. |
 | `bun run build` | Build backend for distribution |
 | `bun run build:cli` | Compile `bin/octi.ts` → static `dist/octi` binary |
 | `bun run backup` | Backup database, Valkey, config, vault |
