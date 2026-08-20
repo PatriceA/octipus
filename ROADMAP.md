@@ -196,15 +196,36 @@ All three landed. What each actually became:
 
 ### Wave 4 — after parity
 
-- **Per-arm persona shadowing.** One global persona today. Let a scoped persona
-  replace the global one for a single arm, so a specialist's voice and
-  constraints differ from the orchestrator's. Small; deliberately after the
-  seams land.
-- **Layout-grounded multimodal parsing.** Complex PDF and GUI understanding
-  beyond what upstream model vision returns.
-- **Native mobile clients.** iOS/Android over the gateway protocol. The web UI
-  is responsive but not installable; Telegram/Slack proxying covers the gap
-  for now.
+- **Per-arm persona shadowing — SHIPPED (2026-08-20).** `/persona arm <role>
+  <preset>` (and `PUT /api/persona/arms/:role`) binds a preset to one arm, so a
+  blunt `review` can run under a playful host. Two properties are load-bearing:
+  an UNBOUND arm still carries no persona block at all — workers never had one,
+  and quietly sending every specialist the host's voice would change every
+  worker prompt and its token cost as a side effect of a feature nobody switched
+  on — and shadowing replaces the VOICE, not the identity, so the user's name,
+  pronouns and self-facts carry over. Bindings are `arm:<role>` facts on the
+  existing assistant profile, so there was no migration and `/persona reset`
+  clears them.
+- **Layout-grounded parsing — PDF SHIPPED (2026-08-20), GUI still open.** The
+  text path threw the page geometry away (`items.map(i => i.str).join(' ')`),
+  which is why a two-column paper arrived with its columns interleaved and a
+  form arrived as one run of labels and values. `documents/pdf-layout.ts`
+  rebuilds lines, column/cell gaps and paragraphs from the item transforms with
+  no new dependency, and the 50-page cap now writes a truncation note instead of
+  letting a partial index read as a complete one. Deliberately NOT attempted:
+  a table recovered as a grid, true multi-column flow ordering, and
+  GUI-screenshot understanding — the last belongs to the vision/OCR path, which
+  never had this problem.
+- **Native mobile clients — EXISTS, out of this repo.** The entry used to say
+  the web UI was "responsive but not installable" and that channel proxying
+  covered the gap; that has been stale for months. A Flutter client lives in a
+  separate repo (`PatriceA/mobile-octipus`): iOS + Android, pairing with token
+  refresh, LAN/public URL failover, offline cache, the WebSocket event stream,
+  and feature screens for chat, tasks, inbox, notes, research, agents, skills
+  and settings, with fastlane and Play Store packaging. It is at `0.1.0` and
+  carries its own `ISSUES.md`, so the real work here is finishing and shipping
+  that app, not starting one. Nothing in this repo references it — that is the
+  first thing to fix.
 
 ### Carried forward (unchanged, unblocked independently)
 
