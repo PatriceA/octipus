@@ -1,3 +1,4 @@
+import { getConfig } from '@/config';
 import { desc, eq, inArray } from 'drizzle-orm';
 import { getNotificationService } from '@/core/notification-service';
 import { recordRunEvent } from '@/core/run-log';
@@ -250,6 +251,22 @@ async function resolveStageModel(
   }
 
   return (await registry.getModelForTopic(topic))?.modelId || undefined;
+}
+
+/**
+ * The pipeline-pool decision, pure so it is directly testable.
+ *
+ * Returns the failure summary when the run has spent its pool, else null. A
+ * pool of 0 disables the bound, and the comparison is `>=` because the pool is
+ * a ceiling on what a run may spend, not on what it may have spent before its
+ * last node.
+ */
+export function poolExhaustedSummary(pool: number, spent: number, nextNodeName: string): string | null {
+  if (pool <= 0 || spent < pool) return null;
+  return (
+    `Pipeline exhausted its ${pool.toLocaleString()}-token pool (${spent.toLocaleString()} spent) ` +
+    `before "${nextNodeName}".`
+  );
 }
 
 /** What a stage said it was for. Both flags are opt-in declarations from the
@@ -518,6 +535,7 @@ export class PipelineManager {
           requiresApproval: n.parentKey ? false : b.requiresApproval,
           ordinal: n.ordinal,
           parentNodeKey: n.parentKey ?? null,
+          maxTokens: b.maxTokens ?? null,
         };
       }),
     );
@@ -700,6 +718,27 @@ export class PipelineManager {
           pipelineId: pipeline.id,
           result: `Pipeline paused before "${byKey.get(cursor)?.name ?? cursor}".`,
         };
+      }
+
+      // Pipeline token pool. Per-node caps bound a VISIT; this bounds the RUN,
+      // which is the only bound a `foreach` respects — its item count is not
+      // known when the run starts, because a review or QA node can append
+      // items to the plan while the loop is running. Checked at the node
+      // boundary, so an over-budget run stops before paying for one more node
+      // rather than mid-turn.
+      const pool = getConfig().orchestrator.pipelineTokenBudget;
+      const spent = [...nodes.values()].reduce((sum, n) => sum + n.tokensUsed, 0);
+      const summary = poolExhaustedSummary(pool, spent, byKey.get(cursor)?.name ?? cursor);
+      if (summary) {
+        await this.updatePipeline(pipeline.id, { status: 'failed', summary });
+        recordRunEvent({
+          runId: sessionId,
+          subject: 'pipeline',
+          subjectId: pipeline.id,
+          event: 'budget_exhausted',
+          payload: { pool, spent, nodeKey: cursor },
+        });
+        return { pipelineId: pipeline.id, result: summary };
       }
 
       if (++steps > MAX_STEPS) {
@@ -1725,6 +1764,7 @@ export class PipelineManager {
       metadata: { pipelineId: pipeline.id, stageId: node.id, pipelineEvent: 'stage_started' },
     }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
 
+    let spentTokens = 0;
     try {
       // Resolve the model for this node's topic. Node override → a mechanical
       // node's lane executor → topic binding.
@@ -1749,6 +1789,12 @@ export class PipelineManager {
           // Held to the same declaration the evidence gate judges afterwards —
           // but BEFORE the model runs, against the tools it will actually hold.
           purpose: { producesArtifacts: declared.producesArtifacts, runsCommands: declared.runsCommands },
+          // `NodeBudget.tokens.cap` for a graph node. Null ⇒ the global
+          // per-agent default, which is what every stage ran on before.
+          ...(node.maxTokens != null ? { maxTokenBudget: node.maxTokens } : {}),
+          // Charged cumulatively: a retry inside the worker, and every later
+          // visit of this node, add to the same total.
+          onTokens: (t) => { spentTokens += t; },
           ...(this.grantedToolIds(declared) ? { extraToolIds: this.grantedToolIds(declared) } : {}),
           swarmParent: {
             id: args.orchestratorAgentId,
@@ -1858,6 +1904,29 @@ export class PipelineManager {
       ).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
 
       return { output: '', stopped: { pipelineId: pipeline.id, result: `Pipeline failed at "${node.name}": ${errorMsg}` } };
+    } finally {
+      // Charge the node whatever this visit cost, success or failure — a run
+      // that failed still burned the tokens, and the pool it draws from is what
+      // bounds a loop whose item count is not known when the run starts. The
+      // in-memory row is updated too: the walker sums it without re-reading.
+      if (spentTokens > 0) {
+        node.tokensUsed += spentTokens;
+        await this.updateNode(node.id, { tokensUsed: node.tokensUsed });
+        recordRunEvent({
+          runId: sessionId,
+          subject: 'pipeline_node',
+          subjectId: node.nodeKey,
+          event: 'node_tokens',
+          payload: {
+            pipelineId: pipeline.id,
+            name: node.name,
+            visit: node.visits,
+            tokens: spentTokens,
+            cumulative: node.tokensUsed,
+            cap: node.maxTokens ?? null,
+          },
+        });
+      }
     }
   }
 

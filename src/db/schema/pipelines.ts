@@ -110,6 +110,18 @@ export const pipelineNodes = pgTable('pipeline_nodes', {
   parentNodeKey: text('parent_node_key'),
   /** How many times the walker has entered this node. Bounds are on the edges. */
   visits: integer('visits').default(0).notNull(),
+  /**
+   * Tokens this node has cost, CUMULATIVE across visits — a node the QA loop
+   * sent back three times cost what all three visits cost, and a budget has to
+   * be judged against that, not against the last one.
+   */
+  tokensUsed: integer('tokens_used').default(0).notNull(),
+  /**
+   * Per-node token cap (`NodeBudget.tokens.cap` for a graph node), from the
+   * template's `maxTokens`. NULL ⇒ the global per-agent default. Bounds ONE
+   * visit: the pipeline-wide pool is what bounds a loop that keeps coming back.
+   */
+  maxTokens: integer('max_tokens'),
   error: text('error'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   completedAt: timestamp('completed_at', { withTimezone: true }),

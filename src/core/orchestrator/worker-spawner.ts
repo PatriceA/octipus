@@ -380,6 +380,17 @@ export async function spawnWorker(
      * it — see `role-contract.ts`. Absent ⇒ no contract, no check.
      */
     purpose?: DeclaredPurpose,
+    /**
+     * Per-visit token cap for this worker (`NodeBudget.tokens.cap` for a graph
+     * node). Absent ⇒ the global per-agent default.
+     */
+    maxTokenBudget?: number;
+    /**
+     * Receives the worker's total token spend once it has run — including the
+     * spend of a run that FAILED, which is the number a budget has to be
+     * charged for. A side channel like `onCounters`, for the same reason.
+     */
+    onTokens?: (tokens: number) => void;
   },
 ): Promise<unknown> {
   const agentManager = getAgentManager();
@@ -1034,6 +1045,7 @@ Use these MCP tools when the task benefits from them — especially for people-r
     tools: workerTools,
     toolAdvertisement,
     parentAgentId: overrides?.swarmParent?.id,
+    maxTokenBudget: overrides?.maxTokenBudget,
   });
 
   const workerId = worker.getContext().id;
@@ -1138,6 +1150,7 @@ Use these MCP tools when the task benefits from them — especially for people-r
     const result = await worker.run(workerMessage);
     const durationMs = Date.now() - startTime;
     overrides?.onCounters?.(await stageCounters(worker, overrides?.swarmParent ? workerId : null));
+    overrides?.onTokens?.(worker.getTotalTokens());
 
     // A pipeline stage's report IS the next stage's input, so a fragment of a
     // cut-off turn cannot be allowed to stand in for one. Measured: a Testing
@@ -1270,6 +1283,8 @@ Use these MCP tools when the task benefits from them — especially for people-r
       tools: workerTools,
       toolAdvertisement,
       onCounters: overrides?.onCounters,
+      onTokens: overrides?.onTokens,
+      maxTokenBudget: overrides?.maxTokenBudget,
     });
   }
 }
@@ -1286,6 +1301,11 @@ interface WorkerRespawnContext {
   toolAdvertisement: import('@/core/agent-base').ToolAdvertisement;
   /** Caller's side-effect sink — the respawned worker reports through it too. */
   onCounters?: (counters: import('@/core/swarm/receipt').SideEffectCounters | null) => void;
+  /** Caller's token sink. Called once per worker that ran, so a failed attempt
+   *  and the retry that followed it are both charged. */
+  onTokens?: (tokens: number) => void;
+  /** Per-visit cap, re-applied to the respawn — a retry is not a fresh budget. */
+  maxTokenBudget?: number;
 }
 
 /**
@@ -1311,6 +1331,9 @@ async function handleWorkerFailure(
   coreLogger.error({ error, workerId, role: agentRole }, 'Worker agent failed');
 
   const failedTokens = worker.getTotalTokens();
+  // A run that failed still cost what it cost. Charging it is the difference
+  // between a budget and a bill for successes only.
+  respawnCtx.onTokens?.(failedTokens);
   if (failedTokens > 0) {
     sessionRepository.incrementMessageCount(context.sessionId, failedTokens).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in worker-spawner'));
   }
@@ -1387,6 +1410,7 @@ async function handleWorkerFailure(
       systemPrompt: respawnCtx.systemPrompt,
       tools: respawnCtx.tools,
       toolAdvertisement: respawnCtx.toolAdvertisement,
+      maxTokenBudget: respawnCtx.maxTokenBudget,
     });
     const workerMessage = input
       ? `${task}\n\n--- Context from previous steps ---\n${input}`
@@ -1396,6 +1420,7 @@ async function handleWorkerFailure(
     // so there are no children to fold in — its own counters are the whole
     // story. Routed through the same helper so both paths stay in step.
     respawnCtx.onCounters?.(await stageCounters(retryWorker, null));
+    respawnCtx.onTokens?.(retryWorker.getTotalTokens());
     deps.emit({
       type: 'worker_completed',
       sessionId: context.sessionId,

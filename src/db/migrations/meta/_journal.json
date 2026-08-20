@@ -631,6 +631,13 @@
       "when": 1785780449098,
       "tag": "0088_human_nodes",
       "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1785780449099,
+      "tag": "0089_node_token_budgets",
+      "breakpoints": true
     }
   ]
 }

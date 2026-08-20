@@ -123,6 +123,16 @@ export interface PipelineStepConfig {
    * round trip to a human who has already answered.
    */
   humanFields?: { key: string; label: string; options?: string[] }[];
+  /**
+   * Per-visit token cap for this step's worker (`NodeBudget.tokens.cap` for a
+   * graph node). Absent ⇒ the global per-agent default, which is what every
+   * stage used before budgets reached the graph.
+   *
+   * Bounds ONE visit. A `foreach` body is entered once per plan item and items
+   * can be appended mid-run, so what bounds the RUN is the pipeline-wide pool
+   * (`pipelines.metadata.tokenBudget`), not this.
+   */
+  maxTokens?: number;
 }
 
 /**

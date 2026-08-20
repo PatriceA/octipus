@@ -90,6 +90,8 @@ export const defaultConfig: Partial<Config> = {
     orchestratorTimeoutMs: 1800000,
     /** Orchestrator agent timeout for unattended hook-triggered runs (45 min). */
     orchestratorHookTimeoutMs: 2700000,
+    /** Token pool for one pipeline run, summed over node visits. 0 = off. */
+    pipelineTokenBudget: 2_000_000,
   },
   multiuser: {
     // Octipus is always multi-user — there is no single-user mode and no

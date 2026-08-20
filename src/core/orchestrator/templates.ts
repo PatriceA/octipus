@@ -32,6 +32,8 @@ export interface StageTemplate {
   producesPlan?: boolean;
   /** Answer shape for a `human_input` stage — see PipelineStepConfig. */
   humanFields?: { key: string; label: string; options?: string[] }[];
+  /** Per-visit token cap for this stage's worker — see PipelineStepConfig. */
+  maxTokens?: number;
 }
 
 export interface PipelineTemplate {
@@ -67,6 +69,7 @@ export function stepConfigToStageTemplate(step: PipelineStepConfig): StageTempla
     loopOverPlan: step.loopOverPlan,
     producesPlan: step.producesPlan,
     humanFields: step.humanFields,
+    maxTokens: step.maxTokens,
     toolIds: step.toolIds,
   };
 }
@@ -326,6 +329,7 @@ export function buildStagesFromTemplate(
       mechanical: stage.mechanical,
       loopOverPlan: stage.loopOverPlan,
       producesPlan: stage.producesPlan,
+      maxTokens: stage.maxTokens,
     };
   });
 }

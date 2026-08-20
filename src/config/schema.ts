@@ -270,6 +270,17 @@ export const orchestratorConfigSchema = z.object({
   workerTimeoutMs: z.number().min(0).default(600000), // 10 minutes
   orchestratorTimeoutMs: z.number().min(0).default(1800000), // 30 minutes
   orchestratorHookTimeoutMs: z.number().min(0).default(2700000), // 45 minutes for hook-triggered runs
+  /**
+   * Token pool for one pipeline RUN, summed over every node visit. 0 disables
+   * the pool.
+   *
+   * Per-node caps bound a visit, not a run: a `foreach` body is entered once
+   * per plan item and items can be appended mid-run by a review or QA node, so
+   * the node count is not known when the run starts. This is the bound that
+   * does not depend on knowing it. Generous by design — it exists to stop a
+   * non-converging run, not to shape a converging one.
+   */
+  pipelineTokenBudget: z.number().min(0).default(2_000_000),
 });
 
 // OAuth configuration schema

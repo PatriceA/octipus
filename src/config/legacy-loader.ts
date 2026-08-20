@@ -133,6 +133,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       piiFilterEnabled: process.env.PII_FILTER_ENABLED !== 'false',
       maxPipelineStages: parseInt(process.env.MAX_PIPELINE_STAGES || '10', 10),
       approvalTimeoutMs: parseInt(process.env.APPROVAL_TIMEOUT_MS || '3600000', 10),
+      pipelineTokenBudget: parseInt(process.env.PIPELINE_TOKEN_BUDGET || '2000000', 10),
       workerTimeoutMs: parseInt(process.env.WORKER_TIMEOUT_MS || '600000', 10),
       orchestratorTimeoutMs: parseInt(process.env.ORCHESTRATOR_TIMEOUT_MS || '1800000', 10),
       orchestratorHookTimeoutMs: parseInt(process.env.ORCHESTRATOR_HOOK_TIMEOUT_MS || '2700000', 10),

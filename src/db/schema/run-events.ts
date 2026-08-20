@@ -26,6 +26,8 @@ export const runEventSubjectEnum = pgEnum('run_event_subject', [
   'pipeline_node',
   'plan_item',
   'tool',
+  // The run as a whole, for what belongs to no single node — the token pool.
+  'pipeline',
 ]);
 
 export const runEventTypeEnum = pgEnum('run_event_type', [
@@ -48,6 +50,11 @@ export const runEventTypeEnum = pgEnum('run_event_type', [
   // and a durable copy of every tool payload is a data-retention problem nobody
   // asked for.
   'tool_call',
+  // Budgets (wave 3). `node_tokens` is what one node visit cost, charged
+  // whether the visit succeeded or failed; `budget_exhausted` is the run
+  // stopping because the pool is gone.
+  'node_tokens',
+  'budget_exhausted',
 ]);
 
 export const runEvents = pgTable(

@@ -708,6 +708,10 @@ export class OrchestratorService {
       extraToolIds?: string[];
       /** Declared purpose, checked against the resolved toolset. See spawnWorker. */
       purpose?: import('./role-contract').DeclaredPurpose;
+      /** Per-visit token cap for this worker. See spawnWorker. */
+      maxTokenBudget?: number;
+      /** Token sink, called once per worker that ran. See spawnWorker. */
+      onTokens?: (tokens: number) => void;
     },
   ): Promise<unknown> {
     return spawnWorker(role, task, input, context, this.deps, overrides);
