@@ -131,7 +131,11 @@ jobs:
       - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+          # --no-install-recommends: the plain install pulls ~188 packages
+          # (gstreamer, pipewire, docs) and spent 16 min in the Azure mirror
+          # on 2026-08-19. Only the link-time deps are needed to compile.
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libappindicator3-dev \
             librsvg2-dev patchelf libgtk-3-dev
 
       - name: Setup Rust
