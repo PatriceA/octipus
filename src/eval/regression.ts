@@ -14,6 +14,7 @@
  * reported as new rather than silently counted as either.
  */
 
+import { resolve } from 'node:path';
 import type { EvalSuiteResult } from './types';
 
 /** One test's outcome, flattened out of the nested suite/result shape. */
@@ -143,4 +144,24 @@ export function formatRegressionReport(report: RegressionReport): string {
   if (report.regressions.length === 0) lines.push('  no regressions');
 
   return lines.join('\n');
+}
+
+/**
+ * Resolve `--baseline`. A path is used as given; `latest` picks the newest
+ * `eval-*.json` in the results directory, which is what a developer means by
+ * "compare against the last run" without having to name a timestamp.
+ */
+export async function resolveBaselinePath(arg: string, resultsDir: string): Promise<string | null> {
+  if (arg !== 'latest') return (await Bun.file(arg).exists()) ? arg : null;
+  const { readdirSync } = await import('fs');
+  let names: string[];
+  try {
+    names = readdirSync(resultsDir).filter((n) => n.startsWith('eval-') && n.endsWith('.json'));
+  } catch {
+    return null;
+  }
+  // Filenames are ISO timestamps with `:`/`.` replaced, so they sort lexically
+  // in chronological order.
+  const newest = names.sort().pop();
+  return newest ? resolve(resultsDir, newest) : null;
 }

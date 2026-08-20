@@ -2,8 +2,11 @@
  * Regression gating. The property that matters: an aggregate that did not move
  * must not hide a test that broke.
  */
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
-import { compareToBaseline, hasRegressions } from './regression';
+import { compareToBaseline, formatRegressionReport, hasRegressions, resolveBaselinePath } from './regression';
 import type { EvalSuiteResult } from './types';
 
 const suite = (name: string, tests: [string, boolean][]): EvalSuiteResult => ({
@@ -81,5 +84,43 @@ describe('compareToBaseline', () => {
       [suite('routing', [['a', false]])],
     );
     expect(hasRegressions(report)).toBe(true);
+  });
+});
+
+describe('formatRegressionReport', () => {
+  test('names each regression, and says so plainly when there are none', () => {
+    const clean = compareToBaseline(
+      [suite('routing', [['a', true]])],
+      [suite('routing', [['a', true]])],
+    );
+    expect(formatRegressionReport(clean)).toContain('no regressions');
+
+    const broken = compareToBaseline(
+      [suite('routing', [['a', true]])],
+      [suite('routing', [['a', false]])],
+    );
+    const text = formatRegressionReport(broken);
+    expect(text).toContain('REGRESSED (1)');
+    expect(text).toContain('routing/a');
+    expect(text).not.toContain('no regressions');
+  });
+});
+
+describe('resolveBaselinePath', () => {
+  test('"latest" picks the newest run — filenames sort chronologically', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'eval-baseline-'));
+    writeFileSync(join(dir, 'eval-2026-01-01T00-00-00.json'), '{}');
+    writeFileSync(join(dir, 'eval-2026-08-20T09-00-00.json'), '{}');
+    writeFileSync(join(dir, 'not-a-result.txt'), 'x');
+    expect(await resolveBaselinePath('latest', dir)).toBe(join(dir, 'eval-2026-08-20T09-00-00.json'));
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('an empty or missing results directory resolves to nothing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'eval-baseline-'));
+    expect(await resolveBaselinePath('latest', dir)).toBeNull();
+    expect(await resolveBaselinePath('latest', join(dir, 'nope'))).toBeNull();
+    expect(await resolveBaselinePath(join(dir, 'nope.json'), dir)).toBeNull();
+    rmSync(dir, { recursive: true, force: true });
   });
 });

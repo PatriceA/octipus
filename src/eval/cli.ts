@@ -17,7 +17,7 @@
 
 import { resolve } from 'path';
 import { loadSuites } from './loader';
-import { compareToBaseline, formatRegressionReport, hasRegressions } from './regression';
+import { compareToBaseline, formatRegressionReport, hasRegressions, resolveBaselinePath } from './regression';
 import { reportDetailedToConsole, reportToConsole, saveResults, toJSON } from './reporter';
 import { runAllSuites } from './runner';
 import type { EvalRunnerOptions } from './types';
@@ -154,26 +154,6 @@ async function exitClean(code: number): Promise<never> {
     /* close failure is non-fatal */
   }
   process.exit(code);
-}
-
-/**
- * Resolve `--baseline`. A path is used as given; `latest` picks the newest
- * `eval-*.json` in the results directory, which is what a developer means by
- * "compare against the last run" without having to name a timestamp.
- */
-async function resolveBaselinePath(arg: string, resultsDir: string): Promise<string | null> {
-  if (arg !== 'latest') return (await Bun.file(arg).exists()) ? arg : null;
-  const { readdirSync } = await import('fs');
-  let names: string[];
-  try {
-    names = readdirSync(resultsDir).filter((n) => n.startsWith('eval-') && n.endsWith('.json'));
-  } catch {
-    return null;
-  }
-  // Filenames are ISO timestamps with `:`/`.` replaced, so they sort lexically
-  // in chronological order.
-  const newest = names.sort().pop();
-  return newest ? resolve(resultsDir, newest) : null;
 }
 
 async function main() {
