@@ -69,18 +69,19 @@ export function refreshConfigKey(key: string, value: unknown): void {
   let target: Record<string, unknown> = cachedConfig[section] as Record<string, unknown>;
   for (let i = 1; i < path.length - 1; i++) {
     const segment = path[i];
-    // Re-checked per segment, not only up-front. The whole-path check above is
-    // the behaviour ("refuse the update"); this makes the walk itself provably
-    // unable to leave the object it was given, for a reader or an analyzer that
-    // sees the loop without the guard twenty lines earlier.
-    if (isPrototypePath([segment])) return;
+    // Written out literally, and repeated at the leaf below, rather than
+    // delegated to `isPrototypePath`. The whole-path refusal above is the
+    // behaviour; these two are the local proof that the walk cannot leave the
+    // object it was handed — for a reader arriving at the loop, and for CodeQL,
+    // which follows the assignment but not a guard behind a helper call.
+    if (segment === '__proto__' || segment === 'constructor' || segment === 'prototype') return;
     if (!Object.hasOwn(target, segment) || !target[segment] || typeof target[segment] !== 'object') {
       target[segment] = {};
     }
     target = target[segment] as Record<string, unknown>;
   }
   const leaf = path[path.length - 1];
-  if (isPrototypePath([leaf])) return;
+  if (leaf === '__proto__' || leaf === 'constructor' || leaf === 'prototype') return;
   target[leaf] = value;
 
   // Handle derived fields
