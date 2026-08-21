@@ -68,13 +68,20 @@ export function refreshConfigKey(key: string, value: unknown): void {
 
   let target: Record<string, unknown> = cachedConfig[section] as Record<string, unknown>;
   for (let i = 1; i < path.length - 1; i++) {
-    const key = path[i];
-    if (!Object.hasOwn(target, key) || !target[key] || typeof target[key] !== 'object') {
-      target[key] = {};
+    const segment = path[i];
+    // Re-checked per segment, not only up-front. The whole-path check above is
+    // the behaviour ("refuse the update"); this makes the walk itself provably
+    // unable to leave the object it was given, for a reader or an analyzer that
+    // sees the loop without the guard twenty lines earlier.
+    if (isPrototypePath([segment])) return;
+    if (!Object.hasOwn(target, segment) || !target[segment] || typeof target[segment] !== 'object') {
+      target[segment] = {};
     }
-    target = target[key] as Record<string, unknown>;
+    target = target[segment] as Record<string, unknown>;
   }
-  target[path[path.length - 1]] = value;
+  const leaf = path[path.length - 1];
+  if (isPrototypePath([leaf])) return;
+  target[leaf] = value;
 
   // Handle derived fields
   if (key === 'voice.whisperModelPath') {
