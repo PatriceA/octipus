@@ -1074,6 +1074,11 @@ Use these MCP tools when the task benefits from them — especially for people-r
     toolAdvertisement,
     parentAgentId: overrides?.swarmParent?.id,
     maxTokenBudget: overrides?.maxTokenBudget,
+    // The pipeline puts `pipelineId`/`nodeKey` on the stage context; without
+    // forwarding them the agent's own metadata is empty and the `plan` tool
+    // answers "Not running inside a pipeline" — which silently disables every
+    // `producesPlan`/`loopOverPlan` (foreach) stage.
+    contextMetadata: context.metadata,
   });
 
   const workerId = worker.getContext().id;
@@ -1439,6 +1444,7 @@ async function handleWorkerFailure(
       tools: respawnCtx.tools,
       toolAdvertisement: respawnCtx.toolAdvertisement,
       maxTokenBudget: respawnCtx.maxTokenBudget,
+      contextMetadata: context.metadata,
     });
     const workerMessage = input
       ? `${task}\n\n--- Context from previous steps ---\n${input}`
