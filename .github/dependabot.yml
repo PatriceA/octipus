@@ -1,6 +1,10 @@
 version: 2
 updates:
-  # Root app (bun/npm lockfile).
+  # Root app. NOTE: Dependabot cannot write `bun.lock`, so every PR it opens
+  # here bumps `package.json` alone and then fails at
+  # `bun install --frozen-lockfile` in the first job. Treat these PRs as
+  # NOTIFICATIONS: apply the bump locally (`bun install` moves both files),
+  # verify, push to main, and close the PR referencing the commit.
   - package-ecosystem: npm
     directory: /
     schedule:
@@ -28,7 +32,13 @@ updates:
       minor-and-patch:
         update-types: [minor, patch]
     ignore:
-      # ESLint 9→10 needs a flat-config migration; do it deliberately.
+      # ESLint 10 is blocked UPSTREAM, not by our config: `eslint-plugin-react`
+      # (pulled in by eslint-config-next) is at 7.37.5, declares
+      # `peerDependencies.eslint: ^3 … ^9.7`, and calls the `context.getFilename()`
+      # API that ESLint 10 removed — every file errors with
+      # "contextOrFilename.getFilename is not a function" (measured 2026-08-21).
+      # Revisit when the plugin ships ESLint 10 support. This ignore did NOT
+      # stop Dependabot opening #315 anyway, so expect to close it by hand.
       - dependency-name: "eslint"
         update-types: ["version-update:semver-major"]
       # TypeScript majors land breaking type-checker changes; upgrade on purpose.
