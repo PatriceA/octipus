@@ -1,4 +1,5 @@
 import { describe, test, expect } from 'bun:test';
+import { isPrototypePath } from './index';
 
 // Note: Config tests require resetting singleton state which is complex
 // These are unit tests for config structure validation
@@ -93,5 +94,24 @@ describe('Config (Unit)', () => {
       expect(isValidSecret('short')).toBe(false);
       expect(isValidSecret('a'.repeat(32))).toBe(true);
     });
+  });
+});
+
+// Settings rows supply the key that `refreshConfigKey` walks, so the path is
+// data. CodeQL alert #9: without this check, `swarm.__proto__.polluted` writes
+// onto Object.prototype.
+describe('isPrototypePath', () => {
+  test('an ordinary deep key is allowed', () => {
+    expect(isPrototypePath(['swarm', 'levelDefaults', 'agent', 'wallMs'])).toBe(false);
+  });
+
+  test('every prototype-walking segment is refused, at any depth', () => {
+    expect(isPrototypePath(['swarm', '__proto__', 'polluted'])).toBe(true);
+    expect(isPrototypePath(['swarm', 'constructor', 'prototype', 'x'])).toBe(true);
+    expect(isPrototypePath(['prototype'])).toBe(true);
+  });
+
+  test('a segment that merely CONTAINS the word is fine', () => {
+    expect(isPrototypePath(['agent', 'prototypeMode'])).toBe(false);
   });
 });

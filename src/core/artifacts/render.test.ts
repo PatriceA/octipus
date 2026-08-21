@@ -22,6 +22,33 @@ describe('sanitizeTemplate', () => {
     expect(out).not.toContain('onclick');
     expect(out).not.toContain('onerror');
   });
+
+  // The three shapes CodeQL flagged (alerts #11/#12): a spaced closing tag, a
+  // nesting that reassembles after one pass, and an unclosed block.
+  test('a spaced closing tag is still a closing tag', () => {
+    expect(sanitizeTemplate('<div>a</div><script>alert(1)</script >')).toBe('<div>a</div>');
+  });
+
+  test('nesting that reassembles after one pass is removed', () => {
+    // Cutting the inner block once would leave a live `<script>alert(1)</script>`.
+    const out = sanitizeTemplate('<scr<script>ipt>alert(1)</script></script>');
+    expect(out).not.toContain('<script');
+    expect(out).not.toContain('alert(1)');
+  });
+
+  test('an unclosed script runs to the end of input', () => {
+    const out = sanitizeTemplate('<p>ok</p><script>alert(1)');
+    expect(out).toBe('<p>ok</p>');
+  });
+
+  test('uppercase and attributed script tags are covered', () => {
+    expect(sanitizeTemplate('<SCRIPT TYPE="text/javascript">x()</SCRIPT>')).toBe('');
+  });
+
+  test('the word "script" in prose survives — this strips elements, not text', () => {
+    const out = sanitizeTemplate('<p>see the script below</p>');
+    expect(out).toBe('<p>see the script below</p>');
+  });
 });
 
 describe('renderTemplate', () => {

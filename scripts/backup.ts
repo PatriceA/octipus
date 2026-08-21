@@ -83,9 +83,14 @@ async function backupConfig(outputPath: string): Promise<void> {
   const backupFile = join(outputPath, `config-${timestamp}.tar.gz`);
 
   try {
-    const configFiles = ['.env', 'config.json', 'skills/*/manifest.json'].filter(f =>
-      existsSync(f.replace('*', ''))
-    );
+    // The glob is expanded, not passed to `tar` — `tar -czf` does not expand
+    // patterns when CREATING an archive, and the old existence check
+    // (`'skills/*/manifest.json'.replace('*','')`) tested `skills//manifest.json`,
+    // a path that never exists. Every skill manifest was silently absent from
+    // every config backup, which is the kind of thing you find out while
+    // restoring.
+    const skillManifests = [...new Bun.Glob('skills/*/manifest.json').scanSync('.')];
+    const configFiles = ['.env', 'config.json'].filter(f => existsSync(f)).concat(skillManifests);
 
     if (configFiles.length > 0) {
       const proc = Bun.spawn(['tar', '-czf', backupFile, ...configFiles], { stdout: 'ignore', stderr: 'pipe' });

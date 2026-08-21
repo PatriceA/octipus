@@ -76,4 +76,14 @@ describe('art_export_markdown', () => {
     const out = await markdownExporter.execute({ rows: [{ a: 'a|b' }] }, ctx);
     expect(out.body).toContain('a\\|b');
   });
+  test('a backslash before a pipe cannot re-open the cell (CodeQL #5)', async () => {
+    // Escaping only the pipe turns `a\|b` into `a\\|b`: markdown reads an
+    // escaped BACKSLASH followed by a live separator, so the row silently
+    // grows a column. The backslash has to be escaped first.
+    const out = await markdownExporter.execute({ rows: [{ a: 'a\\|b' }] }, ctx);
+    const row = out.body.split('\n').find((l) => l.includes('a\\'));
+    expect(row).toBe('| a\\\\\\|b |');
+    // One data cell, whatever the input contained.
+    expect(row?.split(/(?<!\\)\|/).filter((c) => c.trim()).length).toBe(1);
+  });
 });

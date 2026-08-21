@@ -39,10 +39,30 @@ export function escapeHtml(value: unknown): string {
  * the kind that gets relied on and then quietly isn't true.
  */
 export function sanitizeTemplate(html: string): string {
-  return html
-    .replace(/<script\b[\s\S]*?<\/script>/gi, '')
-    .replace(HANDLER_ATTR_RE, '');
+  // Loop until the string stops changing. Two reasons, both real:
+  //
+  //  - Removal can CREATE a match. `<scr<script>ipt>alert(1)</script></script>`
+  //    reassembles into a live `<script>` the moment the inner block is cut, so
+  //    a single pass hands back exactly what it promised to remove.
+  //  - Termination is guaranteed, not assumed: every replacement here only
+  //    DELETES, so any iteration that changes the string strictly shortens it.
+  //
+  // `SCRIPT_BLOCK_RE` also accepts `</script >` (valid HTML, which the old
+  // `</script>` literal missed) and an unclosed `<script` running to the end of
+  // input — a truncated template is not a reason to start executing it.
+  let out = html;
+  for (;;) {
+    const next = out.replace(SCRIPT_BLOCK_RE, '').replace(HANDLER_ATTR_RE, '');
+    if (next === out) return out;
+    out = next;
+  }
 }
+
+/**
+ * A `<script>` element: opening tag through `</script`+optional space+`>`, or
+ * through end-of-input when the closing tag never arrives.
+ */
+const SCRIPT_BLOCK_RE = /<script\b[\s\S]*?(?:<\/script\s*>|$)/gi;
 
 // ── author-time JS extraction ──────────────────────────────────────
 // A hand-authored page keeps its JS in `<script>` blocks and `onclick="…"`

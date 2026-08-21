@@ -1,4 +1,4 @@
-import { createHash } from 'crypto';
+import { createHmac, randomBytes } from 'crypto';
 import { RedisCache } from '@/db/redis';
 import { modelLogger } from '@/utils/logger';
 import { AnthropicDiscovery } from './anthropic';
@@ -52,9 +52,19 @@ interface CacheEntry {
   fetchedAt: number;
 }
 
+/**
+ * Per-process salt for `credHash`. The digest is a CACHE KEY, never a stored
+ * credential — but it is derived from an API key, and a bare `sha256(key)` in a
+ * heap dump or a debug log is a candidate to test offline. Keying the hash with
+ * a random value that dies with the process makes the digest meaningless
+ * anywhere but here, and costs nothing: the cache is in-process too, so it never
+ * needs to be reproducible across restarts.
+ */
+const CRED_HASH_SALT = randomBytes(32);
+
 function credHash(creds: DiscoveryCreds): string {
   const fp = `${creds.endpoint || ''}:${creds.apiKey || ''}`;
-  return createHash('sha256').update(fp).digest('hex').slice(0, 12);
+  return createHmac('sha256', CRED_HASH_SALT).update(fp).digest('hex').slice(0, 12);
 }
 
 /** Resolve API key for a provider from env first, then vault (user-scoped → system). */

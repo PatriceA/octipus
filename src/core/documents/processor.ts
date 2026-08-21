@@ -633,7 +633,14 @@ export class DocumentProcessor {
       const renderCell = (v: unknown): string => {
         if (v === undefined || v === null || v === '') return '';
         if (v instanceof Date) return v.toISOString();
-        return String(v).replace(/\|/g, '\\|').replace(/\n/g, ' ');
+        return String(v)
+          // Backslash FIRST: escaping the pipe into `\\|` after a literal
+          // backslash already sits in the cell produces `\\\\|`, which markdown
+          // reads as an escaped backslash followed by a LIVE cell separator —
+          // the row grows a column and the table shifts.
+          .replace(/\\/g, '\\\\')
+          .replace(/\|/g, '\\|')
+          .replace(/\n/g, ' ');
       };
 
       sections.push(`## Sheet: ${sheetName}`);

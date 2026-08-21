@@ -65,7 +65,10 @@ export const markdownExporter: ToolboxTool<Params, ExportPayload> = {
 };
 
 function esc(raw: string): string {
-  return raw.replace(/\|/g, '\\|').replace(/\n/g, ' ');
+  return raw
+    .replace(/\\/g, '\\\\')
+    .replace(/\|/g, '\\|')
+    .replace(/\n/g, ' ');
 }
 
 function stringify(value: unknown): string {

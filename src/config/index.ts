@@ -25,6 +25,19 @@ export function isRuntimeConfigLoaded(): boolean {
 
 // ─── Hot-reload support ────────────────────────────────────────
 
+/**
+ * Does this settings path walk into an object's prototype?
+ *
+ * A settings ROW supplies the key, so the path is data, not a literal, and
+ * `swarm.__proto__.polluted` would otherwise assign onto `Object.prototype` —
+ * handing every plain object in the process a new property. The whole update is
+ * refused rather than sanitised: a key containing one of these names is not a
+ * setting anyone meant to change.
+ */
+export function isPrototypePath(path: string[]): boolean {
+  return path.some((k) => k === '__proto__' || k === 'constructor' || k === 'prototype');
+}
+
 export function refreshConfigKey(key: string, value: unknown): void {
   if (!cachedConfig) return;
 
@@ -48,10 +61,15 @@ export function refreshConfigKey(key: string, value: unknown): void {
     const def = defaultConfig[section] as Record<string, unknown> | undefined;
     (cachedConfig as any)[section] = def ? { ...def } : {};
   }
+  if (isPrototypePath(path)) {
+    logger.warn({ key }, 'Config refresh refused — key walks a prototype chain');
+    return;
+  }
+
   let target: Record<string, unknown> = cachedConfig[section] as Record<string, unknown>;
   for (let i = 1; i < path.length - 1; i++) {
     const key = path[i];
-    if (!target[key] || typeof target[key] !== 'object') {
+    if (!Object.hasOwn(target, key) || !target[key] || typeof target[key] !== 'object') {
       target[key] = {};
     }
     target = target[key] as Record<string, unknown>;
