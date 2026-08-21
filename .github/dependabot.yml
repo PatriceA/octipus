@@ -20,6 +20,15 @@ updates:
       # Deferred for a deliberate upgrade — Bolt 4→5 has breaking API changes.
       - dependency-name: "@slack/bolt"
         update-types: ["version-update:semver-major"]
+      # PGlite 0.5.5 makes `bun test` exit 99 with every test passing: the
+      # embedded postmaster dies during process teardown, after the summary
+      # prints "0 fail". Bisected 2026-08-21 — 0.5.4 exits 0, 0.5.5 exits 99,
+      # with or without the matching pgvector 0.0.6. Held at 0.5.4 (and
+      # pgvector at 0.0.5) until a release fixes the teardown crash; re-test by
+      # bumping both and checking `echo $?` after `bun run test`, NOT the
+      # summary line.
+      - dependency-name: "@electric-sql/pglite"
+      - dependency-name: "@electric-sql/pglite-pgvector"
 
   # Next.js web app.
   - package-ecosystem: npm
