@@ -69,6 +69,22 @@ describe('snapshotWorkspace', () => {
     expect(countChangedFiles(before, after)).toBe(0);
   });
 
+  test('ignores what VERIFYING the packaging leaves behind', async () => {
+    // Measured 2026-08-21: a read-only QA stage built a wheel and installed it
+    // in a venv to check the package imports — the only way to verify that —
+    // and the gate failed it for "changing" the ten files it had generated.
+    await writeFile(join(root, 'slugify.py'), 'def slugify(): ...');
+    const before = await snapshotWorkspace(root);
+
+    await mkdir(join(root, 'src', 'strkit.egg-info'), { recursive: true });
+    await writeFile(join(root, 'src', 'strkit.egg-info', 'PKG-INFO'), 'Name: strkit');
+    await writeFile(join(root, 'src', 'strkit.egg-info', 'SOURCES.txt'), 'slugify.py');
+    await writeFile(join(root, 'strkit-0.1.0-py3-none-any.whl'), 'zip');
+    const after = await snapshotWorkspace(root);
+
+    expect(countChangedFiles(before, after)).toBe(0);
+  });
+
   test('still sees a real edit made in the same run as the caches', async () => {
     await writeFile(join(root, 'slugify.py'), 'v1');
     const before = await snapshotWorkspace(root);

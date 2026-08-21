@@ -71,8 +71,16 @@ const PRUNED_DIRS = new Set([
  * case; these catch the strays (a `.pyc` beside its source, `.class` files).
  * Deliberately NOT `dist/` or `build/` — a stage may legitimately be asked to
  * produce those, and pruning them would let it pass having built nothing.
+ *
+ * `.whl` joins them for the same reason `*.egg-info/` is pruned above: measured
+ * 2026-08-21, a read-only QA stage verified packaging the only way it can — a
+ * wheel build plus an isolated install — and the gate failed it for "changing"
+ * ten files it had generated, while its report ("no source changes were made")
+ * was true. Verifying a package must not read as editing one. The dist/build
+ * directories still count, so a stage whose deliverable is a package still has
+ * to show it there.
  */
-const IGNORED_SUFFIXES = ['.pyc', '.pyo', '.class', '.o'];
+const IGNORED_SUFFIXES = ['.pyc', '.pyo', '.class', '.o', '.whl'];
 
 /** Above this, the tree is too big to diff reliably — see `truncated`. */
 const SNAPSHOT_MAX_FILES = 20_000;
@@ -124,7 +132,7 @@ export async function snapshotWorkspace(
     for (const entry of entries) {
       if (truncated) return;
       if (entry.isDirectory()) {
-        if (PRUNED_DIRS.has(entry.name)) continue;
+        if (PRUNED_DIRS.has(entry.name) || entry.name.endsWith('.egg-info')) continue;
         await walk(join(dir, entry.name));
         continue;
       }
