@@ -69,7 +69,10 @@ export class RedisStorageProvider implements StorageProvider {
     return {
       async push(item: unknown, priority = 0): Promise<void> {
         const score = Date.now() - priority * 1000;
-        await redis.zadd(queueName, score, JSON.stringify(item));
+        // ioredis 6 types the sorted-set score and range bounds as
+        // `string | Buffer`; the wire protocol has always sent them as strings,
+        // so this is the same command with the coercion made explicit.
+        await redis.zadd(queueName, String(score), JSON.stringify(item));
       },
       async pop(): Promise<unknown | null> {
         const result = await redis.zpopmin(queueName);
@@ -77,7 +80,7 @@ export class RedisStorageProvider implements StorageProvider {
         try { return JSON.parse(result[0]); } catch { return result[0]; }
       },
       async peek(): Promise<unknown | null> {
-        const result = await redis.zrange(queueName, 0, 0);
+        const result = await redis.zrange(queueName, 0, '0');
         if (!result || result.length === 0) return null;
         try { return JSON.parse(result[0]); } catch { return result[0]; }
       },
