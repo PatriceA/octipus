@@ -1,7 +1,8 @@
 # Octipus rebuild: execution plan
 
 Date: 2026-08-22
-Status: proposal, not started
+Status: in progress — phases 0 to 2 done or decided, phase 3 started (2026-08-22)
+Findings: [rebuild-findings-2026-08-22.md](rebuild-findings-2026-08-22.md)
 Supersedes: `rebuild-stack-and-orchestration.md` and `deepseek-harness-lessons.md`, both merged into this document.
 
 ## What this is
@@ -42,6 +43,10 @@ Three testing rules, adopted as policy and applied to existing tests as they are
 
 *Prove the guard fails.* A new gate is not done until the regression it guards has been introduced, watched go red, and reverted. Three inert gates have shipped past a green CI here. Harness gives a worked example: a loader smoke test stayed green when a default export replaced required named exports, so they added an explicit assertion and proved it failed first.
 
+*Prove the guard is REACHED.* Added 2026-08-22, and the one this repository keeps paying for. The rule above establishes that a guard can fail; it says nothing about whether the shipping path ever arrives at it. Every regression authored during the first session of this plan was of the second kind and none of the first: a role-fit gate keyed to the router tier, which no path reaching that function can ever be; the same gate keyed to `lite`, live at one of its three call sites; an eval that refused to fake an answer in unit mode while integration mode went on faking it; a red-team demotion that only fired when *every* assertion was unverified, in a suite whose motivating plugin pairs one with a conclusive check; and a stopped-short test keyed to "does this node have any outgoing edge", which would have reported every healthy run of a shipped preset as a failure. Four gates already in the tree turned out to be unreachable for the same reason, one of them the audit rule for unaddressed low-confidence doubt.
+
+So the check has two halves and the second is the one that gets skipped. Name the path that ships, and assert the value arrives there — a test that captures what the production call site actually passes, not one that calls the guard directly with a hand-made argument. Where a tier or a flag is resolved once and consumed later, thread the resolved value rather than re-deriving it: two derivations of one fact will disagree, and the disagreement is invisible.
+
 *Test the real entry path.* The published artifact under the real runtime, not the source under a loader — this exposes settle races, module resolution failures, and swallowed load errors that a dev-mode loader masks. Our `bun --compile` sidecar crashed at boot for precisely this reason. The corollary for a product with two storage modes: `STORAGE_MODE=embedded` is a shipped path, so it needs its own lane rather than being treated as a development convenience.
 
 Two supporting habits: mock only the expensive or non-deterministic boundary (LLM adapter, network, clock) and keep everything downstream real — our `mock.module` leak is the cost of the opposite habit; and treat an uncovered line as probable dead code the gate is correctly flagging for deletion rather than a test to bolt on.
@@ -55,6 +60,8 @@ Four configuration rules, adopted at the same time, each naming a bug already sh
 *Misconfiguration fails loud* at load when self-contained, otherwise at the earliest resolvable point, and never silently skips a missing referent.
 
 *Soft guidance and hard enforcement are separate systems.* A prompt-level mode contributes prompt text and nothing else; permission and sandbox enforcement never read or write that state. Ours are entangled, which is part of why a gate could look active while enforcing nothing.
+
+*A guard sits on the risk-weighted side.* Where a check can be wrong in both directions, the two mistakes rarely cost the same, and the bar belongs on the expensive one. The alias verdict tier is the worked example: reading a stray JSON payload as a FAIL costs one retry and can only tighten the gate, while reading one as a PASS overwrites a genuine failure the auditor wrote in prose and ships the work. A symmetric rule there was both too strict for real failing verdicts and too loose for incidental payloads; an asymmetric one is neither.
 
 Runnable check: the testing rules are applied first to the evidence gate and the QA verdict contract, the two guards with a known false-pass history.
 
@@ -70,7 +77,17 @@ This matters beyond Phase 1: the evidence scorers are the only thing currently s
 
 Runnable check: the desktop build succeeds and the desktop client still logs in against a remote backend.
 
-### Phase 2 — Collapse the orchestrator
+### Phase 2 — Collapse the orchestrator (partly done, 2026-08-22)
+
+**Done: the inference layer no longer picks the specialist.** The keyword classifier decided three things in a row, each overriding the one before, with the model's own reading of the request coming last. Two of the three are gone.
+
+The delegation policy is now unconditional. It used to be emitted only inside `if (classification.topic)`, so a message the regex table did not recognise reached the orchestrator with no delegation guidance at all — and the requests least likely to match a keyword are exactly the ones most likely to need a specialist. It is policy, not a classification result.
+
+The topic no longer reaches a capable model. "You have been pre-classified as X, use this as the child role" replaced a full-mode orchestrator's reading of the whole request with a table's reading — a table whose own source carries years of comments about the asks it steals from the right role. Lite keeps it, demoted from instruction to hint, because a small model is literal enough to follow one and weak enough to route badly without it. Provenance follows: `classifier(topic)` is listed as a source only where it is consumed.
+
+The deterministic role-fit rewrite is weak-model-only. Its own rationale was always a small-model workaround, but it ran for every model, so a capable orchestrator that deliberately chose `architecture` had that replaced by a regex read of the task brief alone — logged as a correction rather than as an override.
+
+**Still open.** The classifier remains for the casual fast-path, output mode and memory scope, all of which are cheap and earn their place. The mode selector remains and should: it resolves a hardware capability tier, not a task guess, and router/lite exist because a small local model cannot drive a full agentic loop. Neither is the inference the phase was aimed at. What is left of the original target is `handoff.ts`, `role-contract.ts` and the runtime stage-graph assembly, none of which is now obviously worth deleting — see the workflow decision below.
 
 Route every request through the single-agent loop by default. `direct-response.ts` and the tool executor already contain most of what is needed; the work is deleting the layer above them.
 
@@ -82,17 +99,23 @@ The deletion does not happen either. Of `pipeline-manager.ts`'s 2,461 lines, the
 
 The orchestration thesis stands and was the valuable half: delegation is chosen explicitly rather than inferred, which is what removing the classifier's role directive achieved. Revisit workflow files when a template genuinely cannot express what it needs, and let that template be the argument.
 
-The Harness workflow seam is close enough to serve as a reference contract, and its own documentation notes the field vocabulary matches Claude Code's dynamic-workflows meta block, so this is a converging design rather than a novel one. Four parts worth copying:
+Kept for whenever that argument arrives, the Harness workflow seam is close enough to serve as a reference contract, and its own documentation notes the field vocabulary matches Claude Code's dynamic-workflows meta block, so this is a converging design rather than a novel one. Four parts worth copying:
 
 The identity block is plain JSON data, validated before any script text is evaluated, so a malformed workflow fails loud before the engine runs a line. The run executes in a worker thread, one per run. Failure discipline is split: script misuse — bad arguments, unknown options, a tripped cap — throws fatally and the `parallel`/`pipeline` combinators *re-throw* rather than mapping the item to `null`, because a typo must kill the script loudly instead of dissolving into something that reads as an ordinary child failure; the per-item `null` is reserved strictly for genuine child-run failures. And a run can never wedge: the result promise does not reject (a script failure resolves with an error stop reason), and after cancellation the engine force-settles within a bounded grace period even if the script never settles.
 
 One further rule from the same source generalises beyond workflows: observation events carry data snapshots, never live handles, so a subscriber cannot acquire `cancel`/`dispose`; each listener gets its own cloned payload; and a throwing subscriber is logged rather than propagated, because one bad subscriber must never break core lifecycle.
 
-Runnable check: an end-to-end run of the seven-stage pipeline as a converted workflow, asserting non-zero files written and non-zero evidence rows — the exact scenario that previously reported success while doing nothing.
+Runnable check for what remains: an end-to-end run of the seven-stage pipeline asserting non-zero files written and non-zero evidence rows — the exact scenario that previously reported success while doing nothing.
 
-### Phase 3 — The session log as the spine
+### Phase 3 — The session log as the spine (started 2026-08-22)
 
 The largest structural change, and the one that makes completion provable rather than claimed.
+
+**First finding, fixed: a run that could take no route out of a stage reported "completed successfully".** The walk ends when `selectEdge` returns null, and every such exit was treated as the end of the pipeline. That null has two unrelated causes — a node with no route for the outcome it produced has finished; a node whose route existed and is now exhausted has stopped short — so a QA stage could fail, burn its retry budget, and have the failing work handed back as a success, with the row, the UI and the notification all agreeing. `routeExhausted` now asks whether an edge matching this outcome exists and every one is at its `maxTraversals`. The stopped run no longer stamps `completedAt` or notifies under the completion type, both of which are read as "this finished" regardless of the status column.
+
+**Reassessment of the premise.** The phase was written on the assumption that completion is a claim in a return value. For pipelines that is now mostly false: `pipeline_nodes.status` is written with an awaited update at both ends of each stage, the evidence gate holds a stage to what it declared, and `reconcileInterrupted` already converts a crashed run to `paused`. The remaining gap the phase names is narrower than "make the log authoritative" — it is that `run-log.ts` is explicitly fire-and-forget ("an aid, not the critical path"), which is right for observability and wrong for anything a decision is derived from.
+
+So scope this phase to the decision-bearing subset rather than a wholesale conversion: which facts must survive a crash, which of those are currently written best-effort, and what reads them. Everything else stays where it is. Measure before converting — the assumption that a rewrite was needed did not survive contact with the code once, and this is the same shape of assumption.
 
 Make the session event log authoritative under one rule: anything that reaches a model request must be reconstructable from the log. Live coordination state — status, queues, in-flight children — travels on a separate non-durable channel and is never the record of what happened. State that matters becomes a fold over the log rather than a mirror held in memory, so resume, fork, and compaction recover it for free, and replay can reject histories that should be impossible (sequence gaps, stale revisions, mutations against stopped phases, cap overflow).
 
