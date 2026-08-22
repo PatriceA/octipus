@@ -929,6 +929,16 @@ export default function ChatPage() {
           case 'pipeline_completed':
             setStatusMessage(null);
             break;
+          case 'pipeline_failed':
+            // A run that could take no route out of a stage stopped short. It
+            // used to arrive here as `pipeline_completed`, so the UI cleared
+            // itself and the run read as a success.
+            setStatusMessage(
+              pe.stoppedAt
+                ? `Pipeline stopped at "${pe.stoppedAt}" — no route left out of that stage`
+                : 'Pipeline stopped before finishing',
+            );
+            break;
         }
         break;
       }

@@ -313,6 +313,36 @@ export function selectEdge(
   return null;
 }
 
+/**
+ * Did the walk stop here because a route EXISTED and was used up?
+ *
+ * `selectEdge` returns null for two unrelated reasons, and the walker has to
+ * tell them apart: a node that simply has no route for this outcome has
+ * finished, while a node whose route was there and is now exhausted has stopped
+ * short of where it was going.
+ *
+ * "Has any outgoing edge at all" is NOT the test, and using it false-reds two
+ * normal shapes the compiler emits: a terminal `qa_validation` stage carries
+ * `qa_fail` and self-`audit_gate_failed` edges but no `qa_pass` edge, so a
+ * PASSING verdict finds no route and would look like a failure; and the head of
+ * a trailing `foreach` carries a `loop_body` edge but no `loop_done` edge, so a
+ * plan loop that drained normally would look like one too.
+ *
+ * Only edges whose condition matches THIS outcome count, and only when every
+ * one of them is at its `maxTraversals`.
+ */
+export function routeExhausted(
+  graph: PipelineGraph,
+  from: string,
+  outcome: NodeOutcome,
+  traversals: Map<string, number> = new Map(),
+): boolean {
+  const conditions = new Set(MATCHES[outcome]);
+  const candidates = graph.edges.filter((e) => e.from === from && conditions.has(e.condition));
+  if (candidates.length === 0) return false;
+  return candidates.every((e) => e.maxTraversals != null && (traversals.get(edgeId(e)) ?? 0) >= e.maxTraversals);
+}
+
 /** Stable identity for one edge — same triple the DB row is keyed on. */
 export const edgeId = (e: GraphEdge) => `${e.from}->${e.to}:${e.condition}`;
 

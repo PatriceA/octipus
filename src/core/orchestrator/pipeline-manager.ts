@@ -30,6 +30,7 @@ import {
   isRetryExhausted,
   type NodeOutcome,
   type PipelineGraph,
+  routeExhausted,
   selectEdge,
   validateGraph,
 } from './pipeline-graph';
@@ -790,6 +791,8 @@ export class PipelineManager {
     // `raw` note on `runStepNode`. Not checkpointed: a resumed run re-derives
     // its handoff from prose, which is the old behaviour and no worse.
     let previousRaw = '';
+    /** Set when the walk left a node that had edges but could take none. */
+    let stoppedShort: { node: string; outcome: NodeOutcome } | null = null;
     const handoffChain: HandoffContext[] = [];
     // Source attribution: every successfully completed node (incl. retries)
     // appends one entry, rendered into the summary as `_Sources: ..._`.
@@ -947,7 +950,15 @@ export class PipelineManager {
           // unconditional one, and "no edge" would end the walk silently.
           outcome = built[gnode.templateIndex].stageType === 'qa_validation' ? 'qa_pass' : 'ok';
           const skipEdge = selectEdge(graph, cursor, outcome, traversals);
-          if (!skipEdge) break;
+          if (!skipEdge) {
+            // Same question at the second exit. A skipped QA node whose only
+            // routes are `qa_fail`/`audit_gate_failed` leaves the walk here,
+            // and leaving `stoppedShort` null reported it green.
+            stoppedShort = routeExhausted(graph, cursor, 'ok', traversals)
+              ? { node: node.name, outcome: 'ok' as NodeOutcome }
+              : null;
+            break;
+          }
           traversals.set(edgeId(skipEdge), (traversals.get(edgeId(skipEdge)) ?? 0) + 1);
           cursor = skipEdge.to;
           continue;
@@ -1170,7 +1181,20 @@ export class PipelineManager {
       }
 
       const edge = selectEdge(graph, cursor, outcome, traversals);
-      if (!edge) break;
+      if (!edge) {
+        // Two very different exits share this one `break`, and they used to
+        // share a summary too. A node with no route for this outcome has
+        // finished; a node whose route existed and is now exhausted stopped
+        // short of where it was going, and reporting "completed successfully"
+        // for that is the same false green the evidence gate exists to prevent,
+        // one level up — a QA stage can fail, burn its retry budget, and hand
+        // the failing work back as a success. See `routeExhausted` for why "has
+        // any outgoing edge" is the wrong test.
+        stoppedShort = routeExhausted(graph, cursor, outcome, traversals)
+          ? { node: node.name, outcome }
+          : null;
+        break;
+      }
 
       traversals.set(edgeId(edge), (traversals.get(edgeId(edge)) ?? 0) + 1);
       await pipelineRepository.recordTraversal(pipeline.id, edge.from, edge.to, edge.condition);
@@ -1215,25 +1239,41 @@ export class PipelineManager {
       cursor = edge.to;
     }
 
-    const baseSummary = `Pipeline "${title}" completed successfully. Final output:\n\n${previousOutput}`;
+    const baseSummary = stoppedShort
+      ? `Pipeline "${title}" STOPPED at "${stoppedShort.node}" (${stoppedShort.outcome}) — ` +
+        `no route out of that stage was left to take, so the remaining stages never ran. ` +
+        `Last output:\n\n${previousOutput}`
+      : `Pipeline "${title}" completed successfully. Final output:\n\n${previousOutput}`;
     const summary = appendSources(baseSummary, pipelineSources);
     await this.updatePipeline(pipeline.id, {
-      status: 'completed',
+      status: stoppedShort ? 'failed' : 'completed',
       summary,
-      completedAt: new Date(),
+      // `completedAt` marks a run that FINISHED. Stamping it on one that stopped
+      // short would keep every duration and success rate computed from its
+      // presence counting this as a completion, whatever `status` says.
+      ...(stoppedShort ? {} : { completedAt: new Date() }),
     });
 
     orchestrator['emit']({
       type: 'pipeline_event',
       sessionId,
-      data: { event: 'pipeline_completed', pipelineId: pipeline.id, title },
+      // The UI and the notification below say the same thing the row does — a
+      // run that stopped short must not arrive as a completion anywhere.
+      data: {
+        event: stoppedShort ? 'pipeline_failed' : 'pipeline_completed',
+        pipelineId: pipeline.id,
+        title,
+        ...(stoppedShort ? { stoppedAt: stoppedShort.node, outcome: stoppedShort.outcome } : {}),
+      },
       timestamp: new Date(),
     });
 
     getNotificationService().notify(
       pipeline.userId,
-      'pipeline_complete',
-      `Pipeline "${title}" completed`,
+      // The TYPE, not only the title — anything filtering on `pipeline_complete`
+      // would otherwise keep counting a stopped run as a finished one.
+      stoppedShort ? 'pipeline_failed' : 'pipeline_complete',
+      stoppedShort ? `Pipeline "${title}" stopped at "${stoppedShort.node}"` : `Pipeline "${title}" completed`,
       (previousOutput || '').slice(0, 200),
       { pipelineId: pipeline.id },
     ).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));

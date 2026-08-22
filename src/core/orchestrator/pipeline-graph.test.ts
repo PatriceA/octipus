@@ -4,6 +4,7 @@ import {
   edgeId,
   isRetryExhausted,
   nodeKeyFor,
+  routeExhausted,
   selectEdge,
   validateGraph,
 } from './pipeline-graph';
@@ -197,4 +198,104 @@ describe('shipped presets compile to runnable graphs', () => {
     // It is a node in the chain, not a flag on one: work flows through it.
     expect(g.edges.map((e) => `${e.from}->${e.to}`)).toEqual(['n0->n1', 'n1->n2']);
   });
+});
+
+describe('a walk that can take no edge has not finished', () => {
+  // `selectEdge` returns null for two very different reasons, and the walker
+  // used to treat both as the end of the pipeline: a node with no outgoing
+  // edges (genuinely the last stage) and a node whose every candidate edge was
+  // the wrong condition or had burned its `maxTraversals`. The second is a run
+  // that stopped short — a QA stage can fail, exhaust its retries, and have the
+  // failing work handed back as "completed successfully".
+  //
+  // The walker distinguishes them by asking whether the node had edges at all,
+  // so these pin the two answers `selectEdge` gives for the same node.
+  const graph = {
+    nodes: [],
+    edges: [
+      { from: 'qa', to: 'impl', condition: 'qa_fail' as const, ordinal: 0, maxTraversals: 2 },
+      { from: 'done', to: '', condition: 'always' as const, ordinal: 0 },
+    ],
+  } as unknown as Parameters<typeof selectEdge>[0];
+
+  test('an exhausted retry edge yields no edge, from a node that HAS edges', () => {
+    const used = new Map([['qa->impl:qa_fail', 2]]);
+    expect(selectEdge(graph, 'qa', 'qa_fail', used)).toBeNull();
+    expect(graph.edges.some((e) => e.from === 'qa')).toBe(true);
+  });
+
+  test('an unmatched outcome yields no edge either, from the same node', () => {
+    expect(selectEdge(graph, 'qa', 'loop_next', new Map())).toBeNull();
+    expect(graph.edges.some((e) => e.from === 'qa')).toBe(true);
+  });
+
+  test('a node with no outgoing edges is the other case entirely', () => {
+    expect(selectEdge(graph, 'nowhere', 'ok', new Map())).toBeNull();
+    expect(graph.edges.some((e) => e.from === 'nowhere')).toBe(false);
+  });
+});
+
+describe('routeExhausted — which null from selectEdge means "stopped short"', () => {
+  // The first version of this guard asked "does the node have ANY outgoing
+  // edge", which false-redded two shapes the compiler emits on every healthy
+  // run: a terminal qa_validation stage carries qa_fail and self-audit edges
+  // but no qa_pass edge, and the head of a trailing foreach carries loop_body
+  // but no loop_done. Both would have reported a successful run as failed.
+  const graph = {
+    nodes: [],
+    edges: [
+      { from: 'verify', to: 'impl', condition: 'qa_fail' as const, ordinal: 0, maxTraversals: 2 },
+      { from: 'verify', to: 'verify', condition: 'audit_gate_failed' as const, ordinal: 1, maxTraversals: 2 },
+      { from: 'loop', to: 'body', condition: 'loop_body' as const, ordinal: 0 },
+    ],
+  } as unknown as Parameters<typeof routeExhausted>[0];
+
+  test('a terminal QA stage passing is FINISHED, not stopped short', () => {
+    expect(selectEdge(graph, 'verify', 'qa_pass', new Map())).toBeNull();
+    expect(routeExhausted(graph, 'verify', 'qa_pass', new Map())).toBe(false);
+  });
+
+  test('a drained plan loop is FINISHED, not stopped short', () => {
+    expect(selectEdge(graph, 'loop', 'loop_done', new Map())).toBeNull();
+    expect(routeExhausted(graph, 'loop', 'loop_done', new Map())).toBe(false);
+  });
+
+  test('a burned retry budget IS stopped short', () => {
+    const used = new Map([['verify->impl:qa_fail', 2]]);
+    expect(selectEdge(graph, 'verify', 'qa_fail', used)).toBeNull();
+    expect(routeExhausted(graph, 'verify', 'qa_fail', used)).toBe(true);
+  });
+
+  test('a retry with budget left is neither — it takes the edge', () => {
+    expect(selectEdge(graph, 'verify', 'qa_fail', new Map())).not.toBeNull();
+    expect(routeExhausted(graph, 'verify', 'qa_fail', new Map())).toBe(false);
+  });
+
+  test('an unlimited edge can never be exhausted', () => {
+    // `loop_next` is the outcome that takes the `loop_body` edge. That edge
+    // carries no maxTraversals, so no traversal count can exhaust it.
+    const used = new Map([['loop->body:loop_body', 999]]);
+    expect(routeExhausted(graph, 'loop', 'loop_next', used)).toBe(false);
+  });
+});
+
+describe('every shipped preset can finish without looking like a failure', () => {
+  // The guard that reports a run as stopped-short reads `routeExhausted` on the
+  // node the walk leaves from. If that ever returns true for a preset's last
+  // node on its SUCCESS outcome, every healthy run of that preset false-reds —
+  // which is exactly what asking "does the node have any outgoing edge" did to
+  // the Bug Fix preset, whose terminal `Verify Fix` stage carries qa_fail and
+  // self-audit edges but no qa_pass edge.
+  for (const preset of PRESET_TEMPLATES) {
+    test(`${preset.name} — no terminal node reads as stopped short on success`, () => {
+      const g = compileTemplateToGraph(preset.steps.map(stepConfigToStageTemplate));
+      const terminal = g.nodes.filter((n) => !g.edges.some((e) => e.from === n.key && e.condition !== 'qa_fail' && e.condition !== 'audit_gate_failed'));
+      expect(terminal.length).toBeGreaterThan(0);
+      for (const n of terminal) {
+        for (const outcome of ['ok', 'qa_pass', 'loop_done'] as const) {
+          expect(routeExhausted(g, n.key, outcome, new Map())).toBe(false);
+        }
+      }
+    });
+  }
 });
