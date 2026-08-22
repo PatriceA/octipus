@@ -206,7 +206,7 @@ function MessageBubble({ message }: { message: ChatMessageData }) {
 
   if (role === 'user') {
     return (
-      <div className="flex justify-end py-1.5 group">
+      <div className="flex justify-end py-1.5 group" data-role="user">
         <div className="flex flex-col items-end gap-0.5">
           <div className="bg-linear-to-r from-primary to-primary-container text-on-primary px-4 py-2.5 rounded-2xl rounded-br-md shadow-xs">
             <p className="whitespace-pre-wrap text-sm">{content}</p>
@@ -221,7 +221,11 @@ function MessageBubble({ message }: { message: ChatMessageData }) {
 
   // assistant
   return (
-    <div className="flex gap-3 py-1.5 group">
+    // `data-role` is the only thing here a test can key on: the role is
+    // otherwise expressed as layout and colour. Without it, checking that an
+    // answer arrived means matching page text — which matches the question the
+    // moment it is echoed into the transcript.
+    <div className="flex gap-3 py-1.5 group" data-role="assistant">
       <div className="shrink-0 mt-1">
         <div className="h-7 w-7 rounded-full bg-linear-to-br from-primary to-primary-container flex items-center justify-center shadow-xs">
           <Bot className="h-4 w-4 text-on-primary" />

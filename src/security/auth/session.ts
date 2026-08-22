@@ -21,6 +21,14 @@ export interface SessionData {
   lastActivityAt: Date;
 }
 
+/** A ticket, not a login: minted per WebSocket handshake and gone in a minute. */
+const EPHEMERAL_TTL_MAX_MS = 5 * 60_000;
+
+/** One place resolves the lifetime, so the cap and the store cannot disagree. */
+function ttlMsFor(requested: number | undefined, fallback: number): number {
+  return requested ?? fallback;
+}
+
 export class SessionManager {
   private cache: RedisCache;
   private maxAge: number;
@@ -53,22 +61,47 @@ export class SessionManager {
       throw new Error('User not found');
     }
 
-    // Enforce session count limit
+    // Enforce the session count limit by EVICTING THE OLDEST, never by
+    // revoking everything.
+    //
+    // The old fallback did the latter, and it fired in ordinary use: every
+    // WebSocket handshake mints a short-lived ticket session, so a user opening
+    // a few pages reached twenty live sessions in under a minute — at which
+    // point their browser cookie, their phone and every other device were
+    // revoked mid-click. The observed symptom is a storm of 401s on `/auth/me`
+    // and a UI that silently reverts to logged-out a minute after a valid
+    // login.
+    //
+    // Evicting oldest-first keeps the cap doing its job — a bounded number of
+    // live sessions per user — without the cure being worse than the disease.
+    // Short-lived tickets are exempt from the cap AND from filling it. A
+    // WebSocket handshake mints one per connection and it burns down in a
+    // minute; counting them meant a browser tab could evict the user's phone.
     const MAX_SESSIONS = 20;
-    const activeCount = await this.countForUser(userId);
-    if (activeCount >= MAX_SESSIONS) {
-      // Revoke oldest sessions to make room
+    const isEphemeral = ttlMsFor(options?.ttlMs, this.maxAge) <= EPHEMERAL_TTL_MAX_MS;
+    if (!isEphemeral && (await this.countForUser(userId)) >= MAX_SESSIONS) {
       await this.cleanup(userId);
-      const newCount = await this.countForUser(userId);
-      if (newCount >= MAX_SESSIONS) {
-        await this.revokeAllForUser(userId);
+      const live = await this.listForUserWithHashes(userId);
+      if (live.length >= MAX_SESSIONS) {
+        const oldestFirst = [...live].sort(
+          (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+        );
+        // +1 because one more is about to be added.
+        const evict = live.length - MAX_SESSIONS + 1;
+        for (const victim of oldestFirst.slice(0, evict)) {
+          await this.revokeByHash(userId, victim.id);
+        }
+        securityLogger.warn(
+          { userId, evicted: evict, cap: MAX_SESSIONS },
+          'Session cap reached — evicted the oldest sessions',
+        );
       }
     }
 
     const token = generateToken(32);
     const tokenHash = sha256(token);
     const now = new Date();
-    const ttlMs = options?.ttlMs ?? this.maxAge;
+    const ttlMs = ttlMsFor(options?.ttlMs, this.maxAge);
 
     const session: SessionData = {
       userId,

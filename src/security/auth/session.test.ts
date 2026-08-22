@@ -146,6 +146,43 @@ describe('SessionManager.revoke', () => {
     expect(await mgr.countForUser(u1)).toBe(0);
   });
 
+  test('the session cap evicts the oldest, and never signs the user out entirely', async () => {
+    const mgr = new SessionManager();
+    const id = seedUser();
+
+    // 20 is the cap; the 21st must not cost the user the other 20.
+    const tokens: string[] = [];
+    for (let i = 0; i < 20; i++) {
+      tokens.push((await mgr.create(id)).token);
+    }
+    const fresh = await mgr.create(id);
+
+    // What the old fallback did — revoke everything — showed up in ordinary
+    // use, because every WebSocket handshake mints a ticket session: a user
+    // opening a few pages hit the cap and had their browser cookie killed
+    // mid-click, with a 401 storm on /auth/me as the symptom.
+    expect(await mgr.validate(fresh.token)).not.toBeNull();
+    expect(await mgr.countForUser(id)).toBe(20);
+    // The oldest went, the newest stayed.
+    expect(await mgr.validate(tokens[0])).toBeNull();
+    expect(await mgr.validate(tokens[19])).not.toBeNull();
+  });
+
+  test('a websocket ticket neither fills the cap nor evicts a real session', async () => {
+    const mgr = new SessionManager();
+    const id = seedUser();
+    const login = await mgr.create(id, { channelType: 'web' });
+
+    // One handshake per page, several pages, a couple of reconnects: this is a
+    // normal minute of use, not an attack.
+    for (let i = 0; i < 40; i++) {
+      await mgr.create(id, { channelType: 'web', channelId: 'ws-ticket', ttlMs: 60_000 });
+    }
+
+    // The login the user actually made is still valid.
+    expect(await mgr.validate(login.token)).not.toBeNull();
+  });
+
   test('revokeAllForUser clears every session and returns the count', async () => {
     const mgr = new SessionManager();
     const id = seedUser();

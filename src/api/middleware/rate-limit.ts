@@ -6,6 +6,30 @@ import { apiLogger } from '@/utils/logger';
 
 const AUTH_RATE_LIMIT = 20; // requests per window
 const AUTH_RATE_WINDOW_SECS = 60; // 1 minute
+
+/**
+ * The auth endpoints that TAKE a credential, and so are worth a tight per-IP
+ * window: each one is an attempt an attacker can repeat.
+ *
+ * Deliberately not "everything under /api/auth". The web app reads
+ * `/api/auth/me` on every page mount and takes a `ws-ticket` per socket, so a
+ * user simply clicking through the navigation spent the 20/min budget meant
+ * for credential stuffing — and a 429 on `me` reads to the front-end as
+ * "not logged in", which is how a normal session degrades into a half-broken
+ * page. Session reads fall through to the baseline per-IP and per-user layers
+ * below, which is where ordinary traffic belongs.
+ */
+export function isCredentialAttempt(path: string): boolean {
+  return (
+    path.startsWith('/api/auth/login') ||
+    path.startsWith('/api/auth/register') ||
+    path.startsWith('/api/auth/passkey') ||
+    path.startsWith('/api/auth/oauth') ||
+    path.startsWith('/api/auth/password') ||
+    path.startsWith('/api/auth/totp') ||
+    path.startsWith('/api/auth/2fa')
+  );
+}
 const USER_QUOTA_WINDOW_SECS = 60;
 
 // Baseline per-IP ceiling on all /api/* traffic, applied in EVERY deployment
@@ -61,8 +85,10 @@ function clientIp(request: Request): string {
  *
  * Two layers:
  *
- *   1. Per-IP sliding window on `/api/auth/*` (20 req/min). Pre-existing
- *      protection against credential-stuffing — kept exactly as before.
+ *   1. Per-IP sliding window on the auth endpoints that TAKE a credential
+ *      (20 req/min) — login, register, passkey, oauth, password/2FA. Session
+ *      reads like `/api/auth/me` are deliberately NOT in it; see
+ *      `isCredentialAttempt`.
  *
  *   2. (Phase 3c-2) Per-user sliding window on `/api/*`, fed by
  *      `quotaManager.getEffectiveQuota(userId).maxApiCallsPerMinute`.
@@ -87,8 +113,8 @@ export const rateLimitMiddleware = new Elysia({ name: 'rate-limit' }).onBeforeHa
     const { request, set } = ctx;
     const url = new URL(request.url);
 
-    // ── Layer 1: per-IP on auth endpoints ──────────────────────────
-    if (url.pathname.startsWith('/api/auth')) {
+    // ── Layer 1: per-IP on CREDENTIAL endpoints ────────────────────
+    if (isCredentialAttempt(url.pathname)) {
       const ip = clientIp(request);
 
       const rateLimiter = getRateLimiter();
