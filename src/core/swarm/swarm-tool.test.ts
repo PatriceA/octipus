@@ -28,6 +28,17 @@ describe('buildDelegationGuidance', () => {
     // Includes the spawnable-role catalog so the agent knows what it can spawn.
     expect(g).toContain(buildSpawnRoleCatalog());
   });
+
+  test('says a missing tool is a reason to spawn, not a reason to decline', () => {
+    // Measured on the live bench: an orchestrator holding only `profiles`
+    // answered a knowledge-base question with "Octipus has no vector store
+    // configured and no knowledge-base search tool mounted" — a claim about the
+    // PRODUCT drawn from its own toolset, with a `research` specialist one
+    // spawn away that has exactly that tool.
+    const g = buildDelegationGuidance();
+    expect(g).toMatch(/tool you do NOT hold/i);
+    expect(g).toMatch(/never tell the user a capability is missing/i);
+  });
 });
 
 // ── applyRoleFit (Phase 2.6 deterministic role-fit) ──────────────────

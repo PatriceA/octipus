@@ -26,6 +26,18 @@ describe('buildDelegationPolicy', () => {
     expect(lite).not.toContain('create_pipeline');
   });
 
+  test('both tiers say a tool the orchestrator lacks is a spawn, not a refusal', () => {
+    // Measured on the live bench: asked what Octipus uses for a vector store,
+    // the orchestrator — which holds only `profiles` by design — answered
+    // "Octipus has no searchable knowledge base", a claim about the PRODUCT
+    // read off its own toolset, with a `research` specialist one spawn away.
+    for (const tier of [true, false]) {
+      const p = buildDelegationPolicy(tier);
+      expect(p).toMatch(/tool you do not hold|cannot reach it/i);
+      expect(p).toMatch(/knowledge base/i);
+    }
+  });
+
   test('full keeps the multi-spawn and pipeline surface lite must not see', () => {
     const full = buildDelegationPolicy(false);
     expect(full).toContain('one or more calls per turn');

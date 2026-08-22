@@ -99,6 +99,11 @@ export function buildDelegationGuidance(): string {
     '(pick a `role`, give a focused `taskBrief`). Decide with these rules:\n' +
     '1. First check: can you do it with your own tools? If yes, just ' +
     "do it — don't spawn.\n" +
+    '1b. If the work needs a tool you do NOT hold, that is a reason to spawn, ' +
+    'not a reason to decline: the catalog below lists what each specialist can ' +
+    'reach. Never tell the user a capability is missing or unconfigured because ' +
+    'it is missing from YOUR toolset — searching the knowledge base, the web, ' +
+    'the filesystem or a repository are all one `spawn_child` away.\n' +
     '2. SPAWN when you have 2+ INDEPENDENT units of non-trivial work to run ' +
     'in parallel (per-page research, per-file audit, per-endpoint probe), OR ' +
     "a sub-topic needs a DIFFERENT specialist's toolset.\n" +
