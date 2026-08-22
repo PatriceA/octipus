@@ -150,7 +150,13 @@ export interface TestExecutionContext {
     topic?: string;
     outputMode?: string;
   };
+  /** First role the turn delegated to; undefined when routing was not observed. */
   routedRole?: string;
+  /**
+   * Every role the turn delegated to. A turn may fan out, so `routes_to_role`
+   * is satisfied by membership rather than by the first one alone.
+   */
+  routedRoles?: string[];
   toolsUsed?: string[];
   response?: string;
   latencyMs: number;

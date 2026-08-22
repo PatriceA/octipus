@@ -119,16 +119,28 @@ export function aliasVerdict(raw: unknown): QAValidationResult | null {
   else if (typeof stated === 'string' && FAIL_WORDS.test(stated.trim())) passed = false;
   else return null;
 
-  // A verdict word alone is not a verdict: an incidental `{"status": "ok"}`
-  // says nothing about an audit. Require the object to answer at least one
-  // more part of the contract before it is read as one.
+  // A verdict word alone is not a verdict, and neither is a verdict word beside
+  // ordinary prose. The object must answer something only an AUDIT answers.
+  //
+  // `feedback` used to count, but `FEEDBACK_KEYS` includes `summary` and
+  // `notes`, which any pasted payload has: `{"result": "success", "summary":
+  // "12 tests passed"}` from a test runner and `{"status": "ok", "notes":
+  // "service up"}` from a health check both satisfied it and were read as
+  // PASSING verdicts. Tier 1b runs before the prose tiers, so an auditor that
+  // wrote a genuine FAIL in prose and ended its report with a tool-output fence
+  // had that FAIL replaced by a pass — which the coverage gate then rejected
+  // into the auditor-only retry loop, so the real failure never reached the
+  // implementer at all.
+  //
+  // Issues, what-was-not-checked and confidence are audit vocabulary. A report
+  // that carries none of them is not answering the audit contract, whatever
+  // word it used.
   const feedback = pick(obj, FEEDBACK_KEYS);
-  const answersMore =
-    feedback !== undefined ||
+  const answersAudit =
     pick(obj, ISSUE_KEYS) !== undefined ||
     pick(obj, NOT_CHECKED_KEYS) !== undefined ||
     pick(obj, ['confidence', 'certainty']) !== undefined;
-  if (!answersMore) return null;
+  if (!answersAudit) return null;
 
   return {
     passed,
@@ -1528,13 +1540,13 @@ export class PipelineManager {
     // The "after" side of the snapshot. Taken here rather than at the call site
     // so it is impossible to gate on a stale reading: this runs immediately
     // before the decision that uses it.
-    // Same options as the "before" side in `snapshotStage` — a diff whose two
-    // sides disagree about what counts reads a hidden file as a new one.
-    const after =
-      args.before && args.workspaceRoot
-        ? await snapshotWorkspace(args.workspaceRoot, { countPackages: declared.producesArtifacts === true })
-        : null;
-    const filesTouched = countChangedFiles(args.before ?? null, after);
+    const after = args.before && args.workspaceRoot ? await snapshotWorkspace(args.workspaceRoot) : null;
+    // The declaration decides how the diff is SCORED, not what the walk records:
+    // a snapshot that hides files can never be re-scored, and two snapshots taken
+    // under different rules cannot be compared at all.
+    const filesTouched = countChangedFiles(args.before ?? null, after, {
+      countPackages: declared.producesArtifacts === true,
+    });
 
     const failure = stageEvidenceFailure(declared, counters, filesTouched);
     const passed = failure === null;
@@ -1644,8 +1656,7 @@ export class PipelineManager {
     // Both declarations need the filesystem: one to prove work happened, the
     // other to prove it did not.
     if (!workspaceRoot || !(declared?.producesArtifacts || declared?.readOnly)) return null;
-    // Must match the "after" side in `assertStageEvidence`.
-    return snapshotWorkspace(workspaceRoot, { countPackages: declared.producesArtifacts === true });
+    return snapshotWorkspace(workspaceRoot);
   }
 
   /**

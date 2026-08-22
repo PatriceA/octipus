@@ -44,9 +44,31 @@ describe('classification and routing', () => {
     expect(r.score).toBeCloseTo(0.5);
   });
 
-  test('routes_to_role falls back to the classifier topic in unit mode', async () => {
-    const c = ctx({ classification: { type: 'task', confidence: 1, topic: 'coding' } });
+  // Behaviour deliberately reversed. This used to assert the fallback, which was
+  // the bug: unit mode set `routedRole` to the classifier's own topic, so the
+  // assertion asked the function under test whether it agreed with itself.
+  test('routes_to_role reads the specialist that actually took the work', async () => {
+    const c = ctx({ classification: { type: 'task', confidence: 1, topic: 'coding' }, routedRoles: ['coding'] });
     expect((await evaluateAssertion({ type: 'routes_to_role', value: 'coding' }, c)).passed).toBe(true);
+  });
+
+  test('a fan-out satisfies it by membership, not by being first', async () => {
+    const c = ctx({ routedRoles: ['research', 'coding'] });
+    expect((await evaluateAssertion({ type: 'routes_to_role', value: 'coding' }, c)).passed).toBe(true);
+  });
+
+  test('delegating to nobody is a real answer, and it is not a match', async () => {
+    const c = ctx({ routedRoles: [] });
+    const r = await evaluateAssertion({ type: 'routes_to_role', value: 'coding' }, c);
+    expect(r.passed).toBe(false);
+    expect(r.actual).toBe('unknown');
+  });
+
+  test('a classifier topic alone never satisfies it', async () => {
+    const c = ctx({ classification: { type: 'task', confidence: 1, topic: 'coding' } });
+    const r = await evaluateAssertion({ type: 'routes_to_role', value: 'coding' }, c);
+    expect(r.passed).toBe(false);
+    expect(r.actual).toBe('unknown');
   });
 });
 

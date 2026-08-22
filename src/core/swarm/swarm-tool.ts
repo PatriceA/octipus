@@ -260,7 +260,7 @@ export function createSpawnChildTool(
   parent: AgentNode,
   spawner: SwarmSpawner = getSwarmSpawner(),
   hooks?: SpawnChildHooks,
-  opts?: { lite?: boolean },
+  opts?: { lite?: boolean; weakModel?: boolean },
 ): ToolHandler {
   // Detach-or-await execute, shared by the lite and full schemas so both
   // behave identically. Every spawn returns a pending handle immediately when
@@ -275,10 +275,16 @@ export function createSpawnChildTool(
     if ('error' in validated) return `spawn_child: ${validated.error}`;
     const params = validated.params;
 
-    // The turn's RESOLVED orchestrator tier, passed through so `resolveChildRole`
-    // does not re-derive it from a model id. Read by the deterministic role-fit
-    // rewrite, which applies to lite orchestrators only.
-    const internal = { orchestratorIsLite: opts?.lite === true };
+    // Whether the agent doing the spawning is too weak to be trusted with the
+    // role choice, resolved by the caller and passed through so
+    // `resolveChildRole` does not re-derive it from a model id.
+    //
+    // Separate from `lite`, which also selects the flat spawn SCHEMA. The
+    // top-level orchestrator sets `lite` and means both; a stage worker or a
+    // depth-1 agent on a small local model is equally unable to hold the role
+    // choice but keeps its full schema, so it sets `weakModel` alone. Without
+    // this the role-fit rewrite was live at exactly one call site.
+    const internal = { orchestratorIsLite: opts?.weakModel ?? opts?.lite === true };
 
     const cap = hooks?.maxPendingDetached() ?? 0;
     if (hooks && cap > 0) {

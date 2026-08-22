@@ -5,8 +5,42 @@ import { scopedRepos } from '@/db/repositories/scoped';
 import { checkProjectPath, devModeAllowed } from '@/security/devmode';
 import { isAuthenticated, requireScope } from '@/security/principal';
 import { API_SCOPES } from '@/security/scopes';
+import { swarmNodeRepository } from '@/core/swarm/node-repository';
 import { generateId } from '@/utils/crypto';
 import { apiLogger } from '@/utils/logger';
+
+/**
+ * The specialist roles this turn actually delegated to.
+ *
+ * The turn's `agentId` is the ORCHESTRATOR's, so it says nothing about where
+ * the work went. The routing decision lives in the swarm nodes spawned under
+ * this session, which is the only place it is recorded as fact rather than as
+ * intent.
+ *
+ * Added for the eval harness, whose `routes_to_role` assertion previously read
+ * the classifier's own topic — the function under test answering the question
+ * about itself. Filtered to nodes created during this turn so a long session
+ * does not report every role it has ever used.
+ *
+ * Best-effort: a lookup failure returns nothing rather than failing the reply.
+ * An empty array means "delegated to nobody", which is a real answer — the
+ * orchestrator answered directly.
+ */
+async function routedRolesForTurn(sessionId: string, since: Date): Promise<string[] | undefined> {
+  try {
+    const nodes = await swarmNodeRepository.findByRootSession(sessionId);
+    return [
+      ...new Set(
+        nodes
+          .filter((n) => n.depth > 0 && n.createdAt >= since)
+          .map((n) => n.role),
+      ),
+    ];
+  } catch (err) {
+    apiLogger.warn({ err, sessionId }, 'routed-role lookup failed — reply omits routedRoles');
+    return undefined;
+  }
+}
 
 /**
  * Chat — Phase 1a multi-user conversion.
@@ -102,6 +136,9 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
 
       const orchestrator = getOrchestratorService();
 
+      // Marks this turn's boundary, so the roles reported below are the ones
+      // THIS request routed to and not a previous turn's children.
+      const turnStartedAt = new Date();
       try {
         const result = await orchestrator.handleMessage(
           sessionId,
@@ -118,6 +155,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           sessionId: result.sessionId || sessionId,
           agentId: result.agentId,
           classification: result.classification,
+          routedRoles: await routedRolesForTurn(result.sessionId || sessionId, turnStartedAt),
           metadata: result.metadata,
         };
       } catch (error) {

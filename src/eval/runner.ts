@@ -64,8 +64,11 @@ async function runTestUnit(
       topic: classification.topic,
       outputMode: classification.outputMode,
     },
-    // In unit mode, routedRole comes from classifier topic heuristic
-    routedRole: classification.topic,
+      // NOT the classifier topic. `routes_to_role` used to read this field, and
+    // its fallback is the classifier topic too, so setting it here made every
+    // routing assertion compare the classifier against itself — green whether
+    // routing worked or not. Routing is only observable in integration mode.
+    routedRole: undefined,
     toolsUsed: [],
     response: undefined,
     latencyMs: Date.now() - start,
@@ -164,6 +167,8 @@ async function runTestIntegration(
       classification?: { type: string; confidence: number; complexity?: string; topic?: string };
       metadata?: { latencyMs?: number; tokens?: number };
       agentId?: string;
+      /** Roles this turn actually delegated to — see `routedRolesForTurn`. */
+      routedRoles?: string[];
     };
 
     return {
@@ -173,7 +178,17 @@ async function runTestIntegration(
         complexity: data.classification.complexity,
         topic: data.classification.topic,
       } : undefined,
-      routedRole: data.classification?.topic,
+      // The role the work actually went to, reported by the backend from the
+      // swarm nodes this turn spawned. NOT `classification.topic`, which is the
+      // classifier's guess — reading that here made the assertion compare the
+      // classifier with itself in integration mode too, so removing the unit
+      // tautology alone would only have moved the lie.
+      //
+      // Undefined when the backend does not report it (an older build, or a
+      // failed lookup), which the assertion reads as unverified rather than as
+      // a miss.
+      routedRole: data.routedRoles?.[0],
+      routedRoles: data.routedRoles,
       toolsUsed: [], // Would need agent event tracking for full tool usage
       response: data.response,
       latencyMs: Date.now() - start,
@@ -262,6 +277,15 @@ export async function runTest(
   });
   if (blocker) return errorResult(test, suiteId, blocker);
 
+  // Same refusal, for the same reason. Unit mode never spawns a specialist, so
+  // it has no routing to observe; it used to answer `routes_to_role` from the
+  // classifier's own topic, which is the function under test answering the
+  // question about itself. Reported as a setup problem, loudly, rather than
+  // scored either way — a green routing suite that never routed is worse than
+  // no routing suite.
+  const routingBlocker = routingObservabilityBlocker(test.assertions, options.integration);
+  if (routingBlocker) return errorResult(test, suiteId, routingBlocker);
+
   let seededIds: string[] = [];
   if (test.memorySetup?.length) {
     try {
@@ -310,6 +334,26 @@ export async function runTest(
     metadata: ctx.metadata,
     timestamp: new Date(),
   };
+}
+
+/**
+ * Why a routing assertion cannot be judged in this run, or undefined when it can.
+ *
+ * `routes_to_role` asks which specialist actually took the work. Only the
+ * integration path spawns one, so unit mode has no answer — and the answer it
+ * used to give was `classification.topic`, produced by the same classifier the
+ * assertion is checking.
+ */
+export function routingObservabilityBlocker(
+  assertions: EvalTest['assertions'],
+  integration?: boolean,
+): string | undefined {
+  if (integration) return undefined;
+  if (!assertions.some((a) => a.type === 'routes_to_role')) return undefined;
+  return (
+    'routes_to_role needs a running backend: unit mode never spawns a specialist, so there is no ' +
+    'routing to observe. Re-run with --integration.'
+  );
 }
 
 /**

@@ -113,20 +113,40 @@ describe('snapshotWorkspace', () => {
     expect(countChangedFiles(before, after)).toBe(1);
   });
 
+  test('overwriting a package that was already there always counts', async () => {
+    // The exemption is for a package the stage BUILT on its way to verifying
+    // something. A suffix-blind skip let a read-only validator rewrite a
+    // checked-in wheel — or drop a `notes.tar.gz` over one — and report nothing.
+    await writeFile(join(root, 'vendored-1.0-py3-none-any.whl'), 'original');
+    const before = await snapshotWorkspace(root);
+
+    await writeFile(join(root, 'vendored-1.0-py3-none-any.whl'), 'tampered-with-different-length');
+    const after = await snapshotWorkspace(root);
+
+    expect(countChangedFiles(before, after)).toBe(1);
+  });
+
+  test('deleting a package always counts', async () => {
+    await writeFile(join(root, 'vendored-1.0-py3-none-any.whl'), 'original');
+    const before = await snapshotWorkspace(root);
+    await rm(join(root, 'vendored-1.0-py3-none-any.whl'));
+    const after = await snapshotWorkspace(root);
+    expect(countChangedFiles(before, after)).toBe(1);
+  });
+
   test('a package IS counted for a stage that declared it produces artifacts', async () => {
     // The other half of the rule, and the reason it is the caller's decision:
     // hiding the package here would fail a packaging stage for "changing 0
     // files", since a shell-built package raises no tool counter either.
-    const opts = { countPackages: true };
     await writeFile(join(root, 'pyproject.toml'), '[project]');
-    const before = await snapshotWorkspace(root, opts);
+    const before = await snapshotWorkspace(root);
 
     // In the workspace ROOT, which the old location rule exempted.
     await writeFile(join(root, 'strkit-0.1.0.tar.gz'), 'gzip');
     await writeFile(join(root, 'strkit-0.1.0-py3-none-any.whl'), 'zip');
-    const after = await snapshotWorkspace(root, opts);
+    const after = await snapshotWorkspace(root);
 
-    expect(countChangedFiles(before, after)).toBe(2);
+    expect(countChangedFiles(before, after, { countPackages: true })).toBe(2);
   });
 
   test('a plain archive is not packaging evidence and still counts', async () => {

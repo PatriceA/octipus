@@ -647,6 +647,7 @@ export class SwarmSpawner {
       reason: internal.reason ?? 'normal',
       spawnMode: params.mode ?? 'await',
       scorers: params.scorers,
+      childIsSmall: isSmall,
     }));
 
     // Feed the child's actual spend back into the parent's pool accounting so
@@ -714,6 +715,12 @@ export class SwarmSpawner {
     reason: 'normal' | 'escalation' | 'retry';
     spawnMode: 'await' | 'detach';
     scorers?: Scorer[];
+    /**
+     * Whether THIS child's own model is in the small tier — it is the one that
+     * will choose its subagent's role, so it decides whether the deterministic
+     * role-fit rewrite applies to the grandchildren it spawns.
+     */
+    childIsSmall?: boolean;
   }): Promise<ChildResult> {
     // Retry policy (design §Failure Modes):
     //   provider_error → retry once on the SAME spawn attempt (same node).
@@ -863,11 +870,17 @@ export class SwarmSpawner {
         const { createEscalateTool } = await import('./escalate-tool');
         const { createCollectChildrenTool } = await import('./collect-tool');
         tools.push(
-          createSpawnChildTool(childNode, this, {
-            registerPending: (pc) => detachHookRef.current?.registerPendingChild(pc),
-            pendingCount: () => detachHookRef.current?.pendingDetachedCount() ?? 0,
-            maxPendingDetached: () => getLevelDefault(1).maxPendingDetached,
-          }),
+          createSpawnChildTool(
+            childNode,
+            this,
+            {
+              registerPending: (pc) => detachHookRef.current?.registerPendingChild(pc),
+              pendingCount: () => detachHookRef.current?.pendingDetachedCount() ?? 0,
+              maxPendingDetached: () => getLevelDefault(1).maxPendingDetached,
+            },
+            // This agent's own tier — it is the one choosing its subagent's role.
+            { weakModel: opts.childIsSmall === true },
+          ),
         );
         tools.push(createEscalateTool(childNode, this));
         tools.push(createCollectChildrenTool(childNode, workerRef));
@@ -1049,13 +1062,7 @@ export class SwarmSpawner {
     const scorerWorkspaceRoot = wantsFileEvidence
       ? WorkspaceFS.forAgent({ userId: opts.parentContext.userId }).root
       : null;
-    // `countPackages` because this snapshot IS the file evidence: a child asked
-    // for a `code-diff`, or scored on `minFilesChanged`, may well have a built
-    // wheel or sdist as its deliverable, and hiding it measures zero files and
-    // fails the child for producing nothing. Both sides of the diff below use
-    // the same option.
-    const snapshotOpts = { countPackages: true };
-    const fsBefore = scorerWorkspaceRoot ? await snapshotWorkspace(scorerWorkspaceRoot, snapshotOpts) : null;
+    const fsBefore = scorerWorkspaceRoot ? await snapshotWorkspace(scorerWorkspaceRoot) : null;
 
     // ── Run child (with provider_error single retry on same node) ──
     let status: ChildResultStatus = 'ok';
@@ -1155,7 +1162,11 @@ export class SwarmSpawner {
     ];
     if (status === 'ok' && effectiveScorers.length > 0) {
       const filesTouched = scorerWorkspaceRoot
-        ? countChangedFiles(fsBefore, await snapshotWorkspace(scorerWorkspaceRoot, snapshotOpts))
+        // `countPackages` because this diff IS the file evidence: a child asked
+        // for a `code-diff`, or scored on `minFilesChanged`, may well have a
+        // built wheel or sdist as its deliverable, and skipping it measures
+        // zero files and fails the child for producing nothing.
+        ? countChangedFiles(fsBefore, await snapshotWorkspace(scorerWorkspaceRoot), { countPackages: true })
         : null;
       const outcome = await runScorers(
         effectiveScorers,

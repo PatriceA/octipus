@@ -80,9 +80,19 @@ register('confidence_above', (assertion, ctx) => {
 
 register('routes_to_role', (assertion, ctx) => {
   const expected = String(assertion.value);
-  const actual = ctx.routedRole || ctx.classification?.topic || 'unknown';
-  // Allow topic-based matching for unit mode (no orchestrator running)
-  const passed = actual === expected;
+  // `ctx.routedRole` ONLY — which specialist actually took the work.
+  //
+  // This used to fall back to `ctx.classification?.topic`, and unit mode set
+  // `routedRole` to that same topic, so the assertion compared the classifier
+  // with the classifier: 43 assertions across 8 suites reported that routing
+  // worked without ever observing a route. The runner now refuses to run a
+  // routing test outside integration mode rather than answer it from the
+  // function under test.
+  // A turn may delegate to several specialists, so membership — not the first
+  // one alone. `unknown` means routing was never observed, which can only fail.
+  const routed = ctx.routedRoles ?? (ctx.routedRole ? [ctx.routedRole] : []);
+  const actual = routed.length > 0 ? routed.join(', ') : 'unknown';
+  const passed = routed.includes(expected);
   return {
     type: 'routes_to_role',
     passed,

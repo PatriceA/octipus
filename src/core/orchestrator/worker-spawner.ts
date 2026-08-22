@@ -1031,7 +1031,9 @@ Use these MCP tools when the task benefits from them — especially for people-r
     };
     stageNode.allowedToolIds.add('spawn_child');
     try {
-      roleTools.push(createSpawnChildTool(stageNode));
+      // `weakModel`, not `lite`: the tier gates the role-fit rewrite without
+      // switching this worker to the flat spawn schema.
+      roleTools.push(createSpawnChildTool(stageNode, undefined, undefined, { weakModel: isSmall }));
     } catch (err) {
       coreLogger.error({ err, role: agentRole }, 'Failed to inject spawn_child for pipeline stage — stage runs without subagent spawning');
     }

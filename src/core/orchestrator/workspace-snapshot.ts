@@ -106,6 +106,17 @@ function isEggInfoMetadata(relPath: string): boolean {
   return parts[parts.length - 2].endsWith('.egg-info') && EGG_INFO_FILES.has(parts[parts.length - 1]);
 }
 
+/** How a diff is scored. */
+export interface DiffOptions {
+  /**
+   * Count newly-created packages as changes. Set for a stage that DECLARED it
+   * produces artifacts, where the package is the deliverable; left false for
+   * every other stage, where a NEW one is a verification by-product. A package
+   * that already existed and changed always counts — see `countChangedFiles`.
+   */
+  countPackages?: boolean;
+}
+
 /**
  * A built package is by-product or DELIVERABLE, and only the stage's own
  * declaration knows which — so the caller decides, not this file.
@@ -147,17 +158,10 @@ export interface WorkspaceSnapshot {
   truncated: boolean;
 }
 
-/** How one snapshot is taken. BOTH sides of a diff must use the same options. */
+/** How one snapshot is taken. */
 export interface SnapshotOptions {
   /** Cap before the walk gives up and reports `truncated`. */
   maxFiles?: number;
-  /**
-   * Count built packages as ordinary files. Set for a stage that DECLARED it
-   * produces artifacts, where the package is the deliverable; left false for
-   * every other stage, where it is a verification by-product. See
-   * `PACKAGE_SUFFIXES`.
-   */
-  countPackages?: boolean;
 }
 
 /**
@@ -172,7 +176,7 @@ export async function snapshotWorkspace(
   root: string,
   opts: SnapshotOptions = {},
 ): Promise<WorkspaceSnapshot | null> {
-  const { maxFiles = SNAPSHOT_MAX_FILES, countPackages = false } = opts;
+  const { maxFiles = SNAPSHOT_MAX_FILES } = opts;
   const files = new Map<string, string>();
   let truncated = false;
 
@@ -208,7 +212,6 @@ export async function snapshotWorkspace(
       if (IGNORED_SUFFIXES.some((ext) => entry.name.endsWith(ext))) continue;
       const rel = relative(root, join(dir, entry.name)).split(sep).join('/');
       if (isEggInfoMetadata(rel)) continue;
-      if (!countPackages && isPackage(rel)) continue;
 
       if (files.size >= maxFiles) {
         truncated = true;
@@ -248,12 +251,20 @@ export async function snapshotWorkspace(
 export function countChangedFiles(
   before: WorkspaceSnapshot | null,
   after: WorkspaceSnapshot | null,
+  opts: DiffOptions = {},
 ): number | null {
   if (!before || !after || before.truncated || after.truncated) return null;
+  const { countPackages = false } = opts;
 
   let changed = 0;
   for (const [path, stamp] of after.files) {
-    if (before.files.get(path) !== stamp) changed++;
+    if (before.files.get(path) === stamp) continue;
+    // A package the stage CREATED is exempt for a non-producing stage; one that
+    // already existed and changed is not. The distinction is the whole point:
+    // a verification stage builds a new wheel on its way to an isolated
+    // install, it does not rewrite a wheel that was already in the tree.
+    if (!countPackages && isPackage(path) && !before.files.has(path)) continue;
+    changed++;
   }
   for (const path of before.files.keys()) {
     if (!after.files.has(path)) changed++;

@@ -83,12 +83,37 @@ describe('parseQAResult — verdict block selection (B2 review fix)', () => {
 // `blockers: []`, `summary: …` — and the gate read it as "no machine-readable
 // verdict", re-ran the entire audit three times at ~430k tokens a visit, and
 // killed the run on the token pool with zero plan items finished.
+describe('aliasVerdict — incidental JSON is not a verdict', () => {
+  // Tier 1b runs BEFORE the prose tiers, so anything it accepts overrides a
+  // verdict the auditor actually wrote in prose. A report that ends with a
+  // pasted tool payload used to have its real FAIL replaced by that payload's
+  // "success" — and the resulting PASS was then coverage-rejected into the
+  // auditor-only retry loop, so the failure never reached the implementer.
+  test('a test-runner payload is not a passing audit', () => {
+    expect(aliasVerdict({ result: 'success', summary: '12 tests passed' })).toBeNull();
+  });
+
+  test('a health-check payload is not a passing audit', () => {
+    expect(aliasVerdict({ status: 'ok', notes: 'service up' })).toBeNull();
+  });
+
+  test('audit vocabulary is what makes it a verdict', () => {
+    // The measured real case: a QA stage emitting its own field names.
+    const v = aliasVerdict({ verdict: 'approve', blockers: [], summary: 'looks right' });
+    expect(v?.passed).toBe(true);
+  });
+
+  test('confidence alone is audit vocabulary too', () => {
+    expect(aliasVerdict({ verdict: 'fail', confidence: 'low' })?.passed).toBe(false);
+  });
+});
+
 describe('aliasVerdict — a null alias does not shadow a real one', () => {
   // Models routinely emit the whole contract with the fields they did not fill
   // set to null. Selecting on key PRESENCE let the null win, so a stated
   // verdict read as "no verdict" and stated blockers were silently dropped.
   test('a null primary verdict field falls through to the one that is set', () => {
-    const v = aliasVerdict({ passed: null, verdict: 'fail', feedback: 'nope' });
+    const v = aliasVerdict({ passed: null, verdict: 'fail', issues: ['x'], feedback: 'nope' });
     expect(v).not.toBeNull();
     expect(v?.passed).toBe(false);
   });

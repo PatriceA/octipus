@@ -411,7 +411,7 @@ describe('createSpawnChildTool', () => {
   // the spawner. A first attempt gated it on the ROUTER threshold, which made
   // it dead code in every path that reaches `spawnChild` at all — router mode
   // never gets here, it short-circuits into `runRouterTurn`.
-  async function spawnAndCaptureInternal(opts?: { lite?: boolean }) {
+  async function spawnAndCaptureInternal(opts?: { lite?: boolean; weakModel?: boolean }) {
     let internal: Record<string, unknown> | undefined;
     const spawner = {
       spawnChild: async (
@@ -440,6 +440,18 @@ describe('createSpawnChildTool', () => {
 
   test('a full orchestrator reaches the spawner as not-lite', async () => {
     expect((await spawnAndCaptureInternal())?.orchestratorIsLite).toBe(false);
+  });
+
+  // A stage worker or a depth-1 agent on a small local model is equally unable
+  // to hold the role choice, but keeps its full spawn schema — so it sets
+  // `weakModel` alone. Gating on `lite` left the rewrite live at exactly one
+  // call site out of three.
+  test('a weak-model spawner reaches the spawner as lite without taking the lite schema', async () => {
+    expect((await spawnAndCaptureInternal({ weakModel: true }))?.orchestratorIsLite).toBe(true);
+  });
+
+  test('weakModel:false is not overridden by anything', async () => {
+    expect((await spawnAndCaptureInternal({ weakModel: false }))?.orchestratorIsLite).toBe(false);
   });
 
   test('passes validated params to spawner and marshals result via formatChildResult', async () => {
