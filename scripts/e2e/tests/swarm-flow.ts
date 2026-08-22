@@ -60,6 +60,16 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
   // Cache: role → bound modelId (from the Models page, primary binding).
   let topicBindings: Record<string, string> = {};
   let defaultModelId: string | null = null;
+  /**
+   * expertId → the model that expert pins, when it pins one.
+   *
+   * An expert's `modelPreference` deliberately outranks the lane binding — it
+   * is the whole point of picking an expert — so a child spawned with one is
+   * not evidence of parent-model inheritance. Without this the shipped
+   * `Data Engineer` expert (pinned to the pro model while the `data` lane is
+   * bound to flash) failed the routing assertion for behaving as configured.
+   */
+  let expertModelById: Record<string, string> = {};
 
   // Precondition: models exist and have topic bindings for every role.
   await runner.test('Topic coverage — every specialist role has a model bound', async () => {
@@ -109,6 +119,16 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
       missing.length === 0,
       `Unmapped topics (set a primary model in the Models page): ${missing.join(', ')}`,
     );
+
+    const { status: eStatus, data: eData } = await client.request<{
+      experts?: Array<{ id: string; modelPreference?: string | null }>;
+    }>('GET', '/experts');
+    if (eStatus === 200 && Array.isArray(eData.experts)) {
+      for (const e of eData.experts) {
+        if (!e.modelPreference) continue;
+        expertModelById[e.id] = modelIdByName.get(e.modelPreference) ?? e.modelPreference;
+      }
+    }
   });
 
   // Short-circuit — every subsequent test needs topic bindings + default.
@@ -135,6 +155,7 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
     role: string;
     model: string;
     topicPath: string;
+    expertId?: string | null;
   }
 
   interface CompletionEvent {
@@ -257,6 +278,9 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
     // Orchestrator is seeded with the default model; specialist roles must
     // come from their topic binding.
     if (spawn.kind === 'orchestrator') return;
+    // An expert pins its own model on purpose; that is a choice, not a leak.
+    const pinned = spawn.expertId ? expertModelById[spawn.expertId] : undefined;
+    if (pinned && spawn.model === pinned) return;
     const expected = topicBindings[spawn.role];
     assert(
       !!expected,
@@ -264,7 +288,8 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
     );
     assert(
       spawn.model === expected,
-      `Spawn ${spawn.nodeId} (role=${spawn.role}, kind=${spawn.kind}) ran on '${spawn.model}' but topic '${spawn.role}' is bound to '${expected}'. ` +
+      `Spawn ${spawn.nodeId} (role=${spawn.role}, kind=${spawn.kind}, expert=${spawn.expertId ?? 'none'}) ran on '${spawn.model}' ` +
+        `but topic '${spawn.role}' is bound to '${expected}' and no expert pins that model. ` +
         `Indicates parent-model inheritance (routing bug) OR child-tier-clamp re-route.`,
     );
   }
