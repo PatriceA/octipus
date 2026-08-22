@@ -1,5 +1,5 @@
 import { readdir, stat } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { coreLogger } from '@/utils/logger';
 
 /**
@@ -72,15 +72,24 @@ const PRUNED_DIRS = new Set([
  * Deliberately NOT `dist/` or `build/` — a stage may legitimately be asked to
  * produce those, and pruning them would let it pass having built nothing.
  *
- * `.whl` joins them for the same reason `*.egg-info/` is pruned above: measured
- * 2026-08-21, a read-only QA stage verified packaging the only way it can — a
- * wheel build plus an isolated install — and the gate failed it for "changing"
- * ten files it had generated, while its report ("no source changes were made")
- * was true. Verifying a package must not read as editing one. The dist/build
- * directories still count, so a stage whose deliverable is a package still has
- * to show it there.
+ * Built packages are handled separately below, by location rather than suffix.
  */
-const IGNORED_SUFFIXES = ['.pyc', '.pyo', '.class', '.o', '.whl'];
+const IGNORED_SUFFIXES = ['.pyc', '.pyo', '.class', '.o'];
+
+/**
+ * A built package is by-product or deliverable depending on WHERE it lands.
+ * `python -m build` puts it in `dist/`, which stays counted so a stage whose
+ * job is to produce a package still has to show it; a wheel dropped beside the
+ * source is what a verification stage leaves behind on its way to an isolated
+ * install, and counting it fails the stage for doing its job.
+ */
+const PACKAGE_SUFFIXES = ['.whl', '.egg'];
+const DELIVERABLE_DIRS = new Set(['dist', 'build']);
+
+function isPackageByProduct(relPath: string): boolean {
+  if (!PACKAGE_SUFFIXES.some((ext) => relPath.endsWith(ext))) return false;
+  return !relPath.split(sep).slice(0, -1).some((d) => DELIVERABLE_DIRS.has(d));
+}
 
 /** Above this, the tree is too big to diff reliably — see `truncated`. */
 const SNAPSHOT_MAX_FILES = 20_000;
@@ -141,6 +150,7 @@ export async function snapshotWorkspace(
       // workspace entirely or loop.
       if (!entry.isFile()) continue;
       if (IGNORED_SUFFIXES.some((ext) => entry.name.endsWith(ext))) continue;
+      if (isPackageByProduct(relative(root, join(dir, entry.name)))) continue;
 
       if (files.size >= maxFiles) {
         truncated = true;

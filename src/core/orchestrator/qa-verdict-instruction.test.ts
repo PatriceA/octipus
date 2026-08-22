@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test';
+import { thinVerdictFailure } from './audit-coverage';
 import {
+  aliasVerdict,
   PipelineManager,
+  qaVerdictCorrectionInput,
   QA_VERDICT_JSON_INSTRUCTION,
   QA_VERDICT_JSON_LEAD,
   withQaVerdictContract,
@@ -72,5 +75,92 @@ describe('parseQAResult — verdict block selection (B2 review fix)', () => {
 
   test('returns null for output with no verdict at all', () => {
     expect(parseQA('just some prose with a ```js\ncode\n``` block')).toBeNull();
+  });
+});
+
+// The failure this closes, measured on the live stack 2026-08-21: a QA stage
+// ended with a fenced `json` block of its own shape — `verdict: "approve"`,
+// `blockers: []`, `summary: …` — and the gate read it as "no machine-readable
+// verdict", re-ran the entire audit three times at ~430k tokens a visit, and
+// killed the run on the token pool with zero plan items finished.
+describe('aliasVerdict — a verdict under different field names', () => {
+  const observed = {
+    verdict: 'approve',
+    summary: 'strkit passes full QA: 171/171 unit tests, packaging install verified.',
+    blockers: [],
+    recommendations: ['Lock the packaging contract with an __all__ test.'],
+  };
+
+  test('reads the shape a real QA stage emitted', () => {
+    const v = aliasVerdict(observed);
+    expect(v?.passed).toBe(true);
+    expect(v?.feedback).toContain('171/171');
+    expect(v?.source).toBe('json');
+  });
+
+  test('parseQAResult finds it inside the report', () => {
+    const out = `## Test Results\nAll green.\n\n\`\`\`json\n${JSON.stringify(observed)}\n\`\`\``;
+    expect((parseQA(out) as { passed: boolean }).passed).toBe(true);
+  });
+
+  test('a literal `passed` block still wins over an alias one', () => {
+    const out =
+      `\`\`\`json\n${JSON.stringify({ verdict: 'approve' })}\n\`\`\`\n` +
+      `\`\`\`json\n${JSON.stringify({ passed: false, issues: ['ReDoS in slugify'] })}\n\`\`\``;
+    const v = parseQA(out) as { passed: boolean; issues: string[] };
+    expect(v.passed).toBe(false);
+    expect(v.issues).toEqual(['ReDoS in slugify']);
+  });
+
+  test('reads the negative words too', () => {
+    expect(aliasVerdict({ status: 'rejected', blockers: ['tests fail'] })?.passed).toBe(false);
+    expect(aliasVerdict({ result: 'needs work', issues: ['flaky suite'] })?.passed).toBe(false);
+  });
+
+  test('a verdict word alone is not a verdict — incidental JSON is not read as one', () => {
+    // A QA report quotes payloads. Without more of the contract answered,
+    // `{"status":"ok"}` from a health check is just a payload.
+    expect(aliasVerdict({ status: 'ok' })).toBeNull();
+    expect(aliasVerdict({ result: 'success', tests: 171 })).toBeNull();
+    expect(aliasVerdict({ status: 'ok', confidence: 'high' })?.passed).toBe(true);
+  });
+
+  test('the LAST verdict block wins — the contract puts it at the end', () => {
+    const out =
+      `\`\`\`json\n${JSON.stringify({ result: 'success', issues: [] })}\n\`\`\`\n` +
+      `\`\`\`json\n${JSON.stringify({ verdict: 'reject', blockers: ['ReDoS'] })}\n\`\`\``;
+    const v = parseQA(out) as { passed: boolean; issues: string[] };
+    expect(v.passed).toBe(false);
+    expect(v.issues).toEqual(['ReDoS']);
+  });
+
+  test('refuses to guess: no verdict field, or a value that is neither', () => {
+    expect(aliasVerdict({ summary: 'looks fine to me', blockers: [] })).toBeNull();
+    expect(aliasVerdict({ verdict: 'partially, with caveats', issues: [] })).toBeNull();
+    expect(aliasVerdict({ verdict: 42, issues: [] })).toBeNull();
+    expect(aliasVerdict(['approve'])).toBeNull();
+    expect(aliasVerdict(null)).toBeNull();
+  });
+
+  test('stays in the structured tier, so the thin-verdict rules still apply', () => {
+    const v = aliasVerdict(observed)!;
+    expect(v.source).toBe('json');
+    expect(v.whatIDidNotCheck).toEqual([]);
+    expect(v.confidence).toBeUndefined();
+    expect(thinVerdictFailure(v)).not.toBeNull();
+  });
+});
+
+describe('qaVerdictCorrectionInput', () => {
+  const input = qaVerdictCorrectionInput('REPORT BODY', 'the verdict named no stage');
+
+  test('hands the auditor its own report and the reason', () => {
+    expect(input).toContain('REPORT BODY');
+    expect(input).toContain('the verdict named no stage');
+  });
+
+  test('asks for the block only — not another audit', () => {
+    expect(input).toMatch(/Do NOT re-run the audit/i);
+    expect(input).toContain(QA_VERDICT_JSON_INSTRUCTION);
   });
 });

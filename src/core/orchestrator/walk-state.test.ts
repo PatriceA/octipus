@@ -55,3 +55,30 @@ describe('walk state — checkpoint round trip', () => {
     });
   });
 });
+
+describe('walk state — the rejected report survives a checkpoint', () => {
+  test('round-trips, so a resumed correction is still a correction', () => {
+    const state = hydrateWalk(
+      serializeWalk({
+        cursor: 'n5',
+        previousOutput: '',
+        handoffChain: [],
+        pipelineSources: [],
+        traversals: {},
+        loopMarks: {},
+        pendingFeedback: {},
+        judgedContext: {},
+        pendingRejection: 'the verdict named no stage',
+        rejectedReport: 'REPORT BODY',
+        currentItemId: null,
+        steps: 3,
+      }),
+    );
+    expect(state?.rejectedReport).toBe('REPORT BODY');
+  });
+
+  test('a checkpoint written before the field existed resumes without one', () => {
+    const state = hydrateWalk({ cursor: 'n5', pendingRejection: 'reason' });
+    expect(state?.rejectedReport).toBeUndefined();
+  });
+});

@@ -75,6 +75,92 @@ function parseConfidence(text: string): QAValidationResult['confidence'] {
   return m ? (m[1].toLowerCase() as 'high' | 'medium' | 'low') : undefined;
 }
 
+/** Field names a verdict block uses for each part of the contract, in priority order. */
+const VERDICT_KEYS = ['passed', 'verdict', 'status', 'result', 'outcome'];
+const ISSUE_KEYS = ['issues', 'blockers', 'problems', 'critical_issues', 'criticalIssues'];
+const FEEDBACK_KEYS = ['feedback', 'summary', 'notes', 'rationale', 'reasoning'];
+const NOT_CHECKED_KEYS = ['whatIDidNotCheck', 'what_i_did_not_check', 'notChecked', 'not_checked'];
+
+/** Words a verdict field uses for the two answers. Anything else is not a verdict. */
+const PASS_WORDS = /^(pass(ed)?|approve[ds]?|ok|accept(ed)?|green|success(ful)?)$/i;
+const FAIL_WORDS = /^(fail(ed)?|reject(ed)?|block(ed)?|deny|denied|needs[-_\s]?work|red)$/i;
+
+/** First key present on the object, whatever its value. */
+function pick(obj: Record<string, unknown>, keys: string[]): unknown {
+  for (const k of keys) if (k in obj) return obj[k];
+  return undefined;
+}
+
+/**
+ * Read a verdict object that carries the contract under different field names.
+ *
+ * Returns null unless the object states pass or fail unambiguously — a block
+ * with no recognizable verdict field, or one whose value is neither a pass nor
+ * a fail word, is NOT a verdict and must not be guessed at. Reported as the
+ * `json` tier because that is what it is: a structured answer, held to the
+ * structured tier's rules.
+ */
+export function aliasVerdict(raw: unknown): QAValidationResult | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const obj = raw as Record<string, unknown>;
+  const stated = pick(obj, VERDICT_KEYS);
+  let passed: boolean;
+  if (typeof stated === 'boolean') passed = stated;
+  else if (typeof stated === 'string' && PASS_WORDS.test(stated.trim())) passed = true;
+  else if (typeof stated === 'string' && FAIL_WORDS.test(stated.trim())) passed = false;
+  else return null;
+
+  // A verdict word alone is not a verdict: an incidental `{"status": "ok"}`
+  // says nothing about an audit. Require the object to answer at least one
+  // more part of the contract before it is read as one.
+  const feedback = pick(obj, FEEDBACK_KEYS);
+  const answersMore =
+    feedback !== undefined ||
+    pick(obj, ISSUE_KEYS) !== undefined ||
+    pick(obj, NOT_CHECKED_KEYS) !== undefined ||
+    pick(obj, ['confidence', 'certainty']) !== undefined;
+  if (!answersMore) return null;
+
+  return {
+    passed,
+    issues: normalizeStringList(pick(obj, ISSUE_KEYS)),
+    feedback: typeof feedback === 'string' ? feedback : '',
+    retryCount: typeof obj.retryCount === 'number' ? obj.retryCount : 0,
+    confidence: normalizeConfidence(pick(obj, ['confidence', 'certainty'])),
+    whatIDidNotCheck: normalizeStringList(pick(obj, NOT_CHECKED_KEYS)),
+    source: 'json',
+  };
+}
+
+/**
+ * The retry prompt for a verdict the audit gate REJECTED.
+ *
+ * The work was judged; it is the report that is unusable. Re-running the audit
+ * makes the auditor redo everything it just did — measured 2026-08-21 at ~430k
+ * tokens a visit, three visits, the run pool gone and not one plan item
+ * finished. Handing the auditor its own report back and asking only for the
+ * verdict block costs a fraction of that, and converges, because the model has
+ * nothing left to do except answer in the shape it was asked for.
+ *
+ * The report is re-attached to the corrected block afterwards, so whatever runs
+ * next still reads the full audit rather than a bare verdict.
+ */
+export function qaVerdictCorrectionInput(report: string, reason: string, handsOff = false): string {
+  return (
+    `Your audit REPORT below was rejected — not the work you audited, and not your conclusion. ` +
+    `The reason:\n\n${reason}\n\n` +
+    `Do NOT re-run the audit, re-read the code, or run any commands: nothing has changed since you ` +
+    `wrote this, and your findings stand. Fix ONLY the reported problem and reply with the corrected ` +
+    `verdict block, nothing else.\n\n` +
+    `--- YOUR PREVIOUS REPORT ---\n${report}\n--- END OF REPORT ---\n` +
+    // A node with an outgoing edge still owes the next one a handoff. Without
+    // this the reply carries none and the downstream stage inherits the
+    // PRE-correction handoff out of the re-attached report.
+    (handsOff ? HANDOFF_EMIT_INSTRUCTION : '') +
+    QA_VERDICT_JSON_INSTRUCTION
+  );
+}
+
 /**
  * Appended to `qa_validation` stages so they emit a machine-readable verdict
  * `parseQAResult`'s strict-JSON tier (1) consumes — instead of relying on the
@@ -387,6 +473,8 @@ export interface WalkState {
   pendingFeedback: Record<string, QAValidationResult>;
   judgedContext: Record<string, string>;
   pendingRejection?: string;
+  /** The rejected report itself, so the retry corrects it instead of redoing it. */
+  rejectedReport?: string;
   currentItemId: string | null;
   steps: number;
 }
@@ -420,6 +508,7 @@ export function hydrateWalk(raw: unknown): WalkState | null {
     pendingFeedback: record<QAValidationResult>(r.pendingFeedback),
     judgedContext: record<string>(r.judgedContext),
     pendingRejection: typeof r.pendingRejection === 'string' ? r.pendingRejection : undefined,
+    rejectedReport: typeof r.rejectedReport === 'string' ? r.rejectedReport : undefined,
     currentItemId: typeof r.currentItemId === 'string' ? r.currentItemId : null,
     steps: typeof r.steps === 'number' && r.steps >= 0 ? r.steps : 0,
   };
@@ -653,6 +742,8 @@ export class PipelineManager {
     const judgedContext = new Map<string, string>();
     /** Rejection notice for a QA node re-running because its report was unaccountable. */
     let pendingRejection: string | undefined;
+    /** That node's rejected report, handed back to it so the retry is a correction. */
+    let rejectedReport: string | undefined;
     /** The plan item currently in flight, when inside a `foreach` body. */
     let currentItem: PlanItemRow | null = null;
     /** Handoff-chain length when each loop was first entered — the per-item reset point. */
@@ -680,6 +771,7 @@ export class PipelineManager {
       for (const [k, v] of Object.entries(r.pendingFeedback)) pendingFeedback.set(k, v);
       for (const [k, v] of Object.entries(r.judgedContext)) judgedContext.set(k, v);
       pendingRejection = r.pendingRejection;
+      rejectedReport = r.rejectedReport;
       steps = r.steps;
       currentItem = r.currentItemId
         ? (await pipelineRepository.getPlanItems(pipeline.id)).find((i) => i.id === r.currentItemId) ?? null
@@ -700,6 +792,7 @@ export class PipelineManager {
         pendingFeedback: Object.fromEntries(pendingFeedback),
         judgedContext: Object.fromEntries(judgedContext),
         pendingRejection,
+        rejectedReport,
         currentItemId: currentItem?.id ?? null,
         steps,
       };
@@ -886,8 +979,19 @@ export class PipelineManager {
         // Non-terminal nodes emit a structured ```handoff block for whoever
         // runs next; `createHandoffContext` prefers it over regex scraping.
         if (graph.edges.some((e) => e.from === cursor)) input += HANDOFF_EMIT_INSTRUCTION;
+        // A rejected REPORT is corrected, not re-audited (`qaVerdictCorrectionInput`).
+        // Without the report to hand — a resume from a checkpoint written before
+        // this existed — fall back to the full re-audit.
+        const correcting = isQa && !!pendingRejection && !!rejectedReport;
+        const reportUnderCorrection = correcting ? (rejectedReport as string) : undefined;
         if (isQa) {
-          input = withQaVerdictContract(input, pendingRejection);
+          input = correcting
+            ? qaVerdictCorrectionInput(
+                reportUnderCorrection as string,
+                pendingRejection as string,
+                graph.edges.some((e) => e.from === cursor),
+              )
+            : withQaVerdictContract(input, pendingRejection);
           judgedContext.set(cursor, handoffText || previousOutput);
         }
 
@@ -907,9 +1011,19 @@ export class PipelineManager {
         });
         if (stepResult.stopped) return stepResult.stopped;
 
-        previousOutput = stepResult.output;
+        // The corrected reply is the verdict block alone; the audit it belongs to
+        // is the report it was written against, so the next node reads both.
+        // What the gate reads is the corrected REPLY alone. The report is
+        // re-attached for whoever runs next, but re-parsing the pair would find
+        // the old, rejected block first (`parseQAResult` takes the first fence
+        // that parses) and re-reject the correction it never looked at.
+        const verdictText = stepResult.output;
+        previousOutput = reportUnderCorrection
+          ? `${reportUnderCorrection}\n\n${stepResult.output}`
+          : stepResult.output;
         pipelineSources.push(`stage(${node.ordinal + 1}: ${node.name}/${node.role})`);
         pendingRejection = undefined;
+        rejectedReport = undefined;
 
         if (isQa) {
           const auditScope = auditScopeBefore(
@@ -918,7 +1032,7 @@ export class PipelineManager {
             graph.nodes.map((n) => (n.templateIndex >= 0 ? built[n.templateIndex].producesArtifacts : false)),
             handoffConfidenceByStage(handoffChain),
           );
-          const qaResult = await this.gateQaVerdict(previousOutput, auditScope, {
+          const qaResult = await this.gateQaVerdict(verdictText, auditScope, {
             sessionId,
             pipelineId: pipeline.id,
             stageName: node.name,
@@ -929,6 +1043,9 @@ export class PipelineManager {
             // The REPORT was rejected, not the work. Re-run the auditor alone.
             outcome = 'audit_gate_failed';
             pendingRejection = qaResult.feedback;
+            // The original report, not the growing pile — re-embedding each
+            // round's verdict block would enlarge the prompt every retry.
+            rejectedReport = reportUnderCorrection ?? previousOutput;
           } else {
             outcome = 'qa_fail';
           }
@@ -1625,6 +1742,30 @@ export class PipelineManager {
             source: 'json',
           };
         }
+      } catch { /* try the next candidate */ }
+    }
+
+    // (1b) A structured block that answers the question under different field
+    // names. Measured 2026-08-21: a QA stage emitted a fenced `json` verdict of
+    // its own shape — `{"verdict": "approve", "blockers": [], "summary": ...}` —
+    // and the gate threw it away as "no machine-readable verdict", re-ran the
+    // whole audit three times at ~430k tokens a visit and killed the run on the
+    // token pool without ever judging the substance. The block WAS machine
+    // readable; only the key names differed. Rejecting a parseable verdict over
+    // vocabulary is the gate failing, not the auditor.
+    //
+    // Runs as a second pass so a literal `passed` block anywhere in the reply
+    // still wins, and stays inside the structured tier: the thin-verdict rules
+    // apply to it, and the fields it lacks are exactly what the retry asks for.
+    // LAST block wins here, unlike tier 1: the contract asks for the verdict as
+    // the last thing in the reply, and an alias key is common enough in
+    // incidental JSON (`{"status": "ok"}` from a health check, `{"result":
+    // "success"}` from a test summary) that taking the first match would read a
+    // quoted payload as the verdict.
+    for (const jsonStr of [...candidates].reverse()) {
+      try {
+        const alias = aliasVerdict(JSON.parse(jsonStr));
+        if (alias) return alias;
       } catch { /* try the next candidate */ }
     }
 

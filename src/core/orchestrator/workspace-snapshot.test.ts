@@ -85,6 +85,20 @@ describe('snapshotWorkspace', () => {
     expect(countChangedFiles(before, after)).toBe(0);
   });
 
+  test('a wheel BUILT INTO dist/ is a deliverable and still counts', async () => {
+    // The other half of the rule: pruning packages by suffix everywhere would
+    // let a stage declared `producesArtifacts` pass having built nothing, since
+    // a shell-built wheel raises no tool counter either.
+    await writeFile(join(root, 'pyproject.toml'), '[project]');
+    const before = await snapshotWorkspace(root);
+
+    await mkdir(join(root, 'dist'), { recursive: true });
+    await writeFile(join(root, 'dist', 'strkit-0.1.0-py3-none-any.whl'), 'zip');
+    const after = await snapshotWorkspace(root);
+
+    expect(countChangedFiles(before, after)).toBe(1);
+  });
+
   test('still sees a real edit made in the same run as the caches', async () => {
     await writeFile(join(root, 'slugify.py'), 'v1');
     const before = await snapshotWorkspace(root);
