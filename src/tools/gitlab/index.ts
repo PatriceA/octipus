@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { buildChildEnv } from '@/security/child-env';
 import type { ToolManifest } from '@/core/types';
 import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 
@@ -225,7 +226,10 @@ export class GitLabTool extends BaseTool {
 
   private async glab(args: string[]): Promise<string> {
     return new Promise((resolve, reject) => {
-      const child = spawn('glab', args);
+      const child = spawn('glab', args, {
+        // Same rule as gh: glab keeps its own token and nothing else.
+        env: buildChildEnv(undefined, { keep: ['GITLAB_TOKEN', 'GLAB_TOKEN', 'GITLAB_ACCESS_TOKEN'] }),
+      });
       let stdout = '';
       let stderr = '';
 

@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { buildChildEnv } from '@/security/child-env';
 import type { AgentContext, ToolManifest } from '@/core/types';
 import {
   buildIsolationFlags,
@@ -133,7 +134,11 @@ export class DockerTool extends BaseTool {
 
   private async runDocker(args: string[], timeout: number = EXEC_TIMEOUT): Promise<{ stdout: string; stderr: string }> {
     return new Promise((resolve, reject) => {
-      const child = spawn('docker', args, { timeout });
+      // The args come from the model, and `docker run --env NAME` forwards a
+      // variable into a container whose output the model then reads — so the
+      // docker CLI must not be holding the harness's secrets in the first
+      // place.
+      const child = spawn('docker', args, { timeout, env: buildChildEnv() });
       let stdout = '';
       let stderr = '';
 

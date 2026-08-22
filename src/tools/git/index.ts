@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { buildChildEnv } from '@/security/child-env';
 import type { ToolManifest } from '@/core/types';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
@@ -248,7 +249,10 @@ export class GitTool extends BaseTool {
 
   private async git(args: string[], cwd: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      const child = spawn('git', args, { cwd });
+      // git authenticates through the credential helper and ssh-agent, not
+      // through the environment, so it needs none of the secrets the harness
+      // holds.
+      const child = spawn('git', args, { cwd, env: buildChildEnv() });
       let stdout = '';
       let stderr = '';
 

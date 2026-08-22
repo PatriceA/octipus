@@ -62,3 +62,27 @@ describe('LocalShellOperations.exec — credential scrubbing', () => {
     expect(res.stdout).toContain('GITHUB_TOKEN=explicit-value');
   });
 });
+
+describe('LocalShellOperations.getEnv — reading by name', () => {
+  const ops = new LocalShellOperations();
+
+  it('will not hand back a credential the caller names', async () => {
+    // Stripping secrets from spawned commands while answering `env MASTER_KEY`
+    // in the same process would be a door next to a wall.
+    const saved = process.env.MASTER_KEY;
+    process.env.MASTER_KEY = 'should-not-be-readable';
+    process.env.HARMLESS_READABLE = 'fine';
+    try {
+      expect(await ops.getEnv('MASTER_KEY')).toEqual({});
+      expect(await ops.getEnv('HARMLESS_READABLE')).toEqual({ HARMLESS_READABLE: 'fine' });
+    } finally {
+      if (saved === undefined) delete process.env.MASTER_KEY;
+      else process.env.MASTER_KEY = saved;
+      delete process.env.HARMLESS_READABLE;
+    }
+  });
+
+  it('still refuses a bulk dump', async () => {
+    expect(await ops.getEnv()).toEqual({});
+  });
+});

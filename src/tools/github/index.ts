@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { buildChildEnv } from '@/security/child-env';
 import type { ToolManifest } from '@/core/types';
 import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 
@@ -323,7 +324,13 @@ export class GitHubTool extends BaseTool {
 
   private async gh(args: string[]): Promise<string> {
     return new Promise((resolve, reject) => {
-      const child = spawn('gh', args);
+      const child = spawn('gh', args, {
+        // gh's own credentials are kept; everything else the harness holds is
+        // not gh's business.
+        env: buildChildEnv(undefined, {
+          keep: ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'],
+        }),
+      });
       let stdout = '';
       let stderr = '';
 
