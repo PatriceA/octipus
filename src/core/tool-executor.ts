@@ -2,13 +2,14 @@ import { isCancellationError } from '@/core/swarm/errors';
 import { type SideEffectCounters, emptyCounters } from '@/core/swarm/receipt';
 import { renderToolActivity } from '@/core/work-stream/renderers';
 import { stripWorkStreamMeta } from '@/shared/work-stream';
+import { spillToolOutput } from './tool-output-spill';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { getConfig } from '@/config';
 import { routeApproval } from '@/security/approval-policy';
 import { getPermissionManager } from '@/security/permissions';
 import { agentLogger, coreLogger } from '@/utils/logger';
-import { sanitizeToolOutput } from '@/utils/sanitize';
+import { DEFAULT_MAX_LENGTH, sanitizeToolOutput } from '@/utils/sanitize';
 import type { AgentEvent, ToolHandler } from './agent-base';
 import type { AgentContext, AgentMessage, ToolCall, ToolResult } from './types';
 
@@ -847,7 +848,21 @@ export class ToolExecutor {
       // Drop UI-only work-stream metadata (e.g. a file diff) before the result
       // reaches the model or the persisted transcript — the model already has
       // the inputs it acted on, so this would be redundant, token-costly context.
-      const sanitized = result.error || sanitizeToolOutput(stripWorkStreamMeta(result.result));
+      // Oversized output is saved to the workspace before it is cut, so the
+      // model gets a head, a tail and a path it can read or grep instead of a
+      // fragment with the rest gone for good. Returns null when the output is
+      // small enough, or when the save failed — both fall through to the plain
+      // truncation below, since a housekeeping write must not turn a
+      // successful command into an error.
+      const raw = result.error ? null : sanitizeToolOutput(stripWorkStreamMeta(result.result), { maxLength: Infinity });
+      const spilled = raw
+        ? await spillToolOutput(raw, {
+            toolCallId: result.toolCallId,
+            userId: this.context.userId,
+            threshold: DEFAULT_MAX_LENGTH,
+          })
+        : null;
+      const sanitized = result.error || spilled || sanitizeToolOutput(raw ?? '');
       const modelSafe = modelSeesImages ? sanitized : stripBinaryBlobs(sanitized);
       toolMessages.push({
         role: 'tool',

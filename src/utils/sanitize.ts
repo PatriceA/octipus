@@ -1,6 +1,11 @@
 import dns from 'node:dns';
 
-const DEFAULT_MAX_LENGTH = 50_000;
+/**
+ * The single boundary for "this output is too big to hand a model". Exported
+ * so the spill path saves exactly what this would otherwise cut off — two
+ * different thresholds would mean output that is truncated but never saved.
+ */
+export const DEFAULT_MAX_LENGTH = 50_000;
 
 export interface UrlValidation {
   valid: boolean;
