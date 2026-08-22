@@ -33,7 +33,11 @@ export interface Invariant {
 export interface InvariantResult {
   area: string;
   name: string;
-  /** Violation text, or `null` when it holds. `undefined` when it threw. */
+  /**
+   * Violation text, or `null` when it holds — but `null` alone does NOT mean
+   * the invariant passed: read `error` first. A check that could not run is
+   * an unknown answer, and treating it as a pass is how a gate goes quiet.
+   */
   violation: string | null;
   /** Set when the check itself failed — an unknown answer, not a passing one. */
   error?: string;
@@ -53,9 +57,13 @@ export function registerInvariant(inv: Invariant): void {
  * knowing is not the same as being fine, and treating it as a pass is how a
  * gate goes quiet.
  */
-export async function runInvariants(): Promise<InvariantResult[]> {
+export async function runInvariants(
+  /** Optional filter — used by tests so they run their own probes only. */
+  select?: (inv: Invariant) => boolean,
+): Promise<InvariantResult[]> {
   const results: InvariantResult[] = [];
   for (const inv of registry.values()) {
+    if (select && !select(inv)) continue;
     try {
       results.push({ area: inv.area, name: inv.name, violation: await inv.check() });
     } catch (err) {
@@ -103,6 +111,13 @@ registerInvariant({
   area: 'swarm',
   name: 'the orchestrator level resolves a non-zero detach cap',
   async check() {
+    // Touch config FIRST, and let a failure throw. `getLevelDefault` swallows a
+    // config error and falls back to the hardcoded record, whose value is 6 —
+    // so asking it alone would answer "holds" for a deployment whose config
+    // never loaded, which is the inert-gate shape this check exists to catch.
+    const { getConfig } = await import('@/config');
+    const level = getConfig().swarm?.levelDefaults?.orchestrator;
+    if (!level) return 'config carries no swarm.levelDefaults.orchestrator: the runtime is running on hardcoded fallbacks';
     const { getLevelDefault } = await import('./swarm/types');
     const cap = getLevelDefault(0).maxPendingDetached;
     return cap > 0
@@ -134,10 +149,12 @@ registerInvariant({
       .where(
         and(
           gt(swarmNodes.depth, 0),
-          // Recovery only ever cares about recent nodes, and the window also
-          // lets rows written before the bracket existed age out instead of
-          // being reported forever as a violation nobody can act on.
-          gt(swarmNodes.createdAt, sql`now() - interval '7 days'`),
+          // Only nodes that are still in flight. A terminal row needs nothing
+          // from replay or reconcile, so reporting one is noise nobody can act
+          // on — including the rows the spawn path itself cancels when it
+          // refuses to run a child it could not record, and every row written
+          // before the bracket existed.
+          eq(swarmNodes.status, 'running'),
           notExists(
             getDb()
               .select({ one: sql`1` })
@@ -155,6 +172,6 @@ registerInvariant({
     const missing = row?.n ?? 0;
     return missing === 0
       ? null
-      : `${missing} swarm_nodes row(s) below the root, created in the last 7 days, have no 'spawn' event: they are invisible to replay and to the boot reconcile`;
+      : `${missing} running swarm_nodes row(s) below the root have no 'spawn' event: they are invisible to replay and to the boot reconcile`;
   },
 });

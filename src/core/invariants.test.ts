@@ -13,7 +13,10 @@ describe('invariant registry', () => {
         throw new Error('probe unavailable');
       },
     });
-    const r = (await runInvariants()).find((x) => x.name === 'throwing check');
+    // Scoped to this file's own probes: an unfiltered run would also execute
+    // the DB-backed invariant, which in the unit lane opens a pool against the
+    // developer's real database.
+    const r = (await runInvariants((i) => i.area === 'test')).find((x) => x.name === 'throwing check');
     // Not knowing is not the same as being fine. A check that swallows its own
     // failure into `null` is how a gate goes quiet without anyone noticing.
     expect(r?.error).toMatch(/probe unavailable/);
@@ -28,7 +31,7 @@ describe('invariant registry', () => {
         return 'two rows are wrong';
       },
     });
-    const r = (await runInvariants()).find((x) => x.name === 'failing check');
+    const r = (await runInvariants((i) => i.area === 'test')).find((x) => x.name === 'failing check');
     expect(r?.violation).toBe('two rows are wrong');
     expect(r?.error).toBeUndefined();
   });
@@ -53,7 +56,7 @@ describe.skipIf(!isIntegration)('swarm ledger-start invariant (DB-backed)', () =
   const rootSessionId = '00000000-0000-0000-0000-0000000000aa';
 
   const ledgerViolation = async (): Promise<string | null> => {
-    const r = (await runInvariants()).find((x) => x.name === LEDGER_START);
+    const r = (await runInvariants((i) => i.name === LEDGER_START))[0];
     if (r?.error) throw new Error(`invariant failed to run: ${r.error}`);
     return r?.violation ?? null;
   };
