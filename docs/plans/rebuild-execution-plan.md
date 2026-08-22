@@ -1,7 +1,7 @@
 # Octipus rebuild: execution plan
 
 Date: 2026-08-22
-Status: in progress — phases 0 to 2 done or decided, phase 3 started (2026-08-22)
+Status: in progress — phases 0 to 2 done or decided, phase 3 scoped and largely done, phase 4 invariants done (2026-08-22)
 Findings: [rebuild-findings-2026-08-22.md](rebuild-findings-2026-08-22.md)
 Supersedes: `rebuild-stack-and-orchestration.md` and `deepseek-harness-lessons.md`, both merged into this document.
 
@@ -107,7 +107,7 @@ One further rule from the same source generalises beyond workflows: observation 
 
 Runnable check for what remains: an end-to-end run of the seven-stage pipeline asserting non-zero files written and non-zero evidence rows — the exact scenario that previously reported success while doing nothing.
 
-### Phase 3 — The session log as the spine (started 2026-08-22)
+### Phase 3 — The session log as the spine (scoped and largely done, 2026-08-22)
 
 The largest structural change, and the one that makes completion provable rather than claimed.
 
@@ -123,11 +123,17 @@ Completion becomes a logged bracket. Every multi-step operation writes a durable
 
 This subsumes the evidence gate. A stage that produced nothing has nothing to project, so there is no separate gate to bypass and no flag to be dropped between a template and a checker — the recurring bug class ends structurally rather than by a fourth fix.
 
-Runnable check: kill the process mid-stage and assert the resumed run reports interruption rather than completion, and that no stage's completion can be derived without its logged end.
+**Second finding, fixed: the bracket had no durable start.** Measuring the decision-bearing subset, as the reassessment above demanded, turned up the opposite of what the phase expected. `run-log.ts` is fire-and-forget, but its only reader is the API trace view, so no decision derives from it and it can stay exactly as it is. The gap was one layer over: the swarm ledger's `spawn` event and the `swarm_nodes` row were *both* best-effort, and both are load-bearing. The node row is what cascade-cancel, the orphan reaper and the budget walk resolve a running child through; the ledger event is what `replay` and `findRootsWithIncomplete` key off, so a child with no `spawn` row is invisible to reconciliation permanently.
 
-### Phase 4 — Log-derived subsystems
+The fix is the bracket rule with the Phase 0 asymmetry applied to writes rather than to guards. `recordSpawn` throws and the spawn is abandoned if it cannot be recorded — the worker is stopped and every reservation it took is returned (node row cancelled, call-graph fingerprint released, fan-out slot given back), returning `denied` rather than `tool_error` so the crash and backup-model ladders do not spawn two more workers against the same broken write. `recordTerminal` and `reconcile` stay best-effort, because a dropped terminal leaves the node in-flight and the next reconcile cancels it: the cheap direction to be wrong in. Pipeline stage workers had a swallowed node row and no ledger events at all; they now record the same durable start and a best-effort terminal on both the success and failure paths.
 
-Three subsystems that only become simple once Phase 3 lands, and should follow it directly.
+**What is left.** The wholesale conversion described above — state as a fold over the log, replay rejecting impossible histories, the evidence gate subsumed — is NOT done and is no longer obviously worth doing. Pipelines already write node status with awaited updates at both ends, and the two writes that were genuinely best-effort are now durable. Treat the remaining text as a hypothesis to re-measure against the code before building, the same way the premise above did not survive first contact.
+
+Runnable check: `ledger.test.ts` proves the asymmetry directly — a spawn append against an unwritable repository rejects, while a terminal and a reconcile against the same repository do not. Reverting `recordSpawn` to `safeAppend` was watched go red. Still open: kill the process mid-stage and assert the resumed run reports interruption rather than completion.
+
+### Phase 4 — Log-derived subsystems (invariants done, 2026-08-22)
+
+Three subsystems that only become simple once Phase 3 lands, and should follow it directly. Phase 3 was scoped down rather than delivered whole, so the two that depend on a full log fold — token accounting and goal state — are not unblocked by it and should be re-argued from the code before being started.
 
 *Token accounting* becomes one measurement service replaying the log — total request pressure plus per-node positional pricing, with the last successful call's provider usage reused as a baseline only when the canonical request envelope matches, and the whole envelope repriced heuristically otherwise. This removes the hand-threaded per-stage pools and `NodeBudget.childTokensUsed` entirely, and makes a token-blind stage unrepresentable, because pressure is a property of the log rather than something a stage reports.
 
@@ -135,7 +141,13 @@ Three subsystems that only become simple once Phase 3 lands, and should follow i
 
 *Runtime invariants* become a registry where each area registers checks under its own name, asserting only over authoritative event streams or mutable data — never that a service or method exists — with failures attributed to the owning area. Harness pairs this with a mechanical gate that rejects unexplained empty checks: an area with nothing checkable must say specifically why. This is the check that would have caught all three inert gates, because it runs where the product runs rather than where the test runs.
 
-Runnable check: an invariant that fails on a deliberately reintroduced detach-cap-zero configuration, live, not in CI.
+**Done: `src/core/invariants.ts`.** A registry keyed by area and name, a boot pass that logs violations with their owning area and never blocks the boot, and a check that throws reported as an *error* rather than as a pass — not knowing is not the same as being fine. The mechanical gate for unexplained empty areas is deliberately skipped: it is a team-scale ceremony, and with two areas the ledger is the check.
+
+Two invariants to start, both taken from incidents. The detach cap is read through `getLevelDefault(0)`, the same call the runtime makes after this deployment's settings are merged, which is exactly the reading the incident lacked while every unit test agreed with the type. And every swarm node below the root created in the last seven days must carry the ledger `spawn` event that replay and the boot reconcile key off; the seven-day window keeps rows written before the bracket existed from being reported forever as a violation nobody can act on.
+
+The same measurement fixed a third instance of the recurring bug class on the way past: `swarmLevelSchema.maxPendingDetached` carried `.default(0)` while each level's object default carried 6/3/0 and `getLevelDefault` carried a third `?? LEVEL_DEFAULT[depth]` resolve step. Three sources for one fact, and the field default was the one that won — a level object setting any other key parsed as a hard zero, making the resolve step below it unreachable. That is the detach-cap incident's exact shape minus the type disagreement that was the only reason anyone noticed. The field is now optional.
+
+Runnable check: the DB-backed lane inserts a child node with no start event, watches the invariant report it, appends the event, and watches it hold again — the production query against real rows. Still open: exercising the detach-cap invariant against a live deployment configured back to zero.
 
 ### Phase 5 — Runtime
 
