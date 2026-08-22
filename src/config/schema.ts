@@ -338,7 +338,12 @@ const swarmLevelSchema = z.object({
   tokens: z.number().min(1_000),
   wallMs: z.number().min(10_000),
   fanOut: z.number().min(0).max(20),
-  maxPendingDetached: z.number().min(0).max(10).default(0),
+  // No default HERE on purpose. The per-level default differs (6/3/0) and is
+  // owned by `getLevelDefault`, which resolves it per depth. A field default
+  // would be a second source for one fact, and the one that wins: a settings
+  // object that omits the key would parse as a hard 0 rather than as absent,
+  // which is precisely how detach shipped disabled while the type said 6.
+  maxPendingDetached: z.number().min(0).max(10).optional(),
 });
 
 export const swarmConfigSchema = z.object({

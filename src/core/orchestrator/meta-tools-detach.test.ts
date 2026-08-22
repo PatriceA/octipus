@@ -152,4 +152,17 @@ describe('LEVEL_DEFAULT[0] detach budget', () => {
     const parsed = swarmConfigSchema.parse({});
     expect(parsed.levelDefaults.orchestrator.maxPendingDetached).toBeGreaterThan(0);
   });
+
+  // The same bug one layer down: a level object that omits the key must parse
+  // as ABSENT, so `getLevelDefault` resolves the per-depth default (6/3/0). A
+  // field-level `.default(0)` in the schema turned "not set" into a hard zero
+  // and made that resolve step unreachable — the shipped failure, minus the
+  // type disagreement that made it visible.
+  test('a level object without the key parses as absent, not as zero', () => {
+    const parsed = swarmConfigSchema.parse({
+      levelDefaults: { orchestrator: { tokens: 200_000, wallMs: 600_000, fanOut: 6 } },
+    });
+    expect(parsed.levelDefaults.orchestrator.maxPendingDetached).toBeUndefined();
+    expect(LEVEL_DEFAULT[0].maxPendingDetached).toBeGreaterThan(0);
+  });
 });
