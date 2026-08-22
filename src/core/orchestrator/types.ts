@@ -41,6 +41,20 @@ export interface QAValidationResult {
    * (a re-run with nothing to do can legitimately change 0 files).
    */
   auditGateFailed?: boolean;
+
+  /**
+   * WHICH audit-gate failure this is. Both take the auditor-only retry path,
+   * but they need opposite prompts.
+   *
+   * - `unparseable` — the findings stand, only the report's shape is unusable.
+   *   Correctable without re-reading anything, which is the cheap path.
+   * - `coverage` — a PASS that does not account for stages in scope, or
+   *   unaddressed low-confidence doubt. The auditor has to go and LOOK; asking
+   *   it to correct the wording instead lets it only re-word, the gate rejects
+   *   the same uncovered stages again, and the retry budget burns down without
+   *   the missing stage ever being examined.
+   */
+  auditGateReason?: 'unparseable' | 'coverage';
   /**
    * What the auditor states it did NOT check. jcode's `validate_artifact`
    * calls this the cheat code: forcing an agent to list what it did not

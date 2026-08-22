@@ -72,34 +72,65 @@ const PRUNED_DIRS = new Set([
  * Deliberately NOT `dist/` or `build/` — a stage may legitimately be asked to
  * produce those, and pruning them would let it pass having built nothing.
  *
- * Built packages are handled separately below, by location rather than suffix.
+ * Built packages are handled separately below, by the caller's declaration.
  */
 const IGNORED_SUFFIXES = ['.pyc', '.pyo', '.class', '.o'];
 
 /**
- * A built package is by-product or deliverable depending on WHERE it lands.
- * `python -m build` puts it in `dist/`, which stays counted so a stage whose
- * job is to produce a package still has to show it; a package dropped beside
- * the source is what a verification stage leaves behind on its way to an
- * isolated install, and counting it fails the stage for doing its job.
+ * The generated files setuptools writes into `<name>.egg-info/`, ignored by
+ * exact name.
  *
- * `dist/` and `build/` staying counted is the deliberate half of the rule, not
- * a gap: exempting them everywhere would let a stage declared
- * `producesArtifacts` pass having built nothing, since a shell-built package
- * raises no tool counter either.
+ * The whole subtree used to be pruned, which was a hole rather than a rule: the
+ * directory name is chosen by whatever the stage runs, so a stage declared
+ * `readOnly` could write anything at all under a `whatever.egg-info/` and the
+ * snapshot reported zero changes — the one gate that is supposed to catch a
+ * validator editing what it validates. Setuptools writes a known, closed set,
+ * so ignoring those names by name keeps the original exemption and closes the
+ * subtree.
+ */
+const EGG_INFO_FILES = new Set([
+  'PKG-INFO',
+  'SOURCES.txt',
+  'dependency_links.txt',
+  'entry_points.txt',
+  'namespace_packages.txt',
+  'not-zip-safe',
+  'requires.txt',
+  'top_level.txt',
+]);
+
+/** Is this a setuptools-generated metadata file inside a `*.egg-info` dir? */
+function isEggInfoMetadata(relPath: string): boolean {
+  const parts = relPath.split('/');
+  if (parts.length < 2) return false;
+  return parts[parts.length - 2].endsWith('.egg-info') && EGG_INFO_FILES.has(parts[parts.length - 1]);
+}
+
+/**
+ * A built package is by-product or DELIVERABLE, and only the stage's own
+ * declaration knows which — so the caller decides, not this file.
  *
- * The sdist belongs here for the same reason its wheel does — `pip wheel .`
- * and `python -m build --sdist --outdir .` differ only in which archive they
- * leave in the working directory, and failing one but not the other is an
- * inconsistency in one rule rather than two decisions. Kept to the exact
- * source-archive suffix: a bare `.zip` is not evidence of packaging.
+ * A verification stage builds a package on its way to an isolated install and
+ * leaves it in the working directory; counting that fails the stage for doing
+ * its job. A packaging stage's entire job is to produce that same file, and
+ * hiding it fails the stage for "changing 0 files" — a shell-built package
+ * raises no tool counter either, so the snapshot is the only witness.
+ *
+ * The same path told both stories, which is why the location rule was wrong in
+ * both directions: it exempted a packaging stage that built into the workspace
+ * root, and it counted a verification stage that happened to use `dist/`.
+ * `countPackages` replaces the guess with the declaration.
+ *
+ * The sdist sits alongside the wheel because `pip wheel .` and
+ * `python -m build --sdist --outdir .` differ only in which archive they leave
+ * behind, and exempting one but not the other is one rule applied
+ * inconsistently. Kept to the exact source-archive suffix: a bare `.zip` is not
+ * evidence of packaging.
  */
 const PACKAGE_SUFFIXES = ['.whl', '.egg', '.tar.gz'];
-const DELIVERABLE_DIRS = new Set(['dist', 'build']);
 
-function isPackageByProduct(relPath: string): boolean {
-  if (!PACKAGE_SUFFIXES.some((ext) => relPath.endsWith(ext))) return false;
-  return !relPath.split(sep).slice(0, -1).some((d) => DELIVERABLE_DIRS.has(d));
+function isPackage(relPath: string): boolean {
+  return PACKAGE_SUFFIXES.some((ext) => relPath.endsWith(ext));
 }
 
 /** Above this, the tree is too big to diff reliably — see `truncated`. */
@@ -116,6 +147,19 @@ export interface WorkspaceSnapshot {
   truncated: boolean;
 }
 
+/** How one snapshot is taken. BOTH sides of a diff must use the same options. */
+export interface SnapshotOptions {
+  /** Cap before the walk gives up and reports `truncated`. */
+  maxFiles?: number;
+  /**
+   * Count built packages as ordinary files. Set for a stage that DECLARED it
+   * produces artifacts, where the package is the deliverable; left false for
+   * every other stage, where it is a verification by-product. See
+   * `PACKAGE_SUFFIXES`.
+   */
+  countPackages?: boolean;
+}
+
 /**
  * Walk `root` and record every regular file's mtime and size.
  *
@@ -126,8 +170,9 @@ export interface WorkspaceSnapshot {
  */
 export async function snapshotWorkspace(
   root: string,
-  maxFiles: number = SNAPSHOT_MAX_FILES,
+  opts: SnapshotOptions = {},
 ): Promise<WorkspaceSnapshot | null> {
+  const { maxFiles = SNAPSHOT_MAX_FILES, countPackages = false } = opts;
   const files = new Map<string, string>();
   let truncated = false;
 
@@ -152,7 +197,7 @@ export async function snapshotWorkspace(
     for (const entry of entries) {
       if (truncated) return;
       if (entry.isDirectory()) {
-        if (PRUNED_DIRS.has(entry.name) || entry.name.endsWith('.egg-info')) continue;
+        if (PRUNED_DIRS.has(entry.name)) continue;
         await walk(join(dir, entry.name));
         continue;
       }
@@ -161,7 +206,9 @@ export async function snapshotWorkspace(
       // workspace entirely or loop.
       if (!entry.isFile()) continue;
       if (IGNORED_SUFFIXES.some((ext) => entry.name.endsWith(ext))) continue;
-      if (isPackageByProduct(relative(root, join(dir, entry.name)))) continue;
+      const rel = relative(root, join(dir, entry.name)).split(sep).join('/');
+      if (isEggInfoMetadata(rel)) continue;
+      if (!countPackages && isPackage(rel)) continue;
 
       if (files.size >= maxFiles) {
         truncated = true;

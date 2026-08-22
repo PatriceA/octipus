@@ -83,6 +83,27 @@ describe('parseQAResult — verdict block selection (B2 review fix)', () => {
 // `blockers: []`, `summary: …` — and the gate read it as "no machine-readable
 // verdict", re-ran the entire audit three times at ~430k tokens a visit, and
 // killed the run on the token pool with zero plan items finished.
+describe('aliasVerdict — a null alias does not shadow a real one', () => {
+  // Models routinely emit the whole contract with the fields they did not fill
+  // set to null. Selecting on key PRESENCE let the null win, so a stated
+  // verdict read as "no verdict" and stated blockers were silently dropped.
+  test('a null primary verdict field falls through to the one that is set', () => {
+    const v = aliasVerdict({ passed: null, verdict: 'fail', feedback: 'nope' });
+    expect(v).not.toBeNull();
+    expect(v?.passed).toBe(false);
+  });
+
+  test('a null issues alias does not swallow the blockers that follow it', () => {
+    const v = aliasVerdict({ verdict: 'fail', issues: null, blockers: ['migration missing'], feedback: 'x' });
+    expect(v?.issues).toEqual(['migration missing']);
+  });
+
+  test('a present-but-empty value is a real answer and still wins', () => {
+    const v = aliasVerdict({ verdict: 'fail', issues: [], blockers: ['ignored'], feedback: 'x' });
+    expect(v?.issues).toEqual([]);
+  });
+});
+
 describe('aliasVerdict — a verdict under different field names', () => {
   const observed = {
     verdict: 'approve',
@@ -162,5 +183,33 @@ describe('qaVerdictCorrectionInput', () => {
   test('asks for the block only — not another audit', () => {
     expect(input).toMatch(/Do NOT re-run the audit/i);
     expect(input).toContain(QA_VERDICT_JSON_INSTRUCTION);
+  });
+});
+
+describe('parseQAResult tier 1b — LAST fenced block wins', () => {
+  // This pins the last-block rule itself, which is what protects a verdict from
+  // an incidental `{"status": "ok"}` earlier in the reply.
+  //
+  // It deliberately does NOT claim to guard the accompanying slice fix (the
+  // reversal used to cover the bare-output fallback too, putting it first
+  // instead of last). That reordering is unobservable by construction — the
+  // fallback is the whole reply, and a reply containing fences never parses as
+  // bare JSON — so no test can fail on it. The fix stands because the code
+  // should mean what its comment says, not because a guard proves it.
+  const parse = (out: string) =>
+    (new PipelineManager() as unknown as { parseQAResult: (o: string) => { passed: boolean } | null })
+      .parseQAResult(out);
+
+  test('an incidental alias block above the verdict does not win', () => {
+    const out = [
+      '```json',
+      '{"status": "ok", "result": "success"}',
+      '```',
+      'Here is the verdict.',
+      '```json',
+      '{"verdict": "fail", "blockers": ["migration missing"], "summary": "not ready"}',
+      '```',
+    ].join('\n');
+    expect(parse(out)?.passed).toBe(false);
   });
 });

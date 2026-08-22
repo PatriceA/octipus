@@ -60,3 +60,19 @@ describe('pipelineMetadata', () => {
     expect(pipelineMetadata({ isSystemUser: true })).toBeUndefined();
   });
 });
+
+describe('a delegating stage keeps the pipeline reachable', () => {
+  it('forwards the pipeline keys to swarm children too', async () => {
+    // A stage worker carries pipelineId/nodeKey, but when it delegates via
+    // spawn_child the child got `{ originalRequest }` only — so
+    // `plan__add_items` from inside the child answered "Not running inside a
+    // pipeline", and a producesPlan stage that spawned a planner left no items
+    // for the loop to read. Source-shape, like the assertion above: the defect
+    // is a missing field at a spawn literal.
+    const src = await Bun.file(`${import.meta.dir}/../swarm/spawner.ts`).text();
+    const at = src.indexOf('contextMetadata: {');
+    expect(at).toBeGreaterThan(0);
+    const block = src.slice(at, src.indexOf('}', src.indexOf('originalRequest', at)));
+    expect(block).toContain('pipelineMetadata(');
+  });
+});

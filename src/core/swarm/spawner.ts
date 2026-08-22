@@ -10,6 +10,7 @@ import { buildSecurityReminder, guardInput } from '@/core/orchestrator/input-gua
 import { formatCriticalRules, getRoleConfig, getToolsForRole } from '@/core/orchestrator/roles';
 import { estimateToolSchemaTokens, logPromptComposition } from '@/core/orchestrator/prompt-budget';
 import { applyToolCap, isSmallModel } from '@/core/orchestrator/small-model';
+import { pipelineMetadata } from '@/core/orchestrator/worker-spawner';
 import { countChangedFiles, snapshotWorkspace } from '@/core/orchestrator/workspace-snapshot';
 import type { AgentRole } from '@/core/orchestrator/types';
 import { WorkspaceFS } from '@/security/workspace-fs';
@@ -895,10 +896,20 @@ export class SwarmSpawner {
         parentSignal: opts.parent.signal,
         // Forward the original user request so grandchildren (depth 2) still
         // see it verbatim when they compose their own briefs.
+        // Forwarded by name, never as the parent's whole metadata object — the
+        // same rule `pipelineMetadata` applies one level up, for the same
+        // reason: that object also carries `isSystemUser` and `isAdmin`.
+        //
+        // `pipelineId`/`nodeKey` ride along so a stage that DELEGATES its
+        // planning still reaches the pipeline. Without them `plan__add_items`
+        // answered "Not running inside a pipeline" from inside a child, so a
+        // `producesPlan` stage that spawned a planner produced no plan items and
+        // the loop that reads them ran zero times — reading as success.
         contextMetadata: {
           originalRequest:
             ((opts.parentContext.metadata as Record<string, unknown>)?.originalRequest as string) ??
             opts.brief.originalUserRequest,
+          ...pipelineMetadata(opts.parentContext.metadata as Record<string, unknown> | undefined),
         },
       });
     } catch (err) {
@@ -1038,7 +1049,13 @@ export class SwarmSpawner {
     const scorerWorkspaceRoot = wantsFileEvidence
       ? WorkspaceFS.forAgent({ userId: opts.parentContext.userId }).root
       : null;
-    const fsBefore = scorerWorkspaceRoot ? await snapshotWorkspace(scorerWorkspaceRoot) : null;
+    // `countPackages` because this snapshot IS the file evidence: a child asked
+    // for a `code-diff`, or scored on `minFilesChanged`, may well have a built
+    // wheel or sdist as its deliverable, and hiding it measures zero files and
+    // fails the child for producing nothing. Both sides of the diff below use
+    // the same option.
+    const snapshotOpts = { countPackages: true };
+    const fsBefore = scorerWorkspaceRoot ? await snapshotWorkspace(scorerWorkspaceRoot, snapshotOpts) : null;
 
     // ── Run child (with provider_error single retry on same node) ──
     let status: ChildResultStatus = 'ok';
@@ -1138,7 +1155,7 @@ export class SwarmSpawner {
     ];
     if (status === 'ok' && effectiveScorers.length > 0) {
       const filesTouched = scorerWorkspaceRoot
-        ? countChangedFiles(fsBefore, await snapshotWorkspace(scorerWorkspaceRoot))
+        ? countChangedFiles(fsBefore, await snapshotWorkspace(scorerWorkspaceRoot, snapshotOpts))
         : null;
       const outcome = await runScorers(
         effectiveScorers,

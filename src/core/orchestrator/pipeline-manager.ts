@@ -85,9 +85,18 @@ const NOT_CHECKED_KEYS = ['whatIDidNotCheck', 'what_i_did_not_check', 'notChecke
 const PASS_WORDS = /^(pass(ed)?|approve[ds]?|ok|accept(ed)?|green|success(ful)?)$/i;
 const FAIL_WORDS = /^(fail(ed)?|reject(ed)?|block(ed)?|deny|denied|needs[-_\s]?work|red)$/i;
 
-/** First key present on the object, whatever its value. */
+/**
+ * First key present on the object with a value, in the alias order given.
+ *
+ * A key present but null or undefined is SKIPPED rather than winning: models
+ * routinely emit the whole contract with the fields they did not fill set to
+ * null, so `{"passed": null, "verdict": "fail"}` would otherwise read as "no
+ * recognisable verdict" and fall through to the prose tier, and
+ * `{"issues": null, "blockers": ["…"]}` would silently drop the blockers.
+ * A present-and-empty value (`""`, `[]`) is a real answer and still wins.
+ */
 function pick(obj: Record<string, unknown>, keys: string[]): unknown {
-  for (const k of keys) if (k in obj) return obj[k];
+  for (const k of keys) if (obj[k] !== null && obj[k] !== undefined) return obj[k];
   return undefined;
 }
 
@@ -1024,7 +1033,12 @@ export class PipelineManager {
           declared: correcting ? correctionDeclaration(b) : b,
           stageTemplate,
           input,
-          stageContext: handoffText || previousOutput,
+          // A correction visit is told to re-read nothing, and its own prompt
+          // already carries the full report it must fix. Appending the judged
+          // work as "context from previous steps" on top of that made the
+          // correction prompt LARGER than the re-audit it replaces, and invited
+          // a weak model to do the one thing it was forbidden to do.
+          stageContext: correcting ? '' : handoffText || previousOutput,
           graph,
           context,
           registry,
@@ -1034,16 +1048,28 @@ export class PipelineManager {
         });
         if (stepResult.stopped) return stepResult.stopped;
 
-        // The corrected reply is the verdict block alone; the audit it belongs to
-        // is the report it was written against, so the next node reads both.
-        // What the gate reads is the corrected REPLY alone. The report is
-        // re-attached for whoever runs next, but re-parsing the pair would find
-        // the old, rejected block first (`parseQAResult` takes the first fence
-        // that parses) and re-reject the correction it never looked at.
+        // The corrected reply is the verdict block alone, and the audit it
+        // belongs to is the report it was written against, so the two are
+        // re-joined. What the GATE reads stays the corrected reply alone:
+        // re-parsing the pair would find the old, rejected block first
+        // (`parseQAResult` takes the first fence that parses) and re-reject the
+        // correction it never looked at.
+        //
+        // The pair is for the RECORD, not for the next node — a QA node with an
+        // outgoing edge always emits a handoff, so downstream reads
+        // `handoffText` and never this. It is the node row, the UI and the audit
+        // trail that would otherwise keep a bare verdict with the findings gone.
         const verdictText = stepResult.output;
         previousOutput = reportUnderCorrection
           ? `${reportUnderCorrection}\n\n${stepResult.output}`
           : stepResult.output;
+        // `runStepNode` stored the reply it received, which for a correction is
+        // the verdict block ALONE — so the node row, the UI and the audit trail
+        // lost the findings the verdict belongs to. Re-persist the pair the next
+        // node reads, so what was audited survives where it can be inspected.
+        if (reportUnderCorrection) {
+          await this.updateNode(node.id, { output: previousOutput });
+        }
         pipelineSources.push(`stage(${node.ordinal + 1}: ${node.name}/${node.role})`);
         pendingRejection = undefined;
         rejectedReport = undefined;
@@ -1068,7 +1094,16 @@ export class PipelineManager {
             pendingRejection = qaResult.feedback;
             // The original report, not the growing pile — re-embedding each
             // round's verdict block would enlarge the prompt every retry.
-            rejectedReport = reportUnderCorrection ?? previousOutput;
+            // Only an unusable REPORT is correctable in place. A coverage
+            // rejection says the auditor never examined stages it passed, and
+            // the correction prompt forbids re-reading anything — so it could
+            // only re-word, the gate would reject the same uncovered stages,
+            // and the edge's retry budget would burn down with the missing
+            // stage still unexamined. That one re-audits for real.
+            rejectedReport =
+              qaResult.auditGateReason === 'coverage'
+                ? undefined
+                : (reportUnderCorrection ?? previousOutput);
           } else {
             outcome = 'qa_fail';
           }
@@ -1493,8 +1528,12 @@ export class PipelineManager {
     // The "after" side of the snapshot. Taken here rather than at the call site
     // so it is impossible to gate on a stale reading: this runs immediately
     // before the decision that uses it.
+    // Same options as the "before" side in `snapshotStage` — a diff whose two
+    // sides disagree about what counts reads a hidden file as a new one.
     const after =
-      args.before && args.workspaceRoot ? await snapshotWorkspace(args.workspaceRoot) : null;
+      args.before && args.workspaceRoot
+        ? await snapshotWorkspace(args.workspaceRoot, { countPackages: declared.producesArtifacts === true })
+        : null;
     const filesTouched = countChangedFiles(args.before ?? null, after);
 
     const failure = stageEvidenceFailure(declared, counters, filesTouched);
@@ -1605,7 +1644,8 @@ export class PipelineManager {
     // Both declarations need the filesystem: one to prove work happened, the
     // other to prove it did not.
     if (!workspaceRoot || !(declared?.producesArtifacts || declared?.readOnly)) return null;
-    return snapshotWorkspace(workspaceRoot);
+    // Must match the "after" side in `assertStageEvidence`.
+    return snapshotWorkspace(workspaceRoot, { countPackages: declared.producesArtifacts === true });
   }
 
   /**
@@ -1661,7 +1701,7 @@ export class PipelineManager {
       } catch (err) {
         coreLogger.warn({ err: (err as Error).message }, 'Failed to record unparseable-verdict evidence');
       }
-      return { passed: false, issues: [reason], feedback: reason, retryCount: 0, auditGateFailed: true };
+      return { passed: false, issues: [reason], feedback: reason, retryCount: 0, auditGateFailed: true, auditGateReason: 'unparseable' };
     }
 
     void this.recordQaEvidence(evidence.sessionId, evidence.pipelineId, evidence.stageName, parsed);
@@ -1715,6 +1755,7 @@ export class PipelineManager {
       ...parsed,
       passed: false,
       auditGateFailed: true,
+      auditGateReason: 'coverage',
       feedback: `Your PASS verdict was rejected: ${failure}\n\n${parsed.feedback}`.trim(),
       issues: [...parsed.issues, failure],
     };
@@ -1750,6 +1791,9 @@ export class PipelineManager {
     for (const m of output.matchAll(/```(?:json)?\s*\n?([\s\S]*?)\n?```/g)) {
       candidates.push(m[1].trim());
     }
+    // Fenced blocks in reply order; the bare-output fallback is appended after,
+    // and tier 1b reverses only the fenced slice (see there).
+    const fencedCount = candidates.length;
     candidates.push(output.trim()); // whole output, when the model emitted bare JSON
     for (const jsonStr of candidates) {
       try {
@@ -1785,7 +1829,11 @@ export class PipelineManager {
     // incidental JSON (`{"status": "ok"}` from a health check, `{"result":
     // "success"}` from a test summary) that taking the first match would read a
     // quoted payload as the verdict.
-    for (const jsonStr of [...candidates].reverse()) {
+    // Reverse the FENCED slice only. Reversing the whole list would put the
+    // bare-output fallback first, which is the opposite of what the comment
+    // above promises — harmless only while a reply containing fences never
+    // parses as bare JSON, and quietly wrong for whoever relies on the order.
+    for (const jsonStr of [...candidates.slice(0, fencedCount).reverse(), ...candidates.slice(fencedCount)]) {
       try {
         const alias = aliasVerdict(JSON.parse(jsonStr));
         if (alias) return alias;

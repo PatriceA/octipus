@@ -98,15 +98,35 @@ describe('snapshotWorkspace', () => {
     expect(countChangedFiles(before, after)).toBe(0);
   });
 
-  test('an sdist BUILT INTO dist/ is a deliverable and still counts', async () => {
-    await writeFile(join(root, 'pyproject.toml'), '[project]');
+  test('a stage cannot hide arbitrary writes inside a *.egg-info directory', async () => {
+    // The subtree used to be pruned wholesale, and the directory name is chosen
+    // by whatever the stage runs — so a read-only validator could edit the code
+    // it was validating under `anything.egg-info/` and the gate saw nothing.
+    await writeFile(join(root, 'slugify.py'), 'v1');
     const before = await snapshotWorkspace(root);
 
-    await mkdir(join(root, 'dist'), { recursive: true });
-    await writeFile(join(root, 'dist', 'strkit-0.1.0.tar.gz'), 'gzip');
+    await mkdir(join(root, 'strkit.egg-info'), { recursive: true });
+    await writeFile(join(root, 'strkit.egg-info', 'PKG-INFO'), 'Name: strkit');   // generated, ignored
+    await writeFile(join(root, 'strkit.egg-info', 'smuggled.py'), 'payload');     // not, counted
     const after = await snapshotWorkspace(root);
 
     expect(countChangedFiles(before, after)).toBe(1);
+  });
+
+  test('a package IS counted for a stage that declared it produces artifacts', async () => {
+    // The other half of the rule, and the reason it is the caller's decision:
+    // hiding the package here would fail a packaging stage for "changing 0
+    // files", since a shell-built package raises no tool counter either.
+    const opts = { countPackages: true };
+    await writeFile(join(root, 'pyproject.toml'), '[project]');
+    const before = await snapshotWorkspace(root, opts);
+
+    // In the workspace ROOT, which the old location rule exempted.
+    await writeFile(join(root, 'strkit-0.1.0.tar.gz'), 'gzip');
+    await writeFile(join(root, 'strkit-0.1.0-py3-none-any.whl'), 'zip');
+    const after = await snapshotWorkspace(root, opts);
+
+    expect(countChangedFiles(before, after)).toBe(2);
   });
 
   test('a plain archive is not packaging evidence and still counts', async () => {
@@ -118,10 +138,9 @@ describe('snapshotWorkspace', () => {
     expect(countChangedFiles(before, after)).toBe(1);
   });
 
-  test('a wheel BUILT INTO dist/ is a deliverable and still counts', async () => {
-    // The other half of the rule: pruning packages by suffix everywhere would
-    // let a stage declared `producesArtifacts` pass having built nothing, since
-    // a shell-built wheel raises no tool counter either.
+  test('a wheel in dist/ is by-product too when the stage did not declare it', async () => {
+    // The location no longer decides. A read-only verification stage that
+    // happens to build into `dist/` was previously failed for it.
     await writeFile(join(root, 'pyproject.toml'), '[project]');
     const before = await snapshotWorkspace(root);
 
@@ -129,7 +148,7 @@ describe('snapshotWorkspace', () => {
     await writeFile(join(root, 'dist', 'strkit-0.1.0-py3-none-any.whl'), 'zip');
     const after = await snapshotWorkspace(root);
 
-    expect(countChangedFiles(before, after)).toBe(1);
+    expect(countChangedFiles(before, after)).toBe(0);
   });
 
   test('still sees a real edit made in the same run as the caches', async () => {
@@ -154,7 +173,7 @@ describe('snapshotWorkspace', () => {
 
   test('marks truncated past the file cap rather than diffing a partial tree', async () => {
     for (const n of ['a', 'b', 'c']) await writeFile(join(root, n), n);
-    const snap = await snapshotWorkspace(root, 2);
+    const snap = await snapshotWorkspace(root, { maxFiles: 2 });
     expect(snap?.truncated).toBe(true);
   });
 });
