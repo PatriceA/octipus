@@ -74,7 +74,13 @@ Runnable check: the desktop build succeeds and the desktop client still logs in 
 
 Route every request through the single-agent loop by default. `direct-response.ts` and the tool executor already contain most of what is needed; the work is deleting the layer above them.
 
-Introduce named workflows as TypeScript files under a `workflows/` directory, each exporting a description and a body in ordinary code. The agent gets one tool to list them and one to run them by name. Existing pipeline templates are converted by hand — this is where implicit stage graphs become explicit and readable.
+**Named workflow files are DECLINED at current scale (decided 2026-08-22).** The plan assumed the explicit path had to be built, and that building it would delete the runtime stage-graph assembly. Measured against the repository, neither half holds.
+
+There are four pipeline templates in the database — two, three, seven and seven steps. They are already explicit: a declarative step list with conditional edges, retry edges, per-stage model overrides, `foreach` over a plan, and human-input stages. Nothing in them is reaching for expressiveness a TypeScript body would supply, and nothing has asked for it.
+
+The deletion does not happen either. Of `pipeline-manager.ts`'s 2,461 lines, the graph walker is roughly 470. The rest is QA verdict parsing, the evidence gate, checkpoint, resume, pause and stop, and the three node runners — all of which a workflow engine would have to be re-plumbed into rather than replacing. Against that, the engine adds a worker-thread host, script validation, cap enforcement and the fatal-versus-null failure discipline. It is a net addition of complexity to run four templates, and it would take those templates out of the database, where they are user-editable recipes with parameters, and put them in the source tree, where they are not.
+
+The orchestration thesis stands and was the valuable half: delegation is chosen explicitly rather than inferred, which is what removing the classifier's role directive achieved. Revisit workflow files when a template genuinely cannot express what it needs, and let that template be the argument.
 
 The Harness workflow seam is close enough to serve as a reference contract, and its own documentation notes the field vocabulary matches Claude Code's dynamic-workflows meta block, so this is a converging design rather than a novel one. Four parts worth copying:
 
