@@ -1,8 +1,10 @@
 # Octipus rebuild: execution plan
 
-Date: 2026-08-22
-Status: in progress — phases 0 to 2 done or decided, phase 3 scoped and largely done, phase 4 invariants done (2026-08-22)
+Date: 2026-08-22 · last updated 2026-08-23
+Status: in progress — phases 0 to 2 done or decided, phase 3 scoped and largely done, phase 4 invariants done, three of the four independent items done. Phases 5 to 8 untouched.
 Findings: [rebuild-findings-2026-08-22.md](rebuild-findings-2026-08-22.md)
+Measured pass: [../reports/2026-08-23-feature-performance-pass.md](../reports/2026-08-23-feature-performance-pass.md) — every number below that is not a plan comes from there.
+State: see [Where this stands](#where-this-stands) at the end, which is the section to read first when resuming.
 Supersedes: `rebuild-stack-and-orchestration.md` and `deepseek-harness-lessons.md`, both merged into this document.
 
 ## What this is
@@ -37,11 +39,15 @@ Deleting seventeen thousand lines before the runtime migration means not porting
 
 No code churn. Cheapest phase, largest effect on our actual incident history, blocks nothing.
 
-Three testing rules, adopted as policy and applied to existing tests as they are touched:
+Four testing rules, adopted as policy and applied to existing tests as they are touched (the fourth was added 2026-08-23, from the live pass):
 
 *Verify the world, not the self-report.* An end-to-end assertion re-runs the command or re-reads the file externally, and asserts that untouched files are byte-identical. Harness's wording is that a keyword probe on the agent's own output "lets a cheating agent pass" — which is exactly how our seven-stage pipeline reported success while writing nothing, and exactly what a sixty-percent rubber-stamp rate looks like.
 
 *Prove the guard fails.* A new gate is not done until the regression it guards has been introduced, watched go red, and reverted. Three inert gates have shipped past a green CI here. Harness gives a worked example: a loader smoke test stayed green when a default export replaced required named exports, so they added an explicit assertion and proved it failed first.
+
+*An assertion must not be satisfiable without the product.* Added 2026-08-23. The three previous rules all concern the code under test; this one concerns the check itself, and every harness written during the measured pass broke it at least once. A live UI check waited for the marker the user typed to appear twice — which the composer echo and the transcript satisfy between them, so it passed in 206ms with no model involved. The TUI check repeated the mistake with its own marker. A third reused a chat session, so the previous run's answer satisfied the assertion before this run began. And a refusal check matched a base64 *shape* against whitespace-stripped prose, which any paragraph satisfies, so it failed the product for refusing correctly.
+
+The test: name what could make this assertion pass other than the behaviour it is about — the input echoed back, history, the harness's own output, a shape rather than a value — and remove each one. In practice that means asserting on a value that appears ONLY in the answer (a computed sum, not a phrase from the question), against a state the run created fresh, keyed to the role that produced it (`[data-role="assistant"]`, not page text). The failure direction matters here as much as anywhere: a false green says the product works.
 
 *Prove the guard is REACHED.* Added 2026-08-22, and the one this repository keeps paying for. The rule above establishes that a guard can fail; it says nothing about whether the shipping path ever arrives at it. Every regression authored during the first session of this plan was of the second kind and none of the first: a role-fit gate keyed to the router tier, which no path reaching that function can ever be; the same gate keyed to `lite`, live at one of its three call sites; an eval that refused to fake an answer in unit mode while integration mode went on faking it; a red-team demotion that only fired when *every* assertion was unverified, in a suite whose motivating plugin pairs one with a conclusive check; and a stopped-short test keyed to "does this node have any outgoing edge", which would have reported every healthy run of a shipped preset as a failure. Four gates already in the tree turned out to be unreachable for the same reason, one of them the audit rule for unaddressed low-confidence doubt.
 
@@ -131,7 +137,7 @@ The fix is the bracket rule with the Phase 0 asymmetry applied to writes rather 
 
 Runnable check: `ledger.test.ts` proves the asymmetry directly — a spawn append against an unwritable repository rejects, while a terminal and a reconcile against the same repository do not. Reverting `recordSpawn` to `safeAppend` was watched go red. Still open: kill the process mid-stage and assert the resumed run reports interruption rather than completion.
 
-### Phase 4 — Log-derived subsystems (invariants done, 2026-08-22)
+### Phase 4 — Log-derived subsystems (invariants done, 2026-08-22; boot pass made self-reporting 2026-08-23)
 
 Three subsystems that only become simple once Phase 3 lands, and should follow it directly. Phase 3 was scoped down rather than delivered whole, so the two that depend on a full log fold — token accounting and goal state — are not unblocked by it and should be re-argued from the code before being started.
 
@@ -187,19 +193,79 @@ Runnable check: the stack boots and passes integration tests with the Valkey con
 
 ## Independent items
 
-These depend on nothing and can land in any phase.
+These depend on nothing and can land in any phase. Three of the four are done; each entry below carries what shipped and where the code overruled the plan.
 
-*Tool-output spill.* Oversized tool output is persisted rather than inlined: save the full text, return an opaque locator, the exact byte count, and a retrieval hint; the model sees a head/tail preview plus the reference. The details matter — write under a private `0700` root into a session-hashed subdirectory with an exclusive owner-only open so a planted symlink cannot redirect the write; keep the locator opaque so consumers render it with the hint rather than assuming a filesystem read, letting a remote backend return a URI instead; and make the policy best-effort, so a save failure keeps the original inline result rather than turning a successful call into an error.
+*Tool-output spill* — **done, 2026-08-23, and simpler than specified.** Oversized output is saved rather than inlined; the model gets a head, a tail, the exact size and the path. `src/core/tool-output-spill.ts`, wired at the one boundary where a tool result becomes a message.
 
-*Credential scrubbing for spawned commands.* Drop `*KEY*`, `*SECRET*`, `*TOKEN*`, and `*PASSWORD*` from the environment handed to spawned processes so harness credentials cannot leak into output or spill files. Octipus deliberately gives spawned CLI agents the full host config and that decision stands — but the credential subset is worth scrubbing separately from the plugin and hook configuration the CLIs genuinely need.
+The locator is deliberately NOT opaque, which is the one place the plan was overruled by the code. The file goes into the agent's own workspace, so retrieval needs no locator service, no retrieval tool and no new permission — the filesystem and grep tools are already scoped there. An opaque handle would have bought a remote-backend option nobody has asked for, at the cost of a service and a rendering contract. Everything else held: `0700` directory, `0600` file, chmod after write so the umask cannot loosen it, the sandbox `resolve` as the guard against a planted symlink, and best-effort semantics so a failed save falls through to the old truncation rather than turning a successful call into an error. Threshold is the same `DEFAULT_MAX_LENGTH` the truncation uses, because two thresholds would mean output that is cut but never saved. Verified live during the measured pass: two files, 129KB and 149KB, owner-only.
+
+The unspecified half turned out to matter more than the spill: what the truncation destroyed was also the *transcript's* only copy, so the rest was not merely absent from context, it was gone.
+
+*Credential scrubbing for spawned commands* — **done, 2026-08-23, and it found two live leaks.** The filter now lives in `src/security/child-env.ts` and every spawn site uses it.
+
+The shell tool already had one, and it was wrong in two ways the plan did not anticipate. Its pattern was anchored to the END of the variable name, so `AWS_SECRET_ACCESS_KEY` read as safe — the plan's own `*SECRET*` wording is the correct one and the code was the narrower version. And it was private to that tool: `git`, `docker`, `gh` and `glab` spawn with no `env` at all, which inherits everything. The docker one is the sharpest, because the model writes the arguments and `docker run --env NAME` forwards a variable into a container whose output it then reads.
+
+Two of the four CLIs need one credential of their own, so `buildChildEnv` takes a `keep` list: `gh` keeps its GitHub tokens, `glab` its GitLab ones, neither keeps the other's or Slack's. The same judgment now answers the `env` tool, which filtered by name against the raw environment and would hand over `MASTER_KEY` to anyone who asked for it by name — stripping secrets from spawned commands while answering that in the same process is a door beside a wall. The standing decision that spawned CLI agents inherit the full host config is untouched; this is the credential subset only.
 
 *Generated, gated catalogs.* Generate the service surface, module graph, and event producer/consumer matrix from the TypeScript program and verify them fresh in CI. Our docs drift measurably — the website lags the repo by about two weeks and the palette has diverged — and generated-plus-gated is the only permanent fix for that class.
 
-*Four remaining defensive rules.* Report orthogonal outcomes independently: a process can time out *and* exit zero because it trapped the signal, so surface `timedOut`, `signal`, and `exitCode` separately rather than nesting one inside another's branch. Normalise a public contract on both sides, so a thrown exception always means a defect rather than a provider problem. Async state is not synchronous state — several queued follow-ups may share one running interval, so a caller that owns a run defines its interval explicitly and describes output as interval-wide; and if the awaited transition can never occur the wait hangs, so handle the nothing-to-wait-for branch (our long "hang" that turned out to be a correct `awaiting_approval` wait is this rule). Dispose must reach quiescence, not merely request it: kill then await exit, and close listener and notification registries *before* killing so late completions stay silent.
+*Four remaining defensive rules* — **two done, two open (2026-08-23).**
+
+Done: *report orthogonal outcomes independently* and *dispose must reach quiescence*. The shell result now carries `timedOut`, `aborted` and `signal` beside `exitCode` rather than nested inside one branch of it, and writing that down exposed why the signal was wrong — node's own spawn `timeout` was racing our timer, killing with SIGTERM and setting none of the flags that explain a kill. One deadline, one owner. Driving it afterwards found the deadline did not reach the process tree either: the kill went to the direct child while the promise resolves on `close`, which waits for pipes a backgrounded grandchild still holds. And `stopAll` now waits for agents to be gone rather than returning once they have been asked, bounded so it cannot outlast the force-exit watchdog, dropping subscribers first — but only at process shutdown, never for the live `/stop-all` command, whose subscribers are the UI's event stream.
+
+Open: *normalise a public contract on both sides*, and *async state is not synchronous state* (the shared-interval and nothing-to-wait-for branches).
+
+The original wording, kept because the two open halves still need it. Report orthogonal outcomes independently: a process can time out *and* exit zero because it trapped the signal, so surface `timedOut`, `signal`, and `exitCode` separately rather than nesting one inside another's branch. Normalise a public contract on both sides, so a thrown exception always means a defect rather than a provider problem. Async state is not synchronous state — several queued follow-ups may share one running interval, so a caller that owns a run defines its interval explicitly and describes output as interval-wide; and if the awaited transition can never occur the wait hangs, so handle the nothing-to-wait-for branch (our long "hang" that turned out to be a correct `awaiting_approval` wait is this rule). Dispose must reach quiescence, not merely request it: kill then await exit, and close listener and notification registries *before* killing so late completions stay silent.
 
 ## Not in scope
 
 A rewrite — every phase is in-place. A move away from Postgres; that was evaluated in March and pgvector remains the binding constraint. Dropping embedded PGlite, or requiring Docker to run the test suite — both storage modes stay, and the suite stays runnable against a plain local Postgres. Rust in the core, until a specific hot path is measured. Event sourcing beyond what the log and the workflow engine's own history provide. Kubernetes. And from the Harness read specifically: the plugin kernel, the multi-package split, bilingual documentation, a per-file hundred-percent coverage gate, and dual-SDK projection.
+
+## Where this stands
+
+Written 2026-08-23, after the measured pass. Read this first when resuming; the phases above are the argument, this is the position.
+
+### Done
+
+**Phase 0 — rules.** Four testing rules and five configuration rules, in force. Applied to everything touched since.
+
+**Phase 1 — drops.** Complete and smaller than planned: most of it was already gone, and the swarm scorers and call-graph deletions were declined because both are load-bearing.
+
+**Phase 2 — the orchestrator's inference layer.** The keyword classifier no longer picks the specialist; the delegation policy is unconditional; the deterministic role-fit rewrite is weak-model-only. Named workflow files are declined at this scale, with the argument recorded — revisit only when a template cannot express what it needs.
+
+**Phase 3 — completion as a durable fact.** Scoped down after measurement and largely done. A swarm child's start is now durable and asymmetric by risk: it throws and the child does not run if the start cannot be recorded, while terminals stay best-effort. Pipeline stage workers got the same bracket. The stopped-short run that reported success is fixed. What is NOT done is the wholesale conversion of state into a fold over the log — see *Open* below.
+
+**Phase 4 — invariants.** `src/core/invariants.ts` ships with a boot pass that logs whether it ran (`checked: 2, held: 2` on the live instance), reports a throwing check as an error rather than a pass, and takes a filter so tests do not run the DB-backed checks. Two invariants: the orchestrator's detach cap read the way the runtime reads it, and every running swarm node below the root having its ledger start.
+
+**Independent items.** Tool-output spill, credential scrubbing, and two of the four defensive rules — all described in their own section above.
+
+**The live harnesses.** Three, all new: `scripts/feature-bench.ts` (ten scenarios plus sixteen endpoints through the HTTP API both clients use, with tokens and roles read from the rows each run wrote), `scripts/ui-live-check.ts` (real browser, real app, real backend — the existing Playwright suite stubs every API call), and `scripts/tui-live-check.ts` (the TUI under a pty; a pipe gives an empty transcript because pi-tui only paints to a TTY).
+
+### Verified state, 2026-08-23
+
+Eleven lanes green: typecheck, lint (904 files), unit (4,298), TUI unit (251), web Playwright (64), integration against real Postgres (4,250), e2e against the live backend (142), the feature bench (10/10, twice), the API surface (16/16), the live web UI (11/11) and the live TUI (4/4).
+
+Performance, measured rather than assumed: read endpoints 12–16ms median; web pages 0.53–0.85s; a chat answer on screen in 2.4–6.0s; the TUI booting in 0.2s and answering in 2.8–5.2s; delivery lag median 11ms and p95 19ms across 86 runs. Full numbers in the report linked at the top.
+
+Eight product defects were found by running the product and fixed — four of them reachable only through a real client, including two authentication faults that signed a user out during ordinary navigation. They are listed in the report; the point for this plan is that none of them were visible to a suite that stubs its boundaries, and the harnesses that found them are now in the tree.
+
+### Open, in the order it is worth doing
+
+1. **Prompt overhead.** ~8,400 tokens on every orchestrator-answered turn, before the model does anything. It is the largest single number in the measured pass and the cheapest to attack, because the tool JSON schema dominates it and the measurement already exists.
+2. **Tool-call variance.** The same task cost 2 tool calls one run and 14 the next — a 3× swing in tokens and a 5× swing in latency, same prompt, same model. Worth a cap or a plan-first nudge on mechanical file work before any further latency work.
+3. **The two remaining defensive rules** — normalising a public contract on both sides, and async-state (shared interval, nothing-to-wait-for).
+4. **Generated, gated catalogs** — untouched.
+5. **Phase 3's remaining half**, if it earns it. State as a fold over the log, replay rejecting impossible histories, the evidence gate subsumed. Re-measure before building: the phase's premise did not survive contact with the code twice already, and pipelines now write status with awaited updates at both ends.
+6. **Phase 4's other two subsystems** — token accounting and goal state — both assumed the full log fold and are not unblocked by what shipped.
+7. **Phases 5 to 8** — Node and Hono, Vitest, DBOS, the AI SDK, Vite, dropping Valkey. Each is a single-branch migration rather than an increment; Phase 5 is the one with a stated ordering constraint (do it in one branch, a half-migrated runtime is worse than either end state).
+
+### Known and unresolved
+
+One unit-test flake: a single failure appeared twice in roughly ten full-suite runs and never reproduced across five consecutive clean runs afterwards. The failing test's name was not captured. It is not a blocker and it is not understood.
+
+The `new` session dialog creates an empty session while the composer's first message lands in a separate auto-created one, so a user who clicks new and types can end up with two. Cosmetic, visible in the session list.
+
+`/api/metrics` is mounted now but 404s until `METRICS_TOKEN` is set. That is the deliberate default and worth setting on any instance being scraped.
 
 ## Expected outcome
 
