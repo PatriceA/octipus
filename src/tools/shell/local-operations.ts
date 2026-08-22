@@ -14,7 +14,13 @@ const SENSITIVE_ENV_EXACT = new Set([
   'POSTGRES_PASSWORD',
 ]);
 // Provider/channel credentials and anything that smells like a secret.
-const SENSITIVE_ENV_PATTERN = /(API_KEY|_TOKEN|SECRET|PASSWORD|PRIVATE_KEY)$/i;
+// Deliberately a substring match, not a suffix one: the anchored version read
+// `AWS_SECRET_ACCESS_KEY` as safe because its name ends in ACCESS_KEY rather
+// than in SECRET, and passed it straight to every spawned command. The two
+// mistakes cost very different things — over-stripping means a caller passes
+// the value explicitly through `extra`, under-stripping means a credential
+// leaves the process.
+const SENSITIVE_ENV_PATTERN = /(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)/i;
 
 /**
  * Build the environment for a spawned child. The full `process.env` would
