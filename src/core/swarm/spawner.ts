@@ -992,6 +992,13 @@ export class SwarmSpawner {
       escalationUsed: false,
     });
 
+    // ── The child's durable START bracket ────────────────────────────
+    // Both writes below are recovery-bearing and neither is best-effort. The
+    // node row is what cascade-cancel, the orphan reaper and the budget walk
+    // resolve a running child through; the ledger `spawn` event is what replay
+    // and the boot reconcile key off. Missing either one leaves a child that is
+    // running and that nothing can account for or stop — so if the start cannot
+    // be recorded, the child does not run.
     try {
       await swarmNodeRepository.create({
         id: childId,
@@ -1015,23 +1022,52 @@ export class SwarmSpawner {
         // recorded flag and the routing decision can never disagree.
         planned: !!opts.brief.plan?.length,
       });
+      await getSwarmLedger().recordSpawn({
+        rootSessionId: opts.parent.rootSessionId,
+        nodeId: childId,
+        parentNodeId: opts.parent.id,
+        topicPath: opts.topicPath,
+        role: opts.childRole,
+        depth: opts.childDepth,
+      });
     } catch (err) {
-      coreLogger.error({ err, childId }, 'Failed to persist swarm_node row');
+      const msg = err instanceof Error ? err.message : String(err);
+      coreLogger.error(
+        { err, childId, parentNodeId: opts.parent.id },
+        'Could not record the child spawn — aborting it rather than running it unrecorded',
+      );
+      agentManager.stop(childId, { cascade: true });
+      // Undo every reservation the aborted child took, so a start we refused to
+      // record costs the parent nothing:
+      //  - the node row, if the first write landed and the second did not — it
+      //    would otherwise sit `running` with no ledger event, visible only to
+      //    the age-based reaper, which is the state this whole block prevents;
+      //  - the call-graph fingerprint it owns, or the un-run brief stays
+      //    deduped for the rest of the session and the retry is swallowed;
+      //  - the fan-out slot reserved before the spawn.
+      await swarmNodeRepository
+        .cancelIfRunning(childId, 'spawn_not_recorded')
+        .catch((cancelErr: unknown) =>
+          coreLogger.error({ err: cancelErr, childId }, 'Failed to cancel the unrecorded child node row'),
+        );
+      graph.unregisterFingerprint(childId);
+      opts.parent.budget.fanOut.used = Math.max(0, opts.parent.budget.fanOut.used - 1);
+      return {
+        // Empty, like every other pre-run failure: a child that never ran must
+        // not reach the `if (result.nodeId)` sibling-scope block with an empty
+        // report attributed to it.
+        nodeId: '',
+        kind: opts.childKind,
+        // NOT `tool_error`: that status runs the crash + backup-model ladder,
+        // which would spawn two more workers against the same broken write.
+        status: 'denied',
+        output: null,
+        usedTokens: 0,
+        durationMs: Date.now() - startTime,
+        spawnedChildren: [],
+        notes: `Spawn could not be recorded: ${msg}`,
+      };
     }
-
-    // Append-only ledger: record the spawn so a crash mid-run leaves a
-    // replayable history. Fire-and-forget — the write internally catches+logs,
-    // so awaiting buys no fail-loud guarantee and would only add an INSERT's
-    // latency to the spawn path. Replay tolerates a spawn that lands after its
-    // own terminal (seq-ordered fold keeps the terminal status).
-    void getSwarmLedger().recordSpawn({
-      rootSessionId: opts.parent.rootSessionId,
-      nodeId: childId,
-      parentNodeId: opts.parent.id,
-      topicPath: opts.topicPath,
-      role: opts.childRole,
-      depth: opts.childDepth,
-    });
 
     void backfillAgentLink(childId, opts.parent.id);
 

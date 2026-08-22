@@ -218,3 +218,82 @@ describe('SwarmLedger.reconcile', () => {
     expect(rows.filter((r) => r.event === 'reconcile')).toHaveLength(1);
   });
 });
+
+describe('SwarmLedger write durability — the bracket is asymmetric', () => {
+  /** A repo whose every append fails, i.e. the database is unreachable. */
+  const brokenRepo = (): Pick<
+    SwarmLedgerRepository,
+    'append' | 'findByRoot' | 'findRootsWithIncomplete'
+  > => ({
+    async append() {
+      throw new Error('db down');
+    },
+    async findByRoot() {
+      return [];
+    },
+    async findRootsWithIncomplete() {
+      return [];
+    },
+  });
+
+  const noNodes: Pick<SwarmNodeRepository, 'cancelIfRunning'> = {
+    async cancelIfRunning() {
+      return false;
+    },
+  };
+
+  it('THROWS when the spawn — the durable start — cannot be recorded', async () => {
+    const ledger = new SwarmLedger(brokenRepo(), noNodes);
+    // A node with no `spawn` row is invisible to replay and to
+    // findRootsWithIncomplete, so it could never be reconciled. The caller
+    // must learn about this and refuse to run the child.
+    await expect(
+      ledger.recordSpawn({ rootSessionId: 'r', nodeId: 'n', parentNodeId: null }),
+    ).rejects.toThrow(/db down/);
+  });
+
+  it('swallows a failed terminal — a node left in-flight is the safe direction', async () => {
+    const ledger = new SwarmLedger(brokenRepo(), noNodes);
+    // The next reconcile finds it still in-flight and cancels it; the cost of
+    // this failure is one spurious cancel, not an untracked running child.
+    await ledger.recordTerminal({
+      rootSessionId: 'r',
+      nodeId: 'n',
+      parentNodeId: null,
+      status: 'completed',
+    });
+  });
+
+  it('swallows a failed reconcile append and still attempts the node flip', async () => {
+    const flipped: string[] = [];
+    const repo = brokenRepo();
+    // The node is in-flight per replay, and every append fails: reconcile must
+    // still flip the node table rather than dying on the unwritable event.
+    const ledger = new SwarmLedger(
+      {
+        ...repo,
+        async findByRoot() {
+          return [
+            {
+              seq: 1,
+              nodeId: 'n',
+              parentNodeId: null,
+              event: 'spawn' as const,
+              payload: null,
+              createdAt: new Date(0),
+            },
+          ];
+        },
+      },
+      {
+        async cancelIfRunning(id: string) {
+          flipped.push(id);
+          return true;
+        },
+      },
+    );
+    const res = await ledger.reconcile('r');
+    expect(res.reconciled).toBe(1);
+    expect(flipped).toEqual(['n']);
+  });
+});

@@ -229,9 +229,12 @@ function toEvent(r: {
 }
 
 /**
- * The ledger's write + replay + reconcile surface. Write methods are
- * best-effort: a ledger failure is logged but never thrown, so it can't break
- * a spawn (the ledger is a durability aid, not on the critical path).
+ * The ledger's write + replay + reconcile surface.
+ *
+ * Writes are best-effort — logged, never thrown — with one deliberate
+ * exception: `recordSpawn` is the durable start of a node's bracket and throws,
+ * because a node with no recorded start is invisible to every recovery path.
+ * See its own comment for the asymmetry.
  */
 export class SwarmLedger {
   constructor(
@@ -244,7 +247,18 @@ export class SwarmLedger {
     private readonly nodes: Pick<SwarmNodeRepository, 'cancelIfRunning'> = swarmNodeRepository,
   ) {}
 
-  /** Record that a child node was created and started running. */
+  /**
+   * Record that a child node was created and started running.
+   *
+   * The one write here that is NOT best-effort. It is the durable start of the
+   * node's bracket, and every crash-recovery path keys off it:
+   * `findRootsWithIncomplete` looks for a `spawn` with no terminal, and
+   * `replay` cannot see a node that has none. The two failures cost very
+   * different things — a dropped terminal leaves the node in-flight, so the
+   * next reconcile cancels it (safe direction), while a dropped spawn makes a
+   * running child invisible to reconciliation for good. So this one throws and
+   * the caller must not run the child.
+   */
   async recordSpawn(e: {
     rootSessionId: string;
     nodeId: string;
@@ -253,7 +267,7 @@ export class SwarmLedger {
     role?: string;
     depth?: number;
   }): Promise<void> {
-    await this.safeAppend({
+    await this.repo.append({
       rootSessionId: e.rootSessionId,
       nodeId: e.nodeId,
       parentNodeId: e.parentNodeId,

@@ -3,6 +3,7 @@ import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
 import { getGatewayHub } from '@/core/gateway/hub';
 import { getNotificationService } from '@/core/notification-service';
+import { getSwarmLedger } from '@/core/swarm/ledger';
 import { swarmNodeRepository } from '@/core/swarm/node-repository';
 import { mergeCounters, type SideEffectCounters } from '@/core/swarm/receipt';
 import { taskFingerprint } from '@/core/swarm/spawner';
@@ -1150,6 +1151,19 @@ Use these MCP tools when the task benefits from them — especially for people-r
         taskBriefPreview: brief,
         spawnMode: 'await',
       });
+      // Same durable start bracket a swarm child gets: the node row is what the
+      // orphan reaper and cascade-cancel resolve this worker through, the
+      // ledger `spawn` event is what replay and the boot reconcile key off.
+      // Neither is best-effort — a stage worker nothing can account for is
+      // worse than a stage that fails here.
+      await getSwarmLedger().recordSpawn({
+        rootSessionId: overrides.swarmParent.rootSessionId,
+        nodeId: workerId,
+        parentNodeId: overrides.swarmParent.id,
+        topicPath: stageNode.topicPath,
+        role: agentRole,
+        depth: 1,
+      });
       getGatewayHub().publishEvent({
         type: 'swarm.node_spawned',
         source: `swarm:${overrides.swarmParent.id}`,
@@ -1194,7 +1208,19 @@ Use these MCP tools when the task benefits from them — especially for people-r
         coreLogger.debug({ err }, 'pipeline stage backfillAgentLink import failed');
       }
     } catch (err) {
-      coreLogger.error({ err, workerId }, 'Failed to persist swarm_node for pipeline stage');
+      coreLogger.error(
+        { err, workerId },
+        'Could not record the stage worker start — failing the stage rather than running it unrecorded',
+      );
+      agentManager.stop(workerId, { cascade: true });
+      // If the node row landed and the ledger event did not, the row would sit
+      // `running` with nothing to close it but the age-based reaper.
+      await swarmNodeRepository
+        .cancelIfRunning(workerId, 'spawn_not_recorded')
+        .catch((cancelErr: unknown) =>
+          coreLogger.error({ err: cancelErr, workerId }, 'Failed to cancel the unrecorded stage node row'),
+        );
+      throw err instanceof Error ? err : new Error(String(err));
     }
   }
 
@@ -1292,6 +1318,15 @@ Use these MCP tools when the task benefits from them — especially for people-r
             durationMs,
           },
         });
+        // Closes the bracket. Best-effort on purpose: a dropped terminal
+        // leaves the node in-flight, which the next reconcile cancels — the
+        // cheap direction to be wrong in.
+        await getSwarmLedger().recordTerminal({
+          rootSessionId: overrides.swarmParent.rootSessionId,
+          nodeId: workerId,
+          parentNodeId: overrides.swarmParent.id,
+          status: 'completed',
+        });
       } catch (err) {
         coreLogger.error({ err, workerId }, 'Failed to update swarm_node on completion');
       }
@@ -1337,6 +1372,12 @@ Use these MCP tools when the task benefits from them — especially for people-r
             status: 'failed',
             error: errMsg.slice(0, 200),
           },
+        });
+        await getSwarmLedger().recordTerminal({
+          rootSessionId: overrides.swarmParent.rootSessionId,
+          nodeId: workerId,
+          parentNodeId: overrides.swarmParent.id,
+          status: errMsg.includes('Permission denied') ? 'denied' : 'tool_error',
         });
       } catch (updateErr) {
         coreLogger.error({ err: updateErr, workerId }, 'Failed to update swarm_node on error');
