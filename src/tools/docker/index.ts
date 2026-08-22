@@ -138,7 +138,18 @@ export class DockerTool extends BaseTool {
       // variable into a container whose output the model then reads — so the
       // docker CLI must not be holding the harness's secrets in the first
       // place.
-      const child = spawn('docker', args, { timeout, env: buildChildEnv() });
+      //
+      // The deadline is ours rather than node's `timeout` option, for the same
+      // reason the shell tool's is: node kills with SIGTERM on its own
+      // schedule and the result then says only that the command is gone, with
+      // nothing to say a deadline is what ended it.
+      const child = spawn('docker', args, { env: buildChildEnv() });
+      let timedOut = false;
+      const deadline = setTimeout(() => {
+        if (child.exitCode !== null || child.signalCode !== null) return;
+        timedOut = true;
+        child.kill('SIGKILL');
+      }, timeout);
       let stdout = '';
       let stderr = '';
 
@@ -146,16 +157,20 @@ export class DockerTool extends BaseTool {
       child.stderr.on('data', (data) => { stderr += data; });
 
       child.on('error', (err) => {
+        clearTimeout(deadline);
         reject(new Error(`Docker command failed: ${err.message}`));
       });
 
-      child.on('close', (code) => {
-        if (code === 0) {
-          resolve({ stdout, stderr });
-        } else {
-          // Match previous behavior: return output even on non-zero exit
-          resolve({ stdout, stderr });
+      child.on('close', () => {
+        clearTimeout(deadline);
+        // Output comes back on a non-zero exit too — docker writes the useful
+        // part to stderr — but a killed command says so, since its stdout is
+        // whatever had been flushed rather than an answer.
+        if (timedOut) {
+          reject(new Error(`Docker command timed out after ${timeout}ms: docker ${args[0] ?? ''}`));
+          return;
         }
+        resolve({ stdout, stderr });
       });
     });
   }

@@ -117,3 +117,31 @@ describe('LocalShellOperations.exec — why a command died', () => {
     expect(res.signal).toBeNull();
   });
 });
+
+describe('LocalShellOperations.exec — the deadline actually ends the call', () => {
+  const ops = new LocalShellOperations();
+
+  it('kills grandchildren that still hold the pipes', async () => {
+    // The direct child exits immediately; the backgrounded grandchild keeps
+    // stdout open, and `close` — which resolves the call — waits for it. Killing
+    // only the child left this pending long past the deadline.
+    const started = Date.now();
+    const res = await ops.exec('sleep 10 & sleep 10', process.cwd(), {
+      timeout: 400,
+      unsafe: true,
+    });
+    expect(res.timedOut).toBe(true);
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  it('honours a signal that was already aborted before the call', async () => {
+    // A cancelled run whose next queued command starts anyway is the bug; it
+    // used to run to completion and report `aborted: false` while doing it.
+    const ctl = new AbortController();
+    ctl.abort();
+    const started = Date.now();
+    const res = await ops.exec('sleep 3', process.cwd(), { signal: ctl.signal });
+    expect(res.aborted).toBe(true);
+    expect(Date.now() - started).toBeLessThan(1500);
+  });
+});

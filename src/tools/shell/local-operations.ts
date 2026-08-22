@@ -129,6 +129,11 @@ export class LocalShellOperations implements ShellOperations {
       const child = spawn(finalArgv[0], finalArgv.slice(1), {
         cwd,
         env: buildChildEnv(options.env),
+        // Its own process group, so a deadline can kill the whole tree. Killing
+        // the direct child alone leaves `sh -c "sleep 10 & sleep 10"` holding
+        // the stdio pipes, and `close` — which is what resolves this promise —
+        // waits for those: the call sat unresolved long past a 500ms timeout.
+        detached: true,
       });
 
       let stdout = '';
@@ -136,6 +141,16 @@ export class LocalShellOperations implements ShellOperations {
       let killed = false;
       let timedOut = false;
       let aborted = false;
+
+      /** Kill the whole group, falling back to the child if it is already gone. */
+      const killTree = (): void => {
+        try {
+          if (child.pid) process.kill(-child.pid, 'SIGKILL');
+          else child.kill('SIGKILL');
+        } catch {
+          // ESRCH: the group is already gone. Nothing to do.
+        }
+      };
 
       child.stdout.on('data', (data: Buffer) => {
         const chunk = data.toString();
@@ -155,31 +170,44 @@ export class LocalShellOperations implements ShellOperations {
 
       const timeoutHandle = options.timeout
         ? setTimeout(() => {
+            // `exit` fires before `close`, and the pipes can flush a tick after
+            // the deadline. Without this the command that finished in time is
+            // reported as having blown its budget, and the model is told to
+            // split work that already succeeded.
+            if (child.exitCode !== null || child.signalCode !== null) return;
             killed = true;
             timedOut = true;
-            child.kill('SIGKILL');
+            killTree();
           }, options.timeout)
         : null;
 
+      const onAbort = (): void => {
+        killed = true;
+        aborted = true;
+        killTree();
+      };
       if (options.signal) {
-        const onAbort = () => {
-          killed = true;
-          aborted = true;
-          child.kill('SIGKILL');
-        };
-        options.signal.addEventListener('abort', onAbort, { once: true });
-        child.on('close', () => options.signal!.removeEventListener('abort', onAbort));
+        // A signal that aborted BEFORE this call never fires the event, so the
+        // command would run to completion after its run was cancelled — and
+        // report `aborted: false` while doing it.
+        if (options.signal.aborted) onAbort();
+        else options.signal.addEventListener('abort', onAbort, { once: true });
       }
 
-      child.on('close', (code, signal) => {
+      /** Runs on either terminal event; `error` may fire without a `close`. */
+      const cleanup = (): void => {
         if (timeoutHandle) clearTimeout(timeoutHandle);
+        options.signal?.removeEventListener('abort', onAbort);
         wrap.cleanup();
+      };
+
+      child.on('close', (code, signal) => {
+        cleanup();
         resolve({ stdout, stderr, exitCode: code, killed, timedOut, aborted, signal });
       });
 
       child.on('error', (error) => {
-        if (timeoutHandle) clearTimeout(timeoutHandle);
-        wrap.cleanup();
+        cleanup();
         reject(error);
       });
     });

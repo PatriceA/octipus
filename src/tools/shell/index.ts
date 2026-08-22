@@ -1,6 +1,7 @@
 import { resolve } from 'path';
 import { getConfig } from '@/config';
 import { WorkspaceFS } from '@/security/workspace-fs';
+import { isSensitiveEnvName } from '@/security/child-env';
 import type { ToolManifest } from '@/core/types';
 import { toolLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema } from '../base-tool';
@@ -236,6 +237,11 @@ export class ShellTool extends BaseTool {
       async (args) => {
         if (typeof args.name !== 'string' || !args.name) {
           throw new Error('env requires a "name" parameter — bulk env dump is not exposed.');
+        }
+        // A withheld credential must not look like an unset variable: an agent
+        // told `null` concludes the key is missing and goes and sets one.
+        if (isSensitiveEnvName(args.name)) {
+          return { [args.name]: null, redacted: true, reason: 'looks like a credential — withheld' };
         }
         const envVars = await this.ops.getEnv(args.name);
         return { [args.name]: envVars[args.name] ?? null };
