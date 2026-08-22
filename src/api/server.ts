@@ -42,6 +42,7 @@ import { connectorRoutes } from './routes/connectors';
 import { mcpRoutes } from './routes/mcp';
 import { graphRoutes } from './routes/graph';
 import { memoryRoutes } from './routes/memory';
+import { metricsRoutes } from './routes/metrics';
 import { noteRoutes } from './routes/notes';
 import { personaRoutes } from './routes/persona';
 import { modelRoutes } from './routes/models';
@@ -335,6 +336,11 @@ export function createServer() {
     .group('/api', (app) =>
       app
         .use(healthRoutes)
+        // Every counter and histogram in `core/telemetry.ts` fed a registry
+        // nothing exposed: the route existed, its test passed, and it was never
+        // mounted. A route that is not `.use`d is not reachable, whatever its
+        // unit test says.
+        .use(metricsRoutes)
         .use(authRoutes)
         .use(apiTokenRoutes)
         .use(channelBindingRoutes)

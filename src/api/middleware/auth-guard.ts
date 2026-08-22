@@ -13,7 +13,7 @@ const PUBLIC_PATH_PREFIXES = [
   '/api/settings/setup-status',
 ];
 
-function isPublicPath(path: string): boolean {
+export function isPublicPath(path: string): boolean {
   // OAuth callbacks are public (state-based auth)
   if (path.match(/^\/api\/auth\/oauth\/\w+\/callback/)) return true;
   // All health endpoints are public (used by monitoring, load balancers, k8s probes)
@@ -32,6 +32,10 @@ function isPublicPath(path: string): boolean {
   if (path.startsWith('/api/scim/')) return true;
   // SAML SP routes — IdP-initiated, signature-validated inside the route
   if (path.startsWith('/api/saml/')) return true;
+  // Prometheus scrape — a scraper cannot do the login flow. The route itself
+  // is 404 unless METRICS_TOKEN is set and 401 without it, so "public" here
+  // means "authenticated by its own token", not "open".
+  if (path.startsWith('/api/metrics')) return true;
   return PUBLIC_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 

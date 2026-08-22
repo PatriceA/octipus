@@ -51,3 +51,22 @@ describe('metrics route (M11)', () => {
     expect(res.status).toBe(200);
   });
 });
+
+/**
+ * Reachability, not behaviour. Every assertion above exercises the route
+ * object directly — which is exactly how this endpoint shipped unmounted and
+ * unreachable for its whole life while its tests stayed green.
+ */
+describe('metrics route is actually mounted', () => {
+  test('is registered on the API server and public to the auth guard', async () => {
+    const server = await Bun.file(`${import.meta.dir}/../server.ts`).text();
+    expect(server).toContain('.use(metricsRoutes)');
+
+    const { isPublicPath } = await import('../middleware/auth-guard');
+    // A scraper cannot log in; if the guard is not told, the route's own token
+    // check is never reached and the endpoint answers 401 forever.
+    expect(isPublicPath('/api/metrics')).toBe(true);
+    // And nothing else got waved through by the same prefix rule.
+    expect(isPublicPath('/api/models')).toBe(false);
+  });
+});
