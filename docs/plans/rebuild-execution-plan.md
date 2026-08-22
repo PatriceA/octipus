@@ -58,11 +58,15 @@ Four configuration rules, adopted at the same time, each naming a bug already sh
 
 Runnable check: the testing rules are applied first to the evidence gate and the QA verdict contract, the two guards with a known false-pass history.
 
-### Phase 1 — Drops
+### Phase 1 — Drops (done, 2026-08-22)
 
-Delete the desktop sidecar remnants: the build wiring, the `externalBin` configuration, the Rust spawn and kill paths, the runtime-port store entry. The thin client is the shipped and working design; the sidecar was an experiment that did not survive contact with `bun --compile`, which cannot `readdirSync` a source directory and crashed at boot. Remove the scaffolding so nobody re-derives the idea from the leftovers.
+Smaller than planned, because an audit found most of it already gone and one target still load-bearing. Recorded here rather than silently dropped, since both findings change what later phases can assume.
 
-Delete the swarm scorers and call-graph machinery if an audit shows no live caller — they were built for a fan-out mode Phase 2 removes.
+The desktop sidecar was already removed with the thin client. There is no `externalBin` in `tauri.conf.json`, no spawn or kill path in `lib.rs`, and no runtime-port store entry — the store holds only `backendUrl`, which is the thin-client design and stays. The one genuine remnant was `@tauri-apps/plugin-shell` in `web/package.json`: no JavaScript import, no matching Rust crate, and no `shell:` permission in the capability manifest. It was the process-spawning dependency the sidecar needed, and it is now removed.
+
+The swarm scorers and call-graph machinery are **not** droppable and the planned deletion is declined. Both are live. `scorers.ts` is wired into the `spawn_child` tool schema, its validation path, both result formatters, and the spawner — including the evidence scorers that the quality-enforcement work attaches automatically, which are the mechanism a `contract_failed` verdict rides on. `call-graph.ts` backs the escalate tool and the spawner's cycle detection and task fingerprinting. Deleting either today breaks child spawning outright.
+
+This matters beyond Phase 1: the evidence scorers are the only thing currently standing between a child's self-report and a recorded result, so they must be carried across the Phase 2 collapse rather than removed with the surrounding orchestrator, and retired only once Phase 3 makes completion a logged fact.
 
 Runnable check: the desktop build succeeds and the desktop client still logs in against a remote backend.
 
