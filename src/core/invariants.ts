@@ -85,14 +85,24 @@ export async function runInvariants(
 export async function checkInvariantsAtBoot(): Promise<number> {
   const results = await runInvariants();
   let violations = 0;
+  let errors = 0;
   for (const r of results) {
     if (r.error) {
+      errors++;
       coreLogger.error({ area: r.area, invariant: r.name, err: r.error }, 'Invariant check failed to run');
     } else if (r.violation) {
       violations++;
       coreLogger.error({ area: r.area, invariant: r.name, detail: r.violation }, 'Runtime invariant violated');
     }
   }
+  // Logged even when everything holds, and on purpose. A gate that says
+  // nothing when it passes is indistinguishable from a gate that never ran —
+  // which is the failure this whole module exists to end, and it would be a
+  // poor joke to reproduce it here.
+  coreLogger.info(
+    { checked: results.length, held: results.length - violations - errors, violations, errors },
+    'Runtime invariants checked',
+  );
   return violations;
 }
 
