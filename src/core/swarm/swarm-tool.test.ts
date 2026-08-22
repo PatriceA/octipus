@@ -33,27 +33,50 @@ describe('buildDelegationGuidance', () => {
 // ── applyRoleFit (Phase 2.6 deterministic role-fit) ──────────────────
 
 describe('applyRoleFit', () => {
+  // The rewrite is a SMALL-orchestrator workaround, so every case below passes
+  // `true`. Its behaviour for a capable orchestrator is the separate block
+  // underneath, and it is the opposite: the model's own choice stands.
   test('rewrites an advisory role to coding when the task classifies coding-like', () => {
-    const fit = applyRoleFit('architecture', 'implement the feature and fix the bug in the backend code');
+    const fit = applyRoleFit('architecture', 'implement the feature and fix the bug in the backend code', true);
     expect(fit.role).toBe('coding');
     expect(fit.rewrittenFrom).toBe('architecture');
   });
 
   test('rewrites review → coding for a hands-on coding task', () => {
-    const fit = applyRoleFit('review', 'refactor the module and add a unit test for the new function');
+    const fit = applyRoleFit('review', 'refactor the module and add a unit test for the new function', true);
     expect(fit.role).toBe('coding');
     expect(fit.rewrittenFrom).toBe('review');
   });
 
   test('leaves an advisory role untouched for a genuine advisory task', () => {
-    const fit = applyRoleFit('architecture', 'design the system architecture and write an architecture decision record');
+    const fit = applyRoleFit('architecture', 'design the system architecture and write an architecture decision record', true);
     expect(fit.role).toBe('architecture');
     expect(fit.rewrittenFrom).toBeUndefined();
   });
 
   test('never touches a non-advisory role', () => {
-    const fit = applyRoleFit('coding', 'implement and fix the bug');
+    const fit = applyRoleFit('coding', 'implement and fix the bug', true);
     expect(fit.role).toBe('coding');
+    expect(fit.rewrittenFrom).toBeUndefined();
+  });
+});
+
+describe('applyRoleFit — a capable orchestrator keeps its own choice', () => {
+  // The exact task text that IS rewritten for a small orchestrator above. A
+  // capable model read the whole request before picking `architecture`;
+  // replacing that with a keyword table's read of the brief alone is the
+  // inversion this gate exists to stop.
+  const codingLike = 'implement the feature and fix the bug in the backend code';
+
+  test('no rewrite when the orchestrator is not small', () => {
+    const fit = applyRoleFit('architecture', codingLike, false);
+    expect(fit.role).toBe('architecture');
+    expect(fit.rewrittenFrom).toBeUndefined();
+  });
+
+  test('an unspecified caller is treated as capable, not as small', () => {
+    const fit = applyRoleFit('architecture', codingLike);
+    expect(fit.role).toBe('architecture');
     expect(fit.rewrittenFrom).toBeUndefined();
   });
 });
@@ -381,6 +404,42 @@ describe('createSpawnChildTool', () => {
     );
     expect(typeof result).toBe('string');
     expect(String(result)).toContain('spawn_child:');
+  });
+
+  // Reachability, not behaviour. The role-fit rewrite is a LITE-orchestrator
+  // workaround, and it can only fire if the resolved tier actually arrives at
+  // the spawner. A first attempt gated it on the ROUTER threshold, which made
+  // it dead code in every path that reaches `spawnChild` at all — router mode
+  // never gets here, it short-circuits into `runRouterTurn`.
+  async function spawnAndCaptureInternal(opts?: { lite?: boolean }) {
+    let internal: Record<string, unknown> | undefined;
+    const spawner = {
+      spawnChild: async (
+        _p: AgentNode,
+        _params: Record<string, unknown>,
+        _ctx: unknown,
+        received?: Record<string, unknown>,
+      ) => {
+        internal = received;
+        return {
+          nodeId: 'c', kind: 'agent', status: 'ok', output: 'x',
+          usedTokens: 0, durationMs: 0, spawnedChildren: [],
+        } as ChildResult;
+      },
+    } as unknown as SwarmSpawner;
+    await createSpawnChildTool(makeParent(), spawner, undefined, opts).execute(
+      { topic: 'security', subtopic: 'oauth', taskBrief: 'Review the flow.', expectedOutput: { shape: 'summary' } },
+      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'orchestrator', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+    );
+    return internal;
+  }
+
+  test('a lite orchestrator reaches the spawner as lite', async () => {
+    expect((await spawnAndCaptureInternal({ lite: true }))?.orchestratorIsLite).toBe(true);
+  });
+
+  test('a full orchestrator reaches the spawner as not-lite', async () => {
+    expect((await spawnAndCaptureInternal())?.orchestratorIsLite).toBe(false);
   });
 
   test('passes validated params to spawner and marshals result via formatChildResult', async () => {

@@ -44,6 +44,47 @@ export interface OrchestratorRunnerDeps {
  * create_pipeline meta-tools. Extracted verbatim from OrchestratorService so
  * the service stays a thin façade; behaviour is identical.
  */
+/**
+ * The delegation policy appended to every orchestrator turn.
+ *
+ * This is POLICY, not a classification result. It used to ride inside the
+ * `if (classification.topic)` block, so a message the keyword table did not
+ * recognise reached the orchestrator with no delegation guidance at all — and
+ * the requests least likely to match a keyword are exactly the ones most likely
+ * to need delegating. It is now unconditional, and the topic is a separate,
+ * weaker thing (see `buildTopicHint`).
+ *
+ * Lite mode gets a contradiction-free version: the lite prompt already says
+ * "Delegate ONCE per request", so this text must NOT say "one or more calls per
+ * turn" (small models are literal — that conflict is what drove the
+ * rule-breaking second spawn in run 743d4b66) and must NOT advertise
+ * `create_pipeline`, which the lite spawn schema does not expose.
+ */
+export function buildDelegationPolicy(isLite: boolean): string {
+  return isLite
+    ? `\n\nFor any substantive task, call spawn_child EXACTLY ONCE and then relay the child's result. Only answer directly (no spawn) for a greeting, arithmetic, a single-fact answer, repeat-after-me, or a simple definition. When in doubt, delegate.`
+    : `\n\nDelegate to specialists via spawn_child (one or more calls per turn) for any substantive task — writing or refactoring code, research, design, security review, devops work, etc. Use create_pipeline only when the user explicitly asks for a multi-stage workflow with handover (e.g., "research then implement then review"). Narrow exception: if the request is plainly trivial — a greeting, arithmetic, a single-fact answer, repeat-after-me, or a simple definition — answer directly without spawning. When in doubt between delegating and answering directly, delegate. If the user explicitly tells you to delegate or use spawn_child, always do so.`;
+}
+
+/**
+ * The keyword classifier's topic, which now reaches the model in LITE MODE ONLY,
+ * and only as a hint.
+ *
+ * It is a regex table's guess at what a request is about. A capable model reads
+ * the same message and reads it better, so "use this as the child role when
+ * calling spawn_child" replaced that model's judgement with the table's — and
+ * the table's own source carries years of comments about the asks it steals
+ * from the right role. Lite keeps the hint because a small model is literal
+ * enough to follow one and weak enough to route badly without it.
+ */
+export function buildTopicHint(
+  isLite: boolean,
+  classification: Pick<MessageClassification, 'topic' | 'confidence'>,
+): string {
+  if (!isLite || !classification.topic) return '';
+  return ` The message looks like a "${classification.topic}" task (confidence: ${classification.confidence.toFixed(2)}); use that as the child role unless the request plainly says otherwise.`;
+}
+
 export async function runOrchestrator(
   service: OrchestratorService,
   deps: OrchestratorRunnerDeps,
@@ -232,7 +273,10 @@ export async function runOrchestrator(
   if (recentHistory.length > 0) {
     sources.push(`recent ${recentHistory.length} msg${recentHistory.length === 1 ? '' : 's'}`);
   }
-  if (classification.topic) {
+  // Only claimed as a source where it is actually consumed. Full mode no
+  // longer routes on it (see the delegation policy below), so listing it there
+  // would tell the user a decision was made that was not.
+  if (isLite && classification.topic) {
     sources.push(`classifier(${classification.topic})`);
   }
   if (recentHistory.length > 0) {
@@ -242,16 +286,7 @@ export async function runOrchestrator(
     volatileParts.push(`\n\nRecent conversation history (last ${recentHistory.length} messages):\n${historyLines.join('\n\n')}`);
   }
 
-  if (classification.topic) {
-    // Lite mode gets a contradiction-free version: the lite prompt says
-    // "Delegate ONCE per request", so this appendix must NOT say "one or more
-    // calls per turn" (small models are literal — that conflict is what drove
-    // the rule-breaking second spawn in run 743d4b66) and must NOT advertise
-    // create_pipeline, which the lite spawn schema doesn't expose.
-    systemPrompt += isLite
-      ? `\n\nThe user's message has been pre-classified as a "${classification.topic}" topic (confidence: ${classification.confidence.toFixed(2)}). Use this as the child role. For any substantive task, call spawn_child EXACTLY ONCE and then relay the child's result. Only answer directly (no spawn) for a greeting, arithmetic, a single-fact answer, repeat-after-me, or a simple definition. When in doubt, delegate.`
-      : `\n\nThe user's message has been pre-classified as a "${classification.topic}" topic (confidence: ${classification.confidence.toFixed(2)}). Use this as the child role when calling spawn_child. Delegate to specialists via spawn_child (one or more calls per turn) for any substantive task — writing or refactoring code, research, design, security review, devops work, etc. Use create_pipeline only when the user explicitly asks for a multi-stage workflow with handover (e.g., "research then implement then review"). Narrow exception: if the request is plainly trivial — a greeting, arithmetic, a single-fact answer, repeat-after-me, or a simple definition — answer directly without spawning. When in doubt between delegating and answering directly, delegate. If the user explicitly tells you to delegate or use spawn_child, always do so.`;
-  }
+  systemPrompt += buildDelegationPolicy(isLite) + buildTopicHint(isLite, classification);
   if (classification.type === 'ambiguous') {
     systemPrompt += `\n\nThe user's message could not be confidently classified. If it is plainly small-talk or a one-shot factual question, answer directly. Otherwise prefer spawn_child to a fitting specialist — when in doubt, delegate. If the user explicitly tells you to delegate, always do so.`;
   }

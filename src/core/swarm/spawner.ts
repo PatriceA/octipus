@@ -85,6 +85,17 @@ export interface SpawnChildInternalOpts {
   excludeExpertId?: string;
   /** Tag logged on spawn — distinguishes normal spawns from escalation. */
   reason?: 'normal' | 'escalation' | 'retry';
+  /**
+   * The RESOLVED orchestrator tier for this turn, threaded down from
+   * `createSpawnChildTool`. Only `resolveChildRole` reads it, to decide whether
+   * the deterministic role-fit rewrite applies (it is a small-model workaround).
+   *
+   * Threaded rather than re-derived: `resolveOrchestratorMode` already resolved
+   * it once for this turn, using the model's `metadata.paramCount` when the id
+   * carries no size tag. Deriving it a second time from the id alone would give
+   * a different answer for the same model.
+   */
+  orchestratorIsLite?: boolean;
 }
 
 /**
@@ -145,7 +156,7 @@ export class SwarmSpawner {
 
     let childRole: AgentRole;
     try {
-      childRole = this.resolveChildRole(params);
+      childRole = this.resolveChildRole(params, internal.orchestratorIsLite);
     } catch (err) {
       // A malformed spawn reports too: `spawn:after` is the seam subscribers
       // count on, and this throw happens before `spawn:before` could fire.
@@ -225,7 +236,7 @@ export class SwarmSpawner {
 
     const childDepth: 1 | 2 = (parent.depth + 1) as 1 | 2;
     const childKind: 'agent' | 'subagent' = childDepth === 1 ? 'agent' : 'subagent';
-    const childRole = this.resolveChildRole(params);
+    const childRole = this.resolveChildRole(params, internal.orchestratorIsLite);
     const topicPath = this.buildTopicPath(parent.topicPath, params.topic, params.subtopic);
 
     // WS4 observability — count spawns that clear the depth gate, by child role,
@@ -1262,7 +1273,7 @@ export class SwarmSpawner {
 
   // ── Internals ──────────────────────────────────────────────────────
 
-  private resolveChildRole(params: SpawnChildParams): AgentRole {
+  private resolveChildRole(params: SpawnChildParams, orchestratorIsLite = false): AgentRole {
     // Validator in swarm-tool.ts guarantees role is set — it rejects
     // spawns missing a resolvable role. Silent defaulting to 'general'
     // was the source of wrong-model routing.
@@ -1273,9 +1284,18 @@ export class SwarmSpawner {
     }
     // Phase 2.6 — deterministic role-fit: an advisory role picked for a task
     // the classifier reads as coding is a misroute (an "architect" doing code
-    // changes). Rewrite to `coding` and log; prompt hints don't hold for small
-    // orchestrator models.
-    const fit = applyRoleFit(params.role, params.taskBrief);
+    // changes). Rewrite to `coding` and log.
+    //
+    // LITE orchestrators only, which is what it was written for: prompt hints
+    // don't hold for them. A capable (full) model read the whole request before
+    // choosing, so overriding it with a keyword table's read of the task brief
+    // alone replaces judgement with a guess.
+    //
+    // Lite, specifically, and not "small": a router-tier orchestrator never
+    // reaches this method at all — `runOrchestrator` short-circuits router mode
+    // into `runRouterTurn`, which spawns its worker directly. Gating on the
+    // router threshold would leave the rewrite switched on for nothing.
+    const fit = applyRoleFit(params.role, params.taskBrief, orchestratorIsLite);
     if (fit.rewrittenFrom) {
       coreLogger.info(
         { from: fit.rewrittenFrom, to: fit.role, taskBrief: params.taskBrief.slice(0, 120) },

@@ -197,16 +197,29 @@ const ADVISORY_ROLES: ReadonlySet<AgentRole> = new Set(['architecture', 'review'
 const CODING_TOPICS: ReadonlySet<string> = new Set(['coding', 'devops', 'automation']);
 
 /**
- * Deterministic role-fit guard (Phase 2.6). Before spawning, validate the
- * LLM's role choice against the classifier's read of the task text: if an
- * advisory role was chosen but the task classifies coding-like, rewrite to
- * `coding`. A fixed mapping table beats prompt hints for small orchestrator
- * models. Returns `rewrittenFrom` when it changed the role so the caller logs.
+ * Deterministic role-fit guard (Phase 2.6). If an advisory role was chosen for
+ * a task the keyword classifier reads as coding-like, rewrite to `coding`.
+ *
+ * SMALL ORCHESTRATOR MODELS ONLY. Its own rationale — "a fixed mapping table
+ * beats prompt hints for small orchestrator models" — was always a small-model
+ * workaround, but it ran for every model, so a capable orchestrator that had
+ * read the whole request and deliberately picked `architect` had its choice
+ * replaced by a regex table's read of the task brief alone. That is the same
+ * inversion the pre-classified topic directive made, one layer further down,
+ * and it is invisible: the rewrite is logged as a correction, never as an
+ * override of a decision that may well have been right.
+ *
+ * `orchestratorIsSmall` defaults to false, so an unknown caller keeps the
+ * model's own choice. Reducing a capable model to a table is the worse error.
+ *
+ * Returns `rewrittenFrom` when it changed the role so the caller logs.
  */
 export function applyRoleFit(
   role: AgentRole,
   taskText: string,
+  orchestratorIsSmall = false,
 ): { role: AgentRole; rewrittenFrom?: AgentRole } {
+  if (!orchestratorIsSmall) return { role };
   if (!ADVISORY_ROLES.has(role)) return { role };
   const topic = classifyMessage(taskText).topic;
   if (topic && CODING_TOPICS.has(topic)) {
@@ -262,6 +275,11 @@ export function createSpawnChildTool(
     if ('error' in validated) return `spawn_child: ${validated.error}`;
     const params = validated.params;
 
+    // The turn's RESOLVED orchestrator tier, passed through so `resolveChildRole`
+    // does not re-derive it from a model id. Read by the deterministic role-fit
+    // rewrite, which applies to lite orchestrators only.
+    const internal = { orchestratorIsLite: opts?.lite === true };
+
     const cap = hooks?.maxPendingDetached() ?? 0;
     if (hooks && cap > 0) {
       if (hooks.pendingCount() >= cap) {
@@ -271,7 +289,7 @@ export function createSpawnChildTool(
       const childHandle = randomUUID();
       const promise = (async () => {
         try {
-          return await spawner.spawnChild(parent, params, context);
+          return await spawner.spawnChild(parent, params, context, internal);
         } catch (err) {
           coreLogger.error(
             { err, parentNodeId: parent.id, topic: params.topic, subtopic: params.subtopic },
@@ -303,7 +321,7 @@ export function createSpawnChildTool(
     // ── Await fallback (no detach budget / no hooks) ─────────────────
     try {
       params.mode = 'await';
-      const result = await spawner.spawnChild(parent, params, context);
+      const result = await spawner.spawnChild(parent, params, context, internal);
       return formatChildResult(result);
     } catch (err) {
       coreLogger.error(
