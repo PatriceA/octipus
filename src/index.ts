@@ -263,6 +263,17 @@ async function main() {
       logger.error({ err }, 'Swarm ledger resume failed (non-fatal)');
     }
 
+    // Runtime invariants — the same class of check as the gates above, but run
+    // against what this deployment actually resolved rather than against a
+    // fixture. Logs and counts; never blocks the boot.
+    try {
+      const { checkInvariantsAtBoot } = await import('@/core/invariants');
+      const violations = await checkInvariantsAtBoot();
+      if (violations > 0) logger.error({ violations }, 'Runtime invariants violated at boot');
+    } catch (err) {
+      logger.error({ err }, 'Runtime invariant pass failed (non-fatal)');
+    }
+
     // task_state orphan reaper — drops typed-output rows whose session
     // was deleted (schema deliberately has no FK; see migration 0050).
     // Runs once on boot, then weekly via the cron runner.
