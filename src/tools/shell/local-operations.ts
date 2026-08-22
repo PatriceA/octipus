@@ -123,15 +123,19 @@ export class LocalShellOperations implements ShellOperations {
 
     return new Promise((resolve, reject) => {
       // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn (no shell); this is the shell tool's own executor, argv already parsed/sandboxed upstream
+      // No `timeout` option here on purpose: node's own timer kills with
+      // SIGTERM on its own schedule, racing the timer below and landing a kill
+      // that sets none of the flags explaining it. One deadline, one owner.
       const child = spawn(finalArgv[0], finalArgv.slice(1), {
         cwd,
         env: buildChildEnv(options.env),
-        timeout: options.timeout,
       });
 
       let stdout = '';
       let stderr = '';
       let killed = false;
+      let timedOut = false;
+      let aborted = false;
 
       child.stdout.on('data', (data: Buffer) => {
         const chunk = data.toString();
@@ -152,6 +156,7 @@ export class LocalShellOperations implements ShellOperations {
       const timeoutHandle = options.timeout
         ? setTimeout(() => {
             killed = true;
+            timedOut = true;
             child.kill('SIGKILL');
           }, options.timeout)
         : null;
@@ -159,16 +164,17 @@ export class LocalShellOperations implements ShellOperations {
       if (options.signal) {
         const onAbort = () => {
           killed = true;
+          aborted = true;
           child.kill('SIGKILL');
         };
         options.signal.addEventListener('abort', onAbort, { once: true });
         child.on('close', () => options.signal!.removeEventListener('abort', onAbort));
       }
 
-      child.on('close', (code) => {
+      child.on('close', (code, signal) => {
         if (timeoutHandle) clearTimeout(timeoutHandle);
         wrap.cleanup();
-        resolve({ stdout, stderr, exitCode: code, killed });
+        resolve({ stdout, stderr, exitCode: code, killed, timedOut, aborted, signal });
       });
 
       child.on('error', (error) => {

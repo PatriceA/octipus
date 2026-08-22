@@ -41,5 +41,17 @@ export interface ShellExecResult {
   exitCode: number | null;
   stdout: string;
   stderr: string;
+  /** True if we killed it — for either reason below. Kept for callers that
+   *  only care that the command did not finish on its own. */
   killed: boolean;
+  /**
+   * Why it was killed, reported independently rather than nested inside one
+   * another: a command can hit its deadline AND still exit zero (it trapped
+   * the signal, or finished in the same tick), and a caller told only
+   * "killed" cannot tell a blown deadline from a user cancelling the run.
+   */
+  timedOut: boolean;
+  aborted: boolean;
+  /** The signal the process died from, when it died from one. */
+  signal: string | null;
 }

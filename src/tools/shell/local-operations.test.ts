@@ -86,3 +86,34 @@ describe('LocalShellOperations.getEnv — reading by name', () => {
     expect(await ops.getEnv()).toEqual({});
   });
 });
+
+describe('LocalShellOperations.exec — why a command died', () => {
+  const ops = new LocalShellOperations();
+
+  it('separates a blown deadline from an exit code', async () => {
+    const res = await ops.exec('sleep 5', process.cwd(), { timeout: 150 });
+    // Orthogonal outcomes, reported side by side: a caller told only "killed"
+    // cannot tell a deadline from a cancellation, and `exitCode: null` says
+    // nothing about which happened.
+    expect(res.killed).toBe(true);
+    expect(res.timedOut).toBe(true);
+    expect(res.aborted).toBe(false);
+    expect(res.signal).toBe('SIGKILL');
+  });
+
+  it('separates a cancellation from a deadline', async () => {
+    const ctl = new AbortController();
+    setTimeout(() => ctl.abort(), 100);
+    const res = await ops.exec('sleep 5', process.cwd(), { signal: ctl.signal });
+    expect(res.aborted).toBe(true);
+    expect(res.timedOut).toBe(false);
+  });
+
+  it('a command that finishes in time reports neither', async () => {
+    const res = await ops.exec('true', process.cwd(), { timeout: 5000 });
+    expect(res.exitCode).toBe(0);
+    expect(res.killed).toBe(false);
+    expect(res.timedOut).toBe(false);
+    expect(res.signal).toBeNull();
+  });
+});

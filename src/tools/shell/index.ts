@@ -136,15 +136,27 @@ export class ShellTool extends BaseTool {
 
         // Classify the exit code so the agent isn't misled by non-zero codes
         // that are semantically normal (grep=1 "no match", diff=1 "files differ").
+        // A killed command is an error whatever its exit code — but the model
+        // is told WHICH kill, and what the budget was, because "retry it" and
+        // "raise the timeout or split the work" are different next moves.
         const interpretation = result.exitCode !== null && !result.killed
           ? interpretExit(command, result.exitCode)
-          : { outcome: 'error' as const };
+          : {
+              outcome: 'error' as const,
+              semantic: result.timedOut
+                ? `timed_out_after_${timeout}ms`
+                : result.aborted
+                  ? 'cancelled'
+                  : undefined,
+            };
 
         if (interpretation.outcome === 'error') {
           toolLogger.warn({
             command: command.slice(0, 200),
             exitCode: result.exitCode,
             killed: result.killed,
+            timedOut: result.timedOut,
+            signal: result.signal,
             stderrSnippet: result.stderr.slice(0, 200),
             agentId: context?.id,
           }, 'Shell command failed');
