@@ -97,6 +97,23 @@ describe('aliasVerdict — incidental JSON is not a verdict', () => {
     expect(aliasVerdict({ status: 'ok', notes: 'service up' })).toBeNull();
   });
 
+  test('a linter payload with an empty issues list is not a passing audit', () => {
+    // `issues` is tool vocabulary too. A PASS is held to a higher bar than a
+    // FAIL because the two mistakes do not cost the same: a stray FAIL costs a
+    // retry, a stray PASS overwrites a real failure and ships the work.
+    expect(aliasVerdict({ result: 'success', issues: [] })).toBeNull();
+    expect(aliasVerdict({ status: 'ok', issues: [] })).toBeNull();
+  });
+
+  test('a failing alias may stand on issues alone — it can only tighten the gate', () => {
+    expect(aliasVerdict({ status: 'rejected', blockers: ['tests fail'] })?.passed).toBe(false);
+  });
+
+  test('a passing alias needs a field an incidental payload does not carry', () => {
+    expect(aliasVerdict({ verdict: 'approve', issues: [], feedback: 'checked every stage' })?.passed).toBe(true);
+    expect(aliasVerdict({ verdict: 'approve', whatIDidNotCheck: ['perf'] })?.passed).toBe(true);
+  });
+
   test('audit vocabulary is what makes it a verdict', () => {
     // The measured real case: a QA stage emitting its own field names.
     const v = aliasVerdict({ verdict: 'approve', blockers: [], summary: 'looks right' });

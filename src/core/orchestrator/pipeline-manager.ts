@@ -23,7 +23,7 @@ import { getTopicConfig } from '@/models/topic-config';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
 import { type AuditScopeStage, auditVerdictFailure, coverageScope, unaddressedDoubt, uncoveredStages } from './audit-coverage';
-import { createHandoffContext, formatHandoffChain, HANDOFF_EMIT_INSTRUCTION, type HandoffContext, stripHandoffBlock } from './handoff';
+import { createHandoffContext, formatHandoffChain, HANDOFF_EMIT_INSTRUCTION, type HandoffContext, parseStructuredHandoff, stripHandoffBlock } from './handoff';
 import {
   compileTemplateToGraph,
   edgeId,
@@ -132,14 +132,25 @@ export function aliasVerdict(raw: unknown): QAValidationResult | null {
   // into the auditor-only retry loop, so the real failure never reached the
   // implementer at all.
   //
-  // Issues, what-was-not-checked and confidence are audit vocabulary. A report
-  // that carries none of them is not answering the audit contract, whatever
-  // word it used.
+  // What-was-not-checked and confidence are AUDIT vocabulary: a tool does not
+  // emit them, only something answering this contract does. `issues` is not — a
+  // test summary or a linter emits `{"result": "success", "issues": []}` and
+  // `{"status": "ok", "issues": []}` just as readily, the same trap one key over
+  // from the `summary`/`notes` one.
+  //
+  // So the bar depends on which way the verdict points, because the two
+  // mistakes do not cost the same. Reading a stray payload as a FAIL costs one
+  // retry and can only make the gate stricter. Reading one as a PASS overwrites
+  // a genuine failure the auditor wrote in prose — this tier runs first — and
+  // ships the work. A failing alias may therefore stand on `issues` alone; a
+  // passing one needs a field an incidental payload does not carry.
   const feedback = pick(obj, FEEDBACK_KEYS);
-  const answersAudit =
-    pick(obj, ISSUE_KEYS) !== undefined ||
-    pick(obj, NOT_CHECKED_KEYS) !== undefined ||
-    pick(obj, ['confidence', 'certainty']) !== undefined;
+  const auditOnly =
+    pick(obj, NOT_CHECKED_KEYS) !== undefined || pick(obj, ['confidence', 'certainty']) !== undefined;
+  const hasIssues = pick(obj, ISSUE_KEYS) !== undefined;
+  const answersAudit = passed
+    ? auditOnly || (hasIssues && feedback !== undefined)
+    : auditOnly || hasIssues;
   if (!answersAudit) return null;
 
   return {
@@ -773,6 +784,12 @@ export class PipelineManager {
     const workspaceRoot = await this.resolveWorkspaceRoot(sessionId);
 
     let previousOutput = '';
+    // The last stage's reply with its ```handoff fence still in it. Kept beside
+    // `previousOutput` (which is stripped, because the fence must never reach a
+    // model or a user) purely so the handoff can be parsed from it — see the
+    // `raw` note on `runStepNode`. Not checkpointed: a resumed run re-derives
+    // its handoff from prose, which is the old behaviour and no worse.
+    let previousRaw = '';
     const handoffChain: HandoffContext[] = [];
     // Source attribution: every successfully completed node (incl. retries)
     // appends one entry, rendered into the summary as `_Sources: ..._`.
@@ -956,6 +973,7 @@ export class PipelineManager {
         });
         if (asked.stopped) return asked.stopped;
         previousOutput = asked.output;
+        previousRaw = asked.raw;
         pipelineSources.push(`stage(${node.ordinal + 1}: ${node.name}/human)`);
         outcome = 'ok';
       } else if (gnode.kind === 'foreach') {
@@ -1072,6 +1090,12 @@ export class PipelineManager {
         // `handoffText` and never this. It is the node row, the UI and the audit
         // trail that would otherwise keep a bare verdict with the findings gone.
         const verdictText = stepResult.output;
+        // A correction reply is the verdict block alone. If it carries no
+        // handoff fence there is nothing structured to parse, and scraping the
+        // bare verdict would build the downstream handoff out of JSON with every
+        // finding gone — which is what re-joining the report exists to prevent.
+        // Fall back to the re-joined pair in that case, not to the bare reply.
+        previousRaw = parseStructuredHandoff(stepResult.raw) ? stepResult.raw : '';
         previousOutput = reportUnderCorrection
           ? `${reportUnderCorrection}\n\n${stepResult.output}`
           : stepResult.output;
@@ -1178,7 +1202,11 @@ export class PipelineManager {
               from: { role: node.role, stageName: node.name, stageIndex: node.ordinal },
               to: { role: target.role, stageName: target.name, stageIndex: target.ordinal },
               originalRequest: description,
-              stageOutput: previousOutput,
+              // RAW, so the structured block is still there to parse. Passing
+              // the stripped reply made `parseStructuredHandoff` return null on
+              // every stage, silently downgrading every handoff to regex-scraped
+              // prose while the prompt kept demanding a fence.
+              stageOutput: previousRaw || previousOutput,
             }),
           );
         }
@@ -1966,7 +1994,7 @@ export class PipelineManager {
     workspaceRoot: string | null;
     orchestratorAgentId: string;
     title: string;
-  }): Promise<{ output: string; stopped?: { pipelineId: string; result: string } }> {
+  }): Promise<{ output: string; raw: string; stopped?: { pipelineId: string; result: string } }> {
     const { pipeline, node, declared, stageTemplate, input, stageContext, context, registry, workspaceRoot, title } = args;
     const orchestrator = getOrchestratorService();
     const sessionId = pipeline.sessionId;
@@ -2063,9 +2091,16 @@ export class PipelineManager {
         }
       }
 
-      // Parse handoffs from the RAW output but persist/forward the STRIPPED
-      // one, so the internal block is never shown or bled into the next node.
-      const output = stripHandoffBlock(String(result || ''));
+      // Persist and forward the STRIPPED reply, so the internal block is never
+      // shown or bled into the next node — but RETURN the raw one as well, so
+      // the handoff can still be parsed from it. Returning only the stripped
+      // reply is what killed the structured path: `createHandoffContext` was
+      // handed text the block had already been cut out of, so
+      // `parseStructuredHandoff` returned null every time and every stage fell
+      // back to scraping prose with regexes, while the prompt kept asking each
+      // one for a fence nothing read.
+      const raw = String(result || '');
+      const output = stripHandoffBlock(raw);
 
       await this.updateNode(node.id, { status: 'completed', output, completedAt: new Date() });
       recordRunEvent({
@@ -2101,7 +2136,7 @@ export class PipelineManager {
         metadata: { pipelineId: pipeline.id, stageId: node.id, pipelineEvent: 'stage_completed' },
       }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
 
-      return { output };
+      return { output, raw };
     } catch (error) {
       const errorMsg = (error as Error).message;
       await this.updateNode(node.id, { status: 'failed', error: errorMsg });
@@ -2126,7 +2161,7 @@ export class PipelineManager {
         { pipelineId: pipeline.id, stage: node.name },
       ).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
 
-      return { output: '', stopped: { pipelineId: pipeline.id, result: `Pipeline failed at "${node.name}": ${errorMsg}` } };
+      return { output: '', raw: '', stopped: { pipelineId: pipeline.id, result: `Pipeline failed at "${node.name}": ${errorMsg}` } };
     } finally {
       // Charge the node whatever this visit cost, success or failure — a run
       // that failed still burned the tokens, and the pool it draws from is what
@@ -2326,7 +2361,7 @@ export class PipelineManager {
     feedback?: QAValidationResult;
     context: AgentContext;
     title: string;
-  }): Promise<{ output: string; stopped?: { pipelineId: string; result: string } }> {
+  }): Promise<{ output: string; raw: string; stopped?: { pipelineId: string; result: string } }> {
     const { pipeline, node, stageTemplate, description, paramVars, previousOutput, feedback, context, title } = args;
     const orchestrator = getOrchestratorService();
 
@@ -2389,6 +2424,7 @@ export class PipelineManager {
       });
       return {
         output: '',
+        raw: '',
         stopped: {
           pipelineId: pipeline.id,
           result: `Pipeline paused at "${node.name}": no answer. Resume to ask again.`,
@@ -2419,7 +2455,8 @@ export class PipelineManager {
       timestamp: new Date(),
     });
 
-    return { output };
+    // A human answer carries no handoff fence, so raw and stripped are the same.
+    return { output, raw: output };
   }
 
   /**

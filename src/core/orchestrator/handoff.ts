@@ -131,6 +131,11 @@ export async function createHandoffContext(params: {
   from: HandoffContext['from'];
   to: HandoffContext['to'];
   originalRequest: string;
+  /**
+   * The stage's reply WITH its ```handoff fence, which only the structured
+   * parse reads. Every prose fallback reads the stripped text instead — see
+   * `prose` below.
+   */
   stageOutput: string;
 }): Promise<HandoffContext> {
   const { from, to, originalRequest, stageOutput } = params;
@@ -139,16 +144,27 @@ export async function createHandoffContext(params: {
   // structure, no lossy regex. Fall back PER FIELD when the block omits one
   // (empty string/array is a miss, not a value), and say so loudly (fail loud).
   const structured = parseStructuredHandoff(stageOutput);
-  const decisions = structured?.decisions.length ? structured.decisions : extractDecisions(stageOutput);
-  const openQuestions = structured?.openQuestions.length ? structured.openQuestions : extractOpenQuestions(stageOutput);
-  const artifacts = structured?.artifacts.length ? structured.artifacts : extractArtifacts(stageOutput);
+
+  // The prose fallbacks read the reply WITHOUT the fence, always. They scrape
+  // free text, and the JSON block is not free text: summarizing the raw reply
+  // would render the fence itself into the next stage's prompt and into the
+  // stored handoff — the exact leak stripping exists to prevent — and
+  // `buildInstructions` would scan the block for words like "failure", raising
+  // a spurious "previous stage output contains errors" off a handoff whose own
+  // openQuestions mentioned one. Stripping is cheap and idempotent, so this is
+  // correct whether the caller passed raw or already-stripped text.
+  const prose = stripHandoffBlock(stageOutput);
+
+  const decisions = structured?.decisions.length ? structured.decisions : extractDecisions(prose);
+  const openQuestions = structured?.openQuestions.length ? structured.openQuestions : extractOpenQuestions(prose);
+  const artifacts = structured?.artifacts.length ? structured.artifacts : extractArtifacts(prose);
   const completedWork = structured?.completedWork
     ? summarizeOutput(structured.completedWork)
-    : summarizeOutput(stageOutput);
+    : summarizeOutput(prose);
   // Always compute the built instructions — they carry the automatic
   // error/warning flag and role-transition hint the structured block won't.
   // The stage's own nextStageInstructions, if any, lead.
-  const builtInstructions = buildInstructions(from, to, stageOutput);
+  const builtInstructions = buildInstructions(from, to, prose);
   const instructions = [structured?.instructions, builtInstructions]
     .filter((s): s is string => !!s && s.length > 0)
     .join('\n\n');

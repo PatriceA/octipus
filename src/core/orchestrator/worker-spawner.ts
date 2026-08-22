@@ -1033,7 +1033,14 @@ Use these MCP tools when the task benefits from them — especially for people-r
     try {
       // `weakModel`, not `lite`: the tier gates the role-fit rewrite without
       // switching this worker to the flat spawn schema.
-      roleTools.push(createSpawnChildTool(stageNode, undefined, undefined, { weakModel: isSmall }));
+      //
+      // `finalIsSmall`, not `isSmall` — the same distinction the lite prompt and
+      // tool-discovery path already make above. `isSmall` came from the TOPIC
+      // model; this worker runs on `finalModel`, which an override or an
+      // expert's `modelPreference` can pin to a different size. Keying off the
+      // topic would hand the keyword table a capable model's deliberate role
+      // choice, which is precisely the inversion being removed elsewhere.
+      roleTools.push(createSpawnChildTool(stageNode, undefined, undefined, { weakModel: finalIsSmall }));
     } catch (err) {
       coreLogger.error({ err, role: agentRole }, 'Failed to inject spawn_child for pipeline stage — stage runs without subagent spawning');
     }

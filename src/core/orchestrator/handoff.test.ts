@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { createHandoffContext, HANDOFF_EMIT_INSTRUCTION, parseStructuredHandoff, stripHandoffBlock } from './handoff';
+import { auditScopeBefore, handoffConfidenceByStage } from './pipeline-manager';
 
 describe('parseStructuredHandoff', () => {
   test('reads a fenced ```handoff block', () => {
@@ -145,5 +146,150 @@ describe('handoff confidence', () => {
 
   test('asks for the field in the emit instruction, or no stage would ever send one', () => {
     expect(HANDOFF_EMIT_INSTRUCTION).toContain('confidence');
+  });
+});
+
+describe('the structured handoff must survive the walker', () => {
+  // Measured 2026-08-22: every non-terminal stage was told to emit a ```handoff
+  // fence, `runStepNode` stripped it before returning, and the walker then
+  // handed the STRIPPED reply to `createHandoffContext`. So
+  // `parseStructuredHandoff` returned null on every stage of every pipeline,
+  // each handoff was regex-scraped out of prose instead, and nothing said so.
+  //
+  // The two halves are pinned separately: the block is removed from what is
+  // forwarded, AND it is still parseable from what is handed to the builder.
+  const reply = [
+    'Implemented the parser and added two tests.',
+    '',
+    '```handoff',
+    JSON.stringify({
+      completedWork: 'parser + tests',
+      decisions: ['used a hand-rolled lexer'],
+      openQuestions: ['should unicode escapes be supported?'],
+      artifacts: ['src/parse.ts'],
+      instructions: 'review the lexer boundaries',
+      confidence: 'high',
+    }),
+    '```',
+  ].join('\n');
+
+  test('the fence is removed from what the next stage reads', () => {
+    const stripped = stripHandoffBlock(reply);
+    expect(stripped).not.toContain('```handoff');
+    expect(stripped).toContain('Implemented the parser');
+  });
+
+  test('and is still parseable from the raw reply', () => {
+    const h = parseStructuredHandoff(reply);
+    expect(h).not.toBeNull();
+    expect(h?.decisions).toEqual(['used a hand-rolled lexer']);
+    expect(h?.artifacts).toEqual(['src/parse.ts']);
+  });
+
+  test('parsing the STRIPPED reply is exactly the failure that shipped', () => {
+    expect(parseStructuredHandoff(stripHandoffBlock(reply))).toBeNull();
+  });
+
+  test('the walker hands the raw reply to the builder, not the stripped one', async () => {
+    // Source-shape: the defect was which variable reached one call site.
+    const src = await Bun.file(`${import.meta.dir}/pipeline-manager.ts`).text();
+    const at = src.indexOf('createHandoffContext({');
+    expect(at).toBeGreaterThan(0);
+    const call = src.slice(at, src.indexOf('})', at));
+    expect(call).toContain('stageOutput: previousRaw');
+  });
+});
+
+describe('the low-confidence doubt gate was unreachable without the structured block', () => {
+  // `confidence` is set from the structured handoff ALONE — prose extraction
+  // cannot produce one, by design ("a missing signal, not a low one"). With the
+  // block stripped before parsing, every handoff carried `confidence:
+  // undefined`, so `handoffConfidenceByStage` returned an empty map,
+  // `auditScopeBefore` never admitted a stage on the low-confidence branch, and
+  // the audit rule that fails a PASS for unaddressed doubt could not fire at
+  // all. This pins the whole chain, because the fix is only worth anything if
+  // the gate it feeds is reachable.
+  const withConfidence = (c: string) =>
+    ['done', '```handoff', JSON.stringify({ completedWork: 'x', confidence: c }), '```'].join('\n');
+
+  test('a stated confidence survives into the handoff context', async () => {
+    const h = await createHandoffContext({
+      from: { role: 'coding', stageName: 'Implement', stageIndex: 0 },
+      to: { role: 'qa', stageName: 'QA', stageIndex: 1 },
+      originalRequest: 'do the thing',
+      stageOutput: withConfidence('low'),
+    });
+    expect(h.confidence).toBe('low');
+  });
+
+  test('and puts a non-artifact stage into the audit scope, which is the gate', async () => {
+    const h = await createHandoffContext({
+      from: { role: 'architecture', stageName: 'Design', stageIndex: 0 },
+      to: { role: 'qa', stageName: 'QA', stageIndex: 1 },
+      originalRequest: 'do the thing',
+      stageOutput: withConfidence('low'),
+    });
+    const scope = auditScopeBefore(1, ['Design', 'QA'], [false, false], handoffConfidenceByStage([h]));
+    expect(scope.map((s) => s.name)).toEqual(['Design']);
+    expect(scope[0].confidence).toBe('low');
+  });
+
+  test('the stripped reply admits nothing — the shipped behaviour', async () => {
+    const h = await createHandoffContext({
+      from: { role: 'architecture', stageName: 'Design', stageIndex: 0 },
+      to: { role: 'qa', stageName: 'QA', stageIndex: 1 },
+      originalRequest: 'do the thing',
+      stageOutput: stripHandoffBlock(withConfidence('low')),
+    });
+    expect(h.confidence).toBeUndefined();
+    expect(auditScopeBefore(1, ['Design', 'QA'], [false, false], handoffConfidenceByStage([h]))).toEqual([]);
+  });
+});
+
+describe('the fence never leaks into prose-derived fields', () => {
+  // Handing the RAW reply to `createHandoffContext` is what makes the
+  // structured parse work — and it put the JSON block in front of every prose
+  // fallback at the same time. A block that omits `completedWork` used to fall
+  // back to summarizing the whole raw reply, rendering the fence itself into the
+  // next stage's prompt, and `buildInstructions` scanned it for error words.
+  const rawWithPartialBlock = [
+    'Ran the suite and everything is green.',
+    '',
+    '```handoff',
+    JSON.stringify({ decisions: ['kept the old parser'], openQuestions: ['what about failure modes?'] }),
+    '```',
+  ].join('\n');
+
+  test('a missing completedWork summarizes the prose, not the block', async () => {
+    const h = await createHandoffContext({
+      from: { role: 'coding', stageName: 'Implement', stageIndex: 0 },
+      to: { role: 'qa', stageName: 'QA', stageIndex: 1 },
+      originalRequest: 'run the suite',
+      stageOutput: rawWithPartialBlock,
+    });
+    expect(h.completedWork).not.toContain('```handoff');
+    expect(h.completedWork).not.toContain('openQuestions');
+    expect(h.completedWork).toContain('Ran the suite');
+  });
+
+  test('the structured fields still come from the block', async () => {
+    const h = await createHandoffContext({
+      from: { role: 'coding', stageName: 'Implement', stageIndex: 0 },
+      to: { role: 'qa', stageName: 'QA', stageIndex: 1 },
+      originalRequest: 'run the suite',
+      stageOutput: rawWithPartialBlock,
+    });
+    expect(h.decisions).toEqual(['kept the old parser']);
+  });
+
+  test('a word inside the block does not raise a spurious error note', async () => {
+    const h = await createHandoffContext({
+      from: { role: 'coding', stageName: 'Implement', stageIndex: 0 },
+      to: { role: 'qa', stageName: 'QA', stageIndex: 1 },
+      originalRequest: 'run the suite',
+      stageOutput: rawWithPartialBlock,
+    });
+    // The prose says everything is green; only the block mentions "failure".
+    expect(h.instructions.toLowerCase()).not.toContain('contains errors');
   });
 });
