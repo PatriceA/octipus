@@ -128,7 +128,14 @@ async function main(): Promise<void> {
     // already held an answer from the last run, and the assertion below matched
     // it instantly — a green check for a turn that never happened.
     await page.getByText('new', { exact: true }).first().click();
+    // `new` opens a mode dialog; the session only exists once it is confirmed.
+    // Skipping that left the dialog open over a composer the run then typed
+    // into — it worked, and it was not what a user does.
+    const confirm = page.getByRole('button', { name: /create session/i });
+    await confirm.waitFor({ timeout: 15_000 });
+    await confirm.click();
     await page.waitForSelector('textarea:not([disabled])', { timeout: 30_000 });
+    await page.waitForSelector('text=/create session/i', { state: 'detached', timeout: 15_000 });
   });
 
   await record('chat turn end to end', async () => {
