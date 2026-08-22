@@ -79,11 +79,22 @@ const IGNORED_SUFFIXES = ['.pyc', '.pyo', '.class', '.o'];
 /**
  * A built package is by-product or deliverable depending on WHERE it lands.
  * `python -m build` puts it in `dist/`, which stays counted so a stage whose
- * job is to produce a package still has to show it; a wheel dropped beside the
- * source is what a verification stage leaves behind on its way to an isolated
- * install, and counting it fails the stage for doing its job.
+ * job is to produce a package still has to show it; a package dropped beside
+ * the source is what a verification stage leaves behind on its way to an
+ * isolated install, and counting it fails the stage for doing its job.
+ *
+ * `dist/` and `build/` staying counted is the deliberate half of the rule, not
+ * a gap: exempting them everywhere would let a stage declared
+ * `producesArtifacts` pass having built nothing, since a shell-built package
+ * raises no tool counter either.
+ *
+ * The sdist belongs here for the same reason its wheel does — `pip wheel .`
+ * and `python -m build --sdist --outdir .` differ only in which archive they
+ * leave in the working directory, and failing one but not the other is an
+ * inconsistency in one rule rather than two decisions. Kept to the exact
+ * source-archive suffix: a bare `.zip` is not evidence of packaging.
  */
-const PACKAGE_SUFFIXES = ['.whl', '.egg'];
+const PACKAGE_SUFFIXES = ['.whl', '.egg', '.tar.gz'];
 const DELIVERABLE_DIRS = new Set(['dist', 'build']);
 
 function isPackageByProduct(relPath: string): boolean {

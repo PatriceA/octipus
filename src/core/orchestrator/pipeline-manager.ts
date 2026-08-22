@@ -453,6 +453,27 @@ export function stageEvidenceFailure(
 }
 
 /**
+ * The declaration a verdict-CORRECTION visit is judged against.
+ *
+ * `qaVerdictCorrectionInput` tells the auditor to run nothing, re-read nothing
+ * and change nothing: the work already stands, only the report's shape is
+ * wrong. The stage's own declaration still says `runsCommands` — `QA
+ * Validation` and `Verify Fix` both declare it — so the evidence gate then
+ * fails the visit for doing exactly what it was told, and a failed gate aborts
+ * the whole pipeline. The cheap correction path killed the run it exists to
+ * rescue.
+ *
+ * Only the do-something declarations are cleared, and only for this one visit;
+ * the stage's own declaration is untouched and a later re-audit is gated in
+ * full. `readOnly` is deliberately KEPT, and is the one that should still bite:
+ * a correction that edits the code it already judged has invalidated the very
+ * verdict it is correcting.
+ */
+export function correctionDeclaration<T extends StageDeclaration & { producesPlan?: boolean }>(declared: T): T {
+  return { ...declared, producesArtifacts: false, runsCommands: false, producesPlan: false };
+}
+
+/**
  * Everything the graph walker carries that no table already holds.
  *
  * Node outputs, plan items and edge traversal totals are durable on their own
@@ -998,7 +1019,9 @@ export class PipelineManager {
         const stepResult = await this.runStepNode({
           pipeline,
           node,
-          declared: b,
+          // A correction visit is told to run and change nothing, so it is not
+          // judged against declarations it was just forbidden to satisfy.
+          declared: correcting ? correctionDeclaration(b) : b,
           stageTemplate,
           input,
           stageContext: handoffText || previousOutput,

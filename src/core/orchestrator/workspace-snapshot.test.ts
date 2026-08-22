@@ -85,6 +85,39 @@ describe('snapshotWorkspace', () => {
     expect(countChangedFiles(before, after)).toBe(0);
   });
 
+  test('an sdist beside the source is by-product too, same as its wheel', async () => {
+    // `pip wheel .` and `python -m build --sdist --outdir .` differ only in
+    // which archive they leave behind; failing one and not the other is one
+    // rule applied inconsistently.
+    await writeFile(join(root, 'slugify.py'), 'def slugify(): ...');
+    const before = await snapshotWorkspace(root);
+
+    await writeFile(join(root, 'strkit-0.1.0.tar.gz'), 'gzip');
+    const after = await snapshotWorkspace(root);
+
+    expect(countChangedFiles(before, after)).toBe(0);
+  });
+
+  test('an sdist BUILT INTO dist/ is a deliverable and still counts', async () => {
+    await writeFile(join(root, 'pyproject.toml'), '[project]');
+    const before = await snapshotWorkspace(root);
+
+    await mkdir(join(root, 'dist'), { recursive: true });
+    await writeFile(join(root, 'dist', 'strkit-0.1.0.tar.gz'), 'gzip');
+    const after = await snapshotWorkspace(root);
+
+    expect(countChangedFiles(before, after)).toBe(1);
+  });
+
+  test('a plain archive is not packaging evidence and still counts', async () => {
+    await writeFile(join(root, 'slugify.py'), 'v1');
+    const before = await snapshotWorkspace(root);
+    await writeFile(join(root, 'backup.zip'), 'zip');
+    const after = await snapshotWorkspace(root);
+
+    expect(countChangedFiles(before, after)).toBe(1);
+  });
+
   test('a wheel BUILT INTO dist/ is a deliverable and still counts', async () => {
     // The other half of the rule: pruning packages by suffix everywhere would
     // let a stage declared `producesArtifacts` pass having built nothing, since

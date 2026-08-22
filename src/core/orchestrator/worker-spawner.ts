@@ -38,6 +38,28 @@ import { formatDateTimeContext } from '@/utils/date-context';
 const AGENTS_MD_GUIDE_TOKEN_BUDGET = 2000;
 
 /**
+ * The caller metadata a spawned stage worker inherits — the two pipeline keys,
+ * and nothing else.
+ *
+ * Only `pipelineId`/`nodeKey` are read downstream (`src/tools/plan`), but
+ * `context.metadata` is the ORCHESTRATOR's, and carries more than that:
+ * `isSystemUser` bypasses tool permission checks, `isAdmin` widens gateway
+ * authority, and `originalRequest` re-seeds a worker's drift detector with the
+ * parent's vocabulary, weakening the very guard that is supposed to notice the
+ * worker wandering off its own task. Forwarding the whole object hands every
+ * one of those to every stage worker, and would hand over any privilege flag a
+ * future caller adds without anybody choosing to.
+ *
+ * Copied key by key so the escalation is opt-in rather than opt-out.
+ */
+export function pipelineMetadata(metadata: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!metadata) return undefined;
+  const { pipelineId, nodeKey } = metadata as Record<string, unknown>;
+  if (pipelineId === undefined && nodeKey === undefined) return undefined;
+  return { ...(pipelineId !== undefined && { pipelineId }), ...(nodeKey !== undefined && { nodeKey }) };
+}
+
+/**
  * Optional swarm wiring for `spawnWorker`. When provided, the worker is
  * registered as a depth-1 agent node under the supplied parent (typically
  * the orchestrator), so it shows up in the swarm tree UI, and is given the
@@ -1078,7 +1100,7 @@ Use these MCP tools when the task benefits from them — especially for people-r
     // forwarding them the agent's own metadata is empty and the `plan` tool
     // answers "Not running inside a pipeline" — which silently disables every
     // `producesPlan`/`loopOverPlan` (foreach) stage.
-    contextMetadata: context.metadata,
+    contextMetadata: pipelineMetadata(context.metadata),
   });
 
   const workerId = worker.getContext().id;
@@ -1444,7 +1466,7 @@ async function handleWorkerFailure(
       tools: respawnCtx.tools,
       toolAdvertisement: respawnCtx.toolAdvertisement,
       maxTokenBudget: respawnCtx.maxTokenBudget,
-      contextMetadata: context.metadata,
+      contextMetadata: pipelineMetadata(context.metadata),
     });
     const workerMessage = input
       ? `${task}\n\n--- Context from previous steps ---\n${input}`

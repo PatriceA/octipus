@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, spyOn, test } from 'bun:test';
 import { emptyCounters } from '@/core/swarm/receipt';
-import { PipelineManager, stageEvidenceFailure } from './pipeline-manager';
+import { PipelineManager, correctionDeclaration, stageEvidenceFailure } from './pipeline-manager';
 import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
 import { planProducesArtifactsBackfill } from '@/db/seed-presets';
 import { snapshotWorkspace } from './workspace-snapshot';
@@ -374,5 +374,26 @@ describe('PipelineManager.assertStageEvidence', () => {
     // … and still fails a bad one.
     await expect(call({ declared: { producesArtifacts: true }, counters: counters() })).rejects.toThrow();
     spy.mockRestore();
+  });
+});
+
+describe('correctionDeclaration', () => {
+  // A rejected VERDICT is corrected, not re-audited: the auditor is told to run
+  // nothing and change nothing. Judging that visit against `runsCommands` fails
+  // it for obeying, and a failed evidence gate aborts the whole pipeline.
+  const qa = { producesArtifacts: true, runsCommands: true, readOnly: true, producesPlan: true };
+
+  test('a correction visit that runs nothing passes the gate', () => {
+    expect(stageEvidenceFailure(qa, counters())).not.toBeNull();
+    expect(stageEvidenceFailure(correctionDeclaration(qa), counters())).toBeNull();
+  });
+
+  test('read-only still bites — a correction may not edit what it judged', () => {
+    expect(stageEvidenceFailure(correctionDeclaration(qa), counters(), 1)).toContain('read-only');
+  });
+
+  test('the stage declaration itself is untouched, so a re-audit is gated in full', () => {
+    correctionDeclaration(qa);
+    expect(qa.runsCommands).toBe(true);
   });
 });
