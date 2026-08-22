@@ -268,8 +268,14 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
         if (running === 0) {
           return { text: 'No running agents to stop.' };
         }
-        agentManager.stopAll();
-        return { text: `Stopped ${running} running agent(s).` };
+        // Not `silenceListeners`: this process keeps running, and its
+        // subscribers are the UI's event stream.
+        const { stillRunning } = await agentManager.stopAll();
+        return {
+          text: stillRunning > 0
+            ? `Stopped ${running} running agent(s); ${stillRunning} did not wind down in time.`
+            : `Stopped ${running} running agent(s).`,
+        };
       } catch {
         return { text: 'Error stopping agents.' };
       }

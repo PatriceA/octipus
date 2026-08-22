@@ -391,19 +391,59 @@ export class AgentManager {
   }
 
   /**
-   * Stop all running agents (used during shutdown)
+   * Stop all running agents and WAIT for them to be gone (used during
+   * shutdown).
+   *
+   * Disposing has to reach quiescence, not merely request it. `stop()` asks a
+   * worker to wind down — it does not mean the worker has stopped, and for a
+   * CLI-backed worker it does not mean the child process has exited. Returning
+   * immediately let the rest of the teardown run against workers still mid-tool,
+   * which is how a killed run can still write a row after the thing that would
+   * have recorded it is gone.
+   *
+   * `silenceListeners` drops subscribers FIRST, so a completion landing during
+   * the wait is silent rather than fanning out into registries that are already
+   * being torn down. It is OFF by default and belongs to process shutdown only:
+   * the live `/stop-all` command stops agents in a process that keeps running,
+   * and clearing its subscribers there would leave the UI stream dead for good.
+   *
+   * Bounded: shutdown has its own force-exit watchdog and must never wait on a
+   * worker that will not go.
    */
-  stopAll(): void {
+  async stopAll(
+    opts: { timeoutMs?: number; silenceListeners?: boolean } = {},
+  ): Promise<{ stopped: number; stillRunning: number }> {
+    const timeoutMs = opts.timeoutMs ?? 1500;
+
+    if (opts.silenceListeners) this.eventHandlers.clear();
+
+    let stopped = 0;
     for (const [id, agent] of this.agents) {
       if (agent.getStatus() === 'running') {
         try {
           agent.stop();
+          stopped++;
           agentLogger.info({ agentId: id }, 'Agent stopped during shutdown');
         } catch {
           // Best effort
         }
       }
     }
+
+    const running = (): string[] =>
+      [...this.agents.entries()].filter(([, a]) => a.getStatus() === 'running').map(([id]) => id);
+
+    const deadline = Date.now() + timeoutMs;
+    let left = running();
+    while (left.length > 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 25));
+      left = running();
+    }
+    if (left.length > 0) {
+      agentLogger.warn({ agentIds: left.slice(0, 10), count: left.length, timeoutMs },
+        'Agents still running after stop — shutdown continuing without them');
+    }
+    return { stopped, stillRunning: left.length };
   }
 
   /**

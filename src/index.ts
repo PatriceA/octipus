@@ -373,8 +373,8 @@ async function main() {
       try {
         const { getAgentManager } = await import('@/core/agent-manager');
         const agentManager = getAgentManager();
-        agentManager.stopAll();
-        logger.info('All agents stopped');
+        const { stopped, stillRunning } = await agentManager.stopAll({ silenceListeners: true });
+        logger.info({ stopped, stillRunning }, 'Agents stopped');
       } catch {
         // Agent manager may not be initialized
       }
