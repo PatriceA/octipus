@@ -65,9 +65,11 @@ command that must pass (`{"kind":"command_exit_zero","command":"npm test"}`) —
 that last one is the only check that settles "done" by running something
 instead of reading what the child said about it.
 
-A `contract_failed` that reaches you has therefore **already been retried once
-and failed again**. Treat it as a real, twice-observed failure: say what failed,
-do not re-spawn it yourself.
+A `contract_failed` that reaches you has, on the default configuration,
+**already been re-dispatched once and failed again**. Treat it as a settled
+failure: say what failed and what the check said, and do not re-spawn it
+yourself — the framework owns that retry, so a second one from you is a third
+attempt at something already tried twice.
 
 ### Read-only analysis requests
 

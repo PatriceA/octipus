@@ -48,7 +48,7 @@ function gateFailed(reason = 'file "notes.md" does not exist'): ChildResult {
  */
 async function runWith(
   results: ChildResult[],
-  opts: { tokenCap?: number; tokensUsed?: number } = {},
+  opts: { tokenCap?: number; tokensUsed?: number; wallCap?: number; startedAt?: number } = {},
 ): Promise<{ final: ChildResult; messages: string[]; calls: number }> {
   const spawner = new SwarmSpawner({} as never);
   const messages: string[] = [];
@@ -74,7 +74,7 @@ async function runWith(
     childTools: [],
     budget: {
       tokens: { cap: opts.tokenCap ?? 80_000, used: opts.tokensUsed ?? 0 },
-      wallClockMs: { cap: 600_000, startedAt: Date.now() },
+      wallClockMs: { cap: opts.wallCap ?? 600_000, startedAt: opts.startedAt ?? Date.now() },
       fanOut: { cap: 4, used: 0 },
       depth: 1,
     },
@@ -214,6 +214,35 @@ describe('SwarmSpawner — contract retry (through runChildWithRetry)', () => {
 
     expect(final.usedTokens).toBe(3_000);
     expect(final.discardedTokens).toBe(5_000);
+  });
+
+  it('counts what earlier attempts already burned, not just the last one', async () => {
+    // A crash retry and a backup-model attempt run BEFORE this loop and come
+    // out of the same pool. Seeding the guard from the surviving attempt alone
+    // let a contract retry start against a pool three attempts had emptied.
+    const crashed = result({ status: 'tool_error', usedTokens: 30_000 });
+    const gate = gateFailed();
+    gate.usedTokens = 30_000;
+    const { final, calls } = await runWith([crashed, gate, result()], { tokenCap: 62_000 });
+
+    // Attempt 1 crashed (30k), attempt 2 is the crash retry and fails its gate
+    // (30k). 60k of a 62k cap is gone, leaving less than MIN_CHILD_TOKENS, so
+    // no contract retry may start. Counting only the survivor would see 30k
+    // spent, read 32k as available, and start a third attempt.
+    expect(calls).toBe(2);
+    expect(final.status).toBe('contract_failed');
+  });
+
+  it('stops when the wall clock is spent, even with tokens left', async () => {
+    // Wall clock does not cascade: every attempt gets a fresh full cap, so a
+    // token-only guard still permits an unbounded wait on an awaited spawn.
+    const { final, calls } = await runWith([gateFailed(), result()], {
+      wallCap: 60_000,
+      startedAt: Date.now() - 61_000,
+    });
+
+    expect(calls).toBe(1);
+    expect(final.status).toBe('contract_failed');
   });
 
   it('leaves a passing child alone', async () => {

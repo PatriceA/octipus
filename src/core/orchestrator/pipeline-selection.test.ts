@@ -90,7 +90,7 @@ describe('the delegation prompt and the spawn surfaces agree', () => {
     // sentence the root reads "checks trigger a retry" next to "never respawn"
     // and has to guess which governs.
     expect(delegationPrompt).toMatch(/No respawn/i);
-    expect(delegationPrompt).toMatch(/already been retried/i);
+    expect(delegationPrompt).toMatch(/already been re-dispatched/i);
   });
 
   test('every scorer example in the prompt survives the real parser', () => {

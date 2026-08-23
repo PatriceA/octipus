@@ -7,6 +7,7 @@ import {
   deriveCodeDiffScorer,
   deriveSchemaScorer,
   deriveToolOutageScorer,
+  formatCommandOutput,
   parseScorers,
   runScorers,
 } from './scorers';
@@ -502,7 +503,7 @@ describe('command_exit_zero — execution', () => {
     const out = await runScorers(
       [{ kind: 'command_exit_zero', command: 'true' }],
       { output: 'x' },
-      {},
+      { canRunCommands: true },
     );
     expect(out.passed).toBe(true);
   });
@@ -513,7 +514,7 @@ describe('command_exit_zero — execution', () => {
     const out = await runScorers(
       [{ kind: 'command_exit_zero', command: 'ls /definitely/not/here' }],
       { output: 'x' },
-      {},
+      { canRunCommands: true },
     );
     expect(out.passed).toBe(false);
     expect(out.failures[0].scorer).toMatch(/^command_exit_zero\(/);
@@ -528,7 +529,7 @@ describe('command_exit_zero — execution', () => {
     const out = await runScorers(
       [{ kind: 'command_exit_zero', command: 'true; echo pwned > /tmp/x' }],
       { output: 'x' },
-      {},
+      { canRunCommands: true },
     );
     expect(out.passed).toBe(false);
     expect(out.failures[0].reason).toMatch(/did not run/);
@@ -538,7 +539,7 @@ describe('command_exit_zero — execution', () => {
     const out = await runScorers(
       [{ kind: 'command_exit_zero', command: 'octipus-no-such-binary' }],
       { output: 'x' },
-      {},
+      { canRunCommands: true },
     );
     expect(out.passed).toBe(false);
   });
@@ -547,8 +548,93 @@ describe('command_exit_zero — execution', () => {
     const out = await runScorers(
       [{ kind: 'command_exit_zero', command: 'sleep 5', timeoutMs: 300 }],
       { output: 'x' },
-      {},
+      { canRunCommands: true },
     );
     expect(out.passed).toBe(false);
   }, 20_000);
+});
+
+describe('command_exit_zero — who may run one', () => {
+  it('REFUSES to run for a child that does not hold the shell tool', async () => {
+    // Otherwise a scorer is a way to run commands as a role the operator
+    // deliberately kept away from them. `true` would succeed here if it ran.
+    const out = await runScorers([{ kind: 'command_exit_zero', command: 'true' }], { output: 'x' }, {});
+    expect(out.passed).toBe(false);
+    expect(out.failures[0].reason).toMatch(/does not hold the shell tool/);
+  });
+
+  it('treats an unstated capability as absent, not as permitted', async () => {
+    const out = await runScorers(
+      [{ kind: 'command_exit_zero', command: 'true' }],
+      { output: 'x' },
+      { userId: 'system' },
+    );
+    expect(out.passed).toBe(false);
+  });
+});
+
+describe('command_exit_zero — the shell tool’s content policy applies', () => {
+  it('refuses a denylisted command', async () => {
+    const out = await runScorers(
+      [{ kind: 'command_exit_zero', command: 'shutdown now' }],
+      { output: 'x' },
+      { canRunCommands: true },
+    );
+    expect(out.passed).toBe(false);
+    expect(out.failures[0].reason).toMatch(/Blocked command detected/);
+  });
+
+  it('refuses an elevated command outright — a gate never needs sudo', async () => {
+    const out = await runScorers(
+      [{ kind: 'command_exit_zero', command: 'sudo npm test' }],
+      { output: 'x' },
+      { canRunCommands: true },
+    );
+    expect(out.passed).toBe(false);
+    expect(out.failures[0].reason).toMatch(/elevated permission/);
+  });
+});
+
+describe('command_exit_zero — the failure has to be actionable', () => {
+  it('names a timeout rather than reporting "exited null"', async () => {
+    // A killed process has a null exit code, so without this the retry brief
+    // would say `exited null` and name no defect at all.
+    const out = await runScorers(
+      [{ kind: 'command_exit_zero', command: 'sleep 5', timeoutMs: 300 }],
+      { output: 'x' },
+      { canRunCommands: true },
+    );
+    expect(out.passed).toBe(false);
+    expect(out.failures[0].reason).toMatch(/timed out after 300ms/);
+    expect(out.failures[0].reason).not.toMatch(/exited null/);
+  });
+
+  it('keeps the END of a long output, where the failure is', () => {
+    // A test runner's first 2k is banner and passing cases; the failure, the
+    // stack and the summary are all at the tail. Head-truncation would quote
+    // the retry exactly the part that says nothing went wrong.
+    //
+    // Asserted on the formatter rather than through a real command: a failing
+    // process with >2k of output cannot be expressed as the bare argv this
+    // scorer accepts, and a test that cannot state its input precisely proves
+    // less than one that can.
+    const long = `HEAD-BANNER-MARKER\n${'passing test\n'.repeat(400)}FAILURE: the assertion at the end`;
+    const text = formatCommandOutput(long, '');
+    expect(text).toContain('FAILURE: the assertion at the end');
+    expect(text).toContain('earlier chars omitted');
+    // The head is what gets dropped — a head-truncating formatter would keep
+    // this marker and lose the failure.
+    expect(text).not.toContain('HEAD-BANNER-MARKER');
+    expect(text.endsWith(long.slice(-2000))).toBe(true);
+  });
+
+  it('leads with stderr, where a build writes its diagnosis', () => {
+    expect(formatCommandOutput('ordinary progress', 'the real error')).toMatch(
+      /the real error[\s\S]*ordinary progress/,
+    );
+  });
+
+  it('says so when a failing command printed nothing', () => {
+    expect(formatCommandOutput('', '')).toBe(' with no output');
+  });
 });

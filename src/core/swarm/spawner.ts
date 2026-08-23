@@ -837,11 +837,15 @@ export class SwarmSpawner {
             'Swarm child failed on primary model — retrying once on topic backup model',
           );
           noteFailure(lastResult);
-          discardedTokens += lastResult.usedTokens ?? 0;
+          // Charged only once the replacement actually returns. Adding it
+          // before the await double-counts when the spawn throws, because the
+          // catch below hands the SAME result back as `lastResult`.
+          const supersededTokens = lastResult.usedTokens ?? 0;
           lastResult = await this.singleSpawnAndRun(
             { ...opts, childModel: backup.modelId, reason: 'retry' },
             true,
           );
+          discardedTokens += supersededTokens;
         }
       } catch (backupErr) {
         coreLogger.warn(
@@ -862,7 +866,15 @@ export class SwarmSpawner {
     // path would not respawn a wandering child, and blanket-retrying the
     // status would reintroduce that bug from the other side. The gate is the
     // presence of scorer failures, which a drift abort never carries.
-    const contractRetry = await this.retryOnContractFailure(opts, lastResult, noteFailure);
+    const contractRetry = await this.retryOnContractFailure(
+      opts,
+      lastResult,
+      noteFailure,
+      // Everything the crash retry and the backup-model attempt already burned.
+      // Seeding from the surviving attempt alone would let a contract retry
+      // start against a pool three attempts have emptied.
+      discardedTokens,
+    );
     lastResult = contractRetry.result;
     discardedTokens += contractRetry.discardedTokens;
 
@@ -900,7 +912,10 @@ export class SwarmSpawner {
    * 2. **The feedback must be renderable.** A retry prompt that names no defect
    *    asks the child to guess; `renderContractFeedback` returns null and we
    *    stop instead.
-   * 3. **The attempts so far must leave room for another.** Counted from what
+   * 3. **The wall clock must not already be spent.** Each attempt is handed a
+   *    fresh full wall cap because wall clock does not cascade, so without this
+   *    a bounded token budget still permits an unbounded wait.
+   * 4. **The attempts so far must leave room for another.** Counted from what
    *    the attempts actually reported, NOT from `budget.tokens.used`: a child's
    *    budget is derived fresh per spawn and its `used` stays 0 for the node's
    *    whole life (`deriveChildBudget`; only a PARENT's is reconciled, by
@@ -918,6 +933,7 @@ export class SwarmSpawner {
     opts: Parameters<SwarmSpawner['runChildWithRetry']>[0],
     initial: ChildResult | null,
     noteFailure: (r: ChildResult) => void,
+    alreadySpent = 0,
   ): Promise<{ result: ChildResult | null; discardedTokens: number }> {
     let result = initial;
     let discardedTokens = 0;
@@ -934,7 +950,7 @@ export class SwarmSpawner {
     // What every attempt so far actually consumed. The child's own budget
     // object is not a running total (see the doc comment), so the loop keeps
     // its own.
-    let spent = result?.usedTokens ?? 0;
+    let spent = alreadySpent + (result?.usedTokens ?? 0);
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       if (!result || result.status !== 'contract_failed') break;
@@ -947,6 +963,19 @@ export class SwarmSpawner {
         coreLogger.warn(
           { parentNodeId: opts.parent.id, remaining, spent, attempt },
           'Swarm child contract retry skipped — token pool exhausted',
+        );
+        break;
+      }
+
+      // Wall clock does NOT cascade — each attempt is handed a fresh full cap
+      // (`deriveChildBudget`), so nothing else stops a sequence of retries from
+      // running several times the child's wall budget. The parent is awaiting
+      // this, and a caller that asked for one child should not wait an hour.
+      const elapsed = Date.now() - opts.budget.wallClockMs.startedAt;
+      if (elapsed >= opts.budget.wallClockMs.cap) {
+        coreLogger.warn(
+          { parentNodeId: opts.parent.id, elapsed, cap: opts.budget.wallClockMs.cap, attempt },
+          'Swarm child contract retry skipped — wall-clock budget spent',
         );
         break;
       }
@@ -1401,7 +1430,15 @@ export class SwarmSpawner {
       const outcome = await runScorers(
         effectiveScorers,
         { output: result.output, notes: result.notes, receipt: result.receipt },
-        { userId: opts.parentContext.userId, filesTouched },
+        {
+          userId: opts.parentContext.userId,
+          filesTouched,
+          // `command_exit_zero` may only run for a child that already holds the
+          // shell tool. Read from the resolved toolset rather than the role
+          // name, since that is what the child actually got after the
+          // parent-intersection and the small-model cap.
+          canRunCommands: opts.childTools.some((t) => t.toolId === 'shell' || t.name.startsWith('shell__')),
+        },
       );
       result.scorerOutcome = outcome;
       if (!outcome.passed) {

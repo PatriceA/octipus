@@ -20,6 +20,7 @@
 
 import { existsSync } from 'node:fs';
 import { WorkspaceFS } from '@/security/workspace-fs';
+import { commandPolicyViolation, matchElevatedCommand } from '@/tools/shell/policy';
 import { coreLogger } from '@/utils/logger';
 import type { SwarmReceipt } from './receipt';
 
@@ -69,15 +70,28 @@ export type Scorer =
    * Deliberately constrained, because the command comes from a parent LLM
    * whose context can include untrusted tool and web output:
    *
-   * - Run through `LocalShellOperations` in SAFE mode, so `tokenizeSafe`
-   *   rejects every shell metacharacter (`;`, `&`, `|`, redirects, `$()`,
-   *   backticks, newlines, brace expansion). A verification command is an
-   *   argv — anything needing a pipeline is not one.
-   * - `cwd` is resolved through `WorkspaceFS`, the same sandbox `file_exists`
-   *   uses, so it cannot reach outside the child's workspace.
-   * - Network-isolated and process-sandboxed by the same wrapper the shell
-   *   tool gets.
+   * - **Only for a child that already holds the shell tool.** A gate must not
+   *   be a way to run commands as a role the operator kept away from them, so
+   *   a `research` or `writing` child fails this scorer instead of executing
+   *   it (`ScorerContext.canRunCommands`).
+   * - **The shell tool's own content policy**, shared from `tools/shell/policy`
+   *   rather than copied: the same denylist and injection patterns, plus an
+   *   outright refusal of anything `ELEVATED_COMMANDS` matches. A verification
+   *   command never needs `sudo`, and the elevated path is DENY-by-default for
+   *   the tool precisely because nothing should reach it unreviewed.
+   * - **SAFE mode**, so `tokenizeSafe` rejects every shell metacharacter (`;`,
+   *   `&`, `|`, redirects, `$()`, backticks, newlines, brace expansion). A
+   *   verification command is an argv; anything needing a pipeline is not one.
+   * - `cwd` resolved through `WorkspaceFS`, the resolver `file_exists` uses, so
+   *   it cannot reach outside the child's workspace.
    * - Hard timeout; a check that hangs is a failed check, not a hung run.
+   *
+   * What it does NOT get, stated because the opposite is easy to assume: the
+   * process sandbox is `security.shellSandbox`, which defaults to `'off'`. When
+   * it is off this runs unwrapped and unisolated, exactly like the shell tool.
+   * It does not go through the tool's ASK-level `execute` permission either —
+   * the capability gate above is what stands in for that, and it is a coarser
+   * instrument.
    */
   | { kind: 'command_exit_zero'; command: string; timeoutMs?: number };
 
@@ -157,6 +171,22 @@ export const MAX_COMMAND_SCORER_LEN = 500;
 const MAX_COMMAND_OUTPUT_CHARS = 2_000;
 
 /**
+ * Quote a failing command's output into the failure reason, keeping the END.
+ *
+ * The reason text is what the contract retry puts in front of the next attempt,
+ * so which 2k is kept decides whether the retry can act. A test runner's or
+ * compiler's first 2k is banner, config and passing cases; the failure, the
+ * stack and the summary are all at the tail. `stderr` leads because a build that
+ * writes both put the diagnosis there.
+ */
+export function formatCommandOutput(stdout: string, stderr: string): string {
+  const text = [stderr?.trim(), stdout?.trim()].filter(Boolean).join('\n').trim();
+  if (!text) return ' with no output';
+  if (text.length <= MAX_COMMAND_OUTPUT_CHARS) return `:\n${text}`;
+  return `:\n…(${text.length - MAX_COMMAND_OUTPUT_CHARS} earlier chars omitted)\n${text.slice(-MAX_COMMAND_OUTPUT_CHARS)}`;
+}
+
+/**
  * Reject regex patterns prone to catastrophic backtracking (ReDoS). The
  * scorer pattern comes from the parent LLM, whose context can include
  * untrusted tool/web output — a malicious pattern like `(a+)+$` could hang
@@ -184,6 +214,13 @@ export interface ScorableResult {
  *  filesystem evidence the spawner measured around the child's run. */
 export interface ScorerContext {
   userId?: string;
+  /**
+   * Whether the child holds the shell tool. Gates `command_exit_zero`: a scorer
+   * that ran commands for a role without shell access would be a way around the
+   * role's toolset rather than a check on its output. Absent (`undefined`) reads
+   * as NOT allowed — a gate whose authority cannot be established must not run.
+   */
+  canRunCommands?: boolean;
   /**
    * Files that actually differ in the workspace across the child's run, from
    * `workspace-snapshot.ts`. `null` = not measured (no file-aware scorer asked
@@ -387,22 +424,44 @@ async function evaluate(
     }
 
     case 'command_exit_zero': {
-      // Workspace first: the same sandbox resolver `file_exists` uses. `'.'`
-      // is the workspace root, so a command can never be pointed elsewhere.
+      const label = `command_exit_zero(${truncate(scorer.command, 40)})`;
+
+      // Capability first, before anything is resolved or run. A child without
+      // the shell tool must not gain command execution by way of a gate.
+      if (!ctx.canRunCommands) {
+        return {
+          scorer: label,
+          reason:
+            'this child does not hold the shell tool, so the command was not run — ' +
+            'attach this scorer only to a role that runs commands',
+        };
+      }
+
+      // The shell tool's content policy, shared rather than restated.
+      const violation = commandPolicyViolation(scorer.command);
+      if (violation) return { scorer: label, reason: `refused: ${violation}` };
+      const elevated = matchElevatedCommand(scorer.command);
+      if (elevated) {
+        return {
+          scorer: label,
+          reason:
+            `refused: "${elevated}" needs elevated permission, which a verification ` +
+            'gate never does',
+        };
+      }
+
+      // Workspace: the same sandbox resolver `file_exists` uses. `'.'` is the
+      // workspace root, so a command cannot be pointed elsewhere.
       const fs = WorkspaceFS.forAgent({ userId: ctx.userId });
       const cwd = fs.resolveOptional('.');
       if (!cwd) {
-        return {
-          scorer: 'command_exit_zero',
-          reason: 'the workspace could not be resolved, so the command was not run',
-        };
+        return { scorer: label, reason: 'the workspace could not be resolved, so the command was not run' };
       }
 
       const timeoutMs = Math.min(
         scorer.timeoutMs ?? DEFAULT_COMMAND_SCORER_TIMEOUT_MS,
         MAX_COMMAND_SCORER_TIMEOUT_MS,
       );
-      const label = `command_exit_zero(${truncate(scorer.command, 40)})`;
 
       // Imported here rather than at module scope: `scorers.ts` is imported by
       // the spawn path on every child, and the shell operations module pulls in
@@ -417,15 +476,16 @@ async function evaluate(
         });
         if (res.exitCode === 0) return null;
 
-        // Quote the output back — this is the text that ends up in the retry
-        // brief, and "exit 1" alone tells the next attempt nothing.
-        const out = `${res.stdout ?? ''}${res.stderr ?? ''}`.trim();
-        return {
-          scorer: label,
-          reason:
-            `exited ${res.exitCode}` +
-            (out ? `:\n${out.slice(0, MAX_COMMAND_OUTPUT_CHARS)}` : ' with no output'),
-        };
+        // How it ended, not just that it did. `exitCode` is null for a killed
+        // process, so a blown deadline would otherwise read "exited null" and
+        // the retry brief would name no defect at all.
+        const how = res.timedOut
+          ? `timed out after ${timeoutMs}ms`
+          : res.exitCode === null
+            ? `was killed${res.signal ? ` by ${res.signal}` : ''}`
+            : `exited ${res.exitCode}`;
+
+        return { scorer: label, reason: `${how}${formatCommandOutput(res.stdout, res.stderr)}` };
       } catch (err) {
         // A rejected command (metacharacters), a missing binary, or the
         // deadline. All are failed gates: the check did not pass, and a gate

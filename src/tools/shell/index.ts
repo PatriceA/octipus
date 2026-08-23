@@ -8,59 +8,10 @@ import { BaseTool, createParameterSchema } from '../base-tool';
 import { interpretExit } from './exit-code-semantics';
 import { LocalShellOperations } from './local-operations';
 import type { ShellOperations } from './operations';
+import { commandPolicyViolation, matchElevatedCommand } from './policy';
 
 const DEFAULT_TIMEOUT = 30000; // 30 seconds
 
-// Dangerous commands that should never be executed
-const BLOCKED_COMMANDS = [
-  'rm -rf /',
-  'rm -rf ~',
-  'rm -rf /*',
-  'mkfs',
-  ':(){:|:&};:',
-  'dd if=/dev/random',
-  'chmod -R 777 /',
-  'chmod 777 /',
-  // Data exfiltration / reverse shell tools
-  'nc ',
-  'nc -',
-  'ncat ',
-  'ncat -',
-  'netcat ',
-  'netcat -',
-  // Process management — prevent agents from killing Octipus or other processes
-  'shutdown',
-  'reboot',
-  'halt',
-  'poweroff',
-];
-
-// Commands that require elevated permissions
-const ELEVATED_COMMANDS = [
-  'sudo',
-  'su',
-  'chown',
-  'chmod',
-  'systemctl',
-  'service',
-  'apt',
-  'apt-get',
-  'yum',
-  'dnf',
-  'pacman',
-  'docker',
-  'podman',
-  'mount',
-  'umount',
-  'iptables',
-  'ip6tables',
-  'nft',
-  // Process management — prevent accidental self-kill
-  'kill',
-  'pkill',
-  'killall',
-  'xkill',
-];
 
 export class ShellTool extends BaseTool {
   readonly id = 'shell';
@@ -285,64 +236,15 @@ export class ShellTool extends BaseTool {
   }
 
   private validateCommand(command: string): void {
-    // Normalize runs of whitespace so trivial evasions of the denylist
-    // (`rm -rf  /`, tabs, newlines between tokens) still match.
-    const lowerCommand = command.toLowerCase().replace(/\s+/g, ' ');
+    // Content policy lives in `./policy` so the `command_exit_zero` scorer
+    // enforces the same denylist rather than a second copy of it.
+    const violation = commandPolicyViolation(command);
+    if (violation) throw new Error(violation);
 
-    // Check for blocked commands
-    for (const blocked of BLOCKED_COMMANDS) {
-      if (lowerCommand.includes(blocked.toLowerCase())) {
-        throw new Error(`Blocked command detected: ${blocked}`);
-      }
-    }
-
-    // Check for shell injection patterns
-    const injectionPatterns = [
-      /;\s*rm\s+/i,
-      /\|\s*rm\s+/i,
-      /`.*rm.*`/i,
-      /\$\(.*rm.*\)/i,
-      />\s*\/dev\/sd/i,
-      />\s*\/dev\/hd/i,
-      // Data exfiltration: piping output to network tools
-      /\|\s*curl\s+/i,
-      /\|\s*wget\s+/i,
-      /\|\s*nc\s+/i,
-      /\|\s*ncat\s+/i,
-      /\|\s*netcat\s+/i,
-      // Suspicious backtick command substitution (nested command execution)
-      /`[^`]*`.*`[^`]*`/i,
-      // Suspicious $(...) expansion piping to network tools
-      /\$\(.*\).*\|\s*(curl|wget|nc|ncat|netcat)\s/i,
-    ];
-
-    for (const pattern of injectionPatterns) {
-      if (pattern.test(command)) {
-        throw new Error('Potential command injection detected');
-      }
-    }
-
-    const elevated = this.matchElevatedCommand(command);
+    const elevated = matchElevatedCommand(command);
     if (elevated) {
       toolLogger.warn({ command: command.slice(0, 200), elevated }, 'Elevated command detected — requires elevated permission');
     }
-  }
-
-  /**
-   * Return the elevated keyword if the command invokes a privileged tool at
-   * the start of the line or after a pipe/`;`/`&&` separator, else null.
-   */
-  private matchElevatedCommand(command: string): string | null {
-    for (const elevated of ELEVATED_COMMANDS) {
-      const patterns = [
-        new RegExp(`^${elevated}\\b`, 'i'),
-        new RegExp(`\\|\\s*${elevated}\\b`, 'i'),
-        new RegExp(`;\\s*${elevated}\\b`, 'i'),
-        new RegExp(`&&\\s*${elevated}\\b`, 'i'),
-      ];
-      if (patterns.some((p) => p.test(command))) return elevated;
-    }
-    return null;
   }
 
   /**
@@ -353,7 +255,7 @@ export class ShellTool extends BaseTool {
    * `execute` permission like ordinary commands.
    */
   private resolvePermissionAction(command: string): string {
-    if (typeof command === 'string' && this.matchElevatedCommand(command)) {
+    if (typeof command === 'string' && matchElevatedCommand(command)) {
       return 'execute_elevated';
     }
     return 'execute';
