@@ -29,7 +29,7 @@ export const capabilities = pgTable('capabilities', {
   path: text('path'),
   /**
    * Installer dispatch kind for `octi capabilities install <id>`.
-   *   - `bun-exec`: runs `bunx <pkg> install` style
+   *   - `bun-exec`: runs `npx <pkg> install` style
    *   - `shell`: runs an arbitrary shell script (curl|bash, etc.)
    *   - `npm-build`: cd into a path, npm install + npm run build
    *   - `copy`: filesystem copy (e.g. browser extension)

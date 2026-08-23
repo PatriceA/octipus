@@ -101,7 +101,7 @@ describe('setup-wizard — buildEnv', () => {
 });
 
 /**
- * Rerun safety: a second `bun run setup` must reuse the existing MASTER_KEY,
+ * Rerun safety: a second `npm run setup` must reuse the existing MASTER_KEY,
  * not regenerate it — a fresh key orphans everything the vault has encrypted.
  * readExistingSecrets is the parse half; buildEnv round-trips back to it.
  */

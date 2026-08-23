@@ -63,7 +63,7 @@ export type GatewayEventType =
   // INTO `agent.spawned` / `agent.completed` / `pipeline.event` — so declaring
   // them here described a producer that by construction cannot exist. Same for
   // `status_update`, `typing`, `message` and `approval_required` below. All
-  // found by the generated event matrix (`bun run catalog`).
+  // found by the generated event matrix (`npm run catalog`).
   // Pipeline + team
   | 'pipeline.event'
   | 'team.started'
@@ -73,7 +73,7 @@ export type GatewayEventType =
   | 'swarm.node_completed'
   // NOTE: there is no `swarm.node_status`. It was declared here and documented
   // in three places as an intermediate progress update, and nothing ever
-  // emitted one — the generated event matrix (`bun run catalog`) is what
+  // emitted one — the generated event matrix (`npm run catalog`) is what
   // surfaced that. Retired rather than given a producer: nothing renders it
   // either, so writing one would be building a feature to satisfy a type. A
   // live worker's progress already travels as `agent.iteration` and

@@ -16,7 +16,7 @@ import {
 // /health/features) and the gateway (/health/live, /health/channels) stay
 // out of scope for the DB/Redis test slice.
 //
-// Run via:  bun run test:integration -- src/api/routes/health.test.ts
+// Run via:  npm run test:integration -- src/api/routes/health.test.ts
 
 describe.skipIf(!isIntegration)('Health API (Integration)', () => {
   let app: ElysiaLike;

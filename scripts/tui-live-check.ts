@@ -40,7 +40,7 @@ async function main(): Promise<void> {
   let out = '';
   const started = Date.now();
   // `script` gives the child a pty; -q quiet, -e propagate exit code, -c command.
-  const child = spawn('script', ['-qec', 'npx tsx src/tui-pi/index.ts', '/dev/null'], {
+  const child = spawn('script', ['-qec', 'npx tsx --import ./scripts/md-loader.mjs src/tui-pi/index.ts', '/dev/null'], {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   child.stdout.on('data', (d: Buffer) => { out += d.toString(); });

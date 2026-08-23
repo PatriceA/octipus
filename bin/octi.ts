@@ -126,7 +126,7 @@ async function delegateScript(scriptRelPath: string, args: string[]): Promise<ne
     process.stderr.write(`octi: script not found at ${scriptPath}\n`);
     process.exit(2);
   }
-  const code = await runInherit('npx', ['tsx', scriptPath, ...args], projectDir);
+  const code = await runInherit('npx', ['tsx', '--import', './scripts/md-loader.mjs', scriptPath, ...args], projectDir);
   process.exit(code);
 }
 

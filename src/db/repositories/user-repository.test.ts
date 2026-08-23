@@ -8,9 +8,9 @@ import {
 import type { UserRepository } from './user-repository';
 
 // Integration tests require a running Postgres (docker-compose.test.yml).
-// Enabled with INTEGRATION=1; otherwise the block is skipped so `bun test`
+// Enabled with INTEGRATION=1; otherwise the block is skipped so `npm test`
 // stays green without Docker. Run via:
-//   bun run test:integration -- src/db/repositories/user-repository.test.ts
+//   npm run test:integration -- src/db/repositories/user-repository.test.ts
 
 describe.skipIf(!isIntegration)('UserRepository (Integration)', () => {
   let repo: UserRepository;

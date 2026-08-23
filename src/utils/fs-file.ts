@@ -7,7 +7,7 @@
  * which is the whole of it: there is no caching, no pooling and no lifecycle.
  */
 import { createReadStream, existsSync, statSync } from 'node:fs';
-import { glob, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { glob, mkdir, open, readFile, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
 import { Readable } from 'node:stream';
 
@@ -38,8 +38,20 @@ export function fileAt(path: string): FileHandle {
     slice(start: number, end?: number) {
       return {
         async arrayBuffer() {
-          const buf = await readFile(path);
-          return toArrayBuffer(buf.subarray(start, end));
+          // Reads only the requested range. The obvious version — read the
+          // file, then `subarray` — loads a whole audio recording to fetch a
+          // 44-byte WAV header, which is what `src/voice/stt.ts` asks for.
+          const length = end === undefined ? undefined : Math.max(0, end - start);
+          const handle = await open(path, 'r');
+          try {
+            const size = (await handle.stat()).size;
+            const want = length ?? Math.max(0, size - start);
+            const buf = Buffer.alloc(Math.min(want, Math.max(0, size - start)));
+            if (buf.byteLength > 0) await handle.read(buf, 0, buf.byteLength, start);
+            return toArrayBuffer(buf);
+          } finally {
+            await handle.close();
+          }
         },
       };
     },

@@ -5,7 +5,7 @@ import { isIntegration, setupIntegrationDb, teardownIntegration, truncateTables 
 
 type ElysiaLike = { handle: (req: Request) => Promise<Response> };
 
-// DB-backed: run via `bun run test:integration -- src/api/routes/topics.test.ts`.
+// DB-backed: run via `npm run test:integration -- src/api/routes/topics.test.ts`.
 describe.skipIf(!isIntegration)('Topics API (Integration)', () => {
   let adminApp: ElysiaLike;
   let userApp: ElysiaLike;

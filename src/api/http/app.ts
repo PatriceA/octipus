@@ -9,11 +9,16 @@
  * `request`/`set`. This module implements that slice over Hono so the runtime
  * changes without the routes changing with it.
  *
- * What is deliberately NOT reproduced: Elysia's per-instance hook scoping.
- * Every hook in this repository is either registered on the root application
- * or declared `{ as: 'global' }`, so hooks are hoisted to the root and run in
- * registration order. A future local hook would need this to grow a scope; the
- * assertion in `app.test.ts` pins the ordering that exists today.
+ * Hooks carry the path prefix they were mounted under. A hook registered on
+ * the root applies everywhere; one registered inside a prefixed instance
+ * applies only to that prefix. That is not decoration — the OpenAI-compatible
+ * surface registers its own `onError` to shape failures into the SDK's error
+ * envelope, and hoisting every hook to the root made it unreachable behind the
+ * root handler, so an invalid body answered `422 {"error":"…"}` instead of the
+ * envelope an OpenAI client knows how to read.
+ *
+ * Error hooks run most-specific-first for the same reason. Everything else
+ * runs in registration order, broad to narrow, as it did.
  */
 import { Hono } from 'hono';
 import type { TSchema } from './t';
@@ -84,12 +89,60 @@ interface WsDef {
 
 type ErrorHook = (arg: { error: unknown; code: string; set: Ctx['set']; request?: Request }) => unknown;
 
+/**
+ * A hook plus every path prefix it was mounted under (`''` = everywhere).
+ *
+ * A list, not one prefix: a shared plugin can be mounted by several route
+ * modules at unrelated paths, and it has to run under all of them.
+ */
+interface Scoped<T> {
+  fn: T;
+  prefixes: string[];
+}
+
 interface Hooks {
-  request: Handler[];
-  derive: Handler[];
-  before: Handler[];
-  after: Handler[];
-  error: ErrorHook[];
+  request: Scoped<Handler>[];
+  derive: Scoped<Handler>[];
+  before: Scoped<Handler>[];
+  after: Scoped<Handler>[];
+  error: Scoped<ErrorHook>[];
+}
+
+/** Does a request path fall under any of a hook's mount prefixes? */
+function inScope(prefixes: string[], pathname: string): boolean {
+  return prefixes.some(
+    (p) => p === '' || p === '/' || pathname === p || pathname.startsWith(`${p}/`),
+  );
+}
+
+/** The narrowest prefix a hook is mounted under, for error-hook ordering. */
+function specificity(prefixes: string[]): number {
+  return Math.max(...prefixes.map((p) => p.length));
+}
+
+/**
+ * Merge a child's hooks into a parent under `prefix`.
+ *
+ * The same function registered twice is kept once, at the broader prefix. That
+ * is what the previous framework's plugin `name` deduplication bought: the
+ * shared API-context plugin is `.use()`d by fifty-five route modules, and
+ * without this its `derive` would run fifty-five times per request.
+ */
+function mergeScoped<T>(into: Scoped<T>[], from: Scoped<T>[], prefix: string): void {
+  for (const hook of from) {
+    const mounted = hook.prefixes.map((p) => joinScope(prefix, p));
+    const existing = into.find((h) => h.fn === hook.fn);
+    if (existing) {
+      for (const p of mounted) if (!existing.prefixes.includes(p)) existing.prefixes.push(p);
+      continue;
+    }
+    into.push({ fn: hook.fn, prefixes: [...mounted] });
+  }
+}
+
+function joinScope(outer: string, inner: string): string {
+  if (!inner || inner === '/') return outer;
+  return joinPath(outer, inner);
 }
 
 /** `/a` + `/b` → `/a/b`; a lone `/` collapses onto the prefix. */
@@ -131,24 +184,24 @@ export class App {
     return this;
   }
 
-  onRequest(fn: Handler): this { this.hooks.request.push(fn); return this; }
+  onRequest(fn: Handler): this { this.hooks.request.push({ fn, prefixes: [this.prefix] }); return this; }
   /** `(opts, fn)` and `(fn)` are both in use; the scope option is a no-op here. */
   derive(a: Handler | Record<string, unknown>, b?: Handler): this {
-    this.hooks.derive.push((typeof a === 'function' ? a : b) as Handler);
+    this.hooks.derive.push({ fn: (typeof a === 'function' ? a : b) as Handler, prefixes: [this.prefix] });
     return this;
   }
 
   resolve(a: Handler | Record<string, unknown>, b?: Handler): this { return this.derive(a, b); }
-  onError(fn: ErrorHook): this { this.hooks.error.push(fn); return this; }
+  onError(fn: ErrorHook): this { this.hooks.error.push({ fn, prefixes: [this.prefix] }); return this; }
 
   /** `(opts, fn)` and `(fn)` are both in use; the scope option is a no-op here. */
   onBeforeHandle(a: Handler | Record<string, unknown>, b?: Handler): this {
-    this.hooks.before.push((typeof a === 'function' ? a : b) as Handler);
+    this.hooks.before.push({ fn: (typeof a === 'function' ? a : b) as Handler, prefixes: [this.prefix] });
     return this;
   }
 
   onAfterHandle(a: Handler | Record<string, unknown>, b?: Handler): this {
-    this.hooks.after.push((typeof a === 'function' ? a : b) as Handler);
+    this.hooks.after.push({ fn: (typeof a === 'function' ? a : b) as Handler, prefixes: [this.prefix] });
     return this;
   }
 
@@ -157,7 +210,7 @@ export class App {
     for (const r of other.routes) this.routes.push({ ...r, path: joinPath(this.prefix, r.path) });
     for (const w of other.wsRoutes) this.wsRoutes.push({ ...w, path: joinPath(this.prefix, w.path) });
     for (const k of ['request', 'derive', 'before', 'after', 'error'] as const) {
-      (this.hooks[k] as unknown[]).push(...(other.hooks[k] as unknown[]));
+      mergeScoped(this.hooks[k] as Scoped<unknown>[], other.hooks[k] as Scoped<unknown>[], this.prefix);
     }
     this.compiled = undefined;
     return this;
@@ -169,7 +222,7 @@ export class App {
     for (const r of sub.routes) this.routes.push(r);
     for (const w of sub.wsRoutes) this.wsRoutes.push(w);
     for (const k of ['request', 'derive', 'before', 'after', 'error'] as const) {
-      (this.hooks[k] as unknown[]).push(...(sub.hooks[k] as unknown[]));
+      mergeScoped(this.hooks[k] as Scoped<unknown>[], sub.hooks[k] as Scoped<unknown>[], '');
     }
     this.compiled = undefined;
     return this;
@@ -184,8 +237,14 @@ export class App {
   }
 
   private async runError(error: unknown, code: string, set: Ctx['set'], request: Request): Promise<Response> {
-    for (const hook of this.hooks.error) {
-      const out = await hook({ error, code, set, request });
+    const pathname = new URL(request.url).pathname;
+    // Most specific first: a surface that shapes its own errors must win over
+    // the application-wide handler, which answers every code.
+    const applicable = this.hooks.error
+      .filter((h) => inScope(h.prefixes, pathname))
+      .sort((a, b) => specificity(b.prefixes) - specificity(a.prefixes));
+    for (const hook of applicable) {
+      const out = await hook.fn({ error, code, set, request });
       if (out !== undefined) return toResponse(out, set, code === 'NOT_FOUND' ? 404 : code === 'VALIDATION' ? 422 : 500);
     }
     const status = code === 'NOT_FOUND' ? 404 : code === 'VALIDATION' ? 422 : 500;
@@ -216,12 +275,14 @@ export class App {
       };
       c.set('octiCtx', ctx);
 
+      const applies = (h: { prefixes: string[] }) => inScope(h.prefixes, url.pathname);
+
       try {
-        for (const hook of this.hooks.request) await hook(ctx);
+        for (const hook of this.hooks.request.filter(applies)) await hook.fn(ctx);
         ctx.body = await parseBody(request);
-        for (const hook of this.hooks.derive) Object.assign(ctx, (await hook(ctx)) ?? {});
-        for (const hook of this.hooks.before) {
-          const short = await hook(ctx);
+        for (const hook of this.hooks.derive.filter(applies)) Object.assign(ctx, (await hook.fn(ctx)) ?? {});
+        for (const hook of this.hooks.before.filter(applies)) {
+          const short = await hook.fn(ctx);
           if (short !== undefined) {
             const res = toResponse(short, set, 200);
             await this.runAfter(ctx);
@@ -266,6 +327,11 @@ export class App {
         const ctx = c.get('octiCtx') as Ctx;
         ctx.params = c.req.param() ?? {};
         try {
+          // `type: 'text'` means the route parses the body itself, so undo the
+          // global parse rather than handing it an object it did not ask for.
+          if (route.options?.type === 'text' && ctx.body !== undefined && typeof ctx.body !== 'string') {
+            ctx.body = await ctx.request.clone().text();
+          }
           if (route.options?.parse) ctx.body = await route.options.parse(ctx);
           validateRoute(route.options, ctx);
           const out = await route.handler(ctx);
@@ -289,8 +355,10 @@ export class App {
   }
 
   private async runAfter(ctx: Ctx): Promise<void> {
+    const pathname = new URL(ctx.request.url).pathname;
     for (const hook of this.hooks.after) {
-      try { await hook(ctx); } catch { /* an after-hook must never fail a request */ }
+      if (!inScope(hook.prefixes, pathname)) continue;
+      try { await hook.fn(ctx); } catch { /* an after-hook must never fail a request */ }
     }
   }
 

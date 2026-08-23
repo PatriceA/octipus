@@ -3,12 +3,12 @@
  * CLI runner for model conformance tests.
  *
  * Usage:
- *   bun run src/models/testing/run.ts
- *   bun run src/models/testing/run.ts --provider=ollama
- *   bun run src/models/testing/run.ts --test=basic-completion,tool-calling
- *   bun run src/models/testing/run.ts --model=qwen3:14b
- *   bun run src/models/testing/run.ts --timeout=60000
- *   bun run src/models/testing/run.ts --json          # output JSON report only
+ *   npx tsx src/models/testing/run.ts
+ *   npx tsx src/models/testing/run.ts --provider=ollama
+ *   npx tsx src/models/testing/run.ts --test=basic-completion,tool-calling
+ *   npx tsx src/models/testing/run.ts --model=qwen3:14b
+ *   npx tsx src/models/testing/run.ts --timeout=60000
+ *   npx tsx src/models/testing/run.ts --json          # output JSON report only
  */
 
 import { parseArgs } from 'util';
@@ -41,7 +41,7 @@ if (args.help) {
 Model Conformance Test Runner
 
 Usage:
-  bun run src/models/testing/run.ts [options]
+  npx tsx src/models/testing/run.ts [options]
 
 Options:
   --provider=<name>    Filter models by provider (ollama, openai, anthropic, gemini, deepseek, mistral, zai, moonshot)

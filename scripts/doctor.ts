@@ -78,7 +78,7 @@ export async function checkEnvFile(projectDir: string): Promise<CheckResult> {
       status: 'fail',
       detail: '.env not found',
       critical: true,
-      hint: 'Run `bun run setup` (or `octi init`) to generate one.',
+      hint: 'Run `npm run setup` (or `octi init`) to generate one.',
     };
   }
   const text = readFileSync(envPath, 'utf-8');
@@ -90,7 +90,7 @@ export async function checkEnvFile(projectDir: string): Promise<CheckResult> {
       status: 'fail',
       detail: `Missing required keys: ${missing.join(', ')}`,
       critical: true,
-      hint: 'Re-run `bun run setup` — security keys are auto-generated.',
+      hint: 'Re-run `npm run setup` — security keys are auto-generated.',
     };
   }
   return { name: 'Bootstrap .env', status: 'ok', detail: 'present, all required keys set', critical: true };
@@ -258,7 +258,7 @@ export async function checkBackend(): Promise<CheckResult> {
     status: reachable ? 'ok' : 'warn',
     detail: reachable ? `up on :${port}` : `not running on :${port}`,
     critical: false,
-    hint: reachable ? undefined : 'Run `octi start` or `bun run dev` to launch.',
+    hint: reachable ? undefined : 'Run `octi start` or `npm run dev` to launch.',
   };
 }
 
@@ -290,7 +290,7 @@ export async function checkVaultKeys(projectDir: string): Promise<CheckResult> {
     status: looksValid ? 'ok' : 'fail',
     detail: looksValid ? 'MASTER_KEY present and well-formed' : `MASTER_KEY length ${masterKey.length} (expected ~44)`,
     critical: true,
-    hint: looksValid ? undefined : 'Re-run `bun run setup` to regenerate. Existing vault entries become unrecoverable if the key is rotated.',
+    hint: looksValid ? undefined : 'Re-run `npm run setup` to regenerate. Existing vault entries become unrecoverable if the key is rotated.',
   };
 }
 
@@ -302,7 +302,7 @@ export async function checkMcpServerBuild(projectDir: string): Promise<CheckResu
       status: 'warn',
       detail: 'mcp-server/dist/index.js missing',
       critical: false,
-      hint: 'Run `cd mcp-server && bun run build` if you want to expose Octipus tools via MCP.',
+      hint: 'Run `cd mcp-server && npm run build` if you want to expose Octipus tools via MCP.',
     };
   }
   return { name: 'MCP server', status: 'ok', detail: 'built', critical: false };
@@ -311,7 +311,7 @@ export async function checkMcpServerBuild(projectDir: string): Promise<CheckResu
 export async function checkBrowserExtension(): Promise<CheckResult> {
   // Two ways the extension can be "present":
   //   1. The unpacked extension dir is installed under ~/.octipus
-  //      (what `bun run setup` copies).
+  //      (what `npm run setup` copies).
   //   2. The backend is up AND its /ws/browser-bridge has a live
   //      connection from a browser that loaded the extension. This
   //      second path matters because users installing the extension
@@ -350,7 +350,7 @@ export async function checkBrowserExtension(): Promise<CheckResult> {
     status: 'warn',
     detail: 'not installed or not connected',
     critical: false,
-    hint: 'Optional — `bun run setup` can copy a local copy; or load the extension from the Chrome/Firefox store. Needed only for browser-handoff tools.',
+    hint: 'Optional — `npm run setup` can copy a local copy; or load the extension from the Chrome/Firefox store. Needed only for browser-handoff tools.',
   };
 }
 

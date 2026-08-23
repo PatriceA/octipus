@@ -53,7 +53,16 @@ export class PostgresStorageProvider implements StorageProvider {
   readonly mode = 'external' as const;
   private sweepInterval: ReturnType<typeof setInterval>;
   private listenClient: ListenClient | null = null;
-  private subscriptions = new Map<string, { handlers: Set<(m: unknown) => void>; unlisten: () => Promise<void> }>();
+  /**
+   * In-flight client creation. Two callers in the same tick would otherwise
+   * each build a client and the second assignment would orphan the first —
+   * leaking a connection whose `LISTEN`s `close()` never releases.
+   */
+  private listenClientPending: Promise<ListenClient> | null = null;
+  private subscriptions = new Map<
+    string,
+    { handlers: Set<(m: unknown) => void>; unlisten: Promise<() => Promise<void>> }
+  >();
 
   constructor() {
     this.sweepInterval = setInterval(() => {
@@ -143,7 +152,7 @@ export class PostgresStorageProvider implements StorageProvider {
         const { rows } = await queryRaw(
           `DELETE FROM kv_queue WHERE id = (
              SELECT id FROM kv_queue WHERE queue = $1
-             ORDER BY score ASC, id ASC
+             ORDER BY score ASC, seq ASC
              FOR UPDATE SKIP LOCKED
              LIMIT 1
            ) RETURNING payload`,
@@ -154,7 +163,7 @@ export class PostgresStorageProvider implements StorageProvider {
       },
       async peek(): Promise<unknown | null> {
         const { rows } = await queryRaw(
-          'SELECT payload FROM kv_queue WHERE queue = $1 ORDER BY score ASC, id ASC LIMIT 1',
+          'SELECT payload FROM kv_queue WHERE queue = $1 ORDER BY score ASC, seq ASC LIMIT 1',
           [name],
         );
         if (rows.length === 0) return null;
@@ -178,18 +187,24 @@ export class PostgresStorageProvider implements StorageProvider {
     };
   }
 
-  private async getListenClient(): Promise<ListenClient> {
-    if (this.listenClient) return this.listenClient;
-    const postgresMod = await import('postgres');
-    const postgres = postgresMod.default;
-    const config = getConfig();
-    this.listenClient = postgres(config.database.url, {
-      max: 1,
-      idle_timeout: 0,
-      connect_timeout: config.database.connectionTimeout / 1000,
-      prepare: false,
-    }) as unknown as ListenClient;
-    return this.listenClient;
+  private getListenClient(): Promise<ListenClient> {
+    if (this.listenClient) return Promise.resolve(this.listenClient);
+    // The promise is stored BEFORE the first await, so a concurrent caller
+    // joins this creation instead of starting a second one.
+    this.listenClientPending ??= (async () => {
+      const postgresMod = await import('postgres');
+      const postgres = postgresMod.default;
+      const config = getConfig();
+      const client = postgres(config.database.url, {
+        max: 1,
+        idle_timeout: 0,
+        connect_timeout: config.database.connectionTimeout / 1000,
+        prepare: false,
+      }) as unknown as ListenClient;
+      this.listenClient = client;
+      return client;
+    })();
+    return this.listenClientPending;
   }
 
   private async publish(channel: string, message: unknown): Promise<void> {
@@ -213,14 +228,30 @@ export class PostgresStorageProvider implements StorageProvider {
     const existing = this.subscriptions.get(name);
     if (existing) {
       existing.handlers.add(handler);
+      await existing.unlisten; // join the in-flight LISTEN rather than racing it
       return;
     }
+    // The map entry goes in BEFORE the first await. Two concurrent subscribes
+    // on one channel would otherwise both miss it, both LISTEN, and the second
+    // `set` would strand the first handler set and its unlisten handle — so
+    // `unsubscribe` became a no-op and the handler fired forever.
     const handlers = new Set([handler]);
-    const client = await this.getListenClient();
-    const sub = await client.listen(name, (payload) => {
-      void dispatch(handlers, payload);
-    });
-    this.subscriptions.set(name, { handlers, unlisten: sub.unlisten });
+    const unlisten = (async () => {
+      const client = await this.getListenClient();
+      const sub = await client.listen(name, (payload) => {
+        void dispatch(handlers, payload);
+      });
+      return sub.unlisten;
+    })();
+    this.subscriptions.set(name, { handlers, unlisten });
+    // Surface a failed LISTEN to this caller, and drop the entry so a retry
+    // can succeed rather than finding a subscription that never subscribed.
+    try {
+      await unlisten;
+    } catch (err) {
+      this.subscriptions.delete(name);
+      throw err;
+    }
   }
 
   private async unsubscribe(channel: string, handler?: (message: unknown) => void): Promise<void> {
@@ -231,7 +262,7 @@ export class PostgresStorageProvider implements StorageProvider {
     else entry.handlers.clear();
     if (entry.handlers.size === 0) {
       this.subscriptions.delete(name);
-      try { await entry.unlisten(); } catch { /* connection already gone */ }
+      try { await (await entry.unlisten)(); } catch { /* connection already gone */ }
     }
   }
 
@@ -247,9 +278,15 @@ export class PostgresStorageProvider implements StorageProvider {
   async close(): Promise<void> {
     clearInterval(this.sweepInterval);
     for (const entry of this.subscriptions.values()) {
-      try { await entry.unlisten(); } catch { /* already gone */ }
+      try { await (await entry.unlisten)(); } catch { /* already gone */ }
     }
     this.subscriptions.clear();
+    // Await any creation still in flight, so a client born a tick ago is
+    // closed rather than left holding a connection after shutdown.
+    if (this.listenClientPending) {
+      try { await this.listenClientPending; } catch { /* never came up */ }
+      this.listenClientPending = null;
+    }
     if (this.listenClient) {
       try { await this.listenClient.end(); } catch { /* already gone */ }
       this.listenClient = null;

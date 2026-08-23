@@ -68,7 +68,7 @@ async function main() {
     await migrateEnvToDb();
 
     // First-boot model bootstrap: reads BOOTSTRAP_PROVIDER / _MODEL /
-    // _API_KEY / _BASE_URL from .env (set by `bun run setup`) and
+    // _API_KEY / _BASE_URL from .env (set by `npm run setup`) and
     // seeds a single default model_config row + vault entry — only
     // when model_config is empty.
     try {

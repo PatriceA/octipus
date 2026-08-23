@@ -1,5 +1,8 @@
+# Node is pinned to 24.9, not floated: `crypto.argon2` (every password hash)
+# landed there, and `fs.glob` needs 22. A floating tag that happens to be new
+# enough today would fail at runtime on login, not at build.
 # ---- Build stage ----
-FROM node:24-bookworm AS build
+FROM node:24.9-bookworm AS build
 WORKDIR /app
 
 # Install dependencies first (layer caching)
@@ -25,7 +28,7 @@ ENV NEXT_PUBLIC_API_PORT=${NEXT_PUBLIC_API_PORT}
 RUN cd web && npm install && npm run build
 
 # ---- Runtime stage ----
-FROM node:24-bookworm-slim
+FROM node:24.9-bookworm-slim
 WORKDIR /app
 
 # Install runtime system dependencies

@@ -13,7 +13,7 @@ import { seedSession, seedUsers } from '@/test-helpers/multiuser-fixtures';
  * much as the positive one: a run that genuinely completed before the crash
  * must not be rewritten into a paused one.
  *
- * DB-backed: `bun run test:integration -- src/core/orchestrator/pipeline-interrupted.test.ts`.
+ * DB-backed: `npm run test:integration -- src/core/orchestrator/pipeline-interrupted.test.ts`.
  */
 describe.skipIf(!isIntegration)('pipeline boot reconcile (DB-backed)', () => {
   const userId = '00000000-0000-0000-0000-0000000000b1';

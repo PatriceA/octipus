@@ -14,7 +14,7 @@
  *   - admin.findByIdAdmin(bob_session.id) → row
  *
  * Backed by an ephemeral PGlite, so the suite runs in the standard
- * `bun test` slice without Docker.
+ * `npm test` slice without Docker.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { randomBytes } from 'node:crypto';

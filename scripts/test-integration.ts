@@ -45,7 +45,7 @@ async function main() {
     }
 
     console.log('\n[integration] Running migrations against test DB...');
-    const migrateCode = await run('npx', ['tsx', 'scripts/migrate.ts'], {
+    const migrateCode = await run('npx', ['tsx', '--import', './scripts/md-loader.mjs', 'scripts/migrate.ts'], {
       DATABASE_URL,
       STORAGE_MODE: 'external',
     });

@@ -44,7 +44,7 @@ beforeAll(async () => {
   await runMigrations();
 
   // Seed via raw SQL — bypasses any module-mock state from earlier
-  // test files in the same `bun test` invocation.
+  // test files in the same `npm test` invocation.
   const {
     seedAgent, seedAgentEvent, seedSession, seedUsers,
   } = await import('@/test-helpers/multiuser-fixtures');

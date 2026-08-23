@@ -12,7 +12,7 @@ import { ClassifiedError } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
 
 // Bun's mock.module is process-global. To avoid polluting unrelated suites
-// in the same `bun test` run, every mock here is built as a SPREAD of the
+// in the same `npm test` run, every mock here is built as a SPREAD of the
 // real module so its other exports remain intact, and afterAll re-mocks
 // each path back to the captured real module.
 //
@@ -208,7 +208,7 @@ afterAll(() => {
 
 describeUnit('LiteLLMClient — constructor', () => {
   test('forwards config to OpenAI client', () => {
-    // Other test files in the same `bun test` run may have already cached a
+    // Other test files in the same `npm test` run may have already cached a
     // different config — reset so this assertion reads OUR env vars.
     (realConfig as { resetConfig: () => void }).resetConfig();
     new LiteLLMClient();

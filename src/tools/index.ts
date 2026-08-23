@@ -28,20 +28,27 @@ export { WebSearchTool, websearchTool } from './websearch';
 
 import { loadPlugins, PluginTool } from '@/plugins';
 import { toolLogger } from '@/utils/logger';
-import { discoverTools } from './discovery';
+import { BUILTIN_TOOL_FOLDERS, discoverTools } from './discovery';
 import { getToolRegistry } from './registry';
 
 /**
- * Register all built-in tools (auto-discovered) and plugins.
+ * Register all built-in tools and plugins.
  *
- * Tool discovery walks `src/tools/<name>/index.ts`; see `discovery.ts`
- * for the convention. Plugins live in `extensions/` and are loaded by
- * `loadPlugins()`.
+ * The built-ins come from the static map in `discovery.ts`. Plugins live in
+ * `extensions/` and are loaded by `loadPlugins()`.
  */
 export async function registerBuiltinTools(): Promise<void> {
   const registry = getToolRegistry();
 
   const discovered = await discoverTools();
+  // Loud, because the failure this guards was silent: the built-ins vanished
+  // from the bundle and the registry came up holding only plugins, so the
+  // agent had no filesystem, no shell and no search, and nothing said so.
+  if (discovered.length === 0) {
+    throw new Error(
+      `No built-in tools resolved from ${BUILTIN_TOOL_FOLDERS} folders — the tool map in discovery.ts is not reaching the runtime.`,
+    );
+  }
   for (const { folder, tool } of discovered) {
     try {
       await registry.register(tool);

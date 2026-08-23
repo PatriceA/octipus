@@ -78,9 +78,16 @@ ok "git: $(git --version | head -1)"
 
 # ─── Check node ────────────────────────────────────────────────────────────
 if ! command -v node >/dev/null 2>&1; then
-  err "Node.js not found. Install Node 24 or newer from https://nodejs.org and re-run."
+  err "Node.js not found. Install Node 24.9 or newer from https://nodejs.org and re-run."
 fi
-ok "node: $(node --version)"
+# 24.9 specifically: `crypto.argon2` (password hashing) landed there, and a
+# lower version fails at login rather than at install — so check it here.
+NODE_MAJOR_MINOR=$(node -p "process.versions.node.split('.').slice(0,2).map(Number).join('.')")
+if node -e "const [a,b]=process.versions.node.split('.').map(Number); process.exit(a>24||(a===24&&b>=9)?0:1)"; then
+  ok "node: $(node --version)"
+else
+  err "Node $NODE_MAJOR_MINOR is too old — Octipus needs 24.9 or newer (crypto.argon2)."
+fi
 
 # ─── Clone or update ───────────────────────────────────────────────────────
 if [ -d "$INSTALL_DIR/.git" ]; then

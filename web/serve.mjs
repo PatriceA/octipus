@@ -36,9 +36,21 @@ const TYPES = {
   '.webmanifest': 'application/manifest+json',
 };
 
-/** Resolve a URL path to a file inside ROOT, or null. Rejects traversal. */
+/**
+ * Resolve a URL path to a file inside ROOT, or null. Rejects traversal, and
+ * treats an undecodable path as "no file" rather than throwing: a request for
+ * `/%` is a malformed escape, and `decodeURIComponent` throws on it — inside a
+ * synchronous request handler that is an uncaught exception and the process is
+ * gone, from one curl.
+ */
 function resolveFile(pathname) {
-  const clean = normalize(decodeURIComponent(pathname)).replace(/^(\.\.[/\\])+/, '');
+  let decoded;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    return null;
+  }
+  const clean = normalize(decoded).replace(/^(\.\.[/\\])+/, '');
   const full = join(ROOT, clean);
   if (!full.startsWith(ROOT)) return null;
   if (!existsSync(full)) return null;
@@ -66,6 +78,13 @@ const server = createServer((req, res) => {
   }
 
   const file = resolveFile(url.pathname) ?? join(ROOT, 'index.html');
+  if (!existsSync(file)) {
+    // The SPA fallback itself is missing — the bundle was never built, or was
+    // built to the desktop `out/`. Say so instead of dying on a stream error.
+    res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end(`Web bundle not found at ${ROOT}. Run \`npm run build\` in web/.\n`);
+    return;
+  }
   // A hashed asset is immutable; index.html must never be cached or a deploy
   // leaves browsers asking for chunks that no longer exist.
   const isIndex = file.endsWith('index.html');
@@ -73,7 +92,21 @@ const server = createServer((req, res) => {
     'content-type': TYPES[extname(file)] ?? 'application/octet-stream',
     'cache-control': isIndex ? 'no-cache' : 'public, max-age=31536000, immutable',
   });
-  createReadStream(file).pipe(res);
+  const stream = createReadStream(file);
+  // A read that fails mid-flight (file deleted by a redeploy, permissions)
+  // must end the response, not the process.
+  stream.on('error', () => res.destroy());
+  stream.pipe(res);
+});
+
+// Last resort. A static server has no business exiting because one request
+// went wrong, and there is no supervisor inside the container that would
+// notice the difference between "crashed" and "idle".
+server.on('clientError', (_err, socket) => {
+  socket.destroy();
+});
+process.on('uncaughtException', (err) => {
+  process.stderr.write(`web server: uncaught ${err?.stack ?? err}\n`);
 });
 
 server.listen(PORT, () => {

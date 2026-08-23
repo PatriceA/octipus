@@ -9,7 +9,7 @@
  *   1. Detect runtime + services (shared probes from src/setup/probes.ts)
  *   2. Storage mode  → writes secrets-only .env
  *   3. Secrets       → auto-generated, written to .env
- *   4. Boot backend  → spawns `bun run src/index.ts`, waits on /api/health
+ *   4. Boot backend  → spawns `npx tsx src/index.ts`, waits on /api/health
  *   5. Admin account → POST /api/auth/register (first user gets admin grant)
  *   6. Provider      → select from canonical PROVIDERS, key into vault
  *   7. Default model → PATCH /api/settings

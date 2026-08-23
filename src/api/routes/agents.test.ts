@@ -15,7 +15,7 @@ type ElysiaLike = { handle: (req: Request) => Promise<Response> };
 // POST /agents (spawn) and POST /:id/message are out of scope — they require a
 // live AgentManager with model providers wired up.
 //
-// Run via:  bun run test:integration -- src/api/routes/agents.test.ts
+// Run via:  npm run test:integration -- src/api/routes/agents.test.ts
 
 describe.skipIf(!isIntegration)('Agents API (Integration)', () => {
   let app: ElysiaLike;

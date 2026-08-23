@@ -2,6 +2,9 @@ import { describe, expect, test } from 'vitest';
 import { App, cors, t } from '@/api/http';
 
 const inner = new App({ prefix: '/health' })
+  .post('/upload', ({ body }) => ({ count: Array.isArray(body.files) ? body.files.length : 1 }), {
+    body: t.Object({ files: t.Union([t.File(), t.Array(t.File())]) }),
+  })
   .get('/', () => ({ status: 'ok' }))
   .get('/:id', ({ params }) => ({ id: params.id }))
   .post('/echo', ({ body }) => ({ got: body }), { body: t.Object({ n: t.Number() }) })
@@ -78,7 +81,97 @@ describe('the application pipeline', () => {
     expect(await call('/api/health/blocked').then((r) => [r.status, r.body])).toEqual([401, { error: 'nope' }]);
   });
 
+  test('a file field accepts a file and rejects an absent one', async () => {
+    // `t.File()` must not be a stand-in for "anything": aliased to `Any` it
+    // also matched `undefined`, so an upload with no files answered 200 and
+    // uploaded nothing instead of 422.
+    const form = new FormData();
+    form.append('files', new Blob(['hello'], { type: 'text/plain' }), 'a.txt');
+    const ok = await app.handle(
+      new Request('http://x/api/health/upload', { method: 'POST', body: form }),
+    );
+    expect([ok.status, await ok.json()]).toEqual([200, { count: 1 }]);
+
+    const empty = await app.handle(
+      new Request('http://x/api/health/upload', { method: 'POST', body: new FormData() }),
+    );
+    expect(empty.status).toBe(422);
+  });
+
   test('an unmatched path reaches the error hook as NOT_FOUND', async () => {
     expect(await call('/api/nope').then((r) => [r.status, r.body])).toEqual([404, { error: 'Not found' }]);
+  });
+});
+
+describe('hook scoping', () => {
+  test('a surface with its own error hook wins over the application-wide one', async () => {
+    // The real case: the OpenAI-compatible routes shape failures into the SDK's
+    // error envelope. Hoisting every hook to the root put the application
+    // handler first and made that unreachable, so a bad body answered the
+    // generic 422 and an OpenAI client could not read it.
+    const surface = new App({ prefix: '/v1' })
+      .onError(({ code, set }) => {
+        if (code !== 'VALIDATION') return;
+        set.status = 400;
+        return { error: { message: 'bad request', type: 'invalid_request_error' } };
+      })
+      .post('/chat', () => ({ ok: true }), { body: t.Object({ n: t.Number() }) });
+
+    const other = new App({ prefix: '/api' })
+      .post('/thing', () => ({ ok: true }), { body: t.Object({ n: t.Number() }) });
+
+    const root = new App()
+      .onError(({ code }) => (code === 'VALIDATION' ? { error: 'Invalid request data' } : { error: 'boom' }))
+      .use(surface)
+      .use(other);
+
+    const post = (path: string) =>
+      root.handle(new Request(`http://x${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ n: 'nope' }),
+      }));
+
+    const scoped = await post('/v1/chat');
+    expect([scoped.status, await scoped.json()]).toEqual([
+      400,
+      { error: { message: 'bad request', type: 'invalid_request_error' } },
+    ]);
+
+    // And the application-wide handler still answers everything else.
+    const generic = await post('/api/thing');
+    expect([generic.status, await generic.json()]).toEqual([422, { error: 'Invalid request data' }]);
+  });
+
+  test('a plugin mounted by many modules contributes its hook once', async () => {
+    // The shared API-context plugin is `.use()`d by fifty-five route modules.
+    // Without dedupe its derive ran fifty-five times on every request.
+    let derives = 0;
+    const plugin = new App({ name: 'shared' }).derive(() => {
+      derives += 1;
+      return { tagged: true };
+    });
+
+    const a = new App({ prefix: '/a' }).use(plugin).get('/x', ({ tagged }) => ({ tagged }));
+    const b = new App({ prefix: '/b' }).use(plugin).get('/y', ({ tagged }) => ({ tagged }));
+    const root = new App().use(a).use(b);
+
+    expect(await root.handle(new Request('http://x/a/x')).then((r) => r.json())).toEqual({ tagged: true });
+    expect(derives).toBe(1);
+    expect(await root.handle(new Request('http://x/b/y')).then((r) => r.json())).toEqual({ tagged: true });
+    expect(derives).toBe(2); // once per request, not once per mount
+  });
+
+  test('a hook mounted under a prefix does not run for other paths', async () => {
+    const seen: string[] = [];
+    const scoped = new App({ prefix: '/only' })
+      .onRequest((ctx: any) => { seen.push(new URL(ctx.request.url).pathname); })
+      .get('/here', () => ({ ok: true }));
+    const root = new App().use(scoped).get('/elsewhere', () => ({ ok: true }));
+
+    await root.handle(new Request('http://x/elsewhere'));
+    expect(seen).toEqual([]);
+    await root.handle(new Request('http://x/only/here'));
+    expect(seen).toEqual(['/only/here']);
   });
 });

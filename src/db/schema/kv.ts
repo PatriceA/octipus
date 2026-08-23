@@ -1,4 +1,4 @@
-import { bigint, index, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { bigint, bigserial, index, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 /**
  * The key-value store behind the cache, the raw get/set/del pairs and the
@@ -26,12 +26,14 @@ export const kvQueue = pgTable(
   'kv_queue',
   {
     id: uuid('id').primaryKey().defaultRandom(),
+    /** Insertion order — the FIFO tiebreak when two pushes share a `score`. */
+    seq: bigserial('seq', { mode: 'number' }).notNull(),
     queue: text('queue').notNull(),
     score: bigint('score', { mode: 'number' }).notNull(),
     payload: text('payload').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
-  (t) => [index('kv_queue_pop_idx').on(t.queue, t.score, t.id)],
+  (t) => [index('kv_queue_pop_idx').on(t.queue, t.score, t.seq)],
 );
 
 export type KvEntry = typeof kvStore.$inferSelect;

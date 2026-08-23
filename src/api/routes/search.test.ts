@@ -21,7 +21,7 @@ interface SearchResult {
 const VALID_TYPES: SearchResult['type'][] = ['session', 'hook', 'model', 'skill', 'knowledge', 'tool'];
 
 // Integration tests exercise the real search route against Postgres. Run via:
-//   bun run test:integration -- src/api/routes/search.test.ts
+//   npm run test:integration -- src/api/routes/search.test.ts
 
 describe.skipIf(!isIntegration)('Search API (Integration)', () => {
   let app: ElysiaLike;

@@ -3,12 +3,12 @@
  * Red-team evaluation CLI.
  *
  * Usage:
- *   bun run src/eval/red-team/cli.ts                          # run all plugins
- *   bun run src/eval/red-team/cli.ts --plugin injection        # specific plugin
- *   bun run src/eval/red-team/cli.ts --severity critical       # filter by severity
- *   bun run src/eval/red-team/cli.ts --dry-run                 # generate without executing
- *   bun run src/eval/red-team/cli.ts --list                    # list all test cases
- *   bun run src/eval/red-team/cli.ts --output results.json     # save results to file
+ *   npx tsx src/eval/red-team/cli.ts                          # run all plugins
+ *   npx tsx src/eval/red-team/cli.ts --plugin injection        # specific plugin
+ *   npx tsx src/eval/red-team/cli.ts --severity critical       # filter by severity
+ *   npx tsx src/eval/red-team/cli.ts --dry-run                 # generate without executing
+ *   npx tsx src/eval/red-team/cli.ts --list                    # list all test cases
+ *   npx tsx src/eval/red-team/cli.ts --output results.json     # save results to file
  */
 
 import { parseArgs } from 'util';
@@ -100,7 +100,7 @@ async function main() {
 Red-Team Evaluation CLI
 
 Usage:
-  bun run src/eval/red-team/cli.ts [options]
+  npx tsx src/eval/red-team/cli.ts [options]
 
 Options:
   -p, --plugin <name>      Plugin to run (can repeat). Names or aliases:

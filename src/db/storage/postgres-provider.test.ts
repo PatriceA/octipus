@@ -92,14 +92,17 @@ describe.skipIf(!isIntegration)('PostgresStorageProvider (Integration)', () => {
   });
 
   describe('queue', () => {
-    test('pops in push order', async () => {
+    test('pops in push order, including within one millisecond', async () => {
+      // Twenty in a tight loop share a millisecond, so `score` ties for most of
+      // them. Without an insertion-order tiebreak the order fell back to a
+      // random uuid and the queue was FIFO only by accident.
       const q = provider.createQueue('jobs');
-      await q.push({ n: 1 });
-      await q.push({ n: 2 });
-      expect(await q.length()).toBe(2);
-      expect(await q.peek()).toEqual({ n: 1 });
-      expect(await q.pop()).toEqual({ n: 1 });
-      expect(await q.pop()).toEqual({ n: 2 });
+      for (let n = 0; n < 20; n++) await q.push({ n });
+      expect(await q.length()).toBe(20);
+      expect(await q.peek()).toEqual({ n: 0 });
+      const popped: number[] = [];
+      for (let i = 0; i < 20; i++) popped.push((await q.pop() as { n: number }).n);
+      expect(popped).toEqual([...Array(20).keys()]);
       expect(await q.pop()).toBeNull();
     });
 
@@ -169,6 +172,30 @@ describe.skipIf(!isIntegration)('PostgresStorageProvider (Integration)', () => {
       expect(a).toEqual([]);
       expect(b).toEqual(['ping']);
       await ps.unsubscribe('chan');
+    });
+
+    test('concurrent subscribes on one channel both keep working', async () => {
+      // Both callers used to miss the map, both LISTEN, and the second write
+      // stranded the first handler set — so unsubscribe was a no-op for it and
+      // it kept firing forever.
+      const ps = provider.createPubSub();
+      const a: unknown[] = [];
+      const b: unknown[] = [];
+      const handlerA = (m: unknown) => a.push(m);
+      const handlerB = (m: unknown) => b.push(m);
+      await Promise.all([ps.subscribe('race', handlerA), ps.subscribe('race', handlerB)]);
+
+      await ps.publish('race', 'one');
+      await settle();
+      expect(a).toEqual(['one']);
+      expect(b).toEqual(['one']);
+
+      await ps.unsubscribe('race', handlerA);
+      await ps.publish('race', 'two');
+      await settle();
+      expect(a).toEqual(['one']); // actually unsubscribed
+      expect(b).toEqual(['one', 'two']);
+      await ps.unsubscribe('race');
     });
 
     test('a throwing subscriber does not stop the others', async () => {

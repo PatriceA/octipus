@@ -14,6 +14,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
+import { discoverTools } from '@/tools/discovery';
 import { ROLE_CONFIGS } from '@/core/orchestrator/roles';
 
 const BUNDLE = join(import.meta.dirname, '..', 'dist', 'index.js');
@@ -41,9 +42,45 @@ describe.skipIf(!built)('the built artifact', () => {
     }
   });
 
-  test('does not read the role directory at runtime', () => {
-    // The failure mode was a directory scan resolving into `dist/`. If one
+  test('carries every built-in tool', async () => {
+    // Same failure as the prompts, and quieter: the tool registry scanned its
+    // own directory too, so the bundle came up with no filesystem, no shell and
+    // no search, and only a debug line said anything.
+    const tools = await discoverTools();
+    expect(tools.length).toBeGreaterThan(20);
+    for (const { tool } of tools) {
+      // Either quoting style — esbuild picks per string, so pinning one would
+      // make the assertion about the minifier rather than about the tool.
+      const present = bundle.includes(`'${tool.id}'`) || bundle.includes(`"${tool.id}"`);
+      expect(present, `tool ${tool.id} is missing from the bundle`).toBe(true);
+    }
+  });
+
+  test('resolves neither roles nor tools by reading a directory', () => {
+    // Both failures were a directory scan resolving into `dist/`. If either
     // comes back, this catches it before a user does.
     expect(bundle).not.toMatch(/readdirSync\([^)]*roles/);
+    expect(bundle).not.toMatch(/readdirSync\(HERE\)/);
+  });
+});
+
+/**
+ * Every entry point that boots product code needs the markdown loader hook,
+ * because the role prompts are imported rather than read. Without it the
+ * script does not start at all — `npm run dev` was broken exactly this way —
+ * so the cost of forgetting is total and the check belongs here rather than in
+ * a reviewer's head.
+ */
+describe('the tsx entry points', () => {
+  const pkg = JSON.parse(
+    readFileSync(join(import.meta.dirname, '..', 'package.json'), 'utf8'),
+  ) as { scripts: Record<string, string> };
+
+  test('every script that runs tsx registers the markdown loader', () => {
+    const missing = Object.entries(pkg.scripts)
+      .filter(([, cmd]) => /(^|\s)tsx(\s|$)/.test(cmd))
+      .filter(([, cmd]) => !cmd.includes('--import ./scripts/md-loader.mjs'))
+      .map(([name]) => name);
+    expect(missing, `scripts missing the loader: ${missing.join(', ')}`).toEqual([]);
   });
 });

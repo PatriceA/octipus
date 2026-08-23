@@ -9,5 +9,5 @@ runs:
   steps:
     - uses: actions/setup-node@v4
       with:
-        node-version: '24'
+        node-version: '24.9'
         cache: npm

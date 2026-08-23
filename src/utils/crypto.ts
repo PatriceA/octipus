@@ -115,6 +115,18 @@ export function sha256(data: string): string {
  * 32-byte tag. `crypto.argon2` reproduces those digests byte for byte — the
  * test beside this file pins one such hash and would fail if any of it drifted.
  */
+// `crypto.argon2` landed in Node 24.9. Below that it is `undefined` and every
+// hash and verify throws a TypeError — i.e. registration and login fail at
+// runtime, one request at a time, instead of the process refusing to start.
+// Checked at module load so the failure is a boot failure with a readable
+// message. `package.json` engines, the Dockerfile tag, the CI pin and the
+// installer all say 24.9 too; this is the one that cannot be skipped.
+if (typeof cryptoArgon2 !== 'function') {
+  throw new Error(
+    `Octipus needs Node 24.9 or newer for password hashing (crypto.argon2); this is Node ${process.versions.node}.`,
+  );
+}
+
 const ARGON2_MEMORY = 65536; // 64 MB
 const ARGON2_PASSES = 3;
 const ARGON2_PARALLELISM = 1;

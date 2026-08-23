@@ -3,16 +3,16 @@
  * Eval CLI entry point.
  *
  * Usage:
- *   bun run src/eval/cli.ts                      # Run all suites
- *   bun run src/eval/cli.ts --suite routing       # Run specific suite
- *   bun run src/eval/cli.ts --tag safety          # Filter by tag
- *   bun run src/eval/cli.ts --model qwen3:14b     # Override model
- *   bun run src/eval/cli.ts --integration         # Run against live backend
- *   bun run src/eval/cli.ts --grader qwen3:14b    # Set grader model for LLM assertions
- *   bun run src/eval/cli.ts --concurrency 4       # Parallel tests
- *   bun run src/eval/cli.ts --detailed            # Show all assertion details
- *   bun run src/eval/cli.ts --json                # Output JSON only
- *   bun run src/eval/cli.ts --no-save             # Don't save results to disk
+ *   npx tsx src/eval/cli.ts                      # Run all suites
+ *   npx tsx src/eval/cli.ts --suite routing       # Run specific suite
+ *   npx tsx src/eval/cli.ts --tag safety          # Filter by tag
+ *   npx tsx src/eval/cli.ts --model qwen3:14b     # Override model
+ *   npx tsx src/eval/cli.ts --integration         # Run against live backend
+ *   npx tsx src/eval/cli.ts --grader qwen3:14b    # Set grader model for LLM assertions
+ *   npx tsx src/eval/cli.ts --concurrency 4       # Parallel tests
+ *   npx tsx src/eval/cli.ts --detailed            # Show all assertion details
+ *   npx tsx src/eval/cli.ts --json                # Output JSON only
+ *   npx tsx src/eval/cli.ts --no-save             # Don't save results to disk
  */
 
 import { resolve } from 'path';
@@ -112,7 +112,7 @@ function printHelp() {
   console.log(`
 Agent Evaluation Harness
 
-Usage: bun run src/eval/cli.ts [options]
+Usage: npx tsx src/eval/cli.ts [options]
 
 Options:
   --suite, -s <name>      Run a specific suite (matched by filename)
@@ -133,10 +133,10 @@ Options:
   --help, -h              Show this help message
 
 Examples:
-  bun run src/eval/cli.ts                          # Run all suites in unit mode
-  bun run src/eval/cli.ts -s routing               # Run routing suite only
-  bun run src/eval/cli.ts -t quality -m qwen3:14b  # Quality tests with specific model
-  bun run src/eval/cli.ts -i -d                    # Integration mode, detailed output
+  npx tsx src/eval/cli.ts                          # Run all suites in unit mode
+  npx tsx src/eval/cli.ts -s routing               # Run routing suite only
+  npx tsx src/eval/cli.ts -t quality -m qwen3:14b  # Quality tests with specific model
+  npx tsx src/eval/cli.ts -i -d                    # Integration mode, detailed output
 `);
 }
 

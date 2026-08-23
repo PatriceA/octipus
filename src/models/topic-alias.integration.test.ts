@@ -30,7 +30,7 @@ import { getTopicConfig, loadTopicConfigs, setTopicConfig } from '@/models/topic
 // file order differs between local and CI, this file-scope hook was the lone
 // `(unnamed)` failure that kept CI red (passing locally, failing in CI). The
 // prior 30s hook-timeout bump treated the symptom, not the cause. Run it
-// isolated via `bun run test:integration`.
+// isolated via `npm run test:integration`.
 describe.skipIf(!isIntegration)('Topic consolidation (Integration)', () => {
   let dataDir: string;
 

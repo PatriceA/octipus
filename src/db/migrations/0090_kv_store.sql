@@ -23,6 +23,11 @@ CREATE INDEX IF NOT EXISTS "kv_store_expires_at_idx"
 
 CREATE TABLE IF NOT EXISTS "kv_queue" (
   "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  -- Insertion order, and the tiebreak that makes the queue FIFO. `score` is
+  -- wall-clock milliseconds, so two pushes in the same millisecond tie — and
+  -- the only other column to break the tie with was a random uuid, which made
+  -- same-millisecond ordering arbitrary rather than first-in-first-out.
+  "seq" bigserial NOT NULL,
   "queue" text NOT NULL,
   -- The ordering key the previous sorted set used: wall-clock milliseconds
   -- pulled forward a second per priority point, so higher priority sorts first.
@@ -33,4 +38,4 @@ CREATE TABLE IF NOT EXISTS "kv_queue" (
 
 -- Exactly the pop order, so `FOR UPDATE SKIP LOCKED` reads one index row rather
 -- than sorting the queue on every pop.
-CREATE INDEX IF NOT EXISTS "kv_queue_pop_idx" ON "kv_queue" ("queue", "score", "id");
+CREATE INDEX IF NOT EXISTS "kv_queue_pop_idx" ON "kv_queue" ("queue", "score", "seq");

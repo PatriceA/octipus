@@ -1,7 +1,7 @@
 /**
  * Phase 1 entry for the pi-tui-based Octipus shell.
  *
- *   bun run src/tui-pi/index.ts [--project /path]
+ *   npx tsx src/tui-pi/index.ts [--project /path]
  *
  * Builds the runtime, mounts OctipusTuiApp, connects to the gateway.
  * Once Phase 8 lands, `bin/octi tui` and `package.json#scripts.tui`

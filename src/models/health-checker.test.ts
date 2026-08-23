@@ -6,7 +6,7 @@ import { getHealthChecker, HealthChecker } from './health-checker';
 
 // checkProvider('litellm', …) reaches getConfig() for the proxy URL/key, which
 // validates the full config schema (security secrets ≥32 chars). Seed them like
-// the other suites do so the LiteLLM branch can resolve config under `bun test`.
+// the other suites do so the LiteLLM branch can resolve config under `npm test`.
 const rand = (n: number) => randomBytes(n).toString('hex');
 process.env.MASTER_KEY ??= `test-master-${rand(24)}`;
 process.env.JWT_SECRET ??= `test-jwt-${rand(24)}`;

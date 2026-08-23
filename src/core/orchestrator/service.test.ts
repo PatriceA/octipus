@@ -7,7 +7,7 @@ import { guardOutput } from './output-guard';
  * These tests cover the routing-decision surface of the orchestrator's
  * `handleMessage` flow without requiring a live model provider or
  * Postgres/Redis. End-to-end tests against a real LiteLLM + PGlite stack
- * live in `bun run eval` (see ROADMAP.md → "Embedded eval-driven prompt
+ * live in `npm run eval` (see ROADMAP.md → "Embedded eval-driven prompt
  * iteration").
  *
  * What we lock down here:

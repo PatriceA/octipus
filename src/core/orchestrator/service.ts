@@ -186,7 +186,7 @@ export class OrchestratorService {
           const text =
             `${name} has no engine. The arms are idle.\n\n` +
             'To wire one up, run one of:\n' +
-            '  • `bun run setup`   (interactive — picks Ollama / LiteLLM / direct provider)\n' +
+            '  • `npm run setup`   (interactive — picks Ollama / LiteLLM / direct provider)\n' +
             '  • `octi doctor`     (shows what is missing)\n' +
             '  • open the Models page in the web UI\n\n' +
             'Once a model is bound to the `general` topic, every turn after this one works.';
