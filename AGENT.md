@@ -102,6 +102,7 @@ AGENTS.md         per-repo curated project guide (universal agents.md convention
 | E2E (API/WS)     | `bun run test:e2e`               |
 | Web E2E          | `bun run test:web`               |
 | Eval suite       | `bun run eval` (`eval:routing`, `eval:quality`) |
+| Architecture catalog | `bun run catalog` (check: `bun run catalog:check`) |
 | DB migrate       | `bun run db:migrate`             |
 | DB generate      | `bun run db:generate`            |
 | DB studio        | `bun run db:studio`              |
@@ -112,6 +113,15 @@ AGENTS.md         per-repo curated project guide (universal agents.md convention
 Default ports: backend `3005`, web `3007`. Use `bin/octi` rather than raw
 `bun run` when starting the full stack so channels, web, and workers come up
 together.
+
+`catalog:check` runs in CI and fails when `docs/architecture/generated/CATALOG.md`
+no longer matches the source. If a route, a module edge, or a gateway event type
+changed, run `bun run catalog` and commit the result — the file is generated, so
+never hand-edit it.
+
+The integration lane binds Postgres on `5443`. If something else already holds
+that port, pass your own: `TEST_POSTGRES_PORT=5453 TEST_REDIS_PORT=6389 bun run
+scripts/test-integration.ts`.
 
 ## House rules (must follow)
 
@@ -242,10 +252,15 @@ Octipus features a comprehensive voice subsystem (`src/voice/`) divided into thr
 | RAG / knowledge base                  | `src/core/rag/`, `docs/RAG.md`            |
 | Voice / TUI clients                   | `src/voice/`, `src/tui-pi/`, `src/tui-editor/` |
 | Architecture deep dive                | `docs/AGENT-ARCHITECTURE.md`              |
+| Every route, module edge, event type  | `docs/architecture/generated/CATALOG.md` (generated, CI-gated) |
+| **Where the work stands right now**   | `docs/plans/rebuild-execution-plan.md` → *Where this stands* |
 | Full docs index                       | `README.md` → Documentation table         |
 
 ## When in doubt
 
+0. Read *Where this stands* in `docs/plans/rebuild-execution-plan.md` before
+   starting anything structural. It carries what is done, what is deliberately
+   NOT being built and why, and what the next step actually is.
 1. Search `docs/` for an existing doc on the area.
 2. Check `.octipus/` for design notes and audits.
 3. Look at a sibling implementation (existing role, tool, channel) and follow

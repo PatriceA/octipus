@@ -1,5 +1,11 @@
 # Quality loop — open points for the next session
 
+**Superseded as the entry point, 2026-08-23.** Start from *Where this stands* in
+[rebuild-execution-plan.md](rebuild-execution-plan.md), which is the current
+record of what is done and what is next. This document is still the best account
+of how the quality gates came to exist and which of its own points were closed —
+read it for that, not for what to do next.
+
 Handoff rewritten 2026-08-08 (evening) after working the previous handoff's six
 points end to end and running three full seven-stage pipelines against them.
 Background: `docs/plans/quality-loop-status.md` is the long-form record of how

@@ -1,5 +1,24 @@
 # Octipus goes silent, and never says whether it is working or stuck
 
+**Status: SHIPPED, all three phases. Verified 2026-08-23.** Phase 1's blocked
+heartbeat is in `AgentWorker.whileBlocked` / `startBlockedHeartbeat`, naming what
+a quiet turn is waiting for every ~20s as an `agent.blocked` event. Phase 2 was
+decided rather than built: REST callers poll `GET /chat/approvals/pending`, the
+contract is documented at the top of `src/api/routes/chat.ts`, and
+`scripts/e2e/approvals.ts` is the helper that drives it. Phase 3 is
+`src/models/local-fit.ts`, which fails a local load fast instead of burning
+ollama's fifteen-minute timeout.
+
+One reachability caveat found while verifying: the Phase 3 fit gate sits on the
+DIRECT-provider branch of `LiteLLMClient.complete`, so a local model registered
+against the LiteLLM proxy bypasses it entirely. It fails open by design, so the
+consequence is the old fifteen-minute wait rather than a wrong refusal — but it
+is the repo's recurring gate-reachability shape and worth knowing before
+trusting the guard.
+
+Kept for the measurement and the reasoning, both of which are still the best
+record of why these three silences are different from each other.
+
 ## The complaint
 
 > *"The child was spawned immediately. The child took 25 sec to do the task. The

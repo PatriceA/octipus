@@ -1,7 +1,7 @@
 # Octipus rebuild: execution plan
 
 Date: 2026-08-22 · last updated 2026-08-23
-Status: in progress — phases 0 to 2 done or decided, phase 3 scoped and largely done, phase 4 invariants done, three of the four independent items done. Phases 5 to 8 untouched.
+Status: in progress — phases 0 to 4 done or decided, all four independent items done, and every open item below the migrations closed. **What is left is Phases 5 to 8, and each is a single-branch migration rather than an increment.** Phase 5 carries the ordering constraint that a half-migrated runtime is worse than either end state, so the next step is a decision about which branch to open, not another increment.
 Findings: [rebuild-findings-2026-08-22.md](rebuild-findings-2026-08-22.md)
 Measured pass: [../reports/2026-08-23-feature-performance-pass.md](../reports/2026-08-23-feature-performance-pass.md) — every number below that is not a plan comes from there.
 State: see [Where this stands](#where-this-stands) at the end, which is the section to read first when resuming.
@@ -113,7 +113,7 @@ One further rule from the same source generalises beyond workflows: observation 
 
 Runnable check for what remains: an end-to-end run of the seven-stage pipeline asserting non-zero files written and non-zero evidence rows — the exact scenario that previously reported success while doing nothing.
 
-### Phase 3 — The session log as the spine (scoped and largely done, 2026-08-22)
+### Phase 3 — The session log as the spine (scoped and delivered, 2026-08-22 · last check closed 2026-08-23)
 
 The largest structural change, and the one that makes completion provable rather than claimed.
 
@@ -141,9 +141,9 @@ Runnable check: `ledger.test.ts` proves the asymmetry directly — a spawn appen
 
 The sweep now resets those stages to `pending`, which is safe because the interrupted node re-runs anyway (a worker turn cannot be picked up halfway) and `resume` locates itself from the checkpoints and `currentNodeKey`, never from a node's status. Completed stages are left alone — rewriting those would make the resumed run redo everything that had already finished. Verified against real Postgres, and watched go red with the reset removed.
 
-### Phase 4 — Log-derived subsystems (invariants done, 2026-08-22; boot pass made self-reporting 2026-08-23)
+### Phase 4 — Log-derived subsystems (done, 2026-08-22 to 2026-08-23)
 
-Three subsystems that only become simple once Phase 3 lands, and should follow it directly. Phase 3 was scoped down rather than delivered whole, so the two that depend on a full log fold — token accounting and goal state — are not unblocked by it and should be re-argued from the code before being started.
+Three subsystems the phase expected to become simple only once Phase 3 landed whole. Phase 3 was scoped down instead, so the two that assumed a full log fold — token accounting and goal state — were re-argued from the code rather than started on the assumption. Both turned out to be expressible as invariants over the rows the product already writes, which is what Phase 4 says an invariant should be; neither needed the fold. All three are done.
 
 *Token accounting* becomes one measurement service replaying the log — total request pressure plus per-node positional pricing, with the last successful call's provider usage reused as a baseline only when the canonical request envelope matches, and the whole envelope repriced heuristically otherwise. This removes the hand-threaded per-stage pools and `NodeBudget.childTokensUsed` entirely, and makes a token-blind stage unrepresentable, because pressure is a property of the log rather than something a stage reports.
 
@@ -153,11 +153,19 @@ Three subsystems that only become simple once Phase 3 lands, and should follow i
 
 **Done: `src/core/invariants.ts`.** A registry keyed by area and name, a boot pass that logs violations with their owning area and never blocks the boot, and a check that throws reported as an *error* rather than as a pass — not knowing is not the same as being fine. The mechanical gate for unexplained empty areas is deliberately skipped: it is a team-scale ceremony, and with two areas the ledger is the check.
 
-Two invariants to start, both taken from incidents. The detach cap is read through `getLevelDefault(0)`, the same call the runtime makes after this deployment's settings are merged, which is exactly the reading the incident lacked while every unit test agreed with the type. And every swarm node below the root created in the last seven days must carry the ledger `spawn` event that replay and the boot reconcile key off; the seven-day window keeps rows written before the bracket existed from being reported forever as a violation nobody can act on.
+Four invariants, each taken from an incident or from a subsystem the phase had assumed needed the log fold. The boot pass reports `checked: 4`.
+
+*The detach cap* is read through `getLevelDefault(0)`, the same call the runtime makes after this deployment's settings are merged — exactly the reading the incident lacked while every unit test agreed with the type.
+
+*Every running swarm node below the root* carries the ledger `spawn` event that replay and the boot reconcile key off. Scoped to `running` rows rather than to a time window: a terminal row needs nothing from replay, so reporting one is noise nobody can act on, and that covers every row written before the bracket existed without dating the check.
+
+*Token accounting* (2026-08-23): no running child holds a token pool larger than its own level's default. `deriveChildBudget` sets a child's cap to `min(levelDefault, parentRemaining - reserve)`, so a cap above the level default cannot come out of the derivation — a row above it means some path wrote a node without going through it. Compared per level rather than against the parent's stored cap, because the derivation raises a parent's in-memory cap when config has grown and never writes that back. `running` only, for the same reason as above: lowering a level default would otherwise make every historical row a violation.
+
+*Goal state* (2026-08-23): no pipeline in a terminal status has a stage still marked `running`. That is the run-reports-success-while-work-is-outstanding shape, stated narrowly enough to be usable — a stage left `pending` is explicitly NOT a violation, because an untaken conditional branch legitimately stays pending forever.
 
 The same measurement fixed a third instance of the recurring bug class on the way past: `swarmLevelSchema.maxPendingDetached` carried `.default(0)` while each level's object default carried 6/3/0 and `getLevelDefault` carried a third `?? LEVEL_DEFAULT[depth]` resolve step. Three sources for one fact, and the field default was the one that won — a level object setting any other key parsed as a hard zero, making the resolve step below it unreachable. That is the detach-cap incident's exact shape minus the type disagreement that was the only reason anyone noticed. The field is now optional.
 
-Runnable check: the DB-backed lane inserts a child node with no start event, watches the invariant report it, appends the event, and watches it hold again — the production query against real rows. Still open: exercising the detach-cap invariant against a live deployment configured back to zero.
+Runnable check: the DB-backed lane drives each invariant hold → violate → hold against real Postgres — the production query against real rows, not a hand-made argument. `TEST_POSTGRES_PORT=5453 bun run scripts/test-integration.ts src/core/invariants.test.ts`, eleven passing. Still open: exercising the detach-cap invariant against a live deployment configured back to zero.
 
 ### Phase 5 — Runtime
 
@@ -197,7 +205,7 @@ Runnable check: the stack boots and passes integration tests with the Valkey con
 
 ## Independent items
 
-These depend on nothing and can land in any phase. Three of the four are done; each entry below carries what shipped and where the code overruled the plan.
+These depend on nothing and can land in any phase. All four are done; each entry below carries what shipped and where the code overruled the plan.
 
 *Tool-output spill* — **done, 2026-08-23, and simpler than specified.** Oversized output is saved rather than inlined; the model gets a head, a tail, the exact size and the path. `src/core/tool-output-spill.ts`, wired at the one boundary where a tool result becomes a message.
 
@@ -211,13 +219,19 @@ The shell tool already had one, and it was wrong in two ways the plan did not an
 
 Two of the four CLIs need one credential of their own, so `buildChildEnv` takes a `keep` list: `gh` keeps its GitHub tokens, `glab` its GitLab ones, neither keeps the other's or Slack's. The same judgment now answers the `env` tool, which filtered by name against the raw environment and would hand over `MASTER_KEY` to anyone who asked for it by name — stripping secrets from spawned commands while answering that in the same process is a door beside a wall. The standing decision that spawned CLI agents inherit the full host config is untouched; this is the credential subset only.
 
-*Generated, gated catalogs.* Generate the service surface, module graph, and event producer/consumer matrix from the TypeScript program and verify them fresh in CI. Our docs drift measurably — the website lags the repo by about two weeks and the palette has diverged — and generated-plus-gated is the only permanent fix for that class.
+*Generated, gated catalogs* — **done, 2026-08-23.** `scripts/gen-catalog.ts` writes `docs/architecture/generated/CATALOG.md`; `bun run catalog:check` is a step in the backend CI job and fails when the committed copy no longer matches the source. Three catalogs: the HTTP surface (every mounted route with its full path, plus any route object nothing mounts), the module import graph with its mutual imports, and the gateway event matrix. Linked from the README and named as authoritative by `AGENT-ARCHITECTURE.md`.
 
-*Four remaining defensive rules* — **two done, two open (2026-08-23).**
+Where the code overruled the plan: "from the TypeScript program" is not available. This repo is on TypeScript 7, the Go port, which ships a compiler binary and no JavaScript AST API — `ts.createSourceFile` does not exist. Rather than add a parser for one script it uses `Bun.Transpiler.scanImports` for the module graph, which is a real parse, and narrow anchored patterns for the other two over a copy with comments blanked so commented-out code cannot read as live. Anything that does not resolve to a literal is counted and reported rather than dropped.
+
+It paid for itself on the first run, and again on its own review. Eleven declared gateway event types had no producer: one was a genuine missing feature (`swarm.budget_warning`, subscribed by the persona narration bridge, so that narration had never fired) and ten were retired, including one documented in three hand-written files as live. Its own first draft had six bugs that each produced a catalog reading as coverage — a commented-out mount counted as live, a getter's parenthesis matched instead of the call's, an indirect event type swallowing the operand it was compared against, thirty-three `Map.get(id)` calls counted as unresolvable routes, no regex-literal state in the comment scanner, and an event scan that read raw source while the route scan read the blanked copy. All six are pinned in `scripts/gen-catalog.test.ts`, along with a check that the unmounted-route gate fires — proved by commenting out the metrics mount and watching it appear.
+
+*Four remaining defensive rules* — **three done, one and a half open (2026-08-23).**
 
 Done: *report orthogonal outcomes independently* and *dispose must reach quiescence*. The shell result now carries `timedOut`, `aborted` and `signal` beside `exitCode` rather than nested inside one branch of it, and writing that down exposed why the signal was wrong — node's own spawn `timeout` was racing our timer, killing with SIGTERM and setting none of the flags that explain a kill. One deadline, one owner. Driving it afterwards found the deadline did not reach the process tree either: the kill went to the direct child while the promise resolves on `close`, which waits for pipes a backgrounded grandchild still holds. And `stopAll` now waits for agents to be gone rather than returning once they have been asked, bounded so it cannot outlast the force-exit watchdog, dropping subscribers first — but only at process shutdown, never for the live `/stop-all` command, whose subscribers are the UI's event stream.
 
-Open: *normalise a public contract on both sides*, and *async state is not synchronous state* (the shared-interval and nothing-to-wait-for branches).
+Also done: the *nothing-to-wait-for* half of *async state is not synchronous state*. `docs/plans/blocked-vs-stuck.md` turned out to be shipped end to end — Phase 1's blocked heartbeat names what a quiet turn is waiting for every ~20s, Phase 2 documents the REST caller's polling contract with an e2e helper, and Phase 3's `src/models/local-fit.ts` fails a local model load fast instead of burning ollama's fifteen-minute timeout. One reachability caveat worth knowing: the fit gate sits on the direct-provider branch only, so a local model registered against the LiteLLM proxy bypasses it. It fails open by design, but that is the repo's recurring gate-reachability shape.
+
+Open: *normalise a public contract on both sides*, and the *shared-interval* half of *async state is not synchronous state*.
 
 The original wording, kept because the two open halves still need it. Report orthogonal outcomes independently: a process can time out *and* exit zero because it trapped the signal, so surface `timedOut`, `signal`, and `exitCode` separately rather than nesting one inside another's branch. Normalise a public contract on both sides, so a thrown exception always means a defect rather than a provider problem. Async state is not synchronous state — several queued follow-ups may share one running interval, so a caller that owns a run defines its interval explicitly and describes output as interval-wide; and if the awaited transition can never occur the wait hangs, so handle the nothing-to-wait-for branch (our long "hang" that turned out to be a correct `awaiting_approval` wait is this rule). Dispose must reach quiescence, not merely request it: kill then await exit, and close listener and notification registries *before* killing so late completions stay silent.
 
@@ -227,7 +241,7 @@ A rewrite — every phase is in-place. A move away from Postgres; that was evalu
 
 ## Where this stands
 
-Written 2026-08-23, after the measured pass, and updated later the same day after the first three open items were worked. Read this first when resuming; the phases above are the argument, this is the position.
+Written 2026-08-23 after the measured pass, and rewritten the same day once every open item below the migrations had been closed. Read this first when resuming; the phases above are the argument, this is the position.
 
 ### Done
 
@@ -237,11 +251,17 @@ Written 2026-08-23, after the measured pass, and updated later the same day afte
 
 **Phase 2 — the orchestrator's inference layer.** The keyword classifier no longer picks the specialist; the delegation policy is unconditional; the deterministic role-fit rewrite is weak-model-only. Named workflow files are declined at this scale, with the argument recorded — revisit only when a template cannot express what it needs.
 
-**Phase 3 — completion as a durable fact.** Scoped down after measurement and largely done. A swarm child's start is now durable and asymmetric by risk: it throws and the child does not run if the start cannot be recorded, while terminals stay best-effort. Pipeline stage workers got the same bracket. The stopped-short run that reported success is fixed. What is NOT done is the wholesale conversion of state into a fold over the log — see *Open* below.
+**Phase 3 — completion as a durable fact.** Scoped down after measurement, and now delivered at that scope with its last runnable check closed. A swarm child's start is durable and asymmetric by risk: it throws and the child does not run if the start cannot be recorded, while terminals stay best-effort. Pipeline stage workers got the same bracket. The stopped-short run that reported success is fixed, including the escalation path that laundered its own outcome on the way to the exit. And the boot sweep no longer pardons a crashed pipeline while leaving its stage row claiming to be running.
 
-**Phase 4 — invariants.** `src/core/invariants.ts` ships with a boot pass that logs whether it ran (`checked: 2, held: 2` on the live instance), reports a throwing check as an error rather than a pass, and takes a filter so tests do not run the DB-backed checks. Two invariants: the orchestrator's detach cap read the way the runtime reads it, and every running swarm node below the root having its ledger start.
+What is NOT done is the wholesale conversion of state into a fold over the log — and the case for it is now weaker than when the phase was written. Every failure the phase predicted a fold would fix has turned out to be one specific non-durable write, each costing a few lines to fix directly: the swarm ledger's spawn bracket, the pipeline stage worker's bracket, and the crashed stage row. Three for three. Keep re-measuring before building; do not treat the remaining text as a backlog.
 
-**Independent items.** Tool-output spill, credential scrubbing, and two of the four defensive rules — all described in their own section above.
+**Phase 4 — all three subsystems.** `src/core/invariants.ts` ships with a boot pass that logs whether it ran (`checked: 4`), reports a throwing check as an error rather than a pass, and takes a filter so tests do not run the DB-backed checks. Four invariants: the orchestrator's detach cap read the way the runtime reads it; every running swarm node below the root carrying its ledger start; no running child holding a token pool larger than its level allows; and no terminal pipeline with a stage still marked running.
+
+The last two are token accounting and goal state — the subsystems the phase assumed needed the log fold first. They did not. Both are expressible against the rows the product already writes, which is what this phase says an invariant should be, and both were driven hold → violate → hold against real Postgres rather than asserted.
+
+**Independent items.** All four: tool-output spill, credential scrubbing, the generated and CI-gated architecture catalog, and three of the four defensive rules — all described in their own section above.
+
+**The two open items from the measured pass.** Prompt overhead was not a size problem: the orchestrator was busting the provider cache breakpoint the repo has had since Phase 2b by putting six per-turn blocks in the static tier, and its own turn had no prompt accounting at all. Tool-call variance was narrowed by a run-wide redundant-call check, because both existing loop guards are consecutive-only and the alternating shape behind the 14-call run tripped neither.
 
 **The live harnesses.** Three, all new: `scripts/feature-bench.ts` (ten scenarios plus sixteen endpoints through the HTTP API both clients use, with tokens and roles read from the rows each run wrote), `scripts/ui-live-check.ts` (real browser, real app, real backend — the existing Playwright suite stubs every API call), and `scripts/tui-live-check.ts` (the TUI under a pty; a pipe gives an empty transcript because pi-tui only paints to a TTY).
 
@@ -249,11 +269,33 @@ Written 2026-08-23, after the measured pass, and updated later the same day afte
 
 Eleven lanes green: typecheck, lint (904 files), unit (4,298), TUI unit (251), web Playwright (64), integration against real Postgres (4,250), e2e against the live backend (142), the feature bench (10/10, twice), the API surface (16/16), the live web UI (11/11) and the live TUI (4/4).
 
+Re-run after the work above, 2026-08-23: unit 4,152 and integration 4,211, both zero failures, plus lint, both typechecks and `catalog:check`. A twelfth gate exists now — the catalog — and it caught its first drift on the commit that added the two new invariants, which changed the module edge counts.
+
+One local note for the integration lane: port 5443 can be held by another project's Postgres, so `TEST_POSTGRES_PORT=5453 TEST_REDIS_PORT=6389 bun run scripts/test-integration.ts` is the form that always works.
+
 Performance, measured rather than assumed: read endpoints 12–16ms median; web pages 0.53–0.85s; a chat answer on screen in 2.4–6.0s; the TUI booting in 0.2s and answering in 2.8–5.2s; delivery lag median 11ms and p95 19ms across 86 runs. Full numbers in the report linked at the top.
 
 Eight product defects were found by running the product and fixed — four of them reachable only through a real client, including two authentication faults that signed a user out during ordinary navigation. They are listed in the report; the point for this plan is that none of them were visible to a suite that stubs its boundaries, and the harnesses that found them are now in the tree.
 
-### Open, in the order it is worth doing
+### Next
+
+Everything below the migrations is closed. What remains is Phases 5 to 8 — Node and Hono, Vitest, DBOS, the AI SDK, Vite, dropping Valkey — and none of them is an increment. Each is a single branch that is either finished or reverted, so the next step is a decision about which branch to open rather than more work of the kind this pass did.
+
+Phase 5 is the one with a stated ordering constraint: do it in one branch, because a half-migrated runtime is worse than either end state. It is also the one that unblocks the most, since Vitest and the durable workflow engine both sit behind it.
+
+Two smaller things are open and do not need a branch:
+
+- **The remaining defensive rules** — *normalise a public contract on both sides*, so a thrown exception always means a defect rather than a provider problem, and the *shared-interval* half of *async state is not synchronous state*. Both are rules to apply while touching the relevant code, not projects.
+- **The detach-cap invariant against a live deployment configured back to zero.** The check is written and green against real rows; what has never been done is watching it fire on a real instance.
+
+Two open questions carried from the review of this pass, both product decisions rather than defects:
+
+- `/api/metrics` is mounted but 404s until `METRICS_TOKEN` is set. Deliberate, and worth setting on any instance being scraped.
+- `local-fit.ts` guards the direct-provider branch only, so a local model registered against the LiteLLM proxy bypasses the fail-fast. It fails open by design, but it is the repo's recurring gate-reachability shape.
+
+### Closed on 2026-08-23, and what each turned out to be
+
+Kept in full because in every case the finding was not what the item predicted, and that is the part worth reading before starting the next one.
 
 1. **Prompt overhead** — **attacked 2026-08-23, and the fault was not size.** The floor breaks down as ~2,950 tokens of role prompt, ~2,700 of meta-tool JSON schema, ~240 of delegation policy, and the rest expert index, workspace and per-turn context. All of it sits behind an Anthropic cache breakpoint that the repo has had since Phase 2b — and the orchestrator was busting it on every turn. Long-term memory (retrieved per turn, scoped by the classifier's topic), the attached-file block, the security reminder, the topic hint, the ambiguity notice and the output directive were all concatenated into the *static* tier, ahead of the breakpoint, so the whole ~6k prefix was re-written rather than read whenever any of them differed. They are now in the volatile tier and the prefix is stable.
 
@@ -285,15 +327,12 @@ Eight product defects were found by running the product and fixed — four of th
    *Goal state*: no pipeline in a terminal status has a stage still marked `running`. That is the run-reports-success-while-work-is-outstanding shape, stated narrowly enough to be usable — a stage left `pending` is explicitly NOT a violation, because an untaken conditional branch legitimately stays pending forever.
 
    Both verified against real Postgres rather than asserted: `TEST_POSTGRES_PORT=5453 bun run scripts/test-integration.ts src/core/invariants.test.ts`, 11 passing, each invariant driven through hold → violate → hold. The boot pass now reports `checked: 4`.
-7. **Phases 5 to 8** — Node and Hono, Vitest, DBOS, the AI SDK, Vite, dropping Valkey. Each is a single-branch migration rather than an increment; Phase 5 is the one with a stated ordering constraint (do it in one branch, a half-migrated runtime is worse than either end state).
 
 ### Known and unresolved
 
-One unit-test flake: a single failure appeared twice in roughly ten full-suite runs and never reproduced across five consecutive clean runs afterwards. The failing test's name was not captured. It is not a blocker and it is not understood.
+One unit-test flake: a single failure appeared twice in roughly ten full-suite runs and never reproduced across five consecutive clean runs afterwards. The failing test's name was not captured. It is not a blocker and it is not understood. It has not recurred across the several full runs this pass made either, which is evidence of nothing in particular.
 
 The `new` session dialog duplicate is **fixed, 2026-08-23**. The dialog is a choice not yet made, and the composer behind it stayed live: a message sent while it was open auto-created its own session, and confirming the dialog then added a second, empty one. The composer is now disabled — and says why — for as long as the dialog is open.
-
-`/api/metrics` is mounted now but 404s until `METRICS_TOKEN` is set. That is the deliberate default and worth setting on any instance being scraped.
 
 ## Expected outcome
 

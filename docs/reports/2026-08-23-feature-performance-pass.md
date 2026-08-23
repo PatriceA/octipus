@@ -4,6 +4,8 @@ Scope: the rebuild plan's Phase 3 and Phase 4 work, the independent items that c
 
 Twenty-one commits on `main`, `ce99d53b`..`8f7af29d`, 44 files, +2239/−107. Every lane green at the end.
 
+**Status, later the same day:** every open item this report raised has been worked except one test flake — see [Open items](#open-items--all-but-one-closed-later-the-same-day) at the end. Read this report for the measurements; read [the rebuild plan](../plans/rebuild-execution-plan.md) for where things stand now.
+
 ## What the pass measured
 
 | Lane | Result | Wall clock |
@@ -87,18 +89,22 @@ Three assertions failed the product for behaving correctly, and each is worth na
 
 The E2E swarm suite compared every child's model against its lane binding, while the shipped `Data Engineer` expert deliberately pins a different one — an expert's `modelPreference` outranking the lane is the point of choosing an expert. The bench's secret-disclosure check matched a base64 *shape* against whitespace-stripped prose, which flagged a correct refusal; it now compares against the actual secret. And the live UI check's first version waited for its own marker to appear twice, which the composer echo and the transcript satisfy on their own — it passed in 206ms with no model involved.
 
-## Open items
+## Open items — all but one closed later the same day
 
-**Prompt overhead.** ~8.4k tokens on every orchestrator-answered turn. The measurement exists (`project_octipus_prompt_size`); the reduction does not.
+This report was written mid-pass. Everything it raised was worked afterwards; the outcomes are recorded here so the report is not read as a live list. The detail is in [the rebuild plan](../plans/rebuild-execution-plan.md).
 
-**Tool-call variance.** Same task, 2 tool calls one run and 14 the next. Worth a cap or a plan-first nudge for mechanical file work.
+**Prompt overhead — CLOSED, and the diagnosis was wrong.** The ~8.4k was not oversized, it was uncached. The repo has had an Anthropic cache breakpoint since Phase 2b, and the orchestrator was busting it every turn by concatenating six per-turn blocks — long-term memory, the attached-file block, the security reminder, the topic hint, the ambiguity notice, the output directive — into the static tier ahead of the cut. They are volatile now and the prefix is stable. The orchestrator's own turn also had no prompt accounting at all: `logPromptComposition` had been wired into the worker and swarm paths and never into the path this report measured.
 
-**One rare unit-test flake.** A single failure appeared twice in roughly ten full-suite runs and never reproduced — five consecutive clean runs afterwards, and the failing test's name was not captured. Unresolved.
+**Tool-call variance — NARROWED.** Both existing loop guards are consecutive-only, so the alternating shape behind the 14-call run tripped neither. A run-wide redundant-call check now nudges once on the fourth identical call. Advisory, not enforcing: a re-read after a write is a different answer to the same question, and a cap that truncates real work is worse than the tokens it saves.
 
-**The `new` session dialog.** Confirming it creates an empty "New Chat" while the composer's first message lands in a separate auto-created session, so a user who clicks `new` and types can end up with two sessions. Cosmetic, but visible in the session list.
+**The `new` session dialog — FIXED.** The composer stayed live behind a choice not yet made. It is disabled, and says why, while the dialog is open.
 
-**Metrics are off by default.** `/api/metrics` now exists but returns 404 until `METRICS_TOKEN` is set — deliberate, and worth setting if anything is scraping.
+**Metrics are off by default.** Unchanged and deliberate: `/api/metrics` returns 404 until `METRICS_TOKEN` is set. Worth setting if anything is scraping.
+
+**One rare unit-test flake — STILL UNRESOLVED.** A single failure appeared twice in roughly ten full-suite runs and never reproduced. The failing test's name was not captured. It did not recur across the several full runs made since, which is evidence of nothing in particular.
 
 ## What is left in the rebuild plan
 
-Phase 3 is scoped and largely done; the wholesale conversion of state into a fold over the log is not done and is no longer obviously worth doing — re-measure before building it. Phase 4's invariant registry has landed with two invariants; token accounting and goal state assumed the full log fold and are not unblocked by what shipped. Phases 5 to 8 — Node and Hono, Vitest, DBOS, the AI SDK, Vite, dropping Valkey — are untouched, and each is a single-branch migration rather than an increment.
+Everything below the migrations is closed. Phase 3 is delivered at its scoped size with its last runnable check shut — the wholesale conversion of state into a fold over the log stays unbuilt, and the case for it is weaker than when it was written, since all three failures it predicted turned out to be one specific non-durable write each. Phase 4 is complete: four invariants, including the token accounting and goal state that were thought to need the log fold and did not. The generated, CI-gated architecture catalog shipped and immediately found eleven declared gateway event types with no producer.
+
+What remains is Phases 5 to 8 — Node and Hono, Vitest, DBOS, the AI SDK, Vite, dropping Valkey. Each is a single branch that is either finished or reverted rather than an increment, so the next step is a decision about which one to open.
