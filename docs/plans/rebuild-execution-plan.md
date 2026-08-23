@@ -213,7 +213,7 @@ Kept as one provider among many, decided by the operator. Revisit if the direct 
 
 Replace Next.js with Vite and React Router in `web/`. The app uses no server rendering and every one of its forty-four pages is a client component, so the framework was providing a router and a build. The marketing site keeps its own stack.
 
-The pages are untouched, by the same move the HTTP layer used: a hundred and eighteen components import from `next/navigation`, `next/link` and `next/image`, and the surface they use is `useRouter`, `usePathname`, `useSearchParams`, `redirect`, a link and an img. `web/compat/next/` is that surface over React Router.
+The pages are untouched, by the same move the HTTP layer used: twenty-eight files import from `next/navigation`, `next/link` and `next/image`, and the surface they use is `useRouter`, `usePathname`, `useSearchParams`, `redirect`, a link and an img. `web/compat/next/` is that surface over React Router, in 137 lines. (An earlier commit message put that count at a hundred and eighteen — that is the number of client components in the app, not the number importing from the framework.)
 
 `next start` is replaced by forty lines of `node:http` — serve the file if it exists, serve `index.html` if it does not, proxy `/api`, `/a` and `/__artifacts__` same-origin so the session cookie is attached. Two pages genuinely changed, both because there is no server: `/setup` probes its status in the browser, and `/graph` renders `<Navigate replace>` rather than calling an imperative redirect that would mean a full page load.
 
