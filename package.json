@@ -47,6 +47,7 @@
     "eval:quality": "tsx --import ./scripts/md-loader.mjs src/eval/cli.ts --suite quality",
     "catalog": "tsx --import ./scripts/md-loader.mjs scripts/gen-catalog.ts",
     "catalog:check": "tsx --import ./scripts/md-loader.mjs scripts/gen-catalog.ts --check",
+    "orchestrator-cost": "tsx --import ./scripts/md-loader.mjs scripts/orchestrator-cost.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome lint",
     "lint:fix": "biome lint --write --unsafe"

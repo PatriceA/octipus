@@ -1,7 +1,7 @@
 # Octipus rebuild: execution plan
 
 Date: 2026-08-22 · last updated 2026-08-23 (second pass)
-Status: **every phase is closed.** Phases 0 to 4 done or decided in the first pass; Phases 5, 7 and 8 shipped in the second; Phase 6 and the durable-execution half of Phase 5 are declined with the measurement recorded. What remains is not a phase — see [Where this stands](#where-this-stands).
+Status: phases 0 to 8 are closed — 0 to 4 in the first pass, 5, 7 and 8 shipped in the second, and 6 plus the durable-execution half of 5 declined with the measurement recorded. **Phase 9 is open and not started:** Phase 2 was marked done over a scope much smaller than its title, and the orchestrator hop it was named for is still there and still costing 18.2% of agent tokens. See [Phase 9](#phase-9--the-orchestrator-hop-reopened-2026-08-23-not-started).
 Findings: [rebuild-findings-2026-08-22.md](rebuild-findings-2026-08-22.md)
 Measured pass: [../reports/2026-08-23-feature-performance-pass.md](../reports/2026-08-23-feature-performance-pass.md) — every number below that is not a plan comes from there.
 State: see [Where this stands](#where-this-stands) at the end, which is the section to read first when resuming.
@@ -239,6 +239,96 @@ Ordering is the thing to know: external storage runs ON the database, so `initia
 
 Runnable check: the stack boots and passes integration tests with the Valkey container removed from compose — 4,207 green, and the built artifact writing sessions, rate-limit counters, the scheduler heartbeat and a queue item into the new tables while serving login and authenticated reads.
 
+### Phase 9 — The orchestrator hop (REOPENED 2026-08-23, not started)
+
+Phase 2 is headed "collapse the orchestrator" and did not collapse it. It removed the
+*inference* from role selection, which was the valuable half, and then the title was
+quietly left standing over a much smaller delivery. This phase reopens the other half
+with a scope narrow enough to finish and a measurement that says whether it worked.
+
+**What is actually there.** `src/core/orchestrator/` is 12,220 lines and `src/core/swarm/`
+is 5,878 — 18,100 against the 17,000 the plan opened by objecting to. It has not shrunk.
+
+**What the layer costs, measured against the live database (2026-08-23).**
+
+| | |
+|---|---|
+| orchestrator agent runs | 109 |
+| …that delegated to nobody | **56 (51%)**, averaging 8,975 tokens each |
+| …that delegated | 53, averaging 27,672 orchestrator tokens |
+| tokens spent being the orchestrator | 1,969,196 of 10,802,166 — **18.2% of all agent tokens** |
+| tokens spent on runs that delegated to nobody | **502,576** |
+
+Half of every orchestrator run is a model reading the request, deciding it does not
+need anyone, and answering — after a second model already read the same request to
+decide the orchestrator should run at all. That is the hop this phase deletes.
+
+**The target is not new code.** `AgentWorker` (`src/core/agent-worker.ts:810`) is already
+a single agent loop with tools, and it is what every specialist runs. `spawn_child` is
+already injected into non-orchestrator workers (`worker-spawner.ts:1033`, for pipeline
+stages) — so delegation is already an explicit tool any worker may call. Both halves of
+the two-path design exist. What sits between them is the routing hop.
+
+#### Scope — delete
+
+1. **The classifier's control-flow decision.** `service.ts:547` branches on
+   `classification.type === 'casual' && confidence >= 0.7 && outputMode !== 'file'` to
+   pick `directResponse` over `runOrchestrator`. Inference decides control flow here,
+   which is the thing the plan's first position objects to, and Phase 2 left it alone.
+2. **The orchestrator-as-router hop.** `runRouterTurn` (`router-turn.ts`) is
+   classify → one specialist → relay with no orchestrator LLM. Once the default path is
+   a worker with `spawn_child`, this is the same thing with a keyword table in front.
+3. **`directResponse` as a separate path.** 215 lines, no tool loop, one completion.
+   It is a chat shortcut, not an agent loop — see the cost note below before removing it.
+
+#### Scope — keep, and say why
+
+- **Pipelines** (`pipeline-manager.ts`, 2,700). Four database-resident templates that
+  users edit. Phase 2 already declined replacing these and the argument still holds.
+- **`handoff.ts` (449) and `role-contract.ts` (131).** Named in Phase 2 as deletion
+  candidates. They are reachable only from `pipeline-manager.ts` and `worker-spawner.ts`
+  — they belong to the pipeline engine, not to the routing hop, and go with it or not
+  at all.
+- **The swarm layer.** The ledger, scorers, call-graph and budget cascade are what bound
+  and record explicit delegation. Phase 1 already declined deleting the scorers and
+  found them load-bearing.
+- **`mode-selector.ts`** may keep resolving a *prompt* tier. It must stop resolving a
+  *control-flow* tier — see the constraint below.
+
+#### The constraint that stalled this last time
+
+`router` mode exists because a small local model cannot drive an agentic loop. Deleting
+the hop without a replacement breaks every Ollama install — which is a shipped path, not
+a development convenience. Any version of this phase that does not answer "what does a
+9B model do now" is not done, and merging it half-way is worse than either end state.
+
+Two candidate answers, both to be measured rather than assumed: give the small model the
+same loop with a reduced tool set and a hard iteration cap; or keep one deterministic
+pre-step for small models only, as a named function rather than a mode of the whole
+runtime.
+
+#### Cost note before deleting `directResponse`
+
+It is cached (`getResponseCache`) and toolless, which is why "hi" is cheap. Routing
+every casual turn through a tool-enabled worker will cost more tokens and more latency
+on exactly the most frequent request. Measure the casual-turn median *before* deleting
+it; if the loop cannot match it, the cache belongs in the loop, not in a second path.
+
+#### Runnable check
+
+`npm run orchestrator-cost` prints the table above from the rows the product already
+writes — no instrumentation to ship first, which is the only reason it will actually get
+run twice. Take it before the change and after, against comparable traffic, and assert:
+
+- **no orchestrator run delegates to nobody** — the 51% class is gone by construction,
+  because there is no orchestrator to run. This is the number that says the phase worked.
+- orchestrator share of agent tokens falls from 18.2% toward the cost of the one loop
+  that remains.
+- casual-turn latency does not regress against the pre-change median.
+- a 9B local model still completes `scripts/feature-bench.ts` at its current pass rate.
+- `src/core/orchestrator/` line count falls, and the number is recorded here rather
+  than described.
+
 ## Independent items
 
 These depend on nothing and can land in any phase. All four are done; each entry below carries what shipped and where the code overruled the plan.
@@ -289,7 +379,7 @@ Written 2026-08-23 after the measured pass, and rewritten the same day once ever
 
 **Phase 1 — drops.** Complete and smaller than planned: most of it was already gone, and the swarm scorers and call-graph deletions were declined because both are load-bearing.
 
-**Phase 2 — the orchestrator's inference layer.** The keyword classifier no longer picks the specialist; the delegation policy is unconditional; the deterministic role-fit rewrite is weak-model-only. Named workflow files are declined at this scale, with the argument recorded — revisit only when a template cannot express what it needs.
+**Phase 2 — the orchestrator's inference layer, and only that.** The keyword classifier no longer picks the specialist; the delegation policy is unconditional; the deterministic role-fit rewrite is weak-model-only. Named workflow files are declined at this scale, with the argument recorded. What this phase did NOT do is the thing its title claims: the orchestrator hop is still there, still chosen by a classifier, and now reopened as [Phase 9](#phase-9--the-orchestrator-hop-reopened-2026-08-23-not-started). Marking a phase done over a scope smaller than its heading is how that went unnoticed for a day.
 
 **Phase 3 — completion as a durable fact.** Scoped down after measurement, and now delivered at that scope with its last runnable check closed. A swarm child's start is durable and asymmetric by risk: it throws and the child does not run if the start cannot be recorded, while terminals stay best-effort. Pipeline stage workers got the same bracket. The stopped-short run that reported success is fixed, including the escalation path that laundered its own outcome on the way to the exit. And the boot sweep no longer pardons a crashed pipeline while leaving its stage row claiming to be running.
 
@@ -327,9 +417,16 @@ Eight product defects were found by running the product and fixed — four of th
 
 ### Next
 
-**Nothing in this plan is open.** The three migrations that ran in the second pass are described in their own sections above; the two that did not run are declined there with the argument, not deferred.
+**Phase 9 — the orchestrator hop.** Reopened 2026-08-23 with a scope and a measurement,
+and the only phase with work in it. Phase 2 claimed the title "collapse the orchestrator"
+and delivered the inference half; the routing hop it was named for survived, and the live
+numbers now say what it costs: 51% of orchestrator runs delegate to nobody. Read the
+constraint about small models before starting — it is what stalled this the first time.
 
-What is worth carrying forward is not a phase:
+The three migrations that ran in the second pass are described in their own sections
+above; the two that did not run are declined there with the argument, not deferred.
+
+Alongside it, and not phases:
 
 - **The recurring lesson collected again.** Phase 0's "test the real entry path" rule had been sitting unpaid because `start` ran the source. The moment it ran the artifact, the role registry's runtime directory scan produced an empty registry and the orchestrator died on its first turn — invisible until an unrelated log line stopped serialising its Error to `{}`. Two rules, both already written down, and the bug needed both of them to surface.
 - **Declining is a result.** Three of the eight phases ended in a measured decline — workflow files, the AI SDK, the durable engine — and in each case the plan's premise had been overtaken by work done since. Re-measure before building stays the most valuable rule in this document.
