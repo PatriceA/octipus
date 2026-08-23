@@ -1,7 +1,7 @@
 # Octipus rebuild: execution plan
 
-Date: 2026-08-22 · last updated 2026-08-23
-Status: in progress — phases 0 to 4 done or decided, all four independent items done, and every open item below the migrations closed. **What is left is Phases 5 to 8, and each is a single-branch migration rather than an increment.** Phase 5 carries the ordering constraint that a half-migrated runtime is worse than either end state, so the next step is a decision about which branch to open, not another increment.
+Date: 2026-08-22 · last updated 2026-08-23 (second pass)
+Status: **every phase is closed.** Phases 0 to 4 done or decided in the first pass; Phases 5, 7 and 8 shipped in the second; Phase 6 and the durable-execution half of Phase 5 are declined with the measurement recorded. What remains is not a phase — see [Where this stands](#where-this-stands).
 Findings: [rebuild-findings-2026-08-22.md](rebuild-findings-2026-08-22.md)
 Measured pass: [../reports/2026-08-23-feature-performance-pass.md](../reports/2026-08-23-feature-performance-pass.md) — every number below that is not a plan comes from there.
 State: see [Where this stands](#where-this-stands) at the end, which is the section to read first when resuming.
@@ -167,41 +167,77 @@ The same measurement fixed a third instance of the recurring bug class on the wa
 
 Runnable check: the DB-backed lane drives each invariant hold → violate → hold against real Postgres — the production query against real rows, not a hand-made argument. `TEST_POSTGRES_PORT=5453 npx tsx scripts/test-integration.ts src/core/invariants.test.ts`, eleven passing. Still open: exercising the detach-cap invariant against a live deployment configured back to zero.
 
-### Phase 5 — Runtime
+### Phase 5 — Runtime (done, 2026-08-23, except the durable engine, which is declined)
 
-Move the production runtime to Node LTS and replace Elysia with Hono — a close ergonomic match that runs unchanged on Node with no adapter lifecycle surprises. Bun stays for scripts and one-off tooling, where startup time is a genuine benefit and process semantics do not matter.
+Move the production runtime to Node LTS and replace Elysia with Hono — a close ergonomic match that runs unchanged on Node with no adapter lifecycle surprises.
+
+**The HTTP layer is a shim, not a rewrite, and that was the finding.** Ninety-five route modules, thirty-two route tests and three middleware plugins were written against a small and entirely regular slice of Elysia: a prefixed instance, the verb methods, `.use`, `.group`, `.derive`, four lifecycle hooks, `.ws`, and a context of `body`/`params`/`query`/`request`/`set`. `src/api/http/` implements that slice over Hono in about four hundred lines, so twenty thousand lines of routes did not change. What is deliberately NOT reproduced is per-instance hook scoping — every hook here is either on the root application or declared global.
+
+Three things in the shim are decisions rather than translations. Static route segments sort ahead of parameterised ones, because the previous router resolved that way and registration order would otherwise decide whether `/sessions/active` reaches its own handler. Query and path parameters are coerced to their declared types and bodies are NOT — a JSON body already carries types, and converting it would silently accept the mismatch the schema exists to reject. And the body parser works on a clone, so the four routes verifying a signature over exact bytes still read them; that removed two `onParse` hooks, one of which skipped WhatsApp signature verification entirely whenever the raw string it depended on was absent.
+
+The self-healing listener watchdog and the `beforeExit` surgery are deleted rather than ported. Both existed to work around the Bun adapter. A dropped listener should now surface as a crash.
+
+Bun is gone entirely rather than kept for scripts: the image, the CI, the installer, the launcher and every npm script are Node. Keeping a second runtime for tooling would have meant keeping its lockfile, its CI setup action and its divergences — and `bun.lock` being unwritable by Dependabot is one of the costs this phase was meant to remove.
 
 Move the test runner to Vitest, retiring `mock.module`. Dependency injection at the accessor layer — already the established pattern for the embedding service — replaces module mocking everywhere.
+
+**Vitest isolates each file in its own process, which retired the machinery eleven suites carried** to survive process-wide module mocks. Two projects: pure files at full width, and the seventy-eight that touch a database at one worker. That split is not about speed. Several PGlite instances booting at once wedge inside a WASM syscall where no timer can fire, so the file's own hook timeout never trips and the run hangs instead of failing; and the integration suites truncate shared tables, so in parallel against one server they deadlock. The classification reads the files rather than listing them, because the failure mode of a stale list is a hang.
+
+Three Bun behaviours turned out to be load-bearing and invisible. `.env` was auto-loaded on every start, so on Node the migration runner and every script began with no `DATABASE_URL` — now loaded explicitly, and NOT under test, because pointing a suite that truncates tables at the developer's real database is not a default worth keeping. `Bun.password`'s argon2id had to be reproduced exactly by `crypto.argon2` or every existing user would be locked out; a hash written by the old runtime is committed as a test. And the scratch-directory sweep, registered per file, deletes the live scratch of every sibling worker — it belongs in global setup.
 
 Storage stays as it is. Both modes are product: `external` is the normal deployment, and `embedded` PGlite is the supported path for installs with no Postgres of their own. Neither is a test fixture and neither is being replaced. Tests continue to run against whatever `DATABASE_URL` names — the existing default is a plain local `octipus_test` database — so a container is never required to run the suite, and a developer with a local Postgres install needs nothing else.
 
 What does change is that both modes get a lane. The `embedded` path ships to users and must be exercised as such, not merely as whatever a test happened to pick up. The PGlite problem this phase actually fixes is narrow and belongs to the runner rather than to storage: a test process that exits 99 while reporting zero failures is an exit-code propagation bug, and the Vitest migration is what makes that visible instead of hidden behind a pipe.
 
-Then put durable execution underneath the workflows from Phase 2. DBOS is the right first choice because it is a library over Postgres, which we already run, rather than a separate service; Temporal is the fallback if volume ever justifies its operational cost. The engine owns retries, timeouts, wall-clock budgets, and crash resumption — all currently hand-rolled, all having failed at least once.
+**The durable execution engine is DECLINED at current scale (decided 2026-08-23), for the same reason and by the same measurement as the workflow files in Phase 2.**
+
+The phase named four things the engine would own — retries, timeouts, wall-clock budgets and crash resumption — and said all four were hand-rolled and each had failed at least once. Measured against the repository after Phases 3 and 4, all four now exist and are covered. Retries are the graph's retry edges with `maxTraversals`. Wall-clock and token budgets are `NodeBudget` plus the per-node caps migration 0089 added. Crash resumption is a `pipeline_checkpoints` row written at every node boundary — the same mechanism pause, resume and rewind-to-node ride on — with a boot reconcile that no longer pardons a crashed run, and an invariant that fails if a terminal pipeline still has a stage marked running.
+
+There is also nothing for the engine to sit underneath. It was specified as going "underneath the workflows from Phase 2", and Phase 2 declined those: the four pipeline templates live in the database as user-editable recipes. Adopting DBOS would mean restructuring the graph walker into DBOS steps and re-plumbing QA verdict parsing, the evidence gate, pause, stop and the three node runners through it — the walker is roughly 470 of `pipeline-manager.ts`'s 2,700 lines, so the great majority of what would move is not the part the engine replaces. Against that it adds a schema, a dependency, and a second definition of "what is durable" beside the checkpoint row.
+
+Revisit when a failure appears that a checkpoint boundary genuinely cannot express — a mid-node crash whose partial work must be replayed rather than redone. Let that failure be the argument, as Phase 3 said: three for three, every predicted fold-fixes-this turned out to be one specific non-durable write costing a few lines.
 
 This phase is mechanical and large. Do it in one branch; a half-migrated runtime is worse than either end state.
 
-Runnable check: the full suite green under Vitest in both storage modes, with a non-zero exit code correctly propagated in each; `scripts/run-health.ts` still gating delivery latency; and a workflow that survives a process kill and resumes.
+Runnable check, and what it found: the full suite green under Vitest in both storage modes with the exit code propagated — **unit 4,131 and integration 4,207, both zero failures**. The interesting half was the check that the *published artifact* boots and serves, not the source under a loader. It did not. The role registry scanned its own directory at runtime and `require()`d each `config.ts`, which worked only because the previous runtime executed TypeScript from source; inside the bundle `import.meta.url` resolves into `dist/`, the scan found nothing, and the orchestrator failed its first turn on an undefined role. The registry is static imports now, with the prompts loaded as text so the bundler carries them, and `scripts/build.test.ts` asserts against `dist/index.js` that every prompt is in there — proved by removing one and watching it go red. This is Phase 0's "test the real entry path" rule collecting on the first phase that made `start` run the artifact.
 
-### Phase 6 — Provider layer
+### Phase 6 — Provider layer (DECLINED, 2026-08-23)
 
-Replace LiteLLM with the Vercel AI SDK as an in-process library, keeping the existing topic-to-model binding as the selection mechanism. Local models continue through Ollama's OpenAI-compatible endpoint. The standing rule that no model name is ever hardcoded stays in force; per-model behaviour continues to live in `model_config.metadata`.
+The plan was to replace LiteLLM with the Vercel AI SDK as an in-process library. Measured against the repository, the premise does not hold: `src/models/providers/` already contains eighteen direct in-process providers — Anthropic, OpenAI, Gemini, Vertex, Mistral, Moonshot, Grok, DeepSeek, Z.ai, OpenRouter, Voyage, Ollama, three custom-endpoint families and the CLI adapters. The in-process library the phase wanted already exists and is the path almost everything takes. Adopting the AI SDK would be a second abstraction over eighteen working providers, and the standing no-hardcoded-model rule would have to be re-established on top of it.
 
-Runnable check: the evaluation suite passes against both a paid provider and a local model with no LiteLLM process running.
+Nor is LiteLLM the second process the phase describes. `docker-compose.yml` runs no LiteLLM container — it is an optional external proxy URL, one provider among many, and the operator's own instance has exactly one enabled model bound to it. The "second process, second deploy" cost is opt-in rather than structural.
 
-### Phase 7 — Web
+Kept as one provider among many, decided by the operator. Revisit if the direct providers ever start duplicating protocol work the SDK does better; that duplication would be the argument.
 
-Replace Next.js with Vite and React Router in `web/`. The app uses no server rendering, and the static-export workarounds for the Tauri client's parameterised routes disappear with the framework. The marketing site keeps its own stack.
+### Phase 7 — Web (done, 2026-08-23)
 
-Runnable check: the Playwright web suite passes and the Tauri client's detail pages resolve without query-parameter routing hacks.
+Replace Next.js with Vite and React Router in `web/`. The app uses no server rendering and every one of its forty-four pages is a client component, so the framework was providing a router and a build. The marketing site keeps its own stack.
 
-### Phase 8 — Data
+The pages are untouched, by the same move the HTTP layer used: a hundred and eighteen components import from `next/navigation`, `next/link` and `next/image`, and the surface they use is `useRouter`, `usePathname`, `useSearchParams`, `redirect`, a link and an img. `web/compat/next/` is that surface over React Router.
 
-Retire Valkey. Postgres already serves as the vector store and system of record; `LISTEN`/`NOTIFY` covers pub/sub, advisory locks cover locking, a table covers the queue. Reintroduce a cache only against a measurement showing Postgres is the bottleneck.
+`next start` is replaced by forty lines of `node:http` — serve the file if it exists, serve `index.html` if it does not, proxy `/api`, `/a` and `/__artifacts__` same-origin so the session cookie is attached. Two pages genuinely changed, both because there is no server: `/setup` probes its status in the browser, and `/graph` renders `<Navigate replace>` rather than calling an imperative redirect that would mean a full page load.
 
-Constrain migrations so the journal cannot drift: generate only, never hand-edit, with `drizzle-kit check` in CI.
+The lint gate is the part worth keeping deliberately. The framework preset carried the React Compiler's hook rules and clearing their forty-one errors was real work; `eslint-plugin-react-hooks` keeps them behind `--max-warnings 0`, proved by feeding it a conditional hook and watching it fail.
 
-Runnable check: the stack boots and passes integration tests with the Valkey container removed from compose.
+Runnable check: the Playwright web suite passes — 64/64 against the built bundle — and a real browser drives the shipped UI against a live backend, 11/11 including a chat turn.
+
+Not done, and now merely available: the detail pages still route by query parameter (`/eval/view?id=…`). That shape existed because static export cannot prerender `[id]`; React Router has no such limit, so it is a one-line route change per page whenever prettier URLs are worth the bookmarks.
+
+### Phase 8 — Data (done, 2026-08-23)
+
+Retire Valkey. Postgres already serves as the vector store and system of record; `LISTEN`/`NOTIFY` covers pub/sub and a table covers the queue and the cache. Reintroduce a cache only against a measurement showing Postgres is the bottleneck.
+
+Smaller than it reads, because the `StorageProvider` seam was already there with two implementations. This adds a third — `kv_store` with an `expires_at`, `kv_queue` with `FOR UPDATE SKIP LOCKED`, `LISTEN`/`NOTIFY` — and makes it the external one. Advisory locks turned out not to be needed: nothing was using a distributed lock.
+
+Three behaviours are decisions, each with a test: expiry is enforced on read so the sweep only reclaims space; `increment` is one statement so concurrent counters do not lose each other; and a message over NOTIFY's 8000-byte payload limit spills to the table and travels as a pointer, because an 8KB ceiling that only appears under a big message in production is the worse failure.
+
+Ordering is the thing to know: external storage runs ON the database, so `initializeStorage` must follow `initializeDb`. The integration helper now sets the database up itself rather than trusting each caller.
+
+`src/db/redis.ts` is `src/db/cache.ts` and the `Redis*` classes lost the prefix; the `redis` key in the health payload and the `octipus_redis_up` metric keep their names, because they are a contract the dashboard and external monitoring read.
+
+**Migrations: the "generate only, never hand-edit" rule is NOT adopted, and should be dropped from this plan.** The repository diverged at 0085 — snapshots stop there and 0085 through 0089 are hand-written with journal entries. `drizzle-kit generate` currently cannot run non-interactively at all: it stops on an enum-conflict prompt from drift that predates this work. Reconciling that is its own task, and pretending the rule is in force while the tree says otherwise is worse than saying so. 0090 follows the established pattern.
+
+Runnable check: the stack boots and passes integration tests with the Valkey container removed from compose — 4,207 green, and the built artifact writing sessions, rate-limit counters, the scheduler heartbeat and a queue item into the new tables while serving login and authenticated reads.
 
 ## Independent items
 
@@ -245,6 +281,10 @@ Written 2026-08-23 after the measured pass, and rewritten the same day once ever
 
 ### Done
 
+**Phases 5, 7 and 8 — the migrations (second pass, 2026-08-23).** Node and Hono, Vitest, Vite and React Router, and Postgres in place of Valkey. Each shipped as one commit with its verification in the message. The HTTP layer and the web router are both compatibility shims rather than rewrites — the same move twice, and the reason twenty thousand lines of routes and forty-four pages did not change. Bun is gone from the image, the CI, the installer and the launcher.
+
+**Phase 6, and the durable engine inside Phase 5 — declined with the measurement.** Eighteen direct providers already are the in-process library the AI SDK was to supply, and LiteLLM is an optional proxy rather than a second deploy. Retries, budgets and crash resumption already exist as retry edges, `NodeBudget` and the checkpoint row, and there is no workflow engine for a durable engine to sit under because Phase 2 declined those too.
+
 **Phase 0 — rules.** Four testing rules and five configuration rules, in force. Applied to everything touched since.
 
 **Phase 1 — drops.** Complete and smaller than planned: most of it was already gone, and the swarm scorers and call-graph deletions were declined because both are load-bearing.
@@ -265,7 +305,15 @@ The last two are token accounting and goal state — the subsystems the phase as
 
 **The live harnesses.** Three, all new: `scripts/feature-bench.ts` (ten scenarios plus sixteen endpoints through the HTTP API both clients use, with tokens and roles read from the rows each run wrote), `scripts/ui-live-check.ts` (real browser, real app, real backend — the existing Playwright suite stubs every API call), and `scripts/tui-live-check.ts` (the TUI under a pty; a pipe gives an empty transcript because pi-tui only paints to a TTY).
 
-### Verified state, 2026-08-23
+### Verified state, 2026-08-23 (second pass)
+
+After the migrations, on Node: typecheck (backend and web), Biome lint on 915 files, ESLint on the web with the React Compiler hook rules, the catalog check, **unit 4,131** and **integration 4,207 against real Postgres with no Valkey container in the stack**, the Playwright web suite **64/64** against the built bundle, the live web UI **11/11** in a real browser against a live backend — including a chat turn that answered 17 × 23 = 391 — and the live TUI **4/4** under a pty. The built artifact boots, serves, and shuts down cleanly on SIGTERM in both storage modes.
+
+The coverage baseline was re-measured rather than lowered: v8 attributes lines and functions differently from the previous instrument, so the same tests over the same code read 48.96/50.93 where they read 52.8/61.9. The reason is recorded in `scripts/coverage-baseline.json`.
+
+One local note that still applies: port 5443 can be held by another project's Postgres, so `TEST_POSTGRES_PORT=5453 npx tsx scripts/test-integration.ts` is the form that always works.
+
+### Verified state, 2026-08-23 (first pass)
 
 Eleven lanes green: typecheck, lint (904 files), unit (4,298), TUI unit (251), web Playwright (64), integration against real Postgres (4,250), e2e against the live backend (142), the feature bench (10/10, twice), the API surface (16/16), the live web UI (11/11) and the live TUI (4/4).
 
@@ -279,19 +327,15 @@ Eight product defects were found by running the product and fixed — four of th
 
 ### Next
 
-Everything below the migrations is closed. What remains is Phases 5 to 8 — Node and Hono, Vitest, DBOS, the AI SDK, Vite, dropping Valkey — and none of them is an increment. Each is a single branch that is either finished or reverted, so the next step is a decision about which branch to open rather than more work of the kind this pass did.
+**Nothing in this plan is open.** The three migrations that ran in the second pass are described in their own sections above; the two that did not run are declined there with the argument, not deferred.
 
-Phase 5 is the one with a stated ordering constraint: do it in one branch, because a half-migrated runtime is worse than either end state. It is also the one that unblocks the most, since Vitest and the durable workflow engine both sit behind it.
+What is worth carrying forward is not a phase:
 
-Two smaller things are open and do not need a branch:
-
-- **The remaining defensive rules** — *normalise a public contract on both sides*, so a thrown exception always means a defect rather than a provider problem, and the *shared-interval* half of *async state is not synchronous state*. Both are rules to apply while touching the relevant code, not projects.
-- **The detach-cap invariant against a live deployment configured back to zero.** The check is written and green against real rows; what has never been done is watching it fire on a real instance.
-
-Two open questions carried from the review of this pass, both product decisions rather than defects:
-
-- `/api/metrics` is mounted but 404s until `METRICS_TOKEN` is set. Deliberate, and worth setting on any instance being scraped.
-- `local-fit.ts` guards the direct-provider branch only, so a local model registered against the LiteLLM proxy bypasses the fail-fast. It fails open by design, but it is the repo's recurring gate-reachability shape.
+- **The recurring lesson collected again.** Phase 0's "test the real entry path" rule had been sitting unpaid because `start` ran the source. The moment it ran the artifact, the role registry's runtime directory scan produced an empty registry and the orchestrator died on its first turn — invisible until an unrelated log line stopped serialising its Error to `{}`. Two rules, both already written down, and the bug needed both of them to surface.
+- **Declining is a result.** Three of the eight phases ended in a measured decline — workflow files, the AI SDK, the durable engine — and in each case the plan's premise had been overtaken by work done since. Re-measure before building stays the most valuable rule in this document.
+- **The migration rule that was aspiration.** Phase 8 says "generate only, never hand-edit" for migrations. The tree diverged at 0085 and `drizzle-kit generate` cannot currently run non-interactively because of pre-existing enum drift. Either reconcile that drift and make the rule true, or delete the rule. Leaving it written but unenforced is the shape this repository keeps paying for.
+- **Two open questions carried from the first pass**, both still product decisions rather than defects: `/api/metrics` 404s until `METRICS_TOKEN` is set, and `local-fit.ts` guards the direct-provider branch only, so a local model registered against the LiteLLM proxy bypasses the fail-fast.
+- **The detach-cap invariant against a live deployment configured back to zero.** Written and green against real rows; never watched firing on a real instance.
 
 ### Closed on 2026-08-23, and what each turned out to be
 
@@ -334,6 +378,12 @@ One unit-test flake: a single failure appeared twice in roughly ten full-suite r
 
 The `new` session dialog duplicate is **fixed, 2026-08-23**. The dialog is a choice not yet made, and the composer behind it stayed live: a message sent while it was open auto-created its own session, and confirming the dialog then added a second, empty one. The composer is now disabled — and says why — for as long as the dialog is open.
 
-## Expected outcome
+## Expected outcome, and what it turned out to be
 
-Around seventeen thousand lines of coordination logic reduce to a single agent loop plus a small set of explicit workflow files. One runtime instead of two, one process for model routing instead of two, one data store instead of two. The bug classes behind the delivery lag, the inert gates, the discarded detached children, and the zero-file pipeline become unrepresentable rather than merely fixed.
+The plan expected seventeen thousand lines of coordination logic to reduce to a single agent loop plus explicit workflow files, one runtime instead of two, one process for model routing instead of two, and one data store instead of two.
+
+Two of those four landed as written. **One runtime**: Node end to end, Bun gone from the image, the CI, the installer and the launcher, and with it the adapter watchdog, the `beforeExit` surgery and the process-wide module mocks. **One data store**: Postgres serves the cache, the queue and the pub/sub, and the Valkey container is out of both compose files.
+
+The other two did not survive contact, and the measurements are the useful part. The seventeen thousand lines did not collapse into an agent loop: the valuable half of that thesis was making delegation explicit rather than inferred, which Phase 2 delivered by removing the classifier's role directive, and the rest turned out to be four database-resident pipeline templates that a TypeScript engine would take *out* of the users' hands. Model routing was already one process — eighteen in-process providers — with LiteLLM an optional proxy beside them.
+
+What did become harder to represent: a run that reports success while stopped short, a crashed pipeline that leaves a stage claiming to be running, a child holding a budget its level does not allow, a detach cap silently at zero, and — new in the second pass — a shipped artifact whose prompts stayed behind in the source tree.

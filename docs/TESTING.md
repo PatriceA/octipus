@@ -3,15 +3,19 @@
 This project has four distinct test surfaces. Each is scoped so it runs fast
 and doesn't need the full stack.
 
-## 1. Unit + integration tests — `bun test`
+## 1. Unit + integration tests — `npm test`
 
-Runs the production code's Bun test suite (`src/**/*.test.ts`,
-`scripts/**/*.test.ts`). Requires Postgres for some specs — most run
-pure in-process and are fine offline.
+Runs the Vitest suite (`src/**/*.test.ts`, `scripts/**/*.test.ts`) across two
+projects. Files that touch a database — embedded PGlite or the shared test
+Postgres — run in the `database` project at one worker; everything else runs at
+full width in `unit`. The split is classified by reading the files, not from a
+list, because a file in the wrong project hangs or deadlocks rather than
+failing (see `vitest.config.ts`). Most specs are pure in-process and fine
+offline.
 
 ```
-bun test               # unit + integration under src/ and scripts/
-bun run test:tui       # just the TUI tests (src/tui-pi and src/tui-editor)
+npm test               # unit + integration under src/ and scripts/
+npm run test:tui       # just the TUI tests (src/tui-pi and src/tui-editor)
 ```
 
 The TUI suite uses `ink-testing-library` with a compatibility shim (see
@@ -24,7 +28,7 @@ testing library's stdin mock. The `MockGatewayClient` mirrors the real
 End-to-end HTTP + WebSocket tests against a running backend.
 
 ```
-bun run test:e2e
+npm run test:e2e
 ```
 
 See `scripts/e2e/index.ts` for the orchestrator and `scripts/e2e/fixtures.ts`
@@ -37,11 +41,11 @@ with the backend on `http://localhost:3005/api` for real routes and heavy
 `page.route()` interception for everything else.
 
 ```
-bun run test:web:install   # one-time: playwright install chromium
-bun run test:web           # headless Chromium
-bun run test:web:headed    # headed (watch it run)
-bun run test:web:ui        # Playwright's interactive UI mode
-bun run test:web:list      # list discovered tests without running
+npm run test:web:install   # one-time: playwright install chromium
+npm run test:web           # headless Chromium
+npm run test:web:headed    # headed (watch it run)
+npm run test:web:ui        # Playwright's interactive UI mode
+npm run test:web:list      # list discovered tests without running
 ```
 
 Config lives at `playwright.config.ts` and tests at `tests/web/*.spec.ts`.
@@ -49,15 +53,16 @@ Config lives at `playwright.config.ts` and tests at `tests/web/*.spec.ts`.
 Key design notes:
 
 - **Dev server orchestration**: `playwright.config.ts`'s `webServer` block
-  spawns both the backend (`bun run src/index.ts`) and the Next.js dev server
-  (`bun --cwd web dev`). In CI we don't reuse existing servers; locally we do.
+  builds the web bundle and serves it with `web/serve.mjs`. Every `/api/**`
+  call is stubbed in the browser, so no backend is needed. In CI we don't
+  reuse existing servers; locally we do.
   Set `PLAYWRIGHT_SKIP_WEBSERVERS=1` to run against a hand-started stack.
 - **Auth fixture** (`tests/web/fixtures/auth.ts`): the `authenticatedPage`
   fixture seeds `localStorage` with a stub token + intercepts `/api/auth/me`
   so the AuthProvider passes the guard. When `MASTER_KEY` is set in env, the
   real key is used and we exercise the master-key auth path.
 - **Mock-heavy**: the UI is under test here, not the backend (the backend has
-  881+ bun tests of its own). Default stubs in `tests/web/fixtures/api-stubs.ts`
+  881+ unit tests of its own). Default stubs in `tests/web/fixtures/api-stubs.ts`
   cover sessions, models, experts, MCP, knowledge, skills, pipelines, swarm,
   settings — tests compose or override as needed.
 - **Console-error watchdog**: the auth fixture wires `page.on('pageerror')`
@@ -70,12 +75,12 @@ Key design notes:
 - **Mobile**: the `responsive.spec.ts` suite runs under the `chromium-mobile`
   project (Pixel 5 viewport) — see `playwright.config.ts`.
 
-## 4. Integration harness — `bun run test:integration`
+## 4. Integration harness — `npm run test:integration`
 
 Previously-skipped integration tests backed by `docker-compose.test.yml`. Spins up an isolated Postgres and runs specs that need real DB transactions or cross-process pub/sub. Coverage includes MCP transports (stdio + SSE) and storage provider parity (Postgres vs in-memory).
 
 ```
-bun run test:integration
+npm run test:integration
 ```
 
 The compose file is scoped to this harness — ports don't collide with the dev stack.
@@ -84,10 +89,10 @@ The compose file is scoped to this harness — ports don't collide with the dev 
 
 | Surface           | Command             | Needs docker? | Typical time |
 |-------------------|---------------------|---------------|--------------|
-| Unit + TUI        | `bun test`          | no            | ~5s          |
-| Integration (DB)  | `bun run test:integration` | yes (test compose) | ~30s |
-| API E2E           | `bun run test:e2e`  | yes           | ~1–2 min     |
-| Web UI (Playwright) | `bun run test:web` | no (webServer auto-starts) | ~2–5 min |
+| Unit + TUI        | `npm test`          | no            | ~5s          |
+| Integration (DB)  | `npm run test:integration` | yes (test compose) | ~30s |
+| API E2E           | `npm run test:e2e`  | yes           | ~1–2 min     |
+| Web UI (Playwright) | `npm run test:web` | no (webServer auto-starts) | ~2–5 min |
 
 Run them all in parallel lanes; the Web UI lane is fully self-contained because
 it intercepts all provider calls — no API keys needed.
@@ -110,12 +115,11 @@ Full swarm flow E2E lives at `scripts/e2e/tests/swarm-flow.ts` — exercises Orc
 ## Troubleshooting
 
 **Playwright tests flake on my machine**: check that `API_PORT=3005` and that
-the backend starts cleanly (run `bun run src/index.ts` by hand once). If the
+the backend starts cleanly (run `npm run dev` by hand once). If the
 webServer block times out, bump its `timeout:` in `playwright.config.ts`.
 
-**`bun test` picks up Playwright specs and errors**: the root `test` script
-is scoped to `bun test src scripts` specifically to avoid this. Run the
-scripts, not `bun test` directly with no args.
+**Playwright specs picked up by the unit runner**: they are excluded in
+`vitest.config.ts`. `npm run test:web` is the only thing that runs them.
 
 **TUI tests fail with `stdin.ref is not a function`**: make sure your tests
 import `render` from `src/tui/test-utils.tsx`, not directly from

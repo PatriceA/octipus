@@ -98,7 +98,7 @@ WEB_PORT=3009
 ## Browser Tool: Playwright Not Installed
 
 ```bash
-bunx playwright install chromium
+npx playwright install chromium
 ```
 
 ## "No model bound to topic X"

@@ -424,6 +424,9 @@ export async function collectModuleGraph(): Promise<{ edges: Map<string, Map<str
     format: 'esm',
     platform: 'node',
     packages: 'external',
+    // Role prompts are imported as text; without the loader the graph scan
+    // fails on them rather than on anything about the graph.
+    loader: { '.md': 'text' },
     logLevel: 'silent',
   });
 

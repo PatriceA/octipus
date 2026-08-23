@@ -6,7 +6,7 @@ How to configure and prompt Octipus to trigger different features.
 
 Before using advanced features, ensure:
 
-1. **Backend running**: `bun run dev` (or `bun run src/index.ts`) on port 3005
+1. **Backend running**: `npm run dev` (or `npm run dev`) on port 3005
 2. **PostgreSQL**: Docker service running (`docker compose up -d`)
 3. **LLM model available**: At least one model configured in LiteLLM (default: `qwen3:14b`)
 4. **Web UI**: Access at `http://localhost:3007` (auto-started with backend)

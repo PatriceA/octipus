@@ -62,7 +62,7 @@ See [docs/DOCKER.md](docs/DOCKER.md).
 from `OCTIPUS_SETUP_*` env vars (`_STORAGE`, `_ADMIN_USER`,
 `_ADMIN_PASS`, `_PROVIDER`, `_API_KEY`, `_MODEL`, `_INSTALL_CAPS`).
 
-**Cloning manually instead?** `git clone && bun install && octi setup`
+**Cloning manually instead?** `git clone && npm install && octi setup`
 does the same thing the installer does — see
 [CONTRIBUTING.md](CONTRIBUTING.md) for the dev path.
 
@@ -124,7 +124,7 @@ Deep dive: [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md) · [.octipus
 
 ## Technologies and ideas worth a look
 
-- **Bun** runtime end to end — fast tests, single lock, single package manager.
+- **Node** end to end — one runtime for the server, the scripts, the tests and the web build.
 - **Drizzle ORM** + Postgres + **pgvector** for hybrid (BM25 + vector) RAG.
 - **PGlite** for embedded mode — zero external deps, single-user.
 - **WebSocket gateway** with typed Zod protocol — every channel speaks the same dialect.
@@ -156,10 +156,10 @@ Full feature breakdown: see the [documentation index](#documentation) below.
 
 ```bash
 git clone https://github.com/PatriceA/octipus.git
-cd octipus && bun install
-cd web && bun install && cd ..
-cd mcp-server && bun install && cd ..   # standalone MCP server (not a root workspace)
-bun run setup        # the single wizard (same as `octi setup`)
+cd octipus && npm install
+cd web && npm install && cd ..
+cd mcp-server && npm install && cd ..   # standalone MCP server (not a root workspace)
+npm run setup        # the single wizard (same as `octi setup`)
 octi start           # backend + web UI (server / browser)
 # …or `octi desktop` for the Tauri desktop app (see "Desktop app" below)
 ```
@@ -188,7 +188,7 @@ curl -fsSL https://raw.githubusercontent.com/PatriceA/octipus/main/scripts/insta
 
 Requirements: **Node ≥ 24**, **Docker** (for the full stack), **Postgres 15** (external mode).
 
-> **Runtime split:** the server runs on **Bun only** (tests, scripts, channels, gateway, MCP server). The web dashboard runs on Node via Next.js. Bun is not a soft requirement — provider clients, the LiteLLM bridge, and the gateway rely on Bun's runtime surface. There is no Node entry point for the server and there are no plans to add one.
+> **Runtime:** Node, everywhere — the server, the scripts, the tests, the TUI and the web build. `npm run build` produces `dist/index.js` and `npm start` runs that artifact, not the source; the web bundle is static files served by `web/serve.mjs`.
 
 ## Outlook
 
