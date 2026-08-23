@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import type { RecipeParameter } from '@/db/schema/pipeline-templates';
 import {
   paramTemplateVars,

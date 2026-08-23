@@ -11,7 +11,7 @@
  * route-level chat session-ownership branch is already covered by
  * sessions.isolation.test.ts.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { ApprovalManager } from '@/core/orchestrator/approval-manager';
 
 const aliceId = '11111111-1111-1111-1111-111111111111';

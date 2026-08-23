@@ -1,5 +1,5 @@
 import { execSync } from 'child_process';
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { existsSync, mkdirSync, readdirSync, realpathSync, statSync } from 'fs';
 import { homedir } from 'os';
 import { join, resolve } from 'path';

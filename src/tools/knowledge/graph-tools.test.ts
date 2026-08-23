@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, type Mock, spyOn, test } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, describe, expect, test, type Mock, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -53,12 +53,12 @@ describe('KnowledgeTool graph tools', () => {
     // timing out the suite (flaky in CI). Restored in afterAll so the stub does
     // not leak to later test files sharing the singleton.
     const { getEmbeddingService } = await import('@/core/rag/embeddings');
-    embeddingSpy = spyOn(getEmbeddingService(), 'generateEmbedding').mockRejectedValue(
+    embeddingSpy = vi.spyOn(getEmbeddingService(), 'generateEmbedding').mockRejectedValue(
       new Error('No embedding model configured (test) — re-index degrades to indexed:false'),
     );
     // indexText embeds in batches, so `embedBatch` is the seam that must fail
     // locally too — otherwise indexing reaches a configured proxy for real.
-    spyOn(getEmbeddingService(), 'embedBatch').mockImplementation(async (texts: string[]) =>
+    vi.spyOn(getEmbeddingService(), 'embedBatch').mockImplementation(async (texts: string[]) =>
       texts.map(() => new Error('No embedding model configured (test) — re-index degrades to indexed:false')),
     );
     const { KnowledgeTool } = await import('./index');

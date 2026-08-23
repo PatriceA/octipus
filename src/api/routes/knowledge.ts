@@ -1,4 +1,4 @@
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { CODE_NOT_INDEXED_MESSAGE, isCodeFile } from '@/core/rag/code-detection';
 import { type EmbeddingPurpose, getEmbeddingService } from '@/core/rag/embeddings';
@@ -271,7 +271,7 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
     const validPurpose = 'document' as const;
 
     // Sandbox the caller-supplied path BEFORE anything else touches it.
-    // Without this, `indexer.indexFile` does `Bun.file(path).text()` on ANY
+    // Without this, `indexer.indexFile` does `fileAt(path).text()` on ANY
     // absolute path the request names — an authenticated user could index
     // `/etc/passwd`, app secrets, or another tenant's workspace into their
     // own KB and read it back via search. `WorkspaceFS.forAgent` pins
@@ -303,7 +303,7 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
 
     try {
       if (type === 'directory') {
-        const globPatterns = patterns ? patterns.split(',').map(p => p.trim()) : undefined;
+        const globPatterns = patterns ? patterns.split(',').map((p: string) => p.trim()) : undefined;
         // Per-file guard: a globbed leaf that realpath-resolves outside the
         // workspace (e.g. a symlink to /etc) is skipped, not indexed.
         const result = await indexer.indexDirectory(safePath, globPatterns, {

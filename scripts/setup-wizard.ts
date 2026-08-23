@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env tsx
 /**
  * `octi setup` — the single Octipus setup wizard.
  *
@@ -9,7 +9,7 @@
  *   1. Detect runtime + services (shared probes from src/setup/probes.ts)
  *   2. Storage mode  → writes secrets-only .env
  *   3. Secrets       → auto-generated, written to .env
- *   4. Boot backend  → spawns `bun run src/index.ts`, waits on /api/health
+ *   4. Boot backend  → spawns `npx tsx src/index.ts`, waits on /api/health
  *   5. Admin account → POST /api/auth/register (first user gets admin grant)
  *   6. Provider      → select from canonical PROVIDERS, key into vault
  *   7. Default model → PATCH /api/settings
@@ -23,7 +23,6 @@
  *   OCTIPUS_SETUP_STORAGE=embedded|external
  *   OCTIPUS_SETUP_DATA_DIR=~/.octipus/data       (embedded)
  *   OCTIPUS_SETUP_DATABASE_URL=postgres://…      (external)
- *   OCTIPUS_SETUP_REDIS_URL=redis://…            (external)
  *   OCTIPUS_SETUP_API_PORT=3005
  *   OCTIPUS_SETUP_API_HOST=127.0.0.1
  *   OCTIPUS_SETUP_ADMIN_USER, _ADMIN_PASS, _ADMIN_EMAIL
@@ -64,6 +63,7 @@ import {
   UV_INSTALL_HINT,
   type FasterWhisperModel,
 } from '@/voice/provision';
+import { type ChildProcessHandle, spawnProcess } from '@/utils/proc';
 
 // ── Args ───────────────────────────────────────────────────────────
 
@@ -222,7 +222,6 @@ function infoStep(ctx: WizardCtx, title: string, lines: string[]): Promise<void>
 export interface BootstrapConfig {
   storageMode: 'embedded' | 'external';
   databaseUrl: string;
-  redisUrl: string;
   dataDir: string;
   apiPort: string;
   apiHost: string;
@@ -268,7 +267,7 @@ export function buildEnv(cfg: BootstrapConfig, secrets: { masterKey: string; jwt
     `STORAGE_MODE=${cfg.storageMode}`,
   ];
   if (cfg.storageMode === 'external') {
-    lines.push(`DATABASE_URL=${cfg.databaseUrl}`, `REDIS_URL=${cfg.redisUrl}`);
+    lines.push(`DATABASE_URL=${cfg.databaseUrl}`);
   } else {
     lines.push(`DATA_DIR=${cfg.dataDir}`);
   }
@@ -287,14 +286,14 @@ export function buildEnv(cfg: BootstrapConfig, secrets: { masterKey: string; jwt
 // ── Backend lifecycle ──────────────────────────────────────────────
 
 interface BackendHandle {
-  proc: ReturnType<typeof Bun.spawn>;
+  proc: ChildProcessHandle;
   url: string;
   shutdown: () => Promise<void>;
 }
 
 async function bootBackend(apiHost: string, apiPort: string): Promise<BackendHandle> {
   const url = `http://${apiHost === '0.0.0.0' ? '127.0.0.1' : apiHost}:${apiPort}`;
-  const proc = Bun.spawn(['bun', 'run', 'src/index.ts'], {
+  const proc = spawnProcess(['bun', 'run', 'src/index.ts'], {
     cwd: process.cwd(),
     stdout: 'pipe',
     stderr: 'pipe',
@@ -311,7 +310,7 @@ async function bootBackend(apiHost: string, apiPort: string): Promise<BackendHan
     const decoder = new TextDecoder();
     for await (const chunk of stream) captured += decoder.decode(chunk, { stream: true });
   };
-  const draining = Promise.all([drain(proc.stdout), drain(proc.stderr)]);
+  const draining = Promise.all([drain(proc.stdout ?? undefined), drain(proc.stderr ?? undefined)]);
   const tail = () => captured.trim().slice(-2000) || '(no output captured)';
 
   // Wait for /api/health (max 60s — first boot runs migrations + seeds).
@@ -439,16 +438,13 @@ async function runPreBackend(ctx: WizardCtx | null): Promise<BootstrapConfig & {
   }
 
   let databaseUrl = '';
-  let redisUrl = '';
   let dataDir = resolve(homedir(), '.octipus', 'data');
 
   if (storageMode === 'external') {
     if (NON_INTERACTIVE) {
       databaseUrl = process.env.OCTIPUS_SETUP_DATABASE_URL || 'postgresql://octipus:octipus@localhost:5432/octipus';
-      redisUrl = process.env.OCTIPUS_SETUP_REDIS_URL || 'redis://localhost:6379';
     } else if (ctx) {
       databaseUrl = await textStep(ctx, 'Database URL', 'PostgreSQL connection string', 'postgresql://octipus:octipus@localhost:5432/octipus');
-      redisUrl = await textStep(ctx, 'Valkey URL', 'Valkey (or Redis-compatible) connection string', 'redis://localhost:6379');
     }
   } else if (ctx && !NON_INTERACTIVE) {
     dataDir = await textStep(ctx, 'Data directory', 'Where to store the embedded database', dataDir);
@@ -466,7 +462,6 @@ async function runPreBackend(ctx: WizardCtx | null): Promise<BootstrapConfig & {
   return {
     storageMode,
     databaseUrl,
-    redisUrl,
     dataDir,
     apiPort,
     apiHost,

@@ -28,7 +28,7 @@ interface OctipusMcpLaunch {
  * runtime/entry/port/token resolution lives in exactly one place.
  */
 function resolveOctipusMcpLaunch(): OctipusMcpLaunch {
-  const projectRoot = resolve(join(import.meta.dir, '../..'));
+  const projectRoot = resolve(join(import.meta.dirname, '../..'));
   const mcpServerEntry = join(projectRoot, 'mcp-server/dist/index.js');
   const mcpServerSrc = join(projectRoot, 'mcp-server/src/index.ts');
 

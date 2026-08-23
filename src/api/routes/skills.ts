@@ -1,5 +1,5 @@
 import { eq, inArray, or } from 'drizzle-orm';
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getDb } from '@/db/postgres';
 import { skillRepository, type SkillUpdate } from '@/db/repositories/skill-repository';
@@ -50,7 +50,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
 
       let rows;
       if (query.ids) {
-        const idList = query.ids.split(',').map((s) => s.trim()).filter(Boolean);
+        const idList = query.ids.split(',').map((s: string) => s.trim()).filter(Boolean);
         rows = await db.select().from(skills).where(inArray(skills.id, idList));
       } else {
         // Export all custom (non-system) skills visible to the user

@@ -9,7 +9,7 @@
  * the child role"), which replaces a capable model's read of the whole request
  * with a regex table's read of it.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { assembleSystemPrompt, buildDelegationPolicy, buildTopicHint } from './orchestrator-runner';
 import { splitVolatileSystem } from '@/models/providers/prompt-cache';
 

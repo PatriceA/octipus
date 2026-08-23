@@ -10,6 +10,7 @@ import type { MCPTransport } from './transports/interface';
 import { SSETransport } from './transports/sse';
 import { StdioTransport } from './transports/stdio';
 import { StreamableHTTPTransport } from './transports/streamable-http';
+import { fileAt, writeFileAt } from '@/utils/fs-file';
 
 export interface MCPServerConnection {
   id: string;
@@ -44,8 +45,8 @@ export class MCPBridge extends EventEmitter {
     // Prefer file-based config if explicitly configured
     if (config.mcp.serversConfigPath) {
       try {
-        const file = Bun.file(config.mcp.serversConfigPath);
-        const content = await file.json();
+        const file = fileAt(config.mcp.serversConfigPath);
+        const content = await file.json<{ servers?: MCPServer[] }>();
         this.serverConfigs = content.servers || [];
         coreLogger.info({ count: this.serverConfigs.length, source: 'file' }, 'MCP server configs loaded');
         return;
@@ -525,7 +526,7 @@ export class MCPBridge extends EventEmitter {
     // Prefer file-based storage if explicitly configured
     if (config.mcp.serversConfigPath) {
       const content = JSON.stringify({ servers: this.serverConfigs }, null, 2);
-      await Bun.write(config.mcp.serversConfigPath, content);
+      await writeFileAt(config.mcp.serversConfigPath, content);
       return;
     }
 

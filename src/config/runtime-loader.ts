@@ -19,8 +19,8 @@ async function lazyGetVault() {
 
 /**
  * Load runtime configuration from the settings service (DB + vault).
- * Merges: defaults → DB settings → bootstrap overrides for DB/Redis/security/api.
- * Call this after DB, Redis, vault, and settings service are initialized.
+ * Merges: defaults → DB settings → bootstrap overrides for DB/security/api.
+ * Call this after the DB, vault, and settings service are initialized.
  */
 export async function loadRuntimeConfig(
   setCache: (config: Config) => void,
@@ -82,12 +82,11 @@ export async function loadRuntimeConfig(
       (!!runtimePartial.voice.ttsProvider && runtimePartial.voice.ttsProvider !== 'piper');
   }
 
-  // Build final config: defaults → DB runtime values → bootstrap (DB/Redis/security/api.host/api.port)
+  // Build final config: defaults → DB runtime values → bootstrap (DB/security/api.host/api.port)
   const merged = deepMerge(
     deepMerge(defaultConfig, runtimePartial),
     {
       database: bootstrap.database,
-      redis: bootstrap.redis,
       security: {
         ...runtimePartial.security,
         masterKey: bootstrap.security.masterKey,

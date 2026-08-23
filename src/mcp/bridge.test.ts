@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach } from 'bun:test';
+import { beforeEach, describe, expect, test } from 'vitest';
 import { MCPBridge } from './bridge';
 import type { AgentContext } from '@/core/types';
 

@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { withFileMutationQueue } from './file-mutation-queue';
 
 describe('File Mutation Queue', () => {

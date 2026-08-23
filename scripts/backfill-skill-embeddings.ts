@@ -20,7 +20,7 @@
  * Idempotent — re-running after a successful run is a no-op (rows where
  * embedding non-null AND hash matches current content are skipped).
  *
- * Usage: bun run scripts/backfill-skill-embeddings.ts
+ * Usage: npx tsx scripts/backfill-skill-embeddings.ts
  */
 import { createHash } from 'node:crypto';
 import { eq } from 'drizzle-orm';

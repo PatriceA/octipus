@@ -4,7 +4,6 @@ import type { Config, StorageMode } from './schema';
 export interface BootstrapConfig {
   storageMode: StorageMode;
   database: Config['database'];
-  redis: Config['redis'];
   security: {
     masterKey: string;
     jwtSecret: string;
@@ -18,7 +17,7 @@ export interface BootstrapConfig {
 
 /**
  * Load bootstrap configuration from environment variables.
- * Only reads the vars needed before DB/Redis are available.
+ * Only reads the vars needed before the database is available.
  */
 export function loadBootstrapConfig(): BootstrapConfig {
   const storageMode = (process.env.STORAGE_MODE || 'external') as StorageMode;
@@ -31,12 +30,6 @@ export function loadBootstrapConfig(): BootstrapConfig {
       poolSize: parseInt(process.env.DB_POOL_SIZE || '10', 10),
       idleTimeout: parseInt(process.env.DB_IDLE_TIMEOUT || '30000', 10),
       connectionTimeout: parseInt(process.env.DB_CONNECTION_TIMEOUT || '10000', 10),
-    },
-    redis: {
-      url: process.env.REDIS_URL || defaultConfig.redis!.url!,
-      keyPrefix: process.env.REDIS_KEY_PREFIX || defaultConfig.redis!.keyPrefix!,
-      maxRetries: parseInt(process.env.REDIS_MAX_RETRIES || '3', 10),
-      retryDelay: parseInt(process.env.REDIS_RETRY_DELAY || '1000', 10),
     },
     security: {
       masterKey: process.env.MASTER_KEY || '',

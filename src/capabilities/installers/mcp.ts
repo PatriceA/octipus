@@ -10,6 +10,8 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { InstallerModule } from '@/capabilities/service';
+import { fileAt } from '@/utils/fs-file';
+import { spawnProcess } from '@/utils/proc';
 
 const installer: InstallerModule = {
   kind: 'npm-build',
@@ -20,7 +22,7 @@ const installer: InstallerModule = {
     }
 
     const run = async (cmd: string[], step: string) => {
-      const proc = Bun.spawn(cmd, { cwd, stdout: 'pipe', stderr: 'pipe' });
+      const proc = spawnProcess(cmd, { cwd, stdout: 'pipe', stderr: 'pipe' });
       const [stdout, stderr, exit] = await Promise.all([
         new Response(proc.stdout).text(),
         new Response(proc.stderr).text(),
@@ -42,7 +44,7 @@ const installer: InstallerModule = {
   },
   version: async () => {
     try {
-      const pkg = await Bun.file(resolve(process.cwd(), 'mcp-server', 'package.json')).json();
+      const pkg = await fileAt(resolve(process.cwd(), 'mcp-server', 'package.json')).json<{ version?: string }>();
       return pkg?.version ? `mcp-server@${pkg.version}` : null;
     } catch {
       return null;

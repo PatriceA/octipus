@@ -1,4 +1,4 @@
-import { describe, test, expect, mock } from 'bun:test';
+import { describe, expect, test, vi } from 'vitest';
 import { ClassifiedError, FailoverReason } from '@/core/errors/classification';
 import { OpenAIProvider } from './openai-provider';
 import { AnthropicProvider } from './anthropic-provider';
@@ -233,7 +233,7 @@ describe('CLIProvider classified errors', () => {
     const { getQuotaTracker } = await import('../quota-tracker');
     const tracker = getQuotaTracker();
     const origGet = tracker.getStatus.bind(tracker);
-    tracker.getStatus = mock(async () => ({ provider: 'claude-code', hasQuota: true, exhausted: false })) as any;
+    tracker.getStatus = vi.fn(async () => ({ provider: 'claude-code', hasQuota: true, exhausted: false })) as any;
 
     try {
       let thrown: unknown;
@@ -255,8 +255,8 @@ describe('CLIProvider classified errors', () => {
     const tracker = getQuotaTracker();
     const origGet = tracker.getStatus.bind(tracker);
     const origMark = tracker.markExhausted.bind(tracker);
-    tracker.getStatus = mock(async () => ({ provider: 'claude-code', hasQuota: true, exhausted: false })) as any;
-    tracker.markExhausted = mock(async () => {}) as any;
+    tracker.getStatus = vi.fn(async () => ({ provider: 'claude-code', hasQuota: true, exhausted: false })) as any;
+    tracker.markExhausted = vi.fn(async () => {}) as any;
 
     try {
       let thrown: unknown;

@@ -5,7 +5,7 @@
  *
  * docs/plans/blocked-vs-stuck.md Phase 1.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { BLOCKED_PROGRESS_INTERVAL_MS, blockedReason, startBlockedHeartbeat } from './agent-worker';
 
 describe('blockedReason', () => {

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -45,11 +45,11 @@ describe('NoteService', () => {
     const { EmbeddingService } = await import('@/core/rag/embeddings');
     const embeddings = new EmbeddingService('test-model');
     const noModel = new Error('No embedding model configured (test) — re-index degrades to indexed:false');
-    spyOn(embeddings, 'generateEmbedding').mockRejectedValue(noModel);
+    vi.spyOn(embeddings, 'generateEmbedding').mockRejectedValue(noModel);
     // Indexing embeds in batches, so `embedBatch` is the network seam that
     // matters for the degradation contract — stubbing only generateEmbedding
     // would let indexText reach a configured proxy for real.
-    spyOn(embeddings, 'embedBatch').mockImplementation(async (texts: string[]) => texts.map(() => noModel));
+    vi.spyOn(embeddings, 'embedBatch').mockImplementation(async (texts: string[]) => texts.map(() => noModel));
     const mod = await import('./notes');
     svc = new mod.NoteService(undefined, undefined, embeddings);
   });

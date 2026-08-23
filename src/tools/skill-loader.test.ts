@@ -2,7 +2,7 @@
  * Built-in skill loader (list_skills / get_skill) — the MCP-independent path
  * for loading full skill content. See skill-loader.ts.
  */
-import { describe, expect, spyOn, test } from 'bun:test';
+import { describe, expect, test, vi } from 'vitest';
 import type { AgentContext } from '@/core/types';
 import type { Skill } from '@/db/schema/skills';
 import { getSkillRegistry } from '@/skills/registry';
@@ -24,7 +24,7 @@ describe('buildSkillLoaderHandlers', () => {
 
   test('list_skills returns id + name + capped description, no body', async () => {
     const reg = getSkillRegistry();
-    const spy = spyOn(reg, 'getAll').mockResolvedValue([
+    const spy = vi.spyOn(reg, 'getAll').mockResolvedValue([
       skill({ id: 'a', name: 'Alpha', description: '  multi   space ', content: 'FULL BODY' }),
     ]);
     const result = (await tool('list_skills').execute({}, ctx)) as Array<Record<string, unknown>>;
@@ -36,7 +36,7 @@ describe('buildSkillLoaderHandlers', () => {
 
   test('get_skill returns the rendered body for a known id', async () => {
     const reg = getSkillRegistry();
-    const spy = spyOn(reg, 'renderSkill').mockResolvedValue('## Alpha\n\nFULL BODY');
+    const spy = vi.spyOn(reg, 'renderSkill').mockResolvedValue('## Alpha\n\nFULL BODY');
     const out = await tool('get_skill').execute({ skill_id: 'a' }, ctx);
     expect(spy).toHaveBeenCalledWith('a');
     expect(out).toBe('## Alpha\n\nFULL BODY');
@@ -44,7 +44,7 @@ describe('buildSkillLoaderHandlers', () => {
   });
 
   test('get_skill throws a helpful error for an unknown id', async () => {
-    const spy = spyOn(getSkillRegistry(), 'renderSkill').mockResolvedValue(null);
+    const spy = vi.spyOn(getSkillRegistry(), 'renderSkill').mockResolvedValue(null);
     await expect(tool('get_skill').execute({ skill_id: 'nope' }, ctx)).rejects.toThrow(/list_skills/);
     spy.mockRestore();
   });

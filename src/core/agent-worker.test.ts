@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { beforeEach, describe, expect, test } from 'vitest';
 import { sanitizeToolOutput } from '@/utils/sanitize';
 import { BaseAgentWorker } from '@/core/agent-base';
 

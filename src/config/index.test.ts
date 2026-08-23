@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { isPrototypePath } from './index';
 
 // Note: Config tests require resetting singleton state which is complex

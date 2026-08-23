@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNotNull, isNull } from 'drizzle-orm';
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getCanvasBuilder } from '@/core/knowledge/canvas';
 import { getKnowledgeGraph } from '@/core/knowledge/graph';

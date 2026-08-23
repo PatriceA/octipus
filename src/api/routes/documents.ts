@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { existsSync } from 'fs';
 import { mkdir, unlink } from 'fs/promises';
 import { extname, join, resolve } from 'path';
@@ -9,6 +9,7 @@ import { getDocumentQueue } from '@/core/documents/queue';
 import { scopedRepos } from '@/db/repositories/scoped';
 import { isAuthenticated } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
+import { fileAt, writeFileAt } from '@/utils/fs-file';
 
 const logger = apiLogger.child({ component: 'documents-route' });
 
@@ -73,7 +74,7 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
 
       // Write file to disk
       const buffer = Buffer.from(await file.arrayBuffer());
-      await Bun.write(storagePath, buffer);
+      await writeFileAt(storagePath, buffer);
 
       // Create DB record — scoped repo pins the doc to the principal.
       const doc = await docs.create({
@@ -197,7 +198,7 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
       return { error: 'File no longer available on disk' };
     }
 
-    const file = Bun.file(doc.storagePath);
+    const file = fileAt(doc.storagePath);
     const disposition = query.download === '1' ? 'attachment' : 'inline';
     // Filename* uses RFC 5987 encoding so non-ASCII filenames survive
     const encoded = encodeURIComponent(doc.originalName);

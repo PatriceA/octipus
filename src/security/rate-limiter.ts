@@ -1,4 +1,4 @@
-import { RedisCache } from '@/db/redis';
+import { Cache } from '@/db/cache';
 import { apiLogger } from '@/utils/logger';
 
 interface RateLimitResult {
@@ -17,10 +17,10 @@ const LOGIN_MAX_ATTEMPTS = 5;
 const LOCKOUT_DURATIONS_SECS = [15 * 60, 30 * 60, 60 * 60]; // 15min, 30min, 60min
 
 export class RateLimiter {
-  private cache: RedisCache;
+  private cache: Cache;
 
   constructor() {
-    this.cache = new RedisCache(0);
+    this.cache = new Cache(0);
   }
 
   /**

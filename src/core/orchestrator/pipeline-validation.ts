@@ -1,7 +1,7 @@
 /**
  * Pipeline-stage pre-save validation.
  *
- * Pure function — lives in `src/` so the `bun test` suite can cover
+ * Pure function — lives in `src/` so the `npm test` suite can cover
  * it directly; the web UI imports it from `web/components/pipeline-graph.tsx`.
  *
  * Surfaces every problem in one pass so the UI can render a single

@@ -6,7 +6,7 @@
  * non-trivial token kinds (keyword/string/comment/...). Falls back to
  * the regex highlighter on grammar / module load failure.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { highlight, resetHighlighter } from './highlight';
 import {
   _resetTreeSitterForTests,

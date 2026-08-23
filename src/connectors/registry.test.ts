@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import type { ConnectorDefinition, UserConnectorStatus } from './types';
 import { ATLASSIAN_CONNECTOR } from './atlassian/definition';
 

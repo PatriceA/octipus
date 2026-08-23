@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { type Component, visibleWidth } from '@mariozechner/pi-tui';
 import { LayoutStore } from '../stores/layout-store';
 import { SplitPane } from './split-pane';

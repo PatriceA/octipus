@@ -7,7 +7,7 @@
  * permission gate is skipped exactly as it is for orchestrator-spawned workers
  * in production — the realistic agent path.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';

@@ -1,4 +1,4 @@
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { existsSync, statSync } from 'fs';
 import { resolve } from 'path';
 import { apiContext } from '@/api/context';

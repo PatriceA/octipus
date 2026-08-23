@@ -7,7 +7,7 @@
  * template declares and what the runtime reads — the same drift that has bitten
  * `producesArtifacts`, `runsCommands` and `stageType` before.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import type { PipelineStepConfig } from '@/db/schema/pipeline-templates';
 import { poolExhaustedSummary } from './pipeline-manager';
 import { stepConfigToStageTemplate } from './templates';

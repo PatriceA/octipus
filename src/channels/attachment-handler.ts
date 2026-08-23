@@ -12,6 +12,7 @@ import { getDocumentQueue } from '@/core/documents/queue';
 import type { Attachment, UnifiedMessage } from '@/core/types';
 import { documentRepository } from '@/db/repositories/document-repository';
 import { channelLogger } from '@/utils/logger';
+import { writeFileAt } from '@/utils/fs-file';
 
 /** MIME types worth processing for document extraction */
 const PROCESSABLE_MIMES = new Set([
@@ -72,7 +73,7 @@ export async function processChannelAttachments(message: UnifiedMessage): Promis
       const uniqueFilename = `${randomUUID()}${ext}`;
       const storagePath = join(uncategorizedDir, uniqueFilename);
 
-      await Bun.write(storagePath, fileBuffer);
+      await writeFileAt(storagePath, fileBuffer);
 
       const doc = await documentRepository.create({
         userId: message.userId,

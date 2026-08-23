@@ -2,7 +2,7 @@
  * Integration test for the shadow-mode audit middleware.
  *
  * Backed by an ephemeral PGlite instance — no Docker required, runs in
- * the standard `bun test` slice. Verifies:
+ * the standard `npm test` slice. Verifies:
  *   - state-changing requests insert one audit_log row with action='api_request'
  *   - GET requests are not logged in shadow mode
  *   - skip-list paths (health, webhooks) are not logged
@@ -12,12 +12,12 @@
  * derive() + middleware order so we exercise the full plugin lifecycle
  * rather than mocking.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Elysia } from 'elysia';
+import { Elysia } from '@/api/http';
 
 type ElysiaLike = { handle: (req: Request) => Promise<Response> };
 

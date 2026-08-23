@@ -4,7 +4,7 @@
  * and the repos. guardInput is left real so the security-hole regression is
  * covered against the actual patterns.
  */
-import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { getAgentManager } from '@/core/agent-manager';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
@@ -32,9 +32,9 @@ function fakeWorker(opts: FakeOpts): unknown {
 describe('trySteerRunningOrchestrator', () => {
   const sid = '00000000-0000-0000-0000-000000000000';
   const mgr = getAgentManager();
-  const getBySessionSpy = spyOn(mgr, 'getBySession');
-  const createSpy = spyOn(messageRepository, 'create');
-  const incSpy = spyOn(sessionRepository, 'incrementMessageCount');
+  const getBySessionSpy = vi.spyOn(mgr, 'getBySession');
+  const createSpy = vi.spyOn(messageRepository, 'create');
+  const incSpy = vi.spyOn(sessionRepository, 'incrementMessageCount');
 
   beforeEach(() => {
     getBySessionSpy.mockReset();

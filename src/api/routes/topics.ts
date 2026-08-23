@@ -1,4 +1,4 @@
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getModelRegistry } from '@/models/model-registry';
 import { SINGLE_MODEL_CHAT_TOPICS } from '@/models/single-model-binding';

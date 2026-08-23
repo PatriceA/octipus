@@ -11,7 +11,7 @@ const MAX_OUTPUT_SIZE = 1024 * 1024; // 1MB
  * `detached: true` is what lets a deadline kill a whole tree — without it a
  * backgrounded grandchild keeps the stdio pipes open and `close` never fires.
  * It also means the child no longer shares our process group, so a signal sent
- * to the group on shutdown never reaches it: stop the backend mid-`bun test`
+ * to the group on shutdown never reaches it: stop the backend mid-`npm test`
  * and the test run carries on with its pipes attached to a dead parent.
  *
  * So the group we deliberately detached, we deliberately reap. Registered on

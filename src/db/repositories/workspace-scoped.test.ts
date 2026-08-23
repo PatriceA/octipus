@@ -18,7 +18,7 @@
  * PGlite's single-superuser mode, so the scoped repos' application-
  * layer filtering is what the test exercises.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';

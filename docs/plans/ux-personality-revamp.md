@@ -72,7 +72,7 @@ Outcomes always write the binding to `settings` (via `settings-service.ts`) unde
 
 4. **Friendly no-model path** in `src/core/orchestrator/direct-response.ts` — if no `general` topic is bound, return a help string and a `/setup model` hint instead of the current stack-trace.
 
-5. **Root `docker-compose.yaml`** — Postgres + pgvector, Valkey, Octipus backend, web. Optional `ollama` profile. `docker compose up` is the alt-path #1.
+5. **Root `docker-compose.yaml`** — Postgres + pgvector, Octipus backend, web. Optional `ollama` profile. `docker compose up` is the alt-path #1.
 
 6. **Compiled binary**: `bun build --compile bin/octi.ts` → static binary into `~/.local/bin` (Unix) or `%LOCALAPPDATA%\Programs\octipus\` (Windows). Retires the PATH-mutation in `scripts/setup.ts`.
 

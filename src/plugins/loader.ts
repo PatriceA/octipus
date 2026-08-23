@@ -3,6 +3,7 @@ import { join, resolve } from 'path';
 import { checkApiVersion, manifestTools, validateManifest as validateManifestContract } from '@octipus/plugin-sdk';
 import { createChildLogger } from '@/utils/logger';
 import type { LoadedPlugin, PluginContext, PluginManifest, PluginModule } from './types';
+import { fileAt } from '@/utils/fs-file';
 
 const pluginLogger = createChildLogger({ component: 'plugin' });
 
@@ -68,7 +69,7 @@ async function loadPlugin(dir: string): Promise<LoadedPlugin> {
   const manifestPath = join(dir, 'plugin.json');
 
   // Read and parse manifest
-  const manifestFile = Bun.file(manifestPath);
+  const manifestFile = fileAt(manifestPath);
   if (!(await manifestFile.exists())) {
     throw new Error(`No plugin.json found in ${dir}`);
   }
@@ -78,7 +79,7 @@ async function loadPlugin(dir: string): Promise<LoadedPlugin> {
 
   // Resolve and import the entry file
   const entryPath = join(dir, manifest.main);
-  const entryFile = Bun.file(entryPath);
+  const entryFile = fileAt(entryPath);
   if (!(await entryFile.exists())) {
     throw new Error(`Plugin "${manifest.name}": entry file "${manifest.main}" not found in ${dir}`);
   }
@@ -118,7 +119,7 @@ export async function loadPlugins(): Promise<LoadedPlugin[]> {
     const pluginDir = join(extensionsDir, entry);
 
     // Skip directories without plugin.json
-    const manifestExists = await Bun.file(join(pluginDir, 'plugin.json')).exists();
+    const manifestExists = await fileAt(join(pluginDir, 'plugin.json')).exists();
     if (!manifestExists) {
       pluginLogger.debug({ dir: entry }, 'Skipping directory without plugin.json');
       continue;

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { planPresetReconcile } from './seed-presets';
 
 // A preset was insert-once-and-never-again: user edits survived a restart

@@ -23,7 +23,7 @@
  *   - staleness invalidation (skillRepository.update() NULLs the
  *     embedding column so the next discovery call still sees the row).
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -53,15 +53,13 @@ let embeddingError: Error | null = null;
 // otherwise other test files that legitimately import the real module
 // (e.g. src/core/rag/embeddings.test.ts uses the real `EmbeddingService`
 // class directly) end up with `undefined` exports.
-import * as realEmbeddingsNs from '@/core/rag/embeddings';
 // Plain-object snapshot taken BEFORE mock.module. Restoring from the live
 // `import * as` namespace does not work — bun leaves it pointing at the stub,
 // so afterAll must reinstall this copy or the embedding stub leaks into later
 // suites (getEmbeddingService returns a fixed vector → wrong similarity results).
-const realEmbeddings = { ...realEmbeddingsNs };
 
-mock.module('@/core/rag/embeddings', () => ({
-  ...realEmbeddings,
+vi.mock('@/core/rag/embeddings', async () => ({
+  ...(await vi.importActual<typeof import('@/core/rag/embeddings')>('@/core/rag/embeddings')),
   getEmbeddingService: () => ({
     generateEmbedding: async (_text: string) => {
       if (embeddingError) throw embeddingError;
@@ -104,7 +102,6 @@ beforeAll(async () => {
 afterAll(async () => {
   // Restore the real embeddings module so this suite's stub doesn't leak into
   // later suites in the same bun process.
-  mock.module('@/core/rag/embeddings', () => realEmbeddings);
   // Best-effort: clean up everything we added under TEST_TOPIC, then
   // close the DB and rm the data dir.
   try {
@@ -271,7 +268,7 @@ describe('discoverSkillIds — hybrid mode', () => {
     // Just assert it resolves rather than rejects.
     await expect(
       discoverSkillIds({ topic: TEST_TOPIC, message: 'hi' })
-    ).resolves.toBeArray();
+    ).resolves.toBeInstanceOf(Array);
   });
 
   test('dedupe: skill matched by trigger AND vector appears once', async () => {

@@ -4,7 +4,7 @@
  * Covers the motion + edit + mode-switch contract documented at
  * the top of `vim.ts`. Pure handler — no React, no Ink.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { Buffer } from './buffer';
 import { newVimState, step, type VimKey } from './vim';
 

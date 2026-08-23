@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { type GmailMessage, type GraphMessage, gmailToMessage, m365ToMessage, normalizeGmail, normalizeM365, parseAddress } from './normalize';
 
 describe('parseAddress', () => {

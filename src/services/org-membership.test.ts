@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import { randomUUID } from 'crypto';
 import { getDb } from '@/db/postgres';
 import { orgMembers, organizations } from '@/db/schema/organizations';

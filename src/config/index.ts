@@ -1,3 +1,6 @@
+// Side-effect import, and first on purpose: everything below reads
+// `process.env`, and on Node the `.env` file is not loaded unless we do it.
+import './load-env-file';
 import { logger } from '@/utils/logger';
 import { defaultConfig } from './defaults';
 import { loadFromEnvLegacy } from './legacy-loader';

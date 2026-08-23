@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it } from 'vitest';
 import { CLIArgumentBuilder, injectVibeMcpServer } from './cli-adapters';
 
 const builder = new CLIArgumentBuilder();

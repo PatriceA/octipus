@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { applyRoleFit, validateSpawnChildArgs, formatChildResult, createSpawnChildTool, buildSpawnRoleCatalog, buildDelegationGuidance, parsePlan, MAX_PLAN_STEPS, SPAWN_CHILD_ROLES } from './swarm-tool';
 import { LEVEL_DEFAULT, type AgentNode, type ChildResult } from './types';
 import { SwarmSpawner } from './spawner';

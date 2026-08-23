@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'crypto';
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { getHookManager } from '@/hooks';
 import type { TriggerContext, TriggerEvent } from '@/hooks/triggers';
 import { apiLogger } from '@/utils/logger';

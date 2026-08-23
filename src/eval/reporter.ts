@@ -5,6 +5,7 @@
 
 import { resolve } from 'path';
 import type { AssertionResult, EvalSuiteResult } from './types';
+import { writeFileAt } from '@/utils/fs-file';
 
 // ── ANSI helpers ─────────────────────────────────────────────────────
 
@@ -188,7 +189,7 @@ export async function saveResults(
   const filename = `eval-${ts}.json`;
   const filePath = resolve(dir, filename);
 
-  await Bun.write(filePath, toJSON(results));
+  await writeFileAt(filePath, toJSON(results));
 
   return filePath;
 }

@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { looksWorthExtracting, parseExtractorResponse } from './extractor';
 import { parseJudgeAction } from './judge';
 import { renderMemoriesBlock } from './retrieval';

@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { ROLE_CONFIGS, setRoleToolIdsInMemory } from '@/core/orchestrator/roles';
 import type { AgentRole } from '@/core/orchestrator/types';

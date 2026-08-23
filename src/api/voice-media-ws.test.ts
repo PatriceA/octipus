@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { mintMediaStreamToken, consumeMediaStreamToken } from './voice-media-ws';
 
 describe('media stream token store', () => {

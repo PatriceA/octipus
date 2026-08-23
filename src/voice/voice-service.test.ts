@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { VoiceService } from './index';
 
 // The mic-capture path (arecord) and transcription need real hardware + the

@@ -5,7 +5,7 @@
  * `notifications` rows: every skip reason plus the run path, including the
  * deterministic probe that decides whether any LLM turn happens at all.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';

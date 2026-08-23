@@ -1,4 +1,4 @@
-import type { Elysia } from 'elysia';
+import type { Elysia } from '@/api/http';
 import { webChatChannel } from '@/channels/webchat';
 import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
@@ -406,7 +406,7 @@ export function setupWebSocket(app: Elysia): void {
 
       // Only clean up if this is still the active connection for this user
       const active = data.userId ? activeConnections.get(data.userId) : null;
-      if (active?.ws === ws && data.userId) {
+      if (active && active.ws === ws && data.userId) {
         active.cleanup();
         activeConnections.delete(data.userId);
       } else {

@@ -1,6 +1,6 @@
-import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { randomUUID } from 'crypto';
-import { Elysia } from 'elysia';
+import { Elysia } from '@/api/http';
 import {
   isIntegration,
   setupIntegrationDb,
@@ -15,7 +15,7 @@ type ElysiaLike = { handle: (req: Request) => Promise<Response> };
 // POST /agents (spawn) and POST /:id/message are out of scope — they require a
 // live AgentManager with model providers wired up.
 //
-// Run via:  bun run test:integration -- src/api/routes/agents.test.ts
+// Run via:  npm run test:integration -- src/api/routes/agents.test.ts
 
 describe.skipIf(!isIntegration)('Agents API (Integration)', () => {
   let app: ElysiaLike;

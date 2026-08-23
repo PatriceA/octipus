@@ -3,7 +3,7 @@
  * about the World Cup spent 29 iterations writing Diátaxis documentation and
  * then declared success.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { DriftDetector, driftTokens } from './drift-detector';
 
 const FOOTBALL_BRIEF =
@@ -97,7 +97,7 @@ describe('DriftDetector', () => {
       [{ name: 'shell__run', arguments: { command: 'ls -la' } }],
       [{ name: 'filesystem__list_directory', arguments: { path: '.' } }],
       [{ name: 'filesystem__read_file', arguments: { path: 'src/login/auth.ts' } }],
-      [{ name: 'shell__run', arguments: { command: 'bun test' } }],
+      [{ name: 'shell__run', arguments: { command: 'npm test' } }],
     ];
     for (const calls of exploration) expect(d.record(calls).action).toBe('none');
   });
@@ -105,13 +105,13 @@ describe('DriftDetector', () => {
   test('a SUSTAINED on-task run whose vocabulary drifts from the brief survives', () => {
     // The review scenario: the bug traces to a shared util whose path contains
     // none of the brief's nouns. Twelve iterations — past both thresholds.
-    // Exact-token matching aborted this; prefix matching keeps `bun test`
+    // Exact-token matching aborted this; prefix matching keeps `npm test`
     // clearing against the brief's "tests".
     const d = new DriftDetector('Fix the failing authentication tests in the login module');
     const debugging = [
       [{ name: 'filesystem__read_file', arguments: { path: 'src/utils/date-formatter.ts' } }],
       [{ name: 'filesystem__write_file', arguments: { path: 'src/utils/date-formatter.ts', content: 'patch' } }],
-      [{ name: 'shell__run', arguments: { command: 'bun test' } }],
+      [{ name: 'shell__run', arguments: { command: 'npm test' } }],
     ];
     for (let i = 0; i < 4; i++) {
       for (const calls of debugging) expect(d.record(calls).action).toBe('none');

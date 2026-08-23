@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import type { Memory } from '@/db/schema/memories';
 import { estimateTokens } from '@/utils/token-count';
 import { DEFAULT_MEMORY_TOKEN_BUDGET, renderMemoriesBlock } from './retrieval';

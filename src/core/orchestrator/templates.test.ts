@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { buildStagesFromTemplate, expandPromptTemplate, parseRecipeExport, stepConfigToStageTemplate } from './templates';
 
 describe('expandPromptTemplate', () => {

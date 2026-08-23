@@ -300,7 +300,7 @@ kill_port_users() {
       pids=$(lsof -ti :"$port" 2>/dev/null || true)
     fi
     if [[ -z "$pids" ]] && command -v ss >/dev/null 2>&1; then
-      # ss output: "users:(("bun",pid=110914,fd=34))" — extract pid=NNN
+      # ss output: "users:(("node",pid=110914,fd=34))" — extract pid=NNN
       pids=$(ss -tlnpH "( sport = :$port )" 2>/dev/null \
         | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u || true)
     fi
@@ -362,17 +362,11 @@ kill_all_octipus() {
   kill_tracked "$PID_FILE_WEB" "web UI"
 
   if [[ "$IS_WINDOWS" == true ]]; then
-    # Windows: kill all bun.exe processes running our project files
-    # Get PIDs of bun processes whose command line matches our project
+    # Windows: kill the node processes running our project files
     local pids
-    pids=$(WMIC process where "name='bun.exe'" get ProcessId,CommandLine 2>/dev/null \
+    pids=$(WMIC process where "name='node.exe'" get ProcessId,CommandLine 2>/dev/null \
       | grep -i "$(echo "$PROJECT_DIR" | tr '/' '\\')" \
       | awk '{print $NF}' || true)
-    if [[ -z "$pids" ]]; then
-      # Fallback: kill ALL bun.exe (safe since we're restarting anyway)
-      pids=$(tasklist //FI "IMAGENAME eq bun.exe" //FO CSV //NH 2>/dev/null \
-        | grep -i "bun" | cut -d'"' -f4 || true)
-    fi
     for pid in $pids; do
       if [[ -n "$pid" && "$pid" != "0" ]]; then
         taskkill //F //PID "$pid" //T >/dev/null 2>&1 || true
@@ -389,10 +383,9 @@ kill_all_octipus() {
     done
   else
     # Unix: pkill orphans
-    pkill -f "bun.*src/index.ts" 2>/dev/null || true
+    pkill -f "node.*dist/index.js" 2>/dev/null || true
+    pkill -f "tsx.*src/index.ts" 2>/dev/null || true
     pkill -f "next.*${WEB_PORT}" 2>/dev/null || true
-    pkill -f "bun run dev.*${PROJECT_DIR}" 2>/dev/null || true
-    pkill -f "bun run start.*${PROJECT_DIR}" 2>/dev/null || true
   fi
 
   # Free up ports
@@ -420,7 +413,7 @@ kill_desktop() {
     # tauri dev wrapper + its desktop dev web server, and the built binary
     # (productName "Octipus", identifier cc.octipus.desktop). Scope path-based
     # patterns to THIS checkout so we never kill another project's `tauri dev`
-    # or another user's next server on a shared machine — the child node/bun
+    # or another user's next server on a shared machine — the child node
     # procs carry the absolute project path in their argv. The bundle
     # identifier is app-unique, so it needs no path scope.
     pkill -f "${PROJECT_DIR}.*tauri dev" 2>/dev/null || true
@@ -476,7 +469,7 @@ diagnose_backend_failure() {
   # Check .env
   if [[ ! -f "$PROJECT_DIR/.env" ]]; then
     log_error ".env file not found"
-    log_hint "Run: cp .env.example .env  (or: bun run setup)"
+    log_hint "Run: cp .env.example .env  (or: npm run setup)"
     issues=$((issues + 1))
   else
     log_info ".env file exists"
@@ -494,7 +487,7 @@ diagnose_backend_failure() {
   # Check node_modules
   if [[ ! -d "$PROJECT_DIR/node_modules" ]]; then
     log_error "Dependencies not installed"
-    log_hint "Run: bun install"
+    log_hint "Run: npm install"
     issues=$((issues + 1))
   fi
 
@@ -550,7 +543,7 @@ cmd_start() {
 
   # Check dependencies
   log_step "Checking dependencies..."
-  check_dependency "bun" "Install from https://bun.sh" || return 1
+  check_dependency "node" "Install Node.js 24+ from https://nodejs.org" || return 1
 
   # Check required services (only for external storage mode)
   if [[ "$STORAGE_MODE" == "external" ]]; then
@@ -590,7 +583,7 @@ cmd_start() {
     # so tsc would fail with missing @types/node + SDK. Install on first build.
     if [[ ! -d node_modules ]]; then
       log_step "Installing MCP server deps (first run)..."
-      bun install --silent 2>/dev/null || npm install --silent 2>/dev/null || log_warn "MCP dep install failed"
+      npm install --silent 2>/dev/null || log_warn "MCP dep install failed"
     fi
     npm run build --silent 2>/dev/null && log_info "MCP server built" || log_warn "MCP build failed (non-critical)"
     cd "$PROJECT_DIR"
@@ -603,11 +596,11 @@ cmd_start() {
   if [[ "$dev_mode" == true ]]; then
     log_step "Starting backend (dev mode with hot reload)..."
     cd "$PROJECT_DIR"
-    nohup bun run dev > "$LOG_FILE" 2>&1 &
+    nohup npm run dev > "$LOG_FILE" 2>&1 &
   else
     log_step "Starting backend..."
     cd "$PROJECT_DIR"
-    nohup bun run start > "$LOG_FILE" 2>&1 &
+    nohup npm run start > "$LOG_FILE" 2>&1 &
   fi
   echo $! > "$PID_FILE_BACKEND"
 
@@ -653,7 +646,7 @@ cmd_start() {
     echo ""
     log_step "Launching TUI..."
     cd "$PROJECT_DIR"
-    API_PORT="$API_PORT" exec bun run src/tui-pi/index.ts
+    API_PORT="$API_PORT" exec npm run tui
   else
     # Web UI mode
     log_step "Clearing web UI cache..."
@@ -663,15 +656,15 @@ cmd_start() {
     cd "$PROJECT_DIR/web"
     if [[ "$dev_mode" == true ]]; then
       log_step "Starting web UI (dev mode)..."
-      nohup bun run dev > "$WEB_LOG_FILE" 2>&1 &
+      nohup npm run dev > "$WEB_LOG_FILE" 2>&1 &
     else
       log_step "Building web UI..."
-      if ! bun run build >> "$WEB_LOG_FILE" 2>&1; then
+      if ! npm run build >> "$WEB_LOG_FILE" 2>&1; then
         log_warn "Production build failed, using dev mode instead"
-        nohup bun run dev > "$WEB_LOG_FILE" 2>&1 &
+        nohup npm run dev > "$WEB_LOG_FILE" 2>&1 &
       else
         log_step "Starting web UI..."
-        nohup bun run start >> "$WEB_LOG_FILE" 2>&1 &
+        nohup npm run start >> "$WEB_LOG_FILE" 2>&1 &
       fi
     fi
     echo $! > "$PID_FILE_WEB"
@@ -753,7 +746,7 @@ cmd_restart() {
 
   # Check dependencies
   log_step "Checking dependencies..."
-  check_dependency "bun" "Install from https://bun.sh" || return 1
+  check_dependency "node" "Install Node.js 24+ from https://nodejs.org" || return 1
 
   # Check required services (only for external storage mode)
   if [[ "$STORAGE_MODE" == "external" ]]; then
@@ -793,7 +786,7 @@ cmd_restart() {
     # so tsc would fail with missing @types/node + SDK. Install on first build.
     if [[ ! -d node_modules ]]; then
       log_step "Installing MCP server deps (first run)..."
-      bun install --silent 2>/dev/null || npm install --silent 2>/dev/null || log_warn "MCP dep install failed"
+      npm install --silent 2>/dev/null || log_warn "MCP dep install failed"
     fi
     npm run build --silent 2>/dev/null && log_info "MCP server built" || log_warn "MCP build failed (non-critical)"
     cd "$PROJECT_DIR"
@@ -806,11 +799,11 @@ cmd_restart() {
   if [[ "$dev_mode" == true ]]; then
     log_step "Starting backend (dev mode with hot reload)..."
     cd "$PROJECT_DIR"
-    nohup bun run dev > "$LOG_FILE" 2>&1 &
+    nohup npm run dev > "$LOG_FILE" 2>&1 &
   else
     log_step "Starting backend..."
     cd "$PROJECT_DIR"
-    nohup bun run start > "$LOG_FILE" 2>&1 &
+    nohup npm run start > "$LOG_FILE" 2>&1 &
   fi
   echo $! > "$PID_FILE_BACKEND"
 
@@ -846,20 +839,20 @@ cmd_restart() {
     echo ""
     log_step "Launching TUI..."
     cd "$PROJECT_DIR"
-    API_PORT="$API_PORT" exec bun run src/tui-pi/index.ts
+    API_PORT="$API_PORT" exec npm run tui
   else
     cd "$PROJECT_DIR/web"
     if [[ "$dev_mode" == true ]]; then
       log_step "Starting web UI (dev mode)..."
-      nohup bun run dev > "$WEB_LOG_FILE" 2>&1 &
+      nohup npm run dev > "$WEB_LOG_FILE" 2>&1 &
     else
       log_step "Building web UI..."
-      if ! bun run build >> "$WEB_LOG_FILE" 2>&1; then
+      if ! npm run build >> "$WEB_LOG_FILE" 2>&1; then
         log_warn "Production build failed, using dev mode instead"
-        nohup bun run dev > "$WEB_LOG_FILE" 2>&1 &
+        nohup npm run dev > "$WEB_LOG_FILE" 2>&1 &
       else
         log_step "Starting web UI..."
-        nohup bun run start >> "$WEB_LOG_FILE" 2>&1 &
+        nohup npm run start >> "$WEB_LOG_FILE" 2>&1 &
       fi
     fi
     echo $! > "$PID_FILE_WEB"
@@ -1047,7 +1040,7 @@ cmd_desktop() {
   if $build_mode; then
     log_step "Building the desktop app bundle (can take a few minutes)…"
     log_hint "Output: web/src-tauri/target/release/bundle/"
-    exec bun run tauri:build
+    exec npm run tauri:build
   fi
 
   log_step "Launching the Octipus desktop app…"
@@ -1056,7 +1049,7 @@ cmd_desktop() {
   if $foreground; then
     # Attached mode: window dies when the terminal closes. tauri:dev starts the
     # web dev server and opens the window. Use 'octi desktop --build' to bundle.
-    exec bun run tauri:dev
+    exec npm run tauri:dev
   fi
 
   # Default: detach so the GUI survives the terminal closing. Logs go to a file
@@ -1066,7 +1059,7 @@ cmd_desktop() {
     # Linux: setsid gives the tree (tauri + next dev + webview) its own
     # session/group, so the tracked PID == PGID and stop reaps it with one
     # negative-PID kill.
-    setsid bun run tauri:dev > "$DESKTOP_LOG_FILE" 2>&1 < /dev/null &
+    setsid npm run tauri:dev > "$DESKTOP_LOG_FILE" 2>&1 < /dev/null &
   else
     # macOS / Git Bash (no setsid): nohup detaches from the controlling
     # terminal so it survives the terminal closing. No clean process group, so
@@ -1105,7 +1098,7 @@ cmd_tui() {
   log_info "Connecting TUI to gateway at localhost:$API_PORT..."
   log_hint "Project: $user_cwd"
   cd "$PROJECT_DIR"
-  API_PORT="$API_PORT" exec bun run src/tui-pi/index.ts --project "$user_cwd" "$@"
+  API_PORT="$API_PORT" exec npm run tui --project "$user_cwd" "$@"
 }
 
 cmd_edit() {

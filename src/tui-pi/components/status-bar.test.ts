@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { visibleWidth } from '@mariozechner/pi-tui';
 import { StatusBar } from './status-bar';
 

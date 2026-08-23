@@ -3,7 +3,7 @@
  * SINGLE_MODEL_CHAT_TOPICS must stay in sync with the live role registry, so a
  * newly added role can't silently end up unbound in a one-model install.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { ROLE_CONFIGS } from '@/core/orchestrator/roles';
 import {
   SINGLE_MODEL_CHAT_TOPICS,

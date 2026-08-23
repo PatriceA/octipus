@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'vitest';
 import { getOrchestratorHooks } from './orchestrator/hooks';
 import { installRunLogHooks, toolCallEvent } from './run-log';
 

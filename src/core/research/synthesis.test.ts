@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { renderReportHtml } from './render';
 import { buildSource, resolveReport } from './synthesis';
 import type { Source } from './types';

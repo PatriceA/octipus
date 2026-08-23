@@ -6,7 +6,7 @@
  *   - Secrets that boot the system before the DB is reachable:
  *       MASTER_KEY, JWT_SECRET, SESSION_SECRET
  *   - Storage targeting (also pre-DB):
- *       STORAGE_MODE, DATABASE_URL, REDIS_URL, DATA_DIR
+ *       STORAGE_MODE, DATABASE_URL, DATA_DIR
  *   - API server bind (pre-config-load):
  *       API_HOST, API_PORT
  *   - One-shot bootstrap that seeds DB on first boot:

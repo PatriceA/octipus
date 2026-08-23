@@ -1,6 +1,6 @@
-import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { randomUUID } from 'crypto';
-import { Elysia } from 'elysia';
+import { Elysia } from '@/api/http';
 import {
   isIntegration,
   setupIntegrationDb,
@@ -19,7 +19,7 @@ type ElysiaLike = { handle: (req: Request) => Promise<Response> };
  * inject a fake `user` so the route's ownership check uses our seeded
  * session.
  *
- * Run via:  bun run test:integration -- src/api/routes/swarm.test.ts
+ * Run via:  npm run test:integration -- src/api/routes/swarm.test.ts
  */
 
 describe.skipIf(!isIntegration)('Swarm API (Integration)', () => {

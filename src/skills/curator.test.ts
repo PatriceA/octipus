@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { skillRepository } from '@/db/repositories/skill-repository';
 import type { Skill } from '@/db/schema/skills';
 import { DEFAULT_REVIEW_DAYS, DEFAULT_STALE_DAYS, runSkillCurator } from './curator';
@@ -35,8 +35,8 @@ const realArchive = skillRepository.archive.bind(skillRepository);
 
 describe('runSkillCurator', () => {
   beforeEach(() => {
-    skillRepository.findStale = mock(async () => []);
-    skillRepository.archive = mock(async () => undefined);
+    skillRepository.findStale = vi.fn(async () => []);
+    skillRepository.archive = vi.fn(async () => undefined);
   });
 
   afterEach(() => {
@@ -53,11 +53,11 @@ describe('runSkillCurator', () => {
 
   test('archives skills older than the archive cutoff', async () => {
     const ancient = new Date(Date.now() - (DEFAULT_STALE_DAYS + 5) * 86_400_000);
-    skillRepository.findStale = mock(async () => [
+    skillRepository.findStale = vi.fn(async () => [
       makeSkill({ id: 's-ancient', lastUsedAt: ancient }),
     ]);
     const calls: Array<{ id: string; note?: string }> = [];
-    skillRepository.archive = mock(async (id: string, note?: string) => {
+    skillRepository.archive = vi.fn(async (id: string, note?: string) => {
       calls.push({ id, note });
       return undefined;
     });
@@ -72,7 +72,7 @@ describe('runSkillCurator', () => {
   test('only flags (does not archive) skills between review and archive cutoffs', async () => {
     // 45 days unused — past review (30d) but before archive (90d).
     const recent = new Date(Date.now() - 45 * 86_400_000);
-    skillRepository.findStale = mock(async () => [
+    skillRepository.findStale = vi.fn(async () => [
       makeSkill({ id: 's-flag', lastUsedAt: recent }),
     ]);
     const report = await runSkillCurator();
@@ -82,7 +82,7 @@ describe('runSkillCurator', () => {
   });
 
   test('never-used skills are archived when older than the archive cutoff', async () => {
-    skillRepository.findStale = mock(async () => [
+    skillRepository.findStale = vi.fn(async () => [
       makeSkill({ id: 's-never', lastUsedAt: null }),
     ]);
     const report = await runSkillCurator();
@@ -92,11 +92,11 @@ describe('runSkillCurator', () => {
 
   test('applyArchive=false produces a would-archive flag instead of writing', async () => {
     const ancient = new Date(Date.now() - 200 * 86_400_000);
-    skillRepository.findStale = mock(async () => [
+    skillRepository.findStale = vi.fn(async () => [
       makeSkill({ id: 's-dry', lastUsedAt: ancient }),
     ]);
     let archiveCalls = 0;
-    skillRepository.archive = mock(async () => { archiveCalls++; return undefined; });
+    skillRepository.archive = vi.fn(async () => { archiveCalls++; return undefined; });
     const report = await runSkillCurator({ applyArchive: false });
     expect(report.archived).toEqual([]);
     expect(report.flagged).toHaveLength(1);
@@ -106,7 +106,7 @@ describe('runSkillCurator', () => {
 
   test('respects custom thresholds', async () => {
     // 10 days old, archiveAfterDays=5 — should archive.
-    skillRepository.findStale = mock(async () => [
+    skillRepository.findStale = vi.fn(async () => [
       makeSkill({ id: 's-custom', lastUsedAt: new Date(Date.now() - 10 * 86_400_000) }),
     ]);
     const report = await runSkillCurator({

@@ -9,6 +9,8 @@
 
 import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { arch, cpus, platform, totalmem } from 'node:os';
+import { spawnProcess } from '@/utils/proc';
+import { createConnection } from 'node:net';
 
 export interface ProbeResult {
   ok: boolean;
@@ -26,12 +28,10 @@ export async function tcpReachable(host: string, port: number, timeoutMs = 1500)
     const racer = new Promise<null>((resolve) => {
       timer = setTimeout(() => resolve(null), timeoutMs);
     });
-    const connect = Bun.connect({
-      hostname: host,
-      port,
-      socket: { data() {}, open(s) { s.end(); }, error() {} },
-    }).catch((err: unknown) => {
-      return { __err: err instanceof Error ? err.message : String(err) } as { __err: string };
+    const connect = new Promise<{ __err: string } | true>((resolve) => {
+      const sock = createConnection({ host, port });
+      sock.once('connect', () => { sock.end(); resolve(true); });
+      sock.once('error', (err: Error) => { sock.destroy(); resolve({ __err: err.message }); });
     });
     const result = await Promise.race([connect, racer]);
     if (timer) clearTimeout(timer);
@@ -83,7 +83,7 @@ export async function httpJson<T>(url: string, init?: RequestInit, timeoutMs = 2
 export async function commandExists(bin: string): Promise<string | null> {
   const cmd = platform() === 'win32' ? ['where', bin] : ['which', bin];
   try {
-    const proc = Bun.spawn(cmd, { stdout: 'pipe', stderr: 'pipe' });
+    const proc = spawnProcess(cmd, { stdout: 'pipe', stderr: 'pipe' });
     const exit = await proc.exited;
     if (exit !== 0) return null;
     const out = (await new Response(proc.stdout).text()).trim();
@@ -181,7 +181,7 @@ const MB_PER_BYTE = 1 / (1024 * 1024);
  */
 async function runCapture(cmd: string[], timeoutMs = 4000): Promise<string | null> {
   try {
-    const proc = Bun.spawn(cmd, { stdout: 'pipe', stderr: 'ignore' });
+    const proc = spawnProcess(cmd, { stdout: 'pipe', stderr: 'ignore' });
     const timer = setTimeout(() => proc.kill(), timeoutMs);
     const exit = await proc.exited;
     clearTimeout(timer);

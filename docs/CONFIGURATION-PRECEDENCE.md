@@ -20,7 +20,7 @@ Two stores, two stages. Knowing which wins when is important.
    │  read by  src/config/bootstrap-loader.ts
    ▼
 Bootstrap config in memory
-   STORAGE_MODE, DATABASE_URL, REDIS_URL,
+   STORAGE_MODE, DATABASE_URL,
    MASTER_KEY, JWT_SECRET, SESSION_SECRET,
    PORT, HOST
    │
@@ -46,7 +46,6 @@ mirrors the DB. DB writes hot-reload through the cache.
 | ------------------------- | ------------ | ----------------------------------------- |
 | `STORAGE_MODE`            | `.env`       | re-run `bun run setup` and pick           |
 | `DATABASE_URL`            | `.env`       | `.env` directly (external mode only)      |
-| `REDIS_URL`               | `.env`       | `.env` directly (external mode only)      |
 | `DATA_DIR`                | `.env`       | `.env` directly (embedded mode only)      |
 | `MASTER_KEY`              | `.env`       | regenerate with care — see warning below  |
 | `JWT_SECRET`              | `.env`       | regenerate (invalidates sessions)         |

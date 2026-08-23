@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { isIntegration, setupIntegrationDb, teardownIntegration, truncateTables } from '@/test-helpers/integration';
 import { SwarmSpawner } from './spawner';
 
@@ -9,7 +9,7 @@ import { SwarmSpawner } from './spawner';
  * child is a recon/judgment delegation and stays on the topic primary.
  * Empty executor ⇒ topic primary binding regardless of plan.
  *
- * DB-backed: run via `bun run test:integration -- src/core/swarm/spawner-executor.test.ts`.
+ * DB-backed: run via `npm run test:integration -- src/core/swarm/spawner-executor.test.ts`.
  */
 describe.skipIf(!isIntegration)('SwarmSpawner — executor model resolution (W9)', () => {
   // resolveChildModelAndExpert is private; cast to reach it in the test.

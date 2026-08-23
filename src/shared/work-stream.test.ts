@@ -2,7 +2,7 @@
  * Work-stream metadata channel — the diff (and any future UI-only preview data)
  * a tool attaches to its result must reach the renderer but NEVER the model.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { renderToolActivity } from '@/core/work-stream/renderers';
 import { readWorkStreamMeta, stripWorkStreamMeta, WORK_STREAM_META_KEY } from './work-stream';
 

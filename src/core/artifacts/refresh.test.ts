@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { spyOn } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import {  } from 'vitest';
 import { Vault } from '@/security/vault';
 import { parseRss, resolveVaultHeaders } from './refresh';
 
@@ -35,7 +35,7 @@ describe('parseRss', () => {
 });
 
 describe('resolveVaultHeaders', () => {
-  const getByNameSpy = spyOn(Vault.prototype, 'getByName');
+  const getByNameSpy = vi.spyOn(Vault.prototype, 'getByName');
 
   beforeEach(() => {
     getByNameSpy.mockReset();

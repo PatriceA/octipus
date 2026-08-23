@@ -1,5 +1,5 @@
 import { ilike, or, } from 'drizzle-orm';
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getEmbeddingService } from '@/core/rag/embeddings';
 import { getDb } from '@/db/postgres';

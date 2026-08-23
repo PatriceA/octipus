@@ -15,7 +15,7 @@
  * Drizzle, no new middleware, errors returned as `{ error }` bodies with a
  * 200 status (the rest of the API uses the same convention).
  */
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getAgentManager } from '@/core/agent-manager';
 import { swarmNodeRepository } from '@/core/swarm/node-repository';

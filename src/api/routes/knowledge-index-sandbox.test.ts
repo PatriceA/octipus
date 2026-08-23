@@ -3,7 +3,7 @@
  * caller-supplied `path` to the caller's workspace.
  *
  * Before the fix the route passed `body.path` straight to
- * `FileIndexer.indexFile`, which does `Bun.file(path).text()` on ANY absolute
+ * `FileIndexer.indexFile`, which does `fileAt(path).text()` on ANY absolute
  * path. An authenticated user (via the MCP `octipus_upload_document` tool or
  * REST directly) could index `/etc/passwd`, app secrets, or another tenant's
  * workspace into their own knowledge base and read it back through search —
@@ -15,11 +15,12 @@
  * rejected at the sandbox; a legitimate in-workspace path falls through to the
  * KB-readiness gate (503 here), which proves it cleared the sandbox.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { Elysia } from 'elysia';
+import { Elysia } from '@/api/http';
+import { fileAt } from '@/utils/fs-file';
 
 type ElysiaLike = { handle: (req: Request) => Promise<Response> };
 

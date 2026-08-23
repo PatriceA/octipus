@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'vitest';
 import { getPersonaRegistry } from './registry';
 import { renderNarration } from './resolver';
 import { Persona, type ResolvedPersona } from './types';

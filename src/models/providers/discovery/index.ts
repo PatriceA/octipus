@@ -1,5 +1,5 @@
 import { createHmac, randomBytes } from 'crypto';
-import { RedisCache } from '@/db/redis';
+import { Cache } from '@/db/cache';
 import { modelLogger } from '@/utils/logger';
 import { AnthropicDiscovery } from './anthropic';
 import { curate } from './curation';
@@ -32,7 +32,7 @@ const CLIENTS: Record<string, ProviderDiscovery> = {
   ollama: new OllamaDiscovery(),
 };
 
-const cache = new RedisCache(TTL_SECONDS);
+const cache = new Cache(TTL_SECONDS);
 
 export interface DiscoveryOptions {
   /** Force a fresh fetch even if a cache entry is valid. */

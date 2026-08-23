@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 import { applyAnthropicCacheControl, isAnthropicFamily, splitVolatileSystem } from './prompt-cache';
 

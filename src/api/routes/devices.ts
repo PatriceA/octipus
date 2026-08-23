@@ -1,9 +1,9 @@
 import { randomBytes } from 'crypto';
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { networkInterfaces } from 'os';
 import { apiContext } from '@/api/context';
 import { getSettingsService } from '@/config/settings-service';
-import { getRedis } from '@/db/redis';
+import { rawStore } from '@/db/cache';
 import { getSessionManager } from '@/security/auth/session';
 import { apiLogger } from '@/utils/logger';
 
@@ -34,7 +34,7 @@ export const deviceRoutes = new Elysia({ prefix: '/devices' })
       }
 
       const code = randomBytes(16).toString('hex');
-      const redis = getRedis();
+      const store = rawStore();
 
       const pairingData = JSON.stringify({
         userId: user.id,
@@ -43,7 +43,7 @@ export const deviceRoutes = new Elysia({ prefix: '/devices' })
         createdAt: new Date().toISOString(),
       });
 
-      await redis.set(`${PAIRING_CODE_PREFIX}${code}`, pairingData, 'EX', PAIRING_CODE_TTL);
+      await store.set(`${PAIRING_CODE_PREFIX}${code}`, pairingData, PAIRING_CODE_TTL);
 
       apiLogger.info({ userId: user.id }, 'Device pairing code generated');
 
@@ -65,16 +65,16 @@ export const deviceRoutes = new Elysia({ prefix: '/devices' })
     '/pair/redeem',
     async ({ body, request, set }) => {
       const { code, deviceName } = body;
-      const redis = getRedis();
+      const store = rawStore();
 
-      const pairingDataRaw = await redis.get(`${PAIRING_CODE_PREFIX}${code}`);
+      const pairingDataRaw = await store.get(`${PAIRING_CODE_PREFIX}${code}`);
       if (!pairingDataRaw) {
         set.status = 400;
         return { error: 'Invalid or expired pairing code' };
       }
 
       // Delete the code immediately (one-time use)
-      await redis.del(`${PAIRING_CODE_PREFIX}${code}`);
+      await store.del(`${PAIRING_CODE_PREFIX}${code}`);
 
       const pairingData = JSON.parse(pairingDataRaw);
       const sessionManager = getSessionManager();

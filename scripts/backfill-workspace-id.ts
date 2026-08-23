@@ -8,9 +8,9 @@
  * Idempotent — re-running on a fully-backfilled database is a no-op.
  *
  * Usage:
- *   bun run scripts/backfill-workspace-id.ts            # backfill all
- *   bun run scripts/backfill-workspace-id.ts --dry-run  # report only
- *   bun run scripts/backfill-workspace-id.ts --user=<uuid>
+ *   npx tsx scripts/backfill-workspace-id.ts            # backfill all
+ *   npx tsx scripts/backfill-workspace-id.ts --dry-run  # report only
+ *   npx tsx scripts/backfill-workspace-id.ts --user=<uuid>
  *
  * Required env: MASTER_KEY, JWT_SECRET, SESSION_SECRET, plus
  * DATABASE_URL (external mode) or DATA_DIR (embedded).
@@ -43,7 +43,7 @@ function parseArgs(argv: readonly string[]): Args {
     if (arg === '--dry-run') dryRun = true;
     else if (arg.startsWith('--user=')) onlyUser = arg.slice('--user='.length);
     else if (arg === '--help' || arg === '-h') {
-      console.log('Usage: bun run scripts/backfill-workspace-id.ts [--dry-run] [--user=<uuid>]');
+      console.log('Usage: npx tsx scripts/backfill-workspace-id.ts [--dry-run] [--user=<uuid>]');
       process.exit(0);
     }
   }

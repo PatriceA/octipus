@@ -3,7 +3,7 @@
  * known-unreliable ids should be flagged; capable/cloud/unknown-size models
  * should not, so we never nag about a model that's probably fine.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { staticCapabilityWarnings } from './capability-gate';
 
 describe('staticCapabilityWarnings', () => {

@@ -35,22 +35,22 @@ Capability flags are derived from model DB fields (`supportsStreaming`, `support
 
 ```bash
 # All enabled models
-bun run src/models/testing/run.ts
+npx tsx src/models/testing/run.ts
 
 # Filter by provider
-bun run src/models/testing/run.ts --provider=ollama
+npx tsx src/models/testing/run.ts --provider=ollama
 
 # Test a specific model
-bun run src/models/testing/run.ts --model=qwen3:14b
+npx tsx src/models/testing/run.ts --model=qwen3:14b
 
 # Run only selected tests
-bun run src/models/testing/run.ts --test=basic-completion,tool-calling
+npx tsx src/models/testing/run.ts --test=basic-completion,tool-calling
 
 # Increase timeout (default 30000ms)
-bun run src/models/testing/run.ts --timeout=60000
+npx tsx src/models/testing/run.ts --timeout=60000
 
 # JSON output only (no table, writes report file too)
-bun run src/models/testing/run.ts --json
+npx tsx src/models/testing/run.ts --json
 ```
 
 Exit code is 1 if any tests fail. JSON report is written to `conformance-report-<timestamp>.json`.
@@ -109,15 +109,15 @@ The chat command produces a markdown matrix:
 
 ## Agent Eval Suites (YAML harness)
 
-`bun run eval` runs the YAML suites in `eval/` against the classifier (unit
+`npm run eval` runs the YAML suites in `eval/` against the classifier (unit
 mode) or a live backend (`--integration`). Two capabilities are worth calling
 out because they change what a run can tell you.
 
 ### Regression gating
 
 ```bash
-bun run eval --baseline latest        # newest file in eval/results/
-bun run eval --baseline eval/baseline.json
+npm run eval --baseline latest        # newest file in eval/results/
+npm run eval --baseline eval/baseline.json
 ```
 
 Compares this run to a previous results file PER TEST and exits 1 when a test
@@ -280,7 +280,7 @@ Capabilities gate conformance tests (test is `skipped` rather than `failed` when
 
 The Evaluations page is at `/eval` and has three tabs.
 
-**Suite Tests** — results from the `bun test` eval suite run against the live service.
+**Suite Tests** — results from the `npm test` eval suite run against the live service.
 
 **Conformance** — matrix view of model × test results. Run controls let you trigger a new conformance run against all enabled models or a specific model. Past runs are listed with date and pass rate.
 
@@ -318,14 +318,14 @@ Full interactive docs at `http://localhost:3005/swagger` (tag: `evaluations`).
 ## Quick Start
 
 ```bash
-# 1. Start services (PostgreSQL, Valkey, Ollama)
+# 1. Start services (PostgreSQL, Ollama)
 docker compose -f /path/to/docker-services/docker-compose.yml up -d
 
 # 2. Start the backend
-bun run dev
+npm run dev
 
 # 3. Run conformance against local Ollama models
-bun run src/models/testing/run.ts --provider=ollama
+npx tsx src/models/testing/run.ts --provider=ollama
 
 # 4. Run quality evaluation via chat
 /eval quality qwen3:14b

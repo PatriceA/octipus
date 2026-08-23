@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env tsx
 /**
  * Gzip yesterday's trajectory JSONL file. Idempotent — skips if already gzipped.
  * The compression logic lives in the recorder (`compressTrajectoryForDate`) and

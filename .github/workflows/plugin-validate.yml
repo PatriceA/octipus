@@ -28,10 +28,10 @@ jobs:
           persist-credentials: false
 
       - name: Setup Bun (+ dependency cache)
-        uses: ./.github/actions/bun-setup
+        uses: ./.github/actions/node-setup
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: npm ci
 
       - name: Validate each plugin
         run: |
@@ -42,7 +42,7 @@ jobs:
             dir="$(dirname "$manifest")"
             found=1
             echo "── $dir ──"
-            bun run scripts/plugin.ts validate "$dir"
+            npx tsx scripts/plugin.ts validate "$dir"
           done
           if [ "$found" -eq 0 ]; then
             echo "No plugins under extensions/ — nothing to validate."

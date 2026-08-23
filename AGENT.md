@@ -27,13 +27,19 @@ Architecture in one line:
 
 ## Stack
 
-- **Runtime:** Bun ≥ 1.1 end-to-end (tests, scripts, server). Node ≥ 18 only
-  for the Next.js web UI.
-- **Backend:** Elysia (HTTP + WS), Drizzle ORM, Postgres + pgvector (PGlite in
-  embedded mode), Valkey (Redis-compatible) via `ioredis`.
-- **Web:** Next.js 16 + React 19 + Tailwind in `web/`.
+- **Runtime:** Node ≥ 24 end-to-end (server, tests, scripts, TUI, web build).
+  `npm run build` bundles `dist/index.js`; `npm start` runs that artifact, not
+  the source.
+- **Backend:** Hono + `ws` behind the application in `src/api/http/` (which
+  keeps the route surface the routes were written against), Drizzle ORM,
+  Postgres + pgvector (PGlite in embedded mode). Cache, queue and pub/sub are
+  Postgres too — `kv_store`, `kv_queue`, `LISTEN`/`NOTIFY`.
+- **Web:** Vite + React Router + React 19 + Tailwind in `web/`, served as
+  static files by `web/serve.mjs`.
+- **Tests:** Vitest, two projects — `unit` at full width, `database` at one
+  worker. See `vitest.config.ts` for why that split is not optional.
 - **Validation:** Zod everywhere at boundaries.
-- **Lint/format:** Biome (`bun run lint`). Formatter is **off** — don't
+- **Lint/format:** Biome (`npm run lint`). Formatter is **off** — don't
   reformat untouched code.
 - **TS:** strict mode, `noImplicitOverride`. Path aliases: `@/`, `@db/`,
   `@core/`, `@models/`, `@security/`, `@skills/`, `@channels/`, `@api/`,
@@ -43,7 +49,7 @@ Architecture in one line:
 
 ```
 src/
-  api/            REST routes + WS (Elysia)
+  api/            REST routes + WS (`api/http/` is the application layer)
   channels/       Telegram, Slack, Teams, WhatsApp, WebChat (+ discovery, linking)
   config/         Zod-validated config, hot-reload
   core/
@@ -74,7 +80,7 @@ src/
   tui-editor/     TUI code editor
   services/ shared/ setup/   org services, shared types/diff, setup probes
 mcp-server/       standalone MCP server (59+ tools across ~20 groups)
-web/              Next.js dashboard
+web/              Vite + React Router dashboard
 browser-extension/  companion browser extension
 bin/              octi launcher CLI (bin/octi start|stop)
 personas/         persona YAML definitions
@@ -86,29 +92,29 @@ docs/             feature & architecture docs (see README Documentation table)
 AGENTS.md         per-repo curated project guide (universal agents.md convention)
 ```
 
-## Commands (Bun)
+## Commands
 
 | Task             | Command                          |
 | ---------------- | -------------------------------- |
-| Install          | `bun install && cd web && bun install && cd ../mcp-server && bun install && cd ..` |
+| Install          | `npm install && cd web && npm install && cd ../mcp-server && npm install && cd ..` |
 | Install (desktop)| `scripts/install-desktop-deps.sh` (Rust + Tauri system libs; optional) |
-| Dev (backend)    | `bun run dev`                    |
+| Dev (backend)    | `npm run dev`                    |
 | Start full stack | `bin/octi start` (stop: `bin/octi stop`) |
-| Type check       | `bun run typecheck`              |
-| Lint             | `bun run lint` (fix: `bun run lint:fix`) |
-| Unit tests       | `bun run test` (= `bun test src scripts`) |
-| TUI tests        | `bun run test:tui`               |
-| Integration      | `bun run test:integration` (Docker Postgres) |
-| E2E (API/WS)     | `bun run test:e2e`               |
-| Web E2E          | `bun run test:web`               |
-| Eval suite       | `bun run eval` (`eval:routing`, `eval:quality`) |
-| Architecture catalog | `bun run catalog` (check: `bun run catalog:check`) |
-| DB migrate       | `bun run db:migrate`             |
-| DB generate      | `bun run db:generate`            |
-| DB studio        | `bun run db:studio`              |
-| Setup wizard     | `bun run setup`                  |
-| TUI client       | `bun run tui` (edit: `bun run tui:edit`) |
-| Doctor / preflight | `bun run scripts/doctor.ts`    |
+| Type check       | `npm run typecheck`              |
+| Lint             | `npm run lint` (fix: `npm run lint:fix`) |
+| Unit tests       | `npm run test` (Vitest; `-- --coverage` for the ratchet) |
+| TUI tests        | `npm run test:tui`               |
+| Integration      | `npm run test:integration` (Docker Postgres) |
+| E2E (API/WS)     | `npm run test:e2e`               |
+| Web E2E          | `npm run test:web`               |
+| Eval suite       | `npm run eval` (`eval:routing`, `eval:quality`) |
+| Architecture catalog | `npm run catalog` (check: `npm run catalog:check`) |
+| DB migrate       | `npm run db:migrate`             |
+| DB generate      | `npm run db:generate`            |
+| DB studio        | `npm run db:studio`              |
+| Setup wizard     | `npm run setup`                  |
+| TUI client       | `npm run tui` (edit: `npm run tui:edit`) |
+| Doctor / preflight | `npm run scripts/doctor.ts`    |
 
 Default ports: backend `3005`, web `3007`. Use `bin/octi` rather than raw
 `bun run` when starting the full stack so channels, web, and workers come up
@@ -116,7 +122,7 @@ together.
 
 `catalog:check` runs in CI and fails when `docs/architecture/generated/CATALOG.md`
 no longer matches the source. If a route, a module edge, or a gateway event type
-changed, run `bun run catalog` and commit the result — the file is generated, so
+changed, run `npm run catalog` and commit the result — the file is generated, so
 never hand-edit it.
 
 The integration lane binds Postgres on `5443`. If something else already holds
@@ -168,8 +174,8 @@ think you need to break one, open an issue first.
   Either way, **verify it actually landed**: `git cat-file -e origin/main:<a
   file from each PR>` after merging. (This has bitten us more than once.)
 - **Tests:** new code needs tests. Routing / prompt / tool-selection changes
-  must pass `bun run eval`.
-- **Before declaring done:** `bun run typecheck && bun run lint && bun test`
+  must pass `npm run eval`.
+- **Before declaring done:** `npm run typecheck && npm run lint && npm test`
   all green locally. For UI changes, exercise the feature in a browser — type
   checks don't catch broken UX.
 - **Don't reformat** files you aren't otherwise touching. Biome's formatter is
@@ -203,7 +209,7 @@ think you need to break one, open an issue first.
 - **Expert / Profile** → seed in `src/db/seed-experts.ts` / `seed-presets.ts`,
   or POST via API.
 - **DB schema change** → edit Drizzle schema in `src/db/schema/`, then
-  `bun run db:generate` to produce a migration, then `bun run db:migrate`.
+  `npm run db:generate` to produce a migration, then `npm run db:migrate`.
 
 ## Voice Integration Architecture
 

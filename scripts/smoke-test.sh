@@ -37,10 +37,10 @@ cleanup() {
 trap cleanup EXIT
 
 echo "── 1/3 · octi setup --non-interactive (embedded) ──"
-bun run scripts/setup-wizard.ts --non-interactive
+npx tsx scripts/setup-wizard.ts --non-interactive
 
 echo "── 2/3 · octi doctor ──"
-bun run scripts/doctor.ts
+npx tsx scripts/doctor.ts
 
 echo "── 3/3 · boot backend + health check ──"
 bun run src/index.ts > /tmp/octipus-smoke-server.log 2>&1 &

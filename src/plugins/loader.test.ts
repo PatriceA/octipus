@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 
 // Note: loadPlugins reads from the filesystem (extensions/ directory).
 // These unit tests verify manifest validation logic and plugin structure.

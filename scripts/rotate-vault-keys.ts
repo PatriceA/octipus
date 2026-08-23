@@ -7,9 +7,9 @@
  * been touched since the upgrade.
  *
  * Usage:
- *   bun run scripts/rotate-vault-keys.ts            # rotate everything
- *   bun run scripts/rotate-vault-keys.ts --dry-run  # report only
- *   bun run scripts/rotate-vault-keys.ts --batch=50 # tune batch size
+ *   npx tsx scripts/rotate-vault-keys.ts            # rotate everything
+ *   npx tsx scripts/rotate-vault-keys.ts --dry-run  # report only
+ *   npx tsx scripts/rotate-vault-keys.ts --batch=50 # tune batch size
  *
  * Required env: MASTER_KEY, JWT_SECRET, SESSION_SECRET, plus
  * DATABASE_URL (external mode) or DATA_DIR (embedded).
@@ -41,7 +41,7 @@ function parseArgs(argv: readonly string[]): Args {
       if (!Number.isFinite(n) || n < 1) throw new Error(`invalid --batch: ${arg}`);
       batchSize = n;
     } else if (arg === '--help' || arg === '-h') {
-      console.log('Usage: bun run scripts/rotate-vault-keys.ts [--dry-run] [--batch=N]');
+      console.log('Usage: npx tsx scripts/rotate-vault-keys.ts [--dry-run] [--batch=N]');
       process.exit(0);
     }
   }

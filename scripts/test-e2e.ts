@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env tsx
 /**
  * E2E Test Suite — thin wrapper.
  * See scripts/e2e/ for the full test suite.

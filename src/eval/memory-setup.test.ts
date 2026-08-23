@@ -2,7 +2,7 @@
  * Memory-aware evals. Everything here is the part that decides whether a
  * seeded test may run at all — the half that must never quietly pass.
  */
-import { describe, expect, spyOn, test } from 'bun:test';
+import { describe, expect, test, vi } from 'vitest';
 import * as memoryRepo from '@/core/memory/repository';
 import * as postgres from '@/db/postgres';
 import * as embeddings from '@/core/rag/embeddings';
@@ -85,10 +85,10 @@ describe('recalls_memory', () => {
 describe('seedMemories', () => {
   test('embeds each fact and returns the row ids', async () => {
     const added: Record<string, unknown>[] = [];
-    const embedSpy = spyOn(embeddings, 'getEmbeddingService').mockReturnValue({
+    const embedSpy = vi.spyOn(embeddings, 'getEmbeddingService').mockReturnValue({
       generateEmbedding: async () => [0.1, 0.2, 0.3],
     } as unknown as ReturnType<typeof embeddings.getEmbeddingService>);
-    const repoSpy = spyOn(memoryRepo, 'getMemoryRepository').mockReturnValue({
+    const repoSpy = vi.spyOn(memoryRepo, 'getMemoryRepository').mockReturnValue({
       addNew: async (r: Record<string, unknown>) => { added.push(r); return { id: `row-${added.length}` }; },
     } as unknown as ReturnType<typeof memoryRepo.getMemoryRepository>);
 
@@ -109,10 +109,10 @@ describe('seedMemories', () => {
   });
 
   test('an embedding failure throws, naming the fact and the fix', async () => {
-    const embedSpy = spyOn(embeddings, 'getEmbeddingService').mockReturnValue({
+    const embedSpy = vi.spyOn(embeddings, 'getEmbeddingService').mockReturnValue({
       generateEmbedding: async () => { throw new Error('no embedding model'); },
     } as unknown as ReturnType<typeof embeddings.getEmbeddingService>);
-    const repoSpy = spyOn(memoryRepo, 'getMemoryRepository').mockReturnValue({
+    const repoSpy = vi.spyOn(memoryRepo, 'getMemoryRepository').mockReturnValue({
       addNew: async () => { throw new Error('must not be reached'); },
     } as unknown as ReturnType<typeof memoryRepo.getMemoryRepository>);
 
@@ -127,7 +127,7 @@ describe('seedMemories', () => {
 
 describe('clearMemories', () => {
   test('no ids, no query', async () => {
-    const dbSpy = spyOn(postgres, 'getDb').mockImplementation(() => {
+    const dbSpy = vi.spyOn(postgres, 'getDb').mockImplementation(() => {
       throw new Error('must not touch the database');
     });
     await clearMemories([]);
@@ -136,7 +136,7 @@ describe('clearMemories', () => {
 
   test('deletes the seeded rows', async () => {
     let deleted: unknown;
-    const dbSpy = spyOn(postgres, 'getDb').mockReturnValue({
+    const dbSpy = vi.spyOn(postgres, 'getDb').mockReturnValue({
       delete: () => ({ where: async (w: unknown) => { deleted = w; } }),
     } as unknown as ReturnType<typeof postgres.getDb>);
     await clearMemories(['a', 'b']);

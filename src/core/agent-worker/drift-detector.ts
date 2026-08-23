@@ -175,7 +175,7 @@ export class DriftDetector {
 
   /**
    * Prefix match rather than equality, so trivial morphology does not read as
-   * drift: a brief saying "tests" against a `bun test` command, or "logging"
+   * drift: a brief saying "tests" against a `npm test` command, or "logging"
    * against `logger`. Exact matching made a successful run abortable purely
    * because the agent's vocabulary inflected differently from the brief's.
    *

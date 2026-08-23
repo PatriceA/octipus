@@ -7,7 +7,7 @@
  * sibling dirs sharing the prefix (`…/results-evil/x.json`). These lock the
  * path-segment check that replaced it.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { resolve, sep } from 'node:path';
 import { resolveEvalResultPath } from './eval';
 

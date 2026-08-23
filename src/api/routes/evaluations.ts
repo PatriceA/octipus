@@ -1,4 +1,4 @@
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import type { AgentMessage } from '@/core/types';
 import { evaluationRepository } from '@/db/repositories/evaluation-repository';

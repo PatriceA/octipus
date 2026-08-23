@@ -1,7 +1,8 @@
-import { getRedis, RedisPubSub, RedisQueue } from '@/db/redis';
+import { PubSub, Queue, rawStore } from '@/db/cache';
 import { generateId } from '@/utils/crypto';
 import { coreLogger } from '@/utils/logger';
 import type { Task } from './types';
+import { spawnProcess } from '@/utils/proc';
 
 const TASK_QUEUE = 'tasks:queue';
 const TASK_CHANNEL = 'tasks:events';
@@ -136,7 +137,7 @@ export async function evaluateWakeGate(gate: WakeGate): Promise<WakeGateResult> 
   try {
     if (gate.kind === 'command') {
       const timeoutMs = gate.timeoutMs ?? 5000;
-      const proc = Bun.spawn(['sh', '-c', gate.cmd], { stdout: 'pipe', stderr: 'pipe' });
+      const proc = spawnProcess(['sh', '-c', gate.cmd], { stdout: 'pipe', stderr: 'pipe' });
       const timer = setTimeout(() => proc.kill(), timeoutMs);
       const exit = await proc.exited;
       clearTimeout(timer);
@@ -166,8 +167,8 @@ export async function evaluateWakeGate(gate: WakeGate): Promise<WakeGateResult> 
 }
 
 export class Scheduler {
-  private queue: RedisQueue;
-  private pubsub: RedisPubSub;
+  private queue: Queue;
+  private pubsub: PubSub;
   private processing: Map<string, ScheduledTask> = new Map();
   private taskHandlers: Map<string, (task: ScheduledTask) => Promise<unknown>> = new Map();
   private lastHeartbeatWrite = 0;
@@ -175,8 +176,8 @@ export class Scheduler {
   private workerLoops: Promise<void>[] = [];
 
   constructor() {
-    this.queue = new RedisQueue(TASK_QUEUE);
-    this.pubsub = new RedisPubSub();
+    this.queue = new Queue(TASK_QUEUE);
+    this.pubsub = new PubSub();
   }
 
   /**
@@ -522,7 +523,7 @@ export class Scheduler {
     if (now - this.lastHeartbeatWrite < HEARTBEAT_WRITE_INTERVAL_MS) return;
     this.lastHeartbeatWrite = now;
     try {
-      await getRedis().set(HEARTBEAT_KEY, String(now));
+      await rawStore().set(HEARTBEAT_KEY, String(now));
     } catch (err) {
       coreLogger.warn({ err: (err as Error).message }, 'Scheduler heartbeat write failed');
     }
@@ -533,7 +534,7 @@ export class Scheduler {
    * `stale` is true when it is older than HEARTBEAT_STALE_MS (ticker wedged).
    */
   async getHeartbeat(): Promise<{ at: Date; ageMs: number; stale: boolean } | null> {
-    const raw = await getRedis().get(HEARTBEAT_KEY);
+    const raw = await rawStore().get(HEARTBEAT_KEY);
     if (!raw) return null;
     const ms = Number(raw);
     if (!Number.isFinite(ms)) return null;

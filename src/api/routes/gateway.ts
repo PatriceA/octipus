@@ -1,4 +1,4 @@
-import { Elysia } from 'elysia';
+import { Elysia } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getGatewayHub } from '@/core/gateway/hub';
 

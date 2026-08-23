@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
+import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import * as modelRegistry from '@/models/model-registry';
 import { VisualAnalyzer } from './analyzer';
 
@@ -6,7 +6,7 @@ import { VisualAnalyzer } from './analyzer';
 // Spy the accessor (NOT mock.module, which is process-global in bun and leaks
 // the stub into unrelated suites — see the bun mock.module leak note) so it
 // restores cleanly after this file runs.
-const registrySpy = spyOn(modelRegistry, 'getModelRegistry').mockReturnValue({
+const registrySpy = vi.spyOn(modelRegistry, 'getModelRegistry').mockReturnValue({
   getModelForTopic: async (topic: string) =>
     topic === 'vision' ? { modelId: 'mock-vision-model' } : null,
 } as unknown as ReturnType<typeof modelRegistry.getModelRegistry>);
@@ -25,7 +25,7 @@ describe('VisualAnalyzer', () => {
 
   beforeEach(() => {
     mockLlmClient = {
-      complete: mock(async () => ({ content: '{}' }))
+      complete: vi.fn(async () => ({ content: '{}' }))
     };
     analyzer = new VisualAnalyzer(mockLlmClient as any);
   });

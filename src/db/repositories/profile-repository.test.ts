@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import { randomUUID } from 'crypto';
 import {
   isIntegration,
@@ -9,7 +9,7 @@ import {
 import type { ProfileRepository } from './profile-repository';
 
 // Integration tests require a running Postgres (docker-compose.test.yml).
-// Run via:  bun run test:integration -- src/db/repositories/profile-repository.test.ts
+// Run via:  npm run test:integration -- src/db/repositories/profile-repository.test.ts
 
 describe.skipIf(!isIntegration)('ProfileRepository (Integration)', () => {
   let repo: ProfileRepository;

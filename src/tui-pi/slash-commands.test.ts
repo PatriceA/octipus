@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { findSlashCommand, OCTIPUS_SLASH_COMMANDS } from './slash-commands';
 
 describe('OCTIPUS_SLASH_COMMANDS', () => {

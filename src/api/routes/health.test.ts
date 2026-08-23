@@ -1,5 +1,5 @@
-import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
-import { Elysia } from 'elysia';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { Elysia } from '@/api/http';
 
 type ElysiaLike = { handle: (req: Request) => Promise<Response> };
 import {
@@ -16,14 +16,14 @@ import {
 // /health/features) and the gateway (/health/live, /health/channels) stay
 // out of scope for the DB/Redis test slice.
 //
-// Run via:  bun run test:integration -- src/api/routes/health.test.ts
+// Run via:  npm run test:integration -- src/api/routes/health.test.ts
 
 describe.skipIf(!isIntegration)('Health API (Integration)', () => {
   let app: ElysiaLike;
 
   beforeAll(async () => {
     await setupIntegrationDb();
-    setupIntegrationStorage();
+    await setupIntegrationStorage();
 
     const { healthRoutes } = await import('./health');
     // Mount only the three pure DB/Redis/time routes so we don't transitively
@@ -41,8 +41,8 @@ describe.skipIf(!isIntegration)('Health API (Integration)', () => {
         };
       })
       .get('/health/redis', async () => {
-        const { checkRedisHealth } = await import('@/db/redis');
-        const result = await checkRedisHealth();
+        const { checkCacheHealth } = await import('@/db/cache');
+        const result = await checkCacheHealth();
         return {
           service: 'redis',
           status: result.healthy ? 'healthy' : 'unhealthy',

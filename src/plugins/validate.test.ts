@@ -2,7 +2,7 @@
  * Plugin validation kit tests (WS3) — validatePlugin over the real example
  * plugin and synthetic broken fixtures.
  */
-import { afterAll, describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';

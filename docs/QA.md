@@ -310,7 +310,7 @@ This one needs Postgres in external mode.
    `0028_sessions_channel_unique_active`):
 
    ```bash
-   bun run scripts/migrate.ts
+   npx tsx scripts/migrate.ts
    ```
 
 2. Manually try to create two concurrent active sessions for the
@@ -586,10 +586,10 @@ The remainder of this section uses `curl` against
    ```
 2. Dry-run the backfill:
    ```bash
-   bun run scripts/backfill-workspace-id.ts --dry-run
+   npx tsx scripts/backfill-workspace-id.ts --dry-run
    ```
    **Expect:** logs report `would backfill { userId: ..., sessions: 1 }`.
-3. Run for real: `bun run scripts/backfill-workspace-id.ts`.
+3. Run for real: `npx tsx scripts/backfill-workspace-id.ts`.
 4. Re-run — second run should report all zeros (idempotent).
 5. Verify the session now has alice's default workspace id:
    ```sql
@@ -913,7 +913,7 @@ export downloads, share links, real-time push, deletion, and cleanup.
   `artifact_transforms` + `artifact_widgets`), and
   `0059_artifact_exports` (creates `artifact_exports`).
 - The SDK build script has been run at least once:
-  `bun run scripts/build-artifact-sdk.ts` (writes the sha256 sidecar).
+  `npx tsx scripts/build-artifact-sdk.ts` (writes the sha256 sidecar).
 - For the subdomain-mode steps: a DNS record for
   `artifacts.<your-host>` (or any subdomain) pointing at the same
   backend, otherwise skip those and run only the path-prefix steps.

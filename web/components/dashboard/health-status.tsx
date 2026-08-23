@@ -35,7 +35,7 @@ interface HealthStatusProps {
 
 const SERVICE_CONFIG = [
   { key: 'database',   label: 'postgres',   icon: Database },
-  { key: 'redis',      label: 'valkey',     icon: Server },
+  { key: 'redis',      label: 'storage',    icon: Server },
   { key: 'scheduler',  label: 'scheduler',  icon: Clock },
   { key: 'litellm',    label: 'litellm',    icon: Layers },
   { key: 'ollama',     label: 'ollama',     icon: Cpu },

@@ -10,11 +10,11 @@
  * an unauthenticated request that PASSES validation reaches the handler and
  * gets `{ error: 'Not authenticated' }` instead of a 422). The end-to-end
  * "PATCH null → 200 and cleared" test is DB-backed:
- * `bun run test:integration -- src/api/routes/experts.test.ts`.
+ * `npm run test:integration -- src/api/routes/experts.test.ts`.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { randomUUID } from 'crypto';
-import { Elysia } from 'elysia';
+import { Elysia } from '@/api/http';
 import { isIntegration, setupIntegrationDb, teardownIntegration, truncateTables } from '@/test-helpers/integration';
 import { expertRoutes } from './experts';
 
@@ -57,7 +57,7 @@ describe('Experts API — modelPreference schema accepts null', () => {
   });
 });
 
-// DB-backed: run via `bun run test:integration -- src/api/routes/experts.test.ts`.
+// DB-backed: run via `npm run test:integration -- src/api/routes/experts.test.ts`.
 describe.skipIf(!isIntegration)('Experts API (Integration) — clearing the override', () => {
   let userApp: ElysiaLike;
   const userId = randomUUID();

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { BufferStore } from '../stores/buffer-store';
 import { FindOverlay } from './find-overlay';
 

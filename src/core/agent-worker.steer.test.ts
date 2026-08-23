@@ -3,7 +3,7 @@
  * loop was about to hit maxIterations. steer() grants one extra iteration so
  * the final-iteration drain (agent-worker.ts) can honor a late mid-run message.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { AgentWorker } from '@/core/agent-worker';
 import type { AgentContext, AgentMessage } from '@/core/types';
 

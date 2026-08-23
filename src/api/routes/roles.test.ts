@@ -1,11 +1,11 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { randomUUID } from 'crypto';
-import { Elysia } from 'elysia';
+import { Elysia } from '@/api/http';
 import { isIntegration, setupIntegrationDb, teardownIntegration, truncateTables } from '@/test-helpers/integration';
 
 type ElysiaLike = { handle: (req: Request) => Promise<Response> };
 
-// DB-backed: run via `bun run test:integration -- src/api/routes/roles.test.ts`.
+// DB-backed: run via `npm run test:integration -- src/api/routes/roles.test.ts`.
 describe.skipIf(!isIntegration)('Roles API (Integration)', () => {
   let adminApp: ElysiaLike;
   let userApp: ElysiaLike;

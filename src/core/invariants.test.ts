@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, it, test } from 'vitest';
 import { isIntegration, setupIntegrationDb, teardownIntegration, truncateTables } from '@/test-helpers/integration';
 import { registerInvariant, runInvariants } from './invariants';
 
@@ -40,7 +40,7 @@ describe('invariant registry', () => {
 /**
  * The point of an invariant is that it runs against real rows, so the ledger
  * one is only meaningful in the DB lane:
- *   `bun run test:integration -- src/core/invariants.test.ts`
+ *   `npm run test:integration -- src/core/invariants.test.ts`
  */
 describe.skipIf(!isIntegration)('swarm ledger-start invariant (DB-backed)', () => {
   beforeAll(async () => {

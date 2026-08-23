@@ -11,7 +11,7 @@
  * Driven with instance-level overrides of the private `getCompletion`, the same
  * hermetic pattern used by budget-enforcement.test.ts (no DB / no real LLM).
  */
-import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { AgentWorker, TOOLSHIM_TIMEOUT_MS } from '@/core/agent-worker';
 import type { AgentEvent } from '@/core/agent-worker';
 import { getLiteLLMClient } from '@/models/litellm-client';
@@ -103,11 +103,11 @@ describe('AgentWorker.stop — terminal events (P1.7)', () => {
 });
 
 describe('AgentWorker auto-collect relay fidelity (P1.2 / P1.3)', () => {
-  let auditSpy: ReturnType<typeof spyOn>;
-  let updateSpy: ReturnType<typeof spyOn>;
+  let auditSpy: ReturnType<typeof vi.spyOn>;
+  let updateSpy: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
-    auditSpy = spyOn(auditRepository, 'logAgentCompleted').mockResolvedValue(undefined as never);
-    updateSpy = spyOn(agentRepository, 'updateStatus').mockResolvedValue(undefined as never);
+    auditSpy = vi.spyOn(auditRepository, 'logAgentCompleted').mockResolvedValue(undefined as never);
+    updateSpy = vi.spyOn(agentRepository, 'updateStatus').mockResolvedValue(undefined as never);
   });
   afterEach(() => {
     auditSpy.mockRestore();
@@ -234,16 +234,16 @@ describe('AgentWorker child-aware timeout (2.2) + graceful exit (3.5)', () => {
 });
 
 describe('AgentWorker task-drift detection (T2.2)', () => {
-  let auditSpy: ReturnType<typeof spyOn>;
-  let updateSpy: ReturnType<typeof spyOn>;
+  let auditSpy: ReturnType<typeof vi.spyOn>;
+  let updateSpy: ReturnType<typeof vi.spyOn>;
   // The orchestrator case persists its user message; this suite has no DB.
-  let msgSpy: ReturnType<typeof spyOn>;
-  let sessSpy: ReturnType<typeof spyOn>;
+  let msgSpy: ReturnType<typeof vi.spyOn>;
+  let sessSpy: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
-    auditSpy = spyOn(auditRepository, 'logAgentCompleted').mockResolvedValue(undefined as never);
-    updateSpy = spyOn(agentRepository, 'updateStatus').mockResolvedValue(undefined as never);
-    msgSpy = spyOn(messageRepository, 'create').mockResolvedValue(undefined as never);
-    sessSpy = spyOn(sessionRepository, 'incrementMessageCount').mockResolvedValue(undefined as never);
+    auditSpy = vi.spyOn(auditRepository, 'logAgentCompleted').mockResolvedValue(undefined as never);
+    updateSpy = vi.spyOn(agentRepository, 'updateStatus').mockResolvedValue(undefined as never);
+    msgSpy = vi.spyOn(messageRepository, 'create').mockResolvedValue(undefined as never);
+    sessSpy = vi.spyOn(sessionRepository, 'incrementMessageCount').mockResolvedValue(undefined as never);
   });
   afterEach(() => {
     auditSpy.mockRestore();
@@ -374,7 +374,7 @@ describe('AgentWorker toolshim gate (native tool-caller ⇒ no translator)', () 
       sawNativeToolCall: boolean;
       tryToolShim: (prose: string) => Promise<unknown>;
     };
-    const topicSpy = spyOn(getModelRegistry(), 'getModelForTopic');
+    const topicSpy = vi.spyOn(getModelRegistry(), 'getModelForTopic');
 
     priv.sawNativeToolCall = true;
     expect(await priv.tryToolShim('Done — the daily update task has been disabled.')).toBeNull();
@@ -390,7 +390,7 @@ describe('AgentWorker toolshim gate (native tool-caller ⇒ no translator)', () 
       sawNativeToolCall: boolean;
       tryToolShim: (prose: string) => Promise<unknown>;
     };
-    const topicSpy = spyOn(getModelRegistry(), 'getModelForTopic').mockResolvedValue(null as never);
+    const topicSpy = vi.spyOn(getModelRegistry(), 'getModelForTopic').mockResolvedValue(null as never);
 
     priv.sawNativeToolCall = false;
     // Names the advertised tool, so the intent gate passes and the shim runs.
@@ -405,7 +405,7 @@ describe('AgentWorker toolshim gate (native tool-caller ⇒ no translator)', () 
       sawNativeToolCall: boolean;
       tryToolShim: (prose: string) => Promise<unknown>;
     };
-    const topicSpy = spyOn(getModelRegistry(), 'getModelForTopic');
+    const topicSpy = vi.spyOn(getModelRegistry(), 'getModelForTopic');
 
     // No native call yet (the daily-cron case: a 1-iteration run that simply
     // answers), and prose with no tool intent. Historically this still bought a
@@ -427,7 +427,7 @@ describe('AgentWorker toolshim gate (native tool-caller ⇒ no translator)', () 
     let seen: AbortSignal | undefined;
     // Stands in for a provider that never answers — e.g. ollama cold-loading a
     // 21 GB model — and, like a real HTTP client, aborts when its signal does.
-    const completeSpy = spyOn(getLiteLLMClient(), 'complete').mockImplementation((async (opts: {
+    const completeSpy = vi.spyOn(getLiteLLMClient(), 'complete').mockImplementation((async (opts: {
       signal?: AbortSignal;
     }) => {
       seen = opts.signal;

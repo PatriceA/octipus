@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env tsx
 /**
  * Export recorded trajectories as chat-format training JSONL for offline eval /
  * fine-tune pipelines. Reads the daily JSONL files (compressed or not) written
@@ -6,7 +6,7 @@
  * example per run.
  *
  * Usage:
- *   bun run scripts/trajectories/export.ts [--from YYYY-MM-DD] [--to YYYY-MM-DD]
+ *   npx tsx scripts/trajectories/export.ts [--from YYYY-MM-DD] [--to YYYY-MM-DD]
  *                                          [--outcome success] [--out file.jsonl]
  * Without --out, writes to stdout. Always prints a summary to stderr — no
  * silent truncation.

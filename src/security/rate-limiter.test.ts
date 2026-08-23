@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import {
   isIntegration,
   setupIntegrationStorage,
@@ -17,7 +17,7 @@ import {
 
 describe.skipIf(!isIntegration)('RateLimiter.checkSwarmFanOutBudget (Integration)', () => {
   beforeAll(async () => {
-    setupIntegrationStorage();
+    await setupIntegrationStorage();
   });
 
   afterAll(async () => {

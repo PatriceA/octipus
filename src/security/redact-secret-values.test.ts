@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { redactSecretValues } from './secret-injector';
 
 describe('redactSecretValues (M2 egress control)', () => {

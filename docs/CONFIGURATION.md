@@ -1,6 +1,6 @@
 # Configuration
 
-Create a `.env` file or use `bun run setup` to generate one interactively.
+Create a `.env` file or use `npm run setup` to generate one interactively.
 
 ## Ports
 
@@ -21,10 +21,8 @@ Compose the host-side ports are `OCTIPUS_API_PORT` (default 3015) and
 ```env
 # ─── Required ─────────────────────────────────────────────────
 DATABASE_URL=postgres://user:password@localhost:5432/octipus
-# Valkey (Redis-compatible). Var name kept as REDIS_URL for ioredis client compat.
-REDIS_URL=redis://localhost:6379
 
-# Security keys (minimum 32 characters each, use `bun run setup` to generate)
+# Security keys (minimum 32 characters each, use `npm run setup` to generate)
 MASTER_KEY=your-master-key-at-least-32-characters
 JWT_SECRET=your-jwt-secret-at-least-32-characters
 SESSION_SECRET=your-session-secret-at-least-32-chars
@@ -42,7 +40,7 @@ OLLAMA_URL=                            # Ollama URL (optional — set in Setting
 # Provider API keys (OpenAI, Anthropic, Gemini) are stored in the encrypted vault.
 
 # ─── First-boot model bootstrap (consumed once, then ignored) ─
-# Written by `bun run setup` / `octi init`. On first boot,
+# Written by `npm run setup` / `octi init`. On first boot,
 # `bootstrapDefaultModel` reads these, seeds a single default
 # model_config row, stores the API key in the vault, and stops
 # touching .env. Editing these after first boot has no effect —
@@ -135,7 +133,7 @@ The project uses shared Docker services. These must be running before starting:
 ```bash
 # Start required services
 cd ~/docker-services
-docker compose up -d db valkey
+docker compose up -d db
 
 # Start optional services
 docker compose up -d ollama litellm searxng
@@ -144,7 +142,6 @@ docker compose up -d ollama litellm searxng
 | Service | Port | Image | Required |
 |---------|------|-------|----------|
 | PostgreSQL | 5432 | `pgvector/pgvector:pg16` | Yes |
-| Valkey | 6379 | `valkey/valkey:7.2-alpine` | Yes |
 | Ollama | 11434 | `ollama/ollama:rocm` | No |
 | LiteLLM | 4000 | `ghcr.io/berriai/litellm:main-latest` | No |
 | SearXNG | 8888 | `searxng/searxng:latest` | No |

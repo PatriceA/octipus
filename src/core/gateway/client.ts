@@ -30,7 +30,7 @@ export class GatewayClient {
   private ws: WebSocket | null = null;
   private status: ConnectionStatus = 'disconnected';
   private options: GatewayClientOptions;
-  private reconnectTimer: Timer | null = null;
+  private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 10;
 

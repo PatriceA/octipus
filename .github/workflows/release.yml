@@ -10,7 +10,7 @@ name: Release
 
 on: # zizmor: ignore[cache-poisoning]
   # Accepted: release runs only on maintainer-pushed `v*` tags, and the Bun
-  # cache is keyed on the committed bun.lock hash — a PR can't poison a cache
+  # cache is keyed on the committed package-lock.json hash — a PR can't poison a cache
   # this workflow would restore. Revisit if untrusted contributors can trigger
   # release-like publishing.
   push:
@@ -41,24 +41,24 @@ jobs:
           persist-credentials: false
 
       - name: Setup Bun (+ dependency cache)
-        uses: ./.github/actions/bun-setup
+        uses: ./.github/actions/node-setup
 
       - name: Setup Node (for npm publish)
         uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: '24.9'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: npm ci
 
       # ── Release gate: the core CI checks must pass before we publish ──
       - name: Typecheck
-        run: bun run typecheck
+        run: npm run typecheck
       - name: Lint
-        run: bun run lint
+        run: npm run lint
       - name: Test
-        run: bun run test
+        run: npm run test
         env:
           MASTER_KEY: ci-dummy-master-key-for-unit-tests-only-1234567890
           JWT_SECRET: ci-dummy-jwt-secret-for-unit-tests-only-1234567890
@@ -71,13 +71,13 @@ jobs:
       - name: Sync package versions to the tag
         env:
           REF_NAME: ${{ github.ref_name }}
-        run: bun run scripts/sync-version.ts "$REF_NAME"
+        run: npx tsx scripts/sync-version.ts "$REF_NAME"
 
       - name: Extract release notes from CHANGELOG
         env:
           REF_NAME: ${{ github.ref_name }}
         run: |
-          bun run scripts/changelog-extract.ts "$REF_NAME" > RELEASE_NOTES.md
+          npx tsx scripts/changelog-extract.ts "$REF_NAME" > RELEASE_NOTES.md
           echo "----- release notes -----"
           cat RELEASE_NOTES.md
 
@@ -85,8 +85,8 @@ jobs:
       - name: Build mcp-server
         working-directory: mcp-server
         run: |
-          bun install --frozen-lockfile
-          bun run build
+          npm ci
+          npm run build
           npm pack
 
       - name: Create GitHub Release

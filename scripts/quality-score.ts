@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env tsx
 /**
  * quality-score.ts — one number per axis, one baseline, one stopping condition.
  *
@@ -31,10 +31,10 @@
  * whole document exists to stop.
  *
  * Usage:
- *   bun run scripts/quality-score.ts                # score the last 30 days
- *   bun run scripts/quality-score.ts --days 7
- *   bun run scripts/quality-score.ts --write        # (re)write the baseline
- *   bun run scripts/quality-score.ts --gate         # exit 1 if worse than target
+ *   npx tsx scripts/quality-score.ts                # score the last 30 days
+ *   npx tsx scripts/quality-score.ts --days 7
+ *   npx tsx scripts/quality-score.ts --write        # (re)write the baseline
+ *   npx tsx scripts/quality-score.ts --gate         # exit 1 if worse than target
  */
 import { appendFileSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
@@ -44,7 +44,7 @@ import { closeStorage, initializeStorage } from '../src/db/storage';
 import { initializeVault } from '../src/security/vault';
 import { percentile } from './run-health';
 
-const BASELINE_PATH = join(import.meta.dir, 'quality-baseline.json');
+const BASELINE_PATH = join(import.meta.dirname, 'quality-baseline.json');
 
 /** A measured axis. `value === null` means "no data", never "zero". */
 export interface Axis {

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { type AgentSessionEvent, decodeGatewayEvent } from './gateway-adapter';
 
 function single(events: AgentSessionEvent[]): AgentSessionEvent {

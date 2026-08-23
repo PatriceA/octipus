@@ -48,7 +48,7 @@ export class VisualTool extends BaseTool {
     if (!pwOk && !extConnected) {
       return {
         available: false,
-        reason: 'No capture backend available. Install Playwright browsers (`bunx playwright install`) or connect the Browser Extension.',
+        reason: 'No capture backend available. Install Playwright browsers (`npx playwright install`) or connect the Browser Extension.',
       };
     }
     return { available: true };
@@ -125,7 +125,7 @@ export class VisualTool extends BaseTool {
     const bridge = getBrowserBridge();
     if (!bridge.connected) {
       throw new Error(
-        'Visual capture unavailable: Playwright browsers not installed (run `bunx playwright install`) and the Browser Extension is not connected.',
+        'Visual capture unavailable: Playwright browsers not installed (run `npx playwright install`) and the Browser Extension is not connected.',
       );
     }
 

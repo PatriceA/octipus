@@ -16,14 +16,14 @@
  * Usage:
  *
  *   OLD_MASTER_KEY=... NEW_MASTER_KEY=... \
- *     bun run scripts/rotate-master-key.ts
+ *     npx tsx scripts/rotate-master-key.ts
  *
  *   # Dry run (report only, no writes):
  *   OLD_MASTER_KEY=... NEW_MASTER_KEY=... \
- *     bun run scripts/rotate-master-key.ts --dry-run
+ *     npx tsx scripts/rotate-master-key.ts --dry-run
  *
  *   # Custom batch size:
- *   bun run scripts/rotate-master-key.ts --batch=200
+ *   npx tsx scripts/rotate-master-key.ts --batch=200
  *
  * Idempotent — re-running the same (OLD, NEW) pair is safe; rows
  * already encrypted with NEW are reported as `skipped`. Failures on
@@ -68,7 +68,7 @@ function parseArgs(argv: readonly string[]): Args {
       if (!Number.isFinite(n) || n < 1) throw new Error(`invalid --batch: ${arg}`);
       batchSize = n;
     } else if (arg === '--help' || arg === '-h') {
-      console.log('Usage: bun run scripts/rotate-master-key.ts [--dry-run] [--batch=N]');
+      console.log('Usage: npx tsx scripts/rotate-master-key.ts [--dry-run] [--batch=N]');
       console.log('');
       console.log('Required env: OLD_MASTER_KEY, NEW_MASTER_KEY');
       console.log('              DATABASE_URL (external) or DATA_DIR (embedded)');

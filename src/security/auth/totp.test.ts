@@ -8,7 +8,7 @@
  * secret round-trip. Valid codes are produced with otplib's own `generate`.
  */
 import { randomBytes } from 'node:crypto';
-import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { generate } from 'otplib';
 
 // getConfig() (reached via `new TOTPAuth()` and the HKDF key derivation)
@@ -34,11 +34,9 @@ const users = new Map<string, StoredUser>();
 // that binding pointing at the stub, so the afterAll restore would re-install
 // the stub and leak it into later suites (e.g. the DB repository integration
 // tests). A copy taken before mocking restores cleanly.
-import * as realUserRepoNs from '@/db/repositories/user-repository';
-const realUserRepo = { ...realUserRepoNs };
 
-mock.module('@/db/repositories/user-repository', () => ({
-  ...realUserRepo,
+vi.mock('@/db/repositories/user-repository', async () => ({
+  ...(await vi.importActual<typeof import('@/db/repositories/user-repository')>('@/db/repositories/user-repository')),
   userRepository: {
     findById: async (id: string) => users.get(id) ?? null,
     update: async (id: string, patch: Record<string, unknown>) => {
@@ -54,7 +52,6 @@ mock.module('@/db/repositories/user-repository', () => ({
 const { TOTPAuth } = await import('./totp');
 
 afterAll(() => {
-  mock.module('@/db/repositories/user-repository', () => realUserRepo);
 });
 
 function seedUser(id: string): StoredUser {

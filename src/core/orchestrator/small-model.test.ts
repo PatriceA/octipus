@@ -4,7 +4,7 @@
  * the bound model is in the router tier, and never degrades a model whose size
  * can't be determined.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { applyToolCap, capToolsForSmallModel, isSmallModel } from './small-model';
 
 const ROUTER_MAX = 10_000_000_000;

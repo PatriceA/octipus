@@ -41,21 +41,18 @@ export async function setupIntegrationDb(): Promise<void> {
 }
 
 /**
- * Initialize Redis-backed storage for integration tests.
+ * Initialize external storage for integration tests.
+ *
+ * The database comes first and is set up here rather than left to the caller,
+ * because external storage now runs ON the database: a suite that asked for
+ * storage alone used to get a working Valkey connection and now gets
+ * "Database not initialized" on its first cache read. Ordering that the
+ * runtime requires belongs in the helper, not in each caller's `beforeAll`.
  */
-export function setupIntegrationStorage(): void {
+export async function setupIntegrationStorage(): Promise<void> {
+  await setupIntegrationDb();
   if (storageInitialized) return;
-  const url = process.env.REDIS_URL;
-  if (!url) throw new Error('REDIS_URL must be set for integration tests');
-  initializeStorage({
-    mode: 'external',
-    redis: {
-      url,
-      keyPrefix: `test:${Math.random().toString(36).slice(2, 8)}:`,
-      maxRetries: 3,
-      retryDelay: 100,
-    },
-  });
+  initializeStorage({ mode: 'external' });
   storageInitialized = true;
 }
 

@@ -1,6 +1,7 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { createHandoffContext, HANDOFF_EMIT_INSTRUCTION, parseStructuredHandoff, stripHandoffBlock } from './handoff';
 import { auditScopeBefore, handoffConfidenceByStage } from './pipeline-manager';
+import { fileAt } from '@/utils/fs-file';
 
 describe('parseStructuredHandoff', () => {
   test('reads a fenced ```handoff block', () => {
@@ -192,7 +193,7 @@ describe('the structured handoff must survive the walker', () => {
 
   test('the walker hands the raw reply to the builder, not the stripped one', async () => {
     // Source-shape: the defect was which variable reached one call site.
-    const src = await Bun.file(`${import.meta.dir}/pipeline-manager.ts`).text();
+    const src = await fileAt(`${import.meta.dirname}/pipeline-manager.ts`).text();
     const at = src.indexOf('createHandoffContext({');
     expect(at).toBeGreaterThan(0);
     const call = src.slice(at, src.indexOf('})', at));

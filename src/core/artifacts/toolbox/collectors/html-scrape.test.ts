@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { htmlScrapeCollector } from './html-scrape';
 
 const ctx = { principalId: 'p', workspaceId: 'w' };

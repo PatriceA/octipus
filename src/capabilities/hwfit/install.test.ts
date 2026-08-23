@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import type { NewModelConfigEntry } from '@/db/schema/models';
 import type { PullProgress } from '@/models/providers/ollama-provider';
 import { buildModelEntry, type InstallDeps, type InstallJob, runInstall } from './install';

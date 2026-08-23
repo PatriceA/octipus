@@ -38,7 +38,7 @@ export class GatewayWSClient {
     predicate: (frame: WsFrame) => boolean;
     resolve: (frame: WsFrame) => void;
     reject: (err: Error) => void;
-    timer: Timer;
+    timer: NodeJS.Timeout;
   }> = [];
   private closed = false;
   private options: Required<Pick<GatewayWSClientOptions, 'url' | 'clientType' | 'clientVersion' | 'authTimeoutMs' | 'skipAutoSubscribe'>> & {

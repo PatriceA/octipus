@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env tsx
 /**
  * executor-ab.ts — the A/B run that decides whether the planner→executor split
  * is worth keeping.
@@ -23,9 +23,9 @@
  * executor path fire deterministically instead of when a model feels like it.
  *
  * Usage:
- *   bun run scripts/executor-ab.ts                  # every task, both arms
- *   bun run scripts/executor-ab.ts --task read-types
- *   bun run scripts/executor-ab.ts --arm b          # treatment only
+ *   npx tsx scripts/executor-ab.ts                  # every task, both arms
+ *   npx tsx scripts/executor-ab.ts --task read-types
+ *   npx tsx scripts/executor-ab.ts --arm b          # treatment only
  *
  * This spends real tokens on whatever the lane binds. It is a deliberate,
  * hand-run experiment — not part of CI.

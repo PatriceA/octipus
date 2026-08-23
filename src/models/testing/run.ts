@@ -1,14 +1,14 @@
-#!/usr/bin/env bun
+#!/usr/bin/env tsx
 /**
  * CLI runner for model conformance tests.
  *
  * Usage:
- *   bun run src/models/testing/run.ts
- *   bun run src/models/testing/run.ts --provider=ollama
- *   bun run src/models/testing/run.ts --test=basic-completion,tool-calling
- *   bun run src/models/testing/run.ts --model=qwen3:14b
- *   bun run src/models/testing/run.ts --timeout=60000
- *   bun run src/models/testing/run.ts --json          # output JSON report only
+ *   npx tsx src/models/testing/run.ts
+ *   npx tsx src/models/testing/run.ts --provider=ollama
+ *   npx tsx src/models/testing/run.ts --test=basic-completion,tool-calling
+ *   npx tsx src/models/testing/run.ts --model=qwen3:14b
+ *   npx tsx src/models/testing/run.ts --timeout=60000
+ *   npx tsx src/models/testing/run.ts --json          # output JSON report only
  */
 
 import { parseArgs } from 'util';
@@ -19,6 +19,7 @@ import { getProviderRouter } from '../providers';
 import type { ModelProvider } from '../providers/interface';
 import type { ConformanceReport, ConformanceResult } from './conformance';
 import { getTestCaseNames, runConformanceTests } from './conformance';
+import { writeFileAt } from '@/utils/fs-file';
 
 // ── Arg parsing ───────────────────────────────────────────────
 
@@ -40,7 +41,7 @@ if (args.help) {
 Model Conformance Test Runner
 
 Usage:
-  bun run src/models/testing/run.ts [options]
+  npx tsx src/models/testing/run.ts [options]
 
 Options:
   --provider=<name>    Filter models by provider (ollama, openai, anthropic, gemini, deepseek, mistral, zai, moonshot)
@@ -285,7 +286,7 @@ async function main(): Promise<void> {
 
     // Also write JSON to file for later analysis
     const reportPath = `conformance-report-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
-    await Bun.write(reportPath, JSON.stringify(report, null, 2));
+    await writeFileAt(reportPath, JSON.stringify(report, null, 2));
     console.log(`JSON report written to: ${reportPath}`);
   }
 

@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach, afterAll, mock } from 'bun:test';
+import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 
@@ -25,12 +25,6 @@ process.env.LITELLM_API_KEY ??= 'sk-test';
 const { resetConfig } = await import('@/config');
 resetConfig();
 
-// Plain-object snapshot taken before the mock.module below. Restoring from the
-// live namespace does not work — bun's `mock.module` leaves that binding on the
-// installed stub, so the afterAll "restore" would re-install the stub and leak a
-// partial `getLiteLLMClient()` (missing `embed`/`complete`) into later suites.
-const realLitellmClient = { ...(await import('../litellm-client')) };
-
 const fakeCompleteResult: CompletionResult = {
   content: 'hi',
   finishReason: 'stop',
@@ -43,8 +37,8 @@ let completeViaProxyCalls: CompletionOptions[] = [];
 let streamViaProxyCalls: CompletionOptions[] = [];
 let streamChunks: StreamChunk[] = [];
 
-mock.module('../litellm-client', () => ({
-  ...realLitellmClient,
+vi.mock('../litellm-client', async () => ({
+  ...(await vi.importActual<typeof import('../litellm-client')>('../litellm-client')),
   getLiteLLMClient: () => ({
     completeViaProxy: async (opts: CompletionOptions) => {
       completeViaProxyCalls.push(opts);
@@ -76,10 +70,6 @@ describe('LiteLLMProvider', () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
-  });
-
-  afterAll(() => {
-    mock.module('../litellm-client', () => realLitellmClient);
   });
 
   test('identity fields', () => {

@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env tsx
 /**
  * Live TUI check — the terminal client, driven through a real pty.
  *
@@ -12,9 +12,10 @@
  * is a TTY, so piping gives an empty transcript and a green check for nothing.
  *
  * Usage:
- *   bun run scripts/tui-live-check.ts [--timeout 180000] [--json out.json]
+ *   npx tsx scripts/tui-live-check.ts [--timeout 180000] [--json out.json]
  */
 import { spawn } from 'node:child_process';
+import { writeFileAt } from '@/utils/fs-file';
 
 const args = process.argv.slice(2);
 const arg = (n: string): string | undefined => {
@@ -39,7 +40,7 @@ async function main(): Promise<void> {
   let out = '';
   const started = Date.now();
   // `script` gives the child a pty; -q quiet, -e propagate exit code, -c command.
-  const child = spawn('script', ['-qec', 'bun run src/tui-pi/index.ts', '/dev/null'], {
+  const child = spawn('script', ['-qec', 'npx tsx --import ./scripts/md-loader.mjs src/tui-pi/index.ts', '/dev/null'], {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   child.stdout.on('data', (d: Buffer) => { out += d.toString(); });
@@ -116,7 +117,7 @@ async function main(): Promise<void> {
   }
 
   if (JSON_OUT) {
-    await Bun.write(JSON_OUT, JSON.stringify({ at: new Date().toISOString(), asked: `${a}+${b}`, steps }, null, 2));
+    await writeFileAt(JSON_OUT, JSON.stringify({ at: new Date().toISOString(), asked: `${a}+${b}`, steps }, null, 2));
   }
   process.exit(failed.length > 0 ? 1 : 0);
 }

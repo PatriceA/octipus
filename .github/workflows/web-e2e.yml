@@ -28,33 +28,33 @@ jobs:
           persist-credentials: false
 
       - name: Setup Bun (+ dependency cache)
-        uses: ./.github/actions/bun-setup
+        uses: ./.github/actions/node-setup
 
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: '24.9'
 
       - name: Install root deps
-        run: bun install --frozen-lockfile
+        run: npm ci
 
       - name: Install web deps
-        run: bun install --frozen-lockfile
+        run: npm ci
         working-directory: web
 
       # Installs the Chromium build matching the pinned @playwright/test, plus
       # its OS libraries.
       - name: Install Playwright Chromium
-        run: bunx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium
 
-      # Production build up front; playwright.config.ts starts `next start`
-      # (instant) rather than a lazy dev server when CI is set.
+      # Built up front so playwright.config.ts can start the static server
+      # instantly rather than waiting on a lazy dev server.
       - name: Build web (production)
-        run: bun run build
+        run: npm run build
         working-directory: web
 
       - name: Run Playwright tests
-        run: bunx playwright test
+        run: npx playwright test
 
       - name: Upload Playwright report
         if: ${{ !cancelled() }}

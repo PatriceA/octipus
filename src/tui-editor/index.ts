@@ -1,7 +1,7 @@
 /**
  * Entry point for the pi-tui-based Octipus editor surface.
  *
- *   bun run src/tui-editor/index.ts [--project /path]
+ *   npx tsx src/tui-editor/index.ts [--project /path]
  *
  * Connects to the gateway (default API_PORT from .env), boots the
  * editor + chat hybrid, restores persisted layout/buffers from

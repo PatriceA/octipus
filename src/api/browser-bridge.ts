@@ -17,7 +17,7 @@ export interface BrowserCommand {
 interface PendingCommand {
   resolve: (result: unknown) => void;
   reject: (error: Error) => void;
-  timer: Timer;
+  timer: NodeJS.Timeout;
 }
 
 const DEFAULT_TIMEOUT = 30_000;

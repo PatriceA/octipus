@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -141,13 +141,13 @@ describe('scanner pure helpers', () => {
     const text = buildRepoMapText({
       topDirs: ['src', 'test'],
       entryPoints: ['src/index.ts'],
-      commands: { test: 'bun test', build: 'tsc' },
+      commands: { test: 'npm test', build: 'tsc' },
       languages: ['typescript'],
     });
     expect(text).toContain('Languages: typescript');
     expect(text).toContain('Top-level: src, test');
     expect(text).toContain('Entry points: src/index.ts');
-    expect(text).toContain('test (`bun test`)');
+    expect(text).toContain('test (`npm test`)');
   });
 });
 
@@ -164,7 +164,7 @@ describe('scanner integration (temp fixture)', () => {
     writeFileSync(join(root, 'app', 'package.json'), JSON.stringify({
       name: 'app',
       dependencies: { '@acme/core': '^1.0.0', react: '^18.0.0' },
-      scripts: { test: 'bun test', build: 'next build' },
+      scripts: { test: 'npm test', build: 'next build' },
     }));
     writeFileSync(join(root, 'app', 'AGENTS.md'), '# App guide');
 
@@ -177,7 +177,7 @@ describe('scanner integration (temp fixture)', () => {
     expect(core?.packageName).toBe('@acme/core');
     expect(app?.kind).toBe('product');
     expect(app?.hasAgentsMd).toBe(true);
-    expect(app?.repoMap).toContain('test (`bun test`)');
+    expect(app?.repoMap).toContain('test (`npm test`)');
 
     // Edge: app → core
     const nodes: RepoGraphNode[] = results.map((r) => ({

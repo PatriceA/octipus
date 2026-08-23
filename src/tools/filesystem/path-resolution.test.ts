@@ -16,7 +16,7 @@
  * `WORKSPACE_PATH`, in both the per-user nested layout (real users) and the
  * flat layout (system jobs).
  */
-import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';

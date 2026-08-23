@@ -1,6 +1,6 @@
-import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { randomUUID } from 'crypto';
-import { Elysia } from 'elysia';
+import { Elysia } from '@/api/http';
 import {
   isIntegration,
   setupIntegrationDb,
@@ -21,7 +21,7 @@ interface SearchResult {
 const VALID_TYPES: SearchResult['type'][] = ['session', 'hook', 'model', 'skill', 'knowledge', 'tool'];
 
 // Integration tests exercise the real search route against Postgres. Run via:
-//   bun run test:integration -- src/api/routes/search.test.ts
+//   npm run test:integration -- src/api/routes/search.test.ts
 
 describe.skipIf(!isIntegration)('Search API (Integration)', () => {
   let app: ElysiaLike;

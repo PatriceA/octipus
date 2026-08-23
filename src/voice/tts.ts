@@ -1,7 +1,10 @@
-import { spawn, } from 'bun';
+import { spawnProcess as spawn } from '@/utils/proc';
 import { EventEmitter } from 'events';
+import { homedir } from 'node:os';
+import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { logger } from '../utils/logger';
+import { fileAt, removeFile, writeFileAt } from '@/utils/fs-file';
 
 export interface TTSOptions {
   voice?: string;
@@ -74,11 +77,11 @@ export class PiperEngine extends EventEmitter implements TTSEngine {
       }
 
       // Read output file
-      const audioBuffer = await Bun.file(outputPath).arrayBuffer();
+      const audioBuffer = await fileAt(outputPath).arrayBuffer();
       return Buffer.from(audioBuffer);
     } finally {
-      await Bun.file(outputPath).exists() &&
-        await Bun.$`rm ${outputPath}`.quiet();
+      await fileAt(outputPath).exists() &&
+        await removeFile(outputPath);
     }
   }
 
@@ -95,8 +98,11 @@ export class PiperEngine extends EventEmitter implements TTSEngine {
   async getVoices(): Promise<string[]> {
     // Piper voices are model files, return available models
     try {
-      const result = await Bun.$`ls ~/.local/share/piper/voices/*.onnx 2>/dev/null || echo ""`.text();
-      return result.trim().split('\n').filter(Boolean);
+      // Read the directory directly rather than shelling out to `ls` — the
+      // glob was the only reason a shell was involved.
+      const dir = join(homedir(), '.local/share/piper/voices');
+      const entries = await readdir(dir);
+      return entries.filter((f) => f.endsWith('.onnx')).map((f) => join(dir, f));
     } catch {
       return [];
     }
@@ -144,10 +150,10 @@ export class KokoroEngine extends EventEmitter implements TTSEngine {
     const outputPath = `/tmp/kokoro-${stamp}.wav`;
 
     try {
-      await Bun.write(inputPath, text);
+      await writeFileAt(inputPath, text);
 
       const { kokoroModelDir } = await import('./provision');
-      const worker = join(import.meta.dir, 'kokoro_tts_worker.py');
+      const worker = join(import.meta.dirname, 'kokoro_tts_worker.py');
       const proc = spawn({
         cmd: [
           'uv', 'run', '--python', '3.12', '--with', 'kokoro-onnx', '--with', 'soundfile',
@@ -166,11 +172,11 @@ export class KokoroEngine extends EventEmitter implements TTSEngine {
         throw new Error(`Kokoro failed: ${stderr || `exit ${exitCode}`}`);
       }
 
-      const audioBuffer = await Bun.file(outputPath).arrayBuffer();
+      const audioBuffer = await fileAt(outputPath).arrayBuffer();
       return Buffer.from(audioBuffer);
     } finally {
-      await Bun.file(inputPath).exists() && (await Bun.$`rm ${inputPath}`.quiet());
-      await Bun.file(outputPath).exists() && (await Bun.$`rm ${outputPath}`.quiet());
+      await removeFile(inputPath);
+      await removeFile(outputPath);
     }
   }
 

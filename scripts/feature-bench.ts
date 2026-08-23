@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env tsx
 /**
  * Feature + performance bench — one measured pass over the product's main
  * paths, through the same HTTP API the web UI and the TUI both talk to.
@@ -14,12 +14,13 @@
  * did not do cannot score itself.
  *
  * Usage:
- *   bun run scripts/feature-bench.ts --token <api-token> [--base http://localhost:3005]
+ *   npx tsx scripts/feature-bench.ts --token <api-token> [--base http://localhost:3005]
  *                                    [--only chat,tools] [--json out.json]
  */
 import { sql } from 'drizzle-orm';
 import { closeDb, getDb, initializeDb } from '../src/db/postgres';
 import { initializeVault } from '../src/security/vault';
+import { writeFileAt } from '@/utils/fs-file';
 
 interface Scenario {
   id: string;
@@ -383,7 +384,7 @@ async function main(): Promise<void> {
   }
 
   if (JSON_OUT) {
-    await Bun.write(JSON_OUT, JSON.stringify({ base: BASE, at: new Date().toISOString(), api, measured }, null, 2));
+    await writeFileAt(JSON_OUT, JSON.stringify({ base: BASE, at: new Date().toISOString(), api, measured }, null, 2));
     console.log(`\n  wrote ${JSON_OUT}`);
   }
 

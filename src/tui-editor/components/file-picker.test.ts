@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { FilePicker } from './file-picker';
 
 const ROOT = '/tmp/example-project';

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { compareTimelineEntries, type TimelineEntryLike, timelineEntryId } from './timeline-order';
 
 // Regression guard for the recurring "jumping rows" bug: timeline order must be

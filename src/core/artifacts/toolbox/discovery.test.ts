@@ -4,7 +4,7 @@
  * cwd, so the discovery scan walks the real `collectors/` folder.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { discoverToolbox } from './discovery';
 import { _resetToolboxRegistryForTests, getToolboxRegistry } from './registry';
 

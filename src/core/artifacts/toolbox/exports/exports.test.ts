@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import type { ToolboxContext } from '../types';
 import { csvExporter } from './csv';
 import { jsonExporter } from './json';

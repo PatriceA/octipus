@@ -1,6 +1,6 @@
-#!/usr/bin/env bun
+#!/usr/bin/env tsx
 /**
- * Live web-UI check — the real browser, the real Next.js app, the real backend.
+ * Live web-UI check — the real browser, the real web app, the real backend.
  *
  * The Playwright suite under `tests/web` stubs every `/api/**` call at the
  * browser, which is right for testing the front-end and useless for answering
@@ -10,10 +10,11 @@
  * rather than what the API returns.
  *
  * Usage:
- *   bun run scripts/ui-live-check.ts --user <name> --pass <password>
+ *   npx tsx scripts/ui-live-check.ts --user <name> --pass <password>
  *        [--base http://localhost:3007] [--json out.json] [--shots dir]
  */
 import { chromium, type Page } from 'playwright';
+import { writeFileAt } from '@/utils/fs-file';
 
 const args = process.argv.slice(2);
 const arg = (n: string): string | undefined => {
@@ -178,7 +179,7 @@ async function main(): Promise<void> {
   }
 
   if (JSON_OUT) {
-    await Bun.write(JSON_OUT, JSON.stringify({ base: BASE, at: new Date().toISOString(), steps, httpFailures, consoleErrors }, null, 2));
+    await writeFileAt(JSON_OUT, JSON.stringify({ base: BASE, at: new Date().toISOString(), steps, httpFailures, consoleErrors }, null, 2));
   }
 
   await browser.close();

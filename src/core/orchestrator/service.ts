@@ -186,7 +186,7 @@ export class OrchestratorService {
           const text =
             `${name} has no engine. The arms are idle.\n\n` +
             'To wire one up, run one of:\n' +
-            '  • `bun run setup`   (interactive — picks Ollama / LiteLLM / direct provider)\n' +
+            '  • `npm run setup`   (interactive — picks Ollama / LiteLLM / direct provider)\n' +
             '  • `octi doctor`     (shows what is missing)\n' +
             '  • open the Models page in the web UI\n\n' +
             'Once a model is bound to the `general` topic, every turn after this one works.';
@@ -647,7 +647,19 @@ export class OrchestratorService {
       };
     } catch (error) {
       recordOrchestratorRun(channel, undefined, 'error');
-      coreLogger.error({ error, sessionId, channel }, 'handleMessage failed');
+      // Pulled apart explicitly: an Error's `message` and `stack` are
+      // non-enumerable, so `{ error }` serialises to `{}` and hides the very
+      // thing the line exists to report.
+      coreLogger.error(
+        {
+          err: error instanceof Error
+            ? { name: error.name, message: error.message, stack: error.stack }
+            : { value: String(error) },
+          sessionId,
+          channel,
+        },
+        'handleMessage failed',
+      );
       if (trajectory) {
         trajectory.finalize({
           finalResponse: '',

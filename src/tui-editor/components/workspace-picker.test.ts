@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { WorkspaceStore } from '../stores/workspace-store';
 import { WorkspacePicker } from './workspace-picker';
 

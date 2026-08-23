@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env tsx
 /**
  * sync-version.ts — set the package version to match a release tag.
  *
@@ -10,8 +10,8 @@
  * a JSON parse+stringify round-trip would reformat the whole file and blow up
  * the diff. `setVersion` (pure) is unit-tested.
  *
- *   bun run scripts/sync-version.ts 0.2.0
- *   bun run scripts/sync-version.ts v0.2.0        # leading v is stripped
+ *   npx tsx scripts/sync-version.ts 0.2.0
+ *   npx tsx scripts/sync-version.ts v0.2.0        # leading v is stripped
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -43,7 +43,7 @@ const TARGETS = ['package.json', join('mcp-server', 'package.json')];
 if (import.meta.main) {
   const arg = process.argv[2];
   if (!arg) {
-    console.error('Usage: bun run scripts/sync-version.ts <version>');
+    console.error('Usage: npx tsx scripts/sync-version.ts <version>');
     process.exit(2);
   }
   const version = normalizeVersion(arg);
@@ -52,7 +52,7 @@ if (import.meta.main) {
     process.exit(2);
   }
 
-  const repoRoot = join(import.meta.dir, '..');
+  const repoRoot = join(import.meta.dirname, '..');
   for (const rel of TARGETS) {
     const path = join(repoRoot, rel);
     const before = readFileSync(path, 'utf8');

@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { validateLocalAuth } from './local-auth';
 
 describe('Local Auth', () => {

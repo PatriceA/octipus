@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CLI_TOOLS, CLIProvider, glmCliConfig, kimiCliConfig } from './cli-provider';
 
 describe('GLM / Kimi CLI configs (Claude-binary + Anthropic endpoint)', () => {

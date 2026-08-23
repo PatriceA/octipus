@@ -1,4 +1,4 @@
-import { Elysia } from 'elysia';
+import { Elysia } from '@/api/http';
 import type { Principal } from '@/security/principal';
 import { isAuthenticated } from '@/security/principal';
 import { getRateLimiter } from '@/security/rate-limiter';

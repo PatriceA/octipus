@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import type { Hook } from '@/core/types';
 import { resolveHookSessionId } from './actions';
 import type { TriggerContext } from './triggers';

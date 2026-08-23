@@ -2,7 +2,7 @@
  * Lazy tool discovery split — partitions a role's flat handler list into the
  * advertised "core" set and the discoverable "long tail". See tool-split.ts.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import type { ToolHandler } from '@/core/agent-base';
 import { isLongTailHandler, splitRoleTools } from './tool-split';
 

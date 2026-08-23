@@ -1,7 +1,5 @@
-import { cors } from '@elysiajs/cors';
-import { swagger } from '@elysiajs/swagger';
 import { eq } from 'drizzle-orm';
-import { Elysia, } from 'elysia';
+import { cors, Elysia, listen, type RunningServer } from '@/api/http';
 import { getConfig } from '@/config';
 import { getDb } from '@/db/postgres';
 import { users } from '@/db/schema/users';
@@ -98,26 +96,6 @@ export function createServer() {
   const config = getConfig();
 
   const app = new Elysia()
-    // Swagger documentation
-    .use(
-      swagger({
-        documentation: {
-          info: {
-            title: 'Octipus API',
-            version: '1.0.0',
-            description: 'Autonomous Development Octipus API',
-          },
-          tags: [
-            { name: 'auth', description: 'Authentication endpoints' },
-            { name: 'agents', description: 'Agent management' },
-            { name: 'sessions', description: 'Session management' },
-            { name: 'models', description: 'Model configuration' },
-            { name: 'hooks', description: 'Hook management' },
-            { name: 'health', description: 'Health checks' },
-          ],
-        },
-      })
-    )
     // CORS — supports wildcard '*' for LAN access or a list of origins.
     // The Tauri desktop client is a thin client served from its own fixed local
     // origin (no same-origin /api proxy like the web build), so its cross-origin
@@ -433,71 +411,26 @@ export async function startServer() {
   const config = getConfig();
   const app = createServer();
 
-  // (Re)bind the HTTP listener. Long-running synchronous routes (Grok reasoning
-  // tests, embedding probes) can block for minutes, so bump Bun's per-connection
-  // idleTimeout (default 10s) to the max (255s) to avoid spurious mid-flight
-  // closes. Elysia's Bun adapter registers a `process.on('beforeExit')` handler
-  // during `.listen()` that calls `app.server.stop()`; that assumes Node's
-  // beforeExit semantics and misfires under Bun, so we strip the listener it just
-  // added (we stop the server explicitly on SIGTERM/SIGINT in src/index.ts).
-  const bind = () => {
-    // On a rebind the dropped server object is still assigned (port -1, socket
-    // half-closed). Elysia's listen() overwrites app.server unconditionally, so
-    // without closing the old one first we leak Bun.Server handles (and, with
-    // Elysia's hardcoded reusePort, can stack extra sockets on the port). Close
-    // and clear it before re-listening. (No-op on first boot — app.server unset.)
-    const existing = app.server as { stop?: (force?: boolean) => void } | null;
-    if (existing) {
-      try { existing.stop?.(true); } catch { /* already stopped */ }
-      (app as unknown as { server: unknown }).server = null;
-    }
-    const before = new Set(process.listeners('beforeExit'));
-    app.listen({ hostname: config.api.host, port: config.api.port, idleTimeout: 255 });
-    for (const l of process.listeners('beforeExit')) {
-      if (!before.has(l)) process.removeListener('beforeExit', l);
-    }
-  };
+  // One bind, no watchdog and no `beforeExit` surgery. Both existed to work
+  // around the Bun adapter: it registered a `beforeExit` handler that stopped
+  // the server under Node's semantics, and the listener could be torn down a
+  // few seconds after boot with no attributable JS call — the "backend
+  // reachable, then refused" bug. Neither happens on Node, so the self-healing
+  // rebind loop is gone rather than carried across. If a listener ever drops
+  // again it should surface as a crash, not as a silent rebind.
+  apiServer = listen(app, { hostname: config.api.host, port: config.api.port });
+  app.server = apiServer;
 
-  bind();
-
-  // Self-healing watchdog. Under Bun + Elysia (Bun 1.3.x) the HTTP listener can
-  // be torn down a few seconds after boot — `app.server.port` flips to -1 — with
-  // NO JS `stop()`/`beforeExit`/signal we could attribute it to (confirmed via
-  // stack-trace wrapping). The process stays alive on its channel/cron handles,
-  // so it silently becomes connection-refused: the "backend reachable then down
-  // after a few seconds" bug. It's intermittent and Bun-internal; rather than
-  // fight the runtime, detect the drop and re-listen so the API self-heals.
-  const watchdog = setInterval(() => {
-    const port = (app.server as { port?: number } | null)?.port;
-    if (port == null || port < 0) {
-      apiLogger.warn({ observedPort: port ?? null }, 'API listener dropped — rebinding');
-      try {
-        bind();
-        apiLogger.info({ port: (app.server as { port?: number } | null)?.port }, 'API listener rebound');
-      } catch (err) {
-        apiLogger.error({ err: err instanceof Error ? err.message : String(err) }, 'API listener rebind failed (will retry)');
-      }
-    }
-    // Poll at 1s (not 3s): the rebind window is when requests get
-    // connection-refused / 502, so a tighter loop shrinks user-visible failures
-    // and lets the client's idempotent retry (web/lib/api.ts, ~2.1s budget)
-    // land after the listener is back. The check is a cheap port read.
-  }, 1000);
-  // Keep the watchdog ref'd for the process lifetime; clear it on shutdown.
-  apiServerWatchdog = watchdog;
-
-  apiLogger.info({ host: config.api.host, port: config.api.port }, 'API server started');
+  apiLogger.info({ host: config.api.host, port: apiServer.port }, 'API server started');
 
   return app;
 }
 
-/** Interval handle for the listener watchdog, cleared on graceful shutdown. */
-export let apiServerWatchdog: ReturnType<typeof setInterval> | undefined;
+/** The running listener, or undefined before boot / after shutdown. */
+export let apiServer: RunningServer | undefined;
 
-/** Stop the listener watchdog (called from the shutdown path). */
-export function stopApiServerWatchdog() {
-  if (apiServerWatchdog) {
-    clearInterval(apiServerWatchdog);
-    apiServerWatchdog = undefined;
-  }
+/** Stop the HTTP listener (called from the shutdown path). */
+export function stopApiServer() {
+  apiServer?.stop();
+  apiServer = undefined;
 }

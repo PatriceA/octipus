@@ -1,25 +1,34 @@
+# Node is pinned to 24.9, not floated: `crypto.argon2` (every password hash)
+# landed there, and `fs.glob` needs 22. A floating tag that happens to be new
+# enough today would fail at runtime on login, not at build.
 # ---- Build stage ----
-FROM oven/bun:1.3 AS build
+FROM node:24.9-bookworm AS build
 WORKDIR /app
 
 # Install dependencies first (layer caching)
-COPY package.json bun.lock* ./
-RUN bun install
+COPY package.json package-lock.json* ./
+RUN npm install
 
 # Copy source
 COPY src/ src/
+COPY scripts/ scripts/
+COPY bin/ bin/
 COPY web/ web/
 COPY mcp-server/ mcp-server/
 COPY tsconfig.json ./
+
+# Bundle the backend. `start` runs this artifact, not the source under a
+# loader, so the image ships what the tests exercised.
+RUN npx tsx scripts/build.ts
 
 # Build web frontend
 # NEXT_PUBLIC_API_PORT is baked into client JS at build time (used for WebSocket)
 ARG NEXT_PUBLIC_API_PORT=3005
 ENV NEXT_PUBLIC_API_PORT=${NEXT_PUBLIC_API_PORT}
-RUN cd web && bun install && bun run build
+RUN cd web && npm install && npm run build
 
 # ---- Runtime stage ----
-FROM oven/bun:1.3-slim
+FROM node:24.9-bookworm-slim
 WORKDIR /app
 
 # Install runtime system dependencies
@@ -46,21 +55,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip \
     openssh-client \
     python3-minimal \
-    nodejs \
-    npm \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy built app
 COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/web/.next ./web/.next
-COPY --from=build /app/web/node_modules ./web/node_modules
-COPY --from=build /app/web/public ./web/public
+COPY --from=build /app/dist ./dist
+COPY --from=build /app/web/dist ./web/dist
+COPY --from=build /app/web/serve.mjs ./web/serve.mjs
 COPY --from=build /app/web/package.json ./web/package.json
-COPY --from=build /app/web/next.config.* ./web/
 
-# Copy source (Bun runs TS directly)
-COPY package.json bun.lock tsconfig.json ./
+# Source stays in the image: the migration runner, the setup wizard and the
+# TUI are still run from it, and stack traces resolve against it.
+COPY package.json tsconfig.json ./
 COPY src/ src/
+COPY scripts/ scripts/
 COPY mcp-server/ mcp-server/
 COPY eval/ eval/
 COPY bin/ bin/
@@ -84,7 +92,7 @@ RUN mkdir -p /data/workspace /data/documents /data/extensions
 # runtime user (below) can launch them — the default per-user cache
 # (~/.cache/ms-playwright) would be unreadable after the USER switch.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN bunx playwright install chromium && \
+RUN npx playwright install chromium && \
     chmod -R a+rX /ms-playwright && \
     cd mcp-server && npm install --silent && npm run build --silent && cd ..
 
@@ -98,11 +106,11 @@ ENV NODE_ENV=production \
     DOCUMENTS_PATH=/data/documents \
     LOG_FORMAT=json
 
-# Drop root. The oven/bun image ships a non-root `bun` user (uid 1000);
+# Drop root. The node image ships a non-root `node` user (uid 1000);
 # a compromised agent shell tool would otherwise run as root inside the
 # container (and, if the Docker socket is mounted, host-root-equivalent).
-RUN chown -R bun:bun /app /data
-USER bun
+RUN chown -R node:node /app /data
+USER node
 
 # Health check — probe readiness (DB + Redis reachable), not just liveness,
 # so the container is only "healthy" when it can actually serve requests.
@@ -111,6 +119,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 
 EXPOSE 3005 3007
 
-COPY --chown=bun:bun docker-entrypoint.sh /app/docker-entrypoint.sh
+COPY --chown=node:node docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 ENTRYPOINT ["/app/docker-entrypoint.sh"]

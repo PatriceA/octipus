@@ -1,24 +1,37 @@
-import nextConfig from 'eslint-config-next';
+import js from '@eslint/js';
+import reactHooks from 'eslint-plugin-react-hooks';
+import globals from 'globals';
+import tseslint from 'typescript-eslint';
 
-const config = [
-  ...nextConfig,
+/**
+ * The gate this config exists for is the React Compiler's hook rules — the
+ * previous framework preset carried them, and clearing the forty-one errors
+ * they found was a deliberate piece of work. Keep them; the rest of the preset
+ * was framework-specific (`next/image`, `next/link`, page conventions) and has
+ * nothing left to check.
+ */
+export default [
   {
-    // `.next-desktop/` is the Tauri static-export build dir (gitignored, ~1 GB
-    // of generated chunks). CI never has it, so CI's lint is green — but any
-    // developer who has run a desktop build gets ~530 errors from bundled
-    // output and none from their own code, which makes the local lint useless
-    // right where it should be most useful.
-    ignores: ['.next/', '.next-desktop/', 'out/', 'node_modules/'],
+    // `public/` holds the artifact SDK — a generated bundle and its plain-JS
+    // source, neither of which is application code.
+    ignores: ['dist/', 'out/', 'node_modules/', 'src-tauri/', 'public/', '**/*.d.ts'],
   },
+  js.configs.recommended,
+  ...tseslint.configs.recommended,
+  reactHooks.configs.flat['recommended-latest'],
   {
+    languageOptions: {
+      globals: { ...globals.browser, ...globals.node },
+      parserOptions: { ecmaFeatures: { jsx: true } },
+    },
     rules: {
-      // The dashboard ships as a static export (Tauri desktop) where next/image
-      // is unoptimized anyway, and the remaining <img> uses are data:/blob: URLs
-      // (QR codes, upload previews, a tiny static logo) that next/image can't
-      // meaningfully optimize. Plain <img> is the right tool here.
-      '@next/next/no-img-element': 'off',
+      // Off, not tuned: the previous preset never reported these, so switching
+      // them on here would mix a new rule class into a framework migration.
+      // Every react-hooks rule keeps its own default level, which is what the
+      // `--max-warnings 0` in the lint script is guarding.
+      '@typescript-eslint/no-unused-vars': 'off',
+      '@typescript-eslint/no-explicit-any': 'off',
+      'no-empty': ['error', { allowEmptyCatch: true }],
     },
   },
 ];
-
-export default config;

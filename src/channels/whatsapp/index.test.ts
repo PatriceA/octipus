@@ -8,7 +8,7 @@
  * tests set them directly so no config singleton or network is involved.
  */
 import { createHmac } from 'node:crypto';
-import { beforeEach, describe, expect, test } from 'bun:test';
+import { beforeEach, describe, expect, test } from 'vitest';
 import { WhatsAppChannel } from './index';
 
 const APP_SECRET = 'meta-app-secret';

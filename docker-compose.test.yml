@@ -24,17 +24,3 @@ services:
       timeout: 2s
       retries: 30
       start_period: 2s
-
-  octipus-test-valkey:
-    image: valkey/valkey:7.2-alpine
-    container_name: octipus-test-valkey
-    # No volume mount — ephemeral by default
-    command: valkey-server --save "" --appendonly no
-    ports:
-      - "${TEST_REDIS_PORT:-6390}:6379"
-    healthcheck:
-      test: ["CMD", "valkey-cli", "ping"]
-      interval: 1s
-      timeout: 2s
-      retries: 30
-      start_period: 1s

@@ -1,5 +1,5 @@
 /** Chat/work split directive — Thread 3. */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { buildOutputDirective } from './output-directive';
 
 describe('buildOutputDirective', () => {

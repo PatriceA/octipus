@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { getDb } from '@/db/postgres';
-import { RedisCache } from '@/db/redis';
+import { Cache } from '@/db/cache';
 import { type ModelConfigEntry, modelConfig, type NewModelConfigEntry } from '@/db/schema/models';
 import { getCapabilitiesForModel, type ModelCapabilities } from '@/models/capabilities';
 import { SINGLE_MODEL_CHAT_TOPICS } from '@/models/single-model-binding';
@@ -20,7 +20,7 @@ export class ModelRegistry {
   private get db() {
     return getDb();
   }
-  private cache = new RedisCache(CACHE_TTL);
+  private cache = new Cache(CACHE_TTL);
 
   private async cacheGet<T>(key: string): Promise<T | null> {
     try {

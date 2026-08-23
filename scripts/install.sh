@@ -5,11 +5,11 @@
 #   curl -fsSL https://raw.githubusercontent.com/PatriceA/octipus/main/scripts/install.sh | bash
 #
 # What it does:
-#   1. Detects platform + verifies prerequisites (git, bun).
+#   1. Detects platform + verifies prerequisites (git, node).
 #   2. Clones the repo into ~/.octipus/app (skips if present).
 #   3. Installs dependencies.
 #   4. (--desktop) Installs the Rust toolchain + Tauri system libs.
-#   5. Runs `bun run setup` (interactive — picks Ollama / LiteLLM / direct provider).
+#   5. Runs `npm run setup` (interactive — picks Ollama / LiteLLM / direct provider).
 #   6. Prints the next-step command.
 #
 # Flags (pass after `bash -s --` when piping through curl):
@@ -76,18 +76,18 @@ if ! command -v git >/dev/null 2>&1; then
 fi
 ok "git: $(git --version | head -1)"
 
-# ─── Check bun (install if missing) ────────────────────────────────────────
-if ! command -v bun >/dev/null 2>&1; then
-  warn "bun not found — installing via official script..."
-  curl -fsSL https://bun.sh/install | bash
-  # shellcheck disable=SC1090
-  if [ -f "$HOME/.bun/bin/bun" ]; then export PATH="$HOME/.bun/bin:$PATH"; fi
-  if ! command -v bun >/dev/null 2>&1; then
-    err "bun install failed. Install manually from https://bun.sh and re-run."
-    exit 1
-  fi
+# ─── Check node ────────────────────────────────────────────────────────────
+if ! command -v node >/dev/null 2>&1; then
+  err "Node.js not found. Install Node 24.9 or newer from https://nodejs.org and re-run."
 fi
-ok "bun: $(bun --version)"
+# 24.9 specifically: `crypto.argon2` (password hashing) landed there, and a
+# lower version fails at login rather than at install — so check it here.
+NODE_MAJOR_MINOR=$(node -p "process.versions.node.split('.').slice(0,2).map(Number).join('.')")
+if node -e "const [a,b]=process.versions.node.split('.').map(Number); process.exit(a>24||(a===24&&b>=9)?0:1)"; then
+  ok "node: $(node --version)"
+else
+  err "Node $NODE_MAJOR_MINOR is too old — Octipus needs 24.9 or newer (crypto.argon2)."
+fi
 
 # ─── Clone or update ───────────────────────────────────────────────────────
 if [ -d "$INSTALL_DIR/.git" ]; then
@@ -116,12 +116,12 @@ fi
 
 # ─── Install deps ──────────────────────────────────────────────────────────
 say "Installing backend dependencies..."
-bun install --silent
+npm install --silent
 ok "Backend dependencies installed"
 
 if [ -d "$INSTALL_DIR/web" ]; then
   say "Installing web dependencies..."
-  (cd "$INSTALL_DIR/web" && bun install --silent)
+  (cd "$INSTALL_DIR/web" && npm install --silent)
   ok "Web dependencies installed"
 fi
 
@@ -138,7 +138,7 @@ fi
 # ─── Build the compiled CLI binary ────────────────────────────────────────
 echo ""
 say "Building the compiled octi binary..."
-bun run build:cli >/dev/null 2>&1 || warn "build:cli failed — bash bin/octi will still work."
+npm run build:cli >/dev/null 2>&1 || warn "build:cli failed — bash bin/octi will still work."
 
 # Link or copy the binary onto PATH. Prefer ~/.local/bin (no sudo).
 TARGET_BIN_DIR="${OCTIPUS_BIN_DIR:-$HOME/.local/bin}"
@@ -171,7 +171,7 @@ echo ""
 if command -v octi >/dev/null 2>&1; then
   octi setup
 else
-  bun run scripts/setup-wizard.ts
+  npx tsx scripts/setup-wizard.ts
 fi
 
 # ─── Done ──────────────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'vitest';
 import { artifactLifecycleBus, type ArtifactLifecycleEvent } from './lifecycle-bus';
 
 afterEach(() => {

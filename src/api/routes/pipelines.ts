@@ -1,5 +1,5 @@
 import { desc, eq, or } from 'drizzle-orm';
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getPipelineManager } from '@/core/orchestrator';
 import { validatePipelineStages } from '@/core/orchestrator/pipeline-validation';
@@ -178,7 +178,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
 
       const start = await pipelineRepository.nextPlanOrdinal(params.id);
       const added = await pipelineRepository.addPlanItems(
-        body.items.map((item, i) => ({
+        body.items.map((item: Record<string, unknown>, i: number) => ({
           pipelineId: params.id,
           ordinal: start + i,
           title: item.title,
@@ -447,7 +447,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
     async ({ user, body }) => {
       if (!user) return { error: 'Not authenticated' };
       const db = getDb();
-      const steps = (body.steps || []).map(s => ({
+      const steps = (body.steps || []).map((s: Record<string, any>) => ({
         name: s.name,
         description: s.description,
         topic: s.topic ?? '',
@@ -511,7 +511,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       if (!owned) return { error: 'Template not found' };
 
       const db = getDb();
-      const steps = (body.steps || []).map(s => ({
+      const steps = (body.steps || []).map((s: Record<string, any>) => ({
         name: s.name,
         description: s.description,
         topic: s.topic ?? '',

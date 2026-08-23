@@ -1,31 +1,14 @@
-import { afterAll, mock } from 'bun:test';
-// Captured BEFORE the mock.module calls below so afterAll can restore the real
-// modules — bun's mock.module is process-global, and this suite's partial
-// model-registry stub (truthy getModelForTopic, no registerModel) otherwise
-// leaks forward and breaks memory.extractor / topics / swarm-spawner suites.
-import * as realProvidersNs from '@/models/providers';
-import * as realModelRegistryNs from '@/models/model-registry';
-// Plain-object snapshots taken before mocking — restoring from the live
-// `import * as` namespace re-installs the stub (bun leaves the binding on the
-// mock), so afterAll must reinstall these copies to avoid leaking the partial
-// registry stub into later unit suites.
-const realProviders = { ...realProvidersNs };
-const realModelRegistry = { ...realModelRegistryNs };
-
-// This is a pure unit suite: every dependency below is replaced via
-// `mock.module`, which bun applies process-globally for the whole `bun test`
-// run. Under the integration runner (INTEGRATION=1) those mocks add no coverage
-// and leak into real-DB suites — e.g. the partial `model-registry` mock omits
-// `registerModel`, breaking the topics/swarm-spawner integration tests. So make
-// the global mocks no-ops and skip this suite when INTEGRATION=1; the unit pass
-// (`bun test src scripts`, INTEGRATION unset) still runs it in full.
+// A pure unit suite: every dependency below is replaced with a module mock.
+// Those mocks are scoped to this file — the runner isolates each test file in
+// its own process — so nothing here can reach another suite. The snapshot-and-
+// restore dance this file used to carry existed only because the previous
+// runner applied module mocks process-wide.
 const inIntegration = process.env.INTEGRATION === '1';
-const mockModule: typeof mock.module = inIntegration ? (() => {}) as typeof mock.module : mock.module;
 
 // Set the env vars `loadConfig()` needs BEFORE importing anything that may
 // touch `@/config`. We can't safely mock `@/config` itself: bun's
 // `mock.module` is process-wide for the whole test run, so any partial mock
-// here would leak into integration tests later in the same `bun test` run
+// here would leak into integration tests later in the same `npm test` run
 // and break them (e.g. config.database.url ends up empty → postgres-js
 // connects as the local OS user). Setting env vars is local: integration
 // tests set their own DATABASE_URL/REDIS_URL via the test:integration
@@ -46,7 +29,7 @@ const mockComplete = async () => ({
   latencyMs: 100,
 });
 
-mockModule('@/models/providers', () => ({
+vi.mock('@/models/providers', () => ({
   getProviderRouter: () => ({
     complete: mockComplete,
     stream: async function* () {},
@@ -55,7 +38,7 @@ mockModule('@/models/providers', () => ({
 }));
 
 // Also mock model-registry to avoid DB access in llmJudge
-mockModule('@/models/model-registry', () => ({
+vi.mock('@/models/model-registry', () => ({
   getModelRegistry: () => ({
     getModelForTopic: async () => ({
       modelId: 'test-model',
@@ -70,15 +53,7 @@ mockModule('@/models/model-registry', () => ({
   }),
 }));
 
-// Restore the real modules after this suite so the partial stubs above don't
-// leak into later real-DB suites (mock.module is process-global; noop under
-// INTEGRATION where mockModule is already a noop).
-afterAll(() => {
-  mockModule('@/models/providers', () => realProviders);
-  mockModule('@/models/model-registry', () => realModelRegistry);
-});
-
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test, vi } from 'vitest';
 import {
   defineEvaluator,
   ALL_EVALUATORS,

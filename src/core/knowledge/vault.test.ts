@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
@@ -50,12 +50,12 @@ describe('VaultSync (embedded)', () => {
     // an async rejection that bun mis-attributes to unrelated tests).
     const { EmbeddingService } = await import('@/core/rag/embeddings');
     const embeddings = new EmbeddingService('test-model');
-    spyOn(embeddings, 'generateEmbedding').mockRejectedValue(
+    vi.spyOn(embeddings, 'generateEmbedding').mockRejectedValue(
       new Error('No embedding model configured (test) — re-index degrades to indexed:false'),
     );
     // indexText embeds in batches, so `embedBatch` is the seam that must fail
     // locally too — otherwise indexing reaches a configured proxy for real.
-    spyOn(embeddings, 'embedBatch').mockImplementation(async (texts: string[]) =>
+    vi.spyOn(embeddings, 'embedBatch').mockImplementation(async (texts: string[]) =>
       texts.map(() => new Error('No embedding model configured (test) — re-index degrades to indexed:false')),
     );
     const { NoteService } = await import('./notes');

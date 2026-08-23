@@ -3,7 +3,7 @@
  * file. The hash is pinned in CSP `script-src` at embed render time
  * (read by `src/api/routes/artifact-pages.ts`).
  *
- * Run via `bun run scripts/build-artifact-sdk.ts`. Output:
+ * Run via `npx tsx scripts/build-artifact-sdk.ts`. Output:
  *   web/public/octipus-artifact-client.js
  *   web/public/octipus-artifact-client.sha256.txt
  */
@@ -11,6 +11,7 @@
 import { createHash } from 'crypto';
 import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
+import { build as esbuild } from 'esbuild';
 
 async function main(): Promise<void> {
   const root = process.cwd();
@@ -18,17 +19,18 @@ async function main(): Promise<void> {
   const outPath = join(root, 'web/public/octipus-artifact-client.js');
   const shaPath = join(root, 'web/public/octipus-artifact-client.sha256.txt');
 
-  const built = await Bun.build({
-    entrypoints: [srcPath],
-    target: 'browser',
+  const built = await esbuild({
+    entryPoints: [srcPath],
+    bundle: true,
+    platform: 'browser',
     format: 'iife',
     minify: true,
-    sourcemap: 'none',
+    sourcemap: false,
+    write: false,
   });
-  if (!built.success) {
-    throw new Error('SDK build failed: ' + built.logs.map((l) => l.message).join('; '));
-  }
-  const out = Buffer.from(await built.outputs[0].arrayBuffer());
+  const first = built.outputFiles?.[0];
+  if (!first) throw new Error('SDK build failed: no output produced');
+  const out = Buffer.from(first.contents);
   await writeFile(outPath, out);
   const sha = createHash('sha256').update(out).digest('hex');
   await writeFile(shaPath, sha + '\n');

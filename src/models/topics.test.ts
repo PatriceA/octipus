@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { ALL_TOPIC_VALUES, canonicalTopic, RETIRED_TOPIC_ALIASES, TEXT_TOPIC_VALUES, TOPICS } from './topics';
 import { SINGLE_MODEL_CHAT_TOPICS } from './single-model-binding';
 

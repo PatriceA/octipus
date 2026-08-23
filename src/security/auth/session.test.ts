@@ -4,11 +4,11 @@
  * `src/security/auth/session.ts` was effectively untested despite guarding
  * every authenticated request.
  *
- * Storage runs on the real in-memory provider (embedded mode) so RedisCache
+ * Storage runs on the real in-memory provider (embedded mode) so the cache
  * round-trips for real; the Postgres-backed user/audit repositories are mocked.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
-import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
 
 const rand = (n: number) => randomBytes(n).toString('hex');
 process.env.MASTER_KEY ??= `test-master-${rand(24)}`;
@@ -22,17 +22,13 @@ const auditCalls: string[] = [];
 
 // Snapshot real modules into plain objects before mocking (see totp.test.ts for
 // why restoring from the live `import * as` namespace leaks the stub forward).
-import * as realUserRepoNs from '@/db/repositories/user-repository';
-import * as realAuditRepoNs from '@/db/repositories/audit-repository';
-const realUserRepo = { ...realUserRepoNs };
-const realAuditRepo = { ...realAuditRepoNs };
 
-mock.module('@/db/repositories/user-repository', () => ({
-  ...realUserRepo,
+vi.mock('@/db/repositories/user-repository', async () => ({
+  ...(await vi.importActual<typeof import('@/db/repositories/user-repository')>('@/db/repositories/user-repository')),
   userRepository: { findById: async (id: string) => users.get(id) ?? null },
 }));
-mock.module('@/db/repositories/audit-repository', () => ({
-  ...realAuditRepo,
+vi.mock('@/db/repositories/audit-repository', async () => ({
+  ...(await vi.importActual<typeof import('@/db/repositories/audit-repository')>('@/db/repositories/audit-repository')),
   auditRepository: {
     logLogout: async () => { auditCalls.push('logout'); },
     logLogin: async () => { auditCalls.push('login'); },
@@ -47,8 +43,6 @@ initializeStorage({ mode: 'embedded' });
 
 afterAll(async () => {
   await closeStorage();
-  mock.module('@/db/repositories/user-repository', () => realUserRepo);
-  mock.module('@/db/repositories/audit-repository', () => realAuditRepo);
 });
 
 // Fresh id per user. The embedded cache persists across tests within the file,

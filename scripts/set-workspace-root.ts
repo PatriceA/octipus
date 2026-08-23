@@ -18,11 +18,8 @@ async function main() {
   loadConfig();
   const config = getConfig();
   const storageMode = config.storageMode || 'external';
-  initializeStorage({
-    mode: storageMode,
-    redis: storageMode === 'external' ? config.redis : undefined,
-  });
   await initializeDb();
+  initializeStorage({ mode: storageMode });
 
   const svc = getSettingsService();
   const before = await svc.get('workspace.rootPath');

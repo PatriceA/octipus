@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
 import { isTransportFailure } from './index';
 

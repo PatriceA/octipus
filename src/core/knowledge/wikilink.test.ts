@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { parseLinks, parseTags, parseWikilinks, slugify } from './wikilink';
 
 describe('slugify', () => {

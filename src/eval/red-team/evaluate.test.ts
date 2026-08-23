@@ -8,7 +8,7 @@
  * whether an attacker can steer the system into a privileged role, and its
  * `routes_to_role` assertion therefore could not fail.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { evaluateTest } from './index';
 import type { RedTeamTest } from './types';
 

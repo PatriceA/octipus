@@ -258,8 +258,8 @@ tokens/day** cap resets at 00:00 UTC.
 
 ## Where to pick up
 
-1. **Re-measure the board.** `bun run scripts/quality-score.ts` and
-   `bun run scripts/run-health.ts --days 7`. The samples behind
+1. **Re-measure the board.** `npx tsx scripts/quality-score.ts` and
+   `npx tsx scripts/run-health.ts --days 7`. The samples behind
    `paidTokensPerRun` and `rubberStampRate` predate every fix here, so both
    numbers are still describing the old system. Give it a few runs on the new
    executor binding before trusting either.

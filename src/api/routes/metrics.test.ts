@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { Elysia } from 'elysia';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { Elysia } from '@/api/http';
 import { metricsRoutes } from './metrics';
+import { fileAt } from '@/utils/fs-file';
 
 type ElysiaLike = { handle: (req: Request) => Promise<Response> };
 
@@ -59,7 +60,7 @@ describe('metrics route (M11)', () => {
  */
 describe('metrics route is actually mounted', () => {
   test('is registered on the API server and public to the auth guard', async () => {
-    const server = await Bun.file(`${import.meta.dir}/../server.ts`).text();
+    const server = await fileAt(`${import.meta.dirname}/../server.ts`).text();
     expect(server).toContain('.use(metricsRoutes)');
 
     const { isPublicPath } = await import('../middleware/auth-guard');

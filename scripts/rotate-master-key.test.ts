@@ -13,7 +13,7 @@
  *   - A row whose OLD-master decryption fails returns 'failed' and
  *     stays untouched in the DB.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';

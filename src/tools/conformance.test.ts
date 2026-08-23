@@ -15,7 +15,7 @@
  *
  * A regression in any tool's registration now fails here instead of at runtime.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import type { BaseTool } from './base-tool';
 import { discoverTools } from './discovery';
 

@@ -6,7 +6,7 @@
  * neither. That is the shape behind the measured tool-call variance (2 calls
  * one run, 14 the next), so the case is pinned here.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { MAX_TOTAL_REPEATS, ToolLoopDetector } from './tool-loop-detector';
 
 const call = (name: string, args: unknown) => [{ id: name, name, arguments: args } as never];

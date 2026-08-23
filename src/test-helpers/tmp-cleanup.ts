@@ -1,34 +1,35 @@
 /**
- * Bun test preload — reaps the per-test PGlite/`DATA_DIR` scratch directories
- * that ~100 test files create with `mkdtempSync(join(tmpdir(), 'octipus-…'))`
- * and never remove. Left alone they accumulate at ~140 dirs (~40 MB each) per
- * `bun test src scripts` run and, on a `tmpfs`-backed `/tmp`, fill the whole
- * mount within days (observed: 1 852 dirs / 39.6 GB, `/tmp` at 100%).
+ * Reaps the per-test PGlite/`DATA_DIR` scratch directories that ~100 test files
+ * create with `mkdtempSync(join(tmpdir(), 'octipus-…'))` and never remove. Left
+ * alone they accumulate at ~140 dirs (~40 MB each) per run and, on a
+ * `tmpfs`-backed `/tmp`, fill the whole mount within days (observed: 1 852 dirs
+ * / 39.6 GB, `/tmp` at 100%).
  *
- * Wired via `bunfig.toml` `[test].preload`, so it runs once per test process
- * before any test file. Two sweeps of `tmpdir()/octipus-*`:
- *   • at load   — abandoned dirs from prior crashed/killed runs (>2 h idle;
- *                 a healthy run cleans its own at the end, so nothing that old
- *                 is still owned by a live run).
- *   • after all — everything this run created (activity within the run window).
- *                 Registered via a top-level `afterAll` from `bun:test`, which
- *                 Bun fires exactly once after the whole run. `process.on(
- *                 'exit'|'beforeExit')` do NOT fire under Bun's test runner
- *                 (verified), so an exit hook would silently leak.
+ * Wired as the runner's **global setup**, which is the part that matters: the
+ * sweep of "everything this run created" must happen once, after the last file,
+ * not once per file. Registered per-file it deletes the scratch directories of
+ * every sibling worker still running — which is exactly what it did on the
+ * first run after the runner changed, and what the document-processor suite
+ * failed on with ENOENT on a file it had just written.
  *
- * Why a timestamp window and not per-dir tracking: Bun exposes `node:fs`
- * methods as readonly, so `mkdtempSync` cannot be wrapped to record exact
- * paths. We compare the max of (birthtime, ctime, mtime) so an unreliable
- * `birthtime` (0 on some filesystems) can never make a fresh dir look old.
+ * Two sweeps of `tmpdir()/octipus-*`:
+ *   • at setup    — abandoned dirs from prior crashed/killed runs (>2 h idle;
+ *                   a healthy run cleans its own at the end, so nothing that
+ *                   old is still owned by a live run).
+ *   • at teardown — everything this run created (activity within the window).
+ *
+ * Why a timestamp window and not per-dir tracking: the tests call `mkdtempSync`
+ * directly, so there is no single place to record exact paths. We compare the
+ * max of (birthtime, ctime, mtime) so an unreliable `birthtime` (0 on some
+ * filesystems) can never make a fresh dir look old.
  *
  * ponytail: window sweep, not precise tracking. Ceiling — if a *separate*
  * octipus process (e.g. a dev server on this box) writes a `/tmp/octipus-*`
- * scratch dir during a test run, the after-all sweep could remove it too.
+ * scratch dir during a test run, the teardown sweep could remove it too.
  * Benign in practice: the server regenerates its `/tmp` scratch (per-spawn MCP
  * config) on demand, and CI runs no server. Upgrade path — a shared
  * `makeTestTmpDir()` helper the tests call, tracked and removed precisely.
  */
-import { afterAll } from 'bun:test';
 import { readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -88,62 +89,17 @@ function reap(dir: string, remove: (lastMs: number) => boolean): number {
   return removed;
 }
 
-const LOAD = Date.now();
 const TMP = tmpdir();
 
-// Reap abandoned leftovers from prior crashed/killed runs (idle > 2h).
-reap(TMP, (last) => last < LOAD - STALE_MS);
-
-// Clean everything this run created, once every test file has finished.
-afterAll(() => {
-  reap(TMP, (last) => last >= LOAD);
-});
-
 /**
- * Second leak, same shape: Bun's lcov writer leaves a
- * `coverage/.lcov.info.<hash>.tmp` behind on every run and never reaps them
- * (observed: 175 files / 30 MB in one week). Swept at load, not in `afterAll`,
- * because the writer finalises *after* the last hook — so this process's own
- * `.tmp` does not exist yet at preload and can never be its own victim.
- *
- * The age guard is what makes that safe for *other* processes: this preload
- * runs on every `bun test` invocation, including a targeted single-file run
- * started in a second terminal while a full suite is mid-flight. Deleting that
- * suite's in-flight `.tmp` would make its coverage output silently vanish
- * (Bun's finalise would fail against a missing path, and the `catch` below
- * would swallow it). Anything younger than `FRESH_MS` is therefore assumed to
- * belong to a live run and left alone.
- *
- * ponytail: age window, not ownership tracking. Ceiling — back-to-back runs
- * inside the window leave a few files behind until they age out (a handful,
- * versus the 175 that motivated this). Upgrade path: read the writer's pid
- * from the filename if Bun ever puts one there.
+ * Vitest global setup. Returns the teardown, which the runner calls once after
+ * every project and every file has finished.
  */
-const FRESH_MS = 5 * 60 * 1000; // 5m — a full `bun test src scripts` run is ~80s
-
-export function reapCoverageTmp(dir: string, now: number = Date.now()): number {
-  let names: string[];
-  try {
-    names = readdirSync(dir);
-  } catch {
-    return 0; // no coverage dir yet — nothing to do
-  }
-  let removed = 0;
-  for (const name of names) {
-    if (!name.startsWith('.lcov.info.') || !name.endsWith('.tmp')) continue;
-    try {
-      const st = statSync(join(dir, name));
-      // Plain files only (a directory of this name would throw on the
-      // non-recursive rmSync anyway — this just makes the skip explicit), and
-      // only ones too old to still be in flight elsewhere.
-      if (!st.isFile() || st.mtimeMs > now - FRESH_MS) continue;
-      rmSync(join(dir, name), { force: true });
-      removed++;
-    } catch {
-      // best effort — same as above
-    }
-  }
-  return removed;
+export default function setup(): () => void {
+  const load = Date.now();
+  // Abandoned leftovers from prior crashed or killed runs (idle > 2h).
+  reap(TMP, (last) => last < load - STALE_MS);
+  return () => {
+    reap(TMP, (last) => last >= load);
+  };
 }
-
-reapCoverageTmp(join(import.meta.dir, '..', '..', 'coverage'));

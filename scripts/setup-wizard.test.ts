@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { PassThrough, Writable } from 'node:stream';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -28,7 +28,6 @@ const KEYS = {
 const BASE: BootstrapConfig = {
   storageMode: 'embedded',
   databaseUrl: '',
-  redisUrl: '',
   dataDir: '/tmp/data',
   apiPort: '3005',
   apiHost: '127.0.0.1',
@@ -46,14 +45,15 @@ describe('setup-wizard — buildEnv', () => {
     expect(env).not.toContain('DATABASE_URL=');
   });
 
-  test('external mode emits DATABASE_URL + REDIS_URL', () => {
+  test('external mode emits DATABASE_URL and no DATA_DIR', () => {
     const env = buildEnv(
-      { ...BASE, storageMode: 'external', databaseUrl: 'postgresql://u:p@h:5432/db', redisUrl: 'redis://h:6379', dataDir: '' },
+      { ...BASE, storageMode: 'external', databaseUrl: 'postgresql://u:p@h:5432/db', dataDir: '' },
       KEYS,
     );
     expect(env).toContain('STORAGE_MODE=external');
     expect(env).toContain('DATABASE_URL=postgresql://u:p@h:5432/db');
-    expect(env).toContain('REDIS_URL=redis://h:6379');
+    // External storage is Postgres now; there is no second service to point at.
+    expect(env).not.toContain('REDIS_URL');
     expect(env).not.toContain('DATA_DIR=');
   });
 
@@ -101,7 +101,7 @@ describe('setup-wizard — buildEnv', () => {
 });
 
 /**
- * Rerun safety: a second `bun run setup` must reuse the existing MASTER_KEY,
+ * Rerun safety: a second `npm run setup` must reuse the existing MASTER_KEY,
  * not regenerate it — a fresh key orphans everything the vault has encrypted.
  * readExistingSecrets is the parse half; buildEnv round-trips back to it.
  */

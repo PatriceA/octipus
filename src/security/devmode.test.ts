@@ -8,7 +8,7 @@
  * Admin-ness is necessary but not sufficient: the path must also be a real
  * directory that isn't a system directory.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';

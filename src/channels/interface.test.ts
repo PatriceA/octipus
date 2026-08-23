@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import type { ChannelResponse, ChannelType } from '@/core/types';
 import { BaseChannel, UnifiedMessageInterface } from './interface';
 

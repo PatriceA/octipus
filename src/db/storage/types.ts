@@ -1,6 +1,6 @@
 /**
- * Storage provider interfaces — abstracts Redis behind a common API
- * so both ioredis (external) and in-memory (embedded) backends work.
+ * Storage provider interfaces — one API over the two backends: Postgres for
+ * `external`, an in-process map for `embedded`.
  */
 
 export interface CacheProvider {
@@ -34,9 +34,9 @@ export interface StorageProvider {
   createQueue(name: string): QueueProvider;
   createPubSub(): PubSubProvider;
 
-  /** Raw key-value ops (used by oauth.ts, linking.ts) */
+  /** Raw key-value ops. Omitting the TTL stores the key without expiry. */
   getRaw(key: string): Promise<string | null>;
-  setRaw(key: string, value: string, ttlSeconds: number): Promise<void>;
+  setRaw(key: string, value: string, ttlSeconds?: number): Promise<void>;
   delRaw(key: string): Promise<void>;
 
   /** Health check */

@@ -1,4 +1,4 @@
-import type { ServerWebSocket } from 'bun';
+
 import { randomBytes } from 'crypto';
 import { coreLogger } from '@/utils/logger';
 import { validateLocalAuth } from './local-auth';
@@ -14,11 +14,23 @@ import { GatewayRateLimiter } from './rate-limiter';
 
 // ── Types ─────────────────────────────────────────────────────────
 
+/**
+ * The subset of a websocket this manager touches. Declared here rather than
+ * imported from a runtime package: the manager only ever sends, closes and
+ * reads `readyState`, and the connection objects come from the HTTP layer.
+ */
+export interface ServerWebSocket<T = unknown> {
+  data: T;
+  readonly readyState: number;
+  send(payload: string | ArrayBufferView): void;
+  close(code?: number, reason?: string): void;
+}
+
 export interface GatewayConnection {
   ws: ServerWebSocket<any>;
   state: ConnectionState;
   context: ConnectionContext | null;
-  authTimer: Timer | null;
+  authTimer: NodeJS.Timeout | null;
   createdAt: number;
 }
 

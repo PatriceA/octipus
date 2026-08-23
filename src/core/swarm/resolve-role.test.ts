@@ -3,7 +3,7 @@
  * `spawn_child` validation and router-mode deterministic routing. They must
  * agree, so this pins the ladder's behavior.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { resolveRoleFromTopic } from './swarm-tool';
 
 describe('resolveRoleFromTopic', () => {

@@ -1,5 +1,5 @@
 import { and, eq } from 'drizzle-orm';
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { getDb } from '@/db/postgres';
 import { hookExecutions } from '@/db/schema/hook-executions';
 import { hooks } from '@/db/schema/hooks';

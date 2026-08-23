@@ -1,4 +1,4 @@
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { apiLogger } from '@/utils/logger';
 
 /**
@@ -8,15 +8,6 @@ import { apiLogger } from '@/utils/logger';
  * POST /api/channels/whatsapp/webhook — incoming messages
  */
 export const whatsappWebhookRoutes = new Elysia({ prefix: '/channels/whatsapp' })
-  // Intercept raw body before Elysia parses it (needed for HMAC signature verification)
-  .onParse({ as: 'local' }, async ({ request, contentType }) => {
-    if (contentType === 'application/json') {
-      const raw = await request.text();
-      // Store raw text and return parsed object so Elysia sees a valid body
-      (request as any).__rawBody = raw;
-      return JSON.parse(raw);
-    }
-  })
   // Webhook verification (Meta sends GET with hub.* params)
   .get(
     '/webhook',
@@ -65,10 +56,16 @@ export const whatsappWebhookRoutes = new Elysia({ prefix: '/channels/whatsapp' }
 
       const whatsapp = channel as import('@/channels/whatsapp').WhatsAppChannel;
 
-      // Verify signature using the raw body captured in onParse
-      const rawBody = (request as any).__rawBody as string | undefined;
+      // Signature is over the exact bytes Meta sent, so read them from the
+      // request rather than re-serialising the parsed body. The body parser
+      // works on a clone, so this is still the untouched payload.
+      //
+      // This used to depend on a raw string an `onParse` hook stashed on the
+      // request object, and skipped verification entirely when that string was
+      // absent — a guard the shipping path could miss. It cannot be missing now.
+      const rawBody = await request.text();
       const signatureHeader = request.headers.get('x-hub-signature-256');
-      if (rawBody && signatureHeader && !whatsapp.verifySignature(rawBody, signatureHeader)) {
+      if (signatureHeader && !whatsapp.verifySignature(rawBody, signatureHeader)) {
         apiLogger.warn({ ip: request.headers.get('x-forwarded-for') }, 'WhatsApp webhook signature mismatch — rejecting');
         return new Response('Forbidden', { status: 403 });
       }

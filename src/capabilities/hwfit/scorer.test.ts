@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import type { HardwareProfile } from '@/setup/probes';
 import { MODEL_CATALOG } from './catalog';
 import { computeBudgetMB, scoreCatalog } from './scorer';

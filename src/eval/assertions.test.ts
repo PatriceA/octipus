@@ -5,7 +5,7 @@
  * absent, a grader that returns prose instead of JSON, a scoring formula that
  * should degrade rather than snap to zero, and the partial-match rules.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { evaluateAllAssertions, evaluateAssertion, type GraderFunction } from './assertions';
 import type { TestExecutionContext } from './types';
 

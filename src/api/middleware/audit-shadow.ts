@@ -16,7 +16,7 @@
  * Phase 1 layers per-resource enrichment (resource_type / resource_id from
  * the path) and writes a row for reads as well.
  */
-import { Elysia } from 'elysia';
+import { Elysia } from '@/api/http';
 import { getConfig } from '@/config';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import type { Principal } from '@/security/principal';

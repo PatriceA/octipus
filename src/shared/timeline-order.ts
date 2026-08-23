@@ -3,7 +3,7 @@
  *
  * Lives in `src/shared` (not next to the web component) for two reasons: it's
  * pure logic with no React imports, and putting it here lets the backend test
- * runner (`bun test src`) cover it — the web side has no unit-test harness, and
+ * runner (`npm test src`) cover it — the web side has no unit-test harness, and
  * a `bun:test` file under web/ breaks `tsc --noEmit` there.
  *
  * Why this exists: the chat timeline kept suffering "jumping rows" on the 10s

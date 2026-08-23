@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { getDb } from '@/db/postgres';
 import { experts } from '@/db/schema/experts';
 import { skillProposals } from '@/db/schema/skill-proposals';

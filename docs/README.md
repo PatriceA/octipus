@@ -8,7 +8,7 @@ The map for everything under `docs/`. Start with **Getting Started**, then jump 
 |-----|----------------|
 | [CONFIGURATION.md](CONFIGURATION.md) | Environment variables, ports, Docker services, and the settings you set before first boot. |
 | [CONFIGURATION-PRECEDENCE.md](CONFIGURATION-PRECEDENCE.md) | How `.env` (first-boot seed), the DB `settings` table, and the vault interact — and why the DB wins at runtime. |
-| [DOCKER.md](DOCKER.md) | Running Octipus and its services (Postgres, Valkey, Ollama, LiteLLM) with Docker. |
+| [DOCKER.md](DOCKER.md) | Running Octipus and its services (Postgres, Ollama, LiteLLM) with Docker. |
 | [SMALL-MODELS.md](SMALL-MODELS.md) | Running the whole stack on a single small local model. |
 
 ## Channels

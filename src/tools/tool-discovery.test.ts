@@ -2,7 +2,7 @@
  * Built-in tool discovery meta-tools — list_tools omits schemas, describe_tool
  * returns the exact schema, unknown names fail loud. See tool-discovery.ts.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import type { AgentContext } from '@/core/types';
 import type { ToolHandler } from '@/core/agent-base';
 import { buildToolDiscoveryHandlers } from './tool-discovery';

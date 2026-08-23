@@ -142,8 +142,11 @@ export class MemoryStorageProvider implements StorageProvider {
   }
 
   async getRaw(key: string): Promise<string | null> { return this.getValid(key); }
-  async setRaw(key: string, value: string, ttlSeconds: number): Promise<void> {
-    this.store.set(key, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
+  async setRaw(key: string, value: string, ttlSeconds?: number): Promise<void> {
+    this.store.set(key, {
+      value,
+      expiresAt: ttlSeconds && ttlSeconds > 0 ? Date.now() + ttlSeconds * 1000 : 0,
+    });
   }
   async delRaw(key: string): Promise<void> { this.store.delete(key); }
 

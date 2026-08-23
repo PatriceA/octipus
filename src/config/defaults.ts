@@ -16,12 +16,6 @@ export const defaultConfig: Partial<Config> = {
     idleTimeout: 30000,
     connectionTimeout: 10000,
   },
-  redis: {
-    url: 'redis://localhost:6379',
-    keyPrefix: 'octipus:',
-    maxRetries: 3,
-    retryDelay: 1000,
-  },
   litellm: {
     proxyUrl: 'http://localhost:4000',
     timeout: 120000,
@@ -129,7 +123,7 @@ export const defaultConfig: Partial<Config> = {
   },
 };
 
-/** Required env vars — DATABASE_URL and REDIS_URL only needed in external mode */
+/** Required env vars — DATABASE_URL is only needed in external mode */
 export const requiredEnvVars = [
   'MASTER_KEY',
   'JWT_SECRET',
@@ -142,7 +136,6 @@ export const externalModeRequiredVars = [
 ];
 
 export const optionalEnvVars = [
-  'REDIS_URL',
   'LITELLM_PROXY_URL',
   'LITELLM_API_KEY',
   'OLLAMA_URL',

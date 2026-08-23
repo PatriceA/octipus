@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env tsx
 import { TestRunner } from './runner';
 import { APIClient } from './client';
 import { BASE_URL } from './fixtures';

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import type { TrajectoryRecord } from '@/core/trajectories/types';
 import { trajectoryToDistillMaterial } from './trajectory-source';
 
@@ -18,7 +18,7 @@ function record(over: Partial<TrajectoryRecord> = {}): TrajectoryRecord {
       { timestamp: 't', kind: 'spawn', role: 'devops' },
       { timestamp: 't', kind: 'llm_call' },
     ],
-    finalResponse: 'Added .github/workflows/ci.yml running bun test.',
+    finalResponse: 'Added .github/workflows/ci.yml running npm test.',
     outcome: 'success',
     totalTokens: 100,
     modelsUsed: ['m1'],

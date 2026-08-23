@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { extractToolPreview, formatToolCall, registerToolPreview } from './tool-preview';
 import type { ToolHandler } from './agent-base';
 

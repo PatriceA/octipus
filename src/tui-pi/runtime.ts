@@ -37,7 +37,7 @@ export interface Runtime {
  */
 export function getApiPort(): string {
   if (process.env.API_PORT) return process.env.API_PORT;
-  const envPath = resolve(import.meta.dir, '../../.env');
+  const envPath = resolve(import.meta.dirname, '../../.env');
   if (existsSync(envPath)) {
     const content = readFileSync(envPath, 'utf-8');
     const match = content.match(/^API_PORT=(\d+)/m);

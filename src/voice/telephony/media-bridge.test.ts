@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { twilioMediaToPcm16k, pcm16kToTwilioMedia, TwilioInboundDecoder } from './media-bridge';
 import { muLawEncode } from '../audio-codec';
 

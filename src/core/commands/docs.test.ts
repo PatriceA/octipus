@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, type Mock, mock, spyOn, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, type Mock, vi } from 'vitest';
 import * as embeddings from '@/core/rag/embeddings';
 import type { EmbeddingService, SearchResult } from '@/core/rag/embeddings';
 import './docs'; // self-registers the /docs command
@@ -15,7 +15,7 @@ import { getCommand } from './registry';
  *
  * We own the service at the `getEmbeddingService` layer (a spyOn RESTORED in
  * afterAll), NOT via a prototype spy. Other suites call
- * `mock.module('@/core/rag/embeddings', …)` — process-wide and persistent in
+ * `vi.mock('@/core/rag/embeddings', …)` — process-wide and persistent in
  * bun — which replaces `getEmbeddingService` with a stub that has no
  * `searchGlobalDocs`. A prototype spy would then never fire (the command's
  * `getEmbeddingService()` returns the leaked stub, not a real instance) and the
@@ -27,8 +27,8 @@ let docsSpy: Mock<EmbeddingService['searchGlobalDocs']>;
 let getServiceSpy: Mock<typeof embeddings.getEmbeddingService>;
 
 beforeAll(() => {
-  docsSpy = mock(async () => [] as SearchResult[]);
-  getServiceSpy = spyOn(embeddings, 'getEmbeddingService').mockReturnValue({
+  docsSpy = vi.fn(async () => [] as SearchResult[]);
+  getServiceSpy = vi.spyOn(embeddings, 'getEmbeddingService').mockReturnValue({
     searchGlobalDocs: docsSpy,
   } as unknown as EmbeddingService);
 });

@@ -7,7 +7,7 @@
  * helpers shell out to `docker`; those tests are gated on docker
  * being available and are skipped otherwise.
  */
-import { afterEach, beforeAll, describe, expect, test } from 'bun:test';
+import { afterEach, beforeAll, describe, expect, test } from 'vitest';
 import { existsSync } from 'node:fs';
 
 const hasDocker = ['/usr/bin/docker', '/usr/local/bin/docker', '/bin/docker']

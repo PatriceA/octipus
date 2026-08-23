@@ -2,7 +2,7 @@
  * Line diff util — powers the work-stream diff renderer (Thread 1) and the
  * in-chat file view's diff mode (Thread 2). Pure, no I/O.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { computeLineDiff } from './diff';
 
 describe('computeLineDiff', () => {

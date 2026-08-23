@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { getFieldConstraints, getFieldSchema, validateSettingValue } from './schema-introspect';
 
 describe('schema-introspect — validateSettingValue', () => {

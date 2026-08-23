@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { StreamingResampler } from './audio-codec';
 import {
   AsyncLineReader,
@@ -12,6 +12,7 @@ import {
   stripWavHeader,
   WhisperEngine,
 } from './stt';
+import { writeFileAt } from '@/utils/fs-file';
 
 describe('AsyncLineReader', () => {
   const streamOf = (...chunks: string[]) =>
@@ -231,7 +232,7 @@ describe('isConformantWav', () => {
     view.setUint16(34, bits, true);
     put(36, 'data');
     const path = `/tmp/conformant-${format}-${channels}-${sampleRate}-${bits}-${samples}.wav`;
-    await Bun.write(path, buf);
+    await writeFileAt(path, buf);
     return path;
   }
 
@@ -248,7 +249,7 @@ describe('isConformantWav', () => {
 
   test('rejects a non-WAV / missing file', async () => {
     const p = '/tmp/not-a-wav.bin';
-    await Bun.write(p, new Uint8Array([1, 2, 3, 4, 5]));
+    await writeFileAt(p, new Uint8Array([1, 2, 3, 4, 5]));
     expect(await isConformantWav(p)).toBe(false);
     expect(await isConformantWav('/tmp/does-not-exist-xyz.wav')).toBe(false);
   });

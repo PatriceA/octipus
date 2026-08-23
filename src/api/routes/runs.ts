@@ -1,5 +1,5 @@
 import { and, asc, eq, gte } from 'drizzle-orm';
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { readRunEvents } from '@/core/run-log';
 import { buildTrace } from '@/core/run-trace';

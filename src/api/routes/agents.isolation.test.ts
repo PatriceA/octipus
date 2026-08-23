@@ -10,12 +10,12 @@
  *   - GET /agents?sessionId=<bob's> from alice → empty list
  *   - GET /agents/:id/events for bob's agent from alice → "not found"
  */
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Elysia } from 'elysia';
+import { Elysia } from '@/api/http';
 
 type ElysiaLike = { handle: (req: Request) => Promise<Response> };
 
@@ -44,7 +44,7 @@ beforeAll(async () => {
   await runMigrations();
 
   // Seed via raw SQL — bypasses any module-mock state from earlier
-  // test files in the same `bun test` invocation.
+  // test files in the same `npm test` invocation.
   const {
     seedAgent, seedAgentEvent, seedSession, seedUsers,
   } = await import('@/test-helpers/multiuser-fixtures');

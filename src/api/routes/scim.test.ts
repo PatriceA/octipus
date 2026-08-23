@@ -1,5 +1,5 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { Elysia } from 'elysia';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { Elysia } from '@/api/http';
 import {
   isIntegration,
   setupIntegrationDb,

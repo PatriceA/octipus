@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { DiffOverlay } from './diff-overlay';
 
 function setup(before: string, after: string) {

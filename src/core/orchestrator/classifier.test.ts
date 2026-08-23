@@ -2,7 +2,7 @@
  * Classifier — chat/work split (Thread 3) output-mode heuristic, plus a couple
  * of sanity checks that adding `outputMode` didn't disturb existing routing.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { classifyMessage } from './classifier';
 
 describe('classifyMessage — outputMode (chat/work split)', () => {

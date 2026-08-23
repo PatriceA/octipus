@@ -12,7 +12,7 @@
  * share-link redeem; else 404 (never 401 — don't leak existence).
  */
 
-import { Elysia } from 'elysia';
+import { Elysia } from '@/api/http';
 import { existsSync } from 'fs';
 import { apiContext } from '@/api/context';
 import { artifactsRepository } from '@/db/repositories/artifacts-repository';
@@ -39,6 +39,7 @@ import { recordArtifactView } from '@/core/artifacts/scheduler';
 import { artifactSdkFilePath, resolveArtifactSettings } from '@/core/artifacts/settings';
 import type { Artifact } from '@/db/schema/artifacts';
 import { coreLogger } from '@/utils/logger';
+import { fileAt } from '@/utils/fs-file';
 
 const TOKEN_TTL_SECONDS = 5 * 60;
 
@@ -123,7 +124,7 @@ function sdkAvailable(): boolean {
     if (!sdkPresent) {
       coreLogger.warn(
         { path: artifactSdkFilePath() },
-        'artifact.sdk.missing — embeds will render without live refresh; run `bun run scripts/build-artifact-sdk.ts`',
+        'artifact.sdk.missing — embeds will render without live refresh; run `npx tsx scripts/build-artifact-sdk.ts`',
       );
     }
   }
@@ -132,7 +133,7 @@ function sdkAvailable(): boolean {
 
 /** Serve the SDK from the API origin, where the embed page's CSP `'self'` points. */
 async function handleSdk(ctx: HandlerCtx) {
-  const file = Bun.file(artifactSdkFilePath());
+  const file = fileAt(artifactSdkFilePath());
   if (!(await file.exists())) {
     ctx.set.status = 404;
     return 'Not found';
@@ -305,7 +306,7 @@ async function handleEmbed(ctx: HandlerCtx) {
   // Existence only — the hash is not used (see buildEmbedHtml on why there is
   // no SRI here), so do not read and digest the whole file on every request.
   let bundle: { src: string } | undefined;
-  if (version && (await Bun.file(bundleFilePath(auth.artifact.id, version.id)).exists())) {
+  if (version && (await fileAt(bundleFilePath(auth.artifact.id, version.id)).exists())) {
     const qs = typeof ctx.query.t === 'string' ? `?t=${encodeURIComponent(ctx.query.t)}` : '';
     // Derive from the request path so this works under both mounts.
     const src = `${new URL(ctx.request.url).pathname.replace(/\/embed$/, '/bundle.js')}${qs}`;
@@ -339,7 +340,7 @@ async function handleBundle(ctx: HandlerCtx) {
     return 'Not found';
   }
 
-  const file = Bun.file(bundleFilePath(auth.artifact.id, auth.artifact.currentVersionId));
+  const file = fileAt(bundleFilePath(auth.artifact.id, auth.artifact.currentVersionId));
   if (!(await file.exists())) {
     ctx.set.status = 404;
     return 'Not found';

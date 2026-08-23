@@ -8,7 +8,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, spyOn, test } from 'bun:test';
+import { describe, expect, test, vi } from 'vitest';
 import { emptyCounters } from '@/core/swarm/receipt';
 import { PipelineManager, correctionDeclaration, stageEvidenceFailure } from './pipeline-manager';
 import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
@@ -291,7 +291,7 @@ describe('planProducesArtifactsBackfill', () => {
 describe('PipelineManager.assertStageEvidence', () => {
   const setup = () => {
     const rows: Array<Record<string, unknown>> = [];
-    const spy = spyOn(verificationEvidenceRepository, 'record').mockImplementation(async (r) => {
+    const spy = vi.spyOn(verificationEvidenceRepository, 'record').mockImplementation(async (r) => {
       rows.push(r as Record<string, unknown>);
       return r as never;
     });
@@ -363,7 +363,7 @@ describe('PipelineManager.assertStageEvidence', () => {
   });
 
   test('a ledger failure never breaks the run, and never masks the gate verdict', async () => {
-    const spy = spyOn(verificationEvidenceRepository, 'record').mockImplementation(async () => {
+    const spy = vi.spyOn(verificationEvidenceRepository, 'record').mockImplementation(async () => {
       throw new Error('db down');
     });
     const call = (a: Record<string, unknown>) =>

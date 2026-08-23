@@ -1,4 +1,4 @@
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { isAdmin, isAuthenticated } from '@/security/principal';
 import { getRecent, getStats, logEvents } from '@/utils/log-stream';
 

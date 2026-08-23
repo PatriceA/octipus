@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../out",
     "devUrl": "http://localhost:3008",
-    "beforeDevCommand": "bun run tauri:webdev",
-    "beforeBuildCommand": "bun run build"
+    "beforeDevCommand": "npm run tauri:webdev",
+    "beforeBuildCommand": "npm run build"
   },
   "app": {
     "windows": [

@@ -16,6 +16,7 @@ import { getEmbeddingService } from '@/core/rag/embeddings';
 import { documentRepository } from '@/db/repositories/document-repository';
 import { coreLogger } from '@/utils/logger';
 import type { ReportDoc } from './types';
+import { writeFileAt } from '@/utils/fs-file';
 
 /** Serialize a ReportDoc to a self-contained Markdown document. */
 export function renderReportMarkdown(report: ReportDoc): string {
@@ -66,7 +67,7 @@ export async function persistReport(report: ReportDoc, userId: string): Promise<
 
     const filename = `${globalThis.crypto.randomUUID()}.md`;
     const storagePath = join(dir, filename);
-    await Bun.write(storagePath, markdown);
+    await writeFileAt(storagePath, markdown);
 
     const doc = await documentRepository.create({
       userId,

@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { reapOrphanedSwarmNodes } from './orphan-reaper';
 import type { SwarmNodeRepository } from './node-repository';
 

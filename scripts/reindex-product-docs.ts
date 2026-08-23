@@ -15,8 +15,8 @@
  * user-uploaded KB documents and per-user rows are never affected.
  *
  * Usage:
- *   bun run scripts/reindex-product-docs.ts          # purge + reindex
- *   bun run scripts/reindex-product-docs.ts --dry-run # report counts only
+ *   npx tsx scripts/reindex-product-docs.ts          # purge + reindex
+ *   npx tsx scripts/reindex-product-docs.ts --dry-run # report counts only
  */
 import { sql } from 'drizzle-orm';
 import { getConfig, loadConfig, loadRuntimeConfig } from '../src/config';
@@ -51,10 +51,9 @@ async function main(): Promise<number> {
   loadConfig();
   const bootCfg = getConfig();
   const storageMode = bootCfg.storageMode || 'external';
-  initializeStorage({ mode: storageMode, redis: storageMode === 'external' ? bootCfg.redis : undefined });
-
   await initializeVault();
   await initializeDb();
+  initializeStorage({ mode: storageMode });
   await getSettingsService().initialize();
   await loadRuntimeConfig();
   resetLiteLLMClient();
