@@ -36,6 +36,12 @@ jobs:
       - name: Lint
         run: bun run lint
 
+      # The architecture catalog is generated from the source. Gating it is the
+      # point: a route, a module edge or an event type that changed without the
+      # committed catalog changing means the docs have started drifting again.
+      - name: Catalog is current
+        run: bun run catalog:check
+
       - name: Test
         run: bun run test
         env:

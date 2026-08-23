@@ -215,6 +215,7 @@ Open directions (later): federation between Octipus instances, local-first sync 
 | **[Channels](docs/CHANNELS.md)** | Telegram, Slack, Teams, WhatsApp, WebChat, Voice, MCP |
 | **[Chat Commands](docs/CHAT-COMMANDS.md)** | Slash commands across all channels |
 | **[API Reference](docs/API.md)** | Complete REST API |
+| **[Architecture Catalog](docs/architecture/generated/CATALOG.md)** | Generated from the source and gated in CI: every mounted route, the module import graph, the gateway event matrix |
 | **[Enrichment Features](docs/ENRICHMENT.md)** | Reader, Deep Research, Tasks, Email triage, Hardware-aware onboarding |
 | **[Configuration](docs/CONFIGURATION.md)** | Env vars, ports, services |
 | **[LiteLLM Proxy](docs/LITELLM.md)** | Route models through a LiteLLM proxy; auth, adding models, 401 fixes |

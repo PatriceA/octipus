@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, lt } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, inArray, lt } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import {
   type NewSwarmNodeRecord,
@@ -29,6 +29,35 @@ export class SwarmNodeRepository {
       .where(eq(swarmNodes.id, id))
       .limit(1);
     return result[0] ?? null;
+  }
+
+  /**
+   * Child nodes this session spawned at or after `since`, newest first.
+   *
+   * The turn-scoped read behind `routedRoles`. The caller used to bracket a
+   * turn by taking the full node set before and after and diffing the ids,
+   * which is two unbounded queries per chat turn — one of them awaited inside
+   * the response literal, so it sat on the wire-time critical path of every
+   * reply, on the very path whose delivery latency was the subject of a fix.
+   * A timestamp costs nothing to take, so the boundary can be a predicate
+   * rather than a set, and the row count no longer grows with the session.
+   *
+   * `depth > 0` because the root node is the orchestrator itself, which is not
+   * a routing decision.
+   */
+  async findChildrenSince(rootSessionId: string, since: Date): Promise<SwarmNodeRecord[]> {
+    return this.db
+      .select()
+      .from(swarmNodes)
+      .where(
+        and(
+          eq(swarmNodes.rootSessionId, rootSessionId),
+          gt(swarmNodes.depth, 0),
+          gte(swarmNodes.createdAt, since),
+        ),
+      )
+      .orderBy(desc(swarmNodes.createdAt))
+      .limit(100);
   }
 
   async findByRootSession(rootSessionId: string): Promise<SwarmNodeRecord[]> {

@@ -50,9 +50,17 @@ import { coreLogger } from '@/utils/logger';
  * and the gate failed the stage for editing what it was reviewing. It had
  * edited nothing. Executing code is what these stages are FOR, so its
  * by-products must not read as changes.
+ *
+ * `.octipus` is the same rule applied to OUR OWN by-products. Oversized tool
+ * output is spilled to `.octipus/tool-output/<id>.txt` inside the agent's
+ * workspace — the same root this snapshot walks — so without this entry a
+ * read-only stage that runs a verbose test command fails for "changing" a file
+ * the harness wrote on its behalf, and a `producesArtifacts` stage that
+ * produced nothing passes on the strength of its own spill.
  */
 const PRUNED_DIRS = new Set([
   'node_modules',
+  '.octipus',
   '.git',
   '__pycache__',
   '.pytest_cache',

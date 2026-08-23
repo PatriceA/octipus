@@ -13,8 +13,9 @@
  * area and logged loudly; it never stops the boot, because a check that can
  * take the server down is a check nobody dares write.
  */
-import { and, eq, gt, notExists, sql } from 'drizzle-orm';
+import { and, eq, exists, gt, inArray, notExists, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
+import { pipelineNodes, pipelines } from '@/db/schema/pipelines';
 import { runEvents } from '@/db/schema/run-events';
 import { swarmNodes } from '@/db/schema/swarm-nodes';
 import { coreLogger } from '@/utils/logger';
@@ -183,5 +184,89 @@ registerInvariant({
     return missing === 0
       ? null
       : `${missing} running swarm_nodes row(s) below the root have no 'spawn' event: they are invisible to replay and to the boot reconcile`;
+  },
+});
+
+/**
+ * No in-flight child holds a token pool larger than its own level allows.
+ *
+ * `deriveChildBudget` sets a child's cap to `min(levelDefault, parentRemaining
+ * - reserve)`, so a cap above its level's default cannot be produced by the
+ * derivation at all — a row above it means some path wrote a node without
+ * going through the derivation, and the budget cascade is not bounding
+ * anything for that branch. This is the token-accounting half of Phase 4,
+ * written against the rows that exist rather than against the log fold the
+ * phase originally assumed.
+ *
+ * Only `running` rows, and deliberately. A historical row was written under
+ * whatever the config said at the time; lowering `swarm.levelDefaults.*.tokens`
+ * would otherwise make every past row a violation, which is noise nobody can
+ * act on. In-flight rows are the ones the current configuration governs.
+ *
+ * Depth is compared per level rather than against the parent's stored cap
+ * because `deriveChildBudget` raises a parent's in-memory cap when the config
+ * has grown since it spawned, and that raise is not written back to the row.
+ */
+registerInvariant({
+  area: 'swarm',
+  name: 'no running child exceeds its level token cap',
+  async check() {
+    const { getConfig } = await import('@/config');
+    if (!getConfig().swarm?.levelDefaults) {
+      return 'config carries no swarm.levelDefaults: the runtime is running on hardcoded fallbacks';
+    }
+    const { getLevelDefault } = await import('./swarm/types');
+    const offenders: string[] = [];
+    for (const depth of [1, 2] as const) {
+      const cap = getLevelDefault(depth).tokens;
+      const [row] = await getDb()
+        .select({ n: sql<number>`count(*)::int`, worst: sql<number>`coalesce(max(${swarmNodes.tokenCap}), 0)::int` })
+        .from(swarmNodes)
+        .where(
+          and(eq(swarmNodes.depth, depth), eq(swarmNodes.status, 'running'), gt(swarmNodes.tokenCap, cap)),
+        );
+      if ((row?.n ?? 0) > 0) {
+        offenders.push(`depth ${depth}: ${row.n} row(s) over the ${cap}-token level cap, worst ${row.worst}`);
+      }
+    }
+    return offenders.length === 0
+      ? null
+      : `${offenders.join('; ')} — a node was written without deriveChildBudget, so the cascade bounds nothing on that branch`;
+  },
+});
+
+/**
+ * A finished pipeline has no worker still running under it.
+ *
+ * This is the goal-state half of Phase 4. The failure it names is the one the
+ * measured pass found twice: a run that reports success while work is still
+ * outstanding. A stage left `pending` is NOT evidence of that — an untaken
+ * conditional branch legitimately stays pending forever — but a stage still
+ * `running` under a pipeline the walker has already marked terminal is
+ * unambiguous. Either the walker returned while a stage was live, or a stage
+ * finished and never wrote its status.
+ */
+registerInvariant({
+  area: 'pipeline',
+  name: 'no terminal pipeline has a running stage',
+  async check() {
+    const [row] = await getDb()
+      .select({ n: sql<number>`count(*)::int` })
+      .from(pipelines)
+      .where(
+        and(
+          inArray(pipelines.status, ['completed', 'failed']),
+          exists(
+            getDb()
+              .select({ one: sql`1` })
+              .from(pipelineNodes)
+              .where(and(eq(pipelineNodes.pipelineId, pipelines.id), eq(pipelineNodes.status, 'running'))),
+          ),
+        ),
+      );
+    const stuck = row?.n ?? 0;
+    return stuck === 0
+      ? null
+      : `${stuck} terminal pipeline(s) still have a stage marked 'running': the run was reported finished while a stage was outstanding`;
   },
 });

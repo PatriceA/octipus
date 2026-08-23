@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, mkdir, rm, writeFile, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { SPILL_DIR } from '@/core/tool-output-spill';
 import { countChangedFiles, snapshotWorkspace } from './workspace-snapshot';
 
 let root: string;
@@ -64,6 +65,23 @@ describe('snapshotWorkspace', () => {
     await writeFile(join(root, 'stray.pyc'), 'bytecode');
     await mkdir(join(root, '.pytest_cache'), { recursive: true });
     await writeFile(join(root, '.pytest_cache', 'lastfailed'), '{}');
+    const after = await snapshotWorkspace(root);
+
+    expect(countChangedFiles(before, after)).toBe(0);
+  });
+
+  test("ignores what the HARNESS itself leaves behind", async () => {
+    // Oversized tool output is spilled into the agent's own workspace, which is
+    // the root this snapshot walks. Without the prune a read-only stage that
+    // runs one verbose command fails for "changing" a file it never wrote —
+    // and a produces-artifacts stage that produced nothing passes on its own
+    // spill. Anchored to SPILL_DIR so moving the spill cannot quietly un-prune
+    // it: the constant is the contract between the two modules.
+    await writeFile(join(root, 'src.ts'), 'export const a = 1;');
+    const before = await snapshotWorkspace(root);
+
+    await mkdir(join(root, SPILL_DIR), { recursive: true });
+    await writeFile(join(root, SPILL_DIR, 'call-abc.txt'), 'x'.repeat(200));
     const after = await snapshotWorkspace(root);
 
     expect(countChangedFiles(before, after)).toBe(0);

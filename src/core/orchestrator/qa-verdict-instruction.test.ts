@@ -188,6 +188,19 @@ describe('aliasVerdict — a verdict under different field names', () => {
     expect(aliasVerdict({ status: 'ok', confidence: 'high' })?.passed).toBe(true);
   });
 
+  test('a tool payload carrying issues AND a summary is still not a passing verdict', () => {
+    // The shape that cleared the old two-incidental-keys bar in one go: a test
+    // runner emits all three fields itself, and this tier runs before the prose
+    // tiers, so reading it as a PASS overwrites a genuine FAIL written above it.
+    expect(aliasVerdict({ result: 'success', issues: [], summary: '171/171 tests passed' })).toBeNull();
+    expect(aliasVerdict({ status: 'ok', issues: [], notes: 'service up' })).toBeNull();
+    // The same payload pointing the other way may still stand on `issues`:
+    // reading a stray payload as a FAIL costs one retry and nothing worse.
+    expect(aliasVerdict({ result: 'failed', issues: ['timeout'] })?.passed).toBe(false);
+    // And audit vocabulary still passes — the shape a real QA stage emitted.
+    expect(aliasVerdict({ verdict: 'approve', blockers: [], recommendations: ['x'] })?.passed).toBe(true);
+  });
+
   test('the LAST verdict block wins — the contract puts it at the end', () => {
     const out =
       `\`\`\`json\n${JSON.stringify({ result: 'success', issues: [] })}\n\`\`\`\n` +

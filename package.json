@@ -45,6 +45,8 @@
     "eval": "bun run src/eval/cli.ts",
     "eval:routing": "bun run src/eval/cli.ts --suite routing",
     "eval:quality": "bun run src/eval/cli.ts --suite quality",
+    "catalog": "bun run scripts/gen-catalog.ts",
+    "catalog:check": "bun run scripts/gen-catalog.ts --check",
     "typecheck": "tsc --noEmit",
     "lint": "biome lint",
     "lint:fix": "biome lint --write --unsafe"

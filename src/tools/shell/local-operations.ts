@@ -6,6 +6,42 @@ import type { ShellExecResult, ShellOperations } from './operations';
 const MAX_OUTPUT_SIZE = 1024 * 1024; // 1MB
 
 /**
+ * PIDs of process GROUPS this process started and has not yet reaped.
+ *
+ * `detached: true` is what lets a deadline kill a whole tree — without it a
+ * backgrounded grandchild keeps the stdio pipes open and `close` never fires.
+ * It also means the child no longer shares our process group, so a signal sent
+ * to the group on shutdown never reaches it: stop the backend mid-`bun test`
+ * and the test run carries on with its pipes attached to a dead parent.
+ *
+ * So the group we deliberately detached, we deliberately reap. Registered on
+ * `exit`, which runs after a SIGTERM/SIGINT handler has done its work, and is
+ * synchronous — `process.kill` is too, so this is legal in that handler. It
+ * cannot help with SIGKILL or a hard crash; nothing in-process can.
+ */
+const liveGroups = new Set<number>();
+let reaperInstalled = false;
+
+function trackGroup(pid: number | undefined): () => void {
+  if (pid === undefined) return () => {};
+  liveGroups.add(pid);
+  if (!reaperInstalled) {
+    reaperInstalled = true;
+    process.once('exit', () => {
+      for (const gid of liveGroups) {
+        try {
+          process.kill(-gid, 'SIGKILL');
+        } catch {
+          // Already gone. Nothing to do, and `exit` handlers must not throw.
+        }
+      }
+      liveGroups.clear();
+    });
+  }
+  return () => liveGroups.delete(pid);
+}
+
+/**
  * Conservative POSIX-ish tokenizer. Splits a command string into argv,
  * stripping single/double quotes. Returns `null` if the command contains
  * any shell metacharacter that would enable command injection or
@@ -136,6 +172,7 @@ export class LocalShellOperations implements ShellOperations {
         detached: true,
       });
 
+      const untrack = trackGroup(child.pid);
       let stdout = '';
       let stderr = '';
       let killed = false;
@@ -198,6 +235,7 @@ export class LocalShellOperations implements ShellOperations {
       const cleanup = (): void => {
         if (timeoutHandle) clearTimeout(timeoutHandle);
         options.signal?.removeEventListener('abort', onAbort);
+        untrack();
         wrap.cleanup();
       };
 
@@ -251,6 +289,12 @@ export class LocalShellOperations implements ShellOperations {
       detached: true,
       stdio: 'ignore',
     });
+    // NOT tracked by `trackGroup`, unlike `exec`. Outliving this process is the
+    // whole point here — the caller asked for a background process (a dev
+    // server, a watcher) and reaping it at shutdown would defeat the feature.
+    // `exec`'s groups are detached only so a deadline can reach the tree, so
+    // those get reaped; these are detached because the user said so.
+    //
     // Detached process is fire-and-forget; release the sandbox handle once the
     // child has exited so we don't leak any wrapper state.
     child.on('close', () => wrap.cleanup());

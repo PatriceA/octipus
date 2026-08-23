@@ -18,16 +18,6 @@ import { apiLogger } from '@/utils/logger';
  * created in the turn's first moments — a flaky red for the very assertion this
  * exists to make honest. Comparing id sets has no clock in it.
  */
-async function existingNodeIds(sessionId: string): Promise<Set<string> | undefined> {
-  try {
-    const nodes = await swarmNodeRepository.findByRootSession(sessionId);
-    return new Set(nodes.map((n) => n.id));
-  } catch (err) {
-    apiLogger.warn({ err, sessionId }, 'pre-turn swarm-node snapshot failed — reply omits routedRoles');
-    return undefined;
-  }
-}
-
 /**
  * The specialist roles this turn actually delegated to.
  *
@@ -40,22 +30,20 @@ async function existingNodeIds(sessionId: string): Promise<Set<string> | undefin
  * the classifier's own topic — the function under test answering the question
  * about itself.
  *
- * Best-effort: a lookup failure returns nothing rather than failing the reply,
- * and the assertion reads that as unverified. An empty array is different: it
- * means the turn delegated to nobody, which is a real answer.
+ * The turn boundary is a timestamp taken before `handleMessage`, not a set of
+ * node ids read from the database. Bracketing by identity meant two unbounded
+ * `findByRootSession` calls on every chat turn — one before, one awaited inside
+ * the response literal, so on the wire-time critical path of every reply — for
+ * a field only the eval harness reads. Taking a `Date` costs nothing and the
+ * query that remains is bounded by the turn rather than by session length.
  *
- * Ordered oldest-first, so index 0 is the FIRST role the turn delegated to —
- * the repository returns newest-first.
+ * Best-effort: a lookup failure returns nothing rather than failing the reply,
+ * because a missing diagnostic field must never cost the user their answer.
  */
-async function routedRolesForTurn(
-  sessionId: string,
-  before: Set<string> | undefined,
-): Promise<string[] | undefined> {
-  if (!before) return undefined;
+async function routedRolesForTurn(sessionId: string, since: Date): Promise<string[] | undefined> {
   try {
-    const nodes = await swarmNodeRepository.findByRootSession(sessionId);
-    const fresh = nodes.filter((n) => n.depth > 0 && !before.has(n.id)).reverse();
-    return [...new Set(fresh.map((n) => n.role))];
+    const fresh = await swarmNodeRepository.findChildrenSince(sessionId, since);
+    return [...new Set(fresh.reverse().map((n) => n.role))];
   } catch (err) {
     apiLogger.warn({ err, sessionId }, 'routed-role lookup failed — reply omits routedRoles');
     return undefined;
@@ -156,9 +144,9 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
 
       const orchestrator = getOrchestratorService();
 
-      // Marks this turn's boundary by node IDENTITY, so the roles reported
-      // below are the ones THIS request routed to and not a previous turn's.
-      const nodesBefore = await existingNodeIds(sessionId);
+      // Marks this turn's boundary, so the roles reported below are the ones
+      // THIS request routed to and not a previous turn's.
+      const turnStartedAt = new Date();
       try {
         const result = await orchestrator.handleMessage(
           sessionId,
@@ -175,7 +163,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           sessionId: result.sessionId || sessionId,
           agentId: result.agentId,
           classification: result.classification,
-          routedRoles: await routedRolesForTurn(result.sessionId || sessionId, nodesBefore),
+          routedRoles: await routedRolesForTurn(result.sessionId || sessionId, turnStartedAt),
           metadata: result.metadata,
         };
       } catch (error) {

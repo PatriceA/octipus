@@ -81,6 +81,28 @@ const VERDICT_KEYS = ['passed', 'verdict', 'status', 'result', 'outcome'];
 const ISSUE_KEYS = ['issues', 'blockers', 'problems', 'critical_issues', 'criticalIssues'];
 const FEEDBACK_KEYS = ['feedback', 'summary', 'notes', 'rationale', 'reasoning'];
 const NOT_CHECKED_KEYS = ['whatIDidNotCheck', 'what_i_did_not_check', 'notChecked', 'not_checked'];
+/**
+ * Keys a REVIEW writes and a tool payload does not.
+ *
+ * The split inside `VERDICT_KEYS` and `ISSUE_KEYS` is the useful one. A test
+ * runner or a health check answers under `result` or `status`, and lists
+ * `issues`; nothing but something rendering a judgement calls its answer a
+ * `verdict`, or its list `blockers` / `critical_issues`, or offers
+ * `recommendations`. That vocabulary, not the NUMBER of fields present, is what
+ * separates a real audit from a pasted payload — `{"result":"success",
+ * "issues":[],"summary":"171/171 passed"}` carries three keys and none of them
+ * is a judgement.
+ */
+const AUDIT_VOCAB_KEYS = [
+  'verdict',
+  'blockers',
+  'critical_issues',
+  'criticalIssues',
+  'recommendations',
+  'confidence',
+  'certainty',
+  ...NOT_CHECKED_KEYS,
+];
 
 /** Words a verdict field uses for the two answers. Anything else is not a verdict. */
 const PASS_WORDS = /^(pass(ed)?|approve[ds]?|ok|accept(ed)?|green|success(ful)?)$/i;
@@ -143,15 +165,21 @@ export function aliasVerdict(raw: unknown): QAValidationResult | null {
   // mistakes do not cost the same. Reading a stray payload as a FAIL costs one
   // retry and can only make the gate stricter. Reading one as a PASS overwrites
   // a genuine failure the auditor wrote in prose — this tier runs first — and
-  // ships the work. A failing alias may therefore stand on `issues` alone; a
-  // passing one needs a field an incidental payload does not carry.
+  // ships the work. A failing alias may therefore stand on a generic issue list;
+  // a passing one must speak audit vocabulary.
+  //
+  // `issues` PLUS `feedback` used to clear the passing bar, on the reasoning
+  // that two incidental keys are less likely than one. They are not: a test
+  // runner emits `{"result":"success","issues":[],"summary":"171/171 passed"}`
+  // in a single payload and satisfies both halves at once. Counting keys was
+  // the wrong axis — two keys a tool carries anyway do not add up to one key
+  // only an audit carries. `AUDIT_VOCAB_KEYS` is that axis, and it keeps the
+  // shape a real QA stage was measured emitting (`verdict` + `blockers` +
+  // `recommendations`) passing while the pasted payload above does not.
   const feedback = pick(obj, FEEDBACK_KEYS);
-  const auditOnly =
-    pick(obj, NOT_CHECKED_KEYS) !== undefined || pick(obj, ['confidence', 'certainty']) !== undefined;
+  const speaksAudit = AUDIT_VOCAB_KEYS.some((k) => obj[k] !== undefined && obj[k] !== null);
   const hasIssues = pick(obj, ISSUE_KEYS) !== undefined;
-  const answersAudit = passed
-    ? auditOnly || (hasIssues && feedback !== undefined)
-    : auditOnly || hasIssues;
+  const answersAudit = passed ? speaksAudit : speaksAudit || hasIssues;
   if (!answersAudit) return null;
 
   return {
