@@ -461,3 +461,84 @@ describe('tool-outage gate (requireWorkingTools)', () => {
     expect(parseScorers([{ kind: 'side_effect', requireWorkingTools: 'yes' }])).toHaveProperty('error');
   });
 });
+
+describe('command_exit_zero — parse validation', () => {
+  it('accepts a plain command and an explicit timeout', () => {
+    const r = parseScorers([{ kind: 'command_exit_zero', command: 'npm test', timeoutMs: 5000 }]);
+    expect(r.error).toBeUndefined();
+    expect(r.scorers?.[0]).toEqual({ kind: 'command_exit_zero', command: 'npm test', timeoutMs: 5000 });
+  });
+
+  it('rejects an empty command, an over-long one, and a bad timeout', () => {
+    expect(parseScorers([{ kind: 'command_exit_zero', command: '   ' }]).error).toMatch(/non-empty/);
+    expect(
+      parseScorers([{ kind: 'command_exit_zero', command: 'x'.repeat(501) }]).error,
+    ).toMatch(/at most 500/);
+    expect(
+      parseScorers([{ kind: 'command_exit_zero', command: 'npm test', timeoutMs: 0 }]).error,
+    ).toMatch(/positive integer/);
+    expect(
+      parseScorers([{ kind: 'command_exit_zero', command: 'npm test', timeoutMs: 900_000 }]).error,
+    ).toMatch(/at most 600000/);
+  });
+
+  it('names the new kind in the unknown-kind error', () => {
+    expect(parseScorers([{ kind: 'nope' }]).error).toMatch(/command_exit_zero/);
+  });
+});
+
+describe('command_exit_zero — execution', () => {
+  it('passes on exit 0', async () => {
+    const out = await runScorers(
+      [{ kind: 'command_exit_zero', command: 'true' }],
+      { output: 'x' },
+      {},
+    );
+    expect(out.passed).toBe(true);
+  });
+
+  it('fails on a non-zero exit and quotes the output back', async () => {
+    // The reason text is what lands in the retry brief, so a bare "exit 1"
+    // would leave the next attempt with nothing to act on.
+    const out = await runScorers(
+      [{ kind: 'command_exit_zero', command: 'ls /definitely/not/here' }],
+      { output: 'x' },
+      {},
+    );
+    expect(out.passed).toBe(false);
+    expect(out.failures[0].scorer).toMatch(/^command_exit_zero\(/);
+    expect(out.failures[0].reason).toMatch(/exited [1-9]/);
+    expect(out.failures[0].reason.length).toBeGreaterThan('exited 2'.length);
+  });
+
+  it('FAILS a command carrying shell metacharacters rather than running it', async () => {
+    // The command comes from a parent LLM whose context can include untrusted
+    // web/tool output. Safe-mode `tokenizeSafe` refuses the whole string, and a
+    // gate that could not run must never read as one that passed.
+    const out = await runScorers(
+      [{ kind: 'command_exit_zero', command: 'true; echo pwned > /tmp/x' }],
+      { output: 'x' },
+      {},
+    );
+    expect(out.passed).toBe(false);
+    expect(out.failures[0].reason).toMatch(/did not run/);
+  });
+
+  it('FAILS a command that does not exist', async () => {
+    const out = await runScorers(
+      [{ kind: 'command_exit_zero', command: 'octipus-no-such-binary' }],
+      { output: 'x' },
+      {},
+    );
+    expect(out.passed).toBe(false);
+  });
+
+  it('FAILS a command that outruns its deadline', async () => {
+    const out = await runScorers(
+      [{ kind: 'command_exit_zero', command: 'sleep 5', timeoutMs: 300 }],
+      { output: 'x' },
+      {},
+    );
+    expect(out.passed).toBe(false);
+  }, 20_000);
+});

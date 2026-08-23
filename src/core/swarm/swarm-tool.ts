@@ -449,7 +449,7 @@ export function createSpawnChildTool(
         scorers: {
           type: 'array',
           description:
-            'Optional deterministic checks the child output MUST pass. Run after the child returns; any failure marks the result contract_failed so you can retry or correct. Kinds: {"kind":"non_empty"}, {"kind":"contains","value":"...","on":"output|notes"}, {"kind":"regex","pattern":"...","flags":"i","on":"output|notes"}, {"kind":"json","requiredKeys":["a","b"]}, {"kind":"file_exists","path":"report.md"}.',
+            'Optional deterministic checks the child output MUST pass. Run after the child returns; any failure marks the result contract_failed and the child is automatically re-dispatched once with the failures quoted back to it, so a check you can state is a defect you do not have to catch by reading. Kinds: {"kind":"non_empty"}, {"kind":"contains","value":"...","on":"output|notes"}, {"kind":"regex","pattern":"...","flags":"i","on":"output|notes"}, {"kind":"json","requiredKeys":["a","b"]}, {"kind":"file_exists","path":"report.md"}, {"kind":"side_effect","minFilesChanged":1}, {"kind":"command_exit_zero","command":"npm test","timeoutMs":120000}. Prefer command_exit_zero whenever "done" can be settled by running something (a suite, a build, a type-check): it is the only check that produces new evidence rather than reading what the child said. The command is run in the child\'s workspace with NO shell features — a plain argv, so no pipes, redirects, ;, &&, $() or backticks.',
           items: { type: 'object' },
         },
       },

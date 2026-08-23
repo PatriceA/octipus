@@ -11,8 +11,11 @@
  * `contract_failed` (fail loud) — the parent decides what to do, rather than
  * synthesizing against an output that silently missed the brief.
  *
- * All scorers are deterministic and side-effect free. They run AFTER the child
- * returns `ok` and BEFORE the result is surfaced to the parent.
+ * Scorers are deterministic and run AFTER the child returns `ok`, BEFORE the
+ * result is surfaced to the parent. All but one are side-effect free;
+ * `command_exit_zero` runs a verification command (a test suite, a build, a
+ * linter) because some contracts can only be checked by executing something.
+ * Its constraints are documented on the variant.
  */
 
 import { existsSync } from 'node:fs';
@@ -54,7 +57,29 @@ export type Scorer =
        * during a total tool outage is unverified no matter how it reads.
        */
       requireWorkingTools?: boolean;
-    };
+    }
+  /**
+   * Run a command in the child's workspace and pass on exit 0.
+   *
+   * The only scorer that produces NEW evidence rather than inspecting evidence
+   * already collected — this is what lets "done" mean "the suite passes"
+   * instead of "the child says the suite passes". It is the roadmap's
+   * `pre_verify` (ROADMAP.md, "Completion contracts") in scorer form.
+   *
+   * Deliberately constrained, because the command comes from a parent LLM
+   * whose context can include untrusted tool and web output:
+   *
+   * - Run through `LocalShellOperations` in SAFE mode, so `tokenizeSafe`
+   *   rejects every shell metacharacter (`;`, `&`, `|`, redirects, `$()`,
+   *   backticks, newlines, brace expansion). A verification command is an
+   *   argv — anything needing a pipeline is not one.
+   * - `cwd` is resolved through `WorkspaceFS`, the same sandbox `file_exists`
+   *   uses, so it cannot reach outside the child's workspace.
+   * - Network-isolated and process-sandboxed by the same wrapper the shell
+   *   tool gets.
+   * - Hard timeout; a check that hangs is a failed check, not a hung run.
+   */
+  | { kind: 'command_exit_zero'; command: string; timeoutMs?: number };
 
 export interface ScorerFailure {
   /** Human-readable scorer label, e.g. `regex(/PASS/)` or `file_exists`. */
@@ -118,6 +143,18 @@ const MAX_REGEX_SCAN_CHARS = 10_000;
 
 /** Upper bound on a scorer regex pattern length (parsed from LLM args). */
 export const MAX_REGEX_PATTERN_LEN = 200;
+
+/** Default deadline for a `command_exit_zero` check. */
+export const DEFAULT_COMMAND_SCORER_TIMEOUT_MS = 120_000;
+
+/** Ceiling on it. A gate is a check, not the run. */
+export const MAX_COMMAND_SCORER_TIMEOUT_MS = 600_000;
+
+/** Upper bound on a verification command's length (parsed from LLM args). */
+export const MAX_COMMAND_SCORER_LEN = 500;
+
+/** How much of a failing command's output is quoted back in the failure. */
+const MAX_COMMAND_OUTPUT_CHARS = 2_000;
 
 /**
  * Reject regex patterns prone to catastrophic backtracking (ReDoS). The
@@ -348,6 +385,54 @@ async function evaluate(
             reason: `the child's own execution record contradicts a completed deliverable: ${misses.join('; ')}`,
           };
     }
+
+    case 'command_exit_zero': {
+      // Workspace first: the same sandbox resolver `file_exists` uses. `'.'`
+      // is the workspace root, so a command can never be pointed elsewhere.
+      const fs = WorkspaceFS.forAgent({ userId: ctx.userId });
+      const cwd = fs.resolveOptional('.');
+      if (!cwd) {
+        return {
+          scorer: 'command_exit_zero',
+          reason: 'the workspace could not be resolved, so the command was not run',
+        };
+      }
+
+      const timeoutMs = Math.min(
+        scorer.timeoutMs ?? DEFAULT_COMMAND_SCORER_TIMEOUT_MS,
+        MAX_COMMAND_SCORER_TIMEOUT_MS,
+      );
+      const label = `command_exit_zero(${truncate(scorer.command, 40)})`;
+
+      // Imported here rather than at module scope: `scorers.ts` is imported by
+      // the spawn path on every child, and the shell operations module pulls in
+      // the process sandbox and its runner probe.
+      const { LocalShellOperations } = await import('@/tools/shell/local-operations');
+      try {
+        const res = await new LocalShellOperations().exec(scorer.command, cwd, {
+          timeout: timeoutMs,
+          // Never `unsafe`. Safe mode is what makes `tokenizeSafe` reject shell
+          // metacharacters, and it is the whole security argument for letting an
+          // LLM-authored string reach a process at all.
+        });
+        if (res.exitCode === 0) return null;
+
+        // Quote the output back — this is the text that ends up in the retry
+        // brief, and "exit 1" alone tells the next attempt nothing.
+        const out = `${res.stdout ?? ''}${res.stderr ?? ''}`.trim();
+        return {
+          scorer: label,
+          reason:
+            `exited ${res.exitCode}` +
+            (out ? `:\n${out.slice(0, MAX_COMMAND_OUTPUT_CHARS)}` : ' with no output'),
+        };
+      } catch (err) {
+        // A rejected command (metacharacters), a missing binary, or the
+        // deadline. All are failed gates: the check did not pass, and a gate
+        // that cannot run must never read as one that did.
+        return { scorer: label, reason: `did not run: ${(err as Error).message}` };
+      }
+    }
   }
 }
 
@@ -520,9 +605,33 @@ export function parseScorers(raw: unknown): { scorers: Scorer[] } | { error: str
         });
         break;
       }
+      case 'command_exit_zero': {
+        if (typeof e.command !== 'string' || e.command.trim().length === 0) {
+          return { error: `scorers[${i}].command (command_exit_zero) must be a non-empty string` };
+        }
+        if (e.command.length > MAX_COMMAND_SCORER_LEN) {
+          return {
+            error: `scorers[${i}].command (command_exit_zero) must be at most ${MAX_COMMAND_SCORER_LEN} characters`,
+          };
+        }
+        let timeoutMs: number | undefined;
+        if (e.timeoutMs !== undefined) {
+          if (typeof e.timeoutMs !== 'number' || !Number.isInteger(e.timeoutMs) || e.timeoutMs <= 0) {
+            return { error: `scorers[${i}].timeoutMs (command_exit_zero) must be a positive integer` };
+          }
+          if (e.timeoutMs > MAX_COMMAND_SCORER_TIMEOUT_MS) {
+            return {
+              error: `scorers[${i}].timeoutMs (command_exit_zero) must be at most ${MAX_COMMAND_SCORER_TIMEOUT_MS}`,
+            };
+          }
+          timeoutMs = e.timeoutMs;
+        }
+        scorers.push({ kind: 'command_exit_zero', command: e.command.trim(), ...(timeoutMs ? { timeoutMs } : {}) });
+        break;
+      }
       default:
         return {
-          error: `scorers[${i}].kind must be one of non_empty|contains|regex|json|file_exists|side_effect (got "${String(kind)}")`,
+          error: `scorers[${i}].kind must be one of non_empty|contains|regex|json|file_exists|side_effect|command_exit_zero (got "${String(kind)}")`,
         };
     }
   }
