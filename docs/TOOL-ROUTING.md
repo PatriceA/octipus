@@ -3,9 +3,17 @@
 ## How Messages Get Routed
 
 ### Message Classification
-The orchestrator classifies incoming messages using keyword heuristics (src/core/orchestrator/classifier.ts):
 
-1. **Casual patterns** — greetings, thanks, yes/no → direct response (no worker spawned)
+Every message runs the same agent turn: the root agent, holding the general
+toolset plus `spawn_child`. The keyword classifier
+(`src/core/orchestrator/classifier.ts`) does **not** decide whether an agent
+runs, and has not chosen the specialist since Phase 2 — a capable model reads
+the request better than a regex table. What it still does: scope memory
+retrieval by topic, and, for a small (lite-tier) model only, ride along as a
+hint the request itself can override.
+
+1. **Casual patterns** — greetings, thanks, yes/no. Recorded on the turn; the
+   root answers them itself, the same way it answers everything else.
 2. **Task keywords** — matched against 14 categories with scoring:
    - Multi-word keywords get 1.5x weight (more specific)
    - Single-word keywords use word boundary matching
@@ -14,6 +22,9 @@ The orchestrator classifies incoming messages using keyword heuristics (src/core
 3. **Ambiguous** — falls through to LLM decision
 
 ### Task Categories → Roles → Tools
+
+The roles the root can delegate to with `spawn_child`, and what each holds. The
+root itself runs as `general`, so anything in that row it does without spawning.
 
 | Category | Role | Tools Available | Trigger Keywords (examples) |
 |----------|------|----------------|----------------------------|

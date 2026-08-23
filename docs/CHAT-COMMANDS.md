@@ -98,7 +98,7 @@ Switch between pre-built expert personas from any channel:
 /expert reset              → Return to auto-routing
 ```
 
-When an expert is active, all your messages bypass the orchestrator's classifier and go directly to that expert's agent with its specialized system prompt, domain knowledge (skills), critical rules, and deliverable template.
+When an expert is active, all your messages bypass the normal root-agent turn and go directly to that expert's agent with its specialized system prompt, domain knowledge (skills), critical rules, and deliverable template.
 
 Expert selection persists across messages in the session. Use `/expert reset` to return to automatic classification.
 

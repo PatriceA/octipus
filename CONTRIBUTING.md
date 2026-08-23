@@ -21,8 +21,9 @@ If anything in here is wrong, unclear, or out of date, that is itself a bug — 
 
 ### Prerequisites
 
-- [Bun](https://bun.sh) ≥ 1.1 — backend + scripts runtime
-- [Node.js](https://nodejs.org) ≥ 18 — required by Next.js web UI
+- [Node.js](https://nodejs.org) ≥ 24 — the whole stack: backend, scripts, tests,
+  TUI and the web build. (Bun was the backend runtime until the 2026-08-23
+  rebuild; it is gone from the image, the CI, the installer and the launcher.)
 - _Desktop app only:_ [Rust](https://rustup.rs) + Tauri system libs — installed
   for you by `scripts/install-desktop-deps.sh` (see below)
 
@@ -32,10 +33,10 @@ If anything in here is wrong, unclear, or out of date, that is itself a bug — 
 git clone https://github.com/YOUR_ORG/octipus.git
 cd octipus
 
-bun install
-cd web && bun install && cd ..
+npm install
+cd web && npm install && cd ..
 
-bun run setup          # Interactive wizard — "Embedded" mode for zero-deps
+npm run setup          # Interactive wizard — "Embedded" mode for zero-deps
 bin/octi start
 ```
 
@@ -51,12 +52,12 @@ scripts/install-desktop-deps.sh    # Arch, Debian/Ubuntu, Fedora, openSUSE, macO
 ### Useful commands
 
 ```bash
-bun run dev            # Backend with hot reload
-bun run web            # Frontend (Next.js)
-bun run typecheck      # TS strict check (backend + web)
-bun test               # Bun test runner (backend)
-bun run eval           # Agent evaluation harness
-bun run lint           # ESLint
+npm run dev            # Backend with hot reload (tsx watch)
+npm run dev --prefix web  # Frontend (Vite + React Router)
+npm run typecheck      # TS strict check (backend)
+npm test               # Vitest (backend)
+npm run eval           # Agent evaluation harness
+npm run lint           # Biome
 ```
 
 ---
@@ -78,7 +79,7 @@ octipus/
 │   ├── models/               # LiteLLM client, provider conformance
 │   └── tui/                  # Ink terminal UI
 ├── mcp-server/               # Standalone MCP server (59+ tools)
-├── web/                      # Next.js dashboard (chat, agents, eval, profiles)
+├── web/                      # Vite + React Router dashboard (chat, agents, eval, profiles)
 ├── docs/                     # Architecture + API docs
 ├── eval/                     # YAML test scenarios
 ├── DESIGN.md                 # Design principles
@@ -98,15 +99,20 @@ Octipus roles follow a **node-folder pattern** inspired by [Weft](https://github
 - `prompt.md` — system prompt (markdown, hot-reloadable)
 - `prompt.lite.md` — optional compact system prompt for low-context-window models
 
-The registry auto-discovers everything in `roles/*` at startup. Adding a role is three files in one folder. No other code change needed.
+Register the folder in `src/core/orchestrator/roles/index.ts` — three static
+import lines plus one row in the list. It used to be a runtime directory scan,
+which returned an empty registry in the bundled artifact (`import.meta.url`
+resolves inside `dist/`); static imports are what a bundler can see, and a
+missing role is now a compile error instead of a role that silently vanishes in
+production.
 
 Before opening the PR:
 
-- [ ] Role works end-to-end: user message → classifier routes to new role → worker spawned → reply
+- [ ] Role works end-to-end: user message → the root agent delegates to it via `spawn_child` → worker spawned → reply
 - [ ] System prompt has a clear one-line description and deliverable template
 - [ ] Tool allowlist is minimal (principle of least privilege)
 - [ ] Classifier keywords added to `src/core/orchestrator/classifier.ts` if the role has a distinct topic
-- [ ] `bun run typecheck`, `bun test`, `bun run eval` all pass
+- [ ] `npm run typecheck`, `npm test`, `npm run eval` all pass
 
 ### Role design rules
 
@@ -173,7 +179,7 @@ The server's `inventory` auto-discovers all tool modules at startup.
 
 ## Lint policy
 
-`bun run lint` (Biome) is the gate. The advisory rules deliberately disabled:
+`npm run lint` (Biome) is the gate. The advisory rules deliberately disabled:
 
 - **`noExplicitAny`** — off in lint, but **no new `any` casts** in PRs (review enforced). Existing `any`s are tracked technical debt; clean as you touch.
 - **`noEmptyBlockStatements`** — off; we have a stricter manual policy from `DESIGN.md` ("fail loud — log every catch").
@@ -181,7 +187,7 @@ The server's `inventory` auto-discovers all tool modules at startup.
 
 Active rules that must pass:
 
-- `noUnusedVariables`, `noUnusedImports` (warn) — auto-fixable with `bun run lint:fix`.
+- `noUnusedVariables`, `noUnusedImports` (warn) — auto-fixable with `npm run lint:fix`.
 - `noUselessCatch` (error).
 - `useConst`, `useImportType` (style hygiene).
 

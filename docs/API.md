@@ -660,7 +660,9 @@ enforced on completions (unscoped tokens are full-access — see
 ### Model modes
 
 - **`octipus/orchestrator`** (default when `model` is omitted) runs the latest
-  user message through the full classify → route orchestrator pipeline. This
+  user message through the full agent turn — the root agent with its tools,
+  delegating to specialists when it needs one. The id is unchanged for
+  compatibility; there is no separate orchestrator behind it any more. This
   mode is **session-stateful**: pass a stable `user` field (or an
   `X-Octipus-Session` header) to keep a conversation sticky; otherwise each
   call runs in a fresh ephemeral session.

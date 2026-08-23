@@ -15,15 +15,19 @@ file there, add a one-line `CLAUDE.md` containing `@AGENT.md`.
 
 ## What this repo is
 
-**Octipus** — an open-source, self-hosted AI platform. An orchestrator routes
-user messages to a swarm of specialist agents (3-level: Orchestrator → Agent →
-Subagent) that use typed tools, skills, and experts. Multi-channel
+**Octipus** — an open-source, self-hosted AI platform. One root agent answers
+the user with its own tools and delegates to a swarm of specialist agents when a
+task needs one (3-level: root → Agent → Subagent), all using typed tools, skills,
+and experts. There is no separate "orchestrator" that only routes: the root runs
+as the `general` role marked `AgentContext.root` (see `ROOT_ROLE`), and the
+routing hop that used to sit in front of it was deleted in Phase 9 of
+`docs/plans/rebuild-execution-plan.md`. Multi-channel
 (Telegram / Slack / Teams / WhatsApp / Web / TUI / Voice / MCP), multi-provider
 (Ollama, OpenAI, Anthropic, Gemini, OpenRouter, …), Postgres + pgvector backed
 with a PGlite embedded mode.
 
 Architecture in one line:
-`Channels → Gateway (WS) → Orchestrator → Agents → Tools/Skills/Experts → Models → DB`
+`Channels → Gateway (WS) → Root agent → (spawn_child) Agents → Tools/Skills/Experts → Models → DB`
 
 ## Stack
 
@@ -54,7 +58,8 @@ src/
   config/         Zod-validated config, hot-reload
   core/
     gateway/      WS entry, command registry
-    orchestrator/ classifier, router, roles, pipelines, meta-tools, guards
+    orchestrator/ root-agent turn (runner + service), roles, pipelines,
+                  meta-tools, classifier (topic hint only), guards
     swarm/        spawn_child, budgets, cancel, error mapping
     rag/          auto-indexer, hybrid search (BM25 + vector)
     errors/       FailoverReason / RecoveryAction / classifyError
@@ -117,7 +122,7 @@ AGENTS.md         per-repo curated project guide (universal agents.md convention
 | Doctor / preflight | `npm run scripts/doctor.ts`    |
 
 Default ports: backend `3005`, web `3007`. Use `bin/octi` rather than raw
-`bun run` when starting the full stack so channels, web, and workers come up
+`npm run` when starting the full stack so channels, web, and workers come up
 together.
 
 `catalog:check` runs in CI and fails when `docs/architecture/generated/CATALOG.md`
@@ -126,8 +131,8 @@ changed, run `npm run catalog` and commit the result — the file is generated, 
 never hand-edit it.
 
 The integration lane binds Postgres on `5443`. If something else already holds
-that port, pass your own: `TEST_POSTGRES_PORT=5453 TEST_REDIS_PORT=6389 bun run
-scripts/test-integration.ts`.
+that port, pass your own: `TEST_POSTGRES_PORT=5453 npm run test:integration`.
+(It really does collide — an unrelated local Postgres held 5443 on 2026-08-23.)
 
 ## House rules (must follow)
 
@@ -185,8 +190,9 @@ think you need to break one, open an issue first.
 
 - **Role** → `src/core/orchestrator/roles/<name>/` (existing roles: ai,
   architecture, automation, coding, communication, data, design, devops,
-  finance, general, pm, qa, research, review, security, writing, orchestrator).
-  Auto-discovered via folder scan; no manual registration. Add classifier
+  finance, general, pm, qa, research, review, security, writing). `general` is
+  also what the ROOT agent of a turn runs as. Registered by three lines in
+  `roles/index.ts` (static imports — a folder scan breaks in the bundle). Add classifier
   keywords in `src/core/orchestrator/classifier.ts` if it has a distinct topic.
 - **Skill** → system skills are seeded in `src/db/seed-skills.ts` (DB-backed,
   with embeddings). Filesystem skills follow the agentskills.io spec: a

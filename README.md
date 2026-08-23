@@ -97,8 +97,8 @@ For security issues, see [SECURITY.md](./SECURITY.md). **Do not** file security 
 
 ```
 Channels → Gateway (WebSocket, typed Zod protocol)
-          → Orchestrator (classify → route → spawn)
-            → Agents (3-level Swarm: Orchestrator → Agent → Subagent)
+          → Root agent (answers with its own tools; spawns when a specialist is needed)
+            → Agents (3-level Swarm: root → Agent → Subagent)
               → Tools / Skills / Experts / Pipelines
                 → Models (Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LiteLLM, CLI)
                   → Postgres + pgvector (or PGlite + in-memory for embedded)

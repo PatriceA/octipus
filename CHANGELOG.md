@@ -7,6 +7,56 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+### The orchestrator hop is gone — one agent loop per turn (2026-08-23)
+
+Phase 9 of [`docs/plans/rebuild-execution-plan.md`](docs/plans/rebuild-execution-plan.md),
+which closes that plan. The agent you talk to now holds real tools.
+
+**What changed for a user.** A message used to be read twice: a keyword
+classifier decided whether it was "casual" (a tool-less one-shot completion) or
+work (an `orchestrator` agent whose only tools were `spawn_child` and
+`profiles`). That orchestrator could not do anything itself, so 51% of its runs
+read the request, concluded they needed nobody, and answered from memory —
+18.2% of all agent tokens for a hop that returned nothing. The root of a turn
+now runs as the `general` role with the general toolset **plus** the delegation
+meta-tools: it reads the file, runs the search, stores the note, and calls
+`spawn_child` only when a task genuinely needs a specialist. Delegation, swarms
+and pipelines are unchanged.
+
+**Operator-facing changes.**
+
+- **`orchestrator.mode` no longer accepts `router`.** An existing `router`
+  setting (DB or `ORCHESTRATOR_MODE`) is migrated to `lite` at load; nothing to
+  do, and boot will not fail on it. Modes are now `auto | full | lite`, and a
+  mode is a *prompt tier*, not a control-flow branch: a small model runs the
+  same loop with a trimmed prompt, a tool list capped to
+  `orchestrator.smallModelMaxTools`, and a hard iteration cap.
+- **`orchestrator.liteMaxIterations` default 3 → 8.** Three was sized for
+  "delegate once and relay"; a root that does its own work needs to read,
+  search, and answer. An explicit setting is untouched.
+- **`orchestrator.routerSmallModelMaxParams` keeps its name** — it is the
+  "small model" threshold every trim in the product reads, not a mode selector.
+- **The `orchestrator` role is deleted.** Custom per-role tool allowlists for it
+  are ignored; the roles API no longer lists roles that have no folder. Casual
+  turns are agent runs now, so they appear in the agent list and in cost
+  tracking, where the old shortcut was invisible to both. Expect a casual turn
+  to count more tokens (it carries a tool schema) at roughly unchanged latency
+  and near-unchanged cost — the bulk is the prefix providers cache.
+- **Unattended runs (hooks, heartbeats) no longer raise approval prompts.**
+  The root can hit an `ASK`-level permission now that it holds tools; on a run
+  with nobody watching, the existing unattended path (auto-approve, or refuse
+  via `multiuser.unattendedDenyActions`) applies instead of waiting out the
+  five-minute request TTL and then failing.
+
+**Two latent bugs fixed on the way, both of which affected any install.**
+`loadRolesFromDb` rebuilt each in-memory role from the four columns the `roles`
+table has, so at boot it silently dropped `readOnly` — the only per-handler
+write filter in the product, meaning the read-only `qa`, `review` and
+`architecture` roles regained file-writing tools after startup — along with
+`coreToolIds`, which disabled lazy tool discovery everywhere. Both are now
+preserved, pinned by a database-backed test.
+
+
 ### Hermes v0.18 adoption — learning loop, verification, Vertex (2026-07-16/17, PRs #237–#245)
 
 Selectively adopts ideas from Hermes Agent v0.18 ("The Judgment Release")

@@ -48,7 +48,7 @@ Agent spawned with: role tools + topic model + expert prompt + skills
 Special topics (no role equivalent — used for model capability routing only):
 | Topic | Purpose |
 |---|---|
-| `chat` | Casual conversations (orchestrator direct response) |
+| `chat` | The ROOT agent's own model — the one that answers you and decides when to delegate (`ModelSelector.selectForOrchestration`). Unbound ⇒ the default model. |
 | `embedding` | Vector embeddings (knowledge base) |
 | `ocr` | Text extraction from images |
 | `vision` | Image understanding |

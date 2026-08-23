@@ -15,9 +15,11 @@ import { apiLogger } from '@/utils/logger';
  *
  * Lets off-the-shelf OpenAI SDKs talk to Octipus. Two request modes:
  *
- *   - `octipus/orchestrator` (the default when no model is given) routes the
- *     conversation's latest user message through the full classify→route
- *     orchestrator pipeline. This mode is **session-stateful**: pass a stable
+ *   - `octipus/orchestrator` (the default when no model is given) runs the
+ *     conversation's latest user message through the full agent turn — the root
+ *     agent with its tools, which delegates to specialists when it needs one.
+ *     The id is kept for compatibility; there has been no separate orchestrator
+ *     since Phase 9. This mode is **session-stateful**: pass a stable
  *     `user` field (or `X-Octipus-Session` header) to keep a conversation
  *     sticky; otherwise each call runs in a fresh ephemeral session.
  *   - a raw registry **model id** (e.g. `gpt-4o`, `llama3.2`) is a single-turn
