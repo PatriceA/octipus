@@ -119,12 +119,10 @@ export function createMetaTools(
       name: 'create_pipeline',
       final: true,
       description:
-        'LAST RESORT delegation. Create a multi-stage sequential pipeline with handover between stages. ' +
-        'Use ONLY when the user EXPLICITLY asks for staged execution with handover ' +
-        '(e.g., "first research, then implement, then review"). ' +
-        'DO NOT use for analysis/audit/review/quality-check requests — use multiple spawn_child calls instead. ' +
-        'DO NOT use because you think it will be "more thorough" — pipelines lose context between stages and are slow. ' +
-        'For any single- or parallel-role task, use spawn_child (multiple calls per turn allowed). ' +
+        'Run work through a verified build loop. A pipeline plans the work into items, then runs implement -> test -> review -> QA ONCE PER ITEM, and a failing QA verdict sends that item back to the implementer with the verdict attached (up to 3 times) before asking you. It is the only delegation primitive that checks a deliverable and re-does it when the check fails. ' +
+        'CHOOSE IT WHEN, and only when, BOTH hold: (a) the work breaks into several items that each have to be built, and (b) whether an item is done can be settled by running something — a test suite, a build, a type-check. "Implement the open points in the plan", "fix these five failing tests", "add the endpoint and prove it works" are pipelines. The user does not have to say "staged" or "pipeline" for this to be the right call. ' +
+        'DO NOT use it for a question, a lookup, an explanation, a piece of writing, or a read-only analysis/audit/review — those have nothing to re-run, so the loop costs stages and buys nothing. Use spawn_child (several calls per turn allowed) for all of them. ' +
+        'DO NOT use it merely to seem thorough on a task that is really one job. ' +
         'create_pipeline may only be invoked ONCE per request. ' +
         'IMPORTANT: You MUST call list_pipeline_templates first to get valid template names. Do NOT invent template names.',
       parameters: {

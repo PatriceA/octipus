@@ -463,27 +463,37 @@ describe('tool-outage gate (requireWorkingTools)', () => {
 });
 
 describe('command_exit_zero — parse validation', () => {
+  /** `parseScorers` returns a discriminated union; these narrow it. */
+  const rejection = (raw: unknown): string | undefined => {
+    const r = parseScorers(raw);
+    return 'error' in r ? r.error : undefined;
+  };
+  const accepted = (raw: unknown): Scorer[] | undefined => {
+    const r = parseScorers(raw);
+    return 'scorers' in r ? r.scorers : undefined;
+  };
+
   it('accepts a plain command and an explicit timeout', () => {
-    const r = parseScorers([{ kind: 'command_exit_zero', command: 'npm test', timeoutMs: 5000 }]);
-    expect(r.error).toBeUndefined();
-    expect(r.scorers?.[0]).toEqual({ kind: 'command_exit_zero', command: 'npm test', timeoutMs: 5000 });
+    expect(accepted([{ kind: 'command_exit_zero', command: 'npm test', timeoutMs: 5000 }])?.[0]).toEqual({
+      kind: 'command_exit_zero',
+      command: 'npm test',
+      timeoutMs: 5000,
+    });
   });
 
   it('rejects an empty command, an over-long one, and a bad timeout', () => {
-    expect(parseScorers([{ kind: 'command_exit_zero', command: '   ' }]).error).toMatch(/non-empty/);
-    expect(
-      parseScorers([{ kind: 'command_exit_zero', command: 'x'.repeat(501) }]).error,
-    ).toMatch(/at most 500/);
-    expect(
-      parseScorers([{ kind: 'command_exit_zero', command: 'npm test', timeoutMs: 0 }]).error,
-    ).toMatch(/positive integer/);
-    expect(
-      parseScorers([{ kind: 'command_exit_zero', command: 'npm test', timeoutMs: 900_000 }]).error,
-    ).toMatch(/at most 600000/);
+    expect(rejection([{ kind: 'command_exit_zero', command: '   ' }])).toMatch(/non-empty/);
+    expect(rejection([{ kind: 'command_exit_zero', command: 'x'.repeat(501) }])).toMatch(/at most 500/);
+    expect(rejection([{ kind: 'command_exit_zero', command: 'npm test', timeoutMs: 0 }])).toMatch(
+      /positive integer/,
+    );
+    expect(rejection([{ kind: 'command_exit_zero', command: 'npm test', timeoutMs: 900_000 }])).toMatch(
+      /at most 600000/,
+    );
   });
 
   it('names the new kind in the unknown-kind error', () => {
-    expect(parseScorers([{ kind: 'nope' }]).error).toMatch(/command_exit_zero/);
+    expect(rejection([{ kind: 'nope' }])).toMatch(/command_exit_zero/);
   });
 });
 
