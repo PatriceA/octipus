@@ -33,6 +33,19 @@ export interface BuildSystemPromptOptions {
    * truncate `SECURITY_PREAMBLE` (DESIGN.md house rule #6).
    */
   systemPrompt: string;
+  /**
+   * The per-turn context that will be appended AFTER `systemPrompt` — long-term
+   * memory, attached files, the security reminder for a flagged message.
+   *
+   * Read-only, and separate from `systemPrompt` on purpose. These blocks used
+   * to be concatenated into the prompt before this hook fired, which meant
+   * subscribers saw them but also meant per-turn content sat ahead of the
+   * provider cache breakpoint and re-wrote the whole prefix every turn. Moving
+   * them to the volatile tier fixed the cache and silently took them away from
+   * every subscriber; passing them here gives the information back without
+   * putting them back in the cacheable prefix. Mutating this does nothing.
+   */
+  turnContext?: string;
 }
 
 /**

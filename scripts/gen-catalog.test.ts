@@ -148,6 +148,26 @@ describe('patternCovers', () => {
   });
 });
 
+describe('the event scan is comment-blind too', () => {
+  test('a commented-out publish does not silence the never-published gate', () => {
+    // The route scan blanked comments from the start; the event scan did not,
+    // so commenting out a `publishEvent` would have quietly satisfied the gate
+    // for that type. Reading a doc comment as code is the same bug pointing the
+    // other way, and it was live: a JSDoc block in `orchestrator/service.ts`
+    // mentions `eventBus.subscribe(...)` and was counted as an unresolvable
+    // subscription site.
+    const src = [
+      "// hub.publishEvent({ type: 'ghost.event' });",
+      '/** See {@link eventBus.subscribe} for the pattern syntax. */',
+      "hub.publishEvent({ type: 'real.event' });",
+    ].join('\n');
+    const blanked = blankComments(src);
+    expect(blanked).toContain("type: 'real.event'");
+    expect(blanked).not.toContain("type: 'ghost.event'");
+    expect(blanked).not.toContain('eventBus.subscribe');
+  });
+});
+
 describe('against the real repository', () => {
   test('the HTTP surface is non-trivial and fully resolved', () => {
     const { routes, unresolved } = collectRoutes();

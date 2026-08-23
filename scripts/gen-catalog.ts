@@ -38,6 +38,10 @@
  * future route is registered in a shape this cannot see, the count moves, the
  * committed file changes, and CI says so.
  *
+ * Every scan runs over a copy with comments blanked, so commented-out code
+ * cannot read as live — which is the direction that would hide a defect rather
+ * than invent one.
+ *
  * Usage:
  *   bun run catalog           # write docs/architecture/generated/CATALOG.md
  *   bun run catalog:check     # exit 1 if the committed copy is stale
@@ -144,13 +148,11 @@ export function matchingParen(text: string, openIdx: number): number {
  * String contents are stepped over, not blanked: a `//` inside a string is not
  * a comment, and the quotes themselves are what the route patterns anchor on.
  *
- * There is no regex-literal state, and that is a real limit rather than an
- * oversight: `/['"]/` reads as a `/` followed by a quote, and the scanner then
- * runs to the NEXT quote anywhere in the file, swallowing every route and mount
- * in between. Silently reporting fewer routes is precisely the "reads as
- * coverage" failure this module argues against, and CI would then lock the
- * smaller number in as the baseline — so an odd quote count is thrown, not
- * absorbed. Add regex-literal handling if one ever legitimately appears.
+ * Regex literals ARE recognised and stepped over, which matters more than it
+ * sounds: `/['"]/` otherwise reads as a `/` followed by a quote, the scan runs
+ * to the next quote anywhere in the file, and every comment in between goes
+ * unexamined — so a commented-out mount inside that span reads as live, which
+ * is the exact defect the HTTP catalog exists to surface.
  */
 export function blankComments(text: string): string {
   const out = text.split('');
@@ -550,7 +552,12 @@ export function collectEvents(): {
   let unresolved = 0;
 
   for (const file of sourceFiles(SRC)) {
-    const src = readFileSync(file, 'utf-8');
+    // Blanked, for the same reason the route scan is: a commented-out
+    // `hub.publishEvent({type:'x'})` would otherwise silence the
+    // never-published gate for that type. It is not hypothetical — a doc
+    // comment in `orchestrator/service.ts` mentions `eventBus.subscribe(...)`
+    // and was being counted as an unresolvable subscribe site.
+    const src = blankComments(readFileSync(file, 'utf-8'));
     const rel = relative(REPO_ROOT, file);
 
     PUBLISH_RE.lastIndex = 0;
@@ -678,7 +685,7 @@ export function render(): string {
     L.push('### Declared but never published');
     L.push('');
     L.push(
-      'The contract promises these and no code emits them. Each is either a type to retire or a producer nobody finished — a subscriber waiting on one waits forever.',
+      'The contract promises these and no code emits them. Each is either a type to retire or a producer nobody finished — a subscriber waiting on one waits forever. One exception is expected: a type published only by the gateway\'s own tests appears here because this scan excludes test files on purpose, since tests describe the code rather than being it.',
     );
     L.push('');
     for (const t of neverPublished) {

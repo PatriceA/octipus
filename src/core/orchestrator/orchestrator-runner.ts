@@ -83,7 +83,12 @@ export function buildTopicHint(
   classification: Pick<MessageClassification, 'topic' | 'confidence'>,
 ): string {
   if (!isLite || !classification.topic) return '';
-  return ` The message looks like a "${classification.topic}" task (confidence: ${classification.confidence.toFixed(2)}); use that as the child role unless the request plainly says otherwise.`;
+  // A paragraph break, not a leading space. The hint used to be concatenated
+  // straight onto the delegation policy, where a space was right; it now rides
+  // in the volatile tier after the recent-history block, so a space glues a
+  // routing directive onto the last transcript line and it reads as more
+  // transcript.
+  return `\n\nThe message looks like a "${classification.topic}" task (confidence: ${classification.confidence.toFixed(2)}); use that as the child role unless the request plainly says otherwise.`;
 }
 
 /**
@@ -259,6 +264,9 @@ export async function runOrchestrator(
     workspaceId,
     channel,
     systemPrompt,
+    // What the hook can no longer read off `systemPrompt`, because it moved to
+    // the volatile tier to keep the cacheable prefix stable. Read-only.
+    turnContext: volatileParts.slice(1).join(''),
   });
   systemPrompt = hookCtx.systemPrompt;
 

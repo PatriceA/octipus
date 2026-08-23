@@ -122,6 +122,17 @@ export function getLevelDefault(depth: 0 | 1 | 2): LevelDefault {
 export const BUDGET_RESERVE_FRACTION = 0.1;
 
 /**
+ * Pool consumption at which a node warns that it is running out.
+ *
+ * Derived from the reserve rather than picked: the reserve is what a parent
+ * keeps back to synthesise its children's answers, so once the *spendable*
+ * portion is three-quarters gone the run is genuinely close to the point where
+ * `deriveChildBudget` starts refusing spawns. Warning earlier would fire on
+ * healthy runs; warning at exhaustion would be a report, not a warning.
+ */
+export const BUDGET_WARN_FRACTION = (1 - BUDGET_RESERVE_FRACTION) * 0.75;
+
+/**
  * Outbound brief handed from a parent to its child when spawning.
  * Becomes the child's user message.
  */

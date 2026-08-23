@@ -35,6 +35,14 @@ import { apiLogger } from '@/utils/logger';
  * clock (`swarmNodeRepository.now()`), which is one trivial round trip with no
  * rows and no scan, and both sides of the comparison are the same clock again.
  *
+ * OPT-IN, because it is a diagnostic and every ordinary chat turn was paying
+ * for it. Two round trips rode on the turn — the boundary read before
+ * `handleMessage` and the lookup awaited INSIDE the response object literal, so
+ * the reply was not serialised until it resolved, on the very path whose
+ * delivery latency was the subject of its own fix. The eval runner and the
+ * feature bench ask for it with `routedRoles: true` in the body; everyone else
+ * pays nothing.
+ *
  * Best-effort throughout: a lookup failure returns nothing rather than failing
  * the reply, because a missing diagnostic field must never cost the user their
  * answer.
@@ -145,12 +153,15 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
 
       // Marks this turn's boundary on the DATABASE clock, so the roles reported
       // below are the ones THIS request routed to and not a previous turn's.
-      // Falls back to no boundary rather than failing the turn: `routedRoles`
-      // is a diagnostic, and losing it must never cost the user their answer.
-      const turnStartedAt = await swarmNodeRepository.now().catch((err: unknown) => {
-        apiLogger.warn({ err, sessionId }, 'turn-boundary clock read failed — reply omits routedRoles');
-        return null;
-      });
+      // Only when asked for, and falling back to no boundary rather than
+      // failing the turn: `routedRoles` is a diagnostic, and losing it must
+      // never cost the user their answer.
+      const turnStartedAt = body.routedRoles
+        ? await swarmNodeRepository.now().catch((err: unknown) => {
+            apiLogger.warn({ err, sessionId }, 'turn-boundary clock read failed — reply omits routedRoles');
+            return null;
+          })
+        : null;
       try {
         const result = await orchestrator.handleMessage(
           sessionId,
@@ -184,6 +195,13 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
       body: t.Object({
         message: t.String({ minLength: 1 }),
         sessionId: t.Optional(t.String()),
+        /**
+         * Report which specialist roles this turn delegated to. Off by default:
+         * it costs two database round trips, one of them on the reply's own
+         * critical path, and only the eval harness and the feature bench read
+         * it.
+         */
+        routedRoles: t.Optional(t.Boolean()),
         channel: t.Optional(t.String()),
         expertId: t.Optional(t.String()),
         devMode: t.Optional(t.Boolean()),

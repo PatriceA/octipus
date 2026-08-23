@@ -92,7 +92,7 @@ The `GatewayEventBus` is a typed pub/sub system that replaces scattered EventEmi
 |---|---|---|
 | `chat.*` | `chat.message`, `chat.response`, `chat.typing` | Orchestrator |
 | `agent.*` | `agent.spawned`, `agent.completed`, `agent.failed`, `agent.stopped`, `agent.status`, `agent.event`, `agent.action`, `agent.iteration`, `agent.blocked` | AgentManager / Executor |
-| `swarm.*` | `swarm.node_spawned`, `swarm.node_completed`, `swarm.node_status`, `swarm.budget_warning`, `swarm.call_graph_cycle_blocked`, `swarm.narration` | SwarmSpawner / AgentWorker / SwarmCallGraph |
+| `swarm.*` | `swarm.node_spawned`, `swarm.node_completed`, `swarm.budget_warning`, `swarm.call_graph_cycle_blocked`, `swarm.narration` | SwarmSpawner / AgentWorker / SwarmCallGraph |
 | `permission.*` | `permission.request`, `permission.response` | PermissionManager |
 | `approval.*` | `approval.request`, `approval.response` | PipelineManager |
 | `tool.*` | `tool.invoked`, `tool.result` | ToolExecutor |

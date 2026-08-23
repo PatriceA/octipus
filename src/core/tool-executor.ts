@@ -862,7 +862,16 @@ export class ToolExecutor {
             threshold: DEFAULT_MAX_LENGTH,
           })
         : null;
-      const sanitized = result.error || spilled || sanitizeToolOutput(raw ?? '');
+      // `raw` is already the sanitized string; re-running the sanitizer over it
+      // only to truncate is a second full pass over up to a megabyte.
+      const sanitized =
+        result.error ||
+        spilled ||
+        (raw === null
+          ? ''
+          : raw.length > DEFAULT_MAX_LENGTH
+            ? `${raw.slice(0, DEFAULT_MAX_LENGTH)} [truncated]`
+            : raw);
       const modelSafe = modelSeesImages ? sanitized : stripBinaryBlobs(sanitized);
       toolMessages.push({
         role: 'tool',

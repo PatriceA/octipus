@@ -20,14 +20,29 @@
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { WorkspaceFS } from '@/security/workspace-fs';
+import { DEFAULT_MAX_LENGTH } from '@/utils/sanitize';
 import { coreLogger } from '@/utils/logger';
 
 /** Directory, relative to the agent's workspace root, holding spilled output. */
 export const SPILL_DIR = '.octipus/tool-output';
 
-/** Characters kept from the start and the end of a spilled output. */
-const HEAD_CHARS = 4000;
+/**
+ * Characters kept from the start and the end of a spilled output.
+ *
+ * The head is sized to what the TRUNCATION it replaced already gave the model,
+ * not to a smaller number chosen for its own sake. Saving the rest to a file is
+ * the improvement; cutting the inline context from fifty thousand characters to
+ * five would have been an unrelated 10x reduction applied to every oversized
+ * result — a 60KB file read, a long grep, a test log — and the model would have
+ * had to spend a tool call re-reading what it used to be handed. So: the same
+ * head as before, plus a tail it never had, plus a path.
+ *
+ * The budget leaves room for the notice between them, so a spilled result is
+ * never larger than the truncated one it replaces.
+ */
 const TAIL_CHARS = 1000;
+const NOTICE_ALLOWANCE = 500;
+const HEAD_CHARS = DEFAULT_MAX_LENGTH - TAIL_CHARS - NOTICE_ALLOWANCE;
 
 /**
  * Monotonic suffix for calls that arrive with no usable id. Not every provider

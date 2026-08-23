@@ -57,38 +57,42 @@ export type GatewayEventType =
   // long. Purely informational — nothing is cancelled. Exists because all three
   // of those states look identical from outside: silence.
   | 'agent.blocked'
-  // Worker (orchestrator-spawned) lifecycle
-  | 'worker_spawned'
-  | 'worker_completed'
+  // NOTE: `worker_spawned`, `worker_completed` and `pipeline_event` are NOT
+  // gateway types and were never emitted as any. They belong to
+  // `OrchestratorEvent['type']`, and `mapOrchestratorEventType` translates them
+  // INTO `agent.spawned` / `agent.completed` / `pipeline.event` — so declaring
+  // them here described a producer that by construction cannot exist. Same for
+  // `status_update`, `typing`, `message` and `approval_required` below. All
+  // found by the generated event matrix (`bun run catalog`).
   // Pipeline + team
-  | 'pipeline_event'
   | 'pipeline.event'
   | 'team.started'
   | 'team.completed'
   // Swarm (Phase 1 + Phase 2)
   | 'swarm.node_spawned'
   | 'swarm.node_completed'
-  | 'swarm.node_status'
+  // NOTE: there is no `swarm.node_status`. It was declared here and documented
+  // in three places as an intermediate progress update, and nothing ever
+  // emitted one — the generated event matrix (`bun run catalog`) is what
+  // surfaced that. Retired rather than given a producer: nothing renders it
+  // either, so writing one would be building a feature to satisfy a type. A
+  // live worker's progress already travels as `agent.iteration` and
+  // `agent.blocked`. Add the member back with its producer if that changes.
   | 'swarm.budget_warning'
   | 'swarm.call_graph_cycle_blocked'
   // Persona narration — derived from swarm.node_spawned / completed,
   // rendered through the active persona's narration_templates. Carries
   // a one-line `text` payload like "Octipus dispatches a research arm.".
   | 'swarm.narration'
-  // Channel-side status
-  | 'status_update'
-  | 'typing'
-  | 'message'
   // Chat
   | 'chat.response'
   | 'chat.message'
   // Approval / permission flows
-  | 'approval_required'
   | 'orchestrator.approval_required'
   | 'orchestrator.status'
   | 'permission.request'
-  // Session
-  | 'session.cleared'
+  // Session. `session.cleared` was declared here with no producer and no
+  // consumer, and is retired for the same reason as `swarm.node_status` above.
   | 'session.compaction_stalled'
   // Audit (catch-all for connection-manager audit signals — payload carries
   // the specific audit event name in `originalType`).
@@ -99,9 +103,16 @@ export type GatewayEventType =
   | 'artifact.data_updated'
   | 'artifact.version_updated'
   | 'artifact.source_error'
-  // Reserved
-  | 'test.event'
-  | 'error';
+  // Published only by the gateway's own tests, as a synthetic type to drive
+  // subscription and replay. It shows up in the generated catalog's
+  // never-published list because that scan deliberately excludes test files —
+  // tests describe the code, they are not it — so this is the one entry there
+  // with a good reason.
+  | 'test.event';
+  // NOTE: no `| 'error'`. That is a `ServerMessage` type (see below), sent
+  // directly to one connection by the message handler, never an event on the
+  // bus. Declaring it here described a second, parallel error channel that has
+  // never existed.
 
 export interface GatewayEvent {
   id: string;

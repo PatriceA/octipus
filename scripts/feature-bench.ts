@@ -237,7 +237,10 @@ async function chat(message: string, sessionId: string | undefined, timeoutMs: n
     const res = await fetch(`${BASE}/api/chat`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` },
-      body: JSON.stringify({ message, sessionId, channel: 'api' }),
+      // `routedRoles` is opt-in on the backend — it costs two queries a turn,
+      // one on the reply's critical path, so ordinary chat does not pay for it.
+      // This bench reports which role answered, so it asks.
+      body: JSON.stringify({ message, sessionId, channel: 'api', routedRoles: true }),
       signal: ctl.signal,
     });
     const body = (await res.json()) as ChatResponse;

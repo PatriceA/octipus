@@ -7,7 +7,7 @@
  * one run, 14 the next), so the case is pinned here.
  */
 import { describe, expect, test } from 'bun:test';
-import { ToolLoopDetector } from './tool-loop-detector';
+import { MAX_TOTAL_REPEATS, ToolLoopDetector } from './tool-loop-detector';
 
 const call = (name: string, args: unknown) => [{ id: name, name, arguments: args } as never];
 
@@ -51,10 +51,15 @@ describe('checkRedundant', () => {
     // A parallel batch: both signatures reach the threshold on the same call,
     // so only one can be reported. The other must not be recorded as nudged —
     // it never was — or it can never be reported for the rest of the run.
-    for (let i = 0; i < 3; i++) expect(d.checkRedundant([a, b]).tripped).toBe(i === 3);
+    for (let i = 1; i < MAX_TOTAL_REPEATS; i++) {
+      expect(d.checkRedundant([a, b]).tripped).toBe(false);
+    }
+    // Both cross on this call; one is reported.
     expect(d.checkRedundant([a, b]).tripped).toBe(true);
-    const next = d.checkRedundant([a, b]);
-    expect(next.tripped).toBe(true);
+    // The one that lost is still eligible, so the next call reports it.
+    expect(d.checkRedundant([a, b]).tripped).toBe(true);
+    // And now both have been reported, so it goes quiet again.
+    expect(d.checkRedundant([a, b]).tripped).toBe(false);
   });
 
   test('a signature is nudged once, not on every further repeat', () => {

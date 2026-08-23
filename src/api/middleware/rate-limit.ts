@@ -27,7 +27,14 @@ export function isCredentialAttempt(path: string): boolean {
     path.startsWith('/api/auth/oauth') ||
     path.startsWith('/api/auth/password') ||
     path.startsWith('/api/auth/totp') ||
-    path.startsWith('/api/auth/2fa')
+    path.startsWith('/api/auth/2fa') ||
+    // Redeeming a channel-binding code takes a 6-to-12-character secret and,
+    // on a hit, attaches someone else's pending channel identity to the
+    // caller's account. That is a credential attempt whatever it is called, and
+    // narrowing this list from all of `/api/auth/*` to a keyword set dropped
+    // it — leaving only the loose baseline layers between a caller and that
+    // code space.
+    path.startsWith('/api/auth/channel-bindings/redeem')
   );
 }
 const USER_QUOTA_WINDOW_SECS = 60;

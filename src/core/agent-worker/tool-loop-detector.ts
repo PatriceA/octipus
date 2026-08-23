@@ -65,7 +65,7 @@ const REPEAT_ALLOWED_PREFIXES = ['filesystem__', 'shell__', 'git__', 'web_', 'co
  * a verify-after-fix is a defensible third. The fourth is waste, so it is the
  * first one nudged.
  */
-const MAX_TOTAL_REPEATS = 4;
+export const MAX_TOTAL_REPEATS = 4;
 
 /** Verdict of the same-signature (name + args) check. */
 export type RepeatVerdict = { tripped: boolean; repeats: number };

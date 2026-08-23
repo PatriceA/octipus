@@ -15,6 +15,10 @@ describe('isCredentialAttempt', () => {
       '/api/auth/oauth/github/callback',
       '/api/auth/password/reset',
       '/api/auth/totp/verify',
+      // Takes a 6-to-12-character binding code and, on a hit, attaches
+      // another user's pending channel identity to the caller's account. It
+      // was dropped when this list replaced the blanket `/api/auth/*` rule.
+      '/api/auth/channel-bindings/redeem',
     ]) {
       expect(isCredentialAttempt(p)).toBe(true);
     }
@@ -29,6 +33,13 @@ describe('isCredentialAttempt', () => {
     expect(isCredentialAttempt('/api/auth/me')).toBe(false);
     expect(isCredentialAttempt('/api/auth/ws-ticket')).toBe(false);
     expect(isCredentialAttempt('/api/auth/logout')).toBe(false);
+  });
+
+  test('covers only the redeeming half of channel bindings', () => {
+    // Listing and unbinding are ordinary authenticated reads and writes; only
+    // redeem takes a secret, so only redeem belongs in the tight window.
+    expect(isCredentialAttempt('/api/auth/channel-bindings')).toBe(false);
+    expect(isCredentialAttempt('/api/auth/channel-bindings/telegram/12345')).toBe(false);
   });
 
   test('does not reach outside /api/auth', () => {

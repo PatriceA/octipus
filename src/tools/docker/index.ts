@@ -10,6 +10,15 @@ import {
 import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 
 const EXEC_TIMEOUT = 30000; // 30s
+/**
+ * How long the `docker` client gets to act on SIGTERM before it is killed.
+ *
+ * Long enough for it to pass the signal to an attached container and for that
+ * container's own stop to be under way; short enough that a wedged client does
+ * not hold the deadline open. Docker's own default stop grace is ten seconds,
+ * so anything at or above that would just be waiting on the container twice.
+ */
+const DOCKER_SIGKILL_GRACE_MS = 5000;
 
 /** Validate that a string argument does not contain shell metacharacters */
 function validateArg(value: string, label: string): string {
@@ -145,11 +154,26 @@ export class DockerTool extends BaseTool {
       // nothing to say a deadline is what ended it.
       const child = spawn('docker', args, { env: buildChildEnv() });
       let timedOut = false;
+      let escalation: ReturnType<typeof setTimeout> | null = null;
       const deadline = setTimeout(() => {
         if (child.exitCode !== null || child.signalCode !== null) return;
         timedOut = true;
-        child.kill('SIGKILL');
+        // SIGTERM FIRST, and this one matters more here than in the shell tool.
+        // The `docker` CLI is a client: attached to a container, it proxies
+        // SIGTERM through so the container stops. It cannot proxy SIGKILL —
+        // that kills the client and leaves the container running with nothing
+        // holding a handle to it, which is worse than the timeout it replaced.
+        // Escalate only if the client itself ignores the request.
+        child.kill('SIGTERM');
+        escalation = setTimeout(() => {
+          if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+        }, DOCKER_SIGKILL_GRACE_MS);
+        escalation.unref?.();
       }, timeout);
+      const clearDeadline = (): void => {
+        clearTimeout(deadline);
+        if (escalation) clearTimeout(escalation);
+      };
       let stdout = '';
       let stderr = '';
 
@@ -157,12 +181,12 @@ export class DockerTool extends BaseTool {
       child.stderr.on('data', (data) => { stderr += data; });
 
       child.on('error', (err) => {
-        clearTimeout(deadline);
+        clearDeadline();
         reject(new Error(`Docker command failed: ${err.message}`));
       });
 
       child.on('close', () => {
-        clearTimeout(deadline);
+        clearDeadline();
         // Output comes back on a non-zero exit too — docker writes the useful
         // part to stderr — but a killed command says so, since its stdout is
         // whatever had been flushed rather than an answer.

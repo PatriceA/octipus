@@ -318,7 +318,6 @@ The swarm orchestrator (Orchestrator → Agent → Subagent) publishes its own g
 |-------|---------------|
 | `swarm.node_spawned` | A new Orchestrator / Agent / Subagent is created. Payload includes `rootSessionId`, `nodeId`, `parentNodeId`, `kind`, `depth`, `topicPath`, `role`, `expertId`, `model`, `budgets`, `taskBriefPreview`. |
 | `swarm.node_completed` | Node finished; `ChildResult` is attached (status + output + usedTokens + durationMs). |
-| `swarm.node_status` | Intermediate status update (budget used, partial progress). |
 | `swarm.budget_warning` | Node crossed its budget warning threshold. |
 | `swarm.call_graph_cycle_blocked` | Duplicate / ancestor-chain fingerprint rejected a spawn. |
 

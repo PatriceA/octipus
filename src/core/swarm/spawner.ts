@@ -36,6 +36,7 @@ import { lookupCacheHit } from './spawn-cache';
 import {
   deriveChildBudget,
   InsufficientBudgetError,
+  shouldWarnBudget,
   syncParentTokenUsage,
 } from './spawn-budget';
 import {
@@ -123,6 +124,17 @@ export interface SpawnChildInternalOpts {
  */
 export class SwarmSpawner {
   private _hub: GatewayHub | null;
+  /**
+   * Nodes that have already warned about their pool. One warning per node, not
+   * one per spawn: the narration bridge renders every `swarm.budget_warning`
+   * into a line for the user, and a parent that keeps spawning past the
+   * threshold would narrate the same sentence on each one.
+   *
+   * Pruned when a node reaches a terminal status. The spawner is a
+   * process-lifetime singleton, so an id added and never removed is a leak that
+   * grows with every run the process serves.
+   */
+  private readonly budgetWarned = new Set<string>();
 
   constructor(hub?: GatewayHub) {
     this._hub = hub ?? null;
@@ -131,6 +143,36 @@ export class SwarmSpawner {
   private get hub(): GatewayHub {
     if (!this._hub) this._hub = getGatewayHub();
     return this._hub;
+  }
+
+  /**
+   * Say so, once, when a node's token pool crosses the warning threshold.
+   *
+   * Best-effort by construction: a warning that could fail a spawn would be
+   * worse than no warning at all.
+   */
+  private emitBudgetWarning(node: AgentNode): void {
+    if (!shouldWarnBudget(node.budget)) return;
+    if (this.budgetWarned.has(node.id)) return;
+    const { cap, used } = node.budget.tokens;
+    this.budgetWarned.add(node.id);
+    try {
+      this.hub.publishEvent({
+        type: 'swarm.budget_warning',
+        source: `swarm:${node.id}`,
+        sessionId: node.rootSessionId,
+        payload: {
+          nodeId: node.id,
+          depth: node.depth,
+          role: node.role,
+          tokensUsed: used,
+          tokenCap: cap,
+          remaining: Math.max(0, cap - used),
+        },
+      });
+    } catch (err) {
+      coreLogger.debug({ err, nodeId: node.id }, 'budget warning not published');
+    }
   }
 
   // ── Public API ─────────────────────────────────────────────────────
@@ -429,6 +471,14 @@ export class SwarmSpawner {
       graph.releaseFingerprint(briefHash);
       throw err;
     }
+
+    // The pool is now synced to real spend, so this is the one point in the run
+    // where "how much is left" is both accurate and about to matter. The event
+    // was declared in the gateway protocol and subscribed by both the websocket
+    // route and the persona narration bridge — which carries a `budget_warning`
+    // template — and nothing had ever published it, so that narration had never
+    // once fired. Found by the generated event matrix.
+    this.emitBudgetWarning(parent);
 
     // Reserve fan-out slot only after budget passes.
     parent.budget.fanOut.used++;
@@ -1268,6 +1318,9 @@ export class SwarmSpawner {
     } catch (err) {
       coreLogger.error({ err, childId }, 'Failed to update swarm_node status');
     }
+
+    // The node is done, so it can never warn again — drop its bookkeeping.
+    this.budgetWarned.delete(childId);
 
     // Ledger: record the terminal transition, closing this node's history.
     // Fire-and-forget for the same reason as recordSpawn above.

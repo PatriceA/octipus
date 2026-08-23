@@ -1,5 +1,6 @@
 import {
   BUDGET_RESERVE_FRACTION,
+  BUDGET_WARN_FRACTION,
   getLevelDefault,
   type AgentNode,
   type NodeBudget,
@@ -96,4 +97,21 @@ export function deriveChildBudget(parent: NodeBudget, childDepth: 0 | 1 | 2): No
     fanOut: { cap: defaults.fanOut, used: 0 },
     depth: childDepth,
   };
+}
+
+/**
+ * Has this node burned enough of its pool to be worth saying so?
+ *
+ * Kept here, with the rest of the budget arithmetic, rather than inside the
+ * spawner: the threshold is a property of the cascade, and a pure predicate is
+ * testable without standing up a spawn. The spawner owns only the once-per-node
+ * bookkeeping, because that is state and this is not.
+ *
+ * A zero or negative cap answers false. It means the pool was never derived —
+ * a legacy call site, or a node built before the cascade — and warning about a
+ * budget nobody set would be noise on every spawn.
+ */
+export function shouldWarnBudget(budget: NodeBudget): boolean {
+  const { cap, used } = budget.tokens;
+  return cap > 0 && used >= cap * BUDGET_WARN_FRACTION;
 }

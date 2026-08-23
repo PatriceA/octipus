@@ -29,7 +29,14 @@ describe('spillToolOutput', () => {
     // are what a fragment cut from the front always loses.
     expect(preview!.endsWith('END')).toBe(true);
     expect(preview!).toContain(`${SPILL_DIR}/call_42.txt`);
-    expect(preview!.length).toBeLessThan(6_000);
+    // Never LARGER than the truncation it replaces — that is the contract. It
+    // is deliberately not much smaller either: the head matches what the old
+    // truncation handed the model, so the spill adds a tail and a path without
+    // taking inline context away. Cutting the head as well would have made
+    // every oversized result cost a tool call to read back what it used to be
+    // given outright.
+    expect(preview!.length).toBeLessThanOrEqual(50_000);
+    expect(preview!.length).toBeGreaterThan(40_000);
     // Owner-only, whatever the umask says.
     expect(statSync(join(root, SPILL_DIR, 'call_42.txt')).mode & 0o777).toBe(0o600);
     expect(statSync(join(root, SPILL_DIR)).mode & 0o777).toBe(0o700);

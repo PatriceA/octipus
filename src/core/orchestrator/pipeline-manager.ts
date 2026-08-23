@@ -211,8 +211,14 @@ export function qaVerdictCorrectionInput(report: string, reason: string, handsOf
     `Your audit REPORT below was rejected — not the work you audited, and not your conclusion. ` +
     `The reason:\n\n${reason}\n\n` +
     `Do NOT re-run the audit, re-read the code, or run any commands: nothing has changed since you ` +
-    `wrote this, and your findings stand. Fix ONLY the reported problem and reply with the corrected ` +
-    `verdict block, nothing else.\n\n` +
+    `wrote this, and your findings stand. Fix ONLY the reported problem and reply with ` +
+    // "nothing else" USED to be unconditional, and the handoff instruction was
+    // appended underneath it asking for a second block. The code then relied on
+    // the model resolving that contradiction in favour of the handoff: a
+    // literal reading obeys "nothing else", `previousRaw` comes back empty, and
+    // the downstream stage falls back to scraping the re-joined report.
+    (handsOff ? `the corrected verdict block and the handoff block, and nothing else` : `the corrected verdict block, nothing else`) +
+    `.\n\n` +
     `--- YOUR PREVIOUS REPORT ---\n${report}\n--- END OF REPORT ---\n` +
     // A node with an outgoing edge still owes the next one a handoff. Without
     // this the reply carries none and the downstream stage inherits the
@@ -821,6 +827,18 @@ export class PipelineManager {
     let previousRaw = '';
     /** Set when the walk left a node that had edges but could take none. */
     let stoppedShort: { node: string; outcome: NodeOutcome } | null = null;
+    /**
+     * A QA failure that burned its retries and could not be escalated.
+     *
+     * The walk forces `outcome = 'qa_pass'` there so it can keep going, and
+     * that rewrite is what the exit below would otherwise see: it asks
+     * `routeExhausted` about `qa_pass` edges, finds none exhausted, and reports
+     * the run as having completed successfully — the exact scenario
+     * `stoppedShort` was introduced to catch, reached through the one path that
+     * launders the outcome on its way there. Remembered here so the exit can
+     * answer with what actually happened.
+     */
+    let unescalatedQaFailure: { node: string; outcome: NodeOutcome } | null = null;
     const handoffChain: HandoffContext[] = [];
     // Source attribution: every successfully completed node (incl. retries)
     // appends one entry, rendered into the summary as `_Sources: ..._`.
@@ -1204,6 +1222,7 @@ export class PipelineManager {
                 context,
               });
               if (escalated) return escalated;
+              unescalatedQaFailure = { node: node.name, outcome: 'qa_fail' as NodeOutcome };
               outcome = 'qa_pass';
             }
           }
@@ -1222,9 +1241,9 @@ export class PipelineManager {
         // one level up — a QA stage can fail, burn its retry budget, and hand
         // the failing work back as a success. See `routeExhausted` for why "has
         // any outgoing edge" is the wrong test.
-        stoppedShort = routeExhausted(graph, cursor, outcome, traversals)
-          ? { node: node.name, outcome }
-          : null;
+        stoppedShort =
+          unescalatedQaFailure ??
+          (routeExhausted(graph, cursor, outcome, traversals) ? { node: node.name, outcome } : null);
         break;
       }
 

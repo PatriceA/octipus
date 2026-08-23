@@ -154,6 +154,10 @@ async function runTestIntegration(
         sessionId,
         userId,
         channel,
+        // Opt in to the routing report. It costs the backend two extra
+        // queries per turn, so ordinary chat does not pay for it — but
+        // `routes_to_role` is exactly what this harness exists to check.
+        routedRoles: true,
         ...(model ? { model } : {}),
       }),
     });

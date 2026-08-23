@@ -464,7 +464,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `shared` | 5 |
 | `core` | `skills` | 4 |
 | `core` | `tools` | 7 |
-| `core` | `utils` | 119 |
+| `core` | `utils` | 120 |
 | `db` | `config` | 2 |
 | `db` | `core` | 5 |
 | `db` | `models` | 1 |
@@ -587,52 +587,31 @@ Every member of the `GatewayEventType` union in `src/core/gateway/protocol.ts`, 
 | `agent.iteration` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `agent.spawned` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `agent.stopped` | yes | `src/core/gateway/message-handler.ts` | — |
-| `approval_required` | yes | — | — |
 | `artifact.data_updated` | yes | `src/core/artifacts/events.ts` | — |
 | `artifact.source_error` | yes | `src/core/artifacts/events.ts` | — |
 | `artifact.version_updated` | yes | `src/core/artifacts/events.ts` | — |
 | `audit` | yes | `src/core/gateway/hub.ts` | — |
 | `chat.message` | yes | `src/core/gateway/message-handler.ts` | — |
 | `chat.response` | yes | `src/core/gateway/event-bridge.ts`, `src/core/gateway/message-handler.ts` | — |
-| `error` | yes | — | — |
 | `extension.notify` | yes | `src/extensions/api.ts` | — |
-| `message` | yes | — | — |
 | `orchestrator.approval_required` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `orchestrator.status` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `permission.request` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `pipeline.event` | yes | `src/core/gateway/event-bridge.ts` | — |
-| `pipeline_event` | yes | — | — |
-| `session.cleared` | yes | — | — |
 | `session.compaction_stalled` | yes | `src/core/orchestrator/session-compaction.ts` | — |
-| `status_update` | yes | — | — |
-| `swarm.budget_warning` | yes | — | `swarm.*`, `swarm.budget_warning` |
+| `swarm.budget_warning` | yes | `src/core/swarm/spawner.ts` | `swarm.*`, `swarm.budget_warning` |
 | `swarm.call_graph_cycle_blocked` | yes | `src/core/swarm/spawner.ts` | `swarm.*` |
 | `swarm.narration` | yes | `src/core/personas/narration-bridge.ts` | `swarm.*` |
 | `swarm.node_completed` | yes | `src/core/orchestrator/orchestrator-runner.ts`, `src/core/orchestrator/worker-spawner.ts`, `src/core/swarm/spawner.ts` | `swarm.*`, `swarm.node_completed` |
 | `swarm.node_spawned` | yes | `src/core/orchestrator/orchestrator-runner.ts`, `src/core/orchestrator/worker-spawner.ts`, `src/core/swarm/spawner.ts` | `swarm.*`, `swarm.node_spawned` |
-| `swarm.node_status` | yes | — | `swarm.*` |
 | `team.completed` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `team.started` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `test.event` | yes | — | — |
-| `typing` | yes | — | — |
-| `worker_completed` | yes | — | — |
-| `worker_spawned` | yes | — | — |
 
 ### Declared but never published
 
-The contract promises these and no code emits them. Each is either a type to retire or a producer nobody finished — a subscriber waiting on one waits forever.
+The contract promises these and no code emits them. Each is either a type to retire or a producer nobody finished — a subscriber waiting on one waits forever. One exception is expected: a type published only by the gateway's own tests appears here because this scan excludes test files on purpose, since tests describe the code rather than being it.
 
-- `worker_spawned`
-- `worker_completed`
-- `pipeline_event`
-- `swarm.node_status` — subscribed by `src/api/websocket.ts`
-- `swarm.budget_warning` — subscribed by `src/api/websocket.ts`, `src/core/personas/narration-bridge.ts`
-- `status_update`
-- `typing`
-- `message`
-- `approval_required`
-- `session.cleared`
 - `test.event`
-- `error`
 
-2 publish/subscribe site(s) use a non-literal event type and are counted here rather than dropped.
+1 publish/subscribe site(s) use a non-literal event type and are counted here rather than dropped.

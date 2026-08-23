@@ -266,6 +266,19 @@ describe('routeExhausted — which null from selectEdge means "stopped short"', 
     expect(routeExhausted(graph, 'verify', 'qa_fail', used)).toBe(true);
   });
 
+  test('asking about the REWRITTEN outcome hides an exhausted retry budget', () => {
+    // The trap behind the walker's escalation fallback. When retries are gone
+    // and no human can be asked, the walk forces `outcome = 'qa_pass'` so it
+    // can continue — and if it then finds no edge, asking `routeExhausted`
+    // about the rewritten outcome answers "not exhausted" while the qa_fail
+    // route it actually burned says the opposite. The run reads as completed
+    // successfully. The walker therefore remembers the real failure rather than
+    // re-deriving it from an outcome it laundered itself.
+    const used = new Map([['verify->impl:qa_fail', 2]]);
+    expect(routeExhausted(graph, 'verify', 'qa_fail', used)).toBe(true);
+    expect(routeExhausted(graph, 'verify', 'qa_pass', used)).toBe(false);
+  });
+
   test('a retry with budget left is neither — it takes the edge', () => {
     expect(selectEdge(graph, 'verify', 'qa_fail', new Map())).not.toBeNull();
     expect(routeExhausted(graph, 'verify', 'qa_fail', new Map())).toBe(false);
