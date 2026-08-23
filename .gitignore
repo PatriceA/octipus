@@ -53,10 +53,16 @@ vault-key.json
 # Bun lockfile binary
 bun.lockb
 
-# Ad-hoc debug/utility scripts at project root
+# Ad-hoc debug/utility scripts at project root. Every real root-level config
+# needs an exception here, and forgetting one is silent: the file works locally
+# and simply does not exist in CI. `vitest.config.ts` was missing for a day —
+# CI ran vitest with no config at all, so no path aliases, no project split, and
+# 314 suites "failed" on imports that resolve fine on any developer's machine.
 /*.ts
 !drizzle.config.ts
 !playwright.config.ts
+!vitest.config.ts
+!vite.config.ts
 
 # Eval results (generated)
 eval/results/*.json

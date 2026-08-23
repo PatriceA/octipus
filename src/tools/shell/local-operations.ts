@@ -158,10 +158,15 @@ export class LocalShellOperations implements ShellOperations {
     }
 
     return new Promise((resolve, reject) => {
-      // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn (no shell); this is the shell tool's own executor, argv already parsed/sandboxed upstream
       // No `timeout` option here on purpose: node's own timer kills with
       // SIGTERM on its own schedule, racing the timer below and landing a kill
       // that sets none of the flags explaining it. One deadline, one owner.
+      //
+      // The suppression below must stay on the line DIRECTLY above the call —
+      // semgrep only reads the finding's own line and the one before it, so the
+      // three comment lines that used to sit between them silently un-suppressed
+      // the rule and turned the lane red.
+      // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn (no shell); this is the shell tool's own executor, argv already parsed/sandboxed upstream
       const child = spawn(finalArgv[0], finalArgv.slice(1), {
         cwd,
         env: buildChildEnv(options.env),

@@ -1064,7 +1064,7 @@ cmd_desktop() {
     # macOS / Git Bash (no setsid): nohup detaches from the controlling
     # terminal so it survives the terminal closing. No clean process group, so
     # 'octi stop' reaps the children by process/port match (see kill_desktop).
-    nohup bun run tauri:dev > "$DESKTOP_LOG_FILE" 2>&1 < /dev/null &
+    nohup npm run tauri:dev > "$DESKTOP_LOG_FILE" 2>&1 < /dev/null &
   fi
   local dpid=$!
   echo "$dpid" > "$PID_FILE_DESKTOP"
@@ -1078,9 +1078,9 @@ cmd_desktop() {
 cmd_setup() {
   # Interactive first-run wizard: storage, secrets, admin account, provider,
   # default model, capabilities. Runs through the same code path as
-  # `bun run setup`. Invoked by scripts/install.sh and re-runnable any time.
+  # `npm run setup`. Invoked by scripts/install.sh and re-runnable any time.
   cd "$PROJECT_DIR"
-  exec bun run scripts/setup-wizard.ts "$@"
+  exec npm run setup -- "$@"
 }
 
 cmd_tui() {
@@ -1114,12 +1114,14 @@ cmd_edit() {
   log_info "Launching TUI editor (gateway at localhost:$API_PORT)..."
   log_hint "Project: $user_cwd"
   cd "$PROJECT_DIR"
-  API_PORT="$API_PORT" exec bun run src/tui-editor/index.ts --project "$user_cwd" "$@"
+  API_PORT="$API_PORT" exec npm run tui:edit -- --project "$user_cwd" "$@"
 }
 
 cmd_doctor() {
   cd "$PROJECT_DIR"
-  exec bun run scripts/doctor.ts "$@"
+  # No npm script for this one; `--import` is required by every entry point that
+  # loads product code (role prompts are `.md` imports).
+  exec npx tsx --import ./scripts/md-loader.mjs scripts/doctor.ts "$@"
 }
 
 cmd_help() {

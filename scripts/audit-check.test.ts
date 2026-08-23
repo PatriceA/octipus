@@ -137,6 +137,46 @@ describe('evaluateAdvisories — expiry', () => {
 });
 
 describe('parseAuditOutput', () => {
+  test("npm's own report shape (auditReportVersion 2) is understood", () => {
+    // The runner is `npm audit --omit=dev --json` since Bun left the repo. Its
+    // shape is a map under `vulnerabilities`, not the `advisories` bun emitted,
+    // and the generic map walk would otherwise read `metadata` as a package.
+    const npmReport = JSON.stringify({
+      auditReportVersion: 2,
+      vulnerabilities: {
+        'left-pad': {
+          name: 'left-pad',
+          severity: 'high',
+          via: [
+            {
+              source: 1234,
+              name: 'left-pad',
+              title: 'Prototype pollution in left-pad',
+              url: 'https://github.com/advisories/GHSA-aaaa-bbbb-cccc',
+              severity: 'high',
+            },
+          ],
+        },
+      },
+      metadata: { vulnerabilities: { total: 1 }, dependencies: { total: 42 } },
+    });
+    const found = parseAuditOutput(npmReport);
+    expect(found).toHaveLength(1);
+    expect(found[0].package).toBe('left-pad');
+    expect(found[0].severity).toBe('high');
+    expect(found[0].ghsa).toBe('GHSA-aaaa-bbbb-cccc');
+    expect(found[0].title).toContain('Prototype pollution');
+  });
+
+  test('a clean npm report is no advisories, not a parse of its metadata', () => {
+    const clean = JSON.stringify({
+      auditReportVersion: 2,
+      vulnerabilities: {},
+      metadata: { vulnerabilities: { total: 0 }, dependencies: { total: 600 } },
+    });
+    expect(parseAuditOutput(clean)).toEqual([]);
+  });
+
   test('empty / clean outputs yield no advisories', () => {
     expect(parseAuditOutput('')).toEqual([]);
     expect(parseAuditOutput('{}')).toEqual([]);

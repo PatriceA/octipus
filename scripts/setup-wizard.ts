@@ -293,7 +293,13 @@ interface BackendHandle {
 
 async function bootBackend(apiHost: string, apiPort: string): Promise<BackendHandle> {
   const url = `http://${apiHost === '0.0.0.0' ? '127.0.0.1' : apiHost}:${apiPort}`;
-  const proc = spawnProcess(['bun', 'run', 'src/index.ts'], {
+  // `npx tsx`, not `bun run`: Bun is not a dependency any more (the runtime
+  // moved to Node), so on a clean machine this spawned a binary that does not
+  // exist and the wizard reported "backend exited before becoming healthy" with
+  // no output — which is exactly what the install-smoke lane saw. The
+  // `--import` flag is required by every entry point that loads product code:
+  // role prompts are `.md` imports and Node needs the loader to read them.
+  const proc = spawnProcess(['npx', 'tsx', '--import', './scripts/md-loader.mjs', 'src/index.ts'], {
     cwd: process.cwd(),
     stdout: 'pipe',
     stderr: 'pipe',

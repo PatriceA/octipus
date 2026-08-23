@@ -57,16 +57,19 @@ async function httpReachable(url: string, timeoutMs = 2000): Promise<boolean> {
 
 // ── Individual checks ──────────────────────────────────────────────
 
-export async function checkBun(): Promise<CheckResult> {
+export async function checkNodeRuntime(): Promise<CheckResult> {
+  // It read `process.versions.node` and called it Bun, against a `>= 1.1`
+  // floor every Node release passes — so the preflight printed "Bun 26.2.0" and
+  // could not fail. `engines.node` in package.json is the real requirement.
   const version = process.versions.node;
   const [major, minor] = version.split('.').map(Number);
-  const ok = major > 1 || (major === 1 && minor >= 1);
+  const ok = major > 24 || (major === 24 && minor >= 9);
   return {
-    name: 'Bun runtime',
+    name: 'Node runtime',
     status: ok ? 'ok' : 'fail',
-    detail: `Bun ${version}`,
+    detail: `Node ${version}`,
     critical: true,
-    hint: ok ? undefined : 'Octipus requires Bun ≥ 1.1. Upgrade: https://bun.sh',
+    hint: ok ? undefined : 'Octipus requires Node ≥ 24.9 (package.json engines). Upgrade: https://nodejs.org',
   };
 }
 
@@ -461,7 +464,7 @@ export async function checkCapabilities(): Promise<CheckResult> {
 
 export async function runDoctor(projectDir: string): Promise<DoctorReport> {
   const checks = await Promise.all([
-    checkBun(),
+    checkNodeRuntime(),
     checkEnvFile(projectDir),
     checkVaultKeys(projectDir),
     checkStorageMode(projectDir),
