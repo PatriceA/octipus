@@ -21,8 +21,6 @@ Compose the host-side ports are `OCTIPUS_API_PORT` (default 3015) and
 ```env
 # ─── Required ─────────────────────────────────────────────────
 DATABASE_URL=postgres://user:password@localhost:5432/octipus
-# Valkey (Redis-compatible). Var name kept as REDIS_URL for ioredis client compat.
-REDIS_URL=redis://localhost:6379
 
 # Security keys (minimum 32 characters each, use `bun run setup` to generate)
 MASTER_KEY=your-master-key-at-least-32-characters
@@ -135,7 +133,7 @@ The project uses shared Docker services. These must be running before starting:
 ```bash
 # Start required services
 cd ~/docker-services
-docker compose up -d db valkey
+docker compose up -d db
 
 # Start optional services
 docker compose up -d ollama litellm searxng
@@ -144,7 +142,6 @@ docker compose up -d ollama litellm searxng
 | Service | Port | Image | Required |
 |---------|------|-------|----------|
 | PostgreSQL | 5432 | `pgvector/pgvector:pg16` | Yes |
-| Valkey | 6379 | `valkey/valkey:7.2-alpine` | Yes |
 | Ollama | 11434 | `ollama/ollama:rocm` | No |
 | LiteLLM | 4000 | `ghcr.io/berriai/litellm:main-latest` | No |
 | SearXNG | 8888 | `searxng/searxng:latest` | No |

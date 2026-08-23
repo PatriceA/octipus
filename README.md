@@ -47,7 +47,7 @@ providers, channels, workspace paths, feature flags — lives in the
 DB and is editable at runtime via the API or the web UI.
 
 **Prefer Docker?** Root-level `docker-compose.yml` brings up Postgres
-+ Valkey + Octipus in one shot. Playwright Chromium and the MCP
++ Octipus in one shot. Playwright Chromium and the MCP
 server are pre-baked in the image. Configure the container from your
 host:
 
@@ -101,7 +101,7 @@ Channels → Gateway (WebSocket, typed Zod protocol)
             → Agents (3-level Swarm: Orchestrator → Agent → Subagent)
               → Tools / Skills / Experts / Pipelines
                 → Models (Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LiteLLM, CLI)
-                  → Postgres + pgvector + Valkey (or PGlite + in-memory for embedded)
+                  → Postgres + pgvector (or PGlite + in-memory for embedded)
 ```
 
 **Hierarchy:** Tools (executable capabilities) → Skills (domain knowledge) → Experts (pre-configured personas) → Agents (runtime workers, 3-level Swarm via `spawn_child`) → Pipelines (sequential handover with approval gates).
@@ -184,9 +184,9 @@ curl -fsSL https://raw.githubusercontent.com/PatriceA/octipus/main/scripts/insta
 ```
 
 **Docker (production):** see [docs/DOCKER.md](docs/DOCKER.md).
-**External Postgres + Valkey (Redis-compatible):** see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+**External Postgres:** see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
-Requirements: **Bun ≥ 1.1**, **Node ≥ 18**, **Docker** (for the full stack), **Postgres 15** (external mode).
+Requirements: **Node ≥ 24**, **Docker** (for the full stack), **Postgres 15** (external mode).
 
 > **Runtime split:** the server runs on **Bun only** (tests, scripts, channels, gateway, MCP server). The web dashboard runs on Node via Next.js. Bun is not a soft requirement — provider clients, the LiteLLM bridge, and the gateway rely on Bun's runtime surface. There is no Node entry point for the server and there are no plans to add one.
 

@@ -4,7 +4,7 @@ import { getConfig } from '@/config';
 import { getGateway } from '@/core/gateway';
 import { describeMode, resolveOrchestratorMode } from '@/core/orchestrator/mode-selector';
 import { checkDbHealth } from '@/db/postgres';
-import { checkRedisHealth } from '@/db/redis';
+import { checkCacheHealth } from '@/db/cache';
 import { getHealthChecker } from '@/models/health-checker';
 import { getModelRegistry } from '@/models/model-registry';
 import { getProviderRouter } from '@/models/providers';
@@ -219,10 +219,12 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
     };
   })
 
-  // Valkey (Redis-compatible) health. Route + JSON key stay `redis` — it's a
-  // stable API contract the web dashboard and external monitoring read.
+  // Storage-provider health — Postgres in external mode, the in-process map in
+  // embedded. The route and the JSON key stay `redis`: they are a stable API
+  // contract the web dashboard and external monitoring read, and renaming them
+  // would break those for a cosmetic gain.
   .get('/redis', async () => {
-    const result = await checkRedisHealth();
+    const result = await checkCacheHealth();
 
     return {
       service: 'redis',
@@ -251,7 +253,7 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
   // Readiness probe (for Kubernetes)
   .get('/ready', async () => {
     const dbHealth = await checkDbHealth();
-    const redisHealth = await checkRedisHealth();
+    const redisHealth = await checkCacheHealth();
 
     if (!dbHealth.healthy || !redisHealth.healthy) {
       return new Response(

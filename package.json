@@ -63,7 +63,6 @@
     "drizzle-orm": "^0.45.2",
     "grammy": "^1.44.0",
     "hono": "4.13.3",
-    "ioredis": "^6.0.0",
     "js-tiktoken": "1.0.21",
     "js-yaml": "5.2.3",
     "jszip": "3.10.1",

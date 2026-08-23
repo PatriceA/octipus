@@ -26,12 +26,11 @@ describe('initializeStorage', () => {
     expect(second).toBe(first);
   });
 
-  test('external mode without redis config throws', async () => {
-    // Make sure we start fresh
+  test('external mode returns a Postgres-backed provider', async () => {
     await closeStorage();
-    expect(() => initializeStorage({ mode: 'external' })).toThrow(
-      /Redis config required/,
-    );
+    const provider = initializeStorage({ mode: 'external' });
+    expect(provider.mode).toBe('external');
+    expect(provider.constructor.name).toBe('PostgresStorageProvider');
   });
 });
 

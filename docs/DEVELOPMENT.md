@@ -62,7 +62,7 @@ octipus/
 | `bun run eval --baseline latest` | Same, plus a regression gate: exits 1 if any test that PASSED in the newest `eval/results/*.json` now fails, even when the overall score improved. Pass a path instead of `latest` to pin a committed baseline. |
 | `bun run build` | Build backend for distribution |
 | `bun run build:cli` | Compile `bin/octi.ts` → static `dist/octi` binary |
-| `bun run backup` | Backup database, Valkey, config, vault |
+| `npm run backup` | Backup database, config, vault |
 | `octi doctor` | Run environment health checks (what is wired, what is missing) |
 | `octi init` | Run the pi-tui setup wizard (falls back to `bun run setup` on non-TTY) |
 
@@ -97,7 +97,7 @@ Add entry to `SYSTEM_EXPERTS` in `src/db/seed-experts.ts`, or create via API (`P
 | ORM | Drizzle | — |
 | Database | PostgreSQL + pgvector | — |
 | Database Embedded | PGlite (via @electric-sql/pglite) | Optional (Postgres still preferred for production) |
-| Cache | Valkey (Redis-compatible) | via ioredis |
+| Cache / queue / pub-sub | PostgreSQL | key expiry, a queue table, `LISTEN`/`NOTIFY` |
 | Web UI | Next.js 14, React 18, Tailwind CSS | — |
 | Channels | grammY (Telegram), Bolt.js (Slack), Bot Framework (Teams), WhatsApp Cloud API | — |
 | Auth | Bun.password (argon2id), scrypt, @simplewebauthn/server, otplib | — |

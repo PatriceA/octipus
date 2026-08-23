@@ -1,5 +1,5 @@
 import { getConfig } from '@/config';
-import { RedisCache } from '@/db/redis';
+import { Cache } from '@/db/cache';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { userRepository } from '@/db/repositories/user-repository';
 import { generateToken, sha256 } from '@/utils/crypto';
@@ -50,13 +50,13 @@ function isEphemeralSession(s: { createdAt: Date | string; expiresAt: Date | str
 }
 
 export class SessionManager {
-  private cache: RedisCache;
+  private cache: Cache;
   private maxAge: number;
 
   constructor() {
     const config = getConfig();
     this.maxAge = config.security.sessionMaxAge;
-    this.cache = new RedisCache(this.maxAge / 1000);
+    this.cache = new Cache(this.maxAge / 1000);
   }
 
   /**

@@ -6,7 +6,7 @@ and doesn't need the full stack.
 ## 1. Unit + integration tests — `bun test`
 
 Runs the production code's Bun test suite (`src/**/*.test.ts`,
-`scripts/**/*.test.ts`). Requires Postgres + Valkey for some specs — most run
+`scripts/**/*.test.ts`). Requires Postgres for some specs — most run
 pure in-process and are fine offline.
 
 ```
@@ -72,7 +72,7 @@ Key design notes:
 
 ## 4. Integration harness — `bun run test:integration`
 
-Previously-skipped integration tests backed by `docker-compose.test.yml`. Spins up an isolated Postgres + Valkey and runs specs that need real DB transactions or cross-process pub/sub. Coverage includes MCP transports (stdio + SSE) and storage provider parity (Valkey/Redis vs in-memory).
+Previously-skipped integration tests backed by `docker-compose.test.yml`. Spins up an isolated Postgres and runs specs that need real DB transactions or cross-process pub/sub. Coverage includes MCP transports (stdio + SSE) and storage provider parity (Postgres vs in-memory).
 
 ```
 bun run test:integration

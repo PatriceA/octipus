@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'crypto';
 import { and, eq } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import { getDb } from '@/db/postgres';
-import { getRedis } from '@/db/redis';
+import { rawStore } from '@/db/cache';
 import { vault } from '@/db/schema/vault';
 import { securityLogger } from '@/utils/logger';
 import { getVault } from './vault';
@@ -161,7 +161,7 @@ async function getProviderConfig(provider: string): Promise<OAuthProviderConfig 
 // --- OAuth Manager ---
 
 export class OAuthManager {
-  private redis = getRedis();
+  private store = rawStore();
 
   /**
    * Generate an authorization URL for the given provider.
@@ -187,7 +187,7 @@ export class OAuthManager {
     };
 
     // Store state in Redis with 10-minute TTL
-    await this.redis.setex(`oauth:state:${state}`, 600, JSON.stringify(stateData));
+    await this.store.setex(`oauth:state:${state}`, 600, JSON.stringify(stateData));
 
     // Build authorization URL
     const params = new URLSearchParams({
@@ -213,7 +213,7 @@ export class OAuthManager {
    */
   async exchangeCode(provider: string, code: string, state: string): Promise<{ userId: string }> {
     // Validate state
-    const stateJson = await this.redis.get(`oauth:state:${state}`);
+    const stateJson = await this.store.get(`oauth:state:${state}`);
     if (!stateJson) {
       throw new Error('Invalid or expired OAuth state');
     }
@@ -224,7 +224,7 @@ export class OAuthManager {
     }
 
     // Delete state (one-time use)
-    await this.redis.del(`oauth:state:${state}`);
+    await this.store.del(`oauth:state:${state}`);
 
     const providerConfig = await getProviderConfig(provider);
     if (!providerConfig) {

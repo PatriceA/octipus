@@ -11,7 +11,6 @@ import { setTimeout as setTimeoutPromise } from 'node:timers/promises';
 
 interface BackupOptions {
   database: boolean;
-  redis: boolean;
   config: boolean;
   vault: boolean;
   output?: string;
@@ -46,40 +45,6 @@ async function backupDatabase(outputPath: string): Promise<void> {
     console.log(`✅ Database backed up to ${backupFile}`);
   } catch (error) {
     console.error('❌ Database backup failed:', error);
-  }
-}
-
-async function backupRedis(outputPath: string): Promise<void> {
-  console.log('📦 Backing up Valkey...');
-
-  const redisUrl = process.env.REDIS_URL;
-  if (!redisUrl) {
-    console.log('⚠️  REDIS_URL not set, skipping Valkey backup');
-    return;
-  }
-
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const backupFile = join(outputPath, `redis-${timestamp}.rdb`);
-
-  try {
-    // Parse Redis URL
-    const url = new URL(redisUrl);
-    const host = url.hostname;
-    const port = url.port || '6379';
-
-    // Trigger BGSAVE and copy RDB file
-    await runCommand(['redis-cli', '-h', host, '-p', port, 'BGSAVE']);
-
-    // Wait for save to complete
-    await setTimeoutPromise(2000);
-
-    // Copy RDB file (default location)
-    await runCommand(['redis-cli', '-h', host, '-p', port, 'CONFIG', 'GET', 'dir']);
-    // In production, this would copy the actual RDB file
-
-    console.log(`✅ Valkey backup initiated`);
-  } catch (error) {
-    console.error('❌ Valkey backup failed:', error);
   }
 }
 
@@ -182,16 +147,14 @@ async function main() {
   if (command === 'backup') {
     const options: BackupOptions = {
       database: args.includes('--all') || args.includes('--database'),
-      redis: args.includes('--all') || args.includes('--redis'),
       config: args.includes('--all') || args.includes('--config'),
       vault: args.includes('--all') || args.includes('--vault'),
       output: outputPath,
     };
 
     // Default to all if no specific options
-    if (!options.database && !options.redis && !options.config && !options.vault) {
+    if (!options.database && !options.config && !options.vault) {
       options.database = true;
-      options.redis = true;
       options.config = true;
       options.vault = true;
     }
@@ -199,7 +162,6 @@ async function main() {
     console.log(`Backup location: ${outputPath}\n`);
 
     if (options.database) await backupDatabase(outputPath);
-    if (options.redis) await backupRedis(outputPath);
     if (options.config) await backupConfig(outputPath);
     if (options.vault) await backupVault(outputPath);
 
@@ -235,14 +197,13 @@ async function main() {
   } else {
     console.log(`
 Usage:
-  bun backup.ts backup [--all|--database|--redis|--config|--vault]
+  npx tsx scripts/backup.ts backup [--all|--database|--config|--vault]
   bun backup.ts restore <backup-file>
   bun backup.ts list
 
 Options:
   --all       Backup everything (default)
   --database  Backup PostgreSQL database
-  --redis     Backup Redis data
   --config    Backup configuration files
   --vault     Backup encrypted vault
 

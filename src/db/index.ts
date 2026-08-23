@@ -1,6 +1,6 @@
 // Database exports
 export { checkDbHealth, closeDb, type Database, getDb, initializeDb, initializeExtensions } from './postgres';
-export { checkRedisHealth, closeRedis, getRedis, RedisCache, RedisPubSub, RedisQueue } from './redis';
+export { Cache, checkCacheHealth, PubSub, Queue, rawStore } from './cache';
 // Repository exports
 export * from './repositories';
 // Schema exports

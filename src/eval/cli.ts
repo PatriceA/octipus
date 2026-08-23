@@ -205,10 +205,7 @@ async function main() {
       const { getConfig } = await import('@/config');
       const storageMode = getConfig().storageMode || 'external';
       const { initializeStorage } = await import('@/db/storage');
-      initializeStorage({
-        mode: storageMode,
-        redis: storageMode === 'external' ? getConfig().redis : undefined,
-      });
+      initializeStorage({ mode: storageMode });
       const { getSettingsService } = await import('@/config/settings-service');
       await getSettingsService().initialize();
       const { loadRuntimeConfig } = await import('@/config');

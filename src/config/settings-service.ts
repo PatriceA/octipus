@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { RedisCache, RedisPubSub } from '@/db/redis';
+import { Cache, PubSub } from '@/db/cache';
 import { type SettingEntry, settings } from '@/db/schema/settings';
 import { logger } from '@/utils/logger';
 import { validateSettingValue } from './schema-introspect';
@@ -19,15 +19,15 @@ export interface SettingChangeEvent {
 type ChangeHandler = (key: string, value: unknown, oldValue: unknown) => void;
 
 export class SettingsService {
-  private cache: RedisCache;
-  private pubsub: RedisPubSub;
+  private cache: Cache;
+  private pubsub: PubSub;
   private localCache: Map<string, unknown> = new Map();
   private changeHandlers: Set<ChangeHandler> = new Set();
   private initialized = false;
 
   constructor() {
-    this.cache = new RedisCache(CACHE_TTL);
-    this.pubsub = new RedisPubSub();
+    this.cache = new Cache(CACHE_TTL);
+    this.pubsub = new PubSub();
   }
 
   /**

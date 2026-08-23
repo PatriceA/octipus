@@ -4,7 +4,7 @@
  * `src/security/auth/session.ts` was effectively untested despite guarding
  * every authenticated request.
  *
- * Storage runs on the real in-memory provider (embedded mode) so RedisCache
+ * Storage runs on the real in-memory provider (embedded mode) so the cache
  * round-trips for real; the Postgres-backed user/audit repositories are mocked.
  */
 import { randomBytes, randomUUID } from 'node:crypto';

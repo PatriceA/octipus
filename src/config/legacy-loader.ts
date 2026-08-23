@@ -20,12 +20,6 @@ export function loadFromEnvLegacy(): Partial<Config> {
       idleTimeout: parseInt(process.env.DB_IDLE_TIMEOUT || '30000', 10),
       connectionTimeout: parseInt(process.env.DB_CONNECTION_TIMEOUT || '10000', 10),
     },
-    redis: {
-      url: process.env.REDIS_URL || defaultConfig.redis!.url!,
-      keyPrefix: process.env.REDIS_KEY_PREFIX || defaultConfig.redis!.keyPrefix!,
-      maxRetries: parseInt(process.env.REDIS_MAX_RETRIES || '3', 10),
-      retryDelay: parseInt(process.env.REDIS_RETRY_DELAY || '1000', 10),
-    },
     litellm: {
       proxyUrl: process.env.LITELLM_URL || process.env.LITELLM_PROXY_URL || defaultConfig.litellm!.proxyUrl!,
       apiKey: process.env.LITELLM_API_KEY,

@@ -1,4 +1,4 @@
-import { RedisCache } from '@/db/redis';
+import { Cache } from '@/db/cache';
 import { modelLogger } from '@/utils/logger';
 import type { QuotaStatus } from './providers/interface';
 
@@ -26,7 +26,7 @@ interface DailyUsage {
  * Tracks daily/monthly usage and detects quota exhaustion.
  */
 export class QuotaTracker {
-  private cache = new RedisCache(0); // No default TTL, we manage it per key
+  private cache = new Cache(0); // No default TTL, we manage it per key
 
   /** Get current quota status for a provider */
   async getStatus(provider: string): Promise<QuotaStatus> {

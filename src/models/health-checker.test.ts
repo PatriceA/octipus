@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import { randomBytes } from 'node:crypto';
-import { RedisCache } from '@/db/redis';
+import { Cache } from '@/db/cache';
 import { closeStorage, initializeStorage } from '@/db/storage';
 import { getHealthChecker, HealthChecker } from './health-checker';
 
@@ -48,7 +48,7 @@ function jsonResponse(body: unknown): Response {
 }
 
 beforeAll(() => {
-  // In-memory cache so RedisCache works without a real Valkey/Redis.
+  // In-memory cache so Cache works without a real Valkey/Redis.
   initializeStorage({ mode: 'embedded' });
 });
 
@@ -63,7 +63,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await new RedisCache().delete(ROUTES_CACHE_KEY);
+  await new Cache().delete(ROUTES_CACHE_KEY);
 });
 
 afterEach(() => {

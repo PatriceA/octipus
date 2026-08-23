@@ -42,7 +42,7 @@ scrape_configs:
 | `process_resident_memory_bytes` | RSS. |
 | `nodejs_heap_used_bytes` / `nodejs_heap_total_bytes` | Heap usage. |
 | `octipus_db_up` | `1` if the primary database is reachable. |
-| `octipus_redis_up` | `1` if Redis/Valkey is reachable. |
+| `octipus_redis_up` | `1` if the storage provider is reachable. The metric name is kept for dashboard compatibility. |
 
 ### Domain metrics (counters / histograms)
 

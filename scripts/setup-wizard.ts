@@ -23,7 +23,6 @@
  *   OCTIPUS_SETUP_STORAGE=embedded|external
  *   OCTIPUS_SETUP_DATA_DIR=~/.octipus/data       (embedded)
  *   OCTIPUS_SETUP_DATABASE_URL=postgres://…      (external)
- *   OCTIPUS_SETUP_REDIS_URL=redis://…            (external)
  *   OCTIPUS_SETUP_API_PORT=3005
  *   OCTIPUS_SETUP_API_HOST=127.0.0.1
  *   OCTIPUS_SETUP_ADMIN_USER, _ADMIN_PASS, _ADMIN_EMAIL
@@ -223,7 +222,6 @@ function infoStep(ctx: WizardCtx, title: string, lines: string[]): Promise<void>
 export interface BootstrapConfig {
   storageMode: 'embedded' | 'external';
   databaseUrl: string;
-  redisUrl: string;
   dataDir: string;
   apiPort: string;
   apiHost: string;
@@ -269,7 +267,7 @@ export function buildEnv(cfg: BootstrapConfig, secrets: { masterKey: string; jwt
     `STORAGE_MODE=${cfg.storageMode}`,
   ];
   if (cfg.storageMode === 'external') {
-    lines.push(`DATABASE_URL=${cfg.databaseUrl}`, `REDIS_URL=${cfg.redisUrl}`);
+    lines.push(`DATABASE_URL=${cfg.databaseUrl}`);
   } else {
     lines.push(`DATA_DIR=${cfg.dataDir}`);
   }
@@ -440,16 +438,13 @@ async function runPreBackend(ctx: WizardCtx | null): Promise<BootstrapConfig & {
   }
 
   let databaseUrl = '';
-  let redisUrl = '';
   let dataDir = resolve(homedir(), '.octipus', 'data');
 
   if (storageMode === 'external') {
     if (NON_INTERACTIVE) {
       databaseUrl = process.env.OCTIPUS_SETUP_DATABASE_URL || 'postgresql://octipus:octipus@localhost:5432/octipus';
-      redisUrl = process.env.OCTIPUS_SETUP_REDIS_URL || 'redis://localhost:6379';
     } else if (ctx) {
       databaseUrl = await textStep(ctx, 'Database URL', 'PostgreSQL connection string', 'postgresql://octipus:octipus@localhost:5432/octipus');
-      redisUrl = await textStep(ctx, 'Valkey URL', 'Valkey (or Redis-compatible) connection string', 'redis://localhost:6379');
     }
   } else if (ctx && !NON_INTERACTIVE) {
     dataDir = await textStep(ctx, 'Data directory', 'Where to store the embedded database', dataDir);
@@ -467,7 +462,6 @@ async function runPreBackend(ctx: WizardCtx | null): Promise<BootstrapConfig & {
   return {
     storageMode,
     databaseUrl,
-    redisUrl,
     dataDir,
     apiPort,
     apiHost,

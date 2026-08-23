@@ -58,7 +58,7 @@ const dbUpGauge = new Gauge({
 });
 const redisUpGauge = new Gauge({
   name: 'octipus_redis_up',
-  help: '1 if Redis/Valkey is reachable.',
+  help: '1 if the storage provider is reachable.',
   registers: [registry],
 });
 

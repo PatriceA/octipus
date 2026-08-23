@@ -175,7 +175,7 @@ multi-user platform; OpenClaw's is better for a personal assistant.
 |---|---|---|
 | One-shot installer | Yes (npm global + `onboard`) | Yes (curl installer + `octi setup`) |
 | Non-interactive/CI setup | Yes | Yes (`--non-interactive`, env-driven) |
-| Docker / compose | Yes | Yes (Postgres + Valkey + app) |
+| Docker / compose | Yes | Yes (Postgres + app) |
 | Managed-cloud recipes (Fly, Render, Nix) | Yes | No |
 | OS service install (launchd/systemd) | Yes | No |
 | Auto-update (Sparkle feed for macOS app) | Yes | No |

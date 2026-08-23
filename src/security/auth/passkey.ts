@@ -10,14 +10,14 @@ import {
   verifyRegistrationResponse,
 } from '@simplewebauthn/server';
 import { getConfig } from '@/config';
-import { RedisCache } from '@/db/redis';
+import { Cache } from '@/db/cache';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { userRepository } from '@/db/repositories/user-repository';
 import type { PasskeyCredential } from '@/db/schema/users';
 import { securityLogger } from '@/utils/logger';
 
 // Redis-backed challenge storage with 5-minute TTL
-const challengeCache = new RedisCache(300);
+const challengeCache = new Cache(300);
 
 export class PasskeyAuth {
   private rpId: string;

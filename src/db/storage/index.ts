@@ -3,7 +3,7 @@
  */
 import { dbLogger } from '@/utils/logger';
 import { MemoryStorageProvider } from './memory-provider';
-import { type RedisProviderConfig, RedisStorageProvider } from './redis-provider';
+import { PostgresStorageProvider } from './postgres-provider';
 import type { StorageProvider } from './types';
 
 export type { CacheProvider, PubSubProvider, QueueProvider, StorageProvider } from './types';
@@ -14,11 +14,11 @@ export type StorageMode = 'embedded' | 'external';
 
 export interface StorageConfig {
   mode: StorageMode;
-  redis?: RedisProviderConfig;
 }
 
 /**
- * Initialize the storage provider. Must be called once during startup.
+ * Initialize the storage provider. Must be called once during startup, and —
+ * for `external` — AFTER the database, because that provider runs on it.
  */
 export function initializeStorage(config: StorageConfig): StorageProvider {
   if (provider) return provider;
@@ -27,9 +27,8 @@ export function initializeStorage(config: StorageConfig): StorageProvider {
     provider = new MemoryStorageProvider();
     dbLogger.info('Storage initialized: embedded (in-memory)');
   } else {
-    if (!config.redis) throw new Error('Valkey/Redis config required for external storage mode');
-    provider = new RedisStorageProvider(config.redis);
-    dbLogger.info('Storage initialized: external (Valkey)');
+    provider = new PostgresStorageProvider();
+    dbLogger.info('Storage initialized: external (Postgres)');
   }
 
   return provider;

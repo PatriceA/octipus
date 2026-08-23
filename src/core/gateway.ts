@@ -2,7 +2,7 @@ import { getConfig, loadConfig } from '@/config';
 import { runKBSelfCheck } from '@/core/rag/health';
 import { runMigrations } from '@/db/migrate';
 import { checkDbHealth, closeDb, initializeDb, initializeExtensions } from '@/db/postgres';
-import { checkRedisHealth } from '@/db/redis';
+import { checkCacheHealth } from '@/db/cache';
 import { closeStorage, initializeStorage } from '@/db/storage';
 import { getHealthChecker } from '@/models/health-checker';
 import { getModelRegistry } from '@/models/model-registry';
@@ -47,17 +47,16 @@ export class Gateway {
       const storageMode = config.storageMode || 'external';
       coreLogger.info({ storageMode }, 'Configuration loaded');
 
-      // Initialize storage provider (Valkey or in-memory)
-      initializeStorage({
-        mode: storageMode,
-        redis: storageMode === 'external' ? config.redis : undefined,
-      });
-      coreLogger.info({ mode: storageMode }, 'Storage initialized');
-
       // Initialize database (PostgreSQL or PGlite)
       await initializeDb();
       await initializeExtensions();
       coreLogger.info({ mode: storageMode }, 'Database initialized');
+
+      // Storage comes after the database, not before: in external mode it runs
+      // ON the database, so the previous order only worked while the backend
+      // was a separate service.
+      initializeStorage({ mode: storageMode });
+      coreLogger.info({ mode: storageMode }, 'Storage initialized');
 
       // Run migrations before any queries
       await runMigrations();
@@ -213,7 +212,7 @@ export class Gateway {
 
     const [dbHealth, redisHealth] = await Promise.all([
       checkDbHealth(),
-      checkRedisHealth(),
+      checkCacheHealth(),
     ]);
 
     return {
@@ -229,6 +228,8 @@ export class Gateway {
           message: dbHealth.error,
           lastChecked: new Date(),
         },
+        // Named `redis` for the API contract's sake; the check is the active
+        // storage provider, which is Postgres in external mode.
         redis: {
           service: 'redis',
           status: redisHealth.healthy ? 'healthy' : 'unhealthy',

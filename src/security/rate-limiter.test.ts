@@ -17,7 +17,7 @@ import {
 
 describe.skipIf(!isIntegration)('RateLimiter.checkSwarmFanOutBudget (Integration)', () => {
   beforeAll(async () => {
-    setupIntegrationStorage();
+    await setupIntegrationStorage();
   });
 
   afterAll(async () => {

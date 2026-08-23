@@ -1,6 +1,6 @@
 import { and, desc, eq, gte, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { RedisCache } from '@/db/redis';
+import { Cache } from '@/db/cache';
 import { type CostLogEntry, costLog, modelConfig, type NewCostLogEntry } from '@/db/schema/models';
 import { modelLogger } from '@/utils/logger';
 
@@ -50,7 +50,7 @@ export class CostTracker {
   private get db() {
     return getDb();
   }
-  private cache = new RedisCache(60); // 1 minute cache for stats
+  private cache = new Cache(60); // 1 minute cache for stats
 
   /**
    * Log a model usage entry

@@ -6,7 +6,7 @@ import { z } from 'zod';
 // expand `~`, so schema defaults must be concrete absolute paths.
 const WORKSPACE_ROOT = join(homedir(), '.octipus', 'workspace');
 
-// Storage mode: 'embedded' (PGlite + in-memory) or 'external' (PostgreSQL + Valkey)
+// Storage mode: 'embedded' (PGlite + in-memory) or 'external' (PostgreSQL)
 export const storageModeSchema = z.enum(['embedded', 'external']).default('external');
 
 // Database configuration schema
@@ -16,14 +16,6 @@ export const databaseConfigSchema = z.object({
   poolSize: z.number().min(1).max(100).default(10),
   idleTimeout: z.number().min(0).default(30000),
   connectionTimeout: z.number().min(0).default(10000),
-});
-
-// Valkey (Redis-compatible) configuration schema
-export const redisConfigSchema = z.object({
-  url: z.string().default('redis://localhost:6379'),
-  keyPrefix: z.string().default('octipus:'),
-  maxRetries: z.number().min(0).default(3),
-  retryDelay: z.number().min(0).default(1000),
 });
 
 // LiteLLM configuration schema
@@ -459,7 +451,6 @@ export const heartbeatConfigSchema = z.object({
 export const configSchema = z.object({
   storageMode: storageModeSchema,
   database: databaseConfigSchema,
-  redis: redisConfigSchema,
   litellm: litellmConfigSchema,
   ollama: ollamaConfigSchema,
   security: securityConfigSchema,
@@ -504,7 +495,6 @@ export type Config = z.infer<typeof configSchema>;
 export type HeartbeatConfig = z.infer<typeof heartbeatConfigSchema>;
 export type StorageMode = z.infer<typeof storageModeSchema>;
 export type DatabaseConfig = z.infer<typeof databaseConfigSchema>;
-export type RedisConfig = z.infer<typeof redisConfigSchema>;
 export type LiteLLMConfig = z.infer<typeof litellmConfigSchema>;
 export type OllamaConfig = z.infer<typeof ollamaConfigSchema>;
 export type SecurityConfig = z.infer<typeof securityConfigSchema>;

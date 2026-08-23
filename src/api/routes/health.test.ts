@@ -23,7 +23,7 @@ describe.skipIf(!isIntegration)('Health API (Integration)', () => {
 
   beforeAll(async () => {
     await setupIntegrationDb();
-    setupIntegrationStorage();
+    await setupIntegrationStorage();
 
     const { healthRoutes } = await import('./health');
     // Mount only the three pure DB/Redis/time routes so we don't transitively
@@ -41,8 +41,8 @@ describe.skipIf(!isIntegration)('Health API (Integration)', () => {
         };
       })
       .get('/health/redis', async () => {
-        const { checkRedisHealth } = await import('@/db/redis');
-        const result = await checkRedisHealth();
+        const { checkCacheHealth } = await import('@/db/cache');
+        const result = await checkCacheHealth();
         return {
           service: 'redis',
           status: result.healthy ? 'healthy' : 'unhealthy',

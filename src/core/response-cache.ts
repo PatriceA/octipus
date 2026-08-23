@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { RedisCache } from '@/db/redis';
+import { Cache } from '@/db/cache';
 import { coreLogger } from '@/utils/logger';
 
 interface CachedResponse {
@@ -14,10 +14,10 @@ interface CachedResponse {
  * Keys are SHA-256 hashes of normalized message + recent context.
  */
 export class ResponseCache {
-  private cache: RedisCache;
+  private cache: Cache;
 
   constructor(ttlSeconds: number = 120) {
-    this.cache = new RedisCache(ttlSeconds);
+    this.cache = new Cache(ttlSeconds);
   }
 
   private buildKey(sessionId: string, message: string, recentContext: string): string {

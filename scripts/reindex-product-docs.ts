@@ -51,10 +51,9 @@ async function main(): Promise<number> {
   loadConfig();
   const bootCfg = getConfig();
   const storageMode = bootCfg.storageMode || 'external';
-  initializeStorage({ mode: storageMode, redis: storageMode === 'external' ? bootCfg.redis : undefined });
-
   await initializeVault();
   await initializeDb();
+  initializeStorage({ mode: storageMode });
   await getSettingsService().initialize();
   await loadRuntimeConfig();
   resetLiteLLMClient();

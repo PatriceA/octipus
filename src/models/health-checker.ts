@@ -1,6 +1,6 @@
 import { getConfig } from '@/config';
 import type { HealthStatus } from '@/core/types';
-import { RedisCache } from '@/db/redis';
+import { Cache } from '@/db/cache';
 import { modelLogger } from '@/utils/logger';
 import { type CircuitBreakerStatus, getCircuitBreakerRegistry } from './circuit-breaker';
 import { getLiteLLMClient } from './litellm-client';
@@ -37,7 +37,7 @@ interface LiteLLMHealthResponse {
 }
 
 export class HealthChecker {
-  private cache = new RedisCache(HEALTH_CACHE_TTL);
+  private cache = new Cache(HEALTH_CACHE_TTL);
   private checkInterval: ReturnType<typeof setInterval> | null = null;
   private healthCallbacks: Set<(health: ProviderHealth[]) => void> = new Set();
 

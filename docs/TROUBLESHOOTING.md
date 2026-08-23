@@ -68,14 +68,6 @@ docker compose up -d db
 docker exec <db-container> psql -U <user> -d octipus -c "SELECT 1;"
 ```
 
-## Valkey Connection Failed
-
-```bash
-cd ~/docker-services && docker compose ps valkey
-docker compose up -d valkey
-docker exec <valkey-container> valkey-cli ping
-```
-
 ## LiteLLM Not Running
 
 ```bash

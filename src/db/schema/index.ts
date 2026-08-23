@@ -21,6 +21,7 @@ export * from './hook-executions';
 export * from './hooks';
 export * from './impersonation-sessions';
 export * from './knowledge-links';
+export * from './kv';
 export * from './memories';
 export * from './messages';
 export * from './models';

@@ -13,14 +13,14 @@ import {
   type Scheduler,
 } from './scheduler';
 
-// Scheduler integration tests require Redis (docker-compose.test.yml).
-// Run via:  bun run test:integration -- src/core/scheduler.test.ts
+// Scheduler integration tests need the test Postgres (docker-compose.test.yml).
+// Run via:  npm run test:integration -- src/core/scheduler.test.ts
 
 describe.skipIf(!isIntegration)('Scheduler (Integration)', () => {
   let scheduler: Scheduler;
 
   beforeAll(async () => {
-    setupIntegrationStorage();
+    await setupIntegrationStorage();
     const mod = await import('./scheduler');
     scheduler = new mod.Scheduler();
   });

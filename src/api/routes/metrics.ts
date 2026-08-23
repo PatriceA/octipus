@@ -1,7 +1,7 @@
 import { Elysia } from '@/api/http';
 import { METRICS_CONTENT_TYPE, renderMetrics } from '@/core/telemetry';
 import { checkDbHealth } from '@/db/postgres';
-import { checkRedisHealth } from '@/db/redis';
+import { checkCacheHealth } from '@/db/cache';
 import { secureCompare } from '@/utils/crypto';
 
 /**
@@ -31,7 +31,7 @@ async function collectExposition(): Promise<string> {
   const [db, redisUp] = await Promise.all([
     withTimeout(checkDbHealth().then((h) => (h.healthy ? 1 : 0)), 2000),
     withTimeout(
-      checkRedisHealth().then((h) => (h.healthy ? 1 : 0)),
+      checkCacheHealth().then((h) => (h.healthy ? 1 : 0)),
       2000,
     ),
   ]);

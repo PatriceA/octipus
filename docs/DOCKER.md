@@ -6,9 +6,8 @@ Octipus runs as a multi-container Docker application with three services:
 
 | Service | Image | Purpose |
 |---------|-------|---------|
-| `octipus-app` | Custom (Bun + Next.js) | API backend + web frontend |
+| `octipus-app` | Custom (Node + Next.js) | API backend + web frontend |
 | `octipus-db` | pgvector/pgvector:pg16 | PostgreSQL with vector extensions |
-| `octipus-valkey` | valkey/valkey:7.2-alpine | Caching and pub/sub (Redis-compatible) |
 
 ## Quick Start
 
@@ -30,7 +29,6 @@ docker compose logs -f octipus
 | Host API | 3015 | Backend (internal 3005) | `OCTIPUS_API_PORT` |
 | Host Web UI | 3017 | Web UI (internal 3007) | `OCTIPUS_WEB_PORT` |
 | Host PostgreSQL | 5442 | Database | `POSTGRES_PORT` |
-| Host Valkey | 6389 | Cache (internal 6379, default Redis port) | `REDIS_PORT` |
 
 ## Volumes
 
@@ -40,7 +38,6 @@ docker compose logs -f octipus
 | `octipus-documents` | `/data/documents` | Uploaded documents |
 | `octipus-extensions` | `/data/extensions` | Plugins and extensions |
 | `octipus-pgdata` | PostgreSQL data | Database persistence |
-| `octipus-valkey` | Valkey data | Cache persistence |
 
 ## Installed CLI Tools
 
@@ -68,9 +65,9 @@ Docker containers are isolated from the host system. This affects what Octipus c
 | **Shell** | Agents can execute commands using any tool installed in the container image (see list above). Commands run inside the container, not on the host. |
 | **Git** | Fully functional. Git is installed in the container. Works on any repository within the workspace volume. Clone, commit, push, pull all work (SSH keys need to be mounted or configured). |
 | **Browser Extension** | Works. The browser extension runs in the **user's real browser** on the host and connects to the container's WebSocket endpoint (`ws://localhost:{API_PORT}/ws/browser-bridge`). No special Docker configuration needed. |
-| **Playwright** | Headless browser runs inside the container. Useful for web scraping and automation that doesn't need user sessions. Requires chromium installation (`bunx playwright install chromium --with-deps`). |
+| **Playwright** | Headless browser runs inside the container. Useful for web scraping and automation that doesn't need user sessions. Requires chromium installation (`npx playwright install chromium --with-deps`). |
 | **Database** | Full PostgreSQL with pgvector. Accessible from the container and optionally from the host via the exposed port. |
-| **Valkey** | Full Valkey (Redis-compatible) access for caching and pub/sub. |
+| **Cache / queue / pub-sub** | Served by the same PostgreSQL instance — key expiry, a queue table, and `LISTEN`/`NOTIFY`. There is no second data service. |
 | **MCP Servers** | MCP servers using SSE transport work (network-accessible). Stdio-based MCP servers must be installed inside the container. |
 | **Network** | Full outbound network access. Can reach external APIs, webhooks, etc. |
 

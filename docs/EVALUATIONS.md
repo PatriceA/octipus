@@ -318,7 +318,7 @@ Full interactive docs at `http://localhost:3005/swagger` (tag: `evaluations`).
 ## Quick Start
 
 ```bash
-# 1. Start services (PostgreSQL, Valkey, Ollama)
+# 1. Start services (PostgreSQL, Ollama)
 docker compose -f /path/to/docker-services/docker-compose.yml up -d
 
 # 2. Start the backend
