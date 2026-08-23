@@ -12,7 +12,7 @@ import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-
  * Sandbox for the indexing tools. Like the filesystem tool's `workspaceFor`,
  * it pins reads to the caller's workspace root (per-user under multiuser; flat
  * otherwise) plus `additionalPaths` and a devMode `projectPath`. Without this
- * the index tools fed `Bun.file(path).text()` any absolute path the agent
+ * the index tools fed `fileAt(path).text()` any absolute path the agent
  * named — arbitrary host-file read into the KB.
  */
 function workspaceFor(context?: AgentContext): WorkspaceFS {

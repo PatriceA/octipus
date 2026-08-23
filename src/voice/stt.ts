@@ -1,4 +1,4 @@
-import { type Subprocess, spawn } from 'bun';
+import { type ChildProcessHandle as Subprocess, spawnProcess as spawn } from '@/utils/proc';
 import { EventEmitter } from 'events';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { logger } from '../utils/logger';
 import { FrameAccumulator, StreamingResampler } from './audio-codec';
 import { resolveWhisperBinary, whisperSpawnEnv } from './whisper';
+import { fileAt, writeFileAt } from '@/utils/fs-file';
 
 /** A unique temp path in the OS temp dir (cross-platform; collision-free). */
 function tmpPath(suffix: string): string {
@@ -50,7 +51,7 @@ function pcm16kMonoToWav(pcm: Uint8Array): Buffer {
  */
 export async function isConformantWav(path: string): Promise<boolean> {
   try {
-    const head = new Uint8Array(await Bun.file(path).slice(0, 44).arrayBuffer());
+    const head = new Uint8Array(await fileAt(path).slice(0, 44).arrayBuffer());
     if (head.length < 44) return false;
     const v = new DataView(head.buffer);
     const tag = (o: number) => String.fromCharCode(head[o], head[o + 1], head[o + 2], head[o + 3]);
@@ -160,7 +161,7 @@ export class WhisperEngine extends EventEmitter implements STTEngine {
 
     if (Buffer.isBuffer(audio)) {
       sourcePath = tmpPath('-src');
-      await Bun.write(sourcePath, audio);
+      await writeFileAt(sourcePath, audio);
       tempSource = true;
     } else {
       sourcePath = audio;
@@ -206,7 +207,7 @@ export class WhisperEngine extends EventEmitter implements STTEngine {
       }
 
       // whisper-cli writes JSON to <audioPath>.json
-      const jsonFile = Bun.file(jsonPath);
+      const jsonFile = fileAt(jsonPath);
       if (!(await jsonFile.exists())) {
         throw new Error('Whisper did not produce JSON output');
       }
@@ -263,7 +264,7 @@ export class WhisperEngine extends EventEmitter implements STTEngine {
     // conformant file and skips ffmpeg entirely (headerless PCM fails ffmpeg's
     // autodetect).
     const flush = async (data: Uint8Array): Promise<string> => {
-      await Bun.write(tempPath, pcm16kMonoToWav(data));
+      await writeFileAt(tempPath, pcm16kMonoToWav(data));
       return (await this.transcribe(tempPath)).text;
     };
 
@@ -338,7 +339,7 @@ export class AsyncLineReader {
 export class FasterWhisperEngine extends EventEmitter implements STTEngine {
   private options: STTOptions;
   private proc: Subprocess<'pipe', 'pipe', 'inherit'> | null = null;
-  private sink: import('bun').FileSink | null = null;
+  private sink: WritableStreamDefaultWriter<Uint8Array> | null = null;
   private lines: AsyncLineReader | null = null;
   private chain: Promise<unknown> = Promise.resolve(); // serialises window requests
 
@@ -349,7 +350,7 @@ export class FasterWhisperEngine extends EventEmitter implements STTEngine {
 
   private async ensureWorker(): Promise<void> {
     if (this.proc) return;
-    const worker = join(import.meta.dir, 'faster_whisper_worker.py');
+    const worker = join(import.meta.dirname, 'faster_whisper_worker.py');
     const proc = spawn({
       cmd: [
         'uv', 'run', '--python', '3.12', '--with', 'faster-whisper', worker,
@@ -361,7 +362,7 @@ export class FasterWhisperEngine extends EventEmitter implements STTEngine {
       stderr: 'inherit', // model-load / download progress goes to the server log
     });
     this.proc = proc;
-    this.sink = proc.stdin;
+    this.sink = proc.stdin!.getWriter();
     this.lines = new AsyncLineReader(proc.stdout as ReadableStream<Uint8Array>);
     const first = await this.lines.next();
     if (!first || !(JSON.parse(first) as { ready?: boolean }).ready) {
@@ -378,7 +379,9 @@ export class FasterWhisperEngine extends EventEmitter implements STTEngine {
       new DataView(header.buffer).setUint32(0, pcm.length, false); // big-endian
       this.sink!.write(header);
       this.sink!.write(pcm);
-      await this.sink!.flush(); // ensure the worker sees the full window now
+      // A stream writer has no flush; awaiting `ready` is the same guarantee
+      // — the worker has taken everything written above.
+      await this.sink!.ready;
       const line = await this.lines!.next();
       if (line == null) throw new Error('faster-whisper worker closed unexpectedly');
       return ((JSON.parse(line) as { text?: string }).text || '');
@@ -391,7 +394,7 @@ export class FasterWhisperEngine extends EventEmitter implements STTEngine {
   async transcribe(audio: Buffer | string): Promise<TranscriptionResult> {
     const start = Date.now();
     const raw = typeof audio === 'string'
-      ? Buffer.from(await Bun.file(audio).arrayBuffer())
+      ? Buffer.from(await fileAt(audio).arrayBuffer())
       : audio;
     const pcm = stripWavHeader(new Uint8Array(raw)); // requires 16 kHz mono s16
     const text = stripNonSpeech(await this.send(pcm)).trim();
@@ -432,7 +435,7 @@ export class FasterWhisperEngine extends EventEmitter implements STTEngine {
 
   async dispose(): Promise<void> {
     try {
-      this.sink?.end(); // EOF → worker shuts down
+      void this.sink?.close(); // EOF → worker shuts down
     } catch {
       /* already closed */
     }
@@ -653,7 +656,7 @@ export class MistralSTTEngine extends EventEmitter implements STTEngine {
 
   async transcribe(audio: Buffer | string): Promise<TranscriptionResult> {
     const startTime = Date.now();
-    const buffer = Buffer.isBuffer(audio) ? audio : Buffer.from(await Bun.file(audio).arrayBuffer());
+    const buffer = Buffer.isBuffer(audio) ? audio : Buffer.from(await fileAt(audio).arrayBuffer());
     const fileName = typeof audio === 'string' ? audio.split('/').pop()! : 'audio.wav';
 
     const form = new FormData();
@@ -767,7 +770,7 @@ export class OpenAIRealtimeSTTEngine extends EventEmitter implements STTEngine {
 
   async transcribe(audio: Buffer | string): Promise<TranscriptionResult> {
     const startTime = Date.now();
-    const buffer = Buffer.isBuffer(audio) ? audio : Buffer.from(await Bun.file(audio).arrayBuffer());
+    const buffer = Buffer.isBuffer(audio) ? audio : Buffer.from(await fileAt(audio).arrayBuffer());
     const fileName = typeof audio === 'string' ? audio.split('/').pop()! : 'audio.wav';
 
     const form = new FormData();
@@ -860,7 +863,7 @@ export async function transcribeAudioBuffer(audio: Buffer, format = 'ogg'): Prom
   // 1. Local whisper.cpp — the default. Same model-path resolution the route uses.
   const { whisperModelPath } = await import('./whisper');
   const modelPath = config.voice.whisperModelPath || whisperModelPath();
-  if (await Bun.file(modelPath).exists()) {
+  if (await fileAt(modelPath).exists()) {
     try {
       const engine = new WhisperEngine(modelPath, { language });
       return (await engine.transcribe(audio)).text;

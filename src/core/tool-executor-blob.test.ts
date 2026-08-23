@@ -5,7 +5,7 @@
  * provider reads as an image — so a text-only model gets tens of thousands of
  * junk tokens. See the 743d4b66 post-mortem (373 KB screenshot → 9B text model).
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { stripBinaryBlobs } from './tool-executor';
 
 const blob = 'A'.repeat(2000);

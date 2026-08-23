@@ -118,7 +118,7 @@ daily JSONL under `<workspace>/trajectories/`) can be exported as chat-format
 training data for offline eval / fine-tune pipelines:
 
 ```
-bun run scripts/trajectories/export.ts \
+npx tsx scripts/trajectories/export.ts \
   [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--outcome success] [--out file.jsonl]
 ```
 

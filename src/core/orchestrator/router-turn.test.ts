@@ -3,7 +3,7 @@
  * mock.module, which leaks process-wide). getRoleConfig / resolveRoleFromTopic /
  * buildOutputDirective run for real.
  */
-import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import type { MessageClassification } from './types';
@@ -26,9 +26,9 @@ const baseOpts = {
 };
 
 describe('runRouterTurn', () => {
-  const createSpy = spyOn(messageRepository, 'create');
-  const incSpy = spyOn(sessionRepository, 'incrementMessageCount');
-  const spawnSpy = spyOn(workerSpawner, 'spawnWorker');
+  const createSpy = vi.spyOn(messageRepository, 'create');
+  const incSpy = vi.spyOn(sessionRepository, 'incrementMessageCount');
+  const spawnSpy = vi.spyOn(workerSpawner, 'spawnWorker');
 
   beforeEach(() => {
     createSpy.mockReset().mockResolvedValue(undefined as never);

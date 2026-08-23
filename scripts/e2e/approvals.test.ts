@@ -5,7 +5,7 @@
  *
  * docs/plans/blocked-vs-stuck.md Phase 2.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import type { APIClient } from './client';
 import { autoApproveLoop, getPendingApprovals, resolveApproval } from './approvals';
 

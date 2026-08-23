@@ -3,7 +3,7 @@
  * with the post-run evidence gate: anything refused here would have been failed
  * there, and nothing the gate would accept is refused here.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { PRESET_TEMPLATES } from '@/db/seed-presets';
 import { stepConfigToStageTemplate } from './templates';
 import { roleCapabilities, stageContractErrors, toolsetGaps } from './role-contract';

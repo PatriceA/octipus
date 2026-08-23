@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { ToolRegistry, getToolRegistry } from './registry';
 import type { BaseTool, ToolAvailability } from './base-tool';
 
@@ -14,12 +14,12 @@ describe('ToolRegistry (Unit)', () => {
       id,
       name: `name-${id}`,
       version: '1.0.0',
-      initialize: mock(async () => {}),
-      shutdown: mock(async () => {}),
-      checkAvailability: mock(async (): Promise<ToolAvailability> => ({ available: true })),
-      getToolHandlers: mock(() => handlers as any[]),
-      getTool: mock((name: string) => handlers.find(h => h.name === name)),
-      getManifest: mock(() => ({ id, name: `name-${id}`, version: '1.0.0', description: 'mock', tools: [] }))
+      initialize: vi.fn(async () => {}),
+      shutdown: vi.fn(async () => {}),
+      checkAvailability: vi.fn(async (): Promise<ToolAvailability> => ({ available: true })),
+      getToolHandlers: vi.fn(() => handlers as any[]),
+      getTool: vi.fn((name: string) => handlers.find(h => h.name === name)),
+      getManifest: vi.fn(() => ({ id, name: `name-${id}`, version: '1.0.0', description: 'mock', tools: [] }))
     } as any as BaseTool;
   };
 

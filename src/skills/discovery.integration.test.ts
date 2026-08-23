@@ -12,7 +12,7 @@
  * The two test files use distinct DATA_DIRs and distinct test topics
  * so they don't share state when the suite runs in parallel.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -32,15 +32,13 @@ let currentEmbedding: number[] | null = null;
 // Eagerly load the real module so we can spread its real exports into the
 // mock — `mock.module` is process-wide in bun and other test files (notably
 // src/core/rag/embeddings.test.ts) need the real `EmbeddingService` class.
-import * as realEmbeddingsNs from '@/core/rag/embeddings';
 // Plain-object snapshot taken BEFORE mock.module so afterAll can reinstall the
 // real module — restoring from the live `import * as` namespace re-installs the
 // stub (bun leaves that binding on the mock), leaking the fixed embedding vector
 // into later suites.
-const realEmbeddings = { ...realEmbeddingsNs };
 
-mock.module('@/core/rag/embeddings', () => ({
-  ...realEmbeddings,
+vi.mock('@/core/rag/embeddings', async () => ({
+  ...(await vi.importActual<typeof import('@/core/rag/embeddings')>('@/core/rag/embeddings')),
   getEmbeddingService: () => ({
     generateEmbedding: async (_text: string) => {
       if (!currentEmbedding) return new Array(1024).fill(0).map((_, i) => (i === 0 ? 1 : 0));
@@ -133,7 +131,6 @@ beforeAll(async () => {
 afterAll(async () => {
   // Restore the real embeddings module so this suite's stub doesn't leak into
   // later suites in the same bun process.
-  mock.module('@/core/rag/embeddings', () => realEmbeddings);
   // Clean up everything we seeded — per memory feedback_e2e_session_cleanup.
   try {
     const db = getDb();

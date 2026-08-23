@@ -2,12 +2,13 @@ import { resolve } from 'path';
 import { coreLogger } from '@/utils/logger';
 import { Persona, type Persona as PersonaT } from './types';
 import { parseYaml } from './yaml';
+import { fileAt, globFiles } from '@/utils/fs-file';
 
 /**
  * Locate the personas directory. Personas live at the repo root in
  * `personas/`. In dev the cwd is the repo root; in compiled
  * deployments the binary copies the dir alongside the executable —
- * fall back to looking relative to `import.meta.dir` for that case.
+ * fall back to looking relative to `import.meta.dirname` for that case.
  */
 export function getPersonasDir(): string {
   const fromCwd = resolve(process.cwd(), 'personas');
@@ -20,7 +21,7 @@ export function getPersonasDir(): string {
  * is no silent fallback (DESIGN.md fail-loud rule).
  */
 export async function loadPersonaFile(filePath: string): Promise<PersonaT> {
-  const file = Bun.file(filePath);
+  const file = fileAt(filePath);
   if (!(await file.exists())) {
     throw new Error(`Persona file not found: ${filePath}`);
   }
@@ -52,8 +53,7 @@ export async function loadAllPersonas(dir?: string): Promise<PersonaT[]> {
   const personasDir = dir ?? getPersonasDir();
   const out: PersonaT[] = [];
   try {
-    const glob = new Bun.Glob('*.yaml');
-    for await (const file of glob.scan({ cwd: personasDir, absolute: true })) {
+    for await (const file of globFiles('*.yaml', { cwd: personasDir })) {
       try {
         out.push(await loadPersonaFile(file));
       } catch (err) {

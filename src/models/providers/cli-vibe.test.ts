@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it } from 'vitest';
 import { vibeCliConfig } from './cli-provider';
 
 // Captured shape of `vibe -p "..." --output json`: a JSON array of all messages

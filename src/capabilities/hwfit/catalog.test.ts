@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { CATALOG_VERSION, getCatalogEntry, MODEL_CATALOG } from './catalog';
 import { KNOWN_QUANTS, KNOWN_TOPICS } from './types';
 

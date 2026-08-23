@@ -73,6 +73,8 @@ Rules:
 
 \`\`\`typescript
 import type { PluginContext } from '../../src/plugins/types';
+import { fileAt } from '@/utils/fs-file';
+import { spawnProcess } from '@/utils/proc';
 
 export default {
   name: '<plugin-name>',
@@ -120,7 +122,7 @@ IMPORTANT: This is a 3-step task. Create directory, write plugin.json, write ind
 - Return descriptive error messages
 - Use the logger from PluginContext for debugging
 - For HTTP calls, use fetch() (available in Bun runtime)
-- For file operations, use Bun.file() or Node fs module
+- For file operations, use fileAt() or Node fs module
 - Keep tool names short and descriptive using snake_case
 - Write clear tool descriptions — agents read these to decide when to use the tool
 
@@ -144,7 +146,7 @@ async fetch_data(args: Record<string, unknown>): Promise<unknown> {
 \`\`\`typescript
 async process_file(args: Record<string, unknown>): Promise<unknown> {
   const path = args.path as string;
-  const file = Bun.file(path);
+  const file = fileAt(path);
   if (!await file.exists()) return { error: 'File not found' };
   const content = await file.text();
   // Process content...
@@ -156,7 +158,7 @@ async process_file(args: Record<string, unknown>): Promise<unknown> {
 \`\`\`typescript
 async run_command(args: Record<string, unknown>): Promise<unknown> {
   const cmd = args.command as string;
-  const proc = Bun.spawn(['sh', '-c', cmd], { stdout: 'pipe', stderr: 'pipe' });
+  const proc = spawnProcess(['sh', '-c', cmd], { stdout: 'pipe', stderr: 'pipe' });
   const stdout = await new Response(proc.stdout).text();
   const stderr = await new Response(proc.stderr).text();
   const exitCode = await proc.exited;

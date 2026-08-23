@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { skillRepository } from '@/db/repositories/skill-repository';
 import {
   _peekPendingForTesting,
@@ -34,7 +34,7 @@ describe('skill usage tracker', () => {
   test('flushSkillUsage drains the pending set via the repository', async () => {
     const original = skillRepository.recordUsage.bind(skillRepository);
     const received: string[][] = [];
-    skillRepository.recordUsage = mock(async (ids: string[]) => {
+    skillRepository.recordUsage = vi.fn(async (ids: string[]) => {
       received.push([...ids]);
     });
     try {
@@ -53,7 +53,7 @@ describe('skill usage tracker', () => {
   test('flush is a no-op when nothing is pending', async () => {
     const original = skillRepository.recordUsage.bind(skillRepository);
     let calls = 0;
-    skillRepository.recordUsage = mock(async () => {
+    skillRepository.recordUsage = vi.fn(async () => {
       calls++;
     });
     try {
@@ -66,7 +66,7 @@ describe('skill usage tracker', () => {
 
   test('flush survives a repository throw and clears the buffer', async () => {
     const original = skillRepository.recordUsage.bind(skillRepository);
-    skillRepository.recordUsage = mock(async () => {
+    skillRepository.recordUsage = vi.fn(async () => {
       throw new Error('db down');
     });
     try {
@@ -86,7 +86,7 @@ describe('skill usage tracker', () => {
     const original = skillRepository.recordUsage.bind(skillRepository);
     const calls: string[][] = [];
     let resolveFirst: (() => void) | null = null;
-    skillRepository.recordUsage = mock(async (ids: string[]) => {
+    skillRepository.recordUsage = vi.fn(async (ids: string[]) => {
       calls.push([...ids]);
       if (calls.length === 1) {
         await new Promise<void>((resolve) => { resolveFirst = resolve; });

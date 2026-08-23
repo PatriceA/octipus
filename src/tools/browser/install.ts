@@ -5,12 +5,13 @@
  */
 
 import type { InstallerModule } from '@/capabilities/service';
+import { spawnProcess } from '@/utils/proc';
 
 const installer: InstallerModule = {
   kind: 'bun-exec',
   install: async () => {
     try {
-      const proc = Bun.spawn(['bunx', 'playwright', 'install', 'chromium'], {
+      const proc = spawnProcess(['bunx', 'playwright', 'install', 'chromium'], {
         stdout: 'pipe',
         stderr: 'pipe',
       });
@@ -33,7 +34,7 @@ const installer: InstallerModule = {
   },
   version: async () => {
     try {
-      const proc = Bun.spawn(['bunx', 'playwright', '--version'], { stdout: 'pipe' });
+      const proc = spawnProcess(['bunx', 'playwright', '--version'], { stdout: 'pipe' });
       const out = (await new Response(proc.stdout).text()).trim();
       await proc.exited;
       return out || null;

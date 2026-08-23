@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'bun:test';
-import { Elysia } from 'elysia';
+import { describe, expect, test } from 'vitest';
+import { Elysia } from '@/api/http';
 import { personaRoutes } from './persona';
 
 /**

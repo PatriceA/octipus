@@ -1,6 +1,4 @@
-import { afterAll, afterEach, describe, expect, mock, test } from 'bun:test';
-import * as realModelRegistryNs from '@/models/model-registry';
-import * as realLitellmClientNs from '@/models/litellm-client';
+import { afterAll, afterEach, describe, expect, test, vi } from 'vitest';
 
 // Plain-object snapshots taken before the mock.module calls below. Restoring
 // from the live `import * as` namespaces does NOT work: bun's `mock.module`
@@ -8,8 +6,6 @@ import * as realLitellmClientNs from '@/models/litellm-client';
 // re-installs the stubs and leaks them forward (later integration suites then
 // see a partial `getModelRegistry()`/`getLiteLLMClient()` and crash). A copy
 // taken before mocking is immune.
-const realModelRegistry = { ...realModelRegistryNs };
-const realLitellmClient = { ...realLitellmClientNs };
 
 /**
  * Locks the silent short-circuit that left the `memories` table empty in
@@ -19,7 +15,7 @@ const realLitellmClient = { ...realLitellmClientNs };
  * error — it only logs at debug — so a regression is invisible without an
  * explicit guard. See docs/QA.md §9.13.
  *
- * Leak-immune setup: another suite's `mock.module('@/models/model-registry', …)`
+ * Leak-immune setup: another suite's `vi.mock('@/models/model-registry', …)`
  * is process-global and can leak forward (bun's restore is order-dependent),
  * leaving `getModelRegistry()` a partial stub — which used to make this gate
  * flaky (see the recurring CI failure). Rather than patch a singleton whose
@@ -27,14 +23,14 @@ const realLitellmClient = { ...realLitellmClientNs };
  * (last mock.module wins) and restores the real modules in afterAll.
  */
 let modelForTopic: unknown = null;
-const completeSpy = mock(async () => ({ content: '{"facts":[]}' }));
+const completeSpy = vi.fn(async () => ({ content: '{"facts":[]}' }));
 
-mock.module('@/models/model-registry', () => ({
-  ...realModelRegistry,
+vi.mock('@/models/model-registry', async () => ({
+  ...(await vi.importActual<typeof import('@/models/model-registry')>('@/models/model-registry')),
   getModelRegistry: () => ({ getModelForTopic: async () => modelForTopic }),
 }));
-mock.module('@/models/litellm-client', () => ({
-  ...realLitellmClient,
+vi.mock('@/models/litellm-client', async () => ({
+  ...(await vi.importActual<typeof import('@/models/litellm-client')>('@/models/litellm-client')),
   getLiteLLMClient: () => ({ complete: completeSpy }),
 }));
 
@@ -43,8 +39,6 @@ const { extractFacts } = await import('./extractor');
 const { judgeAndApply } = await import('./judge');
 
 afterAll(() => {
-  mock.module('@/models/model-registry', () => realModelRegistry);
-  mock.module('@/models/litellm-client', () => realLitellmClient);
 });
 
 describe('memory.extractor — memory_extraction topic gating', () => {

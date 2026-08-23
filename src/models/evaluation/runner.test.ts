@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { runEvaluation } from './runner';
 import type { EvalDataPoint, Evaluator, EvalScore } from './types';
 

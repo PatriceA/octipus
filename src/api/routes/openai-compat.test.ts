@@ -15,10 +15,8 @@
  * orchestrator barrel is NOT contaminated, so `getOrchestratorService` is spied
  * normally.
  */
-import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
-import { Elysia } from 'elysia';
-import * as realRegistryNs from '@/models/model-registry';
-import * as realProvidersNs from '@/models/providers';
+import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { Elysia } from '@/api/http';
 
 // Snapshot the real exports into plain objects BEFORE the mock.module calls
 // below. bun's `mock.module` leaves the live `import * as` namespace binding
@@ -26,8 +24,6 @@ import * as realProvidersNs from '@/models/providers';
 // re-installs the stub (a silent cross-file leak: later suites see a partial
 // `getModelRegistry()` and crash on e.g. `registerModel is not a function`).
 // A plain-object copy taken before mocking is immune and restores cleanly.
-const realRegistry = { ...realRegistryNs };
-const realProviders = { ...realProvidersNs };
 import { ANONYMOUS_PRINCIPAL, type Principal, principalFromUser } from '@/security/principal';
 
 // ── Mutable per-test behavior the pinned stubs delegate to ──────────────────
@@ -35,8 +31,8 @@ let completeImpl: (opts: unknown) => Promise<unknown>;
 let getAllModelsImpl: () => Promise<unknown[]>;
 let completeCalls: unknown[];
 
-mock.module('@/models/providers', () => ({
-  ...realProviders,
+vi.mock('@/models/providers', async () => ({
+  ...(await vi.importActual<typeof import('@/models/providers')>('@/models/providers')),
   getProviderRouter: () => ({
     complete: (opts: unknown) => {
       completeCalls.push(opts);
@@ -44,8 +40,8 @@ mock.module('@/models/providers', () => ({
     },
   }),
 }));
-mock.module('@/models/model-registry', () => ({
-  ...realRegistry,
+vi.mock('@/models/model-registry', async () => ({
+  ...(await vi.importActual<typeof import('@/models/model-registry')>('@/models/model-registry')),
   getModelRegistry: () => ({ getAllModels: () => getAllModelsImpl() }),
 }));
 
@@ -89,13 +85,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  mock.restore(); // revert getOrchestratorService spies
+  vi.restoreAllMocks(); // revert getOrchestratorService spies
 });
 
 afterAll(() => {
   // Restore the real modules so this file's stubs don't leak into later suites.
-  mock.module('@/models/providers', () => realProviders);
-  mock.module('@/models/model-registry', () => realRegistry);
 });
 
 describe('GET /v1/models', () => {
@@ -221,7 +215,7 @@ describe('POST /v1/chat/completions — passthrough mode', () => {
 
 describe('POST /v1/chat/completions — orchestrator mode', () => {
   test('octipus/orchestrator routes the last user message and maps the response', async () => {
-    const spy = spyOn(getOrchestratorService(), 'handleMessage').mockResolvedValue({
+    const spy = vi.spyOn(getOrchestratorService(), 'handleMessage').mockResolvedValue({
       response: 'orchestrated reply', sessionId: 's1',
       classification: { type: 'task', confidence: 1 }, metadata: { tokens: 42 },
     } as never);
@@ -250,7 +244,7 @@ describe('POST /v1/chat/completions — orchestrator mode', () => {
   });
 
   test('defaults to orchestrator when no model is given', async () => {
-    spyOn(getOrchestratorService(), 'handleMessage').mockResolvedValue({
+    vi.spyOn(getOrchestratorService(), 'handleMessage').mockResolvedValue({
       response: 'default routed', classification: { type: 'casual', confidence: 1 },
     } as never);
     const res = await post(appFor(fullUser), { messages: [{ role: 'user', content: 'hi' }] });

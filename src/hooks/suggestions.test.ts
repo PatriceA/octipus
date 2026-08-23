@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import type { HookSuggestion } from './suggestions';
 
 // Note: getHookSuggestions requires OAuth and UMI dependencies.

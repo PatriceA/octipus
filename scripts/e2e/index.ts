@@ -1,9 +1,9 @@
-#!/usr/bin/env bun
+#!/usr/bin/env tsx
 /**
  * E2E Test Suite for Octipus API
  *
- * Usage: bun run scripts/e2e/index.ts
- *   or:  bun run scripts/test-e2e.ts  (thin wrapper)
+ * Usage: npx tsx scripts/e2e/index.ts
+ *   or:  npx tsx scripts/test-e2e.ts  (thin wrapper)
  *
  * Requires a running backend server. By default connects to http://localhost:3005/api.
  * Set API_URL env to override.

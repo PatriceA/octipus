@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { historyReferencesTools } from './agent-worker';
 
 // Why this matters: a turn with tools DISABLED used to send `tools: undefined`

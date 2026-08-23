@@ -12,7 +12,7 @@
  * the GPU, and what each is costing you, so "we have 96GB and it is always
  * full" becomes an answerable question.
  *
- * Linux only — it reads /proc and /sys. Run: `bun run scripts/mem-report.ts`
+ * Linux only — it reads /proc and /sys. Run: `npx tsx scripts/mem-report.ts`
  */
 
 import { readFile, readdir } from 'node:fs/promises';

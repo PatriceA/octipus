@@ -10,6 +10,7 @@
 
 import { platform } from 'node:os';
 import type { InstallerModule } from '@/capabilities/service';
+import { spawnProcess } from '@/utils/proc';
 
 const installer: InstallerModule = {
   kind: 'shell',
@@ -28,7 +29,7 @@ const installer: InstallerModule = {
     }
 
     try {
-      const proc = Bun.spawn(['sh', '-c', 'curl -fsSL https://ollama.com/install.sh | sh'], {
+      const proc = spawnProcess(['sh', '-c', 'curl -fsSL https://ollama.com/install.sh | sh'], {
         stdout: 'pipe',
         stderr: 'pipe',
       });

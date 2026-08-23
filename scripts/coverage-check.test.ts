@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { type CoverageBaseline, evaluateCoverage, parseBaseline, parseLcov } from './coverage-check';
 
 // Minimal lcov: 2 files. Totals: lines 15/20 = 75%, functions 3/4 = 75%.

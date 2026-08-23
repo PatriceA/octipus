@@ -22,7 +22,7 @@
  *   ops on `userName`, `active`, `emails`, group membership).
  */
 import { and, eq } from 'drizzle-orm';
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getDb } from '@/db/postgres';
 import { orgMembers, organizations } from '@/db/schema/organizations';
@@ -107,9 +107,6 @@ export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
   // `body` schema rejects it with a 422 *before* the handler's bearer check
   // runs — so every authenticated POST/PATCH would 422, and unauthenticated
   // ones surface 422 instead of the RFC-correct 401.
-  .onParse(async ({ request }, contentType) => {
-    if (contentType === 'application/scim+json') return await request.json();
-  })
 
   // ---- Users ----
 
@@ -188,7 +185,7 @@ export const scimRoutes = new Elysia({ prefix: '/scim/v2' })
       if (!ctx) { set.status = 401; return scimError(401, 'Invalid bearer token'); }
 
       const db = getDb();
-      const email = body.emails?.find((e) => e.primary)?.value ?? body.emails?.[0]?.value ?? null;
+      const email = body.emails?.find((e: { primary?: boolean; value?: string }) => e.primary)?.value ?? body.emails?.[0]?.value ?? null;
 
       // Upsert by userName. SCIM clients re-POST on every reconciliation.
       const [existing] = await db.select().from(users).where(eq(users.username, body.userName)).limit(1);

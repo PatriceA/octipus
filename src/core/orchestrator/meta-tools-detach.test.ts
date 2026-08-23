@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import type { AgentWorker } from '@/core/agent-worker';
 import { LEVEL_DEFAULT, type AgentNode, type PendingChild } from '@/core/swarm/types';
 import { swarmConfigSchema } from '@/config/schema';

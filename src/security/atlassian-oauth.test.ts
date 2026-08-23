@@ -1,10 +1,10 @@
 // src/security/atlassian-oauth.test.ts
-import { describe, expect, mock, test } from 'bun:test';
+import { describe, expect, test, vi } from 'vitest';
 
 describe('atlassian oauth dynamic registration', () => {
   test('discovers registration endpoint from well-known URL', async () => {
     const origFetch = globalThis.fetch;
-    globalThis.fetch = mock(async (url: string | Request) => {
+    globalThis.fetch = vi.fn(async (url: string | Request) => {
       const u = url instanceof Request ? url.url : url;
       if (u.includes('well-known')) {
         return new Response(JSON.stringify({

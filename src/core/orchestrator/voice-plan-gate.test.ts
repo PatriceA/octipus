@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { isAffirmation, isCancellation, VoicePlanGate } from './voice-plan-gate';
 
 const S = 'session-1';

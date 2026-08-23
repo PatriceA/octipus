@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { estimateTokens, truncateLinesToTokens, truncateToTokens } from './token-count';
 
 describe('estimateTokens', () => {

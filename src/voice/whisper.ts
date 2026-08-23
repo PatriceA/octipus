@@ -1,7 +1,8 @@
-import { spawn, which } from 'bun';
+import { spawnProcess as spawn, which } from '@/utils/proc';
 import { cp, mkdir, readdir, rm } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { logger } from '../utils/logger';
+import { fileAt, writeFileAt } from '@/utils/fs-file';
 
 /**
  * Cross-platform provisioning + detection for local whisper.cpp STT.
@@ -51,7 +52,7 @@ export function whisperModelPath(): string {
  */
 export async function resolveWhisperBinary(): Promise<string | null> {
   const perPlatform = whisperBinaryPath();
-  return (await Bun.file(perPlatform).exists()) ? perPlatform : null;
+  return (await fileAt(perPlatform).exists()) ? perPlatform : null;
 }
 
 /**
@@ -93,7 +94,7 @@ export function invalidateWhisperProbe(): void {
 export async function probeWhisper(): Promise<WhisperProbe> {
   if (cachedProbe) return cachedProbe;
   const modelPath = whisperModelPath();
-  const modelOk = await Bun.file(modelPath).exists();
+  const modelOk = await fileAt(modelPath).exists();
   const binaryPath = await resolveWhisperBinary();
 
   if (!binaryPath) {
@@ -271,11 +272,11 @@ async function doInstall(onProgress: InstallProgress): Promise<void> {
 /** Ensure the ggml model is present; download if missing. */
 async function ensureModel(onProgress: InstallProgress): Promise<void> {
   const model = whisperModelPath();
-  if (await Bun.file(model).exists()) return;
+  if (await fileAt(model).exists()) return;
   onProgress(`Downloading ${MODEL_FILE}…`);
   const res = await fetch(MODEL_URL);
   if (!res.ok || !res.body) throw new Error(`Model download failed (${res.status})`);
-  await Bun.write(model, res);
+  await writeFileAt(model, res);
 }
 
 async function assertToolchain(): Promise<void> {
@@ -348,7 +349,7 @@ async function run(cmd: string[], onProgress: InstallProgress): Promise<void> {
     }
     if (buf) onProgress(buf);
   };
-  await Promise.all([pump(proc.stdout), pump(proc.stderr)]);
+  await Promise.all([pump(proc.stdout!), pump(proc.stderr!)]);
   await proc.exited;
   if (proc.exitCode !== 0) {
     throw new Error(`Command failed (exit ${proc.exitCode}): ${cmd.join(' ')}`);

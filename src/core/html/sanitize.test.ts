@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { safeUrl, sanitizeHtmlFragment, sanitizeStyle } from './sanitize';
 
 describe('sanitizeHtmlFragment', () => {

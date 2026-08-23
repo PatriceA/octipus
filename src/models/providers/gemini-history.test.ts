@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import type { AgentMessage } from '@/core/types';
 import type { ChatCompletionTool } from 'openai/resources/chat/completions';
 import { buildGeminiContents, buildGeminiTools } from './custom/gemini-envelope';

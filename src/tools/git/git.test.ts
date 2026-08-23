@@ -1,47 +1,39 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test';
-import * as realChildProcess from 'node:child_process';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { gitTool } from './index';
 
-// Snapshot the real child_process exports BEFORE mock.module replaces them.
-// Bun's mock.module is process-wide and mutates the module-namespace bindings
-// in place, so reading `realChildProcess.spawn` at call time would resolve
-// back to our mock and cause infinite recursion when we try to delegate.
-const realSpawn = realChildProcess.spawn;
-const realChildProcessSnapshot = { ...realChildProcess };
-
-// gitTool only spawns the `git` binary. For any other command (e.g.
-// StdioTransport's `cat`/`sh` smoke tests in src/mcp/transports/) fall
-// through to the real spawn so the rest of the suite keeps a working
-// child_process. The mocked `git` handle includes stdin and kill on top of
-// the fields gitTool consumes, again so other tests that share this mocked
-// module don't trip over `undefined.write` / `undefined.kill`.
-const mockSpawn = mock((command: string, args?: readonly string[], options?: object) => {
-  if (command !== 'git') {
-    return realSpawn(command, (args as string[]) ?? [], options ?? {});
-  }
-  return {
-    stdout: { on: mock(() => {}) },
-    stderr: { on: mock(() => {}) },
-    stdin: { write: mock(() => {}), end: mock(() => {}) },
-    kill: mock(() => {}),
-    on: mock((event: string, callback: (code: number) => void) => {
-      if (event === 'close') {
-        callback(0);
-      }
-    }),
-  };
+// The stub lives in a hoisted block because `vi.mock` factories run before
+// ordinary top-level statements: a plain `const` here would not exist yet when
+// the factory below asks for it.
+//
+// gitTool only spawns the `git` binary; anything else falls through to the real
+// spawn, so a suite that shares this module still gets a working child_process.
+// The stub handle carries stdin and kill on top of what gitTool reads, so a
+// caller that closes or kills it does not trip over an undefined field.
+const { realSpawn, mockSpawn } = vi.hoisted(() => {
+  const realSpawn: { current: typeof import('node:child_process').spawn | null } = { current: null };
+  const mockSpawn = vi.fn((command: string, args?: readonly string[], options?: object) => {
+    if (command !== 'git') {
+      return realSpawn.current?.(command, (args as string[]) ?? [], options ?? {});
+    }
+    return {
+      stdout: { on: vi.fn(() => {}) },
+      stderr: { on: vi.fn(() => {}) },
+      stdin: { write: vi.fn(() => {}), end: vi.fn(() => {}) },
+      kill: vi.fn(() => {}),
+      on: vi.fn((event: string, callback: (code: number) => void) => {
+        if (event === 'close') {
+          callback(0);
+        }
+      }),
+    };
+  });
+  return { realSpawn, mockSpawn };
 });
 
-mock.module('child_process', () => ({
-  ...realChildProcessSnapshot,
-  spawn: mockSpawn,
-}));
-
-// Restore the real child_process so this suite's `git`-spawn stub doesn't leak
-// into later suites (which would then get fabricated close(0)/empty output for
-// real `git` invocations). bun's mock.module is process-global.
-afterAll(() => {
-  mock.module('child_process', () => realChildProcessSnapshot);
+vi.mock('child_process', async () => {
+  const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+  realSpawn.current = actual.spawn;
+  return { ...actual, spawn: mockSpawn };
 });
 
 describe('GitTool', () => {

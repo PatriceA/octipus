@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { interpretExit } from './exit-code-semantics';
 
 describe('interpretExit', () => {

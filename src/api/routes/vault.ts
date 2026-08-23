@@ -1,4 +1,4 @@
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getVault } from '@/security/vault';
 import { apiLogger, coreLogger } from '@/utils/logger';

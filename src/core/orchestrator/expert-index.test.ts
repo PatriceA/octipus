@@ -7,7 +7,7 @@
  * own custom experts, never another user's); custom-first ordering; the
  * expertId + [custom] marker rendering; and the truncation cap.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';

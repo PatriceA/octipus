@@ -5,7 +5,7 @@
  * lazy (core + discovery meta-tools) — without needing a live backend. Tool
  * discovery + initialize() need no DB/config (see tools/conformance.test.ts).
  *
- * Run: bun run scripts/measure-tool-payload.ts
+ * Run: npx tsx scripts/measure-tool-payload.ts
  */
 import type { ChatCompletionTool } from 'openai/resources/chat/completions';
 import type { ToolHandler } from '@/core/agent-base';

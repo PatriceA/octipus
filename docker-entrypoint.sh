@@ -3,7 +3,7 @@ set -e
 
 # Start Next.js web frontend in background
 cd /app/web
-bun node_modules/.bin/next start -p ${WEB_PORT:-3007} &
+node_modules/.bin/next start -p ${WEB_PORT:-3007} &
 NEXT_PID=$!
 
 # Print a one-shot setup hint after the backend reports healthy. The
@@ -30,7 +30,7 @@ NEXT_PID=$!
 
 # Start backend in background as well so we can supervise both processes.
 cd /app
-bun run src/index.ts &
+node dist/index.js &
 BACKEND_PID=$!
 
 # Forward termination to both children on container stop.

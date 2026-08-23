@@ -1,4 +1,4 @@
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { discoverModels, listPresets, probeHealth } from '@/models/providers/presets';
 import type { CustomProviderConfig } from '@/db/schema/models';

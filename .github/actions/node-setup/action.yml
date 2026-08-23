@@ -1,0 +1,13 @@
+name: Node setup
+description: Install the pinned Node and restore the shared npm cache.
+
+# One place for the Node version pin (previously copy-pasted into every job)
+# and the dependency cache, keyed on the lockfile so a dependency change busts
+# it. The cache only accelerates downloads; `npm ci` stays exact either way.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '24'
+        cache: npm

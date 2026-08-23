@@ -1,36 +1,36 @@
-import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { ScreenshotCapture } from './screenshot';
 
 // Mock Playwright
 const mockPage = {
-  goto: mock(() => Promise.resolve()),
-  screenshot: mock(() => Promise.resolve(Buffer.from('fake-image'))),
-  viewportSize: mock(() => ({ width: 1920, height: 1080 })),
-  url: mock(() => 'https://example.com'),
-  click: mock(() => Promise.resolve()),
-  fill: mock(() => Promise.resolve()),
-  content: mock(() => Promise.resolve('<html></html>')),
-  setViewportSize: mock(() => Promise.resolve()),
-  waitForSelector: mock(() => Promise.resolve({ screenshot: () => Promise.resolve(Buffer.from('element-screenshot')) })),
-  waitForLoadState: mock(() => Promise.resolve()),
-  close: mock(() => Promise.resolve()),
-  $$: mock(() => Promise.resolve([])),
-  evaluate: mock(() => Promise.resolve()),
+  goto: vi.fn(() => Promise.resolve()),
+  screenshot: vi.fn(() => Promise.resolve(Buffer.from('fake-image'))),
+  viewportSize: vi.fn(() => ({ width: 1920, height: 1080 })),
+  url: vi.fn(() => 'https://example.com'),
+  click: vi.fn(() => Promise.resolve()),
+  fill: vi.fn(() => Promise.resolve()),
+  content: vi.fn(() => Promise.resolve('<html></html>')),
+  setViewportSize: vi.fn(() => Promise.resolve()),
+  waitForSelector: vi.fn(() => Promise.resolve({ screenshot: () => Promise.resolve(Buffer.from('element-screenshot')) })),
+  waitForLoadState: vi.fn(() => Promise.resolve()),
+  close: vi.fn(() => Promise.resolve()),
+  $$: vi.fn(() => Promise.resolve([])),
+  evaluate: vi.fn(() => Promise.resolve()),
 };
 
 const mockContext = {
-  newPage: mock(() => Promise.resolve(mockPage)),
-  close: mock(() => Promise.resolve()),
+  newPage: vi.fn(() => Promise.resolve(mockPage)),
+  close: vi.fn(() => Promise.resolve()),
 };
 
 const mockBrowser = {
-  newContext: mock(() => Promise.resolve(mockContext)),
-  close: mock(() => Promise.resolve()),
+  newContext: vi.fn(() => Promise.resolve(mockContext)),
+  close: vi.fn(() => Promise.resolve()),
 };
 
 // Mock chromium launcher
 const mockChromium = {
-  launch: mock(() => Promise.resolve(mockBrowser)),
+  launch: vi.fn(() => Promise.resolve(mockBrowser)),
 };
 
 describe('ScreenshotCapture', () => {
@@ -95,7 +95,7 @@ describe('ScreenshotCapture', () => {
 
     test('captures element screenshot', async () => {
       const mockElement = {
-        screenshot: mock(() => Promise.resolve(Buffer.from('element-image'))),
+        screenshot: vi.fn(() => Promise.resolve(Buffer.from('element-image'))),
       };
       mockPage.waitForSelector.mockResolvedValueOnce(mockElement);
 
@@ -135,11 +135,11 @@ describe('ScreenshotCapture', () => {
     test('extracts element information', async () => {
       const mockElements = [
         {
-          evaluate: mock((fn: any) => fn({ tagName: 'button', className: 'btn', id: 'submit', attributes: [] })),
-          textContent: mock(() => Promise.resolve('Submit')),
-          boundingBox: mock(() => Promise.resolve({ x: 100, y: 200, width: 80, height: 30 })),
-          isVisible: mock(() => Promise.resolve(true)),
-          isEnabled: mock(() => Promise.resolve(true)),
+          evaluate: vi.fn((fn: any) => fn({ tagName: 'button', className: 'btn', id: 'submit', attributes: [] })),
+          textContent: vi.fn(() => Promise.resolve('Submit')),
+          boundingBox: vi.fn(() => Promise.resolve({ x: 100, y: 200, width: 80, height: 30 })),
+          isVisible: vi.fn(() => Promise.resolve(true)),
+          isEnabled: vi.fn(() => Promise.resolve(true)),
         },
       ];
 

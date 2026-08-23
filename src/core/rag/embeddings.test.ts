@@ -1,4 +1,4 @@
-import { describe, test, expect, mock } from 'bun:test';
+import { describe, expect, test, vi } from 'vitest';
 import { buildEmbeddingVersion, embedPrefixTag, EmbeddingService, sha256Hex } from './embeddings';
 
 /**
@@ -21,7 +21,7 @@ describe.skipIf(!isIntegration)('EmbeddingService — fail-loud indexing', () =>
     // embedding provider (Ollama down, API key missing, etc.)
     const providerError = new Error('connect ECONNREFUSED 127.0.0.1:11434');
     (service as unknown as { embedBatch: (t: string[]) => Promise<Array<number[] | Error>> })
-      .embedBatch = mock(async (texts: string[]) => texts.map(() => providerError));
+      .embedBatch = vi.fn(async (texts: string[]) => texts.map(() => providerError));
 
     // Content long enough to become at least one chunk
     const content = 'hello world '.repeat(50);
@@ -46,7 +46,7 @@ describe.skipIf(!isIntegration)('EmbeddingService — fail-loud indexing', () =>
     const service = new EmbeddingService('test-embed-model');
     const providerError = new Error('401 Unauthorized: invalid API key');
     (service as unknown as { embedBatch: (t: string[]) => Promise<Array<number[] | Error>> })
-      .embedBatch = mock(async (texts: string[]) => texts.map(() => providerError));
+      .embedBatch = vi.fn(async (texts: string[]) => texts.map(() => providerError));
 
     const content = 'chunk content '.repeat(30);
 
@@ -91,10 +91,10 @@ describe.skipIf(!isIntegration)('EmbeddingService — fail-loud indexing', () =>
     const { getLiteLLMClient } = await import('@/models/litellm-client');
     const client = getLiteLLMClient();
     const originalEmbed = client.embed.bind(client);
-    client.embed = mock(async () => [[]]) as typeof client.embed;
+    client.embed = vi.fn(async () => [[]]) as typeof client.embed;
 
     // Also bypass resolveModel
-    (service as unknown as { resolveModel: () => Promise<{ modelId: string; prefixes: object }> }).resolveModel = mock(
+    (service as unknown as { resolveModel: () => Promise<{ modelId: string; prefixes: object }> }).resolveModel = vi.fn(
       async () => ({ modelId: 'test-embed-model', prefixes: {} }),
     );
 
@@ -115,7 +115,7 @@ describe.skipIf(!isIntegration)('EmbeddingService — fail-loud indexing', () =>
 describe('embedding version identity', () => {
   test('generateEmbedding applies the configured side prefix, and only that side', async () => {
     const service = new EmbeddingService();
-    (service as unknown as { resolveModel: () => Promise<{ modelId: string; prefixes: object }> }).resolveModel = mock(
+    (service as unknown as { resolveModel: () => Promise<{ modelId: string; prefixes: object }> }).resolveModel = vi.fn(
       async () => ({
         modelId: 'some-embedding-model',
         prefixes: { document: 'search_document: ', query: 'search_query: ' },
@@ -126,7 +126,7 @@ describe('embedding version identity', () => {
     const client = getLiteLLMClient();
     const originalEmbed = client.embed.bind(client);
     const seen: string[] = [];
-    client.embed = mock(async (text: string) => {
+    client.embed = vi.fn(async (text: string) => {
       seen.push(text);
       return [[0.1, 0.2]];
     }) as unknown as typeof client.embed;
@@ -145,7 +145,7 @@ describe('embedding version identity', () => {
 
   test('generateEmbedding passes text through verbatim for a symmetric model', async () => {
     const service = new EmbeddingService();
-    (service as unknown as { resolveModel: () => Promise<{ modelId: string; prefixes: object }> }).resolveModel = mock(
+    (service as unknown as { resolveModel: () => Promise<{ modelId: string; prefixes: object }> }).resolveModel = vi.fn(
       async () => ({ modelId: 'some-embedding-model', prefixes: {} }),
     );
 
@@ -153,7 +153,7 @@ describe('embedding version identity', () => {
     const client = getLiteLLMClient();
     const originalEmbed = client.embed.bind(client);
     const seen: string[] = [];
-    client.embed = mock(async (text: string) => {
+    client.embed = vi.fn(async (text: string) => {
       seen.push(text);
       return [[0.1, 0.2]];
     }) as unknown as typeof client.embed;
@@ -190,7 +190,7 @@ describe('embedding version identity', () => {
 
 describe('embedBatch — batching and per-chunk failure accounting', () => {
   const stubModel = (service: EmbeddingService, prefixes: object = {}) => {
-    (service as unknown as { resolveModel: () => Promise<{ modelId: string; prefixes: object }> }).resolveModel = mock(
+    (service as unknown as { resolveModel: () => Promise<{ modelId: string; prefixes: object }> }).resolveModel = vi.fn(
       async () => ({ modelId: 'some-embedding-model', prefixes }),
     );
   };
@@ -202,7 +202,7 @@ describe('embedBatch — batching and per-chunk failure accounting', () => {
     const client = getLiteLLMClient();
     const original = client.embed.bind(client);
     const calls: string[][] = [];
-    client.embed = mock(async (text: string | string[]) => {
+    client.embed = vi.fn(async (text: string | string[]) => {
       const input = Array.isArray(text) ? text : [text];
       calls.push(input);
       // Distinguishable vector per input so misordering is detectable.
@@ -232,7 +232,7 @@ describe('embedBatch — batching and per-chunk failure accounting', () => {
     const { getLiteLLMClient } = await import('@/models/litellm-client');
     const client = getLiteLLMClient();
     const original = client.embed.bind(client);
-    client.embed = mock(async () => { throw new Error('502 Bad Gateway'); }) as unknown as typeof client.embed;
+    client.embed = vi.fn(async () => { throw new Error('502 Bad Gateway'); }) as unknown as typeof client.embed;
 
     let out: Array<number[] | Error>;
     try {
@@ -253,7 +253,7 @@ describe('embedBatch — batching and per-chunk failure accounting', () => {
     const client = getLiteLLMClient();
     const original = client.embed.bind(client);
     // Two inputs in, one vector back — attributing it to either chunk is wrong.
-    client.embed = mock(async () => [[0.1, 0.2]]) as unknown as typeof client.embed;
+    client.embed = vi.fn(async () => [[0.1, 0.2]]) as unknown as typeof client.embed;
 
     let out: Array<number[] | Error>;
     try {
@@ -273,7 +273,7 @@ describe('embedBatch — batching and per-chunk failure accounting', () => {
     const client = getLiteLLMClient();
     const original = client.embed.bind(client);
     let seen: string[] = [];
-    client.embed = mock(async (text: string | string[]) => {
+    client.embed = vi.fn(async (text: string | string[]) => {
       seen = Array.isArray(text) ? text : [text];
       return seen.map(() => [0.1]);
     }) as unknown as typeof client.embed;

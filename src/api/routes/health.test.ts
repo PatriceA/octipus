@@ -1,5 +1,5 @@
-import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
-import { Elysia } from 'elysia';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { Elysia } from '@/api/http';
 
 type ElysiaLike = { handle: (req: Request) => Promise<Response> };
 import {

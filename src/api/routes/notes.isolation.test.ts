@@ -1,9 +1,9 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Elysia } from 'elysia';
+import { Elysia } from '@/api/http';
 
 // biome-ignore lint/suspicious/noExplicitAny: test harness over Elysia's opaque app type
 type ElysiaLike = { handle: (req: Request) => Promise<Response> };

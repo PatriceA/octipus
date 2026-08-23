@@ -20,10 +20,10 @@
  * Post-answer bookkeeping is legitimate; making someone wait for it is not.
  *
  * Usage:
- *   bun run scripts/run-health.ts              # last 30 days
- *   bun run scripts/run-health.ts --days 7
- *   bun run scripts/run-health.ts --worst 20   # slowest runs, detailed
- *   bun run scripts/run-health.ts --p95 10     # gate: fail if p95 lag > 10s
+ *   npx tsx scripts/run-health.ts              # last 30 days
+ *   npx tsx scripts/run-health.ts --days 7
+ *   npx tsx scripts/run-health.ts --worst 20   # slowest runs, detailed
+ *   npx tsx scripts/run-health.ts --p95 10     # gate: fail if p95 lag > 10s
  *
  * Exits 1 when a `--p95` budget is given and exceeded, so CI or a cron can
  * gate on it; otherwise exits 0 and just reports.

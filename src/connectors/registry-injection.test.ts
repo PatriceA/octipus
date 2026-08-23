@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 
 describe('connector tool injection surface', () => {
   test('getUserToolHandlers signature accepts userId string', async () => {

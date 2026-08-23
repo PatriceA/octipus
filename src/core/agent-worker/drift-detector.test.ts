@@ -3,7 +3,7 @@
  * about the World Cup spent 29 iterations writing Diátaxis documentation and
  * then declared success.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { DriftDetector, driftTokens } from './drift-detector';
 
 const FOOTBALL_BRIEF =

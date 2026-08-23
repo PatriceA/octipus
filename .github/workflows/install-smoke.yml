@@ -33,10 +33,10 @@ jobs:
           persist-credentials: false
 
       - name: Setup Bun (+ dependency cache)
-        uses: ./.github/actions/bun-setup
+        uses: ./.github/actions/node-setup
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: npm ci
 
       - name: Setup → doctor → boot → health
         run: bash scripts/smoke-test.sh

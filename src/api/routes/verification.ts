@@ -1,4 +1,4 @@
-import { Elysia } from 'elysia';
+import { Elysia } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
 import { scopedRepos } from '@/db/repositories/scoped';

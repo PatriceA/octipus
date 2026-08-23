@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { exportFromJsonl, shouldExport, toTrainingExample } from './exporter';
 import type { TrajectoryRecord } from './types';
 

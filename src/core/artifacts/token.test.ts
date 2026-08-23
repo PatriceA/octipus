@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, test } from 'bun:test';
+import { afterEach, beforeAll, describe, expect, test } from 'vitest';
 import { _resetArtifactTokenKey, signArtifactToken, verifyArtifactToken } from './token';
 
 beforeAll(() => {

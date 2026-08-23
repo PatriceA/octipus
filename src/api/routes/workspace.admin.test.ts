@@ -14,8 +14,8 @@
  * A non-admin must get 403 on the operator endpoints; an admin must clear the
  * gate. No DB needed — the admin check returns before any persistence/fs work.
  */
-import { describe, expect, test } from 'bun:test';
-import { Elysia } from 'elysia';
+import { describe, expect, test } from 'vitest';
+import { Elysia } from '@/api/http';
 
 type ElysiaLike = { handle: (req: Request) => Promise<Response> };
 

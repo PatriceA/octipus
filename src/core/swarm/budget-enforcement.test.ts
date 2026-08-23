@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { AgentWorker } from '@/core/agent-worker';
 import type { AgentContext } from '@/core/types';
 import {

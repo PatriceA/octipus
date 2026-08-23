@@ -7,7 +7,7 @@
  * narration had never once fired. The generated event matrix found it; this
  * pins the threshold that now decides when it does.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { shouldWarnBudget } from './spawn-budget';
 import { BUDGET_WARN_FRACTION, type NodeBudget } from './types';
 

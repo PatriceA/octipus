@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { buildChildEnv, isSensitiveEnvName } from './child-env';
 
 /** Plant vars, run `fn`, restore whatever was there before. */

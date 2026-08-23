@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { coerceDeepseekToolChoice, DEEPSEEK_TEMPLATE_LEAK, isDeepSeekReasoningModel, parseDsmlToolCalls } from './deepseek-template-recovery';
 
 describe('DEEPSEEK_TEMPLATE_LEAK detector', () => {

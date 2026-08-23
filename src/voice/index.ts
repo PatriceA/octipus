@@ -11,11 +11,12 @@ export {
   WakeWordDetector,
 } from './wake-word';
 
-import type { Subprocess } from 'bun';
+import { type ChildProcessHandle as Subprocess, spawnProcess } from '@/utils/proc';
 import { logger } from '../utils/logger';
 import { SpeechToText, } from './stt';
 import { TextToSpeech, } from './tts';
 import { WakeWordDetector, } from './wake-word';
+import { fileAt, removeFile, writeFileAt } from '@/utils/fs-file';
 
 export interface VoiceServiceConfig {
   stt?: {
@@ -201,7 +202,7 @@ export class VoiceService {
     if (!this.stt) throw new Error('Speech-to-text not configured');
     if (this.recordProc) return; // already recording — ignore double-press
     this.recordPath = `/tmp/voice-ptt-${Date.now()}.wav`;
-    this.recordProc = Bun.spawn({
+    this.recordProc = spawnProcess({
       cmd: ['arecord', '-f', 'S16_LE', '-r', '16000', '-c', '1', this.recordPath],
       stdout: 'pipe',
       stderr: 'pipe',
@@ -221,7 +222,7 @@ export class VoiceService {
     proc.kill(); // SIGTERM — arecord traps it and closes the WAV cleanly
     await proc.exited;
     try {
-      const file = Bun.file(path);
+      const file = fileAt(path);
       // arecord writes a 44-byte WAV header up front; a file at/under that size
       // means no samples were captured (no mic, or an ALSA device error). Surface
       // that clearly instead of letting ffmpeg fail on an empty/absent file.
@@ -233,7 +234,7 @@ export class VoiceService {
       const result = await this.stt.transcribe(path);
       return result.text.trim();
     } finally {
-      await Bun.$`rm -f ${path}`.quiet();
+      await removeFile(path);
     }
   }
 
@@ -249,19 +250,19 @@ export class VoiceService {
    */
   private async playAudio(audio: Buffer): Promise<void> {
     const tempPath = `/tmp/voice-play-${Date.now()}.wav`;
-    await Bun.write(tempPath, audio);
+    await writeFileAt(tempPath, audio);
 
     try {
       // Use aplay for Linux, afplay for macOS
       const player = process.platform === 'darwin' ? 'afplay' : 'aplay';
-      const proc = Bun.spawn({
+      const proc = spawnProcess({
         cmd: [player, tempPath],
         stdout: 'pipe',
         stderr: 'pipe',
       });
       await proc.exited;
     } finally {
-      await Bun.$`rm -f ${tempPath}`.quiet();
+      await removeFile(tempPath);
     }
   }
 
@@ -278,7 +279,7 @@ export class VoiceService {
       this.recordProc = null;
     }
     if (this.recordPath) {
-      await Bun.$`rm -f ${this.recordPath}`.quiet().catch(() => {});
+      await removeFile(this.recordPath);
       this.recordPath = null;
     }
 

@@ -1,8 +1,9 @@
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { fetchWithTimeout } from '@/utils/http';
 import { apiContext } from '@/api/context';
 import { getConfig } from '@/config';
 import { apiLogger } from '@/utils/logger';
+import { fileAt } from '@/utils/fs-file';
 
 /** Hosted TTS is metered per 1k characters — bound the request body. */
 const MAX_TTS_CHARS = 5000;
@@ -56,7 +57,7 @@ async function getLocalWhisper() {
   // (avoids "status says ready but transcribe 400s").
   const { whisperModelPath } = await import('@/voice/whisper');
   const modelPath = config.voice.whisperModelPath || whisperModelPath();
-  if (!(await Bun.file(modelPath).exists())) return null;
+  if (!(await fileAt(modelPath).exists())) return null;
 
   const { WhisperEngine } = await import('@/voice/stt');
   localWhisper = new WhisperEngine(modelPath, {
@@ -422,7 +423,7 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
         const audio = await engine.synthesize(body.text);
 
         return new Response(new Uint8Array(audio), {
-          headers: { 'Content-Type': TTS_CONTENT_TYPES[format] },
+          headers: { 'Content-Type': TTS_CONTENT_TYPES[format as keyof typeof TTS_CONTENT_TYPES] },
         });
       } catch (error) {
         apiLogger.error({ error }, 'Voice synthesis failed');

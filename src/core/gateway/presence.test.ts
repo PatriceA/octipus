@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { PresenceTracker } from './presence';
 import type { ConnectionContext } from './protocol';
 

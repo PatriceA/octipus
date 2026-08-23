@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it } from 'vitest';
 import { registerModel } from './model-service';
 
 // Focused on the pure, pre-DB validation branch in registerModel: OpenRouter

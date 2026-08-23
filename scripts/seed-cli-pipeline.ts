@@ -11,7 +11,7 @@
  * planner→executor routing — deliberate: the point of this run is to measure
  * the CLI agents, not the local executor.
  *
- *   bun run scripts/seed-cli-pipeline.ts
+ *   npx tsx scripts/seed-cli-pipeline.ts
  */
 import { eq } from 'drizzle-orm';
 import { closeDb, getDb } from '@/db/postgres';

@@ -464,7 +464,7 @@ Walks every active row in batches and calls the helper. CLI:
 
 ```
 OLD_MASTER_KEY=<old hex> NEW_MASTER_KEY=<new hex> \
-  bun run scripts/rotate-master-key.ts [--dry-run] [--batch=N]
+  npx tsx scripts/rotate-master-key.ts [--dry-run] [--batch=N]
 ```
 
 The script deliberately does NOT touch the deployment's `MASTER_KEY`
@@ -1242,9 +1242,9 @@ Walks every user, ensures they have a default workspace via
 full backfill are no-ops.
 
 ```bash
-bun run scripts/backfill-workspace-id.ts            # backfill all
-bun run scripts/backfill-workspace-id.ts --dry-run  # report only
-bun run scripts/backfill-workspace-id.ts --user=<uuid>
+npx tsx scripts/backfill-workspace-id.ts            # backfill all
+npx tsx scripts/backfill-workspace-id.ts --dry-run  # report only
+npx tsx scripts/backfill-workspace-id.ts --user=<uuid>
 ```
 
 Skipping the backfill is also fine: rows with NULL workspace_id
@@ -1331,8 +1331,8 @@ StdioTransport tests, net **+17** new tests added in this PR
 
 ```bash
 # Run the backfill once before flipping the runtime.
-bun run scripts/backfill-workspace-id.ts --dry-run   # preview
-bun run scripts/backfill-workspace-id.ts             # execute
+npx tsx scripts/backfill-workspace-id.ts --dry-run   # preview
+npx tsx scripts/backfill-workspace-id.ts             # execute
 
 # Flip the runtime:
 MULTIUSER=true

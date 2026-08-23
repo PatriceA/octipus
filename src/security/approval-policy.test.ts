@@ -3,7 +3,7 @@
  * the agent loop and one in the tool middleware, each asking the other to be
  * kept in sync — so what matters here is that ONE table of cases pins both.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { canPromptHuman, routeApproval } from './approval-policy';
 
 describe('canPromptHuman', () => {

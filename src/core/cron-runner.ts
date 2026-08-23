@@ -24,7 +24,7 @@ const TRAJECTORY_COMPRESS_INTERVAL_MS = 24 * 3600_000; // Daily
  */
 const AGENT_HISTORY_RETENTION_DAYS_DEFAULT = 14;
 
-let cronTimer: Timer | null = null;
+let cronTimer: NodeJS.Timeout | null = null;
 let lastSessionCleanup = 0;
 let lastKnowledgeCleanup = 0;
 let lastAgentCleanup = 0;

@@ -1,4 +1,4 @@
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import type { MCPServer } from '@/core/types';
 import { getMCPBridge } from '@/mcp/bridge';

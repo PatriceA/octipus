@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 
 // Note: HookManager tests require proper initialization
 // These are unit tests for hook logic

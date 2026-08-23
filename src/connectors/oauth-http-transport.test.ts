@@ -1,11 +1,11 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { describe, expect, test, vi } from 'vitest';
 import { OAuthHTTPTransport } from './oauth-http-transport';
 
 describe('OAuthHTTPTransport', () => {
   test('injects Authorization header into POST', async () => {
     const requests: Request[] = [];
     const origFetch = globalThis.fetch;
-    globalThis.fetch = mock(async (req: Request | string) => {
+    globalThis.fetch = vi.fn(async (req: Request | string) => {
       const r = req instanceof Request ? req : new Request(req);
       requests.push(r);
       return new Response(JSON.stringify({ id: 1, result: {} }), {
@@ -13,7 +13,7 @@ describe('OAuthHTTPTransport', () => {
       });
     }) as unknown as typeof fetch;
 
-    const getToken = mock(async () => 'test-token-abc');
+    const getToken = vi.fn(async () => 'test-token-abc');
     const transport = new OAuthHTTPTransport('https://example.com/mcp', getToken);
     await transport.connect();
 
@@ -30,10 +30,10 @@ describe('OAuthHTTPTransport', () => {
   });
 
   test('calls getToken once per send', async () => {
-    globalThis.fetch = mock(async () => new Response(JSON.stringify({ id: 1, result: {} }), {
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ id: 1, result: {} }), {
       headers: { 'content-type': 'application/json' },
     })) as unknown as typeof fetch;
-    const getToken = mock(async () => 'tok');
+    const getToken = vi.fn(async () => 'tok');
     const transport = new OAuthHTTPTransport('https://example.com/mcp', getToken);
     await transport.connect();
     transport.onMessage(() => {});

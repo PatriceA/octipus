@@ -2,6 +2,7 @@ import { generateId } from '@/utils/crypto';
 import { coreLogger } from '@/utils/logger';
 import { CodeFileNotIndexableError, isCodeFile } from './code-detection';
 import { getEmbeddingService } from './embeddings';
+import { fileAt, globFiles } from '@/utils/fs-file';
 
 export interface IndexResult {
   filesIndexed: number;
@@ -11,7 +12,7 @@ export interface IndexResult {
 
 /**
  * Optional sandbox guard. `indexFile`/`indexDirectory` read whatever absolute
- * path they're handed via `Bun.file(path).text()`, so a caller that accepts a
+ * path they're handed via `fileAt(path).text()`, so a caller that accepts a
  * path from an untrusted request MUST pass `isAllowed` to confine reads to the
  * caller's workspace. For `indexDirectory` this is the only thing that closes
  * the symlink-leaf gap: the glob can surface a file *inside* the validated
@@ -35,7 +36,7 @@ export class FileIndexer {
     if (isCodeFile(filePath)) {
       throw new CodeFileNotIndexableError(filePath);
     }
-    const file = Bun.file(filePath);
+    const file = fileAt(filePath);
     if (!(await file.exists())) {
       throw new Error(`File not found: ${filePath}`);
     }
@@ -64,8 +65,7 @@ export class FileIndexer {
     // that is itself a link to `/etc/passwd`), which the directory-root
     // validation alone does not catch.
     for (const pattern of patterns) {
-      const g = new Bun.Glob(pattern);
-      for await (const path of g.scan({ cwd: dirPath, absolute: true, followSymlinks: false })) {
+      for await (const path of globFiles(pattern, { cwd: dirPath })) {
         if (guard?.isAllowed && !guard.isAllowed(path)) {
           result.errors.push(`${path}: skipped — resolves outside the allowed workspace`);
           coreLogger.warn({ path, dirPath }, 'Skipped indexing file that resolves outside the workspace');

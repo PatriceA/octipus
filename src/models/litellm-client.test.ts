@@ -1,15 +1,12 @@
-import { describe, test, expect, beforeEach, afterAll, mock } from 'bun:test';
+import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 
-// Pure unit suite: every dependency is replaced via `mock.module`, which bun
-// applies process-globally for the whole `bun test` run. Under the integration
-// runner (INTEGRATION=1) those mocks add no coverage and leak into real-DB
-// suites — the partial `model-registry` mock omits `registerModel`, breaking
-// the topics/swarm-spawner integration tests. So no-op the global mocks and
-// skip this suite when INTEGRATION=1; the unit pass (INTEGRATION unset) runs it
-// in full.
+// Pure unit suite: every dependency below is replaced with a module mock,
+// scoped to this file because the runner isolates each test file in its own
+// process. It adds no coverage under the integration runner, so it is skipped
+// there — but nothing here can reach another suite either way, which is why
+// the snapshot-and-restore machinery this file used to carry is gone.
 const inIntegration = process.env.INTEGRATION === '1';
-const mockModule: typeof mock.module = inIntegration ? (() => {}) as typeof mock.module : mock.module;
 const describeUnit = inIntegration ? describe.skip : describe;
 import { ClassifiedError } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
@@ -36,13 +33,6 @@ process.env.LITELLM_API_KEY = 'sk-test';
 process.env.LITELLM_TIMEOUT = '5000';
 process.env.LITELLM_MAX_RETRIES = '0';
 
-// Capture real modules for spread-mocking and afterAll restoration. Plain-object
-// snapshots, not the live namespaces: bun's mock.module leaves an `await import`
-// binding pointing at the installed stub, so restoring from it would re-install
-// the partial stub and leak it into later unit suites.
-const realProviders = { ...(await import('@/models/providers')) };
-const realRegistry = { ...(await import('@/models/model-registry')) };
-const realOpenAIMod = { ...(await import('openai')) };
 const realConfig = await import('@/config');
 
 // ── Mocks ────────────────────────────────────────────────────────────
@@ -60,7 +50,8 @@ const modelsListImpl: { current: () => any } = {
   current: () => { throw new Error('modelsListImpl.current not set'); },
 };
 
-mockModule('openai', () => {
+vi.mock('openai', async () => {
+  const actual = await vi.importActual<typeof import('openai')>('openai');
   class FakeOpenAI {
     chat: any; embeddings: any; models: any;
     constructor(opts: any) {
@@ -70,7 +61,7 @@ mockModule('openai', () => {
       this.models = { list: () => modelsListImpl.current() };
     }
   }
-  return { ...realOpenAIMod, default: FakeOpenAI };
+  return { ...actual, default: FakeOpenAI };
 });
 
 // Provider router mock
@@ -93,8 +84,8 @@ const routerState: {
   routerStream: null,
 };
 
-mockModule('@/models/providers', () => ({
-  ...realProviders,
+vi.mock('@/models/providers', async () => ({
+  ...(await vi.importActual<typeof import('@/models/providers')>('@/models/providers')),
   getProviderRouter: () => ({
     resolveProvider: async (_m: string) => routerState.resolveProvider,
     getProvider: (_m: string) => {
@@ -115,8 +106,8 @@ const registryState: {
   forTopic: Record<string, any>;
 } = { byModelId: {}, forTopic: {} };
 
-mockModule('@/models/model-registry', () => ({
-  ...realRegistry,
+vi.mock('@/models/model-registry', async () => ({
+  ...(await vi.importActual<typeof import('@/models/model-registry')>('@/models/model-registry')),
   getModelRegistry: () => ({
     getModelByModelId: async (id: string) => registryState.byModelId[id] ?? null,
     getModelForTopic: async (t: string) => registryState.forTopic[t] ?? null,
@@ -209,17 +200,9 @@ function resetState() {
 beforeEach(() => resetState());
 
 afterAll(() => {
-  // mock.module is process-global and cannot truly restore mid-run. We
-  // re-register defensively so any module re-imported after this point at
-  // least sees a factory that returns the real exports.
-  mockModule('@/models/providers', () => realProviders);
-  mockModule('@/models/model-registry', () => realRegistry);
-  mockModule('openai', () => realOpenAIMod);
-  // Several tests here call resetConfig(), leaving the config cache cleared (or
-  // loaded from a temporarily mutated env). Reset once more so the *next* test
-  // file in the same worker re-derives a clean config from env on first
-  // getConfig() rather than inheriting a half-mutated cache — the root of the
-  // swarm-test ordering flake (T1).
+  // Several tests here call resetConfig(), leaving the config cache cleared or
+  // loaded from a temporarily mutated env. Reset once more so the process ends
+  // on a clean config rather than a half-mutated cache.
   (realConfig as { resetConfig: () => void }).resetConfig();
 });
 
@@ -681,19 +664,9 @@ describeUnit('LiteLLMClient — stream routing', () => {
       yield { content: 'from-router' };
       yield { finishReason: 'stop' };
     };
-    // mock.module captured initial routerStream; re-mock manually for this test:
-    mockModule('@/models/providers', () => ({
-      getProviderRouter: () => ({
-        resolveProvider: async () => routerState.resolveProvider,
-        getProvider: () => routerState.getProvider,
-        getAllProviders: () => routerState.getAllProviders,
-        stream: async function* (_o: any) {
-          yield { content: 'from-router' };
-          yield { finishReason: 'stop' };
-        },
-      }),
-    }));
-    // Re-import client so it picks up the new module mock
+    // No re-mock needed: the module mock's `getProviderRouter()` builds its
+    // router on every call and reads `routerState.routerStream` at that point,
+    // so assigning it above is what this test is actually varying.
     const { LiteLLMClient: FreshClient } = await import('./litellm-client');
     const client = new FreshClient();
     const out: any[] = [];

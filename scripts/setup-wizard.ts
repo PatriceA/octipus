@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env tsx
 /**
  * `octi setup` — the single Octipus setup wizard.
  *
@@ -64,6 +64,7 @@ import {
   UV_INSTALL_HINT,
   type FasterWhisperModel,
 } from '@/voice/provision';
+import { type ChildProcessHandle, spawnProcess } from '@/utils/proc';
 
 // ── Args ───────────────────────────────────────────────────────────
 
@@ -287,14 +288,14 @@ export function buildEnv(cfg: BootstrapConfig, secrets: { masterKey: string; jwt
 // ── Backend lifecycle ──────────────────────────────────────────────
 
 interface BackendHandle {
-  proc: ReturnType<typeof Bun.spawn>;
+  proc: ChildProcessHandle;
   url: string;
   shutdown: () => Promise<void>;
 }
 
 async function bootBackend(apiHost: string, apiPort: string): Promise<BackendHandle> {
   const url = `http://${apiHost === '0.0.0.0' ? '127.0.0.1' : apiHost}:${apiPort}`;
-  const proc = Bun.spawn(['bun', 'run', 'src/index.ts'], {
+  const proc = spawnProcess(['bun', 'run', 'src/index.ts'], {
     cwd: process.cwd(),
     stdout: 'pipe',
     stderr: 'pipe',
@@ -311,7 +312,7 @@ async function bootBackend(apiHost: string, apiPort: string): Promise<BackendHan
     const decoder = new TextDecoder();
     for await (const chunk of stream) captured += decoder.decode(chunk, { stream: true });
   };
-  const draining = Promise.all([drain(proc.stdout), drain(proc.stderr)]);
+  const draining = Promise.all([drain(proc.stdout ?? undefined), drain(proc.stderr ?? undefined)]);
   const tail = () => captured.trim().slice(-2000) || '(no output captured)';
 
   // Wait for /api/health (max 60s — first boot runs migrations + seeds).

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { ToolExecutor } from './tool-executor';
 import type { ToolHandler } from './agent-base';
 import type { AgentContext, ToolCall } from './types';

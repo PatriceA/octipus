@@ -1,4 +1,4 @@
-import { Elysia } from 'elysia';
+import { Elysia } from '@/api/http';
 import { METRICS_CONTENT_TYPE, renderMetrics } from '@/core/telemetry';
 import { checkDbHealth } from '@/db/postgres';
 import { checkRedisHealth } from '@/db/redis';

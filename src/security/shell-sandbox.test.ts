@@ -13,7 +13,7 @@
  *      succeeds. Tagged `describe.skipIf(!hasBwrap)` so CI without
  *      a sandbox runner stays green.
  */
-import { afterEach, beforeAll, describe, expect, test } from 'bun:test';
+import { afterEach, beforeAll, describe, expect, test } from 'vitest';
 import { existsSync } from 'node:fs';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';

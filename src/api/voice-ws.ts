@@ -1,8 +1,9 @@
-import type { Elysia } from 'elysia';
+import type { Elysia } from '@/api/http';
 import { getConfig } from '@/config';
 import { getSessionManager } from '@/security/auth/session';
 import type { STTEngine } from '@/voice/stt';
 import { apiLogger } from '@/utils/logger';
+import { fileAt } from '@/utils/fs-file';
 
 /**
  * Realtime voice WebSocket — `/voice`.
@@ -59,7 +60,7 @@ async function whisperEngine(language: string): Promise<{ engine: STTEngine; nam
   const { whisperModelPath } = await import('@/voice/whisper');
   const config = getConfig();
   const modelPath = config.voice.whisperModelPath || whisperModelPath();
-  if (!(await Bun.file(modelPath).exists())) {
+  if (!(await fileAt(modelPath).exists())) {
     return { error: 'Local whisper is not installed. Run `octi setup`, or pick a cloud engine in Settings → Voice.' };
   }
   const { WhisperEngine } = await import('@/voice/stt');

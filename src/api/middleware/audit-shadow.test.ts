@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { resourceTypeFromPath } from './audit-shadow';
 
 // Pure-function unit tests. The behavioral tests for `writeApiAudit` and

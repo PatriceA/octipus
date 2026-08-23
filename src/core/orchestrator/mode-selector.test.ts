@@ -2,7 +2,7 @@
  * Orchestrator mode selector — param derivation + threshold banding. The mode
  * keys off model SIZE (metadata or tag), never model names (house rule #2).
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { deriveParamCount, paramCountToMode, resolveOrchestratorMode } from './mode-selector';
 
 const THRESHOLDS = {

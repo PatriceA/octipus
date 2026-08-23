@@ -165,7 +165,7 @@ Four invariants, each taken from an incident or from a subsystem the phase had a
 
 The same measurement fixed a third instance of the recurring bug class on the way past: `swarmLevelSchema.maxPendingDetached` carried `.default(0)` while each level's object default carried 6/3/0 and `getLevelDefault` carried a third `?? LEVEL_DEFAULT[depth]` resolve step. Three sources for one fact, and the field default was the one that won — a level object setting any other key parsed as a hard zero, making the resolve step below it unreachable. That is the detach-cap incident's exact shape minus the type disagreement that was the only reason anyone noticed. The field is now optional.
 
-Runnable check: the DB-backed lane drives each invariant hold → violate → hold against real Postgres — the production query against real rows, not a hand-made argument. `TEST_POSTGRES_PORT=5453 bun run scripts/test-integration.ts src/core/invariants.test.ts`, eleven passing. Still open: exercising the detach-cap invariant against a live deployment configured back to zero.
+Runnable check: the DB-backed lane drives each invariant hold → violate → hold against real Postgres — the production query against real rows, not a hand-made argument. `TEST_POSTGRES_PORT=5453 npx tsx scripts/test-integration.ts src/core/invariants.test.ts`, eleven passing. Still open: exercising the detach-cap invariant against a live deployment configured back to zero.
 
 ### Phase 5 — Runtime
 
@@ -271,7 +271,7 @@ Eleven lanes green: typecheck, lint (904 files), unit (4,298), TUI unit (251), w
 
 Re-run after the work above, 2026-08-23: unit 4,152 and integration 4,211, both zero failures, plus lint, both typechecks and `catalog:check`. A twelfth gate exists now — the catalog — and it caught its first drift on the commit that added the two new invariants, which changed the module edge counts.
 
-One local note for the integration lane: port 5443 can be held by another project's Postgres, so `TEST_POSTGRES_PORT=5453 TEST_REDIS_PORT=6389 bun run scripts/test-integration.ts` is the form that always works.
+One local note for the integration lane: port 5443 can be held by another project's Postgres, so `TEST_POSTGRES_PORT=5453 TEST_REDIS_PORT=6389 npx tsx scripts/test-integration.ts` is the form that always works.
 
 Performance, measured rather than assumed: read endpoints 12–16ms median; web pages 0.53–0.85s; a chat answer on screen in 2.4–6.0s; the TUI booting in 0.2s and answering in 2.8–5.2s; delivery lag median 11ms and p95 19ms across 86 runs. Full numbers in the report linked at the top.
 
@@ -326,7 +326,7 @@ Kept in full because in every case the finding was not what the item predicted, 
 
    *Goal state*: no pipeline in a terminal status has a stage still marked `running`. That is the run-reports-success-while-work-is-outstanding shape, stated narrowly enough to be usable — a stage left `pending` is explicitly NOT a violation, because an untaken conditional branch legitimately stays pending forever.
 
-   Both verified against real Postgres rather than asserted: `TEST_POSTGRES_PORT=5453 bun run scripts/test-integration.ts src/core/invariants.test.ts`, 11 passing, each invariant driven through hold → violate → hold. The boot pass now reports `checked: 4`.
+   Both verified against real Postgres rather than asserted: `TEST_POSTGRES_PORT=5453 npx tsx scripts/test-integration.ts src/core/invariants.test.ts`, 11 passing, each invariant driven through hold → violate → hold. The boot pass now reports `checked: 4`.
 
 ### Known and unresolved
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env tsx
 /**
  * executor-split.ts — is the planner→executor split actually saving anything?
  *
@@ -34,9 +34,9 @@
  *    a saving out of missing telemetry.
  *
  * Usage:
- *   bun run scripts/executor-split.ts               # last 30 days
- *   bun run scripts/executor-split.ts --days 7
- *   bun run scripts/executor-split.ts --gate        # exit 1 if the split fails
+ *   npx tsx scripts/executor-split.ts               # last 30 days
+ *   npx tsx scripts/executor-split.ts --days 7
+ *   npx tsx scripts/executor-split.ts --gate        # exit 1 if the split fails
  *
  * The pure logic lives in `evaluateSplit` so it is unit-testable without a DB;
  * everything below it is a thin CLI wrapper (same shape as coverage-check.ts).

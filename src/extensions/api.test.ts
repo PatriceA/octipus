@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { GatewayEventBus } from '@/core/gateway/event-bus';
 import { getCommandRegistry } from '@/core/gateway/commands';
 import type { GatewayEvent } from '@/core/gateway/protocol';

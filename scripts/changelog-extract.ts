@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env tsx
 /**
  * changelog-extract.ts — pull one release's notes out of CHANGELOG.md.
  *
@@ -12,8 +12,8 @@
  *
  * Pure logic (`extractSection`) is unit-tested; this file is the CLI wrapper.
  *
- *   bun run scripts/changelog-extract.ts 0.2.0            # → notes on stdout
- *   bun run scripts/changelog-extract.ts 0.2.0 CHANGELOG.md
+ *   npx tsx scripts/changelog-extract.ts 0.2.0            # → notes on stdout
+ *   npx tsx scripts/changelog-extract.ts 0.2.0 CHANGELOG.md
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -65,10 +65,10 @@ export function extractSection(changelog: string, version: string): string {
 if (import.meta.main) {
   const version = process.argv[2];
   if (!version) {
-    console.error('Usage: bun run scripts/changelog-extract.ts <version> [changelog-path]');
+    console.error('Usage: npx tsx scripts/changelog-extract.ts <version> [changelog-path]');
     process.exit(2);
   }
-  const path = process.argv[3] || join(import.meta.dir, '..', 'CHANGELOG.md');
+  const path = process.argv[3] || join(import.meta.dirname, '..', 'CHANGELOG.md');
   let raw: string;
   try {
     raw = readFileSync(path, 'utf8');

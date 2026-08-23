@@ -1,7 +1,8 @@
-import { spawn } from 'bun';
+import { spawnProcess as spawn, whichSync } from '@/utils/proc';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
+import { fileAt, writeFileAt } from '@/utils/fs-file';
 
 /**
  * Provisioning for the two local voice engines (faster-whisper STT, Kokoro TTS).
@@ -14,7 +15,7 @@ export type ProgressFn = (line: string) => void;
 
 /** True when `uv` (astral.sh/uv) is on PATH — the prerequisite for both local engines. */
 export function hasUv(): boolean {
-  return Bun.which('uv') !== null;
+  return whichSync('uv') !== null;
 }
 
 export const UV_INSTALL_HINT =
@@ -51,7 +52,7 @@ export async function installFasterWhisper(model: FasterWhisperModel, onProgress
     stderr: 'pipe',
   });
   // Surface uv/model-download progress (stderr) line by line.
-  void streamLines(proc.stderr, onProgress);
+  void streamLines(proc.stderr!, onProgress);
   const code = await proc.exited;
   if (code !== 0) throw new Error(`faster-whisper prewarm failed (exit ${code}); check that uv can reach the network.`);
   onProgress(`faster-whisper "${model}" ready.`);
@@ -74,7 +75,7 @@ export function kokoroModelDir(): string {
 export async function kokoroModelsPresent(): Promise<boolean> {
   const dir = kokoroModelDir();
   for (const f of KOKORO_FILES) {
-    if (!(await Bun.file(join(dir, f.name)).exists())) return false;
+    if (!(await fileAt(join(dir, f.name)).exists())) return false;
   }
   return true;
 }
@@ -92,14 +93,14 @@ export async function installKokoro(onProgress: ProgressFn = () => {}): Promise<
   await mkdir(dir, { recursive: true });
   for (const f of KOKORO_FILES) {
     const dest = join(dir, f.name);
-    if (await Bun.file(dest).exists()) {
+    if (await fileAt(dest).exists()) {
       onProgress(`${f.name} already present.`);
       continue;
     }
     onProgress(`Downloading ${f.name} …`);
     const res = await fetch(f.url);
     if (!res.ok || !res.body) throw new Error(`Kokoro model download failed for ${f.name} (${res.status}).`);
-    await Bun.write(dest, res);
+    await writeFileAt(dest, res);
   }
   onProgress('Kokoro ready.');
 }

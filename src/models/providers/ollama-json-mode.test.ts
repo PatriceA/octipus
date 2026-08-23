@@ -4,7 +4,7 @@
  * Ollama's real structured-output lever. The /v1 response_format is unreliable,
  * so small local models only return parseable JSON via this path.
  */
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'vitest';
 import { OllamaProvider } from './ollama-provider';
 
 const realFetch = globalThis.fetch;

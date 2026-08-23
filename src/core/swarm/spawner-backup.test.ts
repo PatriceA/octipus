@@ -7,14 +7,12 @@
  * stub backup lookup and the spawner's private `singleSpawnAndRun` is
  * instance-patched.
  */
-import { afterAll, describe, expect, mock, test } from 'bun:test';
-import * as realModelRegistryNs from '@/models/model-registry';
+import { afterAll, describe, expect, test, vi } from 'vitest';
 
 // Plain-object snapshot taken before this file mocks the module. Restoring from
 // the live `import * as` namespace does NOT work — bun's `mock.module` leaves
 // that binding pointing at the installed stub, so the "restore" re-installs the
 // stub and leaks it forward. A copy taken before mocking restores cleanly.
-const realModelRegistry = { ...realModelRegistryNs };
 
 let backupModelId: string | null = null;
 
@@ -29,7 +27,7 @@ let backupModelId: string | null = null;
 // suites would break if this partial mock leaked into them.
 const inIntegration = process.env.INTEGRATION === '1';
 if (!inIntegration) {
-  mock.module('@/models/model-registry', () => ({
+  vi.mock('@/models/model-registry', () => ({
     getModelRegistry: () => ({
       getBackupModelForTopic: async () => (backupModelId ? { modelId: backupModelId } : null),
       getModelForTopic: async () => null,
@@ -42,7 +40,6 @@ if (!inIntegration) {
   // (e.g. memory.extractor, which then sees a getModelRegistry() missing the
   // methods it needs). This mirrors openai-compat.test.ts.
   afterAll(() => {
-    mock.module('@/models/model-registry', () => realModelRegistry);
   });
 }
 

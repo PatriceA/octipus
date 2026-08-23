@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { randomBytes } from 'crypto';
 import { encrypt, decrypt, deriveKey } from '@/utils/crypto';
 

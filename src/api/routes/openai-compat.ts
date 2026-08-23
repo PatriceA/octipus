@@ -1,4 +1,4 @@
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { SSE_HEADERS, chunkText, sseData, sseDone } from '@/api/sse';
 import { getOrchestratorService } from '@/core/orchestrator';

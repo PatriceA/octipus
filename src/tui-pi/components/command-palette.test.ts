@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import type { SelectItem } from '@mariozechner/pi-tui';
 import { CommandPalette } from './command-palette';
 

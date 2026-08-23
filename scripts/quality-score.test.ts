@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { parseTargets, type QualityMetrics, type QualityTargets, scoreQuality } from './quality-score';
@@ -70,7 +70,7 @@ describe('scoreQuality', () => {
 
 describe('parseTargets', () => {
   test('the committed baseline parses and carries every axis', () => {
-    const t = parseTargets(readFileSync(join(import.meta.dir, 'quality-baseline.json'), 'utf8'));
+    const t = parseTargets(readFileSync(join(import.meta.dirname, 'quality-baseline.json'), 'utf8'));
     expect(t.deliveredPct).toBeGreaterThan(0);
     expect(t.minSamples).toBeGreaterThan(0);
   });

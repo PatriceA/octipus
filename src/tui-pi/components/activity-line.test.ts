@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'vitest';
 import { ActivityLine } from './activity-line';
 
 interface TuiStub { requestRender: () => void; renderCalls: number }

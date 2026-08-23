@@ -1,7 +1,8 @@
-import { Elysia, } from 'elysia';
+import { Elysia, } from '@/api/http';
 import { readdir, readFile, } from 'fs/promises';
 import { resolve, sep } from 'path';
 import { apiContext } from '@/api/context';
+import { type ChildProcessHandle, spawnProcess } from '@/utils/proc';
 
 const EVAL_RESULTS_DIR = resolve(process.cwd(), 'eval', 'results');
 
@@ -100,7 +101,7 @@ async function getResultById(id: string): Promise<SavedEvalFile | null> {
 
 // Track running eval processes
 interface EvalRun {
-  process: ReturnType<typeof Bun.spawn>;
+  process: ChildProcessHandle;
   startedAt: Date;
   suite?: string;
   type: string;
@@ -159,7 +160,7 @@ export const evalRoutes = new Elysia({ prefix: '/eval' })
       if (model) args.push('--model', model);
     }
 
-    const proc = Bun.spawn(['bun', ...args], {
+    const proc = spawnProcess(['bun', ...args], {
       cwd: process.cwd(),
       stdout: 'pipe',
       stderr: 'pipe',

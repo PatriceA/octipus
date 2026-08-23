@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it } from 'vitest';
 import { auditVerdictFailure, normalizeForMatch, thinVerdictFailure, unaddressedDoubt, uncoveredStages } from './audit-coverage';
 import type { QAValidationResult } from './types';
 

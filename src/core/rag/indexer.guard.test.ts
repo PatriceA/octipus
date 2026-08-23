@@ -2,7 +2,7 @@
  * FileIndexer sandbox guard.
  *
  * `indexFile`/`indexDirectory` read whatever path they're handed via
- * `Bun.file(path).text()`. When a caller (the knowledge route, the knowledge
+ * `fileAt(path).text()`. When a caller (the knowledge route, the knowledge
  * tool) accepts a path from an untrusted request it passes an `isAllowed`
  * guard so reads stay inside the caller's workspace. For directories the guard
  * is the only thing that catches a symlinked leaf inside an owned tree that
@@ -12,11 +12,12 @@
  * `indexFile` rejects a disallowed path before any IO, and empty allowed files
  * return 0 chunks before `getEmbeddingService` is ever called.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FileIndexer } from './indexer';
+import { fileAt } from '@/utils/fs-file';
 
 let dir: string;
 const indexer = new FileIndexer();

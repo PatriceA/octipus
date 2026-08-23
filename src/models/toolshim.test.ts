@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from 'bun:test';
+import { describe, expect, test, vi } from 'vitest';
 import { modelLogger } from '@/utils/logger';
 import {
   buildToolShimPrompt,
@@ -37,7 +37,7 @@ describe('parseToolShimResponse', () => {
     expect(call).not.toBeNull();
     expect(call?.name).toBe('filesystem__write_file');
     expect(call?.arguments).toEqual({ path: '/a.txt', content: 'hi' });
-    expect(call?.id).toStartWith('call_shim_');
+    expect(call?.id).toMatch(/^call_shim_/);
   });
 
   test('extracts the JSON object when wrapped in prose/markdown fences', () => {
@@ -113,7 +113,7 @@ describe('translateToToolCall', () => {
   });
 
   test('translator throws ⇒ null (fail-soft, no rethrow) AND warns with elapsed time', async () => {
-    const warnSpy = spyOn(modelLogger, 'warn').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(modelLogger, 'warn').mockImplementation(() => {});
     try {
       const err = new Error('provider down');
       const call = await translateToToolCall({
@@ -137,7 +137,7 @@ describe('translateToToolCall', () => {
   });
 
   test('successful translation does NOT log a failure breadcrumb', async () => {
-    const warnSpy = spyOn(modelLogger, 'warn').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(modelLogger, 'warn').mockImplementation(() => {});
     try {
       const call = await translateToToolCall({
         text: 'I will write hello to /a.txt',

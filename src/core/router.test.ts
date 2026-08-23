@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, mock } from 'bun:test';
+import { beforeEach, describe, expect, test } from 'vitest';
 import { Router } from './router';
 
 describe('Router', () => {

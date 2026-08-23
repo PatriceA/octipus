@@ -1,4 +1,4 @@
-import { Elysia } from 'elysia';
+import { Elysia } from '@/api/http';
 
 const PUBLIC_PATH_PREFIXES = [
   '/api/auth/login',

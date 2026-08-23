@@ -12,7 +12,7 @@
  * (would require a Postgres + the auth stack); the round-trip below
  * is enough to catch wiring regressions in the route file itself.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { mapAttr } from './saml';
 
 describe('SAML mapAttr', () => {

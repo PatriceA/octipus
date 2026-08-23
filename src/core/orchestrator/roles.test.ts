@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import {
   CONNECTOR_TOOL_PREFIX,
   getBoundConnectorIds,

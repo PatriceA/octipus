@@ -5,7 +5,7 @@ have consciously accepted. It is consulted by `scripts/audit-check.ts`, which is
 run in CI (`.github/workflows/ci.yml`, backend job) as a **blocking** step:
 
 ```
-bun run scripts/audit-check.ts
+npx tsx scripts/audit-check.ts
 ```
 
 The check runs `bun audit --prod --json`, and fails (exit 1) if **any** reported
@@ -49,7 +49,7 @@ The file is a JSON array of entries. Each entry:
 
 ## Adding an exception
 
-1. Run `bun run scripts/audit-check.ts` locally to see the blocking advisory id.
+1. Run `npx tsx scripts/audit-check.ts` locally to see the blocking advisory id.
 2. Add an entry with a real `reason` and a near-term `expires`.
 3. Re-run the check; it should now pass.
 4. The entry shows up in the diff, so acceptance is reviewable in the PR.

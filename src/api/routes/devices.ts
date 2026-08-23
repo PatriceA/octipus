@@ -1,5 +1,5 @@
 import { randomBytes } from 'crypto';
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { networkInterfaces } from 'os';
 import { apiContext } from '@/api/context';
 import { getSettingsService } from '@/config/settings-service';

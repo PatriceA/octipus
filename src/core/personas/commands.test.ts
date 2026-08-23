@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { handlePersonaCommand } from './commands';
 
 // These tests stub out the DB layer by way of the in-process registry

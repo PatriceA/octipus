@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { parseClientMessage, matchesPattern, PROTOCOL_VERSION } from './protocol';
 import { GatewayRateLimiter } from './rate-limiter';
 import { GatewayEventBus } from './event-bus';

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { getStats, ringBufferStream } from './log-stream';
 
 // Feed newline-delimited JSON the way pino's multistream does.

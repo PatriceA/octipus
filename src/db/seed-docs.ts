@@ -2,6 +2,7 @@ import { join } from 'path';
 import { type EmbeddingPurpose, getEmbeddingService, sha256Hex } from '@/core/rag/embeddings';
 import { isKBReady } from '@/core/rag/health';
 import { logger } from '@/utils/logger';
+import { fileAt, globFiles } from '@/utils/fs-file';
 
 /**
  * Auto-index Octipus's own product documentation into the knowledge base so
@@ -62,7 +63,7 @@ export interface IndexProductDocsDeps {
   };
   /** Defaults to Bun.Glob scan of `docsDir`. Returns paths RELATIVE to docsDir. */
   listFiles?: (docsDir: string, patterns: string[]) => Promise<string[]>;
-  /** Defaults to `Bun.file(absPath).text()`. */
+  /** Defaults to `fileAt(absPath).text()`. */
   readFile?: (absPath: string) => Promise<string>;
 }
 
@@ -77,11 +78,11 @@ export interface IndexProductDocsResult {
 async function defaultListFiles(docsDir: string, patterns: string[]): Promise<string[]> {
   const seen = new Set<string>();
   for (const pattern of patterns) {
-    const g = new Bun.Glob(pattern);
+
     // `absolute: false` → paths relative to cwd (docsDir); don't follow
     // symlinks out of the docs tree. NB: scan() rejects with ENOENT if
     // `docsDir` does not exist — the caller catches that as "no docs".
-    for await (const rel of g.scan({ cwd: docsDir, absolute: false, followSymlinks: false })) {
+    for await (const rel of globFiles(pattern, { cwd: docsDir, absolute: false })) {
       seen.add(rel);
     }
   }
@@ -133,7 +134,7 @@ export async function indexProductDocs(deps: IndexProductDocsDeps = {}): Promise
     }
 
     const service = deps.service ?? getEmbeddingService();
-    const readFile = deps.readFile ?? ((absPath: string) => Bun.file(absPath).text());
+    const readFile = deps.readFile ?? ((absPath: string) => fileAt(absPath).text());
 
     result.ran = true;
     for (const rel of included) {

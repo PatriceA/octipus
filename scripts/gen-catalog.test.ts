@@ -14,7 +14,7 @@
  *   type nobody declares appeared as "published but not declared".
  * - A `Map.get(id)` inside a handler counted as an unresolvable route.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import {
   blankComments,
   collectEvents,

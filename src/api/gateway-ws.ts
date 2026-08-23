@@ -1,4 +1,4 @@
-import type { Elysia } from 'elysia';
+import type { Elysia } from '@/api/http';
 import { getGatewayHub } from '@/core/gateway/hub';
 import { getSessionManager } from '@/security/auth/session';
 import { apiLogger } from '@/utils/logger';

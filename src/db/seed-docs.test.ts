@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { describe, expect, test, vi } from 'vitest';
 import { type EmbeddingPurpose, sha256Hex } from '@/core/rag/embeddings';
 import { type IndexProductDocsDeps, indexProductDocs } from './seed-docs';
 
@@ -68,8 +68,8 @@ function makeDeps(over: Partial<IndexProductDocsDeps> = {}): IndexProductDocsDep
   return {
     docsDir: DOCS_DIR,
     isReady: () => true,
-    listFiles: mock(async () => Object.keys(FILES)),
-    readFile: mock(async (abs: string) => {
+    listFiles: vi.fn(async () => Object.keys(FILES)),
+    readFile: vi.fn(async (abs: string) => {
       const rel = abs.slice(DOCS_DIR.length + 1);
       const content = FILES[rel];
       if (content == null) throw new Error(`unexpected read: ${abs}`);

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { ClassifiedError, FailoverReason } from '@/core/errors/classification';
 import { parseToolCallArguments } from './tool-call-args';
 

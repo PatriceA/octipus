@@ -8,7 +8,7 @@
  * recovers. These tests pin the retry contract without needing a real PGlite:
  * the exec seam is injected, so we can script exactly which attempt faults.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { applyEmbeddedMigrationWithRetry, isTransientPgliteFault } from './migrate';
 
 const noSleep = async () => {};

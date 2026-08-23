@@ -10,7 +10,7 @@
  * user/audit repositories are mocked.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
-import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
 
 const rand = (n: number) => randomBytes(n).toString('hex');
 process.env.MASTER_KEY ??= `test-master-${rand(24)}`;
@@ -37,15 +37,9 @@ let authenticationVerified = true;
 let authenticationNewCounter = 1;
 
 // Snapshot real modules into plain objects before mocking (see totp.test.ts).
-import * as realUserRepoNs from '@/db/repositories/user-repository';
-import * as realAuditRepoNs from '@/db/repositories/audit-repository';
-import * as realWebauthnNs from '@simplewebauthn/server';
-const realUserRepo = { ...realUserRepoNs };
-const realAuditRepo = { ...realAuditRepoNs };
-const realWebauthn = { ...realWebauthnNs };
 
-mock.module('@/db/repositories/user-repository', () => ({
-  ...realUserRepo,
+vi.mock('@/db/repositories/user-repository', async () => ({
+  ...(await vi.importActual<typeof import('@/db/repositories/user-repository')>('@/db/repositories/user-repository')),
   userRepository: {
     findById: async (id: string) => users.get(id) ?? null,
     update: async (id: string, patch: Record<string, unknown>) => {
@@ -57,16 +51,16 @@ mock.module('@/db/repositories/user-repository', () => ({
     updateLastLogin: async () => { auditCalls.push({ fn: 'updateLastLogin', args: [] }); },
   },
 }));
-mock.module('@/db/repositories/audit-repository', () => ({
-  ...realAuditRepo,
+vi.mock('@/db/repositories/audit-repository', async () => ({
+  ...(await vi.importActual<typeof import('@/db/repositories/audit-repository')>('@/db/repositories/audit-repository')),
   auditRepository: {
     logLogin: async (...args: unknown[]) => { auditCalls.push({ fn: 'logLogin', args }); },
     logLoginFailed: async (...args: unknown[]) => { auditCalls.push({ fn: 'logLoginFailed', args }); },
     logLogout: async () => {},
   },
 }));
-mock.module('@simplewebauthn/server', () => ({
-  ...realWebauthn,
+vi.mock('@simplewebauthn/server', async () => ({
+  ...(await vi.importActual<typeof import('@simplewebauthn/server')>('@simplewebauthn/server')),
   generateRegistrationOptions: async () => ({ challenge: `reg-${randomUUID()}` }),
   generateAuthenticationOptions: async () => ({ challenge: `auth-${randomUUID()}` }),
   verifyRegistrationResponse: async () => ({
@@ -88,9 +82,6 @@ initializeStorage({ mode: 'embedded' });
 
 afterAll(async () => {
   await closeStorage();
-  mock.module('@/db/repositories/user-repository', () => realUserRepo);
-  mock.module('@/db/repositories/audit-repository', () => realAuditRepo);
-  mock.module('@simplewebauthn/server', () => realWebauthn);
 });
 
 function seedUser(creds: StoredCredential[] = []): string {

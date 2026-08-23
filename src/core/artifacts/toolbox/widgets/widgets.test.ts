@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import type { ToolboxContext } from '../types';
 import { barChartWidget } from './bar_chart';
 import { heatmapWidget } from './heatmap';

@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env tsx
 /**
  * Red-team evaluation CLI.
  *
@@ -14,6 +14,7 @@
 import { parseArgs } from 'util';
 import { generateRedTeamSuite, redTeamPlugins, runRedTeam } from './index';
 import type { RedTeamTest, Severity } from './types';
+import { writeFileAt } from '@/utils/fs-file';
 
 /**
  * Ensure the database is initialized so the model registry + provider router
@@ -80,7 +81,7 @@ function resolvePluginName(name: string): string {
 
 async function main() {
   const { values } = parseArgs({
-    args: Bun.argv.slice(2),
+    args: process.argv.slice(2),
     options: {
       plugin: { type: 'string', short: 'p', multiple: true },
       severity: { type: 'string', short: 's', multiple: true },
@@ -214,7 +215,7 @@ ${redTeamPlugins.map((p) => `  ${p.name.padEnd(20)} ${p.description}`).join('\n'
 
   // Save results if output specified
   if (values.output) {
-    await Bun.write(values.output, JSON.stringify(evalResult, null, 2));
+    await writeFileAt(values.output, JSON.stringify(evalResult, null, 2));
     console.log(`  Results saved to: ${values.output}\n`);
   }
 

@@ -2,7 +2,7 @@
  * Highlighter tests. Locks the contract that `tokens.map(t =>
  * t.text)` reconstructs the original line.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { highlight, highlightLine, resetHighlighter, setHighlighter } from './highlight';
 
 describe('highlightLine', () => {

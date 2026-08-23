@@ -4,7 +4,7 @@
  * canonical lane's binding in the model registry AND land on the lane's row in
  * topics_config; the experts.topic column must default to 'agents'.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';

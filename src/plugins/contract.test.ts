@@ -2,7 +2,7 @@
  * @octipus/plugin-sdk contract tests (WS3). Imported via the tsconfig alias so
  * the host and authors validate against the same definitions.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import {
   checkApiVersion,
   generateFixtureArgs,

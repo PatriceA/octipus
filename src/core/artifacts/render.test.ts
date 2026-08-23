@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { escapeHtml, extractInteractiveScript, renderRssFeed, renderTemplate, sanitizeTemplate } from './render';
 
 describe('escapeHtml', () => {

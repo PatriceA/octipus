@@ -1,8 +1,7 @@
-#!/usr/bin/env bun
 /**
  * `octi` — TypeScript dispatcher.
  *
- * Compiled into a static binary via `bun build --compile`. The
+ * Bundled into `dist/octi` by `scripts/build-cli.ts`. The
  * resulting executable is what the install script drops onto PATH,
  * retiring the PATH-mutation that `scripts/setup.ts` used to do.
  *
@@ -14,8 +13,8 @@
  *   - version  — semver + Bun version
  *
  * Commands delegated to scripts:
- *   - tui      — `bun run src/tui-pi/index.ts`
- *   - edit     — `bun run src/tui-editor/index.ts`
+ *   - tui      — `npm run tui`
+ *   - edit     — `npm run tui:edit`
  *
  * Commands delegated to the bash dispatcher (`bin/octi`) when present:
  *   - start, stop, restart, status, logs, open
@@ -25,7 +24,8 @@
  * ships the bash script alongside (the standard install layout).
  */
 
-import { existsSync } from 'fs';
+import { spawn } from 'child_process';
+import { existsSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join, resolve } from 'path';
 
@@ -106,37 +106,38 @@ async function delegateBash(args: string[]): Promise<never> {
     );
     process.exit(2);
   }
-  const proc = Bun.spawn(['bash', binOcti, ...args], {
-    stdio: ['inherit', 'inherit', 'inherit'],
-    cwd: dirname(dirname(binOcti)),
-  });
-  const code = await proc.exited;
+  const code = await runInherit('bash', [binOcti, ...args], dirname(dirname(binOcti)));
   process.exit(code);
 }
 
-async function delegateBun(scriptRelPath: string, args: string[]): Promise<never> {
+/** Spawn with the parent's stdio and resolve with the exit code. */
+function runInherit(command: string, args: string[], cwd: string): Promise<number> {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, { stdio: 'inherit', cwd });
+    child.on('close', (code, signal) => resolve(code ?? (signal ? 128 : 1)));
+    child.on('error', () => resolve(127));
+  });
+}
+
+async function delegateScript(scriptRelPath: string, args: string[]): Promise<never> {
   const projectDir = projectOrDie();
   const scriptPath = join(projectDir, scriptRelPath);
   if (!existsSync(scriptPath)) {
     process.stderr.write(`octi: script not found at ${scriptPath}\n`);
     process.exit(2);
   }
-  const proc = Bun.spawn(['bun', 'run', scriptPath, ...args], {
-    stdio: ['inherit', 'inherit', 'inherit'],
-    cwd: projectDir,
-  });
-  const code = await proc.exited;
+  const code = await runInherit('npx', ['tsx', scriptPath, ...args], projectDir);
   process.exit(code);
 }
 
 async function runDoctor(args: string[]): Promise<never> {
-  return delegateBun('scripts/doctor.ts', args);
+  return delegateScript('scripts/doctor.ts', args);
 }
 
 async function runInit(args: string[]): Promise<never> {
   // Single unified wizard — handles TTY, non-TTY (CI / Docker), and
   // remote (`--remote <url>`) modes itself. No TTY branching here.
-  return delegateBun('scripts/setup-wizard.ts', args);
+  return delegateScript('scripts/setup-wizard.ts', args);
 }
 
 async function runCapabilities(args: string[]): Promise<never> {
@@ -251,13 +252,13 @@ async function runVersion(): Promise<never> {
   let version = '0.0.0';
   if (projectDir) {
     try {
-      const text = await Bun.file(join(projectDir, 'package.json')).text();
+      const text = readFileSync(join(projectDir, 'package.json'), 'utf8');
       version = (JSON.parse(text).version as string) || version;
     } catch {
       // No package.json — compiled binary may live outside a checkout.
     }
   }
-  process.stdout.write(`Octipus v${version} (Bun ${Bun.version})\n`);
+  process.stdout.write(`Octipus v${version} (Node ${process.versions.node})\n`);
   process.exit(0);
 }
 
@@ -289,11 +290,11 @@ async function main(): Promise<void> {
       break;
 
     case 'tui':
-      await delegateBun('src/tui-pi/index.ts', rest);
+      await delegateScript('src/tui-pi/index.ts', rest);
       break;
 
     case 'edit':
-      await delegateBun('src/tui-editor/index.ts', rest);
+      await delegateScript('src/tui-editor/index.ts', rest);
       break;
 
     case 'persona':
@@ -306,12 +307,12 @@ async function main(): Promise<void> {
       break;
 
     case 'models':
-      await delegateBun('scripts/models-recommend.ts', rest);
+      await delegateScript('scripts/models-recommend.ts', rest);
       break;
 
     case 'plugin':
     case 'plugins':
-      await delegateBun('scripts/plugin.ts', rest);
+      await delegateScript('scripts/plugin.ts', rest);
       break;
 
     case 'start':

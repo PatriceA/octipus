@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { MCPServerList, type MCPServerListProvider, type MCPServerSummary } from './mcp-server-list';
 
 function makeProvider(servers: MCPServerSummary[], reload?: (id: string) => Promise<void>): MCPServerListProvider {

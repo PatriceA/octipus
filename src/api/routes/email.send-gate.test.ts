@@ -3,9 +3,9 @@
  * confirm:true is rejected (409) BEFORE any provider/mailbox access. This
  * proves a draft can never be auto-sent — the core trust posture of the feature.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { randomBytes } from 'node:crypto';
-import { Elysia } from 'elysia';
+import { Elysia } from '@/api/http';
 
 type ElysiaLike = { handle: (req: Request) => Promise<Response> };
 

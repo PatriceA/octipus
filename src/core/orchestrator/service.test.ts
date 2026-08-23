@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { classifyMessage } from './classifier';
 import { guardInput } from './input-guard';
 import { guardOutput } from './output-guard';

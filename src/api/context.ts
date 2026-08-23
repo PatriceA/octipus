@@ -1,4 +1,4 @@
-import { Elysia } from 'elysia';
+import { Elysia } from '@/api/http';
 import { ANONYMOUS_PRINCIPAL, type Principal } from '@/security/principal';
 
 /** User context derived from JWT/session validation in server.ts */

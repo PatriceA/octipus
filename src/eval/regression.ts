@@ -16,6 +16,7 @@
 
 import { resolve } from 'node:path';
 import type { EvalSuiteResult } from './types';
+import { fileAt } from '@/utils/fs-file';
 
 /** One test's outcome, flattened out of the nested suite/result shape. */
 interface Outcome {
@@ -152,7 +153,7 @@ export function formatRegressionReport(report: RegressionReport): string {
  * "compare against the last run" without having to name a timestamp.
  */
 export async function resolveBaselinePath(arg: string, resultsDir: string): Promise<string | null> {
-  if (arg !== 'latest') return (await Bun.file(arg).exists()) ? arg : null;
+  if (arg !== 'latest') return (await fileAt(arg).exists()) ? arg : null;
   const { readdirSync } = await import('fs');
   let names: string[];
   try {

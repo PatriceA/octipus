@@ -23,7 +23,7 @@
  * The legacy `topics[]` column is left untouched (getModelForTopic still falls
  * back to it), so this is non-destructive.
  *
- * Run: bun run scripts/backfill-topic-roles.ts
+ * Run: npx tsx scripts/backfill-topic-roles.ts
  */
 
 import { getDb } from '@/db';

@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { FASTER_WHISPER_MODELS, kokoroModelDir } from './provision';
 import { voiceConfigSchema } from '../config/schema';
 

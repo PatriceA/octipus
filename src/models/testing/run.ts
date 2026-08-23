@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env tsx
 /**
  * CLI runner for model conformance tests.
  *
@@ -19,6 +19,7 @@ import { getProviderRouter } from '../providers';
 import type { ModelProvider } from '../providers/interface';
 import type { ConformanceReport, ConformanceResult } from './conformance';
 import { getTestCaseNames, runConformanceTests } from './conformance';
+import { writeFileAt } from '@/utils/fs-file';
 
 // ── Arg parsing ───────────────────────────────────────────────
 
@@ -285,7 +286,7 @@ async function main(): Promise<void> {
 
     // Also write JSON to file for later analysis
     const reportPath = `conformance-report-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
-    await Bun.write(reportPath, JSON.stringify(report, null, 2));
+    await writeFileAt(reportPath, JSON.stringify(report, null, 2));
     console.log(`JSON report written to: ${reportPath}`);
   }
 

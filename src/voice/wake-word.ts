@@ -1,4 +1,4 @@
-import { type Subprocess, spawn } from 'bun';
+import { type ChildProcessHandle as Subprocess, spawnProcess as spawn } from '@/utils/proc';
 import { EventEmitter } from 'events';
 import { logger } from '../utils/logger';
 

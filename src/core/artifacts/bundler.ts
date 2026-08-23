@@ -12,6 +12,7 @@ import { copyFile, mkdir, readdir, readFile, rm, writeFile } from 'fs/promises';
 import { createHash } from 'crypto';
 import { dirname, join } from 'path';
 import { coreLogger } from '@/utils/logger';
+import { build as esbuild } from 'esbuild';
 
 export interface BundleInput {
   artifactId: string;
@@ -77,27 +78,24 @@ export async function buildAndStoreBundle(input: BundleInput): Promise<BundleRes
   const entryPath = join(outDir, 'entry.js');
   await writeFile(entryPath, input.source, 'utf8');
 
-  const built = await Bun.build({
-    entrypoints: [entryPath],
-    target: 'browser',
+  const built = await esbuild({
+    entryPoints: [entryPath],
+    bundle: true,
+    platform: 'browser',
     format: 'iife',
     minify: true,
-    sourcemap: 'none',
-    naming: '[name].js',
-    external: [],
-  });
-  if (!built.success) {
-    const messages = built.logs.map((l) => l.message).join('; ');
+    sourcemap: false,
+    write: false,
+    logLevel: 'silent',
+  }).catch((err: unknown) => {
+    const messages = err instanceof Error ? err.message : String(err);
     coreLogger.error({ artifactId: input.artifactId, versionId: input.versionId, messages }, 'artifact.bundle.failed');
     throw new Error(`bundler: build failed: ${messages}`);
-  }
+  });
 
-  let outBytes: Buffer;
-  if (built.outputs.length > 0) {
-    outBytes = Buffer.from(await built.outputs[0].arrayBuffer());
-  } else {
-    throw new Error('bundler: no outputs produced');
-  }
+  const first = built.outputFiles?.[0];
+  if (!first) throw new Error('bundler: no outputs produced');
+  const outBytes = Buffer.from(first.contents);
 
   const bundlePath = bundleFilePath(input.artifactId, input.versionId);
   await writeFile(bundlePath, outBytes);

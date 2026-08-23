@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import {
   deriveKey,
   encrypt,
@@ -155,6 +155,28 @@ describe('Crypto Utils', () => {
       const isValid = await verifyPassword('incorrect', hash);
 
       expect(isValid).toBe(false);
+    });
+
+    // The runtime migration replaced the argon2 implementation. Every password
+    // hash written by the previous one is still in the users table, so this
+    // pins a real hash produced by it: if the parameters, the encoding or the
+    // PHC layout drift, every existing user is locked out and this fails.
+    test('verifies a hash written by the previous runtime', async () => {
+      const legacy =
+        '$argon2id$v=19$m=65536,t=3,p=1$EIN1Si4pMzKv5oyf4SidssjJmMp6pIAsJ0wxvmdwGo8$GF1enR4IIbLODiYyloxjYM7JBRfwJkTmTdtSZwQ7drg';
+      expect(await verifyPassword('hunter2', legacy)).toBe(true);
+      expect(await verifyPassword('hunter3', legacy)).toBe(false);
+    });
+
+    test('emits the same PHC shape it accepts', async () => {
+      const hash = await hashPassword('MyPassword123');
+      expect(hash).toMatch(/^\$argon2id\$v=19\$m=65536,t=3,p=1\$[A-Za-z0-9+/]{22}\$[A-Za-z0-9+/]{43}$/);
+    });
+
+    test('a malformed hash is rejected rather than throwing', async () => {
+      for (const bad of ['', 'not-a-hash', '$argon2i$v=19$m=1,t=1,p=1$aaaa$bbbb', '$argon2id$v=19$$aaaa$bbbb']) {
+        expect(await verifyPassword('x', bad)).toBe(false);
+      }
     });
   });
 

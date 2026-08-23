@@ -16,6 +16,7 @@ import { getPermissionManager, type PermissionRequestEvent } from '@/security/pe
 import { channelLogger } from '@/utils/logger';
 import { processChannelAttachments } from './attachment-handler';
 import { getUMI } from './interface';
+import { fileAt, writeFileAt } from '@/utils/fs-file';
 
 /**
  * Summarize a response for external channels (Telegram, Slack, etc.).
@@ -126,9 +127,9 @@ async function analyzeImageAttachments(
             const { execSync } = await import('child_process');
             const tmpIn = `/tmp/vision-input-${Date.now()}`;
             const tmpOut = `/tmp/vision-output-${Date.now()}.png`;
-            await Bun.write(tmpIn, imageBuffer);
+            await writeFileAt(tmpIn, imageBuffer);
             execSync(`convert "${tmpIn}" "${tmpOut}"`, { timeout: 10000 });
-            const converted = Bun.file(tmpOut);
+            const converted = fileAt(tmpOut);
             finalBuffer = Buffer.from(await converted.arrayBuffer());
             finalMime = 'image/png';
             execSync(`rm -f "${tmpIn}" "${tmpOut}"`, { timeout: 5000 });

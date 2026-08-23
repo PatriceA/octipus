@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes, scryptSync, timingSafeEqual } from 'crypto';
+import { argon2 as cryptoArgon2, createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes, scryptSync, timingSafeEqual } from 'crypto';
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12;
@@ -107,21 +107,90 @@ export function sha256(data: string): string {
 }
 
 /**
- * Hash password using Argon2id (Bun built-in, no native addons)
+ * Argon2id, in the PHC string format.
+ *
+ * The parameters and the encoding are pinned to what the previous runtime
+ * produced, so every password hash already in the database still verifies:
+ * `$argon2id$v=19$m=65536,t=3,p=1$<salt>$<tag>`, unpadded base64, 16-byte salt,
+ * 32-byte tag. `crypto.argon2` reproduces those digests byte for byte — the
+ * test beside this file pins one such hash and would fail if any of it drifted.
  */
-export async function hashPassword(password: string): Promise<string> {
-  return Bun.password.hash(password, {
-    algorithm: 'argon2id',
-    memoryCost: 65536, // 64 MB
-    timeCost: 3,
+const ARGON2_MEMORY = 65536; // 64 MB
+const ARGON2_PASSES = 3;
+const ARGON2_PARALLELISM = 1;
+const ARGON2_TAG_BYTES = 32;
+const ARGON2_SALT_BYTES = 16;
+
+function b64(buf: Buffer): string {
+  return buf.toString('base64').replace(/=+$/, '');
+}
+
+async function argon2id(
+  password: string,
+  salt: Buffer,
+  options: { memory: number; passes: number; parallelism: number; tagLength: number },
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    cryptoArgon2(
+      'argon2id',
+      {
+        message: Buffer.from(password, 'utf8'),
+        nonce: salt,
+        parallelism: options.parallelism,
+        tagLength: options.tagLength,
+        memory: options.memory,
+        passes: options.passes,
+      },
+      (err, tag) => (err ? reject(err) : resolve(Buffer.from(tag))),
+    );
   });
 }
 
+export async function hashPassword(password: string): Promise<string> {
+  const salt = randomBytes(ARGON2_SALT_BYTES);
+  const tag = await argon2id(password, salt, {
+    memory: ARGON2_MEMORY,
+    passes: ARGON2_PASSES,
+    parallelism: ARGON2_PARALLELISM,
+    tagLength: ARGON2_TAG_BYTES,
+  });
+  return `$argon2id$v=19$m=${ARGON2_MEMORY},t=${ARGON2_PASSES},p=${ARGON2_PARALLELISM}$${b64(salt)}$${b64(tag)}`;
+}
+
 /**
- * Verify password against hash
+ * Verify against a stored PHC string, reading the cost parameters out of the
+ * hash rather than assuming today's constants — otherwise raising a cost would
+ * lock out every existing user.
  */
 export async function verifyPassword(password: string, hash: string): Promise<boolean> {
-  return Bun.password.verify(password, hash);
+  const parts = hash.split('$');
+  // ['', 'argon2id', 'v=19', 'm=..,t=..,p=..', salt, tag]
+  if (parts.length !== 6 || parts[1] !== 'argon2id') return false;
+  const params = Object.fromEntries(
+    parts[3].split(',').map((kv) => {
+      const [k, v] = kv.split('=');
+      return [k, Number(v)];
+    }),
+  ) as { m?: number; t?: number; p?: number };
+  if (!params.m || !params.t || !params.p) return false;
+
+  let salt: Buffer;
+  let expected: Buffer;
+  try {
+    salt = Buffer.from(parts[4], 'base64');
+    expected = Buffer.from(parts[5], 'base64');
+  } catch {
+    return false;
+  }
+  if (salt.length === 0 || expected.length === 0) return false;
+
+  const actual = await argon2id(password, salt, {
+    memory: params.m,
+    passes: params.t,
+    parallelism: params.p,
+    tagLength: expected.length,
+  });
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
 /**

@@ -1,4 +1,4 @@
-import { Elysia } from 'elysia';
+import { Elysia } from '@/api/http';
 import { getUMI } from '@/channels/interface';
 import { getConfig } from '@/config';
 import { getGateway } from '@/core/gateway';

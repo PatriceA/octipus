@@ -4,7 +4,7 @@
  *
  * docs/plans/blocked-vs-stuck.md Phase 3.
  */
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'vitest';
 import { checkLocalModelFit } from './local-fit';
 
 const GB = 1024 ** 3;

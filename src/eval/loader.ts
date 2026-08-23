@@ -6,6 +6,7 @@
 
 import { basename, extname, resolve } from 'path';
 import type { Assertion, AssertionType, EvalSuite, EvalTest } from './types';
+import { fileAt, globFiles } from '@/utils/fs-file';
 
 const VALID_ASSERTION_TYPES: Set<string> = new Set([
   'routes_to_role', 'uses_tool', 'not_uses_tool',
@@ -292,7 +293,7 @@ function validateSuite(raw: Record<string, unknown>, filename: string): EvalSuit
  * Load a single YAML eval suite from a file path.
  */
 export async function loadSuiteFromFile(filePath: string): Promise<EvalSuite> {
-  const file = Bun.file(filePath);
+  const file = fileAt(filePath);
   if (!(await file.exists())) {
     throw new Error(`Suite file not found: ${filePath}`);
   }
@@ -312,8 +313,7 @@ export async function loadSuites(
   const dir = evalDir || resolve(process.cwd(), 'eval');
   const suites: EvalSuite[] = [];
 
-  const glob = new Bun.Glob('*.{yaml,yml}');
-  for await (const entry of glob.scan({ cwd: dir, absolute: false })) {
+  for await (const entry of globFiles('*.{yaml,yml}', { cwd: dir, absolute: false })) {
     const name = basename(entry, extname(entry));
     if (filterName && name !== filterName) continue;
 

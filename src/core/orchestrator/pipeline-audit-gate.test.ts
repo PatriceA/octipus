@@ -6,7 +6,7 @@
  * (a stage that declared artifacts and wrote none), this one gates the auditor
  * (a stage that reviewed the work and named nothing).
  */
-import { describe, expect, spyOn, test } from 'bun:test';
+import { describe, expect, test, vi } from 'vitest';
 import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
 import { auditScopeBefore, handoffConfidenceByStage, PipelineManager } from './pipeline-manager';
 import type { QAValidationResult } from './types';
@@ -108,7 +108,7 @@ describe('PipelineManager.gateQaVerdict', () => {
 
   const setup = () => {
     const rows: Array<Record<string, unknown>> = [];
-    const spy = spyOn(verificationEvidenceRepository, 'record').mockImplementation(async (r) => {
+    const spy = vi.spyOn(verificationEvidenceRepository, 'record').mockImplementation(async (r) => {
       rows.push(r as Record<string, unknown>);
       return r as never;
     });
@@ -322,7 +322,7 @@ describe('PipelineManager.gateQaVerdict', () => {
   });
 
   test('a ledger failure never breaks the run, and never masks the gate verdict', async () => {
-    const spy = spyOn(verificationEvidenceRepository, 'record').mockImplementation(async () => {
+    const spy = vi.spyOn(verificationEvidenceRepository, 'record').mockImplementation(async () => {
       throw new Error('db down');
     });
     const call = (output: string) =>

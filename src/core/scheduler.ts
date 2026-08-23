@@ -2,6 +2,7 @@ import { getRedis, RedisPubSub, RedisQueue } from '@/db/redis';
 import { generateId } from '@/utils/crypto';
 import { coreLogger } from '@/utils/logger';
 import type { Task } from './types';
+import { spawnProcess } from '@/utils/proc';
 
 const TASK_QUEUE = 'tasks:queue';
 const TASK_CHANNEL = 'tasks:events';
@@ -136,7 +137,7 @@ export async function evaluateWakeGate(gate: WakeGate): Promise<WakeGateResult> 
   try {
     if (gate.kind === 'command') {
       const timeoutMs = gate.timeoutMs ?? 5000;
-      const proc = Bun.spawn(['sh', '-c', gate.cmd], { stdout: 'pipe', stderr: 'pipe' });
+      const proc = spawnProcess(['sh', '-c', gate.cmd], { stdout: 'pipe', stderr: 'pipe' });
       const timer = setTimeout(() => proc.kill(), timeoutMs);
       const exit = await proc.exited;
       clearTimeout(timer);

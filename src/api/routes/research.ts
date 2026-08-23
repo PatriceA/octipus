@@ -1,4 +1,4 @@
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getResearchJob, startResearch } from '@/core/research/jobs';
 import type { ResearchDepth } from '@/core/research/types';

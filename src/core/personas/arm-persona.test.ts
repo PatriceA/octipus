@@ -6,7 +6,7 @@
  * every specialist the host's voice would change every worker prompt — and its
  * token cost — as a side effect of a feature nobody switched on.
  */
-import { describe, expect, spyOn, test } from 'bun:test';
+import { describe, expect, test, vi } from 'vitest';
 import type { Profile, ProfileFact } from '@/db/schema/profiles';
 import * as repository from './repository';
 import { armFactKey, PersonaProfileRepository } from './repository';
@@ -25,7 +25,7 @@ const profileWith = (facts: ProfileFact[], name = 'Adam'): Profile =>
 
 /** Stand in for the DB read the resolver does. */
 function withProfile(profile: Profile | null) {
-  return spyOn(repository, 'getPersonaProfileRepository').mockReturnValue({
+  return vi.spyOn(repository, 'getPersonaProfileRepository').mockReturnValue({
     findForUser: async () => profile,
   } as unknown as ReturnType<typeof repository.getPersonaProfileRepository>);
 }
@@ -100,7 +100,7 @@ describe('resolvePersonaForArm', () => {
   });
 
   test('a profile read that throws degrades to no persona', async () => {
-    const spy = spyOn(repository, 'getPersonaProfileRepository').mockReturnValue({
+    const spy = vi.spyOn(repository, 'getPersonaProfileRepository').mockReturnValue({
       findForUser: async () => { throw new Error('db down'); },
     } as unknown as ReturnType<typeof repository.getPersonaProfileRepository>);
     expect(await resolvePersonaForArm('user-1', 'review')).toBeNull();

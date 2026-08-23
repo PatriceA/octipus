@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { _resetToolboxRegistryForTests, getToolboxRegistry } from './registry';
 import type { ToolboxTool } from './types';
 import { validatePipeline } from './validator';

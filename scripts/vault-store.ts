@@ -1,10 +1,10 @@
 /**
  * One-shot: store a secret in the vault for the user identified by email.
  *
- *   bun run scripts/vault-store.ts <email> <name> <value>
+ *   npx tsx scripts/vault-store.ts <email> <name> <value>
  *
  * Example:
- *   bun run scripts/vault-store.ts patrice.allegue@gmail.com github_token "$(gh auth token)"
+ *   npx tsx scripts/vault-store.ts patrice.allegue@gmail.com github_token "$(gh auth token)"
  *
  * Updates in place if a row with the same (user, name) already exists.
  */
@@ -17,7 +17,7 @@ import { getVault, initializeVault } from '@/security/vault';
 async function main() {
   const [email, name, value] = process.argv.slice(2);
   if (!email || !name || !value) {
-    console.error('usage: bun run scripts/vault-store.ts <email> <name> <value>');
+    console.error('usage: npx tsx scripts/vault-store.ts <email> <name> <value>');
     process.exit(2);
   }
 

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { PermissionRuleEngine } from './permission-rules';
 
 describe('parseRule — patterns with parens in the matcher', () => {

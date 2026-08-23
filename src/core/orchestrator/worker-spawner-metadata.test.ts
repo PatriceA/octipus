@@ -10,12 +10,13 @@
  * call site, and spawning a real worker here would need the whole model/tool
  * stack to say the same thing.
  */
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it } from 'vitest';
 import { pipelineMetadata } from './worker-spawner';
+import { fileAt } from '@/utils/fs-file';
 
 describe('pipeline stage spawns', () => {
   it('forward contextMetadata on every agentManager.spawn call', async () => {
-    const src = await Bun.file(`${import.meta.dir}/worker-spawner.ts`).text();
+    const src = await fileAt(`${import.meta.dirname}/worker-spawner.ts`).text();
     const calls: string[] = [];
     // Brace-count to the matching close: a spawn literal carrying an inline
     // callback would otherwise be truncated at the callback's own `}` and the
@@ -69,7 +70,7 @@ describe('a delegating stage keeps the pipeline reachable', () => {
     // pipeline", and a producesPlan stage that spawned a planner left no items
     // for the loop to read. Source-shape, like the assertion above: the defect
     // is a missing field at a spawn literal.
-    const src = await Bun.file(`${import.meta.dir}/../swarm/spawner.ts`).text();
+    const src = await fileAt(`${import.meta.dirname}/../swarm/spawner.ts`).text();
     const at = src.indexOf('contextMetadata: {');
     expect(at).toBeGreaterThan(0);
     const block = src.slice(at, src.indexOf('}', src.indexOf('originalRequest', at)));

@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env tsx
 /**
  * audit-check.ts — blocking dependency audit with a reviewable allowlist.
  *
@@ -15,6 +15,7 @@
 
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { runCommand } from '@/utils/proc';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -233,15 +234,8 @@ export function loadAllowlist(path: string): AllowlistEntry[] {
 // CLI
 // ---------------------------------------------------------------------------
 
-function runBunAudit(): { stdout: string; stderr: string } {
-  const proc = Bun.spawnSync(['bun', 'audit', '--prod', '--json'], {
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  return {
-    stdout: new TextDecoder().decode(proc.stdout ?? new Uint8Array()),
-    stderr: new TextDecoder().decode(proc.stderr ?? new Uint8Array()),
-  };
+async function runBunAudit(): Promise<{ stdout: string; stderr: string }> {
+  return runCommand(['bun', 'audit', '--prod', '--json']);
 }
 
 function report(result: EvaluationResult): void {
@@ -295,10 +289,10 @@ function report(result: EvaluationResult): void {
   }
 }
 
-function main(): void {
-  const allowlistPath = join(import.meta.dir, 'audit-allowlist.json');
+async function main(): Promise<void> {
+  const allowlistPath = join(import.meta.dirname, 'audit-allowlist.json');
 
-  const { stdout, stderr } = runBunAudit();
+  const { stdout, stderr } = await runBunAudit();
 
   let advisories: Advisory[];
   try {

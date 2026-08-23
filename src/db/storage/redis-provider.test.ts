@@ -3,7 +3,7 @@
  * subset of ioredis methods the provider touches. No real Redis server
  * required.
  */
-import { mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 // ── Fake ioredis ──────────────────────────────────────────────
 
@@ -143,15 +143,14 @@ class FakeRedis {
   }
 }
 
-// Install mock BEFORE importing the provider so it sees the fake class.
-mock.module('ioredis', () => ({
-  default: FakeRedis,
-}));
+vi.mock('ioredis', () => ({ default: FakeRedis }));
 
-// ── Imports (must come after mock.module) ────────────────────
-
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { RedisStorageProvider } from './redis-provider';
+// Imported dynamically, not statically: a static import is hoisted above the
+// `class FakeRedis` declaration, so the provider — and with it the mocked
+// `ioredis` factory — would run while the class is still in its temporal dead
+// zone.
+const { RedisStorageProvider } = await import('./redis-provider');
+type RedisStorageProvider = InstanceType<typeof RedisStorageProvider>;
 
 // ── Fixtures ──────────────────────────────────────────────────
 
@@ -337,7 +336,7 @@ describe('RedisStorageProvider.createPubSub', () => {
   test('subscribe + publish delivers JSON payloads', async () => {
     const ps = provider.createPubSub();
     const received: unknown[] = [];
-    await ps.subscribe('chan', (m) => received.push(m));
+    await ps.subscribe('chan', (m: unknown) => received.push(m));
     await ps.publish('chan', { hi: 'there' });
     await new Promise((r) => setTimeout(r, 10));
     expect(received).toEqual([{ hi: 'there' }]);
@@ -346,7 +345,7 @@ describe('RedisStorageProvider.createPubSub', () => {
   test('subscribe + publish delivers string payloads', async () => {
     const ps = provider.createPubSub();
     const received: unknown[] = [];
-    await ps.subscribe('chan', (m) => received.push(m));
+    await ps.subscribe('chan', (m: unknown) => received.push(m));
     await ps.publish('chan', 'plain');
     await new Promise((r) => setTimeout(r, 10));
     expect(received).toEqual(['plain']);
@@ -382,7 +381,7 @@ describe('RedisStorageProvider.createPubSub', () => {
   test('unsubscribe with no handler detaches the channel entirely', async () => {
     const ps = provider.createPubSub();
     const received: unknown[] = [];
-    await ps.subscribe('chan', (m) => received.push(m));
+    await ps.subscribe('chan', (m: unknown) => received.push(m));
     await ps.unsubscribe('chan');
     await ps.publish('chan', 'dropped');
     await new Promise((r) => setTimeout(r, 10));

@@ -1,4 +1,4 @@
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getApiTokenManager, ScopeValidationError } from '@/security/api-tokens';
 import { isAuthenticated } from '@/security/principal';

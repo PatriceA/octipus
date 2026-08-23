@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 
 // Note: PermissionManager requires database connection
 // These are unit tests for permission logic

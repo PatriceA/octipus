@@ -1,4 +1,4 @@
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { handlePersonaCommand } from '@/core/personas/commands';
 import { getPersonaProfileRepository, PersonaProfileRepository } from '@/core/personas/repository';

@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env tsx
 /**
  * Eval CLI entry point.
  *
@@ -21,6 +21,7 @@ import { compareToBaseline, formatRegressionReport, hasRegressions, resolveBasel
 import { reportDetailedToConsole, reportToConsole, saveResults, toJSON } from './reporter';
 import { runAllSuites } from './runner';
 import type { EvalRunnerOptions } from './types';
+import { fileAt } from '@/utils/fs-file';
 
 // ── Argument parsing ─────────────────────────────────────────────────
 
@@ -277,7 +278,7 @@ async function main() {
       if (dbInitialized) await exitClean(2);
       process.exit(2);
     }
-    const report = compareToBaseline(JSON.parse(await Bun.file(path).text()), results);
+    const report = compareToBaseline(JSON.parse(await fileAt(path).text()), results);
     if (!jsonOnly) {
       console.log(`\nBaseline: ${path}`);
       console.log(formatRegressionReport(report));

@@ -1,4 +1,4 @@
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getLoadedPlugin, getLoadedPlugins, PluginTool, reloadPlugin } from '@/plugins';
 import { getToolRegistry } from '@/tools/registry';

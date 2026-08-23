@@ -49,10 +49,10 @@ jobs:
           persist-credentials: false
 
       - name: Setup Bun (+ dependency cache)
-        uses: ./.github/actions/bun-setup
+        uses: ./.github/actions/node-setup
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: npm ci
 
       - name: Generate red-team suite (dry-run)
-        run: bun run src/eval/red-team/cli.ts --dry-run
+        run: npm run src/eval/red-team/cli.ts --dry-run

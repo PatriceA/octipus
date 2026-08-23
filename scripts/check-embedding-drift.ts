@@ -9,7 +9,7 @@
  * re-index (or backfill the new model's embeddings).
  *
  * Usage:
- *   bun run scripts/check-embedding-drift.ts
+ *   npx tsx scripts/check-embedding-drift.ts
  *
  * Exits 0 with a "no drift" message when both tables are
  * homogeneous, exits 1 with a breakdown otherwise so a CI gate can

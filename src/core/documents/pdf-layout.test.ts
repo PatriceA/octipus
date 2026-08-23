@@ -7,7 +7,7 @@
  * two-column page — both came out of the old `items.join(' ')` as one
  * undifferentiated run.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { type PdfTextItem, reconstructPageText } from './pdf-layout';
 
 /** One text fragment at (x, y), sized for a ~10pt font. */

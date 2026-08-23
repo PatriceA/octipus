@@ -6,7 +6,7 @@
  * spawn the script as a subprocess — we just call its exported batch
  * loop against an ephemeral PGlite.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { randomBytes, pbkdf2Sync } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';

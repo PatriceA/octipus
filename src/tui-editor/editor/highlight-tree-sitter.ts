@@ -44,6 +44,8 @@ import {
   type TokenKind,
 } from './highlight';
 import type { Language as EditorLang } from './lang';
+import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 
 type WtsParser = {
   setLanguage(lang: WtsLanguage): WtsParser;
@@ -97,19 +99,32 @@ const GRAMMAR_FILES: Partial<Record<EditorLang, { pkg: string; file: string }>> 
 };
 
 /**
- * Resolve a grammar package's installed root via Bun's module resolver,
+ * Resolve a grammar package's installed root via the module resolver,
  * then join the wasm filename. Returns null when the package isn't
  * installed (we silently fall back to the regex highlighter).
  */
 function resolveGrammarPath(pkg: string, file: string): string | null {
+  const require = createRequire(import.meta.url);
+  // `package.json` first — it sits at the package root and needs no walking.
+  // `web-tree-sitter` does not expose it through `exports`, though, so fall
+  // back to the package's own entry point and climb to the root from there.
   try {
-    // `package.json` is the most reliable resolution target — every
-    // package has one, and it sits at the package root.
-    const pkgJson = Bun.resolveSync(`${pkg}/package.json`, import.meta.dir);
-    return join(dirname(pkgJson), file);
+    return join(dirname(require.resolve(`${pkg}/package.json`)), file);
   } catch {
-    return null;
+    /* not exported — try the entry point */
   }
+  try {
+    let dir = dirname(require.resolve(pkg));
+    for (let up = 0; up < 8; up++) {
+      if (existsSync(join(dir, 'package.json'))) return join(dir, file);
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } catch {
+    /* not installed */
+  }
+  return null;
 }
 
 let module: ParserModule | null = null;

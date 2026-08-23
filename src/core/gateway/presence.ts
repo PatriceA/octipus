@@ -40,7 +40,7 @@ const IDLE_TIMEOUTS: Record<ClientType, number> = {
  */
 export class PresenceTracker {
   private entries: Map<string, PresenceEntry> = new Map();
-  private checkTimer: Timer | null = null;
+  private checkTimer: NodeJS.Timeout | null = null;
   private onIdleTimeout?: (connectionId: string, entry: PresenceEntry) => void;
 
   constructor(options?: { onIdleTimeout?: (connectionId: string, entry: PresenceEntry) => void }) {

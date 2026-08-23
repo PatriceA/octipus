@@ -1,12 +1,13 @@
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawn } from 'bun';
-import type { Elysia } from 'elysia';
+import { spawnProcess as spawn } from '@/utils/proc';
+import type { Elysia } from '@/api/http';
 import { getConfig } from '@/config';
 import { apiLogger } from '@/utils/logger';
 import { pcm16kToTwilioMedia, TwilioInboundDecoder } from '@/voice/telephony/media-bridge';
 import { generatePhoneReply, type PhoneTurn } from '@/voice/telephony/reply';
+import { fileAt, writeFileAt } from '@/utils/fs-file';
 
 /**
  * Telephony media-stream WebSocket — `/voice/media/:provider` (Phase 4d).
@@ -78,14 +79,14 @@ async function synthesizeReplyPcm16k(text: string): Promise<Int16Array | null> {
   const src = join(tmpdir(), `phone-tts-${crypto.randomUUID()}.mp3`);
   const out = join(tmpdir(), `phone-tts-${crypto.randomUUID()}.pcm`);
   try {
-    await Bun.write(src, mp3);
+    await writeFileAt(src, mp3);
     const ff = spawn({ cmd: ['ffmpeg', '-y', '-i', src, '-ar', '16000', '-ac', '1', '-f', 's16le', out], stderr: 'pipe' });
     await ff.exited;
     if (ff.exitCode !== 0) {
       apiLogger.error({ stderr: (await new Response(ff.stderr).text()).slice(-200) }, 'phone TTS ffmpeg failed');
       return null;
     }
-    const bytes = new Uint8Array(await Bun.file(out).arrayBuffer());
+    const bytes = new Uint8Array(await fileAt(out).arrayBuffer());
     return new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2));
   } finally {
     await rm(src, { force: true });

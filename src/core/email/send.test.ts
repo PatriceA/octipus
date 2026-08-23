@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { buildGmailRaw } from './service';
 
 /** Decode a base64url MIME string back to text. */

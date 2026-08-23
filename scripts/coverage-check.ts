@@ -1,8 +1,9 @@
-#!/usr/bin/env bun
+#!/usr/bin/env tsx
 /**
  * coverage-check.ts — make test coverage visible and ratchet it.
  *
- * Reads the lcov report bun writes to `coverage/lcov.info` (see bunfig.toml),
+ * Reads the lcov report the test runner writes to `coverage/lcov.info` (see
+ * `vitest.config.ts`),
  * computes overall line + function coverage, prints a summary (to the GitHub
  * Actions job summary when `$GITHUB_STEP_SUMMARY` is set, else stdout), and
  * fails if coverage has dropped more than `tolerance` below the committed
@@ -88,7 +89,7 @@ export function evaluateCoverage(lcov: string, baseline: CoverageBaseline): Cove
   // pass. Treat an empty report as a failure.
   if (totals.lines.found === 0) {
     failures.push(
-      'no line coverage data in lcov.info — the report is empty or truncated (expected coverage from the full `bun test src scripts` run)',
+      'no line coverage data in lcov.info — the report is empty or truncated (expected coverage from the full `npm run test -- --coverage` run)',
     );
   }
 
@@ -134,13 +135,13 @@ export function evaluateCoverage(lcov: string, baseline: CoverageBaseline): Cove
 }
 
 function main(): void {
-  const root = join(import.meta.dir, '..');
+  const root = join(import.meta.dirname, '..');
   let lcov: string;
   try {
     lcov = readFileSync(join(root, 'coverage', 'lcov.info'), 'utf8');
   } catch {
     console.error(
-      'coverage/lcov.info not found. Run `bun test src scripts` first (bunfig.toml enables lcov coverage).',
+      'coverage/lcov.info not found. Run `npm run test -- --coverage` first.',
     );
     process.exit(2);
   }

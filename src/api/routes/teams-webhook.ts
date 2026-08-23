@@ -1,4 +1,4 @@
-import { Elysia } from 'elysia';
+import { Elysia } from '@/api/http';
 import { apiLogger } from '@/utils/logger';
 
 /**

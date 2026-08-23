@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { runResearch, type ResearchDeps } from './service';
 
 const NOW = '2026-06-03T12:00:00Z';

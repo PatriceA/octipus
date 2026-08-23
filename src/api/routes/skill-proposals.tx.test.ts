@@ -5,7 +5,7 @@
  * stays re-approvable). Runs against embedded PGlite (no Docker), mirroring the
  * pattern in src/security/rls.test.ts.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';

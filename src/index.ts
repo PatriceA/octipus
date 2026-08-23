@@ -1,4 +1,4 @@
-import { startServer, stopApiServerWatchdog } from '@/api/server';
+import { startServer, stopApiServer } from '@/api/server';
 import { initializeChannels } from '@/channels';
 import { loadRuntimeConfig } from '@/config';
 import { initializeHotReload } from '@/config/hot-reload';
@@ -306,7 +306,7 @@ async function main() {
         if (distinct > 1) {
           logger.warn(
             { table, distinctVersions: distinct },
-            'Embedding-version drift detected — run `bun run scripts/check-embedding-drift.ts` for breakdown',
+            'Embedding-version drift detected — run `npx tsx scripts/check-embedding-drift.ts` for breakdown',
           );
         }
       }
@@ -324,7 +324,7 @@ async function main() {
     // this value let GC run ~10s after boot and silently drop the HTTP listener
     // (the process stayed alive on its channel/cron handles, so it looked "up"
     // but every request was connection-refused). Hold it and stop it on shutdown.
-    const apiServer = await startServer();
+    await startServer();
     logger.info('API server started');
 
     // Mint / refresh the MCP bootstrap api token so bin/octi can stamp it
@@ -407,13 +407,10 @@ async function main() {
       await gatewayHub.stop();
       await mcpBridge.disconnectAll();
       await gateway.stop();
-      // Stop the listener watchdog BEFORE stopping the server, otherwise it would
-      // see the closed listener and immediately rebind it mid-shutdown.
-      stopApiServerWatchdog();
-      // Pass true to force-close active connections (idle keep-alives, the
-      // permission WS). Without it Elysia's stop() waits for every connection to
-      // drain on its own and can hang past the watchdog on a long-poll socket.
-      await apiServer.stop(true);
+      // Force-closes active connections (idle keep-alives, the permission WS)
+      // as well as the listener; a drain-and-wait stop can outlast the
+      // force-exit watchdog on a long-poll socket.
+      stopApiServer();
 
       // Close the long-lived task_state LISTEN connection (if it was
       // ever opened). Safe to call when no subscribers were active.

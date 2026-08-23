@@ -4,7 +4,7 @@
  * every shape a smaller model commonly returns (an array of rows, capitalized
  * or synonym priorities, a wrapped object). These guard the loosened parsing.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { coercePriority, triageEntries } from './service';
 
 describe('coercePriority', () => {

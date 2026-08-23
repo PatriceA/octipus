@@ -4,7 +4,7 @@
  * Locks down the cursor / selection / insert / delete / undo
  * semantics so the renderer can safely assume them.
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { Buffer, positionEq, positionLte } from './buffer';
 
 describe('construction', () => {

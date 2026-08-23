@@ -1,4 +1,4 @@
-import { describe, test, expect, mock } from 'bun:test';
+import { describe, expect, test, vi } from 'vitest';
 import {
   buildSummarizationPrompt,
   compactWithSummarization,
@@ -89,7 +89,7 @@ describe('Context Compaction', () => {
   describe('compactWithSummarization', () => {
     test('returns unchanged messages when under keepRecent threshold', async () => {
       const messages = [msg('user', 'Hello'), msg('assistant', 'Hi')];
-      const summarize = mock(() => Promise.resolve('summary'));
+      const summarize = vi.fn(() => Promise.resolve('summary'));
 
       const result = await compactWithSummarization(messages, summarize, 5);
 
@@ -103,7 +103,7 @@ describe('Context Compaction', () => {
         msg(i % 2 === 0 ? 'user' : 'assistant', `Message ${i}`),
       );
 
-      const summarize = mock(() => Promise.resolve('This is the summary.'));
+      const summarize = vi.fn(() => Promise.resolve('This is the summary.'));
 
       await compactWithSummarization(messages, summarize, 10);
 
@@ -122,7 +122,7 @@ describe('Context Compaction', () => {
         ...Array.from({ length: 10 }, (_, i) => msg('user', `Follow-up ${i}`)),
       ];
 
-      const summarize = mock(() => Promise.resolve('Did some edits.'));
+      const summarize = vi.fn(() => Promise.resolve('Did some edits.'));
 
       const result = await compactWithSummarization(messages, summarize, 5);
 
@@ -138,7 +138,7 @@ describe('Context Compaction', () => {
         msg('user', `Msg ${i}`),
       );
 
-      const summarize = mock(() => Promise.resolve('Summary of old messages.'));
+      const summarize = vi.fn(() => Promise.resolve('Summary of old messages.'));
 
       const result = await compactWithSummarization(messages, summarize, 3);
 

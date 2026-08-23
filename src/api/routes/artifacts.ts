@@ -4,7 +4,7 @@
  * live in `artifact-pages.ts` and mount on the artifacts subdomain.
  */
 
-import { Elysia, t } from 'elysia';
+import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { artifactsRepository } from '@/db/repositories/artifacts-repository';
 import type { Artifact } from '@/db/schema/artifacts';

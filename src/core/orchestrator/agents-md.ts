@@ -1,5 +1,6 @@
 import { resolve } from 'path';
 import { getConfig } from '@/config';
+import { fileAt } from '@/utils/fs-file';
 
 /**
  * AGENTS.md — the universal, curated project guide (https://agents.md).
@@ -36,7 +37,7 @@ export function agentsMdPath(repoRoot: string): string {
 export async function loadAgentsMd(repoRoot?: string): Promise<string | null> {
   try {
     const root = repoRoot || getConfig().workspace?.rootPath || '.';
-    const file = Bun.file(agentsMdPath(root));
+    const file = fileAt(agentsMdPath(root));
     if (await file.exists()) {
       const content = await file.text();
       return content.slice(0, MAX_AGENTS_MD_CHARS);

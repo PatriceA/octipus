@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { parseManifestSizeMB, parseModelId } from './sizing';
 
 // Captured live from registry.ollama.ai/v2/library/llama3.2/manifests/3b-instruct-q4_K_M.

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import type { AgentWorker } from '@/core/agent-worker';
 import { createCollectChildrenTool, formatCollectedResults } from './collect-tool';
 import { getLevelDefault } from './types';

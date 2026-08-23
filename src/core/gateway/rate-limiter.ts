@@ -49,7 +49,7 @@ interface WindowEntry {
  */
 export class GatewayRateLimiter {
   private windows: Map<string, WindowEntry> = new Map();
-  private cleanupTimer: Timer | null = null;
+  private cleanupTimer: NodeJS.Timeout | null = null;
 
   constructor(private customLimits?: Record<string, Record<TrustLevel, RateLimitConfig>>) {
     // Periodic cleanup of stale entries every 5 minutes

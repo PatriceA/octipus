@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { KawaiiSpinner as Spinner } from './spinner';
 
 class MockStream {

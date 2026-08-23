@@ -2,7 +2,7 @@
  * Phase 2.1 capability floor — per-model shim-usage stats + the
  * validateOrchestratorModel reroute they drive.
  */
-import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import * as modelRegistry from '@/models/model-registry';
 import {
   hasRecentShim,
@@ -52,7 +52,7 @@ describe('validateOrchestratorModel — capability floor reroute', () => {
       getDefaultModel: async () => good,
       getAllModels: async () => [bad, good],
     };
-    const spy = spyOn(modelRegistry, 'getModelRegistry').mockReturnValue(fakeRegistry as never);
+    const spy = vi.spyOn(modelRegistry, 'getModelRegistry').mockReturnValue(fakeRegistry as never);
     try {
       resetModelCapabilityStats();
       // Clean model is kept…
