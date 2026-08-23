@@ -29,6 +29,18 @@ function ttlMsFor(requested: number | undefined, fallback: number): number {
   return requested ?? fallback;
 }
 
+/**
+ * The same ticket test applied to a session that already exists, read off its
+ * own lifetime. The cap must recognise a ticket it minted earlier, not only the
+ * one being minted now — otherwise tickets are exempt from the check while
+ * still filling the cap and still being eviction candidates, and because they
+ * are always the NEWEST entries, oldest-first eviction takes the user's real
+ * logins instead.
+ */
+function isEphemeralSession(s: { createdAt: Date | string; expiresAt: Date | string }): boolean {
+  return new Date(s.expiresAt).getTime() - new Date(s.createdAt).getTime() <= EPHEMERAL_TTL_MAX_MS;
+}
+
 export class SessionManager {
   private cache: RedisCache;
   private maxAge: number;
@@ -79,9 +91,12 @@ export class SessionManager {
     // minute; counting them meant a browser tab could evict the user's phone.
     const MAX_SESSIONS = 20;
     const isEphemeral = ttlMsFor(options?.ttlMs, this.maxAge) <= EPHEMERAL_TTL_MAX_MS;
-    if (!isEphemeral && (await this.countForUser(userId)) >= MAX_SESSIONS) {
+    if (!isEphemeral) {
       await this.cleanup(userId);
-      const live = await this.listForUserWithHashes(userId);
+      // Tickets are filtered out of BOTH the count and the candidate list, not
+      // just the check above. `countForUser`/`listForUserWithHashes` stay
+      // unfiltered because the sessions UI must still show every live session.
+      const live = (await this.listForUserWithHashes(userId)).filter((s) => !isEphemeralSession(s));
       if (live.length >= MAX_SESSIONS) {
         const oldestFirst = [...live].sort(
           (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),

@@ -1689,8 +1689,11 @@ export default function ChatPage() {
           </div>
           <PromptInput
             onSend={sendMessage}
-            disabled={isLoading}
-            placeholder={activeSessionId ? 'Send a message...' : 'Create a session to start chatting'}
+            /* The new-session dialog is a choice that is not yet made: a message
+               sent while it is open auto-creates its own session, and confirming
+               the dialog then adds a second, empty one. */
+            disabled={isLoading || showNewSessionDialog}
+            placeholder={showNewSessionDialog ? 'Choose a session type first...' : activeSessionId ? 'Send a message...' : 'Create a session to start chatting'}
             voiceError={realtime.error || voiceUnavailableReason}
             voiceAvailable={voiceAvailable !== false}
             realtimeMode={realtimeMode}

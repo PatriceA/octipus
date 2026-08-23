@@ -1,0 +1,56 @@
+/**
+ * The run-wide redundant-call check.
+ *
+ * Both pre-existing checks are consecutive-only, so an alternating A,B,A,B,A
+ * sequence — the same file read three times with a write in between — trips
+ * neither. That is the shape behind the measured tool-call variance (2 calls
+ * one run, 14 the next), so the case is pinned here.
+ */
+import { describe, expect, test } from 'bun:test';
+import { ToolLoopDetector } from './tool-loop-detector';
+
+const call = (name: string, args: unknown) => [{ id: name, name, arguments: args } as never];
+
+describe('checkRedundant', () => {
+  test('an alternating repeat trips, where the consecutive checks do not', () => {
+    const d = new ToolLoopDetector();
+    const read = () => call('filesystem__read', { path: '/a.ts' });
+    const write = () => call('filesystem__write', { path: '/b.ts' });
+
+    expect(d.checkRedundant(read()).tripped).toBe(false);
+    expect(d.checkRedundant(write()).tripped).toBe(false);
+    expect(d.checkRedundant(read()).tripped).toBe(false); // re-read after a write
+    expect(d.checkRedundant(write()).tripped).toBe(false);
+    expect(d.checkRedundant(read()).tripped).toBe(false); // verify-after-fix
+    expect(d.checkRedundant(write()).tripped).toBe(false);
+
+    const fourth = d.checkRedundant(read());
+    expect(fourth.tripped).toBe(true);
+    expect(fourth.signature).toBe('filesystem__read');
+    expect(fourth.count).toBe(4);
+
+    // The consecutive checks saw nothing wrong with any of it.
+    const c = new ToolLoopDetector();
+    for (const t of [read(), write(), read(), write(), read(), write(), read()]) {
+      expect(c.checkRepeat(t).tripped).toBe(false);
+    }
+  });
+
+  test('different arguments are different questions', () => {
+    const d = new ToolLoopDetector();
+    for (const p of ['/a.ts', '/b.ts', '/c.ts', '/d.ts', '/e.ts']) {
+      expect(d.checkRedundant(call('filesystem__read', { path: p })).tripped).toBe(false);
+    }
+  });
+
+  test('a signature is nudged once, not on every further repeat', () => {
+    const d = new ToolLoopDetector();
+    const c = () => call('shell__exec', { cmd: 'ls' });
+    expect(d.checkRedundant(c()).tripped).toBe(false);
+    expect(d.checkRedundant(c()).tripped).toBe(false);
+    expect(d.checkRedundant(c()).tripped).toBe(false);
+    expect(d.checkRedundant(c()).tripped).toBe(true);
+    expect(d.checkRedundant(c()).tripped).toBe(false);
+    expect(d.checkRedundant(c()).tripped).toBe(false);
+  });
+});

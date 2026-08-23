@@ -10,7 +10,8 @@
  * with a regex table's read of it.
  */
 import { describe, expect, test } from 'bun:test';
-import { buildDelegationPolicy, buildTopicHint } from './orchestrator-runner';
+import { assembleSystemPrompt, buildDelegationPolicy, buildTopicHint } from './orchestrator-runner';
+import { splitVolatileSystem } from '@/models/providers/prompt-cache';
 
 describe('buildDelegationPolicy', () => {
   test('is emitted for both tiers, with no dependency on a classified topic', () => {
@@ -61,5 +62,33 @@ describe('buildTopicHint', () => {
 
   test('nothing to say when the table matched nothing', () => {
     expect(buildTopicHint(true, { topic: undefined, confidence: 0 })).toBe('');
+  });
+});
+
+describe('assembleSystemPrompt', () => {
+  // The orchestrator's static prefix is what the Anthropic cache breakpoint
+  // covers. Long-term memory, the security reminder, the classifier's topic
+  // hint and the output directive all vary per turn, and all four used to be
+  // concatenated ahead of the breakpoint — which meant the ~6k-token prefix
+  // was re-written rather than read on most turns.
+  const base = 'ORCHESTRATOR PROMPT. '.repeat(600); // comfortably over the cache floor
+  const date = '\n\nCURRENT DATE & TIME: Sat, 23 Aug 2026 00:00:00 GMT';
+
+  test('the cacheable prefix is exactly the static tier', () => {
+    const prompt = assembleSystemPrompt([base], [date, '\n\nRELEVANT MEMORIES:\n- likes tea']);
+    const split = splitVolatileSystem(prompt);
+    expect(split).not.toBeNull();
+    expect(split!.staticPart).toBe(base);
+    expect(split!.volatilePart).toContain('likes tea');
+  });
+
+  test('the prefix does not move when the turn-derived blocks change', () => {
+    const a = splitVolatileSystem(assembleSystemPrompt([base], [date, 'memory A', 'hint A']));
+    const b = splitVolatileSystem(assembleSystemPrompt([base], [date, 'memory B']));
+    expect(a!.staticPart).toBe(b!.staticPart);
+  });
+
+  test('empty parts do not open a gap in the prefix', () => {
+    expect(assembleSystemPrompt([base, ''], ['', date])).toBe(base + date);
   });
 });

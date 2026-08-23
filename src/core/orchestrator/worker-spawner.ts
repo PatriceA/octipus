@@ -1164,49 +1164,6 @@ Use these MCP tools when the task benefits from them — especially for people-r
         role: agentRole,
         depth: 1,
       });
-      getGatewayHub().publishEvent({
-        type: 'swarm.node_spawned',
-        source: `swarm:${overrides.swarmParent.id}`,
-        userId: undefined,
-        sessionId: overrides.swarmParent.rootSessionId,
-        payload: {
-          rootSessionId: overrides.swarmParent.rootSessionId,
-          nodeId: workerId,
-          parentNodeId: overrides.swarmParent.id,
-          kind: 'agent',
-          depth: 1,
-          topicPath: stageNode.topicPath,
-          subtopic: stageNode.subtopic,
-          role: agentRole,
-          model: finalModel,
-          budget: stageNode.budget,
-          taskBriefPreview: brief.slice(0, 200),
-          retryAttempt: 0,
-        },
-      });
-      // Backfill agents.parentAgentId + swarmNodeId so the agents table
-      // mirrors the link (same as SwarmSpawner.backfillAgentLink).
-      try {
-        const { agentRepository } = await import('@/db/repositories/agent-repository');
-        const { getDb } = await import('@/db/postgres');
-        const { agents } = await import('@/db/schema/agents');
-        const { eq } = await import('drizzle-orm');
-        // Small delay so the agent row exists before we update it.
-        setTimeout(async () => {
-          try {
-            const existing = await agentRepository.findById(workerId);
-            if (!existing) return;
-            await getDb()
-              .update(agents)
-              .set({ parentAgentId: overrides.swarmParent!.id, swarmNodeId: workerId })
-              .where(eq(agents.id, workerId));
-          } catch (err) {
-            coreLogger.debug({ err, workerId }, 'pipeline stage backfillAgentLink skipped');
-          }
-        }, 25);
-      } catch (err) {
-        coreLogger.debug({ err }, 'pipeline stage backfillAgentLink import failed');
-      }
     } catch (err) {
       coreLogger.error(
         { err, workerId },
@@ -1221,6 +1178,54 @@ Use these MCP tools when the task benefits from them — especially for people-r
           coreLogger.error({ err: cancelErr, workerId }, 'Failed to cancel the unrecorded stage node row'),
         );
       throw err instanceof Error ? err : new Error(String(err));
+    }
+
+    // Announcement and mirroring, OUTSIDE the durable bracket. Both are
+    // best-effort by nature, and a throwing event subscriber inside the bracket
+    // would cancel a node row that WAS recorded and fail the stage over
+    // telemetry. Matches SwarmSpawner, which brackets only create + recordSpawn.
+    getGatewayHub().publishEvent({
+      type: 'swarm.node_spawned',
+      source: `swarm:${overrides.swarmParent.id}`,
+      userId: undefined,
+      sessionId: overrides.swarmParent.rootSessionId,
+      payload: {
+        rootSessionId: overrides.swarmParent.rootSessionId,
+        nodeId: workerId,
+        parentNodeId: overrides.swarmParent.id,
+        kind: 'agent',
+        depth: 1,
+        topicPath: stageNode.topicPath,
+        subtopic: stageNode.subtopic,
+        role: agentRole,
+        model: finalModel,
+        budget: stageNode.budget,
+        taskBriefPreview: brief.slice(0, 200),
+        retryAttempt: 0,
+      },
+    });
+    // Backfill agents.parentAgentId + swarmNodeId so the agents table
+    // mirrors the link (same as SwarmSpawner.backfillAgentLink).
+    try {
+      const { agentRepository } = await import('@/db/repositories/agent-repository');
+      const { getDb } = await import('@/db/postgres');
+      const { agents } = await import('@/db/schema/agents');
+      const { eq } = await import('drizzle-orm');
+      // Small delay so the agent row exists before we update it.
+      setTimeout(async () => {
+        try {
+          const existing = await agentRepository.findById(workerId);
+          if (!existing) return;
+          await getDb()
+            .update(agents)
+            .set({ parentAgentId: overrides.swarmParent!.id, swarmNodeId: workerId })
+            .where(eq(agents.id, workerId));
+        } catch (err) {
+          coreLogger.debug({ err, workerId }, 'pipeline stage backfillAgentLink skipped');
+        }
+      }, 25);
+    } catch (err) {
+      coreLogger.debug({ err }, 'pipeline stage backfillAgentLink import failed');
     }
   }
 

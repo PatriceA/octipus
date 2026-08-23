@@ -192,6 +192,8 @@ export class AgentWorker extends BaseAgentWorker {
   private driftDetector?: DriftDetector;
   /** Nudge queued by the drift check, appended once tool results close the turn. */
   private pendingDriftNudge?: string;
+  /** Nudge queued by the redundant-call check, appended on the same schedule. */
+  private pendingRedundantNudge?: string;
 
   /** Queue for steering messages injected mid-run */
   private steeringQueue: AgentMessage[] = [];
@@ -1167,6 +1169,23 @@ export class AgentWorker extends BaseAgentWorker {
           continue;
         }
 
+        // Same call, same arguments, several times across the run. The two
+        // checks above are both CONSECUTIVE, so an A,B,A,B,A ping-pong — the
+        // shape behind a task costing 2 tool calls one run and 14 the next —
+        // trips neither. Advisory only: the call still runs, because a re-read
+        // after a write is a different answer to the same question.
+        const redundant = this.loopDetector.checkRedundant(completion.toolCalls);
+        if (redundant.tripped) {
+          agentLogger.warn({
+            agentId: this.context.id, sessionId: this.context.sessionId,
+            iteration: this.iteration, tool: redundant.signature, count: redundant.count,
+          }, 'Redundant tool call — same arguments already used this run');
+          this.pendingRedundantNudge =
+            `[SYSTEM] You have now called \`${redundant.signature}\` ${redundant.count} times with identical ` +
+            `arguments. Its earlier result is already in this conversation — re-read it there rather than ` +
+            `calling again, and move on to the next step or give your final answer.`;
+        }
+
         // Drift: is this iteration's tool activity still about the brief?
         // Checked HERE — after name normalization, before execution — so a
         // drifting write actually gets stopped rather than producing one more
@@ -1269,6 +1288,10 @@ export class AgentWorker extends BaseAgentWorker {
         if (this.pendingDriftNudge) {
           this.messages.push({ role: 'user' as const, content: this.pendingDriftNudge, timestamp: new Date() });
           this.pendingDriftNudge = undefined;
+        }
+        if (this.pendingRedundantNudge) {
+          this.messages.push({ role: 'user' as const, content: this.pendingRedundantNudge, timestamp: new Date() });
+          this.pendingRedundantNudge = undefined;
         }
 
         agentLogger.info({

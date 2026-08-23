@@ -15,6 +15,7 @@ import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
 import { truncateLinesToTokens } from '@/utils/token-count';
 import { getOrchestratorHooks } from './hooks';
+import { estimateToolSchemaTokens, logPromptComposition } from './prompt-budget';
 import { buildSecurityReminder } from './input-guard';
 import { createMetaTools } from './meta-tools';
 import type { ModelSelector } from './model-selector';
@@ -83,6 +84,17 @@ export function buildTopicHint(
 ): string {
   if (!isLite || !classification.topic) return '';
   return ` The message looks like a "${classification.topic}" task (confidence: ${classification.confidence.toFixed(2)}); use that as the child role unless the request plainly says otherwise.`;
+}
+
+/**
+ * Join the two prompt tiers. The order is the contract: everything cacheable
+ * first, then the volatile block whose leading date stamp is the marker
+ * `splitVolatileSystem` cuts on. A part appended after the volatile tier lands
+ * inside the uncached section; a per-turn part pushed into the static tier
+ * costs the whole prefix a cache write every turn.
+ */
+export function assembleSystemPrompt(staticParts: string[], volatileParts: string[]): string {
+  return [...staticParts, ...volatileParts].filter(Boolean).join('');
 }
 
 export async function runOrchestrator(
@@ -208,12 +220,6 @@ export async function runOrchestrator(
   });
 
   let systemPrompt = isLite ? getLiteOrchestratorPrompt() : orchestratorConfig.systemPromptTemplate;
-  if (guardFlags.length > 0) {
-    systemPrompt += buildSecurityReminder(guardFlags);
-  }
-  if (extraSystemContext) {
-    systemPrompt += extraSystemContext;
-  }
 
   // Anchor the orchestrator in real wall-clock time. Without this stamp the
   // model has no notion of "now" and treats fresh worker output — today's
@@ -229,6 +235,18 @@ export async function runOrchestrator(
   const volatileParts: string[] = [
     `\n\nCURRENT DATE & TIME: ${nowStamp.toUTCString()} (ISO ${nowStamp.toISOString()}). This is the real wall-clock time, authoritative over your training cutoff. Worker/tool results carrying dates at or before this are plausible by definition — do NOT dismiss them as hallucination merely because they are newer than what you remember. Events "yesterday"/"today"/"tomorrow" are relative to this timestamp.`,
   ];
+  // Long-term memory and attached files are retrieved PER TURN (memories are
+  // scoped by the classifier's topic, files by what the user attached), so they
+  // belong in the volatile tier. They used to be concatenated into the static
+  // prefix, which put per-turn content ahead of the cache breakpoint and busted
+  // the whole ~6k prefix on every turn the memory set differed.
+  if (extraSystemContext) volatileParts.push(extraSystemContext);
+  // Same reasoning for everything else derived from THIS turn: the security
+  // reminder fires on a flagged message, the topic hint and the ambiguity
+  // notice come from the classifier's read of this message, and the output
+  // directive from this request's inline/file mode. Each one in the static tier
+  // is a per-turn cache miss on the whole prefix.
+  if (guardFlags.length > 0) volatileParts.push(buildSecurityReminder(guardFlags));
 
   // Fire the before-agent-start hook so extensions and built-in
   // modules (persona, project context) can mutate the system
@@ -243,6 +261,13 @@ export async function runOrchestrator(
     systemPrompt,
   });
   systemPrompt = hookCtx.systemPrompt;
+
+  // From here the prompt is assembled into labelled parts rather than one
+  // string, so `logPromptComposition` can say WHICH block costs what. The
+  // worker and swarm paths have had that measurement since the prompt-size
+  // audit; the orchestrator's own turn — the one the measured pass put at
+  // ~8.4k tokens for a one-line question — never did.
+  const staticParts: string[] = [systemPrompt];
 
   const session = await sessionRepository.findById(sessionId);
   const sessionCtxData = session?.context as SessionContext | undefined;
@@ -286,9 +311,10 @@ export async function runOrchestrator(
     volatileParts.push(`\n\nRecent conversation history (last ${recentHistory.length} messages):\n${historyLines.join('\n\n')}`);
   }
 
-  systemPrompt += buildDelegationPolicy(isLite) + buildTopicHint(isLite, classification);
+  staticParts.push(buildDelegationPolicy(isLite));
+  volatileParts.push(buildTopicHint(isLite, classification));
   if (classification.type === 'ambiguous') {
-    systemPrompt += `\n\nThe user's message could not be confidently classified. If it is plainly small-talk or a one-shot factual question, answer directly. Otherwise prefer spawn_child to a fitting specialist — when in doubt, delegate. If the user explicitly tells you to delegate, always do so.`;
+    volatileParts.push(`\n\nThe user's message could not be confidently classified. If it is plainly small-talk or a one-shot factual question, answer directly. Otherwise prefer spawn_child to a fitting specialist — when in doubt, delegate. If the user explicitly tells you to delegate, always do so.`);
   }
 
   // Expert index — the live list of experts (system + this user's custom
@@ -301,7 +327,7 @@ export async function runOrchestrator(
     try {
       const { buildExpertIndexBlock } = await import('./expert-index');
       const expertBlock = await buildExpertIndexBlock(userId);
-      if (expertBlock) systemPrompt += expertBlock;
+      if (expertBlock) staticParts.push(expertBlock);
     } catch (err) {
       coreLogger.warn({ err, sessionId }, 'Expert index injection skipped — orchestrator routes by role only');
     }
@@ -309,7 +335,7 @@ export async function runOrchestrator(
 
   // Chat/work split (Thread 3): tell the orchestrator whether to deliver in
   // chat or as a file. Empty for the default-inline case, so unchanged.
-  systemPrompt += buildOutputDirective(outputDirective.mode, outputDirective.forced);
+  volatileParts.push(buildOutputDirective(outputDirective.mode, outputDirective.forced));
 
   // Inject workspace awareness
   const sessionCtx = session?.context as import('@/db/schema/sessions').SessionContext | undefined;
@@ -333,7 +359,7 @@ export async function runOrchestrator(
 
     wsContext += `\n\nAll worker tasks MUST target this project. Always include the full path "${projectPath}" in every worker task description. The user does not need to specify the project — it is implicit.`;
     wsContext += `\n\nFor complex implementation tasks in this project, PREFER using the "Full Development Cycle" pipeline (via create_pipeline) to ensure thorough research, architecture planning, and testing.`;
-    systemPrompt += wsContext;
+    staticParts.push(wsContext);
   } else {
     // Normal mode: generic workspace awareness.
     // Advertise the per-user sandbox root (the same one the filesystem tool
@@ -368,7 +394,7 @@ export async function runOrchestrator(
         let suite = `\nWORKSPACE SUITE — ${repos.length} repos under ${wsRoot}:\n${shown.join('\n')}`;
         if (truncated) suite += `\n  (…suite truncated — showing top ${shown.length} of ${repos.length} repos)`;
         suite += `\n\nUse the repo_registry tool (list_repos / get_repo / repo_dependents) to navigate this suite efficiently — read a repo's map before its files. Route each worker to a repo by its ABSOLUTE PATH and tell it to read that repo's AGENTS.md first. For a cross-repo change, call repo_dependents on a library before editing it and name every affected repo in the worker tasks.`;
-        systemPrompt += suite;
+        staticParts.push(suite);
         injectedSuite = true;
       }
     } catch (err) {
@@ -396,18 +422,31 @@ export async function runOrchestrator(
       }
       wsContext += `\n\nIMPORTANT: When the user references "this project" or a project by name, resolve it to the FULL ABSOLUTE PATH and include that path explicitly in every worker task description. For example, if the user says "audit this project (octipus)", your task descriptions must say "audit the project at ${wsRoot}/octipus". Workers do NOT know which project the user means unless you tell them the exact path.`;
       wsContext += `\n\nWhen a repo is flagged "(has AGENTS.md)", tell the worker to read that repo's AGENTS.md first — it is the curated guide to the repo's structure and commands. For cross-repo work, name every repo involved and its path.`;
-      systemPrompt += wsContext;
+      staticParts.push(wsContext);
     } catch (err) {
       // The per-user nested root may not exist yet (new user who hasn't
       // written a file). Fall back to a bare workspace line; not fatal.
       coreLogger.debug({ err, wsRoot }, 'workspace readdir skipped — root may not exist yet');
-      systemPrompt += `\nWORKSPACE: ${wsRoot}`;
+      staticParts.push(`\nWORKSPACE: ${wsRoot}`);
     }
   }
 
   // Append the volatile per-turn context (date, summary, history) after the
   // whole static/semi-static instruction block — keeps the prefix cacheable.
-  systemPrompt += volatileParts.join('');
+  systemPrompt = assembleSystemPrompt(staticParts, volatileParts);
+
+  logPromptComposition(
+    {
+      role: 'orchestrator',
+      model: modelName,
+      contextWindow: modelMeta?.contextWindow ?? undefined,
+      toolCount: metaTools.length,
+      toolSchemaTokens: estimateToolSchemaTokens(
+        metaTools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })),
+      ),
+    },
+    { static: staticParts.filter(Boolean), volatile: volatileParts.filter(Boolean) },
+  );
 
   // Hook-triggered tasks get a longer timeout since they run unattended.
   const orchConfig = getConfig().orchestrator;

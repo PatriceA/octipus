@@ -954,8 +954,12 @@ export class PipelineManager {
             // Same question at the second exit. A skipped QA node whose only
             // routes are `qa_fail`/`audit_gate_failed` leaves the walk here,
             // and leaving `stoppedShort` null reported it green.
-            stoppedShort = routeExhausted(graph, cursor, 'ok', traversals)
-              ? { node: node.name, outcome: 'ok' as NodeOutcome }
+            // Ask about the outcome `selectEdge` was just given, not a
+            // hardcoded 'ok': MATCHES.ok is ['always'] while MATCHES.qa_pass is
+            // ['qa_pass','always'], so a skipped qa_validation node was having
+            // its exhaustion checked against the wrong edge set.
+            stoppedShort = routeExhausted(graph, cursor, outcome, traversals)
+              ? { node: node.name, outcome }
               : null;
             break;
           }

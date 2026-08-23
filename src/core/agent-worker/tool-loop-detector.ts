@@ -54,10 +54,25 @@ const REPEAT_ALLOWED_TOOLS = new Set<string>([
  */
 const REPEAT_ALLOWED_PREFIXES = ['filesystem__', 'shell__', 'git__', 'web_', 'code__', 'search_'];
 
+/**
+ * A call with identical arguments made this many times ANYWHERE in a run — not
+ * necessarily back to back — is re-deriving something the transcript already
+ * holds. The consecutive check above never sees an A,B,A,B,A ping-pong, which
+ * is the shape behind the measured tool-call variance: the same task cost 2
+ * calls one run and 14 the next.
+ *
+ * Four, not three: a legitimate re-read after a write is the second call, and
+ * a verify-after-fix is a defensible third. The fourth is waste, so it is the
+ * first one nudged.
+ */
+const MAX_TOTAL_REPEATS = 4;
+
 /** Verdict of the same-signature (name + args) check. */
 export type RepeatVerdict = { tripped: boolean; repeats: number };
 /** Verdict of the same-name-burst check. */
 export type SameNameVerdict = { tripped: boolean; signature: string; repeats: number };
+/** Verdict of the run-wide redundant-call check. */
+export type RedundantVerdict = { tripped: boolean; signature: string; count: number };
 
 export class ToolLoopDetector {
   private lastToolCallSignature = '';
@@ -65,6 +80,11 @@ export class ToolLoopDetector {
 
   private lastToolNames = '';
   private consecutiveSameNameCount = 0;
+
+  /** How many times each individual call signature has been made this run. */
+  private readonly signatureCounts = new Map<string, number>();
+  /** Signatures already nudged — one nudge per signature, not one per repeat. */
+  private readonly nudgedSignatures = new Set<string>();
 
   /**
    * Same tool + same args N times in a row. Mutates internal counters; returns
@@ -107,5 +127,25 @@ export class ToolLoopDetector {
       this.consecutiveSameNameCount = 1;
     }
     return { tripped: false, signature: toolNameSignature, repeats: this.consecutiveSameNameCount };
+  }
+
+  /**
+   * Same tool + same args repeated across the whole run. Unlike the two checks
+   * above this is advisory: the caller lets the call execute (a re-read after a
+   * write returns different content, so skipping it would be wrong) and appends
+   * a nudge once the tool results have closed the turn. Nudges once per
+   * signature so a stubborn model is not told the same thing every iteration.
+   */
+  checkRedundant(toolCalls: ToolCall[]): RedundantVerdict {
+    let worst: RedundantVerdict = { tripped: false, signature: '', count: 0 };
+    for (const tc of toolCalls) {
+      const sig = `${tc.name}:${JSON.stringify(tc.arguments)}`;
+      const count = (this.signatureCounts.get(sig) ?? 0) + 1;
+      this.signatureCounts.set(sig, count);
+      if (count < MAX_TOTAL_REPEATS || this.nudgedSignatures.has(sig)) continue;
+      this.nudgedSignatures.add(sig);
+      if (count > worst.count) worst = { tripped: true, signature: tc.name, count };
+    }
+    return worst;
   }
 }

@@ -35,7 +35,10 @@ export function isPublicPath(path: string): boolean {
   // Prometheus scrape — a scraper cannot do the login flow. The route itself
   // is 404 unless METRICS_TOKEN is set and 401 without it, so "public" here
   // means "authenticated by its own token", not "open".
-  if (path.startsWith('/api/metrics')) return true;
+  // Exact route (plus any sub-path), never a bare prefix: `startsWith` would
+  // also make a future `/api/metrics-admin` public, and unlike this route those
+  // would have no second gate of their own.
+  if (path === '/api/metrics' || path.startsWith('/api/metrics/')) return true;
   return PUBLIC_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 

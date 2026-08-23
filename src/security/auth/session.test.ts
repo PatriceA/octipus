@@ -183,6 +183,27 @@ describe('SessionManager.revoke', () => {
     expect(await mgr.validate(login.token)).not.toBeNull();
   });
 
+  test('a real login behind a pile of tickets evicts nothing', async () => {
+    const mgr = new SessionManager();
+    const id = seedUser();
+    // Two real logins — browser and phone — then a browser tab's worth of
+    // handshake tickets, more than the cap on their own.
+    const browser = await mgr.create(id, { channelType: 'web' });
+    const phone = await mgr.create(id, { channelType: 'mobile' });
+    for (let i = 0; i < 25; i++) {
+      await mgr.create(id, { channelType: 'web', channelId: 'ws-ticket', ttlMs: 60_000 });
+    }
+
+    // A third real login runs the cap block, which counted the tickets and
+    // then evicted oldest-first — and the tickets are always the NEWEST
+    // entries, so the victims were the two real logins.
+    const desktop = await mgr.create(id, { channelType: 'desktop' });
+
+    expect(await mgr.validate(browser.token)).not.toBeNull();
+    expect(await mgr.validate(phone.token)).not.toBeNull();
+    expect(await mgr.validate(desktop.token)).not.toBeNull();
+  });
+
   test('revokeAllForUser clears every session and returns the count', async () => {
     const mgr = new SessionManager();
     const id = seedUser();

@@ -29,10 +29,19 @@ export const SPILL_DIR = '.octipus/tool-output';
 const HEAD_CHARS = 4000;
 const TAIL_CHARS = 1000;
 
+/**
+ * Monotonic suffix for calls that arrive with no usable id. Not every provider
+ * supplies one — the Gemini streaming path builds tool calls with `id: tc.id ||
+ * ''` — and a shared constant filename would make every oversized output in a
+ * run overwrite the last, with the preview then pointing the model at a path
+ * holding a different command's output.
+ */
+let anonymousSpillCounter = 0;
+
 /** Filename-safe id — a tool call id reaches us from a provider. */
 function safeId(id: string): string {
   const cleaned = id.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
-  return cleaned || 'tool-output';
+  return cleaned || `tool-output-${++anonymousSpillCounter}`;
 }
 
 /**

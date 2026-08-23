@@ -223,7 +223,7 @@ A rewrite — every phase is in-place. A move away from Postgres; that was evalu
 
 ## Where this stands
 
-Written 2026-08-23, after the measured pass. Read this first when resuming; the phases above are the argument, this is the position.
+Written 2026-08-23, after the measured pass, and updated later the same day after the first three open items were worked. Read this first when resuming; the phases above are the argument, this is the position.
 
 ### Done
 
@@ -251,9 +251,13 @@ Eight product defects were found by running the product and fixed — four of th
 
 ### Open, in the order it is worth doing
 
-1. **Prompt overhead.** ~8,400 tokens on every orchestrator-answered turn, before the model does anything. It is the largest single number in the measured pass and the cheapest to attack, because the tool JSON schema dominates it and the measurement already exists.
-2. **Tool-call variance.** The same task cost 2 tool calls one run and 14 the next — a 3× swing in tokens and a 5× swing in latency, same prompt, same model. Worth a cap or a plan-first nudge on mechanical file work before any further latency work.
-3. **The two remaining defensive rules** — normalising a public contract on both sides, and async-state (shared interval, nothing-to-wait-for).
+1. **Prompt overhead** — **attacked 2026-08-23, and the fault was not size.** The floor breaks down as ~2,950 tokens of role prompt, ~2,700 of meta-tool JSON schema, ~240 of delegation policy, and the rest expert index, workspace and per-turn context. All of it sits behind an Anthropic cache breakpoint that the repo has had since Phase 2b — and the orchestrator was busting it on every turn. Long-term memory (retrieved per turn, scoped by the classifier's topic), the attached-file block, the security reminder, the topic hint, the ambiguity notice and the output directive were all concatenated into the *static* tier, ahead of the breakpoint, so the whole ~6k prefix was re-written rather than read whenever any of them differed. They are now in the volatile tier and the prefix is stable.
+
+   The orchestrator's own turn also had no prompt accounting at all: `logPromptComposition` was wired into the worker and swarm paths by the prompt-size audit and never into the path the measured pass put at 8.4k. It is wired now, so the next question about this number can be answered from a log line rather than a script. The two tiers are joined by one exported function with the ordering contract stated on it, and the check is a test that the cacheable prefix does not move when the turn-derived blocks change.
+
+   Not done, and deliberately: trimming the prose or the tool descriptions. With the prefix genuinely cached the remaining size is priced at ~10%, and the tool descriptions encode routing guidance that was expensive to get right. Re-measure before cutting.
+2. **Tool-call variance** — **narrowed 2026-08-23.** Both existing loop guards are *consecutive*-only, so an A,B,A,B,A ping-pong — the same file read three times with a write in between, which is the shape of the 14-call run — trips neither. `ToolLoopDetector.checkRedundant` now counts each call signature across the whole run and nudges once when the same tool is called a third time with identical arguments. Advisory, not enforcing: the call still executes, because a re-read after a write is a different answer to the same question, and the nudge rides the existing `pendingDriftNudge` schedule so the assistant's `tool_calls` are never left orphaned. A hard cap stays unbuilt — the variance is a two-sample observation and a cap that truncates real work is worse than the tokens it saves.
+3. **The two remaining defensive rules** — normalising a public contract on both sides, and async-state (shared interval, nothing-to-wait-for). The nothing-to-wait-for branch turns out to be **already covered**: `docs/plans/blocked-vs-stuck.md` is fully shipped — Phase 1's blocked heartbeat names what a quiet turn is waiting for every ~20s, Phase 2 documents the REST caller's polling contract with an e2e helper, and Phase 3's `src/models/local-fit.ts` fails a local load fast instead of burning ollama's 15-minute timeout. One reachability caveat on Phase 3: the fit gate sits on the direct-provider branch only, so a local model registered against the LiteLLM proxy bypasses it. It fails open by design, but it is the repo's recurring gate-reachability shape and worth knowing.
 4. **Generated, gated catalogs** — untouched.
 5. **Phase 3's remaining half**, if it earns it. State as a fold over the log, replay rejecting impossible histories, the evidence gate subsumed. Re-measure before building: the phase's premise did not survive contact with the code twice already, and pipelines now write status with awaited updates at both ends.
 6. **Phase 4's other two subsystems** — token accounting and goal state — both assumed the full log fold and are not unblocked by what shipped.
@@ -263,7 +267,7 @@ Eight product defects were found by running the product and fixed — four of th
 
 One unit-test flake: a single failure appeared twice in roughly ten full-suite runs and never reproduced across five consecutive clean runs afterwards. The failing test's name was not captured. It is not a blocker and it is not understood.
 
-The `new` session dialog creates an empty session while the composer's first message lands in a separate auto-created one, so a user who clicks new and types can end up with two. Cosmetic, visible in the session list.
+The `new` session dialog duplicate is **fixed, 2026-08-23**. The dialog is a choice not yet made, and the composer behind it stayed live: a message sent while it was open auto-created its own session, and confirming the dialog then added a second, empty one. The composer is now disabled — and says why — for as long as the dialog is open.
 
 `/api/metrics` is mounted now but 404s until `METRICS_TOKEN` is set. That is the deliberate default and worth setting on any instance being scraped.
 
