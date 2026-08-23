@@ -204,6 +204,29 @@ describe('SessionManager.revoke', () => {
     expect(await mgr.validate(desktop.token)).not.toBeNull();
   });
 
+  test('tickets are bounded by their own pool, and never by the login one', async () => {
+    const mgr = new SessionManager();
+    const id = seedUser();
+    const login = await mgr.create(id, { channelType: 'web' });
+
+    // `/api/auth/ws-ticket` is authenticated navigation, so it sits outside the
+    // credential window on purpose. Exempting it from the session cap as well
+    // left nothing bounding it at all: a reconnect loop appends a hash per
+    // ticket to the per-user list that every real login then walks.
+    for (let i = 0; i < 120; i++) {
+      await mgr.create(id, { channelType: 'web', channelId: `ws-${i}`, ttlMs: 60_000 });
+    }
+
+    const live = await mgr.listForUserWithHashes(id);
+    const tickets = live.filter((sess) => {
+      const ttl = new Date(sess.expiresAt).getTime() - new Date(sess.createdAt).getTime();
+      return ttl <= 5 * 60_000;
+    });
+    expect(tickets.length).toBeLessThanOrEqual(50);
+    // And the login the user actually made is untouched by any of it.
+    expect(await mgr.validate(login.token)).not.toBeNull();
+  });
+
   test('revokeAllForUser clears every session and returns the count', async () => {
     const mgr = new SessionManager();
     const id = seedUser();

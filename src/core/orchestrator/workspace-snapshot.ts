@@ -1,5 +1,6 @@
 import { readdir, stat } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
+import { SPILL_DIR } from '@/core/tool-output-spill';
 import { coreLogger } from '@/utils/logger';
 
 /**
@@ -51,16 +52,11 @@ import { coreLogger } from '@/utils/logger';
  * edited nothing. Executing code is what these stages are FOR, so its
  * by-products must not read as changes.
  *
- * `.octipus` is the same rule applied to OUR OWN by-products. Oversized tool
- * output is spilled to `.octipus/tool-output/<id>.txt` inside the agent's
- * workspace — the same root this snapshot walks — so without this entry a
- * read-only stage that runs a verbose test command fails for "changing" a file
- * the harness wrote on its behalf, and a `producesArtifacts` stage that
- * produced nothing passes on the strength of its own spill.
+ * Our own by-product — the tool-output spill — is handled separately, by
+ * RELATIVE PATH rather than by name; see `isHarnessArtifact`.
  */
 const PRUNED_DIRS = new Set([
   'node_modules',
-  '.octipus',
   '.git',
   '__pycache__',
   '.pytest_cache',
@@ -106,6 +102,26 @@ const EGG_INFO_FILES = new Set([
   'requires.txt',
   'top_level.txt',
 ]);
+
+/**
+ * Is this a file the HARNESS wrote into the workspace, rather than the stage?
+ *
+ * Oversized tool output is spilled to `<root>/.octipus/tool-output/<id>.txt`,
+ * inside the same root this snapshot walks, so a read-only stage that runs one
+ * verbose command would otherwise fail for "changing" a file it never wrote —
+ * and a `producesArtifacts` stage that produced nothing would pass on the
+ * strength of its own spill.
+ *
+ * Matched on the relative path, NOT on the directory name. `.octipus` in
+ * `PRUNED_DIRS` looked equivalent and is not: a project workspace's `.octipus/`
+ * holds real user content — this repository keeps its plans there — so pruning
+ * the name would hide a stage asked to write a design document under
+ * `.octipus/plans/`, and the evidence gate would then fail it for producing
+ * nothing. Only the spill path is ours.
+ */
+function isHarnessArtifact(relPath: string): boolean {
+  return relPath === SPILL_DIR || relPath.startsWith(`${SPILL_DIR}/`);
+}
 
 /** Is this a setuptools-generated metadata file inside a `*.egg-info` dir? */
 function isEggInfoMetadata(relPath: string): boolean {
@@ -210,6 +226,8 @@ export async function snapshotWorkspace(
       if (truncated) return;
       if (entry.isDirectory()) {
         if (PRUNED_DIRS.has(entry.name)) continue;
+        const dirRel = relative(root, join(dir, entry.name)).split(sep).join('/');
+        if (isHarnessArtifact(dirRel)) continue;
         await walk(join(dir, entry.name));
         continue;
       }

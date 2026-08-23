@@ -23,6 +23,14 @@ export interface SessionData {
 
 /** A ticket, not a login: minted per WebSocket handshake and gone in a minute. */
 const EPHEMERAL_TTL_MAX_MS = 5 * 60_000;
+/** Live logins per user. */
+const MAX_SESSIONS = 20;
+/**
+ * Live tickets per user — separate pool, deliberately roomy. A browser takes
+ * one per socket and each expires within the minute, so this bounds a
+ * reconnect loop without ever reaching a real user.
+ */
+const MAX_EPHEMERAL_SESSIONS = 50;
 
 /** One place resolves the lifetime, so the cap and the store cannot disagree. */
 function ttlMsFor(requested: number | undefined, fallback: number): number {
@@ -86,32 +94,19 @@ export class SessionManager {
     //
     // Evicting oldest-first keeps the cap doing its job — a bounded number of
     // live sessions per user — without the cure being worse than the disease.
-    // Short-lived tickets are exempt from the cap AND from filling it. A
-    // WebSocket handshake mints one per connection and it burns down in a
-    // minute; counting them meant a browser tab could evict the user's phone.
-    const MAX_SESSIONS = 20;
+    //
+    // Tickets get their OWN cap rather than an exemption. Exempting them from
+    // the login cap is right — a browser tab must never evict the user's phone
+    // — but exempting them from every cap is not: `/api/auth/ws-ticket` is
+    // authenticated navigation, so it is deliberately outside the credential
+    // window too, and a reconnect loop could then mint tickets without any
+    // bound at all. Each one appends a hash to the per-user list that
+    // `listForUserWithHashes` walks one read at a time on every real login. The
+    // ephemeral ceiling is generous — one socket takes one ticket, and they
+    // expire in a minute — so it never fires in ordinary use and still bounds
+    // the list.
     const isEphemeral = ttlMsFor(options?.ttlMs, this.maxAge) <= EPHEMERAL_TTL_MAX_MS;
-    if (!isEphemeral) {
-      await this.cleanup(userId);
-      // Tickets are filtered out of BOTH the count and the candidate list, not
-      // just the check above. `countForUser`/`listForUserWithHashes` stay
-      // unfiltered because the sessions UI must still show every live session.
-      const live = (await this.listForUserWithHashes(userId)).filter((s) => !isEphemeralSession(s));
-      if (live.length >= MAX_SESSIONS) {
-        const oldestFirst = [...live].sort(
-          (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-        );
-        // +1 because one more is about to be added.
-        const evict = live.length - MAX_SESSIONS + 1;
-        for (const victim of oldestFirst.slice(0, evict)) {
-          await this.revokeByHash(userId, victim.id);
-        }
-        securityLogger.warn(
-          { userId, evicted: evict, cap: MAX_SESSIONS },
-          'Session cap reached — evicted the oldest sessions',
-        );
-      }
-    }
+    await this.enforceCap(userId, isEphemeral);
 
     const token = generateToken(32);
     const tokenHash = sha256(token);
@@ -172,6 +167,37 @@ export class SessionManager {
   /**
    * Get session without validation (for internal use)
    */
+  /**
+   * Make room for one more session of this kind, oldest-first.
+   *
+   * The two kinds are counted and evicted SEPARATELY, which is the whole point:
+   * tickets are always the newest rows, so a shared pool would have oldest-first
+   * eviction take the user's real logins every time. `countForUser` and
+   * `listForUserWithHashes` stay unfiltered — the sessions UI must still show
+   * everything that is live.
+   */
+  private async enforceCap(userId: string, ephemeral: boolean): Promise<void> {
+    const cap = ephemeral ? MAX_EPHEMERAL_SESSIONS : MAX_SESSIONS;
+    await this.cleanup(userId);
+    const live = (await this.listForUserWithHashes(userId)).filter(
+      (sess) => isEphemeralSession(sess) === ephemeral,
+    );
+    if (live.length < cap) return;
+
+    const oldestFirst = [...live].sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+    );
+    // +1 because one more is about to be added.
+    const evict = live.length - cap + 1;
+    for (const victim of oldestFirst.slice(0, evict)) {
+      await this.revokeByHash(userId, victim.id);
+    }
+    securityLogger.warn(
+      { userId, evicted: evict, cap, ephemeral },
+      'Session cap reached — evicted the oldest sessions',
+    );
+  }
+
   async get(token: string): Promise<SessionData | null> {
     const tokenHash = sha256(token);
     return this.cache.get<SessionData>(`${SESSION_PREFIX}${tokenHash}`);

@@ -43,6 +43,20 @@ describe('checkRedundant', () => {
     }
   });
 
+  test('the loser of a same-iteration tie is still reported later', () => {
+    const d = new ToolLoopDetector();
+    const a = { id: 'a', name: 'filesystem__read', arguments: { path: '/a.ts' } } as never;
+    const b = { id: 'b', name: 'filesystem__read', arguments: { path: '/b.ts' } } as never;
+
+    // A parallel batch: both signatures reach the threshold on the same call,
+    // so only one can be reported. The other must not be recorded as nudged —
+    // it never was — or it can never be reported for the rest of the run.
+    for (let i = 0; i < 3; i++) expect(d.checkRedundant([a, b]).tripped).toBe(i === 3);
+    expect(d.checkRedundant([a, b]).tripped).toBe(true);
+    const next = d.checkRedundant([a, b]);
+    expect(next.tripped).toBe(true);
+  });
+
   test('a signature is nudged once, not on every further repeat', () => {
     const d = new ToolLoopDetector();
     const c = () => call('shell__exec', { cmd: 'ls' });

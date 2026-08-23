@@ -75,6 +75,48 @@ describe.skipIf(!isIntegration)('pipeline boot reconcile (DB-backed)', () => {
     expect(done.summary).toBe('all good');
   });
 
+  it('resets the stage the dead process was inside, and leaves the others alone', async () => {
+    const { executeRaw } = await import('@/db/postgres');
+    const crashed = await insertPipeline('running', null);
+    // One stage done, one live when the process died, one never reached.
+    for (const [key, status, ordinal] of [
+      ['stage-done', 'completed', 0],
+      ['stage-live', 'running', 1],
+      // A stage killed while it sat on a question: the walker inside
+      // `requestApproval` is gone and nothing will ever answer, so a row still
+      // claiming to be waiting on the user is the same lie one status over.
+      ['stage-asking', 'awaiting_approval', 2],
+      ['stage-later', 'pending', 3],
+    ] as const) {
+      await executeRaw(
+        `INSERT INTO pipeline_nodes (pipeline_id, node_key, name, role, system_prompt, status, ordinal)
+         VALUES ('${crashed}', '${key}', '${key}', 'research', 'p', '${status}', ${ordinal})`,
+      );
+    }
+
+    const { getPipelineManager } = await import('@/core/orchestrator');
+    expect(await getPipelineManager().reconcileInterrupted()).toBe(1);
+
+    const rows = await executeRaw(
+      `SELECT node_key, status FROM pipeline_nodes WHERE pipeline_id = '${crashed}' ORDER BY ordinal`,
+    );
+    const list = ((Array.isArray(rows) ? rows : (rows as { rows?: unknown[] }).rows) ?? []) as Array<{
+      node_key: string;
+      status: string;
+    }>;
+    const byKey = Object.fromEntries(list.map((r) => [r.node_key, r.status]));
+
+    // The live one is the lie: its worker died with the process, so a row that
+    // still says `running` claims work is in flight when none is. It re-runs on
+    // resume, so `pending` is the honest state.
+    expect(byKey['stage-live']).toBe('pending');
+    expect(byKey['stage-asking']).toBe('pending');
+    // Completed work stays completed — rewriting it would make the resumed run
+    // redo everything that had already finished.
+    expect(byKey['stage-done']).toBe('completed');
+    expect(byKey['stage-later']).toBe('pending');
+  });
+
   it('is idempotent — a second boot changes nothing', async () => {
     const { getPipelineManager } = await import('@/core/orchestrator');
     expect(await getPipelineManager().reconcileInterrupted()).toBe(0);

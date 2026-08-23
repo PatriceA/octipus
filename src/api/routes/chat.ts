@@ -10,15 +10,6 @@ import { generateId } from '@/utils/crypto';
 import { apiLogger } from '@/utils/logger';
 
 /**
- * The swarm nodes that already existed before this turn started.
- *
- * Identity, not time: `swarmNodes.createdAt` is stamped by the Postgres clock
- * while the turn boundary would be stamped by the app clock, and in a
- * split-container deployment any negative skew silently drops the children
- * created in the turn's first moments — a flaky red for the very assertion this
- * exists to make honest. Comparing id sets has no clock in it.
- */
-/**
  * The specialist roles this turn actually delegated to.
  *
  * The turn's `agentId` is the ORCHESTRATOR's, so it says nothing about where
@@ -30,15 +21,23 @@ import { apiLogger } from '@/utils/logger';
  * the classifier's own topic — the function under test answering the question
  * about itself.
  *
- * The turn boundary is a timestamp taken before `handleMessage`, not a set of
- * node ids read from the database. Bracketing by identity meant two unbounded
- * `findByRootSession` calls on every chat turn — one before, one awaited inside
- * the response literal, so on the wire-time critical path of every reply — for
- * a field only the eval harness reads. Taking a `Date` costs nothing and the
- * query that remains is bounded by the turn rather than by session length.
+ * The turn boundary is a timestamp rather than the set of node ids that existed
+ * before the turn. Bracketing by identity meant two unbounded
+ * `findByRootSession` calls per chat turn — one before, one awaited inside the
+ * response literal and therefore on the wire-time critical path of every reply
+ * — for a field only the eval harness reads.
  *
- * Best-effort: a lookup failure returns nothing rather than failing the reply,
- * because a missing diagnostic field must never cost the user their answer.
+ * The reason identity was chosen originally still stands and is answered rather
+ * than ignored: `swarm_nodes.created_at` is stamped by Postgres, so a boundary
+ * from the app's `new Date()` compares two clocks, and any negative skew drops
+ * the children created in the turn's first moments — a flaky red for the very
+ * assertion this exists to make honest. So the boundary comes from the DATABASE
+ * clock (`swarmNodeRepository.now()`), which is one trivial round trip with no
+ * rows and no scan, and both sides of the comparison are the same clock again.
+ *
+ * Best-effort throughout: a lookup failure returns nothing rather than failing
+ * the reply, because a missing diagnostic field must never cost the user their
+ * answer.
  */
 async function routedRolesForTurn(sessionId: string, since: Date): Promise<string[] | undefined> {
   try {
@@ -144,9 +143,14 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
 
       const orchestrator = getOrchestratorService();
 
-      // Marks this turn's boundary, so the roles reported below are the ones
-      // THIS request routed to and not a previous turn's.
-      const turnStartedAt = new Date();
+      // Marks this turn's boundary on the DATABASE clock, so the roles reported
+      // below are the ones THIS request routed to and not a previous turn's.
+      // Falls back to no boundary rather than failing the turn: `routedRoles`
+      // is a diagnostic, and losing it must never cost the user their answer.
+      const turnStartedAt = await swarmNodeRepository.now().catch((err: unknown) => {
+        apiLogger.warn({ err, sessionId }, 'turn-boundary clock read failed — reply omits routedRoles');
+        return null;
+      });
       try {
         const result = await orchestrator.handleMessage(
           sessionId,
@@ -163,7 +167,9 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           sessionId: result.sessionId || sessionId,
           agentId: result.agentId,
           classification: result.classification,
-          routedRoles: await routedRolesForTurn(result.sessionId || sessionId, turnStartedAt),
+          routedRoles: turnStartedAt
+            ? await routedRolesForTurn(result.sessionId || sessionId, turnStartedAt)
+            : undefined,
           metadata: result.metadata,
         };
       } catch (error) {

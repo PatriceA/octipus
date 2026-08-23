@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, gte, inArray, lt } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, inArray, lt, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import {
   type NewSwarmNodeRecord,
@@ -29,6 +29,30 @@ export class SwarmNodeRepository {
       .where(eq(swarmNodes.id, id))
       .limit(1);
     return result[0] ?? null;
+  }
+
+  /**
+   * The DATABASE's clock, for callers that need to bracket a window against
+   * `created_at`.
+   *
+   * `swarm_nodes.created_at` is `defaultNow()`, i.e. stamped by Postgres, so a
+   * boundary taken with the app's `new Date()` compares two different clocks.
+   * In a split-container or managed-Postgres deployment even a small negative
+   * skew drops the children created in the window's first moments — a flaky
+   * red for the very assertion the window exists to make honest. One trivial
+   * round trip (no rows, no scan) removes the clock from the comparison.
+   */
+  async now(): Promise<Date> {
+    // No table in the FROM clause on purpose: selecting from `swarm_nodes`
+    // would return no row on an empty table and silently fall back to the app
+    // clock — the exact skew this exists to remove, appearing only on a fresh
+    // install where nobody would look for it.
+    const res = await this.db.execute<{ at: string | Date }>(sql`select now() as at`);
+    const rows = (Array.isArray(res) ? res : ((res as { rows?: unknown[] }).rows ?? [])) as Array<{
+      at: string | Date;
+    }>;
+    const at = rows[0]?.at;
+    return at ? new Date(at) : new Date();
   }
 
   /**

@@ -87,6 +87,22 @@ describe('snapshotWorkspace', () => {
     expect(countChangedFiles(before, after)).toBe(0);
   });
 
+  test('a stage writing real content under .octipus still counts', async () => {
+    // The over-correction this closes: pruning the bare name `.octipus`
+    // exempted the whole directory, and a project workspace keeps real user
+    // content there — this repository keeps its plans under `.octipus/plans/`.
+    // A stage asked to write a design document there produced a snapshot of
+    // zero changed files, and the evidence gate then failed it for producing
+    // nothing. Only the spill path is the harness's.
+    const before = await snapshotWorkspace(root);
+
+    await mkdir(join(root, '.octipus', 'plans'), { recursive: true });
+    await writeFile(join(root, '.octipus', 'plans', 'design.md'), '# the plan');
+    const after = await snapshotWorkspace(root);
+
+    expect(countChangedFiles(before, after)).toBe(1);
+  });
+
   test('ignores what VERIFYING the packaging leaves behind', async () => {
     // Measured 2026-08-21: a read-only QA stage built a wheel and installed it
     // in a venv to check the package imports — the only way to verify that —

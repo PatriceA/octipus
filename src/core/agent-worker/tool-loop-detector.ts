@@ -138,14 +138,23 @@ export class ToolLoopDetector {
    */
   checkRedundant(toolCalls: ToolCall[]): RedundantVerdict {
     let worst: RedundantVerdict = { tripped: false, signature: '', count: 0 };
+    let worstSig = '';
     for (const tc of toolCalls) {
       const sig = `${tc.name}:${JSON.stringify(tc.arguments)}`;
       const count = (this.signatureCounts.get(sig) ?? 0) + 1;
       this.signatureCounts.set(sig, count);
       if (count < MAX_TOTAL_REPEATS || this.nudgedSignatures.has(sig)) continue;
-      this.nudgedSignatures.add(sig);
-      if (count > worst.count) worst = { tripped: true, signature: tc.name, count };
+      if (count > worst.count) {
+        worst = { tripped: true, signature: tc.name, count };
+        worstSig = sig;
+      }
     }
+    // Only the signature actually REPORTED is marked as nudged. Marking every
+    // tripped signature here burned the losers of a same-iteration tie — a
+    // parallel tool-call batch can trip two at once, and the one that lost the
+    // comparison was recorded as nudged without a nudge ever being emitted, so
+    // it could never be reported again for the rest of the run.
+    if (worstSig) this.nudgedSignatures.add(worstSig);
     return worst;
   }
 }

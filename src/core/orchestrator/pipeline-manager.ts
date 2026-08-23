@@ -1,5 +1,5 @@
 import { getConfig } from '@/config';
-import { desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import { getNotificationService } from '@/core/notification-service';
 import { recordRunEvent } from '@/core/run-log';
 import type { SideEffectCounters } from '@/core/swarm/receipt';
@@ -1409,6 +1409,35 @@ export class PipelineManager {
       // blocked on the question is gone, and nothing will ever answer it.
       .where(inArray(pipelines.status, ['running', 'awaiting_approval']))
       .returning({ id: pipelines.id });
+
+    // The stage the dead process was inside is still marked `running`, and its
+    // worker died with that process. Leaving the row is a claim that work is in
+    // flight when none is — the same class of lie as a run that reports success
+    // after stopping short, one level down. `pending` is the honest state: the
+    // interrupted node RE-RUNS on resume (a worker turn cannot be picked up
+    // halfway), and `resume` locates itself from the checkpoints and
+    // `currentNodeKey`, never from a node's status, so nothing reads the value
+    // being reset here.
+    //
+    // `awaiting_approval` for the same reason the pipeline sweep above treats
+    // it as dead: the walker sitting inside `requestApproval` is gone and
+    // nothing will ever answer the question, so a stage row still claiming to
+    // be waiting on the user is the identical lie one status over. `stop()`
+    // already resets both together.
+    if (rows.length > 0) {
+      await this.db
+        .update(pipelineNodes)
+        .set({ status: 'pending' })
+        .where(
+          and(
+            inArray(
+              pipelineNodes.pipelineId,
+              rows.map((r) => r.id),
+            ),
+            inArray(pipelineNodes.status, ['running', 'awaiting_approval']),
+          ),
+        );
+    }
     return rows.length;
   }
 
