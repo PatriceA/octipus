@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * Live web-UI check — the real browser, the real Next.js app, the real backend.
+ * Live web-UI check — the real browser, the real web app, the real backend.
  *
  * The Playwright suite under `tests/web` stubs every `/api/**` call at the
  * browser, which is right for testing the front-end and useless for answering

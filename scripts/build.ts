@@ -43,6 +43,10 @@ const result = await build({
   // our own source is bundled, which keeps the build fast and the stack traces
   // pointing at real files.
   external: [...Object.keys(pkg.dependencies ?? {}), ...EXTERNAL],
+  // Role prompts are imported as text so they travel inside the bundle. The
+  // registry used to read them off disk relative to `import.meta.url`, which
+  // resolves inside `dist/` once bundled and found nothing.
+  loader: { '.md': 'text' },
   // `import.meta` and top-level await both survive into the output.
   banner: { js: "import { createRequire as __createRequire } from 'node:module';\nconst require = __createRequire(import.meta.url);" },
   logLevel: 'info',

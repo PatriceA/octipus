@@ -4,14 +4,20 @@
  * straight to the chat. Otherwise we show a one-paragraph hint
  * pointing the user to the terminal wizard. There is no longer a
  * web-based onboarding flow.
+ *
+ * The status probe runs in the browser rather than on a server: this is a
+ * static bundle now, so it goes through the same-origin `/api` the rest of the
+ * app uses. Nothing is rendered until the probe settles, so a user whose setup
+ * IS complete never sees the hint flash before the redirect.
  */
+'use client';
 
-import { redirect } from 'next/navigation';
+import { useEffect, useState } from 'react';
+import { Navigate } from 'react-router-dom';
 
 async function fetchSetupStatus(): Promise<{ setupComplete: boolean } | null> {
   try {
-    const base = process.env.OCTIPUS_API_URL || 'http://localhost:3005';
-    const res = await fetch(`${base}/api/settings/setup-status`, { cache: 'no-store' });
+    const res = await fetch('/api/settings/setup-status', { cache: 'no-store' });
     if (!res.ok) return null;
     return (await res.json()) as { setupComplete: boolean };
   } catch {
@@ -19,11 +25,22 @@ async function fetchSetupStatus(): Promise<{ setupComplete: boolean } | null> {
   }
 }
 
-export default async function SetupRedirectPage() {
-  const status = await fetchSetupStatus();
-  if (status?.setupComplete) {
-    redirect('/chat');
-  }
+export default function SetupRedirectPage() {
+  const [status, setStatus] = useState<{ setupComplete: boolean } | null | 'pending'>('pending');
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchSetupStatus().then((s) => {
+      if (!cancelled) setStatus(s);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (status === 'pending') return null;
+  if (status?.setupComplete) return <Navigate to="/chat" replace />;
+
   return (
     <main className="mx-auto flex min-h-screen max-w-xl flex-col items-center justify-center gap-4 p-8 text-center font-mono animate-enter">
       <h1 className="text-base font-semibold lowercase">

@@ -1,10 +1,11 @@
 #!/bin/sh
 set -e
 
-# Start Next.js web frontend in background
+# Serve the built web bundle in the background. Static files plus a same-origin
+# proxy to the API — no framework server, and no node_modules in the web layer.
 cd /app/web
-node_modules/.bin/next start -p ${WEB_PORT:-3007} &
-NEXT_PID=$!
+WEB_PORT=${WEB_PORT:-3007} node serve.mjs &
+WEB_PID=$!
 
 # Print a one-shot setup hint after the backend reports healthy. The
 # hint shows when the system has not been set up yet; users run
@@ -35,7 +36,7 @@ BACKEND_PID=$!
 
 # Forward termination to both children on container stop.
 term() {
-  kill -TERM "$NEXT_PID" "$BACKEND_PID" 2>/dev/null || true
+  kill -TERM "$WEB_PID" "$BACKEND_PID" 2>/dev/null || true
 }
 trap term TERM INT
 
@@ -43,7 +44,7 @@ trap term TERM INT
 # container down so the restart policy (compose/k8s) brings it back
 # cleanly. Previously the backend ran as the foreground process and a
 # crashed web UI left the container reporting "healthy" with a dead UI.
-while kill -0 "$NEXT_PID" 2>/dev/null && kill -0 "$BACKEND_PID" 2>/dev/null; do
+while kill -0 "$WEB_PID" 2>/dev/null && kill -0 "$BACKEND_PID" 2>/dev/null; do
   sleep 5
 done
 

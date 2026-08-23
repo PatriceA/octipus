@@ -57,11 +57,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy built app
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
-COPY --from=build /app/web/.next ./web/.next
-COPY --from=build /app/web/node_modules ./web/node_modules
-COPY --from=build /app/web/public ./web/public
+COPY --from=build /app/web/dist ./web/dist
+COPY --from=build /app/web/serve.mjs ./web/serve.mjs
 COPY --from=build /app/web/package.json ./web/package.json
-COPY --from=build /app/web/next.config.* ./web/
 
 # Source stays in the image: the migration runner, the setup wizard and the
 # TUI are still run from it, and stack traces resolve against it.

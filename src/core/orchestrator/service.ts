@@ -647,7 +647,19 @@ export class OrchestratorService {
       };
     } catch (error) {
       recordOrchestratorRun(channel, undefined, 'error');
-      coreLogger.error({ error, sessionId, channel }, 'handleMessage failed');
+      // Pulled apart explicitly: an Error's `message` and `stack` are
+      // non-enumerable, so `{ error }` serialises to `{}` and hides the very
+      // thing the line exists to report.
+      coreLogger.error(
+        {
+          err: error instanceof Error
+            ? { name: error.name, message: error.message, stack: error.stack }
+            : { value: String(error) },
+          sessionId,
+          channel,
+        },
+        'handleMessage failed',
+      );
       if (trajectory) {
         trajectory.finalize({
           finalResponse: '',

@@ -17,27 +17,35 @@
     "isolatedModules": true,
     "jsx": "react-jsx",
     "incremental": true,
-    "plugins": [
-      {
-        "name": "next"
-      }
-    ],
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "next/navigation": [
+        "./compat/next/navigation.tsx"
+      ],
+      "next/link": [
+        "./compat/next/link.tsx"
+      ],
+      "next/image": [
+        "./compat/next/image.tsx"
+      ],
+      "next": [
+        "./compat/next/index.ts"
       ]
-    }
+    },
+    "types": [
+      "vite/client"
+    ]
   },
   "include": [
-    "next-env.d.ts",
     "**/*.ts",
-    "**/*.tsx",
-    ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts",
-    ".next-desktop/types/**/*.ts",
-    ".next-desktop/dev/types/**/*.ts"
+    "**/*.tsx"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "dist",
+    "out",
+    "src-tauri"
   ]
 }
