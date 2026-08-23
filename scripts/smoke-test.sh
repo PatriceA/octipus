@@ -70,7 +70,10 @@ echo "── 2/3 · octi doctor ──"
 npx tsx scripts/doctor.ts
 
 echo "── 3/3 · boot backend + health check ──"
-npx tsx --import ./scripts/md-loader.mjs src/index.ts > /tmp/octipus-smoke-server.log 2>&1 &
+# `node --import tsx`, not `npx tsx`: the wrapper process would survive as the
+# real parent of the server, so the `kill` in cleanup() would reap the wrapper
+# and leave the backend running.
+node --import tsx --import ./scripts/md-loader.mjs src/index.ts > /tmp/octipus-smoke-server.log 2>&1 &
 server_pid=$!
 
 ready=0
