@@ -23,6 +23,10 @@ export interface SpawnOptions {
   topic?: string;
   model?: string;
   role?: string;
+  /** Mark this agent as the turn's root (see `AgentContext.root`). */
+  root?: boolean;
+  /** A person is waiting on this turn (see `AgentContext.attended`). */
+  attended?: boolean;
   systemPrompt?: string;
   tools?: ToolHandler[];
   timeout?: number;
@@ -45,6 +49,8 @@ export interface AgentInfo {
   topic: string;
   model: string;
   role: string;
+  /** The turn's root agent (see `AgentContext.root`). */
+  root?: boolean;
   status: AgentStatus;
   createdAt: Date;
   /** Set once the agent reached a terminal state. Undefined while running. */
@@ -139,6 +145,8 @@ export class AgentManager {
       topic: routedTopic,
       model: routedModel,
       role: options.role || 'general',
+      root: options.root === true,
+      attended: options.attended,
       status: 'idle',
       createdAt: new Date(),
       updatedAt: new Date(),

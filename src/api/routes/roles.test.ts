@@ -12,9 +12,9 @@ describe.skipIf(!isIntegration)('Roles API (Integration)', () => {
   const adminId = randomUUID();
   const userId = randomUUID();
   // ROLE_CONFIGS is a process-global singleton. `loadRolesFromDb()` below
-  // replaces each entry with the DB row (which carries no lite prompt variant
-  // and DB-sourced toolIds), so without restoring it this suite would leak the
-  // mutated config into unit suites that assert the file-registry defaults
+  // overlays each entry with its DB row (DB-sourced toolIds and prompt), so
+  // without restoring it this suite would leak the mutated config into unit
+  // suites that assert the file-registry defaults
   // (e.g. core/orchestrator/roles.test.ts). Snapshot the original entries and
   // restore them in afterAll.
   let roleConfigsBackup: Record<string, unknown> | null = null;
@@ -78,6 +78,22 @@ describe.skipIf(!isIntegration)('Roles API (Integration)', () => {
     const res = await app.handle(new Request(`http://localhost${path}`));
     return { status: res.status, body: await res.json() };
   }
+
+  test('loadRolesFromDb overlays the DB columns and keeps the rest of the registry', async () => {
+    // It used to REBUILD each entry from the four columns the `roles` table
+    // has, which dropped every field that table has no column for. Three of
+    // those are load-bearing and all three were invisible to unit tests,
+    // because unit tests never call this function: `readOnly` is the only
+    // per-handler write filter in the system, `coreToolIds` is the entire
+    // lazy-tool-discovery gate, and `liteSystemPromptTemplate` is what a small
+    // model gets instead of the full prompt.
+    const { ROLE_CONFIGS } = await import('@/core/orchestrator/roles');
+    expect(ROLE_CONFIGS.review.readOnly).toBe(true);
+    expect(ROLE_CONFIGS.general.coreToolIds?.length).toBeGreaterThan(0);
+    expect(ROLE_CONFIGS.general.liteSystemPromptTemplate).toBeTruthy();
+    // …and the DB still owns what it owns.
+    expect(ROLE_CONFIGS.general.systemPromptTemplate).toBeTruthy();
+  });
 
   test('non-admin cannot PATCH a role', async () => {
     const r = await patchJson(userApp, '/api/roles/general', { toolIds: ['filesystem'] });

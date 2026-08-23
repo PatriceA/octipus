@@ -119,8 +119,8 @@ export function loadFromEnvLegacy(): Partial<Config> {
     orchestrator: {
       enabled: process.env.ORCHESTRATOR_ENABLED !== 'false',
       defaultModel: process.env.ORCHESTRATOR_MODEL || undefined,
-      mode: (process.env.ORCHESTRATOR_MODE as 'auto' | 'full' | 'lite' | 'router') || 'auto',
-      liteMaxIterations: parseInt(process.env.ORCHESTRATOR_LITE_MAX_ITERATIONS || '3', 10),
+      mode: (process.env.ORCHESTRATOR_MODE as 'auto' | 'full' | 'lite') || 'auto',
+      liteMaxIterations: parseInt(process.env.ORCHESTRATOR_LITE_MAX_ITERATIONS || '8', 10),
       routerSmallModelMaxParams: parseInt(process.env.ORCHESTRATOR_ROUTER_MAX_PARAMS || '10000000000', 10),
       liteModelMaxParams: parseInt(process.env.ORCHESTRATOR_LITE_MAX_PARAMS || '24000000000', 10),
       smallModelMaxTools: parseInt(process.env.ORCHESTRATOR_SMALL_MODEL_MAX_TOOLS || '7', 10),

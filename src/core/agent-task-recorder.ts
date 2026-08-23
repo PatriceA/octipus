@@ -28,6 +28,8 @@ export interface AgentCompletionInput {
   workspaceId?: string | null;
   swarmNodeId?: string | null;
   role: string;
+  /** The turn's root agent — its output is the answer, not a recorded task. */
+  root?: boolean;
   topic?: string;
   output: string;
   /**
@@ -75,7 +77,7 @@ export function isAgentTaskRecordingEnabled(): boolean {
 export async function recordAgentCompletion(input: AgentCompletionInput): Promise<void> {
   if (!isAgentTaskRecordingEnabled()) return;
   if (!input.output || input.output.length < MIN_OUTPUT_LENGTH) return;
-  if (input.role === 'orchestrator') return;
+  if (input.root) return;
 
   const taskKind = input.taskKind ?? taskKindForRole(input.role);
 

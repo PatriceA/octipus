@@ -17,6 +17,23 @@ export interface AgentContext {
   topic: string;
   model: string;
   role: string;
+  /**
+   * This agent is the ROOT of the turn — the one the user is talking to, with
+   * no parent to relay to. Was `role === 'orchestrator'` everywhere until the
+   * orchestrator hop was deleted (rebuild plan, Phase 9): the root now runs as
+   * an ordinary role (`general`) with real tools, so the role string no longer
+   * identifies it. Persistence, steering, approval prompting and the persona
+   * all key on this, and every one of them meant "root", not "orchestrator".
+   */
+  root?: boolean;
+  /**
+   * A person is waiting on this turn and can answer a question — the root of an
+   * interactive turn (chat, API, a channel message). False for the root of an
+   * unattended run (a hook, a heartbeat, a scheduled task), where an approval
+   * prompt reaches nobody and only burns the request's TTL before failing.
+   * Undefined on a spawned child, which is never attended either way.
+   */
+  attended?: boolean;
   status: AgentStatus;
   createdAt: Date;
   updatedAt: Date;
@@ -26,6 +43,11 @@ export interface AgentContext {
    *  UI doesn't render "0ms" before the agent is moved to the historical bucket. */
   completedAt?: Date;
   metadata: Record<string, unknown>;
+}
+
+/** Is this the root agent of a turn? See `AgentContext.root`. */
+export function isRootAgent(context: { root?: boolean }): boolean {
+  return context.root === true;
 }
 
 export interface AgentMessage {

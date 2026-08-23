@@ -33,9 +33,8 @@ even though everything else is configured correctly.
 - Known-good local tool-callers: `qwen2.5:32b`, `glm-4.x-flash`, and other
   proven instruct models.
 - Known-risk: the **qwen3** family via Ollama reliably emits malformed
-  tool-call JSON. This is a **full-mode** risk only — router mode has no
-  orchestrator LLM at all, and lite mode runs single-step delegation that
-  most qwen3 sizes survive. Octipus does **not** silently swap qwen3 off
+  tool-call JSON. This is a **full-tier** risk mainly — the lite tier runs a
+  trimmed prompt with a capped tool set that most qwen3 sizes survive. Octipus does **not** silently swap qwen3 off
   the default; if you have hardware that would push qwen3 into full mode
   (≥24B) pick a proven tool-caller instead.
 - Verify any model before relying on it:
@@ -76,19 +75,23 @@ Register a second model (e.g. `nomic-embed-text`) and bind it to the
 
 | Setting | Env var | Default | Purpose |
 |---|---|---|---|
-| `orchestrator.mode` | `ORCHESTRATOR_MODE` | `auto` | `auto` derives the mode from model size; pin to `router` to force the small-model path. |
-| `orchestrator.routerSmallModelMaxParams` | `ORCHESTRATOR_ROUTER_MAX_PARAMS` | `10e9` | Below this the orchestrator runs in **router** mode (no orchestrator LLM) and workers run in the **small tier**. |
+| `orchestrator.mode` | `ORCHESTRATOR_MODE` | `auto` | `auto` derives the prompt tier from model size; pin to `lite` to force the small-model path. |
+| `orchestrator.routerSmallModelMaxParams` | `ORCHESTRATOR_ROUTER_MAX_PARAMS` | `10e9` | The "small model" threshold: below it prompts and tool sets are trimmed everywhere. Named for the router mode it used to select, which no longer exists. |
+| `orchestrator.liteMaxIterations` | `ORCHESTRATOR_LITE_MAX_ITERATIONS` | `8` | Hard iteration cap for a lite-tier root agent — the bound that keeps a 9B model's loop from wandering. |
 | `orchestrator.smallModelMaxTools` | `ORCHESTRATOR_SMALL_MODEL_MAX_TOOLS` | `7` | Max tools handed to a small-tier worker — fewer tools, more reliable tool calls. |
 
 ## How Octipus adapts to a small model
 
-**Orchestrator** — chosen automatically from the default model's size:
+**Root agent prompt tier** — chosen automatically from the default model's size.
+Every tier runs the SAME single agent loop; what changes is how much prompt and
+how many tools it carries. (Before Phase 9 of the rebuild plan there was a third
+tier, `router`, which replaced the loop with a keyword table and dispatched one
+specialist. It is gone: a small model now runs the loop like everything else.)
 
-- `router` (< 10B): no orchestrator LLM. A keyword classifier routes each
-  message to one specialist, which does the work; the result is relayed. No
-  parallel swarms, pipelines, or multi-step planning.
-- `lite` (10–24B): a shrunken single-step orchestrator.
-- `full` (≥ 24B): the complete swarm orchestrator.
+- `lite` (< 24B): trimmed prompt, tool list capped to `smallModelMaxTools`, and
+  a hard iteration cap (`liteMaxIterations`). One delegation per request, no
+  parallel swarms or pipelines.
+- `full` (≥ 24B): the whole prompt and toolset, parallel swarms and pipelines.
 
 **Workers** — when the bound model is small-tier, each worker automatically:
 
@@ -105,13 +108,13 @@ extraction/judgment/research return parseable output instead of prose.
 
 | Capability | On one small chat model |
 |---|---|
-| Casual chat, single-specialist routing | ✅ Works |
+| Casual chat, single-specialist delegation | ✅ Works |
 | Simple coding / edits, classification, short summaries | ✅ Works (with a reliable tool-caller) |
 | Memory extraction, context compaction, email/doc summaries, email drafts | ⚠️ Usable, lower quality |
 | RAG + long-term memory | Needs an embedding model |
 | Document OCR / vision | Needs a vision model |
 | Deep research synthesis, weekly knowledge review | ❌ Unreliable on small models |
-| Parallel swarms / pipelines | ❌ Disabled in router mode by design |
+| Parallel swarms / pipelines | ❌ Disabled in the lite tier by design |
 
 ## Troubleshooting
 

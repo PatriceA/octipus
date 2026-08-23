@@ -1,7 +1,7 @@
 # Octipus rebuild: execution plan
 
 Date: 2026-08-22 · last updated 2026-08-23 (second pass)
-Status: phases 0 to 8 are closed — 0 to 4 in the first pass, 5, 7 and 8 shipped in the second, and 6 plus the durable-execution half of 5 declined with the measurement recorded. **Phase 9 is open and not started:** Phase 2 was marked done over a scope much smaller than its title, and the orchestrator hop it was named for is still there and still costing 18.2% of agent tokens. See [Phase 9](#phase-9--the-orchestrator-hop-reopened-2026-08-23-not-started).
+Status: every phase is closed — 0 to 4 in the first pass, 5, 7 and 8 in the second, 6 plus the durable-execution half of 5 declined with the measurement recorded, and **Phase 9 shipped 2026-08-23**: the orchestrator hop Phase 2 was named for is deleted, the root agent is an ordinary worker with tools, and there is no second model deciding whether it runs. See [Phase 9](#phase-9--the-orchestrator-hop-reopened-2026-08-23-shipped-2026-08-23).
 Findings: [rebuild-findings-2026-08-22.md](rebuild-findings-2026-08-22.md)
 Measured pass: [../reports/2026-08-23-feature-performance-pass.md](../reports/2026-08-23-feature-performance-pass.md) — every number below that is not a plan comes from there.
 State: see [Where this stands](#where-this-stands) at the end, which is the section to read first when resuming.
@@ -239,7 +239,7 @@ Ordering is the thing to know: external storage runs ON the database, so `initia
 
 Runnable check: the stack boots and passes integration tests with the Valkey container removed from compose — 4,207 green, and the built artifact writing sessions, rate-limit counters, the scheduler heartbeat and a queue item into the new tables while serving login and authenticated reads.
 
-### Phase 9 — The orchestrator hop (REOPENED 2026-08-23, not started)
+### Phase 9 — The orchestrator hop (REOPENED 2026-08-23, SHIPPED 2026-08-23)
 
 Phase 2 is headed "collapse the orchestrator" and did not collapse it. It removed the
 *inference* from role selection, which was the valuable half, and then the title was
@@ -329,6 +329,129 @@ run twice. Take it before the change and after, against comparable traffic, and 
 - `src/core/orchestrator/` line count falls, and the number is recorded here rather
   than described.
 
+#### What shipped (2026-08-23)
+
+**The root agent is now an ordinary worker.** `runOrchestrator` still assembles the turn
+— workspace map, session summary, memory, output directive — but what it spawns is role
+`general` (`ROOT_ROLE`) carrying the general toolset *plus* the meta-tools, with
+`root: true` on its context. The role that could only delegate is deleted:
+`roles/orchestrator/` is gone, and with it the prompt whose first line was "You delegate
+to specialist workers; you do NOT do the work yourself" and whose §1 failure mode was
+"answering a substantive question from your own knowledge instead of delegating" — a rule
+that only made sense because the thing holding it had `toolIds: ['profiles']`.
+
+**Everything that meant "the root" now says so.** Ten call sites keyed on
+`role === 'orchestrator'` — message persistence in both workers, the drift-detector
+exemption, the graceful wall-clock exit, session token accounting, tool-result
+persistence, task recording, the persona hook, steering, the channel announcement — and
+each one's own comment already said "root agent". They read `AgentContext.root` now, so
+the role string is free to be an ordinary role. `canPromptHuman` was the sharp one: it
+decided who may ask a human for approval, and keyed on the role name.
+
+**The pre-decision is gone.** The `classification.type === 'casual' && confidence >= 0.7
+&& outputMode !== 'file'` branch in `service.ts` is deleted — including the `!== 'file'`
+clause, which was a special case bolted on because a keyword table was deciding control
+flow and got "write me a poem" wrong. `router-turn.ts` is deleted. `direct-response.ts`
+survives, but only for the two surfaces that genuinely are not agent turns: the voice
+propose-then-confirm utterance and `chat.interject`, the side question asked while a
+swarm is running. It is no longer reachable from the main path.
+
+**The small-model answer, which is what stalled this before.** Modes are `full | lite`;
+`router` is gone from the type, the config enum and the settings UI. A model under the
+lite threshold runs the *same loop* with the trimmed prompt, its tool list capped to
+`smallModelMaxTools` groups, and `liteMaxIterations` as a hard bound — raised from 3 to
+8, because 3 was sized for "delegate once and relay" and a root that does its own work
+needs to read, search, and answer. `routerSmallModelMaxParams` keeps its name: it is the
+small-model threshold every other gate in the codebase reads, and renaming it would have
+been a twelve-file diff for no behaviour.
+
+**What was salvaged rather than deleted.** The orchestrator prompt's 127 lines were not
+all doctrine — spawn_child is non-blocking, `collect_children` semantics, the six-child
+cap, the read-only clause every analysis brief must carry, the no-respawn rule, the
+"children disagree" honesty rule. Those are still true when the root *does* delegate, so
+they live in `delegation-prompt.md`, appended in full tier only, with the routing table
+gaining a line naming what NOT to delegate (profiles, notes, to-dos, the knowledge base,
+the user's browser — the root's own tools now).
+
+**Measured, 2026-08-23, against the live instance.**
+
+| | before | after |
+|---|---|---|
+| casual-turn latency (median of hi / thanks / arithmetic) | 3,237 ms | 2,711 ms |
+| casual-turn tokens | not recorded — `directResponse` wrote no `cost_log` row at all | ~22,900, of which up to 24k is prefix-cached |
+| casual-turn cost | invisible for the same reason | $0.0011 warm, $0.0021 cold |
+| a one-tool question ("list my workspace root") | root holds no tools → spawn a `general` worker: two model runs | 10.2 s, 46k tokens, **no child spawned**, `routedRoles: []` |
+| a specialist task ("review semver.py, read-only") | orchestrator → review child | unchanged: `routedRoles: ['review']`, three real defects with the failing pytest output |
+| orchestrator runs | 109, 51.4% answering alone, 18.2% of all agent tokens | **0** — the role no longer exists |
+
+`npm run orchestrator-cost --since <the restart>` prints an empty legacy table and
+says so: *no orchestrator runs at all — the hop is gone*. The script now leads with
+the measurement that replaces it, root turns split by whether they delegated, since
+"answered alone" is the fast path now rather than the waste.
+
+Latency held: the median casual turn is slightly faster than the `directResponse`
+fast path it replaced, which was the thing most at risk. Tokens did not, and the
+number should be read carefully rather than waved at: a casual turn now carries
+the general tool schema (~12k) it did not carry before, so it counts ~23k input
+where the old shortcut counted almost none. Almost all of it is the static prefix
+and the provider caches it — the cold turn cost $0.0021 and the warm ones $0.0011.
+The lever if that ever matters is already in the tree and deliberately not pulled:
+lazy tool advertisement (`toolAdvertisement: 'lazy'`, `general.coreToolIds`) is
+gated to Ollama today because remote providers prefix-cache the tool block cheaply
+and tool-call more reliably with it. Trading a measured tenth of a cent for an
+unmeasured extra round-trip on real work is not a trade worth making blind.
+
+The delegated path was verified in the same pass: "review semver.py for bugs,
+read-only" routed to `review` (`routedRoles: ['review']`), which read the file, ran
+the test suite read-only, and came back with three real defects and the failing
+pytest output. It took the long way there — the review lane's first-choice model
+(`grok-build-0.1`) is out of credits and the run burned several minutes on provider
+retries before falling through — but that is the lane's binding, not this phase.
+
+**What the pre-commit review caught, and it was not the deletions.** Eleven
+findings; the three that mattered were all the same shape — a good mechanism the
+shipping path never reaches.
+
+- `loadRolesFromDb` (`seed-roles.ts`) REBUILT each `ROLE_CONFIGS` entry from the
+  four columns the `roles` table has, so at boot it silently dropped every field
+  that table has no column for: `readOnly` (the only per-handler write filter in
+  the system — `qa`, `review` and `architecture` got write tools back after
+  boot), `coreToolIds` (the entire lazy-tool-discovery gate, dead for every role
+  in a booted server), and `liteSystemPromptTemplate` (which this phase had just
+  made load-bearing, so a 9B root would have got the full prompt). Present in
+  tests, absent in production, because unit tests never call that function. One
+  line: spread the existing entry instead of rebuilding it. Pinned by a test in
+  `api/routes/roles.test.ts`, which is DB-backed and does call it.
+- Dropping `router` from the `orchestrator.mode` enum with no migration would
+  have **bricked boot** for any install carrying it in settings or
+  `ORCHESTRATOR_MODE` — both config load paths `throw` on a failed parse.
+  `normalizeRetiredConfigValues` now maps it to `lite` ahead of validation, at
+  both parse sites.
+- The root's tool cap was gated on `isLite` (the 24B prompt tier) where every
+  worker gates on `isSmallModel` (the 10B tier), so a 14B root would have lost
+  eight tool groups an identically-bound worker keeps. Gated on the small tier
+  now — and when the cap does fire it names the dropped groups in the prompt,
+  because the lite role prompt still advertises them by name and a capped model
+  would otherwise spend its scarce iterations calling tools that are not there.
+
+Four more that the phase caused and are now fixed: the root spawns with
+`toolAdvertisement` so lazy discovery reaches it on Ollama (it carries the whole
+general toolset now, and that schema re-prefills on the iGPU every request); an
+unattended root (hook, heartbeat) no longer raises approval prompts nobody can
+answer — `AgentContext.attended` carries that, since holding real tools means it
+can now hit an `ASK` where the old tool-less root never could; the root's tool
+results are persisted to the transcript (the skip was written when its only calls
+were `spawn_child`, and a turn where Octipus reads three files should not record
+as an answer with nothing behind it); and the web side panel gets `root` from the
+API's depth-0 swarm node, so a restored session does not list Octipus as one of
+the specialists it dispatched.
+
+**Line count, recorded rather than described.** `src/core/orchestrator/` non-test
+TypeScript: 12,220 → 12,081, and 165 lines of role prompt markdown deleted against 90
+added as `delegation-prompt.md`. That is a small number and worth saying plainly: this
+phase was never going to shrink the directory much, because the hop was one branch and
+one 120-line file, not a subsystem. What it removes is a model call per turn, not code.
+
 ## Independent items
 
 These depend on nothing and can land in any phase. All four are done; each entry below carries what shipped and where the code overruled the plan.
@@ -417,11 +540,11 @@ Eight product defects were found by running the product and fixed — four of th
 
 ### Next
 
-**Phase 9 — the orchestrator hop.** Reopened 2026-08-23 with a scope and a measurement,
-and the only phase with work in it. Phase 2 claimed the title "collapse the orchestrator"
-and delivered the inference half; the routing hop it was named for survived, and the live
-numbers now say what it costs: 51% of orchestrator runs delegate to nobody. Read the
-constraint about small models before starting — it is what stalled this the first time.
+**Phase 9 — the orchestrator hop. Shipped 2026-08-23**, the same day it was reopened.
+The root agent runs as `general` with real tools and the meta-tools; the classifier's
+control-flow branch, `router-turn.ts` and the `orchestrator` role are deleted; small
+models run the same loop with a capped tool set and a hard iteration cap. See the phase
+section for what shipped and what was salvaged.
 
 The three migrations that ran in the second pass are described in their own sections
 above; the two that did not run are declined there with the argument, not deferred.

@@ -21,7 +21,7 @@ function makeOrchestratorNode(): AgentNode {
     parentNodeId: null,
     kind: 'orchestrator',
     depth: 0,
-    role: 'orchestrator',
+    role: 'general',
     topicPath: 'root',
     model: 'test-model',
     budget: {
@@ -119,7 +119,7 @@ describe('createMetaTools — orchestrator swarm wiring', () => {
     // Worker not wired yet — the tool surfaces a clear error, not a crash.
     const out = await collect!.execute({}, {
       id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000',
-      userId: 'u', model: '', topic: '', role: 'orchestrator',
+      userId: 'u', model: '', topic: '', role: 'general',
       status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {},
     });
     expect(String(out)).toMatch(/worker not wired/i);
@@ -130,7 +130,7 @@ describe('createMetaTools — orchestrator swarm wiring', () => {
     } as unknown as AgentWorker;
     const out2 = await collect!.execute({}, {
       id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000',
-      userId: 'u', model: '', topic: '', role: 'orchestrator',
+      userId: 'u', model: '', topic: '', role: 'general',
       status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {},
     });
     expect(String(out2)).toMatch(/no detached children pending/i);

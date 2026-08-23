@@ -20,7 +20,7 @@ describe('schema-introspect — validateSettingValue', () => {
   });
 
   test('enforces enum membership', () => {
-    expect(validateSettingValue('orchestrator.mode', 'router').ok).toBe(true);
+    expect(validateSettingValue('orchestrator.mode', 'lite').ok).toBe(true);
     expect(validateSettingValue('orchestrator.mode', 'bogus').ok).toBe(false);
   });
 
@@ -41,7 +41,7 @@ describe('schema-introspect — getFieldConstraints', () => {
 
   test('extracts enum options', () => {
     expect(getFieldConstraints('orchestrator.mode')).toEqual({
-      enumValues: ['auto', 'full', 'lite', 'router'],
+      enumValues: ['auto', 'full', 'lite'],
     });
   });
 

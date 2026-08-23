@@ -5,12 +5,18 @@
  * This is the measurement for Phase 9 of the rebuild plan. Run it before the
  * change and after, against comparable traffic, and compare the two.
  *
- * The number that matters is `answered alone`: an orchestrator run that spawned
- * no specialist is a model that read the request, decided it needed nobody, and
- * answered — after the classifier had already read the same request to decide
- * the orchestrator should run at all. Those runs are the hop paying for itself
- * and returning nothing, and Phase 9 succeeds when the class is empty because
- * there is no orchestrator left to run.
+ * The number that mattered was `answered alone`: an orchestrator run that
+ * spawned no specialist was a model that read the request, decided it needed
+ * nobody, and answered — after a classifier had already read the same request
+ * to decide the orchestrator should run at all. Those runs were the hop paying
+ * for itself and returning nothing, and Phase 9 succeeds when the class is
+ * empty BECAUSE THERE IS NO ORCHESTRATOR LEFT TO RUN: the root agent now holds
+ * the general toolset and answering alone is the fast path, not a wasted hop.
+ *
+ * So the first table is a regression check that reads zero on post-change
+ * traffic, and the second is the live measurement that replaces it: what a root
+ * turn costs, split by whether it delegated. A root turn is a depth-0
+ * `swarm_nodes` row, whose id is 1:1 with `agents.id`.
  *
  * Deliberately reads `agents` rather than a new counter: a measurement that
  * needs instrumentation shipped first is a measurement that never gets taken.
@@ -75,6 +81,32 @@ try {
     from kids k join orch o using (id)
     group by 1 order by runs desc`;
 
+  // The live shape: root turns, which are depth-0 swarm nodes. Same split, but
+  // "answered alone" here is the fast path rather than the waste — what to watch
+  // is the cost of a root turn against the 8,975 tokens the old hop averaged
+  // for producing nothing.
+  const roots = await sql`
+    with root as (
+      select n.id, n.root_session_id, a.total_tokens, a.duration_ms
+      from swarm_nodes n
+      join agents a on a.id = n.id
+      where n.depth = 0 and a.created_at >= ${since} and a.role <> 'orchestrator'
+    ),
+    kids as (
+      select r.id, count(c.id)::int as children
+      from root r
+      left join swarm_nodes c on c.parent_node_id = r.id
+      group by r.id
+    )
+    select
+      case when k.children = 0 then 'answered alone' else 'delegated' end as bucket,
+      count(*)::int as runs,
+      coalesce(round(avg(r.total_tokens)), 0)::int as avg_tokens,
+      coalesce(sum(r.total_tokens), 0)::bigint as total_tokens,
+      coalesce(round(avg(r.duration_ms)), 0)::int as avg_ms
+    from kids k join root r using (id)
+    group by 1 order by runs desc`;
+
   const alone = split.find((r) => r.bucket === 'answered alone');
   const orchRuns = Number(totals.orch_runs);
   const allTokens = Number(totals.all_tokens);
@@ -89,6 +121,13 @@ try {
     orchestratorTokens: orchTokens,
     allAgentTokens: allTokens,
     orchestratorSharePct: allTokens > 0 ? +((100 * orchTokens) / allTokens).toFixed(1) : 0,
+    rootTurns: roots.map((r) => ({
+      bucket: r.bucket as string,
+      runs: Number(r.runs),
+      avgTokens: Number(r.avg_tokens),
+      totalTokens: Number(r.total_tokens),
+      avgMs: Number(r.avg_ms),
+    })),
     breakdown: split.map((r) => ({
       bucket: r.bucket as string,
       runs: Number(r.runs),
@@ -102,14 +141,18 @@ try {
     await writeFileAt(JSON_OUT, `${JSON.stringify(report, null, 2)}\n`);
     console.log(`wrote ${JSON_OUT}`);
   } else {
-    console.log(`\norchestrator cost · ${report.since}\n`);
+    console.log(`\nroot turns (the one loop) · ${report.since}\n`);
+    console.table(report.rootTurns);
+    console.log(`\nlegacy orchestrator hop · ${report.since} — expected empty after Phase 9\n`);
     console.table(report.breakdown);
     console.log(
       `\n  ${report.answeredAlone}/${report.orchestratorRuns} orchestrator runs (${report.answeredAlonePct}%) delegated to nobody` +
       `\n  ${report.wastedTokens.toLocaleString()} tokens spent on those runs` +
       `\n  ${report.orchestratorSharePct}% of all agent tokens went on being the orchestrator\n`,
     );
-    if (report.answeredAlone === 0 && report.orchestratorRuns > 0) {
+    if (report.orchestratorRuns === 0) {
+      console.log('  no orchestrator runs at all — the hop is gone, which is what Phase 9 asserts.\n');
+    } else if (report.answeredAlone === 0) {
       console.log('  every orchestrator run delegated — the hop is earning its place.\n');
     }
   }

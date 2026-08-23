@@ -164,7 +164,7 @@ describe('AgentWorker child-aware timeout (2.2) + graceful exit (3.5)', () => {
   });
 
   test('the parent survives a timed-out child — collect returns status=timeout, no abort', async () => {
-    const parent = new AgentWorker(mkCtx({ role: 'orchestrator', id: 'parent-1' }), cfg());
+    const parent = new AgentWorker(mkCtx({ role: 'general', root: true, id: 'parent-1' }), cfg());
     (parent as unknown as { startTime: number }).startTime = Date.now();
     parent.registerPendingChild(
       pending('c-t', { nodeId: 'c-t', kind: 'subagent', status: 'timeout', output: 'partial work', usedTokens: 3, durationMs: 10, spawnedChildren: [] }),
@@ -175,8 +175,8 @@ describe('AgentWorker child-aware timeout (2.2) + graceful exit (3.5)', () => {
     expect(parent.getAbortSignal().aborted).toBe(false);
   });
 
-  test('the root orchestrator exits gracefully on wall-clock overrun instead of throwing', async () => {
-    const orch = new AgentWorker(mkCtx({ role: 'orchestrator', id: 'orch-1' }), cfg({ timeout: 10 }));
+  test('the root agent exits gracefully on wall-clock overrun instead of throwing', async () => {
+    const orch = new AgentWorker(mkCtx({ role: 'general', root: true, id: 'orch-1' }), cfg({ timeout: 10 }));
     const priv = orch as unknown as { startTime: number; loop: () => Promise<string>; getCompletion: () => Promise<CompletionResult> };
     priv.startTime = Date.now() - 1_000;
     let calls = 0;
@@ -301,12 +301,12 @@ describe('AgentWorker task-drift detection (T2.2)', () => {
     expect(classifyChildError(thrown)).toBe('contract_failed');
   });
 
-  test('the ORCHESTRATOR is exempt — a false abort there would cascade-cancel its own children', async () => {
-    // The orchestrator's tool vocabulary (spawn_child / collect_children) never
+  test('the ROOT agent is exempt — a false abort there would cascade-cancel its own children', async () => {
+    // The root's delegation vocabulary (spawn_child / collect_children) never
     // echoes the user's wording, so judging it the same way would abort it —
     // and run()'s catch calls detached.cancelAll(), killing the pending
     // children it was waiting to collect.
-    const worker = new AgentWorker(mkCtx({ id: 'orch-1', role: 'orchestrator' }), cfg({ maxIterations: 14 }));
+    const worker = new AgentWorker(mkCtx({ id: 'orch-1', role: 'general', root: true }), cfg({ maxIterations: 14 }));
     const priv = worker as unknown as {
       getCompletion: () => Promise<CompletionResult>;
       toolExecutor: { handleToolCalls: (tc: unknown) => Promise<unknown[]> };

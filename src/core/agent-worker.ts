@@ -34,6 +34,7 @@ import { ToolExecutor } from './tool-executor';
 import { DetachedChildManager } from './agent-worker/detached-child-manager';
 import { DriftDetector } from './agent-worker/drift-detector';
 import { ToolLoopDetector } from './agent-worker/tool-loop-detector';
+import { isRootAgent } from './types';
 import type { AgentMessage, ToolCall } from './types';
 
 // Re-export types for backward compatibility
@@ -459,8 +460,8 @@ export class AgentWorker extends BaseAgentWorker {
     const message: AgentMessage = { role: 'user', content, timestamp: new Date() };
     this.messages.push(message);
 
-    // Only persist for orchestrator (root agent)
-    if (this.context.role === 'orchestrator') {
+    // Only persist for the root agent
+    if (isRootAgent(this.context)) {
       await messageRepository.create({
         sessionId: this.context.sessionId,
         role: 'user',
@@ -488,7 +489,7 @@ export class AgentWorker extends BaseAgentWorker {
     // destructive: `run()`'s catch cascade-cancels every pending detached
     // child, killing the work it was waiting to collect. Drift is a worker
     // failure mode; this guard belongs on workers.
-    if (this.context.role !== 'orchestrator') {
+    if (!isRootAgent(this.context)) {
       const originalRequest = (this.context.metadata as Record<string, unknown> | undefined)?.originalRequest;
       this.driftDetector = new DriftDetector(
         [userMessage ?? '', typeof originalRequest === 'string' ? originalRequest : ''].join(' '),
@@ -632,6 +633,7 @@ export class AgentWorker extends BaseAgentWorker {
         workspaceId: this.context.workspaceId ?? null,
         swarmNodeId: this.context.id,
         role: this.context.role,
+        root: isRootAgent(this.context),
         topic: this.context.topic,
         output: typeof finalResult === 'string' ? finalResult : JSON.stringify(finalResult),
       }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in agent-worker'));
@@ -894,7 +896,7 @@ export class AgentWorker extends BaseAgentWorker {
         // the user. Instead run one final no-tools summary turn. A child (any
         // non-root worker) still throws ChildTimeoutError so its parent gets a
         // ChildResult status='timeout' and can synthesize partial results.
-        if (this.context.role === 'orchestrator') {
+        if (isRootAgent(this.context)) {
           return await this.finalizeGracefully('wall-clock budget reached');
         }
         this.abortController.abort(`timeout:${this.elapsed()}ms`);
@@ -1472,8 +1474,8 @@ export class AgentWorker extends BaseAgentWorker {
         continue;
       }
 
-      // Track token usage for orchestrator agents (response is saved by handleMessage with correct content)
-      if (this.context.role === 'orchestrator') {
+      // Track token usage for the root agent (response is saved by handleMessage with correct content)
+      if (isRootAgent(this.context)) {
         await sessionRepository.incrementMessageCount(this.context.sessionId, this.accountedTokens(completion));
       }
 
@@ -1516,7 +1518,7 @@ export class AgentWorker extends BaseAgentWorker {
         'getCompletion:finalizeGracefully',
         this.config.unracedTurnCeilingMs ?? DEFAULT_UNRACED_TURN_CEILING_MS,
       );
-      if (this.context.role === 'orchestrator') {
+      if (isRootAgent(this.context)) {
         await sessionRepository
           .incrementMessageCount(this.context.sessionId, this.accountedTokens(completion))
           .catch(() => { /* best-effort accounting */ });

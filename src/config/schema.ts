@@ -229,28 +229,29 @@ export const orchestratorConfigSchema = z.object({
   enabled: z.boolean().default(true),
   defaultModel: z.string().optional().describe('Override model for orchestrator. Uses DB default model if unset.'),
   /**
-   * Orchestrator execution mode. 'auto' (default) re-derives the mode every
-   * turn from the current default model's parameter count, so swapping to a
-   * smaller model changes the mode with no restart:
-   *   - router: no orchestrator LLM — classify → one specialist → relay (≤~10B)
-   *   - lite:   shrunken LLM orchestrator, single-step delegation (~10–24B)
-   *   - full:   today's full swarm orchestrator (≥~24B)
-   * Setting an explicit value pins that mode regardless of model size.
+   * Root-agent prompt tier. 'auto' (default) re-derives it every turn from the
+   * current default model's parameter count, so swapping to a smaller model
+   * changes the tier with no restart:
+   *   - lite: trimmed prompt, capped tool set and iterations (< ~24B)
+   *   - full: the whole prompt and toolset, swarms and pipelines (≥ ~24B)
+   * Setting an explicit value pins that tier regardless of model size. The
+   * `router` mode was deleted with the routing hop (rebuild plan, Phase 9).
    */
-  mode: z.enum(['auto', 'full', 'lite', 'router']).default('auto'),
+  mode: z.enum(['auto', 'full', 'lite']).default('auto'),
   /**
-   * Iteration cap for the lite orchestrator loop. Default 3 keeps lite cheap;
-   * the ceiling allows operators to raise it for heavier "full run" workloads
-   * (full mode's own loop tops out at 25, so that's the sensible upper bound).
+   * Iteration cap for the lite root loop — the hard bound that replaces router
+   * mode for small models. It was 3 when lite could only delegate once and
+   * relay; the lite root now does the work itself, and 3 iterations is not
+   * enough to read a file, search, and answer (full mode's loop tops out at
+   * 25, so that stays the upper bound).
    */
-  liteMaxIterations: z.number().min(1).max(25).default(3),
-  /** auto: models with fewer params than this run in router mode. */
+  liteMaxIterations: z.number().min(1).max(25).default(8),
+  /** The "small model" threshold: trimmed prompts and tool sets below this. */
   routerSmallModelMaxParams: z.number().default(10_000_000_000),
-  /** auto: models with fewer params than this (and ≥ router threshold) run in lite mode. */
+  /** auto: models with fewer params than this run in the lite tier. */
   liteModelMaxParams: z.number().default(24_000_000_000),
   /**
-   * Max tools handed to a worker whose bound model is in the small (router)
-   * tier. Small local models lose track of large tool surfaces and emit
+   * Max tools handed to a worker whose bound model is in the small tier. Small local models lose track of large tool surfaces and emit
    * malformed tool-call JSON; capping the list improves reliability and cuts
    * prompt size. Role tool lists are priority-ordered, so the cap keeps the
    * core tools. Does not affect workers on larger models.
@@ -446,6 +447,27 @@ export const heartbeatConfigSchema = z.object({
   /** Hard cap on heartbeat runs per user per calendar day (in the tz above). */
   maxRunsPerDay: z.number().int().min(1).max(288).default(24),
 });
+
+/**
+ * Retired setting values, normalized before validation.
+ *
+ * `orchestrator.mode: 'router'` was a real, documented, user-settable value
+ * until Phase 9 deleted the mode. Dropping it from the enum without this would
+ * mean an install carrying it — in the `settings` table or in
+ * `ORCHESTRATOR_MODE` — fails `configSchema.safeParse` at boot, and both load
+ * paths throw on that: the backend would not start, over a value the product
+ * itself told the user to set. Router's replacement is the lite tier, so that
+ * is what it becomes.
+ *
+ * Mutates a plain merged-config object in place and returns it. Called from
+ * both parse sites; a normalization only one loader runs is the same bug in a
+ * smaller blast radius.
+ */
+export function normalizeRetiredConfigValues<T>(merged: T): T {
+  const orch = (merged as { orchestrator?: { mode?: string } } | undefined)?.orchestrator;
+  if (orch?.mode === 'router') orch.mode = 'lite';
+  return merged;
+}
 
 // Full configuration schema
 export const configSchema = z.object({

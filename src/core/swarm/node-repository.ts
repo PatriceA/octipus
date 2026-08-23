@@ -197,6 +197,22 @@ export class SwarmNodeRepository {
     return rows.map((r) => r.id);
   }
 
+  /**
+   * Of these agent ids, which were the ROOT of their turn? A root is the depth-0
+   * node, and `swarm_nodes.id` is 1:1 with `agents.id`, so this answers "is this
+   * historical agent row Octipus itself" for callers that only have ids — the
+   * `agents` table has no root column and the role name stopped identifying it
+   * when the orchestrator role was deleted.
+   */
+  async findRootIds(ids: string[]): Promise<Set<string>> {
+    if (ids.length === 0) return new Set();
+    const rows = await this.db
+      .select({ id: swarmNodes.id })
+      .from(swarmNodes)
+      .where(and(inArray(swarmNodes.id, ids), eq(swarmNodes.depth, 0)));
+    return new Set(rows.map((r) => r.id));
+  }
+
   /** Flip a specific set of nodes to `cancelled` with the given error reason. */
   async cancelNodes(ids: string[], error: string): Promise<void> {
     if (ids.length === 0) return;

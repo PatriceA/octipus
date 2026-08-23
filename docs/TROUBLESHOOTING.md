@@ -178,10 +178,10 @@ ERROR: Orchestrator agent failed
 |---|---|---|
 | `glm-4.7-flash:latest` | ✅ Works | Tested end-to-end; recommended baseline for local orchestrator. |
 | `qwen2.5:32b+` | ✅ Generally works | Proven tool-calling track record at 32B+. |
-| `qwen3:*`, `qwen3.6:*` (any size up to 35B observed) | ❌ Fails (full mode) | All Qwen3 family sizes tested fail the orchestrator tool-call JSON path with the unbalanced-JSON parser error. Fine as a *worker* model, and fine in router mode (router has no orchestrator LLM at all). Just don't pin it as the default if your hardware can run a 24B+ model and you'd land in full mode. |
+| `qwen3:*`, `qwen3.6:*` (any size up to 35B observed) | ❌ Fails (full mode) | All Qwen3 family sizes tested fail the orchestrator tool-call JSON path with the unbalanced-JSON parser error. Fine as a *worker* model, and survivable in the lite tier (trimmed prompt, capped tools). Just don't pin it as the default if your hardware can run a 24B+ model and you'd land in full mode. |
 | `qwen3-vl:*` | (vision-only, not for orchestrator) | Distinct family — but a VL model shouldn't be the orchestrator anyway. |
 
-**Recommended setup** (full mode only — router/lite are not affected):
+**Recommended setup** (full tier only — the lite tier is not affected):
 - **Local-only**: install `glm-4.7-flash:latest` in Ollama and bind it as default. Use Qwen models for *workers* (writing, coding, etc.) where their output is plain text, not tool-call JSON.
 - **Hybrid**: keep a cloud model (Deepseek, OpenAI, Anthropic, Gemini) as the orchestrator default.
 
@@ -189,4 +189,4 @@ ERROR: Orchestrator agent failed
 1. In **Models → add model**, pull `glm-4.7-flash:latest` (or any cloud model) and set it as the default for the orchestrator topic.
 2. Restart the backend or trigger a model reload — the next chat turn will pick the new default.
 
-Octipus no longer auto-swaps known-unreliable orchestrators. The bad-list / swap logic was removed because the failure mode is specific to full-mode swarm coordination — router and lite tiers either skip the orchestrator LLM (router) or run only single-step delegation (lite), so a small qwen3 set as default and landing in those tiers shouldn't be silently replaced.
+Octipus no longer auto-swaps known-unreliable orchestrators. The bad-list / swap logic was removed because the failure mode is specific to full-tier swarm coordination — the lite tier runs a trimmed prompt with a capped tool set and one delegation per request, so a small qwen3 set as default and landing there shouldn't be silently replaced.

@@ -169,7 +169,7 @@ export abstract class BaseTool {
     // let the shared policy decide. (The agent loop checks every call anyway,
     // so a stored DENY is still enforced there.)
     const skipForUnattended =
-      !canPromptHuman(context.role) && !unattendedDenyActions?.length;
+      !canPromptHuman(context) && !unattendedDenyActions?.length;
     if (options?.requiresPermission !== false && !skipForSystem && !skipForUnattended) {
       const permissionManager = getPermissionManager();
       const action =

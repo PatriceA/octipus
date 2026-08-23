@@ -19,6 +19,7 @@ import { CLIArgumentBuilder, CLIOutputParser, sweepStaleFiles } from './cli-adap
 import type { CLIToolConfig } from '@/models/providers/cli-provider';
 import { BudgetExceededError } from './swarm/errors';
 import { getCLIToolConfig } from './cli-agent-factory';
+import { isRootAgent } from './types';
 import type { AgentContext, AgentMessage } from './types';
 
 /**
@@ -140,8 +141,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
   async addUserMessage(content: string): Promise<void> {
     this.messages.push({ role: 'user', content, timestamp: new Date() });
-    // Only persist for orchestrator (root agent) — sub-workers use handleMessage for persistence
-    if (this.context.role === 'orchestrator') {
+    // Only persist for the root agent — sub-workers use handleMessage for persistence
+    if (isRootAgent(this.context)) {
       await messageRepository.create({
         sessionId: this.context.sessionId,
         role: 'user',
@@ -216,6 +217,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
         workspaceId: this.context.workspaceId ?? null,
         swarmNodeId: this.context.id,
         role: this.context.role,
+        root: isRootAgent(this.context),
         topic: this.context.topic,
         output: result,
       }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to record agent completion'));
@@ -758,8 +760,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
             return;
           }
 
-          // Only persist for orchestrator (root agent) — sub-workers use handleMessage for persistence
-          if (accumulatedText && this.context.role === 'orchestrator') {
+          // Only persist for the root agent — sub-workers use handleMessage for persistence
+          if (accumulatedText && isRootAgent(this.context)) {
             await messageRepository.create({
               sessionId: this.context.sessionId,
               role: 'assistant',

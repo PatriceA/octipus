@@ -23,7 +23,7 @@ describe('deriveParamCount', () => {
   });
 
   test('expands MoE tags to the aggregate, not per-expert', () => {
-    // 8 × 7B = 56B → must not be mistaken for a 7B (router) model.
+    // 8 × 7B = 56B → must not be mistaken for a 7B (small) model.
     expect(deriveParamCount('mixtral:8x7b-instruct-v0.1-q4_K_M')).toBe(56_000_000_000);
     expect(paramCountToMode(deriveParamCount('mixtral:8x7b') as number, THRESHOLDS)).toBe('full');
   });
@@ -40,9 +40,11 @@ describe('deriveParamCount', () => {
 
 describe('paramCountToMode', () => {
   test.each([
-    [7_000_000_000, 'router'],
-    [8_000_000_000, 'router'],
-    [9_999_999_999, 'router'],
+    // Below the small-model threshold is still `lite` — the router tier it used
+    // to return was a control-flow branch, and Phase 9 deleted it.
+    [7_000_000_000, 'lite'],
+    [8_000_000_000, 'lite'],
+    [9_999_999_999, 'lite'],
     [10_000_000_000, 'lite'],
     [14_000_000_000, 'lite'],
     [23_999_999_999, 'lite'],
@@ -58,7 +60,7 @@ describe('resolveOrchestratorMode', () => {
   const cfg = { mode: 'auto' as const, ...THRESHOLDS };
 
   test('auto: derives from model size', () => {
-    expect(resolveOrchestratorMode({ modelId: 'qwen2.5:7b' }, cfg)).toBe('router');
+    expect(resolveOrchestratorMode({ modelId: 'qwen2.5:7b' }, cfg)).toBe('lite');
     expect(resolveOrchestratorMode({ modelId: 'qwen2.5:14b' }, cfg)).toBe('lite');
     expect(resolveOrchestratorMode({ modelId: 'qwen2.5:32b' }, cfg)).toBe('full');
   });
@@ -88,6 +90,6 @@ describe('resolveOrchestratorMode', () => {
 
   test('explicit mode pins regardless of size', () => {
     expect(resolveOrchestratorMode({ modelId: 'qwen2.5:7b' }, { ...cfg, mode: 'full' })).toBe('full');
-    expect(resolveOrchestratorMode({ modelId: 'qwen2.5:70b' }, { ...cfg, mode: 'router' })).toBe('router');
+    expect(resolveOrchestratorMode({ modelId: 'qwen2.5:70b' }, { ...cfg, mode: 'lite' })).toBe('lite');
   });
 });

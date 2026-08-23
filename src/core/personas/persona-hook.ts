@@ -10,17 +10,17 @@ import { resolvePersonaForUser } from './resolver';
  * (idempotent — safe to call multiple times; only one subscriber
  * registers thanks to the module-level guard).
  *
- * Subscription contract: when `before-agent-start` fires for the
- * orchestrator role, we inject the resolved persona block AFTER the
+ * Subscription contract: when `before-agent-start` fires for the turn's ROOT
+ * agent, we inject the resolved persona block AFTER the
  * SECURITY_PREAMBLE and BEFORE the role prompt. Layer order:
  *
  *   SECURITY_PREAMBLE  (untouched — DESIGN.md rule #6)
  *   PERSONA            (this module — name, tone, voice rules, user facts)
- *   ROLE PROMPT        (orchestrator/prompt.md — dispatcher rules, untouched)
+ *   ROLE PROMPT        (the root role's prompt.md, untouched)
  *   (memory, session summary, etc. — appended downstream)
  *
  * Specialist children are out of scope: persona is host-level only.
- * We bail when the hook fires for any role other than `orchestrator`.
+ * We bail when the hook fires for anything but the root agent.
  */
 let registered = false;
 
@@ -40,7 +40,7 @@ export function installPersonaHook(): () => void {
   installNarrationBridge();
 
   const off = getOrchestratorHooks().register('before-agent-start', async (ctx) => {
-    if (ctx.role !== 'orchestrator') return;
+    if (!ctx.root) return;
 
     const persona = await resolvePersonaForUser(ctx.userId);
     const personaBlock = persona.promptBlock;

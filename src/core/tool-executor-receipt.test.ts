@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { messageRepository } from '@/db/repositories/message-repository';
 import { ToolExecutor } from './tool-executor';
 import type { ToolHandler } from './agent-base';
 import type { AgentContext, ToolCall } from './types';
@@ -20,7 +21,8 @@ function makeContext(): AgentContext {
     userId: 'user-test',
     model: 'test',
     topic: '',
-    role: 'orchestrator',
+    role: 'general',
+    root: true,
     status: 'running',
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -39,6 +41,17 @@ function freshExecutor(...tools: ToolHandler[]): ToolExecutor {
 }
 
 const ok = async () => 'ok';
+
+// The executor persists every tool result to `messages` (it stopped skipping the
+// root when the root started doing real work). These are pure unit tests with no
+// database, so the repository write is stubbed at the accessor rather than
+// module-mocked — `vi.mock` on a shared repo leaks across the suite.
+beforeEach(() => {
+  vi.spyOn(messageRepository, 'create').mockResolvedValue({} as never);
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe('ToolExecutor — side-effect counters', () => {
   test('starts at all-zero', () => {

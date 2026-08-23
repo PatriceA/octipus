@@ -18,7 +18,8 @@ const TEST_PERSONA = Persona.parse({
 });
 
 const baseCtx = (overrides: Partial<BuildSystemPromptOptions> = {}): BuildSystemPromptOptions => ({
-  role: 'orchestrator',
+  role: 'general',
+  root: true,
   userId: 'user-test',
   sessionId: 'session-test',
   workspaceId: null,
@@ -62,9 +63,9 @@ describe('installPersonaHook', () => {
     expect(ctx.systemPrompt).toContain('third person');
   });
 
-  test('skips injection for non-orchestrator roles', async () => {
+  test('skips injection for spawned children (not the root)', async () => {
     installPersonaHook();
-    const ctx = baseCtx({ role: 'coding', systemPrompt: SECURITY_PREAMBLE + 'CODING_ROLE' });
+    const ctx = baseCtx({ role: 'coding', root: false, systemPrompt: SECURITY_PREAMBLE + 'CODING_ROLE' });
     await getOrchestratorHooks().fire('before-agent-start', ctx);
     expect(ctx.systemPrompt).toBe(SECURITY_PREAMBLE + 'CODING_ROLE');
   });

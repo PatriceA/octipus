@@ -22,6 +22,8 @@ import ChangesTab from './changes-tab';
 interface TrackedAgent {
   id: string;
   role: string;
+  /** The turn's root agent — Octipus itself, not a specialist it spawned. */
+  root?: boolean;
   model: string;
   status: 'running' | 'completed' | 'failed' | 'stopped';
   toolCalls: Array<{ id: string; name: string; argsSummary?: string }>;
@@ -163,7 +165,10 @@ export default function SidePanel({
     return Array.from(byPath.values()).filter((f) => !/delete/i.test(f.action));
   })();
 
-  const agentArray = Array.from(trackedAgents.values()).filter((a) => a.role !== 'orchestrator');
+  // The root agent is Octipus answering, not one of the agents it dispatched —
+  // the panel lists the latter. Older sessions carry the retired role name
+  // instead of the flag, so both are filtered.
+  const agentArray = Array.from(trackedAgents.values()).filter((a) => !a.root && a.role !== 'orchestrator');
 
   const runningAgents = agentArray.filter((a) => a.status === 'running');
   const completedAgents = agentArray

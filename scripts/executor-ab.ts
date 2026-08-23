@@ -133,7 +133,7 @@ function makeParent(sessionId: string, signal: AbortSignal): AgentNode {
     parentNodeId: null,
     kind: 'orchestrator',
     depth: 0,
-    role: 'orchestrator',
+    role: 'general',
     topicPath: 'coding',
     model: 'harness',
     budget: {
@@ -207,7 +207,7 @@ async function runArm(
     userId,
     topic: 'coding',
     model: 'harness',
-    role: 'orchestrator',
+    role: 'general',
     status: 'running',
     createdAt: new Date(),
     updatedAt: new Date(),

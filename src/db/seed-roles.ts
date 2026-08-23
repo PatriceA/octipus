@@ -94,9 +94,17 @@ export async function loadRolesFromDb(): Promise<void> {
   const dbRoles = await db.select().from(roles);
 
   for (const dbRole of dbRoles) {
-    if (ROLE_CONFIGS[dbRole.role as keyof typeof ROLE_CONFIGS]) {
-      // Update in-memory config from DB
+    const existing = ROLE_CONFIGS[dbRole.role as keyof typeof ROLE_CONFIGS];
+    if (existing) {
+      // Overlay the three columns the DB owns onto the registry entry. It used
+      // to REBUILD the object from those columns, which silently dropped every
+      // field the `roles` table has no column for — `readOnly` (the only
+      // per-handler write filter in the system), `coreToolIds` (the whole lazy
+      // tool-discovery gate) and `liteSystemPromptTemplate`. All three were
+      // present in tests and absent in a booted server, which is why nothing
+      // caught it.
       ROLE_CONFIGS[dbRole.role as keyof typeof ROLE_CONFIGS] = {
+        ...existing,
         role: dbRole.role as any,
         toolIds: dbRole.toolIds as string[],
         defaultTopic: dbRole.defaultTopic,

@@ -34,8 +34,13 @@ export type ApprovalRoute =
 export interface ApprovalContext {
   /** The stored permission for this action. */
   level: PermissionLevel;
-  /** Agent role making the call. `orchestrator` is the one that talks to a human. */
+  /** Agent role making the call. Used only for the denial message. */
   role?: string;
+  /** The caller is the turn's ROOT agent. */
+  root?: boolean;
+  /** …and a person is actually waiting on it. Undefined means "assume yes",
+   *  which is the interactive/direct path's answer. */
+  attended?: boolean;
   toolId: string;
   /** The permission action, which is usually the tool name. */
   action: string;
@@ -55,15 +60,17 @@ export interface ApprovalDecision {
 }
 
 /**
- * Can this caller reach a person? Only the orchestrator can: every other role
- * is a worker the orchestrator spawned, and its approval request would be
- * relayed by nobody.
+ * Can this caller reach a person? Only the ROOT agent of a turn can: every
+ * other agent is a child something spawned, and its approval request would be
+ * relayed by nobody. Keyed on `root` rather than `role === 'orchestrator'`
+ * since Phase 9 — the root now runs as an ordinary role.
  *
- * A missing role is the interactive/direct path (chat, API, CLI), which does
- * reach a person — the same reading both call sites had.
+ * A caller with no role at all is the interactive/direct path (chat, API,
+ * CLI), which does reach a person — the same reading both call sites had.
  */
-export function canPromptHuman(role: string | undefined): boolean {
-  return !role || role === 'orchestrator';
+export function canPromptHuman(caller: { role?: string; root?: boolean; attended?: boolean }): boolean {
+  if (!caller.role) return true;
+  return caller.root === true && caller.attended !== false;
 }
 
 /** Does `pattern` name this tool action? */
@@ -84,7 +91,7 @@ export function routeApproval(ctx: ApprovalContext): ApprovalDecision {
   if (ctx.level !== 'ASK') {
     return { route: 'execute' };
   }
-  if (canPromptHuman(ctx.role)) {
+  if (canPromptHuman(ctx)) {
     return { route: 'ask_human' };
   }
   const denied = (ctx.unattendedDenyActions ?? []).find((p) => matches(p, ctx.toolId, ctx.action));

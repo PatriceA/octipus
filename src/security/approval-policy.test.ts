@@ -7,13 +7,27 @@ import { describe, expect, test } from 'vitest';
 import { canPromptHuman, routeApproval } from './approval-policy';
 
 describe('canPromptHuman', () => {
-  test('the orchestrator and the direct paths can', () => {
-    expect(canPromptHuman('orchestrator')).toBe(true);
-    expect(canPromptHuman(undefined)).toBe(true);
+  test('the root agent and the direct paths can', () => {
+    // Keyed on `root`, not on the role name: since Phase 9 the root runs as an
+    // ordinary role, so a role string no longer identifies it.
+    expect(canPromptHuman({ role: 'general', root: true })).toBe(true);
+    expect(canPromptHuman({})).toBe(true);
+  });
+
+  test('an unattended root cannot either — a hook run has nobody to ask', () => {
+    // The root holds real tools since Phase 9, so it can now raise an ASK on a
+    // hook/heartbeat turn. Prompting there burns the request's TTL and then
+    // fails; the unattended path (auto-approve, or refuse via
+    // `unattendedDenyActions`) is the answer.
+    expect(canPromptHuman({ role: 'general', root: true, attended: false })).toBe(false);
+    // Unset means the interactive default, which is what every other caller is.
+    expect(canPromptHuman({ role: 'general', root: true })).toBe(true);
   });
 
   test('a spawned worker cannot — nobody relays its request', () => {
-    expect(canPromptHuman('coding')).toBe(false);
+    expect(canPromptHuman({ role: 'coding' })).toBe(false);
+    // The root's own role, spawned as a child: still nobody to ask.
+    expect(canPromptHuman({ role: 'general' })).toBe(false);
   });
 });
 
@@ -28,7 +42,7 @@ describe('routeApproval', () => {
   });
 
   test('ASK asks, when someone can answer', () => {
-    expect(routeApproval({ level: 'ASK', role: 'orchestrator', toolId: 'shell', action: 'run' }).route)
+    expect(routeApproval({ level: 'ASK', role: 'general', root: true, toolId: 'shell', action: 'run' }).route)
       .toBe('ask_human');
   });
 
@@ -62,7 +76,7 @@ describe('routeApproval', () => {
   test('the deny list never overrides a human who can be asked', () => {
     expect(
       routeApproval({
-        level: 'ASK', role: 'orchestrator', toolId: 'shell', action: 'run',
+        level: 'ASK', role: 'general', root: true, toolId: 'shell', action: 'run',
         unattendedDenyActions: ['shell'],
       }).route,
     ).toBe('ask_human');

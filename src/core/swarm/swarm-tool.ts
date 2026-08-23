@@ -52,11 +52,11 @@ const CHILD_ROLES_ENUM: AgentRole[] = [
  * fan-out is undiscoverable. The `Record<AgentRole, string>` type forces a
  * blurb whenever a role is added to `AgentRole`.
  *
- * The orchestrator (depth-0) keeps its own role list in prompt.md /
- * prompt.lite.md — kept in sync manually with this map for now; a later change
- * could generate those from here.
+ * The root agent (depth-0) keeps its own routing table in
+ * `orchestrator/delegation-prompt.md` — kept in sync manually with this map for
+ * now; a later change could generate that from here.
  */
-const CHILD_ROLE_BLURBS: Record<Exclude<AgentRole, 'orchestrator'>, string> = {
+const CHILD_ROLE_BLURBS: Record<AgentRole, string> = {
   research: 'web search, investigate, synthesize sources',
   coding: 'write / refactor / fix code, shell, git',
   review: 'read-only code review / audit',
@@ -80,10 +80,7 @@ const CHILD_ROLE_BLURBS: Record<Exclude<AgentRole, 'orchestrator'>, string> = {
  * brief. One `- role — blurb` line per role, in enum order.
  */
 export function buildSpawnRoleCatalog(): string {
-  // CHILD_ROLES_ENUM never contains 'orchestrator', so the cast is safe.
-  return CHILD_ROLES_ENUM.map(
-    (r) => `- ${r} — ${CHILD_ROLE_BLURBS[r as Exclude<AgentRole, 'orchestrator'>]}`,
-  ).join('\n');
+  return CHILD_ROLES_ENUM.map((r) => `- ${r} — ${CHILD_ROLE_BLURBS[r as AgentRole]}`).join('\n');
 }
 
 /**

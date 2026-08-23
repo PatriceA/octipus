@@ -40,10 +40,12 @@ Runtime instances that execute tasks using an LLM tool loop. Each agent has a co
 
 **Location:** `src/core/agent-worker.ts`, managed by `AgentManager`
 
-### Orchestrator
-Depth-0 root of the swarm. Classifies incoming messages and either responds directly (casual / read-only) or delegates sub-topics to specialist Agents via the `spawn_child` meta-tool. Owns the final user-facing reply.
+### Root agent
+Depth-0 root of the swarm, and the agent the user is talking to. It runs as an ordinary role — `general` (`ROOT_ROLE`) — with the general toolset **plus** the `spawn_child` / `collect_children` / `create_pipeline` meta-tools, so it answers with its own tools and delegates sub-topics to specialist Agents when one is genuinely needed. Owns the final user-facing reply.
 
-**Location:** `src/core/orchestrator/service.ts`, role prompt at `src/core/orchestrator/roles/orchestrator/prompt.md`
+Until Phase 9 of the rebuild plan this was a dedicated `orchestrator` role holding meta-tools and `profiles` and nothing else, reached through a keyword classifier that decided per message whether to run it at all. It could do no work, so half its runs answered from parametric memory after a second model had already read the same message. Both the classifier branch and the tool-less role are gone; `AgentContext.root` is what identifies the root now, since the role string no longer does.
+
+**Location:** `src/core/orchestrator/service.ts` and `orchestrator-runner.ts`, role prompt at `src/core/orchestrator/roles/general/prompt.md`, delegation mechanics at `src/core/orchestrator/delegation-prompt.md`
 
 #### Message Classification (Two-Layer Architecture)
 
@@ -55,7 +57,7 @@ coding, research, architecture, chat, embedding, design, devops, security, data,
 **Layer B — src/core/orchestrator/classifier.ts** (live, 14 categories):
 coding, research, devops, security, review, qa, data, writing, architecture, design, finance, communication, automation, general.
 
-Layer B is the active classification path (injected into orchestrator context at service.ts:704). Every category name is a valid worker role, so the classifier topic feeds straight into `spawn_child` with no remapping. `TOPIC_TO_ROLE_ALIAS` (swarm-tool.ts) still catches natural-language synonyms the orchestrator LLM may use (e.g. `development`→`coding`, `database`→`data`). Divergences from Layer A: Layer B has distinct 'communication' category and lacks 'chat'/'embedding'/'ai'/'pm' (handled via LLM fallback).
+Layer B is the active classification path. What it is NOT any more is a routing decision: it does not choose the specialist (Phase 2) and it does not choose whether an agent runs at all (Phase 9). It scopes memory retrieval, and in the lite tier only it reaches the model as a hint the request can override. `TOPIC_TO_ROLE_ALIAS` (swarm-tool.ts) still catches natural-language synonyms the model may use in `spawn_child` (e.g. `development`→`coding`, `database`→`data`). Divergences from Layer A: Layer B has distinct 'communication' category and lacks 'chat'/'embedding'/'ai'/'pm' (handled via LLM fallback).
 
 ### Swarm (3-Level Hierarchy)
 
@@ -73,7 +75,7 @@ The LLM-facing tool is `spawn_child`. Agents also get `escalate_to_different_exp
 
 ## Orchestrator persona
 
-A per-user identity layer the orchestrator inherits at every turn — name, pronouns, tone, narration volume, free-form self-facts. Default is **Octipus** (the octopus-machine). Layered between `SECURITY_PREAMBLE` and the role prompt via the `before-agent-start` hook:
+A per-user identity layer the root agent inherits at every turn — name, pronouns, tone, narration volume, free-form self-facts. Default is **Octipus** (the octopus-machine). Layered between `SECURITY_PREAMBLE` and the role prompt via the `before-agent-start` hook:
 
 ```
 SECURITY_PREAMBLE           (DESIGN.md rule #6 — untouched)
@@ -82,13 +84,13 @@ SECURITY_PREAMBLE           (DESIGN.md rule #6 — untouched)
 PERSONA BLOCK               (from personas/<preset>.yaml + per-user overrides)
 │
 ▼
-ROLE PROMPT                 (roles/orchestrator/prompt.md — untouched)
+ROLE PROMPT                 (roles/general/prompt.md + delegation-prompt.md — untouched)
 │
 ▼
 memory block, recent history, classifier hint, …
 ```
 
-The same persona applies to the casual-chat path (`directResponse`) so greetings sound like Octipus too. Live swarm events (`swarm.node_spawned`, `node_completed`, `budget_warning`) get re-emitted as `swarm.narration` carrying persona-rendered text ("Octipus dispatches a research arm.", "qa arm failed. Predictable.") — channels subscribe independently.
+The same persona applies to the two remaining non-agentic surfaces that also speak to the user — the voice propose-then-confirm turn and `chat.interject` — both of which still run `directResponse`, so those replies sound like Octipus too. Live swarm events (`swarm.node_spawned`, `node_completed`, `budget_warning`) get re-emitted as `swarm.narration` carrying persona-rendered text ("Octipus dispatches a research arm.", "qa arm failed. Predictable.") — channels subscribe independently.
 
 Specialist children **don't** inherit the persona — they stay role-defined. Persona is host-level only.
 
@@ -104,9 +106,7 @@ Orchestrator (depth 0)
     │
     ├─ Expert bypass? ──► Spawn worker with expert's role + tools + skills
     │
-    ├─ Casual message? ──► Direct LLM response (no tools)
-    │
-    └─ Task message? ──► Orchestrator runs with meta-tools
+    └─ Every other message ──► the root agent runs: general tools + meta-tools
                               │
                               ├─ spawn_child(role, topic, subtopic, taskBrief)
                               │     ──► Agent (depth 1) with resolved expert,
@@ -227,7 +227,6 @@ Children **inherit topic bindings, not the parent's model**. If a research Agent
 
 | Role | Tools | Default Skills | Use Case |
 |------|-------|---------------|----------|
-| orchestrator | profiles | — | Routes tasks to specialists |
 | coding | filesystem, shell, git, knowledge, task_state, mcp | architecture, data-structures, db-design, api-design | Code implementation |
 | review | filesystem, shell, git, knowledge, task_state, visual | architecture, testing, security, performance | Code review |
 | research | websearch, knowledge, filesystem, profiles, artifacts, artifacts_toolbox, task_state, mcp | technical-writing | Investigation |
@@ -253,7 +252,7 @@ Some models (Qwen3, DeepSeek) emit `<think>...</think>` reasoning blocks that co
 - **Agent workers (orchestrator AND experts):** Strip `think:false` from extraBody so the model can reason before emitting tool calls. Empirically (2026-05-12 QA), Ollama with `think:false` produces malformed tool-call JSON that the Go-side parser rejects ("Value looks like object, but can't find closing '}'"); with thinking ON, the same models emit valid tool calls. The override applies to every role that uses tools, not just experts.
 - **LLM client safety net:** `<think>` blocks are stripped from both sync and streaming responses before delivery, so users never see raw reasoning output
 
-**Strategy:** Keep thinking enabled for any agent that emits tool calls (orchestrator, experts) — the cost in tokens is much smaller than the cost of a failed tool call + retry storm. Disable thinking only for casual chat (`direct-response.ts`), where there are no tool calls to corrupt.
+**Strategy:** Keep thinking enabled for any agent that emits tool calls (orchestrator, experts) — the cost in tokens is much smaller than the cost of a failed tool call + retry storm. Disable thinking only for the toolless surfaces (`direct-response.ts` — voice propose, `chat.interject`), where there are no tool calls to corrupt.
 
 ## Steering Messages
 
@@ -306,7 +305,7 @@ Reasoning models (Qwen3, DeepSeek, o-series) benefit from thinking tokens but co
 
 | Level | Thinking Budget | Use Case |
 |-------|----------------|----------|
-| **off** | 0 tokens | Orchestrator routing, casual chat |
+| **off** | 0 tokens | Casual chat |
 | **low** | ~1024 tokens | Simple tool calls, classification |
 | **medium** | ~4096 tokens | Multi-step tool reasoning |
 | **high** | ~8192+ tokens | Complex planning, code generation |
@@ -314,7 +313,7 @@ Reasoning models (Qwen3, DeepSeek, o-series) benefit from thinking tokens but co
 ### Behavior
 
 - **Auto-detection**: The system detects reasoning-capable models and assigns a default budget based on the agent's role
-- **Scaling**: Budget scales with task complexity — orchestrator gets `off` or `low`, agent workers get `medium` or `high`
+- **Scaling**: Budget scales with task complexity — simple turns get `off` or `low`, agent workers get `medium` or `high`
 - **Agent worker override**: Workers always enable thinking even if the model config disables it, since complex tool-use benefits from reasoning
 - Thinking tokens are stripped from output before delivery to users
 

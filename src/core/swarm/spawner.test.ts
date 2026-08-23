@@ -180,7 +180,7 @@ describe('syncParentTokenUsage', () => {
   const makeNode = (used: number, workerTokens: number | null, childTokensUsed = 0): AgentNode => {
     const node = {
       id: 'p',
-      role: 'orchestrator',
+      role: 'general',
       depth: 0 as const,
       topicPath: '',
       budget: {
@@ -410,7 +410,7 @@ function makeNode(over: Partial<AgentNode> = {}): AgentNode {
     parentNodeId: null,
     kind: 'orchestrator',
     depth: 0,
-    role: 'orchestrator',
+    role: 'general',
     topicPath: 'root',
     model: 'test-model',
     budget: {
@@ -432,7 +432,7 @@ function makeCtx() {
     userId: 'u-1',
     topic: 'x',
     model: 'test-model',
-    role: 'orchestrator' as const,
+    role: 'general' as const,
     status: 'running' as const,
     createdAt: new Date(),
     updatedAt: new Date(),

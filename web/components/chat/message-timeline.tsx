@@ -47,6 +47,8 @@ export interface ChatMessageData {
 export interface TrackedAgent {
   id: string;
   role: string;
+  /** The turn's root agent — Octipus itself, not a specialist it spawned. */
+  root?: boolean;
   model: string;
   status: 'running' | 'completed' | 'failed' | 'stopped';
   toolCalls: Array<{

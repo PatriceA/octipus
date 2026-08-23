@@ -76,7 +76,7 @@ export interface ScoredModel {
    * from its param count. Attached by the recommend route (needs config
    * thresholds), so optional on the pure scorer output.
    */
-  orchestratorMode?: 'full' | 'lite' | 'router';
+  orchestratorMode?: 'full' | 'lite';
   /** Plain-language explanation of what `orchestratorMode` means for the user. */
   orchestratorModeNote?: string;
 }

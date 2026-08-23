@@ -72,7 +72,7 @@ export const defaultConfig: Partial<Config> = {
   orchestrator: {
     enabled: true,
     mode: 'auto',
-    liteMaxIterations: 3,
+    liteMaxIterations: 8,
     routerSmallModelMaxParams: 10_000_000_000,
     liteModelMaxParams: 24_000_000_000,
     smallModelMaxTools: 7,

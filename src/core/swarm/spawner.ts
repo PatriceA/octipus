@@ -1408,10 +1408,10 @@ export class SwarmSpawner {
     // choosing, so overriding it with a keyword table's read of the task brief
     // alone replaces judgement with a guess.
     //
-    // Lite, specifically, and not "small": a router-tier orchestrator never
-    // reaches this method at all — `runOrchestrator` short-circuits router mode
-    // into `runRouterTurn`, which spawns its worker directly. Gating on the
-    // router threshold would leave the rewrite switched on for nothing.
+    // Lite, specifically, and not "small": the two used to be different tiers
+    // and the rewrite was gated on the wrong one — a router-tier root never
+    // reached this method at all. Router mode is gone (Phase 9); every small
+    // model now resolves to lite, so this reads as the tier it always meant.
     const fit = applyRoleFit(params.role, params.taskBrief, orchestratorIsLite);
     if (fit.rewrittenFrom) {
       coreLogger.info(

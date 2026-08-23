@@ -41,7 +41,7 @@ describe('taskFingerprint (moved to call-graph module)', () => {
 describe('SwarmCallGraph — fingerprint dedup', () => {
   test('first checkSpawn for a brief succeeds and returns a fingerprint', () => {
     const g = new SwarmCallGraph('root-1');
-    g.registerRoot({ id: 'orch', topicPath: 'root', role: 'orchestrator' });
+    g.registerRoot({ id: 'orch', topicPath: 'root', role: 'general' });
 
     const brief = mkBrief();
     const { fingerprint } = g.checkSpawn('orch', brief);
@@ -50,7 +50,7 @@ describe('SwarmCallGraph — fingerprint dedup', () => {
 
   test('duplicate fingerprint throws DuplicateSpawnError with parent notice', () => {
     const g = new SwarmCallGraph('root-2');
-    g.registerRoot({ id: 'orch', topicPath: 'root', role: 'orchestrator' });
+    g.registerRoot({ id: 'orch', topicPath: 'root', role: 'general' });
 
     const brief = mkBrief();
     const { fingerprint } = g.checkSpawn('orch', brief);
@@ -78,7 +78,7 @@ describe('SwarmCallGraph — fingerprint dedup', () => {
 
   test('fingerprint released by unregisterFingerprint allows respawn', () => {
     const g = new SwarmCallGraph('root-3');
-    g.registerRoot({ id: 'orch', topicPath: 'root', role: 'orchestrator' });
+    g.registerRoot({ id: 'orch', topicPath: 'root', role: 'general' });
 
     const brief = mkBrief();
     const { fingerprint } = g.checkSpawn('orch', brief);
@@ -98,7 +98,7 @@ describe('SwarmCallGraph — fingerprint dedup', () => {
 
   test('reserves atomically: a second checkSpawn WITHOUT register still dedups (race close)', () => {
     const g = new SwarmCallGraph('root-race');
-    g.registerRoot({ id: 'orch', topicPath: 'root', role: 'orchestrator' });
+    g.registerRoot({ id: 'orch', topicPath: 'root', role: 'general' });
 
     const brief = mkBrief();
     g.checkSpawn('orch', brief); // reserves — no register() yet (child not built)
@@ -109,7 +109,7 @@ describe('SwarmCallGraph — fingerprint dedup', () => {
 
   test('releaseFingerprint frees a reservation that never registered', () => {
     const g = new SwarmCallGraph('root-release');
-    g.registerRoot({ id: 'orch', topicPath: 'root', role: 'orchestrator' });
+    g.registerRoot({ id: 'orch', topicPath: 'root', role: 'general' });
 
     const brief = mkBrief();
     const { fingerprint } = g.checkSpawn('orch', brief); // reserved, then spawn denied
@@ -119,7 +119,7 @@ describe('SwarmCallGraph — fingerprint dedup', () => {
 
   test('releaseFingerprint is a no-op while a registered node owns it', () => {
     const g = new SwarmCallGraph('root-owned');
-    g.registerRoot({ id: 'orch', topicPath: 'root', role: 'orchestrator' });
+    g.registerRoot({ id: 'orch', topicPath: 'root', role: 'general' });
 
     const brief = mkBrief();
     const { fingerprint } = g.checkSpawn('orch', brief);
@@ -132,7 +132,7 @@ describe('SwarmCallGraph — fingerprint dedup', () => {
 describe('SwarmCallGraph — ancestor-chain rejection', () => {
   test('rejects when brief.topicPath matches an ancestor topicPath', () => {
     const g = new SwarmCallGraph('root-4');
-    g.registerRoot({ id: 'orch', topicPath: 'root', role: 'orchestrator' });
+    g.registerRoot({ id: 'orch', topicPath: 'root', role: 'general' });
     // Agent's topicPath is the one we'll try to re-use as a grandchild.
     g.register({
       id: 'agent-a',
@@ -152,7 +152,7 @@ describe('SwarmCallGraph — ancestor-chain rejection', () => {
 
   test('allows a child with a different topicPath even if brief text similar', () => {
     const g = new SwarmCallGraph('root-5');
-    g.registerRoot({ id: 'orch', topicPath: 'root', role: 'orchestrator' });
+    g.registerRoot({ id: 'orch', topicPath: 'root', role: 'general' });
     g.register({
       id: 'agent-a',
       parentNodeId: 'orch',
@@ -219,7 +219,7 @@ describe('SwarmCallGraph registry + GC', () => {
 
   test('release clears internal state', () => {
     const g = getCallGraph('session-Z');
-    g.registerRoot({ id: 'o', topicPath: 'root', role: 'orchestrator' });
+    g.registerRoot({ id: 'o', topicPath: 'root', role: 'general' });
     g.register({
       id: 'agent-z',
       parentNodeId: 'o',

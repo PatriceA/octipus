@@ -5,7 +5,7 @@ import { logger } from '@/utils/logger';
 import { defaultConfig } from './defaults';
 import { loadFromEnvLegacy } from './legacy-loader';
 import { loadRuntimeConfig as loadRuntimeConfigImpl } from './runtime-loader';
-import { type Config, configSchema } from './schema';
+import { type Config, configSchema, normalizeRetiredConfigValues } from './schema';
 import { settingKeyToConfigPath } from './settings-registry';
 import { deepMerge } from './utils';
 
@@ -106,7 +106,7 @@ export function loadConfig(): Config {
 
   const envConfig = loadFromEnvLegacy();
   const merged = deepMerge(defaultConfig, envConfig);
-  const result = configSchema.safeParse(merged);
+  const result = configSchema.safeParse(normalizeRetiredConfigValues(merged));
 
   if (!result.success) {
     logger.error({ errors: result.error.issues }, 'Configuration validation failed');

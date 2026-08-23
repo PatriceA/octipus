@@ -269,7 +269,7 @@ export default function ChatPage() {
       const restoredAgents = new Map<string, TrackedAgent>();
       const restoredFileChanges: FileChange[] = [];
       try {
-        const agentData = await api.get<{ agents: Array<{ id: string; sessionId: string; role: string; model: string; status: string; createdAt: string; completedAt?: string; durationMs?: number; iteration: number }> }>(`/agents?sessionId=${encodeURIComponent(sessionId)}`);
+        const agentData = await api.get<{ agents: Array<{ id: string; sessionId: string; role: string; root?: boolean; model: string; status: string; createdAt: string; completedAt?: string; durationMs?: number; iteration: number }> }>(`/agents?sessionId=${encodeURIComponent(sessionId)}`);
         const sessionAgents = agentData?.agents || [];
         for (const a of sessionAgents) {
           const toolCalls: ToolCallInfo[] = [];
@@ -361,6 +361,9 @@ export default function ChatPage() {
           restoredAgents.set(a.id, {
             id: a.id,
             role: a.role,
+            // Server-marked (from the depth-0 swarm node) — the root is Octipus
+            // itself and the panel lists only what it dispatched.
+            root: a.root === true,
             model: a.model,
             status: (isFinished ? (a.status === 'failed' ? 'failed' : 'completed') : 'running') as TrackedAgent['status'],
             // A finished agent won't emit more results — clear any tool row that
@@ -956,6 +959,10 @@ export default function ChatPage() {
           next.set(agentId, {
             id: agentId,
             role: d.role,
+            // The turn's root agent. Carried explicitly since Phase 9: the root
+            // runs as an ordinary role now, so `role === 'orchestrator'` no
+            // longer tells the panel which entry is Octipus itself.
+            root: d.root === true,
             model: d.model,
             status: 'running',
             toolCalls: [],

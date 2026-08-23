@@ -1,13 +1,16 @@
 /**
- * What the orchestrator is told about delegating, and what it is told about the
+ * What the ROOT agent is told about delegating, and what it is told about the
  * keyword classifier's guess.
  *
- * Two defects are pinned here. The delegation policy used to be emitted only
+ * Three defects are pinned here. The delegation policy used to be emitted only
  * when the keyword table matched a topic, so an unclassified message — the kind
  * most likely to need a specialist — arrived with no delegation guidance at
- * all. And the topic was handed to every model as an instruction ("use this as
- * the child role"), which replaces a capable model's read of the whole request
- * with a regex table's read of it.
+ * all. The topic was handed to every model as an instruction ("use this as the
+ * child role"), which replaces a capable model's read of the whole request with
+ * a regex table's read of it. And the policy told the root to delegate anything
+ * substantive because the root held no tools — the hop Phase 9 deleted. The
+ * root now holds the general toolset, and the policy has to say so, or half of
+ * every turn is still a spawn for work the root could have done itself.
  */
 import { describe, expect, test } from 'vitest';
 import { assembleSystemPrompt, buildDelegationPolicy, buildTopicHint } from './orchestrator-runner';
@@ -27,21 +30,31 @@ describe('buildDelegationPolicy', () => {
     expect(lite).not.toContain('create_pipeline');
   });
 
-  test('both tiers say a tool the orchestrator lacks is a spawn, not a refusal', () => {
-    // Measured on the live bench: asked what Octipus uses for a vector store,
-    // the orchestrator — which holds only `profiles` by design — answered
-    // "Octipus has no searchable knowledge base", a claim about the PRODUCT
-    // read off its own toolset, with a `research` specialist one spawn away.
+  test('both tiers tell the root to do the work itself — the Phase 9 invariant', () => {
+    // The root holds the general toolset now. A policy that reads "delegate
+    // anything substantive" reinstates the hop this phase deleted: a model
+    // spawning a whole specialist to read one file.
     for (const tier of [true, false]) {
       const p = buildDelegationPolicy(tier);
-      expect(p).toMatch(/tool you do not hold|cannot reach it/i);
-      expect(p).toMatch(/knowledge base/i);
+      expect(p).toMatch(/yourself/i);
+      expect(p).toMatch(/your own tools|you hold/i);
+    }
+  });
+
+  test('both tiers say a missing capability is a tool call or a spawn, never a refusal', () => {
+    // Measured on the live bench: asked what Octipus uses for a vector store,
+    // the root — which held only `profiles` by design — answered "Octipus has
+    // no searchable knowledge base", a claim about the PRODUCT read off its own
+    // toolset. It now holds `knowledge`; the rule survives for what it does not.
+    for (const tier of [true, false]) {
+      const p = buildDelegationPolicy(tier);
+      expect(p).toMatch(/capability is missing/i);
     }
   });
 
   test('full keeps the multi-spawn and pipeline surface lite must not see', () => {
     const full = buildDelegationPolicy(false);
-    expect(full).toContain('one or more calls per turn');
+    expect(full).toContain('parallel');
     expect(full).toContain('create_pipeline');
   });
 });

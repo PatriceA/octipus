@@ -591,8 +591,10 @@ export async function initializeChannels(): Promise<void> {
 
           switch (event.type) {
             case 'worker_spawned': {
-              const d = event.data as { role?: string; model?: string; workerId?: string };
-              const role = d.role === 'orchestrator' ? null : d.role;
+              const d = event.data as { role?: string; model?: string; workerId?: string; root?: boolean };
+              // The turn's root agent gets a 🤔 ack, not a "started X agent"
+              // line — it is Octipus itself, not a specialist it dispatched.
+              const role = d.root ? null : d.role;
               activeWorkers++;
 
               if (role) {

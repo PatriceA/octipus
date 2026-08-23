@@ -1,7 +1,7 @@
 import { logger } from '@/utils/logger';
 import { loadBootstrapConfig } from './bootstrap-loader';
 import { defaultConfig } from './defaults';
-import { type Config, configSchema } from './schema';
+import { type Config, configSchema, normalizeRetiredConfigValues } from './schema';
 import { SETTINGS_REGISTRY, settingKeyToConfigPath } from './settings-registry';
 import { getSettingsService } from './settings-service';
 import { deepMerge } from './utils';
@@ -123,7 +123,7 @@ export async function loadRuntimeConfig(
     merged.n8n = undefined;
   }
 
-  const result = configSchema.safeParse(merged);
+  const result = configSchema.safeParse(normalizeRetiredConfigValues(merged));
   if (!result.success) {
     logger.error({ errors: result.error.issues }, 'Runtime configuration validation failed');
     throw new Error(`Runtime configuration validation failed: ${result.error.message}`);

@@ -19,6 +19,13 @@ import type { AgentRole } from './types';
 export interface BuildSystemPromptOptions {
   /** The role the prompt is being built for. */
   role: AgentRole;
+  /**
+   * This prompt belongs to the turn's ROOT agent — the one the user is talking
+   * to. Host-level subscribers (the persona) key on this rather than on the
+   * role name, which stopped identifying the root when the orchestrator hop
+   * was deleted (rebuild plan, Phase 9).
+   */
+  root?: boolean;
   /** The user whose request is being handled. */
   userId: string;
   /** The session for this turn. */

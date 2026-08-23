@@ -385,7 +385,7 @@ describe('createSpawnChildTool', () => {
       parentNodeId: null,
       kind: 'orchestrator',
       depth: 0,
-      role: 'orchestrator',
+      role: 'general',
       topicPath: 'root',
       model: 'test-model',
       budget: {
@@ -411,7 +411,7 @@ describe('createSpawnChildTool', () => {
 
     const result = await tool.execute(
       { topic: 'security', subtopic: 'x' /* missing taskBrief + expectedOutput */ },
-      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'orchestrator', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     );
     expect(typeof result).toBe('string');
     expect(String(result)).toContain('spawn_child:');
@@ -440,7 +440,7 @@ describe('createSpawnChildTool', () => {
     } as unknown as SwarmSpawner;
     await createSpawnChildTool(makeParent(), spawner, undefined, opts).execute(
       { topic: 'security', subtopic: 'oauth', taskBrief: 'Review the flow.', expectedOutput: { shape: 'summary' } },
-      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'orchestrator', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     );
     return internal;
   }
@@ -492,7 +492,7 @@ describe('createSpawnChildTool', () => {
         taskBrief: 'Review the flow.',
         expectedOutput: { shape: 'summary' },
       },
-      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'orchestrator', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     );
     expect(received).not.toBeNull();
     expect((received as any).topic).toBe('security');
@@ -621,7 +621,7 @@ describe('createSpawnChildTool', () => {
         expectedOutput: { shape: 'summary' },
         mode: 'detach',
       },
-      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'orchestrator', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     );
     expect(seen).toHaveLength(1);
     expect(String(out)).toContain('status="pending"');
@@ -653,7 +653,7 @@ describe('createSpawnChildTool', () => {
         taskBrief: 'brief',
         expectedOutput: { shape: 'summary' },
       },
-      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'orchestrator', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
     );
     expect(awaitCalled).toBe(true);
     expect(String(out)).toContain('nodeId="n-await"');

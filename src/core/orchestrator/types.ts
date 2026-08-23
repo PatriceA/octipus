@@ -1,8 +1,22 @@
+/**
+ * A specialist arm. There is no `orchestrator` role any more: the root agent of
+ * a turn runs as `general` (see `ROOT_ROLE`), and the role that could only
+ * delegate went with the routing hop in Phase 9 of the rebuild plan. Historical
+ * `agents.role = 'orchestrator'` rows predate that and are read as plain text.
+ */
 export type AgentRole =
-  | 'orchestrator' | 'research' | 'coding' | 'review' | 'qa'
+  | 'research' | 'coding' | 'review' | 'qa'
   | 'communication' | 'general'
   | 'design' | 'devops' | 'security' | 'data' | 'ai'
   | 'finance' | 'automation' | 'pm' | 'writing' | 'architecture';
+
+/**
+ * The role the ROOT agent of a turn runs as: an ordinary specialist role with
+ * the general toolset, not a dedicated "orchestrator" that can only delegate.
+ * See `buildDelegationPolicy` in `orchestrator-runner.ts`, and Phase 9 of
+ * `docs/plans/rebuild-execution-plan.md` for why the latter is gone.
+ */
+export const ROOT_ROLE: AgentRole = 'general';
 
 export type PipelineStatus = 'planning' | 'running' | 'paused' | 'awaiting_approval' | 'completed' | 'failed';
 

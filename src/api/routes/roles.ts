@@ -34,6 +34,12 @@ export const roleRoutes = new Elysia({ prefix: '/roles' })
       const rows = await db.select().from(roles);
       return {
         roles: rows
+          // The file registry is canonical (see `seedRoles`), and it never
+          // deletes: a role whose folder was removed leaves its row behind, and
+          // listing it offers an edit that PATCH then rejects. Filtering here
+          // keeps the surface honest for any retired role, not just the
+          // `orchestrator` one Phase 9 removed.
+          .filter((r) => ROLE_CONFIGS[r.role as AgentRole] !== undefined)
           .map((r) => ({
             role: r.role,
             defaultTopic: r.defaultTopic,

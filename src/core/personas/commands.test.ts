@@ -67,8 +67,8 @@ describe('handlePersonaCommand — argument parsing', () => {
 });
 
 // `/persona arm` — only the branches that reject BEFORE any DB write, which is
-// where the rules that matter live (an unknown role or the orchestrator must
-// never reach the profile).
+// where the rules that matter live (an unknown role must never reach the
+// profile).
 describe('handlePersonaCommand — /persona arm', () => {
   const userId = '00000000-0000-0000-0000-000000000000';
 
@@ -83,9 +83,12 @@ describe('handlePersonaCommand — /persona arm', () => {
     expect(r.text).toContain('coding');
   });
 
-  test('the orchestrator is redirected to the host persona', async () => {
+  test('the retired orchestrator role is simply unknown now', async () => {
+    // It used to be redirected to the host persona. Phase 9 deleted the role,
+    // so the generic unknown-role path is the honest answer — and the host
+    // persona is still what the agent the user talks to wears.
     const r = await handlePersonaCommand({ userId, rawArgs: 'arm orchestrator mentor' });
-    expect(r.text).toContain('/persona use');
+    expect(r.text).toContain('Unknown role "orchestrator"');
   });
 
   test('the help banner advertises the arm subcommands', async () => {

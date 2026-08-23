@@ -20,9 +20,11 @@ import { buildSecurityReminder } from './input-guard';
 import { createMetaTools } from './meta-tools';
 import type { ModelSelector } from './model-selector';
 import { resolveOrchestratorMode } from './mode-selector';
-import { runRouterTurn } from './router-turn';
 import { buildOutputDirective } from './output-directive';
-import { getLiteOrchestratorPrompt, getRoleConfig } from './roles';
+import { getRoleConfig, getToolsForRole } from './roles';
+import delegationPrompt from './delegation-prompt.md';
+import { applyToolCap, isSmallModel } from './small-model';
+import { ROOT_ROLE } from './types';
 import type { OrchestratorEvent, OrchestratorService } from './service';
 import type { MessageClassification } from './types';
 
@@ -40,10 +42,16 @@ export interface OrchestratorRunnerDeps {
 }
 
 /**
- * Build, spawn, and run the orchestrator agent for a single turn — the swarm
- * root that plans the turn by delegating to specialists via its spawn_child /
- * create_pipeline meta-tools. Extracted verbatim from OrchestratorService so
- * the service stays a thin façade; behaviour is identical.
+ * Build, spawn, and run the ROOT agent for a single turn: one AgentWorker with
+ * the general toolset plus the spawn_child / create_pipeline meta-tools, which
+ * answers the request itself and delegates only when a specialist is needed.
+ *
+ * Phase 9 of the rebuild plan deleted the routing hop this used to be. The root
+ * used to run as role `orchestrator` holding meta-tools and `profiles` and
+ * nothing else, so it could not do any work — 51% of its runs delegated to
+ * nobody and answered from parametric memory, after a keyword classifier had
+ * already decided the hop should run at all. Both the classifier's control-flow
+ * branch and the tool-less role are gone; what remains is the single loop.
  */
 /**
  * The delegation policy appended to every orchestrator turn.
@@ -63,8 +71,8 @@ export interface OrchestratorRunnerDeps {
  */
 export function buildDelegationPolicy(isLite: boolean): string {
   return isLite
-    ? `\n\nFor any substantive task, call spawn_child EXACTLY ONCE and then relay the child's result. Only answer directly (no spawn) for a greeting, arithmetic, a single-fact answer, repeat-after-me, or a simple definition. If answering needs a tool you do not hold — the knowledge base, the web, files, a repository — spawn the specialist that holds it; never say the capability is missing. When in doubt, delegate.`
-    : `\n\nDelegate to specialists via spawn_child (one or more calls per turn) for any substantive task — writing or refactoring code, research, design, security review, devops work, etc. Use create_pipeline only when the user explicitly asks for a multi-stage workflow with handover (e.g., "research then implement then review"). Narrow exception: if the request is plainly trivial — a greeting, arithmetic, a single-fact answer, repeat-after-me, or a simple definition — answer directly without spawning. When in doubt between delegating and answering directly, delegate. If the user explicitly tells you to delegate or use spawn_child, always do so. And your own toolset is not the product's: you hold almost no tools by design, so a question that needs the knowledge base, the web, the filesystem or a repository is a spawn, never a refusal — telling the user a capability is missing or unconfigured because YOU cannot reach it is a wrong answer about the product.`;
+    ? `\n\nYou hold real tools — use them. Answer the request yourself whenever your own tools reach it. Call spawn_child EXACTLY ONCE, and only when the task needs a specialist you are not: writing or refactoring code, security review, devops, or deep multi-source research. Then relay the child's result. Never tell the user a capability is missing: either call a tool or spawn the specialist that holds it.`
+    : `\n\nYou are the agent the user is talking to, and you hold the general toolset — files, the web, the knowledge base, notes, tasks, profiles, messaging, scheduling, artifacts. Doing the work yourself is the normal path: read the file, run the search, store the note, and answer. Call spawn_child when the task needs a toolset or judgement you do not have — writing or refactoring code, design work, security review, devops, QA, deep multi-source research — or when independent parts of the request can genuinely run in parallel. Use create_pipeline only when the user explicitly asks for a multi-stage workflow with handover (e.g. "research then implement then review"). Delegating a one-tool question you could answer yourself costs the user a whole extra agent for nothing. Never tell the user a capability is missing: call the tool, or spawn the specialist that holds it — saying the knowledge base, the web or a repository is unreachable because you did not try is a wrong answer about the product. If the user explicitly tells you to delegate or use spawn_child, always do so.`;
 }
 
 /**
@@ -142,20 +150,9 @@ export async function runOrchestrator(
       liteModelMaxParams: orchCfg.liteModelMaxParams,
     },
   );
-  coreLogger.info({ sessionId, modelName, orchestratorMode }, 'Orchestrator mode resolved');
+  coreLogger.info({ sessionId, modelName, orchestratorMode, role: ROOT_ROLE }, 'Root agent mode resolved');
 
-  // Router mode: no orchestrator LLM — classify → one specialist → relay.
-  // The small local model only runs as a single role-scoped worker.
-  if (orchestratorMode === 'router') {
-    return runRouterTurn(sessionId, userId, message, classification, deps, {
-      workspaceId,
-      extraSystemContext,
-      guardFlags,
-      outputDirective,
-    });
-  }
-
-  const orchestratorConfig = getRoleConfig('orchestrator');
+  const rootRoleConfig = getRoleConfig(ROOT_ROLE);
 
   // Build the swarm root node AgentNode up front so meta-tools can bind to
   // it. The actual DB row is written once we know the agentId (post-spawn).
@@ -167,8 +164,8 @@ export async function runOrchestrator(
   for (const name of ['spawn_child', 'collect_children', 'create_pipeline', 'list_pipeline_templates', 'filter_pii', 'request_user_approval', 'send_status_update', 'remember_this', 'remember_about_self', 'reflect']) {
     orchestratorAllowedToolIds.add(name);
   }
-  // Role-defined tool ids (if any): orchestrator role uses meta-tools only.
-  for (const id of orchestratorConfig.toolIds) orchestratorAllowedToolIds.add(id);
+  // The root's own role tools — the general toolset it works with directly.
+  for (const id of rootRoleConfig.toolIds) orchestratorAllowedToolIds.add(id);
   // Superset: orchestrator is the root of every swarm branch and must be
   // able to grant any specialist role's tools to its children via
   // intersection. Without this, e.g. the `general` role's `profiles` tool
@@ -187,7 +184,7 @@ export async function runOrchestrator(
     parentNodeId: null,
     kind: 'orchestrator',
     depth: 0,
-    role: 'orchestrator',
+    role: ROOT_ROLE,
     topicPath: 'root',
     model: modelName,
     budget: {
@@ -224,7 +221,63 @@ export async function runOrchestrator(
     lite: isLite,
   });
 
-  let systemPrompt = isLite ? getLiteOrchestratorPrompt() : orchestratorConfig.systemPromptTemplate;
+  // The root's own tools. `getToolsForRole` is the same gate every worker goes
+  // through (capability check, MCP lazy handlers, read-only filtering).
+  // ponytail: it does NOT do the worker-spawner's per-user connector bindings or
+  // skill injection — the root had no tools at all before this, so that is a
+  // gain, not a regression. Lift `spawnWorker`'s tool assembly here if a user
+  // asks the root to reach a bound connector directly.
+  let rootTools = getToolsForRole(ROOT_ROLE);
+  // The small-model answer to "what runs the loop now": the same loop, a reduced
+  // tool set, and a hard iteration cap (below). Gated on `isSmallModel` — the
+  // SMALL tier — and not on `isLite`, which is the 24B prompt tier: every worker
+  // caps on the small tier, and gating the root differently would take eight
+  // tool groups off a 14B root while an identically-bound worker on the same
+  // model kept all fifteen.
+  const rootIsSmall = isSmallModel({ modelId: modelName, metadata: modelMeta?.metadata }, orchCfg.routerSmallModelMaxParams);
+  let droppedToolGroups: string[] = [];
+  if (rootIsSmall) {
+    const before = new Set(rootTools.map((t) => t.toolId ?? t.name));
+    rootTools = applyToolCap(rootTools, orchCfg.smallModelMaxTools, { role: ROOT_ROLE, modelId: modelName });
+    const after = new Set(rootTools.map((t) => t.toolId ?? t.name));
+    droppedToolGroups = [...before].filter((id) => !after.has(id));
+  }
+  let turnTools = [...rootTools, ...metaTools];
+
+  // Lazy tool discovery, same gate every worker goes through
+  // (`worker-spawner.ts`): on local Ollama the per-request tool schema is
+  // re-prefilled on the iGPU every single request, and the root now carries the
+  // whole general toolset. Remote providers stay on the full schema — they
+  // prefix-cache the tool block cheaply and tool-call more reliably with it —
+  // and a small model keeps the capped full schema above, because it chains
+  // multi-step discovery badly.
+  let toolAdvertisement: import('@/core/agent-base').ToolAdvertisement = { mode: 'full' };
+  if (!rootIsSmall && rootRoleConfig.coreToolIds !== undefined && modelMeta?.provider === 'ollama' && modelMeta.supportsTools) {
+    try {
+      const { splitRoleTools } = await import('./tool-split');
+      const { buildToolDiscoveryHandlers } = await import('@/tools/tool-discovery');
+      const { longTail } = splitRoleTools(rootTools, rootRoleConfig.coreToolIds);
+      const discoveryHandlers = buildToolDiscoveryHandlers(longTail);
+      if (discoveryHandlers.length > 0) {
+        // Everything stays REGISTERED (dispatch must keep working); only what is
+        // advertised shrinks. The meta-tools are never in the long tail — the
+        // root's ability to delegate must not need a discovery round-trip.
+        turnTools = [...rootTools, ...discoveryHandlers, ...metaTools];
+        toolAdvertisement = { mode: 'lazy', coreToolIds: [...rootRoleConfig.coreToolIds, ...metaTools.map((t) => t.toolId ?? t.name)] };
+        orchestratorAllowedToolIds.add('tool_discovery');
+        coreLogger.info(
+          { role: ROOT_ROLE, model: modelName, longTailCount: longTail.length },
+          'Lazy tool discovery enabled for the root agent',
+        );
+      }
+    } catch (err) {
+      coreLogger.warn({ err, model: modelName }, 'Lazy tool discovery gate skipped for the root (non-fatal) — using full schema');
+    }
+  }
+
+  let systemPrompt = isLite
+    ? (rootRoleConfig.liteSystemPromptTemplate ?? rootRoleConfig.systemPromptTemplate)
+    : rootRoleConfig.systemPromptTemplate;
 
   // Anchor the orchestrator in real wall-clock time. Without this stamp the
   // model has no notion of "now" and treats fresh worker output — today's
@@ -258,7 +311,8 @@ export async function runOrchestrator(
   // prompt before the orchestrator LLM call. Subscribers run
   // sequentially; thrown handlers are logged and swallowed.
   const hookCtx = await getOrchestratorHooks().fire('before-agent-start', {
-    role: 'orchestrator',
+    role: ROOT_ROLE,
+    root: true,
     userId,
     sessionId,
     workspaceId,
@@ -319,7 +373,30 @@ export async function runOrchestrator(
     volatileParts.push(`\n\nRecent conversation history (last ${recentHistory.length} messages):\n${historyLines.join('\n\n')}`);
   }
 
+  // The cap drops whole tool groups the role prompt still advertises by name
+  // ("who is my wife → search_profiles"), so a capped model would call a tool
+  // that is not registered and burn iterations it does not have. Say what is
+  // missing, and what to do instead.
+  if (droppedToolGroups.length > 0) {
+    staticParts.push(
+      `\n\nNOT AVAILABLE THIS TURN (your model's tool budget): ${droppedToolGroups.join(', ')}. ` +
+      'Ignore any instruction above that tells you to use them — calling one will fail. ' +
+      'If the request needs one, spawn_child to a specialist that holds it.',
+    );
+  }
+
   staticParts.push(buildDelegationPolicy(isLite));
+  // The delegation mechanics — how spawn_child/collect_children actually behave,
+  // which role fits which task, the read-only clause, the no-respawn rule. Full
+  // tier only: lite's whole delegation contract is "once, then relay", and a
+  // small model given three pages about swarms spawns instead of working.
+  //
+  // This is what survived the orchestrator role's prompt when the role itself
+  // went (Phase 9). The half that said "you do NO real work, delegate even what
+  // you know" is what the phase deleted; the mechanics below are as true now as
+  // they were, and the routing table gained the sentence about what NOT to
+  // delegate — the root holds those tools itself.
+  if (!isLite) staticParts.push(`\n\n${delegationPrompt}`);
   volatileParts.push(buildTopicHint(isLite, classification));
   if (classification.type === 'ambiguous') {
     volatileParts.push(`\n\nThe user's message could not be confidently classified. If it is plainly small-talk or a one-shot factual question, answer directly. Otherwise prefer spawn_child to a fitting specialist — when in doubt, delegate. If the user explicitly tells you to delegate, always do so.`);
@@ -445,12 +522,12 @@ export async function runOrchestrator(
 
   logPromptComposition(
     {
-      role: 'orchestrator',
+      role: ROOT_ROLE,
       model: modelName,
       contextWindow: modelMeta?.contextWindow ?? undefined,
-      toolCount: metaTools.length,
+      toolCount: turnTools.length,
       toolSchemaTokens: estimateToolSchemaTokens(
-        metaTools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })),
+        turnTools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })),
       ),
     },
     { static: staticParts.filter(Boolean), volatile: volatileParts.filter(Boolean) },
@@ -466,11 +543,19 @@ export async function runOrchestrator(
     sessionId,
     userId,
     workspaceId,
-    topic: orchestratorConfig.defaultTopic,
+    topic: rootRoleConfig.defaultTopic,
     model: modelName,
-    role: 'orchestrator',
+    role: ROOT_ROLE,
+    root: true,
+    // Who is on the other end. A hook or heartbeat run has nobody to answer an
+    // approval prompt, and the root now holds tools that can raise one — before
+    // Phase 9 it held `profiles` and could not, so this never came up. An
+    // unattended ASK auto-approves or is refused by `unattendedDenyActions`
+    // instead of burning the request's five-minute TTL and then failing.
+    attended: channel !== 'hook' && channel !== 'heartbeat',
     systemPrompt,
-    tools: metaTools,
+    tools: turnTools,
+    toolAdvertisement,
     maxIterations: isLite ? orchCfg.liteMaxIterations : 25,
     timeout: orchestratorTimeout,
     // Seed the user's raw request so the spawner can forward it verbatim
@@ -538,7 +623,7 @@ export async function runOrchestrator(
       parentNodeId: null,
       depth: 0,
       kind: 'orchestrator',
-      role: 'orchestrator',
+      role: ROOT_ROLE,
       expertId: null,
       topicPath: 'root',
       subtopic: null,
@@ -569,7 +654,7 @@ export async function runOrchestrator(
         kind: 'orchestrator',
         depth: 0,
         topicPath: 'root',
-        role: 'orchestrator',
+        role: ROOT_ROLE,
         model: modelName,
         budgets: parentNode.budget,
         taskBriefPreview: message.slice(0, 200),
@@ -583,7 +668,7 @@ export async function runOrchestrator(
     type: 'worker_spawned',
     sessionId,
     userId,
-    data: { agentId, role: 'orchestrator', model: modelName },
+    data: { agentId, role: ROOT_ROLE, root: true, model: modelName },
     timestamp: new Date(),
   });
 
@@ -603,8 +688,8 @@ export async function runOrchestrator(
       const lastStatus = ctxMeta?.lastStatusMessage as string | undefined;
       if (lastStatus?.trim()) {
         coreLogger.warn(
-          { agentId, role: 'orchestrator' },
-          'Orchestrator returned empty — falling back to last send_status_update message',
+          { agentId, role: ROOT_ROLE },
+          'Root agent returned empty — falling back to last send_status_update message',
         );
         finalResponse = lastStatus;
       }
@@ -617,7 +702,8 @@ export async function runOrchestrator(
       userId,
       data: {
         workerId: agentId,
-        role: 'orchestrator',
+        role: ROOT_ROLE,
+        root: true,
         result: '',
         model: modelName,
         durationMs: Date.now() - orchStartTime,
@@ -646,7 +732,7 @@ export async function runOrchestrator(
           kind: 'orchestrator',
           depth: 0,
           topicPath: 'root',
-          role: 'orchestrator',
+          role: ROOT_ROLE,
           status: 'completed',
           usedTokens: worker.getTotalTokens(),
           durationMs: Date.now() - orchStartTime,
@@ -665,9 +751,9 @@ export async function runOrchestrator(
     // Admin cancel / cascaded abort is an intentional outcome — don't log it
     // as `error`. The status downstream is already 'stopped'/'cancelled'.
     if (wasStopped || isCancellationError(error)) {
-      coreLogger.info({ agentId, reason: errMsg }, 'Orchestrator agent cancelled');
+      coreLogger.info({ agentId, reason: errMsg }, 'Root agent cancelled');
     } else {
-      coreLogger.error({ error, agentId }, 'Orchestrator agent failed');
+      coreLogger.error({ error, agentId }, 'Root agent failed');
     }
 
     emit({
@@ -676,7 +762,8 @@ export async function runOrchestrator(
       userId,
       data: {
         workerId: agentId,
-        role: 'orchestrator',
+        role: ROOT_ROLE,
+        root: true,
         result: '',
         model: modelName,
         status: wasStopped ? 'stopped' : 'failed',
@@ -708,7 +795,7 @@ export async function runOrchestrator(
           kind: 'orchestrator',
           depth: 0,
           topicPath: 'root',
-          role: 'orchestrator',
+          role: ROOT_ROLE,
           status: rootStatus,
           usedTokens: worker.getTotalTokens(),
           durationMs: Date.now() - orchStartTime,

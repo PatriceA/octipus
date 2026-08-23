@@ -43,7 +43,7 @@ export async function trySteerRunningOrchestrator(sessionId: string, content: st
   const mgr = getAgentManager();
   const target = mgr
     .getBySession(sessionId)
-    .filter((a) => a.getStatus() === 'running' && a.getContext().role === 'orchestrator')
+    .filter((a) => a.getStatus() === 'running' && a.getContext().root === true)
     .find((a): a is typeof a & SteerableWorker => typeof (a as Partial<SteerableWorker>).steer === 'function');
   if (!target) return false;
 

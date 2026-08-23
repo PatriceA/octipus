@@ -1,4 +1,5 @@
 import { getCanvasBuilder } from '@/core/knowledge/canvas';
+import { isRootAgent } from '@/core/types';
 import { getNoteService } from '@/core/knowledge/notes';
 import { getSuggestionService } from '@/core/knowledge/suggestions';
 import { getVaultSync } from '@/core/knowledge/vault';
@@ -67,7 +68,9 @@ export class NotesTool extends BaseTool {
           body: (args.body as string) ?? '',
           noteKind: (args.note_kind as string) || undefined,
           tags: Array.isArray(args.tags) ? (args.tags as string[]) : undefined,
-          createdByAgentId: context.role && context.role !== 'orchestrator' ? context.id : null,
+          // A note the user asked Octipus for directly is the USER's note, so
+          // the root writes it unattributed; a spawned agent's note is stamped.
+          createdByAgentId: context.role && !isRootAgent(context) ? context.id : null,
         });
         return {
           id: result.note.id,

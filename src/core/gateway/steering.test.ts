@@ -12,6 +12,8 @@ import { trySteerRunningOrchestrator } from './message-handler';
 
 type FakeOpts = {
   role: string;
+  /** The turn's root agent — what steering keys on since Phase 9. */
+  root?: boolean;
   steerable?: boolean;
   onSteer?: (m: unknown) => void;
   /** Successive getStatus() returns; last value repeats. Defaults to 'running'. */
@@ -22,7 +24,7 @@ function fakeWorker(opts: FakeOpts): unknown {
   let i = 0;
   const seq = opts.statusSeq ?? ['running'];
   const w: Record<string, unknown> = {
-    getContext: () => ({ role: opts.role, sessionId: 's', id: 'a' }),
+    getContext: () => ({ role: opts.role, root: opts.root === true, sessionId: 's', id: 'a' }),
     getStatus: () => seq[Math.min(i++, seq.length - 1)],
   };
   if (opts.steerable !== false) w.steer = (m: unknown) => opts.onSteer?.(m);
@@ -49,16 +51,16 @@ describe('trySteerRunningOrchestrator', () => {
     incSpy.mockReset();
   });
 
-  test('no running orchestrator → false, no persist', async () => {
+  test('no running root agent → false, no persist', async () => {
     getBySessionSpy.mockReturnValue([] as never);
     expect(await trySteerRunningOrchestrator(sid, 'focus on auth')).toBe(false);
     expect(createSpy).not.toHaveBeenCalled();
     expect(incSpy).not.toHaveBeenCalled();
   });
 
-  test('running orchestrator → steers, persists, increments, returns true', async () => {
+  test('running root agent → steers, persists, increments, returns true', async () => {
     const steered: { role?: string; content?: string } = {};
-    const w = fakeWorker({ role: 'orchestrator', onSteer: (m) => { Object.assign(steered, m); } });
+    const w = fakeWorker({ role: 'general', root: true, onSteer: (m) => { Object.assign(steered, m); } });
     getBySessionSpy.mockReturnValue([w] as never);
 
     const r = await trySteerRunningOrchestrator(sid, 'focus on the auth module');
@@ -69,7 +71,7 @@ describe('trySteerRunningOrchestrator', () => {
     expect(incSpy).toHaveBeenCalledTimes(1);
   });
 
-  test('non-orchestrator running worker is NOT steered (router specialist)', async () => {
+  test('a spawned child is NOT steered — only the turn\'s root', async () => {
     const w = fakeWorker({ role: 'coding' });
     getBySessionSpy.mockReturnValue([w] as never);
     expect(await trySteerRunningOrchestrator(sid, 'hi')).toBe(false);
@@ -77,14 +79,14 @@ describe('trySteerRunningOrchestrator', () => {
   });
 
   test('CLI worker without steer() is skipped', async () => {
-    const w = fakeWorker({ role: 'orchestrator', steerable: false });
+    const w = fakeWorker({ role: 'general', root: true, steerable: false });
     getBySessionSpy.mockReturnValue([w] as never);
     expect(await trySteerRunningOrchestrator(sid, 'hi')).toBe(false);
   });
 
   test('blocked input is not a hole around the guard → false, not steered, not persisted', async () => {
     let steered = false;
-    const w = fakeWorker({ role: 'orchestrator', onSteer: () => { steered = true; } });
+    const w = fakeWorker({ role: 'general', root: true, onSteer: () => { steered = true; } });
     getBySessionSpy.mockReturnValue([w] as never);
     // 'rm -rf /' trips the command-injection block pattern in input-guard.
     const r = await trySteerRunningOrchestrator(sid, 'rm -rf /');
@@ -93,10 +95,10 @@ describe('trySteerRunningOrchestrator', () => {
     expect(createSpy).not.toHaveBeenCalled();
   });
 
-  test('orchestrator finishes between status-check and steer → false, no orphaned persist', async () => {
+  test('root agent finishes between status-check and steer → false, no orphaned persist', async () => {
     // getStatus: 'running' at filter time, 'completed' at the post-steer recheck.
     let steered = false;
-    const w = fakeWorker({ role: 'orchestrator', statusSeq: ['running', 'completed'], onSteer: () => { steered = true; } });
+    const w = fakeWorker({ role: 'general', root: true, statusSeq: ['running', 'completed'], onSteer: () => { steered = true; } });
     getBySessionSpy.mockReturnValue([w] as never);
 
     const r = await trySteerRunningOrchestrator(sid, 'change course');
@@ -107,12 +109,12 @@ describe('trySteerRunningOrchestrator', () => {
     expect(incSpy).not.toHaveBeenCalled();
   });
 
-  test('picks the orchestrator among multiple session workers', async () => {
+  test('picks the root agent among multiple session workers', async () => {
     let steeredRole = '';
     const child = fakeWorker({ role: 'coding' });
-    const orch = fakeWorker({ role: 'orchestrator', onSteer: () => { steeredRole = 'orchestrator'; } });
+    const orch = fakeWorker({ role: 'general', root: true, onSteer: () => { steeredRole = 'root'; } });
     getBySessionSpy.mockReturnValue([child, orch] as never);
     expect(await trySteerRunningOrchestrator(sid, 'hi')).toBe(true);
-    expect(steeredRole).toBe('orchestrator');
+    expect(steeredRole).toBe('root');
   });
 });

@@ -171,15 +171,13 @@ async function setArm(userId: string, args: string): Promise<PersonaCommandResul
   }
   // ROLE_CONFIGS is the registry loaded from `roles/<name>/`, so it is the
   // authority on which arms exist — a second hardcoded list would drift the
-  // first time a role folder is added.
+  // first time a role folder is added. There is no `orchestrator` arm to
+  // special-case any more (Phase 9 deleted the role); the agent the user talks
+  // to wears the HOST persona, set with `/persona use`. Arming `general` shapes
+  // the general children it spawns, not the root — the root's prompt comes from
+  // the runner and the persona hook, not from `spawnWorker`.
   if (!(role in ROLE_CONFIGS)) {
     return { text: `Unknown role "${role}". Valid roles: ${Object.keys(ROLE_CONFIGS).sort().join(', ')}.` };
-  }
-  if (role === 'orchestrator') {
-    return {
-      text: 'The orchestrator wears the host persona — set that with `/persona use <preset>`. ' +
-        'Shadowing applies to the arms it dispatches to.',
-    };
   }
 
   const profile = await ensureProfile(userId);

@@ -51,9 +51,6 @@ import financeLitePrompt from './finance/prompt.lite.md';
 import { meta as generalMeta } from './general/config';
 import generalPrompt from './general/prompt.md';
 import generalLitePrompt from './general/prompt.lite.md';
-import { meta as orchestratorMeta } from './orchestrator/config';
-import orchestratorPrompt from './orchestrator/prompt.md';
-import orchestratorLitePrompt from './orchestrator/prompt.lite.md';
 import { meta as pmMeta } from './pm/config';
 import pmPrompt from './pm/prompt.md';
 import pmLitePrompt from './pm/prompt.lite.md';
@@ -90,7 +87,6 @@ const SOURCES: RoleSource[] = [
   { meta: devopsMeta, prompt: devopsPrompt, litePrompt: devopsLitePrompt },
   { meta: financeMeta, prompt: financePrompt, litePrompt: financeLitePrompt },
   { meta: generalMeta, prompt: generalPrompt, litePrompt: generalLitePrompt },
-  { meta: orchestratorMeta, prompt: orchestratorPrompt, litePrompt: orchestratorLitePrompt },
   { meta: pmMeta, prompt: pmPrompt, litePrompt: pmLitePrompt },
   { meta: qaMeta, prompt: qaPrompt, litePrompt: qaLitePrompt },
   { meta: researchMeta, prompt: researchPrompt, litePrompt: researchLitePrompt },

@@ -23,6 +23,7 @@ import { getTopicConfig } from '@/models/topic-config';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
 import { type AuditScopeStage, auditVerdictFailure, coverageScope, unaddressedDoubt, uncoveredStages } from './audit-coverage';
+
 import { createHandoffContext, formatHandoffChain, HANDOFF_EMIT_INSTRUCTION, type HandoffContext, parseStructuredHandoff, stripHandoffBlock } from './handoff';
 import {
   compileTemplateToGraph,
@@ -43,7 +44,7 @@ import {
   getPipelineTemplate,
   type StageTemplate,
 } from './templates';
-import { appendSources, type QAValidationResult } from './types';
+import { appendSources, ROOT_ROLE, type QAValidationResult } from './types';
 import { countChangedFiles, snapshotWorkspace, type WorkspaceSnapshot } from './workspace-snapshot';
 
 /**
@@ -1572,8 +1573,9 @@ export class PipelineManager {
       userId: pipeline.userId,
       workspaceId: pipeline.workspaceId,
       topic: 'general',
+      role: ROOT_ROLE,
+      root: true,
       model: '',
-      role: 'orchestrator',
       status: 'running',
       createdAt: new Date(),
       updatedAt: new Date(),

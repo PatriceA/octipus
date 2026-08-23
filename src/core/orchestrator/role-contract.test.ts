@@ -30,7 +30,7 @@ describe('roleCapabilities', () => {
   });
 
   test('a role with neither filesystem nor shell writes nothing', () => {
-    expect(roleCapabilities('orchestrator')).toEqual({ writesFiles: false, runsCommands: false });
+    expect(roleCapabilities('communication')).toEqual({ writesFiles: false, runsCommands: false });
   });
 });
 

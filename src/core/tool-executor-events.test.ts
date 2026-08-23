@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { messageRepository } from '@/db/repositories/message-repository';
 import { ToolExecutor, resolvedFileChangePath } from './tool-executor';
 import type { ToolHandler } from './agent-base';
 import type { AgentContext, ToolCall } from './types';
@@ -20,9 +21,8 @@ function makeContext(): AgentContext {
     userId: 'user-test',
     model: 'test',
     topic: '',
-    // `orchestrator` skips the message-repo persist in the executor —
-    // avoids hitting a live DB from a pure unit test.
-    role: 'orchestrator',
+    role: 'general',
+    root: true,
     status: 'running',
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -46,6 +46,17 @@ function setupExecutor(tool: ToolHandler): { exec: ToolExecutor; emitted: Emitte
   exec.registerTool(tool);
   return { exec, emitted };
 }
+
+// The executor persists every tool result to `messages` (it stopped skipping the
+// root when the root started doing real work). These are pure unit tests with no
+// database, so the repository write is stubbed at the accessor rather than
+// module-mocked — `vi.mock` on a shared repo leaks across the suite.
+beforeEach(() => {
+  vi.spyOn(messageRepository, 'create').mockResolvedValue({} as never);
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe('ToolExecutor — per-tool completion events', () => {
   test('emits tool_call_complete with status=ok on success', async () => {

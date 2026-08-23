@@ -308,7 +308,7 @@ export class OrchestratorService {
         // Check if an orchestrator is already running for this session
         const agentManager = getAgentManager();
         const sessionAgents = agentManager.getBySession(resolvedSessionId);
-        const runningOrchestrator = sessionAgents.find(a => a.getStatus() === 'running' && a.getContext().role === 'orchestrator');
+        const runningOrchestrator = sessionAgents.find(a => a.getStatus() === 'running' && a.getContext().root === true);
         if (runningOrchestrator) {
           const response = 'A plan is already being executed. Use `/status` to check progress or `/stop` to cancel it.';
           await messageRepository.create({ sessionId: resolvedSessionId, role: 'user', content: message });
@@ -541,56 +541,13 @@ export class OrchestratorService {
         })();
       };
 
-      // Chat/work split: a file-mode request (e.g. "write me a poem", which
-      // classifies casual) must reach the orchestrator so a file is actually
-      // produced — don't let the inline fast-path swallow it.
-      if (classification.type === 'casual' && classification.confidence >= 0.7 && effectiveOutputMode !== 'file') {
-        // Emit worker_spawned so channel feedback shows a reaction (even for direct responses).
-        // Role label is 'octipus' (the persona itself answering casually), NOT a specialist
-        // expert — the direct-response path doesn't pick an expert. UI badges treat this as
-        // identity, not as a routing decision.
-        // Stable id reused by the matching worker_completed below — the web
-        // correlates the two by workerId. Without it the completion can't find
-        // the spawned line, so it falls back to creating a second, 0ms
-        // "octipus" entry (the spawned line meanwhile never closes).
-        const directWorkerId = `direct-${Date.now()}`;
-        this.emit({
-          type: 'worker_spawned',
-          sessionId: resolvedSessionId,
-          userId,
-          data: { role: 'octipus', workerId: directWorkerId, model: 'direct' },
-          timestamp: new Date(),
-        });
-
-        const { response, metadata } = await directResponse(
-          message, resolvedSessionId, userId, this.modelSelector, classification.complexity, inputGuard.flags,
-          turnContext,
-        );
-
-        const outputCheck = guardOutput(response, inputGuard.flags);
-        const finalResponse = outputCheck.action === 'replace' ? outputCheck.response : response;
-        if (outputCheck.action === 'replace') {
-          coreLogger.warn({ flags: outputCheck.flags, sessionId }, 'Output guard replaced casual response');
-        }
-
-        // Emit worker_completed so channel feedback shows ✅. Carries the same
-        // workerId (and the measured latency) so the UI closes the single
-        // spawned line instead of rendering a duplicate 0ms entry.
-        this.emit({
-          type: 'worker_completed',
-          sessionId: resolvedSessionId,
-          userId,
-          data: { role: 'octipus', workerId: directWorkerId, model: 'direct', durationMs: metadata.latencyMs, result: finalResponse },
-          timestamp: new Date(),
-        });
-
-        maybeCompactSession(resolvedSessionId).catch(err =>
-          coreLogger.error({ err, sessionId: resolvedSessionId }, 'Session compaction failed'),
-        );
-
-        fireMemoryUpdate();
-        return { response: finalResponse, sessionId: resolvedSessionId, classification, metadata };
-      }
+      // Phase 9 (rebuild plan): there is no classifier-chosen fast path any
+      // more. A keyword table used to decide, before any model saw the message,
+      // whether the turn got a tool-less one-shot completion or a whole
+      // orchestrator — inference picking control flow, and the reason a
+      // file-mode "write me a poem" had to be special-cased back out of it.
+      // Every turn now runs the one loop below, which holds real tools and
+      // delegates only when it needs a specialist.
 
       if (classification.type === 'approval') {
         const resolved = this.approvalManager.tryResolveFromMessage(message, userId);

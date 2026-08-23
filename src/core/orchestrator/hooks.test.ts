@@ -6,7 +6,7 @@ import {
 } from './hooks';
 
 const baseCtx = (): BuildSystemPromptOptions => ({
-  role: 'orchestrator',
+  role: 'general',
   userId: 'user-1',
   sessionId: 'session-1',
   workspaceId: null,

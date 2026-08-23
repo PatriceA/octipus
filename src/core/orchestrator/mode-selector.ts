@@ -2,18 +2,27 @@ import type { ModelMetadata } from '@/db/schema/models';
 import { coreLogger } from '@/utils/logger';
 
 /**
- * Orchestrator execution modes. See `orchestratorConfigSchema.mode`.
- *   - router: no orchestrator LLM — classify → one specialist → relay (≤~10B)
- *   - lite:   shrunken LLM orchestrator, single-step delegation (~10–24B)
- *   - full:   full swarm orchestrator (≥~24B)
+ * Root-agent PROMPT tiers. See `orchestratorConfigSchema.mode`.
+ *   - lite: shrunken prompt, capped tool set and iterations (< ~24B)
+ *   - full: the whole prompt, the whole toolset, swarms and pipelines
+ *
+ * A tier is a prompt size, NOT a control-flow branch. The `router` mode — a
+ * keyword table that dispatched one specialist with no root LLM at all — was
+ * deleted in Phase 9 of the rebuild plan along with the rest of the routing
+ * hop. A small model now runs the same single loop as any other, with fewer
+ * tools and a hard iteration cap.
  */
-export type OrchestratorMode = 'full' | 'lite' | 'router';
+export type OrchestratorMode = 'full' | 'lite';
 
 /** The size thresholds the selector keys off (from orchestrator config). */
 export interface ModeThresholds {
-  /** Below this param count → router. */
+  /**
+   * The "small model" threshold: below this a model gets the trimmed prompt and
+   * tool set everywhere (`isSmallModel`). Named for the mode it used to select;
+   * kept because every other small-model gate reads the same key.
+   */
   routerSmallModelMaxParams: number;
-  /** Below this (and ≥ router threshold) → lite. */
+  /** Below this → lite. */
   liteModelMaxParams: number;
 }
 
@@ -45,7 +54,6 @@ const FRONTIER_CLOUD_PROVIDERS = new Set([
  * and the runtime decision never disagree.
  */
 export function paramCountToMode(params: number, thresholds: ModeThresholds): OrchestratorMode {
-  if (params < thresholds.routerSmallModelMaxParams) return 'router';
   if (params < thresholds.liteModelMaxParams) return 'lite';
   return 'full';
 }
@@ -83,12 +91,10 @@ export function deriveParamCount(modelId: string, metadata?: ModelMetadata | nul
 /** Plain-language explanation of what a mode means for the end user. */
 export function describeMode(mode: OrchestratorMode): string {
   switch (mode) {
-    case 'router':
-      return 'router mode — routes each request to a single specialist; no multi-agent swarms or follow-up planning';
     case 'lite':
-      return 'lite mode — a lightweight orchestrator that delegates one step at a time; no parallel swarms or pipelines';
+      return 'lite mode — a trimmed prompt, a capped tool set and few iterations; one delegation per request, no parallel swarms or pipelines';
     case 'full':
-      return 'full mode — the complete orchestrator with parallel swarms, pipelines, and multi-step planning';
+      return 'full mode — the whole toolset, parallel swarms, pipelines, and multi-step planning';
   }
 }
 
@@ -106,7 +112,7 @@ export function describeModeForParams(
 }
 
 /**
- * Resolve the orchestrator mode for a turn. An explicit config mode pins that
+ * Resolve the root agent's prompt tier for a turn. An explicit config mode pins that
  * value; 'auto' derives it live from the model's parameter count so swapping
  * the default model changes the mode with no restart. Unknown size → lite
  * (loud), which is the safe middle band.

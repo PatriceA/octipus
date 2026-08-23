@@ -588,6 +588,8 @@ export class ToolExecutor {
       const decision = routeApproval({
         level: permResult.level,
         role: this.context.role,
+        root: this.context.root,
+        attended: this.context.attended,
         toolId,
         action: toolCall.name,
         unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions,
@@ -880,21 +882,25 @@ export class ToolExecutor {
         timestamp: new Date(),
       });
 
-      // Persist tool result (skip for orchestrator). Persist the UNSTRIPPED
-      // text: blob removal is model-context hygiene, and the transcript is the
-      // durable record a human or an eval reads later. Stripping here would
-      // destroy the only surviving copy of a small screenshot (nothing else
-      // persists the bytes), which is a different and worse thing than not
-      // showing it to a model that cannot read it anyway.
-      if (this.context.role !== 'orchestrator') {
-        await messageRepository.create({
-          sessionId: this.context.sessionId,
-          role: 'tool',
-          content: sanitized,
-          toolCallId: result.toolCallId,
-          agentId: this.context.id,
-        });
-      }
+      // Persist the UNSTRIPPED text: blob removal is model-context hygiene, and
+      // the transcript is the durable record a human or an eval reads later.
+      // Stripping here would destroy the only surviving copy of a small
+      // screenshot (nothing else persists the bytes), which is a different and
+      // worse thing than not showing it to a model that cannot read it anyway.
+      //
+      // The root used to be skipped, because its only calls were spawn_child and
+      // collect_children — bookkeeping, not evidence. Since Phase 9 doing the
+      // work itself IS the root's fast path, so skipping it would leave a turn
+      // where Octipus read three files recorded as an answer with nothing behind
+      // it. Tool rows never re-enter a prompt (history reads `user`/`assistant`
+      // only), so this costs transcript rows and no context.
+      await messageRepository.create({
+        sessionId: this.context.sessionId,
+        role: 'tool',
+        content: sanitized,
+        toolCallId: result.toolCallId,
+        agentId: this.context.id,
+      });
     }
 
     return toolMessages;
