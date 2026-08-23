@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import { buildChildEnv, isSensitiveEnvName } from '@/security/child-env';
 import { coreLogger } from '@/utils/logger';
+import { tokenizeSafe } from './policy';
 import type { ShellExecResult, ShellOperations } from './operations';
 
 const MAX_OUTPUT_SIZE = 1024 * 1024; // 1MB
@@ -41,59 +42,6 @@ function trackGroup(pid: number | undefined): () => void {
   return () => liveGroups.delete(pid);
 }
 
-/**
- * Conservative POSIX-ish tokenizer. Splits a command string into argv,
- * stripping single/double quotes. Returns `null` if the command contains
- * any shell metacharacter that would enable command injection or
- * unsupported expansion (`;` `&` `|` `<` `>` `` ` `` `$(` `${` `{,}` newline).
- *
- * The intent is to bypass `sh -c` for well-formed simple commands so a
- * compromised LLM cannot inject extra commands via input. Callers that
- * genuinely need shell features must pass `unsafe: true`.
- */
-function tokenizeSafe(cmd: string): string[] | null {
-  const META = /[;&|<>`\n]/;
-  const tokens: string[] = [];
-  let buf = '';
-  let i = 0;
-  while (i < cmd.length) {
-    const c = cmd[i];
-    if (c === "'") {
-      const end = cmd.indexOf("'", i + 1);
-      if (end === -1) return null;
-      buf += cmd.slice(i + 1, end);
-      i = end + 1;
-      continue;
-    }
-    if (c === '"') {
-      const end = cmd.indexOf('"', i + 1);
-      if (end === -1) return null;
-      const inside = cmd.slice(i + 1, end);
-      if (/\$\(|\$\{|`/.test(inside)) return null;
-      buf += inside;
-      i = end + 1;
-      continue;
-    }
-    if (/\s/.test(c)) {
-      if (buf) { tokens.push(buf); buf = ''; }
-      i++;
-      continue;
-    }
-    if (c === '\\' && i + 1 < cmd.length) {
-      buf += cmd[i + 1];
-      i += 2;
-      continue;
-    }
-    // brace expansion: {a,b}
-    if (c === '{' && cmd.slice(i).match(/^\{[^{}]*,[^{}]*\}/)) return null;
-    if (c === '$' && (cmd[i + 1] === '(' || cmd[i + 1] === '{')) return null;
-    if (META.test(c)) return null;
-    buf += c;
-    i++;
-  }
-  if (buf) tokens.push(buf);
-  return tokens.length > 0 ? tokens : null;
-}
 
 /**
  * Local shell operations using child_process.spawn.

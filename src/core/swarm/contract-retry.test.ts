@@ -144,6 +144,15 @@ describe('SwarmSpawner — contract retry (through runChildWithRetry)', () => {
     expect(final.notes ?? '').toContain('contract_failed');
   });
 
+  it('does NOT claim recovery when the retry failed too', async () => {
+    // The parent LLM reads `notes` verbatim beside the status. "Recovered"
+    // next to `contract_failed` tells it the opposite of what happened.
+    const { final } = await runWith([gateFailed(), gateFailed()]);
+    expect(final.status).toBe('contract_failed');
+    expect(final.notes ?? '').not.toContain('Recovered');
+    expect(final.notes ?? '').toContain('Still failing after 2 attempt(s)');
+  });
+
   it('does NOT retry a contract_failed with no scorer failures (drift abort)', async () => {
     // `DriftDetectedError` maps to `contract_failed` (errors.ts:133) precisely
     // so the crash-retry path would not respawn a wandering child. Retrying on

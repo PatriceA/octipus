@@ -883,11 +883,18 @@ export class SwarmSpawner {
     // parent synthesizing against it, and a human reading the node row, must be
     // able to see that an earlier attempt failed rather than infer a clean run.
     if (lastResult && priorFailures.length > 0) {
-      const trail = `Recovered after ${priorFailures.length} failed attempt(s): ${priorFailures.join(' | ')}`;
+      // "Recovered" only if it actually did. When the last attempt missed the
+      // gate too, this note is read by the parent LLM verbatim beside a
+      // `contract_failed` status — and telling it the child recovered when it
+      // did not is precisely the self-report the gates exist to stop trusting.
+      const recovered = lastResult.status === 'ok';
+      const trail = recovered
+        ? `Recovered after ${priorFailures.length} failed attempt(s): ${priorFailures.join(' | ')}`
+        : `Still failing after ${priorFailures.length + 1} attempt(s): ${priorFailures.join(' | ')}`;
       lastResult.notes = lastResult.notes ? `${lastResult.notes}\n${trail}` : trail;
       coreLogger.warn(
         { parentNodeId: opts.parent.id, attempts: priorFailures.length, status: lastResult.status },
-        'Swarm child succeeded only after earlier failed attempts — annotating result',
+        'Swarm child needed more than one attempt — annotating result',
       );
     }
     if (lastResult && discardedTokens > 0) lastResult.discardedTokens = discardedTokens;
@@ -1438,6 +1445,9 @@ export class SwarmSpawner {
           // name, since that is what the child actually got after the
           // parent-intersection and the small-model cap.
           canRunCommands: opts.childTools.some((t) => t.toolId === 'shell' || t.name.startsWith('shell__')),
+          // So a `command_exit_zero` check dies with a cancelled run rather
+          // than outliving it with the awaited spawn still pending.
+          signal: opts.parent.signal,
         },
       );
       result.scorerOutcome = outcome;

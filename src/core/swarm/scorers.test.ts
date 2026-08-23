@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -636,5 +636,103 @@ describe('command_exit_zero — the failure has to be actionable', () => {
 
   it('says so when a failing command printed nothing', () => {
     expect(formatCommandOutput('', '')).toBe(' with no output');
+  });
+});
+
+describe('command_exit_zero — environment faults are not the child’s defect', () => {
+  it('reports a missing workspace as such, not as a failed command', async () => {
+    // Left unchecked this surfaces as `spawn ENOENT` and gets quoted back to
+    // the child as the thing it must fix, burning a contract retry on it.
+    const out = await runScorers(
+      [{ kind: 'command_exit_zero', command: 'true' }],
+      { output: 'x' },
+      { canRunCommands: true, userId: 'no-such-user-workspace' },
+    );
+    if (!out.passed) {
+      expect(out.failures[0].reason).not.toMatch(/ENOENT/);
+    }
+  });
+
+  it('dies with a cancelled run instead of outliving it', async () => {
+    const controller = new AbortController();
+    const started = runScorers(
+      [{ kind: 'command_exit_zero', command: 'sleep 30', timeoutMs: 20_000 }],
+      { output: 'x' },
+      { canRunCommands: true, signal: controller.signal },
+    );
+    setTimeout(() => controller.abort(), 200);
+    const out = await started;
+    expect(out.passed).toBe(false);
+    // Resolved well inside the 20s deadline, so it was the abort that ended it.
+    expect(out.failures[0].reason).toMatch(/cancelled|killed|did not run/i);
+  }, 15_000);
+});
+
+describe('command_exit_zero — the operator’s permission decision', () => {
+  it('refuses when shell.execute is DENY for the user, tool or no tool', async () => {
+    // Holding the tool is not the same as being allowed to use it. Tools are
+    // never stripped by permission — `PermissionManager.check` runs at call
+    // time — so a toolset-presence test alone silently bypasses a stored DENY.
+    const permissions = await import('@/security/permissions');
+    const spy = vi.spyOn(permissions, 'getPermissionManager').mockReturnValue({
+      check: async () => ({ allowed: false, level: 'DENY', requiresApproval: false, reason: 'policy' }),
+    } as never);
+
+    const out = await runScorers(
+      [{ kind: 'command_exit_zero', command: 'true' }],
+      { output: 'x' },
+      { canRunCommands: true, userId: 'someone' },
+    );
+    spy.mockRestore();
+
+    expect(out.passed).toBe(false);
+    expect(out.failures[0].reason).toMatch(/shell\.execute is DENY/);
+  });
+
+  it('does not silently wait on an ASK — nobody is left to answer', async () => {
+    const permissions = await import('@/security/permissions');
+    const spy = vi.spyOn(permissions, 'getPermissionManager').mockReturnValue({
+      check: async () => ({ allowed: false, level: 'ASK', requiresApproval: true }),
+    } as never);
+
+    const out = await runScorers(
+      [{ kind: 'command_exit_zero', command: 'true' }],
+      { output: 'x' },
+      { canRunCommands: true, userId: 'someone' },
+    );
+    spy.mockRestore();
+    expect(out.passed).toBe(false);
+  });
+
+  it('fails closed when the permission layer is unavailable', async () => {
+    const permissions = await import('@/security/permissions');
+    const spy = vi.spyOn(permissions, 'getPermissionManager').mockImplementation(() => {
+      throw new Error('registry down');
+    });
+
+    const out = await runScorers(
+      [{ kind: 'command_exit_zero', command: 'true' }],
+      { output: 'x' },
+      { canRunCommands: true, userId: 'someone' },
+    );
+    spy.mockRestore();
+    expect(out.passed).toBe(false);
+    expect(out.failures[0].reason).toMatch(/could not check shell permission/);
+  });
+
+  it('runs when the operator allows it', async () => {
+    const permissions = await import('@/security/permissions');
+    const spy = vi.spyOn(permissions, 'getPermissionManager').mockReturnValue({
+      check: async () => ({ allowed: true, level: 'ALLOW', requiresApproval: false }),
+    } as never);
+
+    const out = await runScorers(
+      [{ kind: 'command_exit_zero', command: 'true' }],
+      { output: 'x' },
+      { canRunCommands: true, userId: 'system' },
+    );
+    spy.mockRestore();
+    expect(out.failures[0]?.reason ?? '').not.toMatch(/permission|DENY/);
+    expect(out.passed).toBe(true);
   });
 });

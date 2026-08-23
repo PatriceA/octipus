@@ -74,6 +74,13 @@ export type Scorer =
    *   be a way to run commands as a role the operator kept away from them, so
    *   a `research` or `writing` child fails this scorer instead of executing
    *   it (`ScorerContext.canRunCommands`).
+   * - **The operator's permission decision.** `PermissionManager.check` is
+   *   consulted for `shell.execute`, because holding a tool is not the same as
+   *   being allowed to use it — tools are never stripped by permission, the
+   *   check runs at call time, so a stored DENY is invisible to a
+   *   toolset-presence test. Anything short of ALLOW fails the gate rather than
+   *   prompting: a scorer runs after the child is finished, with nobody left to
+   *   answer.
    * - **The shell tool's own content policy**, shared from `tools/shell/policy`
    *   rather than copied: the same denylist and injection patterns, plus an
    *   outright refusal of anything `ELEVATED_COMMANDS` matches. A verification
@@ -221,6 +228,12 @@ export interface ScorerContext {
    * as NOT allowed — a gate whose authority cannot be established must not run.
    */
   canRunCommands?: boolean;
+  /**
+   * The run's cancellation signal. Threaded so a `command_exit_zero` check dies
+   * with the session instead of outliving it: a cancelled parent otherwise
+   * leaves scorer commands running with the awaited spawn unresolved.
+   */
+  signal?: AbortSignal;
   /**
    * Files that actually differ in the workspace across the child's run, from
    * `workspace-snapshot.ts`. `null` = not measured (no file-aware scorer asked
@@ -450,12 +463,43 @@ async function evaluate(
         };
       }
 
+      // Holding the tool is not the same as being allowed to use it: tools are
+      // never stripped by permission, `PermissionManager.check` runs at call
+      // time, so an operator's stored DENY on `shell.execute` would otherwise be
+      // invisible here. Anything short of ALLOW fails the gate rather than
+      // prompting — a scorer runs after the child is done, with nobody left to
+      // answer, and a check that silently waits is worse than one that fails.
+      if (ctx.userId) {
+        try {
+          const { getPermissionManager } = await import('@/security/permissions');
+          const decision = await getPermissionManager().check(ctx.userId, 'shell', 'execute', {
+            command: scorer.command,
+          });
+          if (!decision.allowed) {
+            return {
+              scorer: label,
+              reason: `refused: shell.execute is ${decision.level} for this user${decision.reason ? ` (${decision.reason})` : ''}`,
+            };
+          }
+        } catch (err) {
+          // Fail closed. An unavailable permission layer means the authority to
+          // run this was never established.
+          return { scorer: label, reason: `refused: could not check shell permission (${(err as Error).message})` };
+        }
+      }
+
       // Workspace: the same sandbox resolver `file_exists` uses. `'.'` is the
       // workspace root, so a command cannot be pointed elsewhere.
       const fs = WorkspaceFS.forAgent({ userId: ctx.userId });
       const cwd = fs.resolveOptional('.');
       if (!cwd) {
         return { scorer: label, reason: 'the workspace could not be resolved, so the command was not run' };
+      }
+      // A missing workspace directory is an environment fault, not the child's
+      // defect. Left unchecked it surfaces as `spawn ENOENT`, gets quoted back
+      // as the thing the child must fix, and burns a contract retry on it.
+      if (!existsSync(cwd)) {
+        return { scorer: label, reason: `the workspace directory does not exist (${cwd}), so the command was not run` };
       }
 
       const timeoutMs = Math.min(
@@ -470,6 +514,7 @@ async function evaluate(
       try {
         const res = await new LocalShellOperations().exec(scorer.command, cwd, {
           timeout: timeoutMs,
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
           // Never `unsafe`. Safe mode is what makes `tokenizeSafe` reject shell
           // metacharacters, and it is the whole security argument for letting an
           // LLM-authored string reach a process at all.
@@ -479,7 +524,9 @@ async function evaluate(
         // How it ended, not just that it did. `exitCode` is null for a killed
         // process, so a blown deadline would otherwise read "exited null" and
         // the retry brief would name no defect at all.
-        const how = res.timedOut
+        const how = res.aborted
+          ? 'was cancelled with the run'
+          : res.timedOut
           ? `timed out after ${timeoutMs}ms`
           : res.exitCode === null
             ? `was killed${res.signal ? ` by ${res.signal}` : ''}`
