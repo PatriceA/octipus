@@ -212,6 +212,17 @@ export interface ChildResult {
    * `contract_failed`. See `scorers.ts`.
    */
   scorerOutcome?: ScorerOutcome;
+  /**
+   * Tokens burned by attempts that were thrown away before this one — a crash
+   * retry, a backup-model attempt, or a superseded contract retry.
+   *
+   * `usedTokens` is the surviving attempt alone, which is the honest number for
+   * "what did this answer cost". The pool, however, paid for all of them, so
+   * the parent's `childTokensUsed` accounting adds this on top; without it a
+   * child that took four attempts is charged for one and the budget cascade
+   * hands later siblings tokens that are already spent.
+   */
+  discardedTokens?: number;
 }
 
 /**

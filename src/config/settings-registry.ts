@@ -463,6 +463,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'SWARM_ORPHAN_REAPER_INTERVAL_MS',
   },
   {
+    key: 'swarm.contractRetries',
+    category: 'swarm',
+    valueType: 'number',
+    defaultValue: 1,
+    description: 'Re-dispatches of a child whose scorer gate failed (0 disables)',
+    isSecret: false,
+    envVar: 'SWARM_CONTRACT_RETRIES',
+  },
+  {
     key: 'swarm.levelDefaults.orchestrator.tokens',
     category: 'swarm',
     valueType: 'number',

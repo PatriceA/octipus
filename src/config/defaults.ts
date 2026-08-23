@@ -115,6 +115,7 @@ export const defaultConfig: Partial<Config> = {
   swarm: {
     perUserSpawnsPerMinute: 30,
     orphanReaperIntervalMs: 600_000,
+    contractRetries: 1,
     levelDefaults: {
       orchestrator: { tokens: 200_000, wallMs: 600_000, fanOut: 6, maxPendingDetached: 6 },
       agent: { tokens: 80_000, wallMs: 600_000, fanOut: 4, maxPendingDetached: 3 },

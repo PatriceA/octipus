@@ -72,6 +72,36 @@ export interface ScorerOutcome {
 }
 
 /**
+ * Render a failed gate as a corrective instruction for a re-dispatch.
+ *
+ * This is what makes a contract retry a LOOP rather than a re-roll: the second
+ * attempt is told precisely which checks failed and why, so it corrects rather
+ * than re-sampling the same mistake. Pure and separately testable, because the
+ * spawner that calls it cannot be exercised without booting an agent.
+ *
+ * Returns null when there is nothing actionable to say — an empty failure list
+ * means the caller should not be retrying at all, and a retry prompt that names
+ * no defect is worse than none: it asks the child to guess what went wrong.
+ */
+export function renderContractFeedback(
+  failures: ScorerFailure[],
+  attempt: number,
+  maxAttempts: number,
+): string | null {
+  if (failures.length === 0) return null;
+  const lines = failures.map((f) => `- ${f.scorer}: ${f.reason}`).join('\n');
+  return (
+    `PREVIOUS ATTEMPT REJECTED (attempt ${attempt} of ${maxAttempts + 1}).\n` +
+    `Your last answer was produced but FAILED these deterministic checks:\n${lines}\n\n` +
+    `Redo the task so every check above passes. The checks are mechanical and ` +
+    `will run again on this attempt — they inspect what you actually produced ` +
+    `(and, where they read the execution record, what you actually did), not ` +
+    `how you describe it. Fix the specific defect named; do not restate the ` +
+    `previous answer with different wording.`
+  );
+}
+
+/**
  * Delegation/meta tools. They move work rather than produce evidence, so they
  * do not count as "a tool that worked" for the outage gate.
  */

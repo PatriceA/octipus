@@ -342,6 +342,19 @@ const swarmLevelSchema = z.object({
 export const swarmConfigSchema = z.object({
   perUserSpawnsPerMinute: z.number().min(1).max(1000).default(30),
   orphanReaperIntervalMs: z.number().min(30_000).default(600_000),
+  /**
+   * How many times a child whose SCORER GATE failed is re-dispatched with the
+   * failures quoted back to it, before the `contract_failed` result is handed
+   * to the parent.
+   *
+   * Bounded like every other backward edge in this repo (see
+   * `pipeline-graph.validateGraph`): a cycle without a counter runs forever.
+   * The default is deliberately 1 — a scorer failure is usually a missed
+   * instruction that one corrective pass fixes, and each further pass is
+   * another full child run against a pool the parent also needs. 0 restores
+   * the previous behaviour exactly.
+   */
+  contractRetries: z.number().min(0).max(5).default(1),
   levelDefaults: z.object({
     orchestrator: swarmLevelSchema.default({ tokens: 200_000, wallMs: 600_000, fanOut: 6, maxPendingDetached: 6 }),
     agent: swarmLevelSchema.default({ tokens: 80_000, wallMs: 600_000, fanOut: 4, maxPendingDetached: 3 }),
