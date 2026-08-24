@@ -20,7 +20,12 @@
 
 import { existsSync } from 'node:fs';
 import { WorkspaceFS } from '@/security/workspace-fs';
-import { commandPolicyViolation, matchElevatedCommand, tokenizeSafe } from '@/tools/shell/policy';
+import {
+  commandPolicyViolation,
+  effectiveCommandHead,
+  matchElevatedCommand,
+  tokenizeSafe,
+} from '@/tools/shell/policy';
 import { coreLogger } from '@/utils/logger';
 import type { SwarmReceipt } from './receipt';
 
@@ -200,25 +205,32 @@ const SHELL_STRING_FLAGS = new Set(['-c', '-s', '--command']);
  * caught too, since that is still a shell reading a file we cannot inspect.
  */
 function namesShellWithCommandString(command: string): string | null {
+  // The command this string INVOKES, after wrappers and assignments — not any
+  // token that happens to name a shell. Scanning the whole argv refused
+  // `pytest packages/dash -s` (the `dash` directory, then pytest's own `-s`)
+  // and `pytest -k fish -c pytest.ini`, non-retryably, for commands that would
+  // have run fine.
   const argv = tokenizeSafe(command) ?? command.trim().split(/\s+/);
-  for (let i = 0; i < argv.length; i++) {
-    const token = argv[i];
-    const name = token.slice(token.lastIndexOf('/') + 1);
-    if (!SHELL_INTERPRETERS.has(name)) continue;
-    if (i === 0) return name;
-    // A shell's OWN options may sit between it and the flag that takes the
-    // string, and some of them take a value of their own: `sh -x -c`,
-    // `bash --norc -c`, `sh -o errexit -c`, `bash --rcfile /dev/null -c`.
-    // Walking only over things that look like flags stopped at `errexit` and
-    // `/dev/null`, so the whole rest of the argv is scanned instead.
-    //
-    // A shell mentioned with no such flag anywhere after it is not an
-    // interpreter invocation — `pytest -k sh` names one and runs nothing.
-    for (let j = i + 1; j < argv.length; j++) {
-      if (SHELL_STRING_FLAGS.has(argv[j])) return name;
-    }
+
+  // A shell as the LITERAL head is an interpreter invocation whatever follows:
+  // `sh script.sh` reads a file safe mode cannot inspect. Checked before the
+  // effective head, which peels a leading shell away as a wrapper.
+  const literal = argv[0] ? argv[0].slice(argv[0].lastIndexOf('/') + 1) : '';
+  if (SHELL_INTERPRETERS.has(literal)) return literal;
+
+  // Peeled to the effective command, with shells terminal — they are wrappers
+  // themselves, so an unqualified peel answers `env sh -c id` with `id`.
+  const head = effectiveCommandHead(command, SHELL_INTERPRETERS);
+  if (!head || !SHELL_INTERPRETERS.has(head)) return null;
+  const at = argv.findIndex((t) => t.slice(t.lastIndexOf('/') + 1) === head);
+  // A shell as the effective head is an interpreter invocation whether or not
+  // it carries `-c`: `sh script.sh` is still a shell reading something safe
+  // mode cannot inspect. The flag scan below only names WHICH form it took.
+  if (at <= 0) return head;
+  for (let j = at + 1; j < argv.length; j++) {
+    if (SHELL_STRING_FLAGS.has(argv[j])) return head;
   }
-  return null;
+  return head;
 }
 
 /** Cap on the text a `contains` scorer scans — bounds pathological input. */

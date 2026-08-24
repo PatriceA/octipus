@@ -1013,18 +1013,19 @@ describe('command_exit_zero — a shell is not a verification command', () => {
     expect(out.passed).toBe(true);
   });
 
-  it('does not refuse a command that merely NAMES a shell', async () => {
-    // `pytest -k sh` mentions one and runs nothing. The pairing with `-c`/`-s`
-    // is what makes it an interpreter invocation.
-    const { ctx: c, restore } = await allowedToRun();
-    const out = await runScorers(
-      [{ kind: 'command_exit_zero', command: 'pytest -k sh' }],
-      { output: 'x' },
-      c,
-    );
-    restore();
-    expect(out.failures[0]?.reason ?? '').not.toMatch(/no-shell-features/);
-  });
+  it.each(['pytest -k sh', 'pytest packages/dash -s', 'pytest -k fish -c pytest.ini'])(
+    'does not refuse %s, which merely NAMES a shell',
+    async (command) => {
+      // Scanning every token for a shell basename refused all three — the
+      // `dash` directory plus pytest's own `-s`, the `fish` filter plus its
+      // `-c` config. What matters is the command being INVOKED, so the string
+      // is peeled to its effective head instead.
+      const { ctx: c, restore } = await allowedToRun();
+      const out = await runScorers([{ kind: 'command_exit_zero', command }], { output: 'x' }, c);
+      restore();
+      expect(out.failures[0]?.reason ?? '').not.toMatch(/no-shell-features/);
+    },
+  );
 });
 
 describe('a shell’s own flags do not hide the one that takes a string', () => {

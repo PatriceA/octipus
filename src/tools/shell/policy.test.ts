@@ -655,3 +655,25 @@ describe('a wrapper’s numeric option value does not stop the peel', () => {
     expect(matchElevatedCommand('timeout 5 npm run kill')).toBeNull();
   });
 });
+
+describe('an option’s value does not end the peel', () => {
+  it.each([
+    ['env -u FOO sudo id', 'sudo'],
+    ['strace -o out.txt sudo id', 'sudo'],
+    ['script -q /dev/null sudo id', 'sudo'],
+    ['stdbuf -o L sudo id', 'sudo'],
+    ['timeout --signal KILL 5 sudo id', 'sudo'],
+  ])('%s is elevated', (command, expected) => {
+    // Stopping at a wrapper option's separate VALUE left the `sudo` behind it
+    // unseen, routing the command to ASK-level `execute`. And the value itself
+    // must not be mistaken for the command: `--signal KILL` reported `kill`.
+    expect(matchElevatedCommand(command)).toBe(expected);
+  });
+
+  it('while a flag that takes NO value still ends it', () => {
+    // `env -i` takes nothing, so `sudo` is the payload — guessing from "the
+    // previous token looked like a flag" consumed it.
+    expect(matchElevatedCommand('env -i sudo id')).toBe('sudo');
+    expect(matchElevatedCommand('sh -c "sudo x"')).toBe('sudo');
+  });
+});

@@ -253,7 +253,19 @@ const WRAPPER_ARG = /^(?:--|-?\d+(?:\.\d+)?[smhd]?)$/i;
 const WRAPPER_PATH_ARG = /^[./~]|\//;
 
 /** The wrappers whose first positional is a path, not the command. */
-const TAKES_PATH_ARG = new Set(['flock', 'chroot', 'unshare', 'runuser']);
+const TAKES_PATH_ARG = new Set(['flock', 'chroot', 'unshare', 'runuser', 'script']);
+
+/**
+ * Wrapper options that take a SEPARATE value: `env -u NAME`, `strace -o file`,
+ * `timeout --signal KILL`, `nice -n 5`, `xargs -I {}`.
+ *
+ * Named explicitly because "the previous token was a flag" is not enough to
+ * know: `env -i` takes none, so that guess ate the `sudo` in `env -i sudo id`.
+ */
+const VALUE_TAKING_FLAGS = new Set([
+  '-u', '-o', '-n', '-a', '-I', '-f', '-s', '-e', '-p', '-d', '-t',
+  '--signal', '--rcfile', '--user', '--output', '--adjustment', '--max-procs', '--replace',
+]);
 
 /** `xargs -I {}` and friends: a substitution token, not the command. */
 const PLACEHOLDER = /^\{\}$|^%$/;
@@ -311,7 +323,7 @@ const basename = (token: string): string => token.slice(token.lastIndexOf('/') +
  * candidate, because peeling an assignment and a wrapper together skips the
  * command in between: `env A=1 sudo npm i` would go straight to `npm i`.
  */
-function commandCandidates(segment: string): string[] {
+function commandCandidates(segment: string, stopAt?: ReadonlySet<string>): string[] {
   let rest = segment.trim().split(/\s+/).filter(Boolean);
   if (rest.length === 0) return [];
 
@@ -329,17 +341,43 @@ function commandCandidates(segment: string): string[] {
       if (rest.length > 0) candidates.push(normalize(rest));
     }
 
+    // A name the caller wants treated as terminal even though it is a wrapper.
+    // `sh` and `bash` ARE wrappers, so a peel that walks past them answers
+    // "what does `env sh -c id` run" with `id` — true, and useless to a caller
+    // asking whether a shell is being invoked at all.
+    if (rest.length > 0 && stopAt?.has(basename(rest[0]))) break;
+
     if (rest.length > 0 && COMMAND_WRAPPERS.has(basename(rest[0]))) {
       let j = 1;
+      const takesPath = TAKES_PATH_ARG.has(basename(rest[0]));
       while (j < rest.length) {
         const t = rest[j];
         // Stop the moment a token names a command: `timeout 5 /usr/bin/sudo x`
         // has a path-shaped argument that IS the payload, and consuming it
         // dropped the whole invocation to the ASK-level permission.
+        // An option's separate VALUE, recognised from a NAMED list rather than
+        // "the previous token looked like a flag" — that guess consumed the
+        // payload of `env -i sudo id`, since `-i` takes no value. Without it,
+        // `env -u FOO sudo …`, `strace -o out.txt sudo …` and
+        // `timeout --signal KILL 5 sudo …` stopped at the value instead.
+        const prev = rest[j - 1];
+        const isOptionValue = j > 1 && !!prev && VALUE_TAKING_FLAGS.has(prev);
+        // Stop the moment a token names a command: `timeout 5 /usr/bin/sudo x`
+        // has a path-shaped argument that IS the payload, and consuming it
+        // dropped the whole invocation to the ASK-level permission. An option's
+        // value is exempt — `timeout --signal KILL 5 sudo id` stopped at the
+        // SIGNAL and reported `kill`.
         const nameOfT = basename(t);
-        if (COMMAND_WRAPPERS.has(nameOfT) || ELEVATED_COMMANDS.includes(nameOfT)) break;
-        const takesPath = TAKES_PATH_ARG.has(basename(rest[0]));
-        if (!(FLAG.test(t) || WRAPPER_ARG.test(t) || PLACEHOLDER.test(t) || (takesPath && WRAPPER_PATH_ARG.test(t))))
+        if (!isOptionValue && (COMMAND_WRAPPERS.has(nameOfT) || ELEVATED_COMMANDS.includes(nameOfT))) break;
+        if (
+          !(
+            FLAG.test(t) ||
+            WRAPPER_ARG.test(t) ||
+            PLACEHOLDER.test(t) ||
+            isOptionValue ||
+            (takesPath && WRAPPER_PATH_ARG.test(t))
+          )
+        )
           break;
         j++;
       }
@@ -362,6 +400,26 @@ function commandCandidates(segment: string): string[] {
  */
 const DATA_SUFFIX =
   /^(?:json|ya?ml|sh|bash|zsh|js|jsx|ts|tsx|mjs|cjs|py|rb|go|rs|java|php|pl|lua|c|h|o|a|so|cc|cpp|hpp|cs|swift|kt|scala|sql|css|s?html?|txt|md|rst|toml|conf|cfg|ini|xml|lock|log|csv|tsv|env|bak|tmp|gz|zip|tar|snap|test|spec)$/i;
+
+/**
+ * The command a string effectively invokes, after stepping over environment
+ * assignments and any chain of wrappers with their arguments — `sh` in
+ * `env sh -x`, `npm` in `timeout 60 npm test`.
+ *
+ * Exported because `command_exit_zero` needs the same question answered: is
+ * this string an INVOCATION of a shell, or a command that merely mentions one?
+ * Asking it by scanning every token refused `pytest packages/dash -s`.
+ *
+ * `stopAt` names tokens the peel must treat as terminal. Shells need it: they
+ * are wrappers, so without it `env sh -c id` peels all the way to `id`.
+ */
+export function effectiveCommandHead(command: string, stopAt?: ReadonlySet<string>): string | null {
+  const firstSegment = command.trim().split(/&&|\|\||[;&|\n()`]/)[0] ?? '';
+  const candidates = commandCandidates(firstSegment, stopAt);
+  const last = candidates[candidates.length - 1];
+  if (!last) return null;
+  return basename(last.split(/\s+/)[0] ?? '');
+}
 
 /**
  * Is what follows a matched name a FILE's extension rather than the rest of a
