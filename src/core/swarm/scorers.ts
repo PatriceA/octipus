@@ -280,14 +280,6 @@ export interface ScorerContext {
   canRunCommands?: boolean;
   /** The child's role, for the permission decision. */
   role?: string;
-  /**
-   * Where the child was working. `command_exit_zero` runs here, matching the
-   * `args.cwd || projectPath || workspaceRoot` order the child's own shell tool
-   * uses — a check that runs `npm test` at the workspace root while the child
-   * worked in `workspace/<project>/` fails a correct deliverable, and does it
-   * retryably, so it burns a full re-dispatch on a defect that is not there.
-   */
-  projectPath?: string;
   /** Shared wall-clock deadline for the whole gate; set by `runScorers`. */
   deadline?: number;
   /**
@@ -644,17 +636,14 @@ async function evaluate(
 
       // Workspace: the same sandbox resolver `file_exists` uses. `'.'` is the
       // workspace root, so a command cannot be pointed elsewhere.
+      // The workspace root, which is where a swarm child's own tools operate:
+      // `pipelineMetadata` forwards only `pipelineId` and `nodeKey`, so a child
+      // never receives a `projectPath` and its `file_exists` and `side_effect`
+      // scorers resolve here too. Reading the PARENT's `projectPath` instead
+      // would point the check at the operator's host checkout in a dev-mode
+      // session — a different tree from the one the child changed.
       const fs = WorkspaceFS.forAgent({ userId: ctx.userId });
-      // The child's project directory when it had one, else the workspace root
-      // — the same order its shell tool resolves.
-      //
-      // `projectPath` is used AS GIVEN, exactly as `ShellTool` uses it. In dev
-      // mode it is an absolute host path outside the workspace, so resolving it
-      // through `WorkspaceFS` returns null and the check refuses — every
-      // dev-mode session would flip a correct child to `contract_failed`,
-      // non-retryably, with a false red row in the ledger. The sandbox still
-      // bounds what the command can reach; this only decides where it starts.
-      const cwd = ctx.projectPath ?? fs.resolveOptional('.');
+      const cwd = fs.resolveOptional('.');
       if (!cwd) {
         return {
           scorer: label,
@@ -730,12 +719,16 @@ async function evaluate(
         if (ctx.signal?.aborted) {
           throw new ScorerNotEvaluated('the run was cancelled while the check was running');
         }
-        // A rejected command (metacharacters), a missing binary, or the
-        // deadline. All are failed gates: the check did not pass, and a gate
-        // that cannot run must never read as one that did. None is something a
-        // second child run would change — the command is a property of the
-        // scorer the PARENT wrote, not of the work the child did.
-        return { scorer: label, reason: `did not run: ${(err as Error).message}`, retryable: false };
+        const message = (err as Error).message;
+        // A gate that could not run never reads as one that passed. But two
+        // causes hide here and they are not alike: a malformed command is the
+        // PARENT's, unchanged by another attempt, while a missing script or
+        // binary is often the very thing the child failed to produce — and
+        // `./scripts/verify.sh` not existing yet is exactly what the retry loop
+        // is for. Marking that unfixable refuses to correct the defect the
+        // check was written to catch.
+        const missing = /ENOENT|not found|no such file/i.test(message);
+        return { scorer: label, reason: `did not run: ${message}`, retryable: missing ? undefined : false };
       }
     }
   }

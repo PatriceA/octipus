@@ -149,10 +149,35 @@ const INJECTION_PATTERNS = [
 export function matchElevatedCommand(command: string): string | null {
   for (const candidate of [command.trim().toLowerCase(), ...dequotedForms(command)]) {
     for (const elevated of ELEVATED_COMMANDS) {
-      if (invokesCommand(candidate, elevated, true)) return elevated;
+      if (headOfSegmentIs(candidate, elevated)) return elevated;
     }
   }
   return null;
+}
+
+/**
+ * Does `text` START a segment with `name`, after any wrappers and assignments?
+ *
+ * Narrower than the denylist's token test, deliberately. Elevation does not
+ * block a command; it routes one to the DENY-by-default `execute_elevated`
+ * permission, so a false positive refuses ordinary work — an npm script called
+ * `kill` or `service` is not the binary, and `timeout 5 npm run kill` was not
+ * elevated before this branch either. The denylist takes the opposite bias
+ * because the mistake it guards against is worse.
+ */
+function headOfSegmentIs(text: string, name: string): boolean {
+  const b = name.toLowerCase().trim();
+  if (!b) return false;
+  for (const segment of text.split(/&&|\|\||[;&|\n()]/)) {
+    for (const candidate of commandCandidates(segment)) {
+      if (!candidate.startsWith(b)) continue;
+      const next = candidate[b.length];
+      // A dot continues the name here: `kill.sh` and `service.sh` are project
+      // scripts, not the binaries they are named after.
+      if (next === undefined || /[\s/~]/.test(next)) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -280,32 +305,50 @@ function commandCandidates(segment: string): string[] {
 }
 
 /**
- * Does the character after a matched entry end it, or continue another name?
+ * File suffixes that keep a dot part of the NAME rather than ending it.
  *
- * A letter, digit or dash continues one — `ncdu` is not `nc`, `haltcheck` is
- * not `halt`. `nameOnly` additionally treats a dot as a continuation, which is
- * what separates a packaged binary (`nc.openbsd`, `ncat.traditional`) from a
- * project script (`kill.sh`, `service.sh`): the denylist wants the former,
- * while the elevation check must not claim the latter and route an ordinary
- * script to the DENY-by-default `execute_elevated` action.
+ * `halt.json` and `verify.sh` are data and scripts, not the `halt` binary;
+ * `nc.openbsd` and `mkfs.ext4` are the binaries. One short list decides which,
+ * because both mistakes are real: without it a config path is refused, with a
+ * blanket dot-continues rule the packaged binaries are not.
  */
-function isBoundary(next: string | undefined, nameOnly = false): boolean {
-  if (next === undefined) return true;
-  return nameOnly ? /[\s;&|/~]/.test(next) : /[\s;&|./~]/.test(next);
-}
+const DATA_SUFFIX =
+  /^(?:json|ya?ml|sh|bash|zsh|js|jsx|ts|tsx|mjs|cjs|py|rb|go|rs|java|php|pl|lua|c|h|cc|cpp|hpp|cs|swift|kt|scala|sql|css|s?html?|txt|md|rst|toml|conf|cfg|ini|xml|lock|log|csv|tsv|env|bak|tmp|gz|zip|tar)\b/i;
 
 /**
- * Does `text` invoke `name` in command position — at the head of a
- * separator-delimited segment, after a path, or behind the wrappers and
- * assignments that hand off to it?
+ * Does `text` invoke `name` as a COMMAND — as the start of any token, rather
+ * than inside one?
+ *
+ * Token position, not "head of a segment after peeling wrappers". Peeling can
+ * only recognise the wrappers it has been told about, and the list can never be
+ * complete: `flock /tmp/x nc …`, `strace nc …`, `proxychains nc …` and
+ * `env -u LD_PRELOAD nc …` all hid a reverse shell behind a prefix the peeler
+ * did not model. Every one of those was refused before this branch, so treating
+ * an unknown prefix as safe was a security regression, and one that any new
+ * wrapper would reopen.
+ *
+ * A token start is the property that actually matters: it catches the command
+ * wherever a prefix puts it, and it still spares the measured false positives —
+ * `npm run sync tests` and `go test ./internal/sync` have no token BEGINNING
+ * with `nc`.
  */
-function invokesCommand(text: string, name: string, nameOnly = false): boolean {
+function invokesCommand(text: string, name: string): boolean {
   const b = name.toLowerCase().trim();
   if (!b) return false;
-  for (const segment of text.split(/&&|\|\||[;&|\n()]/)) {
-    for (const candidate of commandCandidates(segment)) {
-      if (candidate.startsWith(b) && isBoundary(candidate[b.length], nameOnly)) return true;
+
+  for (const raw of text.split(/[\s;&|\n()]+/)) {
+    if (!raw) continue;
+    // Compare the program's own name, so `/usr/sbin/shutdown` matches.
+    const token = basename(raw);
+    if (!token.startsWith(b)) continue;
+    const next = token[b.length];
+    if (next === undefined) return true;
+    // A dot ends a binary's name (`nc.openbsd`) but not a file's (`halt.json`).
+    if (next === '.') {
+      if (DATA_SUFFIX.test(token.slice(b.length + 1))) continue;
+      return true;
     }
+    if (/[/~]/.test(next)) return true;
   }
   return false;
 }

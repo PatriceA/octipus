@@ -67,21 +67,6 @@ describe('buildScorerContext', () => {
     expect(withheld.canRunCommands).toBe(false);
   });
 
-  it('carries the project path, so a check runs where the work happened', () => {
-    // A child working in `workspace/<project>/` whose `npm test` is run at the
-    // workspace root fails a correct deliverable — retryably, so it burns a
-    // full re-dispatch on a defect that does not exist.
-    const ctx = buildScorerContext({
-      filesTouched: null,
-      childTools: [],
-      childRole: 'coding' as never,
-      projectPath: '/host/checkout/service',
-    });
-    // Passed through as given — dev mode hands out absolute host paths, and
-    // resolving those through the workspace sandbox yields null and refuses.
-    expect(ctx.projectPath).toBe('/host/checkout/service');
-  });
-
   it('passes the run signal through', () => {
     const signal = new AbortController().signal;
     const ctx = buildScorerContext({

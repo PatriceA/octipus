@@ -950,3 +950,30 @@ describe('a cancellation does not launder verdicts already reached', () => {
     expect(out.failures.map((f) => f.scorer)).toContain('file_exists');
   });
 });
+
+describe('command_exit_zero — a missing script is the child’s to fix', () => {
+  it('marks a missing binary retryable, and a malformed command not', async () => {
+    const { ctx: c, restore } = await allowedToRun();
+
+    // `./scripts/verify.sh` not existing yet is often the very thing the child
+    // failed to produce — refusing to re-dispatch declines to correct the
+    // defect the check was written to catch.
+    const missing = await runScorers(
+      [{ kind: 'command_exit_zero', command: './scripts/verify-does-not-exist.sh' }],
+      { output: 'x' },
+      c,
+    );
+    expect(missing.passed).toBe(false);
+    expect(missing.failures[0].retryable).not.toBe(false);
+
+    // A command the PARENT malformed is unchanged by another child run.
+    const malformed = await runScorers(
+      [{ kind: 'command_exit_zero', command: 'true; echo pwned > /tmp/x' }],
+      { output: 'x' },
+      c,
+    );
+    restore();
+    expect(malformed.passed).toBe(false);
+    expect(malformed.failures[0].retryable).toBe(false);
+  });
+});

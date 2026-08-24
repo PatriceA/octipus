@@ -59,9 +59,14 @@ export default defineConfig({
     // Ephemeral per-process secrets, so config parses without a developer
     // exporting anything and no committed fixture resembles a real credential.
     setupFiles: ['./src/test-setup.ts'],
-    // Removes the embedded-database DATA_DIRs the suite creates and does not
-    // clean up — see the file for why that is centralized here.
-    globalSetup: ['./scripts/vitest-global-setup.ts'],
+    // Reaps the per-test PGlite `DATA_DIR` scratch directories that ~100 files
+    // create and never remove. `src/test-helpers/tmp-cleanup.ts` documents
+    // itself as "wired as the runner's global setup" and had been referenced by
+    // nothing since this config went untracked — so the leak it was written to
+    // stop was live again, and a stale `/tmp` filled this machine to 100%
+    // mid-session. It also sweeps leftovers from crashed runs, which a
+    // this-run-only sweep cannot.
+    globalSetup: ['./src/test-helpers/tmp-cleanup.ts'],
     // The web app has its own runner (Playwright) and its own config; including
     // it here would run React components under the Node environment.
     // `.spec.ts` as well as `.test.ts`: the tree carries both, and matching
