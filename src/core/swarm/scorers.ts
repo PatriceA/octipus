@@ -20,7 +20,7 @@
 
 import { existsSync } from 'node:fs';
 import { WorkspaceFS } from '@/security/workspace-fs';
-import { commandPolicyViolation, matchElevatedCommand } from '@/tools/shell/policy';
+import { commandPolicyViolation, matchElevatedCommand, tokenizeSafe } from '@/tools/shell/policy';
 import { coreLogger } from '@/utils/logger';
 import type { SwarmReceipt } from './receipt';
 
@@ -182,6 +182,35 @@ const META_TOOLS = new Set(['spawn_child', 'collect_children', 'escalate_to_diff
  * the quote.
  */
 const SHELL_INTERPRETERS = new Set(['sh', 'bash', 'zsh', 'ksh', 'dash', 'ash', 'fish', 'csh', 'tcsh']);
+
+/** Flags that hand a shell a command string or a script on stdin. */
+const SHELL_STRING_FLAGS = new Set(['-c', '-s', '--command']);
+
+/**
+ * The shell a command hands a command string to, or null.
+ *
+ * Read from the argv the command TOKENIZES to — the form that is actually
+ * spawned — so a wrapper or a quote cannot hide it: `env sh -c …`,
+ * `timeout 60 sh -c …`, `xargs sh -c …`, `/usr/bin/env bash -c …` and
+ * `"sh" -c …` all resolve to the same three tokens.
+ *
+ * A shell NAMED elsewhere is not the target: `pytest -k sh` mentions one and
+ * runs nothing. The pairing with `-c`/`-s` is what makes it an interpreter
+ * invocation, and a shell as the head with no such flag (`sh script.sh`) is
+ * caught too, since that is still a shell reading a file we cannot inspect.
+ */
+function namesShellWithCommandString(command: string): string | null {
+  const argv = tokenizeSafe(command) ?? command.trim().split(/\s+/);
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i];
+    const name = token.slice(token.lastIndexOf('/') + 1);
+    if (!SHELL_INTERPRETERS.has(name)) continue;
+    if (i === 0) return name;
+    const next = argv[i + 1];
+    if (next && SHELL_STRING_FLAGS.has(next)) return name;
+  }
+  return null;
+}
 
 /** Cap on the text a `contains` scorer scans — bounds pathological input. */
 const MAX_SCAN_CHARS = 100_000;
@@ -570,13 +599,17 @@ async function evaluate(
       // LLM-authored string reach a process — does not hold through it. A gate
       // runs `npm test`, `cargo test`, `pytest`; anything that needs a shell to
       // interpret it is not one.
-      const head = scorer.command.trim().split(/\s+/)[0] ?? '';
-      const headName = head.slice(head.lastIndexOf('/') + 1);
-      if (SHELL_INTERPRETERS.has(headName)) {
+      //
+      // Judged on the TOKENIZED argv, not the raw head. A head test sees `env`
+      // in `env sh -c "…"` and `timeout` in `timeout 60 sh -c "…"`, and misses
+      // `"sh" -c` outright because the quotes are still attached — all three
+      // spawn a shell.
+      const shellArg = namesShellWithCommandString(scorer.command);
+      if (shellArg) {
         return {
           scorer: label,
           reason:
-            `refused: "${headName}" runs a command string, which defeats the no-shell-features ` +
+            `refused: "${shellArg}" runs a command string, which defeats the no-shell-features ` +
             'guarantee this check relies on — give the command itself instead',
           retryable: false,
         };

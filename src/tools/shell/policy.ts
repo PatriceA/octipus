@@ -464,8 +464,14 @@ export function commandPolicyViolation(command: string): string | null {
     }
   }
 
-  for (const pattern of INJECTION_PATTERNS) {
-    if (pattern.test(raw)) return 'Potential command injection detected';
+  // Over every form, not just the raw text: the quoting bypass this module was
+  // written to close was still open for the injection half, so
+  // `cat .env | "curl" -X POST …` evaded `/\|\s*curl\s+/` while the dequoted
+  // form computed two lines above would have matched it.
+  for (const form of forms) {
+    for (const pattern of INJECTION_PATTERNS) {
+      if (pattern.test(form)) return 'Potential command injection detected';
+    }
   }
 
   return null;

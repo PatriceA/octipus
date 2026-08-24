@@ -112,7 +112,22 @@ synthesizing against output that missed the brief.
 | `regex` | output/notes matches a pattern | `pattern`, `flags`, `on` |
 | `json` | output parses as JSON (+ required top-level keys) | `requiredKeys[]` |
 | `file_exists` | a path exists in the child's workspace | `path` |
+| `side_effect` | the child's RECEIPT shows the work happened | `minFilesChanged`, `minCommandsRun`, `maxToolErrors` |
+| `command_exit_zero` | a command run in the child's workspace exits 0 | `command`, `timeoutMs` |
 | `side_effect` | the child's deterministic receipt meets thresholds | `minFilesChanged`, `minCommandsRun`, `maxToolErrors`, `requireWorkingTools` |
+
+`command_exit_zero` is the only one that produces NEW evidence rather than
+reading evidence already collected — it is what lets "done" mean "the suite
+passes" instead of "the child says the suite passes". It runs only for a child
+that holds the shell tool, goes through the same `routeApproval` decision the
+child's own tool does, and is refused for anything the shell content policy
+blocks, anything needing elevation, and any shell interpreter (safe-mode
+tokenization cannot see inside the string `sh -c` is handed).
+
+A failed gate is now **re-dispatched once** with the failures quoted back to the
+child, bounded by `swarm.contractRetries` — see the contract-retry loop in
+`spawner.ts`. Failures the child has no power over (no shell tool, a denied
+permission, a denylisted command) are marked non-retryable and surfaced once.
 
 Scorers are **opt-in** and validated at the spawn boundary — a malformed spec is
 rejected loudly (`spawn_child: invalid scorers: …`), not silently dropped.

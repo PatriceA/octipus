@@ -60,7 +60,7 @@ bun.lockb
 # The test runner's own config. Ignored by the rule above for its whole life,
 # so the suite could not resolve `@/*` or load `.md` prompts from a clean
 # clone — CI referenced the file by name while nothing tracked it.
-!vitest.config.ts
+!/vitest.config.ts
 
 # Eval results (generated)
 eval/results/*.json
