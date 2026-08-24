@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { getConfig, refreshConfigKey, resetConfig } from '@/config';
 import {
   type Scorer,
   deriveCodeDiffScorer,
@@ -11,6 +12,39 @@ import {
   parseScorers,
   runScorers,
 } from './scorers';
+
+/**
+ * A workspace root this suite OWNS, for the whole file.
+ *
+ * `command_exit_zero` runs its command with the workspace as cwd and refuses
+ * when that directory is absent — an environment fault, not the child's defect.
+ * Left to the default (`~/.octipus/workspace`) the execution tests therefore
+ * passed only on a machine where somebody had already run `octi setup`, and
+ * every one of them failed on a clean CI runner with "the workspace directory
+ * does not exist (/home/runner/.octipus/workspace)". The suite has to create
+ * the world it asserts about rather than inherit one.
+ *
+ * The prefix is `assistant-` deliberately: `/tmp/assistant-` is an allowed
+ * extra root in the WorkspaceFS sandbox, which is what lets the `file_exists`
+ * cases below resolve absolute paths at all.
+ */
+let workspaceRoot: string;
+
+beforeAll(() => {
+  workspaceRoot = mkdtempSync(join(tmpdir(), 'assistant-scorer-workspace-'));
+  // `getConfig()` FIRST. `refreshConfigKey` opens with `if (!cachedConfig)
+  // return` — with no config loaded yet it is a silent no-op, and the override
+  // appeared to work only because the machine already had the default
+  // workspace on disk. Measured: with the default directory moved aside, the
+  // refresh-only version failed the same 12 tests as CI.
+  getConfig();
+  refreshConfigKey('workspace.rootPath', workspaceRoot);
+});
+
+afterAll(() => {
+  resetConfig();
+  rmSync(workspaceRoot, { recursive: true, force: true });
+});
 
 
 /**
