@@ -390,42 +390,50 @@ function invokesCommand(text: string, name: string): boolean {
   // WITH arguments, so a bare trailing `nc` is not one — that is what keeps
   // `npm test -- --grep nc` and `git add src/nc` out of the denylist.
   const needsArgs = name.endsWith(' ');
-  const tokens = text.split(/[\s;&|\n()`{}$]+/).filter(Boolean);
-  // Whether this text is a wrapper INVOKING something — `strace -f nc …`,
-  // `env -i shutdown …`. A wrapper's flags belong to the wrapper, and the
-  // command follows them; an ordinary command's flags take values. Reading the
-  // second rule into the first is a bypass: it skipped the very token carrying
-  // the command, which is the class of hole the token match exists to close.
-  const headIsWrapper = tokens.length > 0 && COMMAND_WRAPPERS.has(basename(tokens[0]));
 
-  for (let i = 0; i < tokens.length; i++) {
-    const raw = tokens[i];
-    // A token directly after a BARE flag is that flag's VALUE, not a command:
-    // `--grep nc`, `--testPathPattern nc`. `--adjustment=10` carries its own
-    // value, so what follows IS the command again, and `-c`/`-exec` take a
-    // command as their value by definition.
-    const prev = tokens[i - 1];
-    if (
-      !headIsWrapper &&
-      prev &&
-      FLAG.test(prev) &&
-      !prev.includes('=') &&
-      !INTRODUCES_COMMAND.has(prev)
-    ) {
-      continue;
+  // Segment FIRST, then scan each segment's tokens. Both rules below are
+  // per-command properties, and computing them over the flattened string let
+  // them leak across a separator: `ls -la; nc -e /bin/sh …` took the flag rule
+  // from `ls`'s arguments and `echo ok && strace -f nc …` took `headIsWrapper`
+  // from `echo`, so the second command in the line went unchecked while the
+  // same command alone was refused.
+  for (const segment of text.split(/&&|\|\||[;&|\n()`]/)) {
+    const tokens = segment.split(/[\s{}$]+/).filter(Boolean);
+    if (tokens.length === 0) continue;
+    // A wrapper's flags belong to the WRAPPER and the command follows them; an
+    // ordinary command's bare flag takes the next token as its value.
+    const headIsWrapper = COMMAND_WRAPPERS.has(basename(tokens[0]));
+
+    for (let i = 0; i < tokens.length; i++) {
+      const prev = tokens[i - 1];
+      if (
+        !headIsWrapper &&
+        prev &&
+        FLAG.test(prev) &&
+        // `--adjustment=10` carries its own value, so what follows IS the
+        // command again; `-c`/`-exec` take a command as their value by design.
+        !prev.includes('=') &&
+        !INTRODUCES_COMMAND.has(prev)
+      ) {
+        continue;
+      }
+      // An entry written with a trailing space (`nc `) means the command WITH
+      // arguments, so a bare trailing `nc` is an argument, not an invocation.
+      if (needsArgs && i === tokens.length - 1) continue;
+
+      // Compare the program's own name, so `/usr/sbin/shutdown` matches.
+      const token = basename(tokens[i]);
+      if (!token.startsWith(b)) continue;
+      const next = token[b.length];
+      if (next === undefined) return true;
+      // A dot ends a binary's name (`nc.openbsd`) but not a file's
+      // (`halt.json`, `shutdown.test.ts`).
+      if (next === '.') {
+        if (looksLikeFilename(token.slice(b.length + 1))) continue;
+        return true;
+      }
+      if (/[/~]/.test(next)) return true;
     }
-    if (needsArgs && i === tokens.length - 1) continue;
-    // Compare the program's own name, so `/usr/sbin/shutdown` matches.
-    const token = basename(raw);
-    if (!token.startsWith(b)) continue;
-    const next = token[b.length];
-    if (next === undefined) return true;
-    // A dot ends a binary's name (`nc.openbsd`) but not a file's (`halt.json`).
-    if (next === '.') {
-      if (looksLikeFilename(token.slice(b.length + 1))) continue;
-      return true;
-    }
-    if (/[/~]/.test(next)) return true;
   }
   return false;
 }

