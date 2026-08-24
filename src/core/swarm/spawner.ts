@@ -1053,6 +1053,12 @@ export class SwarmSpawner {
           budget: {
             ...opts.budget,
             tokens: { cap: Math.max(MIN_CHILD_TOKENS, remaining), used: 0 },
+            // A fresh allowance, not the superseded attempt's. The spread
+            // shares the `fanOut` OBJECT, so a child that spawned its four
+            // subagents in attempt 1 met `concurrency_limit` on every
+            // `spawn_child` of the corrective attempt — unable to do the work
+            // it was being asked to redo.
+            fanOut: { cap: opts.budget.fanOut.cap, used: 0 },
             // The wall cap is what is LEFT of the original deadline, not the
             // full grant again. `singleSpawnAndRun` passes this cap straight to
             // `agentManager.spawn` as the worker's timeout, so keeping the

@@ -196,6 +196,9 @@ const SHELL_INTERPRETERS = new Set(['sh', 'bash', 'zsh', 'ksh', 'dash', 'ash', '
  */
 const SHELL_STRING_FLAGS = new Set(['-c', '--command']);
 
+/** A combined short-flag cluster carrying `c`: `sh -xc "…"` is `sh -x -c "…"`. */
+const SHORT_CLUSTER_WITH_C = /^-[a-z]*c[a-z]*$/;
+
 /**
  * The shell a command hands a command string to, or null.
  *
@@ -211,28 +214,38 @@ const SHELL_STRING_FLAGS = new Set(['-c', '--command']);
  */
 function namesShellWithCommandString(command: string): string | null {
   const argv = tokenizeSafe(command) ?? command.trim().split(/\s+/);
-  const nameAt = (i: number): string => {
-    const t = argv[i] ?? '';
-    return t.slice(t.lastIndexOf('/') + 1);
-  };
+  const nameOf = (t: string): string => t.slice(t.lastIndexOf('/') + 1);
 
-  // A shell as the LITERAL head is an invocation whatever follows: `sh
-  // script.sh` reads a file safe mode cannot inspect.
-  if (SHELL_INTERPRETERS.has(nameAt(0))) return nameAt(0);
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i];
 
-  // Otherwise: a shell token with a command-string flag after it, ANYWHERE.
-  //
-  // Not "after peeling known wrappers" — that was tried twice and both times an
-  // unmodelled prefix walked through it (`taskset 1 sh -c …`, `firejail
-  // --quiet sh -c …`, `systemd-run`, `setarch`, `npx`, `make`), and the list
-  // can no more be completed here than it could for the denylist. What makes a
-  // shell an interpreter is the flag that hands it a string, so that is what is
-  // looked for, and no prefix can hide it.
-  for (let i = 1; i < argv.length; i++) {
-    if (!SHELL_INTERPRETERS.has(nameAt(i))) continue;
+    // A token that is itself a command LINE — `env -S "sh -c id"` hands the
+    // whole string to env, which splits it and runs the shell inside.
+    const inner = token.trim().split(/\s+/);
+    if (inner.length > 1 && SHELL_INTERPRETERS.has(nameOf(inner[0]))) return nameOf(inner[0]);
+
+    const name = nameOf(token);
+    if (!SHELL_INTERPRETERS.has(name)) continue;
+
+    // At the head: an invocation whatever follows. `sh script.sh` reads a file
+    // safe mode cannot inspect.
+    if (i === 0) return name;
+
+    // A command-string flag after it, anywhere — including a combined short
+    // cluster, since `sh -xc "…"` is `sh -x -c "…"`. Not resolved by peeling
+    // known wrappers: that was tried twice and an unmodelled prefix
+    // (`taskset`, `firejail`, `systemd-run`) walked through both times.
     for (let j = i + 1; j < argv.length; j++) {
-      if (SHELL_STRING_FLAGS.has(argv[j])) return nameAt(i);
+      if (SHELL_STRING_FLAGS.has(argv[j]) || SHORT_CLUSTER_WITH_C.test(argv[j])) return name;
     }
+
+    // A BARE shell name that is not some flag's value is being invoked, even
+    // with no `-c`: `env sh script.sh`. The two exclusions are what keep
+    // ordinary commands out — `pytest packages/dash -s` names a PATH, and
+    // `pytest -k sh` / `pytest -k fish` pass one as a flag's value.
+    const prev = argv[i - 1];
+    const isFlagValue = !!prev && /^-{1,2}[a-z][a-z0-9-]*$/i.test(prev);
+    if (!token.includes('/') && !isFlagValue) return name;
   }
   return null;
 }

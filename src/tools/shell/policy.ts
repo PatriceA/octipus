@@ -344,7 +344,7 @@ const basename = (token: string): string => token.slice(token.lastIndexOf('/') +
  * candidate, because peeling an assignment and a wrapper together skips the
  * command in between: `env A=1 sudo npm i` would go straight to `npm i`.
  */
-function commandCandidates(segment: string, stopAt?: ReadonlySet<string>): string[] {
+function commandCandidates(segment: string): string[] {
   let rest = segment.trim().split(/\s+/).filter(Boolean);
   if (rest.length === 0) return [];
 
@@ -361,12 +361,6 @@ function commandCandidates(segment: string, stopAt?: ReadonlySet<string>): strin
       rest = rest.slice(i);
       if (rest.length > 0) candidates.push(normalize(rest));
     }
-
-    // A name the caller wants treated as terminal even though it is a wrapper.
-    // `sh` and `bash` ARE wrappers, so a peel that walks past them answers
-    // "what does `env sh -c id` run" with `id` — true, and useless to a caller
-    // asking whether a shell is being invoked at all.
-    if (rest.length > 0 && stopAt?.has(basename(rest[0]))) break;
 
     if (rest.length > 0 && COMMAND_WRAPPERS.has(basename(rest[0]))) {
       let j = 1;
@@ -421,26 +415,6 @@ function commandCandidates(segment: string, stopAt?: ReadonlySet<string>): strin
  */
 const DATA_SUFFIX =
   /^(?:json|ya?ml|sh|bash|zsh|js|jsx|ts|tsx|mjs|cjs|py|rb|go|rs|java|php|pl|lua|c|h|o|a|so|cc|cpp|hpp|cs|swift|kt|scala|sql|css|s?html?|txt|md|rst|toml|conf|cfg|ini|xml|lock|log|csv|tsv|env|bak|tmp|gz|zip|tar|snap|test|spec)$/i;
-
-/**
- * The command a string effectively invokes, after stepping over environment
- * assignments and any chain of wrappers with their arguments — `sh` in
- * `env sh -x`, `npm` in `timeout 60 npm test`.
- *
- * Exported because `command_exit_zero` needs the same question answered: is
- * this string an INVOCATION of a shell, or a command that merely mentions one?
- * Asking it by scanning every token refused `pytest packages/dash -s`.
- *
- * `stopAt` names tokens the peel must treat as terminal. Shells need it: they
- * are wrappers, so without it `env sh -c id` peels all the way to `id`.
- */
-export function effectiveCommandHead(command: string, stopAt?: ReadonlySet<string>): string | null {
-  const firstSegment = command.trim().split(/&&|\|\||[;&|\n()`]/)[0] ?? '';
-  const candidates = commandCandidates(firstSegment, stopAt);
-  const last = candidates[candidates.length - 1];
-  if (!last) return null;
-  return basename(last.split(/\s+/)[0] ?? '');
-}
 
 /**
  * Is what follows a matched name a FILE's extension rather than the rest of a
@@ -543,7 +517,13 @@ export function commandPolicyViolation(command: string): string | null {
     for (const blocked of BLOCKED_COMMANDS) {
       const b = blocked.toLowerCase();
       const hit = MATCH_ANYWHERE.has(blocked)
-        ? form.includes(b.trim()) || squeezed.includes(b.replace(/\s+/g, ''))
+        ? form.includes(b.trim()) ||
+          // Squeezing whitespace defeats `rm  -rf  /` and `: ( ) { … } ; :`.
+          // Withheld from BARE WORDS, where it invents matches across unrelated
+          // tokens: `mkfs` refused `git commit -m "mk fs"` and `ls mk fs`. An
+          // entry carrying punctuation or a space is a pattern, not a name, and
+          // squeezing it cannot join two innocent words into one.
+          (!/^[a-z0-9]+$/.test(b.trim()) && squeezed.includes(b.replace(/\s+/g, '')))
         : invokesCommand(form, b);
       if (hit) return `Blocked command detected: ${blocked}`;
     }

@@ -699,3 +699,17 @@ describe('a flag that takes no value does not eat the payload', () => {
     expect(matchElevatedCommand('env -u FOO sudo id')).toBe('sudo');
   });
 });
+
+describe('squeezing whitespace does not join innocent words', () => {
+  it.each(['git commit -m "mk fs"', 'ls mk fs', 'echo mk fs'])('allows %s', (command) => {
+    // The squeezed comparison exists for `rm  -rf  /` and a spaced fork bomb.
+    // Applied to a BARE WORD it joins unrelated tokens: `mk fs` became `mkfs`.
+    expect(commandPolicyViolation(command)).toBeNull();
+  });
+
+  it('while the patterns it exists for are still caught', () => {
+    expect(commandPolicyViolation('rm  -rf  /')).toMatch(/Blocked command detected/);
+    expect(commandPolicyViolation(':(){ :|:& };:')).toMatch(/Blocked command detected/);
+    expect(commandPolicyViolation('mkfs /dev/sda')).toMatch(/Blocked command detected/);
+  });
+});

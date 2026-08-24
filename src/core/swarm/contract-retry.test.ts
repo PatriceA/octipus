@@ -505,6 +505,51 @@ describe('SwarmSpawner — contract retry (through runChildWithRetry)', () => {
     expect(final.scorerOutcome?.failures[0].scorer).toBe('file_exists');
   });
 
+  it('gives the retry a fresh fan-out allowance', async () => {
+    // The budget spread shares the `fanOut` OBJECT, so a child that spawned its
+    // four subagents in attempt 1 met `concurrency_limit` on every
+    // `spawn_child` of the corrective attempt — unable to do the work it was
+    // being asked to redo.
+    const fanOuts: { cap: number; used: number }[] = [];
+    const spawner = new SwarmSpawner({} as never);
+    let n = 0;
+    (spawner as unknown as { singleSpawnAndRun: unknown }).singleSpawnAndRun = async (o: {
+      budget: { fanOut: { cap: number; used: number } };
+    }) => {
+      fanOuts.push({ ...o.budget.fanOut });
+      // Attempt 1 spends its whole allowance, as a real child would.
+      o.budget.fanOut.used = o.budget.fanOut.cap;
+      return n++ === 0 ? gateFailed() : result();
+    };
+    await (
+      spawner as unknown as { runChildWithRetry: (o: unknown) => Promise<ChildResult> }
+    ).runChildWithRetry({
+      parent: { id: 'p', rootSessionId: 's' },
+      parentContext: { userId: 'u' },
+      childDepth: 1,
+      childKind: 'agent',
+      childRole: 'coding',
+      childModel: 'm',
+      childLane: 'agents',
+      childTools: [],
+      budget: {
+        tokens: { cap: 80_000, used: 0 },
+        wallClockMs: { cap: 600_000, startedAt: Date.now() },
+        fanOut: { cap: 4, used: 0 },
+        depth: 1,
+      },
+      topicPath: 'coding',
+      subtopic: 'x',
+      brief: { taskBrief: 'b', topicPath: 'coding' },
+      briefHash: 'h',
+      childMessage: 'TASK',
+      reason: 'normal',
+      spawnMode: 'await',
+    });
+
+    expect(fanOuts[1]).toEqual({ cap: 4, used: 0 });
+  });
+
   it('leaves a passing child alone', async () => {
     const { final, calls } = await runWith([result()]);
     expect(calls).toBe(1);
