@@ -168,13 +168,15 @@ export function matchElevatedCommand(command: string): string | null {
 function headOfSegmentIs(text: string, name: string): boolean {
   const b = name.toLowerCase().trim();
   if (!b) return false;
-  for (const segment of text.split(/&&|\|\||[;&|\n()]/)) {
+  for (const segment of text.split(/&&|\|\||[;&|\n()`]/)) {
     for (const candidate of commandCandidates(segment)) {
       if (!candidate.startsWith(b)) continue;
       const next = candidate[b.length];
-      // A dot continues the name here: `kill.sh` and `service.sh` are project
-      // scripts, not the binaries they are named after.
-      if (next === undefined || /[\s/~]/.test(next)) return true;
+      // A dot continues the name — `kill.sh` and `service.sh` are project
+      // scripts, not the binaries they are named after. A DASH does not:
+      // `docker-compose`, `iptables-restore` and `ip6tables-save` are the
+      // privileged tools themselves, and the old `\b` matcher caught them.
+      if (next === undefined || /[\s/~-]/.test(next)) return true;
     }
   }
   return false;
@@ -210,6 +212,10 @@ const COMMAND_WRAPPERS = new Set([
   'sh', 'bash', 'zsh', 'ksh', 'dash', 'ash', 'fish',
   'env', 'timeout', 'nohup', 'nice', 'ionice', 'setsid', 'stdbuf', 'script',
   'xargs', 'time', 'watch', 'sudo', 'su', 'doas', 'chroot', 'unshare', 'eval', 'exec',
+  // Debuggers, lockers and launchers that take a command as their tail. The
+  // list cannot be complete — which is why the DENYLIST does not depend on it —
+  // but each name here is one the elevation check would otherwise miss.
+  'flock', 'strace', 'ltrace', 'proxychains', 'proxychains4', 'runuser', 'command', 'busybox',
 ]);
 
 /** A token that is a flag (`-c`, `--signal=KILL`), not the command. */
@@ -217,6 +223,13 @@ const FLAG = /^-{1,2}[a-z][a-z0-9-]*(?:=.*)?$/i;
 
 /** A count or duration a wrapper takes positionally (`timeout 5`, `1.5s`). */
 const WRAPPER_ARG = /^\d+(?:\.\d+)?[smhd]?$/i;
+
+/**
+ * A path a wrapper takes positionally before the command it runs — `flock
+ * /tmp/lock cmd`, `chroot /newroot cmd`. Only skipped in wrapper position, so
+ * an ordinary command's path arguments are untouched.
+ */
+const WRAPPER_PATH_ARG = /^[./~]|\//;
 
 /** `xargs -I {}` and friends: a substitution token, not the command. */
 const PLACEHOLDER = /^\{\}$|^%$/;
@@ -294,7 +307,11 @@ function commandCandidates(segment: string): string[] {
 
     if (rest.length > 0 && COMMAND_WRAPPERS.has(basename(rest[0]))) {
       let j = 1;
-      while (j < rest.length && (FLAG.test(rest[j]) || WRAPPER_ARG.test(rest[j]) || PLACEHOLDER.test(rest[j]))) j++;
+      while (
+        j < rest.length &&
+        (FLAG.test(rest[j]) || WRAPPER_ARG.test(rest[j]) || PLACEHOLDER.test(rest[j]) || WRAPPER_PATH_ARG.test(rest[j]))
+      )
+        j++;
       rest = rest.slice(j);
       if (rest.length > 0) candidates.push(normalize(rest));
     }
@@ -313,7 +330,22 @@ function commandCandidates(segment: string): string[] {
  * blanket dot-continues rule the packaged binaries are not.
  */
 const DATA_SUFFIX =
-  /^(?:json|ya?ml|sh|bash|zsh|js|jsx|ts|tsx|mjs|cjs|py|rb|go|rs|java|php|pl|lua|c|h|cc|cpp|hpp|cs|swift|kt|scala|sql|css|s?html?|txt|md|rst|toml|conf|cfg|ini|xml|lock|log|csv|tsv|env|bak|tmp|gz|zip|tar)\b/i;
+  /^(?:json|ya?ml|sh|bash|zsh|js|jsx|ts|tsx|mjs|cjs|py|rb|go|rs|java|php|pl|lua|c|h|o|a|so|cc|cpp|hpp|cs|swift|kt|scala|sql|css|s?html?|txt|md|rst|toml|conf|cfg|ini|xml|lock|log|csv|tsv|env|bak|tmp|gz|zip|tar|snap|test|spec)$/i;
+
+/**
+ * Is what follows a matched name a FILE's extension rather than the rest of a
+ * binary's name?
+ *
+ * Judged on the last dot-segment, because a filename has more than one:
+ * `shutdown.test.ts` and `reboot.spec.ts` are test files, and an anchored match
+ * on the first segment saw `test` / `spec` and refused them — non-retryably,
+ * through the scorer. `nc.openbsd` and `mkfs.ext4` end in no known extension
+ * and stay binaries.
+ */
+function looksLikeFilename(afterMatch: string): boolean {
+  const last = afterMatch.slice(afterMatch.lastIndexOf('.') + 1);
+  return DATA_SUFFIX.test(last);
+}
 
 /**
  * Does `text` invoke `name` as a COMMAND — as the start of any token, rather
@@ -336,7 +368,10 @@ function invokesCommand(text: string, name: string): boolean {
   const b = name.toLowerCase().trim();
   if (!b) return false;
 
-  for (const raw of text.split(/[\s;&|\n()]+/)) {
+  // Backticks and `${...}` delimit a command as surely as `;` or `|` does:
+  // `` echo `nc -e /bin/sh …` `` runs nc. `$(` survived only because `(` was
+  // already here.
+  for (const raw of text.split(/[\s;&|\n()`{}$]+/)) {
     if (!raw) continue;
     // Compare the program's own name, so `/usr/sbin/shutdown` matches.
     const token = basename(raw);
@@ -345,7 +380,7 @@ function invokesCommand(text: string, name: string): boolean {
     if (next === undefined) return true;
     // A dot ends a binary's name (`nc.openbsd`) but not a file's (`halt.json`).
     if (next === '.') {
-      if (DATA_SUFFIX.test(token.slice(b.length + 1))) continue;
+      if (looksLikeFilename(token.slice(b.length + 1))) continue;
       return true;
     }
     if (/[/~]/.test(next)) return true;

