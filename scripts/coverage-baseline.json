@@ -1,7 +1,8 @@
 {
   "_comment": "Coverage ratchet floor for scripts/coverage-check.ts. CI fails if `npm run test -- --coverage` drops more than `tolerance` percentage points below these. Bump lines/functions upward as coverage rises (the check prints a hint when it should).",
+  "_bumped": "2026-08-24 — the runner config was tracked for the first time (vitest.config.ts had been matched by .gitignore its whole life), which also restored `src/utils/sanitize.spec.ts` to the run, and the swarm loop work added suites. Measured 49.99/51.76.",
   "_rebaselined": "2026-08-23 — the runtime migration replaced the test runner, and with it the coverage instrument (v8 rather than the previous runner's own). The same tests over the same code now measure 48.96/50.93 where they measured 52.8/61.9: v8 attributes functions and lines differently and counts every loaded module. Nothing was un-tested to produce this drop, and the ratchet is set from the first measurement on the new instrument so it keeps working as a ratchet.",
-  "lines": 48.9,
-  "functions": 50.9,
+  "lines": 49.9,
+  "functions": 51.7,
   "tolerance": 0.5
 }

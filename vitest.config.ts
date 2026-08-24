@@ -90,7 +90,23 @@ export default defineConfig({
       // baseline. Keep both reporters — text is what a human reads locally.
       reporter: ['text', 'lcov'],
       reportsDirectory: './coverage',
-      include: ['src/**/*.ts', 'scripts/**/*.ts'],
+      // No `include`. In Vitest 4 that option is the opt-in to reporting files
+      // the tests never loaded (`coverage-v8/provider.js:54` gathers untested
+      // files only when it is set — `coverage.all` is gone, and setting it has
+      // no effect), and it changes what the percentage MEANS.
+      //
+      // This is the instrument `scripts/coverage-baseline.json` was measured
+      // on, and the evidence is the number: the baseline records 48.96/50.93
+      // from 2026-08-23, this tree measures 50.73/52.52 over loaded files and
+      // 39.84/42.29 over all 823 of them. The config that produced the
+      // baseline was never tracked (see the note at the top of this file), so
+      // the setting had to be recovered from what it measured.
+      //
+      // Counting untouched files is arguably the truer number — a module
+      // nobody imports would drag the percentage down instead of being
+      // invisible. That is a deliberate change to a committed gate, with a
+      // re-baseline attached, and it does not belong to whatever feature
+      // branch happens to notice it.
       exclude: ['**/*.{test,spec}.ts', 'src/test-helpers/**', 'src/test-setup.ts'],
     },
   },
