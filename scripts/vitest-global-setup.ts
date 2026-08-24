@@ -34,12 +34,22 @@ import { join } from 'node:path';
  */
 const MKDTEMP_DIR = /^(?:octipus|octi)-[a-z0-9-]*[A-Za-z0-9]{6}$/;
 
-/** Never removed, whatever else matches. */
+/**
+ * Never removed, whatever else matches.
+ *
+ * `octipus-cli` is a fixed directory the CLI adapters create. `octipus-shell-`
+ * IS a `mkdtemp` directory, but it belongs to the shell sandbox of a LIVE
+ * command (`security/shell-sandbox.ts`), so sweeping it would pull the ground
+ * out from under a running process rather than reclaim a finished test's data.
+ */
 const NEVER_REMOVE = new Set(['octipus-cli']);
+const NEVER_REMOVE_PREFIXES = ['octipus-shell-'];
 
 /** Exported so the rule can be tested without a filesystem. */
 export const isSweepable = (name: string): boolean =>
-  !NEVER_REMOVE.has(name) && MKDTEMP_DIR.test(name);
+  !NEVER_REMOVE.has(name) &&
+  !NEVER_REMOVE_PREFIXES.some((p) => name.startsWith(p)) &&
+  MKDTEMP_DIR.test(name);
 
 const octipusTempDirs = (): Set<string> => {
   const found = new Set<string>();

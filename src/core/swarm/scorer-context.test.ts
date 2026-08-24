@@ -75,9 +75,11 @@ describe('buildScorerContext', () => {
       filesTouched: null,
       childTools: [],
       childRole: 'coding' as never,
-      projectPath: 'repo/service',
+      projectPath: '/host/checkout/service',
     });
-    expect(ctx.projectPath).toBe('repo/service');
+    // Passed through as given — dev mode hands out absolute host paths, and
+    // resolving those through the workspace sandbox yields null and refuses.
+    expect(ctx.projectPath).toBe('/host/checkout/service');
   });
 
   it('passes the run signal through', () => {

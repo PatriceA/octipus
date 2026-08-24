@@ -147,23 +147,9 @@ const INJECTION_PATTERNS = [
  * pipe / `;` / `&&` separator, else null.
  */
 export function matchElevatedCommand(command: string): string | null {
-  // Judge the form that will actually be SPAWNED, not the string as typed.
-  // `tokenizeSafe` strips quotes and backslashes, so `'sudo' npm test` and
-  // `\\sudo npm test` reach `spawn` as argv `['sudo','npm','test']` while
-  // matching no pattern written against the raw text. Checking both forms
-  // keeps the raw match for `unsafe: true` callers, whose string really is
-  // handed to `sh -c` intact.
   for (const candidate of [command.trim().toLowerCase(), ...dequotedForms(command)]) {
     for (const elevated of ELEVATED_COMMANDS) {
-      const patterns = [
-        new RegExp(`^${elevated}\\b`, 'i'),
-        new RegExp(`\\|\\s*${elevated}\\b`, 'i'),
-        new RegExp(`;\\s*${elevated}\\b`, 'i'),
-        new RegExp(`&&\\s*${elevated}\\b`, 'i'),
-      ];
-      if (patterns.some((p) => p.test(candidate))) return elevated;
-      // And through a wrapper: `sh -c "sudo x"` is still sudo.
-      if (startsWithCommand(candidate, elevated)) return elevated;
+      if (invokesCommand(candidate, elevated, true)) return elevated;
     }
   }
   return null;
@@ -201,113 +187,76 @@ const COMMAND_WRAPPERS = new Set([
   'xargs', 'time', 'watch', 'sudo', 'su', 'doas', 'chroot', 'unshare', 'eval', 'exec',
 ]);
 
-/** A token that is a flag (`-c`, `--quiet`) rather than the command. */
-const FLAG = /^-{1,2}[a-z][a-z0-9-]*$/i;
+/** A token that is a flag (`-c`, `--signal=KILL`), not the command. */
+const FLAG = /^-{1,2}[a-z][a-z0-9-]*(?:=.*)?$/i;
 
-/** A duration or count a wrapper takes positionally (`timeout 5`, `1.5s`). */
+/** A count or duration a wrapper takes positionally (`timeout 5`, `1.5s`). */
 const WRAPPER_ARG = /^\d+(?:\.\d+)?[smhd]?$/i;
-
-/** Bound on nested `-c`/`-exec` payloads examined per command. */
-const MAX_NESTED_COMMANDS = 24;
-
-/** Bound on wrapper/assignment peeling depth. */
-const MAX_PEEL_DEPTH = 12;
 
 /** `xargs -I {}` and friends: a substitution token, not the command. */
 const PLACEHOLDER = /^\{\}$|^%$/;
 
-/**
- * Tokens after which the REST is another command: `sh -c …`, `find … -exec …`.
- * Without these, `find . -exec rm -rf / ;` reads as an invocation of `find`.
- */
-const INTRODUCES_COMMAND = new Set(['-c', '-exec', '-execdir', '-ok', '-okdir']);
+/** Bound on wrapper/assignment peeling. */
+const MAX_PEEL_DEPTH = 12;
 
 /**
- * A command's own name, without the path it was reached by. `/bin/rm` and
- * `rm` run the same program, so the denylist has to compare the same thing —
- * matching only the bare form let `/bin/rm -rf /`, `/usr/sbin/shutdown` and
- * `/usr/bin/sudo` straight through.
+ * Entries distinctive enough to refuse WHEREVER they appear.
+ *
+ * The denylist holds two kinds of string and they need different rules.
+ *
+ * These are multi-token or otherwise unmistakable: a command line containing
+ * `rm -rf /` or `mkfs` is essentially never innocent. Matching them as plain
+ * substrings catches every wrapper, flag form and quoting trick without
+ * modelling the shell — `env -u FOO rm -rf /`,
+ * `timeout --signal=KILL 5 rm -rf /`, `find . -exec rm -rf / ;` and
+ * `sh -c "rm -rf /"` all fall out of the one check. Trying to reach them by
+ * parsing instead is what this file kept getting wrong.
+ *
+ * The rest — `nc `, `halt`, `shutdown`, `reboot`, `poweroff` — are short words
+ * that occur inside ordinary text. As substrings they refused
+ * `npm run sync tests`, `go test ./internal/sync` and
+ * `cargo test --features async ui` (all measured), so they are matched only in
+ * command position.
+ *
+ * The split is this repo's own "a guard sits on the risk-weighted side" rule:
+ * for the destructive entries the expensive mistake is letting one run, so they
+ * stay broad; for the short words the expensive mistake is refusing real work —
+ * and through a scorer that refusal is non-retryable — so they stay narrow.
+ */
+const MATCH_ANYWHERE = new Set([
+  'rm -rf /',
+  'rm -rf ~',
+  'rm -rf /*',
+  'mkfs',
+  ':(){:|:&};:',
+  'dd if=/dev/random',
+  'chmod -R 777 /',
+  'chmod 777 /',
+]);
+
+/**
+ * A command's own name, without the path it was reached by. `/bin/rm` and `rm`
+ * run the same program, so the check has to compare the same thing.
  */
 const basename = (token: string): string => token.slice(token.lastIndexOf('/') + 1);
 
 /**
- * The command strings a segment could actually run.
+ * A segment peeled down to what actually runs: leading `NAME=value`
+ * assignments and any chain of wrappers with their own arguments.
  *
- * Normally one: the segment with its leading `NAME=value` assignments removed
- * and its head reduced to a basename. Two more sources add candidates:
- *
- * - **A wrapper** hides what it runs behind its own arguments, so those are
- *   stepped over — flags, and the positional counts `timeout 5` / `nice 10`
- *   take. Exactly one candidate comes out, not every suffix: enumerating
- *   suffixes refused `timeout 60 npm run halt` and `xargs -n1 npm run reboot`,
- *   which are ordinary commands, and a scorer marks such a refusal unfixable.
- * - **A command-introducing token** (`-c`, `-exec`) means the rest is a command
- *   in its own right, wherever it appears.
+ * Iterative — `nohup timeout 5 halt` stacks wrappers, and an assignment can sit
+ * after a wrapper as easily as before one. Every step contributes its own
+ * candidate, because peeling an assignment and a wrapper together skips the
+ * command in between: `env A=1 sudo npm i` would go straight to `npm i`.
  */
 function commandCandidates(segment: string): string[] {
-  const tokens = segment.trim().split(/\s+/).filter(Boolean);
-  if (tokens.length === 0) return [];
+  let rest = segment.trim().split(/\s+/).filter(Boolean);
+  if (rest.length === 0) return [];
 
   const normalize = (list: string[]): string =>
     list.length === 0 ? '' : [basename(list[0]), ...list.slice(1)].join(' ');
 
-  const candidates = [normalize(tokens)];
-
-  // Anything after `-exec` / `-c` is a command in its own right, wherever it
-  // appears. Collected into a WORKLIST rather than by recursing per token: a
-  // recursive call on each remaining suffix is 2^n, which measured 6s of
-  // blocked event loop at 16 tokens and a stack overflow at 20 — on a path
-  // `ShellTool.validateCommand` runs for every single `shell__run`.
-  const worklist: string[][] = [];
-  for (let i = 0; i < tokens.length - 1; i++) {
-    if (INTRODUCES_COMMAND.has(tokens[i])) worklist.push(tokens.slice(i + 1));
-  }
-  for (let w = 0; w < worklist.length && w < MAX_NESTED_COMMANDS; w++) {
-    const inner = worklist[w];
-    candidates.push(normalize(inner));
-    for (let i = 0; i < inner.length - 1; i++) {
-      if (INTRODUCES_COMMAND.has(inner[i])) worklist.push(inner.slice(i + 1));
-    }
-    // Each nested command gets the same wrapper peeling as a top-level one.
-    candidates.push(...peel(inner, normalize));
-  }
-
-  candidates.push(...peel(tokens, normalize));
-
-  return candidates.filter(Boolean);
-}
-
-/**
- * Does the character after a matched entry end it, or continue a different
- * name?
- *
- * A letter, digit or dash continues a name — `ncdu` is not `nc`, `haltcheck` is
- * not `halt`, and refusing those was the false positive this matcher was
- * rewritten to remove.
- *
- * A dot, slash or tilde does NOT: `mkfs.ext4` is how mkfs is actually invoked,
- * `nc.openbsd` and `ncat.traditional` are the real binaries on most
- * distributions, and `rm -rf //`, `rm -rf ~/` and `rm -rf /.` are the same
- * command as `rm -rf /`. Treating those as continuations left the `mkfs` entry
- * dead outright.
- */
-function isBoundary(next: string | undefined): boolean {
-  return next === undefined || /[\s;&|./~]/.test(next);
-}
-
-/**
- * Peel a token list down to what actually runs: leading `NAME=value`
- * assignments and any chain of wrappers with their own arguments.
- *
- * Iterative, not one pass — `nohup timeout 5 halt` and `timeout 5 env A=1
- * rm -rf /` stack wrappers, and an assignment can sit after a wrapper as
- * easily as before one. Each step contributes its own candidate, because
- * peeling an assignment and a wrapper together skips straight past the
- * command in between: `env A=1 sudo npm i` would go directly to `npm i`.
- */
-function peel(tokens: string[], normalize: (list: string[]) => string): string[] {
-  const out: string[] = [];
-  let rest = tokens;
+  const candidates = [normalize(rest)];
   for (let depth = 0; depth < MAX_PEEL_DEPTH; depth++) {
     const before = rest;
 
@@ -315,48 +264,47 @@ function peel(tokens: string[], normalize: (list: string[]) => string): string[]
     while (i < rest.length && /^[a-z_][a-z0-9_]*=/i.test(rest[i])) i++;
     if (i > 0) {
       rest = rest.slice(i);
-      if (rest.length > 0) out.push(normalize(rest));
+      if (rest.length > 0) candidates.push(normalize(rest));
     }
 
     if (rest.length > 0 && COMMAND_WRAPPERS.has(basename(rest[0]))) {
       let j = 1;
-      // The wrapper's own arguments: flags, the counts and durations it takes
-      // positionally, and `xargs -I {}`-style placeholders.
       while (j < rest.length && (FLAG.test(rest[j]) || WRAPPER_ARG.test(rest[j]) || PLACEHOLDER.test(rest[j]))) j++;
       rest = rest.slice(j);
-      if (rest.length > 0) out.push(normalize(rest));
+      if (rest.length > 0) candidates.push(normalize(rest));
     }
 
     if (rest === before) break;
   }
-  return out;
+  return candidates.filter(Boolean);
 }
 
 /**
- * Does `text` invoke `blocked` as a command — as opposed to merely containing
- * its letters?
+ * Does the character after a matched entry end it, or continue another name?
  *
- * A plain substring test refuses ordinary work: `nc ` is an entry, so
- * `npm run sync tests` and `go test ./internal/sync` were both blocked. Pure
- * head-anchoring is the opposite mistake: it waves through every wrapper.
- * So each separator-delimited segment is unwrapped down to the command that
- * will actually run, and the entry is matched there on a token boundary.
- *
- * Entries that themselves contain a separator (`:(){:|:&};:`) cannot survive
- * the split, so they are matched against the whole string instead.
+ * A letter, digit or dash continues one — `ncdu` is not `nc`, `haltcheck` is
+ * not `halt`. `nameOnly` additionally treats a dot as a continuation, which is
+ * what separates a packaged binary (`nc.openbsd`, `ncat.traditional`) from a
+ * project script (`kill.sh`, `service.sh`): the denylist wants the former,
+ * while the elevation check must not claim the latter and route an ordinary
+ * script to the DENY-by-default `execute_elevated` action.
  */
-function startsWithCommand(text: string, blocked: string): boolean {
-  const b = blocked.toLowerCase().trim();
+function isBoundary(next: string | undefined, nameOnly = false): boolean {
+  if (next === undefined) return true;
+  return nameOnly ? /[\s;&|/~]/.test(next) : /[\s;&|./~]/.test(next);
+}
+
+/**
+ * Does `text` invoke `name` in command position — at the head of a
+ * separator-delimited segment, after a path, or behind the wrappers and
+ * assignments that hand off to it?
+ */
+function invokesCommand(text: string, name: string, nameOnly = false): boolean {
+  const b = name.toLowerCase().trim();
   if (!b) return false;
-
-  // A separator-bearing entry is a shape, not a command name — the split would
-  // shatter it, so it is matched against the whole string instead.
-  if (/[;&|]/.test(b)) return text.replace(/\s+/g, '').includes(b.replace(/\s+/g, ''));
-
   for (const segment of text.split(/&&|\|\||[;&|\n()]/)) {
     for (const candidate of commandCandidates(segment)) {
-      if (!candidate.startsWith(b)) continue;
-      if (isBoundary(candidate[b.length])) return true;
+      if (candidate.startsWith(b) && isBoundary(candidate[b.length], nameOnly)) return true;
     }
   }
   return false;
@@ -366,29 +314,22 @@ function startsWithCommand(text: string, blocked: string): boolean {
  * Why this command may not run, or null when the content policy permits it.
  *
  * Returns a reason rather than throwing, because one caller wants an exception
- * and the other wants a failed gate. Whitespace runs are normalized first so
- * trivial evasions (`rm -rf  /`, tabs, a newline between tokens) still match.
+ * and the other wants a failed gate.
  */
 export function commandPolicyViolation(command: string): string | null {
   const raw = command.trim();
-  // `[^\S\n]` and not `\s`: collapsing newlines would erase the separator the
-  // segment split depends on, so `echo hi\nshutdown` would read as one command
-  // called `echo`.
-  const normalized = raw.toLowerCase().replace(/[^\S\n]+/g, ' ');
+  // Newlines survive normalization: they are command separators, and
+  // collapsing them would let a second line read as arguments to the first.
+  const forms = [raw.toLowerCase().replace(/[^\S\n]+/g, ' '), ...dequotedForms(command)];
 
-  // Every form a process could see, each judged as a COMMAND. The forms cover
-  // the two execution paths (argv for safe mode, the shell's own dequoting for
-  // `sh -c`); the matcher is what makes it a command rather than a substring.
-  //
-  // A substring test here was the original rule and it is untenable: `nc ` is a
-  // denylist entry, so `npm run sync tests`, `go test ./internal/sync` and
-  // `cargo test --features async ui` were all refused — measured, on the
-  // shipped list. That is ordinary verification work, and since a scorer treats
-  // this refusal as unfixable it would fail correct children for a command
-  // that never ran.
-  for (const form of [normalized, ...dequotedForms(command)]) {
+  for (const form of forms) {
+    const squeezed = form.replace(/\s+/g, '');
     for (const blocked of BLOCKED_COMMANDS) {
-      if (startsWithCommand(form, blocked)) return `Blocked command detected: ${blocked}`;
+      const b = blocked.toLowerCase();
+      const hit = MATCH_ANYWHERE.has(blocked)
+        ? form.includes(b.trim()) || squeezed.includes(b.replace(/\s+/g, ''))
+        : invokesCommand(form, b);
+      if (hit) return `Blocked command detected: ${blocked}`;
     }
   }
 

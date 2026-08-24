@@ -20,6 +20,13 @@ describe('the temp-directory sweep', () => {
     expect(isSweepable('octipus-cli')).toBe(false);
   });
 
+  it('spares a live shell sandbox’s scratch directory', () => {
+    // `octipus-shell-XXXXXX` IS a mkdtemp directory, but it belongs to a
+    // command that is still running — sweeping it pulls the ground out from
+    // under a live process rather than reclaiming a finished test's data.
+    expect(isSweepable('octipus-shell-Ab3xY9')).toBe(false);
+  });
+
   it('spares a name that merely shares the prefix', () => {
     expect(isSweepable('octipus-data')).toBe(false);
     expect(isSweepable('octipus')).toBe(false);

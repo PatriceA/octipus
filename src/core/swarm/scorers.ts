@@ -647,7 +647,14 @@ async function evaluate(
       const fs = WorkspaceFS.forAgent({ userId: ctx.userId });
       // The child's project directory when it had one, else the workspace root
       // — the same order its shell tool resolves.
-      const cwd = ctx.projectPath ? fs.resolveOptional(ctx.projectPath) : fs.resolveOptional('.');
+      //
+      // `projectPath` is used AS GIVEN, exactly as `ShellTool` uses it. In dev
+      // mode it is an absolute host path outside the workspace, so resolving it
+      // through `WorkspaceFS` returns null and the check refuses — every
+      // dev-mode session would flip a correct child to `contract_failed`,
+      // non-retryably, with a false red row in the ledger. The sandbox still
+      // bounds what the command can reach; this only decides where it starts.
+      const cwd = ctx.projectPath ?? fs.resolveOptional('.');
       if (!cwd) {
         return {
           scorer: label,
