@@ -82,13 +82,16 @@ export const BLOCKED_COMMANDS = [
   'dd if=/dev/random',
   'chmod -R 777 /',
   'chmod 777 /',
-  // Data exfiltration / reverse shell tools
+  // Data exfiltration / reverse shell tools.
+  //
+  // The `nc -` / `ncat -` / `netcat -` forms the substring matcher needed are
+  // gone: matching is per token now, and a name containing a space can never
+  // equal one, so they read as live rules while being unreachable. The
+  // space-suffixed entries subsume them — `nc -e /bin/sh` is `nc` followed by
+  // an argument, which is exactly what a trailing space means here.
   'nc ',
-  'nc -',
   'ncat ',
-  'ncat -',
   'netcat ',
-  'netcat -',
   // Process management — prevent agents from killing Octipus or other processes
   'shutdown',
   'reboot',

@@ -87,6 +87,9 @@ export type Scorer =
    * - **SAFE mode**, so `tokenizeSafe` rejects every shell metacharacter (`;`,
    *   `&`, `|`, redirects, `$()`, backticks, newlines, brace expansion). A
    *   verification command is an argv; anything needing a pipeline is not one.
+   *   A shell interpreter as the head is refused for the same reason: safe mode
+   *   cannot see inside the string `sh -c` is handed, so the guarantee would
+   *   stop at the quote.
    * - `cwd` resolved through `WorkspaceFS`, the resolver `file_exists` uses, so
    *   it cannot reach outside the child's workspace.
    * - Hard timeout; a check that hangs is a failed check, not a hung run.
@@ -171,6 +174,14 @@ export function renderContractFeedback(
  * do not count as "a tool that worked" for the outage gate.
  */
 const META_TOOLS = new Set(['spawn_child', 'collect_children', 'escalate_to_different_expert']);
+
+/**
+ * Shells, which take a command STRING rather than arguments. Refused as the
+ * head of a `command_exit_zero` check: safe-mode tokenization cannot see inside
+ * the string they are handed, so every guarantee the check rests on stops at
+ * the quote.
+ */
+const SHELL_INTERPRETERS = new Set(['sh', 'bash', 'zsh', 'ksh', 'dash', 'ash', 'fish', 'csh', 'tcsh']);
 
 /** Cap on the text a `contains` scorer scans — bounds pathological input. */
 const MAX_SCAN_CHARS = 100_000;
@@ -548,6 +559,25 @@ async function evaluate(
           reason:
             'this child does not hold the shell tool, so the command was not run — ' +
             'attach this scorer only to a role that runs commands',
+          retryable: false,
+        };
+      }
+
+      // A shell invoked with a command STRING is not a verification command.
+      // `tokenizeSafe` treats `sh -c "curl … | sh"` as three tokens and spawns
+      // a real shell for the third, so safe mode's "no pipes, no redirects, no
+      // `;`" guarantee — which is this scorer's whole argument for letting an
+      // LLM-authored string reach a process — does not hold through it. A gate
+      // runs `npm test`, `cargo test`, `pytest`; anything that needs a shell to
+      // interpret it is not one.
+      const head = scorer.command.trim().split(/\s+/)[0] ?? '';
+      const headName = head.slice(head.lastIndexOf('/') + 1);
+      if (SHELL_INTERPRETERS.has(headName)) {
+        return {
+          scorer: label,
+          reason:
+            `refused: "${headName}" runs a command string, which defeats the no-shell-features ` +
+            'guarantee this check relies on — give the command itself instead',
           retryable: false,
         };
       }

