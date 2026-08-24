@@ -256,16 +256,37 @@ const WRAPPER_PATH_ARG = /^[./~]|\//;
 const TAKES_PATH_ARG = new Set(['flock', 'chroot', 'unshare', 'runuser', 'script']);
 
 /**
- * Wrapper options that take a SEPARATE value: `env -u NAME`, `strace -o file`,
- * `timeout --signal KILL`, `nice -n 5`, `xargs -I {}`.
+ * Wrapper options that take a SEPARATE value, PER WRAPPER.
  *
- * Named explicitly because "the previous token was a flag" is not enough to
- * know: `env -i` takes none, so that guess ate the `sudo` in `env -i sudo id`.
+ * One shared list does not work: `-f` takes a value for `proxychains` and none
+ * for `strace`, `-t` none for `xargs`, `-p` none for `time`. Applied globally
+ * it ate the payload of `strace -f sudo id`, `xargs -t sudo id` and
+ * `time -p sudo id`. And guessing from "the previous token looked like a flag"
+ * ate `env -i sudo id`, since `-i` takes nothing either.
  */
-const VALUE_TAKING_FLAGS = new Set([
-  '-u', '-o', '-n', '-a', '-I', '-f', '-s', '-e', '-p', '-d', '-t',
-  '--signal', '--rcfile', '--user', '--output', '--adjustment', '--max-procs', '--replace',
-]);
+const VALUE_TAKING_FLAGS: Record<string, ReadonlySet<string>> = {
+  env: new Set(['-u', '--unset', '-S', '--split-string', '-C', '--chdir']),
+  timeout: new Set(['-s', '--signal', '-k', '--kill-after']),
+  nice: new Set(['-n', '--adjustment']),
+  ionice: new Set(['-c', '--class', '-n', '--classdata']),
+  strace: new Set(['-o', '--output', '-p', '--attach', '-e', '-E', '-P', '-s']),
+  ltrace: new Set(['-o', '-p', '-e', '-s']),
+  xargs: new Set([
+    '-I', '-i', '--replace', '-a', '--arg-file', '-n', '--max-args',
+    '-P', '--max-procs', '-s', '-d', '--delimiter', '-E', '-L',
+  ]),
+  stdbuf: new Set(['-i', '--input', '-o', '--output', '-e', '--error']),
+  watch: new Set(['-n', '--interval']),
+  time: new Set(['-o', '--output', '-f', '--format']),
+  proxychains: new Set(['-f']),
+  proxychains4: new Set(['-f']),
+  sudo: new Set(['-u', '--user', '-g', '--group', '-p', '--prompt']),
+  su: new Set(['-c', '--command', '-s', '--shell']),
+  doas: new Set(['-u', '-C']),
+  runuser: new Set(['-u', '--user', '-g', '--group', '-s', '--shell']),
+  unshare: new Set(['--map-user', '--map-group', '--setgroups']),
+  script: new Set(['-c', '--command', '-l', '--log-out']),
+};
 
 /** `xargs -I {}` and friends: a substitution token, not the command. */
 const PLACEHOLDER = /^\{\}$|^%$/;
@@ -361,7 +382,7 @@ function commandCandidates(segment: string, stopAt?: ReadonlySet<string>): strin
         // `env -u FOO sudo …`, `strace -o out.txt sudo …` and
         // `timeout --signal KILL 5 sudo …` stopped at the value instead.
         const prev = rest[j - 1];
-        const isOptionValue = j > 1 && !!prev && VALUE_TAKING_FLAGS.has(prev);
+        const isOptionValue = j > 1 && !!prev && (VALUE_TAKING_FLAGS[basename(rest[0])]?.has(prev) ?? false);
         // Stop the moment a token names a command: `timeout 5 /usr/bin/sudo x`
         // has a path-shaped argument that IS the payload, and consuming it
         // dropped the whole invocation to the ASK-level permission. An option's

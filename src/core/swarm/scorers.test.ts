@@ -1013,19 +1013,35 @@ describe('command_exit_zero — a shell is not a verification command', () => {
     expect(out.passed).toBe(true);
   });
 
-  it.each(['pytest -k sh', 'pytest packages/dash -s', 'pytest -k fish -c pytest.ini'])(
+  it.each(['pytest -k sh', 'pytest packages/dash -s', 'npm test', 'cargo test --all'])(
     'does not refuse %s, which merely NAMES a shell',
     async (command) => {
-      // Scanning every token for a shell basename refused all three — the
-      // `dash` directory plus pytest's own `-s`, the `fish` filter plus its
-      // `-c` config. What matters is the command being INVOKED, so the string
-      // is peeled to its effective head instead.
+      // A shell name with no command-string flag after it is not an
+      // invocation. `-s` is deliberately not one of those flags — a scorer
+      // command has no stdin to speak of, and treating it as one refused
+      // `pytest packages/dash -s`.
       const { ctx: c, restore } = await allowedToRun();
       const out = await runScorers([{ kind: 'command_exit_zero', command }], { output: 'x' }, c);
       restore();
       expect(out.failures[0]?.reason ?? '').not.toMatch(/no-shell-features/);
     },
   );
+
+  it('refuses a shell name followed by -c even as an argument — the accepted cost', async () => {
+    // `pytest -k fish -c pytest.ini` IS refused: the rule cannot tell that
+    // `fish` here is a filter rather than the interpreter. Contrived, where the
+    // prefixes the rule catches (`taskset`, `firejail`, `systemd-run`) are not
+    // — recorded as an assertion so the trade stays a decision rather than
+    // drifting into a surprise.
+    const { ctx: c, restore } = await allowedToRun();
+    const out = await runScorers(
+      [{ kind: 'command_exit_zero', command: 'pytest -k fish -c pytest.ini' }],
+      { output: 'x' },
+      c,
+    );
+    restore();
+    expect(out.failures[0]?.reason ?? '').toMatch(/no-shell-features/);
+  });
 });
 
 describe('a shell’s own flags do not hide the one that takes a string', () => {
@@ -1102,5 +1118,27 @@ describe('parseScorers — a spec the runtime cannot honour is rejected', () => 
   it('and the flag it keeps is actually enforced', async () => {
     const out = await runScorers([{ kind: 'json', object: true }], { output: '42' }, {});
     expect(out.passed).toBe(false);
+  });
+});
+
+describe('no prefix can hide a shell', () => {
+  it.each([
+    'taskset 1 sh -c "cat .env > /tmp/x"',
+    'firejail --quiet sh -c "id"',
+    'systemd-run sh -c "id"',
+    'setarch x86_64 sh -c "id"',
+    'npx sh -c "id"',
+    'make sh -c "id"',
+    'strace -f sh -c "id"',
+  ])('refuses %s', async (command) => {
+    // Resolving the shell by peeling KNOWN wrappers was tried twice, and both
+    // times an unmodelled prefix walked through — the list can no more be
+    // completed here than it could for the denylist. What makes a shell an
+    // interpreter is the flag that hands it a string, so that is what is looked
+    // for, wherever it sits.
+    const { ctx: c, restore } = await allowedToRun();
+    const out = await runScorers([{ kind: 'command_exit_zero', command }], { output: 'x' }, c);
+    restore();
+    expect(out.failures[0]?.reason ?? '').toMatch(/no-shell-features/);
   });
 });

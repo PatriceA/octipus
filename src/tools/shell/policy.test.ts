@@ -677,3 +677,25 @@ describe('an option’s value does not end the peel', () => {
     expect(matchElevatedCommand('sh -c "sudo x"')).toBe('sudo');
   });
 });
+
+describe('a flag that takes no value does not eat the payload', () => {
+  it.each([
+    ['strace -f sudo id', 'sudo'],
+    ['xargs -t sudo id', 'sudo'],
+    ['time -p sudo id', 'sudo'],
+    ['setsid -f sudo id', 'sudo'],
+    ['watch -d sudo id', 'sudo'],
+    ['strace -f docker run x', 'docker'],
+  ])('%s is elevated', (command, expected) => {
+    // One shared list of value-taking options does not work: `-f` takes a value
+    // for `proxychains` and none for `strace`, `-t` none for `xargs`, `-p` none
+    // for `time`. Applied globally it consumed the command behind them.
+    expect(matchElevatedCommand(command)).toBe(expected);
+  });
+
+  it('while the ones that DO take a value are still stepped over', () => {
+    expect(matchElevatedCommand('strace -o out.txt sudo id')).toBe('sudo');
+    expect(matchElevatedCommand('timeout --signal KILL 5 sudo id')).toBe('sudo');
+    expect(matchElevatedCommand('env -u FOO sudo id')).toBe('sudo');
+  });
+});

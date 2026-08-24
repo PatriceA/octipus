@@ -20,12 +20,7 @@
 
 import { existsSync } from 'node:fs';
 import { WorkspaceFS } from '@/security/workspace-fs';
-import {
-  commandPolicyViolation,
-  effectiveCommandHead,
-  matchElevatedCommand,
-  tokenizeSafe,
-} from '@/tools/shell/policy';
+import { commandPolicyViolation, matchElevatedCommand, tokenizeSafe } from '@/tools/shell/policy';
 import { coreLogger } from '@/utils/logger';
 import type { SwarmReceipt } from './receipt';
 
@@ -188,8 +183,18 @@ const META_TOOLS = new Set(['spawn_child', 'collect_children', 'escalate_to_diff
  */
 const SHELL_INTERPRETERS = new Set(['sh', 'bash', 'zsh', 'ksh', 'dash', 'ash', 'fish', 'csh', 'tcsh']);
 
-/** Flags that hand a shell a command string or a script on stdin. */
-const SHELL_STRING_FLAGS = new Set(['-c', '-s', '--command']);
+/**
+ * Flags that hand a shell a command string.
+ *
+ * `-s` (read the script from stdin) is deliberately absent: a scorer command
+ * has no stdin to speak of, and including it refused `pytest packages/dash -s`
+ * — the `dash` directory followed by pytest's own flag.
+ *
+ * The residual cost, stated: a command whose argument happens to be a shell
+ * name followed later by `-c` — `pytest -k fish -c pytest.ini` — is refused.
+ * That is contrived where the prefixes this catches are not.
+ */
+const SHELL_STRING_FLAGS = new Set(['-c', '--command']);
 
 /**
  * The shell a command hands a command string to, or null.
@@ -205,32 +210,31 @@ const SHELL_STRING_FLAGS = new Set(['-c', '-s', '--command']);
  * caught too, since that is still a shell reading a file we cannot inspect.
  */
 function namesShellWithCommandString(command: string): string | null {
-  // The command this string INVOKES, after wrappers and assignments — not any
-  // token that happens to name a shell. Scanning the whole argv refused
-  // `pytest packages/dash -s` (the `dash` directory, then pytest's own `-s`)
-  // and `pytest -k fish -c pytest.ini`, non-retryably, for commands that would
-  // have run fine.
   const argv = tokenizeSafe(command) ?? command.trim().split(/\s+/);
+  const nameAt = (i: number): string => {
+    const t = argv[i] ?? '';
+    return t.slice(t.lastIndexOf('/') + 1);
+  };
 
-  // A shell as the LITERAL head is an interpreter invocation whatever follows:
-  // `sh script.sh` reads a file safe mode cannot inspect. Checked before the
-  // effective head, which peels a leading shell away as a wrapper.
-  const literal = argv[0] ? argv[0].slice(argv[0].lastIndexOf('/') + 1) : '';
-  if (SHELL_INTERPRETERS.has(literal)) return literal;
+  // A shell as the LITERAL head is an invocation whatever follows: `sh
+  // script.sh` reads a file safe mode cannot inspect.
+  if (SHELL_INTERPRETERS.has(nameAt(0))) return nameAt(0);
 
-  // Peeled to the effective command, with shells terminal — they are wrappers
-  // themselves, so an unqualified peel answers `env sh -c id` with `id`.
-  const head = effectiveCommandHead(command, SHELL_INTERPRETERS);
-  if (!head || !SHELL_INTERPRETERS.has(head)) return null;
-  const at = argv.findIndex((t) => t.slice(t.lastIndexOf('/') + 1) === head);
-  // A shell as the effective head is an interpreter invocation whether or not
-  // it carries `-c`: `sh script.sh` is still a shell reading something safe
-  // mode cannot inspect. The flag scan below only names WHICH form it took.
-  if (at <= 0) return head;
-  for (let j = at + 1; j < argv.length; j++) {
-    if (SHELL_STRING_FLAGS.has(argv[j])) return head;
+  // Otherwise: a shell token with a command-string flag after it, ANYWHERE.
+  //
+  // Not "after peeling known wrappers" — that was tried twice and both times an
+  // unmodelled prefix walked through it (`taskset 1 sh -c …`, `firejail
+  // --quiet sh -c …`, `systemd-run`, `setarch`, `npx`, `make`), and the list
+  // can no more be completed here than it could for the denylist. What makes a
+  // shell an interpreter is the flag that hands it a string, so that is what is
+  // looked for, and no prefix can hide it.
+  for (let i = 1; i < argv.length; i++) {
+    if (!SHELL_INTERPRETERS.has(nameAt(i))) continue;
+    for (let j = i + 1; j < argv.length; j++) {
+      if (SHELL_STRING_FLAGS.has(argv[j])) return nameAt(i);
+    }
   }
-  return head;
+  return null;
 }
 
 /** Cap on the text a `contains` scorer scans — bounds pathological input. */
