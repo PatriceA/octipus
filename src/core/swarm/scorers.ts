@@ -74,13 +74,11 @@ export type Scorer =
    *   be a way to run commands as a role the operator kept away from them, so
    *   a `research` or `writing` child fails this scorer instead of executing
    *   it (`ScorerContext.canRunCommands`).
-   * - **The operator's permission decision.** `PermissionManager.check` is
-   *   consulted for `shell.execute`, because holding a tool is not the same as
-   *   being allowed to use it — tools are never stripped by permission, the
-   *   check runs at call time, so a stored DENY is invisible to a
-   *   toolset-presence test. Anything short of ALLOW fails the gate rather than
-   *   prompting: a scorer runs after the child is finished, with nobody left to
-   *   answer.
+   * - **The operator's permission decision**, taken through `routeApproval` —
+   *   the same decision `tool-executor` and `base-tool` share — because holding
+   *   a tool is not the same as being allowed to use it and a third reading of
+   *   the stored level would drift from the other two. A stored DENY refuses;
+   *   ASK auto-approves exactly as it does for the child's own shell tool.
    * - **The shell tool's own content policy**, shared from `tools/shell/policy`
    *   rather than copied: the same denylist and injection patterns, plus an
    *   outright refusal of anything `ELEVATED_COMMANDS` matches. A verification
@@ -107,6 +105,17 @@ export interface ScorerFailure {
   scorer: string;
   /** Why it failed — surfaced to the parent so the miss is unambiguous. */
   reason: string;
+  /**
+   * Whether re-running the child could plausibly fix this. Defaults to true —
+   * an ordinary missed check is exactly what the contract retry is for.
+   *
+   * `false` marks a failure the child has no power over: it holds no shell
+   * tool, the operator denied the permission, the command is denylisted, the
+   * workspace is missing. Re-dispatching on one of those buys a second
+   * identical failure at the price of a full child run, so the retry loop
+   * skips it and the parent sees the refusal once.
+   */
+  retryable?: boolean;
 }
 
 export interface ScorerOutcome {
@@ -187,10 +196,29 @@ const MAX_COMMAND_OUTPUT_CHARS = 2_000;
  * writes both put the diagnosis there.
  */
 export function formatCommandOutput(stdout: string, stderr: string): string {
-  const text = [stderr?.trim(), stdout?.trim()].filter(Boolean).join('\n').trim();
-  if (!text) return ' with no output';
-  if (text.length <= MAX_COMMAND_OUTPUT_CHARS) return `:\n${text}`;
-  return `:\n…(${text.length - MAX_COMMAND_OUTPUT_CHARS} earlier chars omitted)\n${text.slice(-MAX_COMMAND_OUTPUT_CHARS)}`;
+  const err = (stderr ?? '').trim();
+  const out = (stdout ?? '').trim();
+  if (!err && !out) return ' with no output';
+
+  // Budgeted separately, not concatenated then truncated. Joining first and
+  // keeping the last 2k drops stderr entirely whenever stdout is larger than
+  // the budget — which is the normal shape of a failing build, and exactly the
+  // half that says what went wrong.
+  const errKept = tail(err, err ? Math.min(err.length, MAX_COMMAND_OUTPUT_CHARS) : 0);
+  const outKept = tail(out, Math.max(0, MAX_COMMAND_OUTPUT_CHARS - errKept.text.length));
+
+  const parts = [errKept, outKept].filter((p) => p.text.length > 0);
+  if (parts.length === 0) return ' with no output';
+  const omitted = errKept.omitted + outKept.omitted;
+  const body = parts.map((p) => p.text).join('\n');
+  return omitted > 0 ? `:\n…(${omitted} earlier chars omitted)\n${body}` : `:\n${body}`;
+}
+
+/** The last `budget` characters of `text`, and how many were dropped. */
+function tail(text: string, budget: number): { text: string; omitted: number } {
+  if (budget <= 0) return { text: '', omitted: text.length };
+  if (text.length <= budget) return { text, omitted: 0 };
+  return { text: text.slice(-budget), omitted: text.length - budget };
 }
 
 /**
@@ -228,6 +256,8 @@ export interface ScorerContext {
    * as NOT allowed — a gate whose authority cannot be established must not run.
    */
   canRunCommands?: boolean;
+  /** The child's role, for the permission decision. */
+  role?: string;
   /**
    * The run's cancellation signal. Threaded so a `command_exit_zero` check dies
    * with the session instead of outliving it: a cancelled parent otherwise
@@ -447,12 +477,13 @@ async function evaluate(
           reason:
             'this child does not hold the shell tool, so the command was not run — ' +
             'attach this scorer only to a role that runs commands',
+          retryable: false,
         };
       }
 
       // The shell tool's content policy, shared rather than restated.
       const violation = commandPolicyViolation(scorer.command);
-      if (violation) return { scorer: label, reason: `refused: ${violation}` };
+      if (violation) return { scorer: label, reason: `refused: ${violation}`, retryable: false };
       const elevated = matchElevatedCommand(scorer.command);
       if (elevated) {
         return {
@@ -460,31 +491,59 @@ async function evaluate(
           reason:
             `refused: "${elevated}" needs elevated permission, which a verification ` +
             'gate never does',
+          retryable: false,
         };
       }
 
       // Holding the tool is not the same as being allowed to use it: tools are
-      // never stripped by permission, `PermissionManager.check` runs at call
-      // time, so an operator's stored DENY on `shell.execute` would otherwise be
-      // invisible here. Anything short of ALLOW fails the gate rather than
-      // prompting — a scorer runs after the child is done, with nobody left to
-      // answer, and a check that silently waits is worse than one that fails.
+      // never stripped by permission, the check runs at call time, so an
+      // operator's stored DENY on `shell.execute` would be invisible to a
+      // toolset test.
+      //
+      // The decision goes through `routeApproval`, the same one `tool-executor`
+      // and `base-tool` share, rather than a third reading of the stored level.
+      // That matters concretely: `shell.execute` ships as ASK, and ASK
+      // auto-approves for a worker that cannot prompt a human. Demanding ALLOW
+      // here would refuse every default install — the child would run `npm test`
+      // through its own shell tool and then its verification of that same
+      // command would be rejected.
+      //
+      // `attended: false` is the honest context: a scorer runs after the child
+      // is finished, so there is nobody left to ask.
       if (ctx.userId) {
         try {
-          const { getPermissionManager } = await import('@/security/permissions');
-          const decision = await getPermissionManager().check(ctx.userId, 'shell', 'execute', {
+          const [{ getPermissionManager }, { routeApproval }] = await Promise.all([
+            import('@/security/permissions'),
+            import('@/security/approval-policy'),
+          ]);
+          const permission = await getPermissionManager().check(ctx.userId, 'shell', 'execute', {
             command: scorer.command,
           });
-          if (!decision.allowed) {
+          const { getConfig } = await import('@/config');
+          const decision = routeApproval({
+            level: permission.level,
+            role: ctx.role,
+            root: false,
+            attended: false,
+            toolId: 'shell',
+            action: 'shell__run',
+            unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions,
+          });
+          if (decision.route !== 'execute') {
             return {
               scorer: label,
-              reason: `refused: shell.execute is ${decision.level} for this user${decision.reason ? ` (${decision.reason})` : ''}`,
+              reason: `refused: shell.execute is ${permission.level} for this user${decision.reason ? ` (${decision.reason})` : ''}`,
+              retryable: false,
             };
           }
         } catch (err) {
           // Fail closed. An unavailable permission layer means the authority to
           // run this was never established.
-          return { scorer: label, reason: `refused: could not check shell permission (${(err as Error).message})` };
+          return {
+            scorer: label,
+            reason: `refused: could not check shell permission (${(err as Error).message})`,
+            retryable: false,
+          };
         }
       }
 
@@ -493,13 +552,21 @@ async function evaluate(
       const fs = WorkspaceFS.forAgent({ userId: ctx.userId });
       const cwd = fs.resolveOptional('.');
       if (!cwd) {
-        return { scorer: label, reason: 'the workspace could not be resolved, so the command was not run' };
+        return {
+          scorer: label,
+          reason: 'the workspace could not be resolved, so the command was not run',
+          retryable: false,
+        };
       }
       // A missing workspace directory is an environment fault, not the child's
       // defect. Left unchecked it surfaces as `spawn ENOENT`, gets quoted back
       // as the thing the child must fix, and burns a contract retry on it.
       if (!existsSync(cwd)) {
-        return { scorer: label, reason: `the workspace directory does not exist (${cwd}), so the command was not run` };
+        return {
+          scorer: label,
+          reason: `the workspace directory does not exist (${cwd}), so the command was not run`,
+          retryable: false,
+        };
       }
 
       const timeoutMs = Math.min(
@@ -536,8 +603,10 @@ async function evaluate(
       } catch (err) {
         // A rejected command (metacharacters), a missing binary, or the
         // deadline. All are failed gates: the check did not pass, and a gate
-        // that cannot run must never read as one that did.
-        return { scorer: label, reason: `did not run: ${(err as Error).message}` };
+        // that cannot run must never read as one that did. None is something a
+        // second child run would change — the command is a property of the
+        // scorer the PARENT wrote, not of the work the child did.
+        return { scorer: label, reason: `did not run: ${(err as Error).message}`, retryable: false };
       }
     }
   }

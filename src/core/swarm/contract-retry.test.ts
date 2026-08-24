@@ -254,6 +254,45 @@ describe('SwarmSpawner — contract retry (through runChildWithRetry)', () => {
     expect(final.status).toBe('contract_failed');
   });
 
+  it('does not re-dispatch a failure the child has no power over', async () => {
+    // No shell tool, a denied permission, a denylisted command, a missing
+    // workspace: a second full child run produces the identical refusal.
+    const unfixable = result({
+      status: 'contract_failed',
+      scorerOutcome: {
+        passed: false,
+        ran: 1,
+        failures: [
+          {
+            scorer: 'command_exit_zero(npm test)',
+            reason: 'this child does not hold the shell tool',
+            retryable: false,
+          },
+        ],
+      },
+    });
+    const { final, calls } = await runWith([unfixable, result()]);
+
+    expect(calls).toBe(1);
+    expect(final.status).toBe('contract_failed');
+  });
+
+  it('still retries when at least one failure is the child’s to fix', async () => {
+    const mixed = result({
+      status: 'contract_failed',
+      scorerOutcome: {
+        passed: false,
+        ran: 2,
+        failures: [
+          { scorer: 'command_exit_zero(x)', reason: 'no shell tool', retryable: false },
+          { scorer: 'file_exists', reason: 'notes.md does not exist' },
+        ],
+      },
+    });
+    const { calls } = await runWith([mixed, result()]);
+    expect(calls).toBe(2);
+  });
+
   it('leaves a passing child alone', async () => {
     const { final, calls } = await runWith([result()]);
     expect(calls).toBe(1);

@@ -669,6 +669,26 @@ describe('command_exit_zero — environment faults are not the child’s defect'
 });
 
 describe('command_exit_zero — the operator’s permission decision', () => {
+  it('RUNS on the default ASK level — the level shell.execute actually ships', async () => {
+    // The defect this pins: demanding ALLOW refuses every default install.
+    // `shell.execute` ships as ASK, and ASK auto-approves for a worker that
+    // cannot prompt a human — so the child runs `npm test` through its own
+    // shell tool, and then its verification of that same command gets rejected.
+    // The decision goes through `routeApproval` for exactly this reason.
+    const permissions = await import('@/security/permissions');
+    const spy = vi.spyOn(permissions, 'getPermissionManager').mockReturnValue({
+      check: async () => ({ allowed: false, level: 'ASK', requiresApproval: true }),
+    } as never);
+
+    const out = await runScorers(
+      [{ kind: 'command_exit_zero', command: 'true' }],
+      { output: 'x' },
+      { canRunCommands: true, userId: 'system', role: 'coding' },
+    );
+    spy.mockRestore();
+    expect(out.passed).toBe(true);
+  });
+
   it('refuses when shell.execute is DENY for the user, tool or no tool', async () => {
     // Holding the tool is not the same as being allowed to use it. Tools are
     // never stripped by permission — `PermissionManager.check` runs at call
@@ -681,7 +701,7 @@ describe('command_exit_zero — the operator’s permission decision', () => {
     const out = await runScorers(
       [{ kind: 'command_exit_zero', command: 'true' }],
       { output: 'x' },
-      { canRunCommands: true, userId: 'someone' },
+      { canRunCommands: true, userId: 'system', role: 'coding' },
     );
     spy.mockRestore();
 
@@ -689,19 +709,21 @@ describe('command_exit_zero — the operator’s permission decision', () => {
     expect(out.failures[0].reason).toMatch(/shell\.execute is DENY/);
   });
 
-  it('does not silently wait on an ASK — nobody is left to answer', async () => {
+  it('marks a permission refusal as not worth retrying', async () => {
+    // The child cannot grant itself the permission, so a second full run buys
+    // an identical refusal.
     const permissions = await import('@/security/permissions');
     const spy = vi.spyOn(permissions, 'getPermissionManager').mockReturnValue({
-      check: async () => ({ allowed: false, level: 'ASK', requiresApproval: true }),
+      check: async () => ({ allowed: false, level: 'DENY', requiresApproval: false }),
     } as never);
 
     const out = await runScorers(
       [{ kind: 'command_exit_zero', command: 'true' }],
       { output: 'x' },
-      { canRunCommands: true, userId: 'someone' },
+      { canRunCommands: true, userId: 'system', role: 'coding' },
     );
     spy.mockRestore();
-    expect(out.passed).toBe(false);
+    expect(out.failures[0].retryable).toBe(false);
   });
 
   it('fails closed when the permission layer is unavailable', async () => {
@@ -713,7 +735,7 @@ describe('command_exit_zero — the operator’s permission decision', () => {
     const out = await runScorers(
       [{ kind: 'command_exit_zero', command: 'true' }],
       { output: 'x' },
-      { canRunCommands: true, userId: 'someone' },
+      { canRunCommands: true, userId: 'system', role: 'coding' },
     );
     spy.mockRestore();
     expect(out.passed).toBe(false);
@@ -734,5 +756,25 @@ describe('command_exit_zero — the operator’s permission decision', () => {
     spy.mockRestore();
     expect(out.failures[0]?.reason ?? '').not.toMatch(/permission|DENY/);
     expect(out.passed).toBe(true);
+  });
+});
+
+describe('formatCommandOutput — stderr is not lost behind a large stdout', () => {
+  it('keeps the error even when stdout alone exceeds the budget', () => {
+    // The normal shape of a failing build: pages of progress on stdout, the
+    // diagnosis on stderr. Joining the two and keeping the last 2k drops
+    // stderr entirely — the half that says what went wrong.
+    const noisyStdout = 'progress line\n'.repeat(500);
+    const text = formatCommandOutput(noisyStdout, 'error: the type does not match');
+    expect(text).toContain('error: the type does not match');
+    expect(text).toContain('progress line');
+    expect(text).toContain('earlier chars omitted');
+  });
+
+  it('keeps the tail of a huge stderr and drops stdout when it must', () => {
+    const hugeErr = `${'HEAD-MARKER\n'}${'e'.repeat(5000)}TAIL-OF-ERROR`;
+    const text = formatCommandOutput('some stdout', hugeErr);
+    expect(text).toContain('TAIL-OF-ERROR');
+    expect(text).not.toContain('HEAD-MARKER');
   });
 });

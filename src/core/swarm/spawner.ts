@@ -836,16 +836,17 @@ export class SwarmSpawner {
             { parentNodeId: opts.parent.id, failedModel: opts.childModel, backupModel: backup.modelId, topic: opts.childLane },
             'Swarm child failed on primary model — retrying once on topic backup model',
           );
-          noteFailure(lastResult);
-          // Charged only once the replacement actually returns. Adding it
-          // before the await double-counts when the spawn throws, because the
-          // catch below hands the SAME result back as `lastResult`.
-          const supersededTokens = lastResult.usedTokens ?? 0;
+          // Both the note and the token charge land only once the replacement
+          // actually returns. Doing either before the await counts the same
+          // attempt twice when the spawn throws, because the catch below hands
+          // that same result back as `lastResult`.
+          const superseded = lastResult;
           lastResult = await this.singleSpawnAndRun(
             { ...opts, childModel: backup.modelId, reason: 'retry' },
             true,
           );
-          discardedTokens += supersededTokens;
+          noteFailure(superseded);
+          discardedTokens += superseded.usedTokens ?? 0;
         }
       } catch (backupErr) {
         coreLogger.warn(
@@ -962,6 +963,17 @@ export class SwarmSpawner {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       if (!result || result.status !== 'contract_failed') break;
       const failures = result.scorerOutcome?.failures ?? [];
+      // A failure the child has no power over — no shell tool, a denied
+      // permission, a denylisted command, a missing workspace — is not
+      // something a second run changes. Re-dispatching on one buys an
+      // identical failure at the price of a full child run.
+      if (failures.length > 0 && failures.every((f) => f.retryable === false)) {
+        coreLogger.info(
+          { parentNodeId: opts.parent.id, failures: failures.map((f) => f.scorer) },
+          'Swarm child contract failure is not retryable — surfacing it as-is',
+        );
+        break;
+      }
       const feedback = renderContractFeedback(failures, attempt, maxRetries);
       if (!feedback) break;
 

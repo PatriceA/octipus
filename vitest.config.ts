@@ -61,7 +61,9 @@ export default defineConfig({
     setupFiles: ['./src/test-setup.ts'],
     // The web app has its own runner (Playwright) and its own config; including
     // it here would run React components under the Node environment.
-    include: ['src/**/*.test.ts', 'scripts/**/*.test.ts'],
+    // `.spec.ts` as well as `.test.ts`: the tree carries both, and matching
+    // only one silently skips a real suite (`src/utils/sanitize.spec.ts`).
+    include: ['src/**/*.{test,spec}.ts', 'scripts/**/*.{test,spec}.ts'],
     exclude: ['**/node_modules/**', 'dist/**', 'web/**', 'tests/web/**'],
     // Integration suites talk to one Postgres. Isolating each file in its own
     // process is what lets them share it without cross-talk.
@@ -81,7 +83,7 @@ export default defineConfig({
       reporter: ['text', 'lcov'],
       reportsDirectory: './coverage',
       include: ['src/**/*.ts', 'scripts/**/*.ts'],
-      exclude: ['**/*.test.ts', 'src/test-helpers/**', 'src/test-setup.ts'],
+      exclude: ['**/*.{test,spec}.ts', 'src/test-helpers/**', 'src/test-setup.ts'],
     },
   },
 });
