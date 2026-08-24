@@ -162,6 +162,8 @@ export function matchElevatedCommand(command: string): string | null {
         new RegExp(`&&\\s*${elevated}\\b`, 'i'),
       ];
       if (patterns.some((p) => p.test(candidate))) return elevated;
+      // And through a wrapper: `sh -c "sudo x"` is still sudo.
+      if (startsWithCommand(candidate, elevated)) return elevated;
     }
   }
   return null;
@@ -184,30 +186,72 @@ function dequotedForms(command: string): string[] {
   if (argv) forms.push(argv.join(' '));
   const stripped = command.replace(/["'\\]/g, '').trim();
   if (stripped) forms.push(stripped);
-  return forms.map((f) => f.toLowerCase().replace(/\s+/g, ' '));
+  return forms.map((f) => f.toLowerCase().replace(/[^\S\n]+/g, ' '));
 }
 
 /**
- * Does `text` invoke `blocked` as a command — at the start, or after a shell
- * separator — as opposed to merely containing its letters?
+ * Commands whose own arguments are another command. They have to be
+ * transparent to the denylist: `sh -c "rm -rf /"` and `timeout 5 rm -rf /` run
+ * exactly what they wrap, so a matcher that only looks at the head of a segment
+ * sees `sh` and `timeout` and waves them through.
+ */
+const COMMAND_WRAPPERS = new Set([
+  'sh', 'bash', 'zsh', 'ksh', 'dash', 'ash', 'fish',
+  'env', 'timeout', 'nohup', 'nice', 'ionice', 'setsid', 'stdbuf', 'script',
+  'xargs', 'time', 'watch', 'sudo', 'su', 'doas', 'chroot', 'unshare', 'eval', 'exec',
+]);
+
+/**
+ * The command strings a segment could actually run.
  *
- * Token-aware because the denylist mixes bare names (`mkfs`, `halt`) with
- * argument-bearing phrases (`rm -rf /`, `nc -`), so the boundary has to be
- * judged on the character AFTER the match. A plain `startsWith` blocks `ncdu`
- * as `nc ` and `haltcheck` as `halt`; a plain `includes` blocks
- * `grep -rn "chmod 777" /etc`. Both are ordinary commands.
+ * Normally just the segment with its leading `NAME=value` assignments removed.
+ * But when the head is a wrapper, what it runs sits somewhere after arguments
+ * that are not all flags — `timeout 5 rm -rf /`, `nice -n 5 halt`, `sh -c
+ * "shutdown"` — so every token offset after the wrapper is offered as a
+ * candidate. Erring toward more candidates is the risk-weighted direction here:
+ * an extra candidate can only refuse a command that explicitly asked another
+ * command to run something, which is exactly the shape worth refusing.
+ */
+function commandCandidates(segment: string): string[] {
+  const stripped = segment.trim().replace(/^(?:[a-z_][a-z0-9_]*=\S*\s+)+/i, '');
+  const tokens = stripped.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return [];
+  if (!COMMAND_WRAPPERS.has(tokens[0])) return [stripped];
+
+  // A wrapper hides what it runs behind an unknown number of its own
+  // arguments, so every suffix is a candidate.
+  const candidates: string[] = [stripped];
+  for (let i = 1; i < tokens.length; i++) candidates.push(tokens.slice(i).join(' '));
+  return candidates;
+}
+
+/**
+ * Does `text` invoke `blocked` as a command — as opposed to merely containing
+ * its letters?
+ *
+ * A plain substring test refuses ordinary work: `nc ` is an entry, so
+ * `npm run sync tests` and `go test ./internal/sync` were both blocked. Pure
+ * head-anchoring is the opposite mistake: it waves through every wrapper.
+ * So each separator-delimited segment is unwrapped down to the command that
+ * will actually run, and the entry is matched there on a token boundary.
+ *
+ * Entries that themselves contain a separator (`:(){:|:&};:`) cannot survive
+ * the split, so they are matched against the whole string instead.
  */
 function startsWithCommand(text: string, blocked: string): boolean {
   const b = blocked.toLowerCase().trim();
   if (!b) return false;
-  for (const segment of text.split(/&&|\|\||[;&|]/)) {
-    // Leading `NAME=value` assignments are part of the invocation, not the
-    // command — `X=1 rm -rf /` runs `rm -rf /`, so they are stepped over
-    // rather than allowed to hide what follows.
-    const seg = segment.trim().replace(/^(?:[a-z_][a-z0-9_]*=\S*\s+)+/i, '');
-    if (!seg.startsWith(b)) continue;
-    const next = seg[b.length];
-    if (next === undefined || /[\s;&|]/.test(next)) return true;
+
+  // A separator-bearing entry is a shape, not a command name — the split would
+  // shatter it, so it is matched against the whole string instead.
+  if (/[;&|]/.test(b)) return text.replace(/\s+/g, '').includes(b.replace(/\s+/g, ''));
+
+  for (const segment of text.split(/&&|\|\||[;&|\n]/)) {
+    for (const candidate of commandCandidates(segment)) {
+      if (!candidate.startsWith(b)) continue;
+      const next = candidate[b.length];
+      if (next === undefined || /[\s;&|]/.test(next)) return true;
+    }
   }
   return false;
 }
@@ -221,7 +265,10 @@ function startsWithCommand(text: string, blocked: string): boolean {
  */
 export function commandPolicyViolation(command: string): string | null {
   const raw = command.trim();
-  const normalized = raw.toLowerCase().replace(/\s+/g, ' ');
+  // `[^\S\n]` and not `\s`: collapsing newlines would erase the separator the
+  // segment split depends on, so `echo hi\nshutdown` would read as one command
+  // called `echo`.
+  const normalized = raw.toLowerCase().replace(/[^\S\n]+/g, ' ');
 
   // Every form a process could see, each judged as a COMMAND. The forms cover
   // the two execution paths (argv for safe mode, the shell's own dequoting for

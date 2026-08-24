@@ -1516,15 +1516,20 @@ export class SwarmSpawner {
       //
       // Best-effort, exactly like the pipeline's own write: a ledger failure
       // must never turn a good child into a failed one.
-      // A gate that never ran is not a passing verification. Writing
-      // `passed: outcome.passed` — true on the not-evaluated path — would put a
-      // green row in the ledger `scripts/quality-score.ts` reads for
-      // `deliveredPct`: a measurement of nothing, counted as a success.
+      // A gate that never judged anything is not a verification, and writing
+      // `passed: outcome.passed` — true on that path — would put a green row in
+      // the ledger `scripts/quality-score.ts` reads for `deliveredPct`: a
+      // measurement of nothing, counted as a success.
+      //
+      // But a gate cut short after finding a real failure DID verify something,
+      // and that verdict belongs in the ledger like any other. The skip is
+      // therefore "nothing was judged", not "the gate was interrupted".
+      const judgedNothing = !!outcome.notEvaluated && outcome.ran === 0 && outcome.failures.length === 0;
       try {
-        if (outcome.notEvaluated) {
+        if (judgedNothing) {
           coreLogger.info(
             { parentNodeId: opts.parent.id, childId, reason: outcome.notEvaluated },
-            'Skipping verification evidence — the gate was never evaluated',
+            'Skipping verification evidence — the gate judged nothing',
           );
         } else {
         await verificationEvidenceRepository.record({

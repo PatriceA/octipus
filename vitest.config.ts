@@ -59,6 +59,9 @@ export default defineConfig({
     // Ephemeral per-process secrets, so config parses without a developer
     // exporting anything and no committed fixture resembles a real credential.
     setupFiles: ['./src/test-setup.ts'],
+    // Removes the embedded-database DATA_DIRs the suite creates and does not
+    // clean up — see the file for why that is centralized here.
+    globalSetup: ['./scripts/vitest-global-setup.ts'],
     // The web app has its own runner (Playwright) and its own config; including
     // it here would run React components under the Node environment.
     // `.spec.ts` as well as `.test.ts`: the tree carries both, and matching
