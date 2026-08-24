@@ -173,10 +173,17 @@ function headOfSegmentIs(text: string, name: string): boolean {
       if (!candidate.startsWith(b)) continue;
       const next = candidate[b.length];
       // A dot continues the name — `kill.sh` and `service.sh` are project
-      // scripts, not the binaries they are named after. A DASH does not:
-      // `docker-compose`, `iptables-restore` and `ip6tables-save` are the
-      // privileged tools themselves, and the old `\b` matcher caught them.
-      if (next === undefined || /[\s/~-]/.test(next)) return true;
+      // scripts, not the binaries they are named after.
+      if (next === undefined || /[\s/~]/.test(next)) return true;
+      // A dash continues a TOOL's name (`docker-compose`, `iptables-restore`,
+      // which the old `\b` matcher caught) but also a SCRIPT's
+      // (`kill-stale.sh`, `service-check.sh`). The file extension is what tells
+      // them apart: a dashed name ending in one is a script in the repo, not a
+      // privileged binary, and refusing it would deny ordinary work.
+      if (next === '-') {
+        const remainder = candidate.slice(b.length).split(/\s/)[0];
+        if (!looksLikeFilename(remainder.slice(remainder.lastIndexOf('.') + 1))) return true;
+      }
     }
   }
   return false;
@@ -230,6 +237,9 @@ const WRAPPER_ARG = /^\d+(?:\.\d+)?[smhd]?$/i;
  * an ordinary command's path arguments are untouched.
  */
 const WRAPPER_PATH_ARG = /^[./~]|\//;
+
+/** Flags whose VALUE is itself a command: `sh -c …`, `find … -exec …`. */
+const INTRODUCES_COMMAND = new Set(['-c', '-exec', '-execdir', '-ok', '-okdir']);
 
 /** `xargs -I {}` and friends: a substitution token, not the command. */
 const PLACEHOLDER = /^\{\}$|^%$/;
@@ -371,8 +381,23 @@ function invokesCommand(text: string, name: string): boolean {
   // Backticks and `${...}` delimit a command as surely as `;` or `|` does:
   // `` echo `nc -e /bin/sh …` `` runs nc. `$(` survived only because `(` was
   // already here.
-  for (const raw of text.split(/[\s;&|\n()`{}$]+/)) {
+  // An entry written with a trailing space (`nc `, `ncat `) means the command
+  // WITH arguments, so a bare trailing `nc` is not one — that is what keeps
+  // `npm test -- --grep nc` and `git add src/nc` out of the denylist.
+  const needsArgs = name.endsWith(' ');
+  const tokens = text.split(/[\s;&|\n()`{}$]+/);
+
+  for (let i = 0; i < tokens.length; i++) {
+    const raw = tokens[i];
     if (!raw) continue;
+    // A token directly after a flag is that flag's VALUE, not a command:
+    // `--grep nc`, `--testPathPattern nc`. Except after a flag whose value IS
+    // a command, which is the whole point of `sh -c`.
+    // …and only a BARE flag can take the next token. `--adjustment=10` carries
+    // its own value, so what follows it is the command again.
+    const prev = tokens[i - 1];
+    if (prev && FLAG.test(prev) && !prev.includes('=') && !INTRODUCES_COMMAND.has(prev)) continue;
+    if (needsArgs && i === tokens.length - 1) continue;
     // Compare the program's own name, so `/usr/sbin/shutdown` matches.
     const token = basename(raw);
     if (!token.startsWith(b)) continue;

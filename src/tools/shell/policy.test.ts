@@ -466,3 +466,51 @@ describe('elevated tool names that carry a dash', () => {
     expect(matchElevatedCommand(command)).toBe(expected);
   });
 });
+
+describe('an entry named as an ARGUMENT is not an invocation', () => {
+  it.each([
+    'npm test -- --grep nc',
+    'jest --testPathPattern nc',
+    'git add src/nc',
+    'python etl.py data/nc',
+    // These need the flag rule specifically: `shutdown` and `halt` carry no
+    // trailing space in the denylist, so being the last token does not spare
+    // them — being a flag's value does.
+    'npm test -- --grep shutdown',
+    'jest --testNamePattern halt',
+  ])('allows %s', (command) => {
+    // Two rules, both needed. A token directly after a BARE flag is that
+    // flag's value, not a command; and an entry written with a trailing space
+    // (`nc `) means the command WITH arguments, so a bare trailing `nc` is not
+    // one. Through the scorer either refusal would be permanent.
+    expect(commandPolicyViolation(command)).toBeNull();
+  });
+
+  it('still refuses the invocation itself', () => {
+    expect(commandPolicyViolation('nc host 1234')).toMatch(/Blocked command detected/);
+    expect(commandPolicyViolation('flock /tmp/x nc host 1')).toMatch(/Blocked command detected/);
+    // `-c` is the exception: its value IS a command.
+    expect(commandPolicyViolation('sh -c "shutdown -h now"')).toMatch(/Blocked command detected/);
+    // And a flag carrying its own `=value` does not consume what follows.
+    expect(commandPolicyViolation('nice --adjustment=10 poweroff')).toMatch(/Blocked command detected/);
+  });
+});
+
+describe('a dashed name is a tool or a script, and the extension says which', () => {
+  it.each([
+    './scripts/kill-stale.sh',
+    'tools/service-check.sh',
+    'bin/mount-fixtures.sh',
+    'scripts/chmod-fix.sh',
+  ])('%s is not elevated', (command) => {
+    // Ending a name at the dash made every dashed project script match an
+    // elevated tool — and a `command_exit_zero` on one is refused
+    // non-retryably, flipping a correct child to `contract_failed`.
+    expect(matchElevatedCommand(command)).toBeNull();
+  });
+
+  it('while the dashed tools still are', () => {
+    expect(matchElevatedCommand('docker-compose up -d')).toBe('docker');
+    expect(matchElevatedCommand('iptables-restore < f')).toBe('iptables');
+  });
+});
