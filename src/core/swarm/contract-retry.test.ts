@@ -404,6 +404,19 @@ describe('SwarmSpawner — contract retry (through runChildWithRetry)', () => {
     expect(walls[1]).toBeLessThan(410_000);
   });
 
+  it('will not start a retry that cannot finish', async () => {
+    // A remainder of milliseconds is not "time left": the attempt registers a
+    // node, boots an agent and is then guaranteed to time out. The token side
+    // has had `MIN_CHILD_TOKENS` all along; this is its counterpart.
+    const { final, calls } = await runWith([gateFailed(), result()], {
+      wallCap: 600_000,
+      startedAt: Date.now() - 599_000,
+    });
+
+    expect(calls).toBe(1);
+    expect(final.status).toBe('contract_failed');
+  });
+
   it('leaves a passing child alone', async () => {
     const { final, calls } = await runWith([result()]);
     expect(calls).toBe(1);

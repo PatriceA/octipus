@@ -21,6 +21,13 @@ import {
  */
 export const MIN_CHILD_TOKENS = 4_000;
 
+/**
+ * Least wall clock worth starting a corrective retry with. Below this the
+ * attempt registers a node and boots an agent only to time out — a cost with
+ * no chance of a result.
+ */
+export const MIN_RETRY_WALL_MS = 30_000;
+
 /** Raised by `deriveChildBudget` when the parent's token pool is exhausted. */
 export class InsufficientBudgetError extends Error {
   constructor(
