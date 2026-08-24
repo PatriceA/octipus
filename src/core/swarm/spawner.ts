@@ -1488,6 +1488,8 @@ export class SwarmSpawner {
           childTools: opts.childTools,
           childRole: opts.childRole,
           signal: opts.parent.signal,
+          projectPath: (opts.parentContext.metadata as Record<string, unknown> | undefined)
+            ?.projectPath as string | undefined,
         }),
       );
       result.scorerOutcome = outcome;
@@ -2146,6 +2148,7 @@ export function buildScorerContext(args: {
   childTools: ToolHandler[];
   childRole: AgentRole;
   signal?: AbortSignal;
+  projectPath?: string;
 }): ScorerContext {
   return {
     userId: args.userId,
@@ -2157,6 +2160,8 @@ export function buildScorerContext(args: {
     // So a command check dies with a cancelled run rather than outliving it
     // with the awaited spawn still pending.
     signal: args.signal,
+    // Where the child worked, so a verification command runs where the work is.
+    projectPath: args.projectPath,
   };
 }
 

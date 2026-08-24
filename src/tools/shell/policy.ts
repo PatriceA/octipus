@@ -207,6 +207,12 @@ const FLAG = /^-{1,2}[a-z][a-z0-9-]*$/i;
 /** A duration or count a wrapper takes positionally (`timeout 5`, `1.5s`). */
 const WRAPPER_ARG = /^\d+(?:\.\d+)?[smhd]?$/i;
 
+/** Bound on nested `-c`/`-exec` payloads examined per command. */
+const MAX_NESTED_COMMANDS = 24;
+
+/** Bound on wrapper/assignment peeling depth. */
+const MAX_PEEL_DEPTH = 12;
+
 /** `xargs -I {}` and friends: a substitution token, not the command. */
 const PLACEHOLDER = /^\{\}$|^%$/;
 
@@ -248,26 +254,68 @@ function commandCandidates(segment: string): string[] {
   const candidates = [normalize(tokens)];
 
   // Anything after `-exec` / `-c` is a command in its own right, wherever it
-  // appears — and it gets the same peeling as a top-level one.
+  // appears. Collected into a WORKLIST rather than by recursing per token: a
+  // recursive call on each remaining suffix is 2^n, which measured 6s of
+  // blocked event loop at 16 tokens and a stack overflow at 20 — on a path
+  // `ShellTool.validateCommand` runs for every single `shell__run`.
+  const worklist: string[][] = [];
   for (let i = 0; i < tokens.length - 1; i++) {
-    if (INTRODUCES_COMMAND.has(tokens[i])) candidates.push(...commandCandidates(tokens.slice(i + 1).join(' ')));
+    if (INTRODUCES_COMMAND.has(tokens[i])) worklist.push(tokens.slice(i + 1));
+  }
+  for (let w = 0; w < worklist.length && w < MAX_NESTED_COMMANDS; w++) {
+    const inner = worklist[w];
+    candidates.push(normalize(inner));
+    for (let i = 0; i < inner.length - 1; i++) {
+      if (INTRODUCES_COMMAND.has(inner[i])) worklist.push(inner.slice(i + 1));
+    }
+    // Each nested command gets the same wrapper peeling as a top-level one.
+    candidates.push(...peel(inner, normalize));
   }
 
-  // Peel to what actually runs. Iterative, not one pass: `nohup timeout 5 halt`
-  // and `timeout 5 env A=1 rm -rf /` stack wrappers, and an assignment can sit
-  // after a wrapper (`env FOO=1 rm -rf /`) as easily as before one.
+  candidates.push(...peel(tokens, normalize));
+
+  return candidates.filter(Boolean);
+}
+
+/**
+ * Does the character after a matched entry end it, or continue a different
+ * name?
+ *
+ * A letter, digit or dash continues a name — `ncdu` is not `nc`, `haltcheck` is
+ * not `halt`, and refusing those was the false positive this matcher was
+ * rewritten to remove.
+ *
+ * A dot, slash or tilde does NOT: `mkfs.ext4` is how mkfs is actually invoked,
+ * `nc.openbsd` and `ncat.traditional` are the real binaries on most
+ * distributions, and `rm -rf //`, `rm -rf ~/` and `rm -rf /.` are the same
+ * command as `rm -rf /`. Treating those as continuations left the `mkfs` entry
+ * dead outright.
+ */
+function isBoundary(next: string | undefined): boolean {
+  return next === undefined || /[\s;&|./~]/.test(next);
+}
+
+/**
+ * Peel a token list down to what actually runs: leading `NAME=value`
+ * assignments and any chain of wrappers with their own arguments.
+ *
+ * Iterative, not one pass — `nohup timeout 5 halt` and `timeout 5 env A=1
+ * rm -rf /` stack wrappers, and an assignment can sit after a wrapper as
+ * easily as before one. Each step contributes its own candidate, because
+ * peeling an assignment and a wrapper together skips straight past the
+ * command in between: `env A=1 sudo npm i` would go directly to `npm i`.
+ */
+function peel(tokens: string[], normalize: (list: string[]) => string): string[] {
+  const out: string[] = [];
   let rest = tokens;
-  for (let depth = 0; depth < 12; depth++) {
+  for (let depth = 0; depth < MAX_PEEL_DEPTH; depth++) {
     const before = rest;
 
-    // Environment assignments at this level. Recorded as its own candidate:
-    // peeling the assignment and the wrapper in one step skips straight past
-    // `sudo` in `env A=1 sudo npm i`, and that intermediate IS the command.
     let i = 0;
     while (i < rest.length && /^[a-z_][a-z0-9_]*=/i.test(rest[i])) i++;
     if (i > 0) {
       rest = rest.slice(i);
-      if (rest.length > 0) candidates.push(normalize(rest));
+      if (rest.length > 0) out.push(normalize(rest));
     }
 
     if (rest.length > 0 && COMMAND_WRAPPERS.has(basename(rest[0]))) {
@@ -276,13 +324,12 @@ function commandCandidates(segment: string): string[] {
       // positionally, and `xargs -I {}`-style placeholders.
       while (j < rest.length && (FLAG.test(rest[j]) || WRAPPER_ARG.test(rest[j]) || PLACEHOLDER.test(rest[j]))) j++;
       rest = rest.slice(j);
-      if (rest.length > 0) candidates.push(normalize(rest));
+      if (rest.length > 0) out.push(normalize(rest));
     }
 
     if (rest === before) break;
   }
-
-  return candidates.filter(Boolean);
+  return out;
 }
 
 /**
@@ -309,8 +356,7 @@ function startsWithCommand(text: string, blocked: string): boolean {
   for (const segment of text.split(/&&|\|\||[;&|\n()]/)) {
     for (const candidate of commandCandidates(segment)) {
       if (!candidate.startsWith(b)) continue;
-      const next = candidate[b.length];
-      if (next === undefined || /[\s;&|]/.test(next)) return true;
+      if (isBoundary(candidate[b.length])) return true;
     }
   }
   return false;

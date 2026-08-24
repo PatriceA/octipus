@@ -23,13 +23,29 @@ import { join } from 'node:path';
  * run one at a time locally and in an isolated container in CI, so that is
  * acceptable; it would not be if the two ever shared a host.
  */
-const PREFIXES = ['octipus-', 'octi-'];
+/**
+ * Only directories `mkdtempSync` made: a known prefix followed by exactly the
+ * six random characters it appends.
+ *
+ * A bare prefix match is too broad — `/tmp/octipus-cli` is a FIXED directory
+ * the running product creates for its CLI adapters, not a temporary one, so a
+ * `npm test` beside a live server would delete adapter HOME directories out
+ * from under it.
+ */
+const MKDTEMP_DIR = /^(?:octipus|octi)-[a-z0-9-]*[A-Za-z0-9]{6}$/;
+
+/** Never removed, whatever else matches. */
+const NEVER_REMOVE = new Set(['octipus-cli']);
+
+/** Exported so the rule can be tested without a filesystem. */
+export const isSweepable = (name: string): boolean =>
+  !NEVER_REMOVE.has(name) && MKDTEMP_DIR.test(name);
 
 const octipusTempDirs = (): Set<string> => {
   const found = new Set<string>();
   try {
     for (const name of readdirSync(tmpdir())) {
-      if (PREFIXES.some((p) => name.startsWith(p))) found.add(name);
+      if (isSweepable(name)) found.add(name);
     }
   } catch {
     // An unreadable tmpdir is not worth failing a test run over.

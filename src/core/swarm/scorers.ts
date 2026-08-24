@@ -280,6 +280,14 @@ export interface ScorerContext {
   canRunCommands?: boolean;
   /** The child's role, for the permission decision. */
   role?: string;
+  /**
+   * Where the child was working. `command_exit_zero` runs here, matching the
+   * `args.cwd || projectPath || workspaceRoot` order the child's own shell tool
+   * uses — a check that runs `npm test` at the workspace root while the child
+   * worked in `workspace/<project>/` fails a correct deliverable, and does it
+   * retryably, so it burns a full re-dispatch on a defect that is not there.
+   */
+  projectPath?: string;
   /** Shared wall-clock deadline for the whole gate; set by `runScorers`. */
   deadline?: number;
   /**
@@ -637,7 +645,9 @@ async function evaluate(
       // Workspace: the same sandbox resolver `file_exists` uses. `'.'` is the
       // workspace root, so a command cannot be pointed elsewhere.
       const fs = WorkspaceFS.forAgent({ userId: ctx.userId });
-      const cwd = fs.resolveOptional('.');
+      // The child's project directory when it had one, else the workspace root
+      // — the same order its shell tool resolves.
+      const cwd = ctx.projectPath ? fs.resolveOptional(ctx.projectPath) : fs.resolveOptional('.');
       if (!cwd) {
         return {
           scorer: label,
