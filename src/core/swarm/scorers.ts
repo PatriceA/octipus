@@ -698,9 +698,9 @@ async function evaluate(
         if (res.aborted || ctx.signal?.aborted) {
           throw new ScorerNotEvaluated('the run was cancelled before the check finished');
         }
-        const how = res.aborted
-          ? 'was cancelled with the run'
-          : res.timedOut
+        // No `aborted` case: an abort is raised as `ScorerNotEvaluated` above,
+        // so reaching here means the command produced a real result.
+        const how = res.timedOut
           ? `timed out after ${timeoutMs}ms`
           : res.exitCode === null
             ? `was killed${res.signal ? ` by ${res.signal}` : ''}`

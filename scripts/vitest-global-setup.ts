@@ -14,8 +14,14 @@ import { join } from 'node:path';
  * because the failure lands wherever a write happens to be.
  *
  * Fixed here rather than in thirty `afterAll` blocks: one owner, and no way for
- * the next suite to forget. Only directories that appear DURING the run are
- * removed, so a concurrent run's data is left alone.
+ * the next suite to forget.
+ *
+ * Scope, stated plainly rather than overclaimed: only directories that appear
+ * DURING this run are removed, which spares anything already on disk but NOT a
+ * second suite running concurrently on the same machine — its directories
+ * appear in the same window and are indistinguishable from ours. The suite is
+ * run one at a time locally and in an isolated container in CI, so that is
+ * acceptable; it would not be if the two ever shared a host.
  */
 const PREFIXES = ['octipus-', 'octi-'];
 

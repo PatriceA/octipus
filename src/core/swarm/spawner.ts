@@ -1027,11 +1027,13 @@ export class SwarmSpawner {
       // model to defend that answer rather than redo the work. The feedback
       // leads so it is read before the task it modifies.
       //
-      // The budget is what is LEFT, not another full grant. Handing each attempt
-      // the original cap lets one `spawn_child` spend a multiple of it — and
-      // since `discardedTokens` now charges the parent honestly, the overspend
-      // surfaces as an `InsufficientBudgetError` on a later sibling that should
-      // have fit.
+      // The token budget is what is LEFT, not another full grant. Handing each
+      // attempt the original cap lets one `spawn_child` spend a multiple of it —
+      // and since `discardedTokens` now charges the parent honestly, the
+      // overspend surfaces as an `InsufficientBudgetError` on a later sibling
+      // that should have fit. The wall clock is deliberately NOT reset: the
+      // spread keeps the original `startedAt`, so the attempts share one
+      // deadline rather than each getting a fresh one.
       const retried = await this.singleSpawnAndRun(
         {
           ...opts,
@@ -1524,7 +1526,13 @@ export class SwarmSpawner {
       // But a gate cut short after finding a real failure DID verify something,
       // and that verdict belongs in the ledger like any other. The skip is
       // therefore "nothing was judged", not "the gate was interrupted".
-      const judgedNothing = !!outcome.notEvaluated && outcome.ran === 0 && outcome.failures.length === 0;
+      // NOT `ran === 0`: the always-on tool-outage scorer is prepended to every
+      // spawn and completes first, so `ran` is at least 1 whenever a later
+      // command check is cancelled — which made this guard unreachable and let
+      // the green row through anyway. What matters is whether the gate reached
+      // a NEGATIVE verdict: an interrupted gate that found nothing has not
+      // cleared the deliverable, it merely did not finish looking.
+      const judgedNothing = !!outcome.notEvaluated && outcome.failures.length === 0;
       try {
         if (judgedNothing) {
           coreLogger.info(

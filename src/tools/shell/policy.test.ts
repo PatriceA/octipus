@@ -192,3 +192,57 @@ describe('and none of that re-refuses ordinary work', () => {
     expect(commandPolicyViolation(command)).toBeNull();
   });
 });
+
+describe('a path does not hide the command either', () => {
+  it.each([
+    '/bin/rm -rf /',
+    '/usr/sbin/shutdown -h now',
+    '/bin/sh -c "rm -rf /"',
+    '/usr/bin/env rm -rf /',
+  ])('refuses %s', (command) => {
+    // `/bin/rm` and `rm` run the same program, so the denylist has to compare
+    // the same thing. Matching only the bare name let every path-qualified
+    // form through — and each one tokenizes into a spawnable argv.
+    expect(commandPolicyViolation(command)).toMatch(/Blocked command detected/);
+  });
+
+  it('sees an elevated command by its path', () => {
+    expect(matchElevatedCommand('/usr/bin/sudo apt update')).toBe('sudo');
+  });
+});
+
+describe('a command carried as an argument of another', () => {
+  it.each(['find . -exec rm -rf / \;', '(rm -rf /)', 'true && (rm -rf /)'])(
+    'refuses %s',
+    (command) => {
+      // `-exec` introduces a command in its own right, and a subshell is a
+      // separator like any other. Without both, `find . -exec rm -rf /` reads
+      // as an ordinary invocation of `find`.
+      expect(commandPolicyViolation(command)).toMatch(/Blocked command detected/);
+    },
+  );
+});
+
+describe('stepping over a wrapper’s own arguments, not past its payload', () => {
+  it.each([
+    'timeout 60 npm run halt',
+    'env npm run halt',
+    'xargs -n1 npm run reboot',
+    'timeout 5 npm run kill',
+  ])('allows %s', (command) => {
+    // Enumerating every suffix after a wrapper refused all four. As a
+    // `command_exit_zero` command that refusal is marked unfixable, so the
+    // child would be permanently `contract_failed` over a command that never
+    // ran.
+    expect(commandPolicyViolation(command)).toBeNull();
+  });
+
+  it('is not elevated just because a later argument names an elevated tool', () => {
+    expect(matchElevatedCommand('timeout 5 npm run kill')).toBeNull();
+  });
+
+  it('still finds the payload a wrapper actually runs', () => {
+    expect(commandPolicyViolation('timeout 5 rm -rf /')).toMatch(/Blocked command detected/);
+    expect(commandPolicyViolation('nice -n 5 halt')).toMatch(/Blocked command detected/);
+  });
+});

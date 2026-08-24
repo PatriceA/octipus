@@ -201,28 +201,62 @@ const COMMAND_WRAPPERS = new Set([
   'xargs', 'time', 'watch', 'sudo', 'su', 'doas', 'chroot', 'unshare', 'eval', 'exec',
 ]);
 
+/** A token that is a flag (`-c`, `--quiet`) rather than the command. */
+const FLAG = /^-{1,2}[a-z][a-z0-9-]*$/i;
+
+/** A duration or count a wrapper takes positionally (`timeout 5`, `1.5s`). */
+const WRAPPER_ARG = /^\d+(?:\.\d+)?[smhd]?$/i;
+
+/**
+ * Tokens after which the REST is another command: `sh -c …`, `find … -exec …`.
+ * Without these, `find . -exec rm -rf / ;` reads as an invocation of `find`.
+ */
+const INTRODUCES_COMMAND = new Set(['-c', '-exec', '-execdir', '-ok', '-okdir']);
+
+/**
+ * A command's own name, without the path it was reached by. `/bin/rm` and
+ * `rm` run the same program, so the denylist has to compare the same thing —
+ * matching only the bare form let `/bin/rm -rf /`, `/usr/sbin/shutdown` and
+ * `/usr/bin/sudo` straight through.
+ */
+const basename = (token: string): string => token.slice(token.lastIndexOf('/') + 1);
+
 /**
  * The command strings a segment could actually run.
  *
- * Normally just the segment with its leading `NAME=value` assignments removed.
- * But when the head is a wrapper, what it runs sits somewhere after arguments
- * that are not all flags — `timeout 5 rm -rf /`, `nice -n 5 halt`, `sh -c
- * "shutdown"` — so every token offset after the wrapper is offered as a
- * candidate. Erring toward more candidates is the risk-weighted direction here:
- * an extra candidate can only refuse a command that explicitly asked another
- * command to run something, which is exactly the shape worth refusing.
+ * Normally one: the segment with its leading `NAME=value` assignments removed
+ * and its head reduced to a basename. Two more sources add candidates:
+ *
+ * - **A wrapper** hides what it runs behind its own arguments, so those are
+ *   stepped over — flags, and the positional counts `timeout 5` / `nice 10`
+ *   take. Exactly one candidate comes out, not every suffix: enumerating
+ *   suffixes refused `timeout 60 npm run halt` and `xargs -n1 npm run reboot`,
+ *   which are ordinary commands, and a scorer marks such a refusal unfixable.
+ * - **A command-introducing token** (`-c`, `-exec`) means the rest is a command
+ *   in its own right, wherever it appears.
  */
 function commandCandidates(segment: string): string[] {
   const stripped = segment.trim().replace(/^(?:[a-z_][a-z0-9_]*=\S*\s+)+/i, '');
   const tokens = stripped.split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return [];
-  if (!COMMAND_WRAPPERS.has(tokens[0])) return [stripped];
 
-  // A wrapper hides what it runs behind an unknown number of its own
-  // arguments, so every suffix is a candidate.
-  const candidates: string[] = [stripped];
-  for (let i = 1; i < tokens.length; i++) candidates.push(tokens.slice(i).join(' '));
-  return candidates;
+  const normalize = (list: string[]): string =>
+    list.length === 0 ? '' : [basename(list[0]), ...list.slice(1)].join(' ');
+
+  const candidates = [normalize(tokens)];
+
+  // Anything after `-exec` / `-c` is a command, at whatever depth it appears.
+  for (let i = 0; i < tokens.length - 1; i++) {
+    if (INTRODUCES_COMMAND.has(tokens[i])) candidates.push(normalize(tokens.slice(i + 1)));
+  }
+
+  if (COMMAND_WRAPPERS.has(basename(tokens[0]))) {
+    let i = 1;
+    while (i < tokens.length && (FLAG.test(tokens[i]) || WRAPPER_ARG.test(tokens[i]))) i++;
+    if (i < tokens.length) candidates.push(normalize(tokens.slice(i)));
+  }
+
+  return candidates.filter(Boolean);
 }
 
 /**
@@ -246,7 +280,7 @@ function startsWithCommand(text: string, blocked: string): boolean {
   // shatter it, so it is matched against the whole string instead.
   if (/[;&|]/.test(b)) return text.replace(/\s+/g, '').includes(b.replace(/\s+/g, ''));
 
-  for (const segment of text.split(/&&|\|\||[;&|\n]/)) {
+  for (const segment of text.split(/&&|\|\||[;&|\n()]/)) {
     for (const candidate of commandCandidates(segment)) {
       if (!candidate.startsWith(b)) continue;
       const next = candidate[b.length];
