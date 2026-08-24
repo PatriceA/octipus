@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getConfig, refreshConfigKey, resetConfig } from '@/config';
 import { renderContractFeedback } from './scorers';
-import { SwarmSpawner } from './spawner';
+import { SwarmSpawner, applyScorerVerdict } from './spawner';
 import type { ChildResult } from './types';
 
 /**
@@ -313,9 +313,86 @@ describe('SwarmSpawner — contract retry (through runChildWithRetry)', () => {
     expect(final.status).toBe('contract_failed');
   });
 
+  it('hands the retry what is LEFT of the pool, not another full grant', async () => {
+    // Each attempt used to get the original cap, so one `spawn_child` could
+    // spend a multiple of its grant — and since discarded tokens are now
+    // charged honestly, the overspend surfaces as an InsufficientBudgetError on
+    // a later sibling that should have fit.
+    const spent = gateFailed();
+    spent.usedTokens = 50_000;
+    const caps: number[] = [];
+    const spawner = new SwarmSpawner({} as never);
+    let calls = 0;
+    (spawner as unknown as { singleSpawnAndRun: unknown }).singleSpawnAndRun = async (o: {
+      budget: { tokens: { cap: number } };
+    }) => {
+      caps.push(o.budget.tokens.cap);
+      return calls++ === 0 ? spent : result();
+    };
+    await (
+      spawner as unknown as { runChildWithRetry: (o: unknown) => Promise<ChildResult> }
+    ).runChildWithRetry({
+      parent: { id: 'p', rootSessionId: 's' },
+      parentContext: { userId: 'u' },
+      childDepth: 1,
+      childKind: 'agent',
+      childRole: 'coding',
+      childModel: 'm',
+      childLane: 'agents',
+      childTools: [],
+      budget: {
+        tokens: { cap: 80_000, used: 0 },
+        wallClockMs: { cap: 600_000, startedAt: Date.now() },
+        fanOut: { cap: 4, used: 0 },
+        depth: 1,
+      },
+      topicPath: 'coding',
+      subtopic: 'x',
+      brief: { taskBrief: 'b', topicPath: 'coding' },
+      briefHash: 'h',
+      childMessage: 'TASK',
+      reason: 'normal',
+      spawnMode: 'await',
+    });
+
+    expect(caps[0]).toBe(80_000);
+    expect(caps[1]).toBe(30_000);
+  });
+
   it('leaves a passing child alone', async () => {
     const { final, calls } = await runWith([result()]);
     expect(calls).toBe(1);
     expect(final.status).toBe('ok');
+  });
+});
+
+describe('applyScorerVerdict — the two outcomes are independent', () => {
+  it('fails the contract on a real miss even when the gate was cut short', () => {
+    // `runScorers` preserves verdicts across a cancellation; the spawn path has
+    // to act on them. An `else if` on `notEvaluated` discards them, leaving the
+    // child `ok` with a known `file_exists` miss.
+    const v = applyScorerVerdict({
+      passed: false,
+      ran: 1,
+      failures: [{ scorer: 'file_exists', reason: 'notes.md does not exist' }],
+      notEvaluated: 'the run was cancelled before the check finished',
+    });
+
+    expect(v.contractFailed).toBe(true);
+    // Both facts recorded, neither hiding the other.
+    expect(v.notes).toContain('not evaluated');
+    expect(v.notes).toContain('notes.md does not exist');
+  });
+
+  it('records an interruption without inventing a failure', () => {
+    const v = applyScorerVerdict({ passed: true, ran: 0, failures: [], notEvaluated: 'cancelled' });
+    expect(v.contractFailed).toBe(false);
+    expect(v.notes).toContain('not evaluated');
+  });
+
+  it('leaves a clean pass alone', () => {
+    const v = applyScorerVerdict({ passed: true, ran: 2, failures: [] }, 'existing');
+    expect(v.contractFailed).toBe(false);
+    expect(v.notes).toBe('existing');
   });
 });

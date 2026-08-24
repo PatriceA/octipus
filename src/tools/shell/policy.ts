@@ -201,7 +201,10 @@ function startsWithCommand(text: string, blocked: string): boolean {
   const b = blocked.toLowerCase().trim();
   if (!b) return false;
   for (const segment of text.split(/&&|\|\||[;&|]/)) {
-    const seg = segment.trim();
+    // Leading `NAME=value` assignments are part of the invocation, not the
+    // command — `X=1 rm -rf /` runs `rm -rf /`, so they are stepped over
+    // rather than allowed to hide what follows.
+    const seg = segment.trim().replace(/^(?:[a-z_][a-z0-9_]*=\S*\s+)+/i, '');
     if (!seg.startsWith(b)) continue;
     const next = seg[b.length];
     if (next === undefined || /[\s;&|]/.test(next)) return true;
@@ -220,24 +223,24 @@ export function commandPolicyViolation(command: string): string | null {
   const raw = command.trim();
   const normalized = raw.toLowerCase().replace(/\s+/g, ' ');
 
-  for (const blocked of BLOCKED_COMMANDS) {
-    if (normalized.includes(blocked.toLowerCase())) {
-      return `Blocked command detected: ${blocked}`;
+  // Every form a process could see, each judged as a COMMAND. The forms cover
+  // the two execution paths (argv for safe mode, the shell's own dequoting for
+  // `sh -c`); the matcher is what makes it a command rather than a substring.
+  //
+  // A substring test here was the original rule and it is untenable: `nc ` is a
+  // denylist entry, so `npm run sync tests`, `go test ./internal/sync` and
+  // `cargo test --features async ui` were all refused — measured, on the
+  // shipped list. That is ordinary verification work, and since a scorer treats
+  // this refusal as unfixable it would fail correct children for a command
+  // that never ran.
+  for (const form of [normalized, ...dequotedForms(command)]) {
+    for (const blocked of BLOCKED_COMMANDS) {
+      if (startsWithCommand(form, blocked)) return `Blocked command detected: ${blocked}`;
     }
   }
 
   for (const pattern of INJECTION_PATTERNS) {
     if (pattern.test(raw)) return 'Potential command injection detected';
-  }
-
-  // Then the dequoted forms, judged as COMMANDS rather than as text — this is
-  // what catches `rm -rf '/'` and `true && rm -rf '/'`, neither of which the
-  // raw scan above can see.
-  for (const dequoted of dequotedForms(command)) {
-    if (dequoted === normalized) continue;
-    for (const blocked of BLOCKED_COMMANDS) {
-      if (startsWithCommand(dequoted, blocked)) return `Blocked command detected: ${blocked}`;
-    }
   }
 
   return null;

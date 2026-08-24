@@ -50,6 +50,7 @@ import {
 import {
   type Scorer,
   type ScorerContext,
+  type ScorerOutcome,
   deriveCodeDiffScorer,
   deriveSchemaScorer,
   deriveToolOutageScorer,
@@ -1025,9 +1026,19 @@ export class SwarmSpawner {
       // the one that produced the rejected answer, and reusing it invites the
       // model to defend that answer rather than redo the work. The feedback
       // leads so it is read before the task it modifies.
+      //
+      // The budget is what is LEFT, not another full grant. Handing each attempt
+      // the original cap lets one `spawn_child` spend a multiple of it — and
+      // since `discardedTokens` now charges the parent honestly, the overspend
+      // surfaces as an `InsufficientBudgetError` on a later sibling that should
+      // have fit.
       const retried = await this.singleSpawnAndRun(
         {
           ...opts,
+          budget: {
+            ...opts.budget,
+            tokens: { cap: Math.max(MIN_CHILD_TOKENS, remaining), used: 0 },
+          },
           childMessage: `${feedback}\n\n${opts.childMessage}`,
           reason: 'retry',
         },
@@ -1470,20 +1481,10 @@ export class SwarmSpawner {
         }),
       );
       result.scorerOutcome = outcome;
-      if (outcome.notEvaluated) {
-        // Nothing judged the work, so nothing may be claimed about it in either
-        // direction. Recorded on the notes so a reader does not mistake the
-        // absent verdict for a clean one.
-        notes = notes
-          ? `${notes}\nScorer gate not evaluated: ${outcome.notEvaluated}`
-          : `Scorer gate not evaluated: ${outcome.notEvaluated}`;
-        result.notes = notes;
-        coreLogger.info(
-          { parentNodeId: opts.parent.id, childId, reason: outcome.notEvaluated },
-          'Swarm scorer gate not evaluated — leaving the child status untouched',
-        );
-      } else if (!outcome.passed) {
-        const summary = outcome.failures.map((f) => `${f.scorer}: ${f.reason}`).join('; ');
+      const verdict = applyScorerVerdict(outcome, notes);
+      notes = verdict.notes;
+      result.notes = notes;
+      if (verdict.contractFailed) {
         status = 'contract_failed';
         result.status = 'contract_failed';
         // Keep the receipt's own status in step — it is snapshotted before the
@@ -1491,11 +1492,18 @@ export class SwarmSpawner {
         // `contract_failed` envelope is exactly the kind of contradiction the
         // receipt exists to prevent.
         if (result.receipt) result.receipt = { ...result.receipt, status: 'contract_failed' };
-        notes = notes ? `${notes}\nScorer gate failed: ${summary}` : `Scorer gate failed: ${summary}`;
-        result.notes = notes;
+      }
+      if (verdict.contractFailed || outcome.notEvaluated) {
         coreLogger.info(
-          { parentNodeId: opts.parent.id, childId, failures: outcome.failures.length },
-          'Swarm child failed scorer gate — marking contract_failed',
+          {
+            parentNodeId: opts.parent.id,
+            childId,
+            failures: outcome.failures.length,
+            notEvaluated: outcome.notEvaluated,
+          },
+          verdict.contractFailed
+            ? 'Swarm child failed scorer gate — marking contract_failed'
+            : 'Swarm scorer gate not evaluated — recording the interruption',
         );
       }
 
@@ -2066,6 +2074,38 @@ export function planToolGaps(
   const missingTools = [...new Set(missing.map((s) => s.tool as string))];
   const unrunnable = stepsWithTool.length > 0 && missing.length === stepsWithTool.length;
   return { missingTools, unrunnable };
+}
+
+/**
+ * What a scorer outcome does to the child's status and notes.
+ *
+ * Extracted and exported because the two cases are independent and a call site
+ * that treats them as alternatives is wrong in a way no unit test of
+ * `runScorers` can see: a gate cut short still reports what it managed to
+ * judge, so an `else if` on `notEvaluated` silently discards a `file_exists`
+ * miss that `runScorers` deliberately preserved. That is the "correct guard,
+ * never reached" shape, one level down.
+ */
+export function applyScorerVerdict(
+  outcome: ScorerOutcome,
+  existingNotes?: string,
+): { contractFailed: boolean; notes: string | undefined } {
+  let notes = existingNotes;
+  const append = (line: string) => {
+    notes = notes ? `${notes}\n${line}` : line;
+  };
+
+  // The interruption is recorded whether or not anything failed — a reader must
+  // not mistake an absent verdict for a clean one.
+  if (outcome.notEvaluated) append(`Scorer gate not evaluated: ${outcome.notEvaluated}`);
+
+  // And any failure it DID reach still fails the contract.
+  const contractFailed = !outcome.passed;
+  if (contractFailed) {
+    append(`Scorer gate failed: ${outcome.failures.map((f) => `${f.scorer}: ${f.reason}`).join('; ')}`);
+  }
+
+  return { contractFailed, notes };
 }
 
 /**
