@@ -153,7 +153,7 @@ export function matchElevatedCommand(command: string): string | null {
   // matching no pattern written against the raw text. Checking both forms
   // keeps the raw match for `unsafe: true` callers, whose string really is
   // handed to `sh -c` intact.
-  for (const candidate of policyForms(command)) {
+  for (const candidate of [command.trim().toLowerCase(), ...dequotedForms(command)]) {
     for (const elevated of ELEVATED_COMMANDS) {
       const patterns = [
         new RegExp(`^${elevated}\\b`, 'i'),
@@ -168,20 +168,45 @@ export function matchElevatedCommand(command: string): string | null {
 }
 
 /**
- * The forms of a command the policy has to be true of: the string as written
- * (trimmed, since `^sudo` must still match ` sudo npm test`) and, when it
- * tokenizes, the argv that will be spawned rejoined by single spaces.
+ * The command forms a process could actually see, lowercased and
+ * whitespace-normalized: the argv when the string tokenizes, and the text with
+ * quoting removed.
  *
- * Two forms rather than one because the two callers differ: a safe-mode command
- * runs as argv, so the argv is what matters; an `unsafe: true` command is handed
- * to `sh -c` verbatim, so the raw text is what matters. A rule that checked only
- * one of them was evadable from the other direction.
+ * Both, because the two execution paths differ and each is evadable from the
+ * other's blind spot. `tokenizeSafe` returns null the moment a metacharacter
+ * appears — which is precisely when `sh -c` takes over and does its own
+ * dequoting, so `true && rm -rf '/'` reaches a shell that runs `rm -rf /` while
+ * matching nothing written against the text as typed.
  */
-function policyForms(command: string): string[] {
-  const raw = command.trim();
+function dequotedForms(command: string): string[] {
+  const forms: string[] = [];
   const argv = tokenizeSafe(command);
-  const joined = argv ? argv.join(' ') : null;
-  return joined && joined !== raw ? [raw, joined] : [raw];
+  if (argv) forms.push(argv.join(' '));
+  const stripped = command.replace(/["'\\]/g, '').trim();
+  if (stripped) forms.push(stripped);
+  return forms.map((f) => f.toLowerCase().replace(/\s+/g, ' '));
+}
+
+/**
+ * Does `text` invoke `blocked` as a command — at the start, or after a shell
+ * separator — as opposed to merely containing its letters?
+ *
+ * Token-aware because the denylist mixes bare names (`mkfs`, `halt`) with
+ * argument-bearing phrases (`rm -rf /`, `nc -`), so the boundary has to be
+ * judged on the character AFTER the match. A plain `startsWith` blocks `ncdu`
+ * as `nc ` and `haltcheck` as `halt`; a plain `includes` blocks
+ * `grep -rn "chmod 777" /etc`. Both are ordinary commands.
+ */
+function startsWithCommand(text: string, blocked: string): boolean {
+  const b = blocked.toLowerCase().trim();
+  if (!b) return false;
+  for (const segment of text.split(/&&|\|\||[;&|]/)) {
+    const seg = segment.trim();
+    if (!seg.startsWith(b)) continue;
+    const next = seg[b.length];
+    if (next === undefined || /[\s;&|]/.test(next)) return true;
+  }
+  return false;
 }
 
 /**
@@ -205,23 +230,13 @@ export function commandPolicyViolation(command: string): string | null {
     if (pattern.test(raw)) return 'Potential command injection detected';
   }
 
-  // The dequoted argv, checked as a COMMAND rather than as text. A substring
-  // test over the joined argv reads an entry out of an argument: `grep -rn
-  // "chmod 777" /etc` tokenizes to `grep -rn chmod 777 /etc`, which contains
-  // `chmod 777 /` and would be refused although it only searches for the
-  // string. Anchoring at argv[0] keeps the quote-evasion fix — `rm -rf '/'`
-  // still becomes the command `rm -rf /` — without failing the many commands
-  // that merely mention one.
-  const argv = tokenizeSafe(command);
-  if (argv) {
-    const asCommand = argv.join(' ').toLowerCase().replace(/\s+/g, ' ');
-    if (asCommand !== normalized) {
-      for (const blocked of BLOCKED_COMMANDS) {
-        const b = blocked.toLowerCase().trim();
-        if (asCommand === b || asCommand.startsWith(`${b} `) || asCommand.startsWith(b)) {
-          return `Blocked command detected: ${blocked}`;
-        }
-      }
+  // Then the dequoted forms, judged as COMMANDS rather than as text — this is
+  // what catches `rm -rf '/'` and `true && rm -rf '/'`, neither of which the
+  // raw scan above can see.
+  for (const dequoted of dequotedForms(command)) {
+    if (dequoted === normalized) continue;
+    for (const blocked of BLOCKED_COMMANDS) {
+      if (startsWithCommand(dequoted, blocked)) return `Blocked command detected: ${blocked}`;
     }
   }
 

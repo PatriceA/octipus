@@ -458,6 +458,13 @@ async function evaluate(
           );
         }
       }
+      // Retryable, unlike the command scorer's refusals, and the difference is
+      // the point: those are structural (the child holds no shell tool, the
+      // operator denied the permission) and identical on a second run, while a
+      // side-effect miss is about the work — a child that wrote nothing may
+      // well write something when told so, and the always-on outage gate fires
+      // on tool failures that are often transient. Bounded by
+      // `swarm.contractRetries` either way.
       return misses.length === 0
         ? null
         : {
@@ -526,7 +533,12 @@ async function evaluate(
             root: false,
             attended: false,
             toolId: 'shell',
-            action: 'shell__run',
+            // The SAME action the permission was read for. `matches()` builds
+            // `${toolId}__${action}`, so passing `shell__run` here makes an
+            // operator's `unattendedDenyActions: ['shell__execute']` compare
+            // against `shell__shell__run` and never fire — while that same
+            // entry does block the child's own shell tool.
+            action: 'execute',
             unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions,
           });
           if (decision.route !== 'execute') {

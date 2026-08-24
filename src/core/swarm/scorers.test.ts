@@ -778,3 +778,32 @@ describe('formatCommandOutput — stderr is not lost behind a large stdout', () 
     expect(text).not.toContain('HEAD-MARKER');
   });
 });
+
+describe('command_exit_zero — the permission action is the one that was read', () => {
+  it('honours an unattendedDenyActions entry naming shell.execute', async () => {
+    // The check reads `shell.execute`; routing it under a different action name
+    // makes `matches()` compare `shell__shell__run` and silently miss the entry
+    // — while that same entry does block the child's own shell tool.
+    const permissions = await import('@/security/permissions');
+    const config = await import('@/config');
+    const permSpy = vi.spyOn(permissions, 'getPermissionManager').mockReturnValue({
+      check: async () => ({ allowed: false, level: 'ASK', requiresApproval: true }),
+    } as never);
+    const cfg = config.getConfig();
+    const cfgSpy = vi.spyOn(config, 'getConfig').mockReturnValue({
+      ...cfg,
+      multiuser: { ...cfg.multiuser, unattendedDenyActions: ['shell__execute'] },
+    } as never);
+
+    const out = await runScorers(
+      [{ kind: 'command_exit_zero', command: 'true' }],
+      { output: 'x' },
+      { canRunCommands: true, userId: 'system', role: 'coding' },
+    );
+    permSpy.mockRestore();
+    cfgSpy.mockRestore();
+
+    expect(out.passed).toBe(false);
+    expect(out.failures[0].retryable).toBe(false);
+  });
+});

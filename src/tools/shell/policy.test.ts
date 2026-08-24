@@ -85,3 +85,39 @@ describe('the denylist reads a command, not a mention of one', () => {
     expect(commandPolicyViolation('rm -rf "/"')).toMatch(/Blocked command detected/);
   });
 });
+
+describe('the dequoted check reaches the sh -c path too', () => {
+  it('refuses a quoted danger behind a separator, which never tokenizes', () => {
+    // `tokenizeSafe` returns null at the `&&`, so the argv form does not exist
+    // — and that is exactly when `sh -c` runs the string and strips the quotes
+    // itself. Checking only the argv left this path open.
+    expect(commandPolicyViolation("true && rm -rf '/'")).toMatch(/Blocked command detected/);
+    // Refused as an injection rather than a denylist hit — a different message,
+    // the same refusal, and the assertion says so rather than pinning prose.
+    expect(commandPolicyViolation('echo x; rm -rf "/"')).not.toBeNull();
+  });
+
+  it('does not block a longer command that merely starts with an entry', () => {
+    // `ncdu` is not `nc `. Matching the dequoted argv without a boundary check
+    // blocked it, because the `nc ` entry trims to `nc` and `ncdu` starts with
+    // it — a regression this branch introduced and this pins.
+    expect(commandPolicyViolation('ncdu "/var/log"')).toBeNull();
+    expect(commandPolicyViolation('ncdu /var/log')).toBeNull();
+    expect(commandPolicyViolation('netcatalog list')).toBeNull();
+  });
+
+  it('inherits the raw scan’s coarseness, and says so', () => {
+    // `haltcheck` and `shutdownctl` contain a bare denylist entry in their own
+    // text, so the untouched raw substring scan refuses them — as it did before
+    // this branch. Recorded rather than quietly fixed: loosening that rule is a
+    // separate change with its own risk, and this commit only owes the argv
+    // path it added.
+    expect(commandPolicyViolation('haltcheck --x y')).toMatch(/Blocked command detected/);
+    expect(commandPolicyViolation('shutdownctl --status')).toMatch(/Blocked command detected/);
+  });
+
+  it('still refuses the real command after a separator', () => {
+    expect(commandPolicyViolation('echo x && shutdown')).toMatch(/Blocked command detected/);
+    expect(commandPolicyViolation('true; halt')).toMatch(/Blocked command detected/);
+  });
+});
