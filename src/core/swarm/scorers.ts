@@ -206,8 +206,13 @@ function namesShellWithCommandString(command: string): string | null {
     const name = token.slice(token.lastIndexOf('/') + 1);
     if (!SHELL_INTERPRETERS.has(name)) continue;
     if (i === 0) return name;
-    const next = argv[i + 1];
-    if (next && SHELL_STRING_FLAGS.has(next)) return name;
+    // A shell's OWN flags may sit between it and the one that takes the string:
+    // `env sh -x -c "…"`, `timeout 60 bash --norc -c "…"`, `xargs -0 sh -e -c`.
+    // Stopping at the immediately-next token missed all three.
+    for (let j = i + 1; j < argv.length; j++) {
+      if (SHELL_STRING_FLAGS.has(argv[j])) return name;
+      if (!/^-{1,2}[a-z]/i.test(argv[j])) break;
+    }
   }
   return null;
 }
@@ -236,6 +241,9 @@ export const DEFAULT_COMMAND_SCORER_TIMEOUT_MS = 120_000;
 
 /** Ceiling on it. A gate is a check, not the run. */
 export const MAX_COMMAND_SCORER_TIMEOUT_MS = 600_000;
+
+/** Least time worth starting a command check with. Below it, nothing can pass. */
+export const MIN_COMMAND_SCORER_TIMEOUT_MS = 1_000;
 
 /** Upper bound on a verification command's length (parsed from LLM args). */
 export const MAX_COMMAND_SCORER_LEN = 500;
@@ -370,7 +378,11 @@ export async function runScorers(
   // run sequentially AFTER the worker returned — outside the child's
   // `wallClockMs`, which only bounds the spawn. Without this a single spawn
   // could sit in its gates for hours.
-  const deadline = Date.now() + MAX_SCORER_GATE_MS;
+  // A caller-supplied deadline wins: the spawn path leaves it unset and gets
+  // the default budget, while anything already operating under a tighter one
+  // (a test, or a future caller with its own clock) is honoured rather than
+  // silently widened.
+  const deadline = ctx.deadline ?? Date.now() + MAX_SCORER_GATE_MS;
   let ran = 0;
 
   for (const scorer of scorers) {
@@ -725,14 +737,22 @@ async function evaluate(
         };
       }
 
-      const timeoutMs = Math.max(
-        1,
-        Math.min(
-          scorer.timeoutMs ?? DEFAULT_COMMAND_SCORER_TIMEOUT_MS,
-          MAX_COMMAND_SCORER_TIMEOUT_MS,
-          // Never outlive the gate's own budget.
-          ctx.deadline ? ctx.deadline - Date.now() : Number.POSITIVE_INFINITY,
-        ),
+      // Never outlive the gate's own budget — but a sliver of it is not a
+      // deadline, it is a guaranteed timeout blamed on the child. Below the
+      // floor the check is reported as unrun, and unfixably so: another child
+      // run would meet the same spent budget.
+      const gateLeft = ctx.deadline ? ctx.deadline - Date.now() : Number.POSITIVE_INFINITY;
+      if (gateLeft < MIN_COMMAND_SCORER_TIMEOUT_MS) {
+        return {
+          scorer: label,
+          reason: `the verification gate had ${Math.max(0, gateLeft)}ms of its budget left, too little to run this check`,
+          retryable: false,
+        };
+      }
+      const timeoutMs = Math.min(
+        scorer.timeoutMs ?? DEFAULT_COMMAND_SCORER_TIMEOUT_MS,
+        MAX_COMMAND_SCORER_TIMEOUT_MS,
+        gateLeft,
       );
 
       // Already cancelled: do not start a process for a run nobody is waiting

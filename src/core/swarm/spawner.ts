@@ -1045,7 +1045,9 @@ export class SwarmSpawner {
       // overspend surfaces as an `InsufficientBudgetError` on a later sibling
       // that should have fit. The wall cap is likewise the remainder, restamped
       // so the pair still reads as one absolute deadline rather than two.
-      const retried = await this.singleSpawnAndRun(
+      let retried: ChildResult;
+      try {
+        retried = await this.singleSpawnAndRun(
         {
           ...opts,
           budget: {
@@ -1070,7 +1072,18 @@ export class SwarmSpawner {
           reason: 'retry',
         },
         true,
-      );
+        );
+      } catch (err) {
+        // Same shape as the backup-model retry beside it. A throw here says
+        // nothing about the contract, and letting it propagate would discard
+        // the `contract_failed` result and the scorer failures on it — the
+        // diagnosis this loop exists to act on.
+        coreLogger.warn(
+          { parentNodeId: opts.parent.id, attempt, err: (err as Error).message },
+          'Swarm child contract retry threw — keeping the original contract failure',
+        );
+        break;
+      }
       spent += retried.usedTokens ?? 0;
 
       if (retried.status !== 'ok' && retried.status !== 'contract_failed') {

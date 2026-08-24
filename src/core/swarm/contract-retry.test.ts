@@ -464,6 +464,47 @@ describe('SwarmSpawner — contract retry (through runChildWithRetry)', () => {
     expect(final.status).toBe('contract_failed');
   });
 
+  it('keeps the diagnosis when the retry itself throws', async () => {
+    // Same shape as the backup-model retry beside it: a throw says nothing
+    // about the contract, and letting it propagate discards the
+    // `contract_failed` result and the scorer failures this loop exists to act
+    // on.
+    const spawner = new SwarmSpawner({} as never);
+    let n = 0;
+    (spawner as unknown as { singleSpawnAndRun: unknown }).singleSpawnAndRun = async () => {
+      if (n++ === 0) return gateFailed();
+      throw new Error('agent manager exploded');
+    };
+    const final = await (
+      spawner as unknown as { runChildWithRetry: (o: unknown) => Promise<ChildResult> }
+    ).runChildWithRetry({
+      parent: { id: 'p', rootSessionId: 's' },
+      parentContext: { userId: 'u' },
+      childDepth: 1,
+      childKind: 'agent',
+      childRole: 'coding',
+      childModel: 'm',
+      childLane: 'agents',
+      childTools: [],
+      budget: {
+        tokens: { cap: 80_000, used: 0 },
+        wallClockMs: { cap: 600_000, startedAt: Date.now() },
+        fanOut: { cap: 4, used: 0 },
+        depth: 1,
+      },
+      topicPath: 'coding',
+      subtopic: 'x',
+      brief: { taskBrief: 'b', topicPath: 'coding' },
+      briefHash: 'h',
+      childMessage: 'TASK',
+      reason: 'normal',
+      spawnMode: 'await',
+    });
+
+    expect(final.status).toBe('contract_failed');
+    expect(final.scorerOutcome?.failures[0].scorer).toBe('file_exists');
+  });
+
   it('leaves a passing child alone', async () => {
     const { final, calls } = await runWith([result()]);
     expect(calls).toBe(1);

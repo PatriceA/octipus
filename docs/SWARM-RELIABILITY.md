@@ -112,7 +112,6 @@ synthesizing against output that missed the brief.
 | `regex` | output/notes matches a pattern | `pattern`, `flags`, `on` |
 | `json` | output parses as JSON (+ required top-level keys) | `requiredKeys[]` |
 | `file_exists` | a path exists in the child's workspace | `path` |
-| `side_effect` | the child's RECEIPT shows the work happened | `minFilesChanged`, `minCommandsRun`, `maxToolErrors` |
 | `command_exit_zero` | a command run in the child's workspace exits 0 | `command`, `timeoutMs` |
 | `side_effect` | the child's deterministic receipt meets thresholds | `minFilesChanged`, `minCommandsRun`, `maxToolErrors`, `requireWorkingTools` |
 
