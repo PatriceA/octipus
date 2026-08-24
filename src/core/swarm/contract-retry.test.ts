@@ -48,7 +48,13 @@ function gateFailed(reason = 'file "notes.md" does not exist'): ChildResult {
  */
 async function runWith(
   results: ChildResult[],
-  opts: { tokenCap?: number; tokensUsed?: number; wallCap?: number; startedAt?: number } = {},
+  opts: {
+    tokenCap?: number;
+    tokensUsed?: number;
+    wallCap?: number;
+    startedAt?: number;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<{ final: ChildResult; messages: string[]; calls: number }> {
   const spawner = new SwarmSpawner({} as never);
   const messages: string[] = [];
@@ -64,7 +70,7 @@ async function runWith(
   };
 
   const base = {
-    parent: { id: 'parent-1', rootSessionId: 's1' },
+    parent: { id: 'parent-1', rootSessionId: 's1', signal: opts.signal },
     parentContext: { userId: 'u1' },
     childDepth: 1,
     childKind: 'agent',
@@ -291,6 +297,17 @@ describe('SwarmSpawner — contract retry (through runChildWithRetry)', () => {
     });
     const { calls } = await runWith([mixed, result()]);
     expect(calls).toBe(2);
+  });
+
+  it('does not re-dispatch onto a cancelled run', async () => {
+    // The session is gone; a retry would create a fresh node, agent and model
+    // call for work nobody is waiting for.
+    const controller = new AbortController();
+    controller.abort();
+    const { final, calls } = await runWith([gateFailed(), result()], { signal: controller.signal });
+
+    expect(calls).toBe(1);
+    expect(final.status).toBe('contract_failed');
   });
 
   it('leaves a passing child alone', async () => {

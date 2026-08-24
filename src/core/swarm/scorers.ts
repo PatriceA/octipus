@@ -591,6 +591,11 @@ async function evaluate(
         // How it ended, not just that it did. `exitCode` is null for a killed
         // process, so a blown deadline would otherwise read "exited null" and
         // the retry brief would name no defect at all.
+        // A cancelled run is not a defect in the work — and re-running it is
+        // pointless, since the session it belonged to is gone.
+        if (res.aborted) {
+          return { scorer: label, reason: 'was cancelled with the run', retryable: false };
+        }
         const how = res.aborted
           ? 'was cancelled with the run'
           : res.timedOut

@@ -49,6 +49,7 @@ import {
 } from './spawn-validator';
 import {
   type Scorer,
+  type ScorerContext,
   deriveCodeDiffScorer,
   deriveSchemaScorer,
   deriveToolOutageScorer,
@@ -963,6 +964,17 @@ export class SwarmSpawner {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       if (!result || result.status !== 'contract_failed') break;
       const failures = result.scorerOutcome?.failures ?? [];
+      // Nothing is worth re-dispatching onto a cancelled run: the session is
+      // gone, and a retry would create a fresh node, agent and model call for
+      // work nobody is waiting for.
+      if (opts.parent.signal?.aborted) {
+        coreLogger.info(
+          { parentNodeId: opts.parent.id },
+          'Swarm child contract retry skipped — run was cancelled',
+        );
+        break;
+      }
+
       // A failure the child has no power over — no shell tool, a denied
       // permission, a denylisted command, a missing workspace — is not
       // something a second run changes. Re-dispatching on one buys an
@@ -1449,18 +1461,13 @@ export class SwarmSpawner {
       const outcome = await runScorers(
         effectiveScorers,
         { output: result.output, notes: result.notes, receipt: result.receipt },
-        {
+        buildScorerContext({
           userId: opts.parentContext.userId,
           filesTouched,
-          // `command_exit_zero` may only run for a child that already holds the
-          // shell tool. Read from the resolved toolset rather than the role
-          // name, since that is what the child actually got after the
-          // parent-intersection and the small-model cap.
-          canRunCommands: opts.childTools.some((t) => t.toolId === 'shell' || t.name.startsWith('shell__')),
-          // So a `command_exit_zero` check dies with a cancelled run rather
-          // than outliving it with the awaited spawn still pending.
+          childTools: opts.childTools,
+          childRole: opts.childRole,
           signal: opts.parent.signal,
-        },
+        }),
       );
       result.scorerOutcome = outcome;
       if (!outcome.passed) {
@@ -2036,6 +2043,37 @@ export function planToolGaps(
   const missingTools = [...new Set(missing.map((s) => s.tool as string))];
   const unrunnable = stepsWithTool.length > 0 && missing.length === stepsWithTool.length;
   return { missingTools, unrunnable };
+}
+
+/**
+ * The `ScorerContext` a spawned child's gates run under.
+ *
+ * Extracted and exported because every field here is one a hand-written test
+ * gets right and production got wrong. `role` was absent on the real path while
+ * every scorer test supplied it, and `canPromptHuman` reads an ABSENT role as
+ * "can ask a human" — which routed the default ASK level on `shell.execute` to
+ * `ask_human` and made every `command_exit_zero` gate refuse, non-retryably, on
+ * a stock install. The same shape as the unreachable gates the rebuild plan
+ * lists: the guard was correct, the shipping path never met it.
+ */
+export function buildScorerContext(args: {
+  userId?: string;
+  filesTouched: number | null;
+  childTools: ToolHandler[];
+  childRole: AgentRole;
+  signal?: AbortSignal;
+}): ScorerContext {
+  return {
+    userId: args.userId,
+    filesTouched: args.filesTouched,
+    // Read from the RESOLVED toolset, not the role name: that is what the child
+    // actually got after the parent-intersection and the small-model cap.
+    canRunCommands: args.childTools.some((t) => t.toolId === 'shell' || t.name.startsWith('shell__')),
+    role: args.childRole,
+    // So a command check dies with a cancelled run rather than outliving it
+    // with the awaited spawn still pending.
+    signal: args.signal,
+  };
 }
 
 export function composeChildMessage(

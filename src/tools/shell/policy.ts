@@ -192,17 +192,36 @@ function policyForms(command: string): string[] {
  * trivial evasions (`rm -rf  /`, tabs, a newline between tokens) still match.
  */
 export function commandPolicyViolation(command: string): string | null {
-  for (const form of policyForms(command)) {
-    const normalized = form.toLowerCase().replace(/\s+/g, ' ');
+  const raw = command.trim();
+  const normalized = raw.toLowerCase().replace(/\s+/g, ' ');
 
-    for (const blocked of BLOCKED_COMMANDS) {
-      if (normalized.includes(blocked.toLowerCase())) {
-        return `Blocked command detected: ${blocked}`;
-      }
+  for (const blocked of BLOCKED_COMMANDS) {
+    if (normalized.includes(blocked.toLowerCase())) {
+      return `Blocked command detected: ${blocked}`;
     }
+  }
 
-    for (const pattern of INJECTION_PATTERNS) {
-      if (pattern.test(form)) return 'Potential command injection detected';
+  for (const pattern of INJECTION_PATTERNS) {
+    if (pattern.test(raw)) return 'Potential command injection detected';
+  }
+
+  // The dequoted argv, checked as a COMMAND rather than as text. A substring
+  // test over the joined argv reads an entry out of an argument: `grep -rn
+  // "chmod 777" /etc` tokenizes to `grep -rn chmod 777 /etc`, which contains
+  // `chmod 777 /` and would be refused although it only searches for the
+  // string. Anchoring at argv[0] keeps the quote-evasion fix — `rm -rf '/'`
+  // still becomes the command `rm -rf /` — without failing the many commands
+  // that merely mention one.
+  const argv = tokenizeSafe(command);
+  if (argv) {
+    const asCommand = argv.join(' ').toLowerCase().replace(/\s+/g, ' ');
+    if (asCommand !== normalized) {
+      for (const blocked of BLOCKED_COMMANDS) {
+        const b = blocked.toLowerCase().trim();
+        if (asCommand === b || asCommand.startsWith(`${b} `) || asCommand.startsWith(b)) {
+          return `Blocked command detected: ${blocked}`;
+        }
+      }
     }
   }
 

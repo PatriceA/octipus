@@ -59,3 +59,29 @@ describe('tokenizeSafe still refuses what it always refused', () => {
     },
   );
 });
+
+describe('the denylist reads a command, not a mention of one', () => {
+  it('allows a search whose ARGUMENT happens to spell a blocked command', () => {
+    // Tokenizing strips the quotes, so a substring test over the joined argv
+    // finds `chmod 777 /` inside `grep -rn chmod 777 /etc` and refuses a
+    // read-only search. The argv check is anchored at argv[0] to avoid that.
+    expect(commandPolicyViolation('grep -rn "chmod 777" /etc')).toBeNull();
+    expect(commandPolicyViolation('npm test --grep "chmod 777" /tmp')).toBeNull();
+  });
+
+  it('still refuses a command whose RAW text contains a blocked entry', () => {
+    // Pre-existing behaviour, asserted so the argv anchoring above is not
+    // mistaken for a loosening. The raw-string scan is untouched, so a command
+    // that spells a blocked entry in its own text — `grep -r "rm -rf /" .`, or
+    // `find . -name mkfs.conf` — is refused now exactly as it was before this
+    // branch. Coarse, and left alone: tightening it is a separate change with
+    // its own risk, and widening what runs is not this commit's business.
+    expect(commandPolicyViolation('grep -r "rm -rf /" .')).toMatch(/Blocked command detected/);
+    expect(commandPolicyViolation('find . -name mkfs.conf')).toMatch(/Blocked command detected/);
+  });
+
+  it('still refuses the dequoted command itself', () => {
+    expect(commandPolicyViolation("rm -rf '/'")).toMatch(/Blocked command detected/);
+    expect(commandPolicyViolation('rm -rf "/"')).toMatch(/Blocked command detected/);
+  });
+});
