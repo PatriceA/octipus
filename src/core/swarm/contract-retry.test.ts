@@ -111,7 +111,10 @@ describe('renderContractFeedback', () => {
     );
     expect(text).toContain('file_exists: file "notes.md" does not exist');
     expect(text).toContain('json: missing required keys: body');
-    expect(text).toContain('attempt 1 of 3');
+    // The run being briefed is the SECOND of three, not the first — telling the
+    // final attempt it is "attempt 1 of 2" while rejecting its predecessor is a
+    // contradiction the model has to resolve.
+    expect(text).toContain('attempt 2 of 3');
   });
 
   it('returns null when there is nothing actionable to say', () => {

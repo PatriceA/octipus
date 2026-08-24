@@ -1470,7 +1470,19 @@ export class SwarmSpawner {
         }),
       );
       result.scorerOutcome = outcome;
-      if (!outcome.passed) {
+      if (outcome.notEvaluated) {
+        // Nothing judged the work, so nothing may be claimed about it in either
+        // direction. Recorded on the notes so a reader does not mistake the
+        // absent verdict for a clean one.
+        notes = notes
+          ? `${notes}\nScorer gate not evaluated: ${outcome.notEvaluated}`
+          : `Scorer gate not evaluated: ${outcome.notEvaluated}`;
+        result.notes = notes;
+        coreLogger.info(
+          { parentNodeId: opts.parent.id, childId, reason: outcome.notEvaluated },
+          'Swarm scorer gate not evaluated — leaving the child status untouched',
+        );
+      } else if (!outcome.passed) {
         const summary = outcome.failures.map((f) => `${f.scorer}: ${f.reason}`).join('; ');
         status = 'contract_failed';
         result.status = 'contract_failed';

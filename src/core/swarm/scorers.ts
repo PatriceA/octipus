@@ -124,6 +124,12 @@ export interface ScorerOutcome {
   ran: number;
   /** Empty when `passed` is true. */
   failures: ScorerFailure[];
+  /**
+   * Set when the gate could not be evaluated at all (today: the run was
+   * cancelled). `passed` is true in that case because nothing judged the work —
+   * absence of a verdict, not a favourable one.
+   */
+  notEvaluated?: string;
 }
 
 /**
@@ -145,8 +151,12 @@ export function renderContractFeedback(
 ): string | null {
   if (failures.length === 0) return null;
   const lines = failures.map((f) => `- ${f.scorer}: ${f.reason}`).join('\n');
+  // `attempt` is the retry index (1 = first retry), so the run being briefed is
+  // `attempt + 1` of `maxAttempts + 1`. Telling the final run it is "attempt 1
+  // of 2" in the same breath as rejecting its predecessor is a contradiction
+  // the model has to resolve.
   return (
-    `PREVIOUS ATTEMPT REJECTED (attempt ${attempt} of ${maxAttempts + 1}).\n` +
+    `PREVIOUS ATTEMPT REJECTED. This is attempt ${attempt + 1} of ${maxAttempts + 1}.\n` +
     `Your last answer was produced but FAILED these deterministic checks:\n${lines}\n\n` +
     `Redo the task so every check above passes. The checks are mechanical and ` +
     `will run again on this attempt — they inspect what you actually produced ` +
@@ -174,6 +184,13 @@ const MAX_REGEX_SCAN_CHARS = 10_000;
 /** Upper bound on a scorer regex pattern length (parsed from LLM args). */
 export const MAX_REGEX_PATTERN_LEN = 200;
 
+/**
+ * Ceiling on the whole gate, across every scorer attached to one spawn. The
+ * per-scorer clamp bounds one check; this bounds the set, which is what the
+ * caller actually waits on.
+ */
+export const MAX_SCORER_GATE_MS = 900_000;
+
 /** Default deadline for a `command_exit_zero` check. */
 export const DEFAULT_COMMAND_SCORER_TIMEOUT_MS = 120_000;
 
@@ -200,12 +217,17 @@ export function formatCommandOutput(stdout: string, stderr: string): string {
   const out = (stdout ?? '').trim();
   if (!err && !out) return ' with no output';
 
-  // Budgeted separately, not concatenated then truncated. Joining first and
-  // keeping the last 2k drops stderr entirely whenever stdout is larger than
-  // the budget — which is the normal shape of a failing build, and exactly the
-  // half that says what went wrong.
-  const errKept = tail(err, err ? Math.min(err.length, MAX_COMMAND_OUTPUT_CHARS) : 0);
-  const outKept = tail(out, Math.max(0, MAX_COMMAND_OUTPUT_CHARS - errKept.text.length));
+  // Budgeted separately, not concatenated then truncated — and NEITHER stream
+  // may take the whole budget while the other is non-empty. Joining first and
+  // keeping the last 2k drops stderr whenever stdout is larger; giving stderr
+  // the full budget first drops stdout whenever stderr is larger. A failing
+  // `npm test` puts the npm ERR! boilerplate on stderr and the assertion diff
+  // on stdout, so either extreme hands the retry the half that says nothing.
+  const share = err && out ? Math.floor(MAX_COMMAND_OUTPUT_CHARS / 2) : MAX_COMMAND_OUTPUT_CHARS;
+  const errKept = tail(err, err ? share : 0);
+  // Whatever stderr did not use goes to stdout, so a short stderr still leaves
+  // the full remainder for the diff.
+  const outKept = tail(out, out ? MAX_COMMAND_OUTPUT_CHARS - errKept.text.length : 0);
 
   const parts = [errKept, outKept].filter((p) => p.text.length > 0);
   if (parts.length === 0) return ' with no output';
@@ -258,6 +280,8 @@ export interface ScorerContext {
   canRunCommands?: boolean;
   /** The child's role, for the permission decision. */
   role?: string;
+  /** Shared wall-clock deadline for the whole gate; set by `runScorers`. */
+  deadline?: number;
   /**
    * The run's cancellation signal. Threaded so a `command_exit_zero` check dies
    * with the session instead of outliving it: a cancelled parent otherwise
@@ -301,21 +325,53 @@ export async function runScorers(
   ctx: ScorerContext,
 ): Promise<ScorerOutcome> {
   const failures: ScorerFailure[] = [];
+  // One deadline for the whole gate, not one per scorer. `parseScorers` allows
+  // 20 scorers and each `command_exit_zero` may ask for up to 600s, and they
+  // run sequentially AFTER the worker returned — outside the child's
+  // `wallClockMs`, which only bounds the spawn. Without this a single spawn
+  // could sit in its gates for hours.
+  const deadline = Date.now() + MAX_SCORER_GATE_MS;
+  let ran = 0;
 
   for (const scorer of scorers) {
+    if (Date.now() >= deadline) {
+      failures.push({
+        scorer: scorer.kind,
+        reason: `the verification gate exceeded its overall ${MAX_SCORER_GATE_MS}ms budget before this check ran`,
+        retryable: false,
+      });
+      break;
+    }
+    ran++;
     try {
-      const failure = await evaluate(scorer, result, ctx);
+      const failure = await evaluate(scorer, result, { ...ctx, deadline });
       if (failure) failures.push(failure);
     } catch (err) {
-      // A scorer should never throw; if it does, treat it as a failed gate so
-      // a broken check can't masquerade as a pass.
+      // A gate that could not be EVALUATED is different from one that failed:
+      // a cancelled run says nothing about the work, so the whole outcome is
+      // reported as not-run rather than as the child missing its contract.
+      if (err instanceof ScorerNotEvaluated) {
+        coreLogger.info({ scorer: scorer.kind, reason: err.message }, 'Scorer gate not evaluated');
+        return { passed: true, ran: 0, failures: [], notEvaluated: err.message };
+      }
+      // Otherwise: a scorer should never throw, and if it does, treat it as a
+      // failed gate so a broken check can't masquerade as a pass.
       coreLogger.error({ err, scorer: scorer.kind }, 'Scorer threw — counting as failure');
       failures.push({ scorer: scorer.kind, reason: `scorer error: ${(err as Error).message}` });
     }
   }
 
-  return { passed: failures.length === 0, ran: scorers.length, failures };
+  return { passed: failures.length === 0, ran, failures };
 }
+
+/**
+ * Raised when a gate could not be evaluated at all — as opposed to evaluated
+ * and failed. The only case today is a cancelled run: blaming the child for the
+ * operator stopping the session would flip an `ok` result to `contract_failed`,
+ * rewrite its receipt and persist a node row saying it missed a contract it
+ * never got to be judged against.
+ */
+export class ScorerNotEvaluated extends Error {}
 
 /** Evaluate one scorer. Returns a failure, or null when it passes. */
 async function evaluate(
@@ -581,10 +637,21 @@ async function evaluate(
         };
       }
 
-      const timeoutMs = Math.min(
-        scorer.timeoutMs ?? DEFAULT_COMMAND_SCORER_TIMEOUT_MS,
-        MAX_COMMAND_SCORER_TIMEOUT_MS,
+      const timeoutMs = Math.max(
+        1,
+        Math.min(
+          scorer.timeoutMs ?? DEFAULT_COMMAND_SCORER_TIMEOUT_MS,
+          MAX_COMMAND_SCORER_TIMEOUT_MS,
+          // Never outlive the gate's own budget.
+          ctx.deadline ? ctx.deadline - Date.now() : Number.POSITIVE_INFINITY,
+        ),
       );
+
+      // Already cancelled: do not start a process for a run nobody is waiting
+      // on, and do not record a verdict on work that was never judged.
+      if (ctx.signal?.aborted) {
+        throw new ScorerNotEvaluated('the run was cancelled before the check started');
+      }
 
       // Imported here rather than at module scope: `scorers.ts` is imported by
       // the spawn path on every child, and the shell operations module pulls in
@@ -605,8 +672,12 @@ async function evaluate(
         // the retry brief would name no defect at all.
         // A cancelled run is not a defect in the work — and re-running it is
         // pointless, since the session it belonged to is gone.
-        if (res.aborted) {
-          return { scorer: label, reason: 'was cancelled with the run', retryable: false };
+        // A cancelled run is not a defect in the work. Returning a failure here
+        // would flip an `ok` child to `contract_failed`, rewrite its receipt and
+        // persist the node row saying it missed its contract — blaming the child
+        // for the operator stopping the session.
+        if (res.aborted || ctx.signal?.aborted) {
+          throw new ScorerNotEvaluated('the run was cancelled before the check finished');
         }
         const how = res.aborted
           ? 'was cancelled with the run'
@@ -618,6 +689,11 @@ async function evaluate(
 
         return { scorer: label, reason: `${how}${formatCommandOutput(res.stdout, res.stderr)}` };
       } catch (err) {
+        if (err instanceof ScorerNotEvaluated) throw err;
+        // An abort that surfaced as a throw is still an abort, not a verdict.
+        if (ctx.signal?.aborted) {
+          throw new ScorerNotEvaluated('the run was cancelled while the check was running');
+        }
         // A rejected command (metacharacters), a missing binary, or the
         // deadline. All are failed gates: the check did not pass, and a gate
         // that cannot run must never read as one that did. None is something a

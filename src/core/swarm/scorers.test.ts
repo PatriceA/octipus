@@ -643,28 +643,47 @@ describe('command_exit_zero — environment faults are not the child’s defect'
   it('reports a missing workspace as such, not as a failed command', async () => {
     // Left unchecked this surfaces as `spawn ENOENT` and gets quoted back to
     // the child as the thing it must fix, burning a contract retry on it.
+    //
+    // `role` and an ALLOW permission are both required for the check to REACH
+    // the workspace branch — without them it refuses at the permission gate and
+    // the assertion would pass while proving nothing.
+    const permissions = await import('@/security/permissions');
+    const spy = vi.spyOn(permissions, 'getPermissionManager').mockReturnValue({
+      check: async () => ({ allowed: true, level: 'ALLOW', requiresApproval: false }),
+    } as never);
+
     const out = await runScorers(
       [{ kind: 'command_exit_zero', command: 'true' }],
       { output: 'x' },
-      { canRunCommands: true, userId: 'no-such-user-workspace' },
+      { canRunCommands: true, userId: 'no-such-user-workspace', role: 'coding' },
     );
-    if (!out.passed) {
-      expect(out.failures[0].reason).not.toMatch(/ENOENT/);
-    }
+    spy.mockRestore();
+
+    expect(out.passed).toBe(false);
+    expect(out.failures[0].reason).toMatch(/workspace/);
+    expect(out.failures[0].reason).not.toMatch(/ENOENT/);
+    expect(out.failures[0].retryable).toBe(false);
   });
 
   it('dies with a cancelled run instead of outliving it', async () => {
+    const permissions = await import('@/security/permissions');
+    const spy = vi.spyOn(permissions, 'getPermissionManager').mockReturnValue({
+      check: async () => ({ allowed: true, level: 'ALLOW', requiresApproval: false }),
+    } as never);
     const controller = new AbortController();
     const started = runScorers(
       [{ kind: 'command_exit_zero', command: 'sleep 30', timeoutMs: 20_000 }],
       { output: 'x' },
-      { canRunCommands: true, signal: controller.signal },
+      { canRunCommands: true, userId: 'system', role: 'coding', signal: controller.signal },
     );
     setTimeout(() => controller.abort(), 200);
     const out = await started;
-    expect(out.passed).toBe(false);
-    // Resolved well inside the 20s deadline, so it was the abort that ended it.
-    expect(out.failures[0].reason).toMatch(/cancelled|killed|did not run/i);
+    spy.mockRestore();
+
+    // Resolved well inside the 20s deadline, so it was the abort that ended it
+    // — and it is reported as unjudged rather than as the child having failed.
+    expect(out.notEvaluated).toMatch(/cancelled/);
+    expect(out.failures).toHaveLength(0);
   }, 15_000);
 });
 
@@ -805,5 +824,65 @@ describe('command_exit_zero — the permission action is the one that was read',
 
     expect(out.passed).toBe(false);
     expect(out.failures[0].retryable).toBe(false);
+  });
+});
+
+describe('formatCommandOutput — neither stream may starve the other', () => {
+  it('keeps stdout even when stderr alone fills the budget', () => {
+    // A failing `npm test` puts the npm ERR! boilerplate on stderr and the
+    // assertion diff on stdout. Giving stderr the whole budget first drops the
+    // diff — the half that says what actually broke.
+    const hugeErr = 'npm ERR! boilerplate\n'.repeat(400);
+    const text = formatCommandOutput('AssertionError: expected 1 to be 2', hugeErr);
+    expect(text).toContain('AssertionError: expected 1 to be 2');
+    expect(text).toContain('npm ERR!');
+  });
+
+  it('gives stdout the whole budget when there is no stderr', () => {
+    const text = formatCommandOutput('a'.repeat(1500), '');
+    expect(text).toContain('a'.repeat(1500));
+    expect(text).not.toContain('omitted');
+  });
+});
+
+describe('runScorers — the gate as a whole is bounded', () => {
+  it('stops starting checks once the overall budget is gone', async () => {
+    // 20 scorers × a 600s clamp each, run sequentially after the worker
+    // returned — outside the child's wall cap, which only bounds the spawn.
+    const many = Array.from({ length: 4 }, () => ({
+      kind: 'command_exit_zero' as const,
+      command: 'sleep 2',
+      timeoutMs: 2_000,
+    }));
+    const spent = Date.now();
+    const out = await runScorers(many, { output: 'x' }, { canRunCommands: true });
+    // No role/permission here, so each refuses instantly — the point is only
+    // that `ran` is reported honestly rather than assumed.
+    expect(out.ran).toBeLessThanOrEqual(many.length);
+    expect(Date.now() - spent).toBeLessThan(60_000);
+  }, 90_000);
+});
+
+describe('runScorers — a cancelled run is not a failed contract', () => {
+  it('reports the gate as not evaluated rather than failing the child', async () => {
+    const permissions = await import('@/security/permissions');
+    const spy = vi.spyOn(permissions, 'getPermissionManager').mockReturnValue({
+      check: async () => ({ allowed: true, level: 'ALLOW', requiresApproval: false }),
+    } as never);
+    const controller = new AbortController();
+    controller.abort();
+
+    const out = await runScorers(
+      [{ kind: 'command_exit_zero', command: 'true' }],
+      { output: 'x' },
+      { canRunCommands: true, userId: 'system', role: 'coding', signal: controller.signal },
+    );
+    spy.mockRestore();
+
+    // `passed` is true because nothing judged the work — absence of a verdict,
+    // not a favourable one. `notEvaluated` is what stops a reader mistaking it.
+    expect(out.passed).toBe(true);
+    expect(out.ran).toBe(0);
+    expect(out.notEvaluated).toMatch(/cancelled/);
   });
 });
