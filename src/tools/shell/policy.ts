@@ -207,6 +207,9 @@ const FLAG = /^-{1,2}[a-z][a-z0-9-]*$/i;
 /** A duration or count a wrapper takes positionally (`timeout 5`, `1.5s`). */
 const WRAPPER_ARG = /^\d+(?:\.\d+)?[smhd]?$/i;
 
+/** `xargs -I {}` and friends: a substitution token, not the command. */
+const PLACEHOLDER = /^\{\}$|^%$/;
+
 /**
  * Tokens after which the REST is another command: `sh -c …`, `find … -exec …`.
  * Without these, `find . -exec rm -rf / ;` reads as an invocation of `find`.
@@ -236,8 +239,7 @@ const basename = (token: string): string => token.slice(token.lastIndexOf('/') +
  *   in its own right, wherever it appears.
  */
 function commandCandidates(segment: string): string[] {
-  const stripped = segment.trim().replace(/^(?:[a-z_][a-z0-9_]*=\S*\s+)+/i, '');
-  const tokens = stripped.split(/\s+/).filter(Boolean);
+  const tokens = segment.trim().split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return [];
 
   const normalize = (list: string[]): string =>
@@ -245,15 +247,39 @@ function commandCandidates(segment: string): string[] {
 
   const candidates = [normalize(tokens)];
 
-  // Anything after `-exec` / `-c` is a command, at whatever depth it appears.
+  // Anything after `-exec` / `-c` is a command in its own right, wherever it
+  // appears — and it gets the same peeling as a top-level one.
   for (let i = 0; i < tokens.length - 1; i++) {
-    if (INTRODUCES_COMMAND.has(tokens[i])) candidates.push(normalize(tokens.slice(i + 1)));
+    if (INTRODUCES_COMMAND.has(tokens[i])) candidates.push(...commandCandidates(tokens.slice(i + 1).join(' ')));
   }
 
-  if (COMMAND_WRAPPERS.has(basename(tokens[0]))) {
-    let i = 1;
-    while (i < tokens.length && (FLAG.test(tokens[i]) || WRAPPER_ARG.test(tokens[i]))) i++;
-    if (i < tokens.length) candidates.push(normalize(tokens.slice(i)));
+  // Peel to what actually runs. Iterative, not one pass: `nohup timeout 5 halt`
+  // and `timeout 5 env A=1 rm -rf /` stack wrappers, and an assignment can sit
+  // after a wrapper (`env FOO=1 rm -rf /`) as easily as before one.
+  let rest = tokens;
+  for (let depth = 0; depth < 12; depth++) {
+    const before = rest;
+
+    // Environment assignments at this level. Recorded as its own candidate:
+    // peeling the assignment and the wrapper in one step skips straight past
+    // `sudo` in `env A=1 sudo npm i`, and that intermediate IS the command.
+    let i = 0;
+    while (i < rest.length && /^[a-z_][a-z0-9_]*=/i.test(rest[i])) i++;
+    if (i > 0) {
+      rest = rest.slice(i);
+      if (rest.length > 0) candidates.push(normalize(rest));
+    }
+
+    if (rest.length > 0 && COMMAND_WRAPPERS.has(basename(rest[0]))) {
+      let j = 1;
+      // The wrapper's own arguments: flags, the counts and durations it takes
+      // positionally, and `xargs -I {}`-style placeholders.
+      while (j < rest.length && (FLAG.test(rest[j]) || WRAPPER_ARG.test(rest[j]) || PLACEHOLDER.test(rest[j]))) j++;
+      rest = rest.slice(j);
+      if (rest.length > 0) candidates.push(normalize(rest));
+    }
+
+    if (rest === before) break;
   }
 
   return candidates.filter(Boolean);

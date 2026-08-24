@@ -246,3 +246,32 @@ describe('stepping over a wrapper’s own arguments, not past its payload', () =
     expect(commandPolicyViolation('nice -n 5 halt')).toMatch(/Blocked command detected/);
   });
 });
+
+describe('peeling reaches the command through stacked wrappers', () => {
+  it.each([
+    'env FOO=1 rm -rf /',
+    'nohup timeout 5 halt',
+    'nohup nice -n 5 halt',
+    'timeout 5 env A=1 rm -rf /',
+    'xargs -I {} rm -rf /',
+  ])('refuses %s', (command) => {
+    // Single-pass unwrapping missed all of these: an assignment can sit AFTER a
+    // wrapper as easily as before one, wrappers stack, and `-I {}` puts a
+    // placeholder between the flag and the payload.
+    expect(commandPolicyViolation(command)).toMatch(/Blocked command detected/);
+  });
+
+  it('finds an elevated command behind a wrapper and an assignment', () => {
+    // Peeling the assignment and the wrapper in one step skips straight past
+    // `sudo` here, which is why each step offers its own candidate.
+    expect(matchElevatedCommand('env A=1 sudo npm i')).toBe('sudo');
+    expect(matchElevatedCommand('nohup timeout 5 sudo apt update')).toBe('sudo');
+  });
+
+  it('and still allows the same shapes carrying ordinary commands', () => {
+    expect(commandPolicyViolation('env FOO=1 npm run halt')).toBeNull();
+    expect(commandPolicyViolation('nohup timeout 5 npm run reboot')).toBeNull();
+    expect(commandPolicyViolation('xargs -I {} npm run kill')).toBeNull();
+    expect(matchElevatedCommand('env A=1 npm run sudo-check')).toBeNull();
+  });
+});

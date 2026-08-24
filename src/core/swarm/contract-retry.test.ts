@@ -359,6 +359,51 @@ describe('SwarmSpawner — contract retry (through runChildWithRetry)', () => {
     expect(caps[1]).toBe(30_000);
   });
 
+  it('hands the retry the REMAINING wall clock, not a fresh one', async () => {
+    // `singleSpawnAndRun` passes this cap straight to `agentManager.spawn` as
+    // the worker's timeout, so sharing a `startedAt` bounds nothing on its own:
+    // one `spawn_child` could still block for a multiple of its wall budget.
+    const walls: number[] = [];
+    const spawner = new SwarmSpawner({} as never);
+    let n = 0;
+    (spawner as unknown as { singleSpawnAndRun: unknown }).singleSpawnAndRun = async (o: {
+      budget: { wallClockMs: { cap: number } };
+    }) => {
+      walls.push(o.budget.wallClockMs.cap);
+      return n++ === 0 ? gateFailed() : result();
+    };
+    await (
+      spawner as unknown as { runChildWithRetry: (o: unknown) => Promise<ChildResult> }
+    ).runChildWithRetry({
+      parent: { id: 'p', rootSessionId: 's' },
+      parentContext: { userId: 'u' },
+      childDepth: 1,
+      childKind: 'agent',
+      childRole: 'coding',
+      childModel: 'm',
+      childLane: 'agents',
+      childTools: [],
+      budget: {
+        tokens: { cap: 80_000, used: 0 },
+        wallClockMs: { cap: 600_000, startedAt: Date.now() - 200_000 },
+        fanOut: { cap: 4, used: 0 },
+        depth: 1,
+      },
+      topicPath: 'coding',
+      subtopic: 'x',
+      brief: { taskBrief: 'b', topicPath: 'coding' },
+      briefHash: 'h',
+      childMessage: 'TASK',
+      reason: 'normal',
+      spawnMode: 'await',
+    });
+
+    expect(walls[0]).toBe(600_000);
+    // ~400s left of the original 600s deadline.
+    expect(walls[1]).toBeGreaterThan(390_000);
+    expect(walls[1]).toBeLessThan(410_000);
+  });
+
   it('leaves a passing child alone', async () => {
     const { final, calls } = await runWith([result()]);
     expect(calls).toBe(1);
