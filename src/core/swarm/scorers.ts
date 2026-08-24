@@ -352,7 +352,15 @@ export async function runScorers(
       // reported as not-run rather than as the child missing its contract.
       if (err instanceof ScorerNotEvaluated) {
         coreLogger.info({ scorer: scorer.kind, reason: err.message }, 'Scorer gate not evaluated');
-        return { passed: true, ran: 0, failures: [], notEvaluated: err.message };
+        // Failures already recorded are real verdicts and stand. Only THIS
+        // check went unjudged, so the cancellation cannot launder a
+        // `file_exists` miss an earlier scorer had already found.
+        return {
+          passed: failures.length === 0,
+          ran: ran - 1,
+          failures,
+          notEvaluated: err.message,
+        };
       }
       // Otherwise: a scorer should never throw, and if it does, treat it as a
       // failed gate so a broken check can't masquerade as a pass.
@@ -573,7 +581,18 @@ async function evaluate(
       //
       // `attended: false` is the honest context: a scorer runs after the child
       // is finished, so there is nobody left to ask.
-      if (ctx.userId) {
+      if (!ctx.userId) {
+        // Fail closed, exactly as the catch below does. Without a user there is
+        // no permission decision to consult, so the authority to run this was
+        // never established — and skipping the check on a falsy id would be a
+        // way past it.
+        return {
+          scorer: label,
+          reason: 'refused: no user scope, so the shell permission could not be checked',
+          retryable: false,
+        };
+      }
+      {
         try {
           const [{ getPermissionManager }, { routeApproval }] = await Promise.all([
             import('@/security/permissions'),

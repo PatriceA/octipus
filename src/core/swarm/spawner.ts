@@ -1508,7 +1508,17 @@ export class SwarmSpawner {
       //
       // Best-effort, exactly like the pipeline's own write: a ledger failure
       // must never turn a good child into a failed one.
+      // A gate that never ran is not a passing verification. Writing
+      // `passed: outcome.passed` — true on the not-evaluated path — would put a
+      // green row in the ledger `scripts/quality-score.ts` reads for
+      // `deliveredPct`: a measurement of nothing, counted as a success.
       try {
+        if (outcome.notEvaluated) {
+          coreLogger.info(
+            { parentNodeId: opts.parent.id, childId, reason: outcome.notEvaluated },
+            'Skipping verification evidence — the gate was never evaluated',
+          );
+        } else {
         await verificationEvidenceRepository.record({
           sessionId: opts.parent.rootSessionId,
           nodeId: childId,
@@ -1520,6 +1530,7 @@ export class SwarmSpawner {
             failures: outcome.failures.map((f) => ({ scorer: f.scorer, reason: f.reason })),
           },
         });
+        }
       } catch (err) {
         coreLogger.warn(
           { err: (err as Error).message, childId },

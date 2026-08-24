@@ -12,6 +12,25 @@ import {
   runScorers,
 } from './scorers';
 
+
+/**
+ * A context for a child that genuinely may run commands: it holds the shell
+ * tool, has a user scope, and the operator's decision is ALLOW.
+ *
+ * Spelled out rather than relying on an absent `userId` to skip the permission
+ * check — that skip was itself a way past the gate, and is now a refusal.
+ */
+async function allowedToRun(over: Record<string, unknown> = {}) {
+  const permissions = await import('@/security/permissions');
+  const spy = vi.spyOn(permissions, 'getPermissionManager').mockReturnValue({
+    check: async () => ({ allowed: true, level: 'ALLOW', requiresApproval: false }),
+  } as never);
+  return {
+    ctx: { canRunCommands: true, userId: 'system', role: 'coding', ...over },
+    restore: () => spy.mockRestore(),
+  };
+}
+
 const ctx = { userId: 'system' as const };
 
 async function run(scorers: Scorer[], output: unknown, notes?: string) {
@@ -500,22 +519,22 @@ describe('command_exit_zero — parse validation', () => {
 
 describe('command_exit_zero — execution', () => {
   it('passes on exit 0', async () => {
-    const out = await runScorers(
-      [{ kind: 'command_exit_zero', command: 'true' }],
-      { output: 'x' },
-      { canRunCommands: true },
-    );
+    const { ctx: c, restore } = await allowedToRun();
+    const out = await runScorers([{ kind: 'command_exit_zero', command: 'true' }], { output: 'x' }, c);
+    restore();
     expect(out.passed).toBe(true);
   });
 
   it('fails on a non-zero exit and quotes the output back', async () => {
     // The reason text is what lands in the retry brief, so a bare "exit 1"
     // would leave the next attempt with nothing to act on.
+    const { ctx: c, restore } = await allowedToRun();
     const out = await runScorers(
       [{ kind: 'command_exit_zero', command: 'ls /definitely/not/here' }],
       { output: 'x' },
-      { canRunCommands: true },
+      c,
     );
+    restore();
     expect(out.passed).toBe(false);
     expect(out.failures[0].scorer).toMatch(/^command_exit_zero\(/);
     expect(out.failures[0].reason).toMatch(/exited [1-9]/);
@@ -526,32 +545,49 @@ describe('command_exit_zero — execution', () => {
     // The command comes from a parent LLM whose context can include untrusted
     // web/tool output. Safe-mode `tokenizeSafe` refuses the whole string, and a
     // gate that could not run must never read as one that passed.
+    const { ctx: c, restore } = await allowedToRun();
     const out = await runScorers(
       [{ kind: 'command_exit_zero', command: 'true; echo pwned > /tmp/x' }],
       { output: 'x' },
-      { canRunCommands: true },
+      c,
     );
+    restore();
     expect(out.passed).toBe(false);
     expect(out.failures[0].reason).toMatch(/did not run/);
   });
 
   it('FAILS a command that does not exist', async () => {
+    const { ctx: c, restore } = await allowedToRun();
     const out = await runScorers(
       [{ kind: 'command_exit_zero', command: 'octipus-no-such-binary' }],
       { output: 'x' },
-      { canRunCommands: true },
+      c,
     );
+    restore();
     expect(out.passed).toBe(false);
   });
 
   it('FAILS a command that outruns its deadline', async () => {
+    const { ctx: c, restore } = await allowedToRun();
     const out = await runScorers(
       [{ kind: 'command_exit_zero', command: 'sleep 5', timeoutMs: 300 }],
+      { output: 'x' },
+      c,
+    );
+    restore();
+    expect(out.passed).toBe(false);
+  }, 20_000);
+
+  it('REFUSES when there is no user scope to check a permission against', async () => {
+    // The skip this used to rely on was itself a way past the gate.
+    const out = await runScorers(
+      [{ kind: 'command_exit_zero', command: 'true' }],
       { output: 'x' },
       { canRunCommands: true },
     );
     expect(out.passed).toBe(false);
-  }, 20_000);
+    expect(out.failures[0].reason).toMatch(/no user scope/);
+  });
 });
 
 describe('command_exit_zero — who may run one', () => {
@@ -599,11 +635,13 @@ describe('command_exit_zero — the failure has to be actionable', () => {
   it('names a timeout rather than reporting "exited null"', async () => {
     // A killed process has a null exit code, so without this the retry brief
     // would say `exited null` and name no defect at all.
+    const { ctx: c, restore } = await allowedToRun();
     const out = await runScorers(
       [{ kind: 'command_exit_zero', command: 'sleep 5', timeoutMs: 300 }],
       { output: 'x' },
-      { canRunCommands: true },
+      c,
     );
+    restore();
     expect(out.passed).toBe(false);
     expect(out.failures[0].reason).toMatch(/timed out after 300ms/);
     expect(out.failures[0].reason).not.toMatch(/exited null/);
@@ -884,5 +922,31 @@ describe('runScorers — a cancelled run is not a failed contract', () => {
     expect(out.passed).toBe(true);
     expect(out.ran).toBe(0);
     expect(out.notEvaluated).toMatch(/cancelled/);
+  });
+});
+
+describe('a cancellation does not launder verdicts already reached', () => {
+  it('keeps an earlier scorer’s failure when a later one is cancelled', async () => {
+    // The single-scorer tests could not see this: returning a clean
+    // not-evaluated outcome discards failures other scorers already found, so a
+    // real `file_exists` miss would be erased by the cancellation and the child
+    // would stay `ok`.
+    const { ctx: c, restore } = await allowedToRun();
+    const controller = new AbortController();
+    controller.abort();
+
+    const out = await runScorers(
+      [
+        { kind: 'file_exists', path: 'definitely-not-here.md' },
+        { kind: 'command_exit_zero', command: 'true' },
+      ],
+      { output: 'x' },
+      { ...c, signal: controller.signal },
+    );
+    restore();
+
+    expect(out.notEvaluated).toMatch(/cancelled/);
+    expect(out.passed).toBe(false);
+    expect(out.failures.map((f) => f.scorer)).toContain('file_exists');
   });
 });
