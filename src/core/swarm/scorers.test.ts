@@ -590,6 +590,29 @@ describe('command_exit_zero — execution', () => {
   });
 });
 
+describe('the gate’s own budget', () => {
+  it('reports the checks it never reached once the budget is gone — also RETRYABLE', async () => {
+    const { ctx: c, restore } = await allowedToRun({ deadline: Date.now() - 1 });
+    const out = await runScorers(
+      [
+        { kind: 'command_exit_zero', command: 'true' },
+        { kind: 'command_exit_zero', command: 'true' },
+      ],
+      { output: 'x' },
+      c,
+    );
+    restore();
+    expect(out.passed).toBe(false);
+    // One entry, not one per unreached check: the loop breaks on the first.
+    expect(out.failures).toHaveLength(1);
+    expect(out.failures[0].reason).toMatch(/exceeded its overall/);
+    expect(out.failures[0].retryable).not.toBe(false);
+    // And nothing ran — the count is what tells a reader the budget stopped
+    // the gate rather than the checks passing.
+    expect(out.ran).toBe(0);
+  });
+});
+
 describe('command_exit_zero — who may run one', () => {
   it('REFUSES to run for a child that does not hold the shell tool', async () => {
     // Otherwise a scorer is a way to run commands as a role the operator
@@ -1088,7 +1111,13 @@ describe('a spent gate budget is not the child’s failure', () => {
     expect(out.passed).toBe(false);
     expect(out.failures[0].reason).toMatch(/too little to run this check/);
     expect(out.failures[0].reason).not.toMatch(/timed out/);
-    expect(out.failures[0].retryable).toBe(false);
+    // RETRYABLE. It was marked unfixable on the premise that "another child run
+    // would meet the same spent budget" — which is false: the spawn path sets
+    // no `deadline`, so `runScorers` starts each attempt on a fresh
+    // MAX_SCORER_GATE_MS budget. Only a caller with its own clock (this test)
+    // sees a spent one, and the flag was skipping a contract retry that would
+    // most likely have passed.
+    expect(out.failures[0].retryable).not.toBe(false);
   });
 });
 

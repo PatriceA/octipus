@@ -732,3 +732,45 @@ describe('the value-taking flag map is reachable', () => {
     expect(matchElevatedCommand('xargs -p sudo id')).toBe('sudo');
   });
 });
+
+describe('a flag whose VALUE is a command line', () => {
+  it.each([
+    ['env -S "sudo id"', 'sudo'],
+    ['env --split-string "sudo id"', 'sudo'],
+    ['env --split-string="sudo id"', 'sudo'],
+    ['bash --command="sudo id"', 'sudo'],
+    ['script -c "sudo id" /dev/null', 'sudo'],
+    ['su -c "apt-get install x"', 'su'],
+  ])('reads the command inside %s', (command, expected) => {
+    // `env -S` and `script -c` take a whole command LINE as their value. While
+    // those flags sat in `VALUE_TAKING_FLAGS` the peel stepped over the value
+    // as an ordinary option argument, so the `sudo` inside was never examined
+    // and the invocation routed to the ASK-level `execute` permission —
+    // auto-approved unattended — instead of DENY-by-default `execute_elevated`.
+    expect(matchElevatedCommand(command)).toBe(expected);
+  });
+
+  it('reads it in the JOINED form, which has no separate token to stop on', () => {
+    // Keeping the flag out of `VALUE_TAKING_FLAGS` only fixes the SEPARATE
+    // form: there the value is its own token and the peel halts on it.
+    // Whitespace-splitting the joined form yields `--split-string=sudo`, which
+    // matches `FLAG` and is stepped over as an option, so the same bypass
+    // survived in the shape a caller is most likely to type.
+    expect(matchElevatedCommand('env --split-string=sudo apt-get install x')).toBe('sudo');
+    expect(matchElevatedCommand('sh -c=sudo id')).toBe('sudo');
+  });
+
+  it('is scoped PER WRAPPER, so a same-named value flag is not read as a command', () => {
+    // The command is lowercased before matching, so `env -S` lowers onto `-s`
+    // — an ordinary value-taking flag for `strace` (string size) and `timeout`
+    // (signal). A shared list reads `strace -s=1024 sudo id` as running the
+    // command `1024` and loses the `sudo` behind it.
+    expect(matchElevatedCommand('strace -s=1024 sudo id')).toBe('sudo');
+    expect(matchElevatedCommand('timeout -s=KILL 5 sudo id')).toBe('sudo');
+  });
+
+  it('and does not turn an ordinary joined flag into a command', () => {
+    expect(matchElevatedCommand('env --chdir=/tmp npm test')).toBeNull();
+    expect(matchElevatedCommand('env --split-string="npm run kill"')).toBeNull();
+  });
+});

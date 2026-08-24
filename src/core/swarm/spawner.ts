@@ -1,24 +1,25 @@
 import { getConfig } from '@/config';
-import { recordSwarmSpawn } from '@/core/telemetry';
 import type { AnyAgentWorker } from '@/core/agent-manager';
 import { getAgentManager } from '@/core/agent-manager';
-import type { ToolHandler } from '@/core/agent-worker';
+import type { AgentWorker, ToolHandler } from '@/core/agent-worker';
 import type { GatewayHub } from '@/core/gateway/hub';
 import { getGatewayHub } from '@/core/gateway/hub';
 import { getOrchestratorHooks } from '@/core/orchestrator/hooks';
 import { buildSecurityReminder, guardInput } from '@/core/orchestrator/input-guard';
-import { formatCriticalRules, getRoleConfig, getToolsForRole } from '@/core/orchestrator/roles';
 import { estimateToolSchemaTokens, logPromptComposition } from '@/core/orchestrator/prompt-budget';
+import { formatCriticalRules, getRoleConfig, getToolsForRole } from '@/core/orchestrator/roles';
 import { applyToolCap, isSmallModel } from '@/core/orchestrator/small-model';
+import type { AgentRole } from '@/core/orchestrator/types';
 import { pipelineMetadata } from '@/core/orchestrator/worker-spawner';
 import { countChangedFiles, snapshotWorkspace } from '@/core/orchestrator/workspace-snapshot';
-import type { AgentRole } from '@/core/orchestrator/types';
-import { WorkspaceFS } from '@/security/workspace-fs';
+import { recordSwarmSpawn } from '@/core/telemetry';
 import type { AgentContext } from '@/core/types';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
 import { getModelRegistry } from '@/models/model-registry';
 import { getTopicConfig } from '@/models/topic-config';
+import { WorkspaceFS } from '@/security/workspace-fs';
+import { formatDateTimeContext } from '@/utils/date-context';
 import { coreLogger } from '@/utils/logger';
 import { taskFingerprint as _taskFingerprint, getCallGraph } from './call-graph';
 import {
@@ -32,7 +33,17 @@ import {
 import { getSwarmLedger } from './ledger';
 import { swarmNodeRepository } from './node-repository';
 import { buildReceipt } from './receipt';
-import { lookupCacheHit } from './spawn-cache';
+import {
+  deriveCodeDiffScorer,
+  deriveSchemaScorer,
+  deriveToolOutageScorer,
+  renderContractFeedback,
+  runScorers,
+  type Scorer,
+  type ScorerContext,
+  type ScorerOutcome,
+} from './scorers';
+import { buildSiblingScopeBrief, recordChildScope } from './session-scope';
 import {
   deriveChildBudget,
   InsufficientBudgetError,
@@ -41,6 +52,7 @@ import {
   shouldWarnBudget,
   syncParentTokenUsage,
 } from './spawn-budget';
+import { lookupCacheHit } from './spawn-cache';
 import {
   checkConcurrency,
   checkDepth,
@@ -48,18 +60,7 @@ import {
   checkSameRole,
   denialResult as denialResultFn,
 } from './spawn-validator';
-import {
-  type Scorer,
-  type ScorerContext,
-  type ScorerOutcome,
-  deriveCodeDiffScorer,
-  deriveSchemaScorer,
-  deriveToolOutageScorer,
-  renderContractFeedback,
-  runScorers,
-} from './scorers';
 import { applyRoleFit, buildDelegationGuidance } from './swarm-tool';
-import { recordChildScope, buildSiblingScopeBrief } from './session-scope';
 import {
   type AgentNode,
   type ChildResult,
@@ -71,8 +72,6 @@ import {
   type SpawnChildParams,
   type TaskBrief,
 } from './types';
-import type { AgentWorker } from '@/core/agent-worker';
-import { formatDateTimeContext } from '@/utils/date-context';
 
 /** Re-exported (moved into `call-graph.ts` in Phase 2). */
 export const taskFingerprint = _taskFingerprint;
@@ -821,6 +820,11 @@ export class SwarmSpawner {
       }
       noteFailure(result);
       discardedTokens += result.usedTokens ?? 0;
+      // A fresh fan-out allowance for the new node. `handleSpawn` increments
+      // `parent.budget.fanOut.used` on the object this budget shares, so a
+      // child that spawned its subagents and then crashed was retried with the
+      // counter already at cap and every `spawn_child` denied.
+      opts.budget.fanOut = { cap: opts.budget.fanOut.cap, used: 0 };
       // Crash retry on new node.
       coreLogger.warn(
         { parentNodeId: opts.parent.id, status: result.status, attempt: attemptNewNode + 1 },
@@ -846,6 +850,8 @@ export class SwarmSpawner {
           // attempt twice when the spawn throws, because the catch below hands
           // that same result back as `lastResult`.
           const superseded = lastResult;
+          // Same reset as the crash retry: a new node, a new allowance.
+          opts.budget.fanOut = { cap: opts.budget.fanOut.cap, used: 0 };
           lastResult = await this.singleSpawnAndRun(
             { ...opts, childModel: backup.modelId, reason: 'retry' },
             true,

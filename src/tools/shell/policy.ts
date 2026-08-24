@@ -274,7 +274,11 @@ const VALUE_TAKING_FLAGS: Record<string, ReadonlySet<string>> = {
   // entry is omitted rather than guessed: `xargs -P` (max-procs, takes a value)
   // lowers onto `xargs -p` (interactive, takes none), and consuming the token
   // after `-p` would hide a command instead of revealing one.
-  env: new Set(['-u', '--unset', '-s', '--split-string', '-c', '--chdir']),
+  // `-S`/`--split-string` is deliberately ABSENT: its value is a command line,
+  // so skipping it hid the `sudo` in `env -S "sudo id"`. The same reasoning
+  // keeps `-c` off `script` below. A flag whose value is a command must have
+  // that value examined, not stepped over.
+  env: new Set(['-u', '--unset', '-c', '--chdir']),
   timeout: new Set(['-s', '--signal', '-k', '--kill-after']),
   nice: new Set(['-n', '--adjustment']),
   ionice: new Set(['-c', '--class', '-n', '--classdata']),
@@ -290,11 +294,45 @@ const VALUE_TAKING_FLAGS: Record<string, ReadonlySet<string>> = {
   proxychains: new Set(['-f']),
   proxychains4: new Set(['-f']),
   sudo: new Set(['-u', '--user', '-g', '--group', '-p', '--prompt']),
-  su: new Set(['-c', '--command', '-s', '--shell']),
+  // `su -c` likewise runs its value.
+  su: new Set(['-s', '--shell']),
   doas: new Set(['-u', '-C']),
   runuser: new Set(['-u', '--user', '-g', '--group', '-s', '--shell']),
   unshare: new Set(['--map-user', '--map-group', '--setgroups']),
-  script: new Set(['-c', '--command', '-l', '--log-out']),
+  script: new Set(['-l', '--log-out']),
+};
+
+/**
+ * Flags whose value IS a command line, in the joined `--flag=value` form.
+ *
+ * The separate form (`env -S "sudo id"`) is already handled by keeping these
+ * flags out of `VALUE_TAKING_FLAGS`, so the peel stops on the `sudo` token.
+ * The joined form has no such token: whitespace-splitting
+ * `env --split-string="sudo id"` yields `--split-string=sudo`, which matches
+ * `FLAG` and is stepped over as an option — so the elevated command inside it
+ * was never examined and the invocation routed to the ASK-level `execute`
+ * permission instead of DENY-by-default `execute_elevated`.
+ */
+const COMMAND_STRING_FLAGS: Record<string, ReadonlySet<string>> = {
+  // PER WRAPPER, and for the same reason `VALUE_TAKING_FLAGS` is: the command
+  // is lowercased before matching, so `env -S` lowers onto `-s` — which for
+  // `strace` and `timeout` is an ordinary value-taking flag. A shared list
+  // would read `strace -s=1024 sudo id` as running the command `1024` and lose
+  // the `sudo` behind it.
+  env: new Set(['-s', '--split-string']),
+  sh: new Set(['-c', '--command']),
+  bash: new Set(['-c', '--command']),
+  zsh: new Set(['-c', '--command']),
+  ksh: new Set(['-c']),
+  dash: new Set(['-c']),
+  ash: new Set(['-c']),
+  fish: new Set(['-c', '--command']),
+  busybox: new Set(['-c']),
+  script: new Set(['-c', '--command']),
+  su: new Set(['-c', '--command']),
+  runuser: new Set(['-c', '--command']),
+  doas: new Set(['-c']),
+  sudo: new Set(['-c']),
 };
 
 /** `xargs -I {}` and friends: a substitution token, not the command. */
@@ -374,8 +412,16 @@ function commandCandidates(segment: string): string[] {
     if (rest.length > 0 && COMMAND_WRAPPERS.has(basename(rest[0]))) {
       let j = 1;
       const takesPath = TAKES_PATH_ARG.has(basename(rest[0]));
+      // What a joined `--flag=<command line>` token turns out to hold, once
+      // the flag part is stripped off it.
+      let inlineCommand: string[] | null = null;
       while (j < rest.length) {
         const t = rest[j];
+        const joined = /^(--?[a-z][a-z0-9-]*)=([\s\S]+)$/i.exec(t);
+        if (joined && (COMMAND_STRING_FLAGS[basename(rest[0])]?.has(joined[1].toLowerCase()) ?? false)) {
+          inlineCommand = [joined[2], ...rest.slice(j + 1)];
+          break;
+        }
         // Stop the moment a token names a command: `timeout 5 /usr/bin/sudo x`
         // has a path-shaped argument that IS the payload, and consuming it
         // dropped the whole invocation to the ASK-level permission.
@@ -405,7 +451,7 @@ function commandCandidates(segment: string): string[] {
           break;
         j++;
       }
-      rest = rest.slice(j);
+      rest = inlineCommand ?? rest.slice(j);
       if (rest.length > 0) candidates.push(normalize(rest));
     }
 

@@ -431,8 +431,9 @@ export async function runScorers(
     if (Date.now() >= deadline) {
       failures.push({
         scorer: scorer.kind,
+        // Retryable for the same reason as the per-check floor: the next
+        // attempt starts a fresh gate budget.
         reason: `the verification gate exceeded its overall ${MAX_SCORER_GATE_MS}ms budget before this check ran`,
-        retryable: false,
       });
       break;
     }
@@ -781,14 +782,16 @@ async function evaluate(
 
       // Never outlive the gate's own budget — but a sliver of it is not a
       // deadline, it is a guaranteed timeout blamed on the child. Below the
-      // floor the check is reported as unrun, and unfixably so: another child
-      // run would meet the same spent budget.
+      // floor the check is reported as unrun rather than failed.
       const gateLeft = ctx.deadline ? ctx.deadline - Date.now() : Number.POSITIVE_INFINITY;
       if (gateLeft < MIN_COMMAND_SCORER_TIMEOUT_MS) {
         return {
           scorer: label,
+          // Retryable: each attempt gets its own gate budget (nothing sets a
+          // `deadline` on the spawn path), so a re-dispatch does NOT meet the
+          // same spent clock. Marking it unfixable skipped a retry that would
+          // most likely have passed.
           reason: `the verification gate had ${Math.max(0, gateLeft)}ms of its budget left, too little to run this check`,
-          retryable: false,
         };
       }
       const timeoutMs = Math.min(
