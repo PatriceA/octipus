@@ -233,13 +233,18 @@ const WRAPPER_ARG = /^\d+(?:\.\d+)?[smhd]?$/i;
 
 /**
  * A path a wrapper takes positionally before the command it runs — `flock
- * /tmp/lock cmd`, `chroot /newroot cmd`. Only skipped in wrapper position, so
- * an ordinary command's path arguments are untouched.
+ * /tmp/lock cmd`, `chroot /newroot cmd`.
+ *
+ * Skipped only for the wrappers that actually take one. Applied to every
+ * wrapper it consumed the SCRIPT being run and promoted its first argument to
+ * the head: `bash scripts/build.sh docker` read as `docker`,
+ * `timeout 120 ./gradlew kill` as `kill` — both routed to the DENY-by-default
+ * `execute_elevated` permission, refusing ordinary work.
  */
 const WRAPPER_PATH_ARG = /^[./~]|\//;
 
-/** Flags whose VALUE is itself a command: `sh -c …`, `find … -exec …`. */
-const INTRODUCES_COMMAND = new Set(['-c', '-exec', '-execdir', '-ok', '-okdir']);
+/** The wrappers whose first positional is a path, not the command. */
+const TAKES_PATH_ARG = new Set(['flock', 'chroot', 'unshare', 'runuser']);
 
 /** `xargs -I {}` and friends: a substitution token, not the command. */
 const PLACEHOLDER = /^\{\}$|^%$/;
@@ -324,7 +329,9 @@ function commandCandidates(segment: string): string[] {
         // dropped the whole invocation to the ASK-level permission.
         const nameOfT = basename(t);
         if (COMMAND_WRAPPERS.has(nameOfT) || ELEVATED_COMMANDS.includes(nameOfT)) break;
-        if (!(FLAG.test(t) || WRAPPER_ARG.test(t) || PLACEHOLDER.test(t) || WRAPPER_PATH_ARG.test(t))) break;
+        const takesPath = TAKES_PATH_ARG.has(basename(rest[0]));
+        if (!(FLAG.test(t) || WRAPPER_ARG.test(t) || PLACEHOLDER.test(t) || (takesPath && WRAPPER_PATH_ARG.test(t))))
+          break;
         j++;
       }
       rest = rest.slice(j);
@@ -391,32 +398,25 @@ function invokesCommand(text: string, name: string): boolean {
   // `npm test -- --grep nc` and `git add src/nc` out of the denylist.
   const needsArgs = name.endsWith(' ');
 
-  // Segment FIRST, then scan each segment's tokens. Both rules below are
-  // per-command properties, and computing them over the flattened string let
-  // them leak across a separator: `ls -la; nc -e /bin/sh …` took the flag rule
-  // from `ls`'s arguments and `echo ok && strace -f nc …` took `headIsWrapper`
-  // from `echo`, so the second command in the line went unchecked while the
-  // same command alone was refused.
+  // Segment FIRST, then scan each segment's tokens. A rule derived from the
+  // flattened line is taken from its FIRST command and applied to all of them:
+  // `ls -la; nc -e /bin/sh …` and `echo ok && strace -f nc …` both went
+  // unchecked that way, while the same second command alone was refused.
   for (const segment of text.split(/&&|\|\||[;&|\n()`]/)) {
     const tokens = segment.split(/[\s{}$]+/).filter(Boolean);
     if (tokens.length === 0) continue;
-    // A wrapper's flags belong to the WRAPPER and the command follows them; an
-    // ordinary command's bare flag takes the next token as its value.
-    const headIsWrapper = COMMAND_WRAPPERS.has(basename(tokens[0]));
+
+    // NO "a token after a bare flag is that flag's value" rule here, and that
+    // is deliberate. It has to know which head is a wrapper to be safe — a
+    // wrapper's flags are its own and the command follows them — and the
+    // wrapper list can never be complete: `firejail --quiet nc -e /bin/sh …`,
+    // `systemd-run --quiet nc …` and any future launcher slipped straight
+    // through it. Twice now that rule has reopened the bypass this matcher
+    // exists to close, so what it bought — allowing `--grep shutdown` — is
+    // given up instead. `npm run halt` is refused on the same grounds, and the
+    // substring rule on main refused both.
 
     for (let i = 0; i < tokens.length; i++) {
-      const prev = tokens[i - 1];
-      if (
-        !headIsWrapper &&
-        prev &&
-        FLAG.test(prev) &&
-        // `--adjustment=10` carries its own value, so what follows IS the
-        // command again; `-c`/`-exec` take a command as their value by design.
-        !prev.includes('=') &&
-        !INTRODUCES_COMMAND.has(prev)
-      ) {
-        continue;
-      }
       // An entry written with a trailing space (`nc `) means the command WITH
       // arguments, so a bare trailing `nc` is an argument, not an invocation.
       if (needsArgs && i === tokens.length - 1) continue;

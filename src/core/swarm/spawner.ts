@@ -1043,8 +1043,8 @@ export class SwarmSpawner {
       // attempt the original cap lets one `spawn_child` spend a multiple of it —
       // and since `discardedTokens` now charges the parent honestly, the
       // overspend surfaces as an `InsufficientBudgetError` on a later sibling
-      // that should have fit. The wall cap is likewise the remainder, so the
-      // attempts share one deadline instead of each getting a fresh one.
+      // that should have fit. The wall cap is likewise the remainder, restamped
+      // so the pair still reads as one absolute deadline rather than two.
       const retried = await this.singleSpawnAndRun(
         {
           ...opts,
@@ -1056,9 +1056,14 @@ export class SwarmSpawner {
             // `agentManager.spawn` as the worker's timeout, so keeping the
             // original `startedAt` alone bounds nothing — one `spawn_child`
             // could still block for a multiple of the child's wall budget.
+            // The remainder AND a fresh start, so the pair still describes one
+            // absolute deadline. Shrinking the cap while keeping the original
+            // `startedAt` makes every `cap - (now - startedAt)` consumer
+            // subtract the elapsed time twice — `collect-tool.ts` reads
+            // `remaining === 0` from the retry's first moment.
             wallClockMs: {
               cap: Math.max(1, opts.budget.wallClockMs.cap - elapsed),
-              startedAt: opts.budget.wallClockMs.startedAt,
+              startedAt: Date.now(),
             },
           },
           childMessage: `${feedback}\n\n${opts.childMessage}`,

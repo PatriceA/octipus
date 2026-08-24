@@ -404,6 +404,53 @@ describe('SwarmSpawner — contract retry (through runChildWithRetry)', () => {
     expect(walls[1]).toBeLessThan(410_000);
   });
 
+  it('restamps the retry’s clock so the deadline is not counted twice', async () => {
+    // `cap` and `startedAt` describe ONE absolute deadline. Shrinking the cap
+    // while keeping the original start makes every `cap - (now - startedAt)`
+    // consumer subtract the elapsed time again — `collect-tool.ts` reads
+    // `remaining === 0` from the corrective attempt's first moment.
+    const budgets: { cap: number; startedAt: number }[] = [];
+    const spawner = new SwarmSpawner({} as never);
+    let n = 0;
+    (spawner as unknown as { singleSpawnAndRun: unknown }).singleSpawnAndRun = async (o: {
+      budget: { wallClockMs: { cap: number; startedAt: number } };
+    }) => {
+      budgets.push({ ...o.budget.wallClockMs });
+      return n++ === 0 ? gateFailed() : result();
+    };
+    const startedAt = Date.now() - 200_000;
+    await (
+      spawner as unknown as { runChildWithRetry: (o: unknown) => Promise<ChildResult> }
+    ).runChildWithRetry({
+      parent: { id: 'p', rootSessionId: 's' },
+      parentContext: { userId: 'u' },
+      childDepth: 1,
+      childKind: 'agent',
+      childRole: 'coding',
+      childModel: 'm',
+      childLane: 'agents',
+      childTools: [],
+      budget: {
+        tokens: { cap: 80_000, used: 0 },
+        wallClockMs: { cap: 600_000, startedAt },
+        fanOut: { cap: 4, used: 0 },
+        depth: 1,
+      },
+      topicPath: 'coding',
+      subtopic: 'x',
+      brief: { taskBrief: 'b', topicPath: 'coding' },
+      briefHash: 'h',
+      childMessage: 'TASK',
+      reason: 'normal',
+      spawnMode: 'await',
+    });
+
+    const retry = budgets[1];
+    // Roughly the whole remainder is still available to the retry.
+    const remaining = retry.cap - (Date.now() - retry.startedAt);
+    expect(remaining).toBeGreaterThan(390_000);
+  });
+
   it('will not start a retry that cannot finish', async () => {
     // A remainder of milliseconds is not "time left": the attempt registers a
     // node, boots an agent and is then guaranteed to time out. The token side
