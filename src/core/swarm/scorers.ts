@@ -206,12 +206,16 @@ function namesShellWithCommandString(command: string): string | null {
     const name = token.slice(token.lastIndexOf('/') + 1);
     if (!SHELL_INTERPRETERS.has(name)) continue;
     if (i === 0) return name;
-    // A shell's OWN flags may sit between it and the one that takes the string:
-    // `env sh -x -c "…"`, `timeout 60 bash --norc -c "…"`, `xargs -0 sh -e -c`.
-    // Stopping at the immediately-next token missed all three.
+    // A shell's OWN options may sit between it and the flag that takes the
+    // string, and some of them take a value of their own: `sh -x -c`,
+    // `bash --norc -c`, `sh -o errexit -c`, `bash --rcfile /dev/null -c`.
+    // Walking only over things that look like flags stopped at `errexit` and
+    // `/dev/null`, so the whole rest of the argv is scanned instead.
+    //
+    // A shell mentioned with no such flag anywhere after it is not an
+    // interpreter invocation — `pytest -k sh` names one and runs nothing.
     for (let j = i + 1; j < argv.length; j++) {
       if (SHELL_STRING_FLAGS.has(argv[j])) return name;
-      if (!/^-{1,2}[a-z]/i.test(argv[j])) break;
     }
   }
   return null;
@@ -952,7 +956,13 @@ export function parseScorers(raw: unknown): { scorers: Scorer[] } | { error: str
           }
           requiredKeys = e.requiredKeys as string[];
         }
-        scorers.push({ kind: 'json', requiredKeys });
+        // `object` was read nowhere, so `{"kind":"json","object":true}` was
+        // silently downgraded to a shape-less check and `42`, `null` or an
+        // array passed a gate written to reject exactly those.
+        if (e.object !== undefined && typeof e.object !== 'boolean') {
+          return { error: `scorers[${i}].object (json) must be a boolean` };
+        }
+        scorers.push({ kind: 'json', requiredKeys, ...(e.object === true ? { object: true } : {}) });
         break;
       }
       case 'file_exists': {
@@ -999,6 +1009,15 @@ export function parseScorers(raw: unknown): { scorers: Scorer[] } | { error: str
         if (e.timeoutMs !== undefined) {
           if (typeof e.timeoutMs !== 'number' || !Number.isInteger(e.timeoutMs) || e.timeoutMs <= 0) {
             return { error: `scorers[${i}].timeoutMs (command_exit_zero) must be a positive integer` };
+          }
+          // Rejected at the boundary rather than clamped at run time: a
+          // deadline nothing can finish within produces a guaranteed timeout
+          // reported as the CHILD's failure, and a retryable one, so it also
+          // buys a whole extra child run.
+          if (e.timeoutMs < MIN_COMMAND_SCORER_TIMEOUT_MS) {
+            return {
+              error: `scorers[${i}].timeoutMs (command_exit_zero) must be at least ${MIN_COMMAND_SCORER_TIMEOUT_MS}ms — anything shorter cannot complete`,
+            };
           }
           if (e.timeoutMs > MAX_COMMAND_SCORER_TIMEOUT_MS) {
             return {

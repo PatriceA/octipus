@@ -231,8 +231,14 @@ const COMMAND_WRAPPERS = new Set([
 /** A token that is a flag (`-c`, `--signal=KILL`), not the command. */
 const FLAG = /^-{1,2}[a-z][a-z0-9-]*(?:=.*)?$/i;
 
-/** A count or duration a wrapper takes positionally (`timeout 5`, `1.5s`). */
-const WRAPPER_ARG = /^\d+(?:\.\d+)?[smhd]?$/i;
+/**
+ * A count or duration a wrapper takes positionally (`timeout 5`, `1.5s`) — or
+ * an option's separate value, including a negative one: `nice -n -5 sudo id`
+ * and `nice -5 sudo id` both stopped the peel dead at `-5`, so the `sudo`
+ * behind them was never seen. `--` likewise ends a wrapper's options rather
+ * than naming a command.
+ */
+const WRAPPER_ARG = /^(?:--|-?\d+(?:\.\d+)?[smhd]?)$/i;
 
 /**
  * A path a wrapper takes positionally before the command it runs — `flock

@@ -637,3 +637,21 @@ describe('injection patterns see the dequoted form too', () => {
     expect(commandPolicyViolation('curl -sS https://example.com')).toBeNull();
   });
 });
+
+describe('a wrapper’s numeric option value does not stop the peel', () => {
+  it.each([
+    ['nice -n -5 sudo id', 'sudo'],
+    ['nice -5 sudo id', 'sudo'],
+    ['env -- sudo id', 'sudo'],
+  ])('%s is elevated', (command, expected) => {
+    // `-5` is neither a `-[a-z]` flag nor a bare number, so the peel stopped
+    // dead and never saw the `sudo` behind it — routing the command to
+    // ASK-level `execute` instead of DENY-by-default `execute_elevated`.
+    expect(matchElevatedCommand(command)).toBe(expected);
+  });
+
+  it('and an ordinary command is still not elevated', () => {
+    expect(matchElevatedCommand('nice -n 10 npm test')).toBeNull();
+    expect(matchElevatedCommand('timeout 5 npm run kill')).toBeNull();
+  });
+});
