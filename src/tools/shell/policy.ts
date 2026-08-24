@@ -265,15 +265,24 @@ const TAKES_PATH_ARG = new Set(['flock', 'chroot', 'unshare', 'runuser', 'script
  * ate `env -i sudo id`, since `-i` takes nothing either.
  */
 const VALUE_TAKING_FLAGS: Record<string, ReadonlySet<string>> = {
-  env: new Set(['-u', '--unset', '-S', '--split-string', '-C', '--chdir']),
+  // Keys are LOWERCASE: `matchElevatedCommand` lowercases the command before
+  // matching, so an upper-case entry can never be looked up. `env -C /tmp sudo
+  // …` and `xargs -E EOF sudo …` were dropping the elevated command behind an
+  // entry that was dead on arrival.
+  //
+  // Where lowering would collide with a valueless flag of the same wrapper the
+  // entry is omitted rather than guessed: `xargs -P` (max-procs, takes a value)
+  // lowers onto `xargs -p` (interactive, takes none), and consuming the token
+  // after `-p` would hide a command instead of revealing one.
+  env: new Set(['-u', '--unset', '-s', '--split-string', '-c', '--chdir']),
   timeout: new Set(['-s', '--signal', '-k', '--kill-after']),
   nice: new Set(['-n', '--adjustment']),
   ionice: new Set(['-c', '--class', '-n', '--classdata']),
-  strace: new Set(['-o', '--output', '-p', '--attach', '-e', '-E', '-P', '-s']),
+  strace: new Set(['-o', '--output', '-p', '--attach', '-e', '-s']),
   ltrace: new Set(['-o', '-p', '-e', '-s']),
   xargs: new Set([
-    '-I', '-i', '--replace', '-a', '--arg-file', '-n', '--max-args',
-    '-P', '--max-procs', '-s', '-d', '--delimiter', '-E', '-L',
+    '-i', '--replace', '-a', '--arg-file', '-n', '--max-args',
+    '--max-procs', '-s', '-d', '--delimiter', '-e', '-l',
   ]),
   stdbuf: new Set(['-i', '--input', '-o', '--output', '-e', '--error']),
   watch: new Set(['-n', '--interval']),

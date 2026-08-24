@@ -713,3 +713,22 @@ describe('squeezing whitespace does not join innocent words', () => {
     expect(commandPolicyViolation('mkfs /dev/sda')).toMatch(/Blocked command detected/);
   });
 });
+
+describe('the value-taking flag map is reachable', () => {
+  it.each([
+    ['env -C /tmp sudo apt-get install pkg', 'sudo'],
+    ['xargs -E EOF sudo id', 'sudo'],
+  ])('%s is elevated', (command, expected) => {
+    // `matchElevatedCommand` lowercases the command before matching, so an
+    // UPPER-case entry in the map could never be looked up — the peel stopped
+    // at the option's value and dropped the elevated command behind it.
+    expect(matchElevatedCommand(command)).toBe(expected);
+  });
+
+  it('and the lowercase collisions it declines to guess still behave', () => {
+    // `xargs -P` (takes a value) lowers onto `xargs -p` (takes none), so it is
+    // omitted rather than guessed: consuming the token after `-p` would HIDE a
+    // command. `-p` therefore ends the peel, which is the safe direction.
+    expect(matchElevatedCommand('xargs -p sudo id')).toBe('sudo');
+  });
+});

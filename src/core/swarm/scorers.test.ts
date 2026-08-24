@@ -1013,7 +1013,16 @@ describe('command_exit_zero — a shell is not a verification command', () => {
     expect(out.passed).toBe(true);
   });
 
-  it.each(['pytest -k sh', 'pytest packages/dash -s', 'npm test', 'cargo test --all'])(
+  it.each([
+    'pytest -k sh',
+    'pytest packages/dash -s',
+    'npm test',
+    'cargo test --all',
+    // A quoted test filter is not a command line. Checking every token for an
+    // embedded shell refused both of these, non-retryably.
+    'npm test -- -t "bash script handling"',
+    'pytest -k "sh or bash"',
+  ])(
     'does not refuse %s, which merely NAMES a shell',
     async (command) => {
       // A shell name with no command-string flag after it is not an

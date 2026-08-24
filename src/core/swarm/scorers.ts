@@ -196,6 +196,9 @@ const SHELL_INTERPRETERS = new Set(['sh', 'bash', 'zsh', 'ksh', 'dash', 'ash', '
  */
 const SHELL_STRING_FLAGS = new Set(['-c', '--command']);
 
+/** Flags whose VALUE is executed as a command line: `env -S "sh -c id"`. */
+const RUNS_A_COMMAND_STRING = new Set(['-S', '--split-string', '-c', '--command']);
+
 /** A combined short-flag cluster carrying `c`: `sh -xc "…"` is `sh -x -c "…"`. */
 const SHORT_CLUSTER_WITH_C = /^-[a-z]*c[a-z]*$/;
 
@@ -219,10 +222,16 @@ function namesShellWithCommandString(command: string): string | null {
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
 
-    // A token that is itself a command LINE — `env -S "sh -c id"` hands the
-    // whole string to env, which splits it and runs the shell inside.
-    const inner = token.trim().split(/\s+/);
-    if (inner.length > 1 && SHELL_INTERPRETERS.has(nameOf(inner[0]))) return nameOf(inner[0]);
+    // A token that is itself a command LINE, but ONLY as the value of a flag
+    // that runs one — `env -S "sh -c id"` hands the whole string to env, which
+    // splits it and executes the shell inside. Checked on every token it
+    // refused `npm test -- -t "bash script handling"` and `pytest -k "sh or
+    // bash"`, non-retryably, over an ordinary test filter.
+    const prevToken = argv[i - 1];
+    if (prevToken && RUNS_A_COMMAND_STRING.has(prevToken)) {
+      const inner = token.trim().split(/\s+/);
+      if (inner.length > 1 && SHELL_INTERPRETERS.has(nameOf(inner[0]))) return nameOf(inner[0]);
+    }
 
     const name = nameOf(token);
     if (!SHELL_INTERPRETERS.has(name)) continue;
