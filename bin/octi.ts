@@ -113,6 +113,7 @@ async function delegateBash(args: string[]): Promise<never> {
 /** Spawn with the parent's stdio and resolve with the exit code. */
 function runInherit(command: string, args: string[], cwd: string): Promise<number> {
   return new Promise((resolve) => {
+    // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn (no shell); this launcher only ever spawns `bash` on the repo's own bin/octi with the user's own CLI argv
     const child = spawn(command, args, { stdio: 'inherit', cwd });
     child.on('close', (code, signal) => resolve(code ?? (signal ? 128 : 1)));
     child.on('error', () => resolve(127));

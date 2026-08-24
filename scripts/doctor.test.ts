@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import {
   checkBasePersona,
-  checkBun,
+  checkNodeRuntime,
   checkEnvFile,
   checkVaultKeys,
   checkMcpServerBuild,
@@ -13,10 +13,11 @@ import {
 } from './doctor';
 
 describe('octi doctor — individual checks', () => {
-  test('Bun runtime check passes (we are running on Bun)', async () => {
-    const r = await checkBun();
+  test('Node runtime check passes, and reports the runtime we actually run on', async () => {
+    const r = await checkNodeRuntime();
     expect(r.status).toBe('ok');
-    expect(r.detail).toContain('Bun');
+    expect(r.detail).toContain('Node');
+    expect(r.detail).toContain(process.versions.node);
   });
 
   test('checkEnvFile flags missing .env as fail', async () => {

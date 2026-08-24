@@ -293,7 +293,16 @@ interface BackendHandle {
 
 async function bootBackend(apiHost: string, apiPort: string): Promise<BackendHandle> {
   const url = `http://${apiHost === '0.0.0.0' ? '127.0.0.1' : apiHost}:${apiPort}`;
-  const proc = spawnProcess(['bun', 'run', 'src/index.ts'], {
+  // Node directly — no `bun run` (Bun is not a dependency any more; spawning it
+  // is why this reported "backend exited before becoming healthy" with no
+  // output) and no `npx` wrapper either. `npx` puts a process between us and the
+  // server: killing it leaves the real server holding the stdio pipes, `close`
+  // never fires, and `shutdown()` below waits forever — a 14-minute hang until
+  // the CI job timeout. One process, so one kill reaches it.
+  //
+  // Both `--import` flags are required: tsx to run TypeScript, md-loader because
+  // role prompts are `.md` imports Node cannot read on its own.
+  const proc = spawnProcess([process.execPath, '--import', 'tsx', '--import', './scripts/md-loader.mjs', 'src/index.ts'], {
     cwd: process.cwd(),
     stdout: 'pipe',
     stderr: 'pipe',
@@ -322,8 +331,21 @@ async function bootBackend(apiHost: string, apiPort: string): Promise<BackendHan
         proc,
         url,
         shutdown: async () => {
+          // Bounded, and it escalates. `exited` resolves on `close`, which waits
+          // for every stdio pipe — so anything still holding one (a wrapper
+          // process, a wedged child) turns a shutdown into an indefinite wait.
+          // Ask nicely, wait briefly, then insist.
           proc.kill();
-          await proc.exited.catch(() => {});
+          const exited = proc.exited.catch(() => 0);
+          const timedOut = Symbol('timeout');
+          const raced = await Promise.race([
+            exited,
+            new Promise((r) => setTimeout(() => r(timedOut), 5_000)),
+          ]);
+          if (raced === timedOut) {
+            proc.kill('SIGKILL');
+            await Promise.race([exited, new Promise((r) => setTimeout(r, 2_000))]);
+          }
         },
       };
     }

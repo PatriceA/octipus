@@ -1,113 +1,118 @@
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { defineConfig } from 'vitest/config';
+import { globSync, readFileSync } from 'node:fs';
+import { defineConfig, type Plugin } from 'vitest/config';
 
 /**
- * Test-runner configuration.
- *
- * Tracked deliberately. `.gitignore`'s `/*.ts` rule — there to keep ad-hoc
- * root scripts out of the tree — matched this file for its whole life, so a
- * clean clone had no path aliases and no `.md` loader and every suite failed at
- * import. CI referenced `vitest.config.ts` by name in a comment while nothing
- * tracked it, which is the "present locally, absent on the shipping path" shape
- * this repo keeps paying for.
- *
- * Two things the suite cannot run without:
- *
- * 1. **Path aliases**, mirroring `tsconfig.json#compilerOptions.paths`. They are
- *    written out rather than derived through `vite-tsconfig-paths` so the test
- *    runner gains no dependency the product does not already have.
- * 2. **The `.md` loader.** Role prompts live beside their config as markdown and
- *    are imported as strings; the bundle gets this from esbuild's text loader
- *    and Node from `scripts/md-loader.mjs`. Vite needs its own, and without it
- *    every module that reaches the role registry fails to import.
+ * `.md` imported as a string, matching how `scripts/build.ts` bundles the role
+ * prompts — so a suite reads exactly what ships rather than a path that only
+ * exists in the source tree.
  */
-const r = (p: string) => fileURLToPath(new URL(p, import.meta.url));
+function markdownAsText(): Plugin {
+  return {
+    name: 'octipus:markdown-as-text',
+    enforce: 'pre',
+    transform(_code, id) {
+      if (!id.endsWith('.md')) return null;
+      const text = readFileSync(id.split('?')[0], 'utf8');
+      return { code: `export default ${JSON.stringify(text)};`, map: null };
+    },
+  };
+}
 
-/** Mirror of `scripts/md-loader.mjs` for the Vite module graph. */
-const markdownAsString = {
-  name: 'octipus-markdown-as-string',
-  transform(_code: string, id: string) {
-    if (!id.split('?')[0].endsWith('.md')) return null;
-    const text = readFileSync(id.split('?')[0], 'utf8');
-    return { code: `export default ${JSON.stringify(text)};`, map: null };
-  },
+/**
+ * Shared settings. The two projects below differ only in how much of the suite
+ * may run at once.
+ */
+const common = {
+  setupFiles: ['./src/test-setup.ts'],
+  testTimeout: 30_000,
+  hookTimeout: 30_000,
+  teardownTimeout: 10_000,
+  // One process per test file. The previous runner shared a process, which is
+  // how a module mock in one suite leaked into another and produced tests that
+  // passed alone and failed in CI. Isolation is the fix for that class.
+  pool: 'forks' as const,
 };
 
+// `.spec.ts` as well as `.test.ts`: the tree carries both, and matching only
+// one silently skips a real suite — `src/utils/sanitize.spec.ts` had never run.
+const ALL = [
+  'src/**/*.test.ts',
+  'scripts/**/*.test.ts',
+  'src/**/*.spec.ts',
+  'scripts/**/*.spec.ts',
+];
+const NEVER = ['node_modules/**', 'dist/**', 'tests/web/**', 'web/**'];
+
+/**
+ * A test file talks to a real database if it stands up embedded PGlite or if it
+ * runs against the shared Postgres under `INTEGRATION=1`. Those get a project of
+ * their own with a single worker, for two separate reasons that both end in a
+ * red run:
+ *
+ *  - Several WASM Postgres instances booting at once do not merely go slow. The
+ *    runtime wedges inside a syscall where no timer can fire, so the file's own
+ *    hook timeout never trips and the whole run hangs instead of failing.
+ *  - The integration suites truncate shared tables. Run in parallel against one
+ *    server they deadlock against each other, which reads as a product bug and
+ *    is not one.
+ *
+ * Classified by reading the files rather than from a hand-maintained list, so a
+ * new database suite lands in the right project without anyone remembering to
+ * add it — the failure mode of a stale list being a hang or a deadlock, which
+ * are the worst kinds of thing to leave to memory.
+ */
+const DATABASE_MARKERS = [
+  "STORAGE_MODE = 'embedded'",
+  "STORAGE_MODE='embedded'",
+  "mode: 'embedded'",
+  'runMigrations',
+  'initializeDb',
+  '@/test-helpers/integration',
+  'process.env.INTEGRATION',
+  'getDb(',
+];
+
+function usesDatabase(file: string): boolean {
+  const source = readFileSync(file, 'utf8');
+  return DATABASE_MARKERS.some((marker) => source.includes(marker));
+}
+
+const testFiles = ALL.flatMap((pattern) => globSync(pattern)).sort();
+const database = testFiles.filter(usesDatabase);
+const pure = testFiles.filter((f) => !database.includes(f));
+
 export default defineConfig({
-  plugins: [markdownAsString],
-  resolve: {
-    alias: {
-      // Exact specifiers first: Vite matches aliases in order, and a trailing
-      // slash prefix would not catch these two.
-      '@octipus/plugin-sdk/testing': r('./plugin-sdk/testing.ts'),
-      '@octipus/plugin-sdk': r('./plugin-sdk/index.ts'),
-      '@/': `${r('./src')}/`,
-      '@db/': `${r('./src/db')}/`,
-      '@core/': `${r('./src/core')}/`,
-      '@models/': `${r('./src/models')}/`,
-      '@security/': `${r('./src/security')}/`,
-      '@skills/': `${r('./src/skills')}/`,
-      '@channels/': `${r('./src/channels')}/`,
-      '@api/': `${r('./src/api')}/`,
-      '@utils/': `${r('./src/utils')}/`,
-    },
-  },
+  resolve: { tsconfigPaths: true },
+  plugins: [markdownAsText()],
   test: {
-    globals: true,
-    environment: 'node',
-    // Ephemeral per-process secrets, so config parses without a developer
-    // exporting anything and no committed fixture resembles a real credential.
-    setupFiles: ['./src/test-setup.ts'],
-    // Reaps the per-test PGlite `DATA_DIR` scratch directories that ~100 files
-    // create and never remove. `src/test-helpers/tmp-cleanup.ts` documents
-    // itself as "wired as the runner's global setup" and had been referenced by
-    // nothing since this config went untracked — so the leak it was written to
-    // stop was live again, and a stale `/tmp` filled this machine to 100%
-    // mid-session. It also sweeps leftovers from crashed runs, which a
-    // this-run-only sweep cannot.
+    // Once per run, after every file — not per file. Sweeping the shared
+    // `/tmp/octipus-*` scratch from a per-file hook deletes the live scratch of
+    // every worker still running.
     globalSetup: ['./src/test-helpers/tmp-cleanup.ts'],
-    // The web app has its own runner (Playwright) and its own config; including
-    // it here would run React components under the Node environment.
-    // `.spec.ts` as well as `.test.ts`: the tree carries both, and matching
-    // only one silently skips a real suite (`src/utils/sanitize.spec.ts`).
-    include: ['src/**/*.{test,spec}.ts', 'scripts/**/*.{test,spec}.ts'],
-    exclude: ['**/node_modules/**', 'dist/**', 'web/**', 'tests/web/**'],
-    // Integration suites talk to one Postgres. Isolating each file in its own
-    // process is what lets them share it without cross-talk.
-    isolate: true,
-    testTimeout: 30_000,
-    // Hooks get the same budget as tests, and for the same reason: several
-    // suites boot an embedded PGlite database in `beforeAll`, which takes
-    // longer than the 10s default once the full suite is competing for the
-    // machine. That is the intermittent failure recorded as "not understood"
-    // in docs/plans/rebuild-execution-plan.md — it reproduces only in a full
-    // run, which is why it never survived being re-run alone.
-    hookTimeout: 30_000,
     coverage: {
       provider: 'v8',
-      // `scripts/coverage-check.ts` reads lcov; CI compares it to the committed
-      // baseline. Keep both reporters — text is what a human reads locally.
-      reporter: ['text', 'lcov'],
-      reportsDirectory: './coverage',
-      // No `include`. In Vitest 4 that option is the opt-in to reporting files
-      // the tests never loaded (`coverage-v8/provider.js:54` gathers untested
-      // files only when it is set — `coverage.all` is gone, and setting it has
-      // no effect), and it changes what the percentage MEANS.
-      //
-      // This is the instrument `scripts/coverage-baseline.json` was measured
-      // on, and the evidence is the number: the baseline records 48.96/50.93
-      // from 2026-08-23, this tree measures 50.73/52.52 over loaded files and
-      // 39.84/42.29 over all 823 of them. The config that produced the
-      // baseline was never tracked (see the note at the top of this file), so
-      // the setting had to be recovered from what it measured.
-      //
-      // Counting untouched files is arguably the truer number — a module
-      // nobody imports would drag the percentage down instead of being
-      // invisible. That is a deliberate change to a committed gate, with a
-      // re-baseline attached, and it does not belong to whatever feature
-      // branch happens to notice it.
-      exclude: ['**/*.{test,spec}.ts', 'src/test-helpers/**', 'src/test-setup.ts'],
+      reporter: ['lcov'],
+      reportsDirectory: 'coverage',
+      exclude: ['**/octipus-ext-*/**', '**/*.test.ts', 'node_modules/**'],
     },
+    projects: [
+      {
+        plugins: [markdownAsText()],
+        resolve: { tsconfigPaths: true },
+        test: { ...common, name: 'unit', include: pure, exclude: NEVER },
+      },
+      {
+        plugins: [markdownAsText()],
+        resolve: { tsconfigPaths: true },
+        test: {
+          ...common,
+          name: 'database',
+          include: database,
+          exclude: NEVER,
+          maxWorkers: 1,
+          fileParallelism: false,
+        },
+      },
+    ],
   },
 });

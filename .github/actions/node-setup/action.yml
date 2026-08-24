@@ -4,10 +4,18 @@ description: Install the pinned Node and restore the shared npm cache.
 # One place for the Node version pin (previously copy-pasted into every job)
 # and the dependency cache, keyed on the lockfile so a dependency change busts
 # it. The cache only accelerates downloads; `npm ci` stays exact either way.
+#
+# NOT 24.9: that patch has a bug in the synchronous module-customization hooks
+# (`module.registerHooks`) — a hook that passes a CommonJS module through to the
+# next step gets its result rejected with ERR_INVALID_RETURN_PROPERTY_VALUE
+# ("Expected a string … for source … but got undefined"). Every script that
+# boots product code registers `scripts/md-loader.mjs`, so on 24.9 the whole
+# integration lane died at the migration step. Reproduced under
+# `node:24.9-bookworm-slim` and confirmed fixed on 24.19.
 runs:
   using: composite
   steps:
     - uses: actions/setup-node@v4
       with:
-        node-version: '24.9'
+        node-version: '24.19'
         cache: npm

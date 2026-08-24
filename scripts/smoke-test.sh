@@ -10,12 +10,23 @@
 #   3. boot the backend, wait for `/api/health/ready` to report ready
 #
 # Used by .github/workflows/install-smoke.yml and runnable locally:
-#   bun install --frozen-lockfile && bash scripts/smoke-test.sh
+#   npm ci && bash scripts/smoke-test.sh
 #
 set -euo pipefail
 
 PORT="${PORT:-3005}"
 DATA_DIR="$(mktemp -d)"
+# The wizard reads its own port from OCTIPUS_SETUP_API_PORT (default 3005) and
+# will happily ADOPT a backend that already answers there — so with a dev
+# instance running, `octi setup` registered its smoke admin in the developer's
+# real database instead of this run's throwaway one. Pin the wizard to the port
+# this script actually owns, and refuse to run if anything is already on it.
+export OCTIPUS_SETUP_API_PORT="$PORT"
+if curl -sf -m 2 "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1; then
+  echo "::error::something is already serving http://127.0.0.1:${PORT} — stop it, or run with PORT=<free port>."
+  echo "         (the smoke test would otherwise register its admin against that instance)"
+  exit 1
+fi
 export STORAGE_MODE=embedded
 export OCTIPUS_SETUP_STORAGE=embedded
 export OCTIPUS_SETUP_DATA_DIR="$DATA_DIR"
@@ -29,10 +40,26 @@ export SESSION_SECRET="smoke-session-secret-0123456789-abcdefghij"
 export OCTIPUS_SETUP_ADMIN_USER="smokeadmin"
 export OCTIPUS_SETUP_ADMIN_PASS="SmokeAdminPass123"
 
+# `octi setup` writes `.env` in the working directory, and this script runs from
+# the repo root — so on a developer machine it overwrites a real bootstrap file.
+# It preserves MASTER_KEY/JWT/SESSION on a rerun (setup-wizard reuses existing
+# secrets), but it rewrites the storage targets to this run's throwaway embedded
+# database, which points a working install at nothing. Stash it and put it back.
+# In CI there is no `.env` and both branches are no-ops.
+ENV_BACKUP=""
+if [ -f .env ]; then
+  ENV_BACKUP="$(mktemp)"
+  cp .env "$ENV_BACKUP"
+  echo "── stashed your .env (restored on exit) ──"
+fi
+
 server_pid=""
 cleanup() {
   [ -n "$server_pid" ] && kill "$server_pid" 2>/dev/null || true
   rm -rf "$DATA_DIR" 2>/dev/null || true
+  if [ -n "$ENV_BACKUP" ]; then
+    cp "$ENV_BACKUP" .env && rm -f "$ENV_BACKUP"
+  fi
 }
 trap cleanup EXIT
 
@@ -43,7 +70,10 @@ echo "── 2/3 · octi doctor ──"
 npx tsx scripts/doctor.ts
 
 echo "── 3/3 · boot backend + health check ──"
-bun run src/index.ts > /tmp/octipus-smoke-server.log 2>&1 &
+# `node --import tsx`, not `npx tsx`: the wrapper process would survive as the
+# real parent of the server, so the `kill` in cleanup() would reap the wrapper
+# and leave the backend running.
+node --import tsx --import ./scripts/md-loader.mjs src/index.ts > /tmp/octipus-smoke-server.log 2>&1 &
 server_pid=$!
 
 ready=0

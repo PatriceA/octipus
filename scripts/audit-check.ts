@@ -161,6 +161,38 @@ export function parseAuditOutput(raw: string): Advisory[] {
     parsed = (parsed as Record<string, unknown>).advisories;
   }
 
+  // npm's own shape (auditReportVersion 2): { vulnerabilities: { <pkg>: {...} } }
+  // where each entry carries `severity`, `name`, and a `via` array whose object
+  // members are the real advisories (title, url, source id). Without this branch
+  // the generic map walk below would iterate `auditReportVersion` and `metadata`
+  // as if they were packages and report nonsense — and it would do it silently,
+  // on the one tree state (a real vulnerability) where being wrong matters.
+  if (
+    parsed &&
+    typeof parsed === 'object' &&
+    !Array.isArray(parsed) &&
+    'vulnerabilities' in (parsed as Record<string, unknown>)
+  ) {
+    const vulns = (parsed as Record<string, unknown>).vulnerabilities;
+    const flattened: unknown[] = [];
+    for (const [pkg, entry] of Object.entries((vulns ?? {}) as Record<string, unknown>)) {
+      if (!entry || typeof entry !== 'object') continue;
+      const e = entry as Record<string, unknown>;
+      const via = Array.isArray(e.via) ? e.via : [];
+      const sources = via.filter((v) => v && typeof v === 'object');
+      if (sources.length === 0) {
+        // Vulnerable only through a dependency — npm lists the parent by name.
+        flattened.push({ name: pkg, severity: e.severity, title: `vulnerable via ${String(via[0] ?? 'a dependency')}` });
+        continue;
+      }
+      for (const src of sources) {
+        const o = src as Record<string, unknown>;
+        flattened.push({ ...o, name: pkg, severity: o.severity ?? e.severity });
+      }
+    }
+    return flattened.flatMap((item) => parseAuditOutput(JSON.stringify([item])));
+  }
+
   const out: Advisory[] = [];
 
   const pushOne = (obj: unknown, pkg?: string) => {
@@ -234,14 +266,16 @@ export function loadAllowlist(path: string): AllowlistEntry[] {
 // CLI
 // ---------------------------------------------------------------------------
 
-async function runBunAudit(): Promise<{ stdout: string; stderr: string }> {
-  return runCommand(['bun', 'audit', '--prod', '--json']);
+async function runNpmAudit(): Promise<{ stdout: string; stderr: string }> {
+  // `npm audit`, not `bun audit` — Bun is no longer installed anywhere this
+  // runs. `--omit=dev` is npm's spelling of `--prod`.
+  return runCommand(['npm', 'audit', '--omit=dev', '--json']);
 }
 
 function report(result: EvaluationResult): void {
   const { found, allowlisted, blocking, expiredEntries } = result;
 
-  console.log('── Dependency audit (bun audit --prod) ──');
+  console.log('── Dependency audit (npm audit --omit=dev) ──');
   console.log(`Advisories found: ${found.length}`);
 
   if (found.length > 0) {
@@ -292,7 +326,7 @@ function report(result: EvaluationResult): void {
 async function main(): Promise<void> {
   const allowlistPath = join(import.meta.dirname, 'audit-allowlist.json');
 
-  const { stdout, stderr } = await runBunAudit();
+  const { stdout, stderr } = await runNpmAudit();
 
   let advisories: Advisory[];
   try {
