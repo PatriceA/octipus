@@ -33,7 +33,14 @@ const common = {
   pool: 'forks' as const,
 };
 
-const ALL = ['src/**/*.test.ts', 'scripts/**/*.test.ts'];
+// `.spec.ts` as well as `.test.ts`: the tree carries both, and matching only
+// one silently skips a real suite — `src/utils/sanitize.spec.ts` had never run.
+const ALL = [
+  'src/**/*.test.ts',
+  'scripts/**/*.test.ts',
+  'src/**/*.spec.ts',
+  'scripts/**/*.spec.ts',
+];
 const NEVER = ['node_modules/**', 'dist/**', 'tests/web/**', 'web/**'];
 
 /**

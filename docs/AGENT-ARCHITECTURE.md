@@ -126,7 +126,7 @@ Orchestrator (depth 0)
 
 1. **`spawn_child`** (single) — default for single-role delegation with structured output.
 2. **`spawn_child`** (multiple, parallel or sequential) — when the task has distinct sub-topics.
-3. **`create_pipeline`** — last resort; only when the user explicitly asks for staged/reviewable handover, or the task requires a human gate between stages. Pipelines are Orchestrator-only; Agents and Subagents cannot call `create_pipeline`.
+3. **`create_pipeline`** — the verified build loop: plan the work into items, run implement → test → review → QA once per item, and route a failed QA verdict back to the implementer (bounded) before escalating. Chosen when the work is several items that must be *built* and "done" can be settled by *running* something — not by whether the user said "staged". Not for questions, writing, or read-only audits, which have nothing to re-run. Pipelines are root-only; Agents and Subagents cannot call `create_pipeline`.
 
 The legacy `spawn_worker` and `spawn_team` meta-tools are **removed from the LLM-visible tool surface**. The `worker-spawner.ts` internals still back pipeline stages (sequential handover, non-LLM) but the LLM no longer sees either primitive.
 

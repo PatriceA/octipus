@@ -1,24 +1,25 @@
 import { getConfig } from '@/config';
-import { recordSwarmSpawn } from '@/core/telemetry';
 import type { AnyAgentWorker } from '@/core/agent-manager';
 import { getAgentManager } from '@/core/agent-manager';
-import type { ToolHandler } from '@/core/agent-worker';
+import type { AgentWorker, ToolHandler } from '@/core/agent-worker';
 import type { GatewayHub } from '@/core/gateway/hub';
 import { getGatewayHub } from '@/core/gateway/hub';
 import { getOrchestratorHooks } from '@/core/orchestrator/hooks';
 import { buildSecurityReminder, guardInput } from '@/core/orchestrator/input-guard';
-import { formatCriticalRules, getRoleConfig, getToolsForRole } from '@/core/orchestrator/roles';
 import { estimateToolSchemaTokens, logPromptComposition } from '@/core/orchestrator/prompt-budget';
+import { formatCriticalRules, getRoleConfig, getToolsForRole } from '@/core/orchestrator/roles';
 import { applyToolCap, isSmallModel } from '@/core/orchestrator/small-model';
+import type { AgentRole } from '@/core/orchestrator/types';
 import { pipelineMetadata } from '@/core/orchestrator/worker-spawner';
 import { countChangedFiles, snapshotWorkspace } from '@/core/orchestrator/workspace-snapshot';
-import type { AgentRole } from '@/core/orchestrator/types';
-import { WorkspaceFS } from '@/security/workspace-fs';
+import { recordSwarmSpawn } from '@/core/telemetry';
 import type { AgentContext } from '@/core/types';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
 import { getModelRegistry } from '@/models/model-registry';
 import { getTopicConfig } from '@/models/topic-config';
+import { WorkspaceFS } from '@/security/workspace-fs';
+import { formatDateTimeContext } from '@/utils/date-context';
 import { coreLogger } from '@/utils/logger';
 import { taskFingerprint as _taskFingerprint, getCallGraph } from './call-graph';
 import {
@@ -32,13 +33,26 @@ import {
 import { getSwarmLedger } from './ledger';
 import { swarmNodeRepository } from './node-repository';
 import { buildReceipt } from './receipt';
-import { lookupCacheHit } from './spawn-cache';
+import {
+  deriveCodeDiffScorer,
+  deriveSchemaScorer,
+  deriveToolOutageScorer,
+  renderContractFeedback,
+  runScorers,
+  type Scorer,
+  type ScorerContext,
+  type ScorerOutcome,
+} from './scorers';
+import { buildSiblingScopeBrief, recordChildScope } from './session-scope';
 import {
   deriveChildBudget,
   InsufficientBudgetError,
+  MIN_CHILD_TOKENS,
+  MIN_RETRY_WALL_MS,
   shouldWarnBudget,
   syncParentTokenUsage,
 } from './spawn-budget';
+import { lookupCacheHit } from './spawn-cache';
 import {
   checkConcurrency,
   checkDepth,
@@ -46,15 +60,7 @@ import {
   checkSameRole,
   denialResult as denialResultFn,
 } from './spawn-validator';
-import {
-  type Scorer,
-  deriveCodeDiffScorer,
-  deriveSchemaScorer,
-  deriveToolOutageScorer,
-  runScorers,
-} from './scorers';
 import { applyRoleFit, buildDelegationGuidance } from './swarm-tool';
-import { recordChildScope, buildSiblingScopeBrief } from './session-scope';
 import {
   type AgentNode,
   type ChildResult,
@@ -66,8 +72,6 @@ import {
   type SpawnChildParams,
   type TaskBrief,
 } from './types';
-import type { AgentWorker } from '@/core/agent-worker';
-import { formatDateTimeContext } from '@/utils/date-context';
 
 /** Re-exported (moved into `call-graph.ts` in Phase 2). */
 export const taskFingerprint = _taskFingerprint;
@@ -706,7 +710,13 @@ export class SwarmSpawner {
     // executed children reach here — cache hits and pre-run denials return
     // early above (no new tokens spent). Single-threaded async, so the
     // read-modify-write is safe across concurrent detached children.
-    parent.budget.childTokensUsed = (parent.budget.childTokensUsed ?? 0) + (result.usedTokens ?? 0);
+    // `discardedTokens` covers attempts that ran and were thrown away (crash
+    // retry, backup model, contract retry). They came out of the same pool as
+    // the attempt that survived, so the cascade has to see them.
+    parent.budget.childTokensUsed =
+      (parent.budget.childTokensUsed ?? 0) +
+      (result.usedTokens ?? 0) +
+      (result.discardedTokens ?? 0);
 
     // Phase 2.5 — record this child's touched paths (from its file_change
     // events) + final report so subsequent siblings in the session are warned.
@@ -781,11 +791,18 @@ export class SwarmSpawner {
     let attemptNewNode = 0;
     const MAX_NEW_NODE_RETRIES = 1;
     let lastResult: ChildResult | null = null;
+    /** The model the surviving attempt ran on — not always `opts.childModel`. */
+    let survivingModel = opts.childModel;
     // Every attempt that failed before the one we ultimately return. Without
     // this the retry's clean `ok` is all the parent ever sees, and a run where
     // the first attempt lost every tool it had is indistinguishable from one
     // that worked first time — measured, see docs/plans/quality-loop-status.md.
     const priorFailures: string[] = [];
+    // Tokens spent by attempts that are thrown away. Only the RETURNED result's
+    // `usedTokens` reaches the parent's pool accounting, so without this a child
+    // that took four attempts is charged for one, and the budget cascade grants
+    // later siblings a share of tokens that are already gone.
+    let discardedTokens = 0;
     const noteFailure = (r: ChildResult): void => {
       const errs = (r.receipt as { sideEffects?: { toolErrors?: number } } | undefined)?.sideEffects
         ?.toolErrors;
@@ -802,6 +819,12 @@ export class SwarmSpawner {
         break;
       }
       noteFailure(result);
+      discardedTokens += result.usedTokens ?? 0;
+      // A fresh fan-out allowance for the new node. `handleSpawn` increments
+      // `parent.budget.fanOut.used` on the object this budget shares, so a
+      // child that spawned its subagents and then crashed was retried with the
+      // counter already at cap and every `spawn_child` denied.
+      opts.budget.fanOut = { cap: opts.budget.fanOut.cap, used: 0 };
       // Crash retry on new node.
       coreLogger.warn(
         { parentNodeId: opts.parent.id, status: result.status, attempt: attemptNewNode + 1 },
@@ -822,11 +845,20 @@ export class SwarmSpawner {
             { parentNodeId: opts.parent.id, failedModel: opts.childModel, backupModel: backup.modelId, topic: opts.childLane },
             'Swarm child failed on primary model — retrying once on topic backup model',
           );
-          noteFailure(lastResult);
+          // Both the note and the token charge land only once the replacement
+          // actually returns. Doing either before the await counts the same
+          // attempt twice when the spawn throws, because the catch below hands
+          // that same result back as `lastResult`.
+          const superseded = lastResult;
+          // Same reset as the crash retry: a new node, a new allowance.
+          opts.budget.fanOut = { cap: opts.budget.fanOut.cap, used: 0 };
           lastResult = await this.singleSpawnAndRun(
             { ...opts, childModel: backup.modelId, reason: 'retry' },
             true,
           );
+          survivingModel = backup.modelId;
+          noteFailure(superseded);
+          discardedTokens += superseded.usedTokens ?? 0;
         }
       } catch (backupErr) {
         coreLogger.warn(
@@ -835,19 +867,254 @@ export class SwarmSpawner {
         );
       }
     }
+    // ── Contract retry ──────────────────────────────────────────────
+    // A failed SCORER GATE is the one failure class that is worth re-running
+    // with feedback: the child finished, produced something, and missed a
+    // check that names exactly what was wrong. Every other retry above is a
+    // crash or a provider fault, where there is nothing to tell the next
+    // attempt.
+    //
+    // Deliberately NOT keyed on `status === 'contract_failed'`. A drift abort
+    // maps to that same status (`errors.ts:133`) precisely so the crash-retry
+    // path would not respawn a wandering child, and blanket-retrying the
+    // status would reintroduce that bug from the other side. The gate is the
+    // presence of scorer failures, which a drift abort never carries.
+    const contractRetry = await this.retryOnContractFailure(
+      // On the model that actually produced this result. When the primary died
+      // and the topic BACKUP produced the `contract_failed`, re-dispatching on
+      // `opts.childModel` runs the corrective attempt on the model that already
+      // failed — which then gets discarded as an unrelated failure, a whole
+      // child run charged to the parent for nothing.
+      { ...opts, childModel: survivingModel },
+      lastResult,
+      noteFailure,
+      // Everything the crash retry and the backup-model attempt already burned.
+      // Seeding from the surviving attempt alone would let a contract retry
+      // start against a pool three attempts have emptied.
+      discardedTokens,
+    );
+    lastResult = contractRetry.result;
+    discardedTokens += contractRetry.discardedTokens;
+
     // Carry the discarded attempts into the result the parent actually reads.
     // The answer may well be fine, so this does not change the status — but a
     // parent synthesizing against it, and a human reading the node row, must be
     // able to see that an earlier attempt failed rather than infer a clean run.
     if (lastResult && priorFailures.length > 0) {
-      const trail = `Recovered after ${priorFailures.length} failed attempt(s): ${priorFailures.join(' | ')}`;
+      // "Recovered" only if it actually did. When the last attempt missed the
+      // gate too, this note is read by the parent LLM verbatim beside a
+      // `contract_failed` status — and telling it the child recovered when it
+      // did not is precisely the self-report the gates exist to stop trusting.
+      const recovered = lastResult.status === 'ok';
+      const trail = recovered
+        ? `Recovered after ${priorFailures.length} failed attempt(s): ${priorFailures.join(' | ')}`
+        : `Still failing after ${priorFailures.length + 1} attempt(s): ${priorFailures.join(' | ')}`;
       lastResult.notes = lastResult.notes ? `${lastResult.notes}\n${trail}` : trail;
       coreLogger.warn(
         { parentNodeId: opts.parent.id, attempts: priorFailures.length, status: lastResult.status },
-        'Swarm child succeeded only after earlier failed attempts — annotating result',
+        'Swarm child needed more than one attempt — annotating result',
       );
     }
+    if (lastResult && discardedTokens > 0) lastResult.discardedTokens = discardedTokens;
     return lastResult!;
+  }
+
+  /**
+   * Re-dispatch a child whose scorer gate failed, with the failures quoted back
+   * to it, until it passes or the bound is spent.
+   *
+   * The bound is `config.swarm.contractRetries` (default 1). This is the swarm's
+   * counterpart to the pipeline's `qa_fail` backward edge, and it is bounded for
+   * the same reason `validateGraph` refuses an unbounded cycle: without a
+   * counter a child that cannot satisfy its contract runs until the token pool
+   * is gone.
+   *
+   * Three guards decide whether a retry happens at all, and each one exists
+   * because retrying without it is worse than surfacing the failure:
+   *
+   * 1. **Scorer failures must be present.** `contract_failed` is also the status
+   *    of a drift abort, which must not be respawned (see the call site).
+   * 2. **The feedback must be renderable.** A retry prompt that names no defect
+   *    asks the child to guess; `renderContractFeedback` returns null and we
+   *    stop instead.
+   * 3. **Enough wall clock must remain to finish.** Each attempt is handed a
+   *    fresh full wall cap because wall clock does not cascade, so without this
+   *    a bounded token budget still permits an unbounded wait.
+   * 4. **The attempts so far must leave room for another.** Counted from what
+   *    the attempts actually reported, NOT from `budget.tokens.used`: a child's
+   *    budget is derived fresh per spawn and its `used` stays 0 for the node's
+   *    whole life (`deriveChildBudget`; only a PARENT's is reconciled, by
+   *    `syncParentTokenUsage`). Reading it here would have been a guard that
+   *    could never fire.
+   *
+   * A retry only ever replaces the result when it reached a verdict on the
+   * contract — `ok`, or another `contract_failed`. An attempt that dies for an
+   * unrelated reason (concurrency cap, a spawn that could not be recorded, a
+   * provider fault) is discarded and the ORIGINAL diagnosis is returned:
+   * `contract_failed` with the failed scorers on it tells the parent strictly
+   * more than a null output does.
+   */
+  private async retryOnContractFailure(
+    opts: Parameters<SwarmSpawner['runChildWithRetry']>[0],
+    initial: ChildResult | null,
+    noteFailure: (r: ChildResult) => void,
+    alreadySpent = 0,
+  ): Promise<{ result: ChildResult | null; discardedTokens: number }> {
+    let result = initial;
+    let discardedTokens = 0;
+    let maxRetries = 1;
+    try {
+      maxRetries = getConfig().swarm?.contractRetries ?? 1;
+    } catch {
+      // Config not loaded (unit tests, early boot) — fall back to the schema
+      // default rather than disabling the loop silently.
+      maxRetries = 1;
+    }
+    if (maxRetries <= 0) return { result, discardedTokens };
+
+    // What every attempt so far actually consumed. The child's own budget
+    // object is not a running total (see the doc comment), so the loop keeps
+    // its own.
+    let spent = alreadySpent + (result?.usedTokens ?? 0);
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      if (!result || result.status !== 'contract_failed') break;
+      const failures = result.scorerOutcome?.failures ?? [];
+      // Nothing is worth re-dispatching onto a cancelled run: the session is
+      // gone, and a retry would create a fresh node, agent and model call for
+      // work nobody is waiting for.
+      if (opts.parent.signal?.aborted) {
+        coreLogger.info(
+          { parentNodeId: opts.parent.id },
+          'Swarm child contract retry skipped — run was cancelled',
+        );
+        break;
+      }
+
+      // A failure the child has no power over — no shell tool, a denied
+      // permission, a denylisted command, a missing workspace — is not
+      // something a second run changes. Re-dispatching on one buys an
+      // identical failure at the price of a full child run.
+      if (failures.length > 0 && failures.every((f) => f.retryable === false)) {
+        coreLogger.info(
+          { parentNodeId: opts.parent.id, failures: failures.map((f) => f.scorer) },
+          'Swarm child contract failure is not retryable — surfacing it as-is',
+        );
+        break;
+      }
+      const feedback = renderContractFeedback(failures, attempt, maxRetries);
+      if (!feedback) break;
+
+      const remaining = opts.budget.tokens.cap - spent;
+      if (remaining < MIN_CHILD_TOKENS) {
+        coreLogger.warn(
+          { parentNodeId: opts.parent.id, remaining, spent, attempt },
+          'Swarm child contract retry skipped — token pool exhausted',
+        );
+        break;
+      }
+
+      // Wall clock does NOT cascade — each attempt is handed a fresh full cap
+      // (`deriveChildBudget`), so nothing else stops a sequence of retries from
+      // running several times the child's wall budget. The parent is awaiting
+      // this, and a caller that asked for one child should not wait an hour.
+      const elapsed = Date.now() - opts.budget.wallClockMs.startedAt;
+      // A floor, like `MIN_CHILD_TOKENS` on the token side. Without one, a
+      // remainder of a few milliseconds still counts as "time left": the retry
+      // registers a node, boots an agent and is then guaranteed to time out.
+      if (opts.budget.wallClockMs.cap - elapsed < MIN_RETRY_WALL_MS) {
+        coreLogger.warn(
+          { parentNodeId: opts.parent.id, elapsed, cap: opts.budget.wallClockMs.cap, attempt },
+          'Swarm child contract retry skipped — wall-clock budget spent',
+        );
+        break;
+      }
+
+      coreLogger.info(
+        {
+          parentNodeId: opts.parent.id,
+          attempt,
+          maxRetries,
+          failures: failures.map((f) => f.scorer),
+        },
+        'Swarm child failed its contract — re-dispatching with the failures quoted back',
+      );
+
+      // A fresh node, like the crash retry: the previous child's transcript is
+      // the one that produced the rejected answer, and reusing it invites the
+      // model to defend that answer rather than redo the work. The feedback
+      // leads so it is read before the task it modifies.
+      //
+      // The token budget is what is LEFT, not another full grant. Handing each
+      // attempt the original cap lets one `spawn_child` spend a multiple of it —
+      // and since `discardedTokens` now charges the parent honestly, the
+      // overspend surfaces as an `InsufficientBudgetError` on a later sibling
+      // that should have fit. The wall cap is likewise the remainder, restamped
+      // so the pair still reads as one absolute deadline rather than two.
+      let retried: ChildResult;
+      try {
+        retried = await this.singleSpawnAndRun(
+        {
+          ...opts,
+          budget: {
+            ...opts.budget,
+            tokens: { cap: Math.max(MIN_CHILD_TOKENS, remaining), used: 0 },
+            // A fresh allowance, not the superseded attempt's. The spread
+            // shares the `fanOut` OBJECT, so a child that spawned its four
+            // subagents in attempt 1 met `concurrency_limit` on every
+            // `spawn_child` of the corrective attempt — unable to do the work
+            // it was being asked to redo.
+            fanOut: { cap: opts.budget.fanOut.cap, used: 0 },
+            // The wall cap is what is LEFT of the original deadline, not the
+            // full grant again. `singleSpawnAndRun` passes this cap straight to
+            // `agentManager.spawn` as the worker's timeout, so keeping the
+            // original `startedAt` alone bounds nothing — one `spawn_child`
+            // could still block for a multiple of the child's wall budget.
+            // The remainder AND a fresh start, so the pair still describes one
+            // absolute deadline. Shrinking the cap while keeping the original
+            // `startedAt` makes every `cap - (now - startedAt)` consumer
+            // subtract the elapsed time twice — `collect-tool.ts` reads
+            // `remaining === 0` from the retry's first moment.
+            wallClockMs: {
+              cap: Math.max(1, opts.budget.wallClockMs.cap - elapsed),
+              startedAt: Date.now(),
+            },
+          },
+          childMessage: `${feedback}\n\n${opts.childMessage}`,
+          reason: 'retry',
+        },
+        true,
+        );
+      } catch (err) {
+        // Same shape as the backup-model retry beside it. A throw here says
+        // nothing about the contract, and letting it propagate would discard
+        // the `contract_failed` result and the scorer failures on it — the
+        // diagnosis this loop exists to act on.
+        coreLogger.warn(
+          { parentNodeId: opts.parent.id, attempt, err: (err as Error).message },
+          'Swarm child contract retry threw — keeping the original contract failure',
+        );
+        break;
+      }
+      spent += retried.usedTokens ?? 0;
+
+      if (retried.status !== 'ok' && retried.status !== 'contract_failed') {
+        // Infrastructure failure, not a verdict. Keep the diagnosis we already
+        // have and stop — another attempt would hit the same wall.
+        coreLogger.warn(
+          { parentNodeId: opts.parent.id, attempt, retryStatus: retried.status },
+          'Swarm child contract retry failed for an unrelated reason — keeping the original contract failure',
+        );
+        discardedTokens += retried.usedTokens ?? 0;
+        break;
+      }
+
+      // The superseded attempt is the one being thrown away now.
+      noteFailure(result);
+      discardedTokens += result.usedTokens ?? 0;
+      result = retried;
+    }
+    return { result, discardedTokens };
   }
 
   /**
@@ -1257,11 +1524,19 @@ export class SwarmSpawner {
       const outcome = await runScorers(
         effectiveScorers,
         { output: result.output, notes: result.notes, receipt: result.receipt },
-        { userId: opts.parentContext.userId, filesTouched },
+        buildScorerContext({
+          userId: opts.parentContext.userId,
+          filesTouched,
+          childTools: opts.childTools,
+          childRole: opts.childRole,
+          signal: opts.parent.signal,
+        }),
       );
       result.scorerOutcome = outcome;
-      if (!outcome.passed) {
-        const summary = outcome.failures.map((f) => `${f.scorer}: ${f.reason}`).join('; ');
+      const verdict = applyScorerVerdict(outcome, notes);
+      notes = verdict.notes;
+      result.notes = notes;
+      if (verdict.contractFailed) {
         status = 'contract_failed';
         result.status = 'contract_failed';
         // Keep the receipt's own status in step — it is snapshotted before the
@@ -1269,11 +1544,18 @@ export class SwarmSpawner {
         // `contract_failed` envelope is exactly the kind of contradiction the
         // receipt exists to prevent.
         if (result.receipt) result.receipt = { ...result.receipt, status: 'contract_failed' };
-        notes = notes ? `${notes}\nScorer gate failed: ${summary}` : `Scorer gate failed: ${summary}`;
-        result.notes = notes;
+      }
+      if (verdict.contractFailed || outcome.notEvaluated) {
         coreLogger.info(
-          { parentNodeId: opts.parent.id, childId, failures: outcome.failures.length },
-          'Swarm child failed scorer gate — marking contract_failed',
+          {
+            parentNodeId: opts.parent.id,
+            childId,
+            failures: outcome.failures.length,
+            notEvaluated: outcome.notEvaluated,
+          },
+          verdict.contractFailed
+            ? 'Swarm child failed scorer gate — marking contract_failed'
+            : 'Swarm scorer gate not evaluated — recording the interruption',
         );
       }
 
@@ -1286,7 +1568,28 @@ export class SwarmSpawner {
       //
       // Best-effort, exactly like the pipeline's own write: a ledger failure
       // must never turn a good child into a failed one.
+      // A gate that never judged anything is not a verification, and writing
+      // `passed: outcome.passed` — true on that path — would put a green row in
+      // the ledger `scripts/quality-score.ts` reads for `deliveredPct`: a
+      // measurement of nothing, counted as a success.
+      //
+      // But a gate cut short after finding a real failure DID verify something,
+      // and that verdict belongs in the ledger like any other. The skip is
+      // therefore "nothing was judged", not "the gate was interrupted".
+      // NOT `ran === 0`: the always-on tool-outage scorer is prepended to every
+      // spawn and completes first, so `ran` is at least 1 whenever a later
+      // command check is cancelled — which made this guard unreachable and let
+      // the green row through anyway. What matters is whether the gate reached
+      // a NEGATIVE verdict: an interrupted gate that found nothing has not
+      // cleared the deliverable, it merely did not finish looking.
+      const judgedNothing = !!outcome.notEvaluated && outcome.failures.length === 0;
       try {
+        if (judgedNothing) {
+          coreLogger.info(
+            { parentNodeId: opts.parent.id, childId, reason: outcome.notEvaluated },
+            'Skipping verification evidence — the gate judged nothing',
+          );
+        } else {
         await verificationEvidenceRepository.record({
           sessionId: opts.parent.rootSessionId,
           nodeId: childId,
@@ -1298,6 +1601,7 @@ export class SwarmSpawner {
             failures: outcome.failures.map((f) => ({ scorer: f.scorer, reason: f.reason })),
           },
         });
+        }
       } catch (err) {
         coreLogger.warn(
           { err: (err as Error).message, childId },
@@ -1833,6 +2137,69 @@ export function planToolGaps(
   const missingTools = [...new Set(missing.map((s) => s.tool as string))];
   const unrunnable = stepsWithTool.length > 0 && missing.length === stepsWithTool.length;
   return { missingTools, unrunnable };
+}
+
+/**
+ * What a scorer outcome does to the child's status and notes.
+ *
+ * Extracted and exported because the two cases are independent and a call site
+ * that treats them as alternatives is wrong in a way no unit test of
+ * `runScorers` can see: a gate cut short still reports what it managed to
+ * judge, so an `else if` on `notEvaluated` silently discards a `file_exists`
+ * miss that `runScorers` deliberately preserved. That is the "correct guard,
+ * never reached" shape, one level down.
+ */
+export function applyScorerVerdict(
+  outcome: ScorerOutcome,
+  existingNotes?: string,
+): { contractFailed: boolean; notes: string | undefined } {
+  let notes = existingNotes;
+  const append = (line: string) => {
+    notes = notes ? `${notes}\n${line}` : line;
+  };
+
+  // The interruption is recorded whether or not anything failed — a reader must
+  // not mistake an absent verdict for a clean one.
+  if (outcome.notEvaluated) append(`Scorer gate not evaluated: ${outcome.notEvaluated}`);
+
+  // And any failure it DID reach still fails the contract.
+  const contractFailed = !outcome.passed;
+  if (contractFailed) {
+    append(`Scorer gate failed: ${outcome.failures.map((f) => `${f.scorer}: ${f.reason}`).join('; ')}`);
+  }
+
+  return { contractFailed, notes };
+}
+
+/**
+ * The `ScorerContext` a spawned child's gates run under.
+ *
+ * Extracted and exported because every field here is one a hand-written test
+ * gets right and production got wrong. `role` was absent on the real path while
+ * every scorer test supplied it, and `canPromptHuman` reads an ABSENT role as
+ * "can ask a human" — which routed the default ASK level on `shell.execute` to
+ * `ask_human` and made every `command_exit_zero` gate refuse, non-retryably, on
+ * a stock install. The same shape as the unreachable gates the rebuild plan
+ * lists: the guard was correct, the shipping path never met it.
+ */
+export function buildScorerContext(args: {
+  userId?: string;
+  filesTouched: number | null;
+  childTools: ToolHandler[];
+  childRole: AgentRole;
+  signal?: AbortSignal;
+}): ScorerContext {
+  return {
+    userId: args.userId,
+    filesTouched: args.filesTouched,
+    // Read from the RESOLVED toolset, not the role name: that is what the child
+    // actually got after the parent-intersection and the small-model cap.
+    canRunCommands: args.childTools.some((t) => t.toolId === 'shell' || t.name.startsWith('shell__')),
+    role: args.childRole,
+    // So a command check dies with a cancelled run rather than outliving it
+    // with the awaited spawn still pending.
+    signal: args.signal,
+  };
 }
 
 export function composeChildMessage(

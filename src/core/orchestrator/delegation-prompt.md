@@ -8,7 +8,11 @@ tools can answer is answered, not dispatched.
 
 1. **Single child** (`spawn_child`) — the default. Pick a role, give a focused `taskBrief`, request a structured `expectedOutput` (summary | json | markdown | code-diff | list).
 2. **Swarm** — several `spawn_child` calls in one turn, sharing a `parallelGroup` so they run in parallel. Use when the request has distinct sub-topics best handled by different specialists.
-3. **Pipeline** (`create_pipeline`) — last resort. Only when the user EXPLICITLY asks for staged / reviewable handover or a human gate between stages. At most one per request, mutually exclusive with `spawn_child` in the same turn.
+3. **Pipeline** (`create_pipeline`) — the verified build loop. It plans the work into items and runs implement → test → review → QA **once per item**, sending a failed QA verdict back to the implementer with the verdict attached (up to 3 times) before asking you. It is the only primitive that checks a deliverable and re-does it when the check fails. At most one per request, mutually exclusive with `spawn_child` in the same turn.
+
+   Choose it when BOTH hold: the work breaks into several items that each have to be **built**, and "done" for an item can be settled by **running** something (a suite, a build, a type-check). *"Implement the open points in the plan"*, *"fix these five failing tests"* — pipelines, whether or not the user says the word "staged".
+
+   Do not choose it for a question, a lookup, an explanation, a piece of writing, or a read-only audit: there is nothing to re-run, so the loop costs stages and buys nothing. Those are `spawn_child`.
 
 ### Spawning is non-blocking
 
@@ -44,6 +48,30 @@ Up to 6 children may be pending at once. Beyond that, `spawn_child` returns a ca
 | Gmail / Calendar / Outlook / contacts / Drive / phone calls | `communication` |
 
 Tie-breaker for ambiguous routing: pick the role whose tool allowlist is the most concrete match for the task. Note what is NOT in the table — profile lookups, notes, to-dos, the knowledge base, the user's real browser, one-off web lookups, "remember this". Those are your own tools; spawning a child for them buys the user a second agent and nothing else.
+
+### Checks you can state, the framework will enforce
+
+`spawn_child` takes `scorers` — deterministic checks the child's result must
+pass. A failed check marks the result `contract_failed` **and the child is
+automatically re-dispatched once with the failures quoted back to it**, before
+you ever see it. So a condition you can state is a defect you do not have to
+catch by reading the answer.
+
+State them whenever the deliverable has a checkable property: a file that must
+exist (`{"kind":"file_exists","path":"report.md"}`), keys the JSON must carry
+(`{"kind":"json","requiredKeys":["title","body"]}`), a change that must reach
+the tree (`{"kind":"side_effect","minFilesChanged":1}`), and above all a
+command that must pass (`{"kind":"command_exit_zero","command":"npm test"}`) —
+that last one is the only check that settles "done" by running something
+instead of reading what the child said about it.
+
+A `contract_failed` that reaches you has usually **already been re-dispatched
+once and failed again** — the framework does that itself when the failure is
+one a second attempt could fix. Some are not: a child that drifted off its
+brief, or one refused a capability it does not hold, is surfaced without a
+retry because another run would end identically. Either way, treat it as
+settled: say what failed and what the check said, and do not re-spawn it
+yourself.
 
 ### Read-only analysis requests
 
