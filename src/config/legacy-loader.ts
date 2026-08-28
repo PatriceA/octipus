@@ -53,15 +53,12 @@ export function loadFromEnvLegacy(): Partial<Config> {
       host: process.env.API_HOST || process.env.HOST || defaultConfig.api!.host!,
       port: parseInt(process.env.API_PORT || process.env.PORT || '3000', 10),
       corsOrigins: process.env.CORS_ORIGINS?.split(',') || defaultConfig.api!.corsOrigins!,
-      rateLimitWindow: parseInt(process.env.RATE_LIMIT_WINDOW || '60000', 10),
       rateLimitMax: parseInt(process.env.RATE_LIMIT_MAX || '600', 10),
     },
     telegram: process.env.TELEGRAM_BOT_TOKEN
       ? {
           botToken: process.env.TELEGRAM_BOT_TOKEN,
           allowedUsers: process.env.TELEGRAM_ALLOWED_USERS?.split(',') || [],
-          webhookUrl: process.env.TELEGRAM_WEBHOOK_URL,
-          pollingTimeout: parseInt(process.env.TELEGRAM_POLLING_TIMEOUT || '30', 10),
         }
       : undefined,
     teams: process.env.TEAMS_APP_ID
@@ -95,19 +92,16 @@ export function loadFromEnvLegacy(): Partial<Config> {
     mcp: {
       serversConfigPath: process.env.MCP_SERVERS_CONFIG,
       autoStart: process.env.MCP_AUTO_START !== 'false',
-      connectionTimeout: parseInt(process.env.MCP_CONNECTION_TIMEOUT || '30000', 10),
     },
     n8n: process.env.N8N_URL
       ? {
           url: process.env.N8N_URL,
           apiKey: process.env.N8N_API_KEY,
-          webhookPath: process.env.N8N_WEBHOOK_PATH || '/n8n/webhook',
         }
       : undefined,
     logging: {
       level: (process.env.LOG_LEVEL as any) || defaultConfig.logging!.level,
       format: (process.env.LOG_FORMAT as any) || defaultConfig.logging!.format,
-      file: process.env.LOG_FILE,
     },
     agent: {
       maxConcurrentAgents: parseInt(process.env.MAX_CONCURRENT_AGENTS || '10', 10),
@@ -117,18 +111,12 @@ export function loadFromEnvLegacy(): Partial<Config> {
       maxTokenBudget: parseInt(process.env.AGENT_MAX_TOKEN_BUDGET || '100000', 10),
     },
     orchestrator: {
-      enabled: process.env.ORCHESTRATOR_ENABLED !== 'false',
-      defaultModel: process.env.ORCHESTRATOR_MODEL || undefined,
       mode: (process.env.ORCHESTRATOR_MODE as 'auto' | 'full' | 'lite') || 'auto',
       liteMaxIterations: parseInt(process.env.ORCHESTRATOR_LITE_MAX_ITERATIONS || '8', 10),
       routerSmallModelMaxParams: parseInt(process.env.ORCHESTRATOR_ROUTER_MAX_PARAMS || '10000000000', 10),
       liteModelMaxParams: parseInt(process.env.ORCHESTRATOR_LITE_MAX_PARAMS || '24000000000', 10),
       smallModelMaxTools: parseInt(process.env.ORCHESTRATOR_SMALL_MODEL_MAX_TOOLS || '7', 10),
-      piiFilterEnabled: process.env.PII_FILTER_ENABLED !== 'false',
-      maxPipelineStages: parseInt(process.env.MAX_PIPELINE_STAGES || '10', 10),
-      approvalTimeoutMs: parseInt(process.env.APPROVAL_TIMEOUT_MS || '3600000', 10),
       pipelineTokenBudget: parseInt(process.env.PIPELINE_TOKEN_BUDGET || '2000000', 10),
-      workerTimeoutMs: parseInt(process.env.WORKER_TIMEOUT_MS || '600000', 10),
       orchestratorTimeoutMs: parseInt(process.env.ORCHESTRATOR_TIMEOUT_MS || '1800000', 10),
       orchestratorHookTimeoutMs: parseInt(process.env.ORCHESTRATOR_HOOK_TIMEOUT_MS || '2700000', 10),
     },

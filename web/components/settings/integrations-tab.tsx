@@ -111,7 +111,7 @@ function WorkspaceSection() {
       {/* Root path (read-only) */}
       <div className="mb-3">
         <label className="text-xs font-bold text-on-surface-variant uppercase mb-2 block">Root Path</label>
-        <div className="flex items-center gap-2 bg-surface-container-high border-none rounded-md py-3 px-4 text-sm text-on-surface font-mono">
+        <div className="flex items-center gap-2 bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-sm text-on-surface font-mono">
           {wsLoading ? (
             <Loader2 className="w-3.5 h-3.5 animate-spin text-on-surface-variant" />
           ) : (
@@ -151,7 +151,7 @@ function WorkspaceSection() {
           onChange={(e) => setNewPath(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleAddPath()}
           placeholder="/path/to/directory"
-          className="flex-1 bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm font-mono focus:ring-1 focus:ring-primary"
+          className="flex-1 bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm font-mono focus:ring-1 focus:ring-primary"
         />
         <button
           onClick={handleAddPath}

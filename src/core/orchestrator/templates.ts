@@ -78,14 +78,24 @@ export function stepConfigToStageTemplate(step: PipelineStepConfig): StageTempla
  * Get a pipeline template by name or ID from the database.
  * Falls back to a single-stage general template if not found.
  */
-export async function getPipelineTemplate(nameOrId: string): Promise<PipelineTemplate> {
+export async function getPipelineTemplate(nameOrId: string, userId?: string): Promise<PipelineTemplate> {
   const db = getDb();
   const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(nameOrId);
 
-  // 1. Exact match by name or UUID
-  const exactConditions = isUUID
+  // 1. Exact match by name or UUID, within what this user may run.
+  //
+  // `pipeline_templates.name` is not unique and a name lookup used to search
+  // EVERY row, so two users with a recipe called `deploy` could have one
+  // authorized and the other executed. Scoped to the same set
+  // `listAvailableTemplates` returns — own recipes, presets, and unowned rows —
+  // so a name means the same template at check time and at run time.
+  const nameOrIdMatch = isUUID
     ? or(eq(pipelineTemplates.name, nameOrId), eq(pipelineTemplates.id, nameOrId))
     : eq(pipelineTemplates.name, nameOrId);
+  const visible = userId
+    ? or(eq(pipelineTemplates.userId, userId), eq(pipelineTemplates.isPreset, true), isNull(pipelineTemplates.userId))
+    : undefined;
+  const exactConditions = visible ? and(nameOrIdMatch, visible) : nameOrIdMatch;
 
   const results = await db
     .select()

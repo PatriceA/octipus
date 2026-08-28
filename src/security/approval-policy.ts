@@ -73,6 +73,36 @@ export function canPromptHuman(caller: { role?: string; root?: boolean; attended
   return caller.root === true && caller.attended !== false;
 }
 
+/**
+ * Surfaces that CANNOT put an approval prompt in front of a person.
+ *
+ * `attended` used to mean "not a hook and not a heartbeat", and the comment on
+ * `canPromptHuman` asserted that the API path "does reach a person". It does
+ * not: there is no `api` relay, so `umi.send('api', …)` throws and the prompt is
+ * delivered nowhere. A REST caller's ASK therefore sat pending for its whole TTL
+ * and then failed — five minutes of nothing, for a question nobody could have
+ * been asked.
+ *
+ * Deliberately a DENYLIST, not an allowlist. Getting it wrong in this direction
+ * costs a stall; getting it wrong the other way silently auto-approves an ASK on
+ * a surface that would have shown the user a prompt. So a channel is treated as
+ * attended unless it is known to have no way to ask — and a new client type
+ * keeps the prompting behaviour by default.
+ *
+ * Known-unpromptable: the REST API (no relay), and the unattended triggers
+ * (hook, heartbeat, cron) which by definition have nobody watching. Interactive
+ * clients — `webchat` (its own approval control), `tui` (a pi-tui overlay),
+ * `mobile`, `acp`, and the messaging adapters, which relay the prompt and read
+ * the yes/no reply — all prompt.
+ */
+const UNPROMPTABLE_CHANNELS = new Set(['api', 'hook', 'heartbeat', 'cron', 'agent', 'qa-demo']);
+
+/** Can an approval raised on this channel actually reach a person? */
+export function channelCanPrompt(channel: string | undefined): boolean {
+  if (!channel) return false;
+  return !UNPROMPTABLE_CHANNELS.has(channel);
+}
+
 /** Does `pattern` name this tool action? */
 function matches(pattern: string, toolId: string, action: string): boolean {
   const p = pattern.trim();

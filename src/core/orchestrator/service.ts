@@ -693,7 +693,11 @@ export class OrchestratorService {
     type: string,
     description: string,
     context: AgentContext,
-    options?: { maxRetries?: number; params?: Record<string, unknown> },
+    options?: {
+      maxRetries?: number;
+      params?: Record<string, unknown>;
+      onCreated?: (pipelineId: string) => void;
+    },
   ): Promise<unknown> {
     const { getPipelineManager } = await import('./pipeline-manager');
     const pipelineManager = getPipelineManager();

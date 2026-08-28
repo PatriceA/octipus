@@ -128,7 +128,8 @@ const CREATE_DESCRIPTION =
   '(1) If you DO pass `html_template` with `{{data.<name>.…}}` placeholders, every `<name>` MUST exist in `sources[]` or in a transform attached later. ' +
   '(2) Default `visibility` is `workspace`, which means the public URL returns 404 to anyone not signed in. Pass `visibility: "public"` for a shareable link or `"signed"` for share-token only. ' +
   '(3) After create, the page only auto-refreshes when at least one viewer has loaded it recently — open the `outerUrl` to confirm the first render. ' +
-  '(4) Interactive pages work: `<script>` blocks and `onclick="…"` handlers in `html_template` are compiled into a CSP-pinned bundle served with the page. Third-party/CDN `<script src>` is not allowed — inline the code.';
+  '(4) Interactive pages work: `<script>` blocks and `onclick="…"` handlers in `html_template` are compiled into a CSP-pinned bundle served with the page. Third-party/CDN `<script src>` is not allowed — inline the code. ' +
+  '(5) If you author `html_template` or `css` BY HAND, call `art_toolbox_design` first — it returns the product palette, type scale and layout rules. Without it hand-authored pages come out looking like a generic default, which is the most common complaint about this feature.';
 
 const UPDATE_DESCRIPTION =
   'Update an artifact. Body changes (template/css) create a new version. ' +

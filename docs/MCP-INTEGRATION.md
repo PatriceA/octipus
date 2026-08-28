@@ -36,7 +36,6 @@ MCP servers are configured in a JSON file. Set the path via environment variable
 # .env
 MCP_SERVERS_CONFIG=./mcp-servers.json
 MCP_AUTO_START=true
-MCP_CONNECTION_TIMEOUT=30000
 ```
 
 ### Server config format (`mcp-servers.json`)

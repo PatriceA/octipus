@@ -15,47 +15,62 @@ export function GeneralTab() {
     queryFn: () => api.get<UserProfile>('/auth/me'),
   });
 
+  // `/health` is the liveness ping: `{ status, timestamp }` and nothing else.
+  // The per-service breakdown this panel shows lives on `/health/detailed`.
+  // Fetched once per visit, deliberately NOT polled: `/health/detailed` fans out
+  // to a live probe of every configured provider, so an interval here would fire
+  // that whole sweep for as long as the tab stays open.
   const { data: health } = useQuery({
-    queryKey: ['health'],
+    queryKey: ['health', 'detailed'],
     queryFn: async () => {
       try {
-        return await api.get<HealthStatus>('/health');
+        return await api.get<HealthStatus>('/health/detailed');
       } catch {
         return null;
       }
     },
   });
 
+  const services = Object.entries(health?.health ?? {});
+
   return (
     <div className="space-y-6">
       <h2 className="text-lg font-extrabold tracking-tighter text-on-surface">General Settings</h2>
 
       {/* Service Status */}
-      <div>
+      <section>
         <h3 className="text-xs font-bold text-on-surface-variant uppercase mb-2">Service Status</h3>
-        <div className="grid grid-cols-2 gap-2">
-          {health &&
-            typeof health === 'object' &&
-            'services' in health &&
-            Object.entries((health as HealthStatus).services || {}).map(([name, svc]) => (
+        {services.length === 0 ? (
+          <p className="text-sm text-on-surface-variant border border-outline-variant rounded-md px-3 py-2">
+            No health data — the backend did not answer /health/detailed.
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {services.map(([name, svc]) => (
               <div
                 key={name}
-                className="flex items-center justify-between p-2 bg-surface-container-low rounded-lg"
+                className="flex items-center justify-between gap-3 px-3 py-2 bg-surface-container-low border border-outline-variant rounded-md"
               >
-                <span className="text-sm text-on-surface capitalize">{name}</span>
-                <span
-                  className={`text-xs px-2 py-0.5 rounded-full ${
-                    svc.status === 'healthy'
-                      ? 'bg-tertiary-container/60 text-tertiary'
-                      : 'bg-error-container/60 text-error'
-                  }`}
-                >
-                  {svc.status}
+                <span className="text-sm text-on-surface capitalize truncate">{name}</span>
+                <span className="flex items-center gap-2 shrink-0">
+                  {typeof svc.latency === 'number' && (
+                    <span className="text-xs text-on-surface-variant tabular-nums">{svc.latency}ms</span>
+                  )}
+                  <span
+                    className={`text-xs px-2 py-0.5 rounded-full ${
+                      svc.status === 'healthy'
+                        ? 'bg-tertiary-container/60 text-tertiary'
+                        : 'bg-error-container/60 text-error'
+                    }`}
+                  >
+                    {svc.status}
+                  </span>
                 </span>
               </div>
             ))}
-        </div>
-      </div>
+          </div>
+        )}
+      </section>
 
       {/* Profile */}
       <div>
@@ -67,7 +82,7 @@ export function GeneralTab() {
               type="text"
               value={profile?.username || ''}
               readOnly
-              className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm"
+              className="w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm"
             />
           </div>
           {profile?.email && (
@@ -77,7 +92,7 @@ export function GeneralTab() {
                 type="text"
                 value={profile.email}
                 readOnly
-                className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm"
+                className="w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm"
               />
             </div>
           )}

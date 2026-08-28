@@ -73,7 +73,7 @@ async function routedRolesForTurn(sessionId: string, since: Date): Promise<strin
  * ## Blocking contract (docs/plans/blocked-vs-stuck.md Phase 2)
  *
  * `POST /chat` BLOCKS until the turn finishes. If the turn raises an approval
- * it blocks until a human answers or `orchestrator.approvalTimeoutMs` (1h)
+ * it blocks until a human answers or the permission request's own TTL
  * expires. This is deliberate — the web UI and TUI expect the finished answer
  * on the response — but it means a REST caller sees only a quiet socket.
  *

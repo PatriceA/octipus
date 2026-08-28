@@ -253,7 +253,7 @@ export function SchedulePicker({ value, onChange, onScheduledAtChange, scheduled
     });
   };
 
-  const inputCls = 'bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary';
+  const inputCls = 'bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary';
   const tabCls = (active: boolean) => cn(
     'px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer',
     active

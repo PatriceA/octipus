@@ -1,5 +1,14 @@
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap')
-layer(utilities);
+/* The font import must NOT carry `layer(utilities)`.
+ *
+ * An `@import ... layer(x)` DECLARES layer x at that point, and CSS orders
+ * layers by first declaration. Declaring `utilities` on line 1 — before
+ * `@import 'tailwindcss'` declares theme/base/components/utilities — pushed
+ * `utilities` to the FRONT of the order, which makes it the weakest layer and
+ * `base` the strongest. Tailwind's preflight (`*, ::before, ::after { border:
+ * 0 solid }`) then beat every utility in the app: `class="border"` computed to
+ * `border-width: 0`, so no input, card, table cell or panel could draw an edge
+ * and the whole UI read as unstyled. Fonts belong in no layer at all. */
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap');
 
 @import 'tailwindcss';
 
@@ -82,9 +91,15 @@ layer(utilities);
   --color-surface-container-highest: #232323;
   --color-surface-container-lowest: #0A0A0A;
 
-  /* Outlines (single-line dim borders — TUI feel) ------------------- */
+  /* Outlines (single-line dim borders — TUI feel) -------------------
+     `outline-variant` is the default border colour for every element
+     (see the Tailwind v4 compat layer below), so it decides whether the
+     app has edges at all. At #2A2A2A it sat 21/255 off the panel it drew
+     on: inputs, cards and table cells were invisible rectangles and the
+     UI read as unstyled. Lifted until an edge is legible, with a slight
+     cool bias toward the periwinkle accent so it reads chosen. */
   --color-outline: #767575;
-  --color-outline-variant: #2A2A2A;
+  --color-outline-variant: #33343B;
 
   /* Text-on-* (use these instead of hardcoded #fff) ----------------- */
   --color-on-surface: #FFFFFF;

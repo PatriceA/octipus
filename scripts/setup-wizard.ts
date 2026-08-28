@@ -1019,9 +1019,10 @@ async function runApiPhase(baseUrl: string, _ctx: WizardCtx | null): Promise<voi
     // Build a batch of setting writes. Settings flagged isSecret in
     // SETTINGS_REGISTRY are routed to the vault by the backend handler;
     // we just PUT them through the settings batch endpoint either way.
-    const batch: Record<string, unknown> = {
-      'orchestrator.defaultModel': provider.model,
-    };
+    // The chosen model becomes the DB default via the model row itself; there
+    // is no separate orchestrator model override (the setting that used to be
+    // written here was never read by anything).
+    const batch: Record<string, unknown> = {};
     if (def.id === 'ollama') {
       batch['ollama.defaultModel'] = provider.model;
       // Always persist the URL — without it chat can't reach Ollama. Fall back

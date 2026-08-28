@@ -148,14 +148,14 @@ export function ApiTokensTab() {
             value={name}
             onChange={(e) => setName(e.target.value.slice(0, 100))}
             placeholder="Token name (e.g. CI deploy bot)"
-            className="md:col-span-2 bg-surface-container-high border-none rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+            className="md:col-span-2 bg-surface-container-high border border-outline-variant rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
           />
           <input
             type="date"
             value={expiresAt}
             onChange={(e) => setExpiresAt(e.target.value)}
             placeholder="Expires (optional)"
-            className="bg-surface-container-high border-none rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+            className="bg-surface-container-high border border-outline-variant rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
           />
         </div>
         <div className="flex items-center gap-3">

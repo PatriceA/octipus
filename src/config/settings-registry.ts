@@ -144,24 +144,6 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
     envVar: 'TELEGRAM_ALLOWED_USERS',
   },
-  {
-    key: 'telegram.webhookUrl',
-    category: 'channels',
-    valueType: 'string',
-    defaultValue: '',
-    description: 'Telegram webhook URL (leave empty for polling)',
-    isSecret: false,
-    envVar: 'TELEGRAM_WEBHOOK_URL',
-  },
-  {
-    key: 'telegram.pollingTimeout',
-    category: 'channels',
-    valueType: 'number',
-    defaultValue: 30,
-    description: 'Telegram polling timeout (seconds)',
-    isSecret: false,
-    envVar: 'TELEGRAM_POLLING_TIMEOUT',
-  },
 
   // ── Slack ──
   {
@@ -264,15 +246,6 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     vaultName: 'whatsapp_app_secret',
     envVar: 'WHATSAPP_APP_SECRET',
   },
-  {
-    key: 'whatsapp.businessAccountId',
-    category: 'channels',
-    valueType: 'string',
-    defaultValue: '',
-    description: 'WhatsApp Business Account ID',
-    isSecret: false,
-    envVar: 'WHATSAPP_BUSINESS_ACCOUNT_ID',
-  },
 
   // ── Agent ──
   {
@@ -324,24 +297,6 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
 
   // ── Orchestrator ──
   {
-    key: 'orchestrator.enabled',
-    category: 'orchestrator',
-    valueType: 'boolean',
-    defaultValue: true,
-    description: 'Enable orchestrator/pipelines',
-    isSecret: false,
-    envVar: 'ORCHESTRATOR_ENABLED',
-  },
-  {
-    key: 'orchestrator.defaultModel',
-    category: 'orchestrator',
-    valueType: 'string',
-    defaultValue: '',
-    description: 'Override model for orchestrator (empty = use DB default)',
-    isSecret: false,
-    envVar: 'ORCHESTRATOR_MODEL',
-  },
-  {
     key: 'orchestrator.mode',
     category: 'orchestrator',
     valueType: 'string',
@@ -389,42 +344,6 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'ORCHESTRATOR_SMALL_MODEL_MAX_TOOLS',
   },
   {
-    key: 'orchestrator.piiFilterEnabled',
-    category: 'orchestrator',
-    valueType: 'boolean',
-    defaultValue: true,
-    description: 'Enable PII filter',
-    isSecret: false,
-    envVar: 'PII_FILTER_ENABLED',
-  },
-  {
-    key: 'orchestrator.maxPipelineStages',
-    category: 'orchestrator',
-    valueType: 'number',
-    defaultValue: 10,
-    description: 'Max pipeline stages',
-    isSecret: false,
-    envVar: 'MAX_PIPELINE_STAGES',
-  },
-  {
-    key: 'orchestrator.approvalTimeoutMs',
-    category: 'orchestrator',
-    valueType: 'number',
-    defaultValue: 3600000,
-    description: 'Approval timeout (ms)',
-    isSecret: false,
-    envVar: 'APPROVAL_TIMEOUT_MS',
-  },
-  {
-    key: 'orchestrator.workerTimeoutMs',
-    category: 'orchestrator',
-    valueType: 'number',
-    defaultValue: 600000,
-    description: 'Worker timeout (ms)',
-    isSecret: false,
-    envVar: 'WORKER_TIMEOUT_MS',
-  },
-  {
     key: 'orchestrator.orchestratorTimeoutMs',
     category: 'orchestrator',
     valueType: 'number',
@@ -432,6 +351,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     description: 'Orchestrator hard wall-clock (ms)',
     isSecret: false,
     envVar: 'ORCHESTRATOR_TIMEOUT_MS',
+  },
+  {
+    key: 'orchestrator.pipelineTokenBudget',
+    category: 'orchestrator',
+    valueType: 'number',
+    defaultValue: 2_000_000,
+    description:
+      'Token pool for one pipeline RUN, summed over every node visit (0 = unlimited). Per-node caps bound a single visit; this is the only bound a foreach loop respects.',
+    isSecret: false,
+    envVar: 'PIPELINE_TOKEN_BUDGET',
   },
   {
     key: 'orchestrator.orchestratorHookTimeoutMs',
@@ -690,15 +619,6 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
     envVar: 'LOG_FORMAT',
   },
-  {
-    key: 'logging.file',
-    category: 'logging',
-    valueType: 'string',
-    defaultValue: '',
-    description: 'Log file path (empty = stdout only)',
-    isSecret: false,
-    envVar: 'LOG_FILE',
-  },
 
   // ── Voice ──
   {
@@ -783,15 +703,6 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'N8N_API_KEY',
   },
   {
-    key: 'n8n.webhookPath',
-    category: 'integrations',
-    valueType: 'string',
-    defaultValue: '/n8n/webhook',
-    description: 'N8N webhook path',
-    isSecret: false,
-    envVar: 'N8N_WEBHOOK_PATH',
-  },
-  {
     key: 'mcp.serversConfigPath',
     category: 'integrations',
     valueType: 'string',
@@ -816,15 +727,6 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     description: 'Auto-connect to MCP servers on startup',
     isSecret: false,
     envVar: 'MCP_AUTO_START',
-  },
-  {
-    key: 'mcp.connectionTimeout',
-    category: 'integrations',
-    valueType: 'number',
-    defaultValue: 30000,
-    description: 'MCP connection timeout (ms)',
-    isSecret: false,
-    envVar: 'MCP_CONNECTION_TIMEOUT',
   },
 
   // ── OAuth ──
@@ -867,15 +769,6 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     description: 'CORS allowed origins',
     isSecret: false,
     envVar: 'CORS_ORIGINS',
-  },
-  {
-    key: 'api.rateLimitWindow',
-    category: 'api',
-    valueType: 'number',
-    defaultValue: 60000,
-    description: 'Rate limit window (ms)',
-    isSecret: false,
-    envVar: 'RATE_LIMIT_WINDOW',
   },
   {
     key: 'api.rateLimitMax',

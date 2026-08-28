@@ -43,7 +43,6 @@ export const defaultConfig: Partial<Config> = {
     host: '0.0.0.0',
     port: 3000,
     corsOrigins: ['http://localhost:3001'],
-    rateLimitWindow: 60000,
     rateLimitMax: 600,
   },
   voice: {
@@ -56,7 +55,6 @@ export const defaultConfig: Partial<Config> = {
   },
   mcp: {
     autoStart: true,
-    connectionTimeout: 30000,
   },
   logging: {
     level: 'info',
@@ -70,16 +68,11 @@ export const defaultConfig: Partial<Config> = {
     maxTokenBudget: 100000,
   },
   orchestrator: {
-    enabled: true,
     mode: 'auto',
     liteMaxIterations: 8,
     routerSmallModelMaxParams: 10_000_000_000,
     liteModelMaxParams: 24_000_000_000,
     smallModelMaxTools: 7,
-    piiFilterEnabled: true,
-    maxPipelineStages: 10,
-    approvalTimeoutMs: 3600000,
-    workerTimeoutMs: 600000,
     /** Orchestrator agent timeout for interactive channels (30 min). */
     orchestratorTimeoutMs: 1800000,
     /** Orchestrator agent timeout for unattended hook-triggered runs (45 min). */

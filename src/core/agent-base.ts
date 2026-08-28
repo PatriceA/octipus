@@ -70,6 +70,14 @@ export interface ToolHandler {
   description: string;
   parameters: Record<string, unknown>;
   toolId?: string;
+  /**
+   * Permission action this tool checks under, when it is not the tool's own
+   * name. Manifests declare coarse verbs (`read`, `write`, `execute`) and a
+   * tool registers which verb it belongs to; carrying that here is what lets
+   * the agent loop resolve the same action `base-tool` does, instead of
+   * looking up the namespaced call name and finding no declared default.
+   */
+  permissionAction?: string | ((args: Record<string, unknown>) => string);
   final?: boolean;
   /** Name of the most-informative parameter for compact UI display. */
   previewParam?: string;

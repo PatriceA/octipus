@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'vitest';
+import dns from 'node:dns';
+import { describe, expect, test, vi } from 'vitest';
 import { assertPublicAddress, fetchGuarded, safeRegExp, sanitizeToolOutput, validateExternalUrl } from './sanitize';
 
 describe('validateExternalUrl', () => {
@@ -188,11 +189,20 @@ describe('assertPublicAddress (H3 post-connect rebinding check)', () => {
 });
 
 describe('validateExternalUrl returns vetted addresses (H3)', () => {
-  test('public DNS host resolves to addresses for pinning', async () => {
-    const r = await validateExternalUrl('https://one.one.one.one/');
-    expect(r.valid).toBe(true);
-    expect(Array.isArray(r.addresses)).toBe(true);
-    expect((r.addresses ?? []).length).toBeGreaterThan(0);
+  // Resolution is stubbed rather than resolved for real: the assertion is about
+  // what validateExternalUrl does with the answer, and hitting public DNS made
+  // the suite fail on any machine whose resolver declines the lookup.
+  test('a resolvable public host yields its addresses for pinning', async () => {
+    const spy4 = vi.spyOn(dns.promises, 'resolve4').mockResolvedValue(['93.184.216.34']);
+    const spy6 = vi.spyOn(dns.promises, 'resolve6').mockRejectedValue(new Error('ENODATA'));
+    try {
+      const r = await validateExternalUrl('https://example.com/');
+      expect(r.valid).toBe(true);
+      expect(r.addresses).toEqual(['93.184.216.34']);
+    } finally {
+      spy4.mockRestore();
+      spy6.mockRestore();
+    }
   });
 });
 

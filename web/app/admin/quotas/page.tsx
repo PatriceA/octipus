@@ -302,7 +302,7 @@ function Field({ label, value, onChange }: { label: string; value: string; onCha
         value={value}
         onChange={(e) => onChange(e.target.value.replace(/[^0-9]/g, ''))}
         placeholder="(inherit default)"
-        className="w-full bg-surface-container-high border-none rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+        className="w-full bg-surface-container-high border border-outline-variant rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
       />
     </div>
   );

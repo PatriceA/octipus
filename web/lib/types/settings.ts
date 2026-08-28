@@ -20,6 +20,15 @@ export interface UserProfile {
   };
 }
 
+/**
+ * `GET /health/detailed`. The per-service map is `health`, not `services` — the
+ * Settings page read `services` off `GET /health` (which carries neither), so
+ * its Service Status panel rendered an empty grid under a heading from the day
+ * it shipped.
+ */
 export interface HealthStatus {
-  services: Record<string, { status: string; latency?: number }>;
+  status: string;
+  uptime?: number;
+  agents?: { total: number; running: number };
+  health: Record<string, { service: string; status: string; latency?: number; lastChecked?: string }>;
 }

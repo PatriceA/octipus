@@ -115,7 +115,7 @@ export default function LinkAccountPage() {
           value={code}
           onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12))}
           placeholder="ABCDEF"
-          className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-center font-mono text-2xl tracking-widest focus:ring-1 focus:ring-primary"
+          className="w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-center font-mono text-2xl tracking-widest focus:ring-1 focus:ring-primary"
         />
         <button
           type="button"

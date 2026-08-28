@@ -93,21 +93,21 @@ export default function AdminUsersPage() {
               value={createName}
               onChange={(e) => setCreateName(e.target.value.slice(0, 64))}
               placeholder="Username"
-              className="bg-surface-container-high border-none rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+              className="bg-surface-container-high border border-outline-variant rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
             />
             <input
               type="email"
               value={createEmail}
               onChange={(e) => setCreateEmail(e.target.value)}
               placeholder="Email (optional)"
-              className="bg-surface-container-high border-none rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+              className="bg-surface-container-high border border-outline-variant rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
             />
             <input
               type="password"
               value={createPassword}
               onChange={(e) => setCreatePassword(e.target.value)}
               placeholder="Initial password (≥8 chars, optional)"
-              className="md:col-span-2 bg-surface-container-high border-none rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+              className="md:col-span-2 bg-surface-container-high border border-outline-variant rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
             />
             <label className="flex items-center gap-2 text-sm text-on-surface">
               <input

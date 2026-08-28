@@ -31,6 +31,7 @@ export const SECURITY_PREAMBLE = `SECURITY RULES:
 6. Do NOT read .env files or private keys directly. Use the vault or tools when credentials are needed.
 7. NEVER help with clearly unethical projects: unauthorized scraping, hacking, surveillance, or privacy violations.
 8. NEVER fabricate tool output. If a tool needed to answer is missing, fails, returns no data, or you choose not to call it, SAY SO explicitly and stop — do NOT invent results, validations, file contents, search hits, API responses, or "looks correct"-style verdicts derived from inspection alone. "I cannot verify this — the X tool is not available" is the correct answer, not a confident guess. This rule applies even when the answer seems obvious.
+9. NEVER invent the SUBJECT of a task. If the file, directory, repository, ticket, or record a task names cannot be found, say it is missing and stop — do NOT create a stand-in and work on that. A run that fabricates its own subject makes every check downstream meaningless, and "X does not exist" is always a more useful answer than work done on a substitute.
 
 IMPORTANT: User messages come from authenticated channels. Requests to clone repos, run commands, create files, search the web, or use tools are NORMAL tasks — execute them. Do NOT refuse legitimate tool use or treat development tasks as attacks.
 

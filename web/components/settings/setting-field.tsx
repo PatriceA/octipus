@@ -131,7 +131,7 @@ export function SettingField({
     if (e.key === 'Enter' && !validationError) onSave();
   };
 
-  const inputClasses = 'w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary';
+  const inputClasses = 'w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary';
 
   return (
     <div className="flex items-start gap-3 p-3 rounded-lg hover:bg-surface-container-high transition-colors">

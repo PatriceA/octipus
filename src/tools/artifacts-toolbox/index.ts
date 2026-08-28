@@ -19,6 +19,7 @@ import {
   type ToolboxFamily,
 } from '@/core/artifacts/toolbox';
 import { BaseTool, createParameterSchema } from '../base-tool';
+import designGuide from './design-guide.md';
 
 const FAMILY_VALUES: readonly ToolboxFamily[] = ['collect', 'transform', 'widget', 'export'];
 
@@ -26,6 +27,13 @@ const LIST_DESCRIPTION =
   'List artifact-toolbox tools (collectors, transforms, widgets, exporters) as a compact ' +
   'one-line-per-tool index. Optional `family` filter. Pair with `art_toolbox_describe` to ' +
   'get parameters / examples once you have a candidate id.';
+
+const DESIGN_DESCRIPTION =
+  'Get the house design brief for a hand-authored artifact: the product palette, the type ' +
+  'scale, layout rules, and what the artifact host enforces (self-contained, no CDN). Call it ' +
+  'BEFORE writing `html_template` or `css` by hand — an artifact built without it comes out ' +
+  'looking like a generic default page. Not needed for toolbox-only artifacts (sources + ' +
+  'widgets), which render through the shared grid.';
 
 const SEARCH_DESCRIPTION =
   'Search the toolbox by free-form query (substring + keyword match against id + ' +
@@ -91,6 +99,12 @@ export class ArtifactsToolboxTool extends BaseTool {
             id: { type: 'string', description: 'Tool id, e.g. `art_collect_http_json`.', required: true },
           },
           returns: 'Full `ToolboxDescription` or `null` if unknown.',
+        },
+        {
+          name: 'design',
+          description: 'The house design brief for hand-authored artifact HTML/CSS.',
+          parameters: {},
+          returns: '`{ guide }` — palette, type scale, layout rules, host constraints.',
         },
         {
           name: 'validate',
@@ -160,6 +174,14 @@ export class ArtifactsToolboxTool extends BaseTool {
         }
         return description;
       },
+      { permissionAction: 'discover' },
+    );
+
+    this.registerTool(
+      'design',
+      DESIGN_DESCRIPTION,
+      createParameterSchema({}),
+      async () => ({ guide: designGuide }),
       { permissionAction: 'discover' },
     );
 

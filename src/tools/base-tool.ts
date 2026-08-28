@@ -84,6 +84,11 @@ export abstract class BaseTool {
       // ('profiles__search_profiles') which never matches → the child
       // gets ZERO tools. Must be set.
       toolId: this.id,
+      // The agent loop checks permissions before it dispatches, and resolves
+      // the action from the handler. Without this it looks up the namespaced
+      // call name, matches no manifest permission, and falls back to ASK —
+      // turning a declared ALLOW into an approval prompt nobody can answer.
+      permissionAction: options?.permissionAction,
       description,
       parameters,
       execute: async (args, context) => {

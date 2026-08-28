@@ -434,7 +434,11 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
     {
       body: t.Object({
         username: t.String({ minLength: 3, maxLength: 50 }),
-        email: t.Optional(t.String({ format: 'email' })),
+        // `format: 'email'` was never registered with the validator, so every
+        // request that carried an email failed as "Invalid request data" —
+        // registering with an address was impossible. `pattern` is enforced
+        // natively; the real check is the unique constraint on the column.
+        email: t.Optional(t.String({ pattern: '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$' })),
         password: t.String({ minLength: 8 }),
       }),
       detail: { tags: ['auth'] },

@@ -5,6 +5,9 @@
  *   - Integration mode: calls the running backend via HTTP API
  */
 
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { evaluateAllAssertions, type GraderFunction } from './assertions';
 import { clearMemories, memorySetupBlocker, seedMemories } from './memory-setup';
 import type {
@@ -135,6 +138,33 @@ async function runTestUnit(
 
 // ── Integration mode helpers ─────────────────────────────────────────
 
+/**
+ * The api token integration mode calls the backend with.
+ *
+ * `/api/chat` requires authentication, and this harness used to post without
+ * any — so every integration test got a 401, every assertion read "unknown",
+ * and the report showed 0% quality for what was really a broken harness. Fail
+ * loud instead: a missing token is a setup error, not a failing model.
+ *
+ * `OCTIPUS_API_KEY` wins; otherwise the bootstrap token the server mints at
+ * boot (`~/.octipus/mcp-token`), which is what `bin/octi` and the MCP server
+ * already use on this machine.
+ */
+let _apiToken: string | undefined;
+
+function getApiToken(): string {
+  if (_apiToken !== undefined) return _apiToken;
+  const fromEnv = (process.env.OCTIPUS_API_KEY ?? '').trim();
+  if (fromEnv) {
+    _apiToken = fromEnv;
+    return _apiToken;
+  }
+  const tokenPath = join(homedir(), '.octipus', 'mcp-token');
+  _apiToken = existsSync(tokenPath) ? readFileSync(tokenPath, 'utf-8').trim() : '';
+  return _apiToken;
+}
+
+
 async function runTestIntegration(
   test: EvalTest,
   baseUrl: string,
@@ -142,16 +172,27 @@ async function runTestIntegration(
 ): Promise<TestExecutionContext> {
   const start = Date.now();
   const userId = test.context?.userId || 'eval-user';
-  const sessionId = test.context?.sessionId || `eval-${test.id}-${Date.now()}`;
+  // No invented id: `eval-<test>-<ts>` is not a uuid, and posting it made the
+  // backend fail the whole turn instead of running it. A suite that wants
+  // continuity sets a real session id in `context`; otherwise let the backend
+  // open one, which is what a fresh turn wants anyway.
+  const sessionId = test.context?.sessionId;
   const channel = test.context?.channel || 'api';
+
+  const token = getApiToken();
+  if (!token) {
+    throw new Error(
+      'Integration mode needs an api token: set OCTIPUS_API_KEY, or start the backend so it mints ~/.octipus/mcp-token.',
+    );
+  }
 
   try {
     const res = await fetch(`${baseUrl}/api/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({
         message: test.input,
-        sessionId,
+        ...(sessionId ? { sessionId } : {}),
         userId,
         channel,
         // Opt in to the routing report. It costs the backend two extra

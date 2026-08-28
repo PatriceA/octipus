@@ -4,7 +4,7 @@
  * kept in sync — so what matters here is that ONE table of cases pins both.
  */
 import { describe, expect, test } from 'vitest';
-import { canPromptHuman, routeApproval } from './approval-policy';
+import { canPromptHuman, channelCanPrompt, routeApproval } from './approval-policy';
 
 describe('canPromptHuman', () => {
   test('the root agent and the direct paths can', () => {
@@ -89,5 +89,31 @@ describe('routeApproval', () => {
         unattendedDenyActions: ['filesystem__delete_file', ''],
       }).route,
     ).toBe('execute');
+  });
+});
+
+describe('which channels can carry an approval', () => {
+  test('the surfaces with a person on them can', () => {
+    // `tui` is load-bearing: the gateway passes `clientType` straight through as
+    // the channel, so leaving it out makes every terminal turn unattended and
+    // its approval overlay dead.
+    for (const c of ['webchat', 'tui', 'mobile', 'acp', 'channel', 'telegram', 'slack', 'teams', 'whatsapp', 'discord']) {
+      expect(channelCanPrompt(c), c).toBe(true);
+    }
+  });
+
+  test('the API cannot — there is no relay, so an ASK there reaches nobody', () => {
+    expect(channelCanPrompt('api')).toBe(false);
+  });
+
+  test('unattended triggers cannot', () => {
+    for (const c of ['hook', 'heartbeat', 'cron', 'agent', 'qa-demo', undefined]) {
+      expect(channelCanPrompt(c), String(c)).toBe(false);
+    }
+  });
+
+  test('an unknown channel keeps prompting — the safe direction', () => {
+    // Wrong here = a stall. Wrong the other way = a silent auto-approve.
+    expect(channelCanPrompt('some-future-client')).toBe(true);
   });
 });

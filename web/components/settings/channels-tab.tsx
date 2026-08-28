@@ -80,7 +80,7 @@ export function ChannelsTab() {
             onChange={(e) => setLinkCode(e.target.value.toUpperCase().slice(0, 6))}
             placeholder="ABC123"
             maxLength={6}
-            className="flex-1 bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface font-mono text-center text-lg tracking-widest focus:ring-1 focus:ring-primary uppercase"
+            className="flex-1 bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface font-mono text-center text-lg tracking-widest focus:ring-1 focus:ring-primary uppercase"
           />
           <button
             onClick={handleLink}

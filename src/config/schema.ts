@@ -89,9 +89,8 @@ export const apiConfigSchema = z.object({
   host: z.string().default('0.0.0.0'),
   port: z.number().min(1).max(65535).default(3000),
   corsOrigins: z.array(z.string()).default(['http://localhost:3001']),
-  rateLimitWindow: z.number().min(0).default(60000),
   /**
-   * Per-user API-call ceiling per `rateLimitWindow` (the default quota for
+   * Per-user API-call ceiling per minute (the default quota for
    * `maxApiCallsPerMinute`). Octipus is always multi-user, so this fires for
    * every authenticated user — including the lone operator of a single-user
    * install whose dashboard polling counts here. Kept in line with the per-IP
@@ -106,8 +105,6 @@ export const apiConfigSchema = z.object({
 export const telegramConfigSchema = z.object({
   botToken: z.string().optional(),
   allowedUsers: z.array(z.string()).default([]),
-  webhookUrl: z.string().url().optional(),
-  pollingTimeout: z.number().min(0).default(30),
 });
 
 // Microsoft Teams configuration schema
@@ -130,7 +127,6 @@ export const whatsappConfigSchema = z.object({
   phoneNumberId: z.string().optional(),
   verifyToken: z.string().default('octipus-whatsapp-verify'),
   appSecret: z.string().optional(),
-  businessAccountId: z.string().optional(),
 });
 
 // Voice configuration schema
@@ -173,14 +169,12 @@ export const voiceConfigSchema = z.object({
 export const mcpConfigSchema = z.object({
   serversConfigPath: z.string().optional(),
   autoStart: z.boolean().default(true),
-  connectionTimeout: z.number().min(0).default(30000),
 });
 
 // N8N configuration schema
 export const n8nConfigSchema = z.object({
   url: z.string().url().optional(),
   apiKey: z.string().optional(),
-  webhookPath: z.string().default('/n8n/webhook'),
 });
 
 // Logging configuration schema
@@ -226,8 +220,6 @@ export const cliModelsConfigSchema = z.object({
 
 // Orchestrator configuration schema
 export const orchestratorConfigSchema = z.object({
-  enabled: z.boolean().default(true),
-  defaultModel: z.string().optional().describe('Override model for orchestrator. Uses DB default model if unset.'),
   /**
    * Root-agent prompt tier. 'auto' (default) re-derives it every turn from the
    * current default model's parameter count, so swapping to a smaller model
@@ -257,10 +249,6 @@ export const orchestratorConfigSchema = z.object({
    * core tools. Does not affect workers on larger models.
    */
   smallModelMaxTools: z.number().min(1).max(50).default(7),
-  piiFilterEnabled: z.boolean().default(true),
-  maxPipelineStages: z.number().min(1).max(20).default(10),
-  approvalTimeoutMs: z.number().min(0).default(3600000), // 1 hour
-  workerTimeoutMs: z.number().min(0).default(600000), // 10 minutes
   orchestratorTimeoutMs: z.number().min(0).default(1800000), // 30 minutes
   orchestratorHookTimeoutMs: z.number().min(0).default(2700000), // 45 minutes for hook-triggered runs
   /**

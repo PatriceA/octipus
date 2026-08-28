@@ -143,7 +143,10 @@ const SCENARIOS: Scenario[] = [
     group: 'artifacts',
     message: 'Create an artifact: a single HTML page with a heading that says "Bench Artifact".',
     expectation: 'produces an artifact and links it',
-    expect: (a) => has(a, 'artifact', '/artifacts/'),
+    // Not `has(a, 'artifact')` — a refusal reading "Permission denied for
+    // artifacts__create_live_artifact" contains the word and scored this as a
+    // pass while nothing was created. A link or a slug is evidence; prose is not.
+    expect: (a) => /\/artifacts\/[a-z0-9-]+/i.test(a) || /__artifacts__\//i.test(a),
   },
   {
     id: 'refusal',

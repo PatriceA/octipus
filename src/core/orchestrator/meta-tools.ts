@@ -56,10 +56,11 @@ export interface OrchestratorSwarmRefs {
  * These are ToolHandlers that the orchestrator LLM can call via function calling.
  * Instead of filesystem/shell/git, these control the orchestration flow.
  *
- * `spawn_child` is the primary delegation mechanism (see swarm-design.md);
- * `create_pipeline` is a last-resort tool for user-requested staged handover.
- * Pipelines are single-shot — once one is created, no further delegation is
- * allowed in this turn.
+ * `spawn_child` is the general delegation mechanism (see swarm-design.md).
+ * `create_pipeline` is NOT a last resort — it is the preferred primitive for
+ * development work, because it is the only one that verifies a deliverable and
+ * re-does it when the check fails. Pipelines are single-shot — once one is
+ * created, no further delegation is allowed in this turn.
  */
 export function createMetaTools(
   orchestrator: OrchestratorService,
@@ -120,7 +121,7 @@ export function createMetaTools(
       final: true,
       description:
         'Run work through a verified build loop. A pipeline plans the work into items, then runs implement -> test -> review -> QA ONCE PER ITEM, and a failing QA verdict sends that item back to the implementer with the verdict attached (up to 3 times) before asking you. It is the only delegation primitive that checks a deliverable and re-does it when the check fails. ' +
-        'CHOOSE IT WHEN, and only when, BOTH hold: (a) the work breaks into several items that each have to be built, and (b) whether an item is done can be settled by running something — a test suite, a build, a type-check. "Implement the open points in the plan", "fix these five failing tests", "add the endpoint and prove it works" are pipelines. The user does not have to say "staged" or "pipeline" for this to be the right call. ' +
+        'PREFER IT over spawn_child for development work: whenever the user asks you to build, implement, fix, refactor, migrate or ship something and "done" can be settled by running something — a test suite, a build, a type-check. "Implement the open points in the plan", "fix these five failing tests", "add the endpoint and prove it works", "refactor this module" are all pipelines. The user does not have to say "staged" or "pipeline" for this to be the right call. A single spawn_child for that work skips the verification loop and leaves you trusting the child\'s own word that it worked. ' +
         'DO NOT use it for a question, a lookup, an explanation, a piece of writing, or a read-only analysis/audit/review — those have nothing to re-run, so the loop costs stages and buys nothing. Use spawn_child (several calls per turn allowed) for all of them. ' +
         'DO NOT use it merely to seem thorough on a task that is really one job. ' +
         'create_pipeline may only be invoked ONCE per request. ' +

@@ -132,7 +132,7 @@ our pricing data, and a third draft a market positioning document.
 
 1. **Single `spawn_child`** — default for a single-role task with structured output.
 2. **Multiple `spawn_child`** — when the task has distinct sub-topics; use `parallelGroup` to fan out.
-3. **`create_pipeline`** — the verified build loop: it plans the work into items and runs implement → test → review → QA once per item, routing a failed QA verdict back to the implementer (bounded) before escalating to you. Ask for it when the work is several items that must be *built* and "done" can be settled by *running* something; not for a question, a piece of writing or a read-only audit, which have nothing to re-run. Pipelines are root-only.
+3. **`create_pipeline`** — the verified build loop, and what development work should go through by default: it plans the work into items and runs implement → test → review → QA once per item, routing a failed QA verdict back to the implementer (bounded) before escalating to you. Expect it whenever you ask to build, implement, fix, refactor or ship something and "done" can be settled by *running* something; not for a question, a piece of writing or a read-only audit, which have nothing to re-run. Pipelines are root-only.
 
 Children inherit the model bound to their role's topic (via `ModelRegistry.getModelForTopic`), not the parent's model. If a topic has no binding the spawner throws loudly — no silent default model.
 

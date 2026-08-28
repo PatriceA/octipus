@@ -18,7 +18,24 @@ import { agentRepository } from '@/db/repositories/agent-repository';
 import { verificationEvidenceRepository } from '@/db/repositories/verification-evidence-repository';
 import { getModelRegistry } from '@/models/model-registry';
 import { getTopicConfig } from '@/models/topic-config';
+import { premiseNoteFor } from '@/core/premise';
 import { WorkspaceFS } from '@/security/workspace-fs';
+
+/**
+ * The directories a premise check may look in for a user's workspace.
+ *
+ * Same resolution the file-aware scorers use, so "the file is not there" means
+ * the same directory the child will actually write to. Best-effort: a resolution
+ * failure means no check, never a failed spawn.
+ */
+function premiseRootsFor(userId: string | undefined): string[] {
+  if (!userId) return [];
+  try {
+    return [WorkspaceFS.forAgent({ userId }).root];
+  } catch {
+    return [];
+  }
+}
 import { formatDateTimeContext } from '@/utils/date-context';
 import { coreLogger } from '@/utils/logger';
 import { taskFingerprint as _taskFingerprint, getCallGraph } from './call-graph';
@@ -610,6 +627,7 @@ export class SwarmSpawner {
     const childMessage = composeChildMessage(brief, {
       availableToolNames,
       canSpawnChildren,
+      workspaceRoots: premiseRootsFor(parentContext.userId),
       // Tell the agent it has a cheap executor to plan for — only when its lane
       // actually binds one (getTopicConfig on the child's resolved lane).
       executorModel: canSpawnChildren ? getTopicConfig(childLane).executorModel ?? undefined : undefined,
@@ -2204,7 +2222,13 @@ export function buildScorerContext(args: {
 
 export function composeChildMessage(
   brief: TaskBrief,
-  opts: { availableToolNames: string[]; canSpawnChildren: boolean; executorModel?: string },
+  opts: {
+    availableToolNames: string[];
+    canSpawnChildren: boolean;
+    executorModel?: string;
+    /** Directories the child can see, for the premise check. */
+    workspaceRoots?: string[];
+  },
 ): string {
   const parts: string[] = [];
 
@@ -2235,6 +2259,18 @@ export function composeChildMessage(
   }
 
   parts.push(`YOUR TASK:\n${brief.taskBrief}`);
+
+  // Does the brief's subject actually exist? A child handed prose about a file
+  // that is not there has, in practice, created the file and worked on that —
+  // see `core/premise.ts`. Stating the answer costs one line and removes the
+  // ambiguity the invention grew out of.
+  if (opts.workspaceRoots?.length) {
+    const premise = premiseNoteFor(
+      `${brief.taskBrief}\n${brief.originalUserRequest ?? ''}`,
+      opts.workspaceRoots,
+    );
+    if (premise) parts.push(premise);
+  }
 
   // Explicit execution plan (planner→executor split): the parent already did
   // the thinking and handed down ordered steps. Render them as a mechanical

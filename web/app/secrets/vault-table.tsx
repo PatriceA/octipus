@@ -99,7 +99,7 @@ export function VaultTable({ credentials, onRefresh, workspaceId, workspaceName 
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Filter by name, type, or tag..."
-          className="w-full pl-10 pr-4 py-2 text-sm bg-surface-container-high border-none rounded-md text-on-surface placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
+          className="w-full pl-10 pr-4 py-2 text-sm bg-surface-container-high border border-outline-variant rounded-md text-on-surface placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
         />
       </div>
 
@@ -259,7 +259,7 @@ function AddSecretForm({
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
+          className="w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
           placeholder="my_api_key"
         />
       </div>
@@ -281,7 +281,7 @@ function AddSecretForm({
           type="password"
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+          className="w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
         />
       </div>
       <div>
@@ -289,7 +289,7 @@ function AddSecretForm({
         <select
           value={credentialType}
           onChange={(e) => setCredentialType(e.target.value as CredentialType)}
-          className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+          className="w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
         >
           <option value="api_key">API Key</option>
           <option value="oauth_token">OAuth Token</option>
@@ -305,7 +305,7 @@ function AddSecretForm({
           type="text"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
+          className="w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
           placeholder="Optional description"
         />
       </div>
@@ -315,7 +315,7 @@ function AddSecretForm({
           <select
             value={scope}
             onChange={(e) => setScope(e.target.value as 'user' | 'workspace')}
-            className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+            className="w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
           >
             <option value="user">User (visible everywhere)</option>
             <option value="workspace">Workspace ({workspaceName ?? 'current'})</option>
@@ -328,7 +328,7 @@ function AddSecretForm({
           type="text"
           value={tags}
           onChange={(e) => setTags(e.target.value)}
-          className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
+          className="w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
           placeholder="production, openai"
         />
       </div>
@@ -377,7 +377,7 @@ function RotateForm({
           type="password"
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+          className="w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
         />
       </div>
       <div className="flex justify-end gap-3">

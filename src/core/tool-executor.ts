@@ -573,11 +573,29 @@ export class ToolExecutor {
         continue;
       }
 
-      // Permission check
+      // Permission check, resolved the way `base-tool` resolves it: a tool's
+      // declared `permissionAction` (the manifest verb it belongs to) when it
+      // has one, otherwise the BARE tool name.
+      //
+      // Both halves matter. Passing the namespaced call name matched no manifest
+      // permission, so a tool declaring ALLOW fell through to ASK — an approval
+      // prompt an API-driven run has no channel to answer, which stalls the run
+      // until the request expires. And `base-tool` falls back to the bare name
+      // (`read_file`), not the handler name (`filesystem__read_file`), so
+      // without the split the ~38 registrations that declare no action would
+      // still disagree with the other dispatch path about which action a stored
+      // ALLOW or DENY applies to.
+      const bareName = toolCall.name.includes('__')
+        ? (toolCall.name.split('__').pop() as string)
+        : toolCall.name;
+      const permAction =
+        typeof tool.permissionAction === 'function'
+          ? tool.permissionAction(toolCall.arguments)
+          : tool.permissionAction || bareName;
       const permResult = await permissionManager.check(
         this.context.userId,
         toolId,
-        toolCall.name,
+        permAction,
         toolCall.arguments
       );
 
@@ -591,7 +609,7 @@ export class ToolExecutor {
         root: this.context.root,
         attended: this.context.attended,
         toolId,
-        action: toolCall.name,
+        action: permAction,
         unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions,
       });
 
@@ -657,7 +675,16 @@ export class ToolExecutor {
 
             // Abort the agent entirely — don't let it retry or try alternatives.
             // The orchestrator will handle follow-up with the user.
-            throw new Error(`Permission denied for "${toolCall.name}". The user rejected this action.`);
+            //
+            // Deliberately does NOT say "the user rejected this": a request also
+            // resolves unapproved when it expired unanswered, or when it could
+            // not be delivered to the caller's channel at all. Reporting a
+            // refusal nobody made sent the model — and the operator reading the
+            // answer — after the wrong problem.
+            throw new Error(
+              `Permission denied for "${toolCall.name}": the approval was not granted ` +
+                `(rejected, expired, or undeliverable on this channel).`,
+            );
           }
         } else {
           this.counters.autoApproved++;

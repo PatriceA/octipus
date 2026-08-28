@@ -144,6 +144,54 @@ export const settingsRoutes = new Elysia({ prefix: '/settings' })
     { detail: { tags: ['settings'] } }
   )
 
+  // Read one setting by key
+  //
+  // PUT /:key and POST /:key/reset both existed; the GET did not, so
+  // `octipus_get_setting` (which has called it since it was written) 404'd on
+  // every invocation. Same masking rules as the list route — a secret's
+  // presence is reported, never its value.
+  .get(
+    '/:key',
+    async ({ user, params, set }) => {
+      if (!user?.isAdmin) {
+        set.status = 403;
+        return { error: 'Admin access required' };
+      }
+
+      const def = getSettingDefinition(params.key);
+      if (!def) {
+        set.status = 404;
+        return { error: `Unknown setting "${params.key}"` };
+      }
+
+      const svc = getSettingsService();
+      let value: unknown;
+      if (def.isSecret && def.vaultName) {
+        const secret = await getVault().getSystemSecret(def.vaultName);
+        value = secret ? '••••••••' : '';
+      } else if (def.isSecret) {
+        value = (await svc.get(def.key)) ? '••••••••' : '';
+      } else {
+        value = await svc.get(def.key);
+      }
+
+      return {
+        key: def.key,
+        value,
+        valueType: def.valueType,
+        description: def.description,
+        defaultValue: def.defaultValue,
+        isSecret: def.isSecret,
+        category: def.category,
+        constraints: getFieldConstraints(def.key) ?? undefined,
+      };
+    },
+    {
+      params: t.Object({ key: t.String() }),
+      detail: { tags: ['settings'] },
+    },
+  )
+
   // Update a single setting
   .put(
     '/:key',

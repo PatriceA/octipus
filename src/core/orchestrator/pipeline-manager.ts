@@ -626,9 +626,23 @@ export class PipelineManager {
     type: string,
     description: string,
     context: AgentContext,
-    options?: { maxRetries?: number; params?: Record<string, unknown> },
+    options?: {
+      maxRetries?: number;
+      params?: Record<string, unknown>;
+      /**
+       * Called once the pipeline row exists, before any stage runs.
+       *
+       * A REST caller needs the id NOW — the run itself takes minutes, and a
+       * POST that blocks that long is a timeout waiting to happen. With this
+       * the route can answer `{ pipelineId }` and let the run continue in the
+       * background, where `GET /pipelines/:id` follows it.
+       */
+      onCreated?: (pipelineId: string) => void;
+    },
   ): Promise<{ pipelineId: string; result: string }> {
-    const template = await getPipelineTemplate(type);
+    // Scoped to the caller: a bare template NAME must resolve to the same row
+    // the caller was authorized against (see `getPipelineTemplate`).
+    const template = await getPipelineTemplate(type, userId);
     // Override maxRetries if provided
     if (options?.maxRetries != null) {
       for (const stage of template.stages) {
@@ -671,6 +685,8 @@ export class PipelineManager {
         ...(options?.maxRetries != null ? { maxRetries: options.maxRetries } : {}),
       },
     });
+
+    options?.onCreated?.(pipeline.id);
 
     // A `foreach` head adopts the approval flag of its first body node, and the
     // body node drops it: the user approves the PLAN once, before the loop
@@ -1530,7 +1546,7 @@ export class PipelineManager {
     // Rebuild what the run was compiled from. The template is read by type and
     // recompiled rather than stored: a graph is a pure function of the template,
     // and the node/edge rows the walker reads are already persisted.
-    const template = await getPipelineTemplate(pipeline.type);
+    const template = await getPipelineTemplate(pipeline.type, pipeline.userId ?? undefined);
     // The creation-time override only ever lived in memory; without re-applying
     // it here every QA edge silently reverts to the default of 3.
     const resumeMaxRetries = ((pipeline.metadata ?? {}) as { maxRetries?: number }).maxRetries;

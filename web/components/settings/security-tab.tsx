@@ -130,7 +130,7 @@ export function SecurityTab() {
                   value={verifyCode}
                   onChange={(e) => setVerifyCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                   placeholder="000000"
-                  className="flex-1 bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-center font-mono text-lg tracking-widest focus:ring-1 focus:ring-primary"
+                  className="flex-1 bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-center font-mono text-lg tracking-widest focus:ring-1 focus:ring-primary"
                 />
                 <button
                   onClick={handleVerify}
@@ -160,7 +160,7 @@ export function SecurityTab() {
                 value={disableCode}
                 onChange={(e) => setDisableCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                 placeholder="Enter TOTP code"
-                className="flex-1 bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface font-mono focus:ring-1 focus:ring-primary"
+                className="flex-1 bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface font-mono focus:ring-1 focus:ring-primary"
               />
               <button
                 onClick={handleDisable}

@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts` and verified in CI, so it ca
 
 ## HTTP surface
 
-381 mounted routes across 60 route files. The path is the full one, group prefix included — what a client actually calls.
+383 mounted routes across 60 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -260,6 +260,7 @@ Derived from the source by `scripts/gen-catalog.ts` and verified in CI, so it ca
 | GET | `/api/persona/presets` | `src/api/routes/persona.ts` |
 | POST | `/api/persona/reset` | `src/api/routes/persona.ts` |
 | GET | `/api/pipelines` | `src/api/routes/pipelines.ts` |
+| POST | `/api/pipelines` | `src/api/routes/pipelines.ts` |
 | GET | `/api/pipelines/:id` | `src/api/routes/pipelines.ts` |
 | POST | `/api/pipelines/:id/approve/:stageId` | `src/api/routes/pipelines.ts` |
 | GET | `/api/pipelines/:id/checkpoints` | `src/api/routes/pipelines.ts` |
@@ -318,6 +319,7 @@ Derived from the source by `scripts/gen-catalog.ts` and verified in CI, so it ca
 | GET | `/api/sessions/:id/messages` | `src/api/routes/sessions.ts` |
 | GET | `/api/sessions/stats/active` | `src/api/routes/sessions.ts` |
 | GET | `/api/settings` | `src/api/routes/settings.ts` |
+| GET | `/api/settings/:key` | `src/api/routes/settings.ts` |
 | PUT | `/api/settings/:key` | `src/api/routes/settings.ts` |
 | POST | `/api/settings/:key/reset` | `src/api/routes/settings.ts` |
 | PUT | `/api/settings/batch` | `src/api/routes/settings.ts` |
@@ -416,18 +418,18 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 7 |
 | `api` | `config` | 19 |
 | `api` | `connectors` | 1 |
-| `api` | `core` | 67 |
+| `api` | `core` | 68 |
 | `api` | `db` | 97 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 5 |
 | `api` | `mcp` | 3 |
-| `api` | `models` | 27 |
+| `api` | `models` | 28 |
 | `api` | `plugins` | 1 |
-| `api` | `security` | 66 |
+| `api` | `security` | 67 |
 | `api` | `services` | 3 |
 | `api` | `skills` | 1 |
 | `api` | `tools` | 3 |
-| `api` | `utils` | 57 |
+| `api` | `utils` | 58 |
 | `api` | `voice` | 23 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 1 |
@@ -460,7 +462,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `hooks` | 4 |
 | `core` | `mcp` | 3 |
 | `core` | `models` | 61 |
-| `core` | `security` | 33 |
+| `core` | `security` | 34 |
 | `core` | `shared` | 5 |
 | `core` | `skills` | 6 |
 | `core` | `tools` | 11 |

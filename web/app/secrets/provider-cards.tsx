@@ -144,7 +144,7 @@ function ProviderCard({
           value={value}
           onChange={(e) => setValue(e.target.value)}
           placeholder={isSaved ? 'Saved (enter new to replace)' : placeholder || 'Enter API key...'}
-          className="flex-1 bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
+          className="flex-1 bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
           onKeyDown={(e) => e.key === 'Enter' && handleSave()}
         />
         <button

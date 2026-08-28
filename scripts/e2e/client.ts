@@ -44,13 +44,37 @@ export class APIClient {
       headers['Authorization'] = `Bearer ${t}`;
     }
 
+    // A swarm turn can hold the request open for minutes, and a pooled
+    // keep-alive socket that the server has since closed surfaces as a bare
+    // `fetch failed` with no status — which is how the 3-level chain test failed
+    // roughly one run in two AFTER its work had already completed. Asking for a
+    // fresh connection each time removes the stale-socket race; the cost is one
+    // handshake per request in a suite that makes a few hundred.
+    headers['Connection'] = 'close';
+
     let response: Response;
     for (let attempt = 0; ; attempt++) {
-      response = await fetch(`${this.baseUrl}${path}`, {
-        method,
-        headers,
-        body: body ? JSON.stringify(body) : undefined,
-      });
+      try {
+        response = await fetch(`${this.baseUrl}${path}`, {
+          method,
+          headers,
+          body: body ? JSON.stringify(body) : undefined,
+        });
+      } catch (err) {
+        // No response at all. Retrying is only safe when the request cannot
+        // have had an effect — a re-POSTed chat turn would run the whole swarm
+        // a second time — so GET retries and everything else reports what it
+        // was doing, which `fetch failed` alone never did.
+        const cause = (err as { cause?: { code?: string } }).cause?.code;
+        if (method === 'GET' && attempt < MAX_RETRIES) {
+          await sleep(2 ** attempt * 250);
+          continue;
+        }
+        throw new Error(
+          `${method} ${path} never returned a response (${(err as Error).message}` +
+            `${cause ? `, ${cause}` : ''}). The server may still have processed it.`,
+        );
+      }
 
       if (response.status !== 429 || attempt >= MAX_RETRIES) break;
 

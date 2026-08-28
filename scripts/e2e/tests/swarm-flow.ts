@@ -70,6 +70,20 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
    * bound to flash) failed the routing assertion for behaving as configured.
    */
   let expertModelById: Record<string, string> = {};
+  /**
+   * lane → the model that lane's cheap executor binds to, when one is set.
+   *
+   * A PLANNED spawn deliberately drops the expert's `modelPreference` and runs
+   * on the lane's `executorModel` — the parent already did the judgment, so the
+   * child runs the checklist on the cheap model (`resolveChildModelAndExpert`,
+   * "Planned child: lane executorModel overrides expert modelPreference"). That
+   * is a configured, expected outcome and not a parent-model leak, but this
+   * assertion knew only about primaries and pinned models, so it failed the
+   * `agents` lane's executor (`cli/vibe`) as a routing bug roughly one run in
+   * two. Accepting it keeps the check honest — a model that is neither the
+   * primary, nor the expert's pin, nor the lane executor is still a failure.
+   */
+  let executorByLane: Record<string, string> = {};
 
   // Precondition: models exist and have topic bindings for every role.
   await runner.test('Topic coverage — every specialist role has a model bound', async () => {
@@ -88,10 +102,14 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
     // binding from GET /topics; map its model *name* → modelId via /models.
     const modelIdByName = new Map(data.models.map(m => [m.name, m.modelId]));
     const { status: tStatus, data: tData } = await client.request<{
-      topics: Array<{ value: string; primaryModel: string | null }>;
+      topics: Array<{ value: string; primaryModel: string | null; executorModel?: string | null }>;
     }>('GET', '/topics');
     assertStatus(tStatus, 200);
     const primaryByTopic = new Map(tData.topics.map(t => [t.value, t.primaryModel]));
+    for (const t of tData.topics) {
+      const execId = t.executorModel ? modelIdByName.get(t.executorModel) ?? t.executorModel : null;
+      if (execId) executorByLane[t.value] = execId;
+    }
 
     const missing: string[] = [];
     for (const role of SPECIALIST_ROLES) {
@@ -281,6 +299,9 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
     // An expert pins its own model on purpose; that is a choice, not a leak.
     const pinned = spawn.expertId ? expertModelById[spawn.expertId] : undefined;
     if (pinned && spawn.model === pinned) return;
+    // The lane's cheap executor — where a PLANNED child is routed on purpose.
+    const executor = executorByLane[canonicalTopic(spawn.role)];
+    if (executor && spawn.model === executor) return;
     const expected = topicBindings[spawn.role];
     assert(
       !!expected,
@@ -289,7 +310,8 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
     assert(
       spawn.model === expected,
       `Spawn ${spawn.nodeId} (role=${spawn.role}, kind=${spawn.kind}, expert=${spawn.expertId ?? 'none'}) ran on '${spawn.model}' ` +
-        `but topic '${spawn.role}' is bound to '${expected}' and no expert pins that model. ` +
+        `but topic '${spawn.role}' is bound to '${expected}', no expert pins that model, and it is not ` +
+        `the lane executor ('${executor ?? 'none'}'). ` +
         `Indicates parent-model inheritance (routing bug) OR child-tier-clamp re-route.`,
     );
   }

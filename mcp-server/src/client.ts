@@ -179,17 +179,11 @@ export class OctiClient {
   // ─── Search ───
 
   async search(query: string, maxResults = 10): Promise<{ query: string; resultCount: number; results: SearchResult[] }> {
-    return this.request('/api/tools/websearch/tools/search/execute', {
-      method: 'POST',
-      body: JSON.stringify({ args: { query, max_results: maxResults } }),
-    });
+    return this.runTool('websearch', 'search', { query, max_results: maxResults });
   }
 
   async fetchPage(url: string, maxLength = 10000): Promise<PageContent> {
-    return this.request('/api/tools/websearch/tools/fetch_page/execute', {
-      method: 'POST',
-      body: JSON.stringify({ args: { url, max_length: maxLength } }),
-    });
+    return this.runTool('websearch', 'fetch_page', { url, max_length: maxLength });
   }
 
   // ─── Agents ───
@@ -272,7 +266,21 @@ export class OctiClient {
   }
 
   async executeTool(toolId: string, toolName: string, args: Record<string, unknown>): Promise<unknown> {
-    const res = await this.request<{ result?: unknown; error?: string }>(
+    return this.runTool(toolId, toolName, args);
+  }
+
+  /**
+   * Run one backend tool and return WHAT IT RETURNED.
+   *
+   * `/api/tools/:id/tools/:name/execute` answers `{ result }`, and the typed
+   * helpers below used to hand that envelope straight back — so every caller
+   * read `.results` / `.content` off the wrapper and found nothing. That is why
+   * `octipus_search_knowledge` reported "No relevant knowledge found" against a
+   * knowledge base with 1600 indexed chunks, and `octipus_read_knowledge`
+   * rendered "undefined". Unwrap in one place; the helpers just name the tool.
+   */
+  private async runTool<T>(toolId: string, toolName: string, args: Record<string, unknown>): Promise<T> {
+    const res = await this.request<{ result?: T; error?: string }>(
       `/api/tools/${toolId}/tools/${toolName}/execute`,
       {
         method: 'POST',
@@ -282,7 +290,7 @@ export class OctiClient {
     if (res.error) {
       throw new Error(res.error);
     }
-    return res.result;
+    return res.result as T;
   }
 
   // ─── Memory (long-term facts) ───
@@ -406,24 +414,19 @@ export class OctiClient {
   // ─── Knowledge / RAG ───
 
   async searchKnowledge(query: string, limit?: number, mode?: string): Promise<{ results: any[] }> {
-    return this.request('/api/tools/knowledge/tools/search_knowledge/execute', {
-      method: 'POST',
-      body: JSON.stringify({ args: { query, limit: limit || 5, mode: mode || 'hybrid' } }),
+    return this.runTool('knowledge', 'search_knowledge', {
+      query,
+      limit: limit || 5,
+      mode: mode || 'hybrid',
     });
   }
 
   async readKnowledge(id: string): Promise<any> {
-    return this.request('/api/tools/knowledge/tools/read_knowledge/execute', {
-      method: 'POST',
-      body: JSON.stringify({ args: { id } }),
-    });
+    return this.runTool('knowledge', 'read_knowledge', { id });
   }
 
   async indexFile(path: string, type?: string): Promise<{ indexed: boolean; chunks: number; path: string }> {
-    return this.request('/api/tools/knowledge/tools/index_file/execute', {
-      method: 'POST',
-      body: JSON.stringify({ args: { path, type: type || 'document' } }),
-    });
+    return this.runTool('knowledge', 'index_file', { path, type: type || 'document' });
   }
 
   // ─── Messaging ───
@@ -434,17 +437,16 @@ export class OctiClient {
     message: string,
     replyTo?: string,
   ): Promise<{ success: boolean; messageId?: string; error?: string }> {
-    return this.request('/api/tools/messaging/tools/send_message/execute', {
-      method: 'POST',
-      body: JSON.stringify({ args: { channel, target, message, reply_to: replyTo } }),
+    return this.runTool('messaging', 'send_message', {
+      channel,
+      target,
+      message,
+      reply_to: replyTo,
     });
   }
 
   async listChannels(): Promise<{ channels: Array<{ type: string; name: string; connected: boolean }> }> {
-    return this.request('/api/tools/messaging/tools/list_channels/execute', {
-      method: 'POST',
-      body: JSON.stringify({ args: {} }),
-    });
+    return this.runTool('messaging', 'list_channels', {});
   }
 
   // ─── Plugins ───
@@ -575,7 +577,9 @@ export class OctiClient {
   // ─── Audit ───
 
   async listAuditLog(limit = 50): Promise<any> {
-    return this.request(`/api/audit?limit=${limit}`);
+    // `/admin/audit`, not `/api/audit` — the audit log lives under the admin
+    // routes and the flat path has 404'd since this method was written.
+    return this.request(`/api/admin/audit?limit=${limit}`);
   }
 
   // ─── Artifacts ───

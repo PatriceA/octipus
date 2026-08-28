@@ -22,7 +22,7 @@ export function registerKnowledgeTools(server: McpServer, client: OctiClient): v
           return { content: [{ type: 'text' as const, text: 'No relevant knowledge found.' }] };
         }
         const formatted = result.results.map((r: any, i: number) =>
-          `**${i + 1}.** [${r.similarity}] ${r.sourceType}${r.filePath ? ` — ${r.filePath}` : ''}\nID: ${r.id}\n${r.abstract || r.content?.slice(0, 200)}`
+          `**${i + 1}.** [${r.similarity}] ${r.purpose ?? r.sourceType ?? "document"}${r.filePath ? ` — ${r.filePath}` : ''}\nID: ${r.id}\n${r.abstract || r.content?.slice(0, 200)}`
         ).join('\n\n');
         return { content: [{ type: 'text' as const, text: `${formatted}\n\n_Use octipus_read_knowledge with an ID to get full content._` }] };
       } catch (error) {
@@ -43,7 +43,7 @@ export function registerKnowledgeTools(server: McpServer, client: OctiClient): v
         if (result.error) {
           return { content: [{ type: 'text' as const, text: result.error }] };
         }
-        const header = `**${result.sourceType}**${result.filePath ? ` — ${result.filePath}` : ''}`;
+        const header = `**${result.purpose ?? result.sourceType ?? "document"}**${result.filePath ? ` — ${result.filePath}` : ''}`;
         return { content: [{ type: 'text' as const, text: `${header}\n\n${result.content}` }] };
       } catch (error) {
         return { content: [{ type: 'text' as const, text: `Failed: ${(error as Error).message}` }], isError: true };

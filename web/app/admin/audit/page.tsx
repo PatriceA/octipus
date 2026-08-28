@@ -44,19 +44,19 @@ export default function AdminAuditPage() {
           value={actionFilter}
           onChange={(e) => setActionFilter(e.target.value)}
           placeholder="Filter by action (e.g. user_created)"
-          className="bg-surface-container-high border-none rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+          className="bg-surface-container-high border border-outline-variant rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
         />
         <input
           type="text"
           value={userIdFilter}
           onChange={(e) => setUserIdFilter(e.target.value)}
           placeholder="Filter by userId (UUID)"
-          className="bg-surface-container-high border-none rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+          className="bg-surface-container-high border border-outline-variant rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
         />
         <select
           value={limit}
           onChange={(e) => setLimit(parseInt(e.target.value, 10))}
-          className="bg-surface-container-high border-none rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+          className="bg-surface-container-high border border-outline-variant rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
         >
           <option value={50}>50 rows</option>
           <option value={100}>100 rows</option>

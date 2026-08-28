@@ -172,7 +172,7 @@ function FactEditor({
                   if (e.key === 'Enter') handleUpdate(fact.key);
                   if (e.key === 'Escape') setEditingKey(null);
                 }}
-                className="flex-1 bg-surface-container-high border-none rounded-md py-1 px-2 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+                className="flex-1 bg-surface-container-high border border-outline-variant rounded-md py-1 px-2 text-on-surface text-sm focus:ring-1 focus:ring-primary"
                 autoFocus
                 disabled={busy}
               />
@@ -223,7 +223,7 @@ function FactEditor({
           value={newKey}
           onChange={(e) => setNewKey(e.target.value)}
           placeholder="Key"
-          className="w-[120px] bg-surface-container-high border-none rounded-md py-1.5 px-2 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+          className="w-[120px] bg-surface-container-high border border-outline-variant rounded-md py-1.5 px-2 text-on-surface text-sm focus:ring-1 focus:ring-primary"
           disabled={busy}
         />
         <input
@@ -234,7 +234,7 @@ function FactEditor({
             if (e.key === 'Enter') handleAdd();
           }}
           placeholder="Value"
-          className="flex-1 bg-surface-container-high border-none rounded-md py-1.5 px-2 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+          className="flex-1 bg-surface-container-high border border-outline-variant rounded-md py-1.5 px-2 text-on-surface text-sm focus:ring-1 focus:ring-primary"
           disabled={busy}
         />
         <button
@@ -319,7 +319,7 @@ function CreateProfileDialog({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder={isUserProfile ? 'Your name' : 'Person or entity name'}
-              className="w-full bg-surface-container-high border-none rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+              className="w-full bg-surface-container-high border border-outline-variant rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
               autoFocus
             />
           </div>
@@ -333,7 +333,7 @@ function CreateProfileDialog({
                   value={relationship}
                   onChange={(e) => setRelationship(e.target.value)}
                   placeholder="e.g., friend, colleague, mother"
-                  className="w-full bg-surface-container-high border-none rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+                  className="w-full bg-surface-container-high border border-outline-variant rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
                 />
               </div>
               <div>
@@ -341,7 +341,7 @@ function CreateProfileDialog({
                 <select
                   value={category}
                   onChange={(e) => setCategory(e.target.value)}
-                  className="w-full bg-surface-container-high border-none rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+                  className="w-full bg-surface-container-high border border-outline-variant rounded-md py-2 px-3 text-on-surface text-sm focus:ring-1 focus:ring-primary"
                 >
                   <option value="person">Person</option>
                   <option value="organization">Organization</option>
@@ -497,7 +497,7 @@ function EditProfileDialog({
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="bg-surface-container-high border-none rounded-md py-1 px-2 text-on-surface text-lg font-semibold focus:ring-1 focus:ring-primary"
+                  className="bg-surface-container-high border border-outline-variant rounded-md py-1 px-2 text-on-surface text-lg font-semibold focus:ring-1 focus:ring-primary"
                   autoFocus
                 />
               ) : (
@@ -575,7 +575,7 @@ function EditProfileDialog({
                 value={relationship}
                 onChange={(e) => setRelationship(e.target.value)}
                 placeholder="e.g., friend, colleague"
-                className="w-full bg-surface-container-high border-none rounded-md py-1.5 px-2 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+                className="w-full bg-surface-container-high border border-outline-variant rounded-md py-1.5 px-2 text-on-surface text-sm focus:ring-1 focus:ring-primary"
               />
             </div>
             <div className="flex-1">
@@ -583,7 +583,7 @@ function EditProfileDialog({
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
-                className="w-full bg-surface-container-high border-none rounded-md py-1.5 px-2 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+                className="w-full bg-surface-container-high border border-outline-variant rounded-md py-1.5 px-2 text-on-surface text-sm focus:ring-1 focus:ring-primary"
               >
                 <option value="person">Person</option>
                 <option value="organization">Organization</option>

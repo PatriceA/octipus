@@ -1,7 +1,12 @@
 import { desc, eq, or } from 'drizzle-orm';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
-import { getPipelineManager } from '@/core/orchestrator';
+import { getOrchestratorService, getPipelineManager } from '@/core/orchestrator';
+import { ROOT_ROLE } from '@/core/orchestrator/types';
+import type { AgentContext } from '@/core/types';
+import { getModelRegistry } from '@/models/model-registry';
+import { channelCanPrompt } from '@/security/approval-policy';
+import { generateId } from '@/utils/crypto';
 import { validatePipelineStages } from '@/core/orchestrator/pipeline-validation';
 import { validateRecipeParameterDefs, validateRecipeParameterRefs } from '@/core/orchestrator/recipe-params';
 import {
@@ -68,6 +73,18 @@ const recipeParamBodySchema = t.Object({
  * `scopedRepos(principal).pipelines.findOwnedTemplateById` first; presets
  * (read-only) and other users' templates are rejected as "not found".
  */
+/**
+ * How long an API-started pipeline waits on a stage approval before giving up.
+ *
+ * The interactive default is an hour, which assumes somebody is looking at a
+ * chat window. A REST caller is not, so a run whose QA stage escalates would sit
+ * idle for an hour and then record itself aborted. Fifteen minutes is long
+ * enough for an operator who got the notification to answer via
+ * `POST /pipelines/:id/approve/:stageId`, and short enough that an unattended
+ * run fails while the context is still fresh. Override per request.
+ */
+const API_APPROVAL_TIMEOUT_MS = 15 * 60_000;
+
 export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
   .use(apiContext)
 
@@ -92,6 +109,140 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       return { pipelines: list };
     },
     { detail: { tags: ['pipelines'] } },
+  )
+
+  // Create and start a pipeline
+  //
+  // The MCP tool `octipus_create_pipeline` has POSTed here since it was written;
+  // the route did not exist, so every call 404'd. Pipelines were creatable only
+  // through the orchestrator's `create_pipeline` meta-tool, mid-chat.
+  //
+  // Returns as soon as the run has an id. A pipeline takes minutes — a POST that
+  // waited for the result would time out long before it finished — so the run
+  // continues in the background and `GET /pipelines/:id` follows it.
+  .post(
+    '/',
+    async ({ user, principal, body, set }) => {
+      if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
+
+      const { templateName, description } = body;
+
+      // Fail loud on an unknown template, with the real list — the alternative
+      // is a run that dies three layers down with a template lookup error.
+      const templates = await listAvailableTemplates(user.id);
+      const match = templates.find(
+        (t) => t.name.toLowerCase() === templateName.toLowerCase() || t.id === templateName,
+      );
+      if (!match) {
+        set.status = 400;
+        return {
+          error: `Unknown pipeline template "${templateName}"`,
+          available: templates.map((t) => t.name),
+        };
+      }
+
+      const repos = scopedRepos(principal);
+      let sessionId = body.sessionId;
+      if (sessionId) {
+        const existing = await repos.sessions.findById(sessionId);
+        if (!existing) {
+          set.status = 404;
+          return { error: 'Session not found' };
+        }
+      } else {
+        const session = await repos.sessions.create({
+          channelType: 'api',
+          channelId: `pipeline-${generateId().slice(0, 8)}`,
+          title: (body.title || description).slice(0, 100),
+        });
+        sessionId = session.id;
+      }
+
+      const registry = getModelRegistry();
+      const defaultModel = await registry.getDefaultModel();
+      if (!defaultModel) {
+        set.status = 503;
+        return { error: 'No default model configured — bind one on the Models page first' };
+      }
+
+      const context: AgentContext = {
+        id: `pipeline-api-${generateId().slice(0, 12)}`,
+        sessionId,
+        userId: user.id,
+        workspaceId: principal.workspaceId ?? null,
+        topic: 'general',
+        model: defaultModel.modelId,
+        role: ROOT_ROLE,
+        root: true,
+        // No push channel, so a TOOL-level ASK inside a stage auto-resolves
+        // rather than waiting for a prompt nobody receives (`channelCanPrompt`).
+        attended: channelCanPrompt('api'),
+        status: 'running',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        // A STAGE-level approval is different: it is answerable out of band via
+        // `POST /pipelines/:id/approve/:stageId`, and it raises a notification.
+        // So it still blocks — but not for the interactive default of an hour,
+        // which for an unattended REST run just means a stage sitting idle and
+        // then aborting. Callers who are watching can pass their own value.
+        metadata: { approvalTimeoutMs: body.approvalTimeoutMs ?? API_APPROVAL_TIMEOUT_MS },
+      };
+
+      const orchestrator = getOrchestratorService();
+
+      // Resolve on the id, not the result: the caller gets an answer in
+      // milliseconds and the run keeps going.
+      const started = new Promise<string>((resolve, reject) => {
+        orchestrator
+          // `match.name` is safe now that `getPipelineTemplate` resolves a name
+          // within the caller's own visible set — the same set this route
+          // authorized against. Keeping the name (not the id) is what leaves a
+          // readable `pipelines.type` for the UI.
+          .createAndRunPipeline(body.title || description.slice(0, 100), match.name, description, context, {
+            maxRetries: body.maxRetries,
+            params: body.params,
+            onCreated: resolve,
+          })
+          .then((result) => {
+            coreLogger.info({ sessionId, template: match.name }, 'API-started pipeline finished');
+            return result;
+          })
+          .catch((err: unknown) => {
+            coreLogger.error({ err, sessionId, template: match.name }, 'API-started pipeline failed');
+            // Only meaningful if it died BEFORE the row existed; otherwise the
+            // promise is already settled and this is a no-op.
+            reject(err);
+          })
+          // Settle of last resort. `onCreated` fires before any stage runs, so
+          // this is unreachable today — but a future early return ahead of it
+          // would otherwise leave the HTTP request hanging forever with no error.
+          .finally(() => reject(new Error('pipeline finished without ever reporting an id')));
+      });
+
+      try {
+        const pipelineId = await started;
+        set.status = 202;
+        return { pipelineId, sessionId, template: match.name, status: 'running' };
+      } catch (err) {
+        set.status = 400;
+        return { error: (err as Error).message };
+      }
+    },
+    {
+      body: t.Object({
+        templateName: t.String({ minLength: 1 }),
+        description: t.String({ minLength: 1 }),
+        title: t.Optional(t.String()),
+        sessionId: t.Optional(t.String()),
+        maxRetries: t.Optional(t.Number()),
+        approvalTimeoutMs: t.Optional(t.Number({ minimum: 0 })),
+        params: t.Optional(t.Record(t.String(), t.Unknown())),
+      }),
+      detail: { tags: ['pipelines'] },
+    },
   )
 
   // Get pipeline detail with stages

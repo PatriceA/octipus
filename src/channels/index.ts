@@ -461,7 +461,22 @@ export async function initializeChannels(): Promise<void> {
         content: `🔒 Permission required: the agent wants to use "${toolName}".${detail}\n\nReply "yes" to allow or "no" to deny.`,
       });
     } catch (error) {
-      channelLogger.error({ error, channelType }, 'Failed to forward permission request to channel');
+      // The prompt never reached a human, so leaving the request pending buys
+      // nothing but a stall until it expires — the run blocks for the whole TTL
+      // and then fails anyway. Deny it now, with the delivery failure as the
+      // reason, so the agent gets an answer it can report.
+      channelLogger.error({ error, channelType }, 'Failed to forward permission request to channel — denying it');
+      // Keyed by user, so only clear it if it is still OUR request: a second
+      // request arriving between the `set` above and this failure would
+      // otherwise lose its entry and become unanswerable.
+      if (pendingChannelPermissions.get(userId)?.requestId === request.requestId) {
+        pendingChannelPermissions.delete(userId);
+      }
+      await permissionManager
+        .deny(request.requestId, userId, `could not be delivered to the ${channelType} channel`)
+        .catch((denyError) => {
+          channelLogger.error({ denyError, channelType }, 'Failed to deny an undeliverable permission request');
+        });
     }
   });
 

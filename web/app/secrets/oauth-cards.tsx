@@ -127,7 +127,7 @@ function OAuthGroupCard({
               value={values[k.vaultName] || ''}
               onChange={(e) => setValues((prev) => ({ ...prev, [k.vaultName]: e.target.value }))}
               placeholder={statuses[k.vaultName] ? 'Saved (enter new to replace)' : k.placeholder || 'Enter value...'}
-              className="flex-1 bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
+              className="flex-1 bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm placeholder-on-surface-variant focus:ring-1 focus:ring-primary"
             />
           </div>
         ))}

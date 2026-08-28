@@ -24,6 +24,7 @@ import { buildOutputDirective } from './output-directive';
 import { getRoleConfig, getToolsForRole } from './roles';
 import delegationPrompt from './delegation-prompt.md';
 import { applyToolCap, isSmallModel } from './small-model';
+import { channelCanPrompt } from '@/security/approval-policy';
 import { ROOT_ROLE } from './types';
 import type { OrchestratorEvent, OrchestratorService } from './service';
 import type { MessageClassification } from './types';
@@ -547,12 +548,12 @@ export async function runOrchestrator(
     model: modelName,
     role: ROOT_ROLE,
     root: true,
-    // Who is on the other end. A hook or heartbeat run has nobody to answer an
-    // approval prompt, and the root now holds tools that can raise one — before
-    // Phase 9 it held `profiles` and could not, so this never came up. An
-    // unattended ASK auto-approves or is refused by `unattendedDenyActions`
-    // instead of burning the request's five-minute TTL and then failing.
-    attended: channel !== 'hook' && channel !== 'heartbeat',
+    // Who is on the other end — derived from whether this channel can actually
+    // CARRY a prompt, not from its name. The old test ("not a hook, not a
+    // heartbeat") counted the REST API as attended, and the API has no relay:
+    // an ASK raised there was delivered nowhere and sat pending for its whole
+    // TTL before failing. See `channelCanPrompt`.
+    attended: channelCanPrompt(channel),
     systemPrompt,
     tools: turnTools,
     toolAdvertisement,

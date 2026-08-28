@@ -39,31 +39,39 @@ export default function SettingsPage() {
   ];
 
   return (
-    <div className="space-y-6 max-w-5xl font-mono">
+    <div className="space-y-6 max-w-5xl">
       <PageHeader
         title="settings"
         description="system configuration — workspace paths, model routing, channel integrations, security, and notifications."
       />
 
-      <div className="flex gap-6">
-        <div className="w-48 space-y-0.5 shrink-0">
+      {/* Rail + panel. The rail keeps its own border so the two columns read as
+          separate surfaces; without it the tab list floated in the page and the
+          panel had no edge to sit against. */}
+      <div className="flex flex-col md:flex-row gap-4 md:gap-6 items-stretch">
+        <nav
+          aria-label="Settings sections"
+          className="md:w-52 shrink-0 flex md:flex-col gap-0.5 overflow-x-auto md:overflow-visible md:border-r md:border-outline-variant md:pr-4"
+        >
           {tabs.map((tab) => (
             <button
               key={tab.id}
+              type="button"
+              aria-current={activeTab === tab.id ? 'page' : undefined}
               onClick={() => setActiveTab(tab.id)}
-              className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+              className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm whitespace-nowrap transition-colors focus-visible:outline-2 focus-visible:outline-primary ${
                 activeTab === tab.id
                   ? 'bg-primary/10 text-primary'
                   : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface'
               }`}
             >
-              <tab.icon className="w-4 h-4" />
+              <tab.icon className="w-4 h-4 shrink-0" />
               {tab.label}
             </button>
           ))}
-        </div>
+        </nav>
 
-        <div className="flex-1 bg-surface-container rounded-xs p-6">
+        <div className="flex-1 min-w-0 bg-surface-container border border-outline-variant rounded-md p-6">
           {activeTab === 'general' && <GeneralTab />}
           {activeTab === 'configuration' && <ConfigurationTab />}
           {activeTab === 'integrations' && <IntegrationsTab />}

@@ -73,8 +73,6 @@ Once linked, your channel identity is bound to your web account. This enables sh
 |---------|---------|-------|-------------|
 | `telegram.botToken` | `TELEGRAM_BOT_TOKEN` | Vault | Bot token from BotFather (secret, stored in vault) |
 | `telegram.allowedUsers` | `TELEGRAM_ALLOWED_USERS` | DB-settings | Comma-separated Telegram user IDs to allow (empty = all) |
-| `telegram.webhookUrl` | `TELEGRAM_WEBHOOK_URL` | DB-settings | Webhook URL (leave empty for polling mode) |
-| `telegram.pollingTimeout` | `TELEGRAM_POLLING_TIMEOUT` | DB-settings | Polling timeout in seconds (default: 30) |
 
 > **Finding your numeric Telegram user ID** (for `telegram.allowedUsers`): message [@userinfobot](https://t.me/userinfobot) — it replies with your numeric ID. Alternatively, send `/start` to your own bot and read the backend logs (`tail -f ~/.octipus/backend.log`); the incoming update logs the sender's numeric `id`. Telegram IDs are numbers, not @usernames.
 
@@ -240,7 +238,6 @@ The temporary token expires after 24 hours. For production:
 | `whatsapp.phoneNumberId` | `WHATSAPP_PHONE_NUMBER_ID` | DB-settings | Phone Number ID from Meta dashboard |
 | `whatsapp.verifyToken` | `WHATSAPP_VERIFY_TOKEN` | DB-settings | Webhook verification token (default: `octipus-whatsapp-verify`) |
 | `whatsapp.appSecret` | `WHATSAPP_APP_SECRET` | Vault | Meta App Secret for signature verification (secret, stored in vault) |
-| `whatsapp.businessAccountId` | `WHATSAPP_BUSINESS_ACCOUNT_ID` | DB-settings | WhatsApp Business Account ID (optional) |
 
 ### Bot Commands
 
@@ -298,7 +295,6 @@ These are **first-boot seeds only** (see [Where settings live](#where-settings-l
 # ─── Telegram ────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN=                    # From @BotFather
 TELEGRAM_ALLOWED_USERS=                # Comma-separated user IDs
-TELEGRAM_WEBHOOK_URL=                  # Leave empty for polling
 
 # ─── Slack ───────────────────────────────────────────────────
 SLACK_BOT_TOKEN=                       # xoxb-...

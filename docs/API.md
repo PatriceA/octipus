@@ -133,6 +133,7 @@ curl -H "Authorization: Bearer $OCTIPUS_API_TOKEN" http://localhost:3005/api/aut
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| POST | `/api/pipelines` | Create and start a pipeline from a template. Returns `202` with `{ pipelineId, sessionId }` as soon as the run has an id — the run itself continues in the background. |
 | GET | `/api/pipelines` | List user's pipeline runs |
 | GET | `/api/pipelines/:id` | Get pipeline detail with nodes |
 | POST | `/api/pipelines/:id/stop` | Stop a running pipeline |
@@ -446,8 +447,12 @@ Authored markdown notes — the knowledge graph's Tier 2 surface. Full model in
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/settings` | Get all settings |
-| PATCH | `/api/settings` | Update settings |
+| GET | `/api/settings` | All settings, grouped by category (secrets masked) |
+| GET | `/api/settings/registry` | Registry metadata for UI rendering |
+| GET | `/api/settings/:key` | One setting by key (secrets masked) |
+| PUT | `/api/settings/:key` | Update one setting |
+| PUT | `/api/settings/batch` | Update several settings |
+| POST | `/api/settings/:key/reset` | Reset one setting to its default |
 
 ## Channel Bindings
 

@@ -68,6 +68,23 @@ function requireAuth(p: Principal): void {
 }
 
 /**
+ * Is `id` shaped like the uuid its column stores?
+ *
+ * A caller-supplied id that is not a uuid reaches Postgres as a cast error, so
+ * an operation that should have been a miss came back a 500 instead — a client
+ * posting a made-up session id crashed the request rather than being told the
+ * session does not exist. Guarded on every method that takes a caller-supplied
+ * id, reads and writes alike: `PATCH /sessions/abc` and `DELETE /tasks/abc`
+ * carry exactly the same id from exactly the same place as a lookup does.
+ * These tables key on `uuid`; `agents.id` is `text` and is deliberately not
+ * guarded.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isUuid(id: string): boolean {
+  return UUID_RE.test(id);
+}
+
+/**
  * Phase 4 — workspace scoping helper.
  *
  * Returns a Drizzle filter narrowing rows to the principal's
@@ -110,6 +127,7 @@ export class ScopedSessionRepo {
    * workspace when set; rows with NULL workspace_id stay visible.
    */
   async findById(id: string): Promise<Session | null> {
+    if (!isUuid(id)) return null;
     const filters: (SQL | undefined)[] = [eq(sessions.id, id)];
     if (!isAdmin(this.principal)) filters.push(eq(sessions.userId, this.principal.userId));
     filters.push(workspaceFilter(this.principal, sessions.workspaceId));
@@ -175,6 +193,7 @@ export class ScopedSessionRepo {
 
   /** Update only if the principal owns the row (or is an admin). */
   async update(id: string, patch: Partial<NewSession>): Promise<Session | null> {
+    if (!isUuid(id)) return null;
     // Strip user_id from caller-supplied patch — re-owning a row is never legitimate.
     const { userId: _drop, ...safe } = patch;
     void _drop;
@@ -191,6 +210,7 @@ export class ScopedSessionRepo {
 
   /** Delete only if owned. Returns false on miss / cross-tenant. */
   async delete(id: string): Promise<boolean> {
+    if (!isUuid(id)) return false;
     const filters: (SQL | undefined)[] = [eq(sessions.id, id)];
     if (!isAdmin(this.principal)) filters.push(eq(sessions.userId, this.principal.userId));
     filters.push(workspaceFilter(this.principal, sessions.workspaceId));
@@ -419,6 +439,7 @@ export class ScopedDocumentRepo {
   private get db() { return getDb(); }
 
   async findById(id: string): Promise<DocumentRecord | null> {
+    if (!isUuid(id)) return null;
     const filters: (SQL | undefined)[] = [eq(documents.id, id)];
     if (!isAdmin(this.principal)) filters.push(eq(documents.userId, this.principal.userId));
     filters.push(workspaceFilter(this.principal, documents.workspaceId));
@@ -469,6 +490,7 @@ export class ScopedDocumentRepo {
   }
 
   async delete(id: string): Promise<boolean> {
+    if (!isUuid(id)) return false;
     const filters: (SQL | undefined)[] = [eq(documents.id, id)];
     if (!isAdmin(this.principal)) filters.push(eq(documents.userId, this.principal.userId));
     filters.push(workspaceFilter(this.principal, documents.workspaceId));
@@ -481,6 +503,7 @@ export class ScopedDocumentRepo {
 
   /** Update status — restricted to documents owned by the principal. */
   async updateStatus(id: string, status: DocumentRecord['status'], error?: string): Promise<boolean> {
+    if (!isUuid(id)) return false;
     const filters: (SQL | undefined)[] = [eq(documents.id, id)];
     if (!isAdmin(this.principal)) filters.push(eq(documents.userId, this.principal.userId));
     filters.push(workspaceFilter(this.principal, documents.workspaceId));
@@ -538,6 +561,7 @@ export class ScopedNotificationRepo {
    * another user (cross-tenant attempts are silent no-ops).
    */
   async markRead(id: string): Promise<boolean> {
+    if (!isUuid(id)) return false;
     const filters: (SQL | undefined)[] = [eq(notifications.id, id)];
     if (!isAdmin(this.principal)) filters.push(eq(notifications.userId, this.principal.userId));
     filters.push(workspaceFilter(this.principal, notifications.workspaceId));
@@ -606,6 +630,7 @@ export class ScopedTrajectoryRepo {
   }
 
   async findById(id: string): Promise<TrajectoryRunRecord | null> {
+    if (!isUuid(id)) return null;
     const filters: (SQL | undefined)[] = [eq(trajectoryRuns.id, id)];
     if (!isAdmin(this.principal)) filters.push(eq(trajectoryRuns.userId, this.principal.userId));
     filters.push(workspaceFilter(this.principal, trajectoryRuns.workspaceId));
@@ -635,6 +660,7 @@ export class ScopedHookRepo {
    * to the hookManager so the manager's existing methods stay simple.
    */
   async findById(id: string): Promise<Hook | null> {
+    if (!isUuid(id)) return null;
     const filters: (SQL | undefined)[] = [eq(hooks.id, id)];
     if (!isAdmin(this.principal)) filters.push(eq(hooks.userId, this.principal.userId));
     filters.push(workspaceFilter(this.principal, hooks.workspaceId));
@@ -669,6 +695,7 @@ export class ScopedPipelineRepo {
   private get db() { return getDb(); }
 
   async findById(id: string): Promise<Pipeline | null> {
+    if (!isUuid(id)) return null;
     const where = isAdmin(this.principal)
       ? eq(pipelines.id, id)
       : and(eq(pipelines.id, id), eq(pipelines.userId, this.principal.userId));
@@ -683,6 +710,7 @@ export class ScopedPipelineRepo {
    * null when the principal is neither the owner nor looking at a preset.
    */
   async findTemplateById(id: string): Promise<PipelineTemplate | null> {
+    if (!isUuid(id)) return null;
     if (isAdmin(this.principal)) {
       const row = await this.db.select().from(pipelineTemplates).where(eq(pipelineTemplates.id, id)).limit(1);
       return row[0] ?? null;
@@ -704,6 +732,7 @@ export class ScopedPipelineRepo {
    * write paths short-circuit to "not found".
    */
   async findOwnedTemplateById(id: string): Promise<PipelineTemplate | null> {
+    if (!isUuid(id)) return null;
     const where = isAdmin(this.principal)
       ? eq(pipelineTemplates.id, id)
       : and(
@@ -738,6 +767,7 @@ export class ScopedTaskRepo {
 
   /** Returns the task only if the principal owns it (or is an admin). */
   async findById(id: string): Promise<Task | null> {
+    if (!isUuid(id)) return null;
     const filters: (SQL | undefined)[] = [eq(tasks.id, id)];
     if (!isAdmin(this.principal)) filters.push(eq(tasks.userId, this.principal.userId));
     filters.push(workspaceFilter(this.principal, tasks.workspaceId));
@@ -783,6 +813,7 @@ export class ScopedTaskRepo {
 
   /** Update only if owned. `completedAt` is managed by the route/tool. */
   async update(id: string, patch: Partial<NewTask>): Promise<Task | null> {
+    if (!isUuid(id)) return null;
     const { userId: _drop, ...safe } = patch;
     void _drop;
     const filters: (SQL | undefined)[] = [eq(tasks.id, id)];
@@ -798,6 +829,7 @@ export class ScopedTaskRepo {
 
   /** Delete only if owned. Returns false on miss / cross-tenant. */
   async delete(id: string): Promise<boolean> {
+    if (!isUuid(id)) return false;
     const filters: (SQL | undefined)[] = [eq(tasks.id, id)];
     if (!isAdmin(this.principal)) filters.push(eq(tasks.userId, this.principal.userId));
     filters.push(workspaceFilter(this.principal, tasks.workspaceId));

@@ -15,6 +15,7 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import type { ProfileFact } from '@/db/schema/profiles';
 import { getModelRegistry } from '@/models/model-registry';
 import { QuotaExceededError } from '@/security/quota-error';
+import { premiseNoteFor } from '@/core/premise';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
 import { truncateToTokens } from '@/utils/token-count';
@@ -348,6 +349,22 @@ async function stageCounters(
 /**
  * Spawn a single worker agent for a given role and task.
  */
+/**
+ * Directories a premise check may resolve a named path against: the agent's own
+ * sandbox root, plus the dev project when the worker is pinned to one. Pure path
+ * computation; a resolution failure disables the check rather than failing a spawn.
+ */
+function premiseRoots(context: AgentContext, devProjectPath?: string): string[] {
+  const roots: string[] = [];
+  if (devProjectPath) roots.push(devProjectPath);
+  try {
+    roots.push(WorkspaceFS.forAgent({ userId: context.userId }).root);
+  } catch {
+    /* no sandbox root resolvable — the dev path (if any) still counts */
+  }
+  return roots;
+}
+
 export async function spawnWorker(
   role: string,
   task: string,
@@ -1238,9 +1255,16 @@ Use these MCP tools when the task benefits from them — especially for people-r
   });
 
   try {
-    const workerMessage = input
+    const baseMessage = input
       ? `${task}\n\n--- Context from previous steps ---\n${input}`
       : task;
+
+    // Does the task's subject exist? A pipeline stage handed prose about a file
+    // that is not in the workspace created the file and worked on that instead,
+    // and the QA stage downstream certified the fabrication (see
+    // `core/premise.ts`). Cheap, stated as fact, never blocking.
+    const premise = premiseNoteFor(baseMessage, premiseRoots(context, isDevMode ? devProjectPath : undefined));
+    const workerMessage = premise ? `${baseMessage}\n\n${premise}` : baseMessage;
 
     const result = await worker.run(workerMessage);
     const durationMs = Date.now() - startTime;

@@ -504,7 +504,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
               type="text"
               value={name}
               onChange={e => setName(e.target.value)}
-              className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+              className="w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
               placeholder="e.g., GitHub PR Review"
             />
           </div>
@@ -514,7 +514,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
               type="text"
               value={description}
               onChange={e => setDescription(e.target.value)}
-              className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+              className="w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
               placeholder="What this hook does"
             />
           </div>
@@ -525,7 +525,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
             <select
               value={trigger}
               onChange={e => setTrigger(e.target.value)}
-              className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+              className="w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
             >
               {TRIGGER_OPTIONS.map(t => (
                 <option key={t.value} value={t.value}>{t.label}</option>
@@ -549,7 +549,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                     type="text"
                     value={webhookPath}
                     onChange={e => setWebhookPath(e.target.value)}
-                    className="flex-1 bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+                    className="flex-1 bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
                     placeholder="github"
                   />
                 </div>
@@ -563,7 +563,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                     type="text"
                     value={webhookSecret}
                     onChange={e => setWebhookSecret(e.target.value)}
-                    className="flex-1 bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm font-mono focus:ring-1 focus:ring-primary"
+                    className="flex-1 bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm font-mono focus:ring-1 focus:ring-primary"
                     placeholder="Generate or enter a secret..."
                   />
                   <button
@@ -613,7 +613,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                 type="text"
                 value={messagePattern}
                 onChange={e => setMessagePattern(e.target.value)}
-                className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm font-mono focus:ring-1 focus:ring-primary"
+                className="w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm font-mono focus:ring-1 focus:ring-primary"
                 placeholder=".*deploy.*"
               />
             </div>
@@ -625,7 +625,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
             <select
               value={action}
               onChange={e => setAction(e.target.value)}
-              className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+              className="w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
             >
               {ACTION_OPTIONS.map(a => (
                 <option key={a.value} value={a.value}>{a.label}</option>
@@ -647,7 +647,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                   value={agentPrompt}
                   onChange={e => setAgentPrompt(e.target.value)}
                   rows={3}
-                  className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+                  className="w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
                   placeholder="Review the changes in this PR against our code guidelines..."
                 />
                 <p className="mt-1 text-xs text-on-surface-variant">
@@ -707,7 +707,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                     type="text"
                     value={notifyChannels}
                     onChange={e => setNotifyChannels(e.target.value)}
-                    className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+                    className="w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
                     placeholder="telegram:123456, slack:general"
                   />
                   <p className="mt-1 text-xs text-on-surface-variant">Comma-separated, format: type:channelId</p>
@@ -719,7 +719,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                   value={notifyMessage}
                   onChange={e => setNotifyMessage(e.target.value)}
                   rows={3}
-                  className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+                  className="w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
                   placeholder="{{webhook.body.action}} on {{webhook.body.repository.full_name}}"
                 />
                 <p className="mt-1 text-xs text-on-surface-variant">Use {'{{webhook.body.field}}'} for template variables</p>
@@ -734,7 +734,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                 type="text"
                 value={webhookUrl}
                 onChange={e => setWebhookUrl(e.target.value)}
-                className="w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
+                className="w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
                 placeholder="https://example.com/webhook"
               />
             </div>
@@ -899,7 +899,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
     setIsSubmitting(false);
   };
 
-  const inputCls = 'w-full bg-surface-container-high border-none rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary';
+  const inputCls = 'w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary';
 
   return (
     <Portal>
@@ -926,7 +926,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
           {/* Trigger (read-only label + config) */}
           <div>
             <label className="block text-xs font-bold text-on-surface-variant uppercase mb-2">Trigger</label>
-            <div className="bg-surface-container-high border-none rounded-md py-3 px-4 text-sm text-on-surface">
+            <div className="bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-sm text-on-surface">
               {TRIGGER_OPTIONS.find(t => t.value === trigger)?.label || trigger}
             </div>
             <p className="mt-1 text-xs text-on-surface-variant">
@@ -990,7 +990,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
           {/* Action (read-only label + config) */}
           <div>
             <label className="block text-xs font-bold text-on-surface-variant uppercase mb-2">Action</label>
-            <div className="bg-surface-container-high border-none rounded-md py-3 px-4 text-sm text-on-surface">
+            <div className="bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-sm text-on-surface">
               {ACTION_OPTIONS.find(a => a.value === action)?.label || action}
             </div>
             <p className="mt-1 text-xs text-on-surface-variant">
