@@ -3,7 +3,7 @@ import { getOrchestratorHooks } from '@/core/orchestrator/hooks';
 import { isCancellationError } from '@/core/swarm/errors';
 import { recordToolExecution } from '@/core/telemetry';
 import type { AgentContext, ToolManifest, } from '@/core/types';
-import { canPromptHuman, routeApproval } from '@/security/approval-policy';
+import { canPromptHuman, isListedAction, routeApproval } from '@/security/approval-policy';
 import { getPermissionManager } from '@/security/permissions';
 import { injectSecrets, redactSecretValues } from '@/security/secret-injector';
 import { toolLogger } from '@/utils/logger';
@@ -173,14 +173,20 @@ export abstract class BaseTool {
     // path, exactly as before. When the list IS set, we pay for the check and
     // let the shared policy decide. (The agent loop checks every call anyway,
     // so a stored DENY is still enforced there.)
+    //
+    // Keyed on THIS action, not on whether the list is non-empty. The list
+    // stopped being empty by default (`shell.execute_destructive`,
+    // `filesystem.delete`), and a mere length test would have re-armed the
+    // round-trip for every unattended call to every tool in the system — the
+    // hot path this skip exists to protect — to guard two actions.
+    const action =
+      typeof options?.permissionAction === 'function'
+        ? options.permissionAction(args)
+        : options?.permissionAction || toolName;
     const skipForUnattended =
-      !canPromptHuman(context) && !unattendedDenyActions?.length;
+      !canPromptHuman(context) && !isListedAction(unattendedDenyActions, this.id, action);
     if (options?.requiresPermission !== false && !skipForSystem && !skipForUnattended) {
       const permissionManager = getPermissionManager();
-      const action =
-        typeof options?.permissionAction === 'function'
-          ? options.permissionAction(args)
-          : options?.permissionAction || toolName;
 
       const check = await permissionManager.check(context.userId, this.id, action, args);
 

@@ -159,6 +159,153 @@ export function matchElevatedCommand(command: string): string | null {
 }
 
 /**
+ * The way a command destroys work irreversibly, else null.
+ *
+ * A separate class from elevation because the question is different. Elevation
+ * asks *may this caller touch the system at all*; destruction asks *can this be
+ * taken back*. `rm -rf build` needs no privilege whatsoever and cannot be
+ * undone, so it passes the elevated check untouched — which is how a spawned
+ * agent emptied a project directory with nobody asked.
+ *
+ * Matched on the argv a segment tokenizes to rather than its head alone,
+ * because here the flags ARE the event: `rm notes.txt` and `rm -rf .` share a
+ * head and share nothing else.
+ *
+ * Deliberately narrow. The bar is "takes out more than it names, and no copy
+ * survives" — a single named file is not on this list, because it is the most
+ * common edit an agent makes and git already holds the copy. The mistake this
+ * guards against is the unbounded one.
+ */
+export function matchDestructiveCommand(command: string): string | null {
+  const forms = [command.trim().toLowerCase(), ...dequotedForms(command)];
+
+  // Inline interpreter source is matched against the WHOLE command, before any
+  // segmenting. The segment splitter cuts on `;` `(` `)` — which are precisely
+  // the characters the source is made of, so
+  // `python3 -c "import shutil; shutil.rmtree('.')"` arrives at the per-segment
+  // matcher already in pieces, with the destruction in a different piece from
+  // the interpreter.
+  for (const form of forms) {
+    const hit = inlineInterpreterDestruction(form);
+    if (hit) return hit;
+  }
+
+  for (const form of forms) {
+    for (const segment of form.split(/&&|\|\||[;&|\n()`]/)) {
+      for (const candidate of commandCandidates(segment)) {
+        const hit = destructiveForm(candidate);
+        if (hit) return hit;
+      }
+    }
+  }
+  return null;
+}
+
+/** What makes one already-peeled candidate destructive, else null. */
+function destructiveForm(candidate: string): string | null {
+  const argv = candidate.split(/\s+/).filter(Boolean);
+  const head = argv[0];
+  if (!head) return null;
+  const args = argv.slice(1);
+
+  /** Is `ch` set in any bundled short flag (`-rf` carries both r and f)? */
+  const shortFlag = (ch: string) =>
+    args.some((a) => /^-[^-]/.test(a) && a.slice(1).includes(ch));
+  const has = (...names: string[]) => names.some((n) => args.includes(n));
+
+  switch (head) {
+    case 'rm':
+      if (shortFlag('r') || has('--recursive')) return 'rm -r';
+      // An UNBOUNDED glob — `rm *`, `rm ./*`, `rm .*` — deletes whatever
+      // happens to be there. A bounded one (`rm dist/*.js`) names an extension
+      // inside a directory and is routine build hygiene; gating it would deny
+      // ordinary autonomous cleanup for no safety gain, and a guard that fires
+      // on routine work is a guard people learn to wave through.
+      if (args.some((a) => !a.startsWith('-') && UNBOUNDED_GLOB.test(a))) return 'rm <glob>';
+      return null;
+    case 'shred':
+      return 'shred';
+    case 'truncate':
+      return 'truncate';
+    case 'dd':
+      return args.some((a) => a.startsWith('of=')) ? 'dd of=' : null;
+    case 'rsync':
+      // `--delete` makes the destination match the source by removing whatever
+      // is not in it — the standard "empty this directory" idiom in build
+      // scripts, and unbounded by construction.
+      return has('--delete', '--delete-after', '--delete-before', '--delete-during', '--delete-excluded')
+        ? 'rsync --delete'
+        : null;
+    case 'find': {
+      if (has('-delete')) return 'find -delete';
+      // The binary `-exec` runs is the token that FOLLOWS it, not any token in
+      // the line. Scanning the whole argv both missed
+      // `find . -exec shred {} \;` and false-positived on
+      // `find . -exec grep -rn 'rm ' {} \;`, where quote stripping leaves a
+      // bare `rm` that was only ever a search pattern.
+      const execAt = args.findIndex((a) => a === '-exec' || a === '-execdir');
+      if (execAt >= 0) {
+        const run = args[execAt + 1];
+        if (run && DESTRUCTIVE_EXEC_BINARIES.has(basename(run))) return `find -exec ${basename(run)}`;
+      }
+      return null;
+    }
+    case 'git':
+      // Each of these throws away work that exists nowhere else: uncommitted
+      // changes, untracked files, or somebody else's history on the remote.
+      if (has('reset') && has('--hard')) return 'git reset --hard';
+      if (has('clean') && (shortFlag('f') || has('--force'))) return 'git clean -f';
+      if (has('push') && (has('--force', '--force-with-lease') || shortFlag('f'))) {
+        return 'git push --force';
+      }
+      if (has('checkout') && has('.')) return 'git checkout .';
+      if (has('worktree') && has('remove') && (has('--force') || shortFlag('f'))) {
+        return 'git worktree remove --force';
+      }
+      return null;
+    default:
+      return null;
+  }
+}
+
+/**
+ * An interpreter handed inline source runs whatever that source says, and the
+ * head of the command is `python3`. Closing the `rm` route without this one
+ * only moves the problem: an agent refused a recursive delete reaches for
+ * `python3 -c "shutil.rmtree('.')"` next — the same escape-hatch step the
+ * original incident took when its first attempt was rejected.
+ */
+function inlineInterpreterDestruction(form: string): string | null {
+  const tokens = form.split(/\s+/).filter(Boolean);
+  const at = tokens.findIndex((t) => INTERPRETERS.has(basename(t)));
+  if (at < 0) return null;
+  if (!tokens.slice(at + 1).some((t) => INLINE_CODE_FLAGS.has(t))) return null;
+  return DESTRUCTIVE_IN_CODE.test(form) ? `${basename(tokens[at] as string)} inline code` : null;
+}
+
+/** Interpreters that will run source handed to them on the command line. */
+const INTERPRETERS = new Set(['python', 'python2', 'python3', 'node', 'nodejs', 'perl', 'ruby', 'php', 'deno', 'bun']);
+
+/** The flags that mean "the next argument is source, not a filename". */
+const INLINE_CODE_FLAGS = new Set(['-c', '-e', '--eval', '-E', '--exec']);
+
+/**
+ * Destruction expressed in inline source. Deliberately a keyword scan rather
+ * than an attempt to parse: the point is to route the call to a human, not to
+ * decide what the program does. Anything this misses is a known ceiling —
+ * inline code is not analysable from a denylist, so a workspace that runs
+ * untrusted inline interpreters wants the sandbox, not this.
+ */
+const DESTRUCTIVE_IN_CODE =
+  /\b(rmtree|removedirs|\bunlink\b|shutil\.rm|os\.remove|fs\.rm|rmSync|rmdirSync|unlinkSync|remove_entry|FileUtils\.rm|File\.delete)\b/i;
+
+/** Binaries whose whole job, when `find -exec`s them, is to destroy the match. */
+const DESTRUCTIVE_EXEC_BINARIES = new Set(['rm', 'unlink', 'shred', 'truncate', 'rmdir']);
+
+/** `*`, `./*`, `.*`, `dir/*` — a glob that names no extension or stem. */
+const UNBOUNDED_GLOB = /(^|\/)\.?\*$/;
+
+/**
  * Does `text` START a segment with `name`, after any wrappers and assignments?
  *
  * Narrower than the denylist's token test, deliberately. Elevation does not

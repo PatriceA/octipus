@@ -128,10 +128,19 @@ export function loadFromEnvLegacy(): Partial<Config> {
       enforcePermissions: process.env.MULTIUSER_ENFORCE_PERMISSIONS !== 'false',
       rlsEnabled: process.env.MULTIUSER_RLS === 'true',
       orgWorkspaces: process.env.MULTIUSER_ORG_WORKSPACES === 'true',
-      unattendedDenyActions: (process.env.UNATTENDED_DENY_ACTIONS || '')
-        .split(',')
-        .map((a) => a.trim())
-        .filter(Boolean),
+      // Falls back to the shipped default EXPLICITLY when the variable is
+      // unset. The previous `(process.env.X || '').split(',')` produced `[]`
+      // for an unset variable, and `deepMerge` treats an array as a scalar —
+      // so that empty array replaced the default instead of deferring to it,
+      // silently disarming the `shell.execute_destructive` entry. Setting the
+      // variable to an empty string still means "deny nothing"; it just has to
+      // be said out loud now.
+      unattendedDenyActions:
+        process.env.UNATTENDED_DENY_ACTIONS !== undefined
+          ? process.env.UNATTENDED_DENY_ACTIONS.split(',')
+              .map((a) => a.trim())
+              .filter(Boolean)
+          : (defaultConfig.multiuser?.unattendedDenyActions ?? []),
     },
     workspace: {
       rootPath: process.env.WORKSPACE_PATH || WORKSPACE_ROOT,

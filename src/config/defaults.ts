@@ -87,8 +87,17 @@ export const defaultConfig: Partial<Config> = {
     enforcePermissions: true,
     rlsEnabled: false,           // requires non-superuser app role; opt-in
     orgWorkspaces: true,
-    /** Refuse (don't auto-approve) these actions for unattended workers. */
-    unattendedDenyActions: [],
+    /**
+     * Refuse (don't auto-approve) these actions for unattended workers.
+     *
+     * Not empty. An ASK-level action reaching a caller that cannot be asked
+     * falls through to this list, and an empty list means "auto-approve
+     * everything nobody can be asked about" — which is how a spawned child ran
+     * `rm -rf ./*` in a live session with a person sitting at the terminal.
+     * A worker that hits this fails loudly and reports what it needed, which
+     * the root can then put to the user.
+     */
+    unattendedDenyActions: ['shell.execute_destructive', 'filesystem.delete'],
   },
   workspace: {
     rootPath: WORKSPACE_ROOT,

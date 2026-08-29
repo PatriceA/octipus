@@ -8,7 +8,7 @@ import { BaseTool, createParameterSchema } from '../base-tool';
 import { interpretExit } from './exit-code-semantics';
 import { LocalShellOperations } from './local-operations';
 import type { ShellOperations } from './operations';
-import { commandPolicyViolation, matchElevatedCommand } from './policy';
+import { commandPolicyViolation, matchDestructiveCommand, matchElevatedCommand } from './policy';
 
 const DEFAULT_TIMEOUT = 30000; // 30 seconds
 
@@ -35,6 +35,7 @@ export class ShellTool extends BaseTool {
       permissions: [
         { action: 'execute', description: 'Run shell commands (npm, bun, make, curl, etc.) in the workspace directory', defaultLevel: 'ASK' },
         { action: 'execute_elevated', description: 'Run privileged commands requiring sudo/root access (install packages, manage services, modify system config)', defaultLevel: 'DENY', dangerous: true },
+        { action: 'execute_destructive', description: 'Run commands that destroy work irreversibly (rm -r, rm on a glob, git reset --hard, git clean -f, git push --force, dd, shred, find -delete)', defaultLevel: 'ASK', dangerous: true },
       ],
       tools: [
         {
@@ -254,10 +255,19 @@ export class ShellTool extends BaseTool {
    * has explicitly granted elevation, instead of running under the ASK-level
    * `execute` permission like ordinary commands.
    */
+  /**
+   * Which permission a command answers to.
+   *
+   * Elevation is checked first because it is DENY by default and therefore the
+   * stricter answer. Destruction is checked second and separately: it needs no
+   * privilege, so an `rm -rf` sailed through the elevated check and landed on
+   * plain `execute` — ASK, which auto-approves for any caller that cannot be
+   * asked. That is how a spawned child emptied a directory with no prompt.
+   */
   private resolvePermissionAction(command: string): string {
-    if (typeof command === 'string' && matchElevatedCommand(command)) {
-      return 'execute_elevated';
-    }
+    if (typeof command !== 'string') return 'execute';
+    if (matchElevatedCommand(command)) return 'execute_elevated';
+    if (matchDestructiveCommand(command)) return 'execute_destructive';
     return 'execute';
   }
 }

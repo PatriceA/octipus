@@ -370,7 +370,9 @@ export const multiuserConfigSchema = z.object({
    * runs. It exists so an operator can state their own limit in ONE place
    * instead of patching the two dispatch paths.
    */
-  unattendedDenyActions: z.array(z.string()).default([]),
+  unattendedDenyActions: z
+    .array(z.string())
+    .default(['shell.execute_destructive', 'filesystem.delete']),
   /**
    * Postgres Row-Level Security — Phase 3b. When true, the connection
    * wrapper opens authenticated queries in a transaction and sets

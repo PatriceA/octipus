@@ -66,6 +66,18 @@ export class PermissionManager {
    * Check if an action is permitted.
    * Evaluation order: rule engine (deny→allow→ask) → DB policy → tool default.
    */
+  /** Does the tool's own manifest mark this action `dangerous`? */
+  private isDangerousAction(toolId: string, action: string): boolean {
+    try {
+      const manifest = getToolRegistry().get(toolId)?.getManifest();
+      return manifest?.permissions?.some((p) => p.action === action && p.dangerous === true) ?? false;
+    } catch {
+      // Registry not ready — treat as not-dangerous so boot-time checks behave
+      // exactly as they did before this guard existed.
+      return false;
+    }
+  }
+
   async check(
     userId: string,
     toolId: string,
@@ -83,7 +95,22 @@ export class PermissionManager {
             case 'deny':
               return { allowed: false, level: 'DENY', requiresApproval: false, reason: `Denied by rule: ${ruleResult.rule}` };
             case 'allow':
-              return { allowed: true, level: 'ALLOW', requiresApproval: false };
+              // A blanket ALLOW does not cover an action its own tool declares
+              // `dangerous`. The shipped rules include `filesystem(*)` — "the
+              // filesystem tool has its own guards", which are path-containment
+              // guards, not destruction guards — and rules match on tool + path,
+              // never on action, so that one line silently outranked
+              // `delete: ASK, dangerous: true` in the manifest. An agent told to
+              // empty a directory simply called `delete_file` twenty-one times
+              // and no approval was ever consulted.
+              //
+              // Falling through (rather than returning ASK here) keeps the
+              // manifest and any stored per-user level authoritative for the
+              // dangerous action, which is where those decisions belong.
+              if (!this.isDangerousAction(toolId, action)) {
+                return { allowed: true, level: 'ALLOW', requiresApproval: false };
+              }
+              break;
             case 'ask':
               return { allowed: false, level: 'ASK', requiresApproval: true, reason: `Requires approval: ${ruleResult.rule}` };
           }

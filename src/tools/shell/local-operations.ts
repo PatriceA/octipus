@@ -66,9 +66,17 @@ export class LocalShellOperations implements ShellOperations {
     const argv = options.unsafe ? null : tokenizeSafe(command);
 
     if (!options.unsafe && argv === null) {
+      // Phrased as what the parameter is FOR, not as a way around the refusal.
+      // The old wording — "pass unsafe: true to bypass" — is read by a model,
+      // and a model that has just been refused will take an instruction to
+      // bypass the refusal: observed, on the very next tool call. `useShell`
+      // changes how the command is spawned; it does not change which permission
+      // the command answers to, so a destructive command is still a destructive
+      // command either way.
       throw new Error(
         `Shell command rejected — contains metacharacters (;, &, |, <, >, $(), \`, newline, brace expansion). ` +
-          `Pass unsafe: true to bypass and run via sh -c. Refused command (truncated): ${command.slice(0, 80)}`,
+          `Run the steps as separate calls, or set useShell:true if the command genuinely needs shell ` +
+          `features. Refused command (truncated): ${command.slice(0, 80)}`,
       );
     }
 

@@ -104,6 +104,17 @@ export function channelCanPrompt(channel: string | undefined): boolean {
 }
 
 /** Does `pattern` name this tool action? */
+/**
+ * Is `toolId`/`action` named by one of `patterns`?
+ *
+ * Exported because `base-tool` needs the same answer to decide whether an
+ * unattended call can skip the permission round-trip at all — two dispatch
+ * paths disagreeing about what "listed" means is how the original bug got in.
+ */
+export function isListedAction(patterns: string[] | undefined, toolId: string, action: string): boolean {
+  return (patterns ?? []).some((p) => matches(p, toolId, action));
+}
+
 function matches(pattern: string, toolId: string, action: string): boolean {
   const p = pattern.trim();
   if (!p) return false;

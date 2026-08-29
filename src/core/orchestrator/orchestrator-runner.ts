@@ -6,6 +6,7 @@ import { isCancellationError } from '@/core/swarm/errors';
 import { swarmNodeRepository } from '@/core/swarm/node-repository';
 import { taskFingerprint } from '@/core/swarm/spawner';
 import type { AgentWorker } from '@/core/agent-worker';
+import type { ToolHandler } from '@/core/agent-base';
 import { type AgentNode, LEVEL_DEFAULT, type PendingChild } from '@/core/swarm/types';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { messageRepository } from '@/db/repositories/message-repository';
@@ -18,6 +19,7 @@ import { getOrchestratorHooks } from './hooks';
 import { estimateToolSchemaTokens, logPromptComposition } from './prompt-budget';
 import { buildSecurityReminder } from './input-guard';
 import { createMetaTools } from './meta-tools';
+import { buildCapabilitiesHandler } from '@/tools/self-report';
 import type { ModelSelector } from './model-selector';
 import { resolveOrchestratorMode } from './mode-selector';
 import { buildOutputDirective } from './output-directive';
@@ -243,7 +245,23 @@ export async function runOrchestrator(
     const after = new Set(rootTools.map((t) => t.toolId ?? t.name));
     droppedToolGroups = [...before].filter((id) => !after.has(id));
   }
+  // `capabilities` — how the root answers questions about itself. Advertised on
+  // every provider, unlike the lazy-discovery pair below: asked "what can you
+  // do?", an agent with no way to enumerate itself answers from whatever is in
+  // its advertised schema, which is partial at best and invented at worst. The
+  // handler is rebuilt after the tool set is final so its counts describe the
+  // turn that is actually about to run.
+  const selfReport = (advertised: ToolHandler[]) =>
+    buildCapabilitiesHandler({
+      advertised,
+      registered: rootTools,
+      userId,
+      model: modelName,
+      role: ROOT_ROLE,
+    });
+
   let turnTools = [...rootTools, ...metaTools];
+  turnTools = [...turnTools, selfReport(turnTools)];
 
   // Lazy tool discovery, same gate every worker goes through
   // (`worker-spawner.ts`): on local Ollama the per-request tool schema is
@@ -263,8 +281,14 @@ export async function runOrchestrator(
         // Everything stays REGISTERED (dispatch must keep working); only what is
         // advertised shrinks. The meta-tools are never in the long tail — the
         // root's ability to delegate must not need a discovery round-trip.
-        turnTools = [...rootTools, ...discoveryHandlers, ...metaTools];
-        toolAdvertisement = { mode: 'lazy', coreToolIds: [...rootRoleConfig.coreToolIds, ...metaTools.map((t) => t.toolId ?? t.name)] };
+        const lazyCore = [...rootTools, ...discoveryHandlers, ...metaTools];
+        // `capabilities` is core on the lazy path too — the one question it
+        // answers is the one a shrunken advertisement makes hardest to answer.
+        turnTools = [...lazyCore, selfReport(lazyCore)];
+        toolAdvertisement = {
+          mode: 'lazy',
+          coreToolIds: [...rootRoleConfig.coreToolIds, ...metaTools.map((t) => t.toolId ?? t.name), 'self_report'],
+        };
         orchestratorAllowedToolIds.add('tool_discovery');
         coreLogger.info(
           { role: ROOT_ROLE, model: modelName, longTailCount: longTail.length },

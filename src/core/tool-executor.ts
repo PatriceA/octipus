@@ -688,8 +688,20 @@ export class ToolExecutor {
           }
         } else {
           this.counters.autoApproved++;
+          // `action` and the deny list are on this line because without them it
+          // cannot answer the only question anyone asks it: WHICH permission
+          // was waved through, and was the list that should have stopped it
+          // even populated. Diagnosing an auto-approved `rm -rf` from
+          // `tool: shell__run` alone is guesswork.
           agentLogger.info(
-            { agentId: this.context.id, tool: toolCall.name, role: this.context.role },
+            {
+              agentId: this.context.id,
+              tool: toolCall.name,
+              toolId,
+              action: permAction,
+              role: this.context.role,
+              unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions,
+            },
             'Auto-approving ASK-level tool for autonomous worker'
           );
         }

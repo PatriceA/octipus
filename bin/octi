@@ -516,6 +516,9 @@ cmd_start() {
   local dev_mode=false
   local use_tui=false
   local backend_only=false
+  # Captured before the cd below: `--tui` should pin to the directory you ran
+  # the command in, exactly like `octi tui` does.
+  local user_cwd="$PWD"
   for arg in "$@"; do
     case "$arg" in
       --dev|-d) dev_mode=true ;;
@@ -646,7 +649,7 @@ cmd_start() {
     echo ""
     log_step "Launching TUI..."
     cd "$PROJECT_DIR"
-    API_PORT="$API_PORT" exec npm run tui
+    API_PORT="$API_PORT" exec npm run tui -- --project "$user_cwd"
   else
     # Web UI mode
     log_step "Clearing web UI cache..."
@@ -721,6 +724,9 @@ cmd_restart() {
   local dev_mode=false
   local use_tui=false
   local backend_only=false
+  # Captured before the cd below: `--tui` should pin to the directory you ran
+  # the command in, exactly like `octi tui` does.
+  local user_cwd="$PWD"
   for arg in "$@"; do
     case "$arg" in
       --dev|-d) dev_mode=true ;;
@@ -839,7 +845,7 @@ cmd_restart() {
     echo ""
     log_step "Launching TUI..."
     cd "$PROJECT_DIR"
-    API_PORT="$API_PORT" exec npm run tui
+    API_PORT="$API_PORT" exec npm run tui -- --project "$user_cwd"
   else
     cd "$PROJECT_DIR/web"
     if [[ "$dev_mode" == true ]]; then
@@ -1098,7 +1104,12 @@ cmd_tui() {
   log_info "Connecting TUI to gateway at localhost:$API_PORT..."
   log_hint "Project: $user_cwd"
   cd "$PROJECT_DIR"
-  API_PORT="$API_PORT" exec npm run tui --project "$user_cwd" "$@"
+  # The `--` is load-bearing: without it npm claims `--project` as its own
+  # config flag ("Unknown cli config") and never forwards it, so the TUI opened
+  # with no project at all while this function's banner promised one. The agent
+  # then answered questions about "this directory" from the user's default
+  # workspace. `cmd_edit` below has always had the separator.
+  API_PORT="$API_PORT" exec npm run tui -- --project "$user_cwd" "$@"
 }
 
 cmd_edit() {
