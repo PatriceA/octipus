@@ -1,6 +1,7 @@
 import { resolve } from 'path';
 import { getConfig } from '@/config';
 import { shouldUseLazyDiscovery } from './lazy-tools';
+import { isPlanMode, stripMutatingTools } from './plan-mode';
 import { getAgentManager } from '@/core/agent-manager';
 import { getGatewayHub } from '@/core/gateway/hub';
 import { getNotificationService } from '@/core/notification-service';
@@ -491,6 +492,27 @@ export async function spawnWorker(
       roleTools.push(...connectorHandlers);
     } catch (err) {
       coreLogger.warn({ err, userId: context.userId }, 'Failed to load connector tool handlers');
+    }
+  }
+
+  // Plan mode is inherited, and applied HERE — after the stage's declared
+  // toolIds, after `extraToolIds` grants, after connector handlers — because
+  // this is the first point the set is final. Applied at the top instead, it
+  // was undone one block later: a runtime grant of `filesystem` re-adds
+  // `write_file`, and a planning turn duly edited the file it had been asked
+  // to plan. A filter that runs before the additions is not a filter.
+  //
+  // Read from the session so it holds however deep the delegation went —
+  // delegation is exactly where an agent short of a tool looks next.
+  {
+    const planSession = await sessionRepository.findById(context.sessionId);
+    if (isPlanMode(planSession?.context as import('@/db/schema/sessions').SessionContext | undefined)) {
+      const before = roleTools.length;
+      roleTools = stripMutatingTools(roleTools);
+      coreLogger.info(
+        { role: agentRole, from: before, to: roleTools.length },
+        'Plan mode: file-mutating tools withheld from worker',
+      );
     }
   }
 

@@ -2,6 +2,7 @@ import { getConfig } from '@/config';
 import type { AnyAgentWorker } from '@/core/agent-manager';
 import { getAgentManager } from '@/core/agent-manager';
 import { sessionRepository } from '@/db/repositories/session-repository';
+import { isPlanMode, stripMutatingTools } from '@/core/orchestrator/plan-mode';
 import type { AgentWorker, ToolHandler } from '@/core/agent-worker';
 import type { GatewayHub } from '@/core/gateway/hub';
 import { getGatewayHub } from '@/core/gateway/hub';
@@ -519,6 +520,26 @@ export class SwarmSpawner {
     }
 
     let childTools = resolveChildTools(parent.allowedToolIds, roleTools);
+
+    // Plan mode is inherited by every child, at every depth. This is the OTHER
+    // spawn path — `spawn_child` comes through here, `worker-spawner` handles
+    // the orchestrator's own workers — and filtering only one of them is
+    // filtering neither: an agent short of a tool delegates, which is exactly
+    // how a planning turn ended up editing the file it was asked to plan.
+    //
+    // After `resolveChildTools`, and after the connector handlers above,
+    // because this is the first point the child's set is final.
+    {
+      const planSession = await sessionRepository.findById(parentContext.sessionId);
+      if (isPlanMode(planSession?.context as { planMode?: boolean } | undefined)) {
+        const before = childTools.length;
+        childTools = stripMutatingTools(childTools);
+        coreLogger.info(
+          { role: childRole, from: before, to: childTools.length },
+          'Plan mode: file-mutating tools withheld from swarm child',
+        );
+      }
+    }
 
     // Phase 2: register swarm meta-tools on Agent (depth 1) children so they
     // can in turn spawn Subagents. Subagent (depth 2) receives NEITHER —

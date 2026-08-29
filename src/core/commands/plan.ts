@@ -106,8 +106,12 @@ async function saveState(sessionId: string, state: PlanningState): Promise<void>
 }
 
 registerCommand({
-  name: 'plan',
-  description: 'Start an interactive project planning questionnaire',
+  // Renamed from `plan`. This is a project INTAKE questionnaire — eleven fixed
+  // areas, each with its own fixed list of questions — and it was holding the
+  // name that every other coding harness uses for "explore and propose without
+  // changing anything". `/plan` is that mode now; this is what it always was.
+  name: 'intake',
+  description: 'Start the interactive project intake questionnaire (was /plan)',
   async execute(ctx) {
     const session = await sessionRepository.findById(ctx.sessionId);
     let state = getState(session);

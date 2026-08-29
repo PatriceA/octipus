@@ -470,6 +470,54 @@ export function createMetaTools(
       },
     },
     {
+      name: 'exit_plan_mode',
+      description:
+        'Submit your finished plan for approval and leave plan mode. This is the ONLY way out of ' +
+        'plan mode, and it is a submission, not an announcement: do not paste the plan as an ordinary ' +
+        'reply and begin work. Call it once, as the last tool call of the turn, with the complete plan ' +
+        'as markdown starting with a # title.',
+      parameters: {
+        type: 'object',
+        properties: {
+          plan: {
+            type: 'string',
+            description:
+              'The complete plan as markdown. State the goal and how you will know it worked, group ' +
+              'the changes by subsystem, name the files and interfaces involved, and call out the ' +
+              'assumptions you made and the edge cases you are choosing not to handle.',
+          },
+        },
+        required: ['plan'],
+      },
+      // TERMINAL. Submitting the plan ends the turn — `final` disables tools for
+      // the remaining iterations.
+      //
+      // The first cut cleared `planMode` here and let the turn continue. The
+      // model promptly called `exit_plan_mode` early, which turned the mode off
+      // mid-turn, and then edited the file it had just been asked to plan —
+      // spawning a child that inherited a session no longer in plan mode. The
+      // tool that ends planning must not also be the tool that unlocks acting.
+      final: true,
+      execute: async (args, context) => {
+        const plan = typeof args.plan === 'string' ? args.plan.trim() : '';
+        if (!plan) {
+          throw new Error('exit_plan_mode requires the plan itself — call it with the full markdown.');
+        }
+        // The flag STAYS ON. Submitting a plan is not the same as it being
+        // approved, and the only party who can approve it is the user — who
+        // says so with `/plan off`.
+        coreLogger.info({ sessionId: context.sessionId, planChars: plan.length }, 'Plan submitted for approval');
+        return {
+          submitted: true,
+          plan,
+          note:
+            'Plan submitted. Present it to the user and STOP — you are still in plan mode and still ' +
+            'hold no file-writing tools. They approve it by running `/plan off`, and only then is ' +
+            'there anything to do.',
+        };
+      },
+    },
+    {
       name: 'request_user_approval',
       description:
         'Pause execution and ask the user for approval before proceeding. Use this at important decision points (e.g., before starting implementation after a plan is created).',

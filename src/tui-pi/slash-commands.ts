@@ -38,6 +38,8 @@ export const OCTIPUS_SLASH_COMMANDS: OctipusSlashCommand[] = [
   gw({ name: 'expert',    description: 'Switch expert or list available experts',
        argumentHint: '<name|reset>',                                                         aliases: ['e'] }),
   gw({ name: 'abort',     description: 'Cancel running agents',                              aliases: ['stop', 'cancel'] }),
+  gw({ name: 'plan',      description: 'Toggle plan mode — explore and propose, change nothing',
+       argumentHint: '[on|off]' }),
   gw({ name: 'compact',   description: 'Compact session context (optional focus instructions)',
        argumentHint: '[focus]' }),
   gw({ name: 'clear',     description: 'Reset orchestrator context and clear the chat',     aliases: ['cls', 'reset'] }),

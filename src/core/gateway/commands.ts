@@ -283,6 +283,19 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   });
 
   registry.register({
+    name: 'plan',
+    aliases: [],
+    description: 'Toggle plan mode — explore and propose without changing anything. /plan on | off',
+    minTrustLevel: 'user',
+    handler: async (ctx) => {
+      if (!ctx.sessionId) return { text: 'No active session.' };
+      const { togglePlanMode } = await import('@/core/orchestrator/plan-mode');
+      const { text } = await togglePlanMode(ctx.sessionId, ctx.rawArgs);
+      return { text };
+    },
+  });
+
+  registry.register({
     name: 'compact',
     aliases: [],
     description: 'Compact session context — summarizes history and saves to session folder. Optional: /compact <focus instructions>',

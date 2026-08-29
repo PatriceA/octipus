@@ -20,6 +20,7 @@ import { estimateToolSchemaTokens, logPromptComposition } from './prompt-budget'
 import { buildSecurityReminder } from './input-guard';
 import { createMetaTools } from './meta-tools';
 import { shouldUseLazyDiscovery } from './lazy-tools';
+import { isPlanMode, PLAN_MODE_DIRECTIVE, stripMutatingTools } from './plan-mode';
 import { isLongTailHandler } from './tool-split';
 import { buildCapabilitiesHandler } from '@/tools/self-report';
 import type { ModelSelector } from './model-selector';
@@ -157,6 +158,11 @@ export async function runOrchestrator(
   );
   coreLogger.info({ sessionId, modelName, orchestratorMode, role: ROOT_ROLE }, 'Root agent mode resolved');
 
+  // Read once, here, because the tool set is decided further down and plan mode
+  // has to reach it. The later `session` read is the same row.
+  const session = await sessionRepository.findById(sessionId);
+  const planSessionCtx = session?.context as import('@/db/schema/sessions').SessionContext | undefined;
+
   const rootRoleConfig = getRoleConfig(ROOT_ROLE);
 
   // Build the swarm root node AgentNode up front so meta-tools can bind to
@@ -166,7 +172,7 @@ export async function runOrchestrator(
   const orchestratorAbortController = new AbortController();
   const orchestratorAllowedToolIds = new Set<string>();
   // Meta-tool ids that the orchestrator owns by construction.
-  for (const name of ['spawn_child', 'collect_children', 'create_pipeline', 'list_pipeline_templates', 'filter_pii', 'request_user_approval', 'send_status_update', 'remember_this', 'remember_about_self', 'reflect']) {
+  for (const name of ['spawn_child', 'collect_children', 'create_pipeline', 'list_pipeline_templates', 'filter_pii', 'request_user_approval', 'exit_plan_mode', 'send_status_update', 'remember_this', 'remember_about_self', 'reflect']) {
     orchestratorAllowedToolIds.add(name);
   }
   // The root's own role tools — the general toolset it works with directly.
@@ -233,6 +239,11 @@ export async function runOrchestrator(
   // gain, not a regression. Lift `spawnWorker`'s tool assembly here if a user
   // asks the root to reach a bound connector directly.
   let rootTools = getToolsForRole(ROOT_ROLE);
+  // A planning turn holds no file-writing tools. Applied to the ROOT's set
+  // before `allowedToolIds` is derived from it, so a child it spawns cannot be
+  // granted what the parent does not hold — the same reasoning the read-only
+  // role filter documents.
+  if (isPlanMode(planSessionCtx)) rootTools = stripMutatingTools(rootTools);
   // The small-model answer to "what runs the loop now": the same loop, a reduced
   // tool set, and a hard iteration cap (below). Gated on `isSmallModel` — the
   // SMALL tier — and not on `isLite`, which is the 24B prompt tier: every worker
@@ -367,7 +378,6 @@ export async function runOrchestrator(
   // ~8.4k tokens for a one-line question — never did.
   const staticParts: string[] = [systemPrompt];
 
-  const session = await sessionRepository.findById(sessionId);
   const sessionCtxData = session?.context as SessionContext | undefined;
   const clearedAt = sessionCtxData?.clearedAt ? new Date(sessionCtxData.clearedAt) : undefined;
   // Pull session summary from the append-only `compaction_entries`
@@ -461,6 +471,12 @@ export async function runOrchestrator(
   // Inject workspace awareness
   const sessionCtx = session?.context as import('@/db/schema/sessions').SessionContext | undefined;
   const isDevMode = sessionCtx?.devMode === true && !!sessionCtx.projectPath;
+
+  // Plan mode: state what the tool filter below cannot enforce. Volatile tier,
+  // because it is a property of this session right now rather than of the
+  // install, and a per-session block in the static tier costs the whole prefix
+  // a cache write every turn.
+  if (isPlanMode(sessionCtx)) volatileParts.push(PLAN_MODE_DIRECTIVE);
 
   if (isDevMode) {
     // Dev mode: focused on a specific project

@@ -7,6 +7,7 @@ import './experts';
 import './model';
 import './models';
 import './plan';
+import './plan-mode-command';
 import './eval';
 import './cost';
 import './capture';

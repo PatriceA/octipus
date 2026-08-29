@@ -84,6 +84,18 @@ export interface SessionContext {
   clearedAt?: string;
   /** Anti-thrashing compaction guard state. */
   compactionState?: CompactionState;
+  /**
+   * PLAN MODE — the session explores and proposes, and changes nothing.
+   *
+   * A session state rather than a role property, because it is the USER's
+   * decision about this conversation, not a property of whoever ends up doing
+   * the work. Every agent in the session inherits it, including spawned
+   * children: a plan mode a delegated child can step outside of is not one.
+   *
+   * Cleared by `exit_plan_mode`, which submits the plan for approval — the
+   * agent cannot simply decide it is done planning and start editing.
+   */
+  planMode?: boolean;
   // Development Mode
   devMode?: boolean;
   projectPath?: string;
