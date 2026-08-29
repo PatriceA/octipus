@@ -1,6 +1,7 @@
 import { getConfig } from '@/config';
 import type { AnyAgentWorker } from '@/core/agent-manager';
 import { getAgentManager } from '@/core/agent-manager';
+import { sessionRepository } from '@/db/repositories/session-repository';
 import type { AgentWorker, ToolHandler } from '@/core/agent-worker';
 import type { GatewayHub } from '@/core/gateway/hub';
 import { getGatewayHub } from '@/core/gateway/hub';
@@ -1548,6 +1549,7 @@ export class SwarmSpawner {
           childTools: opts.childTools,
           childRole: opts.childRole,
           signal: opts.parent.signal,
+          projectPath: await devProjectPathForSession(opts.parentContext.sessionId),
         }),
       );
       result.scorerOutcome = outcome;
@@ -2200,16 +2202,42 @@ export function applyScorerVerdict(
  * a stock install. The same shape as the unreachable gates the rebuild plan
  * lists: the guard was correct, the shipping path never met it.
  */
+/**
+ * The dev-mode project directory for a session, or undefined.
+ *
+ * Read from the session rather than from a context object because the ROOT does
+ * not carry it in metadata (only `worker-spawner` sets that, on children) — so
+ * a gate on a child spawned directly by the root would otherwise see nothing.
+ * Same condition `worker-spawner` and `orchestrator-runner` apply, so all three
+ * readings of "is this a dev-mode session and where is it" agree.
+ */
+async function devProjectPathForSession(sessionId?: string): Promise<string | undefined> {
+  if (!sessionId) return undefined;
+  try {
+    const session = await sessionRepository.findById(sessionId);
+    const ctx = session?.context as { devMode?: boolean; projectPath?: string } | undefined;
+    return ctx?.devMode === true && ctx.projectPath ? ctx.projectPath : undefined;
+  } catch {
+    // A gate that cannot read the session falls back to the workspace root,
+    // which is the behaviour that shipped.
+    return undefined;
+  }
+}
+
 export function buildScorerContext(args: {
   userId?: string;
   filesTouched: number | null;
   childTools: ToolHandler[];
   childRole: AgentRole;
   signal?: AbortSignal;
+  /** The dev-mode project dir the child's tools used, when the session has one. */
+  projectPath?: string;
 }): ScorerContext {
   return {
     userId: args.userId,
     filesTouched: args.filesTouched,
+    // A gate must check the tree the child changed. See `ScorerContext.projectPath`.
+    projectPath: args.projectPath,
     // Read from the RESOLVED toolset, not the role name: that is what the child
     // actually got after the parent-intersection and the small-model cap.
     canRunCommands: args.childTools.some((t) => t.toolId === 'shell' || t.name.startsWith('shell__')),

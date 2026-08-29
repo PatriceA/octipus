@@ -215,6 +215,49 @@ const SHORT_CLUSTER_WITH_C = /^-[a-z]*c[a-z]*$/;
  * invocation, and a shell as the head with no such flag (`sh script.sh`) is
  * caught too, since that is still a shell reading a file we cannot inspect.
  */
+/**
+ * Shell BUILTINS, which are not executables. `cd` is the one that matters:
+ * a model writing a verification command reaches for `cd <dir> && <test>`
+ * by reflex, and `cd /path` tokenizes cleanly — no metacharacter for
+ * `tokenizeSafe` to catch — so it passes every other check and then fails to
+ * spawn, because there is no `cd` binary to run.
+ */
+const SHELL_BUILTINS: ReadonlySet<string> = new Set([
+  'cd', 'export', 'source', '.', 'eval', 'exec', 'alias', 'unset', 'set',
+  'shift', 'trap', 'ulimit', 'umask', 'wait', 'jobs', 'fg', 'bg',
+]);
+
+/**
+ * Why this command can never pass the gate, or null when its shape is fine.
+ * Phrased for the model that wrote it: every branch says what to write instead.
+ */
+export function commandScorerShapeError(command: string): string | null {
+  const shellArg = namesShellWithCommandString(command);
+  if (shellArg) {
+    return (
+      `runs a shell with a command string (${shellArg}), which defeats the argv-only guarantee. ` +
+      `Give the command directly, e.g. "npm test" or "python3 -m unittest discover".`
+    );
+  }
+  const argv = tokenizeSafe(command);
+  if (!argv) {
+    return (
+      'contains shell syntax (&&, ||, |, ;, <, >, $(), backticks, braces or a newline) and is run ' +
+      'as argv with no shell, so it cannot be parsed. Give ONE command — "npm test", ' +
+      '"python3 -m unittest discover" — and let the child\'s own working directory apply ' +
+      'instead of prefixing a `cd`.'
+    );
+  }
+  const head = (argv[0] ?? '').split('/').pop() ?? '';
+  if (SHELL_BUILTINS.has(head)) {
+    return (
+      `starts with the shell builtin "${head}", which is not an executable and cannot be spawned. ` +
+      `Drop it and give the command itself — the child already runs in its own workspace.`
+    );
+  }
+  return null;
+}
+
 function namesShellWithCommandString(command: string): string | null {
   const argv = tokenizeSafe(command) ?? command.trim().split(/\s+/);
   const nameOf = (t: string): string => t.slice(t.lastIndexOf('/') + 1);
@@ -370,6 +413,25 @@ export interface ScorerContext {
   canRunCommands?: boolean;
   /** The child's role, for the permission decision. */
   role?: string;
+  /**
+   * The dev-mode project directory the child's own tools operated in, when the
+   * session has one. Absent for an ordinary session, where the workspace root
+   * IS the child's working directory.
+   *
+   * Without this the gate checked a different tree from the one the child
+   * changed: `worker-spawner` sets `context.metadata.projectPath` on a dev-mode
+   * child (worker-spawner.ts), so its `shell__run` executes in the project,
+   * while the scorer resolved the per-user workspace root and ran
+   * `python3 -m unittest discover` somewhere with no tests in it. The gate
+   * failed, the child was marked `contract_failed`, and the parent spawned
+   * another — six of them on one measured turn, 460k tokens, for work that was
+   * already correct.
+   *
+   * It also explains a behaviour that looked like the model being careless: it
+   * kept writing `cd <project> && <test>`, which the argv-only gate refuses.
+   * That was the model compensating for this, correctly.
+   */
+  projectPath?: string;
   /** Shared wall-clock deadline for the whole gate; set by `runScorers`. */
   deadline?: number;
   /**
@@ -754,14 +816,20 @@ async function evaluate(
 
       // Workspace: the same sandbox resolver `file_exists` uses. `'.'` is the
       // workspace root, so a command cannot be pointed elsewhere.
-      // The workspace root, which is where a swarm child's own tools operate:
-      // `pipelineMetadata` forwards only `pipelineId` and `nodeKey`, so a child
-      // never receives a `projectPath` and its `file_exists` and `side_effect`
-      // scorers resolve here too. Reading the PARENT's `projectPath` instead
-      // would point the check at the operator's host checkout in a dev-mode
-      // session — a different tree from the one the child changed.
+      // Wherever the CHILD's own tools ran — which is the project directory in
+      // a dev-mode session and the workspace root otherwise.
+      //
+      // This used to be the workspace root unconditionally, on the stated
+      // grounds that "a child never receives a `projectPath`". True of the
+      // pipeline path, where `pipelineMetadata` forwards only `pipelineId` and
+      // `nodeKey`; false of a dev-mode chat turn, where `worker-spawner` sets
+      // it on the child context and the child's shell duly runs in the project.
+      // So the gate verified a different tree from the one the work happened
+      // in, and failed every time.
       const fs = WorkspaceFS.forAgent({ userId: ctx.userId });
-      const cwd = fs.resolveOptional('.');
+      const cwd = ctx.projectPath && existsSync(ctx.projectPath)
+        ? ctx.projectPath
+        : fs.resolveOptional('.');
       if (!cwd) {
         return {
           scorer: label,
@@ -1066,6 +1134,24 @@ export function parseScorers(raw: unknown): { scorers: Scorer[] } | { error: str
             };
           }
           timeoutMs = e.timeoutMs;
+        }
+        // The same reasoning as `timeoutMs` above, applied to the command
+        // itself — and it was missing, which is expensive.
+        //
+        // This scorer runs SAFE: argv only, no shell. A command that cannot
+        // tokenize, or whose head is a shell builtin rather than a binary, is a
+        // GUARANTEED gate failure — and one discovered only after a full child
+        // run has been paid for. Measured on 2026-08-29: a root wrote
+        // `cd <dir> && python3 -m unittest discover` as its verification
+        // command, the gate refused it every time, and the turn spent six `qa`
+        // children, 460,321 tokens and 200 seconds failing the same way. The
+        // work itself had finished correctly in 39 seconds.
+        //
+        // Rejecting it here costs one error message, and the message says what
+        // to write instead — which is the difference between a wall and a sign.
+        const commandError = commandScorerShapeError(e.command.trim());
+        if (commandError) {
+          return { error: `scorers[${i}].command (command_exit_zero) ${commandError}` };
         }
         scorers.push({ kind: 'command_exit_zero', command: e.command.trim(), ...(timeoutMs ? { timeoutMs } : {}) });
         break;

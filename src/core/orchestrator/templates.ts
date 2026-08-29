@@ -20,6 +20,7 @@ export interface StageTemplate {
   producesArtifacts?: boolean;
   /** Declares the stage must EXECUTE something — see PipelineStepConfig. */
   runsCommands?: boolean;
+  verifyCommand?: string;
   /** Tool ids this stage may use, narrowing its role's default set. */
   toolIds?: string[];
   /** Declares the stage must NOT change the workspace — see PipelineStepConfig. */
@@ -64,6 +65,7 @@ export function stepConfigToStageTemplate(step: PipelineStepConfig): StageTempla
     // something the gate never hears about.
     producesArtifacts: step.producesArtifacts,
     runsCommands: step.runsCommands,
+    verifyCommand: step.verifyCommand,
     readOnly: step.readOnly,
     mechanical: step.mechanical,
     loopOverPlan: step.loopOverPlan,
@@ -335,6 +337,7 @@ export function buildStagesFromTemplate(
       model: stage.model,
       producesArtifacts: stage.producesArtifacts,
       runsCommands: stage.runsCommands,
+      verifyCommand: stage.verifyCommand,
       readOnly: stage.readOnly,
       mechanical: stage.mechanical,
       loopOverPlan: stage.loopOverPlan,

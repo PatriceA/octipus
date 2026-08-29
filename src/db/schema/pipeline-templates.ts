@@ -45,6 +45,27 @@ export interface PipelineStepConfig {
    */
   runsCommands?: boolean;
   /**
+   * The command that DEFINES success for this stage, run by the framework
+   * before the stage's model turn.
+   *
+   * `runsCommands` declares that a stage runs something and is checked after
+   * the fact; it never says WHAT. So a verify stage was handed a numbered
+   * checklist ("run the regression test, run the full suite, try the original
+   * repro, check for edge cases") and spent its iterations rediscovering the
+   * command every time — measured at 4 iterations, 82,783 tokens and 85
+   * seconds to establish that a 13-test suite passes in one millisecond.
+   *
+   * When set, the command runs once, deterministically, through the same safe
+   * path `command_exit_zero` uses (argv only, no shell, no metacharacters,
+   * workspace-scoped, permission-checked), and its real exit code and output
+   * are given to the auditor as fact. The auditor still writes the verdict —
+   * judging output is what it is for — it just stops doing the research.
+   *
+   * Supports `{{param.<key>}}`, so a recipe can take the command from its
+   * caller rather than a template guessing at another project's test runner.
+   */
+  verifyCommand?: string;
+  /**
    * DECLARES that this stage must NOT change the workspace — it inspects, runs
    * and reports, and the thing it is judging must be the same afterwards.
    *
