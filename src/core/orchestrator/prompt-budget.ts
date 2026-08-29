@@ -120,6 +120,10 @@ export function logPromptComposition(
     contextWindow?: number;
     toolCount?: number;
     toolSchemaTokens?: number;
+    /** `lazy` when only a core set was advertised; absent on the full path. */
+    advertisement?: 'lazy';
+    /** Tools still callable by name but not advertised. Lazy path only. */
+    registeredToolCount?: number;
   },
   buckets: Record<string, string[]>,
 ): void {
@@ -137,7 +141,10 @@ export function logPromptComposition(
       contextShare: ctx.contextWindow ? +(grandTotal / ctx.contextWindow).toFixed(3) : undefined,
       sections: sections.slice(0, 12),
     },
-    `Prompt composition: ${grandTotal} tok (${total.tokens} text + ${ctx.toolSchemaTokens ?? 0} tool schema)` +
+    `Prompt composition: ${grandTotal} tok (${total.tokens} text + ${ctx.toolSchemaTokens ?? 0} tool schema` +
+      (ctx.advertisement === 'lazy'
+        ? `, lazy: ${ctx.toolCount ?? 0} of ${ctx.registeredToolCount ?? 0} tools advertised)`
+        : ')') +
       (top ? `, largest text section "${top.label}" at ${top.tokens} tok (${Math.round(top.share * 100)}%)` : ''),
   );
 }

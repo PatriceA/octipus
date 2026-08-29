@@ -1,5 +1,6 @@
 import { resolve } from 'path';
 import { getConfig } from '@/config';
+import { shouldUseLazyDiscovery } from './lazy-tools';
 import { getAgentManager } from '@/core/agent-manager';
 import { getGatewayHub } from '@/core/gateway/hub';
 import { getNotificationService } from '@/core/notification-service';
@@ -1082,7 +1083,14 @@ Use these MCP tools when the task benefits from them — especially for people-r
     try {
       // finalIsSmall / finalModelEntry hoisted above (re-derived against the
       // actual finalModel, which an expert modelPreference can pin small).
-      if (!finalIsSmall && finalModelEntry?.provider === 'ollama' && finalModelEntry.supportsTools) {
+      if (
+        shouldUseLazyDiscovery({
+          hasCoreToolIds: roleConfig.coreToolIds !== undefined,
+          isSmallModel: finalIsSmall,
+          supportsTools: finalModelEntry?.supportsTools === true,
+          enabled: getConfig().orchestrator.lazyToolDiscovery,
+        })
+      ) {
         const { splitRoleTools } = await import('./tool-split');
         const { buildToolDiscoveryHandlers } = await import('@/tools/tool-discovery');
         const { longTail } = splitRoleTools(roleTools, roleConfig.coreToolIds);

@@ -19,6 +19,8 @@ import { getOrchestratorHooks } from './hooks';
 import { estimateToolSchemaTokens, logPromptComposition } from './prompt-budget';
 import { buildSecurityReminder } from './input-guard';
 import { createMetaTools } from './meta-tools';
+import { shouldUseLazyDiscovery } from './lazy-tools';
+import { isLongTailHandler } from './tool-split';
 import { buildCapabilitiesHandler } from '@/tools/self-report';
 import type { ModelSelector } from './model-selector';
 import { resolveOrchestratorMode } from './mode-selector';
@@ -271,11 +273,20 @@ export async function runOrchestrator(
   // and a small model keeps the capped full schema above, because it chains
   // multi-step discovery badly.
   let toolAdvertisement: import('@/core/agent-base').ToolAdvertisement = { mode: 'full' };
-  if (!rootIsSmall && rootRoleConfig.coreToolIds !== undefined && modelMeta?.provider === 'ollama' && modelMeta.supportsTools) {
+  const rootCoreToolIds = rootRoleConfig.coreToolIds;
+  if (
+    rootCoreToolIds !== undefined &&
+    shouldUseLazyDiscovery({
+      hasCoreToolIds: true,
+      isSmallModel: rootIsSmall,
+      supportsTools: modelMeta?.supportsTools === true,
+      enabled: orchCfg.lazyToolDiscovery,
+    })
+  ) {
     try {
       const { splitRoleTools } = await import('./tool-split');
       const { buildToolDiscoveryHandlers } = await import('@/tools/tool-discovery');
-      const { longTail } = splitRoleTools(rootTools, rootRoleConfig.coreToolIds);
+      const { longTail } = splitRoleTools(rootTools, rootCoreToolIds);
       const discoveryHandlers = buildToolDiscoveryHandlers(longTail);
       if (discoveryHandlers.length > 0) {
         // Everything stays REGISTERED (dispatch must keep working); only what is
@@ -287,7 +298,7 @@ export async function runOrchestrator(
         turnTools = [...lazyCore, selfReport(lazyCore)];
         toolAdvertisement = {
           mode: 'lazy',
-          coreToolIds: [...rootRoleConfig.coreToolIds, ...metaTools.map((t) => t.toolId ?? t.name), 'self_report'],
+          coreToolIds: [...rootCoreToolIds, ...metaTools.map((t) => t.toolId ?? t.name), 'self_report'],
         };
         orchestratorAllowedToolIds.add('tool_discovery');
         coreLogger.info(
@@ -545,15 +556,29 @@ export async function runOrchestrator(
   // whole static/semi-static instruction block — keeps the prefix cacheable.
   systemPrompt = assembleSystemPrompt(staticParts, volatileParts);
 
+  const advertisedTools =
+    toolAdvertisement.mode === 'lazy'
+      ? turnTools.filter((t) => !isLongTailHandler(t, toolAdvertisement.coreToolIds))
+      : turnTools;
+
   logPromptComposition(
     {
       role: ROOT_ROLE,
       model: modelName,
       contextWindow: modelMeta?.contextWindow ?? undefined,
-      toolCount: turnTools.length,
+      // What is ADVERTISED, not what is registered. On the lazy path those are
+      // very different numbers — every tool stays registered and callable, and
+      // only the schema block shrinks — so measuring `turnTools` reported the
+      // full set either way and showed a saving of zero for the one change that
+      // exists to produce one. An instrument that cannot see the effect it was
+      // built to measure is worse than no instrument.
+      toolCount: advertisedTools.length,
       toolSchemaTokens: estimateToolSchemaTokens(
-        turnTools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })),
+        advertisedTools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })),
       ),
+      ...(toolAdvertisement.mode === 'lazy'
+        ? { advertisement: 'lazy' as const, registeredToolCount: turnTools.length }
+        : {}),
     },
     { static: staticParts.filter(Boolean), volatile: volatileParts.filter(Boolean) },
   );

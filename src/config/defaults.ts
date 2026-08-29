@@ -74,6 +74,12 @@ export const defaultConfig: Partial<Config> = {
     liteModelMaxParams: 24_000_000_000,
     smallModelMaxTools: 7,
     /** Orchestrator agent timeout for interactive channels (30 min). */
+    /**
+     * Advertise a core tool set plus `list_tools`/`describe_tool` instead of
+     * every schema. Measured: 73% of the root's 21,945-token standing prompt
+     * was tool JSON schema. Set false to put the full block back everywhere.
+     */
+    lazyToolDiscovery: true,
     orchestratorTimeoutMs: 1800000,
     /** Orchestrator agent timeout for unattended hook-triggered runs (45 min). */
     orchestratorHookTimeoutMs: 2700000,

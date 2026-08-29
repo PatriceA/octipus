@@ -6,6 +6,7 @@ export const meta: RoleMeta = {
   // (filesystem/shell/git/github read code+diffs every turn, and the prompt
   // mandates search_knowledge as step 1), so only visual/task_state (~1.5k of
   // 27k) could move to the long tail — not worth a discovery round-trip.
+  coreToolIds: ['filesystem', 'git', 'shell'],
   defaultTopic: 'review',
   // `prompt.md` has said "You are READ-ONLY — do NOT modify code" and "No
   // `write_file`, no edits" since it was written. This makes that true instead

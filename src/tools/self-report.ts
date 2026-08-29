@@ -79,15 +79,19 @@ async function mcpSection() {
 }
 
 async function skillsSection(userId?: string) {
-  // Fails CLOSED, like the experts and pipeline sections beside it.
-  // `skillRepository.findAll(undefined)` returns every user's skills with no
-  // filter, so an absent or empty userId here would list another tenant's
-  // skill names. Nothing upstream can currently pass one — but the field is
-  // optional in the type, and "safe because every caller happens to be
-  // careful" is the kind of guarantee that stops being true in a refactor.
+  // Fails CLOSED, like the experts and pipeline sections beside it. The
+  // underlying store returns every user's rows when handed no id, so an absent
+  // userId here would list another tenant's skill names.
   if (!userId) return [];
-  const { skillRepository } = await import('@/db/repositories/skill-repository');
-  return (await skillRepository.findAll(userId)).map((s) => s.name);
+  // The REGISTRY, not the skill table. Skills mounted from the filesystem —
+  // `~/.claude/skills`, `~/.agents/skills`, `~/.pi/agent/skills` and any
+  // configured directory — live in memory with `external:` ids and never
+  // reach the DB. Reading the table reported 22 skills on a machine where the
+  // agent could actually load 40, which is a worse answer than none from a
+  // tool whose whole job is to say what you can do. This is also the exact
+  // source `list_skills` reads, so the inventory and the loader agree.
+  const { getSkillRegistry } = await import('@/skills/registry');
+  return (await getSkillRegistry().getAll(userId)).map((s) => s.name);
 }
 
 async function expertsSection(userId?: string) {

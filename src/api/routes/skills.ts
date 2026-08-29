@@ -5,6 +5,7 @@ import { getDb } from '@/db/postgres';
 import { skillRepository, type SkillUpdate } from '@/db/repositories/skill-repository';
 import { type Skill, skills } from '@/db/schema/skills';
 import { getUserOrgIds } from '@/services/org-membership';
+import { getSkillRegistry } from '@/skills/registry';
 import {
   markdownToSkills,
   type PortableSkill,
@@ -21,20 +22,36 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
     async ({ user }) => {
       const db = getDb();
 
+      // Skills MOUNTED from the filesystem — `~/.claude/skills`,
+      // `~/.codex/skills`, `~/.agents/skills`, `~/.pi/agent/skills` and any
+      // configured directory — live in memory with `external:` ids and never
+      // reach this table. Listing the table alone reported 22 skills on a
+      // machine where the agent could load 40: everything the operator had
+      // already written for another harness was invisible in their own UI,
+      // while the agent quietly used it. They are read-only here (the write
+      // routes below still address DB rows only), and flagged so the UI can
+      // say where each one came from.
+      const mounted = getSkillRegistry()
+        .getExternalSkills()
+        .map((s) => ({ ...s, mounted: true }));
+
       if (user) {
         if (user.id === 'system') {
-          return { skills: await db.select().from(skills) };
+          return { skills: [...(await db.select().from(skills)), ...mounted] };
         }
         const orgIds = await getUserOrgIds(user.id);
         const clauses = [eq(skills.isSystem, true), eq(skills.userId, user.id)];
         if (orgIds.length > 0) clauses.push(inArray(skills.orgId, orgIds));
         return {
-          skills: await db.select().from(skills).where(or(...clauses)),
+          skills: [...(await db.select().from(skills).where(or(...clauses))), ...mounted],
         };
       }
 
       return {
-        skills: await db.select().from(skills).where(eq(skills.isSystem, true)),
+        skills: [
+          ...(await db.select().from(skills).where(eq(skills.isSystem, true))),
+          ...mounted,
+        ],
       };
     },
     { detail: { tags: ['skills'] } }

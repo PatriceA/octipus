@@ -307,6 +307,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'ORCHESTRATOR_MODE',
   },
   {
+    key: 'orchestrator.lazyToolDiscovery',
+    category: 'orchestrator',
+    valueType: 'boolean',
+    defaultValue: true,
+    description:
+      'Advertise a core tool set plus list_tools/describe_tool instead of every tool schema. 73% of the root prompt was tool schema; turn off to restore the full block on every request.',
+    isSecret: false,
+    envVar: 'ORCHESTRATOR_LAZY_TOOLS',
+  },
+  {
     key: 'orchestrator.liteMaxIterations',
     category: 'orchestrator',
     valueType: 'number',

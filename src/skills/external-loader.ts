@@ -14,7 +14,7 @@ import { markdownToSkill } from './markdown';
  * 1. **Flat dirs** — direct `*.md` files at root are individual skills:
  *    `~/.octipus/agent/skills/`, `.octipus/skills/`,
  *    `~/.pi/agent/skills/`, `.pi/skills/`,
- *    `~/.claude/skills/`
+ *    `~/.claude/skills/`, `~/.codex/skills/`, `.codex/skills/`
  *
  * 2. **Recursive dirs** — any subdirectory containing `SKILL.md` is a skill:
  *    all of the above, plus `~/.agents/skills/`, `.agents/skills/`,
@@ -23,6 +23,21 @@ import { markdownToSkill } from './markdown';
  * External skills are surfaced as system skills with synthetic IDs prefixed
  * `external:<location-key>:<rel-path>` so they cannot collide with DB rows.
  */
+
+/**
+ * Directory names never worth descending into.
+ *
+ * This was `name.startsWith('.')`, which is the right instinct for `.git` and
+ * the wrong rule for a skills root: Codex ships its bundled skills in
+ * `~/.codex/skills/.system/`, so a blanket dot-skip mounted the directory and
+ * then found nothing in it. These roots are skill directories by construction,
+ * not arbitrary trees, and MAX_DEPTH still bounds the walk — so naming the
+ * noise is both safer and more useful than excluding a whole naming
+ * convention.
+ */
+const SKIP_DIRS: ReadonlySet<string> = new Set([
+  '.git', '.hg', '.svn', '.cache', '.venv', 'venv', '__pycache__', 'node_modules',
+]);
 
 const ID_PREFIX = 'external:';
 const MAX_BYTES = 256 * 1024;
@@ -51,6 +66,8 @@ function defaultLocations(cwd: string, home: string): ScanLocation[] {
     { key: 'pi-user',       path: join(home, '.pi', 'agent', 'skills'),      flatRootMd: true },
     { key: 'pi-project',    path: join(cwd, '.pi', 'skills'),                flatRootMd: true },
     { key: 'claude-user',   path: join(home, '.claude', 'skills'),           flatRootMd: true },
+    { key: 'codex-user',    path: join(home, '.codex', 'skills'),             flatRootMd: true },
+    { key: 'codex-project', path: join(cwd, '.codex', 'skills'),              flatRootMd: true },
   ];
 }
 
@@ -99,7 +116,7 @@ function walk(root: string, flatRootMd: boolean): FoundFile[] {
     try { entries = readdirSync(dir); } catch { return; }
 
     for (const name of entries) {
-      if (name.startsWith('.') || name === 'node_modules') continue;
+      if (SKIP_DIRS.has(name)) continue;
       const full = join(dir, name);
       let st;
       try { st = statSync(full); } catch { continue; }

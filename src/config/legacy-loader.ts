@@ -117,6 +117,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       liteModelMaxParams: parseInt(process.env.ORCHESTRATOR_LITE_MAX_PARAMS || '24000000000', 10),
       smallModelMaxTools: parseInt(process.env.ORCHESTRATOR_SMALL_MODEL_MAX_TOOLS || '7', 10),
       pipelineTokenBudget: parseInt(process.env.PIPELINE_TOKEN_BUDGET || '2000000', 10),
+      lazyToolDiscovery: process.env.ORCHESTRATOR_LAZY_TOOLS !== 'false',
       orchestratorTimeoutMs: parseInt(process.env.ORCHESTRATOR_TIMEOUT_MS || '1800000', 10),
       orchestratorHookTimeoutMs: parseInt(process.env.ORCHESTRATOR_HOOK_TIMEOUT_MS || '2700000', 10),
     },

@@ -249,6 +249,7 @@ export const orchestratorConfigSchema = z.object({
    * core tools. Does not affect workers on larger models.
    */
   smallModelMaxTools: z.number().min(1).max(50).default(7),
+  lazyToolDiscovery: z.boolean().default(true),
   orchestratorTimeoutMs: z.number().min(0).default(1800000), // 30 minutes
   orchestratorHookTimeoutMs: z.number().min(0).default(2700000), // 45 minutes for hook-triggered runs
   /**
