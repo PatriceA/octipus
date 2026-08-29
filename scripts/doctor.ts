@@ -13,6 +13,7 @@
  *   2  invalid arguments
  */
 
+import { execSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'fs';
 import { homedir, platform } from 'os';
 import { join, resolve } from 'path';
@@ -297,6 +298,54 @@ export async function checkVaultKeys(projectDir: string): Promise<CheckResult> {
   };
 }
 
+/**
+ * Is the shell sandbox on, and could it be?
+ *
+ * It ships `off`, and nothing said so. A harness benchmark reported octipus's
+ * sandbox as effectively unreachable — the confinement is fully implemented,
+ * `bwrap` was sitting on PATH the whole time, and the operator had no way to
+ * see either fact. A capability nobody can observe is one nobody turns on.
+ */
+export async function checkShellSandbox(projectDir: string): Promise<CheckResult> {
+  const envPath = join(projectDir, '.env');
+  const env = existsSync(envPath) ? readFileSync(envPath, 'utf-8') : '';
+  const mode = (env.match(/^SHELL_SANDBOX=(.+)/m)?.[1]?.trim() || 'off') as 'off' | 'auto' | 'required';
+  const runner = ['bwrap', 'firejail'].find((r) => {
+    try {
+      execSync(`command -v ${r}`, { stdio: 'pipe' });
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
+  if (mode === 'off') {
+    return {
+      name: 'Shell sandbox',
+      status: 'warn',
+      detail: runner
+        ? `off — but ${runner} is installed, so commands could be confined`
+        : 'off (no bwrap/firejail installed either)',
+      critical: false,
+      hint: runner
+        ? `Set SHELL_SANDBOX=auto to confine shell commands to a read-only OS and a writable workspace. Commands that need the internet must pass network:true.`
+        : 'Install bubblewrap (`bwrap`) or firejail, then set SHELL_SANDBOX=auto.',
+    };
+  }
+  if (!runner) {
+    return {
+      name: 'Shell sandbox',
+      status: mode === 'required' ? 'fail' : 'warn',
+      detail: `${mode} — but no bwrap/firejail on PATH`,
+      critical: mode === 'required',
+      hint: mode === 'required'
+        ? 'Every shell command will be refused until a runner is installed.'
+        : 'Commands run UNCONFINED until a runner is installed.',
+    };
+  }
+  return { name: 'Shell sandbox', status: 'ok', detail: `${mode}, using ${runner}`, critical: false };
+}
+
 export async function checkMcpServerBuild(projectDir: string): Promise<CheckResult> {
   const distEntry = join(projectDir, 'mcp-server', 'dist', 'index.js');
   if (!existsSync(distEntry)) {
@@ -467,6 +516,7 @@ export async function runDoctor(projectDir: string): Promise<DoctorReport> {
     checkNodeRuntime(),
     checkEnvFile(projectDir),
     checkVaultKeys(projectDir),
+    checkShellSandbox(projectDir),
     checkStorageMode(projectDir),
     checkBasePersona(projectDir),
     checkOctipusHome(),

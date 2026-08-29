@@ -17,6 +17,8 @@ export interface ShellOperations {
        * commands are tokenized and spawned without a shell. Audited.
        */
       unsafe?: boolean;
+    /** Grant the sandboxed command network access. No effect when the sandbox is off. */
+    allowNetwork?: boolean;
     },
   ): Promise<ShellExecResult>;
 
@@ -29,7 +31,7 @@ export interface ShellOperations {
   spawnBackground(
     command: string,
     cwd: string,
-    options?: { env?: Record<string, string>; unsafe?: boolean },
+    options?: { env?: Record<string, string>; unsafe?: boolean; allowNetwork?: boolean },
   ): Promise<{ pid: number | undefined }>;
 
   which(command: string): Promise<string | null>;

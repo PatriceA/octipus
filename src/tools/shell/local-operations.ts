@@ -51,6 +51,22 @@ function trackGroup(pid: number | undefined): () => void {
  * redirects, command substitution, …) are refused unless the caller passes
  * `unsafe: true`, in which case we fall back to `sh -c` and emit an audit log.
  */
+/**
+ * Does this command get the network inside the sandbox?
+ *
+ * A named decision rather than an inline expression, because it used to be
+ * `!!options.unsafe` — "needs the internet" inferred from "needs pipes". Two
+ * unrelated concerns on one flag, and the reason the process sandbox could not
+ * realistically be switched on: `npm install`, `pip install` and `git fetch`
+ * need no shell, so under `SHELL_SANDBOX=auto` they lost their network unless
+ * the caller asked for shell features it did not want.
+ *
+ * No effect when the sandbox is off, which is the default.
+ */
+export function resolveAllowNetwork(options: { unsafe?: boolean; allowNetwork?: boolean }): boolean {
+  return options.allowNetwork === true;
+}
+
 export class LocalShellOperations implements ShellOperations {
   async exec(
     command: string,
@@ -61,6 +77,7 @@ export class LocalShellOperations implements ShellOperations {
       onData?: (stream: 'stdout' | 'stderr', data: Buffer) => void;
       signal?: AbortSignal;
       unsafe?: boolean;
+      allowNetwork?: boolean;
     } = {},
   ): Promise<ShellExecResult> {
     const argv = options.unsafe ? null : tokenizeSafe(command);
@@ -99,11 +116,7 @@ export class LocalShellOperations implements ShellOperations {
     const { wrapCommand } = await import('@/security/shell-sandbox');
     const wrap = wrapCommand(baseArgv, {
       workspaceRoot: cwd,
-      // The shell tool's `unsafe` path opts the user into a less
-      // restrictive run; allow network there to keep behavior parity
-      // (curl/wget often hide behind unsafe sh -c). Safe-mode shells
-      // stay network-isolated.
-      allowNetwork: !!options.unsafe,
+      allowNetwork: resolveAllowNetwork(options),
     });
     const finalArgv = wrap.argv;
     if (wrap.wrapped) {
@@ -215,7 +228,7 @@ export class LocalShellOperations implements ShellOperations {
   async spawnBackground(
     command: string,
     cwd: string,
-    options: { env?: Record<string, string>; unsafe?: boolean } = {},
+    options: { env?: Record<string, string>; unsafe?: boolean; allowNetwork?: boolean } = {},
   ): Promise<{ pid: number | undefined }> {
     const argv = options.unsafe ? null : tokenizeSafe(command);
 
@@ -240,7 +253,7 @@ export class LocalShellOperations implements ShellOperations {
     const { wrapCommand } = await import('@/security/shell-sandbox');
     const wrap = wrapCommand(baseArgv, {
       workspaceRoot: cwd,
-      allowNetwork: !!options.unsafe,
+      allowNetwork: resolveAllowNetwork(options),
     });
 
     // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn (no shell); this is the shell tool's own detached executor, argv already parsed/sandboxed upstream

@@ -792,6 +792,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
 
   // ── Security (runtime-changeable subset) ──
   {
+    key: 'security.shellSandbox',
+    category: 'security',
+    valueType: 'string',
+    defaultValue: 'off',
+    description:
+      'Confine shell commands with bubblewrap/firejail: off (no confinement), auto (use a runner when one is on PATH, otherwise run unconfined), required (refuse to run commands when no runner is found). Sandboxed commands get a read-only OS, a writable workspace and no network unless the call asks for it.',
+    isSecret: false,
+    envVar: 'SHELL_SANDBOX',
+  },
+  {
     key: 'security.sessionMaxAge',
     category: 'security',
     valueType: 'number',

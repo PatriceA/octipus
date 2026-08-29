@@ -62,6 +62,7 @@ export class ShellTool extends BaseTool {
         timeout: { type: 'number', description: 'Command timeout in milliseconds', default: DEFAULT_TIMEOUT },
         env: { type: 'object', description: 'Additional environment variables' },
         useShell: { type: 'boolean', description: 'Set true ONLY when the command genuinely needs shell features (pipes, redirects, $(), backticks). Audited. Default false.', default: false },
+        network: { type: 'boolean', description: 'Set true when the command needs the internet (npm install, pip install, git fetch/push, curl). Only has an effect when the process sandbox is enabled, where commands are network-isolated by default. Default false.', default: false },
       }),
       async (args, context) => {
         if (typeof args.command !== 'string' || !args.command) {
@@ -73,6 +74,7 @@ export class ShellTool extends BaseTool {
         const timeout = (args.timeout as number) || DEFAULT_TIMEOUT;
         const env = args.env as Record<string, string> | undefined;
         const unsafe = args.useShell === true;
+        const allowNetwork = args.network === true;
 
         // Security checks
         this.validateCommand(command);
@@ -85,7 +87,7 @@ export class ShellTool extends BaseTool {
           role: context?.role,
         }, 'Shell command executing');
 
-        const result = await this.ops.exec(command, cwd, { timeout, env, unsafe });
+        const result = await this.ops.exec(command, cwd, { timeout, env, unsafe, allowNetwork });
 
         // Classify the exit code so the agent isn't misled by non-zero codes
         // that are semantically normal (grep=1 "no match", diff=1 "files differ").
@@ -132,6 +134,7 @@ export class ShellTool extends BaseTool {
         cwd: { type: 'string', description: 'Working directory' },
         env: { type: 'object', description: 'Additional environment variables' },
         useShell: { type: 'boolean', description: 'Set true ONLY when the command genuinely needs shell features (pipes, redirects, $(), backticks). Audited. Default false.', default: false },
+        network: { type: 'boolean', description: 'Set true when the command needs the internet (npm install, pip install, git fetch/push, curl). Only has an effect when the process sandbox is enabled, where commands are network-isolated by default. Default false.', default: false },
       }),
       async (args, context) => {
         if (typeof args.command !== 'string' || !args.command) {
@@ -141,6 +144,7 @@ export class ShellTool extends BaseTool {
         const cwd = (args.cwd as string) || this.getWorkspaceRoot(context);
         const env = args.env as Record<string, string> | undefined;
         const unsafe = args.useShell === true;
+        const allowNetwork = args.network === true;
 
         // Same security contract as `run`: denylist + injection checks, then
         // the operations layer tokenizes (or refuses) the command. No raw
@@ -156,7 +160,7 @@ export class ShellTool extends BaseTool {
           role: context?.role,
         }, 'Shell background command spawning');
 
-        const { pid } = await this.ops.spawnBackground(command, cwd, { env, unsafe });
+        const { pid } = await this.ops.spawnBackground(command, cwd, { env, unsafe, allowNetwork });
 
         return { pid, command, status: 'running' };
       },
