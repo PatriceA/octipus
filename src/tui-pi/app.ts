@@ -55,6 +55,7 @@ export class OctipusTuiApp {
   private readonly gatewayUrl?: string;
   private projectPath?: string;
   private cumulative: CumulativeStats = { tokens: 0, cost: 0, turns: 0 };
+  private approvalHandle: OverlayHandle | null = null;
   private permissionHandle: OverlayHandle | null = null;
   private paletteHandle: OverlayHandle | null = null;
   /** Most-recent role seen on agent.start — used to label `iter N` ticks. */
@@ -241,6 +242,9 @@ export class OctipusTuiApp {
         return;
       case 'permission':
         this.openPermissionPrompt(event.requestId, event.toolName, event.detail);
+        return;
+      case 'approval':
+        this.openApprovalPrompt(event.requestId, event.summary, event.question, event.options);
         return;
       case 'agent.start':
         // Start with iteration 0 so a long-running agent isn't silent
@@ -430,6 +434,38 @@ export class OctipusTuiApp {
       onApprove: () => respond(true),
       onDeny:    () => respond(false),
       onCancel:  () => respond(false),
+    });
+  }
+
+  /**
+   * The agent has asked the user a question and is BLOCKED on the answer.
+   *
+   * Different from a permission prompt in the one way that matters: nothing
+   * happens until this is answered. So there is no silent dismissal — Esc
+   * sends a decline, because closing the box without replying leaves the agent
+   * waiting exactly as it was before the overlay appeared.
+   */
+  private openApprovalPrompt(
+    requestId: string,
+    summary: string,
+    question: string,
+    options: string[],
+  ): void {
+    if (this.approvalHandle) this.approvalHandle.hide();
+
+    this.approvalHandle = this.overlays.showApprovalPrompt({
+      summary,
+      question,
+      options,
+      onRespond: (approved, response) => {
+        this.adapter.respondApproval(requestId, approved, response);
+        this.pushMessage('system', approved ? `Answered: ${response}` : `Declined: ${response}`);
+        if (this.approvalHandle) {
+          this.approvalHandle.hide();
+          this.approvalHandle = null;
+          this.tui.setFocus(this.composer);
+        }
+      },
     });
   }
 

@@ -8,11 +8,13 @@
  * indicator).
  */
 import type { Component, OverlayHandle, OverlayOptions, TUI } from '@mariozechner/pi-tui';
+import { ApprovalPrompt, type ApprovalPromptOptions } from '../components/approval-prompt';
 import { CommandPalette, type CommandPaletteOptions } from '../components/command-palette';
 import { PermissionPrompt, type PermissionPromptOptions } from '../components/permission-prompt';
 
 export interface OverlayController {
   showPermissionPrompt(options: PermissionPromptOptions): OverlayHandle;
+  showApprovalPrompt(options: ApprovalPromptOptions): OverlayHandle;
   showCommandPalette(options: CommandPaletteOptions): OverlayHandle;
   /**
    * Generic centered modal — used by editor-specific overlays
@@ -39,6 +41,12 @@ const COMMAND_PALETTE_OVERLAY: OverlayOptions = {
 
 export function createOverlayController(tui: TUI): OverlayController {
   return {
+    showApprovalPrompt(options) {
+      const component = new ApprovalPrompt(options);
+      const handle = tui.showOverlay(component, PERMISSION_OVERLAY);
+      handle.focus();
+      return handle;
+    },
     showPermissionPrompt(options) {
       const component = new PermissionPrompt(options);
       const handle = tui.showOverlay(component, PERMISSION_OVERLAY);

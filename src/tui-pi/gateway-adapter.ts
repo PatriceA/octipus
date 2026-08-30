@@ -31,6 +31,7 @@ export type AgentSessionEvent =
   | { kind: 'status';         status: ConnectionStatus }
   | { kind: 'message';        role: Role; content: string }
   | { kind: 'permission';     requestId: string; toolName: string; detail: string }
+  | { kind: 'approval';       requestId: string; summary: string; question: string; options: string[] }
   | { kind: 'agent.start';    role: string; model: string; nodeId?: string }
   | { kind: 'agent.end';      stats: AgentEndStats; nodeId?: string; role?: string }
   | { kind: 'agent.iteration'; agentId: string; iteration: number }
@@ -131,6 +132,10 @@ export class GatewayAdapter {
     this.client.sendCommand(name, args);
   }
 
+  respondApproval(requestId: string, approved: boolean, response: string): void {
+    this.client.respondApproval(requestId, approved, response);
+  }
+
   respondPermission(requestId: string, approved: boolean): void {
     this.client.respondPermission(requestId, approved);
   }
@@ -203,6 +208,23 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
         }
       }
       out.push({ kind: 'permission', requestId, toolName, detail });
+      return out;
+    }
+
+    // The agent has asked the USER something and is blocked until answered.
+    // The backend has emitted this all along; nothing here listened, so the
+    // screen showed `Waiting: running request_user_approval (40.0s)` counting
+    // up with no prompt, until the turn timed out.
+    case 'orchestrator.approval_required': {
+      const requestId = pickString(payload, 'requestId') ?? '';
+      const rawOptions = payload.options;
+      out.push({
+        kind: 'approval',
+        requestId,
+        summary: pickString(payload, 'summary') ?? '',
+        question: pickString(payload, 'question') ?? 'The agent needs a decision.',
+        options: Array.isArray(rawOptions) ? rawOptions.filter((o): o is string => typeof o === 'string') : [],
+      });
       return out;
     }
 
