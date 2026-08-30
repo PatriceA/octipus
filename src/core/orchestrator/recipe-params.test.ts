@@ -59,8 +59,21 @@ describe('resolveRecipeParams', () => {
     expect(() => resolveRecipeParams(defs, { repo: 'x' })).toThrow(/reviewer/);
   });
 
-  test('unknown key ⇒ throws', () => {
-    expect(() => resolveRecipeParams(defs, { repo: 'x', reviewer: 'a', bogus: 'y' })).toThrow(/unknown recipe parameter: bogus/);
+  test('a near-miss key ⇒ throws, and names what it looks like', () => {
+    expect(() => resolveRecipeParams(defs, { repo: 'x', reviewer: 'a', revewer: 'b' })).toThrow(
+      /unknown recipe parameter: revewer.*Did you mean "reviewer"/s,
+    );
+  });
+
+  test('a key that is nothing like a declared one ⇒ dropped, not fatal', () => {
+    // It is noise a caller invented, not a misspelling of anything on offer,
+    // and killing the run over an input nobody reads is the more expensive
+    // mistake. See the block comment in `resolveRecipeParams`.
+    expect(resolveRecipeParams(defs, { repo: 'x', reviewer: 'a', skipApproval: 'true' })).toEqual({
+      repo: 'x',
+      reviewer: 'a',
+      count: '3',
+    });
   });
 
   test('number coercion validates', () => {
@@ -160,11 +173,21 @@ describe('parameterless templates tolerate stray params', () => {
     expect(resolveRecipeParams([], {})).toEqual({});
   });
 
-  test('a recipe WITH parameters keeps the strict check, and names the valid keys', () => {
+  test('a recipe WITH parameters still rejects a typo of one of them', () => {
     const defs = [
       { key: 'repo', inputType: 'string' as const, requirement: 'optional' as const, default: 'octipus' },
     ];
     expect(() => resolveRecipeParams(defs, { rebo: 'x' })).toThrow(/unknown recipe parameter: rebo/);
     expect(() => resolveRecipeParams(defs, { rebo: 'x' })).toThrow(/accepts: repo/);
+  });
+
+  test('and tolerates the same invented key it tolerates on a parameterless one', () => {
+    // The incident above is not about parameterless templates — it is about a
+    // model inventing control-flow keys. `Full Development Cycle` now declares
+    // a parameter, and it is the recipe such a key is most likely aimed at.
+    const defs = [
+      { key: 'verifyCommand', inputType: 'string' as const, requirement: 'optional' as const, default: '' },
+    ];
+    expect(resolveRecipeParams(defs, { skipApproval: true })).toEqual({ verifyCommand: '' });
   });
 });

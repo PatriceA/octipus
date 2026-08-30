@@ -588,6 +588,18 @@ export function correctionDeclaration<T extends StageDeclaration & { producesPla
 }
 
 /**
+ * Is this the last plan item the loop will visit?
+ *
+ * Asked of a project-wide verify command on a `loopOverPlan` auditor: `npm
+ * test` run against item 1 of 10 fails for the nine nobody has written yet, and
+ * that exit code would reach the auditor labelled ground truth. Ordinal rather
+ * than count, because `plan__add_items` can extend the plan mid-run.
+ */
+export function isFinalPlanItem(items: Array<{ ordinal: number }>, current: { ordinal: number }): boolean {
+  return !items.some((i) => i.ordinal > current.ordinal);
+}
+
+/**
  * Everything the graph walker carries that no table already holds.
  *
  * Node outputs, plan items and edge traversal totals are durable on their own
@@ -1180,13 +1192,38 @@ export class PipelineManager {
         // The result is stated whether it passed or failed: a failing verify
         // command is exactly the evidence the auditor needs to write an honest
         // FAIL, and hiding it would leave it guessing again.
+        let frameworkVerified = false;
         if (isQa && !correcting && stageTemplate.verifyCommand) {
           const command = expandPromptTemplate(stageTemplate.verifyCommand, {
             description,
             previousOutput: handoffText || previousOutput,
             ...paramVars,
           }).trim();
-          if (command) {
+          // An UNRESOLVED reference is not a command. A template whose steps
+          // were copied without its parameters — `scripts/seed-cli-pipeline.ts`
+          // clones the shipped steps, and a user template built the same way —
+          // leaves `{{param.verifyCommand}}` standing, and running that literal
+          // hands the auditor `RESULT: FAILED` for a command that never
+          // existed, labelled as the ground truth it must not re-check. The
+          // only safe reading of a placeholder is "no command was supplied".
+          const unresolved = command.includes('{{');
+          if (unresolved) {
+            coreLogger.warn(
+              { pipelineId: pipeline.id, stage: node.name, command },
+              'Stage verifyCommand still holds an unresolved template reference — not running it',
+            );
+          }
+          // One project-wide command, run once, on the LAST plan item. A
+          // looping QA stage sees this per item, and `npm test` legitimately
+          // fails while items 2..n are unwritten — which would hand the auditor
+          // a FAILED ground truth for work nobody has started yet and bounce it
+          // back to Implementation on every early item.
+          let lastItem = true;
+          if (currentItem && gnode.parentKey) {
+            const items = await pipelineRepository.getPlanItems(pipeline.id);
+            lastItem = isFinalPlanItem(items, currentItem);
+          }
+          if (command && !unresolved && lastItem) {
             const evidence = await runStageVerifyCommand(command, {
               userId: context.userId,
               sessionId,
@@ -1194,6 +1231,7 @@ export class PipelineManager {
               toolIds: b.toolIds,
             });
             input = `${evidence}\n\n---\n\n${input}`;
+            frameworkVerified = true;
           }
         }
 
@@ -1213,7 +1251,15 @@ export class PipelineManager {
           node,
           // A correction visit is told to run and change nothing, so it is not
           // judged against declarations it was just forbidden to satisfy.
-          declared: correcting ? correctionDeclaration(b) : b,
+          // Same reasoning for a framework-verified visit: it was handed the
+          // exit code and told not to re-run it, so `runsCommands` would fail
+          // the stage for obeying — and the command it declares it must execute
+          // has been executed, by the framework, for this visit.
+          declared: correcting
+            ? correctionDeclaration(b)
+            : frameworkVerified
+              ? { ...b, runsCommands: false }
+              : b,
           stageTemplate,
           input,
           // A correction visit is told to re-read nothing, and its own prompt

@@ -42,29 +42,37 @@ export function validateRecipeParameterDefs(defs: unknown): RecipeParameter[] {
 const PARAM_REF_RE = /\{\{\s*param\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
 
 /**
- * Validate that every `{{param.<key>}}` reference in a recipe's stage prompt
- * templates resolves to a DECLARED parameter. An undeclared reference would
- * otherwise be left as a literal `{{param.typo}}` in the worker input (silent
- * footgun) — so we fail loud at create/validate time with a specific message.
+ * Validate that every `{{param.<key>}}` reference in a recipe's stages resolves
+ * to a DECLARED parameter. An undeclared reference would otherwise be left as a
+ * literal `{{param.typo}}` in the worker input (silent footgun) — so we fail
+ * loud at create/validate time with a specific message.
+ *
+ * EVERY templated field is walked, not just the prompt. `verifyCommand` is
+ * expanded the same way and then EXECUTED, so an undeclared reference there is
+ * the worse of the two: the shell gets a literal `{{param.x}}`, and the
+ * non-zero exit is handed to the auditor as ground truth it is told not to
+ * re-check. A guard that only reads prompts is one the field that matters most
+ * never reaches.
  *
  * `defs` is the already-validated parameter list (see validateRecipeParameterDefs).
  * Throws on the first undeclared reference; no-op when there are no references.
  */
 export function validateRecipeParameterRefs(
-  steps: Array<Pick<PipelineStepConfig, 'name' | 'promptTemplate'>>,
+  steps: Array<Pick<PipelineStepConfig, 'name' | 'promptTemplate' | 'verifyCommand'>>,
   defs: RecipeParameter[],
 ): void {
   const declared = new Set(defs.map((d) => d.key));
   for (const step of steps) {
-    const template = step.promptTemplate;
-    if (!template) continue;
-    for (const match of template.matchAll(PARAM_REF_RE)) {
-      const key = match[1];
-      if (!declared.has(key)) {
-        throw new Error(
-          `stage "${step.name}" references undeclared recipe parameter "{{param.${key}}}"; ` +
-            `declare it in the recipe's parameters or fix the typo`,
-        );
+    for (const template of [step.promptTemplate, step.verifyCommand]) {
+      if (!template) continue;
+      for (const match of template.matchAll(PARAM_REF_RE)) {
+        const key = match[1];
+        if (!declared.has(key)) {
+          throw new Error(
+            `stage "${step.name}" references undeclared recipe parameter "{{param.${key}}}"; ` +
+              `declare it in the recipe's parameters or fix the typo`,
+          );
+        }
       }
     }
   }
@@ -94,6 +102,29 @@ function coerceValue(def: RecipeParameter, raw: unknown): string {
 }
 
 /**
+ * Levenshtein distance. Small enough to write, and the only question asked of
+ * it is "is this a misspelling of that", so no library earns its place here.
+ */
+function editDistance(a: string, b: string): number {
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j++) {
+      row[j] = Math.min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = row;
+  }
+  return prev[b.length];
+}
+
+/** A misspelling of a declared key, rather than a key from somewhere else. */
+function isNearMiss(provided: string, declared: string): boolean {
+  const a = provided.toLowerCase();
+  const b = declared.toLowerCase();
+  return a === b || editDistance(a, b) <= 2;
+}
+
+/**
  * Resolve provided parameter values against the recipe's parameter definitions:
  * - required / user_prompt params must be present (fail loud if missing) —
  *   `user_prompt` is identical at resolve time; the *caller* is responsible for
@@ -110,32 +141,37 @@ export function resolveRecipeParams(
 ): Record<string, string> {
   const defByKey = new Map(defs.map((d) => [d.key, d]));
 
-  // A template that declares NO parameters cannot consume any, so params handed
-  // to it are noise, not a typo — there is nothing to have mistyped. Dropping
-  // them is strictly better than failing: rejecting killed whole runs. A model
-  // told "do not pause for approval" invented `{skipApproval: true}` on a
-  // parameterless template, `create_pipeline` threw, the seven-stage run never
-  // started, and the user saw "I was unable to generate a response".
+  // An unknown provided key is one of two things, and only one is worth failing
+  // a run over: a TYPO for a declared parameter, or noise a model invented. The
+  // key itself tells them apart — `rebo` for `repo` is a near miss,
+  // `skipApproval` on a recipe that takes `verifyCommand` is not.
   //
-  // Recipes WITH parameters keep the strict check, which is where it earns its
-  // keep: there, an unknown key really is a typo for a real one.
-  if (defs.length === 0) {
-    if (Object.keys(provided).length > 0) {
-      logger.warn(
-        { ignored: Object.keys(provided) },
-        'Template declares no parameters — ignoring the supplied params instead of failing the run',
-      );
-    }
-    return {};
-  }
-
-  // Reject unknown keys — fail loud rather than silently ignore a typo.
+  // Rejecting every unknown key killed whole runs: a model told "do not pause
+  // for approval" invented `{skipApproval: true}`, `create_pipeline` threw, the
+  // seven-stage run never started, and the user saw "I was unable to generate a
+  // response" with nothing in the log. That was survivable only while the
+  // recipes such a key gets aimed at declared none — and `Full Development
+  // Cycle`, the recipe the orchestrator is told to prefer, now declares one. So
+  // the lenient case has to key on the KEY, not on whether the recipe happens
+  // to be parameterless.
+  //
+  // Dropping noise cannot fabricate a result: parameters are inputs, and an
+  // ignored one leaves the recipe running exactly as it does with none supplied
+  // — while a real typo still fails loud, here for an optional parameter and at
+  // `missing required recipe parameter` for a required one.
   for (const key of Object.keys(provided)) {
-    if (!defByKey.has(key)) {
+    if (defByKey.has(key)) continue;
+    const nearMiss = [...defByKey.keys()].find((declared) => isNearMiss(key, declared));
+    if (nearMiss) {
       throw new Error(
-        `unknown recipe parameter: ${key}. This recipe accepts: ${[...defByKey.keys()].join(', ')}`,
+        `unknown recipe parameter: ${key}. Did you mean "${nearMiss}"? ` +
+          `This recipe accepts: ${[...defByKey.keys()].join(', ')}`,
       );
     }
+    logger.warn(
+      { ignored: key, accepts: [...defByKey.keys()] },
+      'Recipe does not declare this parameter and nothing close to it — ignoring it instead of failing the run',
+    );
   }
 
   const resolved: Record<string, string> = {};
