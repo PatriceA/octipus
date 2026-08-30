@@ -230,6 +230,52 @@ export function qaVerdictCorrectionInput(report: string, reason: string, handsOf
 }
 
 /**
+ * Run a stage's `verifyCommand` and render the result as fact for the auditor.
+ *
+ * Reuses `command_exit_zero` rather than spawning anything itself: that scorer
+ * already owns every constraint a command from a template needs to satisfy —
+ * argv only through `tokenizeSafe`, the shell tool's own content policy, the
+ * operator's permission decision through `routeApproval`, a workspace-resolved
+ * cwd and a hard timeout. A second executor beside it would be a second set of
+ * those rules to keep in step, and the one that drifts is the one nobody reads.
+ *
+ * Never throws. A verify command that cannot run is worth saying out loud in
+ * the auditor's input — it is a fact about the run — and is not worth failing
+ * the stage over before anyone has looked at the work.
+ */
+async function runStageVerifyCommand(
+  command: string,
+  ctx: { userId?: string; sessionId: string; role: string; toolIds?: string[] },
+): Promise<string> {
+  const canRunCommands = (ctx.toolIds ?? []).includes('shell');
+  if (!canRunCommands) {
+    return `VERIFY COMMAND (from the pipeline, not the model): \`${command}\`\nNot run — this stage does not hold the shell tool. Judge the work on what you can read.`;
+  }
+  try {
+    const { runScorers } = await import('@/core/swarm/scorers');
+    const { sessionRepository } = await import('@/db/repositories/session-repository');
+    const session = await sessionRepository.findById(ctx.sessionId);
+    const sessionCtx = session?.context as { devMode?: boolean; projectPath?: string } | undefined;
+    const outcome = await runScorers(
+      [{ kind: 'command_exit_zero', command }],
+      { output: '', notes: '' },
+      {
+        userId: ctx.userId,
+        role: ctx.role,
+        canRunCommands: true,
+        projectPath: sessionCtx?.devMode === true ? sessionCtx.projectPath : undefined,
+      },
+    );
+    const failure = outcome.failures[0];
+    return failure
+      ? `VERIFY COMMAND (run by the pipeline, not by you): \`${command}\`\nRESULT: FAILED.\n${failure.reason}\n\nThat is the ground truth for this stage. Do not re-run it to check; explain it.`
+      : `VERIFY COMMAND (run by the pipeline, not by you): \`${command}\`\nRESULT: exit 0.\n\nThat is the ground truth for this stage. You do not need to run it again — judge whether it is SUFFICIENT evidence for the work claimed.`;
+  } catch (err) {
+    return `VERIFY COMMAND (from the pipeline): \`${command}\`\nCould not be run: ${(err as Error).message}. Judge the work on what you can read.`;
+  }
+}
+
+/**
  * Appended to `qa_validation` stages so they emit a machine-readable verdict
  * `parseQAResult`'s strict-JSON tier (1) consumes — instead of relying on the
  * prose-verdict fallback (`parseProseVerdict`, tier 3) to recover PASS/FAIL from
@@ -1122,6 +1168,35 @@ export class PipelineManager {
         // this existed — fall back to the full re-audit.
         const correcting = isQa && !!pendingRejection && !!rejectedReport;
         const reportUnderCorrection = correcting ? (rejectedReport as string) : undefined;
+        // Run the command that DEFINES success, once, before the auditor turn.
+        //
+        // `runsCommands` only ever declared THAT a stage runs something, never
+        // what — so a verify stage got a numbered checklist ("run the
+        // regression test, run the full suite, try the original repro, check
+        // for edge cases") and spent its iterations rediscovering the command.
+        // Handing it a real exit code instead turns research back into
+        // judgement, which is what an auditor is actually for.
+        //
+        // The result is stated whether it passed or failed: a failing verify
+        // command is exactly the evidence the auditor needs to write an honest
+        // FAIL, and hiding it would leave it guessing again.
+        if (isQa && !correcting && stageTemplate.verifyCommand) {
+          const command = expandPromptTemplate(stageTemplate.verifyCommand, {
+            description,
+            previousOutput: handoffText || previousOutput,
+            ...paramVars,
+          }).trim();
+          if (command) {
+            const evidence = await runStageVerifyCommand(command, {
+              userId: context.userId,
+              sessionId,
+              role: b.role,
+              toolIds: b.toolIds,
+            });
+            input = `${evidence}\n\n---\n\n${input}`;
+          }
+        }
+
         if (isQa) {
           input = correcting
             ? qaVerdictCorrectionInput(

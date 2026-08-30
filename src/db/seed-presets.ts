@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import type { PipelineStepConfig } from '@/db/schema/pipeline-templates';
+import type { PipelineStepConfig, RecipeParameter } from '@/db/schema/pipeline-templates';
 import { pipelineTemplates } from '@/db/schema/pipeline-templates';
 import { logger } from '@/utils/logger';
 
@@ -13,6 +13,8 @@ import { logger } from '@/utils/logger';
 export const PRESET_TEMPLATES: Array<{
   name: string;
   description: string;
+  /** Typed recipe parameters, substituted as `{{param.<key>}}`. */
+  parameters?: RecipeParameter[];
   steps: PipelineStepConfig[];
 }> = [
   {
@@ -390,6 +392,23 @@ Produce:
     name: 'Bug Fix',
     description:
       'Structured bug fix pipeline: reproduce, diagnose root cause, implement fix, test, and verify.',
+    // The command that settles whether the fix holds. Optional, because no
+    // template can know another project's test runner, and a wrong default
+    // would fail every run that did not happen to use it. Supplied, the
+    // framework runs it once before the verify stage's model turn and hands
+    // the auditor a real exit code — instead of a checklist telling it to work
+    // out what to run, which is what the stage was doing at 4 iterations and
+    // 82,783 tokens to establish that a 13-test suite passes in a millisecond.
+    parameters: [
+      {
+        key: 'verifyCommand',
+        description:
+          'Command that decides whether the fix worked, e.g. "npm test", "pytest -q", "python3 -m unittest discover". Plain argv — no pipes, redirects or a leading cd.',
+        inputType: 'string' as const,
+        requirement: 'optional' as const,
+        default: '',
+      },
+    ],
     steps: [
       {
         name: 'Reproduce & Diagnose',
@@ -454,6 +473,9 @@ Report what was changed and why.`,
         stageType: 'qa_validation',
         // "Try the original reproduction steps" is an instruction to execute.
         runsCommands: true,
+        // Run by the framework before this stage's model turn when the caller
+        // supplied one. Empty is the normal case and changes nothing.
+        verifyCommand: '{{param.verifyCommand}}',
         promptTemplate: `Verify the bug fix is correct and complete.
 
 Bug: {{description}}
@@ -461,11 +483,14 @@ Bug: {{description}}
 Fix details:
 {{previousOutput}}
 
+If a VERIFY COMMAND result is shown above, that is the ground truth — do not
+re-run it, explain it. Otherwise establish for yourself whether the fix holds.
+
 Verification:
-1. Run the regression test — does it pass?
-2. Run the full test suite — any failures?
-3. Try the original reproduction steps — is the bug fixed?
-4. Check for edge cases related to the fix
+1. Does the regression test for THIS bug pass?
+2. Does the rest of the suite still pass?
+3. Do the original reproduction steps now behave correctly?
+4. Anything the fix plausibly broke that the suite does not cover
 
 Report: FIXED / NOT FIXED / PARTIALLY FIXED with evidence.`,
       },
@@ -630,14 +655,41 @@ export function planPresetReconcile(
   return changed ? { action: 'backfill', steps } : { action: 'noop' };
 }
 
-async function reconcilePreset(name: string, shipped: PipelineStepConfig[]): Promise<void> {
+async function reconcilePreset(
+  name: string,
+  shipped: PipelineStepConfig[],
+  shippedParameters?: RecipeParameter[],
+): Promise<void> {
   const db = getDb();
   const [row] = await db
-    .select({ id: pipelineTemplates.id, steps: pipelineTemplates.steps, shippedHash: pipelineTemplates.shippedHash })
+    .select({
+      id: pipelineTemplates.id,
+      steps: pipelineTemplates.steps,
+      parameters: pipelineTemplates.parameters,
+      shippedHash: pipelineTemplates.shippedHash,
+    })
     .from(pipelineTemplates)
     .where(eq(pipelineTemplates.name, name))
     .limit(1);
   if (!row) return;
+
+  // A recipe parameter the install has never heard of is additive: without it
+  // a `{{param.x}}` reference in a shipped step fails validation on an install
+  // that was seeded before the parameter existed. Only ever ADDS by key — a
+  // parameter the user has edited keeps their version, same rule the step
+  // backfill follows.
+  if (shippedParameters?.length) {
+    const existing = (row.parameters as RecipeParameter[]) ?? [];
+    const known = new Set(existing.map((p) => p.key));
+    const missing = shippedParameters.filter((p) => !known.has(p.key));
+    if (missing.length > 0) {
+      await db
+        .update(pipelineTemplates)
+        .set({ parameters: [...existing, ...missing], updatedAt: new Date() })
+        .where(eq(pipelineTemplates.id, row.id));
+      logger.info({ template: name, added: missing.map((p) => p.key) }, 'Added new recipe parameters to a preset');
+    }
+  }
 
   const plan = planPresetReconcile((row.steps as PipelineStepConfig[]) ?? [], row.shippedHash, shipped);
   switch (plan.action) {
@@ -679,7 +731,7 @@ export async function seedPresetTemplates(): Promise<void> {
       // Never blindly overwrite — users can edit preset templates. What we DO
       // refresh is a preset they have provably not touched, plus the gating
       // flags on one they have. See `reconcilePreset`.
-      await reconcilePreset(preset.name, preset.steps);
+      await reconcilePreset(preset.name, preset.steps, preset.parameters);
       continue;
     }
 
@@ -689,6 +741,7 @@ export async function seedPresetTemplates(): Promise<void> {
       isPreset: true,
       userId: null as any, // Presets have no owner — available to all users
       steps: preset.steps,
+      ...(preset.parameters ? { parameters: preset.parameters } : {}),
       shippedHash: stepsHash(preset.steps),
     });
 
