@@ -319,7 +319,7 @@ All three landed. What each actually became:
 
 ## Later (open directions)
 
-- **Federation.** Multiple octipus instances coordinating — your home octipus talks to your work octipus talks to a friend's octipus, with explicit consent and audit trails.
+- **Federation.** Multiple octipus instances coordinating — your home octipus talks to your work octipus talks to a friend's octipus, with explicit consent and audit trails. Plan: [docs/plans/workroom-and-swarm-federation.md](docs/plans/workroom-and-swarm-federation.md) — Part 1 is the in-instance multi-model Workroom with a lease watchdog, Part 2 the LAN/internet peer federation with a fixed, non-grantable host-control policy.
 - **Local-first sync.** PGlite + CRDTs for cross-device session continuity without a central server.
 - **Voice — remaining polish.** Full-duplex realtime voice with barge-in and a propose-then-confirm conversation layer shipped 2026-07-13/14 (Phase 4 + #216/#217; see Done below). Remaining: emotion-aware routing, prefetched streaming TTS to close the inter-sentence gap, and Voxtral for the turn-based path too.
 - **Sandboxed tool execution.** Today shell/code tools run in the same process. We want WASI / lightweight VM isolation per worker — mounted as a provider behind the wave-1 waterfall rather than branched into the tool loop.
