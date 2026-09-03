@@ -373,6 +373,97 @@ export async function reinitializeChannel(channelType: ChannelType): Promise<voi
   }
 }
 
+/** Channel types a human can actually be prompted on. */
+const MESSAGING_CHANNELS: ReadonlySet<string> = new Set<ChannelType>([
+  'telegram', 'teams', 'slack', 'whatsapp',
+]);
+
+/**
+ * Forward an ASK-level permission request to the messaging channel the
+ * session came from. Exported for the regression test that pins the
+ * non-messaging guard below.
+ */
+export async function forwardPermissionRequestToChannel(request: PermissionRequestEvent): Promise<void> {
+  const umi = getUMI();
+  const permissionManager = getPermissionManager();
+  const userId = request.userId;
+  const sessionId = request.sessionId;
+  if (!userId || !sessionId) return;
+
+  // Look up the session to find which channel originated it
+  const session = await sessionRepository.findById(sessionId);
+  // Only a messaging channel can carry a permission prompt. Non-messaging
+  // sessions have a channelType too ('tui', 'webchat', 'api'), and the old
+  // `!== 'webchat'` test let 'tui' through to `umi.send`, which throws for a
+  // type no channel is registered for — the catch below then DENIED the
+  // request within milliseconds, so the prompt the TUI user was looking at
+  // was already resolved before they could answer it. Keyed on the type, not
+  // on registration: a Slack session whose channel is currently down must
+  // still reach the deny branch rather than stall for the whole TTL.
+  if (!session?.channelType || !MESSAGING_CHANNELS.has(session.channelType)) return;
+
+  const channelType = session.channelType as ChannelType;
+  const channelId = session.channelId;
+  if (!channelId) return;
+
+  // Track this pending permission for the user
+  pendingChannelPermissions.set(userId, {
+    requestId: request.requestId,
+    channelType,
+    channelId,
+  });
+
+  // Send permission request message to the channel — include tool details
+  const toolName = request.toolName || request.action || 'unknown';
+  const args = request.args as Record<string, unknown> | undefined;
+  let detail = '';
+  if (args) {
+    // Extract the most relevant detail based on tool type
+    const path = args.path || args.file_path || args.filename || args.directory;
+    const command = args.command;
+    const url = args.url;
+    const query = args.query;
+    const target = args.target || args.channel;
+    const message = args.message;
+
+    if (path) {
+      detail = `\nFile: ${path}`;
+    } else if (command) {
+      const cmd = String(command);
+      detail = `\nCommand: ${cmd.length > 120 ? cmd.slice(0, 120) + '…' : cmd}`;
+    } else if (url) {
+      detail = `\nURL: ${url}`;
+    } else if (query) {
+      detail = `\nQuery: ${query}`;
+    } else if (target && message) {
+      const msg = String(message);
+      detail = `\nTo: ${target}\nMessage: ${msg.length > 100 ? msg.slice(0, 100) + '…' : msg}`;
+    }
+  }
+  try {
+    await umi.send(channelType, channelId, {
+      content: `🔒 Permission required: the agent wants to use "${toolName}".${detail}\n\nReply "yes" to allow or "no" to deny.`,
+    });
+  } catch (error) {
+    // The prompt never reached a human, so leaving the request pending buys
+    // nothing but a stall until it expires — the run blocks for the whole TTL
+    // and then fails anyway. Deny it now, with the delivery failure as the
+    // reason, so the agent gets an answer it can report.
+    channelLogger.error({ error, channelType }, 'Failed to forward permission request to channel — denying it');
+    // Keyed by user, so only clear it if it is still OUR request: a second
+    // request arriving between the `set` above and this failure would
+    // otherwise lose its entry and become unanswerable.
+    if (pendingChannelPermissions.get(userId)?.requestId === request.requestId) {
+      pendingChannelPermissions.delete(userId);
+    }
+    await permissionManager
+      .deny(request.requestId, userId, `could not be delivered to the ${channelType} channel`)
+      .catch((denyError) => {
+        channelLogger.error({ denyError, channelType }, 'Failed to deny an undeliverable permission request');
+      });
+  }
+}
+
 /**
  * Initialize and register all configured channels via auto-discovery.
  * Each channel decides whether it should be enabled via its own
@@ -408,77 +499,7 @@ export async function initializeChannels(): Promise<void> {
   await umi.connectAll();
 
   // Subscribe to permission requests and forward them to the originating channel
-  const permissionManager = getPermissionManager();
-  permissionManager.onRequest(async (request: PermissionRequestEvent) => {
-    const userId = request.userId;
-    const sessionId = request.sessionId;
-    if (!userId || !sessionId) return;
-
-    // Look up the session to find which channel originated it
-    const session = await sessionRepository.findById(sessionId);
-    if (!session || !session.channelType || session.channelType === 'webchat') return;
-
-    const channelType = session.channelType as ChannelType;
-    const channelId = session.channelId;
-    if (!channelId) return;
-
-    // Track this pending permission for the user
-    pendingChannelPermissions.set(userId, {
-      requestId: request.requestId,
-      channelType,
-      channelId,
-    });
-
-    // Send permission request message to the channel — include tool details
-    const toolName = request.toolName || request.action || 'unknown';
-    const args = request.args as Record<string, unknown> | undefined;
-    let detail = '';
-    if (args) {
-      // Extract the most relevant detail based on tool type
-      const path = args.path || args.file_path || args.filename || args.directory;
-      const command = args.command;
-      const url = args.url;
-      const query = args.query;
-      const target = args.target || args.channel;
-      const message = args.message;
-
-      if (path) {
-        detail = `\nFile: ${path}`;
-      } else if (command) {
-        const cmd = String(command);
-        detail = `\nCommand: ${cmd.length > 120 ? cmd.slice(0, 120) + '…' : cmd}`;
-      } else if (url) {
-        detail = `\nURL: ${url}`;
-      } else if (query) {
-        detail = `\nQuery: ${query}`;
-      } else if (target && message) {
-        const msg = String(message);
-        detail = `\nTo: ${target}\nMessage: ${msg.length > 100 ? msg.slice(0, 100) + '…' : msg}`;
-      }
-    }
-    try {
-      await umi.send(channelType, channelId, {
-        content: `🔒 Permission required: the agent wants to use "${toolName}".${detail}\n\nReply "yes" to allow or "no" to deny.`,
-      });
-    } catch (error) {
-      // The prompt never reached a human, so leaving the request pending buys
-      // nothing but a stall until it expires — the run blocks for the whole TTL
-      // and then fails anyway. Deny it now, with the delivery failure as the
-      // reason, so the agent gets an answer it can report.
-      channelLogger.error({ error, channelType }, 'Failed to forward permission request to channel — denying it');
-      // Keyed by user, so only clear it if it is still OUR request: a second
-      // request arriving between the `set` above and this failure would
-      // otherwise lose its entry and become unanswerable.
-      if (pendingChannelPermissions.get(userId)?.requestId === request.requestId) {
-        pendingChannelPermissions.delete(userId);
-      }
-      await permissionManager
-        .deny(request.requestId, userId, `could not be delivered to the ${channelType} channel`)
-        .catch((denyError) => {
-          channelLogger.error({ denyError, channelType }, 'Failed to deny an undeliverable permission request');
-        });
-    }
-  });
+  getPermissionManager().onRequest(forwardPermissionRequestToChannel);
 
   // Bridge incoming channel messages → root agent → reply
   umi.on('message', async (message: UnifiedMessage) => {

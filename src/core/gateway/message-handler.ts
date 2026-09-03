@@ -398,11 +398,28 @@ async function handlePermissionRespond(
   try {
     const { getPermissionManager } = await import('@/security/permissions');
     const permissionManager = getPermissionManager();
+    // Local/system auth hands us the 'local' sentinel, not a DB UUID, and
+    // both resolvedBy and the user_id filter are uuid columns — passing it
+    // straight through made every TUI approval fail with a Postgres cast
+    // error instead of resolving the request.
+    const userId = await resolveUserId(context.userId);
+    // A local/system TUI is shown every user's prompt, but `resolveUserId`
+    // can only ever name the first admin — resolving another user's request
+    // as that admin matches zero rows and returns false silently, leaving the
+    // run blocked for the whole TTL. Trusted consoles resolve as admins, and
+    // an unresolved request is reported instead of swallowed.
+    const admin = context.trustLevel === 'local' || context.trustLevel === 'system';
 
-    if (message.approved) {
-      await permissionManager.approve(message.requestId, context.userId);
-    } else {
-      await permissionManager.deny(message.requestId, context.userId);
+    const resolved = message.approved
+      ? await permissionManager.approve(message.requestId, userId, undefined, { admin })
+      : await permissionManager.deny(message.requestId, userId, undefined, { admin });
+
+    if (!resolved) {
+      hub.connectionManager.sendToConnection(connectionId, {
+        type: 'error',
+        code: 'PERMISSION_ERROR',
+        message: 'That permission request is no longer pending (already answered, or expired).',
+      });
     }
   } catch (err) {
     coreLogger.error({ err, connectionId, requestId: message.requestId }, 'Permission respond error');
