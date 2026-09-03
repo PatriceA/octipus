@@ -5,7 +5,7 @@ import { logger } from '@/utils/logger';
 
 /**
  * Seed role records into the database from the file-based registry
- * (`src/core/orchestrator/roles/<name>/{config.ts, prompt.md}`).
+ * (`src/core/agent/roles/<name>/{config.ts, prompt.md}`).
  *
  * SOURCE-OF-TRUTH RULES — read before editing:
  *
@@ -23,7 +23,7 @@ import { logger } from '@/utils/logger';
  */
 export async function seedRoles(): Promise<void> {
   // Dynamic import to avoid circular dependency
-  const { ROLE_CONFIGS } = await import('@/core/orchestrator/roles');
+  const { ROLE_CONFIGS } = await import('@/core/agent/roles');
   const db = getDb();
 
   for (const [roleName, config] of Object.entries(ROLE_CONFIGS)) {
@@ -88,7 +88,7 @@ export async function seedRoles(): Promise<void> {
  * the synchronous getRoleConfig() API working.
  */
 export async function loadRolesFromDb(): Promise<void> {
-  const { ROLE_CONFIGS } = await import('@/core/orchestrator/roles');
+  const { ROLE_CONFIGS } = await import('@/core/agent/roles');
   const db = getDb();
 
   const dbRoles = await db.select().from(roles);

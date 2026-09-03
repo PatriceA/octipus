@@ -7,7 +7,7 @@
  * classifier heuristic); `forced` is whether the user set it explicitly.
  *
  * Returns '' for the common case (default inline, not forced) so existing
- * orchestrator behavior — including coding/devops tasks that legitimately write
+ * root agent behavior — including coding/devops tasks that legitimately write
  * files via their own tools — is completely unchanged.
  */
 export function buildOutputDirective(mode: 'inline' | 'file', forced: boolean, readOnly = false): string {
@@ -20,7 +20,7 @@ export function buildOutputDirective(mode: 'inline' | 'file', forced: boolean, r
       return (
         '\n\nDELIVERABLE FORMAT — FILE: The user wants an editable file. You are a READ-ONLY role ' +
         'and have no file-writing tools — do NOT attempt to write one. Produce the full deliverable ' +
-        'content in your reply and state that it needs saving to a file, so the orchestrator can ' +
+        'content in your reply and state that it needs saving to a file, so the rootAgent can ' +
         'delegate the write to a specialist.'
       );
     }

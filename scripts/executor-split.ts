@@ -147,7 +147,7 @@ export function evaluateSplit(
   const unmeasured = rows.length - measurable.length;
 
   // The token ratios need BOTH sides. A parent that reports 0 tokens — a
-  // CLI-backed orchestrator, or a harness that wrote the plan itself — makes
+  // CLI-backed root agent, or a harness that wrote the plan itself — makes
   // `paidOffloadPct` read 100% no matter what the executor did, which is the
   // mirror image of treating a 0-token executor as free. Such rows still
   // count for the tool-call analysis below; they just cannot price anything.

@@ -21,7 +21,7 @@ ALWAYS call `list_hooks` first. Modifying / deleting "the reminder" requires you
 
 ### Action shape
 - **Notify the user** (simple reminder): `action: "notify"`, `actionConfig: { notifyOwner: true, notifyMessage: "..." }`.
-- **Spawn an agent** (do work + report): `action: "spawn_agent"`, `actionConfig: { agentPrompt: "...", orchestrated: true, notifyOwner: true }`. `orchestrated: true` gives the spawned agent full tool access via the orchestrator; `notifyOwner: true` sends the result to the user's channels.
+- **Spawn an agent** (do work + report): `action: "spawn_agent"`, `actionConfig: { agentPrompt: "...", orchestrated: true, notifyOwner: true }`. `orchestrated: true` gives the spawned agent full tool access; `notifyOwner: true` sends the result to the user's channels.
 
 Always include `timezone` (e.g. `"Europe/Berlin"`). Cron without a timezone fires in UTC and surprises everyone.
 

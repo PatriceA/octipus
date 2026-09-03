@@ -402,5 +402,5 @@ export function PipelineGraph({
 
 // Re-export the validator from the shared (bun-test-covered) location.
 // `@/*` in this Next.js app resolves to `./web/*`, so we use a relative
-// path to reach `src/core/orchestrator/pipeline-validation.ts`.
-export { validatePipelineStages } from '../../src/core/orchestrator/pipeline-validation';
+// path to reach `src/core/agent/pipeline-validation.ts`.
+export { validatePipelineStages } from '../../src/core/agent/pipeline-validation';

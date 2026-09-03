@@ -1,9 +1,9 @@
 /**
- * Trajectory recorder — observes one orchestrator `handleMessage` run and
+ * Trajectory recorder — observes one root agent `handleMessage` run and
  * writes a single JSONL line to disk + a pointer row to `trajectory_runs`.
  *
  * Design notes:
- * - The recorder is a passive observer: it is fed events by the orchestrator
+ * - The recorder is a passive observer: it is fed events by the root agent
  *   and does NOT rewrite orchestration. This file owns the write path only.
  * - Set env `TRAJECTORY_LOGGING=false` to make every recorder a no-op.
  * - PII (emails, phone numbers) is stripped from `userMessage` and
@@ -18,8 +18,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSy
 import { dirname, resolve } from 'path';
 import { gzipSync } from 'zlib';
 import { getConfig } from '@/config';
-import { filterPII } from '@/core/orchestrator/pii-filter';
-import type { MessageClassification } from '@/core/orchestrator/types';
+import { filterPII } from '@/core/agent/pii-filter';
+import type { MessageClassification } from '@/core/agent/types';
 import { coreLogger } from '@/utils/logger';
 import type {
   TrajectoryClassification,
@@ -110,7 +110,7 @@ export interface TrajectoryRecorderOptions {
 }
 
 /**
- * Build a TrajectoryClassification from the orchestrator's
+ * Build a TrajectoryClassification from the root agent's
  * MessageClassification plus an optional expertId.
  */
 function toClassification(
@@ -130,7 +130,7 @@ function toClassification(
 }
 
 /**
- * Observer for a single orchestrator run. Create one at the top of
+ * Observer for a single root agent run. Create one at the top of
  * `handleMessage`, feed it events as they arrive (llm calls, tool calls,
  * spawns), call `finalize(...)` exactly once.
  *
@@ -161,7 +161,7 @@ export class TrajectoryRecorder {
   }
 
   /**
-   * Late-update the classification after the orchestrator runs the
+   * Late-update the classification after the root agent runs the
    * classifier. Safe to call multiple times — last write wins.
    */
   setClassification(c: MessageClassification, expertId?: string): void {

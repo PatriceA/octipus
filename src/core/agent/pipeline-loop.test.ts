@@ -115,8 +115,8 @@ beforeAll(async () => {
   // The one stubbed boundary. It also plays the planner: a `producesPlan` stage
   // is expected to leave plan items behind, so the stub writes two, exactly as
   // a real planner would through the `plan` tool.
-  const { getOrchestratorService } = await import('./index');
-  const service = getOrchestratorService();
+  const { getAgentService } = await import('./index');
+  const service = getAgentService();
 
   // An exhausted retry budget ASKS A HUMAN rather than passing the work — so a
   // suite with nobody watching hangs on the approval channel unless it answers.

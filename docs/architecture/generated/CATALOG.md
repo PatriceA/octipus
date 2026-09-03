@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts` and verified in CI, so it ca
 
 ## HTTP surface
 
-383 mounted routes across 60 route files. The path is the full one, group prefix included — what a client actually calls.
+382 mounted routes across 60 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -158,9 +158,8 @@ Derived from the source by `scripts/gen-catalog.ts` and verified in CI, so it ca
 | GET | `/api/health/features` | `src/api/routes/health.ts` |
 | GET | `/api/health/live` | `src/api/routes/health.ts` |
 | GET | `/api/health/models` | `src/api/routes/health.ts` |
-| GET | `/api/health/orchestrator` | `src/api/routes/health.ts` |
 | GET | `/api/health/ready` | `src/api/routes/health.ts` |
-| GET | `/api/health/redis` | `src/api/routes/health.ts` |
+| GET | `/api/health/storage` | `src/api/routes/health.ts` |
 | GET | `/api/health/time` | `src/api/routes/health.ts` |
 | GET | `/api/hooks` | `src/api/routes/hooks.ts` |
 | POST | `/api/hooks` | `src/api/routes/hooks.ts` |
@@ -416,9 +415,9 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `utils` | 1 |
 | `api` | `capabilities` | 2 |
 | `api` | `channels` | 7 |
-| `api` | `config` | 19 |
+| `api` | `config` | 18 |
 | `api` | `connectors` | 1 |
-| `api` | `core` | 68 |
+| `api` | `core` | 67 |
 | `api` | `db` | 97 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 5 |
@@ -590,6 +589,7 @@ Every member of the `GatewayEventType` union in `src/core/gateway/protocol.ts`, 
 | Event type | Declared | Published from | Covered by |
 |---|---|---|---|
 | `agent.action` | yes | `src/core/gateway/event-bridge.ts` | — |
+| `agent.approval_required` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `agent.blocked` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `agent.completed` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `agent.event` | yes | `src/core/gateway/event-bridge.ts` | — |
@@ -603,16 +603,15 @@ Every member of the `GatewayEventType` union in `src/core/gateway/protocol.ts`, 
 | `chat.message` | yes | `src/core/gateway/message-handler.ts` | — |
 | `chat.response` | yes | `src/core/gateway/event-bridge.ts`, `src/core/gateway/message-handler.ts` | — |
 | `extension.notify` | yes | `src/extensions/api.ts` | — |
-| `orchestrator.approval_required` | yes | `src/core/gateway/event-bridge.ts` | — |
-| `orchestrator.status` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `permission.request` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `pipeline.event` | yes | `src/core/gateway/event-bridge.ts` | — |
-| `session.compaction_stalled` | yes | `src/core/orchestrator/session-compaction.ts` | — |
+| `rootAgent.status` | yes | `src/core/gateway/event-bridge.ts` | — |
+| `session.compaction_stalled` | yes | `src/core/agent/session-compaction.ts` | — |
 | `swarm.budget_warning` | yes | `src/core/swarm/spawner.ts` | `swarm.*`, `swarm.budget_warning` |
 | `swarm.call_graph_cycle_blocked` | yes | `src/core/swarm/spawner.ts` | `swarm.*` |
 | `swarm.narration` | yes | `src/core/personas/narration-bridge.ts` | `swarm.*` |
-| `swarm.node_completed` | yes | `src/core/orchestrator/orchestrator-runner.ts`, `src/core/orchestrator/worker-spawner.ts`, `src/core/swarm/spawner.ts` | `swarm.*`, `swarm.node_completed` |
-| `swarm.node_spawned` | yes | `src/core/orchestrator/orchestrator-runner.ts`, `src/core/orchestrator/worker-spawner.ts`, `src/core/swarm/spawner.ts` | `swarm.*`, `swarm.node_spawned` |
+| `swarm.node_completed` | yes | `src/core/agent/root-runner.ts`, `src/core/agent/worker-spawner.ts`, `src/core/swarm/spawner.ts` | `swarm.*`, `swarm.node_completed` |
+| `swarm.node_spawned` | yes | `src/core/agent/root-runner.ts`, `src/core/agent/worker-spawner.ts`, `src/core/swarm/spawner.ts` | `swarm.*`, `swarm.node_spawned` |
 | `team.completed` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `team.started` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `test.event` | yes | — | — |

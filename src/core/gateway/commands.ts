@@ -289,7 +289,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     minTrustLevel: 'user',
     handler: async (ctx) => {
       if (!ctx.sessionId) return { text: 'No active session.' };
-      const { togglePlanMode } = await import('@/core/orchestrator/plan-mode');
+      const { togglePlanMode } = await import('@/core/agent/plan-mode');
       const { text } = await togglePlanMode(ctx.sessionId, ctx.rawArgs);
       return { text };
     },
@@ -303,7 +303,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     handler: async (ctx) => {
       if (!ctx.sessionId) return { text: 'No active session to compact.' };
       try {
-        const { maybeCompactSession } = await import('@/core/orchestrator/session-compaction');
+        const { maybeCompactSession } = await import('@/core/agent/session-compaction');
         const instructions = ctx.rawArgs.trim();
         await maybeCompactSession(ctx.sessionId, {
           userInstructions: instructions || undefined,
@@ -320,7 +320,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   registry.register({
     name: 'clear',
     aliases: ['cls', 'reset'],
-    description: 'Reset orchestrator context (and clear UI display on channels that support it)',
+    description: 'Reset rootAgent context (and clear UI display on channels that support it)',
     minTrustLevel: 'user',
     handler: async (ctx) => {
       if (!ctx.sessionId) return { text: 'No active session.' };
@@ -340,7 +340,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
 
         // Channels with ephemeral transcripts (webchat, tui) wipe the UI too.
         // Persistent-transcript channels (telegram, slack, …) keep history visible
-        // but the orchestrator will ignore anything before the clear boundary.
+        // but the root agent will ignore anything before the clear boundary.
         const DISPLAY_CLEAR_CLIENTS = new Set(['webchat', 'tui', 'web', 'ide']);
         if (DISPLAY_CLEAR_CLIENTS.has(ctx.clientType)) {
           return { text: '[clear]' };
@@ -468,7 +468,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   registry.register({
     name: 'persona',
     aliases: [],
-    description: 'Configure the orchestrator persona — name, tone, narration, free-form facts',
+    description: 'Configure the rootAgent persona — name, tone, narration, free-form facts',
     minTrustLevel: 'user',
     handler: async (ctx) => {
       const { handlePersonaCommand } = await import('@/core/personas/commands');

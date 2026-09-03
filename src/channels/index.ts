@@ -73,7 +73,7 @@ const NATIVE_VISION_MIMES = new Set(['image/png', 'image/jpeg', 'image/jpg']);
 
 /**
  * Analyze image attachments using the vision model and return descriptions.
- * This runs inline so the orchestrator can respond about the image content.
+ * This runs inline so the root agent can respond about the image content.
  */
 async function analyzeImageAttachments(
   attachments: Attachment[],
@@ -172,7 +172,7 @@ function isAudioAttachment(a: Attachment): boolean {
 
 /**
  * Download inbound voice-note bytes and transcribe them to text so the utterance
- * reaches the orchestrator like any typed message. Reuses the channel-aware
+ * reaches the root agent like any typed message. Reuses the channel-aware
  * downloader (Slack/WhatsApp auth headers) and the default STT engine order
  * (local whisper.cpp → Mistral → OpenAI). Returns '' if nothing transcribed.
  */
@@ -480,7 +480,7 @@ export async function initializeChannels(): Promise<void> {
     }
   });
 
-  // Bridge incoming channel messages → orchestrator → reply
+  // Bridge incoming channel messages → root agent → reply
   umi.on('message', async (message: UnifiedMessage) => {
     try {
       recordChannelMessage(message.channelType, 'inbound');
@@ -495,8 +495,8 @@ export async function initializeChannels(): Promise<void> {
         });
       }
 
-      const { getOrchestratorService } = await import('@/core/orchestrator');
-      const orchestrator = getOrchestratorService();
+      const { getAgentService } = await import('@/core/agent');
+      const rootAgent = getAgentService();
 
       const channelSessionId = (message.metadata?.sessionId as string) || `${message.channelType}-${message.channelId}`;
 
@@ -505,12 +505,12 @@ export async function initializeChannels(): Promise<void> {
         ? String(message.metadata.messageId)
         : undefined;
 
-      // Resolve the actual DB session ID so we can match orchestrator events
+      // Resolve the actual DB session ID so we can match root agent events
       // (resolveSession converts "telegram-12345" → UUID, and events use the UUID)
-      const { resolveSession } = await import('@/core/orchestrator/session-resolver');
+      const { resolveSession } = await import('@/core/agent/session-resolver');
       const resolvedSessionId = await resolveSession(channelSessionId, message.userId, message.channelType);
 
-      // Subscribe to orchestrator events for progress feedback via emoji reactions
+      // Subscribe to root agent events for progress feedback via emoji reactions
       const isExternalChannel = message.channelType !== 'webchat';
       let unsubscribe: (() => void) | null = null;
       let unsubAgentEvents: (() => void) | null = null;
@@ -561,7 +561,7 @@ export async function initializeChannels(): Promise<void> {
         const roleEmojis: Record<string, string> = {
           coding: '💻', research: '🔍', writing: '✍️', automation: '⏰',
           review: '🔍', security: '🔒', devops: '🐳', design: '🎨',
-          data: '📊', qa: '🧪', orchestrator: '🤔',
+          data: '📊', qa: '🧪', rootAgent: '🤔',
         };
 
         // Subscribe to agent-level events for tool-specific emojis
@@ -600,7 +600,7 @@ export async function initializeChannels(): Promise<void> {
         let activeWorkers = 0;
         const sentStatuses = new Set<string>();
 
-        unsubscribe = orchestrator.onEvent((event) => {
+        unsubscribe = rootAgent.onEvent((event) => {
           if (event.sessionId !== resolvedSessionId) return;
           resetStallTimer();
 
@@ -684,7 +684,7 @@ export async function initializeChannels(): Promise<void> {
       let messageContent = message.content;
       let voiceIn = false; // true when this turn came in as a voice note (drives voice-out)
       if (message.attachments?.length) {
-        // Voice notes: transcribe inline so the utterance reaches the orchestrator
+        // Voice notes: transcribe inline so the utterance reaches the root agent
         // as text (all channels build audio attachments identically). Audio is not
         // in the document pipeline's PROCESSABLE_MIMES, so it dead-ended here before.
         const audioAttachments = message.attachments.filter(isAudioAttachment);
@@ -712,10 +712,10 @@ export async function initializeChannels(): Promise<void> {
           const hasCaption = messageContent && messageContent.trim().length > 0;
 
           // All attachments are routed through the document pipeline (fire-and-forget above).
-          // For the orchestrator, decide: should we analyze inline or just acknowledge?
+          // For the root agent, decide: should we analyze inline or just acknowledge?
 
           if (!hasCaption) {
-            // No caption — pure document upload. Acknowledge and skip orchestrator.
+            // No caption — pure document upload. Acknowledge and skip root agent.
             const attachmentNames = fileAttachments.map(a => a.filename || 'file').join(', ');
             await umi.send(message.channelType, message.channelId, {
               content: `Received ${attachmentNames}. Processing through the document pipeline — I'll send you the summary when it's done.`,
@@ -758,7 +758,7 @@ export async function initializeChannels(): Promise<void> {
         }
       } catch { /* ignore — no expert override */ }
 
-      const result = await orchestrator.handleMessage(
+      const result = await rootAgent.handleMessage(
         resolvedSessionId,
         message.userId,
         messageContent,

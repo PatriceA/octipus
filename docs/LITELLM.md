@@ -72,7 +72,7 @@ under **Settings → Configuration → LiteLLM**.
 ### 1. Setup wizard (recommended for first run)
 
 ```bash
-bun run setup
+npm run setup
 ```
 
 Choose **LiteLLM proxy** when prompted. The wizard asks for the proxy URL
@@ -85,7 +85,7 @@ Non-interactive:
 OCTIPUS_SETUP_PROVIDER=litellm \
 OCTIPUS_SETUP_BASE_URL=http://localhost:4000 \
 OCTIPUS_SETUP_API_KEY=sk-your-master-key \
-bun run setup --non-interactive
+npm run setup -- --non-interactive
 ```
 
 ### 2. Settings API (running instance)

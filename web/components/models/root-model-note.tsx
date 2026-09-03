@@ -15,18 +15,22 @@ interface ModelLite {
 }
 
 /**
- * "Which model actually orchestrates" readout for the Models/Topics pages.
+ * "Which model actually answers you" readout for the Models/Topics pages.
  *
- * Mirrors `ModelSelector.selectForOrchestration` (src/core/orchestrator/
+ * Mirrors `ModelSelector.selectForRootAgent` (src/core/agent/
  * model-selector.ts): a bound `chat` lane wins unconditionally; only when it
  * is unbound does the global default model apply. The default-model star on
  * the Models page silently loses to a chat binding — this note says so
  * explicitly instead of letting the user chase the wrong knob.
  *
+ * Named for the root agent, not for a root agent: there is no routing hop
+ * any more (Phase 9), so the model resolved here is simply the one that runs
+ * the turn you are talking to.
+ *
  * Uses the same react-query keys as the host pages, so it costs no extra
  * requests where those queries already run.
  */
-export function OrchestratorModelNote() {
+export function RootModelNote() {
   const { data: topicsData } = useQuery({
     queryKey: ['topics-config'],
     queryFn: () => api.get<{ topics: TopicLite[] }>('/topics'),
@@ -54,28 +58,28 @@ export function OrchestratorModelNote() {
       <div className="flex items-start gap-2">
         <Bot className="w-4 h-4 text-primary mt-0.5 shrink-0" />
         <div className="min-w-0 text-xs text-on-surface-variant space-y-1">
-          <p className="text-sm font-medium text-on-surface">Orchestrator model</p>
+          <p className="text-sm font-medium text-on-surface">Chat model</p>
           <p>
-            The orchestrator reads the <span className="font-mono">chat</span> lane binding first;
-            only when that lane is unbound does the global default model apply
+            The agent that answers you reads the <span className="font-mono">chat</span> lane
+            binding first; only when that lane is unbound does the global default model apply
             (a per-session <span className="font-mono">/model</span> override still wins over both).
           </p>
           {effective ? (
             <p>
-              Effective orchestrator model:{' '}
+              Effective model:{' '}
               <span className="font-mono text-primary">{effective}</span>{' '}
               {chatModel ? '(via chat lane binding)' : '(via default model — chat lane unbound)'}
             </p>
           ) : (
             <p className="text-error">
-              No chat lane binding and no default model — the orchestrator has no model to run on.
+              No chat lane binding and no default model — there is no model to run on.
             </p>
           )}
           {overridden && (
             <p className="text-warning">
               Default model <span className="font-mono">{defaultModel}</span> is overridden by the
               chat lane binding → <span className="font-mono">{chatModel}</span>. Rebind or clear
-              the chat lane on the Topics page to change the orchestrator model.
+              the chat lane on the Topics page to change which model answers.
             </p>
           )}
         </div>

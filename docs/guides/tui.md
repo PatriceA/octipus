@@ -79,11 +79,11 @@ intercepted before reaching the gateway:
 | `/expert <name\|reset>` | gateway | Switch / list experts |
 | `/abort` (`/stop`, `/cancel`) | gateway | Cancel running agents |
 | `/compact [focus]` | gateway | Compact session context |
-| `/clear` (`/cls`, `/reset`) | gateway | Reset orchestrator + clear chat |
+| `/clear` (`/cls`, `/reset`) | gateway | Reset root agent + clear chat |
 | `/diff` | gateway | Workspace git diff |
 | `/changes [file]` | gateway | Review workspace changes — list, or a file diff |
 | `/reload-extensions` (`/reload`) | gateway | Re-discover and reload user extensions |
-| `/persona` | gateway | Configure the orchestrator persona |
+| `/persona` | gateway | Configure the root agent persona |
 | `/version` (`/v`) | gateway | Build info |
 
 ### Keybindings (chat shell)
@@ -220,9 +220,11 @@ API_PORT=3015 octi edit --project ~/code/myapp
 
 ## End-to-end tests
 
-A bun-test harness drives both surfaces under a fixed terminal size
-and verifies launch, focus cycling, slash commands, the file picker,
-and `/quit`. Skipped automatically when the gateway isn't running.
+A harness drives both surfaces under a fixed terminal size and verifies
+launch, focus cycling, slash commands, the file picker, and `/quit`. Skipped
+automatically when the gateway isn't running. This suite still runs on
+`bun:test` (not yet migrated to Vitest with the rest of the test suite), so
+it needs the `bun` binary on PATH:
 
 ```bash
 bun test tests/tui/

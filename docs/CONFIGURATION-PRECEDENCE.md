@@ -44,7 +44,7 @@ mirrors the DB. DB writes hot-reload through the cache.
 
 | Key                       | Store        | Edit via                                  |
 | ------------------------- | ------------ | ----------------------------------------- |
-| `STORAGE_MODE`            | `.env`       | re-run `bun run setup` and pick           |
+| `STORAGE_MODE`            | `.env`       | re-run `npm run setup` and pick           |
 | `DATABASE_URL`            | `.env`       | `.env` directly (external mode only)      |
 | `DATA_DIR`                | `.env`       | `.env` directly (embedded mode only)      |
 | `MASTER_KEY`              | `.env`       | regenerate with care — see warning below  |
@@ -94,5 +94,5 @@ safe procedure is:
 3. Restart Octipus.
 4. Re-add every secret via the UI.
 
-`bun run setup` will refuse to overwrite an existing `MASTER_KEY` for
+`npm run setup` will refuse to overwrite an existing `MASTER_KEY` for
 this reason.

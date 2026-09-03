@@ -160,7 +160,7 @@ export async function stubNotes(page: Page): Promise<void> {
 
 /**
  * Topic → model bindings. The Models page reads these (OrchestratorModelNote
- * shows which lane the orchestrator resolves), so leaving `/api/topics`
+ * shows which lane the root agent resolves), so leaving `/api/topics`
  * unstubbed meant the page rendered against a body with no `topics` array.
  */
 export async function stubTopics(page: Page): Promise<void> {
@@ -363,9 +363,9 @@ export async function stubSwarm(page: Page): Promise<void> {
           id: 'n1',
           rootSessionId: 'sess-1',
           parentNodeId: null,
-          kind: 'orchestrator',
+          kind: 'rootAgent',
           depth: 0,
-          role: 'orchestrator',
+          role: 'rootAgent',
           topicPath: 'root',
           model: 'gpt-4o',
           status: 'running',

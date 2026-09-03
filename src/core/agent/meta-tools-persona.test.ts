@@ -11,8 +11,8 @@ function tool(name: string) {
   // No parentNode → swarm spawn_child is skipped, but the rest are
   // registered. Cast the service argument since these tools don't
   // touch the service when called.
-  const orchestrator = {} as unknown as Parameters<typeof createMetaTools>[0];
-  return createMetaTools(orchestrator).find(t => t.name === name);
+  const rootAgent = {} as unknown as Parameters<typeof createMetaTools>[0];
+  return createMetaTools(rootAgent).find(t => t.name === name);
 }
 
 describe('remember_about_self meta-tool', () => {

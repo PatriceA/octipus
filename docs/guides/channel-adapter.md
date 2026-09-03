@@ -10,9 +10,9 @@ External Platform (e.g., Slack, Teams, custom platform)
     ▼
 YourChannel extends BaseChannel (your code)
     │
-    ├── emitMessage()  ──► UMI ──► Gateway Hub ──► Orchestrator
+    ├── emitMessage()  ──► UMI ──► Gateway Hub ──► Root agent
     │
-    ◄── send()         ◄── UMI ◄── Gateway Hub ◄── Orchestrator response
+    ◄── send()         ◄── UMI ◄── Gateway Hub ◄── Root agent response
     ◄── setReaction()  ◄── UMI ◄── Gateway Hub ◄── Feedback emoji
     ◄── sendTyping()   ◄── UMI ◄── Gateway Hub ◄── Typing indicator
 ```

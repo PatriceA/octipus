@@ -1,6 +1,6 @@
 /**
  * Phase 2.1 capability floor — per-model shim-usage stats + the
- * validateOrchestratorModel reroute they drive.
+ * validateRootModel reroute they drive.
  */
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import * as modelRegistry from '@/models/model-registry';
@@ -40,7 +40,7 @@ describe('model-capability stats', () => {
   });
 });
 
-describe('validateOrchestratorModel — capability floor reroute', () => {
+describe('validateRootModel — capability floor reroute', () => {
   const bad = { modelId: 'flash-lite', supportsTools: true, provider: 'gemini' };
   const good = { modelId: 'deepseek-default', supportsTools: true, provider: 'deepseek' };
 
@@ -56,10 +56,10 @@ describe('validateOrchestratorModel — capability floor reroute', () => {
     try {
       resetModelCapabilityStats();
       // Clean model is kept…
-      expect(await new ModelSelector().selectForOrchestration()).toBe('flash-lite');
+      expect(await new ModelSelector().selectForRootAgent()).toBe('flash-lite');
       // …but once it needs the shim, the floor reroutes to the default.
       recordModelToolCall('flash-lite', true);
-      expect(await new ModelSelector().selectForOrchestration()).toBe('deepseek-default');
+      expect(await new ModelSelector().selectForRootAgent()).toBe('deepseek-default');
     } finally {
       spy.mockRestore();
     }

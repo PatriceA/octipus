@@ -127,9 +127,8 @@ export class OctipusTuiApp {
   async start(): Promise<void> {
     this.tui.start();
     await this.adapter.connect();
-    // Show the orchestrator run mode (Router/Light/Full) once connected, so the
+    // Show the root agent run mode (Router/Light/Full) once connected, so the
     // user sees how Octipus is running from the first screen. Non-critical.
-    void this.loadRunMode();
   }
 
   /** Derive the HTTP API base from the gateway WS URL (ws://host:port/gateway
@@ -145,25 +144,6 @@ export class OctipusTuiApp {
       return u.toString().replace(/\/$/, '');
     } catch {
       return null;
-    }
-  }
-
-  /** Fetch the orchestrator run mode and surface it in the status bar. */
-  private async loadRunMode(): Promise<void> {
-    const base = this.httpBase();
-    if (!base) return;
-    try {
-      const res = await fetch(`${base}/health/orchestrator`);
-      if (!res.ok) return;
-      const data = (await res.json()) as { label?: string | null };
-      if (data?.label) {
-        this.status.setMode(data.label);
-        this.tui.requestRender();
-      }
-    } catch {
-      // Non-critical, and the TUI owns the alt-screen — writing to
-      // stdout/console here would corrupt the rendered UI, so we intentionally
-      // stay silent on a failed mode lookup rather than log.
     }
   }
 
@@ -332,7 +312,7 @@ export class OctipusTuiApp {
   /**
    * Talk-key handler. First press starts capture; second press stops, transcribes,
    * and submits the transcript through the SAME path as typed text (`handleSubmit`
-   * → sendChat), so voice reuses the normal orchestrator turn. The reply to that
+   * → sendChat), so voice reuses the normal root agent turn. The reply to that
    * turn is spoken back when TTS is configured.
    * ponytail: half-duplex, one turn per press; barge-in/streaming is Phase 4.
    */

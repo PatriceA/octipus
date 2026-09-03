@@ -60,7 +60,7 @@ export async function generateLinkCode(data: LinkCodeData): Promise<string> {
  *
  * Also writes a legacy JSONB entry on the user so any code path that
  * still reads `users.channelBindings` directly (older parts of the
- * orchestrator we haven't migrated yet) sees the new binding.
+ * root agent we haven't migrated yet) sees the new binding.
  */
 export async function redeemLinkCode(
   code: string,

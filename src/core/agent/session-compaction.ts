@@ -254,7 +254,7 @@ async function compactSessionContext(
 
   // On-compaction memory extraction: feed the structured summary
   // through the memory pipeline so durable facts get captured even
-  // when the orchestrator's per-turn extraction is disabled. The
+  // when the root agent's per-turn extraction is disabled. The
   // summary is third-person and condensed, which is actually closer
   // to the extractor's preferred input than raw user turns.
   const cadence = getConfig().memory?.extractionCadence ?? 'per_turn';

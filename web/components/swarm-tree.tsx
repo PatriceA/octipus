@@ -3,7 +3,7 @@
 /**
  * Swarm Phase 3 — live hierarchical tree view.
  *
- * Replaces `swarm-nodes-list.tsx` (flat list) with a proper Orchestrator →
+ * Replaces `swarm-nodes-list.tsx` (flat list) with a proper Root agent →
  * Agent → Subagent tree rendered from `swarm.node_spawned` /
  * `swarm.node_completed` events pumped in by the chat page.
  *
@@ -44,7 +44,7 @@ import { cn } from '@/lib/utils';
 export interface SwarmTreeNode {
   nodeId: string;
   parentNodeId: string | null;
-  kind: 'orchestrator' | 'agent' | 'subagent';
+  kind: 'root' | 'agent' | 'subagent';
   depth: 0 | 1 | 2;
   topicPath: string;
   role: string;
@@ -68,7 +68,7 @@ export interface SwarmEventPayload {
   rootSessionId: string;
   nodeId: string;
   parentNodeId: string | null;
-  kind: 'orchestrator' | 'agent' | 'subagent';
+  kind: 'root' | 'agent' | 'subagent';
   depth: 0 | 1 | 2;
   topicPath: string;
   role: string;
@@ -128,7 +128,7 @@ function statusBadge(status: string): {
 
 function kindIcon(kind: SwarmTreeNode['kind']) {
   switch (kind) {
-    case 'orchestrator':
+    case 'root':
       // Emoji preferred in design doc; Layers icon is the fallback.
       return <Layers className="w-3 h-3" />;
     case 'agent':
@@ -139,7 +139,7 @@ function kindIcon(kind: SwarmTreeNode['kind']) {
 }
 
 function kindEmoji(kind: SwarmTreeNode['kind']): string {
-  return kind === 'orchestrator' ? '📦' : kind === 'agent' ? '🤖' : '🔧';
+  return kind === 'root' ? '📦' : kind === 'agent' ? '🤖' : '🔧';
 }
 
 function formatDuration(ms: number): string {
@@ -157,7 +157,7 @@ interface ApiSwarmNode {
   rootSessionId: string;
   parentNodeId: string | null;
   depth: number;
-  kind: 'orchestrator' | 'agent' | 'subagent';
+  kind: 'root' | 'agent' | 'subagent';
   role: string;
   expertId?: string | null;
   topicPath: string;
@@ -255,10 +255,10 @@ export default function SwarmTree({
             const node = apiNodeToTreeNode(n);
             next.set(n.id, node);
             if (typeof n.tokensUsed === 'number') tokens += n.tokensUsed;
-            // Sum only orchestrator runtimes — sub-agent durations are
-            // already encompassed by their orchestrator's wall-clock time.
+            // Sum only root agent runtimes — sub-agent durations are
+            // already encompassed by their root agent's wall-clock time.
             // Summing every node double-counts and inflates the metric.
-            if (node.durationMs && node.kind === 'orchestrator') durationMs += node.durationMs;
+            if (node.durationMs && node.kind === 'root') durationMs += node.durationMs;
           }
           setNodes(next);
           onHydratedTotalsRef.current?.({ tokens, durationMs });
@@ -445,9 +445,9 @@ export default function SwarmTree({
   };
 
   const handleCancel = async (node: SwarmTreeNode) => {
-    // Always cancel from the orchestrator (root). User mental model is
+    // Always cancel from the root agent (root). User mental model is
     // "cancel the swarm" — cancelling a single child leaf with the
-    // orchestrator still running was confusing: the orchestrator would
+    // root agent still running was confusing: the root agent would
     // finalize its task even though the user thought they'd stopped
     // everything. Walk up the parent chain to find the root, then
     // cascade from there. Per-node granular cancel was technically
@@ -608,7 +608,7 @@ function TreeNode({
   const isCollapsed = collapsed.has(node.nodeId);
   const { label, cls, Icon } = statusBadge(node.status);
   const isRunning = node.status === 'running';
-  const isRoot = node.kind === 'orchestrator';
+  const isRoot = node.kind === 'root';
 
   const elapsed = node.completedAt
     ? Math.max(0, node.durationMs ?? 0)

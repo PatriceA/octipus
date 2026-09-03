@@ -17,7 +17,7 @@ octipus/
 │   │   ├── cli-agent-worker.ts  # CLI model agent (Claude Code, Antigravity, Codex, Mistral Vibe)
 │   │   ├── tool-executor.ts     # Tool execution with permissions
 │   │   ├── agent-manager.ts
-│   │   ├── orchestrator/   # Message classification, worker spawning, pipelines
+│   │   ├── root agent/   # Message classification, worker spawning, pipelines
 │   │   └── types.ts
 │   ├── db/                 # Database layer (Drizzle ORM, migrations, seeds)
 │   ├── hooks/              # Event-driven automation

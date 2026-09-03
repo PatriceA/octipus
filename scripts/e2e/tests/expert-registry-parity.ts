@@ -8,15 +8,15 @@ import { GatewayWSClient } from '../ws-client';
  * Dual-registry parity check.
  *
  * /expert has two implementations:
- *   - src/core/commands/experts.ts   — orchestrator (used by REST POST /chat)
+ *   - src/core/commands/experts.ts   — root agent (used by REST POST /chat)
  *   - src/core/gateway/commands.ts   — gateway WS command handler
  *
  * These two must agree on behavior. This file drives the same sequence
  * through both paths and asserts response shape / DB side effects match.
  *
  * The REST `/chat` endpoint intercepts `/expert …` messages via
- * handleCommand() inside orchestrator.handleMessage — so POSTing a chat
- * with content starting with "/expert" exercises the orchestrator registry.
+ * handleCommand() inside AgentService.handleMessage — so POSTing a chat
+ * with content starting with "/expert" exercises the root agent registry.
  * The WS path uses `type: "command"` frames which go through the gateway
  * command registry.
  */
@@ -79,7 +79,7 @@ export async function testExpertRegistryParity(runner: TestRunner, client: APICl
       // single non-printing character keeps the binding while leaving nothing
       // human-readable behind (the session is also deleted in cleanup below).
       ws.send({ type: 'chat.send', sessionId, content: '​' });
-      // A real orchestrator turn, and the `agents` lane commonly resolves to a
+      // A real root agent turn, and the `agents` lane commonly resolves to a
       // CLI-backed model that spawns a process before it answers — measured at
       // 33.5s, i.e. past a 30s wait. Too tight a bound on a real-LLM test
       // manufactures red rather than catching slowness.

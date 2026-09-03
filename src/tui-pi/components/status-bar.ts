@@ -24,7 +24,9 @@ export class StatusBar implements Component {
   setExpert(expert: string | null): void { this.expert = expert; }
   setStats(stats: CumulativeStats): void { this.stats = stats; }
   setMcp(summary: McpSummary | null): void { this.mcp = summary; }
-  /** Orchestrator run mode label (Router/Light/Full); null hides the segment. */
+  /** Free-form status segment; null hides it. Not wired to anything today —
+   *  the run-mode badge it used to carry named a routing hop that no longer
+   *  exists, and derived the prompt tier from a second, divergent threshold. */
   setMode(mode: string | null): void { this.mode = mode; }
 
   invalidate(): void { /* no cached state */ }

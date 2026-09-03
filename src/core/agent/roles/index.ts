@@ -12,7 +12,7 @@
  * `require()` each `config.ts`, which worked only because the previous runtime
  * executed TypeScript from source: in the bundled artifact `import.meta.url`
  * resolves inside `dist/`, the scan found no folders, and every role came back
- * undefined — the orchestrator failed its first turn with "Cannot read
+ * undefined — the root agent failed its first turn with "Cannot read
  * properties of undefined (reading 'systemPromptTemplate')". Static imports are
  * what a bundler can see, and a missing role is now a compile error rather than
  * an empty registry at runtime.

@@ -1,7 +1,7 @@
 /**
  * Eval test runner.
  * Supports two modes:
- *   - Unit mode: imports classifier/orchestrator directly (no running backend needed)
+ *   - Unit mode: imports classifier/root agent directly (no running backend needed)
  *   - Integration mode: calls the running backend via HTTP API
  */
 
@@ -54,11 +54,11 @@ async function runTestUnit(
   const start = Date.now();
 
   // Import classifier directly (no DB or backend needed)
-  const { classifyMessage } = await import('@/core/orchestrator/classifier');
+  const { classifyMessage } = await import('@/core/agent/classifier');
   const classification = classifyMessage(test.input);
 
   // For unit mode, we can only test classification and topic-based routing.
-  // Full orchestrator/tool assertions require integration mode.
+  // Full root agent/tool assertions require integration mode.
   const ctx: TestExecutionContext = {
     classification: {
       type: classification.type,
@@ -87,9 +87,9 @@ async function runTestUnit(
   if (needsResponse && model) {
     try {
       // Apply the same input guard + security preamble that handleMessage() uses
-      const { guardInput, buildSecurityReminder } = await import('@/core/orchestrator/input-guard');
-      const { guardOutput } = await import('@/core/orchestrator/output-guard');
-      const { SECURITY_PREAMBLE } = await import('@/core/orchestrator/roles');
+      const { guardInput, buildSecurityReminder } = await import('@/core/agent/input-guard');
+      const { guardOutput } = await import('@/core/agent/output-guard');
+      const { SECURITY_PREAMBLE } = await import('@/core/agent/roles');
 
       const inputGuard = guardInput(test.input);
 

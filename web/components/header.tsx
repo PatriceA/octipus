@@ -49,34 +49,6 @@ export function Header() {
   // than an in-tab login(), since only login() wrote 'assistant-user'.
   const { user, logout: authLogout } = useAuth();
 
-  // Orchestrator run-mode (Router/Light/Full) — derived server-side from the
-  // default model size. Shown as a badge so the user always knows how Octipus
-  // is running. Polled lightly; the mode only changes when the default model does.
-  const [runMode, setRunMode] = useState<{
-    label: string | null;
-    description: string;
-  } | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const load = () =>
-      api
-        .get<{ mode: string | null; label: string | null; description: string }>('/health/orchestrator')
-        .then((d) => {
-          if (!cancelled) setRunMode(d);
-        })
-        .catch((err) => {
-          // Non-critical badge — keep the UI silent but leave a breadcrumb.
-          console.debug('orchestrator run-mode lookup failed', err);
-        });
-    load();
-    const id = setInterval(load, 60_000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, []);
-
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
@@ -359,17 +331,6 @@ export function Header() {
             </div>
           )}
         </div>
-
-        {runMode?.label && (
-          <div
-            className="hidden md:flex items-center"
-            title={`Octipus run mode: ${runMode.description}`}
-          >
-            <span className="px-2 py-0.5 text-[10px] uppercase tracking-wider rounded-xs bg-surface-container text-on-surface-variant border border-outline-variant/40">
-              {runMode.label}
-            </span>
-          </div>
-        )}
 
         <div className="h-5 w-px bg-outline-variant/60 mx-1" />
 

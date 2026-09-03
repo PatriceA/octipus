@@ -6,7 +6,7 @@ Octipus runs as a multi-container Docker application with three services:
 
 | Service | Image | Purpose |
 |---------|-------|---------|
-| `octipus-app` | Custom (Node + Next.js) | API backend + web frontend |
+| `octipus-app` | Custom (Node + Vite) | API backend + web frontend |
 | `octipus-db` | pgvector/pgvector:pg16 | PostgreSQL with vector extensions |
 
 ## Quick Start
@@ -48,7 +48,7 @@ The container includes these tools for agent shell access:
 | **Core** | bash, curl, wget, git, ca-certificates |
 | **Text/Data** | jq, sed, awk, grep, ripgrep, less |
 | **Files** | tree, file, zip, unzip, tar, gzip, rsync |
-| **Build** | make, bun (Node.js runtime) |
+| **Build** | make, node, npm |
 | **Scripting** | python3 (minimal) |
 | **Remote** | openssh-client (ssh, scp, sftp) |
 | **System** | procps (ps, top), coreutils, findutils, diffutils |

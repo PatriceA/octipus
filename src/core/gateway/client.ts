@@ -125,11 +125,11 @@ export class GatewayClient {
   /**
    * Respond to a permission request — the kind raised by the tool
    * executor's permission gate (ASK/DENY). Distinct from
-   * `respondApproval`, which is for orchestrator-side "ask the user
-   * a question" prompts (`orchestrator.approval_required`).
+   * `respondApproval`, which is for root agent-side "ask the user
+   * a question" prompts (`agent.approval_required`).
    *
    * Bug fix: this used to send `approval.respond`, which is the
-   * ORCHESTRATOR's approval channel, not the permission manager's.
+   * ROOT AGENT's approval channel, not the permission manager's.
    * The server silently dropped it because no waiter matched, and the
    * agent stayed blocked until the user re-approved through a
    * different surface (e.g. web UI sending the correct
@@ -140,9 +140,9 @@ export class GatewayClient {
   }
 
   /**
-   * Respond to an orchestrator approval request (multi-option
+   * Respond to a root agent approval request (multi-option
    * "user, please decide" prompts emitted via
-   * `orchestrator.approval_required`).
+   * `agent.approval_required`).
    */
   respondApproval(requestId: string, approved: boolean, response?: string): void {
     this.send({

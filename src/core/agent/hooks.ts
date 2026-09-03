@@ -2,15 +2,15 @@ import { coreLogger } from '@/utils/logger';
 import type { AgentRole } from './types';
 
 /**
- * Orchestrator hooks — sync/async mutable callbacks fired at fixed
- * points in the orchestrator lifecycle.
+ * Root agent hooks — sync/async mutable callbacks fired at fixed
+ * points in the root agent lifecycle.
  *
  * Different from the gateway event bus (which is broadcast, immutable
  * pub/sub). Hooks let subscribers MUTATE the passed options object —
  * the persona block injection works by prepending to
  * `options.systemPrompt`. Subscribers run sequentially in registration
  * order; a thrown handler is logged and swallowed (one bad extension
- * cannot poison the orchestrator).
+ * cannot poison the root agent).
  *
  * Roadmap "Now" item — promoted as prerequisite for the persona
  * system and dynamic role definition.
@@ -22,7 +22,7 @@ export interface BuildSystemPromptOptions {
   /**
    * This prompt belongs to the turn's ROOT agent — the one the user is talking
    * to. Host-level subscribers (the persona) key on this rather than on the
-   * role name, which stopped identifying the root when the orchestrator hop
+   * role name, which stopped identifying the root when the root agent hop
    * was deleted (rebuild plan, Phase 9).
    */
   root?: boolean;
@@ -143,7 +143,7 @@ export interface HookAgentContext {
 
 export type HookHandler<T> = (ctx: T) => Promise<void> | void;
 
-export type OrchestratorHookEvents = {
+export type AgentHookEvents = {
   'before-agent-start': BuildSystemPromptOptions;
   'tool:before': ToolDispatchContext;
   'tool:after': ToolResultContext;
@@ -151,14 +151,14 @@ export type OrchestratorHookEvents = {
   'spawn:after': SpawnResultContext;
 };
 
-export type OrchestratorHookEvent = keyof OrchestratorHookEvents;
+export type AgentHookEvent = keyof AgentHookEvents;
 
-class OrchestratorHookRegistry {
-  private handlers: Map<OrchestratorHookEvent, HookHandler<unknown>[]> = new Map();
+class AgentHookRegistry {
+  private handlers: Map<AgentHookEvent, HookHandler<unknown>[]> = new Map();
 
-  register<E extends OrchestratorHookEvent>(
+  register<E extends AgentHookEvent>(
     event: E,
-    handler: HookHandler<OrchestratorHookEvents[E]>,
+    handler: HookHandler<AgentHookEvents[E]>,
   ): () => void {
     if (!this.handlers.has(event)) this.handlers.set(event, []);
     const arr = this.handlers.get(event)!;
@@ -171,17 +171,17 @@ class OrchestratorHookRegistry {
     };
   }
 
-  async fire<E extends OrchestratorHookEvent>(
+  async fire<E extends AgentHookEvent>(
     event: E,
-    ctx: OrchestratorHookEvents[E],
-  ): Promise<OrchestratorHookEvents[E]> {
+    ctx: AgentHookEvents[E],
+  ): Promise<AgentHookEvents[E]> {
     const list = this.handlers.get(event);
     if (!list || list.length === 0) return ctx;
     for (const handler of list) {
       try {
         await handler(ctx as unknown);
       } catch (err) {
-        coreLogger.error({ err, event }, 'orchestrator hook handler failed — continuing');
+        coreLogger.error({ err, event }, 'rootAgent hook handler failed — continuing');
       }
     }
     return ctx;
@@ -200,10 +200,10 @@ class OrchestratorHookRegistry {
    * - **Short circuit.** The first handler to set `ctx.shortCircuit` ends the
    *   chain, and the call site skips the underlying work.
    */
-  async fireWaterfall<E extends OrchestratorHookEvent>(
+  async fireWaterfall<E extends AgentHookEvent>(
     event: E,
-    ctx: OrchestratorHookEvents[E] & ShortCircuitable,
-  ): Promise<OrchestratorHookEvents[E] & ShortCircuitable> {
+    ctx: AgentHookEvents[E] & ShortCircuitable,
+  ): Promise<AgentHookEvents[E] & ShortCircuitable> {
     const list = this.handlers.get(event);
     if (!list || list.length === 0) return ctx;
     // Snapshot: a handler may unregister itself (or a sibling) mid-chain.
@@ -223,13 +223,13 @@ class OrchestratorHookRegistry {
   }
 
   /** Count handlers registered for an event (test helper). */
-  _count(event: OrchestratorHookEvent): number {
+  _count(event: AgentHookEvent): number {
     return this.handlers.get(event)?.length ?? 0;
   }
 }
 
-let instance: OrchestratorHookRegistry | null = null;
-export function getOrchestratorHooks(): OrchestratorHookRegistry {
-  if (!instance) instance = new OrchestratorHookRegistry();
+let instance: AgentHookRegistry | null = null;
+export function getAgentHooks(): AgentHookRegistry {
+  if (!instance) instance = new AgentHookRegistry();
   return instance;
 }

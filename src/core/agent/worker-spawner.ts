@@ -30,7 +30,7 @@ import { formatCriticalRules, getBoundConnectorIds, getRoleConfig, getToolsForRo
 import { estimateToolSchemaTokens, logPromptComposition } from './prompt-budget';
 import { type DeclaredPurpose, toolsetGaps } from './role-contract';
 import { applyToolCap, isSmallModel } from './small-model';
-import type { OrchestratorEvent } from './service';
+import type { TurnEvent } from './service';
 import { appendSources } from './types';
 import type { AgentRole, WorkerResult } from './types';
 import { formatDateTimeContext } from '@/utils/date-context';
@@ -46,7 +46,7 @@ const AGENTS_MD_GUIDE_TOKEN_BUDGET = 2000;
  * and nothing else.
  *
  * Only `pipelineId`/`nodeKey` are read downstream (`src/tools/plan`), but
- * `context.metadata` is the ORCHESTRATOR's, and carries more than that:
+ * `context.metadata` is the ROOT AGENT's, and carries more than that:
  * `isSystemUser` bypasses tool permission checks, `isAdmin` widens gateway
  * authority, and `originalRequest` re-seeds a worker's drift detector with the
  * parent's vocabulary, weakening the very guard that is supposed to notice the
@@ -66,7 +66,7 @@ export function pipelineMetadata(metadata: Record<string, unknown> | undefined):
 /**
  * Optional swarm wiring for `spawnWorker`. When provided, the worker is
  * registered as a depth-1 agent node under the supplied parent (typically
- * the orchestrator), so it shows up in the swarm tree UI, and is given the
+ * the root agent), so it shows up in the swarm tree UI, and is given the
  * `spawn_child` meta-tool so it can fan out to subagents like any other
  * agent in the swarm. Used by pipeline stages — without this, stages run
  * invisibly to the swarm view and cannot delegate further.
@@ -78,7 +78,7 @@ export interface WorkerSwarmParent {
   subtopic?: string;
 }
 
-type EmitFn = (event: OrchestratorEvent) => void;
+type EmitFn = (event: TurnEvent) => void;
 
 export interface WorkerSpawnerDeps {
   modelSelector: ModelSelector;
@@ -87,7 +87,7 @@ export interface WorkerSpawnerDeps {
 }
 
 /**
- * Spawn an expert-based worker directly (skip classification + orchestrator).
+ * Spawn an expert-based worker directly (skip classification + root agent).
  */
 export async function handleExpertMessage(
   expertId: string,
@@ -148,7 +148,7 @@ export async function handleExpertMessage(
   // scaffold below is assembled here and passed as a systemPrompt override, so
   // it must be trimmed here too. Tier is the expert's modelPreference if set,
   // else the role's topic model — matching what spawnWorker will actually run.
-  const orchCfg = getConfig().orchestrator;
+  const agentCfg = getConfig().agent;
   let isSmall = false;
   try {
     const registry = getModelRegistry();
@@ -156,7 +156,7 @@ export async function handleExpertMessage(
       ? await registry.getModelByModelId(expert.modelPreference)
       : await registry.getModelForTopic(expertLane);
     if (tierModel) {
-      isSmall = isSmallModel({ modelId: tierModel.modelId, metadata: tierModel.metadata }, orchCfg.routerSmallModelMaxParams);
+      isSmall = isSmallModel({ modelId: tierModel.modelId, metadata: tierModel.metadata }, agentCfg.smallModelMaxParams);
     }
   } catch (err) {
     coreLogger.debug({ err, expertId, role: agentRole }, 'expert small-model tier check skipped (non-fatal)');
@@ -243,7 +243,7 @@ export async function handleExpertMessage(
       // a small model can't use. Larger models get the full fragment here: a
       // direct `/expert` invocation is an explicit, focused request, so we keep
       // full fidelity (unlike auto-spawned experts in spawnWorker, which always
-      // use the index because the orchestrator may fan out to several).
+      // use the index because the root agent may fan out to several).
       if (isSmall) {
         const summary = await skillReg.buildPromptSummary(skillIds);
         if (summary) expertPrompt += `\n\n# Domain Knowledge (index)\n${summary}`;
@@ -260,7 +260,7 @@ export async function handleExpertMessage(
     });
 
     // Source attribution: which expert ran, which role, which skills were
-    // injected. Mirrors the directResponse / orchestrator footer so the
+    // injected. Mirrors the directResponse / root agent footer so the
     // user sees consistent provenance no matter which path served them.
     const sources: string[] = [`expert(${expert.name})`, `role(${agentRole})`];
     if (skillIds.length > 0) sources.push(`skills(${skillIds.length})`);
@@ -557,7 +557,7 @@ export async function spawnWorker(
   const lane = overrides?.topic || matchingExpert?.topic || roleConfig.defaultTopic;
 
   // Resolve the worker's model up front so we know whether it's in the small
-  // (router) tier before assembling the prompt. The orchestrator already
+  // (router) tier before assembling the prompt. The root agent already
   // shrinks itself for small models (router/lite/full); this is the mirror
   // image for workers — trim the expert scaffold and cap the tool surface so a
   // weak local model isn't handed a 14-tool list and a multi-section prompt it
@@ -568,12 +568,12 @@ export async function spawnWorker(
     lane,
     roleTools.length > 0,
   );
-  const orchCfg = getConfig().orchestrator;
+  const agentCfg = getConfig().agent;
   let isSmall = false;
   if (routing.model) {
     try {
       const topicMeta = await getModelRegistry().getModelByModelId(routing.model);
-      isSmall = isSmallModel({ modelId: routing.model, metadata: topicMeta?.metadata }, orchCfg.routerSmallModelMaxParams);
+      isSmall = isSmallModel({ modelId: routing.model, metadata: topicMeta?.metadata }, agentCfg.smallModelMaxParams);
     } catch (err) {
       coreLogger.debug({ err, model: routing.model }, 'small-model tier check skipped (non-fatal)');
     }
@@ -700,7 +700,7 @@ export async function spawnWorker(
   const finalModelEntry = await getModelRegistry().getModelByModelId(finalModel);
   const finalIsSmall = isSmallModel(
     { modelId: finalModel, metadata: finalModelEntry?.metadata },
-    orchCfg.routerSmallModelMaxParams,
+    agentCfg.smallModelMaxParams,
   );
 
   // Small-tier worker: cap the tool surface. Role tool lists are
@@ -711,7 +711,7 @@ export async function spawnWorker(
   // or override otherwise capped a big model to 7 tools, or handed a small one
   // the full ~12k-token surface.
   if (finalIsSmall) {
-    roleTools = applyToolCap(roleTools, orchCfg.smallModelMaxTools, { role: agentRole, modelId: finalModel });
+    roleTools = applyToolCap(roleTools, agentCfg.smallModelMaxTools, { role: agentRole, modelId: finalModel });
   }
 
   // ── Capability contract (wave 3) ────────────────────────────────
@@ -748,12 +748,12 @@ export async function spawnWorker(
   let base = overrides?.systemPrompt || expertPrompt || roleTemplate;
 
   // ── Per-arm persona shadowing (wave 4) ──────────────────────────
-  // The host persona has always been orchestrator-only. An arm the user has
+  // The host persona has always been root agent-only. An arm the user has
   // bound with `/persona arm <role> <preset>` speaks in that preset's voice
   // instead; every other arm is untouched and carries no persona block at all,
   // so this costs nothing until it is switched on.
   //
-  // Placed like the orchestrator's block (`personas/persona-hook.ts`): AFTER
+  // Placed like the root agent's block (`personas/persona-hook.ts`): AFTER
   // SECURITY_PREAMBLE, before the role prompt, so the security rules stay the
   // first thing the model reads (DESIGN.md rule #6). STATIC — it changes only
   // when the binding does, so it belongs in the cacheable prefix.
@@ -980,8 +980,8 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     }
   }
 
-  // Workers must return results to the orchestrator, not message the user directly (STATIC)
-  staticParts.push(`\n\nIMPORTANT: You are a worker agent. Return your findings and results as plain text in your final response. Do NOT use messaging tools (send_to_user, send_channel_message) to contact the user — the orchestrator handles all user communication. Just do your task and respond with the result.`);
+  // Workers must return results to the root agent, not message the user directly (STATIC)
+  staticParts.push(`\n\nIMPORTANT: You are a worker agent. Return your findings and results as plain text in your final response. Do NOT use messaging tools (send_to_user, send_channel_message) to contact the user — the rootAgent handles all user communication. Just do your task and respond with the result.`);
 
   // Knowledge-tool roles: point them at the auto-indexed product docs so
   // "how do I set up / configure / connect X" questions are answered from
@@ -1110,7 +1110,7 @@ Use these MCP tools when the task benefits from them — especially for people-r
           hasCoreToolIds: roleConfig.coreToolIds !== undefined,
           isSmallModel: finalIsSmall,
           supportsTools: finalModelEntry?.supportsTools === true,
-          enabled: getConfig().orchestrator.lazyToolDiscovery,
+          enabled: getConfig().agent.lazyToolDiscovery,
         })
       ) {
         const { splitRoleTools } = await import('./tool-split');
@@ -1514,7 +1514,7 @@ async function handleWorkerFailure(
       data: { workerId, role: agentRole, status: 'denied', totalTokens: failedTokens, durationMs: Date.now() - startTime },
       timestamp: new Date(),
     });
-    throw error; // Propagate to caller (handleExpertMessage or orchestrator)
+    throw error; // Propagate to caller (handleExpertMessage or rootAgent)
   }
 
   // Quota exhaustion aborts like a stop but is NOT one, and it must never be
@@ -1555,7 +1555,7 @@ async function handleWorkerFailure(
       data: { workerId, role: agentRole, status: 'stopped', totalTokens: failedTokens, durationMs: Date.now() - startTime },
       timestamp: new Date(),
     });
-    // Re-throw so the orchestrator aborts the pipeline instead of proceeding to the next stage
+    // Re-throw so the root agent aborts the pipeline instead of proceeding to the next stage
     throw new Error('Agent was stopped by user');
   }
 

@@ -2,7 +2,7 @@
  * One answer to "does this turn advertise every tool schema, or a core set plus
  * `list_tools`/`describe_tool`?"
  *
- * It used to be two answers. The root (`orchestrator-runner`) and every worker
+ * It used to be two answers. The root (`root-runner`) and every worker
  * (`worker-spawner`) each carried their own copy of the same condition, and a
  * copy of a gating rule is a copy that goes stale exactly when someone changes
  * the rule in one place.
@@ -28,7 +28,7 @@ export interface LazyDiscoveryInputs {
   isSmallModel: boolean;
   /** A model that cannot call tools cannot call the discovery meta-tools either. */
   supportsTools: boolean;
-  /** `orchestrator.lazyToolDiscovery` — the operator's override. */
+  /** `agent.lazyToolDiscovery` — the operator's override. */
   enabled: boolean;
 }
 

@@ -17,7 +17,7 @@ Domain knowledge sets that provide expertise to agents via system prompt injecti
 **Location:** DB table `skills`, seeded from `src/db/seed-skills.ts`, managed via `SkillRegistry` and `/api/skills` CRUD
 
 ### Experts
-Pre-configured agent personas that combine a role, tools, skills, and system prompt. Experts bypass the orchestrator for direct, focused task execution.
+Pre-configured agent personas that combine a role, tools, skills, and system prompt. Experts bypass the root agent for direct, focused task execution.
 
 **Examples:** Coder (coding role + architecture/data-structures skills), DevOps Engineer (devops role + CI/CD/containers skills), Security Analyst (security role + OWASP/networking skills)
 
@@ -43,29 +43,29 @@ Runtime instances that execute tasks using an LLM tool loop. Each agent has a co
 ### Root agent
 Depth-0 root of the swarm, and the agent the user is talking to. It runs as an ordinary role — `general` (`ROOT_ROLE`) — with the general toolset **plus** the `spawn_child` / `collect_children` / `create_pipeline` meta-tools, so it answers with its own tools and delegates sub-topics to specialist Agents when one is genuinely needed. Owns the final user-facing reply.
 
-Until Phase 9 of the rebuild plan this was a dedicated `orchestrator` role holding meta-tools and `profiles` and nothing else, reached through a keyword classifier that decided per message whether to run it at all. It could do no work, so half its runs answered from parametric memory after a second model had already read the same message. Both the classifier branch and the tool-less role are gone; `AgentContext.root` is what identifies the root now, since the role string no longer does.
+Until Phase 9 of the rebuild plan this was a dedicated `root agent` role holding meta-tools and `profiles` and nothing else, reached through a keyword classifier that decided per message whether to run it at all. It could do no work, so half its runs answered from parametric memory after a second model had already read the same message. Both the classifier branch and the tool-less role are gone; `AgentContext.root` is what identifies the root now, since the role string no longer does.
 
-**Location:** `src/core/orchestrator/service.ts` and `orchestrator-runner.ts`, role prompt at `src/core/orchestrator/roles/general/prompt.md`, delegation mechanics at `src/core/orchestrator/delegation-prompt.md`
+**Location:** `src/core/agent/service.ts` and `root-runner.ts`, role prompt at `src/core/agent/roles/general/prompt.md`, delegation mechanics at `src/core/agent/delegation-prompt.md`
 
 #### Message Classification (Two-Layer Architecture)
 
-The orchestrator uses two layers of classification with different vocabularies:
+The root agent uses two layers of classification with different vocabularies:
 
 **Layer A — src/core/router.ts** (legacy, 15 topics):
 coding, research, architecture, chat, embedding, design, devops, security, data, ai, qa, finance, automation, pm, writing (+ 'general' fallback).
 
-**Layer B — src/core/orchestrator/classifier.ts** (live, 14 categories):
+**Layer B — src/core/agent/classifier.ts** (live, 14 categories):
 coding, research, devops, security, review, qa, data, writing, architecture, design, finance, communication, automation, general.
 
 Layer B is the active classification path. What it is NOT any more is a routing decision: it does not choose the specialist (Phase 2) and it does not choose whether an agent runs at all (Phase 9). It scopes memory retrieval, and in the lite tier only it reaches the model as a hint the request can override. `TOPIC_TO_ROLE_ALIAS` (swarm-tool.ts) still catches natural-language synonyms the model may use in `spawn_child` (e.g. `development`→`coding`, `database`→`data`). Divergences from Layer A: Layer B has distinct 'communication' category and lacks 'chat'/'embedding'/'ai'/'pm' (handled via LLM fallback).
 
 ### Swarm (3-Level Hierarchy)
 
-Delegation runs through a fixed 3-level tree: **Orchestrator → Agent → Subagent**. Depth is structural, not configurable.
+Delegation runs through a fixed 3-level tree: **Root agent → Agent → Subagent**. Depth is structural, not configurable.
 
 | Kind | Depth | Spawned by | Can spawn? | Lifetime |
 |---|---|---|---|---|
-| **Orchestrator** | 0 | `OrchestratorService.handleMessage()` | Yes → Agents | Per session |
+| **Root agent** | 0 | `AgentService.handleMessage()` | Yes → Agents | Per session |
 | **Agent** | 1 | Parent's `spawn_child` | Yes → Subagents | Ephemeral, per topic |
 | **Subagent** | 2 | Parent's `spawn_child` | **No** (leaf) | Ephemeral, per subtopic |
 
@@ -73,7 +73,7 @@ The LLM-facing tool is `spawn_child`. Agents also get `escalate_to_different_exp
 
 **Location:** `src/core/swarm/` — `spawner.ts`, `call-graph.ts`, `types.ts`, `errors.ts`, `escalate-tool.ts`, `swarm-tool.ts`, `orphan-reaper.ts`, `fan-out-budget.ts`, `node-repository.ts`. DB table `swarm_nodes`. The full design lives in `.octipus/swarm-design.md`.
 
-## Orchestrator persona
+## Root agent persona
 
 A per-user identity layer the root agent inherits at every turn — name, pronouns, tone, narration volume, free-form self-facts. Default is **Octipus** (the octopus-machine). Layered between `SECURITY_PREAMBLE` and the role prompt via the `before-agent-start` hook:
 
@@ -102,7 +102,7 @@ Six presets ship under `personas/`: `octipus` (default), `terse-engineer`, `ment
 User Message
     │
     ▼
-Orchestrator (depth 0)
+Root agent (depth 0)
     │
     ├─ Expert bypass? ──► Spawn worker with expert's role + tools + skills
     │
@@ -136,7 +136,7 @@ Every node has a hard budget envelope enforced pre-LLM-call inside `AgentWorker.
 
 | Level | Tokens (cap) | Wall-clock (cap) | Fan-out (cap) |
 |---|---|---|---|
-| Orchestrator (0) | 200k | 10 min | 6 |
+| Root agent (0) | 200k | 10 min | 6 |
 | Agent (1) | 80k | 10 min | 4 |
 | Subagent (2) | 30k | 10 min | 0 |
 
@@ -152,11 +152,11 @@ Defaults live in `src/core/swarm/types.ts` (`LEVEL_DEFAULT`, `BUDGET_RESERVE_FRA
 
 ### Cascade Cancel
 
-Parent abort propagates to children via an `AbortSignal` chain rooted on the Orchestrator. `AgentManager.stop(id, { cascade: true })` walks the in-memory `childrenByParent` index synchronously and fires a background DB walk so zombie descendants flip to `cancelled` in `swarm_nodes`.
+Parent abort propagates to children via an `AbortSignal` chain rooted on the Root agent. `AgentManager.stop(id, { cascade: true })` walks the in-memory `childrenByParent` index synchronously and fires a background DB walk so zombie descendants flip to `cancelled` in `swarm_nodes`.
 
 ### Permission Inheritance
 
-`child.allowedToolIds = parent.allowedToolIds ∩ requiredToolIds`. The root Orchestrator's `allowedToolIds` is the **union** of all role `toolIds` — so children inherit their role's full toolbox via intersection rather than an empty set. Children that need a tool the parent lacks escalate via `request_user_approval`.
+`child.allowedToolIds = parent.allowedToolIds ∩ requiredToolIds`. The root Root agent's `allowedToolIds` is the **union** of all role `toolIds` — so children inherit their role's full toolbox via intersection rather than an empty set. Children that need a tool the parent lacks escalate via `request_user_approval`.
 
 ### Observability
 
@@ -192,7 +192,7 @@ The full handoff chain is accumulated across all stages, so later stages have vi
 
 ### Automatic Expert Selection
 
-When the orchestrator (or an Agent) calls `spawn_child` with a `role` and no explicit `expertId`, the swarm spawner matches a system expert from the database by role. The matched expert provides:
+When the root agent (or an Agent) calls `spawn_child` with a `role` and no explicit `expertId`, the swarm spawner matches a system expert from the database by role. The matched expert provides:
 
 - **System prompt** — expert-specific instructions and persona (with `SECURITY_PREAMBLE` deduplicated)
 - **Domain knowledge** — skills loaded via `SkillRegistry.buildPromptFragment()` and appended
@@ -209,7 +209,7 @@ Children resolve their model strictly (no parent-model inheritance, no hardcoded
 3. Expert `modelPreference` — if the matched expert has an explicit preference *and no topic binding exists*, use it.
 4. Fail loud — if all above resolve to null, `SwarmSpawner.resolveChildModelAndExpert` throws with a message pointing the user at the Models page. No default-model fallback for workers.
 
-Children **inherit topic bindings, not the parent's model**. If a research Agent spawns a security Subagent, the Subagent resolves the model bound to `security`, not the parent's research model. `ModelRegistry.getModelForTopic()` is the single authoritative entry point. `litellm-client.ts:embed()` and `visual/analyzer.ts` resolve embedding/vision models the same way (or throw if unbound). Default fallback applies *only* to the orchestrator via `selectForOrchestration()`.
+Children **inherit topic bindings, not the parent's model**. If a research Agent spawns a security Subagent, the Subagent resolves the model bound to `security`, not the parent's research model. `ModelRegistry.getModelForTopic()` is the single authoritative entry point. `litellm-client.ts:embed()` and `visual/analyzer.ts` resolve embedding/vision models the same way (or throw if unbound). Default fallback applies *only* to the root agent via `selectForOrchestration()`.
 
 ## How They Relate
 
@@ -249,10 +249,10 @@ Children **inherit topic bindings, not the parent's model**. If a research Agent
 Some models (Qwen3, DeepSeek) emit `<think>...</think>` reasoning blocks that consume output tokens. The system handles this at multiple levels:
 
 - **Model-level:** "Disable Thinking" checkbox in the model Add/Edit dialog sets `extraBody: { think: false }` — prevents the model from generating reasoning tokens entirely (Ollama)
-- **Agent workers (orchestrator AND experts):** Strip `think:false` from extraBody so the model can reason before emitting tool calls. Empirically (2026-05-12 QA), Ollama with `think:false` produces malformed tool-call JSON that the Go-side parser rejects ("Value looks like object, but can't find closing '}'"); with thinking ON, the same models emit valid tool calls. The override applies to every role that uses tools, not just experts.
+- **Agent workers (root agent AND experts):** Strip `think:false` from extraBody so the model can reason before emitting tool calls. Empirically (2026-05-12 QA), Ollama with `think:false` produces malformed tool-call JSON that the Go-side parser rejects ("Value looks like object, but can't find closing '}'"); with thinking ON, the same models emit valid tool calls. The override applies to every role that uses tools, not just experts.
 - **LLM client safety net:** `<think>` blocks are stripped from both sync and streaming responses before delivery, so users never see raw reasoning output
 
-**Strategy:** Keep thinking enabled for any agent that emits tool calls (orchestrator, experts) — the cost in tokens is much smaller than the cost of a failed tool call + retry storm. Disable thinking only for the toolless surfaces (`direct-response.ts` — voice propose, `chat.interject`), where there are no tool calls to corrupt.
+**Strategy:** Keep thinking enabled for any agent that emits tool calls (root agent, experts) — the cost in tokens is much smaller than the cost of a failed tool call + retry storm. Disable thinking only for the toolless surfaces (`direct-response.ts` — voice propose, `chat.interject`), where there are no tool calls to corrupt.
 
 ## Steering Messages
 
@@ -329,7 +329,7 @@ Create via the API (`POST /api/skills`) or add to `SYSTEM_SKILLS` in `src/db/see
 Add entry to `SYSTEM_EXPERTS` in `src/db/seed-experts.ts` with role, skills, prompt, rules, and metrics.
 
 ### New Role
-1. Create folder `src/core/orchestrator/roles/<name>/`
+1. Create folder `src/core/agent/roles/<name>/`
 2. Add `config.ts` with `RoleMeta` (role, toolIds, defaultTopic)
 3. Add `prompt.md` (role system prompt)
 4. Roles auto-discover from folders; no manual registration needed

@@ -1,10 +1,10 @@
 /**
- * Expert index for the orchestrator prompt.
+ * Expert index for the root agent prompt.
  *
- * The orchestrator routes work by picking a `spawn_child` role, but the role
+ * The root agent routes work by picking a `spawn_child` role, but the role
  * table in prompt.md is static — it can't know about experts the user has
  * created. This builds a compact, per-turn index of every expert visible to
- * the calling user (system experts + the user's own), so the orchestrator can
+ * the calling user (system experts + the user's own), so the root agent can
  * pass an exact `expertId` to spawn_child instead of always falling back to
  * the role's default system expert. The list is read from the DB each turn,
  * so newly added experts are routable immediately — no prompt edits, no
@@ -57,7 +57,7 @@ export async function loadVisibleExperts(userId: string): Promise<ExpertIndexEnt
 
 /**
  * Render the AVAILABLE EXPERTS prompt block. Returns '' when the lookup fails
- * or there are no experts — the orchestrator then routes by role alone, which
+ * or there are no experts — the root agent then routes by role alone, which
  * is exactly the pre-index behaviour (auto-pick of the role's system expert).
  */
 export async function buildExpertIndexBlock(userId: string): Promise<string> {
@@ -65,7 +65,7 @@ export async function buildExpertIndexBlock(userId: string): Promise<string> {
   try {
     rows = await loadVisibleExperts(userId);
   } catch (err) {
-    coreLogger.warn({ err, userId }, 'Expert index lookup failed — orchestrator routes by role only this turn');
+    coreLogger.warn({ err, userId }, 'Expert index lookup failed — rootAgent routes by role only this turn');
     return '';
   }
   if (rows.length === 0) return '';

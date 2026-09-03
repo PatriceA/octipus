@@ -13,7 +13,7 @@ import { seedSession, seedUsers } from '@/test-helpers/multiuser-fixtures';
  * much as the positive one: a run that genuinely completed before the crash
  * must not be rewritten into a paused one.
  *
- * DB-backed: `npm run test:integration -- src/core/orchestrator/pipeline-interrupted.test.ts`.
+ * DB-backed: `npm run test:integration -- src/core/agent/pipeline-interrupted.test.ts`.
  */
 describe.skipIf(!isIntegration)('pipeline boot reconcile (DB-backed)', () => {
   const userId = '00000000-0000-0000-0000-0000000000b1';
@@ -24,7 +24,7 @@ describe.skipIf(!isIntegration)('pipeline boot reconcile (DB-backed)', () => {
     const { randomUUID } = await import('node:crypto');
     const id = randomUUID();
     await executeRaw(
-      `INSERT INTO pipelines (id, orchestrator_agent_id, session_id, user_id, title, type, status, summary)
+      `INSERT INTO pipelines (id, root_agent_id, session_id, user_id, title, type, status, summary)
        VALUES ('${id}', 'orch-1', '${sessionId}', '${userId}', 'test', 'development', '${status}',
                ${summary === null ? 'NULL' : `'${summary}'`})`,
     );
@@ -56,7 +56,7 @@ describe.skipIf(!isIntegration)('pipeline boot reconcile (DB-backed)', () => {
     const awaiting = await insertPipeline('awaiting_approval', null);
     const completed = await insertPipeline('completed', 'all good');
 
-    const { getPipelineManager } = await import('@/core/orchestrator');
+    const { getPipelineManager } = await import('@/core/agent');
     const count = await getPipelineManager().reconcileInterrupted();
     expect(count).toBe(2);
 
@@ -94,7 +94,7 @@ describe.skipIf(!isIntegration)('pipeline boot reconcile (DB-backed)', () => {
       );
     }
 
-    const { getPipelineManager } = await import('@/core/orchestrator');
+    const { getPipelineManager } = await import('@/core/agent');
     expect(await getPipelineManager().reconcileInterrupted()).toBe(1);
 
     const rows = await executeRaw(
@@ -118,7 +118,7 @@ describe.skipIf(!isIntegration)('pipeline boot reconcile (DB-backed)', () => {
   });
 
   it('is idempotent — a second boot changes nothing', async () => {
-    const { getPipelineManager } = await import('@/core/orchestrator');
+    const { getPipelineManager } = await import('@/core/agent');
     expect(await getPipelineManager().reconcileInterrupted()).toBe(0);
   });
 });

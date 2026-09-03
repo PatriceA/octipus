@@ -42,7 +42,7 @@ export const OCTIPUS_SLASH_COMMANDS: OctipusSlashCommand[] = [
        argumentHint: '[on|off]' }),
   gw({ name: 'compact',   description: 'Compact session context (optional focus instructions)',
        argumentHint: '[focus]' }),
-  gw({ name: 'clear',     description: 'Reset orchestrator context and clear the chat',     aliases: ['cls', 'reset'] }),
+  gw({ name: 'clear',     description: 'Reset rootAgent context and clear the chat',     aliases: ['cls', 'reset'] }),
   gw({ name: 'cost',      description: 'Show cumulative token usage and cost' }),
   gw({ name: 'diff',      description: 'Show git diff for workspace changes' }),
   gw({ name: 'changes',   description: 'Review workspace changes — list, or a file diff',

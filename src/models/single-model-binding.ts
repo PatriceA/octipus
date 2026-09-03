@@ -4,7 +4,7 @@
  * binding a model to all of them at once.
  *
  * Why this exists: worker topics are fail-loud — `getModelForTopic` has no
- * default fallback (only the orchestrator falls back). So a single-model install
+ * default fallback (only the root agent falls back). So a single-model install
  * that binds just `general` breaks the moment the router routes to any other
  * specialist (`coding`, `research`, …): the topic is unbound and the spawn
  * throws. For the "run Octipus on one small local model" scenario the one chat
@@ -20,7 +20,7 @@ import { TEXT_TOPIC_VALUES } from './topics';
 
 /**
  * Every text topic a single general chat model can reasonably handle — the
- * worker role topics, orchestrator-direct text topics, and automated background
+ * worker role topics, root agent-direct text topics, and automated background
  * text tasks. Derived from the canonical topic registry (`TEXT_TOPIC_VALUES`)
  * so there is ONE source of truth; the vision/ocr/embedding model classes are
  * excluded there. A drift guard in the test cross-checks the role subset

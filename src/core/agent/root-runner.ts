@@ -15,7 +15,7 @@ import type { SessionContext } from '@/db/schema/sessions';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
 import { truncateLinesToTokens } from '@/utils/token-count';
-import { getOrchestratorHooks } from './hooks';
+import { getAgentHooks } from './hooks';
 import { estimateToolSchemaTokens, logPromptComposition } from './prompt-budget';
 import { buildSecurityReminder } from './input-guard';
 import { createMetaTools } from './meta-tools';
@@ -24,14 +24,14 @@ import { isPlanMode, PLAN_MODE_DIRECTIVE, stripMutatingTools } from './plan-mode
 import { isLongTailHandler } from './tool-split';
 import { buildCapabilitiesHandler } from '@/tools/self-report';
 import type { ModelSelector } from './model-selector';
-import { resolveOrchestratorMode } from './mode-selector';
+import { resolvePromptTier } from './prompt-tier';
 import { buildOutputDirective } from './output-directive';
 import { getRoleConfig, getToolsForRole } from './roles';
 import delegationPrompt from './delegation-prompt.md';
 import { applyToolCap, isSmallModel } from './small-model';
 import { channelCanPrompt } from '@/security/approval-policy';
 import { ROOT_ROLE } from './types';
-import type { OrchestratorEvent, OrchestratorService } from './service';
+import type { TurnEvent, AgentService } from './service';
 import type { MessageClassification } from './types';
 
 // Token budget for the workspace-suite repo list (Phase 5 item 2 follow-up).
@@ -39,10 +39,10 @@ import type { MessageClassification } from './types';
 // unbounded — so budget the lines and keep the top (highest-value) repos.
 const REPO_SUITE_TOKEN_BUDGET = 1500;
 
-/** Dependency bundle the runner needs from OrchestratorService. */
-export interface OrchestratorRunnerDeps {
+/** Dependency bundle the runner needs from AgentService. */
+export interface RootRunnerDeps {
   modelSelector: ModelSelector;
-  emit: (event: OrchestratorEvent) => void;
+  emit: (event: TurnEvent) => void;
   setLastWorkerResult: (result: string | null) => void;
   getLastWorkerResult: () => string | null;
 }
@@ -53,18 +53,18 @@ export interface OrchestratorRunnerDeps {
  * answers the request itself and delegates only when a specialist is needed.
  *
  * Phase 9 of the rebuild plan deleted the routing hop this used to be. The root
- * used to run as role `orchestrator` holding meta-tools and `profiles` and
+ * used to run as role `root agent` holding meta-tools and `profiles` and
  * nothing else, so it could not do any work — 51% of its runs delegated to
  * nobody and answered from parametric memory, after a keyword classifier had
  * already decided the hop should run at all. Both the classifier's control-flow
  * branch and the tool-less role are gone; what remains is the single loop.
  */
 /**
- * The delegation policy appended to every orchestrator turn.
+ * The delegation policy appended to every root agent turn.
  *
  * This is POLICY, not a classification result. It used to ride inside the
  * `if (classification.topic)` block, so a message the keyword table did not
- * recognise reached the orchestrator with no delegation guidance at all — and
+ * recognise reached the root agent with no delegation guidance at all — and
  * the requests least likely to match a keyword are exactly the ones most likely
  * to need delegating. It is now unconditional, and the topic is a separate,
  * weaker thing (see `buildTopicHint`).
@@ -116,9 +116,9 @@ export function assembleSystemPrompt(staticParts: string[], volatileParts: strin
   return [...staticParts, ...volatileParts].filter(Boolean).join('');
 }
 
-export async function runOrchestrator(
-  service: OrchestratorService,
-  deps: OrchestratorRunnerDeps,
+export async function runRootAgent(
+  service: AgentService,
+  deps: RootRunnerDeps,
   sessionId: string,
   userId: string,
   message: string,
@@ -126,9 +126,9 @@ export async function runOrchestrator(
   guardFlags: string[] = [],
   channel?: string,
   /**
-   * Memory-redesign Phase D — appended to the orchestrator's system
+   * Memory-redesign Phase D — appended to the root agent's system
    * prompt. Pre-rendered by `handleMessage` once per turn so both
-   * the orchestrator and the directResponse path see the same
+   * the root agent and the directResponse path see the same
    * long-term memory block.
    */
   extraSystemContext: string = '',
@@ -139,24 +139,24 @@ export async function runOrchestrator(
 ): Promise<{ response: string; agentId: string; sources: string[] }> {
   const emit = deps.emit;
   const agentManager = getAgentManager();
-  const modelName = await deps.modelSelector.selectForOrchestration(sessionId);
+  const modelName = await deps.modelSelector.selectForRootAgent(sessionId);
 
-  // Resolve the orchestrator mode for THIS turn. 'auto' (default) re-derives
+  // Resolve the root agent mode for THIS turn. 'auto' (default) re-derives
   // from the current default model's size every turn, so swapping to a
-  // smaller model switches the orchestrator to lite/router with no restart.
+  // smaller model switches the root agent to lite/router with no restart.
   // router short-circuits below to a deterministic single-worker turn; lite
   // shrinks the prompt/tools/iterations further down; full is unchanged.
-  const orchCfg = getConfig().orchestrator;
+  const agentCfg = getConfig().agent;
   const modelMeta = await getModelRegistry().getModelByModelId(modelName);
-  const orchestratorMode = resolveOrchestratorMode(
+  const promptTier = resolvePromptTier(
     { modelId: modelName, metadata: modelMeta?.metadata, provider: modelMeta?.provider },
     {
-      mode: orchCfg.mode,
-      routerSmallModelMaxParams: orchCfg.routerSmallModelMaxParams,
-      liteModelMaxParams: orchCfg.liteModelMaxParams,
+      mode: agentCfg.promptTier,
+      smallModelMaxParams: agentCfg.smallModelMaxParams,
+      liteModelMaxParams: agentCfg.liteModelMaxParams,
     },
   );
-  coreLogger.info({ sessionId, modelName, orchestratorMode, role: ROOT_ROLE }, 'Root agent mode resolved');
+  coreLogger.info({ sessionId, modelName, promptTier, role: ROOT_ROLE }, 'Root agent mode resolved');
 
   // Read once, here, because the tool set is decided further down and plan mode
   // has to reach it. The later `session` read is the same row.
@@ -167,23 +167,23 @@ export async function runOrchestrator(
 
   // Build the swarm root node AgentNode up front so meta-tools can bind to
   // it. The actual DB row is written once we know the agentId (post-spawn).
-  // The orchestrator's allowed tool ids is the superset of its role's tools
+  // The root agent's allowed tool ids is the superset of its role's tools
   // plus the meta-tools it owns.
-  const orchestratorAbortController = new AbortController();
-  const orchestratorAllowedToolIds = new Set<string>();
-  // Meta-tool ids that the orchestrator owns by construction.
+  const rootAbortController = new AbortController();
+  const rootAllowedToolIds = new Set<string>();
+  // Meta-tool ids that the root agent owns by construction.
   for (const name of ['spawn_child', 'collect_children', 'create_pipeline', 'list_pipeline_templates', 'filter_pii', 'request_user_approval', 'exit_plan_mode', 'send_status_update', 'remember_this', 'remember_about_self', 'reflect']) {
-    orchestratorAllowedToolIds.add(name);
+    rootAllowedToolIds.add(name);
   }
   // The root's own role tools — the general toolset it works with directly.
-  for (const id of rootRoleConfig.toolIds) orchestratorAllowedToolIds.add(id);
-  // Superset: orchestrator is the root of every swarm branch and must be
+  for (const id of rootRoleConfig.toolIds) rootAllowedToolIds.add(id);
+  // Superset: root agent is the root of every swarm branch and must be
   // able to grant any specialist role's tools to its children via
   // intersection. Without this, e.g. the `general` role's `profiles` tool
-  // would be stripped out because the orchestrator itself never lists it.
+  // would be stripped out because the root agent itself never lists it.
   const { ROLE_CONFIGS } = await import('./roles');
   for (const cfg of Object.values(ROLE_CONFIGS)) {
-    for (const id of cfg.toolIds) orchestratorAllowedToolIds.add(id);
+    for (const id of cfg.toolIds) rootAllowedToolIds.add(id);
   }
 
   // Parent AgentNode for the swarm. `id` is a placeholder — overwritten
@@ -193,7 +193,7 @@ export async function runOrchestrator(
     id: '__pending__',
     rootSessionId: sessionId,
     parentNodeId: null,
-    kind: 'orchestrator',
+    kind: 'root',
     depth: 0,
     role: ROOT_ROLE,
     topicPath: 'root',
@@ -204,30 +204,30 @@ export async function runOrchestrator(
       fanOut: { cap: LEVEL_DEFAULT[0].fanOut, used: 0 },
       depth: 0,
     },
-    allowedToolIds: orchestratorAllowedToolIds,
-    signal: orchestratorAbortController.signal,
+    allowedToolIds: rootAllowedToolIds,
+    signal: rootAbortController.signal,
   };
 
   // Late-bound worker handles for detach-mode `spawn_child` +
-  // `collect_children`. The orchestrator's AgentWorker is created below
+  // `collect_children`. The root agent's AgentWorker is created below
   // by `agentManager.spawn(...)`; both refs are populated once it
   // returns. Tool executes run inside `worker.run(...)` AFTER this
   // wiring, so a stray null on these refs would be a bug in the spawn
   // path, not a race.
-  const orchestratorDetachHookRef: {
+  const rootDetachHookRef: {
     current: {
       registerPendingChild: (pc: PendingChild) => void;
       pendingDetachedCount: () => number;
     } | null;
   } = { current: null };
-  const orchestratorWorkerRef: { current: AgentWorker | null } = { current: null };
+  const rootWorkerRef: { current: AgentWorker | null } = { current: null };
 
-  const isLite = orchestratorMode === 'lite';
+  const isLite = promptTier === 'lite';
   const metaTools = createMetaTools(service, {
     parentNode,
     swarmRefs: {
-      detachHookRef: orchestratorDetachHookRef,
-      workerRef: orchestratorWorkerRef,
+      detachHookRef: rootDetachHookRef,
+      workerRef: rootWorkerRef,
     },
     lite: isLite,
   });
@@ -250,11 +250,11 @@ export async function runOrchestrator(
   // caps on the small tier, and gating the root differently would take eight
   // tool groups off a 14B root while an identically-bound worker on the same
   // model kept all fifteen.
-  const rootIsSmall = isSmallModel({ modelId: modelName, metadata: modelMeta?.metadata }, orchCfg.routerSmallModelMaxParams);
+  const rootIsSmall = isSmallModel({ modelId: modelName, metadata: modelMeta?.metadata }, agentCfg.smallModelMaxParams);
   let droppedToolGroups: string[] = [];
   if (rootIsSmall) {
     const before = new Set(rootTools.map((t) => t.toolId ?? t.name));
-    rootTools = applyToolCap(rootTools, orchCfg.smallModelMaxTools, { role: ROOT_ROLE, modelId: modelName });
+    rootTools = applyToolCap(rootTools, agentCfg.smallModelMaxTools, { role: ROOT_ROLE, modelId: modelName });
     const after = new Set(rootTools.map((t) => t.toolId ?? t.name));
     droppedToolGroups = [...before].filter((id) => !after.has(id));
   }
@@ -291,7 +291,7 @@ export async function runOrchestrator(
       hasCoreToolIds: true,
       isSmallModel: rootIsSmall,
       supportsTools: modelMeta?.supportsTools === true,
-      enabled: orchCfg.lazyToolDiscovery,
+      enabled: agentCfg.lazyToolDiscovery,
     })
   ) {
     try {
@@ -311,10 +311,10 @@ export async function runOrchestrator(
           mode: 'lazy',
           coreToolIds: [...rootCoreToolIds, ...metaTools.map((t) => t.toolId ?? t.name), 'self_report'],
         };
-        orchestratorAllowedToolIds.add('tool_discovery');
+        rootAllowedToolIds.add('tool_discovery');
         coreLogger.info(
           { role: ROOT_ROLE, model: modelName, longTailCount: longTail.length },
-          'Lazy tool discovery enabled for the root agent',
+          'Lazy tool discovery enabled for the rootAgent',
         );
       }
     } catch (err) {
@@ -326,7 +326,7 @@ export async function runOrchestrator(
     ? (rootRoleConfig.liteSystemPromptTemplate ?? rootRoleConfig.systemPromptTemplate)
     : rootRoleConfig.systemPromptTemplate;
 
-  // Anchor the orchestrator in real wall-clock time. Without this stamp the
+  // Anchor the root agent in real wall-clock time. Without this stamp the
   // model has no notion of "now" and treats fresh worker output — today's
   // scores, "yesterday"/"tomorrow" events, anything past its training cutoff —
   // as hallucinated future data, then discards correct results. Surface the
@@ -355,9 +355,9 @@ export async function runOrchestrator(
 
   // Fire the before-agent-start hook so extensions and built-in
   // modules (persona, project context) can mutate the system
-  // prompt before the orchestrator LLM call. Subscribers run
+  // prompt before the root agent LLM call. Subscribers run
   // sequentially; thrown handlers are logged and swallowed.
-  const hookCtx = await getOrchestratorHooks().fire('before-agent-start', {
+  const hookCtx = await getAgentHooks().fire('before-agent-start', {
     role: ROOT_ROLE,
     root: true,
     userId,
@@ -374,7 +374,7 @@ export async function runOrchestrator(
   // From here the prompt is assembled into labelled parts rather than one
   // string, so `logPromptComposition` can say WHICH block costs what. The
   // worker and swarm paths have had that measurement since the prompt-size
-  // audit; the orchestrator's own turn — the one the measured pass put at
+  // audit; the root agent's own turn — the one the measured pass put at
   // ~8.4k tokens for a one-line question — never did.
   const staticParts: string[] = [systemPrompt];
 
@@ -401,7 +401,7 @@ export async function runOrchestrator(
     sources.push('session summary');
   }
 
-  // Load recent conversation history so the orchestrator can reference prior messages
+  // Load recent conversation history so the root agent can reference prior messages
   const recentHistory = await messageRepository.findRecentBySession(sessionId, 10, ['user', 'assistant'], clearedAt);
   if (recentHistory.length > 0) {
     sources.push(`recent ${recentHistory.length} msg${recentHistory.length === 1 ? '' : 's'}`);
@@ -437,7 +437,7 @@ export async function runOrchestrator(
   // tier only: lite's whole delegation contract is "once, then relay", and a
   // small model given three pages about swarms spawns instead of working.
   //
-  // This is what survived the orchestrator role's prompt when the role itself
+  // This is what survived the root agent role's prompt when the role itself
   // went (Phase 9). The half that said "you do NO real work, delegate even what
   // you know" is what the phase deleted; the mechanics below are as true now as
   // they were, and the routing table gained the sentence about what NOT to
@@ -449,7 +449,7 @@ export async function runOrchestrator(
   }
 
   // Expert index — the live list of experts (system + this user's custom
-  // ones) the orchestrator can route to via spawn_child's `expertId`. Read
+  // ones) the root agent can route to via spawn_child's `expertId`. Read
   // from the DB each turn so newly created experts become routable without a
   // prompt edit or restart. Skipped in lite mode: the lite spawn_child schema
   // is deliberately role+taskBrief only, and small models handle the extra
@@ -460,11 +460,11 @@ export async function runOrchestrator(
       const expertBlock = await buildExpertIndexBlock(userId);
       if (expertBlock) staticParts.push(expertBlock);
     } catch (err) {
-      coreLogger.warn({ err, sessionId }, 'Expert index injection skipped — orchestrator routes by role only');
+      coreLogger.warn({ err, sessionId }, 'Expert index injection skipped — rootAgent routes by role only');
     }
   }
 
-  // Chat/work split (Thread 3): tell the orchestrator whether to deliver in
+  // Chat/work split (Thread 3): tell the root agent whether to deliver in
   // chat or as a file. Empty for the default-inline case, so unchanged.
   volatileParts.push(buildOutputDirective(outputDirective.mode, outputDirective.forced));
 
@@ -485,7 +485,7 @@ export async function runOrchestrator(
     let wsContext = `\n\nDEV MODE SESSION — Project: ${projectName}`;
     wsContext += `\nProject path: ${projectPath}`;
 
-    // Load the curated AGENTS.md guide for the orchestrator (lightweight brief)
+    // Load the curated AGENTS.md guide for the root agent (lightweight brief)
     try {
       const { loadAgentsMd } = await import('./agents-md');
       const guide = await loadAgentsMd(projectPath);
@@ -501,14 +501,14 @@ export async function runOrchestrator(
     // Normal mode: generic workspace awareness.
     // Advertise the per-user sandbox root (the same one the filesystem tool
     // enforces via WorkspaceFS.forAgent), not the flat config.workspace.rootPath —
-    // otherwise the orchestrator hands workers absolute paths that fall outside
+    // otherwise the root agent hands workers absolute paths that fall outside
     // their own sandbox.
     const wsConfig = getConfig();
     const wsRoot = WorkspaceFS.forAgent({ userId }).root;
     const wsAdditional = wsConfig.workspace.additionalPaths?.map((p: string) => resolve(p)).filter(Boolean) || [];
 
     // Multi-repo: when the repo registry has been scanned, inject the map of
-    // the suite (kinds + dependency edges) — the orchestrator's "mental model"
+    // the suite (kinds + dependency edges) — the root agent's "mental model"
     // — instead of a bare directory listing. See .octipus/multi-repo-design.md.
     let injectedSuite = false;
     try {
@@ -543,7 +543,7 @@ export async function runOrchestrator(
       const { readdirSync, statSync: statS } = await import('fs');
       const { hasAgentsMd } = await import('./agents-md');
       // List sibling repos and flag which carry a curated AGENTS.md guide, so
-      // the orchestrator can point workers at it when entering a repo.
+      // the root agent can point workers at it when entering a repo.
       const dirs = readdirSync(wsRoot)
         .filter(name => !name.startsWith('.') && statS(resolve(wsRoot, name)).isDirectory())
         .map(name => {
@@ -600,10 +600,10 @@ export async function runOrchestrator(
   );
 
   // Hook-triggered tasks get a longer timeout since they run unattended.
-  const orchConfig = getConfig().orchestrator;
-  const orchestratorTimeout = channel === 'hook'
-    ? orchConfig.orchestratorHookTimeoutMs
-    : orchConfig.orchestratorTimeoutMs;
+  const agentConfig = getConfig().agent;
+  const turnTimeout = channel === 'hook'
+    ? agentConfig.hookTurnTimeoutMs
+    : agentConfig.turnTimeoutMs;
 
   const worker = await agentManager.spawn({
     sessionId,
@@ -622,16 +622,16 @@ export async function runOrchestrator(
     systemPrompt,
     tools: turnTools,
     toolAdvertisement,
-    maxIterations: isLite ? orchCfg.liteMaxIterations : 25,
-    timeout: orchestratorTimeout,
+    maxIterations: isLite ? agentCfg.liteMaxIterations : 25,
+    timeout: turnTimeout,
     // Seed the user's raw request so the spawner can forward it verbatim
-    // to every child. Without this, children only see the orchestrator's
+    // to every child. Without this, children only see the root agent's
     // paraphrased taskBrief and drift into hallucinations.
     //
-    // projectPath: pass through so the orchestrator's own shell/read tools
+    // projectPath: pass through so the root agent's own shell/read tools
     // run in the dev-session project, not the default workspace. The
     // worker-spawner sets the same field on child agents
-    // (worker-spawner.ts:333); without it here, the orchestrator's own
+    // (worker-spawner.ts:333); without it here, the root agent's own
     // ls/read commands resolve to `<workspaceRoot>/workspace` — the
     // user-reported TUI bug where `--project` was effectively ignored.
     contextMetadata: {
@@ -655,19 +655,19 @@ export async function runOrchestrator(
     typeof maybeWorker.registerPendingChild === 'function' &&
     typeof maybeWorker.pendingDetachedCount === 'function'
   ) {
-    orchestratorDetachHookRef.current = {
+    rootDetachHookRef.current = {
       registerPendingChild: maybeWorker.registerPendingChild.bind(worker),
       pendingDetachedCount: maybeWorker.pendingDetachedCount.bind(worker),
     };
-    orchestratorWorkerRef.current = worker as unknown as AgentWorker;
+    rootWorkerRef.current = worker as unknown as AgentWorker;
     // Expose the worker on the node so `spawnChild` can sync the node's
     // token budget (`budget.tokens.used`) from the worker's live spend
     // before deriving each child's budget — otherwise `used` stays 0 and the
     // near-exhaustion spawn guard is inert. Children get this via
-    // `childNode.workerRef` in the spawner; the orchestrator node needs it
+    // `childNode.workerRef` in the spawner; the root agent node needs it
     // wired here.
-    (parentNode as unknown as { workerRef?: typeof orchestratorWorkerRef }).workerRef =
-      orchestratorWorkerRef;
+    (parentNode as unknown as { workerRef?: typeof rootWorkerRef }).workerRef =
+      rootWorkerRef;
   }
 
   // Swarm: promote parent node id + persist root swarm_node row.
@@ -688,7 +688,7 @@ export async function runOrchestrator(
       rootSessionId: sessionId,
       parentNodeId: null,
       depth: 0,
-      kind: 'orchestrator',
+      kind: 'root',
       role: ROOT_ROLE,
       expertId: null,
       topicPath: 'root',
@@ -717,7 +717,7 @@ export async function runOrchestrator(
         rootSessionId: sessionId,
         nodeId: agentId,
         parentNodeId: null,
-        kind: 'orchestrator',
+        kind: 'root',
         depth: 0,
         topicPath: 'root',
         role: ROOT_ROLE,
@@ -746,7 +746,7 @@ export async function runOrchestrator(
     // Safety net: some LLMs (weaker/chatty ones) end their run by calling
     // `send_status_update` instead of returning plain text, leaving
     // `response` empty. Fall back to the last status message so the user
-    // sees SOMETHING rather than a blank reply. The orchestrator prompt
+    // sees SOMETHING rather than a blank reply. The root agent prompt
     // tells the LLM not to do this, but the safety net is belt-and-braces.
     let finalResponse = deps.getLastWorkerResult() || response;
     if (!finalResponse || !finalResponse.trim()) {
@@ -795,7 +795,7 @@ export async function runOrchestrator(
           rootSessionId: sessionId,
           nodeId: agentId,
           parentNodeId: null,
-          kind: 'orchestrator',
+          kind: 'root',
           depth: 0,
           topicPath: 'root',
           role: ROOT_ROLE,
@@ -858,7 +858,7 @@ export async function runOrchestrator(
           rootSessionId: sessionId,
           nodeId: agentId,
           parentNodeId: null,
-          kind: 'orchestrator',
+          kind: 'root',
           depth: 0,
           topicPath: 'root',
           role: ROOT_ROLE,

@@ -136,7 +136,7 @@ export default function LoginPage() {
             page introduces the design language up-front. */}
         <pre className="text-primary text-[10px] leading-tight mb-3 select-none" aria-hidden>
 {`┌─[ octipus :: terminal ]─────────────────┐
-│  multi-agent orchestrator               │
+│  multi-agent assistant                  │
 │  multi-channel · multi-provider         │
 └─────────────────────────────────────────┘`}
         </pre>

@@ -58,7 +58,7 @@ export function createCollectChildrenTool(
       // wall budget of the parent (computed from node budget, clamped).
       // Floor an explicit override at 15s. A trivially short poll (e.g. 5s) on a
       // child still doing real work (a phone call polls for ~minutes) comes back
-      // status="timeout", which weak orchestrators misread as failure and answer
+      // status="timeout", which weak rootAgents misread as failure and answer
       // by spawning duplicate retry children. 15s matches the non-explicit floor.
       const explicit = typeof args.timeoutMs === 'number' && Number.isFinite(args.timeoutMs)
         ? Math.max(15_000, Math.min(args.timeoutMs, 600_000))
@@ -105,7 +105,7 @@ export function formatCollectedResults(results: ChildResult[]): string {
       typeof r.output === 'string' ? r.output : JSON.stringify(r.output);
     // A collect-path timeout (the wait elapsed, `notes` = "collect_children
     // timeout after Xms" from detached-child-manager) means the child is STILL
-    // RUNNING, not failed — say so loudly, because a weak orchestrator otherwise
+    // RUNNING, not failed — say so loudly, because a weak root agent otherwise
     // reads status="timeout" as failure and answers by spawning duplicate retry
     // children. A child that exhausted its OWN wall budget is terminal and keeps
     // its own notes, so gate on the collect-timeout signature specifically.
@@ -127,7 +127,7 @@ export function formatCollectedResults(results: ChildResult[]): string {
             .map((f) => `${f.scorer}: ${f.reason}`)
             .join('; ')}</scorers>`
         : '';
-    // The other half of that mirror. Detach is the DEFAULT orchestrator path
+    // The other half of that mirror. Detach is the DEFAULT root agent path
     // (maxPendingDetached: 6), so omitting the receipt here meant the parent
     // never saw filesChanged/toolErrors/denials on the flow it actually uses —
     // the ground-truth audit was computed, persisted to swarm_nodes, and then

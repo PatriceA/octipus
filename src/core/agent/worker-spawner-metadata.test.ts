@@ -50,7 +50,7 @@ describe('pipelineMetadata', () => {
       nodeKey: 'n1',
       isSystemUser: true,
       isAdmin: true,
-      originalRequest: 'the orchestrator task',
+      originalRequest: 'the rootAgent task',
       activeExpertId: 'e1',
     });
     expect(out).toEqual({ pipelineId: 'p1', nodeKey: 'n1' });

@@ -4,7 +4,7 @@ import { handleCommand } from '@/core/commands';
 import { renderMemoriesBlock, retrieveForContext, updateMemoriesAfterTurn } from '@/core/memory';
 import { generateRunId, runWithContext } from '@/core/run-context';
 import { type AttachedFileRef, buildAttachedFilesContext } from '@/core/session-files';
-import { recordClassification, recordOrchestratorRun } from '@/core/telemetry';
+import { recordClassification, recordRootRun } from '@/core/telemetry';
 import { TrajectoryRecorder } from '@/core/trajectories/recorder';
 import type { AgentContext } from '@/core/types';
 import { messageRepository } from '@/db/repositories/message-repository';
@@ -19,7 +19,7 @@ import { directResponse } from './direct-response';
 import { VoicePlanGate } from './voice-plan-gate';
 import { guardInput } from './input-guard';
 import { ModelSelector } from './model-selector';
-import { runOrchestrator } from './orchestrator-runner';
+import { runRootAgent } from './root-runner';
 import { guardOutput, stripSwarmScaffolding } from './output-guard';
 import { filterPII } from './pii-filter';
 import { maybeCompactSession } from './session-compaction';
@@ -39,11 +39,11 @@ const VOICE_PLANNING_DIRECTIVE =
   'If it is clear enough, say in one or two sentences how you would approach it, then ask whether you should start. ' +
   'Keep it brief; no numbered plans, no restating their words verbatim.\n\nThe user said: ';
 
-interface OrchestratorEventHandler {
-  (event: OrchestratorEvent): void;
+interface TurnEventHandler {
+  (event: TurnEvent): void;
 }
 
-export interface OrchestratorEvent {
+export interface TurnEvent {
   type: 'chat_response' | 'status_update' | 'approval_required' | 'worker_spawned' | 'worker_completed' | 'pipeline_event';
   sessionId: string;
   userId?: string;
@@ -51,8 +51,8 @@ export interface OrchestratorEvent {
   timestamp: Date;
 }
 
-export class OrchestratorService {
-  private eventHandlers: Set<OrchestratorEventHandler> = new Set();
+export class AgentService {
+  private eventHandlers: Set<TurnEventHandler> = new Set();
   private approvalManager = new ApprovalManager();
   private modelSelector = new ModelSelector();
   private _lastWorkerResult: string | null = null;
@@ -81,26 +81,26 @@ export class OrchestratorService {
   }
 
   /**
-   * Subscribe to orchestrator events. The gateway hub does this at startup
+   * Subscribe to root agent events. The gateway hub does this at startup
    * via `event-bridge.ts` and forwards every event to the GatewayEventBus —
-   * so orchestrator events DO land in the gateway replay buffer. Direct
+   * so root agent events DO land in the gateway replay buffer. Direct
    * subscribers should still prefer `getGatewayHub().eventBus.subscribe(...)`
    * unless they need raw shape (no event-type mapping).
    */
-  onEvent(handler: OrchestratorEventHandler): () => void {
+  onEvent(handler: TurnEventHandler): () => void {
     this.eventHandlers.add(handler);
     return () => this.eventHandlers.delete(handler);
   }
 
-  private emit(event: OrchestratorEvent): void {
+  private emit(event: TurnEvent): void {
     // Synchronous fan-out to local subscribers. The gateway-event-bridge is
     // one of these subscribers; it republishes through GatewayEventBus so
-    // the replay buffer captures every orchestrator event.
+    // the replay buffer captures every root agent event.
     for (const handler of this.eventHandlers) {
       try {
         handler(event);
       } catch (error) {
-        coreLogger.error({ error }, 'Orchestrator event handler error');
+        coreLogger.error({ error }, 'Root agent event handler error');
       }
     }
   }
@@ -109,7 +109,7 @@ export class OrchestratorService {
   private get deps() {
     return {
       modelSelector: this.modelSelector,
-      emit: (event: OrchestratorEvent) => this.emit(event),
+      emit: (event: TurnEvent) => this.emit(event),
       setLastWorkerResult: (result: string | null) => { this._lastWorkerResult = result; },
       getLastWorkerResult: () => this._lastWorkerResult,
     };
@@ -122,7 +122,7 @@ export class OrchestratorService {
    * ambient run context for the whole turn — every child logger, tool call, and
    * LLM request underneath inherits it without threading. The real work is in
    * `handleMessageInner`; this wrapper only owns run correlation + the
-   * top-level orchestrator run counter.
+   * top-level root agent run counter.
    */
   async handleMessage(
     sessionId: string,
@@ -305,28 +305,28 @@ export class OrchestratorService {
       const sessionCtx = (freshSessionForPlan?.context as Record<string, any>) || {};
       const planState = sessionCtx.planningState;
       if (planState?.brief && !planState.active && !planState.executed && /^(go|start|execute|run|do it|let'?s ?go)$/i.test(message.trim())) {
-        // Check if an orchestrator is already running for this session
+        // Check if a root agent is already running for this session
         const agentManager = getAgentManager();
         const sessionAgents = agentManager.getBySession(resolvedSessionId);
-        const runningOrchestrator = sessionAgents.find(a => a.getStatus() === 'running' && a.getContext().root === true);
-        if (runningOrchestrator) {
+        const runningRootAgent = sessionAgents.find(a => a.getStatus() === 'running' && a.getContext().root === true);
+        if (runningRootAgent) {
           const response = 'A plan is already being executed. Use `/status` to check progress or `/stop` to cancel it.';
           await messageRepository.create({ sessionId: resolvedSessionId, role: 'user', content: message });
           await messageRepository.create({ sessionId: resolvedSessionId, role: 'assistant', content: response });
           return { response, sessionId: resolvedSessionId, classification: { type: 'casual' as const, confidence: 1 } };
         }
 
-        // Clear planningState entirely — the brief is passed to the orchestrator below.
+        // Clear planningState entirely — the brief is passed to the root agent below.
         // Keeping stale plan data in session context causes models to reference it in future messages.
         await sessionRepository.update(resolvedSessionId, {
           context: { ...sessionCtx, planningState: undefined },
         });
-        coreLogger.info({ sessionId: resolvedSessionId }, 'Executing plan via orchestrator');
+        coreLogger.info({ sessionId: resolvedSessionId }, 'Executing plan via rootAgent');
 
         await messageRepository.create({ sessionId: resolvedSessionId, role: 'user', content: message });
         await sessionRepository.incrementMessageCount(resolvedSessionId);
 
-        // Send immediate feedback before the long-running orchestrator starts
+        // Send immediate feedback before the long-running root agent starts
         const startMessage = 'Starting plan execution... Use `/status` to check progress.';
         await messageRepository.create({ sessionId: resolvedSessionId, role: 'assistant', content: startMessage });
         // Emit so WebSocket/Telegram can show it immediately
@@ -356,7 +356,7 @@ export class OrchestratorService {
           coreLogger.warn({ err }, 'memory.retrieveForContext failed on plan path');
         }
 
-        const { response, agentId, sources: _planSources } = await this.runOrchestrator(
+        const { response, agentId, sources: _planSources } = await this.runRootAgent(
           resolvedSessionId, userId, planMessage, classification, inputGuard.flags, channel,
           planMemoryBlock,
           workspaceId,
@@ -433,7 +433,7 @@ export class OrchestratorService {
       if (!bypassVoiceGate && this.voiceSessions.has(resolvedSessionId)) {
         // Gate vague requests too, not just cleanly-scored 'task'. Spoken input is
         // usually under-specified → the classifier falls to 'ambiguous', which would
-        // otherwise reach the raw orchestrator and get blind-dispatched or dryly told
+        // otherwise reach the raw root agent and get blind-dispatched or dryly told
         // to "specify X". Routing 'ambiguous' through the gate turns those into a
         // friendly clarify/plan exchange instead. Cancellation is disambiguated
         // inside decide() (the classifier tags both "yes" and "no" as 'approval').
@@ -448,7 +448,7 @@ export class OrchestratorService {
           // ponytail: the re-dispatch persists workMessage again via the work path
           // (router-turn), so a cold request shows once from the propose turn and
           // once here — cosmetic transcript dup. Thread a skip-persist flag through
-          // runOrchestrator if it ever bloats context enough to matter.
+          // runRootAgent if it ever bloats context enough to matter.
           return this.handleMessageInner(
             resolvedSessionId, userId, action.workMessage, channel, expertId, action.attachedFiles, forcedOutputMode, true,
           );
@@ -500,7 +500,7 @@ export class OrchestratorService {
 
       // Combine long-term memory with the attached-file block built above
       // (before the expert bypass). Both are self-separating, so the casual and
-      // orchestrator paths get the live file contents in their system context.
+      // root agent paths get the live file contents in their system context.
       const turnContext = memoryBlock + attachedFilesBlock;
       const memoryCadence = getConfig().memory?.extractionCadence ?? 'per_turn';
       const fireMemoryUpdate = () => {
@@ -544,7 +544,7 @@ export class OrchestratorService {
       // Phase 9 (rebuild plan): there is no classifier-chosen fast path any
       // more. A keyword table used to decide, before any model saw the message,
       // whether the turn got a tool-less one-shot completion or a whole
-      // orchestrator — inference picking control flow, and the reason a
+      // root agent — inference picking control flow, and the reason a
       // file-mode "write me a poem" had to be special-cased back out of it.
       // Every turn now runs the one loop below, which holds real tools and
       // delegates only when it needs a specialist.
@@ -557,7 +557,7 @@ export class OrchestratorService {
       }
 
       const startTime = Date.now();
-      const { response, agentId, sources } = await this.runOrchestrator(
+      const { response, agentId, sources } = await this.runRootAgent(
         resolvedSessionId, userId, message, classification, inputGuard.flags, channel,
         turnContext,
         workspaceId,
@@ -567,10 +567,10 @@ export class OrchestratorService {
       const outputCheck = guardOutput(response, inputGuard.flags);
       let finalResponse = outputCheck.action === 'replace' ? outputCheck.response : response;
       if (outputCheck.action === 'replace') {
-        coreLogger.warn({ flags: outputCheck.flags, sessionId }, 'Output guard replaced orchestrator response');
+        coreLogger.warn({ flags: outputCheck.flags, sessionId }, 'Output guard replaced rootAgent response');
       }
       // Strip internal swarm relay markup (<CollectChildren>/<ChildResult>/…) a
-      // weak orchestrator sometimes echoes verbatim — the user must never see it.
+      // weak root agent sometimes echoes verbatim — the user must never see it.
       finalResponse = stripSwarmScaffolding(finalResponse);
 
       const activeSession = await sessionRepository.findById(resolvedSessionId);
@@ -594,7 +594,7 @@ export class OrchestratorService {
       }
 
       fireMemoryUpdate();
-      recordOrchestratorRun(channel, classification?.type, 'success');
+      recordRootRun(channel, classification?.type, 'success');
       return {
         response: finalResponse,
         sessionId: resolvedSessionId,
@@ -603,7 +603,7 @@ export class OrchestratorService {
         metadata: { latencyMs: Date.now() - startTime },
       };
     } catch (error) {
-      recordOrchestratorRun(channel, undefined, 'error');
+      recordRootRun(channel, undefined, 'error');
       // Pulled apart explicitly: an Error's `message` and `stack` are
       // non-enumerable, so `{ error }` serialises to `{}` and hides the very
       // thing the line exists to report.
@@ -631,9 +631,9 @@ export class OrchestratorService {
     }
   }
 
-  // ── Orchestrator agent ───────────────────────────────────────────
+  // ── Root agent agent ───────────────────────────────────────────
 
-  private async runOrchestrator(
+  private async runRootAgent(
     sessionId: string,
     userId: string,
     message: string,
@@ -641,9 +641,9 @@ export class OrchestratorService {
     guardFlags: string[] = [],
     channel?: string,
     /**
-     * Memory-redesign Phase D — appended to the orchestrator's system
+     * Memory-redesign Phase D — appended to the root agent's system
      * prompt. Pre-rendered by `handleMessage` once per turn so both
-     * the orchestrator and the directResponse path see the same
+     * the root agent and the directResponse path see the same
      * long-term memory block.
      */
     extraSystemContext: string = '',
@@ -652,7 +652,7 @@ export class OrchestratorService {
     /** Chat/work split (Thread 3): inline vs file deliverable directive. */
     outputDirective: { mode: 'inline' | 'file'; forced: boolean } = { mode: 'inline', forced: false },
   ): Promise<{ response: string; agentId: string; sources: string[] }> {
-    return runOrchestrator(
+    return runRootAgent(
       this, this.deps,
       sessionId, userId, message, classification, guardFlags, channel,
       extraSystemContext, workspaceId, outputDirective,
@@ -789,11 +789,11 @@ export class OrchestratorService {
 }
 
 // Singleton
-let instance: OrchestratorService | null = null;
+let instance: AgentService | null = null;
 
-export function getOrchestratorService(): OrchestratorService {
+export function getAgentService(): AgentService {
   if (!instance) {
-    instance = new OrchestratorService();
+    instance = new AgentService();
   }
   return instance;
 }

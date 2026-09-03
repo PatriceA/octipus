@@ -222,30 +222,30 @@ export async function clearCliQuota(provider: string) {
 export async function recommendModels() {
   const { probeHardware } = await import('@/setup/probes');
   const { resolveSizes, scoreCatalog } = await import('@/capabilities/hwfit');
-  const { describeModeForParams } = await import('@/core/orchestrator/mode-selector');
+  const { describeTierForParams } = await import('@/core/agent/prompt-tier');
   const hardware = await probeHardware();
   const sized = await resolveSizes();
   const scored = scoreCatalog(hardware, sized);
 
-  // Annotate each model with the orchestrator mode it would imply as the
-  // default, so the UI can tell the user what the model means for how
-  // Octipus runs (router/lite/full). Thresholds come from config.
+  // Annotate each model with the prompt tier it would imply as the default,
+  // so the UI can tell the user what the model means for how Octipus runs
+  // (lite/full). Thresholds come from config.
   //
-  // Only annotate models that could actually BE the orchestrator default —
+  // Only annotate models that could actually BE the root agent default —
   // i.e. text-generation models. Embedding and vision/OCR models can never
-  // be the orchestrator, so a "router/lite/full" label on them is
-  // meaningless and was the source of the inconsistent UI text.
-  const orch = getConfig().orchestrator;
+  // be the default, so a "lite/full" label on them is meaningless and was the
+  // source of the inconsistent UI text.
+  const agentCfg = getConfig().agent;
   const thresholds = {
-    routerSmallModelMaxParams: orch.routerSmallModelMaxParams,
-    liteModelMaxParams: orch.liteModelMaxParams,
+    smallModelMaxParams: agentCfg.smallModelMaxParams,
+    liteModelMaxParams: agentCfg.liteModelMaxParams,
   };
-  const ORCHESTRATOR_CAPABLE_TOPICS = new Set(['chat', 'general', 'coding', 'research']);
+  const DEFAULT_CAPABLE_TOPICS = new Set(['chat', 'general', 'coding', 'research']);
   for (const s of scored) {
-    if (!s.entry.topics.some((t) => ORCHESTRATOR_CAPABLE_TOPICS.has(t))) continue;
-    const { mode, note } = describeModeForParams(s.entry.params, thresholds);
-    s.orchestratorMode = mode;
-    s.orchestratorModeNote = note;
+    if (!s.entry.topics.some((t) => DEFAULT_CAPABLE_TOPICS.has(t))) continue;
+    const { mode, note } = describeTierForParams(s.entry.params, thresholds);
+    s.promptTier = mode;
+    s.promptTierNote = note;
   }
   return { hardware, scored };
 }

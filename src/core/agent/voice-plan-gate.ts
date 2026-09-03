@@ -2,7 +2,7 @@
  * Voice plan gate — the "propose, then confirm" state machine for spoken turns.
  *
  * In a live voice conversation you don't want a work request to silently spawn
- * agents mid-sentence. Instead the orchestrator proposes an approach out loud
+ * agents mid-sentence. Instead the root agent proposes an approach out loud
  * and waits for your go. This holds the per-session "awaiting confirmation"
  * state and decides what each voice turn should do:
  *
@@ -12,14 +12,14 @@
  *   pending + anything else   → propose  (treat as a refinement, re-propose)
  *   no pending, not work      → passthrough (normal conversation)
  *
- * Only voice turns hit this (the orchestrator gates on a per-session voice-mode
+ * Only voice turns hit this (the root agent gates on a per-session voice-mode
  * flag); typed chat keeps executing immediately.
  */
 
 import type { AttachedFileRef } from '@/core/session-files';
 
 export interface PendingPlan {
-  /** The accumulated work request to hand to the orchestrator on confirm. */
+  /** The accumulated work request to hand to the root agent on confirm. */
   workMessage: string;
   /** Files the proposing turn carried, replayed with the work on confirm. */
   attachedFiles: AttachedFileRef[];

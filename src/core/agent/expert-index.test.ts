@@ -1,5 +1,5 @@
 /**
- * Tests for the orchestrator's AVAILABLE EXPERTS prompt index.
+ * Tests for the root agent's AVAILABLE EXPERTS prompt index.
  *
  * Strategy: ephemeral embedded PGlite (same pattern as
  * src/skills/discovery.test.ts) — real schema, real drizzle queries, no
@@ -55,7 +55,7 @@ afterAll(async () => {
 });
 
 describe('buildExpertIndexBlock', () => {
-  test('empty experts table ⇒ empty block (orchestrator routes by role only)', async () => {
+  test('empty experts table ⇒ empty block (rootAgent routes by role only)', async () => {
     const block = await buildExpertIndexBlock(userA);
     expect(block).toBe('');
   });

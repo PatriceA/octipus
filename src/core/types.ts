@@ -9,7 +9,7 @@ export interface AgentContext {
   userId: string;
   /**
    * Workspace UUID for multi-tenant scoping. Resolved at the message
-   * entry point (orchestrator.handleMessage) and propagated down the
+   * entry point (AgentService.handleMessage) and propagated down the
    * swarm tree so every spawned worker inherits the same scope. NULL
    * for anonymous / system principals that have no workspaces.
    */
@@ -23,7 +23,7 @@ export interface AgentContext {
    * orchestrator hop was deleted (rebuild plan, Phase 9): the root now runs as
    * an ordinary role (`general`) with real tools, so the role string no longer
    * identifies it. Persistence, steering, approval prompting and the persona
-   * all key on this, and every one of them meant "root", not "orchestrator".
+   * all key on this, and every one of them meant "root", not "the orchestrator".
    */
   root?: boolean;
   /**
@@ -240,7 +240,7 @@ export interface ActionConfig {
   agentPrompt?: string;
   agentModel?: string;
   orchestrated?: boolean;
-  orchestratorNotify?: boolean;
+  notifyRoot?: boolean;
   // For webhook
   webhookUrl?: string;
   webhookMethod?: 'GET' | 'POST' | 'PUT';

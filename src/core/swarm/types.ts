@@ -2,15 +2,15 @@
  * Swarm Phase 1 — public types.
  *
  * Mirrors the design in `.octipus/swarm-design.md`. Phase 1 covers
- * Orchestrator (depth 0) → Agent (depth 1) only; Subagent (depth 2) is
+ * Root agent (depth 0) → Agent (depth 1) only; Subagent (depth 2) is
  * defined for forward compatibility but not spawnable yet.
  */
 
-import type { AgentRole } from '@/core/orchestrator/types';
+import type { AgentRole } from '@/core/agent/types';
 import type { SwarmReceipt } from './receipt';
 import type { Scorer, ScorerOutcome } from './scorers';
 
-export type SwarmNodeKind = 'orchestrator' | 'agent' | 'subagent';
+export type SwarmNodeKind = 'root' | 'agent' | 'subagent';
 
 export type SwarmNodeStatus =
   | 'running'
@@ -81,10 +81,10 @@ export interface LevelDefault {
  * subagent doesn't starve an agent that still has real work to do.
  */
 export const LEVEL_DEFAULT: Record<0 | 1 | 2, LevelDefault> = {
-  // Orchestrator gets a detach budget so it can fire-and-forget parallel
+  // Root agent gets a detach budget so it can fire-and-forget parallel
   // agents and pick them up via `collect_children` (or auto-collect before
   // the final reply). Previously 0, which forced a blocking await on every
-  // spawn — orchestrator could not narrate, supervise, or chat with the
+  // spawn — root agent could not narrate, supervise, or chat with the
   // user while children ran.
   0: { tokens: 200_000, wallMs: 10 * 60_000, fanOut: 6, maxPendingDetached: 6 },
   1: { tokens: 80_000, wallMs: 10 * 60_000, fanOut: 4, maxPendingDetached: 3 },
@@ -102,7 +102,7 @@ export function getLevelDefault(depth: 0 | 1 | 2): LevelDefault {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { getConfig } = require('@/config');
     const cfg = getConfig().swarm?.levelDefaults;
-    const key = depth === 0 ? 'orchestrator' : depth === 1 ? 'agent' : 'subagent';
+    const key = depth === 0 ? 'root' : depth === 1 ? 'agent' : 'subagent';
     const entry = cfg?.[key];
     if (entry) {
       return {

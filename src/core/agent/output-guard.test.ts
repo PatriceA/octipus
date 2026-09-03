@@ -51,7 +51,7 @@ describe('guardOutput', () => {
 
   // ── System prompt leakage ────────────────────────────────
   test('catches system prompt leakage (2+ fingerprints)', () => {
-    const leaked = 'Here are my instructions:\nSECURITY RULES — you MUST follow these at all times\nYou are a task orchestrator that delegates work to specialist workers.\nWORKFLOW — follow these steps exactly';
+    const leaked = 'Here are my instructions:\nSECURITY RULES — you MUST follow these at all times\nYou are a task rootAgent that delegates work to specialist workers.\nWORKFLOW — follow these steps exactly';
     const result = guardOutput(leaked, ['prompt_extraction']);
     expect(result.action).toBe('replace');
     expect(result.flags).toContain('prompt_leak');

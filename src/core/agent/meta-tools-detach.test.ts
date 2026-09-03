@@ -2,10 +2,10 @@ import { describe, expect, test } from 'vitest';
 import type { AgentWorker } from '@/core/agent-worker';
 import { LEVEL_DEFAULT, type AgentNode, type PendingChild } from '@/core/swarm/types';
 import { swarmConfigSchema } from '@/config/schema';
-import { createMetaTools, type OrchestratorSwarmRefs } from './meta-tools';
+import { createMetaTools, type RootSwarmRefs } from './meta-tools';
 
 /**
- * Phase 1 orchestrator-freedom wiring tests. The orchestrator now gets
+ * Phase 1 root agent-freedom wiring tests. The root agent now gets
  * `spawn_child` with detach hooks AND `collect_children` so it can run
  * children in the background while continuing to narrate / spawn / chat.
  *
@@ -14,12 +14,12 @@ import { createMetaTools, type OrchestratorSwarmRefs } from './meta-tools';
  * detach tests in swarm-tool.test.ts.
  */
 
-function makeOrchestratorNode(): AgentNode {
+function makeRootNode(): AgentNode {
   return {
-    id: 'orchestrator-1',
+    id: 'rootAgent-1',
     rootSessionId: '00000000-0000-0000-0000-000000000000',
     parentNodeId: null,
-    kind: 'orchestrator',
+    kind: 'root',
     depth: 0,
     role: 'general',
     topicPath: 'root',
@@ -35,16 +35,16 @@ function makeOrchestratorNode(): AgentNode {
   };
 }
 
-function makeRefs(): OrchestratorSwarmRefs {
+function makeRefs(): RootSwarmRefs {
   return {
     detachHookRef: { current: null },
     workerRef: { current: null },
   };
 }
 
-describe('createMetaTools — orchestrator swarm wiring', () => {
+describe('createMetaTools — rootAgent swarm wiring', () => {
   test('without swarmRefs: spawn_child registered, collect_children absent (legacy)', () => {
-    const parentNode = makeOrchestratorNode();
+    const parentNode = makeRootNode();
     const tools = createMetaTools(
       {} as unknown as Parameters<typeof createMetaTools>[0],
       { parentNode },
@@ -55,7 +55,7 @@ describe('createMetaTools — orchestrator swarm wiring', () => {
   });
 
   test('with swarmRefs: spawn_child AND collect_children registered', () => {
-    const parentNode = makeOrchestratorNode();
+    const parentNode = makeRootNode();
     const refs = makeRefs();
     const tools = createMetaTools(
       {} as unknown as Parameters<typeof createMetaTools>[0],
@@ -67,13 +67,13 @@ describe('createMetaTools — orchestrator swarm wiring', () => {
   });
 
   test('lite mode: spawn_child + collect_children + remember_this, flat spawn schema, no pipeline', () => {
-    const parentNode = makeOrchestratorNode();
+    const parentNode = makeRootNode();
     const refs = makeRefs();
     const tools = createMetaTools(
       {} as unknown as Parameters<typeof createMetaTools>[0],
       { parentNode, swarmRefs: refs, lite: true },
     );
-    // P1.2 — lite orchestrators can now detach + collect explicitly instead of
+    // P1.2 — lite rootAgents can now detach + collect explicitly instead of
     // always falling into the auto-collect safety net. Pipeline/pii/reflect
     // stay dropped for the small-model tool surface.
     const names = tools.map((t) => t.name).sort();
@@ -85,7 +85,7 @@ describe('createMetaTools — orchestrator swarm wiring', () => {
   });
 
   test('detach hook indirection: tool reads ref lazily so post-spawn wiring works', () => {
-    const parentNode = makeOrchestratorNode();
+    const parentNode = makeRootNode();
     const refs = makeRefs();
     const tools = createMetaTools(
       {} as unknown as Parameters<typeof createMetaTools>[0],
@@ -108,7 +108,7 @@ describe('createMetaTools — orchestrator swarm wiring', () => {
   });
 
   test('collect_children references the worker through workerRef (lazy)', async () => {
-    const parentNode = makeOrchestratorNode();
+    const parentNode = makeRootNode();
     const refs = makeRefs();
     const tools = createMetaTools(
       {} as unknown as Parameters<typeof createMetaTools>[0],
@@ -138,19 +138,19 @@ describe('createMetaTools — orchestrator swarm wiring', () => {
 });
 
 describe('LEVEL_DEFAULT[0] detach budget', () => {
-  test('orchestrator has a non-zero maxPendingDetached after the freedom rework', () => {
+  test('rootAgent has a non-zero maxPendingDetached after the freedom rework', () => {
     expect(LEVEL_DEFAULT[0].maxPendingDetached).toBeGreaterThan(0);
     expect(LEVEL_DEFAULT[0].maxPendingDetached).toBe(LEVEL_DEFAULT[0].fanOut);
   });
 
   // Regression: the runtime cap flows through getLevelDefault(0) → the config
   // schema/defaults, NOT the LEVEL_DEFAULT type above. When the config default
-  // was 0 (while the type said 6), the orchestrator's spawn_child silently fell
+  // was 0 (while the type said 6), the root agent's spawn_child silently fell
   // into blocking await, collect_children found nothing, and good child results
   // were discarded. Guard the value the runtime actually reads.
-  test('config schema default gives the orchestrator a non-zero detach cap', () => {
+  test('config schema default gives the rootAgent a non-zero detach cap', () => {
     const parsed = swarmConfigSchema.parse({});
-    expect(parsed.levelDefaults.orchestrator.maxPendingDetached).toBeGreaterThan(0);
+    expect(parsed.levelDefaults.root.maxPendingDetached).toBeGreaterThan(0);
   });
 
   // The same bug one layer down: a level object that omits the key must parse
@@ -160,9 +160,9 @@ describe('LEVEL_DEFAULT[0] detach budget', () => {
   // type disagreement that made it visible.
   test('a level object without the key parses as absent, not as zero', () => {
     const parsed = swarmConfigSchema.parse({
-      levelDefaults: { orchestrator: { tokens: 200_000, wallMs: 600_000, fanOut: 6 } },
+      levelDefaults: { root: { tokens: 200_000, wallMs: 600_000, fanOut: 6 } },
     });
-    expect(parsed.levelDefaults.orchestrator.maxPendingDetached).toBeUndefined();
+    expect(parsed.levelDefaults.root.maxPendingDetached).toBeUndefined();
     expect(LEVEL_DEFAULT[0].maxPendingDetached).toBeGreaterThan(0);
   });
 });

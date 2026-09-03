@@ -215,7 +215,7 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
     // The backend has emitted this all along; nothing here listened, so the
     // screen showed `Waiting: running request_user_approval (40.0s)` counting
     // up with no prompt, until the turn timed out.
-    case 'orchestrator.approval_required': {
+    case 'agent.approval_required': {
       const requestId = pickString(payload, 'requestId') ?? '';
       const rawOptions = payload.options;
       out.push({
@@ -264,13 +264,13 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
       return out;
     }
 
-    // Swarm-level spawn/complete events — these fire for orchestrator AND
+    // Swarm-level spawn/complete events — these fire for root agent AND
     // every nested agent/subagent. The TUI previously only listened to the
     // worker-spawner-flavoured `agent.spawned` event, so swarm-routed
     // subagents were invisible. Mirror them into the same agent.start /
     // agent.end shapes so the rest of the UI doesn't have to care which
     // path spawned the worker.
-    // Persona narration — orchestrator dispatch / completion / budget
+    // Persona narration — root agent dispatch / completion / budget
     // lines. The web chat surfaces these as italic narration bubbles;
     // the TUI shows them as system messages so the user gets the same
     // running commentary while children work.
@@ -284,9 +284,9 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
 
     case 'swarm.node_spawned': {
       const kind = pickString(payload, 'kind') ?? 'agent';
-      // Orchestrator already gets a separate agent.spawned event from the
+      // Root agent already gets a separate agent.spawned event from the
       // worker spawner; skip the duplicate so we don't show it twice.
-      if (kind === 'orchestrator') return out;
+      if (kind === 'rootAgent') return out;
       const role = pickString(payload, 'role') ?? 'worker';
       const model = pickString(payload, 'model') ?? '';
       const nodeId = pickString(payload, 'nodeId');
@@ -302,7 +302,7 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
 
     case 'swarm.node_completed': {
       const kind = pickString(payload, 'kind') ?? 'agent';
-      if (kind === 'orchestrator') return out; // dedupe with agent.completed
+      if (kind === 'rootAgent') return out; // dedupe with agent.completed
       const role = pickString(payload, 'role') ?? 'worker';
       const tokens = pickNumber(payload, 'usedTokens') ?? 0;
       const durationMs = pickNumber(payload, 'durationMs');

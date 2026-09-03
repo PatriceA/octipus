@@ -19,7 +19,7 @@ import { useState } from 'react';
 import { PipelineGraph, validatePipelineStages } from '@/components/pipeline-graph';
 import { PageHeader } from '@/components/ui/page-header';
 import { Portal } from '@/components/ui/portal';
-import { reorderStages } from '../../../src/core/orchestrator/pipeline-validation';
+import { reorderStages } from '../../../src/core/agent/pipeline-validation';
 import { api } from '@/lib/api';
 import { WORKER_ROLES } from '@/lib/types/models';
 

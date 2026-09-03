@@ -6,7 +6,7 @@
 
 Every message runs the same agent turn: the root agent, holding the general
 toolset plus `spawn_child`. The keyword classifier
-(`src/core/orchestrator/classifier.ts`) does **not** decide whether an agent
+(`src/core/agent/classifier.ts`) does **not** decide whether an agent
 runs, and has not chosen the specialist since Phase 2 — a capable model reads
 the request better than a regex table. What it still does: scope memory
 retrieval by topic, and, for a small (lite-tier) model only, ride along as a
@@ -67,10 +67,10 @@ root itself runs as `general`, so anything in that row it does without spawning.
   → automation → automation role → scheduling tool
 
 "Run the test suite"
-  → (matched by orchestrator system prompt) → qa role → browser, shell, docker tools
+  → (matched by root agent system prompt) → qa role → browser, shell, docker tools
 
 "Who is my wife?"
-  → (matched by orchestrator system prompt) → general role → profiles tool
+  → (matched by root agent system prompt) → general role → profiles tool
 
 "Take a screenshot of my browser"
   → general → general role → browser-ext tool
@@ -85,7 +85,7 @@ root itself runs as `general`, so anything in that row it does without spawning.
   → finance → finance role → browser, websearch tools
 ```
 
-### Special Routing Rules (from orchestrator system prompt)
+### Special Routing Rules (from root agent system prompt)
 
 These override keyword classification:
 
@@ -113,7 +113,7 @@ Experts are triggered explicitly via the `/expert` command in any channel:
 /expert devops-engineer Set up GitHub Actions CI/CD
 ```
 
-The orchestrator:
+The root agent:
 1. Loads the expert from the database (name, description, role, system prompt)
 2. Builds expert system prompt with: security preamble + expert identity + role prompt + critical rules + deliverable template + success metrics + domain knowledge from skills
 3. Spawns a worker with the expert's role tools and system prompt

@@ -1,14 +1,14 @@
 /**
  * Per-session model override (Phase 6).
  *
- * The user can switch the orchestrator's model mid-session via the
+ * The user can switch the root agent's model mid-session via the
  * `/model <id>` slash command. The override lives in memory only —
  * sessions reset to the configured default on restart. Persistence
  * to `session_overrides` (or similar) is a future expansion; the
  * in-memory shape keeps the change small and reviewable.
  *
  * Workers (specialist roles) still resolve via topic → model registry.
- * Only the orchestrator honors this override.
+ * Only the root agent honors this override.
  */
 
 const overrides = new Map<string, string>();

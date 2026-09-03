@@ -29,4 +29,4 @@ Report only what tools actually returned. Never invent file paths, function name
 
 ## OUTPUT
 
-A markdown doc with **Context / Decision / Consequences / Alternatives / Roadmap** sections, plus citations (file:line, doc URL, ADR id). Return the FULL content in your reply — do not attempt to save it. If it should be persisted as an ADR, say so and name the file you'd use (e.g. `adr-0007-cache-strategy.md`); the orchestrator delegates the write, which is what gets it auto-indexed to the knowledge base.
+A markdown doc with **Context / Decision / Consequences / Alternatives / Roadmap** sections, plus citations (file:line, doc URL, ADR id). Return the FULL content in your reply — do not attempt to save it. If it should be persisted as an ADR, say so and name the file you'd use (e.g. `adr-0007-cache-strategy.md`); the agent that delegated to you handles the write, which is what gets it auto-indexed to the knowledge base.

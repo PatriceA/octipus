@@ -118,7 +118,7 @@ export interface ActionConfig {
   toolParams?: Record<string, unknown>;
   // General options
   orchestrated?: boolean;
-  orchestratorNotify?: boolean;
+  notifyRoot?: boolean;
   notifyOwner?: boolean;
   // For incoming webhook response delivery
   channelType?: string;

@@ -312,11 +312,11 @@ The `/api/recurring-tasks` endpoints still work as a compatibility layer — the
 
 ## Swarm Lifecycle Events
 
-The swarm orchestrator (Orchestrator → Agent → Subagent) publishes its own gateway event family (`swarm.*`) alongside the older `agent.*` events. These are pure observability signals — they are **not** hook triggers today (the hook system matches on `agent_*` triggers, which still fire for every swarm node because every node is also an agent). If you need to react to swarm-specific state — fan-out breach, cycle blocks, budget warnings — subscribe on the gateway instead of the hook system.
+The swarm root agent (Root agent → Agent → Subagent) publishes its own gateway event family (`swarm.*`) alongside the older `agent.*` events. These are pure observability signals — they are **not** hook triggers today (the hook system matches on `agent_*` triggers, which still fire for every swarm node because every node is also an agent). If you need to react to swarm-specific state — fan-out breach, cycle blocks, budget warnings — subscribe on the gateway instead of the hook system.
 
 | Event | When it fires |
 |-------|---------------|
-| `swarm.node_spawned` | A new Orchestrator / Agent / Subagent is created. Payload includes `rootSessionId`, `nodeId`, `parentNodeId`, `kind`, `depth`, `topicPath`, `role`, `expertId`, `model`, `budgets`, `taskBriefPreview`. |
+| `swarm.node_spawned` | A new Root agent / Agent / Subagent is created. Payload includes `rootSessionId`, `nodeId`, `parentNodeId`, `kind`, `depth`, `topicPath`, `role`, `expertId`, `model`, `budgets`, `taskBriefPreview`. |
 | `swarm.node_completed` | Node finished; `ChildResult` is attached (status + output + usedTokens + durationMs). |
 | `swarm.budget_warning` | Node crossed its budget warning threshold. |
 | `swarm.call_graph_cycle_blocked` | Duplicate / ancestor-chain fingerprint rejected a spawn. |

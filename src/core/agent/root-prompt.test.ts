@@ -13,7 +13,7 @@
  * every turn is still a spawn for work the root could have done itself.
  */
 import { describe, expect, test } from 'vitest';
-import { assembleSystemPrompt, buildDelegationPolicy, buildTopicHint } from './orchestrator-runner';
+import { assembleSystemPrompt, buildDelegationPolicy, buildTopicHint } from './root-runner';
 import { splitVolatileSystem } from '@/models/providers/prompt-cache';
 
 describe('buildDelegationPolicy', () => {
@@ -62,7 +62,7 @@ describe('buildDelegationPolicy', () => {
 describe('buildTopicHint', () => {
   const classified = { topic: 'research', confidence: 0.82 };
 
-  test('a capable orchestrator is told nothing about the keyword guess', () => {
+  test('a capable rootAgent is told nothing about the keyword guess', () => {
     expect(buildTopicHint(false, classified)).toBe('');
   });
 
@@ -79,12 +79,12 @@ describe('buildTopicHint', () => {
 });
 
 describe('assembleSystemPrompt', () => {
-  // The orchestrator's static prefix is what the Anthropic cache breakpoint
+  // The root agent's static prefix is what the Anthropic cache breakpoint
   // covers. Long-term memory, the security reminder, the classifier's topic
   // hint and the output directive all vary per turn, and all four used to be
   // concatenated ahead of the breakpoint — which meant the ~6k-token prefix
   // was re-written rather than read on most turns.
-  const base = 'ORCHESTRATOR PROMPT. '.repeat(600); // comfortably over the cache floor
+  const base = 'ROOT AGENT PROMPT. '.repeat(600); // comfortably over the cache floor
   const date = '\n\nCURRENT DATE & TIME: Sat, 23 Aug 2026 00:00:00 GMT';
 
   test('the cacheable prefix is exactly the static tier', () => {

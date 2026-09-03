@@ -7,9 +7,9 @@ import {
   getLevelDefault,
   type PendingChild,
 } from '@/core/swarm/types';
-import type { OrchestratorService } from './service';
+import type { AgentService } from './service';
 
-// Session-scoped idempotency for `remember_this`. A spinning orchestrator (esp.
+// Session-scoped idempotency for `remember_this`. A spinning root agent (esp.
 // a weak model idling while children run) can call it many times with the same
 // or trivially reworded fact. Short-circuit an exact repeat within the session
 // so we neither run the slow LLM judge nor mint duplicate rows. Per-process Map,
@@ -35,11 +35,11 @@ function markRemembered(key: string): void {
 }
 
 /**
- * Hook refs the orchestrator passes in so we can wire `spawn_child`'s
+ * Hook refs the root agent passes in so we can wire `spawn_child`'s
  * detach hooks and `collect_children` BEFORE the worker is created. The
  * service populates both refs after `agentManager.spawn` returns.
  */
-export interface OrchestratorSwarmRefs {
+export interface RootSwarmRefs {
   /** Hooks slot wired to the worker's pending-child map. Tools read this lazily. */
   detachHookRef: {
     current: {
@@ -52,8 +52,8 @@ export interface OrchestratorSwarmRefs {
 }
 
 /**
- * Create meta-tools for the orchestrator agent.
- * These are ToolHandlers that the orchestrator LLM can call via function calling.
+ * Create meta-tools for the root agent agent.
+ * These are ToolHandlers that the root agent LLM can call via function calling.
  * Instead of filesystem/shell/git, these control the orchestration flow.
  *
  * `spawn_child` is the general delegation mechanism (see swarm-design.md).
@@ -63,8 +63,8 @@ export interface OrchestratorSwarmRefs {
  * created, no further delegation is allowed in this turn.
  */
 export function createMetaTools(
-  orchestrator: OrchestratorService,
-  options?: { parentNode?: AgentNode; swarmRefs?: OrchestratorSwarmRefs; lite?: boolean },
+  rootAgent: AgentService,
+  options?: { parentNode?: AgentNode; swarmRefs?: RootSwarmRefs; lite?: boolean },
 ): ToolHandler[] {
   // Lite mode (small models): expose only `spawn_child` (flat schema) +
   // `remember_this`. Detach/collect/pipeline/pii/reflect/status are dropped —
@@ -83,9 +83,9 @@ export function createMetaTools(
 
   const tools: ToolHandler[] = [];
 
-  // Swarm: register `spawn_child` on the Orchestrator (depth 0). With
+  // Swarm: register `spawn_child` on the Root agent (depth 0). With
   // `swarmRefs` we also enable detach mode + `collect_children`, so the
-  // orchestrator can fire-and-forget parallel children, narrate while they
+  // root agent can fire-and-forget parallel children, narrate while they
   // run, and pick up their results before its final reply. Without the
   // refs (legacy unit-test callers) the tool stays in await-only mode.
   if (options?.parentNode) {
@@ -176,7 +176,7 @@ export function createMetaTools(
 
         pipelineCreated = true;
         try {
-          return await orchestrator.createAndRunPipeline(
+          return await rootAgent.createAndRunPipeline(
             args.title as string,
             match.name,
             args.description as string,
@@ -257,7 +257,7 @@ export function createMetaTools(
         }
         pipelineCreated = true;
         try {
-          return await orchestrator.createAndRunPipeline(
+          return await rootAgent.createAndRunPipeline(
             (args.title as string) || match.name,
             match.name,
             args.description as string,
@@ -308,7 +308,7 @@ export function createMetaTools(
         required: ['text'],
       },
       execute: async (args) => {
-        return orchestrator.filterPIIText(args.text as string);
+        return rootAgent.filterPIIText(args.text as string);
       },
     },
     {
@@ -345,7 +345,7 @@ export function createMetaTools(
           : 1.0;
 
         // Session idempotency: skip the (slow) judge if we already handled this
-        // exact fact earlier in the session — stops a spinning orchestrator from
+        // exact fact earlier in the session — stops a spinning root agent from
         // re-remembering the same thing over and over.
         const sessionId = context.sessionId ?? '';
         const dedupKey = sessionId ? rememberKey(context.userId, sessionId, factType, fact) : '';
@@ -427,7 +427,7 @@ export function createMetaTools(
     {
       name: 'remember_about_self',
       description:
-        'Promote one durable fact about YOURSELF (the orchestrator persona) into the user\'s persona profile. Use ONLY when the user explicitly tells you to change how YOU behave, sound, or refer to yourself ("don\'t apologize for slow responses", "summarize in bullets", "stop saying \\"sure\\""). Do NOT use for facts about the user (those go to `remember_this`). The fact must be one short sentence describing how you should behave going forward. Stored on the per-user assistant profile and re-injected into your prompt next turn.',
+        'Promote one durable fact about YOURSELF (the rootAgent persona) into the user\'s persona profile. Use ONLY when the user explicitly tells you to change how YOU behave, sound, or refer to yourself ("don\'t apologize for slow responses", "summarize in bullets", "stop saying \\"sure\\""). Do NOT use for facts about the user (those go to `remember_this`). The fact must be one short sentence describing how you should behave going forward. Stored on the per-user assistant profile and re-injected into your prompt next turn.',
       parameters: {
         type: 'object',
         properties: {
@@ -541,7 +541,7 @@ export function createMetaTools(
         required: ['summary', 'question'],
       },
       execute: async (args, context) => {
-        return orchestrator.requestApproval(
+        return rootAgent.requestApproval(
           args.summary as string,
           args.question as string,
           context,
@@ -580,12 +580,12 @@ export function createMetaTools(
         // Safety net: some LLMs use `send_status_update` as their terminal
         // action instead of returning plain text. Stash the last message on
         // the agent context — if the worker ends with empty content, the
-        // orchestrator service falls back to this so the user sees SOMETHING
+        // root agent service falls back to this so the user sees SOMETHING
         // instead of a blank reply.
         const meta = context.metadata as Record<string, unknown>;
         meta.lastStatusMessage = message;
         if (typeof args.progress === 'number') meta.lastStatusProgress = args.progress;
-        return orchestrator.sendStatusUpdate(
+        return rootAgent.sendStatusUpdate(
           message,
           context,
           args.stage as string | undefined,

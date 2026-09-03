@@ -1,4 +1,4 @@
-import { ROLE_CONFIGS } from '@/core/orchestrator/roles';
+import { ROLE_CONFIGS } from '@/core/agent/roles';
 import { armFactKey, getPersonaProfileRepository, PersonaProfileRepository } from './repository';
 import { getPersonaRegistry } from './registry';
 import { resolvePersonaForUser } from './resolver';
@@ -171,7 +171,7 @@ async function setArm(userId: string, args: string): Promise<PersonaCommandResul
   }
   // ROLE_CONFIGS is the registry loaded from `roles/<name>/`, so it is the
   // authority on which arms exist — a second hardcoded list would drift the
-  // first time a role folder is added. There is no `orchestrator` arm to
+  // first time a role folder is added. There is no `root agent` arm to
   // special-case any more (Phase 9 deleted the role); the agent the user talks
   // to wears the HOST persona, set with `/persona use`. Arming `general` shapes
   // the general children it spawns, not the root — the root's prompt comes from

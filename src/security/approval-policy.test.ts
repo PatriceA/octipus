@@ -7,7 +7,7 @@ import { describe, expect, test } from 'vitest';
 import { canPromptHuman, channelCanPrompt, routeApproval } from './approval-policy';
 
 describe('canPromptHuman', () => {
-  test('the root agent and the direct paths can', () => {
+  test('the rootAgent and the direct paths can', () => {
     // Keyed on `root`, not on the role name: since Phase 9 the root runs as an
     // ordinary role, so a role string no longer identifies it.
     expect(canPromptHuman({ role: 'general', root: true })).toBe(true);

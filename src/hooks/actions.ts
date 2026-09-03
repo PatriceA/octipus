@@ -216,20 +216,20 @@ async function executeSpawnAgent(
 
   const message = context.message?.content || prompt;
 
-  // If orchestrated, route through the orchestrator instead of bare spawn
+  // If orchestrated, route through the root agent instead of bare spawn
   if (config.orchestrated) {
-    const { getOrchestratorService } = await import('@/core/orchestrator');
-    const orchestrator = getOrchestratorService();
+    const { getAgentService } = await import('@/core/agent');
+    const rootAgent = getAgentService();
 
     // A heartbeat hook routes on the 'heartbeat' channel so the run is tagged
     // origin='heartbeat' (RunContext) for auditability; everything else is 'hook'.
     const channel = hook?.trigger === 'heartbeat' ? 'heartbeat' : 'hook';
-    const result = await orchestrator.handleMessage(sessionId, userId, message, channel);
+    const result = await rootAgent.handleMessage(sessionId, userId, message, channel);
 
     // For orchestrated hooks, notify the owner with the result if either:
-    // - orchestratorNotify is true (scheduled tasks that should deliver results)
+    // - notifyRoot is true (scheduled tasks that should deliver results)
     // - notifyOwner is true (explicit owner notification)
-    if ((config.orchestratorNotify || config.notifyOwner) && userId && result.response) {
+    if ((config.notifyRoot || config.notifyOwner) && userId && result.response) {
       notifyOwnerWithResult(userId, result.response).catch((err) => {
         coreLogger.error({ error: err }, 'Failed to notify owner with orchestrated result');
       });

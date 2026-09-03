@@ -1,14 +1,14 @@
 #!/usr/bin/env tsx
 /**
- * What the orchestrator hop costs, from the rows the product already writes.
+ * What the root agent hop costs, from the rows the product already writes.
  *
  * This is the measurement for Phase 9 of the rebuild plan. Run it before the
  * change and after, against comparable traffic, and compare the two.
  *
- * The number that mattered was `answered alone`: an orchestrator run that
+ * The number that mattered was `answered alone`: a root agent run that
  * spawned no specialist was a model that read the request, decided it needed
  * nobody, and answered — after a classifier had already read the same request
- * to decide the orchestrator should run at all. Those runs were the hop paying
+ * to decide the root agent should run at all. Those runs were the hop paying
  * for itself and returning nothing, and Phase 9 succeeds when the class is
  * empty BECAUSE THERE IS NO ORCHESTRATOR LEFT TO RUN: the root agent now holds
  * the general toolset and answering alone is the fast path, not a wasted hop.
@@ -21,7 +21,7 @@
  * Deliberately reads `agents` rather than a new counter: a measurement that
  * needs instrumentation shipped first is a measurement that never gets taken.
  *
- *   npx tsx --import ./scripts/md-loader.mjs scripts/orchestrator-cost.ts
+ *   npx tsx --import ./scripts/md-loader.mjs scripts/root-agent-cost.ts
  *   … --json out.json     write the numbers instead of printing them
  *   … --since 2026-08-01  only runs created on or after this date
  */
@@ -39,14 +39,14 @@ const JSON_OUT = arg('json');
 
 const url = process.env.DATABASE_URL;
 if (!url) {
-  console.error('orchestrator-cost: DATABASE_URL is not set');
+  console.error('root-agent-cost: DATABASE_URL is not set');
   process.exit(2);
 }
 
 const sql = postgres(url, { max: 1 });
 const since = SINCE ? new Date(SINCE) : new Date(0);
 if (Number.isNaN(since.getTime())) {
-  console.error(`orchestrator-cost: --since "${SINCE}" is not a date`);
+  console.error(`root-agent-cost: --since "${SINCE}" is not a date`);
   process.exit(2);
 }
 
@@ -58,8 +58,8 @@ try {
       count(*) filter (where role = 'orchestrator')::int as orch_runs
     from agents where created_at >= ${since}`;
 
-  // An orchestrator run "delegated" when its session also holds a
-  // non-orchestrator agent row. Session-scoped rather than parent-scoped
+  // A root agent run "delegated" when its session also holds a
+  // non-root agent agent row. Session-scoped rather than parent-scoped
   // because `parent_agent_id` is null for workers the swarm spawned.
   const split = await sql`
     with orch as (
@@ -114,13 +114,13 @@ try {
 
   const report = {
     since: SINCE ?? 'all time',
-    orchestratorRuns: orchRuns,
+    rootAgentRuns: orchRuns,
     answeredAlone: Number(alone?.runs ?? 0),
     answeredAlonePct: orchRuns > 0 ? +((100 * Number(alone?.runs ?? 0)) / orchRuns).toFixed(1) : 0,
     wastedTokens: Number(alone?.total_tokens ?? 0),
-    orchestratorTokens: orchTokens,
+    rootAgentTokens: orchTokens,
     allAgentTokens: allTokens,
-    orchestratorSharePct: allTokens > 0 ? +((100 * orchTokens) / allTokens).toFixed(1) : 0,
+    rootAgentSharePct: allTokens > 0 ? +((100 * orchTokens) / allTokens).toFixed(1) : 0,
     rootTurns: roots.map((r) => ({
       bucket: r.bucket as string,
       runs: Number(r.runs),
@@ -146,11 +146,11 @@ try {
     console.log(`\nlegacy orchestrator hop · ${report.since} — expected empty after Phase 9\n`);
     console.table(report.breakdown);
     console.log(
-      `\n  ${report.answeredAlone}/${report.orchestratorRuns} orchestrator runs (${report.answeredAlonePct}%) delegated to nobody` +
+      `\n  ${report.answeredAlone}/${report.rootAgentRuns} orchestrator runs (${report.answeredAlonePct}%) delegated to nobody` +
       `\n  ${report.wastedTokens.toLocaleString()} tokens spent on those runs` +
-      `\n  ${report.orchestratorSharePct}% of all agent tokens went on being the orchestrator\n`,
+      `\n  ${report.rootAgentSharePct}% of all agent tokens went on being the orchestrator\n`,
     );
-    if (report.orchestratorRuns === 0) {
+    if (report.rootAgentRuns === 0) {
       console.log('  no orchestrator runs at all — the hop is gone, which is what Phase 9 asserts.\n');
     } else if (report.answeredAlone === 0) {
       console.log('  every orchestrator run delegated — the hop is earning its place.\n');

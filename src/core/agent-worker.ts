@@ -18,9 +18,9 @@ import { compactMessagesWithSummary, CONTEXT_OVERFLOW_TRUNCATED_MARKER, DEFAULT_
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { BaseAgentWorker } from './agent-base';
 import type { ToolHandler } from './agent-base';
-import { recordModelToolCall } from './orchestrator/model-capability';
-import { ensureChildRelay } from './orchestrator/output-guard';
-import { isLongTailHandler } from './orchestrator/tool-split';
+import { recordModelToolCall } from './agent/model-capability';
+import { ensureChildRelay } from './agent/output-guard';
+import { isLongTailHandler } from './agent/tool-split';
 import { ClassifiedError, isFatalConnectionError, isTransientDnsError } from './errors/classification';
 import { formatCollectedResults } from './swarm/collect-tool';
 import {
@@ -164,7 +164,7 @@ export class AgentWorker extends BaseAgentWorker {
    * on every text-only turn — i.e. on the normal, correct way to end a turn —
    * spending an extra LLM call per turn on the happy path (and, when the
    * `background` model is a cold local one, stalling the answer for as long as
-   * that provider takes to load: one observed orchestrator sat 14 min between
+   * that provider takes to load: one observed root agent sat 14 min between
    * its finished answer and delivery).
    */
   private sawNativeToolCall: boolean = false;
@@ -430,7 +430,7 @@ export class AgentWorker extends BaseAgentWorker {
   }
 
   async loadHistory(): Promise<void> {
-    // Orchestrators and task-specific workers are ephemeral — they receive their
+    // Root agents and task-specific workers are ephemeral — they receive their
     // task via run() and don't need session history.
     if (this.context.role !== 'general') {
       agentLogger.debug({ agentId: this.context.id, role: this.context.role }, 'Skipping history for non-general agent');
@@ -483,7 +483,7 @@ export class AgentWorker extends BaseAgentWorker {
     // that eviction is precisely what let run 743d4b66 forget its task. A
     // detector reading from there would go blind exactly when it matters.
     //
-    // The ORCHESTRATOR is exempt. Its work is delegation and polling, so its
+    // The ROOT agent is exempt. Its work is delegation and polling, so its
     // tool vocabulary (spawn_child, collect_children) legitimately shares
     // nothing with the user's wording, and a false abort there is uniquely
     // destructive: `run()`'s catch cascade-cancels every pending detached
@@ -624,7 +624,7 @@ export class AgentWorker extends BaseAgentWorker {
       //
       // `swarmNodeId` is the agent id: `swarm_nodes.id` is 1:1 with
       // `agents.id` (see `swarm-design.md`). `workspaceId` is
-      // inherited from the agent context, which the orchestrator
+      // inherited from the agent context, which the root agent
       // threads in at spawn time.
       recordAgentCompletion({
         agentId: this.context.id,
@@ -891,7 +891,7 @@ export class AgentWorker extends BaseAgentWorker {
       // Wall-clock cap — skip if a final/delegation tool already completed
       // (tools are disabled after delegation; we just need one more LLM call for the summary).
       if (this.config.timeout > 0 && this.elapsed() > this.config.timeout && !this.toolExecutor.toolsDisabled) {
-        // Phase 3.5 / 2.2 — the root orchestrator has no parent to receive a
+        // Phase 3.5 / 2.2 — the root root agent has no parent to receive a
         // structured timeout, so a bare timeout error would surface straight to
         // the user. Instead run one final no-tools summary turn. A child (any
         // non-root worker) still throws ChildTimeoutError so its parent gets a
@@ -1238,13 +1238,13 @@ export class AgentWorker extends BaseAgentWorker {
 
         const toolStart = Date.now();
         // Final/delegation tools (spawn_child, create_pipeline) manage their own timeouts.
-        // Don't race the orchestrator timeout against them — a pipeline can legitimately
-        // run for much longer than the orchestrator's own timeout.
+        // Don't race the root agent timeout against them — a pipeline can legitimately
+        // run for much longer than the root agent's own timeout.
         //
         // Phase 2.2 — `collect_children` blocks while detached children run.
         // That idle-wait is credited back to the parent's clock via pausedMs,
         // but raceTimeout computes its deadline BEFORE the wait, so racing it
-        // would kill the parent mid-collect (the 1.3 "orchestrator failed while
+        // would kill the parent mid-collect (the 1.3 "root agent failed while
         // blocked on children" bug). It bounds its own wait internally, so skip
         // the race — like a self-timed final tool.
         // Three cases:
@@ -1761,7 +1761,7 @@ export class AgentWorker extends BaseAgentWorker {
 
     // Capability floor signal (Phase 2.1): this model failed to emit a native
     // tool call and needed the shim. Recorded per model — a recent shim streak
-    // bars it from orchestrating (validateOrchestratorModel).
+    // bars it from orchestrating (validateRootModel).
     recordModelToolCall(this.context.model, true);
 
     agentLogger.info(

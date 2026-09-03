@@ -30,7 +30,7 @@ describe('buildDelegationGuidance', () => {
   });
 
   test('says a missing tool is a reason to spawn, not a reason to decline', () => {
-    // Measured on the live bench: an orchestrator holding only `profiles`
+    // Measured on the live bench: a root agent holding only `profiles`
     // answered a knowledge-base question with "Octipus has no vector store
     // configured and no knowledge-base search tool mounted" — a claim about the
     // PRODUCT drawn from its own toolset, with a `research` specialist one
@@ -44,8 +44,8 @@ describe('buildDelegationGuidance', () => {
 // ── applyRoleFit (Phase 2.6 deterministic role-fit) ──────────────────
 
 describe('applyRoleFit', () => {
-  // The rewrite is a SMALL-orchestrator workaround, so every case below passes
-  // `true`. Its behaviour for a capable orchestrator is the separate block
+  // The rewrite is a SMALL-root agent workaround, so every case below passes
+  // `true`. Its behaviour for a capable root agent is the separate block
   // underneath, and it is the opposite: the model's own choice stands.
   test('rewrites an advisory role to coding when the task classifies coding-like', () => {
     const fit = applyRoleFit('architecture', 'implement the feature and fix the bug in the backend code', true);
@@ -72,14 +72,14 @@ describe('applyRoleFit', () => {
   });
 });
 
-describe('applyRoleFit — a capable orchestrator keeps its own choice', () => {
-  // The exact task text that IS rewritten for a small orchestrator above. A
+describe('applyRoleFit — a capable rootAgent keeps its own choice', () => {
+  // The exact task text that IS rewritten for a small root agent above. A
   // capable model read the whole request before picking `architecture`;
   // replacing that with a keyword table's read of the brief alone is the
   // inversion this gate exists to stop.
   const codingLike = 'implement the feature and fix the bug in the backend code';
 
-  test('no rewrite when the orchestrator is not small', () => {
+  test('no rewrite when the rootAgent is not small', () => {
     const fit = applyRoleFit('architecture', codingLike, false);
     expect(fit.role).toBe('architecture');
     expect(fit.rewrittenFrom).toBeUndefined();
@@ -383,7 +383,7 @@ describe('createSpawnChildTool', () => {
       id: 'parent-1',
       rootSessionId: '00000000-0000-0000-0000-000000000000',
       parentNodeId: null,
-      kind: 'orchestrator',
+      kind: 'root',
       depth: 0,
       role: 'general',
       topicPath: 'root',
@@ -417,7 +417,7 @@ describe('createSpawnChildTool', () => {
     expect(String(result)).toContain('spawn_child:');
   });
 
-  // Reachability, not behaviour. The role-fit rewrite is a LITE-orchestrator
+  // Reachability, not behaviour. The role-fit rewrite is a LITE-root agent
   // workaround, and it can only fire if the resolved tier actually arrives at
   // the spawner. A first attempt gated it on the ROUTER threshold, which made
   // it dead code in every path that reaches `spawnChild` at all — router mode
@@ -445,12 +445,12 @@ describe('createSpawnChildTool', () => {
     return internal;
   }
 
-  test('a lite orchestrator reaches the spawner as lite', async () => {
-    expect((await spawnAndCaptureInternal({ lite: true }))?.orchestratorIsLite).toBe(true);
+  test('a lite rootAgent reaches the spawner as lite', async () => {
+    expect((await spawnAndCaptureInternal({ lite: true }))?.rootIsLite).toBe(true);
   });
 
-  test('a full orchestrator reaches the spawner as not-lite', async () => {
-    expect((await spawnAndCaptureInternal())?.orchestratorIsLite).toBe(false);
+  test('a full rootAgent reaches the spawner as not-lite', async () => {
+    expect((await spawnAndCaptureInternal())?.rootIsLite).toBe(false);
   });
 
   // A stage worker or a depth-1 agent on a small local model is equally unable
@@ -458,11 +458,11 @@ describe('createSpawnChildTool', () => {
   // `weakModel` alone. Gating on `lite` left the rewrite live at exactly one
   // call site out of three.
   test('a weak-model spawner reaches the spawner as lite without taking the lite schema', async () => {
-    expect((await spawnAndCaptureInternal({ weakModel: true }))?.orchestratorIsLite).toBe(true);
+    expect((await spawnAndCaptureInternal({ weakModel: true }))?.rootIsLite).toBe(true);
   });
 
   test('weakModel:false is not overridden by anything', async () => {
-    expect((await spawnAndCaptureInternal({ weakModel: false }))?.orchestratorIsLite).toBe(false);
+    expect((await spawnAndCaptureInternal({ weakModel: false }))?.rootIsLite).toBe(false);
   });
 
   test('passes validated params to spawner and marshals result via formatChildResult', async () => {
@@ -591,8 +591,8 @@ describe('createSpawnChildTool', () => {
     expect(String(out)).toContain('already at max pending detached (3)');
   });
 
-  test('detach mode: accepted at depth 0 (orchestrator can detach-spawn agents — phase 1 freedom)', async () => {
-    const parent = makeParent(); // depth 0 (orchestrator)
+  test('detach mode: accepted at depth 0 (rootAgent can detach-spawn agents — phase 1 freedom)', async () => {
+    const parent = makeParent(); // depth 0 (rootAgent)
     const seen: Array<{ id: string }> = [];
     let count = 0;
     const spawner = {
@@ -609,7 +609,7 @@ describe('createSpawnChildTool', () => {
     const tool = createSpawnChildTool(parent, spawner, {
       registerPending: (pc) => { seen.push({ id: pc.childId }); count++; },
       pendingCount: () => count,
-      // Mirrors LEVEL_DEFAULT[0].maxPendingDetached after the orchestrator
+      // Mirrors LEVEL_DEFAULT[0].maxPendingDetached after the root agent
       // freedom rework — 0 used to be the value here and blocked detach.
       maxPendingDetached: () => 6,
     });

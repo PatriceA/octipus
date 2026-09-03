@@ -1,6 +1,6 @@
 /**
- * A specialist arm. There is no `orchestrator` role any more: the root agent of
- * a turn runs as `general` (see `ROOT_ROLE`), and the role that could only
+ * A specialist arm. There is no `orchestrator` role any more: the root agent
+ * of a turn runs as `general` (see `ROOT_ROLE`), and the role that could only
  * delegate went with the routing hop in Phase 9 of the rebuild plan. Historical
  * `agents.role = 'orchestrator'` rows predate that and are read as plain text.
  */
@@ -13,7 +13,7 @@ export type AgentRole =
 /**
  * The role the ROOT agent of a turn runs as: an ordinary specialist role with
  * the general toolset, not a dedicated "orchestrator" that can only delegate.
- * See `buildDelegationPolicy` in `orchestrator-runner.ts`, and Phase 9 of
+ * See `buildDelegationPolicy` in `root-runner.ts`, and Phase 9 of
  * `docs/plans/rebuild-execution-plan.md` for why the latter is gone.
  */
 export const ROOT_ROLE: AgentRole = 'general';
@@ -134,7 +134,7 @@ export interface PIIRedaction {
 
 export interface Pipeline {
   id: string;
-  orchestratorId: string;
+  rootAgentId: string;
   sessionId: string;
   userId: string;
   title: string;
@@ -197,7 +197,7 @@ export interface ResponseMetadata {
 
 /**
  * Append a "_Sources: …_" footer to an assistant reply. Centralised so
- * `directResponse`, the orchestrator, expert sessions, and pipeline
+ * `directResponse`, the root agent, expert sessions, and pipeline
  * stages all render the same shape. Returns the original content
  * untouched when there are no sources.
  */

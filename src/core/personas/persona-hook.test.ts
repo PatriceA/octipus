@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import { type BuildSystemPromptOptions, getOrchestratorHooks } from '@/core/orchestrator/hooks';
-import { SECURITY_PREAMBLE } from '@/core/orchestrator/roles';
+import { type BuildSystemPromptOptions, getAgentHooks } from '@/core/agent/hooks';
+import { SECURITY_PREAMBLE } from '@/core/agent/roles';
 import { _resetPersonaHookForTesting, installPersonaHook } from './persona-hook';
 import { getPersonaRegistry } from './registry';
 import { Persona } from './types';
@@ -29,13 +29,13 @@ const baseCtx = (overrides: Partial<BuildSystemPromptOptions> = {}): BuildSystem
 
 describe('installPersonaHook', () => {
   beforeEach(() => {
-    getOrchestratorHooks()._clearForTesting();
+    getAgentHooks()._clearForTesting();
     _resetPersonaHookForTesting();
     getPersonaRegistry()._setForTesting([TEST_PERSONA]);
   });
 
   afterEach(() => {
-    getOrchestratorHooks()._clearForTesting();
+    getAgentHooks()._clearForTesting();
     _resetPersonaHookForTesting();
     getPersonaRegistry()._resetForTesting();
   });
@@ -43,7 +43,7 @@ describe('installPersonaHook', () => {
   test('injects the persona block AFTER SECURITY_PREAMBLE, BEFORE the role prompt', async () => {
     installPersonaHook();
     const ctx = baseCtx();
-    await getOrchestratorHooks().fire('before-agent-start', ctx);
+    await getAgentHooks().fire('before-agent-start', ctx);
 
     expect(ctx.systemPrompt.startsWith(SECURITY_PREAMBLE)).toBe(true);
     const afterPreamble = ctx.systemPrompt.slice(SECURITY_PREAMBLE.length);
@@ -57,7 +57,7 @@ describe('installPersonaHook', () => {
   test('persona block contains the persona name and prompt body', async () => {
     installPersonaHook();
     const ctx = baseCtx();
-    await getOrchestratorHooks().fire('before-agent-start', ctx);
+    await getAgentHooks().fire('before-agent-start', ctx);
     expect(ctx.systemPrompt).toContain('Octipus');
     expect(ctx.systemPrompt).toContain('octopus-machine');
     expect(ctx.systemPrompt).toContain('third person');
@@ -66,14 +66,14 @@ describe('installPersonaHook', () => {
   test('skips injection for spawned children (not the root)', async () => {
     installPersonaHook();
     const ctx = baseCtx({ role: 'coding', root: false, systemPrompt: SECURITY_PREAMBLE + 'CODING_ROLE' });
-    await getOrchestratorHooks().fire('before-agent-start', ctx);
+    await getAgentHooks().fire('before-agent-start', ctx);
     expect(ctx.systemPrompt).toBe(SECURITY_PREAMBLE + 'CODING_ROLE');
   });
 
   test('prepends whole block when prompt does NOT start with SECURITY_PREAMBLE (unit-test path)', async () => {
     installPersonaHook();
     const ctx = baseCtx({ systemPrompt: 'NO_PREAMBLE_HERE' });
-    await getOrchestratorHooks().fire('before-agent-start', ctx);
+    await getAgentHooks().fire('before-agent-start', ctx);
     expect(ctx.systemPrompt.startsWith('--- PERSONA ---')).toBe(true);
     expect(ctx.systemPrompt).toContain('NO_PREAMBLE_HERE');
   });
@@ -81,7 +81,7 @@ describe('installPersonaHook', () => {
   test('SECURITY_PREAMBLE is preserved verbatim — DESIGN.md rule #6', async () => {
     installPersonaHook();
     const ctx = baseCtx();
-    await getOrchestratorHooks().fire('before-agent-start', ctx);
+    await getAgentHooks().fire('before-agent-start', ctx);
     expect(ctx.systemPrompt.startsWith(SECURITY_PREAMBLE)).toBe(true);
   });
 
@@ -89,6 +89,6 @@ describe('installPersonaHook', () => {
     installPersonaHook();
     installPersonaHook();
     installPersonaHook();
-    expect(getOrchestratorHooks()._count('before-agent-start')).toBe(1);
+    expect(getAgentHooks()._count('before-agent-start')).toBe(1);
   });
 });

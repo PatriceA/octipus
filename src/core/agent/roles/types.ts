@@ -26,7 +26,7 @@ export interface RoleMeta {
    * For a role whose prompt already promises read-only behavior, this makes the
    * promise real: prose is not a permission boundary, and per-action ASK
    * permissions do not help either, because ASK is auto-approved for every
-   * non-orchestrator role (`tool-executor.ts`, `base-tool.ts`).
+   * non-root agent role (`tool-executor.ts`, `base-tool.ts`).
    *
    * Only set this where read-only is the role's ACTUAL contract. Several roles
    * are specified to write as their deliverable (architecture saves ADRs, qa

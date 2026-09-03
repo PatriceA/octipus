@@ -37,7 +37,7 @@ import {
 } from './pipeline-graph';
 import { paramTemplateVars, resolveRecipeParams } from './recipe-params';
 import { stageContractErrors } from './role-contract';
-import { getOrchestratorService } from './service';
+import { getAgentService } from './service';
 import {
   buildStagesFromTemplate,
   expandPromptTemplate,
@@ -677,7 +677,7 @@ export class PipelineManager {
    * Create a pipeline from a template type and start it.
    */
   async createAndRun(
-    orchestratorAgentId: string,
+    rootAgentId: string,
     sessionId: string,
     userId: string,
     title: string,
@@ -728,7 +728,7 @@ export class PipelineManager {
     }
 
     const pipeline = await pipelineRepository.create({
-      orchestratorAgentId,
+      rootAgentId,
       sessionId,
       userId,
       title,
@@ -803,8 +803,8 @@ export class PipelineManager {
       })),
     );
 
-    const orchestrator = getOrchestratorService();
-    orchestrator['emit']({
+    const rootAgent = getAgentService();
+    rootAgent['emit']({
       type: 'pipeline_event',
       sessionId,
       data: {
@@ -831,7 +831,7 @@ export class PipelineManager {
       description,
       title,
       context,
-      orchestratorAgentId,
+      rootAgentId,
       sessionId,
     });
   }
@@ -867,7 +867,7 @@ export class PipelineManager {
     description: string;
     title: string;
     context: AgentContext;
-    orchestratorAgentId: string;
+    rootAgentId: string;
     sessionId: string;
     /** Set when continuing an interrupted, paused, or rewound run. */
     resumeState?: WalkState;
@@ -887,7 +887,7 @@ export class PipelineManager {
   /** The walk itself. `runGraph` owns the one-walker-per-pipeline lease. */
   private async walk(args: Parameters<PipelineManager['runGraph']>[0]): Promise<{ pipelineId: string; result: string }> {
     const { pipeline, graph, built, template, paramVars, description, title, context, sessionId } = args;
-    const orchestrator = getOrchestratorService();
+    const rootAgent = getAgentService();
     const registry = getModelRegistry();
     const nodes = new Map((await pipelineRepository.getNodes(pipeline.id)).map((r) => [r.nodeKey, r]));
     const byKey = new Map(graph.nodes.map((n) => [n.key, n]));
@@ -1002,7 +1002,7 @@ export class PipelineManager {
       // items to the plan while the loop is running. Checked at the node
       // boundary, so an over-budget run stops before paying for one more node
       // rather than mid-turn.
-      const pool = getConfig().orchestrator.pipelineTokenBudget;
+      const pool = getConfig().agent.pipelineTokenBudget;
       const spent = [...nodes.values()].reduce((sum, n) => sum + n.tokensUsed, 0);
       const summary = poolExhaustedSummary(pool, spent, byKey.get(cursor)?.name ?? cursor);
       if (summary) {
@@ -1272,7 +1272,7 @@ export class PipelineManager {
           context,
           registry,
           workspaceRoot,
-          orchestratorAgentId: args.orchestratorAgentId,
+          rootAgentId: args.rootAgentId,
           title,
         });
         if (stepResult.stopped) return stepResult.stopped;
@@ -1443,7 +1443,7 @@ export class PipelineManager {
       ...(stoppedShort ? {} : { completedAt: new Date() }),
     });
 
-    orchestrator['emit']({
+    rootAgent['emit']({
       type: 'pipeline_event',
       sessionId,
       // The UI and the notification below say the same thing the row does — a
@@ -1705,7 +1705,7 @@ export class PipelineManager {
     // which holds the agent context the original run was started with, and
     // everything downstream needs from it is on the row.
     const context: AgentContext = {
-      id: pipeline.orchestratorAgentId,
+      id: pipeline.rootAgentId,
       sessionId: pipeline.sessionId,
       userId: pipeline.userId,
       workspaceId: pipeline.workspaceId,
@@ -1734,7 +1734,7 @@ export class PipelineManager {
       description: pipeline.description ?? '',
       title: pipeline.title,
       context,
-      orchestratorAgentId: pipeline.orchestratorAgentId,
+      rootAgentId: pipeline.rootAgentId,
       sessionId: pipeline.sessionId,
       resumeState,
     });
@@ -2251,16 +2251,16 @@ export class PipelineManager {
     context: AgentContext;
     registry: ModelRegistry;
     workspaceRoot: string | null;
-    orchestratorAgentId: string;
+    rootAgentId: string;
     title: string;
   }): Promise<{ output: string; raw: string; stopped?: { pipelineId: string; result: string } }> {
     const { pipeline, node, declared, stageTemplate, input, stageContext, context, registry, workspaceRoot, title } = args;
-    const orchestrator = getOrchestratorService();
+    const rootAgent = getAgentService();
     const sessionId = pipeline.sessionId;
 
     await this.updateNode(node.id, { input, status: 'running' });
 
-    orchestrator['emit']({
+    rootAgent['emit']({
       type: 'pipeline_event',
       sessionId,
       data: { event: 'stage_started', pipelineId: pipeline.id, stageId: node.id, name: node.name, role: node.role, index: node.ordinal },
@@ -2282,7 +2282,7 @@ export class PipelineManager {
       const before = await this.snapshotStage(declared, workspaceRoot);
 
       let counters: SideEffectCounters | null = null;
-      const result = await orchestrator.spawnWorker(
+      const result = await rootAgent.spawnWorker(
         node.role,
         input,
         stageContext,
@@ -2307,7 +2307,7 @@ export class PipelineManager {
           onTokens: (t) => { spentTokens += t; },
           ...(this.grantedToolIds(declared) ? { extraToolIds: this.grantedToolIds(declared) } : {}),
           swarmParent: {
-            id: args.orchestratorAgentId,
+            id: args.rootAgentId,
             rootSessionId: sessionId,
             topicPath: node.visits > 1
               ? `pipeline/${pipeline.id}/${node.name}#visit${node.visits}`
@@ -2374,7 +2374,7 @@ export class PipelineManager {
         ? `${output.slice(0, 300).replace(/\n/g, ' ').trim()}...`
         : output.replace(/\n/g, ' ').trim();
 
-      orchestrator['emit']({
+      rootAgent['emit']({
         type: 'pipeline_event',
         sessionId,
         data: {
@@ -2469,7 +2469,7 @@ export class PipelineManager {
     stopped?: { pipelineId: string; result: string };
   }> {
     const { pipeline, node, currentItem, lastOutput, context, title } = args;
-    const orchestrator = getOrchestratorService();
+    const rootAgent = getAgentService();
 
     if (currentItem) {
       await pipelineRepository.updatePlanItem(currentItem.id, {
@@ -2512,7 +2512,7 @@ export class PipelineManager {
       await this.updateNode(node.id, { status: 'awaiting_approval' });
       await this.updatePipeline(pipeline.id, { status: 'awaiting_approval' });
 
-      orchestrator['emit']({
+      rootAgent['emit']({
         type: 'pipeline_event',
         sessionId: pipeline.sessionId,
         data: { event: 'plan_approval_required', pipelineId: pipeline.id, stageId: node.id, items: items.length },
@@ -2520,7 +2520,7 @@ export class PipelineManager {
       });
 
       const list = items.map((i, n) => `${n + 1}. ${i.title}${i.detail ? ` — ${i.detail}` : ''}`).join('\n');
-      const approval = await orchestrator.requestApproval(
+      const approval = await rootAgent.requestApproval(
         `Pipeline "${title}" — plan (${items.length} item${items.length === 1 ? '' : 's'}):\n\n${list}` +
           `\n\nYou can edit, reorder, or remove items on the pipeline page before approving, and ` +
           `the plan stays editable while the pipeline runs.`,
@@ -2572,7 +2572,7 @@ export class PipelineManager {
       payload: { pipelineId: pipeline.id, title: next.title, ordinal: next.ordinal },
     });
 
-    getOrchestratorService()['emit']({
+    getAgentService()['emit']({
       type: 'pipeline_event',
       sessionId: pipeline.sessionId,
       data: {
@@ -2622,7 +2622,7 @@ export class PipelineManager {
     title: string;
   }): Promise<{ output: string; raw: string; stopped?: { pipelineId: string; result: string } }> {
     const { pipeline, node, stageTemplate, description, paramVars, previousOutput, feedback, context, title } = args;
-    const orchestrator = getOrchestratorService();
+    const rootAgent = getAgentService();
 
     let question = expandPromptTemplate(stageTemplate.promptTemplate, {
       description,
@@ -2643,7 +2643,7 @@ export class PipelineManager {
     await this.updateNode(node.id, { input: question, status: 'awaiting_approval' });
     await this.updatePipeline(pipeline.id, { status: 'awaiting_approval' });
 
-    orchestrator['emit']({
+    rootAgent['emit']({
       type: 'pipeline_event',
       sessionId: pipeline.sessionId,
       // `fields` rides along so a client can draw a form. The answer comes back
@@ -2659,7 +2659,7 @@ export class PipelineManager {
       timestamp: new Date(),
     });
 
-    const answer = await orchestrator.requestApproval(
+    const answer = await rootAgent.requestApproval(
       `Pipeline "${title}" — ${node.name}${fieldText}`,
       question,
       context,
@@ -2707,7 +2707,7 @@ export class PipelineManager {
       payload: { pipelineId: pipeline.id, name: node.name, visit: node.visits, human: true },
     });
 
-    orchestrator['emit']({
+    rootAgent['emit']({
       type: 'pipeline_event',
       sessionId: pipeline.sessionId,
       data: { event: 'stage_completed', pipelineId: pipeline.id, stageId: node.id, name: node.name },
@@ -2732,12 +2732,12 @@ export class PipelineManager {
     title: string;
   }): Promise<'go' | 'skip' | 'stop'> {
     const { pipeline, node, handoffChain, previousOutput, context, title } = args;
-    const orchestrator = getOrchestratorService();
+    const rootAgent = getAgentService();
 
     await this.updateNode(node.id, { status: 'awaiting_approval' });
     await this.updatePipeline(pipeline.id, { status: 'awaiting_approval' });
 
-    orchestrator['emit']({
+    rootAgent['emit']({
       type: 'pipeline_event',
       sessionId: pipeline.sessionId,
       data: { event: 'approval_required', pipelineId: pipeline.id, stageId: node.id, name: node.name },
@@ -2750,7 +2750,7 @@ export class PipelineManager {
         (latest.decisions.length > 0 ? `\n\n**Decisions:** ${latest.decisions.join('; ')}` : '')
       : `Previous stage completed.\n\nResult:\n${previousOutput.slice(0, 2000)}`;
 
-    const approval = await orchestrator.requestApproval(
+    const approval = await rootAgent.requestApproval(
       `Pipeline "${title}" — ${summary}`,
       `Proceed with next stage: "${node.name}"?`,
       context,
@@ -2777,11 +2777,11 @@ export class PipelineManager {
     context: AgentContext;
   }): Promise<{ pipelineId: string; result: string } | null> {
     const { pipeline, node, qaResult, attempts, context } = args;
-    const orchestrator = getOrchestratorService();
+    const rootAgent = getAgentService();
 
     coreLogger.warn({ pipelineId: pipeline.id, attempts }, 'QA validation exhausted retries, requesting human approval');
 
-    orchestrator['emit']({
+    rootAgent['emit']({
       type: 'pipeline_event',
       sessionId: pipeline.sessionId,
       data: { event: 'qa_escalation', pipelineId: pipeline.id, qaStageId: node.id, attempts, issues: qaResult.issues },
@@ -2790,7 +2790,7 @@ export class PipelineManager {
 
     await this.updatePipeline(pipeline.id, { status: 'awaiting_approval' });
 
-    const escalation = await orchestrator.requestApproval(
+    const escalation = await rootAgent.requestApproval(
       `QA validation failed after ${attempts} attempts.\n\nRemaining issues:\n${qaResult.issues.join('\n')}\n\nFeedback: ${qaResult.feedback}`,
       `Continue pipeline despite QA failures, or abort?`,
       context,

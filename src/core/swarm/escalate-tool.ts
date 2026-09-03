@@ -6,7 +6,7 @@
  *  2. Checks the `SwarmCallGraph` to enforce the one-escalation-per-Agent cap.
  *  3. Delegates to `SwarmSpawner.spawnChild` using the existing parent node.
  *
- * Only registered on Agents (depth 1). Orchestrator does not escalate — it
+ * Only registered on Agents (depth 1). The root does not escalate — it
  * re-plans via `spawn_child`. Subagent has no children to begin with.
  *
  * Trigger contract (Agent system prompt / runtime):

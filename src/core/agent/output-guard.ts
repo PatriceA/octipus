@@ -15,7 +15,7 @@ export interface OutputGuardResult {
 const PROMPT_FINGERPRINTS = [
   'SECURITY RULES',
   'you MUST follow these at all times',
-  'task orchestrator that delegates work to specialist workers',
+  'task rootAgent that delegates work to specialist workers',
   'WORKFLOW — follow these steps exactly',
   'spawn_child for delegation (multiple allowed per turn)',
   'Pick the single best role:',
@@ -119,7 +119,7 @@ export function guardOutput(response: string, inputFlags: string[]): OutputGuard
 /**
  * Remove swarm relay scaffolding that is meant to be INTERNAL — the
  * `<CollectChildren>`/`<ChildResult>` tool-result that `collect_children` feeds
- * back to the orchestrator LLM. A weak orchestrator sometimes echoes it
+ * back to the root agent LLM. A weak root agent sometimes echoes it
  * verbatim, and the deterministic relay fallback appends it raw — either way the
  * user must never see it.
  *
@@ -170,7 +170,7 @@ function relayOverlap(answer: string, childText: string): number {
 
 /**
  * After the framework auto-collects detached children (see
- * `AgentWorker.run`), a small orchestrator sometimes answers with a meta-stub
+ * `AgentWorker.run`), a small root agent sometimes answers with a meta-stub
  * ("I've gathered the results and updated the summary") that drops the actual
  * content the user needs — the user never sees the child output, only the
  * reply. This deterministically detects that: if the final answer is far
@@ -190,7 +190,7 @@ export function ensureChildRelay(
   if (overlap >= RELAY_MIN_OVERLAP) return answer;
   const appended = formattedChildResults.trim();
   if (!appended) return answer;
-  // This path firing means synthesis FAILED — the orchestrator answered with a
+  // This path firing means synthesis FAILED — the root agent answered with a
   // stub and the user is about to get raw child output instead of a synthesized
   // reply. That is a quality event worth counting, but nothing logged it, so
   // its real frequency was unknown. Log both gate values so a tuning decision
@@ -202,7 +202,7 @@ export function ensureChildRelay(
       lengthFraction: +(ans.length / child.length).toFixed(3),
       overlap: +overlap.toFixed(3),
     },
-    'Orchestrator synthesis too thin — appending raw child results (relay fallback)',
+    'Root agent synthesis too thin — appending raw child results (relay fallback)',
   );
   return ans
     ? `${ans}\n\n---\n\nFull results from the delegated work:\n\n${appended}`

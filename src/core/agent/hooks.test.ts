@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'vitest';
 import {
   type BuildSystemPromptOptions,
   type ToolDispatchContext,
-  getOrchestratorHooks,
+  getAgentHooks,
 } from './hooks';
 
 const baseCtx = (): BuildSystemPromptOptions => ({
@@ -13,17 +13,17 @@ const baseCtx = (): BuildSystemPromptOptions => ({
   systemPrompt: 'BASE',
 });
 
-describe('OrchestratorHooks', () => {
-  afterEach(() => getOrchestratorHooks()._clearForTesting());
+describe('AgentHooks', () => {
+  afterEach(() => getAgentHooks()._clearForTesting());
 
   test('fire with no handlers returns the ctx unchanged', async () => {
     const ctx = baseCtx();
-    const out = await getOrchestratorHooks().fire('before-agent-start', ctx);
+    const out = await getAgentHooks().fire('before-agent-start', ctx);
     expect(out.systemPrompt).toBe('BASE');
   });
 
   test('handler can mutate the systemPrompt', async () => {
-    const hooks = getOrchestratorHooks();
+    const hooks = getAgentHooks();
     hooks.register('before-agent-start', (ctx) => {
       ctx.systemPrompt = `PREPEND\n${ctx.systemPrompt}`;
     });
@@ -33,7 +33,7 @@ describe('OrchestratorHooks', () => {
   });
 
   test('multiple handlers run sequentially in registration order', async () => {
-    const hooks = getOrchestratorHooks();
+    const hooks = getAgentHooks();
     hooks.register('before-agent-start', (ctx) => { ctx.systemPrompt += '|A'; });
     hooks.register('before-agent-start', (ctx) => { ctx.systemPrompt += '|B'; });
     hooks.register('before-agent-start', async (ctx) => { ctx.systemPrompt += '|C'; });
@@ -43,7 +43,7 @@ describe('OrchestratorHooks', () => {
   });
 
   test('thrown handler does NOT block subsequent handlers', async () => {
-    const hooks = getOrchestratorHooks();
+    const hooks = getAgentHooks();
     hooks.register('before-agent-start', () => { throw new Error('boom'); });
     hooks.register('before-agent-start', (ctx) => { ctx.systemPrompt += '|after-throw'; });
     const ctx = baseCtx();
@@ -52,7 +52,7 @@ describe('OrchestratorHooks', () => {
   });
 
   test('unregister removes the handler', async () => {
-    const hooks = getOrchestratorHooks();
+    const hooks = getAgentHooks();
     const off = hooks.register('before-agent-start', (ctx) => { ctx.systemPrompt += '|X'; });
     off();
     expect(hooks._count('before-agent-start')).toBe(0);
@@ -63,7 +63,7 @@ describe('OrchestratorHooks', () => {
 });
 
 describe('fireWaterfall — dispatch middleware', () => {
-  afterEach(() => getOrchestratorHooks()._clearForTesting());
+  afterEach(() => getAgentHooks()._clearForTesting());
 
   const toolCtx = (): ToolDispatchContext => ({
     toolId: 'filesystem',
@@ -73,21 +73,21 @@ describe('fireWaterfall — dispatch middleware', () => {
   });
 
   test('with no handlers the ctx passes through untouched', async () => {
-    const out = await getOrchestratorHooks().fireWaterfall('tool:before', toolCtx());
+    const out = await getAgentHooks().fireWaterfall('tool:before', toolCtx());
     expect(out.shortCircuit).toBeUndefined();
     expect(out.args.path).toBe('/etc/passwd');
   });
 
   test('a handler can rewrite args', async () => {
-    getOrchestratorHooks().register('tool:before', (ctx) => {
+    getAgentHooks().register('tool:before', (ctx) => {
       ctx.args.path = '/workspace/safe.txt';
     });
-    const out = await getOrchestratorHooks().fireWaterfall('tool:before', toolCtx());
+    const out = await getAgentHooks().fireWaterfall('tool:before', toolCtx());
     expect(out.args.path).toBe('/workspace/safe.txt');
   });
 
   test('deny short-circuits and skips every later handler', async () => {
-    const hooks = getOrchestratorHooks();
+    const hooks = getAgentHooks();
     let laterRan = false;
     hooks.register('tool:before', (ctx) => {
       ctx.shortCircuit = { deny: 'path outside workspace' };
@@ -99,26 +99,26 @@ describe('fireWaterfall — dispatch middleware', () => {
   });
 
   test('a substituted result short-circuits too', async () => {
-    getOrchestratorHooks().register('tool:before', (ctx) => {
+    getAgentHooks().register('tool:before', (ctx) => {
       ctx.shortCircuit = { result: 'cached' };
     });
-    const out = await getOrchestratorHooks().fireWaterfall('tool:before', toolCtx());
+    const out = await getAgentHooks().fireWaterfall('tool:before', toolCtx());
     expect(out.shortCircuit).toEqual({ result: 'cached' });
   });
 
   // The load-bearing difference from `fire`: policy fails CLOSED. A permission
   // hook that crashes must abort the dispatch, never read as "allowed".
   test('a throwing handler aborts the dispatch instead of being swallowed', async () => {
-    getOrchestratorHooks().register('tool:before', () => {
+    getAgentHooks().register('tool:before', () => {
       throw new Error('policy backend down');
     });
     await expect(
-      getOrchestratorHooks().fireWaterfall('tool:before', toolCtx()),
+      getAgentHooks().fireWaterfall('tool:before', toolCtx()),
     ).rejects.toThrow('policy backend down');
   });
 
   test('observational `fire` still swallows a throwing handler', async () => {
-    const hooks = getOrchestratorHooks();
+    const hooks = getAgentHooks();
     let secondRan = false;
     hooks.register('tool:after', () => { throw new Error('tracing exporter down'); });
     hooks.register('tool:after', () => { secondRan = true; });
@@ -135,13 +135,13 @@ describe('fireWaterfall — dispatch middleware', () => {
   });
 
   test('a handler that unregisters mid-chain does not corrupt iteration', async () => {
-    const hooks = getOrchestratorHooks();
+    const hooks = getAgentHooks();
     const order: string[] = [];
     const off = hooks.register('spawn:before', () => { order.push('b'); });
     hooks.register('spawn:before', () => { order.push('a'); off(); });
     hooks.register('spawn:before', () => { order.push('c'); });
     await hooks.fireWaterfall('spawn:before', {
-      parentNodeId: 'n1', parentRole: 'orchestrator', childDepth: 1,
+      parentNodeId: 'n1', parentRole: 'rootAgent', childDepth: 1,
       childRole: 'research', topicPath: 'research', planned: false,
       agent: { userId: 'u1', sessionId: 's1' },
     });

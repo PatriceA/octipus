@@ -1,5 +1,5 @@
 /**
- * Worker-side small-model adaptation — the mirror of the orchestrator mode
+ * Worker-side small-model adaptation — the mirror of the root agent mode
  * selector for workers. Keys off model SIZE (house rule #2), trims tools when
  * the bound model is in the router tier, and never degrades a model whose size
  * can't be determined.

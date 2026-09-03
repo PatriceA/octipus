@@ -4,9 +4,9 @@ import { guardInput } from './input-guard';
 import { guardOutput } from './output-guard';
 
 /**
- * These tests cover the routing-decision surface of the orchestrator's
+ * These tests cover the routing-decision surface of the root agent's
  * `handleMessage` flow without requiring a live model provider or
- * Postgres/Redis. End-to-end tests against a real LiteLLM + PGlite stack
+ * Postgres. End-to-end tests against a real LiteLLM + PGlite stack
  * live in `npm run eval` (see ROADMAP.md → "Embedded eval-driven prompt
  * iteration").
  *
@@ -19,7 +19,7 @@ import { guardOutput } from './output-guard';
  *   3. The classifier+approval pattern works for "yes"/"approve" replies
  *      that resume a paused pipeline.
  */
-describe('orchestrator integration — routing surface', () => {
+describe('rootAgent integration — routing surface', () => {
   test('"hi" classifies as casual at high confidence (direct-response fast path)', () => {
     const c = classifyMessage('hi');
     expect(c.type).toBe('casual');

@@ -141,7 +141,7 @@ describe('CommandRegistry', () => {
     expect(Number.isNaN(new Date(updateCall[1].context.clearedAt as string).getTime())).toBe(false);
     // Pre-existing context survives (we merge, not replace).
     expect(updateCall[1].context.lastTopic).toBe('coding');
-    // Compacted summary is wiped so the orchestrator doesn't pull stale context.
+    // Compacted summary is wiped so the root agent doesn't pull stale context.
     expect(updateCall[1].context.compactedSummary).toBeUndefined();
   });
 

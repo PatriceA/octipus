@@ -1,10 +1,10 @@
 import type { ModelMetadata } from '@/db/schema/models';
 import { coreLogger } from '@/utils/logger';
-import { deriveParamCount } from './mode-selector';
+import { deriveParamCount } from './prompt-tier';
 
 /**
- * Worker-side small-model adaptation. The orchestrator already shrinks itself
- * for small models via `mode-selector` (router/lite/full). This is the missing
+ * Worker-side small-model adaptation. The root agent already shrinks itself
+ * for small models via `prompt-tier` (router/lite/full). This is the missing
  * mirror image for *workers*: when the model bound to a worker's topic is small
  * (the ≤~10B router tier), the worker prompt and tool list are trimmed so a
  * weak local model isn't handed a 14-tool surface and a multi-section expert
@@ -17,7 +17,7 @@ import { deriveParamCount } from './mode-selector';
  *      deliverable template) and collapse the verbose MCP guidance.
  *
  * Both are gated on `isSmallModel`, which keys off the same param-count
- * threshold the orchestrator router mode uses, so a single bound model produces
+ * threshold the root agent uses, so a single bound model produces
  * a consistent tier everywhere.
  */
 
@@ -28,8 +28,8 @@ export interface SmallModelMeta {
 }
 
 /**
- * Is this model in the small (router) tier? Mirrors the orchestrator's
- * `paramCountToMode` router threshold so the worker tier and orchestrator tier
+ * Is this model in the SMALL tier? Mirrors the root agent's
+ * `paramCountToTier` threshold so the worker tier and the root tier
  * agree for the same bound model.
  *
  * Returns `false` when the size can't be determined — we only *reduce*

@@ -15,7 +15,7 @@ const SERVER_CATEGORIES = new Set([
   'litellm',
   'ollama',
   'agent',
-  'orchestrator',
+  'rootAgent',
   'swarm',
   'api',
   'logging',
@@ -38,18 +38,18 @@ const SECTIONS = [
   },
   {
     id: 'agent',
-    title: 'Agent & Orchestrator',
+    title: 'Agent & Root agent',
     description: 'Agent execution limits and pipeline configuration',
     icon: Bot,
     subsections: [
       { category: 'agent', label: 'Agent' },
-      { category: 'orchestrator', label: 'Orchestrator' },
+      { category: 'rootAgent', label: 'Root agent' },
     ],
   },
   {
     id: 'swarm',
     title: 'Swarm',
-    description: 'Per-level budgets and rate limits for the 3-level agent tree (Orchestrator → Agent → Subagent)',
+    description: 'Per-level budgets and rate limits for the 3-level agent tree (Root agent → Agent → Subagent)',
     icon: GitBranch,
     subsections: [
       { category: 'swarm', label: 'Swarm' },

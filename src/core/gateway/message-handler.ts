@@ -24,13 +24,13 @@ async function resolveUserId(userId: string): Promise<string> {
 }
 
 /**
- * Inject a user message into a running orchestrator turn for this session, if
+ * Inject a user message into a running root agent turn for this session, if
  * one exists, so it changes course mid-flight instead of racing a concurrent
- * turn. Returns true when a live orchestrator absorbed the message.
+ * turn. Returns true when a live root agent absorbed the message.
  *
  * This is the per-session lock the steering design calls for: one live
- * orchestrator per session; while it runs, further user messages steer it. The
- * orchestrator drains its steering queue at the next iteration boundary, and
+ * root agent per session; while it runs, further user messages steer it. The
+ * root agent drains its steering queue at the next iteration boundary, and
  * because spawning is always-detach it is genuinely free between iterations to
  * react. The injected message is persisted so the transcript stays complete
  * (the steering queue itself does not persist).
@@ -38,7 +38,7 @@ async function resolveUserId(userId: string): Promise<string> {
 type SteerableWorker = { steer: (m: { role: 'user'; content: string; timestamp: Date }) => void };
 
 /** Exported for unit tests. */
-export async function trySteerRunningOrchestrator(sessionId: string, content: string): Promise<boolean> {
+export async function trySteerRunningRootAgent(sessionId: string, content: string): Promise<boolean> {
   const { getAgentManager } = await import('@/core/agent-manager');
   const mgr = getAgentManager();
   const target = mgr
@@ -50,7 +50,7 @@ export async function trySteerRunningOrchestrator(sessionId: string, content: st
   // Guard the injected content exactly as handleMessage guards a normal turn —
   // a steer must not be a hole around the input guard. On block, return false so
   // the caller falls through to the normal path, which surfaces the block.
-  const { guardInput } = await import('@/core/orchestrator/input-guard');
+  const { guardInput } = await import('@/core/agent/input-guard');
   if (guardInput(content).action === 'block') {
     coreLogger.warn({ sessionId }, 'Input guard blocked a steering message — routing through normal path');
     return false;
@@ -58,7 +58,7 @@ export async function trySteerRunningOrchestrator(sessionId: string, content: st
 
   target.steer({ role: 'user', content, timestamp: new Date() });
 
-  // Race guard: if the orchestrator finished between the status check and the
+  // Race guard: if the root agent finished between the status check and the
   // steer, its steering queue will never drain. Don't persist an orphaned user
   // message — fall back to a normal turn (the dead queue copy is harmless).
   if (target.getStatus() !== 'running') return false;
@@ -76,7 +76,7 @@ export async function trySteerRunningOrchestrator(sessionId: string, content: st
 
 /**
  * Wire the gateway hub's message handler to route authenticated messages
- * to the appropriate backend services (orchestrator, permissions, agents).
+ * to the appropriate backend services (root agent, permissions, agents).
  */
 export function wireMessageHandler(hub: GatewayHub): void {
   hub.setMessageHandler(async (connectionId, context, message) => {
@@ -123,20 +123,20 @@ async function handleChatSend(
   message: Extract<ClientMessage, { type: 'chat.send' }>,
 ): Promise<void> {
   try {
-    const { getOrchestratorService } = await import('@/core/orchestrator');
-    const orchestrator = getOrchestratorService();
+    const { getAgentService } = await import('@/core/agent');
+    const rootAgent = getAgentService();
 
     // Track the session on the connection for /status command
     context.sessionId = message.sessionId;
 
     // Resolve the principal up front — we need userId both for the optional
-    // session pre-create below AND for the orchestrator call.
+    // session pre-create below AND for the root agent call.
     const userId = await resolveUserId(context.userId);
 
-    // If an orchestrator turn is already running for this session, steer it
+    // If a root agent turn is already running for this session, steer it
     // with this message instead of spawning a concurrent turn. Keeps one live
-    // orchestrator per session; the user can redirect work mid-flight.
-    if (await trySteerRunningOrchestrator(message.sessionId, message.content)) {
+    // root agent per session; the user can redirect work mid-flight.
+    if (await trySteerRunningRootAgent(message.sessionId, message.content)) {
       hub.publishEvent({
         type: 'chat.message',
         source: `steer:${connectionId}`,
@@ -152,12 +152,12 @@ async function handleChatSend(
     // The TUI generates a fresh sessionId per launch — so when the very
     // first message arrives, `findById` returns null, the previous version
     // of this block silently skipped the projectPath write, and by the
-    // time the orchestrator created the row inside `resolveSession`,
-    // devMode/projectPath had been lost. The orchestrator then fell back
+    // time the root agent created the row inside `resolveSession`,
+    // devMode/projectPath had been lost. The root agent then fell back
     // to the generic workspace path and child workers operated against
     // the wrong repo. Pre-create the session row here when projectPath
     // is supplied so the dev-mode context is in place before the
-    // orchestrator reads it.
+    // root agent reads it.
     // devMode/projectPath point the agent at an arbitrary host path, so honor
     // them only for a single-user install or an admin caller — otherwise any
     // user on a shared instance could escape their workspace sandbox by
@@ -232,7 +232,7 @@ async function handleChatSend(
       }
     }
 
-    // Route through orchestrator
+    // Route through root agent
     // Use expert from message, connection metadata, or session DB (set via /expert command)
     let expertId = message.expertId || (context.metadata?.activeExpertId as string | undefined);
     if (!expertId && message.sessionId) {
@@ -245,7 +245,7 @@ async function handleChatSend(
         }
       } catch { /* ignore — no expert override */ }
     }
-    const result = await orchestrator.handleMessage(
+    const result = await rootAgent.handleMessage(
       message.sessionId,
       userId,
       message.content,
@@ -258,7 +258,7 @@ async function handleChatSend(
     // Send response back through gateway
     hub.publishEvent({
       type: 'chat.response',
-      source: 'orchestrator',
+      source: 'rootAgent',
       userId: context.userId,
       sessionId: message.sessionId,
       payload: { response: result },
@@ -274,7 +274,7 @@ async function handleChatSend(
 }
 
 /**
- * Side-channel rate limiter. Interject bypasses the orchestrator queue
+ * Side-channel rate limiter. Interject bypasses the root agent queue
  * and triggers an LLM call directly, so it needs its own brake. Per-session
  * sliding window: at most INTERJECT_MAX hits in INTERJECT_WINDOW_MS.
  */
@@ -296,7 +296,7 @@ function allowInterject(sessionId: string): boolean {
 }
 
 /**
- * Side-channel chat message — does NOT go through the orchestrator
+ * Side-channel chat message — does NOT go through the root agent
  * queue. Routes directly through the persona-aware direct-response
  * path so the user can ask a quick question while a swarm is
  * running. Reply is prefixed with the persona's name and "side
@@ -321,8 +321,8 @@ async function handleChatInterject(
     const userId = await resolveUserId(context.userId);
     context.sessionId = message.sessionId;
 
-    const { directResponse } = await import('@/core/orchestrator/direct-response');
-    const { ModelSelector } = await import('@/core/orchestrator/model-selector');
+    const { directResponse } = await import('@/core/agent/direct-response');
+    const { ModelSelector } = await import('@/core/agent/model-selector');
     const { resolvePersonaForUser } = await import('@/core/personas/resolver');
 
     const persona = await resolvePersonaForUser(userId).catch(() => null);
@@ -421,10 +421,10 @@ async function handleApprovalRespond(
   message: Extract<ClientMessage, { type: 'approval.respond' }>,
 ): Promise<void> {
   try {
-    const { getOrchestratorService } = await import('@/core/orchestrator');
-    const orchestrator = getOrchestratorService();
+    const { getAgentService } = await import('@/core/agent');
+    const rootAgent = getAgentService();
 
-    orchestrator.resolveApproval(message.requestId, message.approved, message.response);
+    rootAgent.resolveApproval(message.requestId, message.approved, message.response);
   } catch (err) {
     coreLogger.error({ err, connectionId, requestId: message.requestId }, 'Approval respond error');
     hub.connectionManager.sendToConnection(connectionId, {
@@ -436,7 +436,7 @@ async function handleApprovalRespond(
 }
 
 /**
- * Explicit mid-run steer. Injects into the running orchestrator turn; if none
+ * Explicit mid-run steer. Injects into the running root agent turn; if none
  * is running for the session, falls back to treating it as a normal chat.send
  * so a steer is always safe to fire.
  */
@@ -450,7 +450,7 @@ async function handleChatSteer(
     context.sessionId = message.sessionId;
     const userId = await resolveUserId(context.userId);
 
-    if (await trySteerRunningOrchestrator(message.sessionId, message.content)) {
+    if (await trySteerRunningRootAgent(message.sessionId, message.content)) {
       hub.publishEvent({
         type: 'chat.message',
         source: `steer:${connectionId}`,

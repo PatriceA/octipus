@@ -12,7 +12,7 @@ import { SECURITY_PREAMBLE } from './roles';
 import { appendSources, type ResponseMetadata } from './types';
 
 /**
- * Generate a direct LLM response for casual messages (no orchestrator/worker needed).
+ * Generate a direct LLM response for casual messages (no root agent/worker needed).
  */
 export async function directResponse(
   message: string,
@@ -90,7 +90,7 @@ export async function directResponse(
     // Persona block — resolved from the user's assistant profile (or
     // the base octipus persona if no profile exists yet). Casual
     // replies go through this path, so the dry octopus-machine voice
-    // applies to greetings/small-talk too, not just orchestrator runs.
+    // applies to greetings/small-talk too, not just root agent runs.
     // Falls back to a one-line static persona if the registry isn't
     // initialized (early-boot test path).
     const sessionCtx = (sessionForBoundary?.context as SessionContext) || {};
@@ -106,7 +106,7 @@ export async function directResponse(
         'person ("Octipus is here") and use "we" for the collective. Short, ' +
         'direct, dry. Never "I". For casual chat, keep replies brief.';
     }
-    // Dev-mode hint stays — orchestrator dispatch logic isn't on this
+    // Dev-mode hint stays — root agent dispatch logic isn't on this
     // path but a casual reply in a coding workspace should at least
     // acknowledge the context.
     const isDevSession = Boolean(sessionCtx.devMode || sessionCtx.projectPath);

@@ -859,7 +859,7 @@ export interface ScopedRepos {
 
 /**
  * Build a bundle of scoped repositories for the given principal. Used by
- * route handlers and orchestrator code paths that should never see data
+ * route handlers and root agent code paths that should never see data
  * outside the current principal's tenant.
  *
  * Throws `UnauthenticatedAccessError` if called with an anonymous

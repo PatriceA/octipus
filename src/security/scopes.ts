@@ -16,7 +16,7 @@
  */
 
 export const API_SCOPES = {
-  /** Drive the chat/orchestrator surface (`POST /api/chat`, `/v1/chat/completions`). */
+  /** Drive the chat/root agent surface (`POST /api/chat`, `/v1/chat/completions`). */
   CHAT: 'api:chat',
   /** Read-only data access (list sessions, read notes, etc.). */
   READ: 'api:read',

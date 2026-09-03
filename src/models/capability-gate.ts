@@ -6,7 +6,7 @@
  * at register time; the live check runs the real conformance subset on demand.
  */
 import { getConfig } from '@/config';
-import { deriveParamCount } from '@/core/orchestrator/mode-selector';
+import { deriveParamCount } from '@/core/agent/prompt-tier';
 import type { ModelConfigEntry } from '@/db/schema/models';
 import type { LiteLLMClient } from './litellm-client';
 import type { ModelProvider } from './providers/interface';
@@ -42,7 +42,7 @@ export function staticCapabilityWarnings(
     modelId: string;
     metadata?: ModelConfigEntry['metadata'];
   },
-  /** Same threshold the worker/orchestrator small tier uses, so the warning and
+  /** Same threshold the worker/root agent small tier uses, so the warning and
    *  the actual behavior agree. Defaults to 10B when no config is threaded in. */
   routerMaxParams = 10_000_000_000,
 ): string[] {
@@ -106,6 +106,6 @@ export async function checkModelCapabilities(
     verdict,
     toolCalling,
     structuredOutput,
-    warnings: staticCapabilityWarnings(model, getConfig().orchestrator.routerSmallModelMaxParams),
+    warnings: staticCapabilityWarnings(model, getConfig().agent.smallModelMaxParams),
   };
 }

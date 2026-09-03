@@ -8,7 +8,7 @@ const CASUAL_PATTERNS = [
   /^(how\s*are\s*you|what'?s\s*up|how'?s\s*it\s*going)/i,
   /^(yes|no|ok|okay|sure|nope|yep|yeah)\b/i,
   // Capability questions ("help", "what can you do") are NOT casual —
-  // they need the orchestrator so the answer reflects the actual
+  // they need the root agent so the answer reflects the actual
   // configured experts/tools, not whatever the persona LLM guesses.
   /^what\s+is\s+the\s+\w+\s+of\b/i,  // "What is the capital of France?"
   /^(can you|could you)\s+(explain|tell|clarify)/i,  // "Can you explain that?"
@@ -24,7 +24,7 @@ const CASUAL_PATTERNS = [
 
 const TASK_KEYWORDS: Record<string, string[]> = {
   // Topic name must equal the worker role id ('coding'). The classifier feeds
-  // this string straight into the orchestrator's spawn_child role hint, so a
+  // this string straight into the root agent's spawn_child role hint, so a
   // non-role topic (the old 'development') would be rejected and waste a turn.
   coding: [
     'implement', 'write code', 'develop', 'program',
@@ -201,8 +201,8 @@ const DOC_AUTHORING_RE =
 
 /**
  * Heuristic default for the chat/work split. The user can still force a mode
- * per-message via the composer toggle (applied at runtime in the orchestrator),
- * and the orchestrator LLM makes the final call — this is just the default.
+ * per-message via the composer toggle (applied at runtime in the root agent),
+ * and the root agent LLM makes the final call — this is just the default.
  */
 function inferOutputMode(message: string): 'inline' | 'file' {
   return DOC_AUTHORING_RE.test(message) ? 'file' : 'inline';

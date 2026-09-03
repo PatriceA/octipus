@@ -49,13 +49,13 @@ describe('the setting reaches a running process', () => {
     const { deepMerge } = await import('@/config/utils');
     const { defaultConfig } = await import('@/config/defaults');
 
-    const saved = process.env.ORCHESTRATOR_LAZY_TOOLS;
-    delete process.env.ORCHESTRATOR_LAZY_TOOLS;
+    const saved = process.env.AGENT_LAZY_TOOLS;
+    delete process.env.AGENT_LAZY_TOOLS;
     try {
       const merged = deepMerge(defaultConfig, loadFromEnvLegacy());
-      expect(merged.orchestrator?.lazyToolDiscovery).toBe(true);
+      expect(merged.agent?.lazyToolDiscovery).toBe(true);
     } finally {
-      if (saved !== undefined) process.env.ORCHESTRATOR_LAZY_TOOLS = saved;
+      if (saved !== undefined) process.env.AGENT_LAZY_TOOLS = saved;
     }
   });
 
@@ -64,14 +64,14 @@ describe('the setting reaches a running process', () => {
     const { deepMerge } = await import('@/config/utils');
     const { defaultConfig } = await import('@/config/defaults');
 
-    const saved = process.env.ORCHESTRATOR_LAZY_TOOLS;
-    process.env.ORCHESTRATOR_LAZY_TOOLS = 'false';
+    const saved = process.env.AGENT_LAZY_TOOLS;
+    process.env.AGENT_LAZY_TOOLS = 'false';
     try {
       const merged = deepMerge(defaultConfig, loadFromEnvLegacy());
-      expect(merged.orchestrator?.lazyToolDiscovery).toBe(false);
+      expect(merged.agent?.lazyToolDiscovery).toBe(false);
     } finally {
-      if (saved === undefined) delete process.env.ORCHESTRATOR_LAZY_TOOLS;
-      else process.env.ORCHESTRATOR_LAZY_TOOLS = saved;
+      if (saved === undefined) delete process.env.AGENT_LAZY_TOOLS;
+      else process.env.AGENT_LAZY_TOOLS = saved;
     }
   });
 });

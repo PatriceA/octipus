@@ -21,11 +21,11 @@ products, which reframes many "gaps" as deliberate scope choices:
 | | OpenClaw | Octipus |
 |---|---|---|
 | Product | Personal, **single-user** AI assistant you run on your own devices | Self-hosted, **multi-user** agent orchestration platform |
-| Center of gravity | Channels + devices ("the product is the assistant") | Orchestrator + swarm ("coordination, not replacement") |
+| Center of gravity | Channels + devices ("the product is the assistant") | Root agent + swarm ("coordination, not replacement") |
 | Trust model | One owner; pairing/allowlists for everyone else | Organizations, RBAC, RLS, SSO — many principals |
 | State | Local-first: JSON5 config, SQLite, markdown memory files | DB-first: Postgres + pgvector (PGlite embedded mode), config in DB |
-| Scale of codebase | ~993k LOC in `src/`, 152 bundled plugins, 21 workspace packages, native Swift/Kotlin apps | ~166k LOC in `src/` + ~36k web, single repo, small core |
-| Maturity | CalVer `2026.7.2`, auto-update feed, 71 CI workflows | v0.2 alpha, semver-ish 0.x, 1 CI workflow |
+| Scale of codebase | ~993k LOC in `src/`, 152 bundled plugins, 21 workspace packages, native Swift/Kotlin apps | ~147k LOC in `src/` + ~38k web, single repo, small core |
+| Maturity | CalVer `2026.7.2`, auto-update feed, 71 CI workflows | v0.1 alpha, semver-ish 0.x, 12 CI workflows |
 
 OpenClaw is roughly 6× the codebase and several times the surface
 area. A line-by-line feature race is unwinnable and undesirable; the
@@ -37,7 +37,7 @@ OpenClaw structurally cannot match.
 
 | Capability | OpenClaw | Octipus | Notes |
 |---|---|---|---|
-| Multi-agent routing | Yes | Yes | OpenClaw: per-channel/peer isolated agents with own workspaces. Octipus: orchestrator + 16 specialist roles |
+| Multi-agent routing | Yes | Yes | OpenClaw: per-channel/peer isolated agents with own workspaces. Octipus: root agent + 16 specialist roles |
 | Deterministic pre-LLM classification | No | Yes | Octipus classifies keyword-first, LLM only when ambiguous |
 | Sub-agent spawning | Yes | Yes | OpenClaw: `subagents` tool + ACP runtime. Octipus: 3-level swarm via `spawn_child`, await/detach, `parallelGroup` |
 | Spawn budgets (tokens/wall-clock/fan-out) | Partial | Yes | Octipus: per-node hard caps + cascade cancel + fingerprint cycle protection (`src/core/swarm/`) |
@@ -47,7 +47,7 @@ OpenClaw structurally cannot match.
 | Multiple external agent harnesses | Yes | Partial | OpenClaw runs Codex, GitHub Copilot CLI, OpenCode as engines. Octipus wraps CLIs as providers (`cli-provider`) |
 | Mid-run steering queue | Yes | No | OpenClaw `steer` tool + steering queue |
 | Topic → model config-driven routing | Partial | Yes | Octipus `ModelRegistry.getModelForTopic()`, fail-loud on unbound |
-| Personas / identity | Yes | Yes | OpenClaw "soul"/identity; Octipus 6 orchestrator personas + 16 experts |
+| Personas / identity | Yes | Yes | OpenClaw "soul"/identity; Octipus 6 root agent personas + 16 experts |
 
 ## Channels
 
@@ -141,7 +141,7 @@ multi-user platform; OpenClaw's is better for a personal assistant.
 
 | Surface | OpenClaw | Octipus |
 |---|---|---|
-| Web UI | Yes (Lit, 27 pages, control-plane flavored) | Yes (Next.js 16, ~30 routes, full product UI) |
+| Web UI | Yes (Lit, 27 pages, control-plane flavored) | Yes (React + Vite, ~44 routes, full product UI) |
 | CLI | Yes | Yes |
 | TUI chat | No | Yes (+ TUI editor, push-to-talk voice) |
 | Desktop app | Yes (native macOS menu-bar app) | Yes (Tauri, cross-platform) |
@@ -167,7 +167,7 @@ multi-user platform; OpenClaw's is better for a personal assistant.
 | Exec approvals (human-in-the-loop) | Yes | Yes (ASK permission tier) |
 | Prompt-injection defense | Partial (untrusted-input gating at channel edge) | Yes (3 layers: preamble, 39-pattern input guard, LLM output guard) |
 | Red-team eval suite in repo | No | Yes (49 cases, 5 attack plugins) |
-| Security scanning in CI | Yes (CodeQL, semgrep/opengrep, zizmor, detect-private-key) | Partial (`bun audit` continue-on-error only) |
+| Security scanning in CI | Yes (CodeQL, semgrep/opengrep, zizmor, detect-private-key) | Yes (CodeQL, semgrep/opengrep, zizmor, blocking dependency audit w/ reviewable allowlist) |
 
 ## Deployment & operations
 
@@ -193,23 +193,23 @@ multi-user platform; OpenClaw's is better for a personal assistant.
 | Skills | Yes (52 bundled, `SKILL.md`, Skill Workshop UI) | Yes (22 domain skills, DB + `SKILL.md` agentskills.io spec, proposal/curator lifecycle) |
 | Eval framework | Partial (QA harness, maturity scorecard) | Yes (`src/eval/` + YAML suites + red-team) |
 | Protocol client SDK | Yes (`gateway-client`, generated Swift models) | Partial (typed Zod protocol, no published client pkg) |
-| OpenAI-compatible HTTP API | Yes | No |
+| OpenAI-compatible HTTP API | Yes | Yes (mounted at `/v1`) |
 
 ## Quality comparison
 
 | Signal | OpenClaw | Octipus |
 |---|---|---|
 | Source size | ~993k LOC `src/` + 105k packages + native apps | ~166k LOC `src/` + 36k web + 3k mcp-server |
-| Test files | 7,240 (incl. 105 e2e, live tests, contract shards) | 337 (unit, integration vs Docker Postgres, 26 API/WS e2e modules, 24 Playwright web specs, TUI e2e, a11y) |
-| Test:source ratio (src) | ~0.43 (4,042 / 9,475 files) | ~0.31 (310 / 989 files) |
-| CI | 71 workflows: sharded matrices, macOS/iOS/Android/Windows lanes, perf regression, install smoke, release validation | 1 workflow, 3 jobs (backend, web+Tauri, mcp-server) |
-| Security CI | CodeQL, semgrep/opengrep, zizmor, dependency guard | `bun audit` (continue-on-error) |
+| Test files | 7,240 (incl. 105 e2e, live tests, contract shards) | 410 (unit, integration vs Docker Postgres, 27 API/WS e2e modules, 20 Playwright web specs, TUI e2e, a11y) |
+| Test:source ratio (src) | ~0.43 (4,042 / 9,475 files) | ~0.35 (410 / 1,156 files) |
+| CI | 71 workflows: sharded matrices, macOS/iOS/Android/Windows lanes, perf regression, install smoke, release validation | 12 workflows: `ci.yml` (backend, web, desktop/Tauri, mcp-server jobs) plus CodeQL, semgrep, zizmor, dependency-review, integration, install-smoke, red-team, browser-extension, release |
+| Security CI | CodeQL, semgrep/opengrep, zizmor, dependency guard | CodeQL, semgrep/opengrep, zizmor, blocking dependency audit w/ allowlist |
 | Type strictness | strict TS everywhere, tsgo lanes | strict TS everywhere |
 | Lint/format | oxlint + oxfmt + knip + markdownlint + shellcheck + swiftlint + ktlint, pre-commit | Biome (curated rules, formatter deliberately off), ESLint on web |
-| Docs | 708 markdown files, Mintlify site, i18n | ~45 files in `docs/`, thorough for size |
+| Docs | 708 markdown files, Mintlify site, i18n | ~78 files in `docs/`, thorough for size |
 | Release engineering | CalVer, changelog 15k lines w/ PR credits, appcast auto-update, RELEASING.md, maturity scorecard | 0.x alpha, Keep-a-Changelog (51KB), no release automation |
 | Error handling | logger pkg, retry/failover docs, tool-call repair, loop detection, watchdogs, restart-recovery | centralized error taxonomy (`FailoverReason`/`RecoveryAction`), fail-loud doctrine, typed swarm errors |
-| TODO debt | n/a (not measured) | 3 TODO/FIXME in all of `src/` (policy-enforced) |
+| TODO debt | n/a (not measured) | 7 TODO/FIXME occurrences across `src/` (not CI-enforced) |
 
 Read fairly: OpenClaw's numbers reflect a ~3-year-old project with a
 large contributor base and sponsors; Octipus is a young alpha with
@@ -251,13 +251,14 @@ keep one authoritative daemon.
   approach scales contribution (152 plugins) but yields a huge
   maintenance surface; Octipus's keeps quality but concentrates all
   work on the core team.
-- **Orchestration.** This is Octipus's structural lead: deterministic
-  classification, config-driven topic→model binding, budgeted
-  3-level swarm with cascade cancel, ledger crash-resume, and
+- **Orchestration.** This is Octipus's structural lead: an LLM-driven root
+  agent that delegates via `spawn_child`, config-driven topic→model binding,
+  budgeted 3-level swarm with cascade cancel, ledger crash-resume, and
   verification receipts. OpenClaw's multi-agent story (routing +
   subagents + external harnesses) is broader but shallower — no spawn
   budgets, no crash-resume of agent trees, no verification layer.
-- **Runtime bet.** Octipus: Bun + Elysia (fast, younger ecosystem).
+- **Runtime bet.** Octipus: Node + Hono (migrated off Bun/Elysia during
+  the rebuild — boring, maximally compatible).
   OpenClaw: Node 22+ (boring, maximally compatible — likely one
   reason its plugin ecosystem grew).
 
@@ -273,9 +274,10 @@ channels are *not* automatically goals).
 
 **High value, aligned with positioning:**
 
-1. **CI & security engineering.** Add CodeQL/semgrep, make `bun audit`
-   blocking, add release automation and cross-OS install smoke tests.
-   Cheapest credibility gap to close.
+1. **CI & security engineering.** CodeQL/semgrep/zizmor and a blocking
+   dependency audit are now in place; release automation and cross-OS
+   install smoke tests are still open. Cheapest remaining credibility gap
+   to close.
 2. **Heartbeat / proactive loop.** OpenClaw's heartbeat + standing
    orders make the assistant *initiate*. Octipus has cron and hooks
    but no periodic "look at your goals and act" turn. Natural fit for
@@ -284,14 +286,16 @@ channels are *not* automatically goals).
    contract tests and support install-from-npm/git. The
    proposal/curator skill lifecycle is already better than OpenClaw's;
    plugins need the same rigor before a marketplace (roadmap) is viable.
-4. **Observability exporters.** OTel traces + Prometheus metrics.
-   Table stakes for a self-hosted multi-user platform; OpenClaw ships
-   both as plugins.
-5. **Tool catalog search.** With 59+ tools and MCP fan-in, prompt-side
-   tool selection will hit context limits; OpenClaw's `tool_search`
-   pattern (experimental there) is the right shape.
-6. **OpenAI-compatible HTTP API.** Lets any existing client/SDK treat
-   Octipus as a backend. Low effort given ~90 REST routes already exist.
+4. **Observability exporters.** Prometheus metrics already ship
+   (`/api/metrics`, `octipus_*` gauges/counters); OTel traces are the
+   remaining gap. Table stakes for a self-hosted multi-user platform;
+   OpenClaw ships both as plugins.
+5. **Tool catalog search.** Shipped — `list_tools`/`describe_tool`
+   lazy discovery plus embedding-ranked `tool_search`
+   (`src/tools/tool-search.ts`) already do what OpenClaw's
+   experimental `tool_search` pattern targets.
+6. **OpenAI-compatible HTTP API.** Shipped — mounted at `/v1`
+   (`src/api/routes/openai-compat.ts`), sharing the REST auth surface.
 
 **Medium value:**
 

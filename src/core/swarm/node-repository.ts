@@ -66,7 +66,7 @@ export class SwarmNodeRepository {
    * A timestamp costs nothing to take, so the boundary can be a predicate
    * rather than a set, and the row count no longer grows with the session.
    *
-   * `depth > 0` because the root node is the orchestrator itself, which is not
+   * `depth > 0` because the root node is the root agent itself, which is not
    * a routing decision.
    */
   async findChildrenSince(rootSessionId: string, since: Date): Promise<SwarmNodeRecord[]> {
@@ -180,7 +180,7 @@ export class SwarmNodeRepository {
    * Orphan reaper — the ids of `running` nodes older than `olderThanMs`. Does
    * NOT flip anything; the reaper decides per-candidate using worker liveness
    * (a stale `createdAt` alone can't tell a wedged worker from one legitimately
-   * alive > the threshold — an orchestrator blocked on children), then flips
+   * alive > the threshold — a root agent blocked on children), then flips
    * only the genuinely-stuck ones via `cancelNodes`.
    */
   async findRunningOlderThan(olderThanMs: number): Promise<string[]> {
@@ -202,7 +202,7 @@ export class SwarmNodeRepository {
    * node, and `swarm_nodes.id` is 1:1 with `agents.id`, so this answers "is this
    * historical agent row Octipus itself" for callers that only have ids — the
    * `agents` table has no root column and the role name stopped identifying it
-   * when the orchestrator role was deleted.
+   * when the root agent role was deleted.
    */
   async findRootIds(ids: string[]): Promise<Set<string>> {
     if (ids.length === 0) return new Set();

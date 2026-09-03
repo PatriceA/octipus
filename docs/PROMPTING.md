@@ -34,48 +34,48 @@ Thanks for the help!
 
 These are classified as "casual" and get a quick response without spawning agents.
 
-## Orchestrator Persona
+## Root agent Persona
 
-The orchestrator (the entity you talk to) has a per-user identity layered between `SECURITY_PREAMBLE` and the role prompt at every turn. Default is **Octipus** — an octopus-machine that refers to itself in the third person, uses "we" for the swarm, and gives short dry replies. The voice applies to the casual-chat path AND the orchestrator's narration of swarm work ("Octipus dispatches a research arm.", "qa arm failed. Predictable.").
+The root agent (the entity you talk to) has a per-user identity layered between `SECURITY_PREAMBLE` and the role prompt at every turn. Default is **Octipus** — an octopus-machine that refers to itself in the third person, uses "we" for the swarm, and gives short dry replies. The voice applies to the casual-chat path AND the root agent's narration of swarm work ("Octipus dispatches a research arm.", "qa arm failed. Predictable.").
 
-Customize via `/persona name <X>`, `/persona tone <…>`, `/persona say <fact>`. Switch presets with `/persona use mentor`. Six presets ship; full list at [CHAT-COMMANDS.md](CHAT-COMMANDS.md#personas-orchestrator-identity).
+Customize via `/persona name <X>`, `/persona tone <…>`, `/persona say <fact>`. Switch presets with `/persona use mentor`. Six presets ship; full list at [CHAT-COMMANDS.md](CHAT-COMMANDS.md#personas-root agent-identity).
 
 Specialist children do **not** inherit the persona — they stay role-defined (Coder, Reviewer, etc.). The persona is host-level only.
 
 ## Expert Agents
 
-Experts are pre-configured agent personas with specific tools and skills. The system automatically routes to the right expert based on your message, or you can specify one explicitly.
+Experts are pre-configured agent personas with specific tools and skills. The agent you're talking to delegates to the right expert when your message needs one, or you can specify one explicitly.
 
-### Auto-Routing (Orchestrator)
+### Auto-Delegation
 
-The orchestrator classifies your message and spawns the right specialist:
+There is no separate routing layer. The agent you talk to is an ordinary `general`-role worker with its own tools (files, web, knowledge base, notes, tasks, messaging, scheduling). It answers directly whenever its own tools reach the request, and calls `spawn_child` to hand off to a specialist role only when the task needs a toolset or judgement it doesn't have:
 
 ```
-# Routes to Coding expert
+# Delegates to the Coding expert
 Fix the bug in src/utils/parser.ts where it fails on empty input
 
-# Routes to DevOps expert
+# Delegates to the DevOps expert
 Deploy the staging environment and check container health
 
-# Routes to Security expert
+# Delegates to the Security expert
 Scan the API endpoints for XSS vulnerabilities
 
-# Routes to Research expert
-Research the top 5 alternatives to Redis for caching
+# Delegates to the Research expert
+Research the top 5 alternatives to Postgres for a vector-search workload
 
-# Routes to QA expert
+# Delegates to the QA expert
 Test the login flow on the staging site and report any issues
 
-# Routes to Data expert
+# Delegates to the Data expert
 Write a SQL query to find users who signed up in the last 30 days
 
-# Routes to Communication expert
+# Delegates to the Communication expert
 Check my Gmail for unread emails from today
 ```
 
 ### Direct Expert Chat (via API/MCP)
 
-Bypass the orchestrator by specifying an `expertId`:
+Bypass delegation by specifying an `expertId` directly:
 
 ```json
 POST /api/chat
@@ -90,23 +90,25 @@ POST /api/chat
 | Expert | Specialization | Key Tools |
 |--------|---------------|-----------|
 | Coder | Code implementation, debugging | filesystem, shell, git |
-| Code Reviewer | Code review, architecture analysis | filesystem, git |
+| Architect | System architecture, technical specs | filesystem, shell, knowledge |
+| Reviewer | Code review, architecture analysis | filesystem, shell, git |
 | Researcher | Web research, investigation | websearch, knowledge |
-| Designer | UI/UX evaluation | browser, filesystem |
+| UI/UX Designer | UI/UX evaluation | browser, filesystem |
 | DevOps Engineer | CI/CD, containers, infrastructure | shell, docker, git |
 | Security Analyst | Vulnerability scanning, auditing | shell, browser, websearch |
-| Data Engineer | Database, queries, data pipelines | shell, filesystem |
+| Data Engineer | Database, queries, data pipelines | shell, filesystem, knowledge |
 | AI Engineer | ML, RAG, prompt engineering | shell, browser, knowledge |
 | QA Engineer | Testing, bug finding | browser, browser-ext, shell |
-| Finance Analyst | Market analysis, financial data | browser, websearch |
-| Automation Engineer | Workflow automation | shell, docker |
+| Financial Analyst | Market analysis, financial data | browser, websearch |
+| Automation Engineer | Workflow automation | shell, docker, scheduling |
 | Project Manager | Planning, status tracking | filesystem, messaging |
 | Technical Writer | Documentation | filesystem, browser |
-| Communications | Email, calendar, messaging | google-workspace, microsoft365 |
+| Communicator | Email, calendar, messaging | google-workspace, microsoft365, messaging |
+| General | Everyday tasks, catch-all delegator | filesystem, shell, websearch, knowledge |
 
 ## Swarm Delegation (`spawn_child`)
 
-Delegation is a 3-level tree: **Orchestrator → Agent → Subagent**. The orchestrator (and depth-1 Agents) call `spawn_child` to hand a focused sub-topic to a specialist. Multiple `spawn_child` calls in one LLM turn with the same `parallelGroup` run in parallel via `Promise.all` (capped 4/turn).
+Delegation is a 3-level tree: **Root agent → Agent → Subagent**. The root agent (and depth-1 Agents) call `spawn_child` to hand a focused sub-topic to a specialist. Multiple `spawn_child` calls in one LLM turn with the same `parallelGroup` run in parallel via `Promise.all` (capped 4/turn).
 
 Trigger by requesting work that naturally splits across specialists:
 
@@ -121,7 +123,7 @@ Check our production logs for errors, review the deployment pipeline
 configuration, and audit the Docker container resource limits.
 ```
 
-The orchestrator recognizes multi-faceted tasks and fans out via parallel `spawn_child` calls. You can also be explicit:
+The root agent recognizes multi-faceted tasks and fans out via parallel `spawn_child` calls. You can also be explicit:
 
 ```
 Use the swarm: have one agent research competitors, another analyze
@@ -245,7 +247,7 @@ Create a calendar event for tomorrow at 3pm
 
 ```
 Show logs for the postgres container
-Restart the redis container
+Restart the octipus container
 List all running containers with their resource usage
 ```
 
@@ -268,7 +270,7 @@ Hooks automate actions based on events. Configure them in the Hooks page (`/hook
 | Action | What it does |
 |--------|-------------|
 | `notify` | Send a message to a channel (Telegram, Slack, etc.) |
-| `spawn_agent` | Start an agent (direct or through orchestrator) |
+| `spawn_agent` | Start an agent (direct or through root agent) |
 | `webhook` | Send an outgoing HTTP request |
 | `n8n_workflow` | Trigger an N8N automation workflow |
 | `execute_tool` | Run a specific tool action |

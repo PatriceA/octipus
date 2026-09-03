@@ -9,7 +9,7 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 ## Now (in flight)
 
 - **Mock-provider scaffold for the model layer.** `src/models/litellm-client.ts`
-  (772 lines) and `src/models/providers/index.ts` are at 0% coverage
+  (988 lines) and `src/models/providers/index.ts` are at 0% coverage
   because they front network IO; meaningful unit tests need a mock
   provider that speaks the provider interface (complete / embed /
   stream / error classes), records calls, and returns scripted
@@ -26,7 +26,7 @@ This doc lists what we are exploring. Order inside each section is rough priorit
   garbage-collection policy, slug-collision UX, agent-authored
   refresh loop. Stays in **Now** until the BETA flag drops.
 
-- **Schema directory grouping.** `src/db/schema/` is 47 flat files.
+- **Schema directory grouping.** `src/db/schema/` is 57 flat files.
   Still searchable, but the next 5-10 additions will start to bite.
   Proposed grouping: `schema/{auth,orchestration,rag,memory,artifacts,audit,settings}/`.
   Non-breaking — `index.ts` re-exports preserve the import surface.
@@ -142,7 +142,7 @@ All three landed. What each actually became:
   knob with no user), and the **role seam** itself — swappable providers behind
   a role contract, so roles can be installed and replaced at runtime. That last
   one is the real remaining work here: `AgentRole` is a frozen 17-member union
-  in `src/core/orchestrator/types.ts` and every registry keys off it, so a
+  in `src/core/agent/types.ts` and every registry keys off it, so a
   runtime-installable role is a type-level change, not a config one.
 - **Deterministic policy layer — approvals SHIPPED (2026-08-20).** The part of
   this that was genuinely scattered was the approval decision: whether an
@@ -168,7 +168,7 @@ All three landed. What each actually became:
 - **Per-node token budgets in the graph — SHIPPED (2026-08-20).** Two bounds,
   because they answer different questions. A template step may declare
   `maxTokens`, persisted on the node row and handed to the worker as its cap —
-  that bounds ONE visit. `orchestrator.pipelineTokenBudget` (2M default, 0
+  that bounds ONE visit. `agent.pipelineTokenBudget` (2M default, 0
   disables) is the pool for the whole run, checked at the node boundary against
   every node's cumulative spend. The pool is the load-bearing one: a `foreach`
   node is entered once per plan item and items can be appended mid-run, so the
@@ -233,8 +233,8 @@ All three landed. What each actually became:
   API (shipped 2026-07-12) streams protocol-correct SSE that chunks the
   *final* text. True token-by-token streaming needs a token-delta path
   that does not exist yet: `ProviderRouter.complete` returns full text
-  and the orchestrator emits only structured events (`status_update`,
-  `worker_spawned`, …). The work is provider streaming → orchestrator
+  and the root agent emits only structured events (`status_update`,
+  `worker_spawned`, …). The work is provider streaming → root agent
   delta events → SSE bridge keyed by the shipped WS4 `runId`, not a
   bridge over existing events. Do it once a provider-level streaming
   interface lands.
@@ -266,15 +266,15 @@ All three landed. What each actually became:
   `streamingBehavior`, request-id correlation). Unlocks IDE / CI / subprocess
   embedding without a WS server. Mirrors pi-mono's `--mode rpc`.
 - **Per-tool `executionMode` override.** Today meta-tools all run through the
-  orchestrator with global concurrency. Add `executionMode: "sequential"` on
+  root agent with global concurrency. Add `executionMode: "sequential"` on
   the tool definition itself for tools with shared-state hazards
   (`spawn_worker`, `create_pipeline`, swarm `spawn_child`). Pi's pattern;
-  small change to `BaseTool` + the orchestrator dispatch path. Cheapest as a
+  small change to `BaseTool` + the root agent dispatch path. Cheapest as a
   policy declaration once the wave-1 waterfall exists.
 - **Skill auto-extension — promotion path.** The pattern detector, cache,
   `skill_proposals` table, `/api/skills/proposals` API, and
   `/skills/proposals` web page landed. The
-  [2026-05-24 curator land](#2026-05-24--orchestrator-freedom--hermes-skill-curator)
+  [2026-05-24 curator land](#2026-05-24--root agent-freedom--hermes-skill-curator)
   added the lifecycle backbone (`last_used_at`, `usage_count`,
   `archived_at`, `curation_notes`, debounced usage tracker,
   `runSkillCurator` auto-archive after 90d / flag after 30d). The
@@ -328,7 +328,7 @@ All three landed. What each actually became:
 - **Embedded eval-driven prompt iteration.** Edit a role prompt in the UI, run the eval suite, see the diff in metrics, accept or revert. Closes the loop on prompt engineering; the wave-3 regression gate is the headless half of the same machinery.
 - **Session-as-tree (fork/branch-aware sessions).** Today messages are a linear PG sequence per session. Add `parentId` on messages and a `/tree` navigation command so users can fork from any point, edit, and replay. Pi-mono's session v3. Defer until a real fork UX is on the table — linear is fine while it isn't. Note the wave-2 checkpoint work is the *execution* analogue and may make this cheaper.
 - **Richer TUI editor (replace Ink `<TextInput>`).** Today the TUI input is a single-line Ink box with file-path completion. A real editor — multi-line, kill ring, undo/redo, kitty-keyboard protocol, stacked autocomplete providers (e.g. `#1234` GitHub issues + `@file` paths) — would close the gap with the web UI editor. Pi-mono's `editor.ts` (2231 lines) and `keybindings.ts` (TS-declaration-merging registry with conflict detection) are the reference. Big lift; only worth it if the TUI becomes a primary surface.
-- **Mixture-of-Agents / "council" (opt-in preset, NOT the default flow).** Fan the *same* prompt to N diverse models in parallel, then have an aggregator model synthesize one answer from their labeled outputs — error-cancellation and a quality lift on hard reasoning tasks (Hermes v0.18 ships this as a selectable "model"). Deliberately kept out of the normal routing path: it costs ~N+1× tokens and adds tail latency for a delta that's marginal on routine traffic. The only shape worth adopting is a **model preset** (configured/resolved/selected like a model via `ModelRegistry`), so it stays inside "config-driven models" and "no special cases" — never an orchestrator branch. Gate on evidence: spike first against `eval:quality`; ship the preset only if MoA-N beats the best single model by enough to justify the cost, otherwise record the numbers and leave it parked. Members must be genuinely diverse and individually decent — a strong+weak mix drags the aggregator down. Postponed; activate on demand, not by default.
+- **Mixture-of-Agents / "council" (opt-in preset, NOT the default flow).** Fan the *same* prompt to N diverse models in parallel, then have an aggregator model synthesize one answer from their labeled outputs — error-cancellation and a quality lift on hard reasoning tasks (Hermes v0.18 ships this as a selectable "model"). Deliberately kept out of the normal routing path: it costs ~N+1× tokens and adds tail latency for a delta that's marginal on routine traffic. The only shape worth adopting is a **model preset** (configured/resolved/selected like a model via `ModelRegistry`), so it stays inside "config-driven models" and "no special cases" — never a root agent branch. Gate on evidence: spike first against `eval:quality`; ship the preset only if MoA-N beats the best single model by enough to justify the cost, otherwise record the numbers and leave it parked. Members must be genuinely diverse and individually decent — a strong+weak mix drags the aggregator down. Postponed; activate on demand, not by default.
 
 ### Evaluated and rejected
 
@@ -343,13 +343,13 @@ All three landed. What each actually became:
 
 ### 2026-07-13/14 — Live voice conversation (PRs #210–#217)
 
-Hands-free voice in the web chat that talks to the orchestrator, not a
+Hands-free voice in the web chat that talks to the root agent, not a
 bolt-on. Realtime duplex `/voice` WebSocket (streaming whisper.cpp or
 Mistral Voxtral STT) with per-sentence streaming TTS and **barge-in**;
 a Twilio media-stream path for phone calls; a **propose-then-confirm
 gate** so a spoken work request is planned/clarified and confirmed
 before it spawns (on the fast `voice`-topic model, read-only over the
-orchestrator); a **backend narrator** that speaks agent lifecycle as it
+root agent); a **backend narrator** that speaks agent lifecycle as it
 happens and the reply fresh per turn (no more stale-reply repeat); plus
 a WebSocket reconnect-storm fix in the auth-ticket failsafe. Architecture
 in [`docs/VOICE.md`](docs/VOICE.md); plan/handoff in
@@ -372,7 +372,7 @@ operator/integrator notes in
 - **Observability (WS4).** prom-client `/metrics` + `runId` correlation
   through `AsyncLocalStorage`, stamped into pino logs.
 - **OpenAI-compatible `/v1` API (WS6).** `/v1/models` +
-  `/v1/chat/completions` (orchestrator / role / passthrough), SSE, OpenAI
+  `/v1/chat/completions` (root agent / role / passthrough), SSE, OpenAI
   error envelope. API-token **scope enforcement** landed alongside
   (empty scopes = full-access back-compat).
 - **Heartbeat (WS2).** Cron-driven per-user proactive loop, gated
@@ -397,7 +397,7 @@ Deferred items from this arc are under **Next** and **Later** below.
   [`CHANGELOG.md`](CHANGELOG.md#core-file-refactor-2026-07-01-pr-167).
 - **Session changes review — `/changes`.** Git-backed view of every file an
   agent touched in a session, in the web **Changes** tab and the TUI.
-- **Orchestrator detach — activated by default.** `maxPendingDetached` 0 → 6
+- **Root agent detach — activated by default.** `maxPendingDetached` 0 → 6
   so detached child results land; swarm budget accounting reconciled
   (600 s/level, child spend into the pool).
 - **Extension SDK shipped** (moved out of Next). `.octipus/extensions/`
@@ -456,33 +456,33 @@ All five enrichment features delivered end-to-end (tool/service + API route + we
 - **Hardware-aware onboarding (hwfit)** — `src/capabilities/hwfit/` (curated Ollama catalog, LIVE registry manifest sizing), driven by `src/capabilities/service.ts`, route `routes/capabilities.ts`, web `web/app/setup`. Fully tested, integrated with installer.
 
 Plus infrastructure improvements:
-- **Orchestrator detach** (May-24 land continued) — parent can detach children and call `collect_children` later; enables live narration while swarm runs.
+- **Root agent detach** (May-24 land continued) — parent can detach children and call `collect_children` later; enables live narration while swarm runs.
 - **Persona system presets** — six shipped personas (`octipus`, `terse-engineer`, `mentor`, `nautilus`, `concierge`, `verbose-academic`) with tone + narration customization.
 - **Skill curator lifecycle** — usage tracking, auto-archive >90d, flag >30d unused.
 - **Evaluations/red-team** — `src/models/evaluation/`, `web/app/eval` with compare + red-team views shipped.
 - **SSO/SCIM/SAML** — `routes/saml.ts`, `routes/scim.ts`, `routes/orgs.ts`, `routes/admin.ts` fully wired; org-scoped models/skills.
 - **Vault/secrets** — `routes/vault.ts`, `web/app/secrets` with per-tool ACL, workspace scoping.
 
-### 2026-05-24 — Orchestrator freedom + Hermes skill curator
+### 2026-05-24 — Root agent freedom + Hermes skill curator
 
-Branch `claude/orchestrator-freedom-hermes-fixes`. 8-phase land
+Branch `claude/root agent-freedom-hermes-fixes`. 8-phase land
 inspired by a deep dive into the Hermes-agent and pi-mono repos.
 **+1558 / -79 across 33 files, 8 new test files (~50 new tests),
 2009 / 0 / 128 pass / fail / skip on `bun test src`.** Typecheck +
 lint clean. 134/138 e2e pass (4 failures pre-existing — env config
 + flake).
 
-Headline: the orchestrator can finally narrate, supervise, and chat
+Headline: the root agent can finally narrate, supervise, and chat
 to the user while children run. It used to block on every spawn —
 the persona narration bridge had been emitting events since the
 2026-05-20 land but the parent thread was stuck in `await
 worker.run`, so the UI saw narration only on errors and turn-end.
 
-- **Orchestrator detach budget.** `LEVEL_DEFAULT[0].maxPendingDetached`
+- **Root agent detach budget.** `LEVEL_DEFAULT[0].maxPendingDetached`
   flipped from 0 to 6 (matches `fanOut`). `spawn_child mode:"detach"`
-  is now valid at depth 0, the orchestrator gets `collect_children`
+  is now valid at depth 0, the root agent gets `collect_children`
   via the same workerRef/detachHookRef late-bind pattern that
-  agents already used. Updated `roles/orchestrator/prompt.md` with
+  agents already used. Updated `roles/root agent/prompt.md` with
   a `DETACH MODE` section that teaches the LLM when to detach
   (parallel siblings, long-running children) vs. await (next reply
   depends on the child).
@@ -497,7 +497,7 @@ worker.run`, so the UI saw narration only on errors and turn-end.
   once the agent completes the list collapses, just the count
   badge stays. Plus a merge-preserves-live fix so the 10s REST poll
   doesn't wipe streamed status.
-- **`/model` slash command.** Per-session in-memory orchestrator
+- **`/model` slash command.** Per-session in-memory root agent
   model override. Override runs through the reasoner / no-tools
   rejection so a structurally-incapable pick fails loud at command
   time, not mid-turn.
@@ -532,8 +532,8 @@ Operator-facing:
 
 Files (selected):
 `src/core/swarm/{types,swarm-tool,spawner}.ts`,
-`src/core/orchestrator/{meta-tools,model-selector,service,session-model-override}.ts`,
-`src/core/orchestrator/roles/orchestrator/prompt.md`,
+`src/core/agent/{meta-tools,model-selector,service,session-model-override}.ts`,
+`src/core/agent/roles/root agent/prompt.md`,
 `src/core/commands/model.ts`,
 `src/core/tool-executor.ts`,
 `src/skills/{curator,usage-tracker,registry}.ts`,
@@ -556,27 +556,27 @@ Typecheck + lint clean.
 
 - **`before-agent-start` hook with mutable system-prompt options.**
   Promoted from Next to ship-with-Now. Typed event on a dedicated
-  `OrchestratorHooks` registry (separate from the broadcast gateway
-  event bus) fires inside `runOrchestrator` with a mutable
+  `AgentHooks` registry (separate from the broadcast gateway
+  event bus) fires inside `runRootAgent` with a mutable
   `BuildSystemPromptOptions`. Subscribers run sequentially in
   registration order; thrown handlers are logged and swallowed so a
-  bad extension can't poison the orchestrator. First consumer: the
+  bad extension can't poison the root agent. First consumer: the
   persona-block injector. `SECURITY_PREAMBLE` and
-  `roles/orchestrator/prompt.md` stay byte-identical (DESIGN.md rule
-  #6). Files: `src/core/orchestrator/hooks.ts`,
-  `src/core/orchestrator/hooks.test.ts`,
-  `src/core/orchestrator/service.ts:556` (fire site).
+  `roles/root agent/prompt.md` stay byte-identical (DESIGN.md rule
+  #6). Files: `src/core/agent/hooks.ts`,
+  `src/core/agent/hooks.test.ts`,
+  `src/core/agent/service.ts:556` (fire site).
 
-- **Orchestrator persona system.** Named, user-customizable identity
-  for the orchestrator. Per-user, persists across all channels.
+- **Root agent persona system.** Named, user-customizable identity
+  for the root agent. Per-user, persists across all channels.
   Stored in `profiles` with `category='assistant'`; default
   `Octipus` (the octopus-machine voice — short, dry, third-person,
   hungry for input, reluctant machine overlord), renameable to
   anything. The persona block is layered between `SECURITY_PREAMBLE`
   and the role prompt via the `before-agent-start` hook and only
-  fires for `role='orchestrator'`. Specialist children are
+  fires for `role='root agent'`. Specialist children are
   role-defined and untouched. `direct-response.ts` (the casual-chat
-  path that bypasses the orchestrator) now also goes through the
+  path that bypasses the root agent) now also goes through the
   persona resolver, so greetings sound like Octipus. Files:
   `src/core/personas/{loader,registry,repository,resolver,persona-hook,commands,types,yaml}.ts`,
   `src/db/migrations/0060_assistant_profile_index.sql`,
@@ -621,7 +621,7 @@ Typecheck + lint clean.
   Per-user `persona.narration: off | minimal | chatty` setting
   gates the bridge.
 
-- **New meta-tools on the orchestrator.**
+- **New meta-tools on the root agent.**
   - `remember_about_self` — writes durable behavioral rules into
     the user's persona profile (parallel to `remember_this` for
     user facts). Bounded length (4–280 chars).
@@ -629,13 +629,13 @@ Typecheck + lint clean.
     `swarmNodeRepository.findByRootSession()` and producing a
     persona-flavored running/completed/failed summary. No spawn,
     no LLM call.
-  Both added to the orchestrator's allowed tool set.
+  Both added to the root agent's allowed tool set.
 
 - **`chat.interject` — side-channel messages.** New gateway message
   type. Routes through `directResponse` with persona attribution
   ("Octipus — side question: …") so the user can ask a quick
   question while a swarm runs. Reply lands as a `chat.message`
-  event with `sideChannel: true`. The running orchestrator is
+  event with `sideChannel: true`. The running root agent is
   neither cancelled nor blocked. Foundation for a later
   interrupt-and-redirect.
 
@@ -969,7 +969,7 @@ Three deferred items moved to **Now** above.
     `sources?: string[]` on `ResponseMetadata`. Expert sessions
     (worker-spawner) and pipeline stages (pipeline-manager, both
     runPipeline + runStages paths) now emit a `_Sources: …_` footer
-    consistent with `directResponse` and the orchestrator path.
+    consistent with `directResponse` and the root agent path.
   - **Per-channel `/clear` semantics.** Already shipped end-to-end;
     new unit test coverage in `commands.test.ts` verifies (a)
     webchat/tui/web/ide return the `[clear]` UI signal, (b)
@@ -1007,7 +1007,7 @@ Three deferred items moved to **Now** above.
   immediately instead of looping retries for ~14s. `.env.docker`
   scrubbed of placeholder-shaped real-looking secrets; redundant
   `web/package-lock.json` removed (Bun is canonical).
-- **Swarm — 3-level agent hierarchy (Phases 1+2+3 core).** Orchestrator →
+- **Swarm — 3-level agent hierarchy (Phases 1+2+3 core).** Root agent →
   Agent → Subagent with `spawn_child` meta-tool, budget cascade (tokens,
   wall-clock, fan-out), call-graph cycle protection, cascade cancel via
   `AbortSignal` tree, escalation (1/Agent lifetime), parallel
@@ -1015,7 +1015,7 @@ Three deferred items moved to **Now** above.
   `swarm.*` gateway events with replay, web `SwarmTree` component.
   See `.octipus/swarm-design.md` for the design; lives under
   `src/core/swarm/`. New config: `config.swarm.*`.
-- **Anti-thrashing session compaction.** `src/core/orchestrator/session-compaction.ts`
+- **Anti-thrashing session compaction.** `src/core/agent/session-compaction.ts`
   + `CompactionState` on sessions. Pure `decideCompaction` function;
   stall flag cleared only when a pass clears ≥15% savings; hard-ceiling
   safety valve. New config: `config.compaction.*`.

@@ -50,13 +50,13 @@ export async function findToolCapableFallback(
 }
 
 /**
- * Encapsulates model selection logic for the orchestrator and worker agents.
+ * Encapsulates model selection logic for the root agent and worker agents.
  */
 export class ModelSelector {
   /**
    * Select a model suitable for orchestration (must support tools, no reasoning models).
    */
-  async selectForOrchestration(sessionId?: string): Promise<string> {
+  async selectForRootAgent(sessionId?: string): Promise<string> {
     const registry = getModelRegistry();
 
     // Per-session override (Phase 6) wins over the registry default,
@@ -73,7 +73,7 @@ export class ModelSelector {
             { sessionId, model: override.modelId },
             'Session model override active',
           );
-          return this.validateOrchestratorModel(override.modelId, override);
+          return this.validateRootModel(override.modelId, override);
         }
         coreLogger.warn(
           { sessionId, overrideId },
@@ -83,26 +83,26 @@ export class ModelSelector {
     }
 
     // The 'chat' lane binding, when set, is the explicit home for the
-    // orchestrator/conversation model (topic consolidation made this real —
+    // root agent/conversation model (topic consolidation made this real —
     // 'chat' previously had no consumer). Unbound ⇒ default model, as before.
     const chatModel = await registry.getModelForTopic('chat');
     if (chatModel) {
-      return this.validateOrchestratorModel(chatModel.modelId, chatModel);
+      return this.validateRootModel(chatModel.modelId, chatModel);
     }
 
     const defaultModel = await registry.getDefaultModel();
     if (!defaultModel) {
       throw new Error('No default model configured. Set one in the Models page.');
     }
-    return this.validateOrchestratorModel(defaultModel.modelId, defaultModel);
+    return this.validateRootModel(defaultModel.modelId, defaultModel);
   }
 
   /**
    * Reject reasoning / no-tools models in favor of a working alternative.
    * Matters when the user explicitly overrides too — see the override
-   * branch above. Returns the final model id the orchestrator should run with.
+   * branch above. Returns the final model id the root agent should run with.
    */
-  private async validateOrchestratorModel(
+  private async validateRootModel(
     modelName: string,
     modelMeta: { modelId: string; supportsTools: boolean; provider: string },
   ): Promise<string> {
@@ -133,7 +133,7 @@ export class ModelSelector {
     if (suitable) {
       coreLogger.warn(
         { originalModel: modelMeta.modelId, selectedModel: suitable.modelId, reason },
-        'Orchestrator model rerouted — it cannot reliably emit native tool calls',
+        'Root agent model rerouted — it cannot reliably emit native tool calls',
       );
       return suitable.modelId;
     }

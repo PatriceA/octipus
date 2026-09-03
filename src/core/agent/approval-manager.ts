@@ -2,7 +2,7 @@ import { getNotificationService } from '@/core/notification-service';
 import type { AgentContext } from '@/core/types';
 import { generateId } from '@/utils/crypto';
 import { coreLogger } from '@/utils/logger';
-import type { OrchestratorEvent } from './service';
+import type { TurnEvent } from './service';
 
 export interface ApprovalRequest {
   id: string;
@@ -32,7 +32,7 @@ export class ApprovalManager {
     summary: string,
     question: string,
     context: AgentContext,
-    emitFn: (event: OrchestratorEvent) => void,
+    emitFn: (event: TurnEvent) => void,
     options?: string[],
   ): Promise<unknown> {
     const requestId = generateId();

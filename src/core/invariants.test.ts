@@ -178,10 +178,10 @@ describe.skipIf(!isIntegration)('pipeline terminal-state invariant (DB-backed)',
     await seedUsers([{ id: userId, username: 'inv-user' }]);
     const session = await seedSession({ userId, channelId: 'inv-1' });
     await executeRaw(
-      `INSERT INTO pipelines (orchestrator_agent_id, session_id, user_id, title, type, status)
+      `INSERT INTO pipelines (root_agent_id, session_id, user_id, title, type, status)
        VALUES ('inv-orch', '${session.id}', '${userId}', 'inv pipeline', 'general', 'running')`,
     );
-    const { rows } = await queryRaw(`SELECT id FROM pipelines WHERE orchestrator_agent_id = 'inv-orch'`);
+    const { rows } = await queryRaw(`SELECT id FROM pipelines WHERE root_agent_id = 'inv-orch'`);
     pipelineId = rows[0].id;
     await executeRaw(
       `INSERT INTO pipeline_nodes (pipeline_id, node_key, name, role, system_prompt, status, ordinal)

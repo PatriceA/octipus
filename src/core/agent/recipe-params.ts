@@ -151,7 +151,7 @@ export function resolveRecipeParams(
   // seven-stage run never started, and the user saw "I was unable to generate a
   // response" with nothing in the log. That was survivable only while the
   // recipes such a key gets aimed at declared none — and `Full Development
-  // Cycle`, the recipe the orchestrator is told to prefer, now declares one. So
+  // Cycle`, the recipe the root agent is told to prefer, now declares one. So
   // the lenient case has to key on the KEY, not on whether the recipe happens
   // to be parameterless.
   //

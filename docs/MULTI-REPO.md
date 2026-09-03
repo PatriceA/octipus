@@ -57,7 +57,7 @@ Code-oriented roles (architecture, coding, review, research) get the
 | `repo_dependencies` | In-suite repos a given repo depends on. |
 | `scan_repos` | Refresh the registry. |
 
-When the registry is populated, the orchestrator injects the suite map (repos,
+When the registry is populated, the root agent injects the suite map (repos,
 kinds, and dependency edges) into its own context and routes each worker to a
 repo by absolute path, telling it to read that repo's `AGENTS.md` first. For a
 cross-repo change it checks `repo_dependents` on a library before editing it and
@@ -88,7 +88,7 @@ and [→ Code-exclusion policy](./RAG.md#code-exclusion-policy-raw-code-is-never
 - **Dependency edges come from manifests** (declared deps), not yet from import
   analysis. A deeper, symbol-level repo map is planned.
 - **No cross-repo fan-out yet** — a change spanning several repos is coordinated
-  by the orchestrator routing workers per repo, not by automatic parallel
+  by the root agent routing workers per repo, not by automatic parallel
   worktrees.
 
 See [`.octipus/multi-repo-design.md`](../.octipus/multi-repo-design.md) for the
