@@ -18,7 +18,7 @@
     "start": "node dist/index.js",
     "tui": "tsx --import ./scripts/md-loader.mjs src/tui-pi/index.ts",
     "tui:edit": "tsx --import ./scripts/md-loader.mjs src/tui-editor/index.ts",
-    "start:all": "bin/octi start",
+    "start:all": "bin/octi start web",
     "stop:all": "bin/octi stop",
     "build": "tsx --import ./scripts/md-loader.mjs scripts/build.ts",
     "build:cli": "tsx --import ./scripts/md-loader.mjs scripts/build-cli.ts",

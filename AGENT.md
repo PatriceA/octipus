@@ -104,7 +104,7 @@ AGENTS.md         per-repo curated project guide (universal agents.md convention
 | Install          | `npm install && cd web && npm install && cd ../mcp-server && npm install && cd ..` |
 | Install (desktop)| `scripts/install-desktop-deps.sh` (Rust + Tauri system libs; optional) |
 | Dev (backend)    | `npm run dev`                    |
-| Start full stack | `bin/octi start` (stop: `bin/octi stop`) |
+| Start backend | `bin/octi start` — add `web`/`tui` for a client (stop: `bin/octi stop`) |
 | Type check       | `npm run typecheck`              |
 | Lint             | `npm run lint` (fix: `npm run lint:fix`) |
 | Unit tests       | `npm run test` (Vitest; `-- --coverage` for the ratchet) |

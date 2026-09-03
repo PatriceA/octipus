@@ -44,7 +44,7 @@ octipus/
 |---------|-------------|
 | `npm run dev` | Start backend with hot reload |
 | `npm run start` | Start backend (no watch) |
-| `npm run start:all` | Start full stack (backend, web, workers) via `bin/octi start` |
+| `npm run start:all` | Start backend + web UI via `bin/octi start web` (plain `octi start` is backend-only) |
 | `npm run stop:all` | Stop full stack via `bin/octi stop` |
 | `npm test` | Run unit and integration tests |
 | `npm run test:tui` | Run TUI tests only |

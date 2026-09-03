@@ -38,6 +38,10 @@ const common = {
 const ALL = [
   'src/**/*.test.ts',
   'scripts/**/*.test.ts',
+  // `bin/` was never scanned, so bin/octi.test.ts sat dead for the whole Node
+  // migration — still importing `bun:test`, never run, and covering the CLI
+  // that every install goes through.
+  'bin/**/*.test.ts',
   'src/**/*.spec.ts',
   'scripts/**/*.spec.ts',
 ];

@@ -34,9 +34,12 @@ extension). After it finishes the service is runnable; pick TUI or
 web as your surface.
 
 ```bash
-octi start                    # full stack — backend + web UI (server / browser)
+octi start                    # the backend, and nothing else
+octi start web                # …plus the web UI, opened in a browser
+octi start tui                # …plus the terminal chat
+octi tui                      # terminal chat against a backend already running
+octi open                     # web UI in the browser (starts it if needed)
 octi desktop                  # desktop client (Tauri) — connects to any backend
-octi tui                      # terminal chat
 octi capabilities             # what optional tools are installed
 octi doctor                   # what's wired, what's missing
 ```
@@ -160,8 +163,8 @@ cd octipus && npm install
 cd web && npm install && cd ..
 cd mcp-server && npm install && cd ..   # standalone MCP server (not a root workspace)
 npm run setup        # the single wizard (same as `octi setup`)
-octi start           # backend + web UI (server / browser)
-# …or `octi desktop` for the Tauri desktop app (see "Desktop app" below)
+octi start web       # backend + web UI (server / browser)
+# …or plain `octi start` for the backend alone, then `octi tui` / `octi desktop`
 ```
 
 Then open [http://localhost:3007](http://localhost:3007) and log in

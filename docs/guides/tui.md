@@ -8,7 +8,7 @@ the same WebSocket protocol the web UI uses:
 | **Chat shell** (`src/tui-pi/`) | `octi tui` | Conversational chat with the agent — single composer + scrolling messages, slash commands, command palette. |
 | **Editor** (`src/tui-editor/`) | `octi edit` | Multi-pane workspace: file tree + buffer editor + agent chat side-by-side, with file picker, find/replace, diff overlay, etc. |
 
-Both surfaces require the backend to be running (`octi start`).
+Both surfaces require the backend to be running (`octi start`), or start both at once with `octi start tui`.
 
 ## What this is built on
 

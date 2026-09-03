@@ -70,6 +70,8 @@ if "%COMMAND%"=="status" goto :cmd_status
 if "%COMMAND%"=="doctor" goto :cmd_doctor
 if "%COMMAND%"=="logs" goto :cmd_logs
 if "%COMMAND%"=="open" goto :cmd_open
+if "%COMMAND%"=="web" goto :cmd_open
+if "%COMMAND%"=="webui" goto :cmd_open
 if "%COMMAND%"=="tui" goto :cmd_tui
 if "%COMMAND%"=="edit" goto :cmd_edit
 if "%COMMAND%"=="desktop" goto :cmd_desktop
@@ -118,8 +120,8 @@ if exist "%STATE_DIR%\run_backend.cmd" (
 if exist "%STATE_DIR%\run_webui.cmd" (
     powershell -NoProfile -Command "Get-WmiObject Win32_Process -Filter \"CommandLine like '%%run_webui.cmd%%'\" -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 )
-:: Also kill any stray bun processes from our project directory
-powershell -NoProfile -Command "Get-WmiObject Win32_Process -Filter \"Name='bun.exe'\" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*octipus*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+:: Also kill any stray node processes from our project directory
+powershell -NoProfile -Command "Get-WmiObject Win32_Process -Filter \"Name='node.exe'\" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*octipus*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 if exist "%PID_FILE_BACKEND%" del "%PID_FILE_BACKEND%"
 if exist "%PID_FILE_WEB%" del "%PID_FILE_WEB%"
 exit /b 0
@@ -144,16 +146,19 @@ call :print_banner
 call :kill_all_octipus
 timeout /t 1 /nobreak >nul
 
-:: Check bun
-where bun >nul 2>&1
+:: Check Node
+where node >nul 2>&1
 if errorlevel 1 (
-    echo   %RED%x%NC% bun is not installed. Install from https://bun.sh
+    echo   %RED%x%NC% Node.js is not installed. Install Node 24+ from https://nodejs.org
     exit /b 1
 )
 
 set "DEV_MODE=false"
-if "%~2"=="--dev" set "DEV_MODE=true"
-if "%~2"=="-d" set "DEV_MODE=true"
+:: Target: which client to attach once the backend is up. Default is none —
+:: `start` should not decide that a terminal user wants a browser.
+set "TARGET=backend"
+call :parse_launch_args %~2 %~3 %~4
+if errorlevel 1 exit /b 1
 
 :: Check required services (only for external storage mode)
 if "!STORAGE_MODE!"=="external" (
@@ -172,10 +177,10 @@ if "!STORAGE_MODE!"=="external" (
 :: Start backend
 if "!DEV_MODE!"=="true" (
     echo   %BLUE%-%NC% Starting backend %DIM%(dev mode with hot reload^)%NC%...
-    call :start_hidden "backend" "%PROJECT_DIR%" "bun run dev" "%LOG_FILE%"
+    call :start_hidden "backend" "%PROJECT_DIR%" "npm run dev" "%LOG_FILE%"
 ) else (
     echo   %BLUE%-%NC% Starting backend...
-    call :start_hidden "backend" "%PROJECT_DIR%" "bun run start" "%LOG_FILE%"
+    call :start_hidden "backend" "%PROJECT_DIR%" "npm run start" "%LOG_FILE%"
 )
 
 :: Wait for backend to be healthy BEFORE starting web UI
@@ -192,25 +197,29 @@ goto :start_health_loop
 :start_health_ok
 echo   %GREEN%v%NC% Backend is ready on port %API_PORT%
 
-:: Clear Next.js cache so code changes take effect
+if "!TARGET!"=="tui" goto :launch_tui_after_start
+if "!TARGET!"=="desktop" goto :launch_desktop_after_start
+if not "!TARGET!"=="web" goto :backend_ready
+
+:: Clear the web build output so code changes take effect
 echo   %BLUE%-%NC% Clearing web UI cache...
-if exist "%PROJECT_DIR%\web\.next" rmdir /s /q "%PROJECT_DIR%\web\.next"
+if exist "%PROJECT_DIR%\web\dist" rmdir /s /q "%PROJECT_DIR%\web\dist"
 if exist "%PROJECT_DIR%\web\node_modules\.cache" rmdir /s /q "%PROJECT_DIR%\web\node_modules\.cache"
 
 :: Start web UI only after backend is confirmed healthy
 if "!DEV_MODE!"=="true" (
     echo   %BLUE%-%NC% Starting web UI %DIM%(dev mode^)%NC%...
-    call :start_hidden "webui" "%PROJECT_DIR%\web" "bun run dev" "%WEB_LOG_FILE%"
+    call :start_hidden "webui" "%PROJECT_DIR%\web" "npm run dev" "%WEB_LOG_FILE%"
 ) else (
     echo   %BLUE%-%NC% Building web UI...
     cd /d "%PROJECT_DIR%\web"
-    call bun run build >"%WEB_LOG_FILE%" 2>&1
+    call npm run build >"%WEB_LOG_FILE%" 2>&1
     if errorlevel 1 (
         echo   %YELLOW%^^!%NC% Production build failed, using dev mode instead
-        call :start_hidden "webui" "%PROJECT_DIR%\web" "bun run dev" "%WEB_LOG_FILE%"
+        call :start_hidden "webui" "%PROJECT_DIR%\web" "npm run dev" "%WEB_LOG_FILE%"
     ) else (
         echo   %BLUE%-%NC% Starting web UI...
-        call :start_hidden "webui" "%PROJECT_DIR%\web" "bun run start" "%WEB_LOG_FILE%" append
+        call :start_hidden "webui" "%PROJECT_DIR%\web" "npm run start" "%WEB_LOG_FILE%" append
     )
 )
 
@@ -234,6 +243,62 @@ echo   octi logs      View backend logs
 echo   octi stop      Stop everything
 echo.
 exit /b 0
+
+:launch_tui_after_start
+echo.
+echo   %GREEN%%BOLD%Octipus is running!%NC%
+echo.
+echo   API:       %CYAN%http://localhost:%API_PORT%%NC%
+echo.
+echo   %BLUE%-%NC% Launching TUI...
+cd /d "%PROJECT_DIR%"
+npm run tui -- --project "%LAUNCH_CWD%"
+exit /b %errorlevel%
+
+:launch_desktop_after_start
+call :print_backend_ready
+goto :cmd_desktop
+
+:backend_ready
+call :print_backend_ready
+exit /b 0
+
+:print_backend_ready
+echo.
+echo   %GREEN%%BOLD%Octipus backend is running!%NC%
+echo.
+echo   API:       %CYAN%http://localhost:%API_PORT%%NC%
+echo   API Docs:  %CYAN%http://localhost:%API_PORT%/swagger%NC%
+echo.
+echo   %BOLD%Attach a client:%NC%
+echo     octi tui       Terminal chat, pinned to the current directory
+echo     octi open      Web UI in the browser ^(starts it if needed^)
+echo     octi desktop   Desktop app
+echo.
+echo   octi stop      Stop everything
+echo.
+exit /b 0
+
+:: Shared by start and restart: read a positional client target plus --dev.
+:: The retired --tui / --backend-only flags still work, unlisted.
+:parse_launch_args
+set "LAUNCH_CWD=%CD%"
+:parse_launch_loop
+if "%~1"=="" exit /b 0
+if /i "%~1"=="tui" set "TARGET=tui"
+if /i "%~1"=="--tui" set "TARGET=tui"
+if /i "%~1"=="-t" set "TARGET=tui"
+if /i "%~1"=="web" set "TARGET=web"
+if /i "%~1"=="webui" set "TARGET=web"
+if /i "%~1"=="desktop" set "TARGET=desktop"
+if /i "%~1"=="app" set "TARGET=desktop"
+if /i "%~1"=="--backend-only" set "TARGET=backend"
+if /i "%~1"=="--headless" set "TARGET=backend"
+if /i "%~1"=="--no-web" set "TARGET=backend"
+if /i "%~1"=="--dev" set "DEV_MODE=true"
+if /i "%~1"=="-d" set "DEV_MODE=true"
+shift
+goto :parse_launch_loop
 
 :start_health_timeout
 echo   %RED%x%NC% Backend health check timed out (60s^)
@@ -259,8 +324,9 @@ exit /b 0
 call :print_banner
 
 set "DEV_MODE=false"
-if "%~2"=="--dev" set "DEV_MODE=true"
-if "%~2"=="-d" set "DEV_MODE=true"
+set "TARGET=backend"
+call :parse_launch_args %~2 %~3 %~4
+if errorlevel 1 exit /b 1
 
 :: ── 1. STOP ─────────────────────────────────────────────────────────────────
 echo   %BLUE%-%NC% Stopping all processes...
@@ -270,17 +336,17 @@ echo   %GREEN%v%NC% Processes stopped
 
 :: ── 2. CLEAR CACHES ─────────────────────────────────────────────────────────
 echo   %BLUE%-%NC% Clearing caches...
-if exist "%PROJECT_DIR%\web\.next" rmdir /s /q "%PROJECT_DIR%\web\.next"
+if exist "%PROJECT_DIR%\web\dist" rmdir /s /q "%PROJECT_DIR%\web\dist"
 if exist "%PROJECT_DIR%\web\node_modules\.cache" rmdir /s /q "%PROJECT_DIR%\web\node_modules\.cache"
 echo   %GREEN%v%NC% Caches cleared
 echo.
 
 :: ── 3. START ─────────────────────────────────────────────────────────────────
 
-:: Check bun
-where bun >nul 2>&1
+:: Check Node
+where node >nul 2>&1
 if errorlevel 1 (
-    echo   %RED%x%NC% bun is not installed. Install from https://bun.sh
+    echo   %RED%x%NC% Node.js is not installed. Install Node 24+ from https://nodejs.org
     exit /b 1
 )
 
@@ -301,10 +367,10 @@ if "!STORAGE_MODE!"=="external" (
 :: Start backend
 if "!DEV_MODE!"=="true" (
     echo   %BLUE%-%NC% Starting backend %DIM%(dev mode with hot reload^)%NC%...
-    call :start_hidden "backend" "%PROJECT_DIR%" "bun run dev" "%LOG_FILE%"
+    call :start_hidden "backend" "%PROJECT_DIR%" "npm run dev" "%LOG_FILE%"
 ) else (
     echo   %BLUE%-%NC% Starting backend...
-    call :start_hidden "backend" "%PROJECT_DIR%" "bun run start" "%LOG_FILE%"
+    call :start_hidden "backend" "%PROJECT_DIR%" "npm run start" "%LOG_FILE%"
 )
 
 :: Wait for backend to be healthy BEFORE starting web UI
@@ -321,20 +387,24 @@ goto :restart_health_loop
 :restart_health_ok
 echo   %GREEN%v%NC% Backend is ready on port %API_PORT%
 
+if "!TARGET!"=="tui" goto :launch_tui_after_start
+if "!TARGET!"=="desktop" goto :launch_desktop_after_start
+if not "!TARGET!"=="web" goto :backend_ready
+
 :: Start web UI (cache already cleared above)
 if "!DEV_MODE!"=="true" (
     echo   %BLUE%-%NC% Starting web UI %DIM%(dev mode^)%NC%...
-    call :start_hidden "webui" "%PROJECT_DIR%\web" "bun run dev" "%WEB_LOG_FILE%"
+    call :start_hidden "webui" "%PROJECT_DIR%\web" "npm run dev" "%WEB_LOG_FILE%"
 ) else (
     echo   %BLUE%-%NC% Building web UI...
     cd /d "%PROJECT_DIR%\web"
-    call bun run build >"%WEB_LOG_FILE%" 2>&1
+    call npm run build >"%WEB_LOG_FILE%" 2>&1
     if errorlevel 1 (
         echo   %YELLOW%^^!%NC% Production build failed, using dev mode instead
-        call :start_hidden "webui" "%PROJECT_DIR%\web" "bun run dev" "%WEB_LOG_FILE%"
+        call :start_hidden "webui" "%PROJECT_DIR%\web" "npm run dev" "%WEB_LOG_FILE%"
     ) else (
         echo   %BLUE%-%NC% Starting web UI...
-        call :start_hidden "webui" "%PROJECT_DIR%\web" "bun run start" "%WEB_LOG_FILE%" append
+        call :start_hidden "webui" "%PROJECT_DIR%\web" "npm run start" "%WEB_LOG_FILE%" append
     )
 )
 
@@ -446,8 +516,37 @@ exit /b 0
 
 :: ─── Open ───────────────────────────────────────────────────────────────────
 :cmd_open
+:: Opening a browser at a port with nothing behind it is a dead tab and a
+:: puzzle. Since `octi start` no longer brings the web UI up by itself, this is
+:: where a terminal user asks for it — so start it if it is not there.
+call :check_port %WEB_PORT%
+if not errorlevel 1 (
+    start "" "http://localhost:%WEB_PORT%"
+    echo   %GREEN%v%NC% Opening %CYAN%http://localhost:%WEB_PORT%%NC%
+    exit /b 0
+)
+
+curl -sf http://localhost:%API_PORT%/api/health >nul 2>&1
+if errorlevel 1 (
+    echo   %RED%x%NC% Backend is not running on port %API_PORT%
+    echo     %DIM%Start it first: octi start%NC%
+    exit /b 1
+)
+
+echo   %BLUE%-%NC% Web UI is not running — starting it...
+if exist "%PROJECT_DIR%\web\dist" rmdir /s /q "%PROJECT_DIR%\web\dist"
+cd /d "%PROJECT_DIR%\web"
+echo   %BLUE%-%NC% Building web UI...
+call npm run build >"%WEB_LOG_FILE%" 2>&1
+if errorlevel 1 (
+    echo   %YELLOW%^^!%NC% Production build failed, using dev mode instead
+    call :start_hidden "webui" "%PROJECT_DIR%\web" "npm run dev" "%WEB_LOG_FILE%"
+) else (
+    call :start_hidden "webui" "%PROJECT_DIR%\web" "npm run start" "%WEB_LOG_FILE%" append
+)
+timeout /t 2 /nobreak >nul
 start "" "http://localhost:%WEB_PORT%"
-echo   %GREEN%v%NC% Opening %CYAN%http://localhost:%WEB_PORT%%NC%
+echo   %GREEN%v%NC% Web UI starting on %CYAN%http://localhost:%WEB_PORT%%NC%
 exit /b 0
 
 :: ─── TUI (terminal chat) ────────────────────────────────────────────────────
@@ -466,7 +565,7 @@ set "USER_CWD=%CD%"
 echo   %GREEN%v%NC% Connecting TUI to gateway at localhost:%API_PORT%...
 echo     %DIM%Project: %USER_CWD%%NC%
 cd /d "%PROJECT_DIR%"
-bun run src/tui-pi/index.ts --project "%USER_CWD%" %~2 %~3 %~4 %~5 %~6 %~7 %~8
+npm run tui -- --project "%USER_CWD%" %~2 %~3 %~4 %~5 %~6 %~7 %~8
 exit /b %errorlevel%
 
 :: ─── Edit (TUI editor) ──────────────────────────────────────────────────────
@@ -483,21 +582,21 @@ echo     %DIM%Project: %USER_CWD%%NC%
 cd /d "%PROJECT_DIR%"
 :: Default project = invocation cwd; user-supplied `--project /path`
 :: in the forwarded args overrides it.
-bun run src/tui-editor/index.ts --project "%USER_CWD%" %~2 %~3 %~4 %~5 %~6 %~7 %~8
+npm run tui:edit -- --project "%USER_CWD%" %~2 %~3 %~4 %~5 %~6 %~7 %~8
 exit /b %errorlevel%
 
 :: ─── Setup (first-run / re-config wizard) ───────────────────────────────────
 :cmd_setup
 :: Interactive first-run wizard: storage, secrets, admin account, provider,
-:: default model, capabilities. Same code path as `bun run setup`.
+:: default model, capabilities. Same code path as `npm run setup`.
 cd /d "%PROJECT_DIR%"
-bun run scripts/setup-wizard.ts %~2 %~3 %~4 %~5 %~6 %~7 %~8
+npm run setup -- %~2 %~3 %~4 %~5 %~6 %~7 %~8
 exit /b %errorlevel%
 
 :: ─── Doctor (environment health checks) ─────────────────────────────────────
 :cmd_doctor
 cd /d "%PROJECT_DIR%"
-bun run scripts/doctor.ts %~2 %~3 %~4 %~5 %~6 %~7 %~8
+npx tsx --import ./scripts/md-loader.mjs scripts/doctor.ts %~2 %~3 %~4 %~5 %~6 %~7 %~8
 exit /b %errorlevel%
 
 :: ─── Desktop (Tauri thin client) ────────────────────────────────────────────
@@ -546,13 +645,13 @@ cd /d "%PROJECT_DIR%\web"
 if "!DT_BUILD!"=="true" (
     echo   %BLUE%-%NC% Building the desktop app bundle %DIM%(can take a few minutes^)%NC%...
     echo     %DIM%Output: web\src-tauri\target\release\bundle\%NC%
-    bun run tauri:build
+    npm run tauri:build
     exit /b %errorlevel%
 )
 
 echo   %BLUE%-%NC% Launching the Octipus desktop app...
 echo     %DIM%It connects to a backend (default http://localhost:%API_PORT%) — change it in-app.%NC%
-bun run tauri:dev
+npm run tauri:dev
 exit /b %errorlevel%
 
 :: ─── Uninstall ──────────────────────────────────────────────────────────────
@@ -636,7 +735,7 @@ if not "!REPLY!"=="!WORD!" (
 echo.
 
 :uninstall_execute
-:: Stop everything (frees ports, kills tracked + stray bun processes).
+:: Stop everything (frees ports, kills tracked + stray node processes).
 echo   %BLUE%-%NC% Stopping processes...
 call :kill_all_octipus
 echo   %GREEN%v%NC% Processes stopped
@@ -695,7 +794,7 @@ if "!PURGE!"=="true" (
 )
 echo.
 echo   %BLUE%-%NC% Remove the %BOLD%octi%NC% command from your PATH with:
-echo     %DIM%bun rm -g octipus%NC%
+echo     %DIM%npm rm -g octipus%NC%
 echo.
 exit /b 0
 
@@ -722,22 +821,26 @@ echo   %BOLD%Usage:%NC% octi ^<command^> [options]
 echo.
 echo   %BOLD%Commands:%NC%
 echo     setup            Run the first-run / re-config wizard
-echo     start [--dev]    Start backend and web UI
+echo     start [client]   Start the backend, and attach a client if you name one
+echo     restart [client] Stop everything, then start again the same way
 echo     stop             Stop all Octipus processes
-echo     restart [--dev]  Restart everything
-echo     tui              Launch terminal chat — pins to current directory as project
-echo     edit             Launch TUI editor — pins to current directory as project
 echo     status           Show running state and service health
 echo     doctor [--json]  Run environment health checks (what's wired, what's missing)
 echo     logs [--web]     Tail backend logs (--web for web UI)
-echo     open             Open web UI in browser
-echo     desktop [opts]   Launch the desktop app ^(thin client; --build bundle, --stop quit^)
 echo     uninstall        Remove Octipus ^(keeps data; --purge wipes everything^)
 echo     help             Show this help message
 echo.
+echo   %BOLD%Clients%NC% %DIM%— attach to a backend that is already running:%NC%
+echo     tui              Terminal chat — pins to the current directory as project
+echo     open             Web UI in the browser — starts it if it is not up
+echo     desktop [opts]   Desktop app ^(thin client; --build bundle, --stop quit^)
+echo     edit             TUI editor — pins to the current directory as project
+echo.
+echo   %DIM%The same names work as a target: 'octi start tui' is a backend plus a TUI.%NC%
+echo.
 echo   %BOLD%Options:%NC%
-echo     --dev, -d        Start in development mode (hot reload)
-echo     --web, -w        Show web UI logs instead of backend
+echo     --dev, -d        Development mode (hot reload) for start/restart
+echo     --web, -w        For 'logs': show web UI logs instead of backend
 echo.
 echo   %BOLD%Environment:%NC%
 echo     API_PORT         Backend API port %DIM%(default: 3005)%NC%
