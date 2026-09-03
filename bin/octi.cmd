@@ -165,16 +165,8 @@ if "!STORAGE_MODE!"=="external" (
         exit /b 1
     )
     echo   %GREEN%v%NC% PostgreSQL is reachable
-
-    call :check_port 6380
-    if errorlevel 1 (
-        echo   %RED%x%NC% Valkey not reachable on port 6380
-        echo     %DIM%Start it: cd ~/docker-services ^&^& docker compose up -d valkey%NC%
-        exit /b 1
-    )
-    echo   %GREEN%v%NC% Valkey is reachable
 ) else (
-    echo   %GREEN%v%NC% Embedded mode %DIM%(PGlite + in-memory cache^)%NC%
+    echo   %GREEN%v%NC% Embedded mode %DIM%(PGlite + in-process cache^)%NC%
 )
 
 :: Start backend
@@ -302,16 +294,8 @@ if "!STORAGE_MODE!"=="external" (
         exit /b 1
     )
     echo   %GREEN%v%NC% PostgreSQL is reachable
-
-    call :check_port 6380
-    if errorlevel 1 (
-        echo   %RED%x%NC% Valkey not reachable on port 6380
-        echo     %DIM%Start it: cd ~/docker-services ^&^& docker compose up -d valkey%NC%
-        exit /b 1
-    )
-    echo   %GREEN%v%NC% Valkey is reachable
 ) else (
-    echo   %GREEN%v%NC% Embedded mode %DIM%(PGlite + in-memory cache^)%NC%
+    echo   %GREEN%v%NC% Embedded mode %DIM%(PGlite + in-process cache^)%NC%
 )
 
 :: Start backend
@@ -410,16 +394,9 @@ if "!STORAGE_MODE!"=="external" (
     ) else (
         echo   %GREEN%v%NC% PostgreSQL: reachable %DIM%(port 5432^)%NC%
     )
-
-    call :check_port 6380
-    if errorlevel 1 (
-        echo   %RED%x%NC% Valkey: not reachable
-    ) else (
-        echo   %GREEN%v%NC% Valkey: reachable %DIM%(port 6380^)%NC%
-    )
 ) else (
     echo   %GREEN%v%NC% PGlite:     embedded database
-    echo   %GREEN%v%NC% Cache:      in-memory
+    echo   %GREEN%v%NC% Cache:      in-process
 )
 
 call :check_port 11434

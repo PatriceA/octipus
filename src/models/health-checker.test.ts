@@ -48,7 +48,7 @@ function jsonResponse(body: unknown): Response {
 }
 
 beforeAll(() => {
-  // In-memory cache so Cache works without a real Valkey/Redis.
+  // In-memory cache so Cache works without an external storage provider.
   initializeStorage({ mode: 'embedded' });
 });
 

@@ -2,7 +2,7 @@
  * Heartbeat loop (WS2) — a periodic per-user agent turn that reviews standing
  * context and either acts or stays silent.
  *
- * Built on the LIVE hooks/cron path (not the unused Redis Scheduler): a per-user
+ * Built on the LIVE hooks/cron path (not the unused queue Scheduler): a per-user
  * hook with `trigger='heartbeat'` becomes "due" on an interval; `maybeRunHeartbeats`
  * (called each cron tick) runs a **cheap deterministic gate BEFORE any LLM tokens
  * are spent** — quiet hours → skip; daily cap → skip; user out of token budget →
@@ -21,7 +21,7 @@ import { notifications } from '@/db/schema/notifications';
 import { tasks } from '@/db/schema/tasks';
 import { coreLogger } from '@/utils/logger';
 
-/** Orchestrator channel + note slug for standing instructions. */
+/** Root agent channel + note slug for standing instructions. */
 export const HEARTBEAT_CHANNEL = 'heartbeat';
 export const HEARTBEAT_NOTE_SLUG = 'heartbeat';
 
@@ -291,7 +291,7 @@ export async function maybeRunHeartbeats(now: Date = new Date()): Promise<void> 
           { type: 'heartbeat', data: { hookId: hook.id }, timestamp: now },
           {
             // Carry the rendered heartbeat message so executeSpawnAgent uses it
-            // verbatim. channelType is a placeholder — the orchestrator channel
+            // verbatim. channelType is a placeholder — the root agent channel
             // is set to 'heartbeat' by executeSpawnAgent from hook.trigger.
             message: {
               id: `heartbeat-${hook.id}-${now.getTime()}`,

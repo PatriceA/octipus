@@ -442,7 +442,7 @@ diagnose_backend_failure() {
   fi
 
   # External-storage checks only. In embedded mode the backend uses PGlite +
-  # in-memory cache, so Postgres/Valkey/DATABASE_URL are irrelevant — reporting
+  # an in-process cache, so Postgres/DATABASE_URL are irrelevant — reporting
   # them (with machine-specific hints) just sends users chasing phantoms.
   if [[ "$STORAGE_MODE" == "external" ]]; then
     # Check PostgreSQL
@@ -453,17 +453,8 @@ diagnose_backend_failure() {
     else
       log_info "PostgreSQL is reachable"
     fi
-
-    # Check Valkey
-    if ! check_service "localhost" "6380"; then
-      log_error "Valkey is not reachable on port 6380"
-      log_hint "Start your Valkey/Redis service (e.g. docker compose up -d valkey)"
-      issues=$((issues + 1))
-    else
-      log_info "Valkey is reachable"
-    fi
   else
-    log_info "Embedded mode — skipping Postgres/Valkey checks"
+    log_info "Embedded mode — skipping Postgres checks"
   fi
 
   # Check .env
@@ -561,21 +552,13 @@ cmd_start() {
       services_ok=false
     fi
 
-    if check_service "localhost" "6380"; then
-      log_info "Valkey is reachable"
-    else
-      log_error "Valkey not reachable on port 6380"
-      log_hint "Start it: cd ~/docker-services && docker compose up -d valkey"
-      services_ok=false
-    fi
-
     if [[ "$services_ok" == false ]]; then
       echo ""
       log_error "Required services are not running. Cannot start."
       return 1
     fi
   else
-    log_info "Embedded mode (PGlite + in-memory cache)"
+    log_info "Embedded mode (PGlite + in-process cache)"
   fi
 
   # Build MCP server and register with CLI tools
@@ -767,21 +750,13 @@ cmd_restart() {
       services_ok=false
     fi
 
-    if check_service "localhost" "6380"; then
-      log_info "Valkey is reachable"
-    else
-      log_error "Valkey not reachable on port 6380"
-      log_hint "Start it: cd ~/docker-services && docker compose up -d valkey"
-      services_ok=false
-    fi
-
     if [[ "$services_ok" == false ]]; then
       echo ""
       log_error "Required services are not running. Cannot start."
       return 1
     fi
   else
-    log_info "Embedded mode (PGlite + in-memory cache)"
+    log_info "Embedded mode (PGlite + in-process cache)"
   fi
 
   # Build MCP server and register with CLI tools
@@ -921,16 +896,9 @@ cmd_status() {
       log_error "PostgreSQL: not reachable"
       log_hint "cd ~/docker-services && docker compose up -d db"
     fi
-
-    if check_service "localhost" "6380"; then
-      log_info "Valkey:     reachable (port 6380)"
-    else
-      log_error "Valkey:     not reachable"
-      log_hint "cd ~/docker-services && docker compose up -d valkey"
-    fi
   else
     log_info "PGlite:     embedded database"
-    log_info "Cache:      in-memory"
+    log_info "Cache:      in-process"
   fi
 
   if check_service "localhost" "11434"; then

@@ -56,9 +56,9 @@ const dbUpGauge = new Gauge({
   help: '1 if the primary database is reachable.',
   registers: [registry],
 });
-const redisUpGauge = new Gauge({
-  name: 'octipus_redis_up',
-  help: '1 if the storage provider is reachable.',
+const storageUpGauge = new Gauge({
+  name: 'octipus_storage_up',
+  help: '1 if the storage provider (cache/queue/pub-sub) is reachable.',
   registers: [registry],
 });
 
@@ -68,8 +68,8 @@ const PROCESS_START = Date.now();
 const DURATION_BUCKETS = [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30];
 const LLM_BUCKETS = [0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60];
 
-const orchestratorRuns = new Counter({
-  name: 'octipus_orchestrator_runs_total',
+const rootAgentRuns = new Counter({
+  name: 'octipus_root_agent_runs_total',
   help: 'Orchestrated turns, by entry channel, resolved role, and outcome.',
   labelNames: ['channel', 'role', 'status'],
   registers: [registry],
@@ -149,12 +149,12 @@ function guard(fn: () => void): void {
   }
 }
 
-export function recordOrchestratorRun(
+export function recordRootRun(
   channel: string | undefined,
   role: string | undefined,
   status: 'success' | 'error',
 ): void {
-  guard(() => orchestratorRuns.inc({ channel: label(channel), role: label(role), status }));
+  guard(() => rootAgentRuns.inc({ channel: label(channel), role: label(role), status }));
 }
 
 export function recordClassification(
@@ -215,9 +215,9 @@ export function recordChannelMessage(
 /**
  * Render the full registry as Prometheus text exposition. Health probes are
  * passed in (the route already runs them with a timeout) so this module stays
- * free of DB/Redis imports.
+ * free of DB/storage imports.
  */
-export async function renderMetrics(dbUp: number, redisUp: number): Promise<string> {
+export async function renderMetrics(dbUp: number, storageUp: number): Promise<string> {
   const mem = process.memoryUsage();
   const version = process.env.npm_package_version || '0.0.0';
 
@@ -229,7 +229,7 @@ export async function renderMetrics(dbUp: number, redisUp: number): Promise<stri
   heapUsedGauge.set(mem.heapUsed);
   heapTotalGauge.set(mem.heapTotal);
   dbUpGauge.set(dbUp);
-  redisUpGauge.set(redisUp);
+  storageUpGauge.set(storageUp);
 
   return registry.metrics();
 }

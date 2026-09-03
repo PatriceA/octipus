@@ -7,7 +7,7 @@ import { spawnProcess } from '@/utils/proc';
 const TASK_QUEUE = 'tasks:queue';
 const TASK_CHANNEL = 'tasks:events';
 const HEARTBEAT_KEY = 'scheduler:heartbeat';
-/** Don't hammer Redis: refresh the heartbeat at most this often. */
+/** Don't hammer the storage provider: refresh the heartbeat at most this often. */
 const HEARTBEAT_WRITE_INTERVAL_MS = 5_000;
 /** A heartbeat older than this means the ticker is wedged or dead. */
 export const HEARTBEAT_STALE_MS = 30_000;
@@ -241,7 +241,7 @@ export class Scheduler {
 
     if (!task) return null;
 
-    // scheduledAt comes back as a string after Redis JSON round-trip; coerce before comparing
+    // scheduledAt comes back as a string after the JSON round-trip through storage; coerce before comparing
     const scheduledAt = task.scheduledAt instanceof Date ? task.scheduledAt : new Date(task.scheduledAt);
     // Tasks enqueued before this field existed round-trip without it; default in.
     task.consecutiveDriftSkips ??= 0;
@@ -384,7 +384,7 @@ export class Scheduler {
 
   /**
    * Start draining the queue with `concurrency` worker loops. Non-blocking and
-   * idempotent — call once at boot. Without this, `schedule()` fills the Redis
+   * idempotent — call once at boot. Without this, `schedule()` fills the
    * queue but nothing ever runs the tasks (e.g. artifact cleanup). Stop it with
    * `stop()` during graceful shutdown.
    */
@@ -515,7 +515,7 @@ export class Scheduler {
    * Refresh the liveness heartbeat, throttled to HEARTBEAT_WRITE_INTERVAL_MS.
    * Writing from the worker loop (even when idle) is what lets a separate
    * process — `octi doctor`, a health endpoint — tell a live-but-idle
-   * scheduler from a wedged one. Best-effort: a Redis blip must not kill the
+   * scheduler from a wedged one. Best-effort: a storage blip must not kill the
    * worker loop, so failures are logged and swallowed.
    */
   private async maybeWriteHeartbeat(): Promise<void> {

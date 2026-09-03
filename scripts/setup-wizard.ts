@@ -435,7 +435,7 @@ async function runPreBackend(ctx: WizardCtx | null): Promise<BootstrapConfig & {
   let storageMode: 'embedded' | 'external';
   if (NON_INTERACTIVE) {
     storageMode = (process.env.OCTIPUS_SETUP_STORAGE as 'embedded' | 'external') ||
-      (services.postgres.ok && services.redis.ok ? 'external' : 'embedded');
+      (services.postgres.ok ? 'external' : 'embedded');
   } else if (ctx) {
     await infoStep(ctx, 'Welcome', [
       '\x1b[1mOctipus setup\x1b[0m — one nervous system, many arms.',
@@ -444,16 +444,16 @@ async function runPreBackend(ctx: WizardCtx | null): Promise<BootstrapConfig & {
       'registers your admin account, wires a model provider, and',
       'installs optional capabilities (browser, MCP server, …).',
       '',
-      `Detected: ollama=${services.ollama.ok ? '✓' : '·'}  postgres=${services.postgres.ok ? '✓' : '·'}  valkey=${services.redis.ok ? '✓' : '·'}  litellm=${services.litellm.ok ? '✓' : '·'}`,
+      `Detected: ollama=${services.ollama.ok ? '✓' : '·'}  postgres=${services.postgres.ok ? '✓' : '·'}  litellm=${services.litellm.ok ? '✓' : '·'}`,
     ]);
     storageMode = await selectStep<'embedded' | 'external'>(
       ctx,
       'Storage mode',
       [
-        { value: 'embedded', label: 'Embedded — PGlite + in-memory cache', description: 'Zero external deps. Best for personal use / getting started.' },
-        { value: 'external', label: 'External — PostgreSQL + Valkey', description: 'Full production setup. Requires both running (Valkey or any Redis-compatible server).' },
+        { value: 'embedded', label: 'Embedded — PGlite + in-process cache', description: 'Zero external deps. Best for personal use / getting started.' },
+        { value: 'external', label: 'External — PostgreSQL', description: 'Full production setup. Cache, queue and pub/sub run on the same Postgres.' },
       ],
-      services.postgres.ok && services.redis.ok ? 'external' : 'embedded',
+      services.postgres.ok ? 'external' : 'embedded',
     );
   } else {
     throw new Error('cannot prompt in non-interactive mode without TTY');
@@ -835,8 +835,8 @@ interface RecommendResp {
     entry: { id: string; topics: string[]; vramMB: number };
     fits: boolean;
     recommended: boolean;
-    orchestratorMode?: 'full' | 'lite' | 'router';
-    orchestratorModeNote?: string;
+    promptTier?: 'full' | 'lite';
+    promptTierNote?: string;
   }>;
   error?: string;
 }
@@ -897,11 +897,11 @@ async function maybeRecommendModel(api: ApiClient): Promise<void> {
     return;
   }
 
-  if (pick.orchestratorModeNote) {
-    // Tell the user what this model means for how Octipus will run. Mode stays
-    // on 'auto' (re-derived live), so swapping the default model later changes
+  if (pick.promptTierNote) {
+    // Tell the user what this model means for how Octipus will run. The tier
+    // stays on 'auto' (re-derived live), so swapping the default model changes
     // this automatically — we only inform here.
-    process.stdout.write(`\x1b[90m· As the default, this model runs the orchestrator in ${pick.orchestratorModeNote}.\x1b[0m\n`);
+    process.stdout.write(`\x1b[90m· As the default, this model runs in ${pick.promptTierNote}.\x1b[0m\n`);
   }
 
   // Interactive default: confirm before a potentially large download. Forced
@@ -1020,7 +1020,7 @@ async function runApiPhase(baseUrl: string, _ctx: WizardCtx | null): Promise<voi
     // SETTINGS_REGISTRY are routed to the vault by the backend handler;
     // we just PUT them through the settings batch endpoint either way.
     // The chosen model becomes the DB default via the model row itself; there
-    // is no separate orchestrator model override (the setting that used to be
+    // is no separate root agent model override (the setting that used to be
     // written here was never read by anything).
     const batch: Record<string, unknown> = {};
     if (def.id === 'ollama') {
@@ -1053,7 +1053,7 @@ async function runApiPhase(baseUrl: string, _ctx: WizardCtx | null): Promise<voi
     }
 
     // Register the chosen model in the registry and mark it the default.
-    // Settings alone don't create a model_config row, and the orchestrator
+    // Settings alone don't create a model_config row, and the root agent
     // resolves chat via getDefaultModel() (isDefault + isEnabled) — so without
     // this the selected model is "not registered" and chat has no engine, for
     // EVERY provider. The API key is already in the vault (the settings batch

@@ -17,7 +17,7 @@ export interface GatewayStatus {
   agents: AgentInfo[];
   health: {
     database: HealthStatus;
-    redis: HealthStatus;
+    storage: HealthStatus;
     models: HealthStatus;
   };
 }
@@ -210,7 +210,7 @@ export class Gateway {
   async getStatus(): Promise<GatewayStatus> {
     const agentManager = getAgentManager();
 
-    const [dbHealth, redisHealth] = await Promise.all([
+    const [dbHealth, storageHealth] = await Promise.all([
       checkDbHealth(),
       checkCacheHealth(),
     ]);
@@ -228,13 +228,14 @@ export class Gateway {
           message: dbHealth.error,
           lastChecked: new Date(),
         },
-        // Named `redis` for the API contract's sake; the check is the active
-        // storage provider, which is Postgres in external mode.
-        redis: {
-          service: 'redis',
-          status: redisHealth.healthy ? 'healthy' : 'unhealthy',
-          latency: redisHealth.latency,
-          message: redisHealth.error,
+        // The active storage provider — Postgres in external mode, in-process
+        // in embedded mode. Never Valkey/Redis: that backend was replaced in
+        // the Node migration and the client removed.
+        storage: {
+          service: 'storage',
+          status: storageHealth.healthy ? 'healthy' : 'unhealthy',
+          latency: storageHealth.latency,
+          message: storageHealth.error,
           lastChecked: new Date(),
         },
         models: {

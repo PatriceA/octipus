@@ -141,11 +141,6 @@ export async function probePostgres(host = 'localhost', port = 5432): Promise<Se
   return { service: 'postgres', ...r };
 }
 
-export async function probeRedis(host = 'localhost', port = 6379): Promise<ServiceProbe> {
-  const r = await tcpReachable(host, port, 1500);
-  return { service: 'redis', ...r };
-}
-
 // ── Hardware probe ───────────────────────────────────────────────────
 // Best-effort host hardware detection for the `hwfit` model-recommendation
 // flow. Shells out to read-only tools that may be absent and degrades
@@ -358,14 +353,11 @@ export async function probeAllServices(opts?: {
   litellmUrl?: string;
   postgresHost?: string;
   postgresPort?: number;
-  redisHost?: string;
-  redisPort?: number;
 }): Promise<Record<string, ServiceProbe>> {
-  const [ollama, litellm, postgres, redis] = await Promise.all([
+  const [ollama, litellm, postgres] = await Promise.all([
     probeOllama(opts?.ollamaUrl),
     probeLiteLLM(opts?.litellmUrl),
     probePostgres(opts?.postgresHost, opts?.postgresPort),
-    probeRedis(opts?.redisHost, opts?.redisPort),
   ]);
-  return { ollama, litellm, postgres, redis };
+  return { ollama, litellm, postgres };
 }

@@ -1,5 +1,5 @@
 /**
- * Integration test helpers — boot Postgres/Redis connections against the
+ * Integration test helpers — boot the Postgres connections against the
  * docker-compose.test.yml containers. Opt-in via INTEGRATION=1.
  *
  * Usage:
