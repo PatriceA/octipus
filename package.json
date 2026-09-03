@@ -115,7 +115,8 @@
     "ws": "$ws",
     "file-type": "^21.3.4",
     "follow-redirects": "^1.15.12",
-    "qs": "^6.15.2",
+    "qs": "^6.16.0",
+    "@xmldom/xmldom": "^0.8.15",
     "playwright-core": "1.62.0"
   }
 }
