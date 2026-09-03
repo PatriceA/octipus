@@ -25,6 +25,7 @@ export const defaultConfig: Partial<Config> = {
     defaultModel: 'llama3.2',
     requestTimeout: 300000,
     keepAlive: '10m',
+    unifiedMemory: false,
   },
   security: {
     masterKey: '', // Must be provided

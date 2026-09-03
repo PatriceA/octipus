@@ -39,6 +39,16 @@ export const ollamaConfigSchema = z.object({
   // instead of unloading after Ollama\'s 5min default — avoids repeated cold loads.
   // Accepts a duration string ('10m', '1h') or '-1' to keep it loaded indefinitely.
   keepAlive: z.string().default('10m').describe('How long Ollama keeps a model warm in VRAM (duration string or -1)'),
+  /**
+   * This host's GPU memory is one shared pool with the CPU's (an APU, or any
+   * unified-memory design), so the reported VRAM figure is a firmware carve-out
+   * rather than a hardware boundary and a model larger than it costs nothing.
+   *
+   * Auto-detected on Apple Silicon. It is NOT detectable for AMD on Linux — an
+   * APU and a discrete card expose the same sysfs surface — so an APU owner
+   * sets this and stops being told that half their memory is "spill".
+   */
+  unifiedMemory: z.boolean().default(false).describe('GPU and CPU share one memory pool at one speed (APU / unified memory)'),
 });
 
 // Security configuration schema

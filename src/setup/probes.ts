@@ -153,6 +153,25 @@ export interface DetectedGpu {
   name: string;
   /** Usable VRAM in MB. For Apple unified memory this is a RAM-derived budget. */
   vramMB: number;
+  /**
+   * System memory the GPU can also address (AMD's GTT aperture), in MB.
+   *
+   * On an APU this is the SAME physical DRAM at the same speed as `vramMB` —
+   * the split between the two is a firmware carve-out, not a hardware boundary.
+   * On a discrete card it is host memory reached over PCIe, which is genuinely
+   * slower. The number is reported either way; whether it counts as full-speed
+   * budget is the caller's call (see `unifiedMemory`).
+   */
+  sharedMemoryMB?: number;
+  /**
+   * True when `vramMB` and `sharedMemoryMB` are one pool at one speed, so
+   * exceeding the VRAM figure costs nothing. Provable on Apple Silicon.
+   * NOT provable for AMD on Linux: an APU and a discrete card expose the same
+   * sysfs surface (no `mem_info_vram_vendor` on current kernels, and a discrete
+   * card's GTT is just as large), so this stays false there and the operator
+   * says so via `hwfit.unifiedMemory`.
+   */
+  unifiedMemory?: boolean;
 }
 
 export type HardwareSource = 'nvidia-smi' | 'rocm-smi' | 'sysfs' | 'os' | 'apple-metal';
@@ -247,15 +266,19 @@ export function parseRocmSmiVram(stdout: string): number {
  * exposed under multiple `cardN` nodes isn't counted twice. Returns 0 on any
  * read failure or when no DRM VRAM node exists (e.g. CPU-only hosts).
  */
-function readSysfsVramMB(): number {
+function readSysfsMemMB(file: 'mem_info_vram_total' | 'mem_info_gtt_total'): number {
   try {
     const seen = new Set<string>();
     let totalBytes = 0;
     for (const entry of readdirSync('/sys/class/drm')) {
       if (!/^card\d+$/.test(entry)) continue; // skip connectors like card0-DP-1
       const deviceDir = `/sys/class/drm/${entry}/device`;
-      const vramFile = `${deviceDir}/mem_info_vram_total`;
-      if (!existsSync(vramFile)) continue;
+      // Presence of the VRAM node is what identifies a GPU device here, even
+      // when the caller wants the GTT figure — a device with GTT and no VRAM
+      // node is not something this probe knows how to size.
+      if (!existsSync(`${deviceDir}/mem_info_vram_total`)) continue;
+      const memFile = `${deviceDir}/${file}`;
+      if (!existsSync(memFile)) continue;
       let key: string;
       try {
         key = realpathSync(deviceDir);
@@ -264,7 +287,7 @@ function readSysfsVramMB(): number {
       }
       if (seen.has(key)) continue;
       seen.add(key);
-      const bytes = Number.parseInt(readFileSync(vramFile, 'utf8').trim(), 10);
+      const bytes = Number.parseInt(readFileSync(memFile, 'utf8').trim(), 10);
       if (Number.isFinite(bytes) && bytes > 0) totalBytes += bytes;
     }
     return Math.floor(totalBytes * MB_PER_BYTE);
@@ -291,7 +314,7 @@ async function detectAmdGpu(): Promise<{ gpu: DetectedGpu; sources: HardwareSour
 
   // Fall back to sysfs (also catches AMD GPUs with no rocm-smi installed).
   if (vramMB === 0) {
-    const sysfsMB = readSysfsVramMB();
+    const sysfsMB = readSysfsMemMB('mem_info_vram_total');
     if (sysfsMB > 0) {
       vramMB = sysfsMB;
       sources.push('sysfs');
@@ -299,7 +322,9 @@ async function detectAmdGpu(): Promise<{ gpu: DetectedGpu; sources: HardwareSour
   }
 
   if (sources.length === 0) return null; // no rocm-smi and no DRM VRAM node ⇒ not AMD
-  return { gpu: { vendor: 'amd', name: 'AMD GPU (ROCm)', vramMB }, sources };
+  const sharedMemoryMB = readSysfsMemMB('mem_info_gtt_total') || undefined;
+  if (sharedMemoryMB && !sources.includes('sysfs')) sources.push('sysfs');
+  return { gpu: { vendor: 'amd', name: 'AMD GPU (ROCm)', vramMB, sharedMemoryMB }, sources };
 }
 
 /**
@@ -315,7 +340,12 @@ export async function probeHardware(): Promise<HardwareProfile> {
 
   // Apple Silicon: unified memory. Treat a fraction of RAM as a usable GPU budget.
   if (plat === 'darwin' && cpu.arch === 'arm64') {
-    gpus.push({ vendor: 'apple', name: 'Apple Silicon (unified memory)', vramMB: Math.floor(ramMB * 0.75) });
+    gpus.push({
+      vendor: 'apple',
+      name: 'Apple Silicon (unified memory)',
+      vramMB: Math.floor(ramMB * 0.75),
+      unifiedMemory: true,
+    });
     source.push('apple-metal');
   } else {
     // NVIDIA — the common discrete-GPU case.

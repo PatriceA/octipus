@@ -112,6 +112,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'OLLAMA_DEFAULT_MODEL',
   },
   {
+    key: 'ollama.unifiedMemory',
+    category: 'ollama',
+    valueType: 'boolean',
+    defaultValue: false,
+    description:
+      'This host shares one memory pool between GPU and CPU (an APU, or any unified-memory design). Model recommendations are then scored against the whole pool instead of the firmware VRAM carve-out, which is not a speed boundary on such a machine. Auto-detected on Apple Silicon; set it by hand on an AMD APU, where Linux exposes no way to tell one from a discrete card.',
+    isSecret: false,
+    envVar: 'OLLAMA_UNIFIED_MEMORY',
+  },
+  {
     key: 'ollama.requestTimeout',
     category: 'ollama',
     valueType: 'number',

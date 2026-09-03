@@ -225,7 +225,7 @@ export async function recommendModels() {
   const { describeTierForParams } = await import('@/core/agent/prompt-tier');
   const hardware = await probeHardware();
   const sized = await resolveSizes();
-  const scored = scoreCatalog(hardware, sized);
+  const scored = scoreCatalog(hardware, sized, { unifiedMemory: getConfig().ollama.unifiedMemory });
 
   // Annotate each model with the prompt tier it would imply as the default,
   // so the UI can tell the user what the model means for how Octipus runs

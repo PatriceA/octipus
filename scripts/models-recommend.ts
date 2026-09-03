@@ -14,6 +14,7 @@ import { getModelRegistry } from '../src/models/model-registry';
 import { OllamaProvider } from '../src/models/providers/ollama-provider';
 import { initializeVault } from '../src/security/vault';
 import { probeHardware } from '../src/setup/probes';
+import { getConfig } from '../src/config';
 
 const GREEN = '\x1b[32m';
 const YELLOW = '\x1b[33m';
@@ -22,24 +23,40 @@ const RESET = '\x1b[0m';
 
 const fmtGB = (mb: number) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`);
 
+/**
+ * `--unified` forces the shared-pool budget for this run. The probe proves
+ * unified memory only on Apple Silicon; on an AMD APU nothing in Linux sysfs
+ * distinguishes a carve-out from a discrete card's VRAM, so the operator says
+ * so — here for one run, or `ollama.unifiedMemory` for good.
+ */
+const UNIFIED = process.argv.includes('--unified') || getConfig().ollama.unifiedMemory;
+
 async function recommend(): Promise<void> {
   process.stdout.write('Scanning hardware…\n');
   const hardware = await probeHardware();
   const sized = await resolveSizes();
-  const scored = scoreCatalog(hardware, sized);
+  const scored = scoreCatalog(hardware, sized, { unifiedMemory: UNIFIED });
 
+  const shared = hardware.gpus.reduce((sum, g) => sum + (g.sharedMemoryMB ?? 0), 0);
+  const memory = UNIFIED && shared > 0
+    ? `${fmtGB(hardware.totalVramMB + shared)} shared memory`
+    : `${fmtGB(hardware.totalVramMB)} VRAM`;
   const gpu = hardware.gpus.length > 0
-    ? `${hardware.gpus.map((g) => g.name).join(', ')} · ${fmtGB(hardware.totalVramMB)} VRAM`
+    ? `${hardware.gpus.map((g) => g.name).join(', ')} · ${memory}`
     : 'no GPU (CPU-only)';
   process.stdout.write(
     `\nHardware: ${gpu} · ${hardware.cpu.cores} cores · ${fmtGB(hardware.ramMB)} RAM ` +
       `${DIM}(via ${hardware.source.join(', ')})${RESET}\n\n`,
   );
 
-  const shown = scored.filter((s) => s.recommended || s.fits);
+  // Overspill models are SHOWN, not hidden. Hiding them is how the best model
+  // this machine can actually run disappeared from its own recommendation list
+  // — "runnable but slower" is a label, not a reason to withhold the option.
+  // Only genuinely too-big entries are collapsed into the tail count.
+  const shown = scored.filter((s) => s.fitTier !== 'too-big');
   for (const s of shown) printRow(s);
   const hidden = scored.length - shown.length;
-  if (hidden > 0) process.stdout.write(`${DIM}  …and ${hidden} more that don't fit this hardware.${RESET}\n`);
+  if (hidden > 0) process.stdout.write(`${DIM}  …and ${hidden} more too big for this machine.${RESET}\n`);
 
   process.stdout.write(`\nInstall one with:  ${DIM}octi models recommend --install <id>${RESET}\n`);
 }

@@ -173,9 +173,30 @@ but you still have to *allocate* it via `num_ctx`.
   `OLLAMA_IGPU_ENABLE=1` (and keep any `HSA_OVERRIDE_GFX_VERSION` gfx override you
   already had). In Docker Compose, env changes need `up -d` to recreate the
   container — a plain `restart` won't pick them up.
-- **VRAM spill.** Models larger than VRAM spill to system RAM and run much
-  slower. Use the hwfit recommender to pick a tag that fits, or an MoE
-  (`qwen3:30b-a3b`: 30B total, ~3B active) for capability-per-VRAM.
+- **VRAM spill.** On a machine with a *discrete* GPU, models larger than VRAM
+  spill to system RAM over PCIe and run much slower. Use the hwfit recommender
+  to pick a tag that fits, or a mixture-of-experts model
+  (`qwen3.5:35b-a3b`: 35B total, ~3B active) for capability per gigabyte.
+- **Unified memory (`ollama.unifiedMemory`).** On an APU or an Apple Silicon
+  machine there is no spill to speak of: the reported VRAM is a firmware
+  carve-out from the same DRAM the GPU reaches through its GTT aperture, at the
+  same speed. Scoring against the carve-out is then measuring a boundary that
+  does not exist — a Radeon 890M reporting 16 GB alongside 39 GB of GTT was
+  told that everything above 16 GB "spills into RAM, slower", which hid the
+  best model the machine could run.
+
+  Apple Silicon is detected automatically. AMD is **not detectable** on Linux —
+  an APU and a discrete card expose the same sysfs surface, with no
+  `mem_info_vram_vendor` on current kernels and a GTT aperture that looks the
+  same on both — so set `ollama.unifiedMemory` (or `OLLAMA_UNIFIED_MEMORY=true`,
+  or `octi models recommend --unified` for a single run) and the recommender
+  scores against VRAM + GTT instead.
+
+  The pool is bounded by GTT, not by installed RAM: 16 GB VRAM + 39 GB GTT on a
+  96 GB machine gives a 55 GB budget, because the amdgpu driver sizes the
+  aperture at roughly half of system memory by default. Raise it with the
+  `amdgpu.gttsize` kernel parameter (in MB) if you want more of the pool
+  available to the GPU.
 
 ---
 

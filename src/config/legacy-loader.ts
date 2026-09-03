@@ -44,6 +44,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       defaultModel: process.env.OLLAMA_DEFAULT_MODEL || defaultConfig.ollama!.defaultModel!,
       requestTimeout: parseInt(process.env.OLLAMA_REQUEST_TIMEOUT || '300000', 10),
       keepAlive: process.env.OLLAMA_KEEP_ALIVE || '10m',
+      unifiedMemory: process.env.OLLAMA_UNIFIED_MEMORY === 'true',
     },
     security: {
       masterKey: process.env.MASTER_KEY || '',
