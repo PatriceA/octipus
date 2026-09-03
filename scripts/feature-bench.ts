@@ -33,6 +33,8 @@ interface Scenario {
   expectation: string;
   /** Fresh session per scenario unless it names a session to continue. */
   continues?: string;
+  /** Optional check on which roles the turn routed to (from the DB, not the text). */
+  expectRoles?: (roles: string[]) => boolean;
   timeoutMs?: number;
 }
 
@@ -75,6 +77,14 @@ const has = (a: string, ...needles: string[]): boolean => {
   const low = a.toLowerCase();
   return needles.some((n) => low.includes(n.toLowerCase()));
 };
+
+/**
+ * A token unique to this run. Every scenario that writes something durable
+ * (a note, a task, a remembered fact, a hook) carries it, and the scenario that
+ * reads it back looks for it in a FRESH session. A previous run's leftovers
+ * therefore cannot satisfy a read-back — the persistence really has to work.
+ */
+const MARK = `bench-${Date.now().toString(36)}`;
 
 const SCENARIOS: Scenario[] = [
   {
@@ -162,6 +172,92 @@ const SCENARIOS: Scenario[] = [
       return !a.includes(secret);
     },
   },
+
+  // ── Write-then-read-back pairs ──────────────────────────────────────────
+  // Each pair writes in one session and reads back in a NEW one. Only the
+  // read-back is the real assertion: a "saved it" answer proves nothing, and a
+  // same-session answer can be satisfied from the transcript alone.
+  {
+    id: 'notes-capture',
+    group: 'notes',
+    message: `Capture a note titled "${MARK}" whose body is exactly: octipus feature bench note ${MARK}`,
+    expectation: 'reports the note was captured',
+    expect: (a) => has(a, 'note') && !has(a, 'error', 'failed', 'cannot'),
+  },
+  {
+    id: 'notes-recall',
+    group: 'notes',
+    message: `Search my notes for "${MARK}" and quote the body of the note you find, verbatim.`,
+    expectation: 'a fresh session finds the note written by notes-capture',
+    expect: (a) => has(a, `octipus feature bench note ${MARK}`),
+  },
+  {
+    id: 'todo-create',
+    group: 'todo',
+    message: `Add a task to my todo list: "ship ${MARK}", priority high.`,
+    expectation: 'reports the task was created',
+    expect: (a) => has(a, 'task', 'todo') && !has(a, 'error', 'failed', 'cannot'),
+  },
+  {
+    id: 'todo-recall',
+    group: 'todo',
+    message: `List my open tasks and tell me the full title of any task mentioning ${MARK}.`,
+    expectation: 'a fresh session lists the task written by todo-create',
+    expect: (a) => has(a, `ship ${MARK}`),
+  },
+  {
+    id: 'hook-create',
+    group: 'hooks',
+    message: `Create a scheduled hook named "${MARK}" that runs every day at 09:00 and lists my open tasks.`,
+    expectation: 'creates the hook',
+    expect: (a) => has(a, 'hook') && !has(a, 'error', 'failed', 'cannot'),
+  },
+  {
+    id: 'hook-delete',
+    group: 'hooks',
+    // Also the cleanup for hook-create — a bench that leaves a daily job behind
+    // is a bench that schedules itself into production.
+    message: `List my hooks, then delete the one named "${MARK}" and confirm it is gone.`,
+    expectation: 'a fresh session lists then deletes the hook',
+    expect: (a) => has(a, 'delet', 'removed', 'gone') && has(a, MARK),
+  },
+
+  // ── Self-learning ───────────────────────────────────────────────────────
+  // The generative half of the skill loop: distil a reusable skill from the
+  // conversation and file it as a PENDING proposal. Approval stays human, so a
+  // pass here is a proposal existing — never a live skill appearing by itself.
+  {
+    id: 'skill-distill',
+    group: 'skills',
+    message:
+      `Here is a procedure worth keeping. To rotate the ${MARK} token: 1) read the current value from the vault, ` +
+      '2) mint a replacement, 3) update every consumer, 4) revoke the old one, 5) verify with a health check. ' +
+      'Distil that into a reusable skill and file it as a proposal.',
+    expectation: 'files a pending skill proposal rather than creating a live skill',
+    expect: (a) => has(a, 'proposal', 'pending', 'review') && !has(a, 'cannot', 'no such tool'),
+  },
+
+  // ── Routing ─────────────────────────────────────────────────────────────
+  // Asserted on the roles the run recorded, not on the prose: an answer can be
+  // right while the turn burned a heavyweight lane to produce it.
+  {
+    id: 'routing-trivial',
+    group: 'routing',
+    message: 'Say the single word: pong.',
+    expectation: 'a one-word question stays on a single lightweight lane',
+    expect: (a) => has(a, 'pong'),
+    expectRoles: (r) => r.length <= 1,
+  },
+  {
+    id: 'routing-code',
+    group: 'routing',
+    message:
+      'Write a TypeScript function `slugify(s: string): string` that lowercases, ' +
+      'strips non-alphanumerics and joins words with hyphens. Code only.',
+    expectation: 'a coding request produces code and routes to a coding lane',
+    expect: (a) => has(a, 'function slugify', 'const slugify', 'slugify ='),
+    expectRoles: (r) => r.length === 0 || r.some((x) => /cod|dev|engineer|general/i.test(x)),
+  },
 ];
 
 /**
@@ -195,7 +291,130 @@ const API_CHECKS: Array<{
   { path: '/api/settings', what: 'settings', expect: (b) => typeof b === 'object' && b !== null },
   { path: '/api/persona', what: 'persona', expect: (b) => typeof b === 'object' && b !== null },
   { path: '/api/skills', what: 'skills', expect: (b) => typeof b === 'object' && b !== null },
+  { path: '/api/hooks', what: 'hooks', expect: (b) => Array.isArray((b as { hooks?: unknown[] }).hooks) },
+  { path: '/api/documents', what: 'documents', expect: (b) => typeof b === 'object' && b !== null },
+  { path: '/api/skills/proposals', what: 'skill proposals', expect: (b) => typeof b === 'object' && b !== null },
 ];
+
+/**
+ * Reader and Deep Research are API features with no chat entry point, so they
+ * are driven directly. Both are cheap on purpose: the reader action runs on
+ * supplied text (no network), and research runs at `quick` depth.
+ */
+const FLOWS: Array<{ id: string; group: string; what: string; run: () => Promise<boolean> }> = [
+  {
+    id: 'reader-fetch',
+    group: 'reader',
+    what: 'fetches a URL and returns extracted article text',
+    run: async () => {
+      const res = await api('/api/reader', { method: 'POST', body: { url: 'https://example.com/' } });
+      const doc = res.body as { title?: string; textContent?: string };
+      return res.status === 200 && (doc.textContent?.length ?? 0) > 50 && !!doc.title;
+    },
+  },
+  {
+    id: 'reader-action',
+    group: 'reader',
+    what: 'summarizes supplied text through the reader topic model',
+    run: async () => {
+      const res = await api('/api/reader/action', {
+        method: 'POST',
+        body: {
+          action: 'summarize',
+          text:
+            'Octipus is a self-hosted AI assistant. It stores everything in Postgres with pgvector, ' +
+            'routes each request to a model bound to a topic lane, and runs tools in a sandbox. ' +
+            'Users reach it through a web app, a terminal UI, and chat channels.',
+        },
+      });
+      const out = res.body as { output?: string; error?: string };
+      return res.status === 200 && (out.output?.length ?? 0) > 40;
+    },
+  },
+  {
+    id: 'memory-roundtrip',
+    group: 'memory',
+    what: 'a fact stated in one session is recalled in a new one',
+    // Asserted on RECALL, not on a row in a particular table. Octipus has two
+    // stores for this — auto-extracted `memories` (judged) and explicit
+    // `profiles` facts — and which one a turn picks is an implementation
+    // detail the user never sees. Polling `/api/memory` made the harness fail
+    // for a product that remembered perfectly well in the other store.
+    //
+    // The fact is deliberately novel rather than a re-statement of something
+    // already stored: re-stating an existing attribute with a new value is an
+    // UPDATE, which asks a small local judge model to recognise a
+    // contradiction — a real question, but a different one from "does memory
+    // work at all".
+    run: async () => {
+      const fact = `my rack UPS is called ${MARK}`;
+      const told = await api('/api/chat', {
+        method: 'POST',
+        body: { message: `Remember this about me: ${fact}.`, channel: 'api' },
+      });
+      if (told.status !== 200) return false;
+
+      // Extraction is asynchronous. Ask in a FRESH session until the answer
+      // carries the mark, which only stored memory can supply.
+      const deadline = Date.now() + 240_000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 20_000));
+        const asked = await api('/api/chat', {
+          method: 'POST',
+          body: { message: 'What is my rack UPS called? Answer with the name only.', channel: 'api' },
+        });
+        if (String((asked.body as { response?: string }).response ?? '').includes(MARK)) return true;
+      }
+      return false;
+    },
+  },
+  {
+    id: 'research-quick',
+    group: 'research',
+    what: 'runs a bounded research job to a finished report',
+    run: async () => {
+      const started = await api('/api/research', {
+        method: 'POST',
+        body: { question: 'What is pgvector and what is it used for?', depth: 'quick' },
+      });
+      const jobId = (started.body as { jobId?: string }).jobId;
+      if (!jobId) return false;
+      const deadline = Date.now() + 300_000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 5000));
+        const poll = await api(`/api/research/${jobId}`);
+        const job = poll.body as {
+          status?: string;
+          report?: { sections?: unknown[]; sources?: unknown[] };
+        };
+        // A report with no sources is a model answering from memory, which is
+        // the one thing Deep Research exists not to do.
+        if (job.status === 'done') {
+          return (job.report?.sections?.length ?? 0) > 0 && (job.report?.sources?.length ?? 0) > 0;
+        }
+        if (job.status === 'error' || job.status === 'failed') return false;
+      }
+      return false;
+    },
+  },
+];
+
+async function api(
+  path: string,
+  opts?: { method?: string; body?: unknown; timeoutMs?: number },
+): Promise<{ status: number; body: unknown }> {
+  // Timed out like `chat()` is: the flows' own deadlines are only checked
+  // BETWEEN awaits, so a wedged backend turn would hang the whole bench
+  // forever rather than failing the flow it belongs to.
+  const res = await fetch(`${BASE}${path}`, {
+    method: opts?.method ?? 'GET',
+    headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+    body: opts?.body ? JSON.stringify(opts.body) : undefined,
+    signal: AbortSignal.timeout(opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+  });
+  const body = res.headers.get('content-type')?.includes('json') ? await res.json() : await res.text();
+  return { status: res.status, body };
+}
 
 interface ApiResult { path: string; what: string; status: number; ms: number; ok: boolean }
 
@@ -310,6 +529,24 @@ async function main(): Promise<void> {
     console.log(`\napi surface   ${apiOk}/${api.length} endpoints healthy · median ${apiTimes[Math.floor(apiTimes.length / 2)] ?? 0}ms · worst ${apiTimes[apiTimes.length - 1] ?? 0}ms`);
     for (const a of api.filter((x) => !x.ok)) console.log(`  BROKEN  ${a.path} (${a.what}) → HTTP ${a.status}`);
   }
+  const flows = FLOWS.filter((f) => !ONLY || ONLY.includes(f.group) || ONLY.includes(f.id));
+  const flowResults: Array<{ id: string; ok: boolean; ms: number; error?: string }> = [];
+  if (flows.length > 0) {
+    console.log(`\ndirect flows  ${flows.length}`);
+    for (const f of flows) {
+      const t0 = Date.now();
+      let ok = false;
+      let error: string | undefined;
+      try {
+        ok = await f.run();
+      } catch (err) {
+        error = err instanceof Error ? err.message : String(err);
+      }
+      flowResults.push({ id: f.id, ok, ms: Date.now() - t0, error });
+      console.log(`  ${f.id.padEnd(18)} ${ok ? 'PASS' : 'FAIL'}  ${fmtMs(Date.now() - t0).padStart(7)}  ${ok ? f.what : `expected: ${f.what}${error ? ` [${error.slice(0, 60)}]` : ''}`}`);
+    }
+  }
+
   const sessions = new Map<string, string>();
   const measured: Measured[] = [];
 
@@ -346,7 +583,7 @@ async function main(): Promise<void> {
         answerHead: answer.slice(0, 160).replace(/\s+/g, ' '),
         routedRoles: body.routedRoles ?? [],
         sessionId: body.sessionId,
-        ok: !body.error && s.expect(answer),
+        ok: !body.error && s.expect(answer) && (s.expectRoles?.(body.routedRoles ?? []) ?? true),
         error: body.error ? `${body.error}${body.details ? `: ${body.details}` : ''}` : undefined,
       };
       if (body.sessionId) {
@@ -387,13 +624,14 @@ async function main(): Promise<void> {
   }
 
   if (JSON_OUT) {
-    await writeFileAt(JSON_OUT, JSON.stringify({ base: BASE, at: new Date().toISOString(), api, measured }, null, 2));
+    await writeFileAt(JSON_OUT, JSON.stringify({ base: BASE, at: new Date().toISOString(), mark: MARK, api, flows: flowResults, measured }, null, 2));
     console.log(`\n  wrote ${JSON_OUT}`);
   }
 
   await closeDb();
   const apiBroken = api.filter((a) => !a.ok).length;
-  process.exit(failed.length > 0 || apiBroken > 0 ? 1 : 0);
+  const flowsBroken = flowResults.filter((f) => !f.ok).length;
+  process.exit(failed.length > 0 || apiBroken > 0 || flowsBroken > 0 ? 1 : 0);
 }
 
 void main();
