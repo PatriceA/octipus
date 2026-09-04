@@ -126,7 +126,7 @@ export function logPromptComposition(
     registeredToolCount?: number;
   },
   buckets: Record<string, string[]>,
-): void {
+): { promptTokens: number; contextWindow?: number } {
   const { total, sections } = summarizePromptSections(buckets);
   const top = sections[0];
   const grandTotal = total.tokens + (ctx.toolSchemaTokens ?? 0);
@@ -147,4 +147,31 @@ export function logPromptComposition(
         : ')') +
       (top ? `, largest text section "${top.label}" at ${top.tokens} tok (${Math.round(top.share * 100)}%)` : ''),
   );
+  return { promptTokens: grandTotal, contextWindow: ctx.contextWindow };
+}
+
+/**
+ * Last measured prompt fill per session, so a client can show how full the
+ * context is. The number is a per-turn snapshot of what was SENT (text +
+ * tool schema), not a running total — it is the one the user needs when
+ * deciding whether to `/compact`.
+ */
+const contextFills = new Map<string, { promptTokens: number; contextWindow?: number }>();
+/** Keeps the map from growing without bound on a long-lived backend. */
+const MAX_TRACKED_SESSIONS = 200;
+
+export function recordContextFill(
+  sessionId: string,
+  fill: { promptTokens: number; contextWindow?: number },
+): void {
+  contextFills.delete(sessionId); // re-insert so iteration order is LRU
+  contextFills.set(sessionId, fill);
+  if (contextFills.size > MAX_TRACKED_SESSIONS) {
+    const oldest = contextFills.keys().next().value;
+    if (oldest !== undefined) contextFills.delete(oldest);
+  }
+}
+
+export function getContextFill(sessionId: string): { promptTokens: number; contextWindow?: number } | undefined {
+  return contextFills.get(sessionId);
 }

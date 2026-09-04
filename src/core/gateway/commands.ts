@@ -382,6 +382,68 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   });
 
   registry.register({
+    name: 'proposals',
+    aliases: ['skills-proposals'],
+    description: 'Review distilled skill/expert proposals — /proposals, /proposals approve <n>, /proposals reject <n>',
+    args: [
+      { name: 'action', required: false, description: 'approve | reject' },
+      { name: 'index', required: false, description: 'Row number from the list' },
+    ],
+    minTrustLevel: 'user',
+    handler: async (ctx) => {
+      const { resolveUserId } = await import('./resolve-user');
+      const {
+        approveProposal, listPendingProposals, rejectProposal,
+      } = await import('@/services/skill-proposal-service');
+
+      // Trusted local/system consoles see (and act on) everything; a normal
+      // user only ever sees their own.
+      const userId = await resolveUserId(ctx.userId);
+      const scope = ctx.trustLevel === 'local' || ctx.trustLevel === 'system' ? undefined : userId;
+
+      const pending = await listPendingProposals(scope);
+      const action = (ctx.args.action || '').toLowerCase();
+
+      if (!action) {
+        if (pending.length === 0) return { text: 'No pending skill proposals.' };
+        const lines = pending.map((p, i) =>
+          `  ${i + 1}. ${p.name} (${p.kind}) — ${p.description}\n     from ${p.exemplarCount} run(s)`,
+        );
+        return {
+          text: `Pending skill proposals:\n${lines.join('\n')}\n\n`
+            + 'Approve with /proposals approve <n>, reject with /proposals reject <n>.',
+        };
+      }
+
+      if (pending.length === 0) return { text: 'No pending skill proposals.' };
+
+      if (action !== 'approve' && action !== 'reject') {
+        return { text: `Unknown action "${action}". Use /proposals, /proposals approve <n>, or /proposals reject <n>.` };
+      }
+
+      // The index is positional over the SAME oldest-first list the user just
+      // read, so it stays stable while nothing is resolved.
+      const index = Number.parseInt(ctx.args.index ?? '', 10);
+      const target = Number.isInteger(index) ? pending[index - 1] : undefined;
+      if (!target) {
+        return { text: `Pick a row number between 1 and ${pending.length}. Run /proposals to see the list.` };
+      }
+
+      if (action === 'approve') {
+        const result = await approveProposal(target.id, { userId: scope });
+        return result
+          ? { text: `Approved: "${result.name}" is now a${result.promoted === 'expert' ? 'n' : ''} ${result.promoted}.` }
+          : { text: 'That proposal is no longer pending.' };
+      }
+
+      const suppressedUntil = await rejectProposal(target.id, scope);
+      return suppressedUntil
+        ? { text: `Rejected "${target.name}". Suppressed until ${suppressedUntil.toISOString().slice(0, 10)}.` }
+        : { text: 'That proposal is no longer pending.' };
+    },
+  });
+
+  registry.register({
     name: 'diff',
     aliases: [],
     description: 'Show git diff for workspace changes',

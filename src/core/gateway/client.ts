@@ -1,3 +1,4 @@
+import { clearCliSession, readCliSession } from '@/core/gateway/cli-session';
 import { ensureLocalToken, readLocalToken } from '@/core/gateway/local-auth';
 import type { ClientMessage, GatewayMessage } from '@/core/gateway/protocol';
 
@@ -10,6 +11,12 @@ export interface GatewayClientOptions {
   onCommandResult?: (name: string, result: unknown, error?: string) => void;
   onStatusChange?: (status: ConnectionStatus) => void;
   onError?: (error: string) => void;
+  /**
+   * Who this client is now acting as — null for the local machine account.
+   * Fires on every connect and when a rejected login is cleared, so a status
+   * bar can't keep showing a signed-in user whose session is already gone.
+   */
+  onIdentityChange?: (identity: { username: string; userId: string } | null) => void;
   /**
    * Phase 4 workspace propagation. When set, the connect URL gets
    * a `?workspace=<slug-or-uuid>` query parameter that the backend
@@ -33,6 +40,9 @@ export class GatewayClient {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 10;
+  /** Who the last connect authenticated as, or null for the local sentinel. */
+  private authenticatedAs: { username: string; userId: string } | null = null;
+  private usedStoredSession = false;
 
   constructor(options: GatewayClientOptions) {
     this.options = options;
@@ -47,7 +57,16 @@ export class GatewayClient {
     const url = ws
       ? `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}workspace=${encodeURIComponent(ws)}`
       : baseUrl;
-    const token = readLocalToken() || ensureLocalToken();
+    // A stored login wins over the machine token: it makes this terminal the
+    // same principal as the browser (own memories, own vault secrets, own
+    // settings) instead of the account-less 'local' sentinel.
+    const session = readCliSession();
+    const auth = session
+      ? { method: 'session_token' as const, credentials: { token: session.token } }
+      : { method: 'local' as const, credentials: { token: readLocalToken() || ensureLocalToken() } };
+    this.authenticatedAs = session ? { username: session.username, userId: session.userId } : null;
+    this.usedStoredSession = session !== null;
+    this.options.onIdentityChange?.(this.authenticatedAs);
 
     this.setStatus('connecting');
 
@@ -58,8 +77,8 @@ export class GatewayClient {
         this.setStatus('authenticating');
         this.send({
           type: 'auth',
-          method: 'local',
-          credentials: { token },
+          method: auth.method,
+          credentials: auth.credentials,
           clientType: 'tui',
           clientVersion: '1.0.0',
         });
@@ -96,10 +115,31 @@ export class GatewayClient {
       this.reconnectTimer = null;
     }
     if (this.ws) {
-      this.ws.close(1000, 'TUI exit');
+      // Detach BEFORE closing. The old socket's `onclose` fires when the server
+      // acks, which on a reconnect lands after the new socket is already up —
+      // and it would stamp the live connection 'disconnected' with no retry
+      // scheduled (code 1000). A stale `onmessage` would likewise still be
+      // feeding this client.
+      const stale = this.ws;
+      stale.onopen = null;
+      stale.onmessage = null;
+      stale.onclose = null;
+      stale.onerror = null;
       this.ws = null;
+      stale.close(1000, 'TUI exit');
     }
     this.setStatus('disconnected');
+  }
+
+  /** The signed-in user, or null when running as the local sentinel. */
+  getIdentity(): { username: string; userId: string } | null {
+    return this.authenticatedAs;
+  }
+
+  /** Drop the connection and re-establish it, picking up a new stored login. */
+  async reauthenticate(): Promise<void> {
+    try { this.disconnect(); } catch { /* already down */ }
+    await this.connect();
   }
 
   /**
@@ -197,7 +237,24 @@ export class GatewayClient {
 
       case 'auth_error':
         this.setStatus('error');
-        this.options.onError?.(`Auth failed: ${msg.reason}`);
+        if (this.usedStoredSession) {
+          // The stored login is dead (expired, revoked, or the server was
+          // reset). Drop it rather than reconnect-looping against it — the
+          // next connect falls back to the local token, so the TUI still
+          // works while the user re-runs /login.
+          clearCliSession();
+          this.authenticatedAs = null;
+          this.usedStoredSession = false;
+          this.options.onError?.(`Login expired (${msg.reason}). Signed out — use /login to sign in again.`);
+          this.options.onIdentityChange?.(null);
+          // Actually fall back. `onclose` only retries a connection that was
+          // live, and this one never authenticated, so without this the TUI
+          // sits disconnected until the user types a command — the session
+          // expires overnight and the morning's first message goes nowhere.
+          void this.connect();
+        } else {
+          this.options.onError?.(`Auth failed: ${msg.reason}`);
+        }
         break;
 
       case 'event':

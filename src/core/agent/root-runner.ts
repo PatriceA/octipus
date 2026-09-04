@@ -16,7 +16,7 @@ import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
 import { truncateLinesToTokens } from '@/utils/token-count';
 import { getAgentHooks } from './hooks';
-import { estimateToolSchemaTokens, logPromptComposition } from './prompt-budget';
+import { estimateToolSchemaTokens, logPromptComposition, recordContextFill } from './prompt-budget';
 import { buildSecurityReminder } from './input-guard';
 import { createMetaTools } from './meta-tools';
 import { shouldUseLazyDiscovery } from './lazy-tools';
@@ -577,7 +577,7 @@ export async function runRootAgent(
       ? turnTools.filter((t) => !isLongTailHandler(t, toolAdvertisement.coreToolIds))
       : turnTools;
 
-  logPromptComposition(
+  recordContextFill(sessionId, logPromptComposition(
     {
       role: ROOT_ROLE,
       model: modelName,
@@ -597,7 +597,7 @@ export async function runRootAgent(
         : {}),
     },
     { static: staticParts.filter(Boolean), volatile: volatileParts.filter(Boolean) },
-  );
+  ));
 
   // Hook-triggered tasks get a longer timeout since they run unattended.
   const agentConfig = getConfig().agent;

@@ -31,6 +31,9 @@ export const OCTIPUS_SLASH_COMMANDS: OctipusSlashCommand[] = [
   tui({ name: 'quit',     description: 'Quit the TUI' }),
   tui({ name: 'project',  description: 'Show or set the active project path',
         argumentHint: '<path>' }),
+  tui({ name: 'login',    description: 'Sign in to your Octipus account (memories, vault secrets, settings)' }),
+  tui({ name: 'logout',   description: 'Sign out — falls back to the local machine account' }),
+  tui({ name: 'whoami',   description: 'Show which account this terminal is acting as' }),
 
   // ── Gateway built-ins (src/core/gateway/commands.ts) ───────────
   gw({ name: 'help',      description: 'List available commands',                            aliases: ['h', '?'] }),
@@ -44,6 +47,8 @@ export const OCTIPUS_SLASH_COMMANDS: OctipusSlashCommand[] = [
        argumentHint: '[focus]' }),
   gw({ name: 'clear',     description: 'Reset rootAgent context and clear the chat',     aliases: ['cls', 'reset'] }),
   gw({ name: 'cost',      description: 'Show cumulative token usage and cost' }),
+  gw({ name: 'proposals', description: 'Review distilled skill/expert proposals — list, approve, reject',
+       argumentHint: '[approve|reject] [n]',                                                 aliases: ['skills-proposals'] }),
   gw({ name: 'diff',      description: 'Show git diff for workspace changes' }),
   gw({ name: 'changes',   description: 'Review workspace changes — list, or a file diff',
        argumentHint: '[file]' }),

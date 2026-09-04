@@ -418,14 +418,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `config` | 18 |
 | `api` | `connectors` | 1 |
 | `api` | `core` | 67 |
-| `api` | `db` | 97 |
+| `api` | `db` | 93 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 5 |
 | `api` | `mcp` | 3 |
 | `api` | `models` | 28 |
 | `api` | `plugins` | 1 |
 | `api` | `security` | 67 |
-| `api` | `services` | 3 |
+| `api` | `services` | 4 |
 | `api` | `skills` | 2 |
 | `api` | `tools` | 3 |
 | `api` | `utils` | 58 |
@@ -460,12 +460,13 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 4 |
 | `core` | `mcp` | 3 |
-| `core` | `models` | 61 |
+| `core` | `models` | 62 |
 | `core` | `security` | 34 |
+| `core` | `services` | 1 |
 | `core` | `shared` | 5 |
 | `core` | `skills` | 6 |
 | `core` | `tools` | 12 |
-| `core` | `utils` | 127 |
+| `core` | `utils` | 128 |
 | `db` | `config` | 3 |
 | `db` | `core` | 5 |
 | `db` | `models` | 1 |
@@ -506,11 +507,11 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `services` | `capabilities` | 5 |
 | `services` | `config` | 3 |
 | `services` | `core` | 1 |
-| `services` | `db` | 2 |
+| `services` | `db` | 6 |
 | `services` | `models` | 15 |
 | `services` | `security` | 2 |
 | `services` | `setup` | 1 |
-| `services` | `utils` | 3 |
+| `services` | `utils` | 4 |
 | `setup` | `utils` | 1 |
 | `skills` | `config` | 1 |
 | `skills` | `core` | 1 |
@@ -537,7 +538,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tui-editor` | `mcp` | 2 |
 | `tui-editor` | `tui-pi` | 23 |
 | `tui-pi` | `config` | 1 |
-| `tui-pi` | `core` | 1 |
+| `tui-pi` | `core` | 3 |
 | `tui-pi` | `voice` | 2 |
 | `utils` | `core` | 3 |
 | `utils` | `models` | 2 |
@@ -568,6 +569,7 @@ Two modules that import each other. Not fatal, but it is what blocks an extracti
 - core <-> extensions
 - core <-> hooks
 - core <-> models
+- core <-> services
 - core <-> skills
 - core <-> tools
 - core <-> utils
@@ -607,6 +609,7 @@ Every member of the `GatewayEventType` union in `src/core/gateway/protocol.ts`, 
 | `pipeline.event` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `rootAgent.status` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `session.compaction_stalled` | yes | `src/core/agent/session-compaction.ts` | — |
+| `session.stats` | yes | `src/core/gateway/message-handler.ts` | — |
 | `swarm.budget_warning` | yes | `src/core/swarm/spawner.ts` | `swarm.*`, `swarm.budget_warning` |
 | `swarm.call_graph_cycle_blocked` | yes | `src/core/swarm/spawner.ts` | `swarm.*` |
 | `swarm.narration` | yes | `src/core/personas/narration-bridge.ts` | `swarm.*` |

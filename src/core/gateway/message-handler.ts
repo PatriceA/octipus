@@ -2,26 +2,7 @@ import { coreLogger } from '@/utils/logger';
 import { getCommandRegistry } from './commands';
 import type { GatewayHub } from './hub';
 import type { ClientMessage, ConnectionContext } from './protocol';
-
-/**
- * Resolve a gateway userId to a real DB user ID.
- * Local auth gives 'local', system auth gives 'system' — these aren't DB UUIDs.
- */
-async function resolveUserId(userId: string): Promise<string> {
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
-    return userId; // Already a UUID
-  }
-  // Resolve to the first admin user (same as MASTER_KEY auth in REST API)
-  try {
-    const { getDb } = await import('@/db/postgres');
-    const { users } = await import('@/db/schema/users');
-    const { eq } = await import('drizzle-orm');
-    const db = getDb();
-    const [admin] = await db.select({ id: users.id }).from(users).where(eq(users.isAdmin, true)).limit(1);
-    if (admin) return admin.id;
-  } catch (err) { coreLogger.error({ err }, 'silent failure in message-handler'); }
-  return userId; // Fallback
-}
+import { resolveUserId } from './resolve-user';
 
 /**
  * Inject a user message into a running root agent turn for this session, if
@@ -263,6 +244,8 @@ async function handleChatSend(
       sessionId: message.sessionId,
       payload: { response: result },
     });
+
+    await publishSessionStats(hub, context.userId, message.sessionId);
   } catch (err) {
     coreLogger.error({ err, connectionId, userId: context.userId }, 'Chat send error');
     hub.connectionManager.sendToConnection(connectionId, {
@@ -270,6 +253,40 @@ async function handleChatSend(
       code: 'CHAT_ERROR',
       message: (err as Error).message,
     });
+  }
+}
+
+/**
+ * Publish the session's authoritative usage after a turn: totals from the cost
+ * log (which counts every child agent, not just the completions this client
+ * happened to see) plus the last prompt's context fill. Best-effort — a stats
+ * query must never fail the turn that produced the answer.
+ */
+async function publishSessionStats(hub: GatewayHub, userId: string, sessionId: string): Promise<void> {
+  try {
+    const [{ getCostTracker }, { getContextFill }] = await Promise.all([
+      import('@/models/cost-tracker'),
+      import('@/core/agent/prompt-budget'),
+    ]);
+    const usage = await getCostTracker().getSessionStats(sessionId);
+    const fill = getContextFill(sessionId);
+    hub.publishEvent({
+      type: 'session.stats',
+      source: 'rootAgent',
+      userId,
+      sessionId,
+      payload: {
+        totalTokens: usage.totalInputTokens + usage.totalOutputTokens,
+        inputTokens: usage.totalInputTokens,
+        outputTokens: usage.totalOutputTokens,
+        totalCostUsd: usage.totalCost,
+        requestCount: usage.requestCount,
+        contextTokens: fill?.promptTokens,
+        contextWindow: fill?.contextWindow,
+      },
+    });
+  } catch (err) {
+    coreLogger.debug({ err, sessionId }, 'session stats publish skipped');
   }
 }
 

@@ -56,4 +56,17 @@ describe('StatusBar', () => {
     const [text] = bar.render(40);
     expect(visibleWidth(text)).toBeLessThanOrEqual(40);
   });
+
+  test('context fill: percentage when the window is known, raw size when it is not', () => {
+    const bar = new StatusBar();
+    expect(strip(bar.render(120)[0])).not.toContain('ctx');
+    bar.setContext({ used: 41_000, window: 100_000 });
+    expect(strip(bar.render(120)[0])).toContain('ctx 41% (41.0k tok)');
+    bar.setContext({ used: 41_000 });
+    const noWindow = strip(bar.render(120)[0]);
+    expect(noWindow).toContain('ctx 41.0k tok');
+    expect(noWindow).not.toContain('%');
+    bar.setContext(null);
+    expect(strip(bar.render(120)[0])).not.toContain('ctx');
+  });
 });

@@ -27,6 +27,16 @@ export interface AgentEndStats {
   iterations?: number;
 }
 
+/** Authoritative per-session usage from the backend's cost log. */
+export interface SessionStats {
+  tokens: number;
+  cost: number;
+  requests: number;
+  /** Tokens in the last prompt sent, and the model's window — absent until a turn runs. */
+  contextTokens?: number;
+  contextWindow?: number;
+}
+
 export type AgentSessionEvent =
   | { kind: 'status';         status: ConnectionStatus }
   | { kind: 'message';        role: Role; content: string }
@@ -35,6 +45,8 @@ export type AgentSessionEvent =
   | { kind: 'agent.start';    role: string; model: string; nodeId?: string }
   | { kind: 'agent.end';      stats: AgentEndStats; nodeId?: string; role?: string }
   | { kind: 'agent.iteration'; agentId: string; iteration: number }
+  | { kind: 'session.stats';  stats: SessionStats }
+  | { kind: 'identity';       user: string | null }
   | { kind: 'tool';           tool: ToolEventState }
   | { kind: 'command.result'; name: string; result: unknown; error?: string }
   | { kind: 'agent.write';    path: string; newText: string }
@@ -84,6 +96,7 @@ export class GatewayAdapter {
       onCommandResult: (name, result, error) => this.emit({ kind: 'command.result', name, result, error }),
       onError: (message) => this.emit({ kind: 'error', message }),
       onEvent: (event) => this.decode(event),
+      onIdentityChange: (identity) => this.emit({ kind: 'identity', user: identity?.username ?? null }),
     };
     this.client = new GatewayClient(clientOptions);
   }
@@ -108,6 +121,16 @@ export class GatewayAdapter {
     try { this.client.disconnect(); } catch { /* already disconnected */ }
     await this.client.connect();
   }
+
+  /**
+   * Reconnect so a just-stored (or just-cleared) login takes effect: the
+   * principal is fixed at the gateway handshake, so signing in mid-session
+   * only changes anything after a fresh connect.
+   */
+  reauthenticate(): Promise<void> { return this.client.reauthenticate(); }
+
+  /** The signed-in user, or null when running as the local machine account. */
+  getIdentity(): { username: string; userId: string } | null { return this.client.getIdentity(); }
 
   // ── Subscription ────────────────────────────────────────────────
 
@@ -241,6 +264,20 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
       out.push({
         kind: 'message', role: 'system',
         content: `Agent spawned: ${role}${model ? ` (${model})` : ''}`,
+      });
+      return out;
+    }
+
+    case 'session.stats': {
+      out.push({
+        kind: 'session.stats',
+        stats: {
+          tokens: pickNumber(payload, 'totalTokens') ?? 0,
+          cost: pickNumber(payload, 'totalCostUsd') ?? 0,
+          requests: pickNumber(payload, 'requestCount') ?? 0,
+          contextTokens: pickNumber(payload, 'contextTokens'),
+          contextWindow: pickNumber(payload, 'contextWindow'),
+        },
       });
       return out;
     }

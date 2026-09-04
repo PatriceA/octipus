@@ -94,6 +94,11 @@ export type GatewayEventType =
   // Session. `session.cleared` was declared here with no producer and no
   // consumer, and is retired for the same reason as `swarm.node_status` above.
   | 'session.compaction_stalled'
+  // Authoritative per-session usage, published at the end of every root turn:
+  // token/cost totals straight from the cost log (so child agents are counted,
+  // which a client summing the agent.completed events it happened to see is
+  // not), plus how full the last prompt left the context window.
+  | 'session.stats'
   // Audit (catch-all for connection-manager audit signals — payload carries
   // the specific audit event name in `originalType`).
   | 'audit'
