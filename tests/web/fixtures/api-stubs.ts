@@ -363,9 +363,13 @@ export async function stubSwarm(page: Page): Promise<void> {
           id: 'n1',
           rootSessionId: 'sess-1',
           parentNodeId: null,
-          kind: 'rootAgent',
+          // `root`/`general`, matching what the backend writes since the root
+          // agent became an ordinary worker. The stale 'rootAgent' kind made
+          // the tree render the root as a child node — so the root-only
+          // "cancel swarm" button never appeared and its test failed.
+          kind: 'root',
           depth: 0,
-          role: 'rootAgent',
+          role: 'general',
           topicPath: 'root',
           model: 'gpt-4o',
           status: 'running',
