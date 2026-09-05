@@ -4,7 +4,7 @@
  * newly added role can't silently end up unbound in a one-model install.
  */
 import { describe, expect, test } from 'vitest';
-import { ROLE_CONFIGS } from '@/core/orchestrator/roles';
+import { ROLE_CONFIGS } from '@/core/agent/roles';
 import {
   SINGLE_MODEL_CHAT_TOPICS,
   singleModelTopicBindings,
@@ -33,13 +33,13 @@ describe('singleModelTopicBindings', () => {
     }
   });
 
-  test('excludes the orchestrator topic (routes via the default model)', () => {
-    expect(SINGLE_MODEL_CHAT_TOPICS).not.toContain('orchestrator');
+  test('excludes the rootAgent topic (routes via the default model)', () => {
+    expect(SINGLE_MODEL_CHAT_TOPICS).not.toContain('rootAgent');
   });
 });
 
 describe('drift guard', () => {
-  test('every worker role topic canonicalizes into the chat set (minus orchestrator)', () => {
+  test('every worker role topic canonicalizes into the chat set (minus rootAgent)', () => {
     // Role configs keep role-named defaultTopics ('coding', 'research', …);
     // since the topic consolidation these are RETIRED aliases that must
     // canonicalize onto a bound lane, or a one-model install would spawn
@@ -47,7 +47,7 @@ describe('drift guard', () => {
     const covered = new Set<string>(SINGLE_MODEL_CHAT_TOPICS);
     const missing: string[] = [];
     for (const [role, cfg] of Object.entries(ROLE_CONFIGS)) {
-      if (role === 'orchestrator') continue;
+      if (role === 'rootAgent') continue;
       if (!covered.has(canonicalTopic(cfg.defaultTopic))) missing.push(`${role} → ${cfg.defaultTopic}`);
     }
     expect(missing).toEqual([]);

@@ -3,7 +3,7 @@
  *
  * The role registry used to scan its own directory at runtime. That worked from
  * source and produced an EMPTY registry inside the bundle — `import.meta.url`
- * resolves into `dist/`, where there are no role folders — so the orchestrator
+ * resolves into `dist/`, where there are no role folders — so the root agent
  * failed its first turn with "Cannot read properties of undefined (reading
  * 'systemPromptTemplate')" and nothing in the suite noticed, because every
  * suite ran against source.
@@ -15,7 +15,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { discoverTools } from '@/tools/discovery';
-import { ROLE_CONFIGS } from '@/core/orchestrator/roles';
+import { ROLE_CONFIGS } from '@/core/agent/roles';
 
 const BUNDLE = join(import.meta.dirname, '..', 'dist', 'index.js');
 const built = existsSync(BUNDLE);

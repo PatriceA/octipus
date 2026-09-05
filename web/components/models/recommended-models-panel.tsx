@@ -36,8 +36,8 @@ interface ScoredModel {
   fitMargin: number;
   recommended: boolean;
   note?: string;
-  orchestratorMode?: 'full' | 'lite' | 'router';
-  orchestratorModeNote?: string;
+  promptTier?: 'full' | 'lite' | 'router';
+  promptTierNote?: string;
 }
 interface RecommendResponse {
   hardware?: HardwareProfile;
@@ -296,11 +296,11 @@ function ModelRow({
   job?: InstallJob;
   onInstall: () => void;
 }) {
-  const { entry, fitTier, recommended, note, orchestratorMode, orchestratorModeNote } = scored;
+  const { entry, fitTier, recommended, note, promptTier, promptTierNote } = scored;
   const modeBadge =
-    orchestratorMode === 'full'
+    promptTier === 'full'
       ? 'bg-primary/10 text-primary'
-      : orchestratorMode === 'lite'
+      : promptTier === 'lite'
         ? 'bg-tertiary/10 text-tertiary'
         : 'bg-surface-container-high text-on-surface-variant';
   const budgetRef = hardware?.totalVramMB || entry.vramMB;
@@ -324,9 +324,9 @@ function ModelRow({
               {t}
             </span>
           ))}
-          {orchestratorMode && (
-            <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${modeBadge}`} title={orchestratorModeNote}>
-              {orchestratorMode} mode
+          {promptTier && (
+            <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${modeBadge}`} title={promptTierNote}>
+              {promptTier} mode
             </span>
           )}
         </div>
@@ -351,8 +351,8 @@ function ModelRow({
         {(note || job?.error) && (
           <p className={`mt-1 text-xs ${job?.error ? 'text-error' : 'text-on-surface-variant'}`}>{job?.error ?? note}</p>
         )}
-        {orchestratorModeNote && (
-          <p className="mt-1 text-xs text-on-surface-variant">As default: {orchestratorModeNote}.</p>
+        {promptTierNote && (
+          <p className="mt-1 text-xs text-on-surface-variant">As default: {promptTierNote}.</p>
         )}
       </div>
 

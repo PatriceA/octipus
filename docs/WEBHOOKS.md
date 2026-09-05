@@ -203,7 +203,7 @@ Best for: events that need interpretation before notification.
 ```
 
 - **`orchestrated: false`** — spawns a single agent directly (faster)
-- **`orchestrated: true`** — routes through the orchestrator for role classification and tool access
+- **`orchestrated: true`** — routes through the root agent for role classification and tool access
 - **`notifyOwner: true`** — automatically sends the agent's output to all verified channels when the agent completes
 
 ### notify (direct notification)

@@ -6,16 +6,18 @@ set -o pipefail 2>/dev/null || true
 # Single-command management for Octipus.
 #
 # Usage:
-#   octi start [--dev]    Start backend + web UI (server / browser)
-#   octi desktop [opts]   Launch the desktop app (thin client; backgrounds by
-#                         default — --foreground/-f, --stop, --build)
-#   octi stop             Stop all Octipus processes
-#   octi restart [--dev]  Restart everything
-#   octi tui              Launch terminal chat interface
-#   octi edit             Launch TUI editor
-#   octi status           Show running state
-#   octi logs             Tail backend logs
-#   octi open             Open web UI in browser
+#   octi start [tui|web|desktop]    Start the backend; optionally attach a client
+#   octi restart [tui|web|desktop]  Same, after stopping what is running
+#   octi stop                       Stop all Octipus processes
+#   octi tui                        Terminal chat against a running backend
+#   octi open                       Web UI in the browser (starts it if needed)
+#   octi desktop [opts]             Desktop app (thin client)
+#   octi edit                       TUI editor
+#   octi status                     Show running state
+#   octi logs                       Tail backend logs
+#
+# `start` is backend-only on purpose: a terminal user should not have to opt
+# out of a browser. Name the client you want, or attach one afterwards.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Resolve project root (follow symlinks, then go up from bin/)
@@ -442,7 +444,7 @@ diagnose_backend_failure() {
   fi
 
   # External-storage checks only. In embedded mode the backend uses PGlite +
-  # in-memory cache, so Postgres/Valkey/DATABASE_URL are irrelevant — reporting
+  # an in-process cache, so Postgres/DATABASE_URL are irrelevant — reporting
   # them (with machine-specific hints) just sends users chasing phantoms.
   if [[ "$STORAGE_MODE" == "external" ]]; then
     # Check PostgreSQL
@@ -453,17 +455,8 @@ diagnose_backend_failure() {
     else
       log_info "PostgreSQL is reachable"
     fi
-
-    # Check Valkey
-    if ! check_service "localhost" "6380"; then
-      log_error "Valkey is not reachable on port 6380"
-      log_hint "Start your Valkey/Redis service (e.g. docker compose up -d valkey)"
-      issues=$((issues + 1))
-    else
-      log_info "Valkey is reachable"
-    fi
   else
-    log_info "Embedded mode — skipping Postgres/Valkey checks"
+    log_info "Embedded mode — skipping Postgres checks"
   fi
 
   # Check .env
@@ -512,70 +505,63 @@ diagnose_backend_failure() {
 
 # ─── Commands ─────────────────────────────────────────────────────────────────
 
-cmd_start() {
-  local dev_mode=false
-  local use_tui=false
-  local backend_only=false
-  # Captured before the cd below: `--tui` should pin to the directory you ran
-  # the command in, exactly like `octi tui` does.
-  local user_cwd="$PWD"
+# ─── Shared start plumbing ───────────────────────────────────────────────────
+# `start` and `restart` differ only in how they clear the ground first; every
+# step after that was duplicated line-for-line between them, which is how the
+# two drifted apart. One copy each, called from both.
+
+# Which client to attach after the backend is up, and how to run it.
+LAUNCH_TARGET="backend"
+LAUNCH_DEV=false
+LAUNCH_CWD=""
+
+# Parse `octi start|restart [tui|web|desktop] [--dev]`.
+#
+# The retired flags (`--tui`, `--backend-only`, `--headless`, `--no-web`) are
+# still accepted, unlisted: they are in people's shell history and scripts, and
+# `--backend-only` is now simply the default. A positional target reads better
+# for the thing you do every day.
+parse_launch_args() {
+  LAUNCH_TARGET="backend"
+  LAUNCH_DEV=false
+  # Captured before any `cd`: an attached TUI pins to the directory you ran the
+  # command in, exactly like `octi tui` does.
+  LAUNCH_CWD="$PWD"
   for arg in "$@"; do
     case "$arg" in
-      --dev|-d) dev_mode=true ;;
-      --tui|-t) use_tui=true ;;
-      --backend-only|--headless|--no-web) backend_only=true ;;
+      tui|--tui|-t) LAUNCH_TARGET="tui" ;;
+      web|webui|browser) LAUNCH_TARGET="web" ;;
+      desktop|app) LAUNCH_TARGET="desktop" ;;
+      --dev|-d) LAUNCH_DEV=true ;;
+      --backend-only|--headless|--no-web) LAUNCH_TARGET="backend" ;;
+      -*) ;; # unknown flags are forwarded/ignored, not fatal
+      *)
+        log_error "Unknown target: $arg"
+        log_hint "Expected one of: tui, web, desktop"
+        return 1
+        ;;
     esac
   done
+}
 
-  init_state_dir
-  print_banner
-
-  # Kill any existing processes first (clean slate)
-  if is_running "$PID_FILE_BACKEND" || is_running "$PID_FILE_WEB"; then
-    log_step "Stopping existing processes..."
-    kill_all_octipus
-    sleep 1
-  fi
-
-  # Also free ports if something else grabbed them
-  if check_service "localhost" "$API_PORT"; then
-    log_warn "Port $API_PORT in use, killing occupant..."
-    kill_port_users "$API_PORT"
-    sleep 0.5
-  fi
-
-  # Check dependencies
+# Node + (for external storage) Postgres, then the MCP server build.
+preflight_checks() {
   log_step "Checking dependencies..."
   check_dependency "node" "Install Node.js 24+ from https://nodejs.org" || return 1
 
-  # Check required services (only for external storage mode)
   if [[ "$STORAGE_MODE" == "external" ]]; then
     log_step "Checking services..."
-    local services_ok=true
-
     if check_service "localhost" "5432"; then
       log_info "PostgreSQL is reachable"
     else
       log_error "PostgreSQL not reachable on port 5432"
       log_hint "Start it: cd ~/docker-services && docker compose up -d db"
-      services_ok=false
-    fi
-
-    if check_service "localhost" "6380"; then
-      log_info "Valkey is reachable"
-    else
-      log_error "Valkey not reachable on port 6380"
-      log_hint "Start it: cd ~/docker-services && docker compose up -d valkey"
-      services_ok=false
-    fi
-
-    if [[ "$services_ok" == false ]]; then
       echo ""
       log_error "Required services are not running. Cannot start."
       return 1
     fi
   else
-    log_info "Embedded mode (PGlite + in-memory cache)"
+    log_info "Embedded mode (PGlite + in-process cache)"
   fi
 
   # Build MCP server and register with CLI tools
@@ -594,103 +580,137 @@ cmd_start() {
     regen_mcp_config
     log_info ".mcp.json generated"
   fi
+}
 
-  # Start backend
-  if [[ "$dev_mode" == true ]]; then
+# Spawn the backend and block until it answers /api/health. Non-zero on failure,
+# having already killed the process and printed a diagnosis.
+start_backend() {
+  cd "$PROJECT_DIR"
+  if [[ "$LAUNCH_DEV" == true ]]; then
     log_step "Starting backend (dev mode with hot reload)..."
-    cd "$PROJECT_DIR"
     nohup npm run dev > "$LOG_FILE" 2>&1 &
   else
     log_step "Starting backend..."
-    cd "$PROJECT_DIR"
     nohup npm run start > "$LOG_FILE" 2>&1 &
   fi
   echo $! > "$PID_FILE_BACKEND"
 
-  # Wait for backend to be healthy BEFORE starting web UI
   log_step "Waiting for backend to be ready..."
   if wait_for_health "http://localhost:$API_PORT/api/health" 60; then
     log_info "Backend is ready on port $API_PORT"
     # The backend just minted ~/.octipus/mcp-token (multi-user mode);
     # restamp .mcp.json so MCP clients pick it up without a manual step.
     regen_mcp_config
-  else
-    # Backend didn't come up — diagnose and bail
-    kill_tracked "$PID_FILE_BACKEND" "backend"
-    diagnose_backend_failure
-    return 1
-  fi
-
-  if [[ "$backend_only" == true ]]; then
-    # Headless: backend up, no UI. Returns to the shell so you can attach any
-    # client — `octi desktop`, `octi tui`, an MCP CLI, or a remote browser.
-    echo ""
-    echo -e "  ${GREEN}${BOLD}Octipus backend is running!${NC}"
-    echo ""
-    echo -e "  API:       ${CYAN}http://localhost:$API_PORT${NC}"
-    echo -e "  API Docs:  ${CYAN}http://localhost:$API_PORT/swagger${NC}"
-    echo ""
-    echo -e "  ${BOLD}Attach a client:${NC}"
-    echo -e "  octi desktop   Launch the desktop app"
-    echo -e "  octi tui       Launch the terminal chat"
-    echo -e "  octi start     (re)start with the web UI too"
-    echo ""
-    echo -e "  octi stop      Stop the backend"
-    echo ""
     return 0
   fi
+  kill_tracked "$PID_FILE_BACKEND" "backend"
+  diagnose_backend_failure
+  return 1
+}
 
-  if [[ "$use_tui" == true ]]; then
-    # TUI mode — skip web UI, launch terminal interface
-    echo ""
-    echo -e "  ${GREEN}${BOLD}Octipus is running!${NC}"
-    echo ""
-    echo -e "  API:       ${CYAN}http://localhost:$API_PORT${NC}"
-    echo ""
-    log_step "Launching TUI..."
-    cd "$PROJECT_DIR"
-    API_PORT="$API_PORT" exec npm run tui -- --project "$user_cwd"
+# Build (or dev-serve) the web UI and open a browser at it.
+start_web() {
+  log_step "Clearing web UI cache..."
+  rm -rf "$PROJECT_DIR/web/dist" "$PROJECT_DIR/web/node_modules/.cache"
+
+  cd "$PROJECT_DIR/web"
+  if [[ "$LAUNCH_DEV" == true ]]; then
+    log_step "Starting web UI (dev mode)..."
+    nohup npm run dev > "$WEB_LOG_FILE" 2>&1 &
   else
-    # Web UI mode
-    log_step "Clearing web UI cache..."
-    rm -rf "$PROJECT_DIR/web/.next"
-    rm -rf "$PROJECT_DIR/web/node_modules/.cache"
-
-    cd "$PROJECT_DIR/web"
-    if [[ "$dev_mode" == true ]]; then
-      log_step "Starting web UI (dev mode)..."
+    log_step "Building web UI..."
+    if ! npm run build >> "$WEB_LOG_FILE" 2>&1; then
+      log_warn "Production build failed, using dev mode instead"
       nohup npm run dev > "$WEB_LOG_FILE" 2>&1 &
     else
-      log_step "Building web UI..."
-      if ! npm run build >> "$WEB_LOG_FILE" 2>&1; then
-        log_warn "Production build failed, using dev mode instead"
-        nohup npm run dev > "$WEB_LOG_FILE" 2>&1 &
-      else
-        log_step "Starting web UI..."
-        nohup npm run start >> "$WEB_LOG_FILE" 2>&1 &
-      fi
+      log_step "Starting web UI..."
+      nohup npm run start >> "$WEB_LOG_FILE" 2>&1 &
     fi
-    echo $! > "$PID_FILE_WEB"
-
-    sleep 2
-    log_info "Web UI starting on port $WEB_PORT"
-
-    log_step "Opening browser..."
-    open_browser "http://localhost:$WEB_PORT"
-
-    echo ""
-    echo -e "  ${GREEN}${BOLD}Octipus is running!${NC}"
-    echo ""
-    echo -e "  Web UI:    ${CYAN}http://localhost:$WEB_PORT${NC}"
-    echo -e "  API:       ${CYAN}http://localhost:$API_PORT${NC}"
-    echo -e "  API Docs:  ${CYAN}http://localhost:$API_PORT/swagger${NC}"
-    echo ""
-    echo -e "  ${BOLD}Commands:${NC}"
-    echo -e "  octi status    Show running state"
-    echo -e "  octi logs      View backend logs"
-    echo -e "  octi stop      Stop everything"
-    echo ""
   fi
+  echo $! > "$PID_FILE_WEB"
+
+  sleep 2
+  log_info "Web UI starting on port $WEB_PORT"
+  log_step "Opening browser..."
+  open_browser "http://localhost:$WEB_PORT"
+}
+
+# Attach whichever client the target names. TUI and desktop replace this
+# process, so nothing after them runs.
+launch_target() {
+  case "$LAUNCH_TARGET" in
+    tui)
+      echo ""
+      echo -e "  ${GREEN}${BOLD}Octipus is running!${NC}"
+      echo ""
+      echo -e "  API:       ${CYAN}http://localhost:$API_PORT${NC}"
+      echo ""
+      log_step "Launching TUI..."
+      cd "$PROJECT_DIR"
+      API_PORT="$API_PORT" exec npm run tui -- --project "$LAUNCH_CWD"
+      ;;
+    web)
+      start_web
+      echo ""
+      echo -e "  ${GREEN}${BOLD}Octipus is running!${NC}"
+      echo ""
+      echo -e "  Web UI:    ${CYAN}http://localhost:$WEB_PORT${NC}"
+      echo -e "  API:       ${CYAN}http://localhost:$API_PORT${NC}"
+      echo -e "  API Docs:  ${CYAN}http://localhost:$API_PORT/swagger${NC}"
+      echo ""
+      echo -e "  ${BOLD}Commands:${NC}  octi status · octi logs · octi stop"
+      echo ""
+      ;;
+    desktop)
+      print_backend_ready
+      cmd_desktop
+      ;;
+    *)
+      print_backend_ready
+      ;;
+  esac
+}
+
+# The default ending: a backend, and how to point something at it.
+print_backend_ready() {
+  echo ""
+  echo -e "  ${GREEN}${BOLD}Octipus backend is running!${NC}"
+  echo ""
+  echo -e "  API:       ${CYAN}http://localhost:$API_PORT${NC}"
+  echo -e "  API Docs:  ${CYAN}http://localhost:$API_PORT/swagger${NC}"
+  echo ""
+  echo -e "  ${BOLD}Attach a client:${NC}"
+  echo -e "    octi tui       Terminal chat, pinned to the current directory"
+  echo -e "    octi open      Web UI in the browser (starts it if needed)"
+  echo -e "    octi desktop   Desktop app"
+  echo ""
+  echo -e "  octi stop      Stop everything"
+  echo ""
+}
+
+cmd_start() {
+  parse_launch_args "$@" || return 1
+
+  init_state_dir
+  print_banner
+
+  # Kill any existing processes first (clean slate)
+  if is_running "$PID_FILE_BACKEND" || is_running "$PID_FILE_WEB"; then
+    log_step "Stopping existing processes..."
+    kill_all_octipus
+    sleep 1
+  fi
+
+  # Also free ports if something else grabbed them
+  if check_service "localhost" "$API_PORT"; then
+    log_warn "Port $API_PORT in use, killing occupant..."
+    kill_port_users "$API_PORT"
+    sleep 0.5
+  fi
+
+  preflight_checks || return 1
+  start_backend || return 1
+  launch_target
 }
 
 cmd_stop() {
@@ -718,165 +738,23 @@ cmd_stop() {
 }
 
 cmd_restart() {
+  parse_launch_args "$@" || return 1
+
   init_state_dir
   print_banner
 
-  local dev_mode=false
-  local use_tui=false
-  local backend_only=false
-  # Captured before the cd below: `--tui` should pin to the directory you ran
-  # the command in, exactly like `octi tui` does.
-  local user_cwd="$PWD"
-  for arg in "$@"; do
-    case "$arg" in
-      --dev|-d) dev_mode=true ;;
-      --tui|-t) use_tui=true ;;
-      --backend-only|--headless|--no-web) backend_only=true ;;
-    esac
-  done
-
-  # ── 1. STOP ──────────────────────────────────────────────────────────────────
   log_step "Stopping all processes..."
   kill_all_octipus
   sleep 1
 
-  # ── 2. CLEAR CACHES ─────────────────────────────────────────────────────────
   log_step "Clearing caches..."
-  rm -rf "$PROJECT_DIR/web/.next"
-  rm -rf "$PROJECT_DIR/web/node_modules/.cache"
+  rm -rf "$PROJECT_DIR/web/dist" "$PROJECT_DIR/web/node_modules/.cache"
   log_info "Caches cleared"
-
   echo ""
 
-  # ── 3. START ─────────────────────────────────────────────────────────────────
-
-  # Check dependencies
-  log_step "Checking dependencies..."
-  check_dependency "node" "Install Node.js 24+ from https://nodejs.org" || return 1
-
-  # Check required services (only for external storage mode)
-  if [[ "$STORAGE_MODE" == "external" ]]; then
-    log_step "Checking services..."
-    local services_ok=true
-
-    if check_service "localhost" "5432"; then
-      log_info "PostgreSQL is reachable"
-    else
-      log_error "PostgreSQL not reachable on port 5432"
-      log_hint "Start it: cd ~/docker-services && docker compose up -d db"
-      services_ok=false
-    fi
-
-    if check_service "localhost" "6380"; then
-      log_info "Valkey is reachable"
-    else
-      log_error "Valkey not reachable on port 6380"
-      log_hint "Start it: cd ~/docker-services && docker compose up -d valkey"
-      services_ok=false
-    fi
-
-    if [[ "$services_ok" == false ]]; then
-      echo ""
-      log_error "Required services are not running. Cannot start."
-      return 1
-    fi
-  else
-    log_info "Embedded mode (PGlite + in-memory cache)"
-  fi
-
-  # Build MCP server and register with CLI tools
-  if [[ -f "$PROJECT_DIR/mcp-server/package.json" ]]; then
-    log_step "Building MCP server..."
-    cd "$PROJECT_DIR/mcp-server"
-    # Fresh clones never installed mcp-server deps (it's not a root workspace),
-    # so tsc would fail with missing @types/node + SDK. Install on first build.
-    if [[ ! -d node_modules ]]; then
-      log_step "Installing MCP server deps (first run)..."
-      npm install --silent 2>/dev/null || log_warn "MCP dep install failed"
-    fi
-    npm run build --silent 2>/dev/null && log_info "MCP server built" || log_warn "MCP build failed (non-critical)"
-    cd "$PROJECT_DIR"
-
-    regen_mcp_config
-    log_info ".mcp.json generated"
-  fi
-
-  # Start backend
-  if [[ "$dev_mode" == true ]]; then
-    log_step "Starting backend (dev mode with hot reload)..."
-    cd "$PROJECT_DIR"
-    nohup npm run dev > "$LOG_FILE" 2>&1 &
-  else
-    log_step "Starting backend..."
-    cd "$PROJECT_DIR"
-    nohup npm run start > "$LOG_FILE" 2>&1 &
-  fi
-  echo $! > "$PID_FILE_BACKEND"
-
-  log_step "Waiting for backend to be ready..."
-  if wait_for_health "http://localhost:$API_PORT/api/health" 60; then
-    log_info "Backend is ready on port $API_PORT"
-    # The backend just minted ~/.octipus/mcp-token (multi-user mode);
-    # restamp .mcp.json so MCP clients pick it up without a manual step.
-    regen_mcp_config
-  else
-    kill_tracked "$PID_FILE_BACKEND" "backend"
-    diagnose_backend_failure
-    return 1
-  fi
-
-  if [[ "$backend_only" == true ]]; then
-    echo ""
-    echo -e "  ${GREEN}${BOLD}Octipus backend is running!${NC}"
-    echo ""
-    echo -e "  API:       ${CYAN}http://localhost:$API_PORT${NC}"
-    echo -e "  API Docs:  ${CYAN}http://localhost:$API_PORT/swagger${NC}"
-    echo ""
-    echo -e "  ${BOLD}Attach a client:${NC} octi desktop · octi tui · octi start (adds web UI)"
-    echo ""
-    return 0
-  fi
-
-  if [[ "$use_tui" == true ]]; then
-    echo ""
-    echo -e "  ${GREEN}${BOLD}Octipus is running!${NC}"
-    echo ""
-    echo -e "  API:       ${CYAN}http://localhost:$API_PORT${NC}"
-    echo ""
-    log_step "Launching TUI..."
-    cd "$PROJECT_DIR"
-    API_PORT="$API_PORT" exec npm run tui -- --project "$user_cwd"
-  else
-    cd "$PROJECT_DIR/web"
-    if [[ "$dev_mode" == true ]]; then
-      log_step "Starting web UI (dev mode)..."
-      nohup npm run dev > "$WEB_LOG_FILE" 2>&1 &
-    else
-      log_step "Building web UI..."
-      if ! npm run build >> "$WEB_LOG_FILE" 2>&1; then
-        log_warn "Production build failed, using dev mode instead"
-        nohup npm run dev > "$WEB_LOG_FILE" 2>&1 &
-      else
-        log_step "Starting web UI..."
-        nohup npm run start >> "$WEB_LOG_FILE" 2>&1 &
-      fi
-    fi
-    echo $! > "$PID_FILE_WEB"
-
-    sleep 2
-    log_info "Web UI starting on port $WEB_PORT"
-
-    log_step "Opening browser..."
-    open_browser "http://localhost:$WEB_PORT"
-
-    echo ""
-    echo -e "  ${GREEN}${BOLD}Octipus is running!${NC}"
-    echo ""
-    echo -e "  Web UI:    ${CYAN}http://localhost:$WEB_PORT${NC}"
-    echo -e "  API:       ${CYAN}http://localhost:$API_PORT${NC}"
-    echo -e "  API Docs:  ${CYAN}http://localhost:$API_PORT/swagger${NC}"
-    echo ""
-  fi
+  preflight_checks || return 1
+  start_backend || return 1
+  launch_target
 }
 
 cmd_status() {
@@ -921,16 +799,9 @@ cmd_status() {
       log_error "PostgreSQL: not reachable"
       log_hint "cd ~/docker-services && docker compose up -d db"
     fi
-
-    if check_service "localhost" "6380"; then
-      log_info "Valkey:     reachable (port 6380)"
-    else
-      log_error "Valkey:     not reachable"
-      log_hint "cd ~/docker-services && docker compose up -d valkey"
-    fi
   else
     log_info "PGlite:     embedded database"
-    log_info "Cache:      in-memory"
+    log_info "Cache:      in-process"
   fi
 
   if check_service "localhost" "11434"; then
@@ -980,8 +851,28 @@ cmd_logs() {
 }
 
 cmd_open() {
-  open_browser "http://localhost:$WEB_PORT"
-  log_info "Opening http://localhost:$WEB_PORT"
+  init_state_dir
+  # Opening a browser at a port with nothing behind it is a dead tab and a
+  # puzzle. Since `octi start` no longer brings the web UI up by itself, this
+  # is where a terminal user asks for it — so start it if it is not there.
+  if check_service "localhost" "$WEB_PORT"; then
+    open_browser "http://localhost:$WEB_PORT"
+    log_info "Opening http://localhost:$WEB_PORT"
+    return 0
+  fi
+
+  if ! curl -sf "http://localhost:$API_PORT/api/health" >/dev/null 2>&1; then
+    log_error "Backend is not running on port $API_PORT"
+    log_hint "Start it first: octi start"
+    return 1
+  fi
+
+  log_step "Web UI is not running — starting it..."
+  LAUNCH_DEV=false
+  start_web
+  echo ""
+  echo -e "  Web UI:    ${CYAN}http://localhost:$WEB_PORT${NC}"
+  echo ""
 }
 
 cmd_desktop() {
@@ -1141,28 +1032,27 @@ cmd_help() {
   echo ""
   echo -e "  ${BOLD}Commands:${NC}"
   echo -e "    setup            Run the first-run / re-config wizard"
-  echo -e "    start [options]  Start the backend; default also opens the web UI"
+  echo -e "    start [client]   Start the backend, and attach a client if you name one"
+  echo -e "    restart [client] Stop everything, then start again the same way"
   echo -e "    stop             Stop all Octipus processes"
-  echo -e "    restart [options] Restart everything"
-  echo -e "    tui              Launch terminal chat — pins to current directory as project"
-  echo -e "    edit             Launch TUI editor — pins to current directory as project"
   echo -e "    status           Show running state and service health"
   echo -e "    doctor [--json]  Run environment health checks (what's wired, what's missing)"
   echo -e "    logs [--web]     Tail backend logs (--web for web UI logs)"
-  echo -e "    open             Open web UI in browser"
-  echo -e "    desktop [opts]   Launch the desktop app in the background (thin client to a backend)"
-  echo -e "                     --foreground/-f attach · --stop quit · --build make a bundle"
   echo -e "    uninstall        Remove Octipus (keeps data; --purge wipes everything)"
   echo -e "    help             Show this help message"
   echo ""
+  echo -e "  ${BOLD}Clients${NC} ${DIM}— attach to a backend that is already running:${NC}"
+  echo -e "    tui              Terminal chat — pins to the current directory as project"
+  echo -e "    open             Web UI in the browser — starts it if it is not up"
+  echo -e "    desktop [opts]   Desktop app, in the background"
+  echo -e "                     ${DIM}--foreground/-f attach · --stop quit · --build make a bundle${NC}"
+  echo -e "    edit             TUI editor — pins to the current directory as project"
+  echo ""
+  echo -e "  ${DIM}The same names work as a target: 'octi start tui' is a backend plus a TUI.${NC}"
+  echo ""
   echo -e "  ${BOLD}Options:${NC}"
-  echo -e "    --dev, -d        Start in development mode (hot reload)"
-  echo -e "  ${DIM}start/restart — pick a UI (default: web):${NC}"
-  echo -e "    --backend-only   Backend only, no UI (then: octi desktop / octi tui)"
-  echo -e "      (--headless, --no-web are aliases)"
-  echo -e "    --tui, -t        Launch the TUI instead of the web UI"
-  echo -e "  ${DIM}logs:${NC}"
-  echo -e "    --web, -w        Show web UI logs instead of backend"
+  echo -e "    --dev, -d        Development mode (hot reload) for start/restart"
+  echo -e "    --web, -w        For 'logs': show web UI logs instead of backend"
   echo ""
   echo -e "  ${BOLD}Environment:${NC}"
   echo -e "    API_PORT         Backend API port (default: 3005)"
@@ -1370,7 +1260,7 @@ main() {
     status)  cmd_status ;;
     doctor)  cmd_doctor "$@" ;;
     logs)    cmd_logs "$@" ;;
-    open)    cmd_open ;;
+    open|web|webui) cmd_open ;;
     desktop) cmd_desktop "$@" ;;
     uninstall) cmd_uninstall "$@" ;;
     help|--help|-h) cmd_help ;;

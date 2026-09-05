@@ -35,6 +35,16 @@ export type MemoryAccessScope = {
   userId: string;
   /** Role id for per-role scoping. NULL = caller wants user-level + global. */
   agentScope?: string | null;
+  /**
+   * Workspace (project / client) the turn runs in. Mirrors `workspaceFilter`
+   * in `db/repositories/scoped.ts`: when set, only rows written under this
+   * workspace OR under no workspace (user-level facts) are returned. When
+   * null/undefined the caller has no workspace context and every row the
+   * user owns is eligible — the same "no scope, no filter" rule the scoped
+   * repositories apply, so a path that cannot resolve a workspace degrades to
+   * the pre-scoping behaviour instead of silently hiding memories.
+   */
+  workspaceId?: string | null;
 };
 
 export class MemoryRepository {
@@ -111,6 +121,11 @@ export class MemoryRepository {
     const scopeFilter = scope.agentScope
       ? or(isNull(memories.agentScope), eq(memories.agentScope, scope.agentScope))
       : isNull(memories.agentScope);
+    // Same workspace rule as retrieveTop: the judge must not supersede a
+    // fact that belongs to another client's workspace.
+    const workspaceScope = scope.workspaceId
+      ? or(isNull(memories.workspaceId), eq(memories.workspaceId, scope.workspaceId))
+      : undefined;
 
     const rows = await this.db
       .select({
@@ -124,6 +139,7 @@ export class MemoryRepository {
           eq(memories.factType, scope.factType),
           isNull(memories.supersededBy),
           scopeFilter,
+          workspaceScope,
         ),
       )
       .orderBy(desc(similarity))
@@ -134,7 +150,9 @@ export class MemoryRepository {
 
   /**
    * Turn-start: retrieve top-N active memories scoped to
-   * (user_id, agent_scope ∈ {NULL, currentRole}). Ordered by
+   * (user_id, agent_scope ∈ {NULL, currentRole}, workspace_id ∈ {NULL,
+   * currentWorkspace}). A fact learned while working for one client must not
+   * surface in another client's workspace. Ordered by
    * `access_count DESC, updated_at DESC` — frequently-recalled and
    * recently-changed facts surface first. Vector ranking is the
    * judge's job; for plain recall, recency + frequency are the
@@ -145,6 +163,9 @@ export class MemoryRepository {
     const scopeFilter = scope.agentScope
       ? or(isNull(memories.agentScope), eq(memories.agentScope, scope.agentScope))
       : isNull(memories.agentScope);
+    const workspaceScope = scope.workspaceId
+      ? or(isNull(memories.workspaceId), eq(memories.workspaceId, scope.workspaceId))
+      : undefined;
     const rows = await this.db
       .select()
       .from(memories)
@@ -158,6 +179,7 @@ export class MemoryRepository {
             sql`${memories.validUntil} > now()`,
           ),
           scopeFilter,
+          workspaceScope,
         ),
       )
       .orderBy(desc(memories.accessCount), desc(memories.updatedAt))

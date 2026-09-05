@@ -205,4 +205,30 @@ describe('agent.blocked — a quiet worker says what it waits on', () => {
   test('no reason means nothing to say — emit nothing rather than "Waiting: undefined"', () => {
     expect(decodeGatewayEvent({ type: 'agent.blocked', payload: { agentId: 'a1' } })).toEqual([]);
   });
+
+  test('session.stats → authoritative totals + context fill', () => {
+    const event = single(decodeGatewayEvent({
+      type: 'session.stats',
+      payload: {
+        totalTokens: 84_200, totalCostUsd: 0.31, requestCount: 12,
+        contextTokens: 41_000, contextWindow: 100_000,
+      },
+    }));
+    expect(event.kind).toBe('session.stats');
+    if (event.kind !== 'session.stats') return;
+    expect(event.stats).toEqual({
+      tokens: 84_200, cost: 0.31, requests: 12,
+      contextTokens: 41_000, contextWindow: 100_000,
+    });
+  });
+
+  test('session.stats → context fields stay undefined before any turn ran', () => {
+    const event = single(decodeGatewayEvent({
+      type: 'session.stats',
+      payload: { totalTokens: 0, totalCostUsd: 0, requestCount: 0 },
+    }));
+    if (event.kind !== 'session.stats') throw new Error('wrong kind');
+    expect(event.stats.contextTokens).toBeUndefined();
+    expect(event.stats.contextWindow).toBeUndefined();
+  });
 });

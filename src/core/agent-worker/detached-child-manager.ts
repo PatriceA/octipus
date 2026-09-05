@@ -97,7 +97,7 @@ export class DetachedChildManager {
    *
    * A detached child can legitimately run up to its OWN wall budget
    * (`getLevelDefault(1).wallMs` — 10 min by default; children of both the
-   * orchestrator and a depth-1 agent are bounded by the depth-1 cap or lower).
+   * root agent and a depth-1 agent are bounded by the depth-1 cap or lower).
    * The old formula clamped this to 60s, so a normal multi-minute research
    * child was reported `timeout`/`null` and its completed work was silently
    * dropped. Wait up to the child wall (+small margin) so a child that is about
@@ -136,7 +136,7 @@ export class DetachedChildManager {
     if (entries.length === 0) return [];
     // Time spent BLOCKED waiting on detached children must not count against
     // the parent's own wall clock — this mirrors the await path's
-    // `onDelegationPause` (tool-executor). Without it, a detaching orchestrator
+    // `onDelegationPause` (tool-executor). Without it, a detaching root agent
     // is penalized for time its children spent working (elapsed() keeps
     // ticking between spawn and collect), which can trip its own timeout and
     // discard the very results it waited for. Children that already settled

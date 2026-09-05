@@ -110,25 +110,25 @@ export async function checkInvariantsAtBoot(): Promise<number> {
 // ── The invariants themselves ────────────────────────────────────────
 
 /**
- * The orchestrator's detach budget, read the way the runtime reads it.
+ * The root agent's detach budget, read the way the runtime reads it.
  *
  * This is the check the detach-cap incident needed and did not have. The type
  * said six, the config resolved to zero, every unit test agreed with the type,
- * and the orchestrator quietly blocked on every spawn for weeks. Asserting the
+ * and the root agent quietly blocked on every spawn for weeks. Asserting the
  * schema default in CI is not enough — the value that matters is the one
  * `getLevelDefault` returns after this deployment's settings have been merged.
  */
 registerInvariant({
   area: 'swarm',
-  name: 'the orchestrator level resolves a non-zero detach cap',
+  name: 'the rootAgent level resolves a non-zero detach cap',
   async check() {
     // Touch config FIRST, and let a failure throw. `getLevelDefault` swallows a
     // config error and falls back to the hardcoded record, whose value is 6 —
     // so asking it alone would answer "holds" for a deployment whose config
     // never loaded, which is the inert-gate shape this check exists to catch.
     const { getConfig } = await import('@/config');
-    const level = getConfig().swarm?.levelDefaults?.orchestrator;
-    if (!level) return 'config carries no swarm.levelDefaults.orchestrator: the runtime is running on hardcoded fallbacks';
+    const level = getConfig().swarm?.levelDefaults?.root;
+    if (!level) return 'config carries no swarm.levelDefaults.root: the runtime is running on hardcoded fallbacks';
     const { getLevelDefault } = await import('./swarm/types');
     const cap = getLevelDefault(0).maxPendingDetached;
     return cap > 0
@@ -146,7 +146,7 @@ registerInvariant({
  * evidence that some path writes a node without its bracket — the shape of the
  * bug, not one instance of it.
  *
- * Depth 0 is excluded deliberately: the root orchestrator node is the process's
+ * Depth 0 is excluded deliberately: the root root agent node is the process's
  * own agent, its row is best-effort by design, and it is stopped through the
  * agent manager rather than through reconciliation.
  */

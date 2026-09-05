@@ -104,9 +104,13 @@ export function refreshConfigKey(key: string, value: unknown): void {
 export function loadConfig(): Config {
   if (cachedConfig) return cachedConfig;
 
-  const envConfig = loadFromEnvLegacy();
-  const merged = deepMerge(defaultConfig, envConfig);
-  const result = configSchema.safeParse(normalizeRetiredConfigValues(merged));
+  // Normalize BEFORE the defaults are merged in. `defaultConfig` supplies every
+  // key the retired namespace maps onto, so after a merge "the new key is
+  // unset" is never true and the carry-over loop copies nothing — a migration
+  // that reads correctly and does nothing.
+  const envConfig = normalizeRetiredConfigValues(loadFromEnvLegacy());
+  const merged = normalizeRetiredConfigValues(deepMerge(defaultConfig, envConfig));
+  const result = configSchema.safeParse(merged);
 
   if (!result.success) {
     logger.error({ errors: result.error.issues }, 'Configuration validation failed');

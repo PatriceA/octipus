@@ -1,6 +1,6 @@
 # Swarm Reliability & Verification
 
-Three additions make the swarm (Orchestrator → Agent → Subagent) **auditable**,
+Three additions make the swarm (Root agent → Agent → Subagent) **auditable**,
 **verifiable**, and **resumable** without changing how delegation works. They
 share one principle from `DESIGN.md` — *fail loud, no silent fallbacks* — turned
 into concrete machinery:

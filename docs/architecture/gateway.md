@@ -9,7 +9,7 @@ The Gateway Hub is the central WebSocket entry point for all clients — web UI,
   Web UI ─────────────►│                                    │
   TUI (local) ────────►│        GATEWAY HUB                 │
   Mobile ─────────────►│                                    │
-  IDE/ACP ────────────►│  - ConnectionManager (auth, budgets)│──► Orchestrator
+  IDE/ACP ────────────►│  - ConnectionManager (auth, budgets)│──► Root agent
   Telegram adapter ───►│  - GatewayEventBus (pub/sub)       │──► Agent Workers
   Slack adapter ──────►│  - CommandRegistry (9 commands)     │──► Tool Execution
   Teams webhook ──────►│  - FeedbackManager (emoji/stall)   │──► Permission Mgr
@@ -54,9 +54,9 @@ Clients connect to `ws://host:port/gateway` and must send an auth message within
 | Message Type | Description |
 |---|---|
 | `auth` | Authentication handshake (must be first message) |
-| `chat.send` | Send a chat message to the orchestrator |
-| `chat.interject` | Side-channel question sent while orchestrator is running (non-blocking) |
-| `chat.steer` | Inject a message into the running orchestrator turn to change course mid-flight |
+| `chat.send` | Send a chat message to the root agent |
+| `chat.interject` | Side-channel question sent while root agent is running (non-blocking) |
+| `chat.steer` | Inject a message into the running root agent turn to change course mid-flight |
 | `command` | Execute a gateway command (e.g., `/expert`, `/status`) |
 | `subscribe` | Subscribe to event patterns (e.g., `agent.*`) |
 | `unsubscribe` | Remove event subscriptions |
@@ -90,7 +90,7 @@ The `GatewayEventBus` is a typed pub/sub system that replaces scattered EventEmi
 
 | Family | Events | Emitter |
 |---|---|---|
-| `chat.*` | `chat.message`, `chat.response`, `chat.typing` | Orchestrator |
+| `chat.*` | `chat.message`, `chat.response`, `chat.typing` | Root agent |
 | `agent.*` | `agent.spawned`, `agent.completed`, `agent.failed`, `agent.stopped`, `agent.status`, `agent.event`, `agent.action`, `agent.iteration`, `agent.blocked` | AgentManager / Executor |
 | `swarm.*` | `swarm.node_spawned`, `swarm.node_completed`, `swarm.budget_warning`, `swarm.call_graph_cycle_blocked`, `swarm.narration` | SwarmSpawner / AgentWorker / SwarmCallGraph |
 | `permission.*` | `permission.request`, `permission.response` | PermissionManager |
@@ -104,7 +104,7 @@ Additional event families exist for worker lifecycle, pipelines, sessions, and e
 ### Event Bridge
 
 The `connectEventBridge()` function subscribes to:
-- Orchestrator events → mapped to `chat.response`, `agent.spawned`, `agent.completed`, etc.
+- Root agent events → mapped to `chat.response`, `agent.spawned`, `agent.completed`, etc.
 - Agent manager events → mapped to `agent.*`
 - Permission requests → mapped to `permission.request`
 
@@ -135,7 +135,7 @@ Built-in commands available via the gateway protocol:
 | `/diff` | | Show git diff for workspace changes |
 | `/changes` | | Review git changes — list, or a file diff |
 | `/reload-extensions` | `/reload` | Re-discover and reload user extensions |
-| `/persona` | | Configure the orchestrator persona |
+| `/persona` | | Configure the root agent persona |
 | `/version` | `/v` | Show Octipus version and build info |
 
 ## Feedback System
@@ -199,8 +199,8 @@ src/core/gateway/
 ├── presence.ts           # Who's connected, idle timeouts
 ├── commands.ts           # Command registry + 9 built-in commands
 ├── feedback.ts           # Emoji reactions + stall detection
-├── message-handler.ts    # Routes messages to orchestrator/permissions
-├── event-bridge.ts       # Bridges orchestrator events to event bus
+├── message-handler.ts    # Routes messages to root agent/permissions
+├── event-bridge.ts       # Bridges root agent events to event bus
 ├── connection-manager.ts # Per-connection state, budgets, subscriptions
 ├── message-handler.ts    # Dispatches inbound client messages
 ├── presence.ts           # Presence tracking

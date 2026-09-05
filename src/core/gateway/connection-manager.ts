@@ -254,7 +254,16 @@ export class ConnectionManager {
           }
           userId = session.userId;
           isAdmin = session.isAdmin;
-          trustLevel = 'user';
+          // An admin signing in ON THIS MACHINE keeps the reach the machine
+          // token already gave them — otherwise logging in to the TUI would be
+          // a downgrade: no /reload, for the same person at the same keyboard.
+          // The loopback test is not decoration: `local` also means "may see
+          // every user's events" (hub.ts), and unlike the `local` method below
+          // — which `validateLocalAuth` refuses off-loopback — a session token
+          // travels, so a remote admin console would silently start receiving
+          // other users' replies and permission prompts.
+          const { isLoopbackIp } = await import('./local-auth');
+          trustLevel = session.isAdmin && isLoopbackIp(ip) ? 'local' : 'user';
           break;
         }
 

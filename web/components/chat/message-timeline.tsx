@@ -88,7 +88,7 @@ export interface TeamState {
 // ---------------------------------------------------------------------------
 
 const ROLE_COLORS: Record<string, string> = {
-  orchestrator: 'border-purple-400 bg-purple-900/20',
+  rootAgent: 'border-purple-400 bg-purple-900/20',
   research: 'border-accent/60 bg-accent-container/60',
   coding: 'border-tertiary/60 bg-tertiary-container/60',
   review: 'border-warning/60 bg-warning-container/60',
@@ -107,7 +107,7 @@ const ROLE_COLORS: Record<string, string> = {
 };
 
 const ROLE_BADGE_COLORS: Record<string, string> = {
-  orchestrator: 'bg-purple-900/40 text-primary',
+  rootAgent: 'bg-purple-900/40 text-primary',
   research: 'bg-primary-container/60 text-primary',
   coding: 'bg-tertiary-container/60 text-tertiary',
   review: 'bg-warning-container/60 text-warning',

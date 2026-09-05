@@ -11,7 +11,7 @@ const inIntegration = process.env.INTEGRATION === '1';
 // here would leak into integration tests later in the same `npm test` run
 // and break them (e.g. config.database.url ends up empty → postgres-js
 // connects as the local OS user). Setting env vars is local: integration
-// tests set their own DATABASE_URL/REDIS_URL via the test:integration
+// tests set their own DATABASE_URL via the test:integration
 // runner before any test code runs.
 process.env.MASTER_KEY ??= 'a'.repeat(32);
 process.env.JWT_SECRET ??= 'b'.repeat(32);

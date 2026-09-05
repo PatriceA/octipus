@@ -23,6 +23,7 @@ interface Job {
   detail?: string;
   report?: ReportDoc;
   documentId?: string;
+  taskId?: string;
   error?: string;
 }
 
@@ -166,6 +167,13 @@ export default function ResearchPage() {
               <p className="text-sm mt-2">
                 <a href="/documents" className="text-primary hover:underline">
                   Saved to Documents &amp; added to the knowledge base →
+                </a>
+              </p>
+            )}
+            {job?.taskId && (
+              <p className="text-sm mt-1">
+                <a href="/tasks" className="text-primary hover:underline">
+                  A review to-do was added to your list →
                 </a>
               </p>
             )}

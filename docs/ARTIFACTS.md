@@ -230,7 +230,7 @@ update_live_artifact({
 ```
 
 Then POST the JS to a future bundle endpoint (see step 6 of the rollout
-plan). The build pipeline runs Bun's bundler with no external imports
+plan). The build pipeline runs esbuild with no external imports
 allowed (V1 allow-list is empty), computes sha256, persists under
 `data/artifacts/<artifactId>/<versionId>/bundle.js`, and the embed
 renderer pins that hash in CSP `script-src` per version.

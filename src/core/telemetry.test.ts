@@ -3,7 +3,7 @@ import {
   recordChannelMessage,
   recordClassification,
   recordLlmRequest,
-  recordOrchestratorRun,
+  recordRootRun,
   recordSwarmSpawn,
   recordToolExecution,
   registry,
@@ -22,7 +22,7 @@ describe('telemetry exposition (WS4)', () => {
     expect(out).toContain('# TYPE process_resident_memory_bytes gauge');
     expect(out).toContain('nodejs_heap_used_bytes');
     expect(line(out, 'octipus_db_up')).toBe('octipus_db_up 1');
-    expect(line(out, 'octipus_redis_up')).toBe('octipus_redis_up 0');
+    expect(line(out, 'octipus_storage_up')).toBe('octipus_storage_up 0');
   });
 
   test('build_info carries the version label without stacking on re-render', async () => {
@@ -35,7 +35,7 @@ describe('telemetry exposition (WS4)', () => {
   });
 
   test('domain counters increment with their labels', async () => {
-    recordOrchestratorRun('slack', 'task', 'success');
+    recordRootRun('slack', 'task', 'success');
     recordClassification('coding', 'deterministic');
     recordToolExecution('read_file', 'success', 0.2);
     recordToolExecution('read_file', 'error', 0.1);
@@ -45,7 +45,7 @@ describe('telemetry exposition (WS4)', () => {
     recordChannelMessage('telegram', 'inbound');
 
     const out = await renderMetrics(1, 1);
-    expect(out).toContain('octipus_orchestrator_runs_total{channel="slack",role="task",status="success"} 1');
+    expect(out).toContain('octipus_root_agent_runs_total{channel="slack",role="task",status="success"} 1');
     expect(out).toContain('octipus_classifications_total{topic="coding",method="deterministic"} 1');
     expect(out).toContain('octipus_tool_executions_total{tool="read_file",status="success"} 1');
     expect(out).toContain('octipus_tool_executions_total{tool="read_file",status="error"} 1');
@@ -59,7 +59,7 @@ describe('telemetry exposition (WS4)', () => {
   test('record helpers never throw on odd input (they swallow errors)', () => {
     expect(() => recordToolExecution('', 'success', Number.NaN)).not.toThrow();
     expect(() => recordLlmRequest(undefined, undefined, 'error', 0)).not.toThrow();
-    expect(() => recordOrchestratorRun(undefined, undefined, 'error')).not.toThrow();
+    expect(() => recordRootRun(undefined, undefined, 'error')).not.toThrow();
   });
 
   test('histograms register their _bucket/_count/_sum series', async () => {

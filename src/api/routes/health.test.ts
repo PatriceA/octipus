@@ -9,12 +9,12 @@ import {
   teardownIntegration,
 } from '@/test-helpers/integration';
 
-// Integration tests exercise the health route against a real Postgres + Redis
-// via docker-compose.test.yml. Only the routes that depend solely on DB/Redis
-// are covered — /health, /health/database, /health/redis, /health/time, /health/ready.
+// Integration tests exercise the health route against a real Postgres
+// via docker-compose.test.yml. Only the routes that depend solely on DB/storage
+// are covered — /health, /health/database, /health/storage, /health/time, /health/ready.
 // Routes that require model providers (/health/detailed, /health/models,
 // /health/features) and the gateway (/health/live, /health/channels) stay
-// out of scope for the DB/Redis test slice.
+// out of scope for the DB/storage test slice.
 //
 // Run via:  npm run test:integration -- src/api/routes/health.test.ts
 
@@ -26,7 +26,7 @@ describe.skipIf(!isIntegration)('Health API (Integration)', () => {
     await setupIntegrationStorage();
 
     const { healthRoutes } = await import('./health');
-    // Mount only the three pure DB/Redis/time routes so we don't transitively
+    // Mount only the three pure DB/storage/time routes so we don't transitively
     // import the gateway/model/registry singletons that aren't initialized here.
     app = new Elysia()
       .get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }))
@@ -40,11 +40,11 @@ describe.skipIf(!isIntegration)('Health API (Integration)', () => {
           error: result.error,
         };
       })
-      .get('/health/redis', async () => {
+      .get('/health/storage', async () => {
         const { checkCacheHealth } = await import('@/db/cache');
         const result = await checkCacheHealth();
         return {
-          service: 'redis',
+          service: 'storage',
           status: result.healthy ? 'healthy' : 'unhealthy',
           latency: result.latency,
           error: result.error,
@@ -89,10 +89,10 @@ describe.skipIf(!isIntegration)('Health API (Integration)', () => {
     expect(typeof body.latency).toBe('number');
   });
 
-  test('GET /health/redis reports healthy against test Redis', async () => {
-    const { status, body } = await hit('/health/redis');
+  test('GET /health/storage reports healthy against the test storage provider', async () => {
+    const { status, body } = await hit('/health/storage');
     expect(status).toBe(200);
-    expect(body.service).toBe('redis');
+    expect(body.service).toBe('storage');
     expect(body.status).toBe('healthy');
     expect(typeof body.latency).toBe('number');
   });
@@ -126,13 +126,13 @@ describe('Health API (Unit)', () => {
       agents: { total: 5, running: 2 },
       health: {
         database: { status: 'ok', latency: 5 },
-        redis: { status: 'ok', latency: 2 },
+        storage: { status: 'ok', latency: 2 },
         models: { status: 'ok' },
       },
     };
 
     expect(mockDetailedHealth.health.database.status).toBe('ok');
-    expect(mockDetailedHealth.health.redis.status).toBe('ok');
+    expect(mockDetailedHealth.health.storage.status).toBe('ok');
     expect(mockDetailedHealth.agents.total).toBeGreaterThanOrEqual(mockDetailedHealth.agents.running);
   });
 });

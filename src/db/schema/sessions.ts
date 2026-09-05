@@ -43,7 +43,7 @@ export interface PlanningState {
  *
  * The anti-thrashing guard uses this to avoid looping on compaction passes
  * that fail to meaningfully reduce token usage. See
- * `src/core/orchestrator/session-compaction.ts` for the decision logic.
+ * `src/core/agent/session-compaction.ts` for the decision logic.
  */
 export interface CompactionState {
   /** ISO timestamp of the most recent compaction pass (effective or not). */
@@ -78,7 +78,7 @@ export interface SessionContext {
   planningState?: PlanningState;
   /**
    * ISO timestamp of a user-initiated context reset (/clear).
-   * Orchestrator + directResponse must ignore messages created before this
+   * The root agent + directResponse must ignore messages created before this
    * boundary when building system-prompt history.
    */
   clearedAt?: string;

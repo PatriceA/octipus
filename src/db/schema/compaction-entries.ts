@@ -17,7 +17,7 @@ export interface CompactionFileOps {
  * that supports iterative summary chaining, debugging, and (later) tree-aware
  * branch summarization.
  *
- * The newest entry's `summary` is what the orchestrator injects as the
+ * The newest entry's `summary` is what the root agent injects as the
  * pre-history system message; older entries remain for audit + chaining.
  */
 export const compactionEntries = pgTable('compaction_entries', {

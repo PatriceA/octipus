@@ -175,10 +175,10 @@ describe('Vault.getForAgent — scope-aware injector lookup', () => {
     const vault = getVault();
     await vault.store(aliceId, 'agent-restricted', 'agent-only', {
       credentialType: 'api_key',
-      allowedAgents: ['orchestrator-1'],
+      allowedAgents: ['rootAgent-1'],
     });
 
-    expect(await vault.getForAgent({ userId: aliceId, agentId: 'orchestrator-1' }, 'agent-restricted'))
+    expect(await vault.getForAgent({ userId: aliceId, agentId: 'rootAgent-1' }, 'agent-restricted'))
       .toBe('agent-only');
     expect(await vault.getForAgent({ userId: aliceId, agentId: 'random-worker' }, 'agent-restricted'))
       .toBeNull();

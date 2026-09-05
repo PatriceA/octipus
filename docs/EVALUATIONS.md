@@ -1,6 +1,6 @@
 # Model Evaluation & Provider Testing
 
-Automated testing and quality scoring for LLM providers. Inspired by Genkit's evaluation patterns, implemented natively in Bun + TypeScript without any Genkit dependency.
+Automated testing and quality scoring for LLM providers. Inspired by Genkit's evaluation patterns, implemented natively in Node + TypeScript without any Genkit dependency.
 
 Two distinct systems:
 - **Provider Conformance** — validates that a provider *works correctly* (pass/fail per feature)
@@ -272,7 +272,7 @@ Capabilities are derived from model DB fields — they are not manually editable
 | `multiturn` | `true` unless embedding model | `true` |
 | `systemRole` | `true` unless embedding model | `true` |
 
-Capabilities gate conformance tests (test is `skipped` rather than `failed` when the required capability is absent) and are also used by the orchestrator's model routing logic.
+Capabilities gate conformance tests (test is `skipped` rather than `failed` when the required capability is absent) and are also used by the root agent's model routing logic.
 
 ---
 

@@ -39,6 +39,16 @@ export const ollamaConfigSchema = z.object({
   // instead of unloading after Ollama\'s 5min default — avoids repeated cold loads.
   // Accepts a duration string ('10m', '1h') or '-1' to keep it loaded indefinitely.
   keepAlive: z.string().default('10m').describe('How long Ollama keeps a model warm in VRAM (duration string or -1)'),
+  /**
+   * This host's GPU memory is one shared pool with the CPU's (an APU, or any
+   * unified-memory design), so the reported VRAM figure is a firmware carve-out
+   * rather than a hardware boundary and a model larger than it costs nothing.
+   *
+   * Auto-detected on Apple Silicon. It is NOT detectable for AMD on Linux — an
+   * APU and a discrete card expose the same sysfs surface — so an APU owner
+   * sets this and stops being told that half their memory is "spill".
+   */
+  unifiedMemory: z.boolean().default(false).describe('GPU and CPU share one memory pool at one speed (APU / unified memory)'),
 });
 
 // Security configuration schema
@@ -191,6 +201,52 @@ export const agentConfigSchema = z.object({
   maxIterations: z.number().min(1).max(1000).default(50),
   contextWindowSize: z.number().min(1000).default(32000),
   maxTokenBudget: z.number().min(0).default(100000), // 0 = unlimited
+  /**
+   * Root-agent prompt tier. 'auto' (default) re-derives it every turn from the
+   * current default model's parameter count, so swapping to a smaller model
+   * changes the tier with no restart:
+   *   - lite: trimmed prompt, capped tool set and iterations (< ~24B)
+   *   - full: the whole prompt and toolset, swarms and pipelines (>= ~24B)
+   * Setting an explicit value pins that tier regardless of model size. The
+   * `router` value was deleted with the routing hop (rebuild plan, Phase 9).
+   */
+  promptTier: z.enum(['auto', 'full', 'lite']).default('auto'),
+  /**
+   * Iteration cap for the lite root loop — the hard bound that replaced router
+   * mode for small models. It was 3 when lite could only delegate once and
+   * relay; the lite root now does the work itself, and 3 iterations is not
+   * enough to read a file, search, and answer (the full loop tops out at 25,
+   * so that stays the upper bound).
+   */
+  liteMaxIterations: z.number().min(1).max(25).default(8),
+  /** The "small model" threshold: trimmed prompts and tool sets below this. */
+  smallModelMaxParams: z.number().default(10_000_000_000),
+  /** auto: models with fewer params than this run in the lite tier. */
+  liteModelMaxParams: z.number().default(24_000_000_000),
+  /**
+   * Max tools handed to a worker whose bound model is in the small tier. Small
+   * local models lose track of large tool surfaces and emit malformed
+   * tool-call JSON; capping the list improves reliability and cuts prompt
+   * size. Role tool lists are priority-ordered, so the cap keeps the core
+   * tools. Does not affect workers on larger models.
+   */
+  smallModelMaxTools: z.number().min(1).max(50).default(7),
+  lazyToolDiscovery: z.boolean().default(true),
+  /** Hard wall-clock for one root turn (ms). */
+  turnTimeoutMs: z.number().min(0).default(1800000), // 30 minutes
+  /** Root-turn wall-clock when the turn was triggered by a hook (ms). */
+  hookTurnTimeoutMs: z.number().min(0).default(2700000), // 45 minutes
+  /**
+   * Token pool for one pipeline RUN, summed over every node visit. 0 disables
+   * the pool.
+   *
+   * Per-node caps bound a visit, not a run: a `foreach` body is entered once
+   * per plan item and items can be appended mid-run by a review or QA node, so
+   * the node count is not known when the run starts. This is the bound that
+   * does not depend on knowing it. Generous by design — it exists to stop a
+   * non-converging run, not to shape a converging one.
+   */
+  pipelineTokenBudget: z.number().min(0).default(2_000_000),
   // Soft cap on full tool-result messages kept in context before the OLDEST
   // ones are truncated (recent kept full). Left optional with NO default so
   // omitting it preserves today's behaviour (DEFAULT_TOOL_OUTPUT_SOFT_CAP);
@@ -218,53 +274,7 @@ export const cliModelsConfigSchema = z.object({
   }).prefault({}),
 });
 
-// Orchestrator configuration schema
-export const orchestratorConfigSchema = z.object({
-  /**
-   * Root-agent prompt tier. 'auto' (default) re-derives it every turn from the
-   * current default model's parameter count, so swapping to a smaller model
-   * changes the tier with no restart:
-   *   - lite: trimmed prompt, capped tool set and iterations (< ~24B)
-   *   - full: the whole prompt and toolset, swarms and pipelines (≥ ~24B)
-   * Setting an explicit value pins that tier regardless of model size. The
-   * `router` mode was deleted with the routing hop (rebuild plan, Phase 9).
-   */
-  mode: z.enum(['auto', 'full', 'lite']).default('auto'),
-  /**
-   * Iteration cap for the lite root loop — the hard bound that replaces router
-   * mode for small models. It was 3 when lite could only delegate once and
-   * relay; the lite root now does the work itself, and 3 iterations is not
-   * enough to read a file, search, and answer (full mode's loop tops out at
-   * 25, so that stays the upper bound).
-   */
-  liteMaxIterations: z.number().min(1).max(25).default(8),
-  /** The "small model" threshold: trimmed prompts and tool sets below this. */
-  routerSmallModelMaxParams: z.number().default(10_000_000_000),
-  /** auto: models with fewer params than this run in the lite tier. */
-  liteModelMaxParams: z.number().default(24_000_000_000),
-  /**
-   * Max tools handed to a worker whose bound model is in the small tier. Small local models lose track of large tool surfaces and emit
-   * malformed tool-call JSON; capping the list improves reliability and cuts
-   * prompt size. Role tool lists are priority-ordered, so the cap keeps the
-   * core tools. Does not affect workers on larger models.
-   */
-  smallModelMaxTools: z.number().min(1).max(50).default(7),
-  lazyToolDiscovery: z.boolean().default(true),
-  orchestratorTimeoutMs: z.number().min(0).default(1800000), // 30 minutes
-  orchestratorHookTimeoutMs: z.number().min(0).default(2700000), // 45 minutes for hook-triggered runs
-  /**
-   * Token pool for one pipeline RUN, summed over every node visit. 0 disables
-   * the pool.
-   *
-   * Per-node caps bound a visit, not a run: a `foreach` body is entered once
-   * per plan item and items can be appended mid-run by a review or QA node, so
-   * the node count is not known when the run starts. This is the bound that
-   * does not depend on knowing it. Generous by design — it exists to stop a
-   * non-converging run, not to shape a converging one.
-   */
-  pipelineTokenBudget: z.number().min(0).default(2_000_000),
-});
-
+// Root agent configuration schema
 // OAuth configuration schema
 export const oauthConfigSchema = z.object({
   // OAuth client credentials are stored in the vault (not env vars)
@@ -292,7 +302,7 @@ export const rateLimitConfigSchema = z.object({
 // Session compaction configuration schema
 //
 // Used by the anti-thrashing guard in
-// `src/core/orchestrator/session-compaction.ts` to avoid looping when a
+// `src/core/agent/session-compaction.ts` to avoid looping when a
 // compaction pass fails to meaningfully reduce token usage.
 export const compactionConfigSchema = z.object({
   /**
@@ -345,7 +355,7 @@ export const swarmConfigSchema = z.object({
    */
   contractRetries: z.number().min(0).max(5).default(1),
   levelDefaults: z.object({
-    orchestrator: swarmLevelSchema.default({ tokens: 200_000, wallMs: 600_000, fanOut: 6, maxPendingDetached: 6 }),
+    root: swarmLevelSchema.default({ tokens: 200_000, wallMs: 600_000, fanOut: 6, maxPendingDetached: 6 }),
     agent: swarmLevelSchema.default({ tokens: 80_000, wallMs: 600_000, fanOut: 4, maxPendingDetached: 3 }),
     subagent: swarmLevelSchema.default({ tokens: 30_000, wallMs: 600_000, fanOut: 0, maxPendingDetached: 0 }),
   }).prefault({}),
@@ -450,26 +460,82 @@ export const heartbeatConfigSchema = z.object({
   quietHoursTimezone: z.string().default('UTC'),
   /** Hard cap on heartbeat runs per user per calendar day (in the tz above). */
   maxRunsPerDay: z.number().int().min(1).max(288).default(24),
+  /** Probe: the user's open pull requests with failing checks (one `gh` call per run). */
+  probeGithub: z.boolean().default(true),
+  /** Probe: calendar events starting within `calendarLookaheadMinutes` (one request per connected provider). */
+  probeCalendar: z.boolean().default(true),
+  calendarLookaheadMinutes: z.number().int().min(5).max(1440).default(60),
 });
 
 /**
- * Retired setting values, normalized before validation.
+ * Retired setting shapes, normalized before validation.
  *
- * `orchestrator.mode: 'router'` was a real, documented, user-settable value
- * until Phase 9 deleted the mode. Dropping it from the enum without this would
- * mean an install carrying it — in the `settings` table or in
- * `ORCHESTRATOR_MODE` — fails `configSchema.safeParse` at boot, and both load
- * paths throw on that: the backend would not start, over a value the product
- * itself told the user to set. Router's replacement is the lite tier, so that
- * is what it becomes.
+ * Two migrations live here, both for the same reason: an install carries these
+ * values in its `settings` table and in its environment, and `configSchema`
+ * would reject them — the backend would refuse to start over values the
+ * product itself told the user to set.
+ *
+ *  1. `orchestrator.mode: 'router'` was real and user-settable until Phase 9
+ *     deleted the routing hop. Router's replacement is the lite tier.
+ *  2. The whole `orchestrator.*` namespace moved into `agent.*` once there was
+ *     no root agent left to name it after. Old keys are mapped to their new
+ *     names and only fill a slot the new key has not already claimed, so an
+ *     install that has been rewritten wins over one that has not.
  *
  * Mutates a plain merged-config object in place and returns it. Called from
  * both parse sites; a normalization only one loader runs is the same bug in a
  * smaller blast radius.
  */
+/**
+ * Retired `orchestrator.*` key -> its name under `agent.*`. These strings are
+ * the OLD names as they appear in a real install's settings table and .env,
+ * so they must stay literal: a rename sweep that "tidies" the left-hand side
+ * leaves a migration that looks right and matches nothing.
+ */
+const RETIRED_ORCHESTRATOR_KEYS: Record<string, string> = {
+  mode: 'promptTier',
+  liteMaxIterations: 'liteMaxIterations',
+  routerSmallModelMaxParams: 'smallModelMaxParams',
+  liteModelMaxParams: 'liteModelMaxParams',
+  smallModelMaxTools: 'smallModelMaxTools',
+  lazyToolDiscovery: 'lazyToolDiscovery',
+  orchestratorTimeoutMs: 'turnTimeoutMs',
+  orchestratorHookTimeoutMs: 'hookTurnTimeoutMs',
+  pipelineTokenBudget: 'pipelineTokenBudget',
+};
+
 export function normalizeRetiredConfigValues<T>(merged: T): T {
-  const orch = (merged as { orchestrator?: { mode?: string } } | undefined)?.orchestrator;
-  if (orch?.mode === 'router') orch.mode = 'lite';
+  const cfg = merged as {
+    orchestrator?: Record<string, unknown>;
+    agent?: Record<string, unknown>;
+    swarm?: { levelDefaults?: Record<string, unknown> };
+  } | undefined;
+  if (!cfg) return merged;
+
+  const retired = cfg.orchestrator;
+  if (retired) {
+    if (retired.mode === 'router') retired.mode = 'lite';
+    const agent = (cfg.agent ??= {});
+    for (const [from, to] of Object.entries(RETIRED_ORCHESTRATOR_KEYS)) {
+      if (retired[from] !== undefined && agent[to] === undefined) agent[to] = retired[from];
+    }
+    delete cfg.orchestrator;
+  }
+
+  // Also on the NEW key: the legacy env loader maps `ORCHESTRATOR_MODE`
+  // straight onto `agent.promptTier`, so a `router` value arrives here having
+  // never touched `cfg.orchestrator` — and `z.enum(['auto','full','lite'])`
+  // would reject it and take the whole boot down over a value the product
+  // itself told the operator to set.
+  if (cfg.agent?.promptTier === 'router') cfg.agent.promptTier = 'lite';
+
+  // The swarm level key follows the node kind, which is now `root`.
+  const levels = cfg.swarm?.levelDefaults;
+  if (levels?.orchestrator !== undefined) {
+    levels.root ??= levels.orchestrator;
+    delete levels.orchestrator;
+  }
+
   return merged;
 }
 
@@ -490,7 +556,6 @@ export const configSchema = z.object({
   n8n: n8nConfigSchema.optional(),
   logging: loggingConfigSchema,
   agent: agentConfigSchema,
-  orchestrator: orchestratorConfigSchema.prefault({}),
   cliModels: cliModelsConfigSchema.prefault({}),
   workspace: workspaceConfigSchema.prefault({}),
   vaultSync: vaultSyncConfigSchema.prefault({}),
@@ -533,7 +598,6 @@ export type MCPConfig = z.infer<typeof mcpConfigSchema>;
 export type N8NConfig = z.infer<typeof n8nConfigSchema>;
 export type LoggingConfig = z.infer<typeof loggingConfigSchema>;
 export type AgentConfig = z.infer<typeof agentConfigSchema>;
-export type OrchestratorConfig = z.infer<typeof orchestratorConfigSchema>;
 export type CLIModelsConfig = z.infer<typeof cliModelsConfigSchema>;
 export type WorkspaceConfig = z.infer<typeof workspaceConfigSchema>;
 export type VaultSyncConfig = z.infer<typeof vaultSyncConfigSchema>;

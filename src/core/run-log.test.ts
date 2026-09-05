@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'vitest';
-import { getOrchestratorHooks } from './orchestrator/hooks';
+import { getAgentHooks } from './agent/hooks';
 import { installRunLogHooks, toolCallEvent } from './run-log';
 
 /**
@@ -12,11 +12,11 @@ const SESSION = '11111111-2222-3333-4444-555555555555';
 
 describe('run log — tool:after subscriber', () => {
   afterEach(() => {
-    getOrchestratorHooks()._clearForTesting();
+    getAgentHooks()._clearForTesting();
   });
 
   const fire = (over: Record<string, unknown> = {}) =>
-    getOrchestratorHooks().fire('tool:after', {
+    getAgentHooks().fire('tool:after', {
       toolId: 'filesystem',
       toolName: 'read_file',
       args: { path: '/etc/passwd', token: 'sk-secret' },
@@ -30,14 +30,14 @@ describe('run log — tool:after subscriber', () => {
   test('installs exactly one subscriber however often it is called', () => {
     const off = installRunLogHooks();
     installRunLogHooks();
-    expect(getOrchestratorHooks()._count('tool:after')).toBe(1);
+    expect(getAgentHooks()._count('tool:after')).toBe(1);
     off();
   });
 
   test('a subscribed dispatch still runs the rest of the chain', async () => {
     const off = installRunLogHooks();
     let laterRan = false;
-    getOrchestratorHooks().register('tool:after', () => { laterRan = true; });
+    getAgentHooks().register('tool:after', () => { laterRan = true; });
     await fire();
     expect(laterRan).toBe(true);
     off();

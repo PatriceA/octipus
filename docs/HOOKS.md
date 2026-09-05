@@ -246,6 +246,37 @@ The **Calendar tab** in the Hooks & Tasks page shows a weekly grid of scheduled 
 0 9 * * 1-5     Weekdays at 9:00 AM
 ```
 
+### Away digest in a hook prompt
+
+A `spawn_agent` hook may set `actionConfig.awayDigestHours` (a positive
+number). Before the run, the owner's "while you were away" digest for that
+many hours (`src/core/digest/away.ts`: finished and failed agents, pipelines
+finished or waiting, pending approvals, new to-dos, unread count) is rendered
+as markdown and prepended to `agentPrompt`. No model call is spent on it, and
+a digest that cannot be built is logged and skipped rather than failing the
+hook.
+
+### Daily Briefing (seeded)
+
+Every user gets one scheduled hook at registration, **Daily Briefing**: weekdays
+at 08:00 (UTC by default), an orchestrated `spawn_agent` turn whose result is
+delivered to the user. The prompt is integration-agnostic — it always reads the
+to-do list and notifications, and only reads calendar / mail / GitHub when those
+tools are connected, finishing with the three actions to take first. It is an
+ordinary hook: edit the schedule or timezone, pause it, or delete it on the
+Hooks page. It costs one agent turn per weekday.
+
+Users who registered before it existed, or who paused it, can bring it back:
+
+```bash
+curl -X POST localhost:3005/api/hooks/briefing -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"timezone":"Europe/Berlin"}'
+curl -X DELETE localhost:3005/api/hooks/briefing -H "Authorization: Bearer $TOKEN"   # pause
+```
+
+Code: `src/core/briefing.ts`. The heartbeat ([HEARTBEAT.md](./HEARTBEAT.md)) is
+the complementary loop — silent unless something is pending, off by default.
+
 ### Task Status (derived)
 
 | Status | Condition |
@@ -296,6 +327,8 @@ Each log entry contains:
 | GET | `/api/hooks/executions/all` | All user executions |
 | GET | `/api/hooks/suggestions` | Suggested hooks |
 | POST | `/api/hooks/suggestions/:id/apply` | Apply suggestion |
+| POST | `/api/hooks/briefing` | Ensure (create / re-enable) the seeded Daily Briefing; optional `timezone`, `cronExpression` |
+| DELETE | `/api/hooks/briefing` | Pause the Daily Briefing |
 
 ### Recurring Tasks (compatibility)
 
@@ -312,11 +345,11 @@ The `/api/recurring-tasks` endpoints still work as a compatibility layer — the
 
 ## Swarm Lifecycle Events
 
-The swarm orchestrator (Orchestrator → Agent → Subagent) publishes its own gateway event family (`swarm.*`) alongside the older `agent.*` events. These are pure observability signals — they are **not** hook triggers today (the hook system matches on `agent_*` triggers, which still fire for every swarm node because every node is also an agent). If you need to react to swarm-specific state — fan-out breach, cycle blocks, budget warnings — subscribe on the gateway instead of the hook system.
+The swarm root agent (Root agent → Agent → Subagent) publishes its own gateway event family (`swarm.*`) alongside the older `agent.*` events. These are pure observability signals — they are **not** hook triggers today (the hook system matches on `agent_*` triggers, which still fire for every swarm node because every node is also an agent). If you need to react to swarm-specific state — fan-out breach, cycle blocks, budget warnings — subscribe on the gateway instead of the hook system.
 
 | Event | When it fires |
 |-------|---------------|
-| `swarm.node_spawned` | A new Orchestrator / Agent / Subagent is created. Payload includes `rootSessionId`, `nodeId`, `parentNodeId`, `kind`, `depth`, `topicPath`, `role`, `expertId`, `model`, `budgets`, `taskBriefPreview`. |
+| `swarm.node_spawned` | A new Root agent / Agent / Subagent is created. Payload includes `rootSessionId`, `nodeId`, `parentNodeId`, `kind`, `depth`, `topicPath`, `role`, `expertId`, `model`, `budgets`, `taskBriefPreview`. |
 | `swarm.node_completed` | Node finished; `ChildResult` is attached (status + output + usedTokens + durationMs). |
 | `swarm.budget_warning` | Node crossed its budget warning threshold. |
 | `swarm.call_graph_cycle_blocked` | Duplicate / ancestor-chain fingerprint rejected a spawn. |

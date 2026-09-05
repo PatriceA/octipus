@@ -1,5 +1,5 @@
 /**
- * Phase 1c — orchestrator permission gate.
+ * Phase 1c — root agent permission gate.
  *
  * Verifies the cross-tenant guards added to PermissionManager:
  *

@@ -112,7 +112,7 @@ ENV NODE_ENV=production \
 RUN chown -R node:node /app /data
 USER node
 
-# Health check — probe readiness (DB + Redis reachable), not just liveness,
+# Health check — probe readiness (DB + storage reachable), not just liveness,
 # so the container is only "healthy" when it can actually serve requests.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:3005/api/health/ready || exit 1

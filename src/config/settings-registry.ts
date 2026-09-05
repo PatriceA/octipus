@@ -36,6 +36,12 @@ export interface SettingDefinition {
   vaultName?: string;
   /** The old env var name, used during migration from .env */
   envVar?: string;
+  /**
+   * Names this setting used to answer to. Read when `envVar` is unset, so an
+   * install whose value lives only in `.env` under the retired name keeps it
+   * instead of silently reverting to the default on the runtime path.
+   */
+  legacyEnvVars?: string[];
 }
 
 /**
@@ -104,6 +110,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     description: 'Default Ollama model',
     isSecret: false,
     envVar: 'OLLAMA_DEFAULT_MODEL',
+  },
+  {
+    key: 'ollama.unifiedMemory',
+    category: 'ollama',
+    valueType: 'boolean',
+    defaultValue: false,
+    description:
+      'This host shares one memory pool between GPU and CPU (an APU, or any unified-memory design). Model recommendations are then scored against the whole pool instead of the firmware VRAM carve-out, which is not a speed boundary on such a machine. Auto-detected on Apple Silicon; set it by hand on an AMD APU, where Linux exposes no way to tell one from a discrete card.',
+    isSecret: false,
+    envVar: 'OLLAMA_UNIFIED_MEMORY',
   },
   {
     key: 'ollama.requestTimeout',
@@ -295,76 +311,82 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'AGENT_MAX_TOKEN_BUDGET',
   },
 
-  // ── Orchestrator ──
   {
-    key: 'orchestrator.mode',
-    category: 'orchestrator',
+    key: 'agent.promptTier',
+    category: 'agent',
     valueType: 'string',
     defaultValue: 'auto',
     description:
       'Root-agent prompt tier: auto (pick by model size, re-derived live), full (whole toolset, swarms), lite (trimmed prompt, capped tools and iterations)',
     isSecret: false,
-    envVar: 'ORCHESTRATOR_MODE',
+    envVar: 'AGENT_PROMPT_TIER',
+    legacyEnvVars: ['ORCHESTRATOR_MODE'],
   },
   {
-    key: 'orchestrator.lazyToolDiscovery',
-    category: 'orchestrator',
+    key: 'agent.lazyToolDiscovery',
+    category: 'agent',
     valueType: 'boolean',
     defaultValue: true,
     description:
       'Advertise a core tool set plus list_tools/describe_tool instead of every tool schema. 73% of the root prompt was tool schema; turn off to restore the full block on every request.',
     isSecret: false,
-    envVar: 'ORCHESTRATOR_LAZY_TOOLS',
+    envVar: 'AGENT_LAZY_TOOLS',
+    legacyEnvVars: ['ORCHESTRATOR_LAZY_TOOLS'],
   },
   {
-    key: 'orchestrator.liteMaxIterations',
-    category: 'orchestrator',
+    key: 'agent.liteMaxIterations',
+    category: 'agent',
     valueType: 'number',
     defaultValue: 8,
     description: 'Iteration cap for the lite root loop (full mode uses 25)',
     isSecret: false,
-    envVar: 'ORCHESTRATOR_LITE_MAX_ITERATIONS',
+    envVar: 'AGENT_LITE_MAX_ITERATIONS',
+    legacyEnvVars: ['ORCHESTRATOR_LITE_MAX_ITERATIONS'],
   },
   {
-    key: 'orchestrator.routerSmallModelMaxParams',
-    category: 'orchestrator',
+    key: 'agent.smallModelMaxParams',
+    category: 'agent',
     valueType: 'number',
     defaultValue: 10_000_000_000,
     description: 'The "small model" threshold: trimmed prompts and tool sets below this',
     isSecret: false,
-    envVar: 'ORCHESTRATOR_ROUTER_MAX_PARAMS',
+    envVar: 'AGENT_SMALL_MODEL_MAX_PARAMS',
+    legacyEnvVars: ['ORCHESTRATOR_ROUTER_MAX_PARAMS'],
   },
   {
-    key: 'orchestrator.liteModelMaxParams',
-    category: 'orchestrator',
+    key: 'agent.liteModelMaxParams',
+    category: 'agent',
     valueType: 'number',
     defaultValue: 24_000_000_000,
     description: 'auto mode: models with fewer params than this run in the lite tier',
     isSecret: false,
-    envVar: 'ORCHESTRATOR_LITE_MAX_PARAMS',
+    envVar: 'AGENT_LITE_MAX_PARAMS',
+    legacyEnvVars: ['ORCHESTRATOR_LITE_MAX_PARAMS'],
   },
   {
-    key: 'orchestrator.smallModelMaxTools',
-    category: 'orchestrator',
+    key: 'agent.smallModelMaxTools',
+    category: 'agent',
     valueType: 'number',
     defaultValue: 7,
     description:
       'Max tools handed to a worker whose bound model is in the small tier; trims the tool surface for weak local models',
     isSecret: false,
-    envVar: 'ORCHESTRATOR_SMALL_MODEL_MAX_TOOLS',
+    envVar: 'AGENT_SMALL_MODEL_MAX_TOOLS',
+    legacyEnvVars: ['ORCHESTRATOR_SMALL_MODEL_MAX_TOOLS'],
   },
   {
-    key: 'orchestrator.orchestratorTimeoutMs',
-    category: 'orchestrator',
+    key: 'agent.turnTimeoutMs',
+    category: 'agent',
     valueType: 'number',
     defaultValue: 1_800_000,
-    description: 'Orchestrator hard wall-clock (ms)',
+    description: 'Hard wall-clock for one root turn (ms)',
     isSecret: false,
-    envVar: 'ORCHESTRATOR_TIMEOUT_MS',
+    envVar: 'AGENT_TURN_TIMEOUT_MS',
+    legacyEnvVars: ['ORCHESTRATOR_TIMEOUT_MS'],
   },
   {
-    key: 'orchestrator.pipelineTokenBudget',
-    category: 'orchestrator',
+    key: 'agent.pipelineTokenBudget',
+    category: 'agent',
     valueType: 'number',
     defaultValue: 2_000_000,
     description:
@@ -373,13 +395,14 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'PIPELINE_TOKEN_BUDGET',
   },
   {
-    key: 'orchestrator.orchestratorHookTimeoutMs',
-    category: 'orchestrator',
+    key: 'agent.hookTurnTimeoutMs',
+    category: 'agent',
     valueType: 'number',
     defaultValue: 2_700_000,
-    description: 'Orchestrator wall-clock when triggered by a hook (ms)',
+    description: 'Root-turn wall-clock when the turn was triggered by a hook (ms)',
     isSecret: false,
-    envVar: 'ORCHESTRATOR_HOOK_TIMEOUT_MS',
+    envVar: 'AGENT_HOOK_TURN_TIMEOUT_MS',
+    legacyEnvVars: ['ORCHESTRATOR_HOOK_TIMEOUT_MS'],
   },
 
   // ── Swarm ──
@@ -411,36 +434,36 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'SWARM_CONTRACT_RETRIES',
   },
   {
-    key: 'swarm.levelDefaults.orchestrator.tokens',
+    key: 'swarm.levelDefaults.root.tokens',
     category: 'swarm',
     valueType: 'number',
     defaultValue: 200_000,
-    description: 'Orchestrator (depth 0) token cap',
+    description: 'Root agent (depth 0) token cap',
     isSecret: false,
   },
   {
-    key: 'swarm.levelDefaults.orchestrator.wallMs',
+    key: 'swarm.levelDefaults.root.wallMs',
     category: 'swarm',
     valueType: 'number',
     defaultValue: 600_000,
-    description: 'Orchestrator (depth 0) wall-clock cap (ms)',
+    description: 'Root agent (depth 0) wall-clock cap (ms)',
     isSecret: false,
   },
   {
-    key: 'swarm.levelDefaults.orchestrator.fanOut',
+    key: 'swarm.levelDefaults.root.fanOut',
     category: 'swarm',
     valueType: 'number',
     defaultValue: 6,
-    description: 'Orchestrator max direct children',
+    description: 'Root agent max direct children',
     isSecret: false,
   },
   {
-    key: 'swarm.levelDefaults.orchestrator.maxPendingDetached',
+    key: 'swarm.levelDefaults.root.maxPendingDetached',
     category: 'swarm',
     valueType: 'number',
     defaultValue: 6,
     description:
-      'Max detached (fire-and-collect) children the orchestrator can have in flight. 0 forces blocking await on every spawn.',
+      'Max detached (fire-and-collect) children the rootAgent can have in flight. 0 forces blocking await on every spawn.',
     isSecret: false,
   },
   {
@@ -924,7 +947,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'multiuser',
     valueType: 'boolean',
     defaultValue: true,
-    description: 'When true, the orchestrator consults skill_permissions before invoking tools (ALLOW/ASK/DENY). Default since v0.3.',
+    description: 'When true, the agent consults skill_permissions before invoking tools (ALLOW/ASK/DENY). Default since v0.3.',
     isSecret: false,
     envVar: 'MULTIUSER_ENFORCE_PERMISSIONS',
   },
@@ -1057,6 +1080,33 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     description: 'Hard cap on heartbeat runs per user per calendar day (1–288).',
     isSecret: false,
     envVar: 'HEARTBEAT_MAX_RUNS_PER_DAY',
+  },
+  {
+    key: 'heartbeat.probeGithub',
+    category: 'heartbeat',
+    valueType: 'boolean',
+    defaultValue: true,
+    description: 'Heartbeat probe: wake for open pull requests of yours whose checks are failing (one gh call per run; silently off when gh is not authenticated).',
+    isSecret: false,
+    envVar: 'HEARTBEAT_PROBE_GITHUB',
+  },
+  {
+    key: 'heartbeat.probeCalendar',
+    category: 'heartbeat',
+    valueType: 'boolean',
+    defaultValue: true,
+    description: 'Heartbeat probe: wake for calendar events starting soon on a connected Google or Microsoft calendar.',
+    isSecret: false,
+    envVar: 'HEARTBEAT_PROBE_CALENDAR',
+  },
+  {
+    key: 'heartbeat.calendarLookaheadMinutes',
+    category: 'heartbeat',
+    valueType: 'number',
+    defaultValue: 60,
+    description: 'How far ahead the calendar probe looks for events about to start (5–1440 minutes).',
+    isSecret: false,
+    envVar: 'HEARTBEAT_CALENDAR_LOOKAHEAD_MINUTES',
   },
 ];
 

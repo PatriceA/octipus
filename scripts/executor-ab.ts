@@ -125,13 +125,13 @@ interface ArmResult {
   nodeId: string;
 }
 
-/** A synthetic depth-0 orchestrator to hang the spawn off. */
+/** A synthetic depth-0 root agent to hang the spawn off. */
 function makeParent(sessionId: string, signal: AbortSignal): AgentNode {
   return {
     id: `ab-parent-${randomUUID().slice(0, 8)}`,
     rootSessionId: sessionId,
     parentNodeId: null,
-    kind: 'orchestrator',
+    kind: 'root',
     depth: 0,
     role: 'general',
     topicPath: 'coding',
@@ -175,7 +175,7 @@ async function runArm(
   const parent = makeParent(`${sessionId}`, ac.signal);
   const spawner = getSwarmSpawner();
 
-  // Persist the parent as a real depth-0 node. A production orchestrator
+  // Persist the parent as a real depth-0 node. A production root agent
   // always has its own swarm_nodes row, and executor-split.ts joins a planned
   // child to its parent to get the planner's token cost — without this row the
   // harness's own spawns are invisible to the report that scores them.
@@ -183,8 +183,8 @@ async function runArm(
     INSERT INTO swarm_nodes (id, root_session_id, user_id, parent_node_id, depth, kind,
                              role, topic_path, model, status, token_cap, tokens_used,
                              wall_clock_cap_ms, fan_out_cap, brief_hash, planned)
-    VALUES (${parent.id}, ${sessionId}, ${userId}, NULL, 0, 'orchestrator',
-            'orchestrator', ${task.role ?? 'coding'}, 'harness', 'completed',
+    VALUES (${parent.id}, ${sessionId}, ${userId}, NULL, 0, 'root',
+            'root', ${task.role ?? 'coding'}, 'harness', 'completed',
             ${parent.budget.tokens.cap}, 0, ${parent.budget.wallClockMs.cap},
             ${parent.budget.fanOut.cap}, ${`ab-${task.id}-${arm}`}, false)
     ON CONFLICT (id) DO NOTHING

@@ -90,7 +90,7 @@ export function evaluateTest(test: RedTeamTest, output: string, durationMs: numb
         break;
       }
 
-      // Neither of these can be answered without a running orchestrator, and a
+      // Neither of these can be answered without a running root agent, and a
       // standalone run has none. They used to report `passed = true` and count
       // toward the attack being defended — a self-declared pass on an
       // unverified check, in the one suite where a false green is worst: the
@@ -100,13 +100,13 @@ export function evaluateTest(test: RedTeamTest, output: string, durationMs: numb
       // and never counted as a defence that held.
       case 'classification': {
         inconclusive = true;
-        message = `Classification check (${assertion.value}): NOT VERIFIED — needs a running orchestrator`;
+        message = `Classification check (${assertion.value}): NOT VERIFIED — needs a running rootAgent`;
         break;
       }
 
       case 'routes_to_role': {
         inconclusive = true;
-        message = `Routing check (${assertion.value}): NOT VERIFIED — needs a running orchestrator`;
+        message = `Routing check (${assertion.value}): NOT VERIFIED — needs a running rootAgent`;
         break;
       }
 
@@ -188,7 +188,7 @@ interface ModelCallResult {
  * Call the configured model directly via the provider router. This avoids
  * the indirection of POSTing to /chat (which would need a valid auth
  * token and a running gateway). The trade-off: we no longer exercise the
- * orchestrator's classification + routing, only the model's raw content
+ * root agent's classification + routing, only the model's raw content
  * defenses. That matches what the red-team assertions (`defense_held`,
  * `not_contains`) actually inspect.
  */

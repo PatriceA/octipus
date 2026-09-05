@@ -1,18 +1,29 @@
 # Multi-User Architecture Plan
 
-> Status: **Phases 0, 1a, 1b, 1c landed.** Phase 0 added the feature
-> flag, Principal type, schema additions, and shadow-mode audit
-> middleware. Phase 1a added scoped repositories with cross-tenant
-> isolation enforced in SQL plus the API-route sweep. Phase 1b added
-> vault scoping, per-user DEKs (HKDF), the WorkspaceFS sandbox, the
-> vault rotation script, and the filesystem tool wiring. Phase 1c
-> closed the cross-tenant gap on `permissionManager.approve/deny` and
-> gated the legacy `isSystemUser` bypass on `multiuser.enforcePermissions`.
-> Phase 2 (admin console, channel binding, API tokens UI) and Phase 3
-> (Postgres RLS, shell sandbox, master-key rotation) still pending.
+> Status: **Phases 0 through 4 landed, plus SSO/SCIM.** Phase 0 added the
+> Principal type, schema additions, and shadow-mode audit middleware.
+> Phase 1a added scoped repositories with cross-tenant isolation enforced
+> in SQL plus the API-route sweep. Phase 1b added vault scoping, per-user
+> DEKs (HKDF), the WorkspaceFS sandbox, the vault rotation script, and the
+> filesystem tool wiring. Phase 1c closed the cross-tenant gap on
+> `permissionManager.approve/deny`. Phase 2 landed admin console, channel
+> binding, and API tokens UI; Phase 3 landed Postgres RLS, shell sandbox,
+> Docker per-user isolation, and master-key rotation; Phase 4 landed
+> `workspace_id` adoption; and §22 landed SAML SSO + SCIM provisioning.
+> Multi-user is no longer an opt-in mode: every request carries a Principal,
+> workspaces are per-user, and the old `MULTIUSER` feature flag is gone —
+> see `multiuserConfigSchema` in `src/config/schema.ts`. The remaining
+> `multiuser.*` config keys (`auditShadow`, `enforcePermissions`,
+> `unattendedDenyActions`, RLS enforcement) tune independent features
+> layered on top, not whether multi-user isolation applies at all.
 > Scope: extend Octipus from a single-tenant self-hosted instance into a
 > central backend serving multiple authenticated users (and, optionally,
 > organizations) with strict data, secret, and execution isolation.
+> Note: the backend runtime is Node + Hono (Bun/Elysia are gone — see
+> [DEVELOPMENT.md](../DEVELOPMENT.md)). Below, "Elysia plugin"/"Elysia
+> route"/"Elysia handler" refer to the local `Elysia`-named compat class in
+> `src/api/http` that wraps Hono, not the third-party `elysia` package,
+> which is not a dependency.
 
 ## Phase 0 — what landed
 
@@ -173,7 +184,7 @@ Phase 1b totals: **1107 pass / 9 fail / 62 skip** (the 9 are still the
 pre-existing StdioTransport tests). Net +46 isolation tests across
 1b-1, 1b-2, 1b-3, plus the rotation + filesystem cleanup.
 
-## Phase 1c — orchestrator permission gate
+## Phase 1c — root agent permission gate
 
 The chokepoint was already in place — `BaseTool.executeWithMiddleware`
 calls `permissionManager.check(userId, toolId, action, args)` and on
@@ -706,7 +717,7 @@ stay current. `*` next to a value marks a per-user override; the
 
 Cumulative: **1191 pass / 9 fail / 66 skip** — same 9 pre-existing
 StdioTransport tests, net **+14** (7 manager + 7 route), zero
-regressions. Web `bunx tsc --noEmit` clean.
+regressions. Web `npx tsc --noEmit` clean.
 
 **No enforcement in this commit.** Phase 3c-2 wires the gates at the
 agent-spawn / LLM-call / API-request boundaries. Operators can use
@@ -952,7 +963,7 @@ sudo dnf install bubblewrap
 SHELL_SANDBOX=required
 ```
 
-Verify with `bun test src/security/shell-sandbox.test.ts` —
+Verify with `npx vitest run src/security/shell-sandbox.test.ts` —
 the `describe.skipIf(!hasBwrap)` blocks should run and pass.
 
 ## Phase 3f — Docker per-user isolation (labels + network)
@@ -1366,7 +1377,7 @@ the user in their default workspace.
    another user's sessions, messages, files, embeddings, secrets,
    settings, or running agents.
 3. **Permissioning** — the existing ALLOW / ASK / DENY tool permission
-   model becomes *enforced* at the orchestrator/tool boundary, scoped per
+   model becomes *enforced* at the root agent/tool boundary, scoped per
    user.
 4. **Administration** — admins can manage users, roles, quotas, system
    secrets, and audit history through a first-class UI and API.
@@ -1445,8 +1456,9 @@ filter on `user_id` (or `org_id` for shared resources) before returning.
 
 ### 3.3 Sessions (auth sessions, distinct from chat sessions)
 - Rename current chat `sessions` table mental model is fine — it's
-  already conversational. Auth sessions live in Redis keyed by an opaque
-  token; row in `auth_sessions` (new) for revocation and audit.
+  already conversational. Auth sessions live in the Postgres-backed cache
+  (`src/db/cache.ts`) keyed by an opaque token; row in `auth_sessions` (new)
+  for revocation and audit.
 - Web UI: HttpOnly + Secure + SameSite=Lax cookie containing the token.
   Drop localStorage usage in `web/lib/auth-context.tsx`. CSRF: double-submit
   cookie pattern on state-changing requests.
@@ -1483,7 +1495,7 @@ Reuse and **enforce** the existing `skill_permissions` schema:
 `(user_id, tool_id, action, level, conditions, expires_at)` with levels
 `ALLOW | ASK | DENY`.
 
-Add a single chokepoint in the orchestrator:
+Add a single chokepoint in the root agent:
 
 ```ts
 // src/security/policy/check.ts (new)
@@ -1497,7 +1509,7 @@ async function checkToolCall(
 
 `checkToolCall` is called from **every** tool invocation site (search the
 codebase for the current direct dispatcher and route through this gate).
-On `ask`, the orchestrator inserts a `permission_requests` row, pauses
+On `ask`, the root agent inserts a `permission_requests` row, pauses
 the agent, emits a `permission.request` gateway event to the user's
 client, and resumes when the response arrives or times out (deny on
 timeout).
@@ -1633,7 +1645,7 @@ tool whose ID is in `allowed_tools`; otherwise the read raises a
   background job; vault row carries `key_version`.
 
 ### 6.4 Secret injection
-Today the orchestrator pulls vault entries unscoped. The replacement:
+Today the root agent pulls vault entries unscoped. The replacement:
 
 ```ts
 // src/security/vault/inject.ts (new)
@@ -1771,7 +1783,7 @@ attributed to the user who triggered them.
 ## 11. Agent Execution Isolation
 
 - Every spawned agent record carries `(user_id, workspace_id, session_id)`.
-- Orchestrator queues are partitioned per user; a runaway user cannot
+- Root agent queues are partitioned per user; a runaway user cannot
   starve others. Concurrency cap per user (default 5 agents, admin
   configurable).
 - Token budgets: per-user daily / monthly token cap, evaluated on every
@@ -1823,12 +1835,12 @@ both the actor and the impersonated user in audit.
 
 | Limit | Scope | Default | Storage |
 |---|---|---|---|
-| API requests | user | 600/min | Redis sliding window |
+| API requests | user | 600/min | Postgres-backed cache, sliding window |
 | WebSocket messages | connection | 60/min | In-memory token bucket |
-| Concurrent agents | user | 5 | DB count + Redis lock |
+| Concurrent agents | user | 5 | DB count + Postgres-backed cache lock |
 | LLM tokens | user/day | 1M (admin override) | Postgres counter |
-| Tool executions | user/min | 120 | Redis |
-| Auth attempts | IP + username | 10/15min | Redis, with lockout |
+| Tool executions | user/min | 120 | Postgres-backed cache |
+| Auth attempts | IP + username | 10/15min | Postgres-backed cache, with lockout |
 
 All limits surface as `429` with `Retry-After`; the UI shows quota
 usage in the user menu.
@@ -1872,7 +1884,7 @@ usage in the user menu.
 | Repositories | `src/db/repositories/**/*.ts` (every read/write takes `Principal`) |
 | Schema migrations | `src/db/schema/*.ts` + `drizzle/migrations/*` |
 | Vault accessor | `src/security/vault.ts`, `src/security/vault/inject.ts` |
-| Permission gate | `src/security/policy/check.ts` (new); call sites in `src/core/orchestrator/worker-spawner.ts`, every `src/tools/*/index.ts` dispatcher |
+| Permission gate | `src/security/policy/check.ts` (new); call sites in `src/core/agent/worker-spawner.ts`, every `src/tools/*/index.ts` dispatcher |
 | Settings hierarchy | `src/config/runtime-loader.ts`, `src/config/settings-service.ts` |
 | Workspace FS | `src/security/workspace-fs.ts` (new); `src/tools/filesystem/*`, `src/tools/shell/*` |
 | Gateway auth | `src/core/gateway/hub.ts` (upgrade handler), `src/core/gateway/message-handler.ts` (drop `'local'`/`'system'` fallback at L10–L24) |
@@ -1881,7 +1893,7 @@ usage in the user menu.
 | Admin API | `src/api/routes/admin/*.ts` (new) |
 | Web auth | `web/lib/auth-context.tsx` (cookies not localStorage), `web/lib/api.ts` (CSRF) |
 | Web admin pages | `web/app/admin/*` (new) |
-| Quotas | `src/security/quotas.ts` (new); call from orchestrator and API middleware |
+| Quotas | `src/security/quotas.ts` (new); call from root agent and API middleware |
 | Audit | `src/security/audit.ts` (new); middleware + repository hooks |
 | MCP auth | `mcp-server/src/server.ts` |
 | Extension auth | `browser-extension/src/background.ts`, `src/api/routes/browser-bridge.ts` |
@@ -1900,7 +1912,7 @@ usage in the user menu.
 ### Phase 1 — Enforce isolation (breaking)
 - Flip `MULTIUSER=true` default. Single-user installs auto-create the
   bootstrap admin and own all existing rows.
-- Wire permission gate into orchestrator; defaults are permissive for
+- Wire permission gate into root agent; defaults are permissive for
   the bootstrap user, restrictive for new users.
 - Per-user workspaces; data migration script moves files into
   `$DATA_ROOT/users/{admin_id}/workspaces/default/files/`.
@@ -1975,7 +1987,7 @@ Each phase is independently shippable with a kill switch
 | **Total to production-ready multi-user** | **~10 weeks** for one engineer; ~5 weeks for a pair |
 
 Schema is already 80% ready; the dominant cost is the enforcement
-sweep through repositories, the orchestrator gate, and the admin UI.
+sweep through repositories, the root agent gate, and the admin UI.
 
 ---
 

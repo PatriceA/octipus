@@ -3,25 +3,25 @@ import {
   clearSessionModel,
   getSessionModel,
   setSessionModel,
-} from '@/core/orchestrator/session-model-override';
+} from '@/core/agent/session-model-override';
 import { registerCommand } from './registry';
 
 /**
- * `/model` — manage the per-session orchestrator model override.
+ * `/model` — manage the per-session root agent model override.
  *
  *   /model                       → show the active override (if any)
- *   /model <modelId|name>        → switch the orchestrator to that model
+ *   /model <modelId|name>        → switch the root agent to that model
  *                                  for the remainder of the session
  *   /model clear                 → drop the override; revert to default
  *   /model list                  → list available models (same as /models)
  *
  * Specialist workers continue to resolve via their topic→model binding;
- * only the orchestrator honors this override. Persistence is in-memory
+ * only the root agent honors this override. Persistence is in-memory
  * (reset on restart) — see `session-model-override.ts`.
  */
 registerCommand({
   name: 'model',
-  description: 'Switch the orchestrator model for this session. Use `/model <id>` to set, `/model clear` to reset, `/model` to show the current override.',
+  description: 'Switch the rootAgent model for this session. Use `/model <id>` to set, `/model clear` to reset, `/model` to show the current override.',
   async execute(ctx) {
     const arg = ctx.args.trim();
     const registry = getModelRegistry();
@@ -29,7 +29,7 @@ registerCommand({
     if (arg === '' || arg.toLowerCase() === 'show' || arg.toLowerCase() === 'status') {
       const current = getSessionModel(ctx.sessionId);
       if (!current) {
-        return { response: 'No session override set. Orchestrator will use the configured default. Use `/model <id>` to switch.' };
+        return { response: 'No session override set. Root agent will use the configured default. Use `/model <id>` to switch.' };
       }
       return { response: `Session model override: \`${current}\`. Use \`/model clear\` to revert.` };
     }
@@ -38,7 +38,7 @@ registerCommand({
       const removed = clearSessionModel(ctx.sessionId);
       return {
         response: removed
-          ? 'Session model override cleared. Orchestrator reverts to the configured default.'
+          ? 'Session model override cleared. Root agent reverts to the configured default.'
           : 'No session override was active.',
       };
     }
@@ -72,7 +72,7 @@ registerCommand({
     }
     setSessionModel(ctx.sessionId, resolved.modelId);
     return {
-      response: `Orchestrator model switched to \`${resolved.modelId}\` for this session. Use \`/model clear\` to revert.`,
+      response: `Root agent model switched to \`${resolved.modelId}\` for this session. Use \`/model clear\` to revert.`,
     };
   },
 });

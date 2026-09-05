@@ -244,7 +244,7 @@ describe('real users — nested per-user root', () => {
   });
 
   test('relative read falls back to the workspace root when the file only exists there', async () => {
-    // Orchestrator-seeded files live at the per-user root, not the session
+    // Root-agent-seeded files live at the per-user root, not the session
     // dir. A relative read must still find them (session-dir miss → root).
     mkdirSync(perUserRoot(), { recursive: true });
     writeFileSync(join(perUserRoot(), 'seeded.md'), 'from the root\n');

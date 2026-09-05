@@ -35,7 +35,7 @@ Common fact keys: `location`, `birthday`, `email`, `phone`, `likes`, `dislikes`,
 
 ### Assistant Profile (Persona)
 
-A special profile row with `category='assistant'` stores the orchestrator's per-user persona. Exactly one per user. Its `name` is what the orchestrator calls itself ("Octipus" by default, or whatever the user renamed it to via `/persona name <X>`). Fact keys for this category:
+A special profile row with `category='assistant'` stores the root agent's per-user persona. Exactly one per user. Its `name` is what the root agent calls itself ("Octipus" by default, or whatever the user renamed it to via `/persona name <X>`). Fact keys for this category:
 
 | Key | Value |
 |-----|-------|
@@ -45,11 +45,11 @@ A special profile row with `category='assistant'` stores the orchestrator's per-
 | `narration` | Live swarm narration volume: `off|minimal|chatty` |
 | `extra:N` | Free-form rules added via `/persona say` or the web UI |
 
-Auto-created on first edit. See [CHAT-COMMANDS.md](CHAT-COMMANDS.md#personas-orchestrator-identity) for the slash commands and the [UX revamp plan](plans/ux-personality-revamp.md) for the full design.
+Auto-created on first edit. See [CHAT-COMMANDS.md](CHAT-COMMANDS.md#personas-root agent-identity) for the slash commands and the [UX revamp plan](plans/ux-personality-revamp.md) for the full design.
 
 ## Agent Tools
 
-Agents with the `profiles` tool (available to orchestrator, research, communication, general roles) can:
+Agents with the `profiles` tool (available to root agent, research, communication, general roles) can:
 
 | Tool | Description |
 |------|-------------|
@@ -98,4 +98,4 @@ Indexes: `user_id`, `name`
 | `src/db/schema/profiles.ts` | Database schema |
 | `src/db/repositories/profile-repository.ts` | Repository with CRUD + search |
 | `src/tools/profiles/index.ts` | Agent tool (8 sub-tools) |
-| `src/core/orchestrator/worker-spawner.ts` | User profile injection into prompts |
+| `src/core/agent/worker-spawner.ts` | User profile injection into prompts |

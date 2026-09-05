@@ -23,7 +23,7 @@ import { GatewayWSClient } from '../ws-client';
 /**
  * How long one real chat turn may take before we call it a failure.
  *
- * These tests drive a genuine orchestrator turn, and the `agents` lane on a
+ * These tests drive a genuine root agent turn, and the `agents` lane on a
  * normal install resolves to a CLI-backed model (`cli/claude`), which spawns a
  * process and loads its own config before it answers. A measured run of the
  * expert turn below completed in 33.5s — under the old 30s wait, so the suite
@@ -90,7 +90,7 @@ export async function testExpertRoutingFlow(runner: TestRunner, client: APIClien
       // connection metadata and the session DB. The REST-visible session
       // context is what proves DB persistence.
       // Use a trivial casual phrase so the classifier short-circuits to
-      // `directResponse` and the orchestrator never spawns a worker.
+      // `directResponse` and the root agent never spawns a worker.
       // "ping (attaches session to conn)" was classified as ambiguous and
       // kicked off a 4-minute general-agent run with browser-ext tool
       // attempts — the session attaches fine, but the side-effects

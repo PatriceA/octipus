@@ -1,4 +1,4 @@
-import { togglePlanMode } from '@/core/orchestrator/plan-mode';
+import { togglePlanMode } from '@/core/agent/plan-mode';
 import { registerCommand } from './registry';
 
 /**

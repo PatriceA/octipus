@@ -57,7 +57,7 @@ function NewAgentModal({ open, onClose }: NewAgentModalProps) {
     setError('');
 
     try {
-      // Use the chat endpoint which routes through the orchestrator
+      // Use the chat endpoint which routes through the root agent
       const _result = await api.post<{ response: string; agentId?: string; sessionId: string }>('/chat', {
         message: task,
       });

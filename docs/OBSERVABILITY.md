@@ -42,13 +42,13 @@ scrape_configs:
 | `process_resident_memory_bytes` | RSS. |
 | `nodejs_heap_used_bytes` / `nodejs_heap_total_bytes` | Heap usage. |
 | `octipus_db_up` | `1` if the primary database is reachable. |
-| `octipus_redis_up` | `1` if the storage provider is reachable. The metric name is kept for dashboard compatibility. |
+| `octipus_storage_up` | `1` if the storage provider (cache/queue/pub-sub) is reachable. |
 
 ### Domain metrics (counters / histograms)
 
 | Metric | Type | Labels | Emitted at |
 |---|---|---|---|
-| `octipus_orchestrator_runs_total` | counter | `channel`, `role`, `status` | every orchestrated turn (`OrchestratorService.handleMessage`) |
+| `octipus_root_agent_runs_total` | counter | `channel`, `role`, `status` | every orchestrated turn (`AgentService.handleMessage`) |
 | `octipus_classifications_total` | counter | `topic`, `method` | message classification |
 | `octipus_tool_executions_total` | counter | `tool`, `status` | every tool dispatch (`BaseTool` middleware) |
 | `octipus_tool_execution_duration_seconds` | histogram | `tool` | " |
@@ -63,7 +63,7 @@ never break a request or an agent turn.
 
 ## Run correlation (`runId`)
 
-Every call to `OrchestratorService.handleMessage` mints a `run_<uuid>` and binds
+Every call to `AgentService.handleMessage` mints a `run_<uuid>` and binds
 it as ambient context (`src/core/run-context.ts`, backed by
 `AsyncLocalStorage`) for the whole turn — including every child agent, tool
 call, and LLM request it fans out to.

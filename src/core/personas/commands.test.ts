@@ -83,10 +83,12 @@ describe('handlePersonaCommand — /persona arm', () => {
     expect(r.text).toContain('coding');
   });
 
-  test('the retired orchestrator role is simply unknown now', async () => {
+  test('the retired `orchestrator` role is simply unknown now', async () => {
     // It used to be redirected to the host persona. Phase 9 deleted the role,
     // so the generic unknown-role path is the honest answer — and the host
-    // persona is still what the agent the user talks to wears.
+    // persona is still what the agent the user talks to wears. The literal
+    // retired name is the point of the test: it is what a user who learned it
+    // from the old docs will type.
     const r = await handlePersonaCommand({ userId, rawArgs: 'arm orchestrator mentor' });
     expect(r.text).toContain('Unknown role "orchestrator"');
   });

@@ -3,8 +3,10 @@
 Octipus treats [Ollama](https://ollama.com) as a first-class local provider:
 self-hosted, no API key, runs on your own CPU/GPU. This doc covers what Octipus
 expects from an Ollama model — **size, tool support, context length** — and the
-local-only optimizations (lazy tool discovery, iGPU) that make a swarm usable on
-consumer hardware.
+optimizations (lazy tool discovery, iGPU) that make a swarm usable on consumer
+hardware. Lazy tool discovery is gated on model capability, not provider — see
+below — but it matters most here, where a local iGPU re-runs prefill on every
+request.
 
 > Related: [Small / Local Models](./SMALL-MODELS.md) (single-model setup and
 > what degrades) and [Custom Providers](./CUSTOM-PROVIDERS.md) (OpenAI-compatible
@@ -17,7 +19,7 @@ consumer hardware.
 | Question | Answer |
 | --- | --- |
 | Minimum viable model for the **full swarm** (tools + multi-step) | ~**7–8B**, 4-bit, `supportsTools: true` (e.g. `qwen3:8b`) |
-| "Small model" threshold (triggers prompt/tool trimming) | **< 10B params** (`orchestrator.routerSmallModelMaxParams`) |
+| "Small model" threshold (triggers prompt/tool trimming) | **< 10B params** (`agent.smallModelMaxParams`) |
 | Tool calling | Native Ollama tool format; **thinking must stay ON** for agent workers |
 | Context Octipus packs before compaction | `agent.contextWindowSize`, default **32000** tokens |
 | Context Ollama actually allocates | `num_ctx` / `OLLAMA_CONTEXT_LENGTH` — **set this yourself** (default 4096!) |
@@ -43,7 +45,7 @@ pullable tags from a curated catalog (`src/capabilities/hwfit/catalog.json`).
 
 Octipus routes by **parameter count**, derived from `metadata.paramCount` or
 parsed from the model tag (`qwen3:8b` → 8B; `qwen3:30b-a3b` MoE → counted by
-total). See `deriveParamCount` (`src/core/orchestrator/mode-selector.ts`).
+total). See `deriveParamCount` (`src/core/agent/mode-selector.ts`).
 
 A model under **`routerSmallModelMaxParams` (default 10B)** is treated as
 **small** and gets:
@@ -95,12 +97,15 @@ OpenAI-style tool schema in `ollama-provider.ts`). Two things to know:
    users never see them — the only effect is reliable tool calls. Casual chat
    (no tools) keeps the model's configured `think` setting.
 
-### Lazy tool discovery (Ollama-only optimization)
+### Lazy tool discovery
 
 Every advertised tool's full JSON schema is sent on **every** request. For a
 research worker that was ~12k tokens of schemas against a ~2.4k system prompt —
 and on a local iGPU that prefill re-runs every request (no cross-request
-server-side prompt caching), which took minutes and timed out the client.
+server-side prompt caching), which took minutes and timed out the client. A
+benchmark later showed the same cost hits remote providers too: the root's
+standing prompt measured ~22k tokens, 73% of it tool JSON schema, billed in
+full on every fresh session since a cache prefix only helps within one.
 
 **Lazy tool discovery** advertises only a
 small **core** set with full schema, plus two meta-tools — `list_tools` (names +
@@ -108,13 +113,16 @@ one-line descriptions, no params) and `describe_tool` (full schema for one tool)
 The long tail stays registered and callable by name; the model fetches a schema
 on demand (one extra round-trip on first use).
 
-It is gated deliberately to **`provider === 'ollama'` + non-small +
-`supportsTools` + a role that opts in** via `coreToolIds`:
+It is gated on the **model's capability, not its provider** — non-small +
+`supportsTools` + a role that opts in via `coreToolIds` (see
+`src/core/agent/lazy-tools.ts`):
 
-- **Remote providers** (OpenAI, Anthropic, DeepSeek, …) prefix-cache the tool
-  block cheaply and tool-call more reliably → stay on full schema.
-- **Small models** → keep the capped full-schema path (they discover poorly).
+- **Small models** → keep the capped full-schema path (they chain multi-step
+  discovery poorly).
 - A role with **no `coreToolIds`** → byte-for-byte unchanged behavior.
+- `agent.lazyToolDiscovery` (default `true`) is the operator override —
+  set it `false` to force full-schema advertisement everywhere, e.g. for a
+  provider that measurably tool-calls worse without the full block.
 
 A role opts in by setting `coreToolIds ⊆ toolIds` in its config. Example
 (`roles/research/config.ts`): `coreToolIds: ['websearch', 'knowledge']` — the
@@ -165,9 +173,30 @@ but you still have to *allocate* it via `num_ctx`.
   `OLLAMA_IGPU_ENABLE=1` (and keep any `HSA_OVERRIDE_GFX_VERSION` gfx override you
   already had). In Docker Compose, env changes need `up -d` to recreate the
   container — a plain `restart` won't pick them up.
-- **VRAM spill.** Models larger than VRAM spill to system RAM and run much
-  slower. Use the hwfit recommender to pick a tag that fits, or an MoE
-  (`qwen3:30b-a3b`: 30B total, ~3B active) for capability-per-VRAM.
+- **VRAM spill.** On a machine with a *discrete* GPU, models larger than VRAM
+  spill to system RAM over PCIe and run much slower. Use the hwfit recommender
+  to pick a tag that fits, or a mixture-of-experts model
+  (`qwen3.5:35b-a3b`: 35B total, ~3B active) for capability per gigabyte.
+- **Unified memory (`ollama.unifiedMemory`).** On an APU or an Apple Silicon
+  machine there is no spill to speak of: the reported VRAM is a firmware
+  carve-out from the same DRAM the GPU reaches through its GTT aperture, at the
+  same speed. Scoring against the carve-out is then measuring a boundary that
+  does not exist — a Radeon 890M reporting 16 GB alongside 39 GB of GTT was
+  told that everything above 16 GB "spills into RAM, slower", which hid the
+  best model the machine could run.
+
+  Apple Silicon is detected automatically. AMD is **not detectable** on Linux —
+  an APU and a discrete card expose the same sysfs surface, with no
+  `mem_info_vram_vendor` on current kernels and a GTT aperture that looks the
+  same on both — so set `ollama.unifiedMemory` (or `OLLAMA_UNIFIED_MEMORY=true`,
+  or `octi models recommend --unified` for a single run) and the recommender
+  scores against VRAM + GTT instead.
+
+  The pool is bounded by GTT, not by installed RAM: 16 GB VRAM + 39 GB GTT on a
+  96 GB machine gives a 55 GB budget, because the amdgpu driver sizes the
+  aperture at roughly half of system memory by default. Raise it with the
+  `amdgpu.gttsize` kernel parameter (in MB) if you want more of the pool
+  available to the GPU.
 
 ---
 

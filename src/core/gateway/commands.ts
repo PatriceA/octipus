@@ -289,7 +289,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     minTrustLevel: 'user',
     handler: async (ctx) => {
       if (!ctx.sessionId) return { text: 'No active session.' };
-      const { togglePlanMode } = await import('@/core/orchestrator/plan-mode');
+      const { togglePlanMode } = await import('@/core/agent/plan-mode');
       const { text } = await togglePlanMode(ctx.sessionId, ctx.rawArgs);
       return { text };
     },
@@ -303,7 +303,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     handler: async (ctx) => {
       if (!ctx.sessionId) return { text: 'No active session to compact.' };
       try {
-        const { maybeCompactSession } = await import('@/core/orchestrator/session-compaction');
+        const { maybeCompactSession } = await import('@/core/agent/session-compaction');
         const instructions = ctx.rawArgs.trim();
         await maybeCompactSession(ctx.sessionId, {
           userInstructions: instructions || undefined,
@@ -320,7 +320,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   registry.register({
     name: 'clear',
     aliases: ['cls', 'reset'],
-    description: 'Reset orchestrator context (and clear UI display on channels that support it)',
+    description: 'Reset rootAgent context (and clear UI display on channels that support it)',
     minTrustLevel: 'user',
     handler: async (ctx) => {
       if (!ctx.sessionId) return { text: 'No active session.' };
@@ -340,7 +340,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
 
         // Channels with ephemeral transcripts (webchat, tui) wipe the UI too.
         // Persistent-transcript channels (telegram, slack, …) keep history visible
-        // but the orchestrator will ignore anything before the clear boundary.
+        // but the root agent will ignore anything before the clear boundary.
         const DISPLAY_CLEAR_CLIENTS = new Set(['webchat', 'tui', 'web', 'ide']);
         if (DISPLAY_CLEAR_CLIENTS.has(ctx.clientType)) {
           return { text: '[clear]' };
@@ -378,6 +378,68 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
       } catch {
         return { text: 'Token usage tracking not available.' };
       }
+    },
+  });
+
+  registry.register({
+    name: 'proposals',
+    aliases: ['skills-proposals'],
+    description: 'Review distilled skill/expert proposals — /proposals, /proposals approve <n>, /proposals reject <n>',
+    args: [
+      { name: 'action', required: false, description: 'approve | reject' },
+      { name: 'index', required: false, description: 'Row number from the list' },
+    ],
+    minTrustLevel: 'user',
+    handler: async (ctx) => {
+      const { resolveUserId } = await import('./resolve-user');
+      const {
+        approveProposal, listPendingProposals, rejectProposal,
+      } = await import('@/services/skill-proposal-service');
+
+      // Trusted local/system consoles see (and act on) everything; a normal
+      // user only ever sees their own.
+      const userId = await resolveUserId(ctx.userId);
+      const scope = ctx.trustLevel === 'local' || ctx.trustLevel === 'system' ? undefined : userId;
+
+      const pending = await listPendingProposals(scope);
+      const action = (ctx.args.action || '').toLowerCase();
+
+      if (!action) {
+        if (pending.length === 0) return { text: 'No pending skill proposals.' };
+        const lines = pending.map((p, i) =>
+          `  ${i + 1}. ${p.name} (${p.kind}) — ${p.description}\n     from ${p.exemplarCount} run(s)`,
+        );
+        return {
+          text: `Pending skill proposals:\n${lines.join('\n')}\n\n`
+            + 'Approve with /proposals approve <n>, reject with /proposals reject <n>.',
+        };
+      }
+
+      if (pending.length === 0) return { text: 'No pending skill proposals.' };
+
+      if (action !== 'approve' && action !== 'reject') {
+        return { text: `Unknown action "${action}". Use /proposals, /proposals approve <n>, or /proposals reject <n>.` };
+      }
+
+      // The index is positional over the SAME oldest-first list the user just
+      // read, so it stays stable while nothing is resolved.
+      const index = Number.parseInt(ctx.args.index ?? '', 10);
+      const target = Number.isInteger(index) ? pending[index - 1] : undefined;
+      if (!target) {
+        return { text: `Pick a row number between 1 and ${pending.length}. Run /proposals to see the list.` };
+      }
+
+      if (action === 'approve') {
+        const result = await approveProposal(target.id, { userId: scope });
+        return result
+          ? { text: `Approved: "${result.name}" is now a${result.promoted === 'expert' ? 'n' : ''} ${result.promoted}.` }
+          : { text: 'That proposal is no longer pending.' };
+      }
+
+      const suppressedUntil = await rejectProposal(target.id, scope);
+      return suppressedUntil
+        ? { text: `Rejected "${target.name}". Suppressed until ${suppressedUntil.toISOString().slice(0, 10)}.` }
+        : { text: 'That proposal is no longer pending.' };
     },
   });
 
@@ -468,7 +530,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   registry.register({
     name: 'persona',
     aliases: [],
-    description: 'Configure the orchestrator persona — name, tone, narration, free-form facts',
+    description: 'Configure the rootAgent persona — name, tone, narration, free-form facts',
     minTrustLevel: 'user',
     handler: async (ctx) => {
       const { handlePersonaCommand } = await import('@/core/personas/commands');

@@ -1,6 +1,6 @@
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
-import { getOrchestratorService } from '@/core/orchestrator';
+import { getAgentService } from '@/core/agent';
 import { scopedRepos } from '@/db/repositories/scoped';
 import { checkProjectPath, devModeAllowed } from '@/security/devmode';
 import { isAuthenticated, requireScope } from '@/security/principal';
@@ -12,7 +12,7 @@ import { apiLogger } from '@/utils/logger';
 /**
  * The specialist roles this turn actually delegated to.
  *
- * The turn's `agentId` is the ORCHESTRATOR's, so it says nothing about where
+ * The turn's `agentId` is the ROOT AGENT's, so it says nothing about where
  * the work went. The routing decision lives in the swarm nodes spawned under
  * this session, which is the only place it is recorded as fact rather than as
  * intent.
@@ -83,14 +83,14 @@ async function routedRolesForTurn(sessionId: string, since: Date): Promise<strin
  * (`autoApproveLoop`) is the supported helper.
  *
  * WebSocket clients need none of this: the approval is pushed as
- * `orchestrator.approval_required`. Since Phase 1, `agent.blocked` also names
+ * `agent.approval_required`. Since Phase 1, `agent.blocked` also names
  * WHAT a quiet turn is waiting for (your approval / a child / a long tool),
  * every ~20s — so the silence is legible even before the approval lands.
  */
 export const chatRoutes = new Elysia({ prefix: '/chat' })
   .use(apiContext)
 
-  // Send a chat message through the orchestrator
+  // Send a chat message through the root agent
   .post(
     '/',
     async ({ user, principal, body, set }) => {
@@ -149,7 +149,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
         }
       }
 
-      const orchestrator = getOrchestratorService();
+      const rootAgent = getAgentService();
 
       // Marks this turn's boundary on the DATABASE clock, so the roles reported
       // below are the ones THIS request routed to and not a previous turn's.
@@ -163,7 +163,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           })
         : null;
       try {
-        const result = await orchestrator.handleMessage(
+        const result = await rootAgent.handleMessage(
           sessionId,
           user.id,
           message,
@@ -231,8 +231,8 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
         return { error: `API token missing required scope "${API_SCOPES.CHAT}"` };
       }
 
-      const orchestrator = getOrchestratorService();
-      const approval = orchestrator.peekApproval(body.requestId);
+      const rootAgent = getAgentService();
+      const approval = rootAgent.peekApproval(body.requestId);
 
       // Collapse "doesn't exist" and "not yours" into the same response so
       // attackers can't tell whether a requestId is currently pending.
@@ -240,7 +240,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
         return { error: 'Approval request not found or already resolved' };
       }
 
-      const resolved = orchestrator.resolveApproval(
+      const resolved = rootAgent.resolveApproval(
         body.requestId,
         body.approved,
         body.response,
@@ -274,12 +274,12 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
         return { error: `API token missing required scope "${API_SCOPES.CHAT}"` };
       }
 
-      const orchestrator = getOrchestratorService();
+      const rootAgent = getAgentService();
       // Admins see global list (operational triage); everyone else only
       // their own pending approvals.
       const pending = user.isAdmin
-        ? orchestrator.getPendingApprovals()
-        : orchestrator.getPendingApprovals(user.id);
+        ? rootAgent.getPendingApprovals()
+        : rootAgent.getPendingApprovals(user.id);
 
       return {
         approvals: pending.map((a) => ({

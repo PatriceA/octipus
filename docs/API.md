@@ -1,8 +1,6 @@
 # API Reference
 
-All endpoints are under `/api` with JWT Bearer authentication (except health and auth).
-
-Interactive documentation available at `http://localhost:3005/swagger`.
+All endpoints are under `/api` with JWT Bearer authentication (except the health routes and the auth endpoints that issue or exchange credentials).
 
 ## Getting an API token
 
@@ -22,10 +20,11 @@ curl -H "Authorization: Bearer $OCTIPUS_API_TOKEN" http://localhost:3005/api/aut
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/health` | No | Basic health check |
-| GET | `/health/detailed` | No | Service status with latencies |
-| GET | `/health/ready` | No | Readiness probe |
-| GET | `/health/live` | No | Liveness probe |
+| GET | `/api/health` | No | Basic health check |
+| GET | `/api/health/detailed` | No | Service status with latencies |
+| GET | `/api/health/ready` | No | Readiness probe |
+| GET | `/api/health/live` | No | Liveness probe |
+| GET | `/api/health/storage` | No | Storage provider (cache/queue/pub-sub) health |
 
 ## Authentication
 
@@ -179,7 +178,7 @@ curl -H "Authorization: Bearer $OCTIPUS_API_TOKEN" http://localhost:3005/api/aut
 
 ## Persona
 
-Per-user orchestrator persona — name, tone, narration volume, free-form self-facts — plus the per-arm voices that shadow it. Same controls as the `/persona` slash command (see [CHAT-COMMANDS.md](CHAT-COMMANDS.md#personas-orchestrator-identity)) and the web `/persona` page. Writes delegate to `handlePersonaCommand` so validation matches across all three surfaces.
+Per-user root agent persona — name, tone, narration volume, free-form self-facts — plus the per-arm voices that shadow it. Same controls as the `/persona` slash command (see [CHAT-COMMANDS.md](CHAT-COMMANDS.md#personas-root agent-identity)) and the web `/persona` page. Writes delegate to `handlePersonaCommand` so validation matches across all three surfaces.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -190,7 +189,7 @@ Per-user orchestrator persona — name, tone, narration volume, free-form self-f
 | DELETE | `/api/persona/facts/:idx` | Remove the N-th free-form fact (0-indexed across `extra:*`) |
 | POST | `/api/persona/reset` | Restore Octipus default — drops custom name and facts |
 | GET | `/api/persona/arms` | Per-arm persona bindings (`{ arms: { review: "terse-engineer" } }`); `{}` when no arm has its own voice |
-| PUT | `/api/persona/arms/:role` | Shadow one arm's voice with `{ presetId }`. 400 with the reason for an unknown role/preset, or for `orchestrator` (use `PATCH /api/persona`) |
+| PUT | `/api/persona/arms/:role` | Shadow one arm's voice with `{ presetId }`. 400 with the reason for an unknown role/preset, or for `root agent` (use `PATCH /api/persona`) |
 | DELETE | `/api/persona/arms/:role` | Clear it — that arm runs with no persona, as before |
 
 ## Tools
@@ -659,15 +658,15 @@ enforced on completions (unscoped tokens are full-access — see
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/v1/models` | List available models: `octipus/orchestrator` + every registry model. |
+| GET | `/v1/models` | List available models: `octipus/root agent` + every registry model. |
 | POST | `/v1/chat/completions` | Chat completion (streaming and non-streaming). |
 
 ### Model modes
 
-- **`octipus/orchestrator`** (default when `model` is omitted) runs the latest
+- **`octipus/root agent`** (default when `model` is omitted) runs the latest
   user message through the full agent turn — the root agent with its tools,
   delegating to specialists when it needs one. The id is unchanged for
-  compatibility; there is no separate orchestrator behind it any more. This
+  compatibility; there is no separate root agent behind it any more. This
   mode is **session-stateful**: pass a stable `user` field (or an
   `X-Octipus-Session` header) to keep a conversation sticky; otherwise each
   call runs in a fresh ephemeral session.
@@ -683,9 +682,9 @@ from openai import OpenAI
 
 client = OpenAI(base_url="https://your-host/v1", api_key="octi_…")
 
-# Orchestrator pipeline
+# Root agent pipeline
 resp = client.chat.completions.create(
-    model="octipus/orchestrator",
+    model="octipus/root agent",
     messages=[{"role": "user", "content": "Summarize today's open PRs"}],
     user="my-session-id",  # optional: keep the conversation sticky
 )
@@ -706,7 +705,7 @@ for chunk in client.chat.completions.create(
 curl https://your-host/v1/chat/completions \
   -H "Authorization: Bearer octi_…" \
   -H "Content-Type: application/json" \
-  -d '{"model":"octipus/orchestrator","messages":[{"role":"user","content":"hello"}]}'
+  -d '{"model":"octipus/root agent","messages":[{"role":"user","content":"hello"}]}'
 ```
 
 ### Notes & limits
@@ -714,6 +713,6 @@ curl https://your-host/v1/chat/completions \
 - **Streaming** (`stream: true`) is protocol-correct SSE that chunks the final
   message text. Token-true streaming (per-delta) is a planned follow-up.
 - `octipus/<role>` model ids (forced single-role) are **not yet wired** and
-  return `400 model_not_found`; use `octipus/orchestrator` or a registry model.
+  return `400 model_not_found`; use `octipus/root agent` or a registry model.
 - Errors use the OpenAI error envelope (`invalid_request_error`,
   `authentication_error`, `server_error`) so SDK error handling works.

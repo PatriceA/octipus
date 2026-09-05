@@ -18,7 +18,7 @@
     "start": "node dist/index.js",
     "tui": "tsx --import ./scripts/md-loader.mjs src/tui-pi/index.ts",
     "tui:edit": "tsx --import ./scripts/md-loader.mjs src/tui-editor/index.ts",
-    "start:all": "bin/octi start",
+    "start:all": "bin/octi start web",
     "stop:all": "bin/octi stop",
     "build": "tsx --import ./scripts/md-loader.mjs scripts/build.ts",
     "build:cli": "tsx --import ./scripts/md-loader.mjs scripts/build-cli.ts",
@@ -47,7 +47,7 @@
     "eval:quality": "tsx --import ./scripts/md-loader.mjs src/eval/cli.ts --suite quality",
     "catalog": "tsx --import ./scripts/md-loader.mjs scripts/gen-catalog.ts",
     "catalog:check": "tsx --import ./scripts/md-loader.mjs scripts/gen-catalog.ts --check",
-    "orchestrator-cost": "tsx --import ./scripts/md-loader.mjs scripts/orchestrator-cost.ts",
+    "root-agent-cost": "tsx --import ./scripts/md-loader.mjs scripts/root-agent-cost.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome lint",
     "lint:fix": "biome lint --write --unsafe"
@@ -115,7 +115,8 @@
     "ws": "$ws",
     "file-type": "^21.3.4",
     "follow-redirects": "^1.15.12",
-    "qs": "^6.15.2",
+    "qs": "^6.16.0",
+    "@xmldom/xmldom": "^0.8.15",
     "playwright-core": "1.62.0"
   }
 }

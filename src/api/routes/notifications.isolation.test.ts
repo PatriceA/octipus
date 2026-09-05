@@ -90,6 +90,27 @@ describe('GET /api/notifications', () => {
     expect(r.body.notifications.find((n: any) => n.id === aliceNotifId)).toBeDefined();
     expect(r.body.unreadCount).toBe(1);
   });
+
+  test('unread and type filters apply server-side and stay in scope', async () => {
+    const { executeRaw } = await import('@/db/postgres');
+    await executeRaw(
+      `INSERT INTO notifications (user_id, type, title, read) VALUES
+         ('${aliceId}', 'agent_complete', 'alice-agent-done', true),
+         ('${aliceId}', 'pipeline_error', 'alice-pipe-broke', false),
+         ('${bobId}', 'pipeline_error', 'bob-pipe-broke', false)`,
+    );
+    const unread = await get(aliceApp, '/api/notifications?unread=1');
+    expect(unread.body.notifications.map((n: any) => n.title).sort()).toEqual(['alice-notif', 'alice-pipe-broke']);
+
+    const pipelines = await get(aliceApp, '/api/notifications?type=pipeline');
+    expect(pipelines.body.notifications.map((n: any) => n.title)).toEqual(['alice-pipe-broke']);
+
+    const both = await get(aliceApp, '/api/notifications?type=agent&unread=1');
+    expect(both.body.notifications).toEqual([]);
+
+    const bad = await get(aliceApp, '/api/notifications?type=pipe%25');
+    expect(bad.body.error).toMatch(/Invalid type filter/);
+  });
 });
 
 describe('POST /api/notifications/:id/read cross-tenant', () => {

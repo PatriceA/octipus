@@ -94,6 +94,14 @@ export interface TriggerConfig {
   // calendar day (in the config tz) the count applies to; it resets on rollover.
   heartbeatDayKey?: string;
   heartbeatRunsToday?: number;
+  /**
+   * External probe items already surfaced (PR url + rollup state, calendar
+   * event identity). A red PR or an upcoming meeting has no "done" a user can
+   * click, so without this the same item would wake the heartbeat every tick.
+   * Pruned to what the latest probe still sees, so a cleared item re-fires
+   * if it comes back.
+   */
+  heartbeatSeen?: { prs?: string[]; events?: string[] };
 }
 
 export interface ActionConfig {
@@ -118,8 +126,14 @@ export interface ActionConfig {
   toolParams?: Record<string, unknown>;
   // General options
   orchestrated?: boolean;
-  orchestratorNotify?: boolean;
+  notifyRoot?: boolean;
   notifyOwner?: boolean;
+  /**
+   * For spawn_agent: prepend the owner's "while you were away" digest for the
+   * last N hours to the prompt (see core/digest/away.ts). Deterministic text,
+   * no model call — the agent reads facts instead of re-discovering them.
+   */
+  awayDigestHours?: number;
   // For incoming webhook response delivery
   channelType?: string;
   channelId?: string;

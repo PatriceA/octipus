@@ -1,158 +1,109 @@
-import { describe, expect, test } from 'bun:test';
-import { mkdtempSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
-
 /**
- * Smoke tests for the compiled `octi` binary. We don't run the
- * compiled artifact here (the build target produces a 95MB binary
- * which we don't want to ship to CI runners); we just exercise the
- * TypeScript dispatcher under bun to validate command routing and
- * help output.
+ * Smoke tests for the `octi` launcher.
+ *
+ * These sat dead through the whole Node migration: the file imported
+ * `bun:test` and used `Bun.spawn`, and `bin/` was not in vitest's globs, so
+ * nothing ran them — which is how `bin/octi.cmd` kept demanding bun, and how
+ * `octi start` could change shape with no test noticing.
+ *
+ * The bash dispatcher is driven directly with an isolated $HOME, so the
+ * destructive paths (PID files, log files) cannot touch a real install. Only
+ * the commands that do NOT start processes are exercised.
  */
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, test } from 'vitest';
 
-const BIN = join(import.meta.dir, 'octi.ts');
-const BIN_BASH = join(import.meta.dir, 'octi');
+const BIN_DIR = dirname(fileURLToPath(import.meta.url));
+const BIN_BASH = join(BIN_DIR, 'octi');
 
-async function run(args: string[], opts: { env?: Record<string, string> } = {}) {
-  const proc = Bun.spawn(['bun', 'run', BIN, ...args], {
-    stdout: 'pipe',
-    stderr: 'pipe',
-    env: { ...process.env, ...opts.env },
-  });
-  const stdout = await new Response(proc.stdout).text();
-  const stderr = await new Response(proc.stderr).text();
-  const code = await proc.exited;
-  return { stdout, stderr, code };
+function runBash(args: string[]): { stdout: string; code: number } {
+  const home = mkdtempSync(join(tmpdir(), 'octi-cli-test-'));
+  try {
+    const stdout = execFileSync('bash', [BIN_BASH, ...args], {
+      env: { ...process.env, HOME: home, NO_COLOR: '1' },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return { stdout, code: 0 };
+  } catch (err) {
+    const e = err as { stdout?: string; stderr?: string; status?: number };
+    return { stdout: `${e.stdout ?? ''}${e.stderr ?? ''}`, code: e.status ?? 1 };
+  }
 }
 
-/**
- * Drive the bash dispatcher directly with an isolated $HOME so destructive
- * commands (uninstall) compute their footprint against a throwaway dir and
- * never touch the real ~/.octipus. We only exercise non-mutating paths
- * (--help, --dry-run, aborted confirm) so nothing is ever deleted.
- */
-async function runBash(
-  args: string[],
-  opts: { env?: Record<string, string>; stdin?: string } = {},
-) {
-  const home = mkdtempSync(join(tmpdir(), 'octi-test-home-'));
-  const proc = Bun.spawn(['bash', BIN_BASH, ...args], {
-    stdout: 'pipe',
-    stderr: 'pipe',
-    stdin: opts.stdin ? new TextEncoder().encode(opts.stdin) : 'ignore',
-    env: { ...process.env, HOME: home, ...opts.env },
-  });
-  const stdout = await new Response(proc.stdout).text();
-  const stderr = await new Response(proc.stderr).text();
-  const code = await proc.exited;
-  // Strip ANSI so assertions match on plain text.
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping ANSI.
-  const plain = (stdout + stderr).replace(/\x1b\[[0-9;]*m/g, '');
-  return { stdout, stderr, plain, code };
-}
+/** Strip the ANSI the banner and log helpers emit unconditionally. */
+const plain = (s: string): string => s.replace(/\[[0-9;]*m/g, '');
 
-describe('octi dispatcher', () => {
-  test('help prints the banner and exits 0', async () => {
-    const r = await run(['help']);
-    expect(r.code).toBe(0);
-    expect(r.stdout).toContain('one nervous system, many arms');
-    expect(r.stdout).toContain('doctor');
-    expect(r.stdout).toContain('setup');
-    expect(r.stdout).toContain('tui');
-    expect(r.stdout).toContain('persona');
+describe('octi help', () => {
+  const help = plain(runBash(['help']).stdout);
+
+  test('exits 0 and prints usage', () => {
+    expect(runBash(['help']).code).toBe(0);
+    expect(help).toContain('Usage:');
   });
 
-  test('--help is an alias', async () => {
-    const r = await run(['--help']);
-    expect(r.code).toBe(0);
-    expect(r.stdout).toContain('Usage: octi');
+  test('start is described as backend-first, not "backend + web UI"', () => {
+    // The whole point of the change: a terminal user should not have to opt
+    // out of a browser.
+    expect(help).toMatch(/start \[client\]\s+Start the backend/);
+    expect(help).not.toContain('backend + web UI');
+    expect(help).not.toContain('--backend-only');
   });
 
-  test('no args defaults to help', async () => {
-    const r = await run([]);
-    expect(r.code).toBe(0);
-    expect(r.stdout).toContain('Usage: octi');
+  test('lists the clients you can attach', () => {
+    for (const client of ['tui', 'open', 'desktop', 'edit']) {
+      expect(help).toMatch(new RegExp(`^\\s+${client}\\b`, 'm'));
+    }
   });
 
-  test('version prints semver + Bun version', async () => {
-    const r = await run(['version']);
-    expect(r.code).toBe(0);
-    expect(r.stdout).toMatch(/Octipus v\d+\.\d+\.\d+/);
-    expect(r.stdout).toContain('Bun');
-  });
-
-  test('unknown command exits 1 with help text', async () => {
-    const r = await run(['fhqwhgads']);
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain('unknown command');
-    expect(r.stderr).toContain('Usage: octi');
-  });
-
-  test('doctor --help passes through to the doctor script', async () => {
-    const r = await run(['doctor', '--help']);
-    expect(r.code).toBe(0);
-    expect(r.stdout).toContain('Usage: octi doctor');
-  });
-
-  test('persona help prints subcommand hints', async () => {
-    const r = await run(['persona', 'help']);
-    expect(r.code).toBe(0);
-    expect(r.stdout).toContain('TUI:');
-    expect(r.stdout).toContain('Web:');
-  });
-
-  test('help lists the uninstall command', async () => {
-    const r = await run(['help']);
-    expect(r.code).toBe(0);
-    expect(r.stdout).toContain('uninstall');
-    expect(r.stdout).toContain('--purge');
-  });
-
-  test('uninstall --help routes through to the bash dispatcher', async () => {
-    // Full path: TS dispatcher -> delegateBash -> cmd_uninstall_help.
-    const r = await run(['uninstall', '--help']);
-    expect(r.code).toBe(0);
-    expect(r.stdout).toContain('octi uninstall [--purge]');
+  test('says the client names double as start targets', () => {
+    expect(help).toContain('octi start tui');
   });
 });
 
-describe('octi uninstall (bash dispatcher)', () => {
-  test('--help explains data is kept by default', async () => {
-    const r = await runBash(['uninstall', '--help']);
-    expect(r.code).toBe(0);
-    expect(r.plain).toContain('your data is kept');
-    expect(r.plain).toContain('--purge to wipe it');
-    expect(r.plain).toContain("Per-project '.octipus/' folders");
-  });
-
-  test('--dry-run keeps data and changes nothing', async () => {
-    const r = await runBash(['uninstall', '--dry-run']);
-    expect(r.code).toBe(0);
-    expect(r.plain).toContain('Keep your data');
-    expect(r.plain).toContain('Back up secrets');
-    expect(r.plain).toContain('Dry run — nothing was changed.');
-    // The keep path must never advertise destroying data.
-    expect(r.plain).not.toContain('Remove EVERYTHING');
-  });
-
-  test('--purge --dry-run warns it will remove everything', async () => {
-    const r = await runBash(['uninstall', '--purge', '--dry-run']);
-    expect(r.code).toBe(0);
-    expect(r.plain).toContain('Remove EVERYTHING');
-    expect(r.plain).toContain('-v');
-    expect(r.plain).toContain('Dry run — nothing was changed.');
-  });
-
-  test('aborts (exit 1) when the confirmation word does not match', async () => {
-    const r = await runBash(['uninstall'], { stdin: 'nope\n' });
+describe('octi start argument parsing', () => {
+  test('rejects an unknown target instead of silently starting', () => {
+    const r = runBash(['start', 'bogus']);
     expect(r.code).toBe(1);
-    expect(r.plain).toContain('Aborted — nothing was changed.');
+    expect(plain(r.stdout)).toContain('Unknown target: bogus');
   });
 
-  test('purge requires typing "purge", not "uninstall"', async () => {
-    const r = await runBash(['uninstall', '--purge'], { stdin: 'uninstall\n' });
+  test('names the targets it does accept', () => {
+    expect(plain(runBash(['start', 'bogus']).stdout)).toContain('tui, web, desktop');
+  });
+});
+
+describe('octi unknown command', () => {
+  test('exits 1 and shows help', () => {
+    const r = runBash(['definitely-not-a-command']);
     expect(r.code).toBe(1);
-    expect(r.plain).toContain('Aborted — nothing was changed.');
+    expect(plain(r.stdout)).toContain('Unknown command');
+  });
+});
+
+describe('launcher scripts are on the current runtime', () => {
+  // The Node migration never reached the Windows launcher: it checked for bun
+  // and ran `bun run start`, so `octi start` on Windows could not work at all.
+  // Neither script is executed by CI on the other platform, so the only thing
+  // that catches this is reading them.
+  const scripts = ['octi', 'octi.cmd', 'octi.mjs'];
+
+  for (const name of scripts) {
+    test(`${name} does not invoke bun`, () => {
+      const source = readFileSync(join(BIN_DIR, name), 'utf8');
+      expect(source).not.toMatch(/\bbun\b(?!dle)/);
+    });
+  }
+
+  test('neither launcher clears a Next.js build directory', () => {
+    // The web app is built by Vite into web/dist; `.next` has not existed
+    // since the migration, so clearing it cleared nothing.
+    for (const name of ['octi', 'octi.cmd']) {
+      expect(readFileSync(join(BIN_DIR, name), 'utf8')).not.toContain('.next');
+    }
   });
 });

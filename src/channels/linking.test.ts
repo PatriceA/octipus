@@ -56,7 +56,7 @@ describe('generateLinkCode + redeemLinkCode bridge → ChannelBindingManager', (
     });
     expect(code).toMatch(/^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$/);
 
-    // The code is in channel_link_codes (new table), NOT a Redis key.
+    // The code is in channel_link_codes (new table), NOT a cache key.
     const { queryRaw } = await import('@/db/postgres');
     const codes = await queryRaw(`SELECT code, channel_type, external_id FROM channel_link_codes WHERE code='${code}'`);
     expect(codes.rows).toHaveLength(1);
@@ -99,7 +99,7 @@ describe('generateLinkCode + redeemLinkCode bridge → ChannelBindingManager', (
     expect((await redeemLinkCode(code, aliceId)).success).toBe(true);
 
     // Verify the JSONB array now contains the binding too — keeps any
-    // unmigrated reader (older orchestrator paths) working.
+    // unmigrated reader (older root agent paths) working.
     const { queryRaw } = await import('@/db/postgres');
     const { rows } = await queryRaw(
       `SELECT channel_bindings FROM users WHERE id='${aliceId}'`,

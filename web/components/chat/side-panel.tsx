@@ -168,7 +168,7 @@ export default function SidePanel({
   // The root agent is Octipus answering, not one of the agents it dispatched —
   // the panel lists the latter. Older sessions carry the retired role name
   // instead of the flag, so both are filtered.
-  const agentArray = Array.from(trackedAgents.values()).filter((a) => !a.root && a.role !== 'orchestrator');
+  const agentArray = Array.from(trackedAgents.values()).filter((a) => !a.root && a.role !== 'rootAgent');
 
   const runningAgents = agentArray.filter((a) => a.status === 'running');
   const completedAgents = agentArray

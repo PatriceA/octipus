@@ -15,7 +15,7 @@ export const profiles = pgTable('profiles', {
   //   "person"       — humans the user knows
   //   "organization" — companies / teams
   //   "pet"          — animals
-  //   "assistant"    — the orchestrator's own profile (persona) for this
+  //   "assistant"    — the root agent's own profile (persona) for this
   //                    user. Exactly one per user; created on demand and
   //                    seeded from `personas/octipus.yaml`.
   category: text('category').notNull().default('person'),

@@ -51,7 +51,7 @@ function ElapsedTimer({ startTime, endTime }: { startTime: number; endTime?: num
 }
 
 const ROLE_COLORS: Record<string, string> = {
-  orchestrator: 'bg-purple-900/30 text-primary',
+  rootAgent: 'bg-purple-900/30 text-primary',
   research: 'bg-primary-container/60 text-primary',
   coding: 'bg-tertiary-container/60 text-tertiary',
   review: 'bg-warning-container/60 text-warning',

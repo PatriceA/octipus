@@ -10,7 +10,7 @@ import type { ChatCompletionMessageParam } from 'openai/resources/chat/completio
  */
 
 // Marks the start of the VOLATILE section of an assembled system prompt. Both
-// prompt-assembly sites (worker-spawner, orchestrator-runner) push the date
+// prompt-assembly sites (worker-spawner, root-runner) push the date
 // block first into the volatile tier (Phase 2a), so the static/cacheable prefix
 // is everything before this marker.
 export const VOLATILE_MARKER = /\n\nCURRENT DATE ?&? ?\/?\s?TIME/;

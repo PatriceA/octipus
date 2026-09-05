@@ -1,5 +1,8 @@
 import type { AgentContext, ToolManifest } from '@/core/types';
 import { scopedRepos } from '@/db/repositories/scoped';
+import { nextActions } from '@/core/tasks/next';
+import { dateOnlyToEndOfDay } from '@/core/tasks/rank';
+import { resolveUserTimezone } from '@/core/tasks/timezone';
 import type { Principal } from '@/security/principal';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
@@ -29,7 +32,7 @@ export class TasksTool extends BaseTool {
         { action: 'write', description: 'Create, update, or complete the user\'s tasks', defaultLevel: 'ASK' },
       ],
       tools: [
-        { name: 'list_tasks', description: 'List the user\'s tasks (optionally filter by status or due-today)', parameters: {}, returns: 'Array of tasks' },
+        { name: 'list_tasks', description: 'List the user\'s tasks (filter by status / due-today / category, or view "next" for next-action order with a reason each)', parameters: {}, returns: 'Array of tasks' },
         { name: 'create_task', description: 'Create a new task', parameters: {}, returns: 'The created task' },
         { name: 'update_task', description: 'Update a task\'s fields', parameters: {}, returns: 'The updated task' },
         { name: 'complete_task', description: 'Mark a task as done', parameters: {}, returns: 'The completed task' },
@@ -40,14 +43,21 @@ export class TasksTool extends BaseTool {
   protected async registerTools(): Promise<void> {
     this.registerTool(
       'list_tasks',
-      'List the user\'s tasks. Optional: status ("open"|"done"|"archived") and dueToday (only tasks due by end of today).',
+      'List the user\'s tasks. Optional: status ("open"|"done"|"archived") and dueToday (only tasks due by end of today). view "next" returns open tasks ranked in next-action order (overdue → due today → high priority → new from email/research → due this week → backlog), each with a one-line reason.',
       createParameterSchema({
         status: { type: 'string', description: 'Filter by status', enum: ['open', 'done', 'archived'] },
         dueToday: { type: 'boolean', description: 'Only tasks due by end of today' },
         category: { type: 'string', description: 'Filter to a category/list (e.g. "Shopping"); "none" for uncategorized' },
+        view: { type: 'string', description: '"next" = open tasks in next-action order with a reason each', enum: ['next'] },
+        limit: { type: 'number', description: 'Max tasks to return for view "next" (default 10)' },
       }),
       async (args, context) => {
         const principal = this.principalFor(context);
+        if (args.view === 'next') {
+          const limit = Math.max(1, Math.min(50, Math.trunc(Number(args.limit) || 10)));
+          const { timezone, ranked } = await nextActions(principal, { category: args.category as string | undefined, limit });
+          return { timezone, tasks: ranked.map((r) => ({ ...summarize(r.task), bucket: r.bucket, reason: r.reason })) };
+        }
         let dueBefore: Date | undefined;
         if (args.dueToday) {
           dueBefore = new Date();
@@ -81,7 +91,7 @@ export class TasksTool extends BaseTool {
           notes: (args.notes as string | undefined) ?? null,
           priority: clampPriority(args.priority),
           category: normalizeCategory(args.category),
-          dueAt: parseDueAt(args.dueAt),
+          dueAt: await parseDueAt(args.dueAt, principal.userId),
           source: normalizeSource(args.source),
           sourceRef: context.sessionId ? { sessionId: context.sessionId } : undefined,
         });
@@ -116,7 +126,7 @@ export class TasksTool extends BaseTool {
           category: args.category !== undefined ? normalizeCategory(args.category) : undefined,
           // `!== undefined` (not truthiness): an explicit "" clears the due date;
           // absent leaves it unchanged. parseDueAt('') → null (clear).
-          dueAt: args.dueAt !== undefined ? parseDueAt(args.dueAt) : undefined,
+          dueAt: args.dueAt !== undefined ? await parseDueAt(args.dueAt, principal.userId) : undefined,
           ...completionPatch(status, Boolean(existing.completedAt)),
         });
         return { updated: true, task: task ? summarize(task) : null };
@@ -183,10 +193,15 @@ function normalizeCategory(v: unknown): string | null {
   return c === '' ? null : c.slice(0, 100);
 }
 
-/** Parse an optional ISO due-date; returns null on absent/garbage rather than NaN. */
-function parseDueAt(v: unknown): Date | null {
-  if (!v) return null;
-  const d = new Date(v as string);
+/**
+ * Parse an optional due date; returns null on absent/garbage rather than NaN.
+ * A bare `YYYY-MM-DD` means the end of that day in the user's timezone.
+ */
+async function parseDueAt(v: unknown, userId: string): Promise<Date | null> {
+  if (!v || typeof v !== 'string') return null;
+  const dateOnly = dateOnlyToEndOfDay(v, await resolveUserTimezone(userId));
+  if (dateOnly) return dateOnly;
+  const d = new Date(v);
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
