@@ -120,6 +120,12 @@ export interface ActionConfig {
   orchestrated?: boolean;
   notifyRoot?: boolean;
   notifyOwner?: boolean;
+  /**
+   * For spawn_agent: prepend the owner's "while you were away" digest for the
+   * last N hours to the prompt (see core/digest/away.ts). Deterministic text,
+   * no model call — the agent reads facts instead of re-discovering them.
+   */
+  awayDigestHours?: number;
   // For incoming webhook response delivery
   channelType?: string;
   channelId?: string;

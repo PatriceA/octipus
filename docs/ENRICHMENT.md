@@ -71,6 +71,27 @@ in `src/core/tasks/sourced.ts`:
 | `email` | **To-do** on an open message (`POST /api/email/message/:id/task`) — subject as title, sender + snippet in notes, triage priority mapped onto task priority, category *Email*. The email-processor tool also tells the agent to `create_task` for mail that needs the user. |
 | `research` | Automatic on every finished Deep Research run — one *Review research: …* task pointing at the saved document (`sourceRef.documentId`), category *Research*. |
 
+## While you were away
+
+One list of what happened to the user's work since they last looked: agents
+that finished or failed, pipelines that completed or now wait on them,
+approvals blocking a run, to-dos other things created for them, and the unread
+notifications that arrived in the window (older unread mail is the inbox's
+business, so "nothing happened" stays reachable). A pipeline that is still
+running is not news yet and is left out. Approvals and failures come first —
+they are the only items where nothing moves until the user acts.
+
+- Core: `src/core/digest/away.ts` — `collectAwayDigest` folds `agents`,
+  `pipelines`, `tasks`, `notifications` and the in-process approval list;
+  `renderAwayDigest` is the deterministic markdown of the same facts.
+- Route: `GET /api/digest/away?since=<iso>` (default: 24h; clamped to 30d).
+- Web: the first card on the dashboard (`web/components/dashboard/away-digest.tsx`).
+  **caught up** remembers the moment in the browser and starts the next "away"
+  there.
+- Briefing: a `spawn_agent` hook with `actionConfig.awayDigestHours` gets the
+  rendered digest prepended to its prompt — the seeded Daily Briefing uses 24 —
+  so the agent reads facts instead of spending a turn collecting them.
+
 ## Inbox (notifications)
 
 Every notification the platform raises for a user — an agent finished or

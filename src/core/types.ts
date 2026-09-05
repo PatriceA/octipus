@@ -241,6 +241,8 @@ export interface ActionConfig {
   agentModel?: string;
   orchestrated?: boolean;
   notifyRoot?: boolean;
+  /** Prepend the owner's "while you were away" digest for the last N hours (see core/digest/away.ts). */
+  awayDigestHours?: number;
   // For webhook
   webhookUrl?: string;
   webhookMethod?: 'GET' | 'POST' | 'PUT';

@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts` and verified in CI, so it ca
 
 ## HTTP surface
 
-386 mounted routes across 60 route files. The path is the full one, group prefix included — what a client actually calls.
+387 mounted routes across 61 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -109,6 +109,7 @@ Derived from the source by `scripts/gen-catalog.ts` and verified in CI, so it ca
 | DELETE | `/api/devices/:sessionId` | `src/api/routes/devices.ts` |
 | POST | `/api/devices/pair/generate` | `src/api/routes/devices.ts` |
 | POST | `/api/devices/pair/redeem` | `src/api/routes/devices.ts` |
+| GET | `/api/digest/away` | `src/api/routes/digest.ts` |
 | GET | `/api/documents` | `src/api/routes/documents.ts` |
 | DELETE | `/api/documents/:id` | `src/api/routes/documents.ts` |
 | GET | `/api/documents/:id` | `src/api/routes/documents.ts` |
@@ -421,14 +422,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 7 |
 | `api` | `config` | 18 |
 | `api` | `connectors` | 1 |
-| `api` | `core` | 74 |
+| `api` | `core` | 75 |
 | `api` | `db` | 93 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 5 |
 | `api` | `mcp` | 3 |
 | `api` | `models` | 28 |
 | `api` | `plugins` | 1 |
-| `api` | `security` | 67 |
+| `api` | `security` | 68 |
 | `api` | `services` | 4 |
 | `api` | `skills` | 2 |
 | `api` | `tools` | 3 |
@@ -460,7 +461,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `channels` | 1 |
 | `core` | `config` | 27 |
 | `core` | `connectors` | 2 |
-| `core` | `db` | 155 |
+| `core` | `db` | 156 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 4 |
 | `core` | `mcp` | 3 |
@@ -487,7 +488,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `extensions` | `utils` | 3 |
 | `hooks` | `channels` | 2 |
 | `hooks` | `config` | 2 |
-| `hooks` | `core` | 4 |
+| `hooks` | `core` | 6 |
 | `hooks` | `db` | 7 |
 | `hooks` | `security` | 1 |
 | `hooks` | `tools` | 1 |

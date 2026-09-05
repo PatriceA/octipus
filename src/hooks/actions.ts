@@ -194,6 +194,24 @@ async function executeSpawnAgent(
 
   let prompt = interpolateTemplate(config.agentPrompt || '', context);
 
+  // The away digest is deterministic — read it here and hand the agent the
+  // facts, rather than spending a model turn asking it to collect them.
+  // Fail-soft: a digest that cannot be built must not stop the hook. It is
+  // applied to whatever the agent will actually receive (see `message`
+  // below): a message-triggered hook runs on the message, not the prompt.
+  let digestBlock = '';
+  const digestHours = Number(config.awayDigestHours);
+  if (Number.isFinite(digestHours) && digestHours > 0 && userId !== 'system') {
+    try {
+      const { collectAwayDigest, defaultSince, renderAwayDigest } = await import('@/core/digest/away');
+      const { backgroundUserPrincipal } = await import('@/core/tasks/sourced');
+      const digest = await collectAwayDigest(backgroundUserPrincipal(userId), defaultSince(new Date(), digestHours));
+      digestBlock = renderAwayDigest(digest);
+    } catch (err) {
+      coreLogger.warn({ err, hookId: hook?.id }, 'away digest unavailable for this hook run; proceeding without it');
+    }
+  }
+
   // Embed trigger context (webhook payload, tool result, etc.) into the prompt
   if (context.webhook) {
     // If a rendered message template is available (from incoming webhook), use it
@@ -214,7 +232,9 @@ async function executeSpawnAgent(
     prompt += `\n\n--- Tool Context ---\n${JSON.stringify(context.tool, null, 2)}`;
   }
 
-  const message = context.message?.content || prompt;
+  const withDigest = (text: string) => (digestBlock ? `${digestBlock}\n\n${text}` : text);
+  prompt = withDigest(prompt);
+  const message = context.message?.content ? withDigest(context.message.content) : prompt;
 
   // If orchestrated, route through the root agent instead of bare spawn
   if (config.orchestrated) {

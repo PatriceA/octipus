@@ -59,6 +59,7 @@ describe('ensureDailyBriefingHook', () => {
     expect(row.action).toBe('spawn_agent');
     expect(row.actionConfig.orchestrated).toBe(true);
     expect(row.actionConfig.notifyRoot).toBe(true);
+    expect(row.actionConfig.awayDigestHours).toBe(24);
     expect(row.actionConfig.agentPrompt).toContain('list_tasks with view "next"');
     expect(row.actionConfig.agentPrompt).toContain('Next three');
     // Scheduled, not "due now": the cron runner picks it up on the next 08:00 weekday.
@@ -78,6 +79,29 @@ describe('ensureDailyBriefingHook', () => {
     expect(row.isEnabled).toBe(true);
     const all = await db.select().from(hooksSchema).where(eq(hooksSchema.userId, userId));
     expect(all).toHaveLength(1);
+  });
+
+  test('a row seeded before the away digest is brought forward; an edited prompt is kept', async () => {
+    const legacyPrompt = 'Prepare my daily briefing for today. Use only what tools actually return; skip any section whose integration is not connected, and say so in one line instead of inventing content.\n\n1. To-dos: list_tasks — overdue first, then due today, then the top open items by priority. Name the ones that came from email or research so I know where they came from.\n2. Calendar: if a calendar tool is available, today\'s events with times; flag conflicts and anything without an agenda.\n3. Inbox: if a mail tool is available, unread mail since yesterday — the ones that need a reply or a decision, grouped by sender. Do not summarize newsletters.\n4. Code: if GitHub is available, my open pull requests (review state, failing checks) and issues assigned to me.\n5. Notifications: anything unread that needs me.\n\nFinish with "Next three": the three actions I should take first today, one line each, with the reason. Keep the whole briefing scannable — bullets, not paragraphs.';
+    const [legacy] = await db.insert(hooksSchema).values({
+      userId, name: briefing.DAILY_BRIEFING_HOOK_NAME, trigger: 'schedule',
+      triggerConfig: { cronExpression: briefing.DAILY_BRIEFING_CRON, timezone: 'UTC' },
+      action: 'spawn_agent', actionConfig: { agentPrompt: legacyPrompt, orchestrated: true, notifyRoot: true },
+      isEnabled: true, nextRunAt: NOON,
+    }).returning();
+    const id = await briefing.ensureDailyBriefingHook(userId, { now: NOON });
+    expect(id).toBe(legacy.id);
+    let [row] = await db.select().from(hooksSchema).where(eq(hooksSchema.id, id));
+    expect(row.actionConfig.awayDigestHours).toBe(briefing.DAILY_BRIEFING_DIGEST_HOURS);
+    expect(row.actionConfig.agentPrompt).toContain('While I was away');
+    expect(row.actionConfig.notifyRoot).toBe(true);
+
+    // The owner's own words are never overwritten, but the flag still lands.
+    await db.update(hooksSchema).set({ actionConfig: { agentPrompt: 'Tell me a joke, then my tasks.', orchestrated: true } }).where(eq(hooksSchema.id, id));
+    await briefing.ensureDailyBriefingHook(userId, { now: NOON });
+    [row] = await db.select().from(hooksSchema).where(eq(hooksSchema.id, id));
+    expect(row.actionConfig.agentPrompt).toBe('Tell me a joke, then my tasks.');
+    expect(row.actionConfig.awayDigestHours).toBe(briefing.DAILY_BRIEFING_DIGEST_HOURS);
   });
 
   test('honours a custom timezone and cron on first creation', async () => {
