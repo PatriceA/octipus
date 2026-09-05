@@ -63,9 +63,9 @@ function sinceLabel(iso: string): string {
     : `since ${d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`;
 }
 
-/** Where a finished job's output lives: a research report is a saved document; a document is on the documents page. */
+/** Where a finished job's output lives: a research report is saved as a document, a processed document is one — both on the documents page. */
 function jobHref(j: JobBrief): string {
-  return j.kind === 'research' ? (j.resultRef ? `/documents?id=${encodeURIComponent(j.resultRef)}` : '/research') : '/documents';
+  return j.kind === 'research' && !j.resultRef ? '/research' : '/documents';
 }
 
 function Section({ title, tone, children }: { title: string; tone?: string; children: React.ReactNode }) {

@@ -150,7 +150,7 @@ Each file is stored with a UUID filename to avoid collisions. The original filen
 
 ## Queue System
 
-The `DocumentQueue` processes documents sequentially (one at a time per process) and emits events for real-time tracking. The queue itself is the `background_jobs` table (`kind = 'document'`), not an in-process array: `enqueue` writes a row, the worker claims the oldest `queued` row under a row lock, and at boot the queue drains whatever a previous process left queued. A document that was mid-extraction when the process died is marked `failed` with "Interrupted by a restart" (its job `interrupted`) rather than re-run — the same rule pipelines follow. Finished jobs stay for thirty days so the "while you were away" digest can report them.
+The `DocumentQueue` processes documents sequentially (one at a time per process) and emits events for real-time tracking. The queue itself is the `background_jobs` table (`kind = 'document'`), not an in-process array: `enqueue` writes a row, the worker claims the oldest `queued` row under a row lock, and at boot the queue drains whatever a previous process left queued. A document that was mid-extraction when the process died is marked `failed` with "Interrupted by a restart" (its job `interrupted`) rather than re-run — the same rule pipelines follow. A document deleted while it was being processed closes its job as `cancelled`, which the digest does not report. Finished jobs stay for thirty days so the "while you were away" digest can report them.
 
 | Event | Parameters | Description |
 |-------|------------|-------------|

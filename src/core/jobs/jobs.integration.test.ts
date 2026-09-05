@@ -28,6 +28,8 @@ vi.mock('@/core/documents/processor', () => ({
       const doc = await documentRepository.findById(documentId);
       if (doc?.originalName === 'bad.pdf') {
         await documentRepository.updateStatus(documentId, 'failed', 'OCR model unavailable');
+      } else if (doc?.originalName === 'vanish.pdf') {
+        await documentRepository.delete(documentId);
       } else {
         await documentRepository.updateProcessed(documentId, { category: 'misc', ocrText: 'text', summary: 's', status: 'completed' });
       }
@@ -99,6 +101,24 @@ describe('BackgroundJobRepository', () => {
     expect((await repo.findById(b.id))?.error).toBe('boom');
     // Clean up the other kind for the queue tests below.
     expect(await repo.dropQueued('document', {})).toBe(1);
+  });
+
+  test('rows created inside one millisecond still claim in insertion order', async () => {
+    const { getDb } = await import('@/db/postgres');
+    const { backgroundJobs } = await import('@/db/schema/background-jobs');
+    const at = new Date('2026-09-07T08:00:00.123Z');
+    const inserted = await getDb()
+      .insert(backgroundJobs)
+      .values(['one', 'two', 'three'].map((title) => ({ kind: 'document' as const, userId: alice, title, payload: {}, createdAt: at, updatedAt: at })))
+      .returning({ id: backgroundJobs.id, title: backgroundJobs.title });
+    const order: string[] = [];
+    for (;;) {
+      const job = await repo.claimNext('document');
+      if (!job) break;
+      order.push(job.title);
+      await repo.finish(job.id, { status: 'done' });
+    }
+    expect(order).toEqual(inserted.map((r) => r.title));
   });
 
   test('progress and finish only touch a running row', async () => {
@@ -181,6 +201,19 @@ describe('DocumentQueue', () => {
     expect(await queue.removeFromQueue(documentId)).toBe(true);
     expect(await queue.removeFromQueue(documentId)).toBe(false);
     expect(processed).not.toContain(documentId);
+  });
+
+  test('a document deleted while it ran is a cancelled job, not a failure', async () => {
+    const { getDocumentQueue } = await import('@/core/documents/queue');
+    const queue = getDocumentQueue();
+    const failures: string[] = [];
+    queue.on('failed', (id: string) => failures.push(id));
+    const documentId = await newDocument('vanish.pdf');
+    await queue.enqueue(documentId, alice, { title: 'vanish.pdf', workspaceId: null });
+    await waitFor(async () => (await repo.countByStatus('document')).queued + (await repo.countByStatus('document')).running === 0);
+    const [row] = await repo.recentForUser(alice, 1);
+    expect([row.payload.documentId, row.status]).toEqual([documentId, 'cancelled']);
+    expect(failures).not.toContain(documentId);
   });
 
   test('resume drains rows a previous process left queued', async () => {

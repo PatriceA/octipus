@@ -12,6 +12,15 @@ export interface QueueEvents {
   failed: (documentId: string, error: string, userId?: string) => void;
 }
 
+/** What the caller already knows about the document, so enqueue is one insert rather than a read and an insert. */
+export interface EnqueueHint {
+  title?: string;
+  workspaceId?: string | null;
+}
+
+/** How long to wait before trying the queue again after the database refused a claim. */
+const RETRY_AFTER_ERROR_MS = 15_000;
+
 export interface QueueStatus {
   queueLength: number;
   isProcessing: boolean;
@@ -43,20 +52,27 @@ export class DocumentQueue extends EventEmitter {
 
   /**
    * Add a document to the processing queue. Resolves once the row exists —
-   * from then on the upload survives a restart.
+   * from then on the upload survives a restart. Throws if the row could not
+   * be written; the caller owns the document and decides what to tell the
+   * user.
    */
-  async enqueue(documentId: string, userId: string): Promise<void> {
-    const doc = await documentRepository.findById(documentId);
+  async enqueue(documentId: string, userId: string, hint: EnqueueHint = {}): Promise<void> {
+    let title = hint.title;
+    let workspaceId = hint.workspaceId;
+    if (title === undefined || workspaceId === undefined) {
+      const doc = await documentRepository.findById(documentId);
+      title ??= doc?.originalName;
+      workspaceId ??= doc?.workspaceId;
+    }
     await backgroundJobRepository.create({
       kind: 'document',
       userId,
-      workspaceId: doc?.workspaceId ?? null,
-      title: doc?.originalName ?? documentId,
+      workspaceId: workspaceId ?? null,
+      title: title ?? documentId,
       payload: { documentId },
     });
-    const status = await backgroundJobRepository.countByStatus('document');
-    this.logger.info({ documentId, queueLength: status.queued }, 'Document enqueued');
-    this.emit('enqueued', documentId, userId);
+    this.logger.info({ documentId }, 'Document enqueued');
+    this.safeEmit('enqueued', documentId, userId);
     this.kick();
   }
 
@@ -102,6 +118,19 @@ export class DocumentQueue extends EventEmitter {
     });
   }
 
+  /**
+   * Emit without letting a listener's bug become the queue's: a throwing
+   * websocket or channel handler must not leave a job `running` and the
+   * drain loop dead.
+   */
+  private safeEmit(event: keyof QueueEvents, ...args: unknown[]): void {
+    try {
+      this.emit(event, ...args);
+    } catch (err) {
+      this.logger.error({ err, event }, 'Document queue listener threw');
+    }
+  }
+
   private async drain(): Promise<void> {
     while (this.wake) {
       this.wake = false;
@@ -110,7 +139,10 @@ export class DocumentQueue extends EventEmitter {
         try {
           job = await backgroundJobRepository.claimNext('document');
         } catch (err) {
-          this.logger.error({ err }, 'Could not claim the next document job');
+          // The rows are still there; only this attempt failed. Come back
+          // rather than leaving the queue to wait for the next upload.
+          this.logger.error({ err, retryInMs: RETRY_AFTER_ERROR_MS }, 'Could not claim the next document job');
+          setTimeout(() => this.kick(), RETRY_AFTER_ERROR_MS).unref();
           return;
         }
         if (!job) break;
@@ -124,30 +156,34 @@ export class DocumentQueue extends EventEmitter {
     const documentId = typeof job.payload.documentId === 'string' ? job.payload.documentId : '';
     const userId = job.userId;
     this.current = { jobId: job.id, documentId };
-    this.logger.info({ documentId, jobId: job.id }, 'Processing document');
-    this.emit('processing', documentId, userId);
-
     try {
+      this.logger.info({ documentId, jobId: job.id }, 'Processing document');
+      this.safeEmit('processing', documentId, userId);
       if (!documentId) throw new Error('document job has no documentId');
       await documentProcessor.process(documentId);
       // The processor records its own outcome on the document and does not
       // throw; read it back so a failed extraction is a failed job, not a
       // completed one with a red document behind it.
       const doc = await documentRepository.findById(documentId);
-      const failure =
-        !doc ? 'Document disappeared during processing'
-        : doc.status === 'failed' ? String((doc.metadata as { error?: unknown } | null)?.error ?? 'Document processing failed')
-        : null;
-      if (failure) throw new Error(failure);
-      await backgroundJobRepository.finish(job.id, { status: 'done', resultRef: documentId });
-      this.emit('completed', documentId, userId);
+      if (!doc) {
+        // Deleted while it ran: the user's doing, not a failure to report.
+        await backgroundJobRepository.finish(job.id, { status: 'cancelled', error: 'Document deleted during processing' });
+        this.logger.info({ documentId }, 'Document deleted during processing');
+        return;
+      }
+      if (doc.status === 'failed') {
+        throw new Error(String((doc.metadata as { error?: unknown } | null)?.error ?? 'Document processing failed'));
+      }
+      const closed = await backgroundJobRepository.finish(job.id, { status: 'done', resultRef: documentId });
+      if (!closed) this.logger.warn({ documentId, jobId: job.id }, 'Document finished but its job was no longer running (swept by a restart?)');
+      this.safeEmit('completed', documentId, userId);
       this.logger.info({ documentId }, 'Document processing completed');
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       await backgroundJobRepository
         .finish(job.id, { status: 'error', error: errorMsg })
         .catch((e: unknown) => this.logger.error({ err: e, jobId: job.id }, 'Could not record document job failure'));
-      this.emit('failed', documentId, errorMsg, userId);
+      this.safeEmit('failed', documentId, errorMsg, userId);
       this.logger.error({ err, documentId }, 'Document processing failed');
     } finally {
       this.current = undefined;

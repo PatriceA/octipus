@@ -34,7 +34,7 @@ test.describe('dashboard — while you were away', () => {
     await expect(card.getByRole('link', { name: 'qa' })).toHaveAttribute('href', '/agents/view?id=ag-2');
     await expect(card.getByRole('link', { name: 'Reply to Ada' })).toHaveAttribute('href', '/tasks');
     await expect(card.getByText(/OCR model unavailable/)).toBeVisible();
-    await expect(card.getByRole('link', { name: 'Is PGlite production-ready?' })).toHaveAttribute('href', '/documents?id=doc-1');
+    await expect(card.getByRole('link', { name: 'Is PGlite production-ready?' })).toHaveAttribute('href', '/documents');
     await expect(card.getByRole('link', { name: /2 new unread/ })).toHaveAttribute('href', '/notifications');
     // Sections render in "needs you first" order.
     const titles = await card.locator('p.uppercase').allTextContents();

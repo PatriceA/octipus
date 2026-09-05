@@ -8,12 +8,16 @@
 -- lighter kinds of work the same treatment without a second queue.
 --
 -- The row is the job. `queued` rows are claimed with `FOR UPDATE SKIP LOCKED`
--- in `created_at` order; `running` rows found at boot are marked `interrupted`
+-- in insertion order; `running` rows found at boot are marked `interrupted`
 -- (never auto-resumed, the pipeline rule); finished rows are kept so the away
 -- digest can report them, and pruned after thirty days.
 
 CREATE TABLE IF NOT EXISTS "background_jobs" (
   "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  -- Insertion order, and the claim order. `created_at` is a millisecond and a
+  -- multi-file upload creates several rows inside one; the only other column
+  -- to break that tie with is a random uuid, which is not upload order.
+  "seq" bigserial NOT NULL,
   "kind" text NOT NULL,
   "status" text NOT NULL DEFAULT 'queued',
   "user_id" uuid NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
@@ -36,7 +40,7 @@ CREATE TABLE IF NOT EXISTS "background_jobs" (
 -- Exactly the claim order, so a pop reads one index row rather than sorting
 -- the queue.
 CREATE INDEX IF NOT EXISTS "background_jobs_claim_idx"
-  ON "background_jobs" ("kind", "status", "created_at");
+  ON "background_jobs" ("kind", "status", "seq");
 --> statement-breakpoint
 
 -- The digest's read: what changed for one user since a point in time.

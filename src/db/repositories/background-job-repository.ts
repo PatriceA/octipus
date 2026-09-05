@@ -9,7 +9,7 @@ import {
 } from '../schema/background-jobs';
 
 /** Statuses a job cannot leave. */
-export const TERMINAL_STATUSES: readonly BackgroundJobStatus[] = ['done', 'error', 'interrupted'];
+export const TERMINAL_STATUSES: readonly BackgroundJobStatus[] = ['done', 'error', 'interrupted', 'cancelled'];
 
 /** What the boot sweep writes on a run the previous process took with it. */
 export const INTERRUPTED_ERROR = 'Interrupted by a restart';
@@ -72,7 +72,7 @@ export class BackgroundJobRepository {
       .select({ id: backgroundJobs.id })
       .from(backgroundJobs)
       .where(and(eq(backgroundJobs.kind, kind), eq(backgroundJobs.status, 'queued')))
-      .orderBy(asc(backgroundJobs.createdAt), asc(backgroundJobs.id))
+      .orderBy(asc(backgroundJobs.seq))
       .limit(1)
       .for('update', { skipLocked: true });
     const now = new Date();
@@ -101,7 +101,7 @@ export class BackgroundJobRepository {
    */
   async finish(
     id: string,
-    outcome: { status: 'done' | 'error'; stage?: string; result?: Record<string, unknown> | null; resultRef?: string | null; error?: string | null },
+    outcome: { status: 'done' | 'error' | 'cancelled'; stage?: string; result?: Record<string, unknown> | null; resultRef?: string | null; error?: string | null },
   ): Promise<BackgroundJob | null> {
     const now = new Date();
     const rows = await this.db
@@ -148,20 +148,13 @@ export class BackgroundJobRepository {
     return out;
   }
 
-  /** Ids of the `running` jobs of a kind, oldest first — for "is this one in flight". */
-  async running(kind: BackgroundJobKind): Promise<BackgroundJob[]> {
-    return this.db
-      .select()
-      .from(backgroundJobs)
-      .where(and(eq(backgroundJobs.kind, kind), eq(backgroundJobs.status, 'running')))
-      .orderBy(asc(backgroundJobs.startedAt));
-  }
-
   /**
    * Boot sweep: a job still `running` belongs to a process that is gone.
    * Mark it `interrupted` and return the rows so each kind can put its own
    * house in order (a document marked failed, say). Never auto-resumes —
-   * the pipeline rule.
+   * the pipeline rule. Global, like the pipeline sweep: in a deployment with
+   * several processes a booting one interrupts its siblings' in-flight jobs
+   * too, which the workers notice (`finish` returns null) and log.
    */
   async sweepInterrupted(now = new Date()): Promise<BackgroundJob[]> {
     return this.db
@@ -187,7 +180,7 @@ export class BackgroundJobRepository {
       .select()
       .from(backgroundJobs)
       .where(eq(backgroundJobs.userId, userId))
-      .orderBy(desc(backgroundJobs.createdAt))
+      .orderBy(desc(backgroundJobs.seq))
       .limit(limit);
   }
 }

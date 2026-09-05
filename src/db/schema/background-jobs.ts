@@ -1,4 +1,4 @@
-import { index, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { bigserial, index, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { users } from './users';
 
 /**
@@ -22,12 +22,15 @@ import { users } from './users';
  * outlives the row. `stage` / `detail` are the worker's progress line.
  */
 export type BackgroundJobKind = 'research' | 'document';
-export type BackgroundJobStatus = 'queued' | 'running' | 'done' | 'error' | 'interrupted';
+/** `cancelled`: the thing the job was for went away (a document deleted mid-run) — not news, not a failure. */
+export type BackgroundJobStatus = 'queued' | 'running' | 'done' | 'error' | 'interrupted' | 'cancelled';
 
 export const backgroundJobs = pgTable(
   'background_jobs',
   {
     id: uuid('id').primaryKey().defaultRandom(),
+    /** Insertion order — the claim order, and a tiebreak `created_at` (millisecond) cannot give. */
+    seq: bigserial('seq', { mode: 'number' }).notNull(),
     kind: text('kind').$type<BackgroundJobKind>().notNull(),
     status: text('status').$type<BackgroundJobStatus>().notNull().default('queued'),
     userId: uuid('user_id')
@@ -50,7 +53,7 @@ export const backgroundJobs = pgTable(
   },
   (t) => [
     /** The claim order: oldest queued row of a kind first. */
-    index('background_jobs_claim_idx').on(t.kind, t.status, t.createdAt),
+    index('background_jobs_claim_idx').on(t.kind, t.status, t.seq),
     /** The digest's read: what changed for a user since a point in time. */
     index('background_jobs_user_updated_idx').on(t.userId, t.updatedAt),
   ],

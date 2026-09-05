@@ -53,7 +53,7 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
     }
 
     const files = Array.isArray(body.files) ? body.files : [body.files];
-    const results: Array<{ id: string; filename: string; status: string }> = [];
+    const results: Array<{ id: string; filename: string; status: string; error?: string }> = [];
     const docs = scopedRepos(principal).documents;
 
     for (const file of files) {
@@ -86,8 +86,19 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
         status: 'queued',
       });
 
-      // Enqueue for processing — a row, so the upload survives a restart.
-      await getDocumentQueue().enqueue(doc.id, user.id);
+      // Enqueue for processing — a row, so the upload survives a restart. If
+      // the row cannot be written the document would sit at `queued` with
+      // nothing to pick it up, so say so on the document and in the response
+      // and carry on with the other files.
+      try {
+        await getDocumentQueue().enqueue(doc.id, user.id, { title: originalName, workspaceId: doc.workspaceId });
+      } catch (err) {
+        const reason = `Could not queue for processing: ${(err as Error).message}`;
+        logger.error({ err, documentId: doc.id, filename: originalName }, 'Document uploaded but not queued');
+        await docs.updateStatus(doc.id, 'failed', reason).catch(() => undefined);
+        results.push({ id: doc.id, filename: originalName, status: 'failed', error: reason });
+        continue;
+      }
 
       results.push({ id: doc.id, filename: originalName, status: 'queued' });
       logger.info({ documentId: doc.id, filename: originalName, size: file.size }, 'Document uploaded');
