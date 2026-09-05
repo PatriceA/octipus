@@ -28,8 +28,23 @@ const cfg = (over: Partial<HeartbeatConfig> = {}): HeartbeatConfig => ({
   quietHoursEnd: 7,
   quietHoursTimezone: 'UTC',
   maxRunsPerDay: 24,
+  probeGithub: true,
+  probeCalendar: true,
+  calendarLookaheadMinutes: 60,
   ...over,
 });
+
+/** External probes stubbed empty unless a test says otherwise. */
+const quiet = (): import('./heartbeat').HeartbeatProbeDeps => ({
+  github: { runGh: async () => JSON.stringify({ data: { search: { nodes: [] } } }) },
+  calendar: { getToken: async () => null, fetchJson: async () => ({}) },
+  githubAllowed: async () => true,
+});
+
+const redPr = (state = 'FAILURE') => JSON.stringify({ data: { search: { nodes: [{
+  number: 42, title: 'Ship it', url: 'https://github.com/o/r/pull/42', repository: { nameWithOwner: 'o/r' },
+  commits: { nodes: [{ commit: { statusCheckRollup: { state } } }] },
+}] } } });
 
 // Midday UTC so the default quiet-hours window (22→7) is inactive.
 const NOON = new Date('2026-07-12T12:00:00Z');
@@ -91,28 +106,28 @@ beforeEach(async () => {
 describe('evaluateHeartbeatGate', () => {
   test('disabled config → skip(disabled), no probe', async () => {
     const hook = await makeHeartbeatHook();
-    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg({ enabled: false }), NOON);
+    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg({ enabled: false }), NOON, quiet());
     expect(r.decision).toEqual({ run: false, reason: 'disabled' });
   });
 
   test('quiet hours → skip(quiet_hours)', async () => {
     const hook = await makeHeartbeatHook();
     // 23:30 UTC is inside 22→7.
-    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg(), new Date('2026-07-12T23:30:00Z'));
+    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg(), new Date('2026-07-12T23:30:00Z'), quiet());
     expect(r.decision).toEqual({ run: false, reason: 'quiet_hours' });
   });
 
   test('daily cap reached → skip(daily_cap)', async () => {
     const dayKey = heartbeat.localDayKey(NOON, 'UTC');
     const hook = await makeHeartbeatHook({ triggerConfig: { heartbeatDayKey: dayKey, heartbeatRunsToday: 24 } });
-    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg({ maxRunsPerDay: 24 }), NOON);
+    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg({ maxRunsPerDay: 24 }), NOON, quiet());
     expect(r.decision).toEqual({ run: false, reason: 'daily_cap' });
     expect(r.runsToday).toBe(24);
   });
 
   test('counter from a previous day is ignored (resets)', async () => {
     const hook = await makeHeartbeatHook({ triggerConfig: { heartbeatDayKey: '2020-01-01', heartbeatRunsToday: 99 } });
-    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON);
+    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, quiet());
     // Stale day → counter treated as 0, so cap doesn't trip (nothing pending though).
     expect(r.runsToday).toBe(0);
     expect(r.decision).toEqual({ run: false, reason: 'nothing_pending' });
@@ -120,7 +135,7 @@ describe('evaluateHeartbeatGate', () => {
 
   test('nothing pending → skip(nothing_pending)', async () => {
     const hook = await makeHeartbeatHook();
-    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON);
+    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, quiet());
     expect(r.decision).toEqual({ run: false, reason: 'nothing_pending' });
   });
 
@@ -129,7 +144,7 @@ describe('evaluateHeartbeatGate', () => {
     await db.insert(tasksSchema).values({
       userId, title: 'Later', status: 'open', dueAt: new Date('2026-07-20T00:00:00Z'),
     });
-    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON);
+    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, quiet());
     expect(r.decision).toEqual({ run: false, reason: 'nothing_pending' });
   });
 
@@ -138,7 +153,7 @@ describe('evaluateHeartbeatGate', () => {
     await db.insert(tasksSchema).values({
       userId, title: 'Reply to the release email', status: 'open', dueAt: new Date('2026-07-12T09:00:00Z'),
     });
-    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON);
+    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, quiet());
     expect(r.decision.run).toBe(true);
     if (r.decision.run) {
       expect(r.decision.message).toContain('Heartbeat check-in');
@@ -150,7 +165,7 @@ describe('evaluateHeartbeatGate', () => {
   test('an unread notification → run', async () => {
     const hook = await makeHeartbeatHook();
     await db.insert(notifsSchema).values({ userId, type: 'github', title: 'CI failed', read: false });
-    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON);
+    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, quiet());
     expect(r.decision.run).toBe(true);
     if (r.decision.run) expect(r.decision.message).toContain('CI failed');
   });
@@ -161,8 +176,113 @@ describe('evaluateHeartbeatGate', () => {
       userId, title: 'done thing', status: 'done', dueAt: new Date('2026-07-12T09:00:00Z'),
     });
     await db.insert(notifsSchema).values({ userId, type: 'x', title: 'seen', read: true });
-    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON);
+    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, quiet());
     expect(r.decision).toEqual({ run: false, reason: 'nothing_pending' });
+  });
+});
+
+describe('external probe sources', () => {
+  test('a pull request with failing checks → run, listed first-class in the checklist', async () => {
+    const hook = await makeHeartbeatHook();
+    const deps = quiet();
+    deps.github.runGh = async () => redPr();
+    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, deps);
+    expect(r.decision.run).toBe(true);
+    if (r.decision.run) expect(r.decision.message).toContain('- o/r#42 Ship it — https://github.com/o/r/pull/42');
+    expect(r.seen.prs).toEqual(['https://github.com/o/r/pull/42@FAILURE']);
+  });
+
+  test('an item already surfaced does not wake the heartbeat again; a cleared-then-red PR does', async () => {
+    const deps = quiet();
+    deps.github.runGh = async () => redPr();
+    // Tick 2: the hook carries what tick 1 saw → nothing new.
+    const seenHook = await makeHeartbeatHook({ triggerConfig: { heartbeatSeen: { prs: ['https://github.com/o/r/pull/42@FAILURE'], events: [] } } });
+    const again = await heartbeat.evaluateHeartbeatGate(seenHook, cfg(), NOON, deps);
+    expect(again.decision).toEqual({ run: false, reason: 'nothing_pending' });
+    expect(again.seen.prs).toEqual(['https://github.com/o/r/pull/42@FAILURE']);
+
+    // Tick 3: the PR went green → the seen set is pruned.
+    deps.github.runGh = async () => JSON.stringify({ data: { search: { nodes: [] } } });
+    const green = await heartbeat.evaluateHeartbeatGate(seenHook, cfg(), NOON, deps);
+    expect(green.seen.prs).toEqual([]);
+
+    // Tick 4: red again, with the pruned set persisted → new again.
+    deps.github.runGh = async () => redPr();
+    const prunedHook = await makeHeartbeatHook({ triggerConfig: { heartbeatSeen: green.seen } });
+    const back = await heartbeat.evaluateHeartbeatGate(prunedHook, cfg(), NOON, deps);
+    expect(back.decision.run).toBe(true);
+  });
+
+  test('the github probe is not consulted for a user who may not read the server\'s gh', async () => {
+    const hook = await makeHeartbeatHook();
+    const deps = quiet();
+    deps.githubAllowed = async () => false;
+    deps.github.runGh = async () => { throw new Error('must not be called'); };
+    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, deps);
+    expect(r.decision).toEqual({ run: false, reason: 'nothing_pending' });
+  });
+
+  test('a calendar event starting within the hour → run', async () => {
+    const hook = await makeHeartbeatHook();
+    const deps = quiet();
+    deps.calendar = {
+      getToken: async (_u, p) => (p === 'google' ? 'tok' : null),
+      fetchJson: async () => ({ items: [{ summary: 'Client call', start: { dateTime: '2026-07-12T12:30:00Z' }, end: { dateTime: '2026-07-12T13:00:00Z' } }] }),
+    };
+    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, deps);
+    expect(r.decision.run).toBe(true);
+    if (r.decision.run) expect(r.decision.message).toContain('- 12:30 Client call (until 13:00)');
+    expect(r.seen.events).toEqual(['google|2026-07-12T12:30:00.000Z|Client call']);
+
+    // The same meeting next tick is old news.
+    const seenHook = await makeHeartbeatHook({ triggerConfig: { heartbeatSeen: r.seen } });
+    const again = await heartbeat.evaluateHeartbeatGate(seenHook, cfg(), NOON, deps);
+    expect(again.decision).toEqual({ run: false, reason: 'nothing_pending' });
+  });
+
+  test('switched off in config → the runners are never consulted', async () => {
+    const hook = await makeHeartbeatHook();
+    const deps: import('./heartbeat').HeartbeatProbeDeps = {
+      github: { runGh: async () => { throw new Error('must not be called'); } },
+      calendar: { getToken: async () => { throw new Error('must not be called'); }, fetchJson: async () => ({}) },
+      githubAllowed: async () => true,
+    };
+    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg({ probeGithub: false, probeCalendar: false }), NOON, deps);
+    expect(r.decision).toEqual({ run: false, reason: 'nothing_pending' });
+  });
+
+  test('a broken gh or calendar never fails the gate, and keeps what was already seen', async () => {
+    const seen = { prs: ['https://github.com/o/r/pull/42@FAILURE'], events: ['google|2026-07-12T12:30:00.000Z|Client call'] };
+    const hook = await makeHeartbeatHook({ triggerConfig: { heartbeatSeen: seen } });
+    const deps: import('./heartbeat').HeartbeatProbeDeps = {
+      github: { runGh: async () => { throw new Error('spawn gh ENOENT'); } },
+      calendar: { getToken: async () => 'tok', fetchJson: async () => { throw new Error('503'); } },
+      githubAllowed: async () => true,
+    };
+    const r = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, deps);
+    expect(r.decision).toEqual({ run: false, reason: 'nothing_pending' });
+    // "Could not read" is not "cleared": nothing is pruned, so the next good
+    // tick does not re-nudge about the same PR and meeting.
+    expect(r.seen).toEqual(seen);
+  });
+});
+
+describe('maybeRunHeartbeats', () => {
+  test('persists the seen set on a silent tick and asks gh once for every due hook', async () => {
+    // Two admins' hooks already know about the PR → silent, but the seen set lands.
+    const seen = { prs: ['https://github.com/o/r/pull/42@FAILURE'], events: [] };
+    const h1 = await makeHeartbeatHook({ nextRunAt: null, triggerConfig: { heartbeatSeen: seen } });
+    const h2 = await makeHeartbeatHook({ nextRunAt: null, triggerConfig: { heartbeatSeen: seen } });
+    let ghCalls = 0;
+    const deps = quiet();
+    deps.github.runGh = async () => { ghCalls += 1; return redPr(); };
+    await heartbeat.maybeRunHeartbeats(NOON, deps, cfg());
+    expect(ghCalls).toBe(1);
+    for (const id of [h1.id, h2.id]) {
+      const [row] = await db.select().from(hooksSchema).where(eq(hooksSchema.id, id));
+      expect(row.triggerConfig.heartbeatSeen).toEqual(seen);
+      expect(row.nextRunAt).not.toBeNull();
+    }
   });
 });
 

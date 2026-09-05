@@ -68,7 +68,7 @@ The badge shows **ON** when connected, **OFF** when disconnected.
 
 ### Automated Install
 
-Run the setup wizard (`bun run setup`). If Chromium is detected, a "Browser Extension" checkbox appears in optional extras. Selecting it copies the extension to `~/.octipus/browser-extension/` and prints loading instructions.
+Run the setup wizard (`npm run setup`). If Chromium is detected, a "Browser Extension" checkbox appears in optional extras. Selecting it copies the extension to `~/.octipus/browser-extension/` and prints loading instructions.
 
 ## Available Commands
 
@@ -185,7 +185,7 @@ The `browser-ext` tool is available to these roles:
 ## Troubleshooting
 
 **Extension won't connect:**
-- Check that the backend is running (`bun run dev`)
+- Check that the backend is running (`npm run dev`)
 - Verify the API key is either a valid API token (from Settings → API Tokens) or the `MASTER_KEY` in `.env`
 - Check the service worker console in `chromium://extensions` for errors
 

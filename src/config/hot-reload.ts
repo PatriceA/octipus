@@ -81,7 +81,7 @@ export function initializeHotReload(): void {
           break;
         }
 
-        // agent, orchestrator, workspace, integrations —
+        // agent, root agent, workspace, integrations —
         // these are read per-request from getConfig(), so no active reload needed.
         // The cached config was already updated by refreshConfigKey() above.
         default:

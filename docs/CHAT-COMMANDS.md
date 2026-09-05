@@ -4,7 +4,7 @@ Chat commands are slash commands you can use in any channel (WebChat, Telegram, 
 
 ## Available Commands
 
-### All Channels (Orchestrator Commands)
+### All Channels (Root agent Commands)
 
 | Command | Description |
 |---------|-------------|
@@ -31,8 +31,8 @@ Persona controls (name, tone, narration, self-facts, presets) are accessible via
 
 | Control | Options | Description |
 |---------|---------|-------------|
-| Name | Text | Rename the orchestrator (default: `Octipus`) |
-| Tone | `dry`, `playful`, `neutral`, `professional`, `terse`, `verbose` | Personality of the orchestrator's responses |
+| Name | Text | Rename the root agent (default: `Octipus`) |
+| Tone | `dry`, `playful`, `neutral`, `professional`, `terse`, `verbose` | Personality of the root agent's responses |
 | Narration | `off`, `minimal`, `chatty` | Volume of live swarm narration during agent execution |
 | Facts | Free-form text | Add custom self-facts ("always use bullets"; persists across sessions) |
 | Preset | Dropdown | Switch preset persona (keeps custom name) |
@@ -41,7 +41,7 @@ Persona controls (name, tone, narration, self-facts, presets) are accessible via
 
 Six presets ship by default: `octopus` (default, dry octopus-machine), `terse-engineer`, `mentor`, `nautilus` (maritime), `concierge`, `verbose-academic`. Each is a YAML file under `personas/` you can edit or copy as a new preset.
 
-**Per-arm voices.** The persona above is the orchestrator's. A single arm can
+**Per-arm voices.** The persona above is the root agent's. A single arm can
 speak differently — a blunt `review` under a playful host — by binding a preset
 to it:
 
@@ -56,7 +56,7 @@ Shadowing is opt-in per arm, and an unbound arm carries no persona block at all
 for one arm costs nothing anywhere else. The preset supplies the voice; your
 chosen name, pronouns and self-facts carry over, because an arm is the same
 assistant speaking differently, not a second assistant you never named. The
-orchestrator itself is set with `/persona use`, not `/persona arm`.
+root agent itself is set with `/persona use`, not `/persona arm`.
 
 Full spec in [`docs/plans/ux-personality-revamp.md`](plans/ux-personality-revamp.md).
 
@@ -66,17 +66,17 @@ These commands are available in the TUI and gateway clients (not web/channel cli
 
 | Command | Aliases | Description |
 |---------|---------|-------------|
-| `/abort` | `/stop`, `/cancel` | Stop running agents (gateway version; `/stop` is orchestrator version) |
+| `/abort` | `/stop`, `/cancel` | Stop running agents (gateway version; `/stop` is root agent version) |
 | `/expert` | `/e` | Switch expert or list available experts (gateway version) |
 | `/status` | `/s` | Show session status, agents, and active expert (gateway version) |
 | `/cost` | — | Show cumulative token usage and cost |
 | `/compact` | — | Compact session context (summarize old messages); optional: `/compact <focus instructions>` |
-| `/clear` | `/cls`, `/reset` | Reset orchestrator context and clear TUI display |
+| `/clear` | `/cls`, `/reset` | Reset root agent context and clear TUI display |
 | `/diff` | — | Show `git diff --stat` for workspace changes |
 | `/changes` | — | Review git changes in the workspace — `/changes` for the list, `/changes <path>` for a file diff |
 | `/help` | `/h`, `/?` | List available commands |
 | `/reload-extensions` | `/reload` | Re-discover and reload user extensions from `.octipus/extensions/` (local trust only) |
-| `/persona` | — | Configure the orchestrator persona — name, tone, narration, free-form facts |
+| `/persona` | — | Configure the root agent persona — name, tone, narration, free-form facts |
 | `/version` | `/v` | Show Octipus version and build info |
 
 ### Channel-Specific
@@ -141,7 +141,7 @@ Reply "yes" to allow or "no" to deny.
 ⚠ Permission: shell → docker compose up -d  (y/n)
 ```
 
-Type `yes`/`y` to approve or `no`/`n` to deny. If denied, the agent is stopped and the orchestrator asks what to do next.
+Type `yes`/`y` to approve or `no`/`n` to deny. If denied, the agent is stopped and the root agent asks what to do next.
 
 ---
 
@@ -166,7 +166,7 @@ A typing indicator is also sent while the agent works (refreshes every 4 seconds
 
 ## How Commands Work
 
-Commands go through the **orchestrator command registry** (`src/core/commands/`), not directly to agents. They execute immediately without an LLM call.
+Commands go through the **root agent command registry** (`src/core/commands/`), not directly to agents. They execute immediately without an LLM call.
 
 ```
 User sends "/expert Technical Writer"
@@ -175,7 +175,7 @@ User sends "/expert Technical Writer"
 Channel receives message -> starts with "/"
     |
     v
-Orchestrator handleCommand() -> looks up "expert" in registry
+Root agent handleCommand() -> looks up "expert" in registry
     |
     v
 Expert command handler -> finds expert in DB -> stores in session context

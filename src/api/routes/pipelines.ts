@@ -1,20 +1,20 @@
 import { desc, eq, or } from 'drizzle-orm';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
-import { getOrchestratorService, getPipelineManager } from '@/core/orchestrator';
-import { ROOT_ROLE } from '@/core/orchestrator/types';
+import { getAgentService, getPipelineManager } from '@/core/agent';
+import { ROOT_ROLE } from '@/core/agent/types';
 import type { AgentContext } from '@/core/types';
 import { getModelRegistry } from '@/models/model-registry';
 import { channelCanPrompt } from '@/security/approval-policy';
 import { generateId } from '@/utils/crypto';
-import { validatePipelineStages } from '@/core/orchestrator/pipeline-validation';
-import { validateRecipeParameterDefs, validateRecipeParameterRefs } from '@/core/orchestrator/recipe-params';
+import { validatePipelineStages } from '@/core/agent/pipeline-validation';
+import { validateRecipeParameterDefs, validateRecipeParameterRefs } from '@/core/agent/recipe-params';
 import {
   exportRecipe,
   importRecipe,
   listAvailableTemplates,
   parseRecipeExport,
-} from '@/core/orchestrator/templates';
+} from '@/core/agent/templates';
 import { getDb } from '@/db/postgres';
 import { pipelineRepository } from '@/db/repositories/pipeline-repository';
 import { scopedRepos } from '@/db/repositories/scoped';
@@ -115,7 +115,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
   //
   // The MCP tool `octipus_create_pipeline` has POSTed here since it was written;
   // the route did not exist, so every call 404'd. Pipelines were creatable only
-  // through the orchestrator's `create_pipeline` meta-tool, mid-chat.
+  // through the root agent's `create_pipeline` meta-tool, mid-chat.
   //
   // Returns as soon as the run has an id. A pipeline takes minutes — a POST that
   // waited for the result would time out long before it finished — so the run
@@ -191,12 +191,12 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         metadata: { approvalTimeoutMs: body.approvalTimeoutMs ?? API_APPROVAL_TIMEOUT_MS },
       };
 
-      const orchestrator = getOrchestratorService();
+      const rootAgent = getAgentService();
 
       // Resolve on the id, not the result: the caller gets an answer in
       // milliseconds and the run keeps going.
       const started = new Promise<string>((resolve, reject) => {
-        orchestrator
+        rootAgent
           // `match.name` is safe now that `getPipelineTemplate` resolves a name
           // within the caller's own visible set — the same set this route
           // authorized against. Keeping the name (not the id) is what leaves a
@@ -281,14 +281,14 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
         return { error: 'Pipeline not found' };
       }
 
-      // Approval is handled via the orchestrator's approval system;
+      // Approval is handled via the root agent's approval system;
       // this endpoint exists as a REST fallback. Filter pending
       // approvals to the principal so we can't peek at someone else's.
-      const { getOrchestratorService } = await import('@/core/orchestrator');
-      const orchestrator = getOrchestratorService();
+      const { getAgentService } = await import('@/core/agent');
+      const rootAgent = getAgentService();
       const approvals = user.isAdmin
-        ? orchestrator.getPendingApprovals()
-        : orchestrator.getPendingApprovals(user.id);
+        ? rootAgent.getPendingApprovals()
+        : rootAgent.getPendingApprovals(user.id);
       const found = approvals.length > 0;
 
       if (!found) {

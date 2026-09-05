@@ -1,5 +1,5 @@
 /**
- * Types for trajectory logging — records every orchestrator run as a
+ * Types for trajectory logging — records every root agent run as a
  * structured JSONL line for later eval / fine-tuning.
  *
  * Inspired by Hermes' approach: save success/fail trajectories as JSONL,
@@ -44,7 +44,7 @@ export interface TrajectoryStep {
 }
 
 /**
- * One complete orchestrator run — written as a single JSONL line.
+ * One complete root agent run — written as a single JSONL line.
  *
  * `failureReason` is typed as `string` for now. Once
  * `src/core/errors/classification.ts` lands (another agent is building it),
@@ -64,7 +64,7 @@ export interface TrajectoryRecord {
   userMessage: string;
   classification: TrajectoryClassification;
   steps: TrajectoryStep[];
-  /** Final assistant response the orchestrator produced (PII-redacted if flagged). */
+  /** Final assistant response the root agent produced (PII-redacted if flagged). */
   finalResponse: string;
   outcome: TrajectoryOutcome;
   failureReason?: string;

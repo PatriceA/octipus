@@ -254,7 +254,7 @@ export class FilesystemTool extends BaseTool {
 
         // Session-dir redirect only applies to agents with NO resolved project.
         // When the worker is operating on a real project (projectPath set by
-        // the orchestrator), writes go to the real project — otherwise the
+        // the root agent), writes go to the real project — otherwise the
         // agent's output lands in a throwaway session folder and nothing ends
         // up in the repo.
         const projectPath = (context?.metadata as Record<string, unknown> | undefined)?.projectPath as string | undefined;
@@ -653,7 +653,7 @@ export class FilesystemTool extends BaseTool {
    * `preferExisting` is the only read/write difference: read-side ops set it
    * so that when the computed session target does not exist but the same path
    * under the workspace root does, the root path is returned instead — keeping
-   * orchestrator-seeded and pre-existing root/project files reachable. Writes
+   * root agent-seeded and pre-existing root/project files reachable. Writes
    * leave it false (the target need not exist yet).
    *
    * Returns a candidate path; callers still gate it through `resolveSafe`.

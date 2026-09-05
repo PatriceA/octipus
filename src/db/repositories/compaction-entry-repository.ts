@@ -8,7 +8,7 @@ import {
 
 /**
  * Append-only access to per-session compaction history.
- * High-level orchestrator code uses this via session-compaction.ts;
+ * High-level root agent code uses this via session-compaction.ts;
  * never reach into `getDb()` directly from compaction logic.
  */
 export class CompactionEntryRepository {

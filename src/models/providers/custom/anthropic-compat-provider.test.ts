@@ -22,7 +22,7 @@ describe('buildCachedSystem (Phase 2b breakpoints)', () => {
     expect(out[1].cache_control).toBeUndefined(); // volatile part not cached
   });
 
-  it('also matches the orchestrator "DATE & TIME" phrasing', () => {
+  it('also matches the rootAgent "DATE & TIME" phrasing', () => {
     const sys = `${bigStatic}\n\nCURRENT DATE & TIME: Tue`;
     const out = buildCachedSystem(sys);
     expect(Array.isArray(out)).toBe(true);

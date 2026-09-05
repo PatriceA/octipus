@@ -1,8 +1,6 @@
 import { Elysia } from '@/api/http';
 import { getUMI } from '@/channels/interface';
-import { getConfig } from '@/config';
 import { getGateway } from '@/core/gateway';
-import { describeMode, resolveOrchestratorMode } from '@/core/orchestrator/mode-selector';
 import { checkDbHealth } from '@/db/postgres';
 import { checkCacheHealth } from '@/db/cache';
 import { getHealthChecker } from '@/models/health-checker';
@@ -160,7 +158,7 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
         },
         health: {
           database: status.health.database,
-          redis: status.health.redis,
+          storage: status.health.storage,
           litellm: toHealthEntry(litellm),
           ollama: toHealthEntry(ollama),
           openai: toHealthEntry(openai),
@@ -188,7 +186,7 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
         agents: { total: 0, running: 0 },
         health: {
           database: fallback('database'),
-          redis: fallback('redis'),
+          storage: fallback('storage'),
           litellm: fallback('litellm'),
           ollama: fallback('ollama'),
           openai: fallback('openai'),
@@ -220,14 +218,14 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
   })
 
   // Storage-provider health — Postgres in external mode, the in-process map in
-  // embedded. The route and the JSON key stay `redis`: they are a stable API
-  // contract the web dashboard and external monitoring read, and renaming them
-  // would break those for a cosmetic gain.
-  .get('/redis', async () => {
+  // embedded. Never Valkey/Redis: that backend was replaced during the Node
+  // migration, so a route named for it reported on something the product no
+  // longer runs.
+  .get('/storage', async () => {
     const result = await checkCacheHealth();
 
     return {
-      service: 'redis',
+      service: 'storage',
       status: result.healthy ? 'healthy' : 'unhealthy',
       latency: result.latency,
       error: result.error,
@@ -253,11 +251,11 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
   // Readiness probe (for Kubernetes)
   .get('/ready', async () => {
     const dbHealth = await checkDbHealth();
-    const redisHealth = await checkCacheHealth();
+    const storageHealth = await checkCacheHealth();
 
-    if (!dbHealth.healthy || !redisHealth.healthy) {
+    if (!dbHealth.healthy || !storageHealth.healthy) {
       return new Response(
-        JSON.stringify({ ready: false, database: dbHealth.healthy, redis: redisHealth.healthy }),
+        JSON.stringify({ ready: false, database: dbHealth.healthy, storage: storageHealth.healthy }),
         { status: 503 }
       );
     }
@@ -330,7 +328,7 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
         help: 'The base chat brain — every message that is not delegated runs on your default model.',
         hint: 'Add a model and set it as the default' },
       { key: 'orchestration', name: 'Orchestration', topic: 'general', required: true,
-        help: 'The swarm orchestrator that routes work to specialist agents. Its depth (Router/Light/Full) follows the default model size.',
+        help: 'The swarm rootAgent that routes work to specialist agents. Its depth (Router/Light/Full) follows the default model size.',
         hint: 'Set a default model — orchestration runs on it' },
       { key: 'agents', name: 'Specialist agents', topic: 'agents', required: true,
         help: 'The model lane every specialist/expert worker (Coder, custom experts, …) resolves from. Workers fail loud if unbound.',
@@ -356,7 +354,7 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
     ] as const;
 
     const registry = getModelRegistry();
-    // Chat and Orchestration run on the *default* model: the orchestrator and
+    // Chat and Orchestration run on the *default* model: the root agent and
     // router resolve via getDefaultModel(), and getModelForTopic() has no
     // default fallback. So a 'general' binding is NOT what makes them work —
     // resolve those rows against the default instead of the topic.
@@ -410,32 +408,4 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
     );
 
     return { features };
-  })
-
-  // Orchestrator run-mode — router / lite / full, derived from the default
-  // model's size and the configured thresholds (same logic the runtime uses
-  // each turn). Surfaced so the web header and TUI can always show how Octipus
-  // is running. Returns mode=null when no default model is set yet.
-  .get('/orchestrator', async () => {
-    const orch = getConfig().orchestrator;
-    const registry = getModelRegistry();
-    const model = await registry.getDefaultModel();
-    if (!model) {
-      return { mode: null, label: null, description: 'No default model set' };
-    }
-    const mode = resolveOrchestratorMode(
-      { modelId: model.modelId, metadata: model.metadata, provider: model.provider },
-      {
-        mode: orch.mode,
-        routerSmallModelMaxParams: orch.routerSmallModelMaxParams,
-        liteModelMaxParams: orch.liteModelMaxParams,
-      },
-    );
-    // Display labels — 'lite' surfaces as "Light" per product naming; the raw
-    // `mode` id stays the canonical value for any programmatic consumer. This
-    // route is public (like the other /health routes) so it deliberately does
-    // NOT echo the model name — that would leak infra info to anonymous callers
-    // (cf. /health/detailed, which is auth-gated for the same reason).
-    const LABELS = { router: 'Router', lite: 'Light', full: 'Full' } as const;
-    return { mode, label: LABELS[mode], description: describeMode(mode) };
   });

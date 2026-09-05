@@ -153,7 +153,7 @@ describe('the event scan is comment-blind too', () => {
     // The route scan blanked comments from the start; the event scan did not,
     // so commenting out a `publishEvent` would have quietly satisfied the gate
     // for that type. Reading a doc comment as code is the same bug pointing the
-    // other way, and it was live: a JSDoc block in `orchestrator/service.ts`
+    // other way, and it was live: a JSDoc block in `root agent/service.ts`
     // mentions `eventBus.subscribe(...)` and was counted as an unresolvable
     // subscription site.
     const src = [

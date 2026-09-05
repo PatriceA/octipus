@@ -1,4 +1,4 @@
-import { filterPII } from '@/core/orchestrator/pii-filter';
+import { filterPII } from '@/core/agent/pii-filter';
 import type { TrajectoryOutcome, TrajectoryRecord } from './types';
 
 /**

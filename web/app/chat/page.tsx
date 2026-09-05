@@ -139,7 +139,7 @@ export default function ChatPage() {
     setAttachedFiles((prev) => [...prev.filter((f) => f.path !== ref.path), ref].slice(-10));
   }, []);
   // Chat/work split (Thread 3): per-message deliverable override. 'auto' lets
-  // the classifier/orchestrator decide; 'chat' forces inline; 'file' forces a
+  // the classifier/root agent decide; 'chat' forces inline; 'file' forces a
   // file deliverable. Sticky across messages until the user changes it.
   const [outputMode, setOutputMode] = useState<'auto' | 'chat' | 'file'>('auto');
   // When the file panel opens, auto-collapse the right sidebar to make room
@@ -187,7 +187,7 @@ export default function ChatPage() {
     });
   }, []);
 
-  // Narration messages — orchestrator dispatch lines and per-tool
+  // Narration messages — root agent dispatch lines and per-tool
   // stream updates ("data arm calls read_file", "data arm · read_file
   // · 0.2s"). They live in the in-memory session state and persist for
   // the lifetime of the session (the 10s REST poll preserves them via
@@ -628,7 +628,7 @@ export default function ChatPage() {
         const sid = data.sessionId || activeSessionId;
         // `/clear` returns the literal "[clear]" sentinel for webchat clients.
         // Wipe the visible message list and tracked agents/teams instead of
-        // appending "[clear]" as an assistant message. The orchestrator side
+        // appending "[clear]" as an assistant message. The root agent side
         // has already recorded clearedAt on the session so future replies
         // ignore pre-clear history.
         if (sid && typeof data.response === 'string' && data.response.trim() === '[clear]') {
@@ -735,8 +735,8 @@ export default function ChatPage() {
         }
         break;
 
-      case 'orchestrator_event':
-        handleOrchestratorEvent(data, eventSessionId || activeSessionId);
+      case 'turn_event':
+        handleTurnEvent(data, eventSessionId || activeSessionId);
         break;
 
       case 'agent_event':
@@ -754,7 +754,7 @@ export default function ChatPage() {
         break;
 
       case 'swarm_event':
-        // Persona narration: render as inline chat bubble so the orchestrator
+        // Persona narration: render as inline chat bubble so the root agent
         // appears to "speak" while subagents work. Without this the bridge
         // emits but no surface displays it, which manifests as "narration
         // never fires" in the UI.
@@ -772,7 +772,7 @@ export default function ChatPage() {
         // Swarm lifecycle events — funnel into the SwarmTree component AND
         // into the per-session trackedAgents map so the sidepanel's agent
         // count / duration / iteration / token columns populate live.
-        // Previously only `worker_spawned` (orchestrator → pipeline worker
+        // Previously only `worker_spawned` (root agent → pipeline worker
         // path) touched trackedAgents, so swarm-spawned children were
         // invisible to the sidepanel until a page reload re-hydrated the
         // agent log from REST.
@@ -801,7 +801,7 @@ export default function ChatPage() {
           const p = data.payload as {
             nodeId: string;
             parentNodeId?: string | null;
-            kind?: 'orchestrator' | 'agent' | 'subagent';
+            kind?: 'root' | 'agent' | 'subagent';
             role?: string;
             model?: string;
             status?: string;
@@ -816,7 +816,7 @@ export default function ChatPage() {
           // timestamp adds a belt-and-suspenders guarantee.
           const clientNow = Date.now();
 
-          if (data.event === 'swarm.node_spawned' && eventSessionId && p.kind !== 'orchestrator') {
+          if (data.event === 'swarm.node_spawned' && eventSessionId && p.kind !== 'root') {
             updateSessionState(eventSessionId, (prev) => {
               const next = new Map(prev.trackedAgents);
               const existing = next.get(p.nodeId);
@@ -840,9 +840,9 @@ export default function ChatPage() {
             // Session-level aggregates — drive Session Stats badges.
             updateSessionState(eventSessionId, (prev) => {
               const nextAgents = new Map(prev.trackedAgents);
-              // Only finalize non-orchestrator nodes in the sidepanel agent
-              // list. The orchestrator is not a tracked agent card.
-              if (p.kind !== 'orchestrator') {
+              // Only finalize non-root agent nodes in the sidepanel agent
+              // list. The root agent is not a tracked agent card.
+              if (p.kind !== 'root') {
                 const existing = nextAgents.get(p.nodeId);
                 const resolvedStatus: TrackedAgent['status'] =
                   p.status === 'completed' || p.status === 'cache_hit'
@@ -868,11 +868,11 @@ export default function ChatPage() {
                 });
               }
               // Swarm duration represents wall-clock time of each swarm
-              // (the orchestrator's runtime). Sub-agent durations should NOT
-              // be added — those are nested inside the orchestrator's time.
+              // (the root agent's runtime). Sub-agent durations should NOT
+              // be added — those are nested inside the root agent's time.
               // Total across multiple swarms in a session = sum of each
-              // orchestrator's duration.
-              const swarmDurationDelta = p.kind === 'orchestrator' ? duration : 0;
+              // root agent's duration.
+              const swarmDurationDelta = p.kind === 'root' ? duration : 0;
               return {
                 ...prev,
                 trackedAgents: nextAgents,
@@ -887,7 +887,7 @@ export default function ChatPage() {
     }
   };
 
-  const handleOrchestratorEvent = (data: any, sessionId: string | null) => {
+  const handleTurnEvent = (data: any, sessionId: string | null) => {
     if (!sessionId) return;
 
     switch (data.event) {
@@ -960,7 +960,7 @@ export default function ChatPage() {
             id: agentId,
             role: d.role,
             // The turn's root agent. Carried explicitly since Phase 9: the root
-            // runs as an ordinary role now, so `role === 'orchestrator'` no
+            // runs as an ordinary role now, so `role === 'root'` no
             // longer tells the panel which entry is Octipus itself.
             root: d.root === true,
             model: d.model,
@@ -1420,7 +1420,7 @@ export default function ChatPage() {
 
     // WS is the primary transport. If it's OPEN → send.
     // If it's CONNECTING → wait up to 5 s for open, then send. This avoids a
-    // race where we fall back to REST mid-connect, fire a 30 s+ orchestrator
+    // race where we fall back to REST mid-connect, fire a 30 s+ root agent
     // request against a proxy with a shorter timeout, and see a transient
     // "Request failed" pop up while the real answer is still streaming in
     // via the WS that finally opened.
@@ -1591,9 +1591,9 @@ export default function ChatPage() {
   });
 
   // Tell the backend when this session enters/leaves voice mode, so the
-  // orchestrator's propose-then-confirm gate + lifecycle narration apply. On a
+  // root agent's propose-then-confirm gate + lifecycle narration apply. On a
   // session switch, turn voice OFF for the previous session first so its flag
-  // isn't left set in the orchestrator.
+  // isn't left set in the root agent.
   const prevVoiceSessionRef = useRef<string | null>(null);
   useEffect(() => {
     const ws = wsRef.current;

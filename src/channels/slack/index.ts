@@ -72,7 +72,7 @@ export class SlackChannel extends BaseChannel {
     // ONE message listener. Bolt invokes EVERY matching listener for an event,
     // so the old setup (a catch-all `app.message()` PLUS `app.event('message')`
     // for DMs PLUS a separate `app.event('app_mention')`) fired handleMessage
-    // two or three times for a single message → duplicate orchestrator runs and
+    // two or three times for a single message → duplicate root agent runs and
     // duplicate replies. `app.message()` already receives message events across
     // every channel type the bot can see (DMs, channels, groups), so it is the
     // single entry point; mentions in joined channels arrive as message events

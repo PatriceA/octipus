@@ -680,7 +680,7 @@ export class Vault {
    *
    * This is the scope-aware replacement for the legacy injector path
    * that called `getByName(userId, name)` directly. Phase 1b-1 leaves
-   * `getByName` in place for backwards compat but the orchestrator
+   * `getByName` in place for backwards compat but the root agent
    * should migrate to `getForAgent` over time.
    */
   async getForAgent(

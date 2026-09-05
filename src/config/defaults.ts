@@ -25,6 +25,7 @@ export const defaultConfig: Partial<Config> = {
     defaultModel: 'llama3.2',
     requestTimeout: 300000,
     keepAlive: '10m',
+    unifiedMemory: false,
   },
   security: {
     masterKey: '', // Must be provided
@@ -66,23 +67,21 @@ export const defaultConfig: Partial<Config> = {
     maxIterations: 50,
     contextWindowSize: 32000,
     maxTokenBudget: 100000,
-  },
-  orchestrator: {
-    mode: 'auto',
+    promptTier: 'auto',
     liteMaxIterations: 8,
-    routerSmallModelMaxParams: 10_000_000_000,
+    smallModelMaxParams: 10_000_000_000,
     liteModelMaxParams: 24_000_000_000,
     smallModelMaxTools: 7,
-    /** Orchestrator agent timeout for interactive channels (30 min). */
     /**
      * Advertise a core tool set plus `list_tools`/`describe_tool` instead of
      * every schema. Measured: 73% of the root's 21,945-token standing prompt
      * was tool JSON schema. Set false to put the full block back everywhere.
      */
     lazyToolDiscovery: true,
-    orchestratorTimeoutMs: 1800000,
-    /** Orchestrator agent timeout for unattended hook-triggered runs (45 min). */
-    orchestratorHookTimeoutMs: 2700000,
+    /** Root-turn timeout for interactive channels (30 min). */
+    turnTimeoutMs: 1800000,
+    /** Root-turn timeout for unattended hook-triggered runs (45 min). */
+    hookTurnTimeoutMs: 2700000,
     /** Token pool for one pipeline run, summed over node visits. 0 = off. */
     pipelineTokenBudget: 2_000_000,
   },
@@ -125,7 +124,7 @@ export const defaultConfig: Partial<Config> = {
     orphanReaperIntervalMs: 600_000,
     contractRetries: 1,
     levelDefaults: {
-      orchestrator: { tokens: 200_000, wallMs: 600_000, fanOut: 6, maxPendingDetached: 6 },
+      root: { tokens: 200_000, wallMs: 600_000, fanOut: 6, maxPendingDetached: 6 },
       agent: { tokens: 80_000, wallMs: 600_000, fanOut: 4, maxPendingDetached: 3 },
       subagent: { tokens: 30_000, wallMs: 600_000, fanOut: 0, maxPendingDetached: 0 },
     },

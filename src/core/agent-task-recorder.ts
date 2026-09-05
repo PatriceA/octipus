@@ -6,7 +6,7 @@
  * polluted similarity search.
  *
  * Same skip-rules as the previous indexer:
- *   - orchestrator outputs are skipped (they are summaries of worker
+ *   - root agent outputs are skipped (they are summaries of worker
  *     outputs and would just duplicate signal),
  *   - trivially-short outputs (< MIN_OUTPUT_LENGTH chars) are skipped
  *     to avoid recording every "ok" / "done".

@@ -41,7 +41,7 @@ const TOOL_CALL_MARKERS: RegExp[] = [
  * The toolshim costs a whole extra LLM call, so it must not fire on prose that
  * was never trying to be a tool call — i.e. on an ordinary final answer, which
  * is the normal way a turn ends. Historically it did: a daily 1-iteration cron
- * whose orchestrator simply answered in plain text still paid for a translator
+ * whose root agent simply answered in plain text still paid for a translator
  * call, and when that translator was a cold local model the run sat ~15 min
  * past its finished answer.
  *

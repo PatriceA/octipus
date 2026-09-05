@@ -1,4 +1,4 @@
-import type { AgentRole } from '@/core/orchestrator/types';
+import type { AgentRole } from '@/core/agent/types';
 import { coreLogger } from '@/utils/logger';
 import type { AgentNode, ChildResult } from './types';
 
@@ -43,7 +43,7 @@ export function checkDepth(parent: AgentNode): ChildResult | null {
 }
 
 /**
- * Same-role guard. At depth 0→1 (Orchestrator → Agent) a same-role spawn means
+ * Same-role guard. At depth 0→1 (root → Agent) a same-role spawn means
  * delegating a role to itself — refused. At depth 1→2 (Agent → Subagent) it is
  * ALLOWED (parallel fan-out), so this only fires when `childDepth === 1`.
  */

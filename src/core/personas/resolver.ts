@@ -91,7 +91,7 @@ export async function resolvePersonaForUser(userId: string): Promise<ResolvedPer
 /**
  * Resolve the persona SHADOWING one arm, or null when that arm has none.
  *
- * Per-arm shadowing (roadmap wave 4). One global persona is the orchestrator's
+ * Per-arm shadowing (roadmap wave 4). One global persona is the root agent's
  * voice; an arm may be given a different one — `review` blunt where the host is
  * playful — by binding a preset with `/persona arm <role> <preset>`.
  *
@@ -156,7 +156,7 @@ export async function resolvePersonaForArm(
     tone: preset.tone,
     promptBlock,
     // Narration is a host-level concern — an arm does not narrate its own work
-    // to the user, the orchestrator does.
+    // to the user, the root agent does.
     narration: 'off',
     narrationTemplates: preset.narration_templates,
     signaturePhrases: preset.signature_phrases,

@@ -36,7 +36,7 @@
  * deployments.
  */
 
-import { and, asc, count, desc, eq, inArray, type SQL, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, inArray, ne, type SQL, sql } from 'drizzle-orm';
 import { isAdmin, isAuthenticated, type Principal } from '@/security/principal';
 import { getDb } from '../postgres';
 import { type AgentRecord, agents, type NewAgentRecord } from '../schema/agents';
@@ -325,6 +325,8 @@ export class ScopedMessageRepo {
 // Agents
 // ─────────────────────────────────────────────────────────────────────
 
+export type FinishedAgentRow = Pick<AgentRecord, 'id' | 'role' | 'status' | 'error' | 'durationMs' | 'createdAt' | 'completedAt'>;
+
 export class ScopedAgentRepo {
   constructor(private readonly principal: Principal) {
     requireAuth(principal);
@@ -355,6 +357,28 @@ export class ScopedAgentRepo {
       .orderBy(desc(agents.createdAt))
       .limit(limit)
       .offset(offset);
+  }
+
+  /**
+   * Agents that reached a terminal state since `since`, newest first — the
+   * "what finished while I was away" query. Terminal = completed, failed or
+   * stopped; a still-running agent is not news yet.
+   */
+  async finishedSince(since: Date, limit = 50): Promise<FinishedAgentRow[]> {
+    const filters: (SQL | undefined)[] = [
+      eq(agents.userId, this.principal.userId),
+      inArray(agents.status, ['completed', 'failed', 'stopped']),
+      gte(agents.completedAt, since),
+    ];
+    filters.push(workspaceFilter(this.principal, agents.workspaceId));
+    // Projection on purpose: the digest is polled by every open dashboard,
+    // and the jsonb columns (toolCalls, metadata) are the bulk of a row.
+    return this.db
+      .select({ id: agents.id, role: agents.role, status: agents.status, error: agents.error, durationMs: agents.durationMs, createdAt: agents.createdAt, completedAt: agents.completedAt })
+      .from(agents)
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
+      .orderBy(desc(agents.completedAt))
+      .limit(limit);
   }
 
   /** Count agents owned by the principal — for pagination totals. */
@@ -523,6 +547,13 @@ export class ScopedDocumentRepo {
 // Notifications
 // ─────────────────────────────────────────────────────────────────────
 
+export interface NotificationListFilter {
+  /** Only unread rows. */
+  unread?: boolean;
+  /** Only rows whose `type` starts with this (e.g. `agent`, `pipeline`, `approval`). */
+  typePrefix?: string;
+}
+
 export class ScopedNotificationRepo {
   constructor(private readonly principal: Principal) {
     requireAuth(principal);
@@ -530,8 +561,15 @@ export class ScopedNotificationRepo {
 
   private get db() { return getDb(); }
 
-  async list(limit = 50, offset = 0): Promise<Notification[]> {
+  /**
+   * Newest first. Filters apply in SQL so paging is over the filtered set —
+   * an inbox that filters client-side over one page hides every match that
+   * fell outside it.
+   */
+  async list(limit = 50, offset = 0, filter: NotificationListFilter = {}): Promise<Notification[]> {
     const filters: (SQL | undefined)[] = [eq(notifications.userId, this.principal.userId)];
+    if (filter.unread) filters.push(eq(notifications.read, false));
+    if (filter.typePrefix) filters.push(sql`${notifications.type} LIKE ${`${filter.typePrefix.replace(/[%_\\]/g, '\\$&')}%`}`);
     filters.push(workspaceFilter(this.principal, notifications.workspaceId));
     return this.db
       .select()
@@ -542,17 +580,19 @@ export class ScopedNotificationRepo {
       .offset(offset);
   }
 
-  async unreadCount(): Promise<number> {
+  /** Unread rows for the principal; `since` narrows to rows created at/after it. */
+  async unreadCount(since?: Date): Promise<number> {
     const filters: (SQL | undefined)[] = [
       eq(notifications.userId, this.principal.userId),
       eq(notifications.read, false),
     ];
+    if (since) filters.push(gte(notifications.createdAt, since));
     filters.push(workspaceFilter(this.principal, notifications.workspaceId));
-    const rows = await this.db
-      .select({ id: notifications.id })
+    const [row] = await this.db
+      .select({ c: count() })
       .from(notifications)
       .where(and(...filters.filter((f): f is SQL => f !== undefined)));
-    return rows.length;
+    return Number(row?.c ?? 0);
   }
 
   /**
@@ -687,6 +727,8 @@ export class ScopedHookRepo {
 // Pipelines & templates
 // ─────────────────────────────────────────────────────────────────────
 
+export type ChangedPipelineRow = Pick<Pipeline, 'id' | 'title' | 'status' | 'summary' | 'updatedAt'>;
+
 export class ScopedPipelineRepo {
   constructor(private readonly principal: Principal) {
     requireAuth(principal);
@@ -701,6 +743,28 @@ export class ScopedPipelineRepo {
       : and(eq(pipelines.id, id), eq(pipelines.userId, this.principal.userId));
     const row = await this.db.select().from(pipelines).where(where).limit(1);
     return row[0] ?? null;
+  }
+
+  /**
+   * Pipelines that reached a state worth reporting since `since`, newest
+   * change first: finished, failed, or now waiting on the user (`paused` /
+   * `awaiting_approval`). `updated_at` moves on every node transition, which
+   * is why the status filter is there — a run that is still going is not
+   * news yet, however many nodes it crossed.
+   */
+  async changedSince(since: Date, limit = 50): Promise<ChangedPipelineRow[]> {
+    const filters: (SQL | undefined)[] = [
+      eq(pipelines.userId, this.principal.userId),
+      inArray(pipelines.status, ['paused', 'awaiting_approval', 'completed', 'failed']),
+      gte(pipelines.updatedAt, since),
+    ];
+    filters.push(workspaceFilter(this.principal, pipelines.workspaceId));
+    return this.db
+      .select({ id: pipelines.id, title: pipelines.title, status: pipelines.status, summary: pipelines.summary, updatedAt: pipelines.updatedAt })
+      .from(pipelines)
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
+      .orderBy(desc(pipelines.updatedAt))
+      .limit(limit);
   }
 
   /**
@@ -758,6 +822,8 @@ export interface TaskListFilter {
   limit?: number;
 }
 
+export type CreatedTaskRow = Pick<Task, 'id' | 'title' | 'source' | 'createdAt'>;
+
 export class ScopedTaskRepo {
   constructor(private readonly principal: Principal) {
     requireAuth(principal);
@@ -796,6 +862,22 @@ export class ScopedTaskRepo {
       .where(and(...filters.filter((f): f is SQL => f !== undefined)))
       .orderBy(asc(tasks.status), desc(tasks.priority), asc(tasks.dueAt), desc(tasks.createdAt))
       .limit(filter.limit ?? 200);
+  }
+
+  /**
+   * Tasks created since `since` by something other than the user (an agent,
+   * email triage, research, the reader) — the ones the user has not seen yet.
+   */
+  async createdSince(since: Date, opts: { excludeSource?: string; limit?: number } = {}): Promise<CreatedTaskRow[]> {
+    const filters: (SQL | undefined)[] = [eq(tasks.userId, this.principal.userId), gte(tasks.createdAt, since)];
+    if (opts.excludeSource) filters.push(ne(tasks.source, opts.excludeSource));
+    filters.push(workspaceFilter(this.principal, tasks.workspaceId));
+    return this.db
+      .select({ id: tasks.id, title: tasks.title, source: tasks.source, createdAt: tasks.createdAt })
+      .from(tasks)
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
+      .orderBy(desc(tasks.createdAt))
+      .limit(opts.limit ?? 50);
   }
 
   /** Create a task pinned to the principal. Ignores any user_id in `data`. */
@@ -859,7 +941,7 @@ export interface ScopedRepos {
 
 /**
  * Build a bundle of scoped repositories for the given principal. Used by
- * route handlers and orchestrator code paths that should never see data
+ * route handlers and root agent code paths that should never see data
  * outside the current principal's tenant.
  *
  * Throws `UnauthenticatedAccessError` if called with an anonymous

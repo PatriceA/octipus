@@ -40,6 +40,7 @@ const McpPage = lazy(() => import('./app/mcp/page'));
 const MemoryPage = lazy(() => import('./app/memory/page'));
 const ModelsPage = lazy(() => import('./app/models/page'));
 const NotesPage = lazy(() => import('./app/notes/page'));
+const NotificationsPage = lazy(() => import('./app/notifications/page'));
 const PermissionsPage = lazy(() => import('./app/permissions/page'));
 const PersonaPage = lazy(() => import('./app/persona/page'));
 const PipelinesPage = lazy(() => import('./app/pipelines/page'));
@@ -113,6 +114,7 @@ const router = createBrowserRouter([
       { path: 'memory', element: <MemoryPage /> },
       { path: 'models', element: <ModelsPage /> },
       { path: 'notes', element: <NotesPage /> },
+      { path: 'notifications', element: <NotificationsPage /> },
       { path: 'permissions', element: <PermissionsPage /> },
       { path: 'persona', element: <PersonaPage /> },
       { path: 'pipelines', element: <PipelinesPage /> },

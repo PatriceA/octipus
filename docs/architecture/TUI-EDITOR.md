@@ -205,7 +205,7 @@ Entry points:
 
 - `octi tui` → `src/tui-pi/index.ts` (chat shell)
 - `octi edit` → `src/tui-editor/index.ts` (editor)
-- `bun run tui:edit` and `./bin/octi-tui-edit.mjs` are equivalent
+- `npm run tui:edit` and `./bin/octi-tui-edit.mjs` are equivalent
   to `octi edit` for scripting.
 
 ## Tests
@@ -217,7 +217,9 @@ Entry points:
   `waitFor(needle)`.
 - `tests/tui/chat.e2e.test.ts` and `tests/tui/editor.e2e.test.ts`
   cover launch, focus cycling, slash commands, the file picker
-  filter, the command palette, and `/quit`.
+  filter, the command palette, and `/quit`. This suite is written
+  against `bun:test` and hasn't been migrated to Vitest with the rest
+  of the tests, so it needs the `bun` binary on PATH.
 
 ```bash
 bun test tests/tui/
@@ -237,11 +239,10 @@ buffer-oriented tree-sitter adapter at
 (`tree-sitter-typescript`, `tree-sitter-python`,
 `tree-sitter-rust`, `tree-sitter-go`, `tree-sitter-java`) are
 runtime dependencies. The `.wasm` files are **not** vendored in
-the repo — the adapter resolves them through Bun's module
-resolver (`Bun.resolveSync('tree-sitter-<lang>/package.json',
-import.meta.dir)`) and reads them from `node_modules/` on first
-use. Adding a language is a `bun add tree-sitter-<lang>` plus
-one row in `GRAMMAR_FILES`.
+the repo — the adapter resolves them through Node's module
+resolver (`createRequire(import.meta.url).resolve('tree-sitter-<lang>/package.json')`)
+and reads them from `node_modules/` on first use. Adding a language is an
+`npm install tree-sitter-<lang>` plus one row in `GRAMMAR_FILES`.
 
 ### Lifecycle
 

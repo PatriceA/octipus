@@ -1,11 +1,11 @@
 /**
- * Orchestrator-hardening behaviours on AgentWorker:
+ * Root agent-hardening behaviours on AgentWorker:
  *  - P1.7  stopped worker emits a complete-shaped terminal event + reason
  *  - P1.2/1.3  auto-collect relays full child content (no 500-char stub) and the
  *              deterministic relay fallback appends it when the model stubs out
  *  - 2.2   a child (non-root) that overruns its wall throws ChildTimeoutError
  *          (→ ChildResult status='timeout') while the parent survives a
- *          timed-out child; the root orchestrator instead exits gracefully
+ *          timed-out child; the root root agent instead exits gracefully
  *  - 3.5   iteration-budget exhaustion runs one final no-tools summary turn
  *
  * Driven with instance-level overrides of the private `getCompletion`, the same
@@ -175,7 +175,7 @@ describe('AgentWorker child-aware timeout (2.2) + graceful exit (3.5)', () => {
     expect(parent.getAbortSignal().aborted).toBe(false);
   });
 
-  test('the root agent exits gracefully on wall-clock overrun instead of throwing', async () => {
+  test('the rootAgent exits gracefully on wall-clock overrun instead of throwing', async () => {
     const orch = new AgentWorker(mkCtx({ role: 'general', root: true, id: 'orch-1' }), cfg({ timeout: 10 }));
     const priv = orch as unknown as { startTime: number; loop: () => Promise<string>; getCompletion: () => Promise<CompletionResult> };
     priv.startTime = Date.now() - 1_000;
@@ -236,7 +236,7 @@ describe('AgentWorker child-aware timeout (2.2) + graceful exit (3.5)', () => {
 describe('AgentWorker task-drift detection (T2.2)', () => {
   let auditSpy: ReturnType<typeof vi.spyOn>;
   let updateSpy: ReturnType<typeof vi.spyOn>;
-  // The orchestrator case persists its user message; this suite has no DB.
+  // The root agent case persists its user message; this suite has no DB.
   let msgSpy: ReturnType<typeof vi.spyOn>;
   let sessSpy: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
@@ -354,7 +354,7 @@ describe('AgentWorker task-drift detection (T2.2)', () => {
  * must not fire on a normal text-only final answer — that costs an extra LLM
  * call per turn and, when the `background` model is a cold local one, stalls
  * delivery of an answer that is already written (observed: 14 min between an
- * orchestrator's finished text and its completion event).
+ * root agent's finished text and its completion event).
  */
 describe('AgentWorker toolshim gate (native tool-caller ⇒ no translator)', () => {
   const shimWorker = () => {

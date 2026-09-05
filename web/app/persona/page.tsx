@@ -128,7 +128,7 @@ export default function PersonaPage() {
     <div className="mx-auto max-w-3xl space-y-8 p-8 text-on-surface">
       <PageHeader
         title="persona"
-        description={'the orchestrator’s identity and voice. per-user, applied across every channel — tui, web, telegram, slack. the base persona is Octipus, an octopus-machine collective that talks about itself in the third person and uses "we" for its swarm.'}
+        description={'octi’s identity and voice. per-user, applied across every channel — tui, web, telegram, slack. the base persona is Octipus, an octopus-machine collective that talks about itself in the third person and uses "we" for its swarm.'}
       />
 
       {error && (
@@ -216,7 +216,7 @@ export default function PersonaPage() {
           Self-facts
         </h2>
         <p className="mb-4 text-xs text-on-surface-variant">
-          Free-form rules the orchestrator should follow about itself. Re-injected
+          Free-form rules octi should follow about itself. Re-injected
           on every turn. Example: <em>&quot;Always summarize in bullets&quot;</em>,
           <em> &quot;Stop apologizing for slow responses&quot;</em>.
         </p>

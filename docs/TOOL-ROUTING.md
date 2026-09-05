@@ -6,7 +6,7 @@
 
 Every message runs the same agent turn: the root agent, holding the general
 toolset plus `spawn_child`. The keyword classifier
-(`src/core/orchestrator/classifier.ts`) does **not** decide whether an agent
+(`src/core/agent/classifier.ts`) does **not** decide whether an agent
 runs, and has not chosen the specialist since Phase 2 — a capable model reads
 the request better than a regex table. What it still does: scope memory
 retrieval by topic, and, for a small (lite-tier) model only, ride along as a
@@ -28,7 +28,7 @@ root itself runs as `general`, so anything in that row it does without spawning.
 
 | Category | Role | Tools Available | Trigger Keywords (examples) |
 |----------|------|----------------|----------------------------|
-| coding | coding | filesystem, shell, git, knowledge, task_state, repo_registry, skill-distill, mcp | "implement", "write code", "fix bug", "refactor", "typescript", "react", "git commit" |
+| coding | coding | filesystem, shell, git, github, knowledge, task_state, repo_registry, skill-distill, mcp | "implement", "write code", "fix bug", "refactor", "typescript", "react", "git commit" |
 | research | research | websearch, knowledge, task_state, filesystem, profiles, artifacts, artifacts_toolbox, repo_registry, skill-distill, mcp | "research", "investigate", "search the web", "compare", "find out", "tell me about" |
 | devops | devops | shell, docker, git, filesystem, mcp | "docker", "kubernetes", "deploy", "CI/CD", "nginx", "terraform" |
 | security | security | shell, filesystem, browser, browser-ext, websearch, knowledge, task_state, mcp | "vulnerability", "audit", "OWASP", "threat model", "security review" |
@@ -43,7 +43,7 @@ root itself runs as `general`, so anything in that row it does without spawning.
 | review | review | filesystem, shell, git, github, knowledge, task_state, repo_registry, visual | "review the code", "code review", "linting", "test coverage" |
 | ai | ai | shell, filesystem, browser, browser-ext, websearch, knowledge, task_state, mcp | "ML model", "RAG", "training", "neural network", "embedding" |
 | general | general | filesystem, browser-ext, websearch, messaging, knowledge, notes, tasks, task_state, scheduling, profiles, email-processor, artifacts, artifacts_toolbox, skill-distill, mcp | "browser", "screenshot", "telegram", "send message", "knowledge base" |
-| pm | pm | filesystem, messaging, skill-distill | "project plan", "estimates", "timeline", "deliverables" |
+| pm | pm | filesystem, messaging, tasks, knowledge, github, skill-distill | "project plan", "estimates", "timeline", "deliverables" |
 
 ### Prompt Examples → Routing
 
@@ -67,10 +67,10 @@ root itself runs as `general`, so anything in that row it does without spawning.
   → automation → automation role → scheduling tool
 
 "Run the test suite"
-  → (matched by orchestrator system prompt) → qa role → browser, shell, docker tools
+  → (matched by root agent system prompt) → qa role → browser, shell, docker tools
 
 "Who is my wife?"
-  → (matched by orchestrator system prompt) → general role → profiles tool
+  → (matched by root agent system prompt) → general role → profiles tool
 
 "Take a screenshot of my browser"
   → general → general role → browser-ext tool
@@ -85,7 +85,7 @@ root itself runs as `general`, so anything in that row it does without spawning.
   → finance → finance role → browser, websearch tools
 ```
 
-### Special Routing Rules (from orchestrator system prompt)
+### Special Routing Rules (from root agent system prompt)
 
 These override keyword classification:
 
@@ -113,7 +113,7 @@ Experts are triggered explicitly via the `/expert` command in any channel:
 /expert devops-engineer Set up GitHub Actions CI/CD
 ```
 
-The orchestrator:
+The root agent:
 1. Loads the expert from the database (name, description, role, system prompt)
 2. Builds expert system prompt with: security preamble + expert identity + role prompt + critical rules + deliverable template + success metrics + domain knowledge from skills
 3. Spawns a worker with the expert's role tools and system prompt

@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Activity, Bot, MessageSquare, Zap } from 'lucide-react';
 import { ActiveAgents } from '@/components/dashboard/active-agents';
+import { AwayDigestCard } from '@/components/dashboard/away-digest';
 import { FeatureStatus } from '@/components/dashboard/feature-status';
 import { HealthStatus } from '@/components/dashboard/health-status';
 import { RecentSessions } from '@/components/dashboard/recent-sessions';
@@ -21,7 +22,7 @@ interface ServiceHealth {
 interface HealthData {
   health?: {
     database: ServiceHealth;
-    redis: ServiceHealth;
+    storage: ServiceHealth;
     scheduler: ServiceHealth;
     litellm: ServiceHealth;
     ollama: ServiceHealth;
@@ -58,7 +59,7 @@ export default function DashboardPage() {
     refetchInterval: (query) => {
       const h = query.state.data?.health;
       if (!h) return 3000;
-      const statuses = [h.database, h.redis, h.litellm, h.ollama, h.openai, h.anthropic, h.gemini, h.deepseek, h.grok, h.mistral, h.zai, h.moonshot, h.voyage, h.openrouter, h.custom]
+      const statuses = [h.database, h.storage, h.litellm, h.ollama, h.openai, h.anthropic, h.gemini, h.deepseek, h.grok, h.mistral, h.zai, h.moonshot, h.voyage, h.openrouter, h.custom]
         .map(s => s?.status)
         .filter(s => s && s !== 'not_configured');
       const allHealthy = statuses.every(s => s === 'healthy');
@@ -78,7 +79,7 @@ export default function DashboardPage() {
   });
 
   // The user's own session count. The card previously showed `health.agents.total`
-  // — the GLOBAL agent count — so creating one chat (orchestrator + worker = 2
+  // — the GLOBAL agent count — so creating one chat (root agent + worker = 2
   // agents) read as "2 sessions". `total` is the full per-user count.
   const { data: sessionData } = useQuery({
     queryKey: ['sessions', 'count'],
@@ -114,6 +115,9 @@ export default function DashboardPage() {
           </StatusBadge>
         }
       />
+
+      {/* What happened since the user last looked — the first thing to read. */}
+      <AwayDigestCard />
 
       {/* Stat counters. Big mono number, label as `> name` so they
           read like ticker rows rather than marketing cards. */}

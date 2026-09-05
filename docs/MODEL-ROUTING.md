@@ -16,7 +16,7 @@ Every topic (lane) can bind up to three models:
 | **Executor** | Topics page → `executorModel` (`topics_config` table) | Cheap model that runs pre-planned steps mechanically | Only when the spawning agent supplies a `plan` in `spawn_child` (planner→executor split, see below). On planned spawns, overrides expert `modelPreference` because a plan means the work is pre-decided and mechanical, not requiring expert judgment. |
 
 All three are optional. An unbound topic **fails loud** at spawn time — there
-is no silent default-model fallback for workers (only the orchestrator has a
+is no silent default-model fallback for workers (only the root agent has a
 default via `selectForOrchestration()`).
 
 ## Resolution order (per spawn)
@@ -53,14 +53,14 @@ Two follow-up gates run after selection:
 routes the child to the topic's cheap `executorModel`. A plan-less child is a
 judgment delegation and runs on the topic **primary**.
 
-**Who plans: the specialist agent, not the orchestrator.** The orchestrator
+**Who plans: the specialist agent, not the root agent.** The root agent
 routes requests to experts by topic, exactly as before — it does not know or
 care about executors. The planner is the **topic/expert-bound agent** (depth
 1): it has the domain context to break its own sub-work into mechanical steps
 and hand them to `spawn_child` as a plan. Concretely:
 
 ```
-Orchestrator          — routes by topic. No plans, no executor awareness.
+Root agent          — routes by topic. No plans, no executor awareness.
    └─ Agent (expert)  — the PLANNER. For mechanical, fully-specified sub-work
       (depth 1)         (run these searches, fetch these pages, apply these
                          edits) it passes a `plan`; the sub-task then runs on
@@ -129,10 +129,10 @@ gate provider availability but do not pick fallbacks.
 | Concern | File |
 |---|---|
 | Child model resolution (expert → executor → primary) | `src/core/swarm/spawner.ts` (`resolveChildModelAndExpert`) |
-| Worker model resolution | `src/core/orchestrator/worker-spawner.ts` |
+| Worker model resolution | `src/core/agent/worker-spawner.ts` |
 | `plan` schema + validation + delegation guidance | `src/core/swarm/swarm-tool.ts` |
 | Executor binding storage/cache | `src/models/topic-config.ts` (`topics_config`) |
 | Primary/backup topic bindings | `src/models/model-registry.ts` (`getModelForTopic`, `getBackupModelForTopic`) |
-| Tool-capability reroute | `src/core/orchestrator/model-selector.ts` |
+| Tool-capability reroute | `src/core/agent/model-selector.ts` |
 | Spawn metrics | `src/core/telemetry.ts` (`recordSwarmSpawn`) |
 | Original design | `docs/plans/planner-executor-plan-split.md` |

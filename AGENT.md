@@ -18,7 +18,7 @@ file there, add a one-line `CLAUDE.md` containing `@AGENT.md`.
 **Octipus** — an open-source, self-hosted AI platform. One root agent answers
 the user with its own tools and delegates to a swarm of specialist agents when a
 task needs one (3-level: root → Agent → Subagent), all using typed tools, skills,
-and experts. There is no separate "orchestrator" that only routes: the root runs
+and experts. There is no separate "root agent" that only routes: the root runs
 as the `general` role marked `AgentContext.root` (see `ROOT_ROLE`), and the
 routing hop that used to sit in front of it was deleted in Phase 9 of
 `docs/plans/rebuild-execution-plan.md`. Multi-channel
@@ -58,7 +58,7 @@ src/
   config/         Zod-validated config, hot-reload
   core/
     gateway/      WS entry, command registry
-    orchestrator/ root-agent turn (runner + service), roles, pipelines,
+    root agent/ root-agent turn (runner + service), roles, pipelines,
                   meta-tools, classifier (topic hint only), guards
     swarm/        spawn_child, budgets, cancel, error mapping
     rag/          auto-indexer, hybrid search (BM25 + vector)
@@ -84,7 +84,7 @@ src/
   tui-pi/         terminal chat client (pi-tui)
   tui-editor/     TUI code editor
   services/ shared/ setup/   org services, shared types/diff, setup probes
-mcp-server/       standalone MCP server (59+ tools across ~20 groups)
+mcp-server/       standalone MCP server (88 tools across 26 groups)
 web/              Vite + React Router dashboard
 browser-extension/  companion browser extension
 bin/              octi launcher CLI (bin/octi start|stop)
@@ -104,7 +104,7 @@ AGENTS.md         per-repo curated project guide (universal agents.md convention
 | Install          | `npm install && cd web && npm install && cd ../mcp-server && npm install && cd ..` |
 | Install (desktop)| `scripts/install-desktop-deps.sh` (Rust + Tauri system libs; optional) |
 | Dev (backend)    | `npm run dev`                    |
-| Start full stack | `bin/octi start` (stop: `bin/octi stop`) |
+| Start backend | `bin/octi start` — add `web`/`tui` for a client (stop: `bin/octi stop`) |
 | Type check       | `npm run typecheck`              |
 | Lint             | `npm run lint` (fix: `npm run lint:fix`) |
 | Unit tests       | `npm run test` (Vitest; `-- --coverage` for the ratchet) |
@@ -144,7 +144,7 @@ think you need to break one, open an issue first.
 2. **No hardcoded models.** Never write `model: 'gpt-4o'` in source. Bind to
    a topic and resolve via `ModelRegistry.getModelForTopic(role)`. Unbound
    topic ⇒ throw at spawn time (fail-loud). Default fallback applies ONLY
-   to the orchestrator, never to worker topics.
+   to the root agent, never to worker topics.
 3. **One job per role.** A role branching on flags to do five things is five
    roles. Tool allowlists are minimal — no wildcards.
 4. **Typed contracts at handoffs.** Every role has an input shape and a
@@ -188,12 +188,12 @@ think you need to break one, open an issue first.
 
 ## Adding things (cheat sheet)
 
-- **Role** → `src/core/orchestrator/roles/<name>/` (existing roles: ai,
+- **Role** → `src/core/agent/roles/<name>/` (existing roles: ai,
   architecture, automation, coding, communication, data, design, devops,
   finance, general, pm, qa, research, review, security, writing). `general` is
   also what the ROOT agent of a turn runs as. Registered by three lines in
   `roles/index.ts` (static imports — a folder scan breaks in the bundle). Add classifier
-  keywords in `src/core/orchestrator/classifier.ts` if it has a distinct topic.
+  keywords in `src/core/agent/classifier.ts` if it has a distinct topic.
 - **Skill** → system skills are seeded in `src/db/seed-skills.ts` (DB-backed,
   with embeddings). Filesystem skills follow the agentskills.io spec: a
   `SKILL.md` (or flat `*.md`) under `.octipus/skills/`, `~/.octipus/agent/skills/`,
@@ -204,7 +204,7 @@ think you need to break one, open an issue first.
 - **MCP tool** → `mcp-server/src/tools/<group>.ts` with Zod schema + `server.tool`
   registration. Inventory auto-discovers.
 - **Channel** → `src/channels/<name>/`. Must speak the gateway protocol; no
-  channel-specific orchestrator hooks. Auto-discovered via `discovery.ts`.
+  channel-specific root agent hooks. Auto-discovered via `discovery.ts`.
 - **Plugin / extension** → a directory under `extensions/` (in OCTIPUS_HOME) with
   `plugin.json` + `index.ts`; loaded by `src/plugins/loader.ts`. See the
   `plugin-development` skill and `docs/PLUGINS.md`.
@@ -235,7 +235,7 @@ Octipus features a comprehensive voice subsystem (`src/voice/`) divided into thr
 3. **Telephony (Phone Calls)**
    - **Providers:** Twilio, Telnyx, Plivo (`src/voice/telephony/`).
    - **Standard Path:** Turn-based conversation using webhooks (`/api/voice/webhook/:provider`) and TwiML `<Gather>`.
-   - **Fast Path:** Bypasses the standard multi-agent Orchestrator routing to ensure low-latency responses (direct LiteLLM call with a short-response expert prompt).
+   - **Fast Path:** Bypasses the standard multi-agent Root agent routing to ensure low-latency responses (direct LiteLLM call with a short-response expert prompt).
    - **Media Stream Path (Phase 4d):** For Twilio, an optional WebSocket media bridge (`/api/voice-media-ws.ts`) handles bidirectional `<Connect><Stream>` payload (8kHz μ-law ↔ 16kHz PCM), enabling real-time streaming STT, VAD turn-taking, and caller barge-in.
 
 ## Things to avoid
@@ -252,7 +252,7 @@ Octipus features a comprehensive voice subsystem (`src/voice/`) divided into thr
 
 | Question                              | File / dir                                |
 | ------------------------------------- | ----------------------------------------- |
-| How does a message become a worker?   | `src/core/orchestrator/`, `src/core/router.ts` |
+| How does a message become a worker?   | `src/core/agent/`, `src/core/router.ts` |
 | Swarm semantics, budgets, cancel      | `src/core/swarm/`, `.octipus/swarm-design.md` |
 | Model routing & failover              | `src/models/`, `src/core/errors/classification.ts` |
 | Permission model                      | `src/security/`, `src/core/tool-executor.ts` |

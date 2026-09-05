@@ -1,7 +1,7 @@
 /**
  * Capability service — persists the availability of every optional
  * tool / external binary into the `capabilities` table, and exposes
- * the read+install API the orchestrator and CLI consume.
+ * the read+install API the root agent and CLI consume.
  *
  * Probes are done by each tool's own `checkAvailability()` (already
  * implemented per BaseTool). This service only orchestrates the runs
@@ -12,7 +12,7 @@
  *   1. runMigrations + seeds
  *   2. tool registry initialization
  *   3. capabilityService.probeAll()  ← writes table
- *   4. orchestrator reads `getAvailable()` when spawning agents
+ *   4. root agent reads `getAvailable()` when spawning agents
  */
 
 import { eq } from 'drizzle-orm';
@@ -147,7 +147,7 @@ class CapabilityService {
       }
     }
 
-    // Warm the in-memory cache so the orchestrator's synchronous gate
+    // Warm the in-memory cache so the root agent's synchronous gate
     // doesn't have to hit the DB on its first agent spawn.
     this.availableCache = {
       ids: new Set(rows.filter((r) => r.available).map((r) => r.toolId)),

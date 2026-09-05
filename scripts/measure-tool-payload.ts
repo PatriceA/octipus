@@ -9,8 +9,8 @@
  */
 import type { ChatCompletionTool } from 'openai/resources/chat/completions';
 import type { ToolHandler } from '@/core/agent-base';
-import { getRoleConfig } from '@/core/orchestrator/roles';
-import { splitRoleTools } from '@/core/orchestrator/tool-split';
+import { getRoleConfig } from '@/core/agent/roles';
+import { splitRoleTools } from '@/core/agent/tool-split';
 import { buildToolDiscoveryHandlers } from '@/tools/tool-discovery';
 import { discoverTools } from '@/tools/discovery';
 

@@ -1,7 +1,7 @@
 /**
  * Shared date/time formatting for grounding LLM prompts in "today".
  *
- * Every model-facing date string (orchestrator system prompt, swarm child
+ * Every model-facing date string (root agent system prompt, swarm child
  * message, research planner) should come from here so the format stays
  * consistent and single-clock — all fields derived from one `Date` in the
  * local timezone, never mixing a local date with a UTC ISO date (which can

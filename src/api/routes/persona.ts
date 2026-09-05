@@ -202,7 +202,7 @@ export const personaRoutes = new Elysia({ prefix: '/persona' })
         rawArgs: `arm ${params.role} ${body.presetId}`,
       });
       // The command layer owns validation (unknown role, unknown preset, and
-      // the orchestrator's "use the host persona instead"). Rather than a
+      // the root agent's "use the host persona instead"). Rather than a
       // second copy of those rules, treat a refusal as a 400 — the message is
       // already the explanation.
       const profile = await getPersonaProfileRepository().findForUser(user.id);

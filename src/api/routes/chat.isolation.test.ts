@@ -1,18 +1,18 @@
 /**
  * Cross-tenant isolation test for the chat-route's two new gaps.
  *
- * The route delegates approval logic to the orchestrator's ApprovalManager.
+ * The route delegates approval logic to the root agent's ApprovalManager.
  * Phase 1a tightened that manager so:
  *   - getPendingApprovals(forUserId) filters by owner
  *   - peek(requestId) lets callers verify ownership before resolving
  *
  * Both checks are pure (no DB, no network) so we exercise them directly
- * here rather than rebuilding a stub orchestrator service. The
+ * here rather than rebuilding a stub root agent service. The
  * route-level chat session-ownership branch is already covered by
  * sessions.isolation.test.ts.
  */
 import { describe, expect, test } from 'vitest';
-import { ApprovalManager } from '@/core/orchestrator/approval-manager';
+import { ApprovalManager } from '@/core/agent/approval-manager';
 
 const aliceId = '11111111-1111-1111-1111-111111111111';
 const bobId = '22222222-2222-2222-2222-222222222222';

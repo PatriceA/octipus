@@ -31,12 +31,12 @@ End-to-end HTTP + WebSocket tests against a running backend.
 npm run test:e2e
 ```
 
-See `scripts/e2e/index.ts` for the orchestrator and `scripts/e2e/fixtures.ts`
+See `scripts/e2e/index.ts` for the root agent and `scripts/e2e/fixtures.ts`
 for the shared auth / session state.
 
 ## 3. Web UI E2E — Playwright
 
-Full browser-based tests against the Next.js app at `http://localhost:3007`,
+Full browser-based tests against the Vite-built web app at `http://localhost:3007`,
 with the backend on `http://localhost:3005/api` for real routes and heavy
 `page.route()` interception for everything else.
 
@@ -110,7 +110,7 @@ The swarm module has its own test bundle under `src/core/swarm/*.test.ts`:
 | `orphan-reaper.test.ts` | — | Orphan reaper sweep flips stale `running` → `cancelled` |
 | `swarm-tool.test.ts` | — | `spawn_child` tool surface and validation |
 
-Full swarm flow E2E lives at `scripts/e2e/tests/swarm-flow.ts` — exercises Orchestrator → Agent → Subagent end to end with real gateway events.
+Full swarm flow E2E lives at `scripts/e2e/tests/swarm-flow.ts` — exercises Root agent → Agent → Subagent end to end with real gateway events.
 
 ## Troubleshooting
 

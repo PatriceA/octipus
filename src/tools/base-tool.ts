@@ -1,5 +1,5 @@
 import type { ToolHandler } from '@/core/agent-worker';
-import { getOrchestratorHooks } from '@/core/orchestrator/hooks';
+import { getAgentHooks } from '@/core/agent/hooks';
 import { isCancellationError } from '@/core/swarm/errors';
 import { recordToolExecution } from '@/core/telemetry';
 import type { AgentContext, ToolManifest, } from '@/core/types';
@@ -92,6 +92,21 @@ export abstract class BaseTool {
       description,
       parameters,
       execute: async (args, context) => {
+        // Enforce the `required` list the parameter schema already declares.
+        // Nothing used to: a model that omitted a required argument reached the
+        // tool body, where an ad-hoc guard let it through (`SLUG_RE.test(
+        // undefined)` tests the string "undefined" and passes) and the failure
+        // surfaced as a raw Postgres NOT NULL violation the model could not act
+        // on. One check here covers every tool instead of every tool body.
+        const missing = missingRequiredParams(parameters, args);
+        if (missing.length > 0) {
+          // Logged rather than silently returned: rejecting before the
+          // middleware keeps a malformed call out of the approval queue and the
+          // audit trail, so without this line a model repeatedly omitting an
+          // argument would be invisible everywhere.
+          toolLogger.warn({ toolId: this.id, tool: name, missing }, 'Tool call missing required parameters');
+          return { error: `Missing required parameter${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}` };
+        }
         return this.executeWithMiddleware(name, args, context, execute, options);
       },
     };
@@ -110,7 +125,7 @@ export abstract class BaseTool {
     options?: ToolExecutionOptions
   ): Promise<unknown> {
     const toolContext: ToolContext = { ...context, toolId: this.id };
-    const hooks = getOrchestratorHooks();
+    const hooks = getAgentHooks();
     const hookAgent = {
       userId: context.userId,
       sessionId: context.sessionId,
@@ -191,7 +206,7 @@ export abstract class BaseTool {
       const check = await permissionManager.check(context.userId, this.id, action, args);
 
       // One shared policy with the agent loop — see `security/approval-policy.ts`.
-      // The rule this replaces (an inline "not the orchestrator ⇒ skip the
+      // The rule this replaces (an inline "not the root agent ⇒ skip the
       // check entirely") lived here as a copy of the one in
       // `tool-executor.ts`, and is the reason a worker's approval request used
       // to hang forever: nobody relays it. Asking the policy also means an
@@ -380,6 +395,17 @@ export abstract class BaseTool {
   async shutdown(): Promise<void> {
     toolLogger.debug({ toolId: this.id }, 'Tool shutting down');
   }
+}
+
+/**
+ * Names declared `required` by a tool's parameter schema that the call did not
+ * supply. Empty string counts as supplied — a tool may legitimately want one —
+ * but null/undefined does not.
+ */
+function missingRequiredParams(parameters: Record<string, unknown>, args: Record<string, unknown>): string[] {
+  const required = (parameters as { required?: unknown }).required;
+  if (!Array.isArray(required)) return [];
+  return required.filter((name): name is string => typeof name === 'string' && args?.[name] == null);
 }
 
 /**

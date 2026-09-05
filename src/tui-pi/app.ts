@@ -13,6 +13,8 @@
  */
 import { randomUUID } from 'node:crypto';
 import { Container, getKeybindings, matchesKey, type OverlayHandle, Spacer, type TUI } from '@mariozechner/pi-tui';
+import { loginWithPassword } from '@/core/gateway/cli-login';
+import { clearCliSession, readCliSession } from '@/core/gateway/cli-session';
 import { formatChangesMessage } from './changes-render';
 import { ActivityLine } from './components/activity-line';
 import { Composer } from './components/composer';
@@ -58,6 +60,7 @@ export class OctipusTuiApp {
   private approvalHandle: OverlayHandle | null = null;
   private permissionHandle: OverlayHandle | null = null;
   private paletteHandle: OverlayHandle | null = null;
+  private loginHandle: OverlayHandle | null = null;
   /** Most-recent role seen on agent.start — used to label `iter N` ticks. */
   private activeAgentRole: string | null = null;
   /** Last pending tool line streamed to messages pane (for completion dedupe). */
@@ -120,6 +123,7 @@ export class OctipusTuiApp {
       return undefined;
     });
 
+    this.status.setUser(readCliSession()?.username ?? null);
     this.welcome();
     this.adapter.on((event) => this.handleEvent(event));
   }
@@ -127,9 +131,8 @@ export class OctipusTuiApp {
   async start(): Promise<void> {
     this.tui.start();
     await this.adapter.connect();
-    // Show the orchestrator run mode (Router/Light/Full) once connected, so the
+    // Show the root agent run mode (Router/Light/Full) once connected, so the
     // user sees how Octipus is running from the first screen. Non-critical.
-    void this.loadRunMode();
   }
 
   /** Derive the HTTP API base from the gateway WS URL (ws://host:port/gateway
@@ -145,25 +148,6 @@ export class OctipusTuiApp {
       return u.toString().replace(/\/$/, '');
     } catch {
       return null;
-    }
-  }
-
-  /** Fetch the orchestrator run mode and surface it in the status bar. */
-  private async loadRunMode(): Promise<void> {
-    const base = this.httpBase();
-    if (!base) return;
-    try {
-      const res = await fetch(`${base}/health/orchestrator`);
-      if (!res.ok) return;
-      const data = (await res.json()) as { label?: string | null };
-      if (data?.label) {
-        this.status.setMode(data.label);
-        this.tui.requestRender();
-      }
-    } catch {
-      // Non-critical, and the TUI owns the alt-screen — writing to
-      // stdout/console here would corrupt the rendered UI, so we intentionally
-      // stay silent on a failed mode lookup rather than log.
     }
   }
 
@@ -259,6 +243,29 @@ export class OctipusTuiApp {
           iter: event.iteration,
         });
         return;
+      case 'identity':
+        // Single source of truth for the badge: a login, a logout, and a
+        // session the gateway rejected all arrive here.
+        this.status.setUser(event.user);
+        this.tui.requestRender();
+        return;
+      case 'session.stats':
+        // Authoritative: the backend counted every agent in this session from
+        // the cost log, so it REPLACES the live sum accumulated below (which
+        // only sees the completions this client was sent).
+        this.cumulative = {
+          tokens: event.stats.tokens,
+          cost: event.stats.cost,
+          turns: this.cumulative.turns,
+        };
+        this.status.setStats(this.cumulative);
+        this.status.setContext(
+          event.stats.contextTokens
+            ? { used: event.stats.contextTokens, window: event.stats.contextWindow }
+            : null,
+        );
+        this.tui.requestRender();
+        return;
       case 'agent.end':
         this.cumulative = {
           tokens: this.cumulative.tokens + event.stats.tokens,
@@ -279,8 +286,13 @@ export class OctipusTuiApp {
         if (event.name === 'clear' && !event.error) {
           this.tui.terminal.clearScreen();
           this.messages.reset();
-          this.cumulative = { tokens: 0, cost: 0, turns: 0 };
+          // Turns counted in THIS client reset; tokens and cost do not. They
+          // come from the session's cost log, which /clear does not touch, so
+          // zeroing them here just made the next turn's `session.stats` snap
+          // the number back up — a counter that lies until you blink.
+          this.cumulative = { ...this.cumulative, turns: 0 };
           this.status.setStats(this.cumulative);
+          this.status.setContext(null);
           this.pushMessage('system', 'Chat cleared.');
           return;
         }
@@ -332,7 +344,7 @@ export class OctipusTuiApp {
   /**
    * Talk-key handler. First press starts capture; second press stops, transcribes,
    * and submits the transcript through the SAME path as typed text (`handleSubmit`
-   * → sendChat), so voice reuses the normal orchestrator turn. The reply to that
+   * → sendChat), so voice reuses the normal root agent turn. The reply to that
    * turn is spoken back when TTS is configured.
    * ponytail: half-duplex, one turn per press; barge-in/streaming is Phase 4.
    */
@@ -476,6 +488,53 @@ export class OctipusTuiApp {
     this.tui.setFocus(this.composer);
   }
 
+  /**
+   * Sign in and reconnect as that user. The gateway connection carries the
+   * principal, so the new identity only takes effect on a fresh connect.
+   */
+  private openLoginPrompt(): void {
+    if (this.loginHandle) return;
+    if (!this.gatewayUrl) {
+      this.pushMessage('system', 'No gateway URL — cannot reach the login endpoint.');
+      return;
+    }
+    const gatewayUrl = this.gatewayUrl;
+
+    const close = () => {
+      if (!this.loginHandle) return;
+      this.loginHandle.hide();
+      this.loginHandle = null;
+      this.tui.setFocus(this.composer);
+    };
+
+    const { handle, prompt } = this.overlays.showLoginPrompt({
+      username: readCliSession()?.username,
+      onCancel: close,
+      onSubmit: (credentials) => {
+        loginWithPassword(gatewayUrl, credentials).then((result) => {
+          if (!result.ok) {
+            prompt.setError(result.error, { totpRequired: result.requiresTOTP });
+            this.tui.requestRender();
+            return;
+          }
+          close();
+          this.pushMessage('system', `Signed in as ${result.session.username}. Reconnecting…`);
+          // Past `close()` the overlay is gone, so a failure here has to reach
+          // the transcript — reported into a hidden box it would leave the user
+          // staring at "Reconnecting…" forever.
+          this.adapter.reauthenticate()
+            .then(() => this.pushMessage('system', 'Connected — this session now uses your account.'))
+            .catch((err: unknown) => this.pushMessage(
+              'system', `Signed in, but reconnecting failed: ${(err as Error).message}`));
+        }).catch((err: unknown) => {
+          prompt.setError((err as Error).message);
+          this.tui.requestRender();
+        });
+      },
+    });
+    this.loginHandle = handle;
+  }
+
   private openCommandPalette(): void {
     if (this.paletteHandle) return;
     this.paletteHandle = this.overlays.showCommandPalette({
@@ -501,15 +560,37 @@ export class OctipusTuiApp {
     const value = parts.slice(1).join(' ').trim();
     const args: Record<string, string> | undefined = value ? { value } : undefined;
 
+    // `/cost` is deliberately absent: it goes to the gateway, which reads the
+    // cost log — the same totals the status bar shows, plus the input/output/
+    // request split the old TUI-local counter never had.
     switch (name) {
       case 'exit':
       case 'quit':
         void this.stop().then(() => process.exit(0));
         return;
-      case 'cost': {
-        const content = `${this.cumulative.tokens.toLocaleString()} tokens · ${this.cumulative.turns} turns`
-          + (this.cumulative.cost > 0 ? ` · $${this.cumulative.cost.toFixed(4)}` : '');
-        this.pushMessage('system', `/cost: ${content}`);
+      case 'login':
+        this.openLoginPrompt();
+        return;
+      case 'logout': {
+        const session = readCliSession();
+        clearCliSession();
+        if (!session) {
+          this.pushMessage('system', 'Not signed in — already running as the local machine account.');
+          return;
+        }
+        this.pushMessage('system', `Signed out ${session.username}. Reconnecting as the local machine account…`);
+        void this.adapter.reauthenticate().catch((err: unknown) => {
+          this.pushMessage('system', `Reconnect failed: ${(err as Error).message}`);
+        });
+        return;
+      }
+      case 'whoami': {
+        const session = readCliSession();
+        this.pushMessage('system', session
+          ? `${session.username}${session.isAdmin ? ' (admin)' : ''} · ${session.userId}`
+            + (session.expiresAt ? ` · session expires ${new Date(session.expiresAt).toLocaleString()}` : '')
+          : 'Signed in as the local machine account — no user account, so no personal memories, '
+            + 'user-scoped vault secrets, or account settings. Use /login to sign in.');
         return;
       }
       case 'project': {

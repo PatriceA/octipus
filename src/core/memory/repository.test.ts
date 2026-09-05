@@ -197,6 +197,49 @@ describe.skipIf(!isIntegration)('MemoryRepository (Integration)', () => {
     expect(contents).toEqual(['coding-scoped', 'global']);
   });
 
+  test('retrieveTop with a workspace sees that workspace + user-level rows, not another workspace', async () => {
+    const db = getDb();
+    const other = await db.insert(workspaces).values({ userId, slug: 'client-b', name: 'Client B' }).returning();
+    const otherWorkspaceId = other[0].id;
+    await repo.addNew({
+      userId, workspaceId, agentScope: null, factType: 'profile',
+      content: 'client A uses Jira', embedding: VEC(0.1), embeddingVersion: 'test/8', sourceMessageId: null, confidence: 1,
+    });
+    await repo.addNew({
+      userId, workspaceId: otherWorkspaceId, agentScope: null, factType: 'profile',
+      content: 'client B uses Linear', embedding: VEC(0.2), embeddingVersion: 'test/8', sourceMessageId: null, confidence: 1,
+    });
+    await repo.addNew({
+      userId, workspaceId: null, agentScope: null, factType: 'preference',
+      content: 'user prefers short replies', embedding: VEC(0.3), embeddingVersion: 'test/8', sourceMessageId: null, confidence: 1,
+    });
+
+    const inA = (await repo.retrieveTop({ userId, workspaceId })).map((m) => m.content).sort();
+    expect(inA).toEqual(['client A uses Jira', 'user prefers short replies']);
+
+    const inB = (await repo.retrieveTop({ userId, workspaceId: otherWorkspaceId })).map((m) => m.content).sort();
+    expect(inB).toEqual(['client B uses Linear', 'user prefers short replies']);
+
+    // No workspace context → no workspace filter (every row the user owns).
+    const unscoped = await repo.retrieveTop({ userId });
+    expect(unscoped.length).toBe(3);
+  });
+
+  test('searchSimilar with a workspace never returns another workspace\'s fact', async () => {
+    const db = getDb();
+    const other = await db.insert(workspaces).values({ userId, slug: 'client-b', name: 'Client B' }).returning();
+    await repo.addNew({
+      userId, workspaceId: other[0].id, agentScope: null, factType: 'profile',
+      content: 'client B secret', embedding: VEC(0.5), embeddingVersion: 'test/8', sourceMessageId: null, confidence: 1,
+    });
+    await repo.addNew({
+      userId, workspaceId, agentScope: null, factType: 'profile',
+      content: 'client A fact', embedding: VEC(0.5), embeddingVersion: 'test/8', sourceMessageId: null, confidence: 1,
+    });
+    const hits = await repo.searchSimilar(VEC(0.5), { userId, workspaceId, factType: 'profile', limit: 10 });
+    expect(hits.map((h) => h.content)).toEqual(['client A fact']);
+  });
+
   test('retrieveTop orders by access_count desc then updated_at desc', async () => {
     const a = await repo.addNew({
       userId, workspaceId, agentScope: null, factType: 'preference',

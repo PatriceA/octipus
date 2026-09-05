@@ -1,6 +1,6 @@
 'use client';
 
-import { Archive, FileText, Loader2, Mail, RefreshCw, Send, Sparkles, X } from 'lucide-react';
+import { Archive, FileText, ListPlus, Loader2, Mail, RefreshCw, Send, Sparkles, X } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
@@ -140,6 +140,17 @@ export default function EmailPage() {
       const res = await api.post<Draft & { error?: string }>(`/email/message/${openMsg.id}/draft`, { instruction });
       if (res.error) setError(res.error);
       else { setDraft({ to: res.to, subject: res.subject, body: res.body }); setReplyOpts(null); }
+    } finally { setBusy(''); }
+  };
+
+  // An email that needs something from me becomes a to-do, linked to the thread.
+  const toTask = async () => {
+    if (!openMsg) return;
+    setBusy('task');
+    try {
+      const res = await api.post<{ task?: { id: string; title: string }; error?: string }>(`/email/message/${openMsg.id}/task`, {});
+      if (res.error) setError(res.error);
+      else setSummary(`Added to your to-do list: ${res.task?.title ?? openMsg.subject}`);
     } finally { setBusy(''); }
   };
 
@@ -297,6 +308,7 @@ export default function EmailPage() {
                 <div className="flex flex-wrap gap-2">
                   <ActionBtn onClick={summarize} busy={busy === 'summarize'} icon={Sparkles}>Summarize</ActionBtn>
                   <ActionBtn onClick={fetchReplyOptions} busy={busy === 'options' || busy === 'draft'} icon={FileText}>Draft reply</ActionBtn>
+                  <ActionBtn onClick={toTask} busy={busy === 'task'} icon={ListPlus}>To-do</ActionBtn>
                   <ActionBtn onClick={archive} busy={busy === 'archive'} icon={Archive}>Archive</ActionBtn>
                 </div>
 

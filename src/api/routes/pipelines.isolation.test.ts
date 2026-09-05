@@ -54,7 +54,7 @@ beforeAll(async () => {
   const bobSession = await seedSession({ userId: bobId, channelId: 'b-1' });
 
   await executeRaw(
-    `INSERT INTO pipelines (orchestrator_agent_id, session_id, user_id, title, type, status)
+    `INSERT INTO pipelines (root_agent_id, session_id, user_id, title, type, status)
      VALUES ('orch-bob', '${bobSession.id}', '${bobId}', 'bob pipeline', 'general', 'running')`,
   );
   await executeRaw(

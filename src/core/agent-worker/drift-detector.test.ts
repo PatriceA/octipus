@@ -118,8 +118,8 @@ describe('DriftDetector', () => {
     }
   });
 
-  test('an orchestrator polling collect_children is neutral, never drift', () => {
-    // A false abort here cascade-cancels the pending children the orchestrator
+  test('a rootAgent polling collect_children is neutral, never drift', () => {
+    // A false abort here cascade-cancels the pending children the root agent
     // was waiting on — it would destroy the work it was collecting.
     const d = new DriftDetector('Research the World Cup fixtures and summarise them');
     const poll = [{ name: 'collect_children', arguments: { timeoutMs: 30000 } }];

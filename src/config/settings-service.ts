@@ -32,7 +32,7 @@ export class SettingsService {
 
   /**
    * Initialize the settings service: warm cache and subscribe to changes.
-   * Must be called after DB and Redis are available.
+   * Must be called after the DB and the storage provider are available.
    */
   async initialize(): Promise<void> {
     if (this.initialized) return;
@@ -53,7 +53,7 @@ export class SettingsService {
   }
 
   /**
-   * Load all settings from DB into local + Redis cache
+   * Load all settings from DB into the local + shared cache
    */
   async warmCache(): Promise<void> {
     const db = getDb();
@@ -90,7 +90,7 @@ export class SettingsService {
   }
 
   /**
-   * Get a setting value. Returns from local cache (fastest), falls back to Redis, then DB.
+   * Get a setting value. Returns from local cache (fastest), falls back to the shared cache, then DB.
    * For secret settings, returns the vault reference name (not the decrypted secret).
    * Use getSecret() to get the actual decrypted value for secrets.
    */
@@ -100,7 +100,7 @@ export class SettingsService {
       return this.localCache.get(key);
     }
 
-    // Redis cache
+    // shared cache
     const cached = await this.cache.get<unknown>(`settings:${key}`);
     if (cached !== null) {
       this.localCache.set(key, cached);

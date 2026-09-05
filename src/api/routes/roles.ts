@@ -1,8 +1,8 @@
 import { eq } from 'drizzle-orm';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
-import { ROLE_CONFIGS, setRoleToolIdsInMemory } from '@/core/orchestrator/roles';
-import type { AgentRole } from '@/core/orchestrator/types';
+import { ROLE_CONFIGS, setRoleToolIdsInMemory } from '@/core/agent/roles';
+import type { AgentRole } from '@/core/agent/types';
 import { getDb } from '@/db/postgres';
 import { roles } from '@/db/schema/roles';
 import { apiLogger } from '@/utils/logger';
@@ -38,7 +38,7 @@ export const roleRoutes = new Elysia({ prefix: '/roles' })
           // deletes: a role whose folder was removed leaves its row behind, and
           // listing it offers an edit that PATCH then rejects. Filtering here
           // keeps the surface honest for any retired role, not just the
-          // `orchestrator` one Phase 9 removed.
+          // `root agent` one Phase 9 removed.
           .filter((r) => ROLE_CONFIGS[r.role as AgentRole] !== undefined)
           .map((r) => ({
             role: r.role,

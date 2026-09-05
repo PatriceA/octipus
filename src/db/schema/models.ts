@@ -60,7 +60,7 @@ export interface ModelMetadata {
   deprecated?: boolean;
   /**
    * Parameter count (e.g. 7_000_000_000 for a 7B model). Used by the
-   * orchestrator mode selector to pick full/lite/router. When absent, the
+   * root agent mode selector to pick full/lite/router. When absent, the
    * selector falls back to parsing the size out of the model id tag.
    */
   paramCount?: number;

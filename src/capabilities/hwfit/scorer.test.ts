@@ -166,3 +166,69 @@ function topicRec(scored: ReturnType<typeof scoreCatalog>, topic: CatalogTopic) 
 test('KNOWN_TOPICS is non-empty', () => {
   expect(KNOWN_TOPICS.length).toBeGreaterThan(0);
 });
+
+describe('unified memory', () => {
+  // The reported VRAM on an APU is a firmware carve-out from the same DRAM the
+  // GPU reaches through GTT, at the same speed. Scoring against the carve-out
+  // told the owner of a 96 GB shared-memory machine that the best model it can
+  // run "spills into RAM, slower" — and then hid it, because the list only
+  // showed models that fit. Nothing spills and nothing is slower.
+  const apu = (): HardwareProfile => ({
+    gpus: [{ vendor: 'amd', name: 'AMD GPU (ROCm)', vramMB: 16_384, sharedMemoryMB: 40_000 }],
+    totalVramMB: 16_384,
+    ramMB: 80_000,
+    cpu: { cores: 24, arch: 'x64' },
+    platform: 'linux',
+    source: ['os', 'rocm-smi'],
+  });
+
+  test('without the flag, the carve-out is the budget (a discrete card is real)', () => {
+    const b = computeBudgetMB(apu());
+    expect(b.unified).toBe(false);
+    expect(b.idealMB).toBe(Math.floor(16_384 * 0.85));
+  });
+
+  test('with it, the budget is the pool the GPU actually reaches', () => {
+    const b = computeBudgetMB(apu(), { unifiedMemory: true });
+    expect(b.unified).toBe(true);
+    expect(b.idealMB).toBeGreaterThan(Math.floor(16_384 * 0.85));
+    // Still bounded — the host needs memory to run in.
+    expect(b.idealMB).toBeLessThanOrEqual(b.overspillMB);
+  });
+
+  test('a 20 GB model goes from "spills into RAM" to a full-speed fit', () => {
+    const model = {
+      id: 'big:35b',
+      family: 'big',
+      params: 35e9,
+      quant: 'q4_K_M' as const,
+      topics: ['general' as const],
+      contextWindow: 8192,
+      vramHintMB: 20_000,
+      vramMB: 20_000,
+      sizeSource: 'live' as const,
+    };
+    expect(scoreCatalog(apu(), [model])[0].fitTier).toBe('overspill');
+    expect(scoreCatalog(apu(), [model], { unifiedMemory: true })[0].fitTier).toBe('fits');
+  });
+
+  test('Apple Silicon needs no flag — the probe can prove it', () => {
+    const mac: HardwareProfile = {
+      gpus: [{ vendor: 'apple', name: 'Apple Silicon (unified memory)', vramMB: 48_000, unifiedMemory: true }],
+      totalVramMB: 48_000,
+      ramMB: 64_000,
+      cpu: { cores: 12, arch: 'arm64' },
+      platform: 'darwin',
+      source: ['os', 'apple-metal'],
+    };
+    expect(computeBudgetMB(mac).unified).toBe(true);
+  });
+
+  test('a CPU-only host is unaffected by the flag', () => {
+    const cpuOnly: HardwareProfile = {
+      gpus: [], totalVramMB: 0, ramMB: 32_000,
+      cpu: { cores: 8, arch: 'x64' }, platform: 'linux', source: ['os'],
+    };
+    expect(computeBudgetMB(cpuOnly, { unifiedMemory: true })).toEqual(computeBudgetMB(cpuOnly));
+  });
+});

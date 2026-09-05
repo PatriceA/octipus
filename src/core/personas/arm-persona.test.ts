@@ -89,7 +89,7 @@ describe('resolvePersonaForArm', () => {
     expect(shadow?.userFacts).toEqual(['never use exclamation marks']);
     expect(shadow?.promptBlock).toContain('never use exclamation marks');
     expect(shadow?.promptBlock.startsWith('--- PERSONA ---')).toBe(true);
-    // An arm never narrates — the orchestrator does that.
+    // An arm never narrates — the root agent does that.
     expect(shadow?.narration).toBe('off');
   });
 

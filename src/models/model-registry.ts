@@ -245,7 +245,7 @@ export class ModelRegistry {
     // this registry).
     import('./capability-gate')
       .then(({ staticCapabilityWarnings }) => {
-        const warnings = staticCapabilityWarnings(data, getConfig().orchestrator.routerSmallModelMaxParams);
+        const warnings = staticCapabilityWarnings(data, getConfig().agent.smallModelMaxParams);
         if (warnings.length > 0) {
           modelLogger.warn({ model: data.name, provider: data.provider, warnings }, 'Registered model may be unreliable for agent work');
         }

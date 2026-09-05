@@ -1,7 +1,7 @@
 import { getKnowledgeLinkRepository, type KnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
 import { getNoteRepository, type NoteRepository } from '@/db/repositories/note-repository';
 import { type EmbeddingService, getEmbeddingService } from '@/core/rag/embeddings';
-import { SECURITY_PREAMBLE } from '@/core/orchestrator/roles';
+import { SECURITY_PREAMBLE } from '@/core/agent/roles';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';

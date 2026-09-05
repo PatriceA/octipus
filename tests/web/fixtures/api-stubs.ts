@@ -160,7 +160,7 @@ export async function stubNotes(page: Page): Promise<void> {
 
 /**
  * Topic → model bindings. The Models page reads these (OrchestratorModelNote
- * shows which lane the orchestrator resolves), so leaving `/api/topics`
+ * shows which lane the root agent resolves), so leaving `/api/topics`
  * unstubbed meant the page rendered against a body with no `topics` array.
  */
 export async function stubTopics(page: Page): Promise<void> {
@@ -363,9 +363,13 @@ export async function stubSwarm(page: Page): Promise<void> {
           id: 'n1',
           rootSessionId: 'sess-1',
           parentNodeId: null,
-          kind: 'orchestrator',
+          // `root`/`general`, matching what the backend writes since the root
+          // agent became an ordinary worker. The stale 'rootAgent' kind made
+          // the tree render the root as a child node — so the root-only
+          // "cancel swarm" button never appeared and its test failed.
+          kind: 'root',
           depth: 0,
-          role: 'orchestrator',
+          role: 'general',
           topicPath: 'root',
           model: 'gpt-4o',
           status: 'running',

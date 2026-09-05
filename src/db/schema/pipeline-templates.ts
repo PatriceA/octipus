@@ -90,7 +90,7 @@ export interface PipelineStepConfig {
    * This is the pipeline's half of the swarm's planner→executor split
    * (`hasPlan` in `src/core/swarm/spawner.ts`). That machinery only ever fired
    * for `spawn_child`; every pipeline stage goes through
-   * `orchestrator/worker-spawner.ts`, which has no notion of a plan, so the
+   * `root agent/worker-spawner.ts`, which has no notion of a plan, so the
    * saving was unreachable from a pipeline. Measured 2026-08-08: every stage of
    * a full seven-stage run was on a paid model, `paidTokensPerRun` 3.4× target.
    *

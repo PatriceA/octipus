@@ -18,7 +18,7 @@ import { apiLogger } from '@/utils/logger';
  *                                        has a registered installer.
  * - POST /capabilities/probe             admin-only. Force re-probe.
  *
- * The capabilities table is the orchestrator's source of truth — gating
+ * The capabilities table is the root agent's source of truth — gating
  * tool dispatch happens via the same data this endpoint exposes.
  */
 export const capabilitiesRoutes = new Elysia({ prefix: '/capabilities' })

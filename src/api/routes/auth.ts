@@ -2,6 +2,7 @@ import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { clearSessionCookie, sessionCookie } from '@/api/session-cookie';
 import { redeemLinkCode } from '@/channels/linking';
+import { ensureDailyBriefingHook } from '@/core/briefing';
 import { userRepository } from '@/db/repositories/user-repository';
 import { getPasskeyAuth } from '@/security/auth/passkey';
 import { getSessionManager } from '@/security/auth/session';
@@ -403,6 +404,15 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
 
       if (isFirstUser) {
         apiLogger.info({ username }, 'First user registered — granted admin privileges');
+      }
+
+      // Every user starts with one proactive turn a day: the weekday-morning
+      // briefing. It is an ordinary hook (pause / edit / delete on the Hooks
+      // page). Fail-soft — a missing hook must never fail a registration.
+      try {
+        await ensureDailyBriefingHook(user.id);
+      } catch (err) {
+        apiLogger.warn({ err, userId: user.id }, 'daily briefing hook not seeded at registration');
       }
 
       // Auto-login after registration

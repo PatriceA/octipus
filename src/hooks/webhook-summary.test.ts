@@ -13,7 +13,7 @@ describe('summarizeWebhookPayload', () => {
           id: '3b6cf80a9ab2a5a11c34dacadc14556fe5467df8',
           message: 'fix(small-model): address code-review findings\n\nlong body...',
           added: [],
-          modified: ['src/core/orchestrator/small-model.ts', 'src/models/capability-gate.ts'],
+          modified: ['src/core/agent/small-model.ts', 'src/models/capability-gate.ts'],
           removed: [],
         },
       ],
@@ -26,7 +26,7 @@ describe('summarizeWebhookPayload', () => {
     expect(out).toContain('1 commit'); // singular
     expect(out).toContain('3b6cf80a9'); // short sha
     expect(out).toContain('fix(small-model): address code-review findings');
-    expect(out).toContain('~src/core/orchestrator/small-model.ts');
+    expect(out).toContain('~src/core/agent/small-model.ts');
     // The noisy metadata must NOT leak into the visible message.
     expect(out).not.toContain('avatar_url');
     expect(out).not.toContain('long body'); // only the commit subject, not the whole body

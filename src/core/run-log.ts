@@ -21,7 +21,7 @@ import { getDb } from '@/db/postgres';
 import type { NewRunEventRecord, RunEventRecord } from '@/db/schema/run-events';
 import { runEvents } from '@/db/schema/run-events';
 import { coreLogger } from '@/utils/logger';
-import { getOrchestratorHooks } from './orchestrator/hooks';
+import { getAgentHooks } from './agent/hooks';
 
 export type RunEventSubject = NewRunEventRecord['subject'];
 export type RunEventType = NewRunEventRecord['event'];
@@ -114,7 +114,7 @@ export function installRunLogHooks(): () => void {
   if (installed) return () => {};
   installed = true;
 
-  const off = getOrchestratorHooks().register('tool:after', (ctx) => {
+  const off = getAgentHooks().register('tool:after', (ctx) => {
     const event = toolCallEvent(ctx);
     if (event) recordRunEvent(event);
   });
