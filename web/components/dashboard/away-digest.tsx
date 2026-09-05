@@ -11,12 +11,14 @@ interface AgentBrief { id: string; role: string; status: string; error?: string 
 interface PipelineBrief { id: string; title: string; status: string; summary?: string | null; waitingOnYou: boolean }
 interface ApprovalBrief { id: string; sessionId: string; summary: string; question: string }
 interface TaskBrief { id: string; title: string; source: string }
+interface JobBrief { id: string; kind: string; title: string; status: 'done' | 'error' | 'interrupted'; error?: string | null; resultRef?: string | null }
 interface AwayDigest {
   since: string;
   until: string;
   agents: { completed: AgentBrief[]; failed: AgentBrief[] };
   pipelines: PipelineBrief[];
   approvals: ApprovalBrief[];
+  jobs: JobBrief[];
   tasks: TaskBrief[];
   unreadNotifications: number;
   empty: boolean;
@@ -48,7 +50,7 @@ function isAwayDigest(x: unknown): x is AwayDigest {
     typeof d.since === 'string' &&
     typeof d.empty === 'boolean' &&
     typeof d.unreadNotifications === 'number' &&
-    Array.isArray(d.pipelines) && Array.isArray(d.approvals) && Array.isArray(d.tasks) &&
+    Array.isArray(d.pipelines) && Array.isArray(d.approvals) && Array.isArray(d.jobs) && Array.isArray(d.tasks) &&
     !!agents && Array.isArray(agents.completed) && Array.isArray(agents.failed)
   );
 }
@@ -59,6 +61,11 @@ function sinceLabel(iso: string): string {
   return sameDay
     ? `since ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`
     : `since ${d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`;
+}
+
+/** Where a finished job's output lives: a research report is a saved document; a document is on the documents page. */
+function jobHref(j: JobBrief): string {
+  return j.kind === 'research' ? (j.resultRef ? `/documents?id=${encodeURIComponent(j.resultRef)}` : '/research') : '/documents';
 }
 
 function Section({ title, tone, children }: { title: string; tone?: string; children: React.ReactNode }) {
@@ -109,7 +116,9 @@ export function AwayDigestCard() {
 
   const waiting = data.pipelines.filter((p) => p.waitingOnYou);
   const finished = data.pipelines.filter((p) => !p.waitingOnYou);
-  const needsYou = data.approvals.length + waiting.length + data.agents.failed.length > 0;
+  const jobsFailed = data.jobs.filter((j) => j.status !== 'done');
+  const jobsDone = data.jobs.filter((j) => j.status === 'done');
+  const needsYou = data.approvals.length + waiting.length + data.agents.failed.length + jobsFailed.length > 0;
 
   return (
     <div data-testid="away-digest">
@@ -165,6 +174,17 @@ export function AwayDigestCard() {
                 <More n={data.agents.failed.length} />
               </Section>
             )}
+            {jobsFailed.length > 0 && (
+              <Section title={`background work failed — ${jobsFailed.length}`} tone="text-error">
+                {jobsFailed.slice(0, CAP).map((j) => (
+                  <li key={j.id} className="truncate">
+                    <Link href={jobHref(j)} className="hover:underline">{j.title}</Link>
+                    <span className="text-on-surface-variant"> ({j.kind}){j.status === 'interrupted' ? ' — interrupted by a restart' : j.error ? `: ${j.error}` : ''}</span>
+                  </li>
+                ))}
+                <More n={jobsFailed.length} />
+              </Section>
+            )}
             {finished.length > 0 && (
               <Section title={`pipelines — ${finished.length}`}>
                 {finished.slice(0, CAP).map((p) => (
@@ -179,6 +199,14 @@ export function AwayDigestCard() {
                   <li key={a.id}><Link href={`/agents/view?id=${encodeURIComponent(a.id)}`} className="hover:underline">{a.role}</Link></li>
                 ))}
                 <More n={data.agents.completed.length} />
+              </Section>
+            )}
+            {jobsDone.length > 0 && (
+              <Section title={`background work — ${jobsDone.length}`}>
+                {jobsDone.slice(0, CAP).map((j) => (
+                  <li key={j.id} className="truncate"><Link href={jobHref(j)} className="hover:underline">{j.title}</Link> <span className="text-on-surface-variant">({j.kind})</span></li>
+                ))}
+                <More n={jobsDone.length} />
               </Section>
             )}
             {data.tasks.length > 0 && (

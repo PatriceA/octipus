@@ -9,6 +9,7 @@ export * from './artifact-share-links';
 export * from './artifact-versions';
 export * from './artifacts';
 export * from './audit';
+export * from './background-jobs';
 export * from './capabilities';
 export * from './channel-identities';
 export * from './cleanup-log';

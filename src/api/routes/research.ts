@@ -1,8 +1,9 @@
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
-import { getResearchJob, startResearch } from '@/core/research/jobs';
+import { researchJobFromRow, startResearch } from '@/core/research/jobs';
 import type { ResearchDepth } from '@/core/research/types';
-import { isAdmin, isAuthenticated } from '@/security/principal';
+import { scopedRepos } from '@/db/repositories/scoped';
+import { isAuthenticated } from '@/security/principal';
 
 const DEPTHS: ResearchDepth[] = ['quick', 'standard', 'deep'];
 
@@ -28,7 +29,7 @@ export const researchRoutes = new Elysia({ prefix: '/research' })
         return { error: 'A question is required' };
       }
       const depth: ResearchDepth = DEPTHS.includes(body.depth as ResearchDepth) ? (body.depth as ResearchDepth) : 'standard';
-      const job = startResearch(question, depth, user.id);
+      const job = await startResearch(question, depth, user.id);
       return { jobId: job.id, status: job.status };
     },
     {
@@ -48,13 +49,13 @@ export const researchRoutes = new Elysia({ prefix: '/research' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
-      const job = getResearchJob(params.jobId);
       // Scope by owner: cross-tenant ids are indistinguishable from missing.
-      if (!job || (job.userId !== user.id && !isAdmin(principal))) {
+      const row = await scopedRepos(principal).jobs.findById(params.jobId);
+      if (!row || row.kind !== 'research') {
         set.status = 404;
         return { error: 'Research job not found' };
       }
-      return job;
+      return researchJobFromRow(row);
     },
     {
       params: t.Object({ jobId: t.String() }),

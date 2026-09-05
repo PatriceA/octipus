@@ -235,6 +235,18 @@ async function main() {
       if (interrupted > 0) logger.info({ interrupted }, 'Paused pipelines interrupted by a restart');
     }
 
+    // Same rule for the lighter background work (research runs, document
+    // processing): a job still `running` is a lie after a restart. Mark it
+    // interrupted, then let the document worker drain what was only queued —
+    // nothing had begun on those, so running them now is safe.
+    {
+      const { recoverBackgroundJobs } = await import('@/core/jobs/recover');
+      const { interrupted, pruned } = await recoverBackgroundJobs();
+      if (interrupted > 0 || pruned > 0) logger.info({ interrupted, pruned }, 'Background jobs reconciled after restart');
+      const { getDocumentQueue } = await import('@/core/documents/queue');
+      getDocumentQueue().resume();
+    }
+
     // Load user-authored extensions (.octipus/extensions/)
     try {
       const { getExtensionRegistry } = await import('@/extensions');

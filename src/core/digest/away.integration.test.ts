@@ -1,6 +1,7 @@
 /**
  * Away digest collector — integration over embedded PGlite. Real rows in
- * `agents`, `pipelines`, `tasks`, `notifications`; approvals injected.
+ * `agents`, `pipelines`, `background_jobs`, `tasks`, `notifications`;
+ * approvals injected.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { randomBytes } from 'node:crypto';
@@ -47,6 +48,15 @@ beforeAll(async () => {
       ('r', '${sessionA}', '${alice}', 'Old run', 'development', 'completed', 'done', '2026-09-01T09:00:00Z', '2026-09-01T10:00:00Z'),
       ('r', '${sessionB}', '${bob}',   'Bob run', 'development', 'completed', NULL,   '2026-09-06T09:00:00Z', '2026-09-06T23:00:00Z')`);
   await executeRaw(`
+    INSERT INTO background_jobs (user_id, kind, status, title, payload, error, result_ref, created_at, updated_at, finished_at) VALUES
+      ('${alice}', 'research', 'done',        'Is PGlite production-ready?', '{"question":"Is PGlite production-ready?","depth":"quick"}', NULL, 'doc-1', '2026-09-06T19:00:00Z', '2026-09-06T19:04:00Z', '2026-09-06T19:04:00Z'),
+      ('${alice}', 'document', 'error',       'invoice.pdf', '{"documentId":"d-1"}', 'OCR model unavailable', NULL, '2026-09-06T20:00:00Z', '2026-09-06T20:00:30Z', '2026-09-06T20:00:30Z'),
+      ('${alice}', 'document', 'interrupted', 'deck.pptx', '{"documentId":"d-2"}', 'Interrupted by a restart', NULL, '2026-09-07T06:00:00Z', '2026-09-07T07:00:00Z', '2026-09-07T07:00:00Z'),
+      ('${alice}', 'research', 'running',     'still going', '{"question":"still going","depth":"quick"}', NULL, NULL, '2026-09-07T07:30:00Z', '2026-09-07T07:59:00Z', NULL),
+      ('${alice}', 'document', 'queued',      'waiting.pdf', '{"documentId":"d-3"}', NULL, NULL, '2026-09-07T07:40:00Z', '2026-09-07T07:40:00Z', NULL),
+      ('${alice}', 'research', 'done',        'old run', '{"question":"old run","depth":"quick"}', NULL, NULL, '2026-09-01T09:00:00Z', '2026-09-01T09:10:00Z', '2026-09-01T09:10:00Z'),
+      ('${bob}',   'document', 'done',        'bob.pdf', '{"documentId":"d-b"}', NULL, 'd-b', '2026-09-06T21:00:00Z', '2026-09-06T21:01:00Z', '2026-09-06T21:01:00Z')`);
+  await executeRaw(`
     INSERT INTO tasks (user_id, title, status, source, created_at) VALUES
       ('${alice}', 'Reply to Ada',   'open', 'email', '2026-09-07T01:00:00Z'),
       ('${alice}', 'I typed this',   'open', 'user',  '2026-09-07T01:00:00Z'),
@@ -80,6 +90,9 @@ describe('collectAwayDigest', () => {
     expect(d.agents.completed.map((a) => a.id)).toEqual(['ag-done']);
     expect(d.agents.failed.map((a) => [a.id, a.error])).toEqual([['ag-fail', 'exit 1']]);
     expect(d.pipelines.map((p) => [p.title, p.waitingOnYou])).toEqual([['Bug Fix', true]]);
+    // Newest change first; a running or queued job is not news, and Bob's is Bob's.
+    expect(d.jobs.map((j) => [j.title, j.status])).toEqual([['deck.pptx', 'interrupted'], ['invoice.pdf', 'error'], ['Is PGlite production-ready?', 'done']]);
+    expect(d.jobs[2].resultRef).toBe('doc-1');
     expect(d.tasks.map((t) => t.title)).toEqual(['Reply to Ada']);
     // Two unread in the window; the stale one from August is the inbox's business.
     expect(d.unreadNotifications).toBe(2);
@@ -91,6 +104,8 @@ describe('collectAwayDigest', () => {
     expect(text).toContain('- Bug Fix (awaiting approval)');
     expect(text).toContain('- qa: exit 1');
     expect(text).toContain('- coding in 1m 35s');
+    expect(text).toContain('- document: deck.pptx (interrupted by a restart)');
+    expect(text).toContain('- research: Is PGlite production-ready?');
     expect(text).toContain('- Reply to Ada');
   });
 
@@ -101,6 +116,7 @@ describe('collectAwayDigest', () => {
     });
     expect(d.agents.completed).toEqual([]);
     expect(d.pipelines).toEqual([]);
+    expect(d.jobs).toEqual([]);
     expect(d.tasks).toEqual([]);
     expect(d.unreadNotifications).toBe(0);
     expect(d.empty).toBe(true);

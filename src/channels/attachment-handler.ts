@@ -85,7 +85,7 @@ export async function processChannelAttachments(message: UnifiedMessage): Promis
         status: 'queued',
       });
 
-      getDocumentQueue().enqueue(doc.id, message.userId);
+      await getDocumentQueue().enqueue(doc.id, message.userId);
 
       channelLogger.info(
         { documentId: doc.id, filename: originalName, channel: message.channelType, size: fileBuffer.length },
