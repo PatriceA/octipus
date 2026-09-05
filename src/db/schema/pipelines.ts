@@ -52,7 +52,7 @@ export const planItemStatusEnum = pgEnum('plan_item_status', [
 
 export const pipelines = pgTable('pipelines', {
   id: uuid('id').primaryKey().defaultRandom(),
-  orchestratorAgentId: text('orchestrator_agent_id').notNull(),
+  rootAgentId: text('root_agent_id').notNull(),
   sessionId: uuid('session_id').references(() => sessions.id, { onDelete: 'cascade' }).notNull(),
   userId: uuid('user_id').references(() => users.id).notNull(),
   /** Phase 4 follow-up — optional workspace scope. NULL = user-level. */

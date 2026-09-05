@@ -3,7 +3,7 @@
  *
  * `POST /chat` blocks until the turn finishes — and a turn that raises an
  * approval blocks until a human answers or `approvalTimeoutMs` (1h) expires.
- * WebSocket clients get `orchestrator.approval_required` and can respond; a
+ * WebSocket clients get `agent.approval_required` and can respond; a
  * plain REST caller is blind and the connection just looks hung.
  *
  * Rather than change that blocking contract (the web UI and TUI depend on

@@ -850,7 +850,7 @@ export class OpenAIRealtimeSTTEngine extends EventEmitter implements STTEngine {
  * Transcribe an audio buffer with the best available engine, mirroring the
  * `/voice/transcribe` route's default order: local whisper.cpp (no API cost) →
  * Mistral Voxtral → OpenAI whisper-1. Throws if none is configured. Used by
- * channels voice-in so an inbound voice note reaches the orchestrator as text.
+ * channels voice-in so an inbound voice note reaches the root agent as text.
  *
  * `format` is only the file-extension hint for the OpenAI multipart upload;
  * local whisper and Mistral sniff the container themselves.

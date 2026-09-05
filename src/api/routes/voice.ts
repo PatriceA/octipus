@@ -166,7 +166,7 @@ async function handleVoiceWebhook(provider: string, body: Record<string, unknown
 
   // ── Speech gathered — MUST be checked before call-status handlers ──
   // Twilio sends SpeechResult alongside CallStatus=in-progress on the Gather callback.
-  // FAST PATH: direct LLM call with expert system prompt, no orchestrator.
+  // FAST PATH: direct LLM call with expert system prompt, no root agent.
   const speechResult = (body.SpeechResult || body.speech || body.Speech || '') as string;
   if (speechResult && session) {
     apiLogger.info({ callId: session.id, speech: speechResult.slice(0, 200) }, 'Voice speech received');
@@ -180,7 +180,7 @@ async function handleVoiceWebhook(provider: string, body: Record<string, unknown
       // Model: voice topic routing → system default (ignore per-call overrides from LLM agents)
       let voiceModelId: string | undefined;
       try {
-        const { ModelSelector } = await import('@/core/orchestrator/model-selector');
+        const { ModelSelector } = await import('@/core/agent/model-selector');
         const selector = new ModelSelector();
         const routing = await selector.selectForWorker('voice', false);
         voiceModelId = routing.model;

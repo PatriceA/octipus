@@ -44,6 +44,7 @@ import { metricsRoutes } from './routes/metrics';
 import { noteRoutes } from './routes/notes';
 import { personaRoutes } from './routes/persona';
 import { modelRoutes } from './routes/models';
+import { digestRoutes } from './routes/digest';
 import { readerRoutes } from './routes/reader';
 import { notificationRoutes } from './routes/notifications';
 import { oauthRoutes } from './routes/oauth';
@@ -334,6 +335,7 @@ export function createServer() {
         .use(hookRoutes)
         .use(taskRoutes)
         .use(readerRoutes)
+        .use(digestRoutes)
         .use(emailRoutes)
         .use(vaultRoutes)
         .use(chatRoutes)

@@ -52,7 +52,12 @@ export async function loadRuntimeConfig(
 
     // If not in DB/vault (or empty default), fall back to env var
     if ((value === undefined || value === null || (typeof value === 'string' && value === '' && def.defaultValue === '')) && def.envVar) {
-      const envVal = process.env[def.envVar];
+      // Retired names are read too: a setting that was renamed still lives
+      // under its old name in real `.env` files, and dropping it here would
+      // reset a tuned install to the default without saying so.
+      const envVal = [def.envVar, ...(def.legacyEnvVars ?? [])]
+        .map((name) => process.env[name])
+        .find((v) => v !== undefined && v !== '');
       if (envVal !== undefined && envVal !== '') {
         value = def.valueType === 'number' ? Number(envVal)
           : def.valueType === 'boolean' ? envVal !== 'false'
@@ -83,6 +88,11 @@ export async function loadRuntimeConfig(
   }
 
   // Build final config: defaults → DB runtime values → bootstrap (DB/security/api.host/api.port)
+  // Normalize the PARTIAL first: `defaultConfig` supplies every key the retired
+  // namespace maps onto, so after the merge "the new key is unset" is never
+  // true and the carry-over loop copies nothing. The second pass below catches
+  // a retired value that reaches the merged object by another route.
+  normalizeRetiredConfigValues(runtimePartial);
   const merged = deepMerge(
     deepMerge(defaultConfig, runtimePartial),
     {

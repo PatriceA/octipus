@@ -485,7 +485,7 @@ export class ToolExecutor {
 
       const toolId = tool.toolId || 'agent';
 
-      // Internal orchestrator meta-tools are always allowed
+      // Internal root agent meta-tools are always allowed
       if (toolId === 'agent') {
         try {
           const toolExecStart = Date.now();
@@ -532,7 +532,7 @@ export class ToolExecutor {
           // Safety: LLMs sometimes use `send_status_update(progress=100)` as
           // their terminal action instead of returning plain text. Treat
           // progress=100 as a signal: disable further tools so the next
-          // iteration MUST reply with text. Prevents the orchestrator from
+          // iteration MUST reply with text. Prevents the root agent from
           // looping on status updates indefinitely. The meta-tool also
           // stashes `lastStatusMessage` so the service layer can fall back
           // to that text if the LLM still returns empty.
@@ -674,7 +674,7 @@ export class ToolExecutor {
             );
 
             // Abort the agent entirely — don't let it retry or try alternatives.
-            // The orchestrator will handle follow-up with the user.
+            // The root agent will handle follow-up with the user.
             //
             // Deliberately does NOT say "the user rejected this": a request also
             // resolves unapproved when it expired unanswered, or when it could

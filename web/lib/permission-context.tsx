@@ -22,7 +22,7 @@ export interface ApprovalRequest {
 interface PermissionContextValue {
   /** Currently pending permission requests (tool permissions) */
   permissions: PermissionRequest[];
-  /** Currently pending approval requests (pipeline/orchestrator approvals) */
+  /** Currently pending approval requests (pipeline/root agent approvals) */
   approvals: ApprovalRequest[];
   /** Approve a permission request */
   approvePermission: (requestId: string) => void;

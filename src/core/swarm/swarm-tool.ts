@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import type { ToolHandler } from '@/core/agent-worker';
-import { classifyMessage } from '@/core/orchestrator/classifier';
-import type { AgentRole } from '@/core/orchestrator/types';
+import { classifyMessage } from '@/core/agent/classifier';
+import type { AgentRole } from '@/core/agent/types';
 import { coreLogger } from '@/utils/logger';
 import { formatReceiptBlock } from './receipt';
 import { parseScorers } from './scorers';
@@ -53,7 +53,7 @@ const CHILD_ROLES_ENUM: AgentRole[] = [
  * blurb whenever a role is added to `AgentRole`.
  *
  * The root agent (depth-0) keeps its own routing table in
- * `orchestrator/delegation-prompt.md` — kept in sync manually with this map for
+ * `root agent/delegation-prompt.md` — kept in sync manually with this map for
  * now; a later change could generate that from here.
  */
 const CHILD_ROLE_BLURBS: Record<AgentRole, string> = {
@@ -132,7 +132,7 @@ export function buildDelegationGuidance(): string {
 }
 
 /**
- * Topic-name → role aliases. Orchestrator LLMs frequently pick natural
+ * Topic-name → role aliases. Root agent LLMs frequently pick natural
  * topic phrases ("database", "frontend", "machine-learning") that aren't
  * actual roles. Auto-mapping the obvious synonyms beats rejecting the
  * whole spawn and forcing a retry — the parent gets the work done in one
@@ -141,7 +141,7 @@ export function buildDelegationGuidance(): string {
  */
 const TOPIC_TO_ROLE_ALIAS: Record<string, AgentRole> = {
   // 'development' is always coding. The classifier now emits 'coding' directly,
-  // but keep the alias as a safety net for orchestrator LLMs that still phrase
+  // but keep the alias as a safety net for root agent LLMs that still phrase
   // the topic the old way.
   development: 'coding',
   dev: 'coding',
@@ -187,7 +187,7 @@ export const SPAWN_CHILD_ROLES: readonly AgentRole[] = CHILD_ROLES_ENUM;
 /**
  * Advisory roles that read/plan/review but must NOT silently absorb hands-on
  * implementation work — their tool grants and prompts assume documents, not
- * code changes. When the orchestrator LLM picks one of these for a task the
+ * code changes. When the root agent LLM picks one of these for a task the
  * classifier reads as coding, that's a misroute (see plan §1.8).
  */
 const ADVISORY_ROLES: ReadonlySet<AgentRole> = new Set(['architecture', 'review', 'pm']);
@@ -202,16 +202,16 @@ const CODING_TOPICS: ReadonlySet<string> = new Set(['coding', 'devops', 'automat
  * Deterministic role-fit guard (Phase 2.6). If an advisory role was chosen for
  * a task the keyword classifier reads as coding-like, rewrite to `coding`.
  *
- * SMALL ORCHESTRATOR MODELS ONLY. Its own rationale — "a fixed mapping table
- * beats prompt hints for small orchestrator models" — was always a small-model
- * workaround, but it ran for every model, so a capable orchestrator that had
+ * SMALL ROOT MODELS ONLY. Its own rationale — "a fixed mapping table
+ * beats prompt hints for small root agent models" — was always a small-model
+ * workaround, but it ran for every model, so a capable root agent that had
  * read the whole request and deliberately picked `architect` had its choice
  * replaced by a regex table's read of the task brief alone. That is the same
  * inversion the pre-classified topic directive made, one layer further down,
  * and it is invisible: the rewrite is logged as a correction, never as an
  * override of a decision that may well have been right.
  *
- * `orchestratorIsSmall` defaults to false, so an unknown caller keeps the
+ * `rootIsSmall` defaults to false, so an unknown caller keeps the
  * model's own choice. Reducing a capable model to a table is the worse error.
  *
  * Returns `rewrittenFrom` when it changed the role so the caller logs.
@@ -219,9 +219,9 @@ const CODING_TOPICS: ReadonlySet<string> = new Set(['coding', 'devops', 'automat
 export function applyRoleFit(
   role: AgentRole,
   taskText: string,
-  orchestratorIsSmall = false,
+  rootIsSmall = false,
 ): { role: AgentRole; rewrittenFrom?: AgentRole } {
-  if (!orchestratorIsSmall) return { role };
+  if (!rootIsSmall) return { role };
   if (!ADVISORY_ROLES.has(role)) return { role };
   const topic = classifyMessage(taskText).topic;
   if (topic && CODING_TOPICS.has(topic)) {
@@ -251,7 +251,7 @@ export function resolveRoleFromTopic(roleRaw: string | undefined, topic: string)
 
 /**
  * Factory: produce a `spawn_child` tool handler bound to a specific parent
- * node (usually the current Orchestrator). The returned handler is what the
+ * node (usually the current Root agent). The returned handler is what the
  * parent agent's LLM will see + invoke.
  *
  * The handler validates parameters, calls `SwarmSpawner.spawnChild`, and
@@ -282,11 +282,11 @@ export function createSpawnChildTool(
     // `resolveChildRole` does not re-derive it from a model id.
     //
     // Separate from `lite`, which also selects the flat spawn SCHEMA. The
-    // top-level orchestrator sets `lite` and means both; a stage worker or a
+    // top-level root agent sets `lite` and means both; a stage worker or a
     // depth-1 agent on a small local model is equally unable to hold the role
     // choice but keeps its full schema, so it sets `weakModel` alone. Without
     // this the role-fit rewrite was live at exactly one call site.
-    const internal = { orchestratorIsLite: opts?.weakModel ?? opts?.lite === true };
+    const internal = { rootIsLite: opts?.weakModel ?? opts?.lite === true };
 
     const cap = hooks?.maxPendingDetached() ?? 0;
     if (hooks && cap > 0) {
@@ -536,7 +536,7 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
   // Default expectedOutput when omitted or malformed. Nested required
   // object params get dropped across providers (observed on deepseek-chat,
   // also common on OpenAI/Anthropic), which otherwise bails the
-  // orchestrator mid-delegation. Only reject an *explicit* invalid shape
+  // root agent mid-delegation. Only reject an *explicit* invalid shape
   // so the LLM learns when it picks a bogus value on purpose.
   const eoRaw = args.expectedOutput;
   const eo = (eoRaw && typeof eoRaw === 'object' ? eoRaw : {}) as Record<string, unknown>;

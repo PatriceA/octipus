@@ -82,7 +82,7 @@ describe('MemoryStorageProvider.createCache', () => {
     expect(await provider.getRaw('raw')).toBe('value');
   });
 
-  test('ttl returns -2 for missing key (Redis convention)', async () => {
+  test('ttl returns -2 for missing key (the TTL convention the interface copies)', async () => {
     const cache = provider.createCache('test');
     expect(await cache.ttl('missing')).toBe(-2);
   });

@@ -33,6 +33,19 @@ export interface FitBudget {
   idealMB: number;
   /** Within this (but over ideal) ⇒ 'overspill': capped by total system RAM. */
   overspillMB: number;
+  /** True when `idealMB` came from one shared pool rather than a VRAM slice. */
+  unified: boolean;
+}
+
+/** Caller-supplied facts the probe cannot establish on its own. */
+export interface BudgetOptions {
+  /**
+   * Force the unified-memory budget. The probe proves this only on Apple
+   * Silicon; on Linux an APU and a discrete card expose the same sysfs
+   * surface, so an APU owner sets `hwfit.unifiedMemory` and gets scored
+   * against the pool their GPU actually reaches.
+   */
+  unifiedMemory?: boolean;
 }
 
 /**
@@ -42,13 +55,27 @@ export interface FitBudget {
  * - CPU-only (no detectable VRAM): ideal is a capped fraction of RAM; overspill
  *   allows somewhat larger (but slow) models up to the RAM ceiling.
  */
-export function computeBudgetMB(hw: HardwareProfile): FitBudget {
+export function computeBudgetMB(hw: HardwareProfile, opts: BudgetOptions = {}): FitBudget {
   const overspillMB = Math.floor(hw.ramMB * RAM_OVERSPILL_FRACTION);
+
+  // Unified memory: the VRAM figure is a firmware carve-out from the same DRAM
+  // the GPU reaches through GTT, at the same speed, so scoring against the
+  // carve-out marks a model "spills into RAM, slower" when nothing spills and
+  // nothing is slower. The budget is the pool — VRAM plus what the GPU can
+  // also address — bounded by the overspill ceiling so the host keeps memory
+  // to run in.
+  const unified = opts.unifiedMemory === true || hw.gpus.some((g) => g.unifiedMemory);
+  if (unified && hw.totalVramMB > 0) {
+    const shared = hw.gpus.reduce((sum, g) => sum + (g.sharedMemoryMB ?? 0), 0);
+    const poolMB = Math.floor((hw.totalVramMB + shared) * VRAM_HEADROOM);
+    return { idealMB: Math.max(Math.min(poolMB, overspillMB), Math.floor(hw.totalVramMB * VRAM_HEADROOM)), overspillMB, unified: true };
+  }
+
   if (hw.totalVramMB > 0) {
-    return { idealMB: Math.floor(hw.totalVramMB * VRAM_HEADROOM), overspillMB };
+    return { idealMB: Math.floor(hw.totalVramMB * VRAM_HEADROOM), overspillMB, unified: false };
   }
   const cpuIdeal = Math.floor(Math.min(hw.ramMB * CPU_RAM_FRACTION, CPU_VRAM_CAP_MB));
-  return { idealMB: cpuIdeal, overspillMB: Math.max(cpuIdeal, overspillMB) };
+  return { idealMB: cpuIdeal, overspillMB: Math.max(cpuIdeal, overspillMB), unified: false };
 }
 
 /** Classify a model's VRAM need against the host's fit budgets. */
@@ -70,8 +97,12 @@ function capabilityRank(entry: SizedModel): number {
  * Always marks at least one model `recommended` so the caller has something to
  * offer even on weak hardware (with an honest `note` when it overflows budget).
  */
-export function scoreCatalog(hw: HardwareProfile, sized: readonly SizedModel[]): ScoredModel[] {
-  const budget = computeBudgetMB(hw);
+export function scoreCatalog(
+  hw: HardwareProfile,
+  sized: readonly SizedModel[],
+  opts: BudgetOptions = {},
+): ScoredModel[] {
+  const budget = computeBudgetMB(hw, opts);
 
   const scored: ScoredModel[] = sized.map((entry) => {
     const fitTier = classifyFit(entry.vramMB, budget);
@@ -91,7 +122,9 @@ export function scoreCatalog(hw: HardwareProfile, sized: readonly SizedModel[]):
     if (best) {
       best.recommended = true;
       if (best.fitTier === 'overspill' && !best.note) {
-        best.note = 'Bigger than VRAM — Ollama will spill into RAM; runnable but slower.';
+        best.note = budget.unified
+          ? 'Bigger than this machine can hold comfortably; runnable but leaves little headroom.'
+          : 'Bigger than VRAM — Ollama will spill into RAM; runnable but slower.';
       }
     }
   }

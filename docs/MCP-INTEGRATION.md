@@ -78,7 +78,7 @@ MCP_AUTO_START=true
 
 ### Which roles get MCP access?
 
-MCP meta-tools are available to these roles: **research**, **coding**, **general**, **devops**, **security**, **data**, **ai**, **automation**, **architecture**. Other roles (qa, design, review, communication, finance, pm, writing, orchestrator) don't include MCP by default — add `'mcp'` to their `toolIds` in `src/core/orchestrator/roles/<name>/config.ts` if needed.
+MCP meta-tools are available to these roles: **research**, **coding**, **general**, **devops**, **security**, **data**, **ai**, **automation**, **architecture**. Other roles (qa, design, review, communication, finance, pm, writing, root agent) don't include MCP by default — add `'mcp'` to their `toolIds` in `src/core/agent/roles/<name>/config.ts` if needed.
 
 ## Managing servers
 

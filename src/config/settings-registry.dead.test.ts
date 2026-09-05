@@ -5,7 +5,7 @@ import { SETTINGS_REGISTRY, settingKeyToConfigPath } from './settings-registry';
 /**
  * Every setting on the Settings page must actually do something.
  *
- * A QA pass found six orchestrator settings — `enabled`, `defaultModel`,
+ * A QA pass found six root agent settings — `enabled`, `defaultModel`,
  * `piiFilterEnabled`, `maxPipelineStages`, `approvalTimeoutMs`,
  * `workerTimeoutMs` — declared in the schema, listed in the registry, rendered
  * as editable fields, persisted on save, and read by nothing. The operator had
@@ -55,14 +55,14 @@ const esc = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
  * Three signals, because config is read three ways in this codebase and no
  * single pattern sees all of them:
  *
- *  1. **Parent-qualified** — `cfg.orchestrator.mode`, `runtimePartial.n8n?.url`.
+ *  1. **Parent-qualified** — `cfg.agent.promptTier`, `runtimePartial.n8n?.url`.
  *     Optional chaining allowed.
- *  2. **Env var** — `process.env.ORCHESTRATOR_MODE`.
+ *  2. **Env var** — `process.env.AGENT_PROMPT_TIER`.
  *  3. **Leaf near its section** — the read went through a renamed local
  *     (`n8nConfig.apiKey`, `defaults.wallMs`), so the leaf is matched only when
  *     the line, or the path of the file it is in, also names the setting's
  *     section. That is what stops `ollama.defaultModel`'s readers from vouching
- *     for `orchestrator.defaultModel`, which is precisely how the leaf-only
+ *     for `agent.defaultModel`, which is precisely how the leaf-only
  *     version of this check would have passed two of the dead keys it exists to
  *     catch.
  *

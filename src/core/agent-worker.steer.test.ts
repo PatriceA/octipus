@@ -13,7 +13,7 @@ const mkCtx = (over: Partial<AgentContext> = {}): AgentContext => ({
   userId: 'u-1',
   topic: 'test',
   model: 'test-model',
-  role: 'orchestrator',
+  role: 'general',
   status: 'idle',
   createdAt: new Date(),
   updatedAt: new Date(),

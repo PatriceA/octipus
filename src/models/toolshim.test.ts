@@ -167,7 +167,7 @@ describe('proseShowsToolIntent', () => {
   const NAMES = ['filesystem__write_file', 'shell__run', 'spawn_child', 'collect_children'];
 
   test('a plain final answer shows no tool intent', () => {
-    // Verbatim from run 4f88751a, whose orchestrator sat 845s past this answer
+    // Verbatim from run 4f88751a, whose root agent sat 845s past this answer
     // paying for a translator call that had nothing to translate.
     expect(
       proseShowsToolIntent(

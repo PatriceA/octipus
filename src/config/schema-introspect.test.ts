@@ -3,25 +3,25 @@ import { getFieldConstraints, getFieldSchema, validateSettingValue } from './sch
 
 describe('schema-introspect — validateSettingValue', () => {
   test('accepts in-range numbers and rejects out-of-range ones', () => {
-    expect(validateSettingValue('orchestrator.liteMaxIterations', 25).ok).toBe(true);
-    expect(validateSettingValue('orchestrator.liteMaxIterations', 3).ok).toBe(true);
+    expect(validateSettingValue('agent.liteMaxIterations', 25).ok).toBe(true);
+    expect(validateSettingValue('agent.liteMaxIterations', 3).ok).toBe(true);
 
-    const tooBig = validateSettingValue('orchestrator.liteMaxIterations', 26);
+    const tooBig = validateSettingValue('agent.liteMaxIterations', 26);
     expect(tooBig.ok).toBe(false);
     if (!tooBig.ok) expect(tooBig.message).toMatch(/25/);
 
-    const tooSmall = validateSettingValue('orchestrator.liteMaxIterations', 0);
+    const tooSmall = validateSettingValue('agent.liteMaxIterations', 0);
     expect(tooSmall.ok).toBe(false);
   });
 
   test('enforces deep-path minimums (the swarm budget that broke boot)', () => {
-    expect(validateSettingValue('swarm.levelDefaults.orchestrator.tokens', 0).ok).toBe(false);
-    expect(validateSettingValue('swarm.levelDefaults.orchestrator.tokens', 200000).ok).toBe(true);
+    expect(validateSettingValue('swarm.levelDefaults.root.tokens', 0).ok).toBe(false);
+    expect(validateSettingValue('swarm.levelDefaults.root.tokens', 200000).ok).toBe(true);
   });
 
   test('enforces enum membership', () => {
-    expect(validateSettingValue('orchestrator.mode', 'lite').ok).toBe(true);
-    expect(validateSettingValue('orchestrator.mode', 'bogus').ok).toBe(false);
+    expect(validateSettingValue('agent.promptTier', 'lite').ok).toBe(true);
+    expect(validateSettingValue('agent.promptTier', 'bogus').ok).toBe(false);
   });
 
   test('passes through keys not present in the config schema', () => {
@@ -32,15 +32,15 @@ describe('schema-introspect — validateSettingValue', () => {
 
 describe('schema-introspect — getFieldConstraints', () => {
   test('extracts min/max for bounded numbers', () => {
-    expect(getFieldConstraints('orchestrator.liteMaxIterations')).toEqual({ min: 1, max: 25 });
+    expect(getFieldConstraints('agent.liteMaxIterations')).toEqual({ min: 1, max: 25 });
   });
 
   test('extracts minimum-only for one-sided bounds', () => {
-    expect(getFieldConstraints('swarm.levelDefaults.orchestrator.tokens')).toEqual({ min: 1000 });
+    expect(getFieldConstraints('swarm.levelDefaults.root.tokens')).toEqual({ min: 1000 });
   });
 
   test('extracts enum options', () => {
-    expect(getFieldConstraints('orchestrator.mode')).toEqual({
+    expect(getFieldConstraints('agent.promptTier')).toEqual({
       enumValues: ['auto', 'full', 'lite'],
     });
   });
@@ -52,8 +52,8 @@ describe('schema-introspect — getFieldConstraints', () => {
 
 describe('schema-introspect — getFieldSchema', () => {
   test('resolves nested fields and returns null for unknown keys', () => {
-    expect(getFieldSchema('orchestrator.mode')).not.toBeNull();
-    expect(getFieldSchema('orchestrator.nope')).toBeNull();
+    expect(getFieldSchema('agent.promptTier')).not.toBeNull();
+    expect(getFieldSchema('agent.nope')).toBeNull();
     expect(getFieldSchema('totally.unknown.path')).toBeNull();
   });
 });

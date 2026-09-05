@@ -11,9 +11,11 @@ import {
   Pencil,
   Plus,
   Search,
+  Sparkles,
   Trash2,
   X,
 } from 'lucide-react';
+import Link from 'next/link';
 import { useState } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
 import { Portal } from '@/components/ui/portal';
@@ -964,6 +966,27 @@ export default function SkillsPage() {
   const [editingSkill, setEditingSkill] = useState<Skill | null>(null);
   const [deletingSkill, setDeletingSkill] = useState<Skill | null>(null);
 
+  // Pending distilled proposals — surfaced as a count on the Proposals link so
+  // the queue is visible from the page people actually open.
+  //
+  // Returns the ARRAY, not the response envelope: /skills/proposals shares this
+  // cache key and maps over it directly, so seeding the key with `{proposals}`
+  // here crashed that page with "map is not a function" the moment someone
+  // followed the link. One key, one shape.
+  const { data: proposals } = useQuery({
+    queryKey: ['skill-proposals'],
+    queryFn: async () => {
+      try {
+        const res = await api.get<{ proposals: { id: string }[] }>('/skills/proposals');
+        return res.proposals ?? [];
+      } catch {
+        return [];
+      }
+    },
+    refetchInterval: 60_000,
+  });
+  const pendingProposals = proposals?.length ?? 0;
+
   const { data, isLoading } = useQuery({
     queryKey: ['skills'],
     queryFn: async () => {
@@ -1030,6 +1053,21 @@ export default function SkillsPage() {
           </StatusBadge>
         }
         actions={
+          <>
+          {/* The distillation pipeline files proposals here and nothing else
+              linked to them, so they piled up unseen. */}
+          <Link
+            href="/skills/proposals"
+            className={cn(
+              'flex items-center gap-1.5 px-4 py-2 text-sm rounded-xs cursor-pointer',
+              pendingProposals > 0
+                ? 'bg-warning/15 text-warning hover:bg-warning/25'
+                : 'text-outline hover:text-on-surface',
+            )}
+          >
+            <Sparkles className="w-4 h-4" />
+            Proposals{pendingProposals > 0 ? ` (${pendingProposals})` : ''}
+          </Link>
           <button
             onClick={() => setShowCreate(true)}
             className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary text-on-primary rounded-xs hover:bg-primary-dim cursor-pointer"
@@ -1037,6 +1075,7 @@ export default function SkillsPage() {
             <Plus className="w-4 h-4" />
             Create Skill
           </button>
+          </>
         }
       />
 

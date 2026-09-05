@@ -2,12 +2,12 @@ name: Integration
 
 # Runs the INTEGRATION=1 suite — the tests gated behind
 # `describe.skipIf(!isIntegration)` that need a real Postgres (so RLS policies
-# actually fire) and a real Redis/Valkey. These cover the multi-tenant security
+# actually fire). These cover the multi-tenant security
 # boundaries (RLS enforcement, rate limiting, SCIM auth refusal, org membership)
 # and every repository test, none of which run in the unit-test `CI` workflow.
 #
 # The heavy lifting lives in scripts/test-integration.ts, which brings up
-# docker-compose.test.yml (pgvector + valkey, both ephemeral/tmpfs), migrates
+# docker-compose.test.yml (pgvector, ephemeral/tmpfs), migrates
 # the test DB, runs the suite with INTEGRATION=1, and tears the stack down.
 
 on:
@@ -24,12 +24,12 @@ permissions:
 
 jobs:
   integration:
-    name: Integration (postgres · valkey)
+    name: Integration (postgres)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Dummy 32+ char secrets satisfy config-load validation — the same reason
     # the `CI` workflow sets them. Integration tests mock LLM providers, so no
-    # real API keys are needed; only Docker (Postgres + Valkey) is required.
+    # real API keys are needed; only Docker (Postgres) is required.
     env:
       MASTER_KEY: ci-dummy-master-key-for-integration-tests-1234567890
       JWT_SECRET: ci-dummy-jwt-secret-for-integration-tests-1234567890
@@ -45,7 +45,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Brings up Postgres + Valkey, migrates, runs INTEGRATION=1 tests, and
+      # Brings up Postgres, migrates, runs INTEGRATION=1 tests, and
       # tears the stack down on exit (pass or fail). ubuntu-latest ships Docker
       # + Compose v2, so no extra setup is required.
       - name: Integration tests

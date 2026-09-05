@@ -27,6 +27,16 @@ export interface AgentEndStats {
   iterations?: number;
 }
 
+/** Authoritative per-session usage from the backend's cost log. */
+export interface SessionStats {
+  tokens: number;
+  cost: number;
+  requests: number;
+  /** Tokens in the last prompt sent, and the model's window — absent until a turn runs. */
+  contextTokens?: number;
+  contextWindow?: number;
+}
+
 export type AgentSessionEvent =
   | { kind: 'status';         status: ConnectionStatus }
   | { kind: 'message';        role: Role; content: string }
@@ -35,6 +45,8 @@ export type AgentSessionEvent =
   | { kind: 'agent.start';    role: string; model: string; nodeId?: string }
   | { kind: 'agent.end';      stats: AgentEndStats; nodeId?: string; role?: string }
   | { kind: 'agent.iteration'; agentId: string; iteration: number }
+  | { kind: 'session.stats';  stats: SessionStats }
+  | { kind: 'identity';       user: string | null }
   | { kind: 'tool';           tool: ToolEventState }
   | { kind: 'command.result'; name: string; result: unknown; error?: string }
   | { kind: 'agent.write';    path: string; newText: string }
@@ -84,6 +96,7 @@ export class GatewayAdapter {
       onCommandResult: (name, result, error) => this.emit({ kind: 'command.result', name, result, error }),
       onError: (message) => this.emit({ kind: 'error', message }),
       onEvent: (event) => this.decode(event),
+      onIdentityChange: (identity) => this.emit({ kind: 'identity', user: identity?.username ?? null }),
     };
     this.client = new GatewayClient(clientOptions);
   }
@@ -108,6 +121,16 @@ export class GatewayAdapter {
     try { this.client.disconnect(); } catch { /* already disconnected */ }
     await this.client.connect();
   }
+
+  /**
+   * Reconnect so a just-stored (or just-cleared) login takes effect: the
+   * principal is fixed at the gateway handshake, so signing in mid-session
+   * only changes anything after a fresh connect.
+   */
+  reauthenticate(): Promise<void> { return this.client.reauthenticate(); }
+
+  /** The signed-in user, or null when running as the local machine account. */
+  getIdentity(): { username: string; userId: string } | null { return this.client.getIdentity(); }
 
   // ── Subscription ────────────────────────────────────────────────
 
@@ -215,7 +238,7 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
     // The backend has emitted this all along; nothing here listened, so the
     // screen showed `Waiting: running request_user_approval (40.0s)` counting
     // up with no prompt, until the turn timed out.
-    case 'orchestrator.approval_required': {
+    case 'agent.approval_required': {
       const requestId = pickString(payload, 'requestId') ?? '';
       const rawOptions = payload.options;
       out.push({
@@ -245,6 +268,20 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
       return out;
     }
 
+    case 'session.stats': {
+      out.push({
+        kind: 'session.stats',
+        stats: {
+          tokens: pickNumber(payload, 'totalTokens') ?? 0,
+          cost: pickNumber(payload, 'totalCostUsd') ?? 0,
+          requests: pickNumber(payload, 'requestCount') ?? 0,
+          contextTokens: pickNumber(payload, 'contextTokens'),
+          contextWindow: pickNumber(payload, 'contextWindow'),
+        },
+      });
+      return out;
+    }
+
     case 'agent.completed': {
       const stats = asRecord(payload.stats) ?? asRecord(payload.data) ?? {};
       const tokens = pickNumber(stats, 'totalTokens') ?? pickNumber(stats, 'total_tokens') ?? 0;
@@ -264,13 +301,13 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
       return out;
     }
 
-    // Swarm-level spawn/complete events — these fire for orchestrator AND
+    // Swarm-level spawn/complete events — these fire for root agent AND
     // every nested agent/subagent. The TUI previously only listened to the
     // worker-spawner-flavoured `agent.spawned` event, so swarm-routed
     // subagents were invisible. Mirror them into the same agent.start /
     // agent.end shapes so the rest of the UI doesn't have to care which
     // path spawned the worker.
-    // Persona narration — orchestrator dispatch / completion / budget
+    // Persona narration — root agent dispatch / completion / budget
     // lines. The web chat surfaces these as italic narration bubbles;
     // the TUI shows them as system messages so the user gets the same
     // running commentary while children work.
@@ -284,9 +321,9 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
 
     case 'swarm.node_spawned': {
       const kind = pickString(payload, 'kind') ?? 'agent';
-      // Orchestrator already gets a separate agent.spawned event from the
+      // Root agent already gets a separate agent.spawned event from the
       // worker spawner; skip the duplicate so we don't show it twice.
-      if (kind === 'orchestrator') return out;
+      if (kind === 'rootAgent') return out;
       const role = pickString(payload, 'role') ?? 'worker';
       const model = pickString(payload, 'model') ?? '';
       const nodeId = pickString(payload, 'nodeId');
@@ -302,7 +339,7 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
 
     case 'swarm.node_completed': {
       const kind = pickString(payload, 'kind') ?? 'agent';
-      if (kind === 'orchestrator') return out; // dedupe with agent.completed
+      if (kind === 'rootAgent') return out; // dedupe with agent.completed
       const role = pickString(payload, 'role') ?? 'worker';
       const tokens = pickNumber(payload, 'usedTokens') ?? 0;
       const durationMs = pickNumber(payload, 'durationMs');

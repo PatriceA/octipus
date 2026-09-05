@@ -504,7 +504,7 @@ export function declaredEventTypes(protocolSource: string): string[] {
  * Three shapes, in order of how often they occur here: a plain literal; a
  * ternary or `||` chain whose branches are literals (`event.type === 'action'
  * ? 'agent.action' : 'agent.event'`); and a call into a same-file helper that
- * switches over literals (`mapOrchestratorEventType(event.type)`, which is how
+ * switches over literals (`mapTurnEventType(event.type)`, which is how
  * nine of the declared types are actually emitted).
  *
  * One hop, deliberately. Following a helper across files would need real module
@@ -572,7 +572,7 @@ export function collectEvents(): {
     // Blanked, for the same reason the route scan is: a commented-out
     // `hub.publishEvent({type:'x'})` would otherwise silence the
     // never-published gate for that type. It is not hypothetical — a doc
-    // comment in `orchestrator/service.ts` mentions `eventBus.subscribe(...)`
+    // comment in `root agent/service.ts` mentions `eventBus.subscribe(...)`
     // and was being counted as an unresolvable subscribe site.
     const src = blankComments(readFileSync(file, 'utf-8'));
     const rel = relative(REPO_ROOT, file);

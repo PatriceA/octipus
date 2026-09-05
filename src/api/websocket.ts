@@ -4,7 +4,7 @@ import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
 import { getDocumentQueue } from '@/core/documents/queue';
 import { FileRefSchema } from '@/core/gateway/protocol';
-import { getOrchestratorService } from '@/core/orchestrator';
+import { getAgentService } from '@/core/agent';
 import { getApiTokenManager } from '@/security/api-tokens';
 import { getSessionManager } from '@/security/auth/session';
 import { getPermissionManager, type PermissionRequestEvent } from '@/security/permissions';
@@ -19,14 +19,14 @@ interface WebSocketData {
   userId?: string;
   connectionId?: string;
   unsubscribeAgentEvents?: () => void;
-  unsubscribeOrchestrator?: () => void;
+  unsubscribeRoot?: () => void;
   unsubscribePermissions?: () => void;
   /** Browser-bridge auth flag — true once the bridge handshake succeeded. */
   _bridgeAuthed?: boolean;
   /** Client is in voice mode — narrate lifecycle events as `speak` frames. */
   voiceOn?: boolean;
   /** The session this connection put into voice mode — used to scope narration
-   * to it and to clear the orchestrator's voice flag when the socket closes. */
+   * to it and to clear the root agent's voice flag when the socket closes. */
   voiceSessionId?: string;
 }
 
@@ -104,13 +104,13 @@ export function setupWebSocket(app: Elysia): void {
         }
       });
 
-      // Subscribe to orchestrator events for this user
-      const orchestrator = getOrchestratorService();
-      const unsubscribeOrchestrator = orchestrator.onEvent((event) => {
+      // Subscribe to root agent events for this user
+      const rootAgent = getAgentService();
+      const unsubscribeRoot = rootAgent.onEvent((event) => {
         // Only send events belonging to this user
         if (event.userId && event.userId !== session.userId) return;
         safeSend({
-          type: 'orchestrator_event',
+          type: 'turn_event',
           event: event.type,
           sessionId: event.sessionId,
           data: event.data,
@@ -192,13 +192,13 @@ export function setupWebSocket(app: Elysia): void {
 
       // Store unsubscribe functions
       wsData(ws).unsubscribeAgentEvents = unsubscribe;
-      wsData(ws).unsubscribeOrchestrator = unsubscribeOrchestrator;
+      wsData(ws).unsubscribeRoot = unsubscribeRoot;
       wsData(ws).unsubscribePermissions = unsubscribePermissions;
 
       // Track this connection for dedup
       const cleanup = () => {
         unsubscribe();
-        unsubscribeOrchestrator();
+        unsubscribeRoot();
         if (unsubscribePermissions) unsubscribePermissions();
         if (unsubscribeSwarm) unsubscribeSwarm();
         if (unsubscribeInstall) unsubscribeInstall();
@@ -255,11 +255,11 @@ export function setupWebSocket(app: Elysia): void {
 
           case 'voice': {
             // Toggle voice mode: narrate lifecycle to this connection, and put the
-            // active session into the orchestrator's propose-then-confirm gate.
+            // active session into the root agent's propose-then-confirm gate.
             data.voiceOn = !!parsed.on;
             const voiceSid = parsed.sessionId ? String(parsed.sessionId) : data.voiceSessionId;
             if (voiceSid) {
-              getOrchestratorService().setVoiceMode(voiceSid, !!parsed.on);
+              getAgentService().setVoiceMode(voiceSid, !!parsed.on);
               // Remember the session so close() can clear it; forget it on 'off'.
               data.voiceSessionId = parsed.on ? voiceSid : undefined;
             }
@@ -305,10 +305,10 @@ export function setupWebSocket(app: Elysia): void {
             // Chat/work split: per-message deliverable override (inline | file).
             const outputMode = parsed.outputMode === 'inline' || parsed.outputMode === 'file' ? parsed.outputMode : undefined;
 
-            // Route through orchestrator (commands are handled inside handleMessage)
-            const orchestrator = getOrchestratorService();
+            // Route through root agent (commands are handled inside handleMessage)
+            const rootAgent = getAgentService();
             try {
-              const result = await orchestrator.handleMessage(
+              const result = await rootAgent.handleMessage(
                 sessionId,
                 userId,
                 content,
@@ -337,8 +337,8 @@ export function setupWebSocket(app: Elysia): void {
           }
 
           case 'approval_response': {
-            // Resolve a pending orchestrator approval
-            const orch = getOrchestratorService();
+            // Resolve a pending root agent approval
+            const orch = getAgentService();
             const resolved = orch.resolveApproval(
               parsed.requestId,
               parsed.approved,
@@ -364,8 +364,8 @@ export function setupWebSocket(app: Elysia): void {
               break;
             }
 
-            const orchestrator = getOrchestratorService();
-            const steered = orchestrator.steer(sessionId, {
+            const rootAgent = getAgentService();
+            const steered = rootAgent.steer(sessionId, {
               role: parsed.role || 'user',
               content,
               timestamp: new Date(),
@@ -400,7 +400,7 @@ export function setupWebSocket(app: Elysia): void {
       // Clear this connection's voice flag so a session left in voice mode isn't
       // stuck in the propose-then-confirm gate after a refresh/disconnect.
       if (data.voiceSessionId) {
-        getOrchestratorService().setVoiceMode(data.voiceSessionId, false);
+        getAgentService().setVoiceMode(data.voiceSessionId, false);
         data.voiceSessionId = undefined;
       }
 

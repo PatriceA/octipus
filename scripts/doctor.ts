@@ -117,13 +117,12 @@ export async function checkStorageMode(projectDir: string): Promise<CheckResult>
       critical: false,
     };
   }
-  // external — verify Postgres + Redis
+  // external — one Postgres carries the tables, the cache, the queue and pub/sub
   const dbUrl = text.match(/^DATABASE_URL=(.+)/m)?.[1]?.trim() || '';
-  const redisUrl = text.match(/^REDIS_URL=(.+)/m)?.[1]?.trim() || '';
   return {
     name: 'Storage mode',
     status: dbUrl ? 'ok' : 'warn',
-    detail: `external (db: ${dbUrl ? 'set' : 'unset'}, redis: ${redisUrl ? 'set' : 'unset'})`,
+    detail: `external (db: ${dbUrl ? 'set' : 'unset'})`,
     critical: false,
     hint: dbUrl ? undefined : 'External mode needs DATABASE_URL — switch to embedded or set the URL.',
   };
@@ -236,21 +235,6 @@ export async function checkPostgres(): Promise<CheckResult> {
     detail: reachable ? 'reachable on localhost:5432' : 'not reachable on localhost:5432',
     critical: false,
     hint: reachable ? undefined : 'Start PostgreSQL or switch to STORAGE_MODE=embedded.',
-  };
-}
-
-export async function checkRedis(): Promise<CheckResult> {
-  const mode = process.env.STORAGE_MODE || 'external';
-  if (mode === 'embedded') {
-    return { name: 'Valkey/Redis', status: 'ok', detail: 'embedded mode, not required', critical: false };
-  }
-  const reachable = await tcpReachable('localhost', 6379);
-  return {
-    name: 'Valkey/Redis',
-    status: reachable ? 'ok' : 'warn',
-    detail: reachable ? 'reachable on localhost:6379' : 'not reachable on localhost:6379',
-    critical: false,
-    hint: reachable ? undefined : 'Start Valkey/Redis or switch to STORAGE_MODE=embedded.',
   };
 }
 
@@ -475,7 +459,7 @@ export async function checkDiskSpace(): Promise<CheckResult> {
  * `warn` row when the backend isn't up — the table only exists once
  * migrations have run. This intentionally does NOT re-probe locally:
  * the backend is the source of truth, and re-probing here would let
- * doctor and orchestrator drift apart.
+ * doctor and root agent drift apart.
  */
 export async function checkCapabilities(): Promise<CheckResult> {
   const port = process.env.API_PORT || '3005';
@@ -523,7 +507,6 @@ export async function runDoctor(projectDir: string): Promise<DoctorReport> {
     checkOllama(),
     checkLiteLLM(),
     checkPostgres(),
-    checkRedis(),
     checkBackend(),
     checkCapabilities(),
     checkMcpServerBuild(projectDir),

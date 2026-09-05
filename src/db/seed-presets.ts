@@ -6,6 +6,27 @@ import { pipelineTemplates } from '@/db/schema/pipeline-templates';
 import { logger } from '@/utils/logger';
 
 /**
+ * The command that settles whether the work holds. Optional, because no
+ * template can know another project's test runner, and a wrong default would
+ * fail every run that did not happen to use it. Supplied, the framework runs it
+ * once before the verify stage's model turn and hands the auditor a real exit
+ * code — instead of a checklist telling it to work out what to run, which is
+ * what the stage was doing at 4 iterations and 82,783 tokens to establish that
+ * a 13-test suite passes in a millisecond.
+ *
+ * Shared by every recipe with a `qa_validation` stage: one wording to keep
+ * right, and a caller who learns the parameter on one recipe knows it on all.
+ */
+const VERIFY_COMMAND_PARAM: RecipeParameter = {
+  key: 'verifyCommand',
+  description:
+    'Command that decides whether the work is done, e.g. "npm test", "pytest -q", "python3 -m unittest discover". Plain argv — no pipes, redirects or a leading cd.',
+  inputType: 'string',
+  requirement: 'optional',
+  default: '',
+};
+
+/**
  * Preset pipeline templates that ship out-of-the-box.
  * These are inserted with isPreset=true and no userId (available to all users).
  */
@@ -21,6 +42,7 @@ export const PRESET_TEMPLATES: Array<{
     name: 'Full Development Cycle',
     description:
       'End-to-end development pipeline: research, requirements & architecture brainstorming with user approval, coding, testing, code review, QA validation, and final summary.',
+    parameters: [VERIFY_COMMAND_PARAM],
     steps: [
       {
         name: 'Research & Discovery',
@@ -283,12 +305,18 @@ Rate overall quality: Excellent / Good / Needs Work / Critical Issues.`,
         // would re-review the same unchanged tree. (An audit-GATE rejection is
         // handled separately and re-runs this auditor alone.)
         retryTargetStage: 2,
+        // Run by the framework before this stage's model turn when the caller
+        // supplied one. Empty is the normal case and changes nothing.
+        verifyCommand: '{{param.verifyCommand}}',
         promptTemplate: `Perform QA validation on the implementation. Test it end-to-end.
 
 Task: {{description}}
 
 Code review results:
 {{previousOutput}}
+
+If a VERIFY COMMAND result is shown above, that is the ground truth — do not
+re-run it, explain it. Otherwise establish for yourself whether the work holds.
 
 TEST SUITE DISCOVERY — find and run the project's test commands:
 1. Check for package.json (npm/bun: look at "scripts" for test/build commands)
@@ -392,23 +420,7 @@ Produce:
     name: 'Bug Fix',
     description:
       'Structured bug fix pipeline: reproduce, diagnose root cause, implement fix, test, and verify.',
-    // The command that settles whether the fix holds. Optional, because no
-    // template can know another project's test runner, and a wrong default
-    // would fail every run that did not happen to use it. Supplied, the
-    // framework runs it once before the verify stage's model turn and hands
-    // the auditor a real exit code — instead of a checklist telling it to work
-    // out what to run, which is what the stage was doing at 4 iterations and
-    // 82,783 tokens to establish that a 13-test suite passes in a millisecond.
-    parameters: [
-      {
-        key: 'verifyCommand',
-        description:
-          'Command that decides whether the fix worked, e.g. "npm test", "pytest -q", "python3 -m unittest discover". Plain argv — no pipes, redirects or a leading cd.',
-        inputType: 'string' as const,
-        requirement: 'optional' as const,
-        default: '',
-      },
-    ],
+    parameters: [VERIFY_COMMAND_PARAM],
     steps: [
       {
         name: 'Reproduce & Diagnose',
@@ -500,10 +512,17 @@ Report: FIXED / NOT FIXED / PARTIALLY FIXED with evidence.`,
 
 /**
  * Add the gating flags — `producesArtifacts`, `runsCommands` and `stageType` —
- * to an already-seeded preset's steps when the stored step has no such key at
- * all. Matches steps BY NAME (a user may have added, removed or reordered
- * steps) and only ever *adds* a key — a step the user explicitly set stays as
- * they set it, and every other field is untouched. No-ops (no write) when
+ * plus the auditor's `verifyCommand`, to an already-seeded preset's steps when
+ * the stored step has no such key at all. Matches steps BY NAME (a user may
+ * have added, removed or reordered steps) and only ever *adds* a key — a step
+ * the user explicitly set stays as they set it, and every other field is
+ * untouched.
+ *
+ * `verifyCommand` is a value rather than a flag, and it is here for the same
+ * reason the flags are: it is the half of the wiring that makes the recipe
+ * PARAMETER mean anything. The parameter is backfilled onto every install
+ * (`reconcilePreset`), so without this an edited install would be offered a
+ * verify command and then silently ignore the one it was given. No-ops (no write) when
  * nothing is missing, which is the steady state.
  *
  * Every flag added here has the same failure mode: an install seeded before the
@@ -565,6 +584,14 @@ export function planProducesArtifactsBackfill(
           ? { retryTargetStage: auditor.retryTargetStage }
           : {}),
       };
+    }
+    // Separate from the block above: an edited preset can already carry
+    // `stageType` and still have no `verifyCommand`, and without this the
+    // recipe parameter is backfilled onto a stage with nothing to read it —
+    // a supplied command would be silently ignored on every edited install.
+    if (auditor?.verifyCommand !== undefined && next.verifyCommand === undefined) {
+      changed = true;
+      next = { ...next, verifyCommand: auditor.verifyCommand };
     }
     return next;
   });
@@ -633,7 +660,7 @@ export type PresetReconcile =
   | { action: 'adopt'; shippedHash: string }
   /** Untouched preset — take the shipped definition wholesale. */
   | { action: 'refresh'; steps: PipelineStepConfig[]; shippedHash: string }
-  /** User-edited preset — add only the gating flags it is missing. */
+  /** User-edited preset — add only the gating flags and verify command it is missing. */
   | { action: 'backfill'; steps: PipelineStepConfig[] };
 
 /** The decision above, with no IO, so every branch is testable without a DB. */

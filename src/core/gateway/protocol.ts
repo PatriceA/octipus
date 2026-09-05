@@ -59,7 +59,7 @@ export type GatewayEventType =
   | 'agent.blocked'
   // NOTE: `worker_spawned`, `worker_completed` and `pipeline_event` are NOT
   // gateway types and were never emitted as any. They belong to
-  // `OrchestratorEvent['type']`, and `mapOrchestratorEventType` translates them
+  // `TurnEvent['type']`, and `mapTurnEventType` translates them
   // INTO `agent.spawned` / `agent.completed` / `pipeline.event` — so declaring
   // them here described a producer that by construction cannot exist. Same for
   // `status_update`, `typing`, `message` and `approval_required` below. All
@@ -88,12 +88,17 @@ export type GatewayEventType =
   | 'chat.response'
   | 'chat.message'
   // Approval / permission flows
-  | 'orchestrator.approval_required'
-  | 'orchestrator.status'
+  | 'agent.approval_required'
+  | 'rootAgent.status'
   | 'permission.request'
   // Session. `session.cleared` was declared here with no producer and no
   // consumer, and is retired for the same reason as `swarm.node_status` above.
   | 'session.compaction_stalled'
+  // Authoritative per-session usage, published at the end of every root turn:
+  // token/cost totals straight from the cost log (so child agents are counted,
+  // which a client summing the agent.completed events it happened to see is
+  // not), plus how full the last prompt left the context window.
+  | 'session.stats'
   // Audit (catch-all for connection-manager audit signals — payload carries
   // the specific audit event name in `originalType`).
   | 'audit'
@@ -199,7 +204,7 @@ export const AgentStopSchema = z.object({
 
 /**
  * `chat.interject` — a non-blocking side-channel message sent while
- * the session already has an active orchestrator turn running.
+ * the session already has an active root agent turn running.
  *
  * Distinct from `chat.send`:
  *   - `chat.send` is the canonical user input; substantive turns
@@ -211,7 +216,7 @@ export const AgentStopSchema = z.object({
  *     question: …") in parallel with the swarm.
  *
  * Foundation for option (b) from the plan's B.3. The plumbing for
- * the *running* orchestrator to *observe* interject events lands
+ * the *running* root agent to *observe* interject events lands
  * later; for now an interject opens a parallel mini-conversation.
  */
 export const ChatInterjectSchema = z.object({
@@ -221,12 +226,12 @@ export const ChatInterjectSchema = z.object({
 });
 
 /**
- * `chat.steer` — inject a user message into the SAME running orchestrator turn
+ * `chat.steer` — inject a user message into the SAME running root agent turn
  * so it changes course mid-flight, instead of spawning a concurrent turn.
  *
  * Distinct from `chat.interject` (a parallel side-question that does NOT touch
- * the running turn): a steer enters the live orchestrator's context at the next
- * iteration boundary via its steering queue. If no orchestrator is currently
+ * the running turn): a steer enters the live root agent's context at the next
+ * iteration boundary via its steering queue. If no root agent is currently
  * running for the session, the handler treats it like a normal `chat.send`.
  */
 export const ChatSteerSchema = z.object({

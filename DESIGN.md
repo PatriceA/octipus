@@ -8,15 +8,15 @@ A reference for contributors. These are the opinions that guide every decision. 
 
 ## Coordination, not replacement
 
-Octipus coordinates things, it does not replace them. LLMs, databases, APIs, humans, tools, channels — these are **primitives**, not libraries you bolt on. The orchestrator's job is to wire them together correctly and cheaply.
+Octipus coordinates things, it does not replace them. LLMs, databases, APIs, humans, tools, channels — these are **primitives**, not libraries you bolt on. The root agent's job is to wire them together correctly and cheaply.
 
-The surface area of the core is small on purpose. You learn the orchestrator, roles, pipelines, and the permission model once. Everything else is nodes composed of those.
+The surface area of the core is small on purpose. You learn the root agent, roles, pipelines, and the permission model once. Everything else is nodes composed of those.
 
 ## If it routes, the contract is sound
 
 Same philosophy as a type checker, but for agent handoffs. Before a worker starts:
 
-- **Classification happens deterministically.** Keyword heuristics first, LLM only when ambiguous. The classifier is a cheap, explainable filter — the orchestrator is the expensive reasoner, not a routing lookup.
+- **Classification happens deterministically.** Keyword heuristics first, LLM only when ambiguous. The classifier is a cheap, explainable filter — the root agent is the expensive reasoner, not a routing lookup.
 - **Role contracts are typed.** Every role has a documented input shape, tool allowlist, and deliverable format. A worker cannot be spawned without a resolved role config.
 - **Pipelines are sequences of typed stages.** Stage N's output is stage N+1's input. Handoff context is a structured document, not a freeform blob.
 
@@ -30,7 +30,7 @@ Corollary: **tool allowlists are minimal**. A role gets only the tools it actual
 
 ## No special cases
 
-When a capability is needed, the language of the platform gets a general feature and the node uses it. No role ever requires custom orchestrator support.
+When a capability is needed, the language of the platform gets a general feature and the node uses it. No role ever requires custom root agent support.
 
 "Wait for approval" is not approval-specific. It is "pause the pipeline until an external signal arrives" — used by human approval, webhook gates, and scheduled resumes. "Remember a fact about the user" is not a profile-specific feature. It is a generic fact store that profiles happen to use.
 
@@ -43,7 +43,7 @@ Two things fall out:
 
 Telegram, Slack, WhatsApp, Teams, WebChat, TUI — all speak the same gateway protocol. A feature added to one channel that cannot be expressed through the gateway is wrong. Fix the gateway.
 
-A corollary: **sessions are channel-agnostic at the orchestrator level**. The orchestrator sees `sessionId`, not `telegram_chat_id`. Channels resolve sessions on the way in and translate events on the way out.
+A corollary: **sessions are channel-agnostic at the root agent level**. The root agent sees `sessionId`, not `telegram_chat_id`. Channels resolve sessions on the way in and translate events on the way out.
 
 ## Fail loud
 
@@ -59,7 +59,7 @@ Error classification lives in `src/core/errors/classification.ts` (`FailoverReas
 
 ## Security preamble is load-bearing
 
-Every worker and the orchestrator get the `SECURITY_PREAMBLE` at the start of their system prompt. It is not a nice-to-have. The input guard (39 regex patterns) and output guard (LLM-based) layer on top but do not replace it. Do not edit the preamble without an issue and an argument.
+Every worker and the root agent get the `SECURITY_PREAMBLE` at the start of their system prompt. It is not a nice-to-have. The input guard (39 regex patterns) and output guard (LLM-based) layer on top but do not replace it. Do not edit the preamble without an issue and an argument.
 
 ## Durable where it matters, ephemeral where it helps
 
@@ -86,7 +86,7 @@ A 100-stage system still looks like 5 blocks at the top level because each block
 
 ## Swarm is a first-class primitive
 
-Delegation has one shape: `spawn_child`. The tree is fixed depth 3 (Orchestrator → Agent → Subagent). Budgets cascade on tokens (pool-shared) and stay per-node on wall-clock (parent excludes time spent waiting on children via `pausedMs`). Every node has hard caps enforced pre-LLM-call — breach throws structured errors (`BudgetExceededError`, `ChildTimeoutError`, `CascadedCancellationError`). Cycle protection is per-session fingerprints; cascade cancel is an `AbortSignal` tree.
+Delegation has one shape: `spawn_child`. The tree is fixed depth 3 (root agent → Agent → Subagent). Budgets cascade on tokens (pool-shared) and stay per-node on wall-clock (parent excludes time spent waiting on children via `pausedMs`). Every node has hard caps enforced pre-LLM-call — breach throws structured errors (`BudgetExceededError`, `ChildTimeoutError`, `CascadedCancellationError`). Cycle protection is per-session fingerprints; cascade cancel is an `AbortSignal` tree.
 
 What this buys: no runaway spend, no silent deep recursion, no one-off "team" or "worker" primitives to memorize. One mechanism for fan-out, one shape for hand-off, one set of budgets to reason about. Pipelines still exist for **explicit staged handover with human gates** — that's a different problem, kept separate on purpose. See [.octipus/swarm-design.md](./.octipus/swarm-design.md).
 
@@ -108,18 +108,18 @@ Octipus should be fully usable with:
 
 - Local models via Ollama
 - Embedded PostgreSQL (PGlite) instead of a real DB
-- In-memory cache instead of Valkey (Redis-compatible)
+- In-process cache instead of an external cache server
 - No external API keys at all
 
 Cloud providers are upgrades, not requirements. A new feature that only works with a specific cloud provider is suspicious.
 
 ## Evaluation is part of the build
 
-Every non-trivial change to routing, roles, prompts, or tool selection goes through the eval harness (`bun run eval`). Red-team tests (prompt injection, role confusion, tool misuse, data leakage, off-topic drift) are part of CI. A regression in the eval suite blocks merge.
+Every non-trivial change to routing, roles, prompts, or tool selection goes through the eval harness (`npm run eval`). Red-team tests (prompt injection, role confusion, tool misuse, data leakage, off-topic drift) are part of CI. A regression in the eval suite blocks merge.
 
 ## Small core, large catalog
 
-The core (orchestrator, gateway, permission system, vault, DB schema) should stay small and rarely change. The catalog (roles, skills, tools, channels, experts, pipeline templates) grows freely. When in doubt, push complexity to the catalog, not the core.
+The core (root agent, gateway, permission system, vault, DB schema) should stay small and rarely change. The catalog (roles, skills, tools, channels, experts, pipeline templates) grows freely. When in doubt, push complexity to the catalog, not the core.
 
 ---
 

@@ -6,7 +6,7 @@ import { decodeGatewayEvent } from './gateway-adapter';
  * The agent asks the user a question and blocks until it is answered.
  *
  * `request_user_approval` emitted `approval_required`, `event-bridge` mapped it
- * to `orchestrator.approval_required`, the protocol declared it — and the TUI
+ * to `agent.approval_required`, the protocol declared it — and the TUI
  * had no handler, so it went on the floor. The screen showed
  * `Waiting: running request_user_approval (40.0s)` counting upward with no
  * prompt and no way to reply, until the turn timed out. Two of four measured
@@ -18,7 +18,7 @@ import { decodeGatewayEvent } from './gateway-adapter';
  */
 
 const decodeApproval = (payload: Record<string, unknown>) =>
-  decodeGatewayEvent({ type: 'orchestrator.approval_required', payload });
+  decodeGatewayEvent({ type: 'agent.approval_required', payload });
 
 describe('the event reaches the app', () => {
   test('an approval request becomes an approval event', () => {

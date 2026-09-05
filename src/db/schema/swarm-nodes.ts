@@ -2,7 +2,7 @@ import { boolean, index, integer, jsonb, pgEnum, pgTable, text, timestamp, uuid 
 
 /**
  * Swarm node schema — sibling table to `agents` representing a node in the
- * agent delegation tree (Orchestrator → Agent → Subagent). See
+ * agent delegation tree (root → Agent → Subagent). See
  * `.octipus/swarm-design.md` §Observability for the authoritative design.
  *
  * The `id` equals the corresponding `agents.id` (1:1 relationship). `agents`
@@ -11,7 +11,7 @@ import { boolean, index, integer, jsonb, pgEnum, pgTable, text, timestamp, uuid 
  */
 
 export const swarmNodeKindEnum = pgEnum('swarm_node_kind', [
-  'orchestrator',
+  'root',
   'agent',
   'subagent',
 ]);
@@ -77,7 +77,7 @@ export const swarmNodes = pgTable('swarm_nodes', {
   userId: text('user_id'),
   /** Phase 4 follow-up — optional workspace scope. NULL = user-level. */
   workspaceId: uuid('workspace_id'),
-  parentNodeId: text('parent_node_id'), // null for Orchestrator
+  parentNodeId: text('parent_node_id'), // null for the root
   depth: integer('depth').notNull(),
   kind: swarmNodeKindEnum('kind').notNull(),
   role: text('role').notNull(),

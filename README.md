@@ -34,15 +34,18 @@ extension). After it finishes the service is runnable; pick TUI or
 web as your surface.
 
 ```bash
-octi start                    # full stack — backend + web UI (server / browser)
+octi start                    # the backend, and nothing else
+octi start web                # …plus the web UI, opened in a browser
+octi start tui                # …plus the terminal chat
+octi tui                      # terminal chat against a backend already running
+octi open                     # web UI in the browser (starts it if needed)
 octi desktop                  # desktop client (Tauri) — connects to any backend
-octi tui                      # terminal chat
 octi capabilities             # what optional tools are installed
 octi doctor                   # what's wired, what's missing
 ```
 
-**`.env` holds only secrets** (master key, JWT, session, DB/Redis
-URLs, and one-shot bootstrap vars). Every other setting — ports,
+**`.env` holds only secrets** (master key, JWT, session, DB URL,
+and one-shot bootstrap vars). Every other setting — ports,
 providers, channels, workspace paths, feature flags — lives in the
 DB and is editable at runtime via the API or the web UI.
 
@@ -70,13 +73,13 @@ does the same thing the installer does — see
 
 ## What it is
 
-Driven by the ultimate "What if?", Octipus is a living ecosystem built for relentless exploration. What if there's a more elegant solution? What if an entirely new capability redefines the workflow? We thrive on constant evolution and adaptation. Every agent arm acts autonomously, perpetually seeking uncharted, optimized paths. In our philosophy, everything is mutable—the only anchors are our resilient orchestrator architecture and the dedicated purpose of our models. 
+Driven by the ultimate "What if?", Octipus is a living ecosystem built for relentless exploration. What if there's a more elegant solution? What if an entirely new capability redefines the workflow? We thrive on constant evolution and adaptation. Every agent arm acts autonomously, perpetually seeking uncharted, optimized paths. In our philosophy, everything is mutable—the only anchors are our resilient root agent architecture and the dedicated purpose of our models. 
 
 This isn't just software; it's a boundless playground for every conceivable idea, providing multi-purpose, all-spanning coverage for any use case imaginable. 
 
 ## Project goal
 
-Octipus is the definitive, omni-capable orchestrator that delegates your most ambitious digital tasks to a swarm of autonomous experts. It isn't restricted by predefined boundaries—you send a directive, and it seamlessly breaks it down, dispatches the right agents, and executes in parallel. It reads your codebase, restructures your architecture, engineers solutions, and adapts on the fly. 
+Octipus is the definitive, omni-capable root agent that delegates your most ambitious digital tasks to a swarm of autonomous experts. It isn't restricted by predefined boundaries—you send a directive, and it seamlessly breaks it down, dispatches the right agents, and executes in parallel. It reads your codebase, restructures your architecture, engineers solutions, and adapts on the fly. 
 
 Designed to be infinitely extensible, Octipus gives you the ultimate sandbox. You maintain total control of your data and models, while Octipus morphs to become the exact intelligent infrastructure your imagination demands.
 
@@ -111,16 +114,16 @@ Deep dive: [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md) · [.octipus
 ## Key points covered in v0.2
 
 - **3-level Swarm** with `spawn_child` meta-tool — `await` and `detach` modes, `parallelGroup` fan-out, `collect_children` for explicit gather. Per-node hard budgets (tokens / wall-clock / fan-out), `AbortSignal` cascade cancel, fingerprint cycle protection, escalation on budget breach.
-- **Error classification** — single canonical taxonomy (`FailoverReason`, `RecoveryAction`, `ClassifiedError`). All 8 model providers migrated off ad-hoc string matching.
+- **Error classification** — single canonical taxonomy (`FailoverReason`, `RecoveryAction`, `ClassifiedError`). All model providers migrated off ad-hoc string matching.
 - **Anti-thrashing session compaction** — LLM summarization with stall detection, ≥15% savings gate, hard-ceiling safety valve.
 - **Trajectory learning** — JSONL audit log of every agent run, daily rolling, opt-out via env. Foundation for offline eval and fine-tuning.
 - **Skill auto-extension** — pattern fingerprinting → `skill_proposals` queue with curator lifecycle (usage tracking, archive after 90d); review UI surfaces high-frequency patterns; never auto-promotes.
 - **MCP circuit breaker** — closed/open/half-open with exponential backoff, admin reset, UI badge.
 - **Fail-loud routing** — strict `getModelForTopic()`, no silent fallbacks; unbound topics fail at spawn time with a clear error.
-- **Orchestrator persona** — per-user identity (name, tone, narration, free-form facts) layered between `SECURITY_PREAMBLE` and the role prompt via the `before-agent-start` hook; six presets ship under `personas/`. Default is *Octipus*, the dry octopus-machine.
-- **Orchestrator detach** — parent can detach children and use `collect_children` to await later; enables narration and user interaction while children run in parallel.
+- **Root agent persona** — per-user identity (name, tone, narration, free-form facts) layered between `SECURITY_PREAMBLE` and the role prompt via the `before-agent-start` hook; six presets ship under `personas/`. Default is *Octipus*, the dry octopus-machine.
+- **Root agent detach** — parent can detach children and use `collect_children` to await later; enables narration and user interaction while children run in parallel.
 - **Enrichment features** — Reader (fetch + extract web content), Deep Research (cited report saved to Documents + indexed into the knowledge base; live job tracking in-memory), To-Do list (recurring via scheduler), Email triage (batch classification), Hardware-aware onboarding (curated Ollama catalog + LIVE registry sizing).
-- **26 E2E test modules** + 1900+ unit tests + red-team plugins (prompt injection, role confusion, tool misuse, data leakage, off-topic drift).
+- **27 E2E test modules** + 1900+ unit tests + red-team plugins (prompt injection, role confusion, tool misuse, data leakage, off-topic drift).
 
 ## Technologies and ideas worth a look
 
@@ -140,12 +143,12 @@ Deep dive: [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md) · [.octipus
 |---|---|
 | **Agents** | 3-level Swarm, 16 roles, 16 expert personas, 22 domain skills |
 | **Models** | Ollama, OpenAI, Anthropic, Gemini, Grok, DeepSeek, Mistral, Z.AI (GLM), Moonshot (Kimi), OpenRouter, Voyage, custom OpenAI/Gemini-compat, LiteLLM, CLI (Claude / Gemini / Codex) |
-| **Tools** | Filesystem, shell (local/SSH/Docker), git, browser (Playwright + extension), web search, Docker, knowledge base, scheduling, voice, M365, GitHub/GitLab, MCP — 59+ across 19 groups |
+| **Tools** | Filesystem, shell (local/SSH/Docker), git, browser (Playwright + extension), web search, Docker, knowledge base, scheduling, voice, M365, GitHub/GitLab, MCP — 88 across 26 groups |
 | **Channels** | Telegram, Slack, Teams, WhatsApp, web UI, TUI (chat shell + editor, built on [pi-tui](https://www.npmjs.com/package/@mariozechner/pi-tui)), voice (Twilio), MCP server |
 | **Knowledge** | Hybrid search (BM25 + vector), tiered content, auto-indexing, document ingest + OCR, authored knowledge graph (notes, `[[wikilinks]]`, Obsidian vault + Canvas) |
 | **Enrichment** | Reader (fetch + extract), Deep Research (cited report → Documents + knowledge base), To-Do list, Email triage, Hardware-aware onboarding |
 | **Automation** | Hooks, webhooks, cron tasks, plugin system |
-| **Eval** | Provider conformance suite, 8 quality evaluators, red-team plugins (5 attacks, 49 cases) |
+| **Eval** | Provider conformance suite, 16 built-in assertion types, red-team plugins (5 attacks, 49 cases) |
 | **Security** | WebAuthn passkeys, TOTP 2FA, JWT sessions, encrypted vault, audit log |
 
 Full feature breakdown: see the [documentation index](#documentation) below.
@@ -160,8 +163,8 @@ cd octipus && npm install
 cd web && npm install && cd ..
 cd mcp-server && npm install && cd ..   # standalone MCP server (not a root workspace)
 npm run setup        # the single wizard (same as `octi setup`)
-octi start           # backend + web UI (server / browser)
-# …or `octi desktop` for the Tauri desktop app (see "Desktop app" below)
+octi start web       # backend + web UI (server / browser)
+# …or plain `octi start` for the backend alone, then `octi tui` / `octi desktop`
 ```
 
 Then open [http://localhost:3007](http://localhost:3007) and log in
@@ -186,7 +189,7 @@ curl -fsSL https://raw.githubusercontent.com/PatriceA/octipus/main/scripts/insta
 **Docker (production):** see [docs/DOCKER.md](docs/DOCKER.md).
 **External Postgres:** see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
-Requirements: **Node ≥ 24**, **Docker** (for the full stack), **Postgres 15** (external mode).
+Requirements: **Node ≥ 24**, **Docker** (for the full stack), **Postgres 16** (external mode).
 
 > **Runtime:** Node, everywhere — the server, the scripts, the tests, the TUI and the web build. `npm run build` produces `dist/index.js` and `npm start` runs that artifact, not the source; the web bundle is static files served by `web/serve.mjs`.
 

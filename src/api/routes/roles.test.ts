@@ -15,7 +15,7 @@ describe.skipIf(!isIntegration)('Roles API (Integration)', () => {
   // overlays each entry with its DB row (DB-sourced toolIds and prompt), so
   // without restoring it this suite would leak the mutated config into unit
   // suites that assert the file-registry defaults
-  // (e.g. core/orchestrator/roles.test.ts). Snapshot the original entries and
+  // (e.g. core/agent/roles.test.ts). Snapshot the original entries and
   // restore them in afterAll.
   let roleConfigsBackup: Record<string, unknown> | null = null;
 
@@ -31,7 +31,7 @@ describe.skipIf(!isIntegration)('Roles API (Integration)', () => {
 
     // Seed roles from the file registry into the DB + in-memory cache.
     const { seedRoles, loadRolesFromDb } = await import('@/db/seed-roles');
-    const { ROLE_CONFIGS } = await import('@/core/orchestrator/roles');
+    const { ROLE_CONFIGS } = await import('@/core/agent/roles');
     // Snapshot before mutating: loadRolesFromDb() replaces whole entries, so a
     // shallow copy of the original per-role objects is enough to restore.
     roleConfigsBackup = { ...ROLE_CONFIGS };
@@ -58,7 +58,7 @@ describe.skipIf(!isIntegration)('Roles API (Integration)', () => {
     // Restore the in-memory role registry so this suite's DB-sourced configs
     // don't leak into later unit suites.
     if (roleConfigsBackup) {
-      const { ROLE_CONFIGS } = await import('@/core/orchestrator/roles');
+      const { ROLE_CONFIGS } = await import('@/core/agent/roles');
       for (const key of Object.keys(roleConfigsBackup)) {
         (ROLE_CONFIGS as Record<string, unknown>)[key] = roleConfigsBackup[key];
       }
@@ -87,7 +87,7 @@ describe.skipIf(!isIntegration)('Roles API (Integration)', () => {
     // per-handler write filter in the system, `coreToolIds` is the entire
     // lazy-tool-discovery gate, and `liteSystemPromptTemplate` is what a small
     // model gets instead of the full prompt.
-    const { ROLE_CONFIGS } = await import('@/core/orchestrator/roles');
+    const { ROLE_CONFIGS } = await import('@/core/agent/roles');
     expect(ROLE_CONFIGS.review.readOnly).toBe(true);
     expect(ROLE_CONFIGS.general.coreToolIds?.length).toBeGreaterThan(0);
     expect(ROLE_CONFIGS.general.liteSystemPromptTemplate).toBeTruthy();
@@ -120,7 +120,7 @@ describe.skipIf(!isIntegration)('Roles API (Integration)', () => {
 
   test('PATCH updates the in-memory ROLE_CONFIGS (spawn-time read point)', async () => {
     await patchJson(adminApp, '/api/roles/general', { toolIds: ['git'] });
-    const { ROLE_CONFIGS } = await import('@/core/orchestrator/roles');
+    const { ROLE_CONFIGS } = await import('@/core/agent/roles');
     expect(ROLE_CONFIGS.general.toolIds).toEqual(['git']);
   });
 

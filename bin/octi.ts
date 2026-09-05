@@ -8,9 +8,9 @@
  * Commands handled natively (no shell needed):
  *   - doctor   — environment health checks
  *   - init     — interactive setup wizard
- *   - persona  — print / configure the orchestrator persona
+ *   - persona  — print / configure the agent persona
  *   - help     — banner + usage
- *   - version  — semver + Bun version
+ *   - version  — semver + runtime version
  *
  * Commands delegated to scripts:
  *   - tui      — `npm run tui`
@@ -40,12 +40,12 @@ Commands:
   models recommend         Recommend local models for this hardware (--install <id> to pull & bind)
   tui                      Launch terminal chat
   edit                     Launch the TUI editor
-  start [--dev]            Start backend + web UI (delegates to bash dispatcher)
+  start [client]           Start the backend; name tui/web/desktop to attach one
+  restart [client]         Stop everything, then start again the same way
   stop                     Stop all Octipus processes
-  restart [--dev]          Restart everything
   status                   Show running state
   logs [--web]             Tail backend logs
-  open                     Open the web UI in a browser
+  open                     Web UI in the browser (starts it if it is not up)
   persona [show]           Print the resolved persona (use the web UI to edit)
   uninstall [--purge]      Remove Octipus (keeps data unless --purge; --dry-run to preview)
   version                  Print version
@@ -59,7 +59,7 @@ interface PathResolution {
 
 /**
  * Find the Octipus checkout. When the binary lives inside
- * <checkout>/bin/octi, `import.meta.dir` resolves the project. When
+ * <checkout>/bin/octi, `import.meta.dirname` resolves the project. When
  * the user installed via the one-shot installer, the checkout is at
  * ~/.octipus/app. Otherwise the current cwd has to be the project
  * root (we look for package.json + the bin/ directory).
@@ -68,7 +68,9 @@ function resolveProject(): PathResolution {
   const candidates: string[] = [];
   // 1) Sibling of this script (dev path)
   try {
-    candidates.push(resolve(import.meta.dir, '..'));
+    // `import.meta.dir` is a Bun-ism — undefined on Node, so this candidate
+    // silently dropped out and project resolution fell through to cwd.
+    candidates.push(resolve(import.meta.dirname, '..'));
   } catch { /* compiled binary has no import.meta */ }
   // 2) Installer default
   candidates.push(join(homedir(), '.octipus', 'app'));

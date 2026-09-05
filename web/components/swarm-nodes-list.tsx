@@ -17,7 +17,7 @@ import { cn } from '@/lib/utils';
 export interface SwarmNode {
   nodeId: string;
   parentNodeId: string | null;
-  kind: 'orchestrator' | 'agent' | 'subagent';
+  kind: 'root' | 'agent' | 'subagent';
   depth: 0 | 1 | 2;
   topicPath: string;
   role: string;
@@ -37,7 +37,7 @@ export interface SwarmEventMessage {
     rootSessionId: string;
     nodeId: string;
     parentNodeId: string | null;
-    kind: 'orchestrator' | 'agent' | 'subagent';
+    kind: 'root' | 'agent' | 'subagent';
     depth: 0 | 1 | 2;
     topicPath: string;
     role: string;
@@ -76,7 +76,7 @@ function statusBadge(status: string) {
 
 function kindIcon(kind: SwarmNode['kind']) {
   switch (kind) {
-    case 'orchestrator':
+    case 'root':
       return <Layers className="w-3 h-3" />;
     case 'agent':
       return <Bot className="w-3 h-3" />;

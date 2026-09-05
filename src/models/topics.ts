@@ -1,6 +1,6 @@
 /**
  * Canonical topic registry — the ONE source of truth for the topics the
- * orchestrator can route to. Both the backend single-model binding and the
+ * root agent can route to. Both the backend single-model binding and the
  * Topics configuration UI (via GET /topics) derive from this list so they can
  * never drift.
  *
@@ -45,7 +45,7 @@ export const TOPICS: readonly TopicDef[] = [
   {
     value: 'chat',
     label: 'Chat',
-    description: 'Casual conversations and direct replies. Also preferred by the orchestrator when bound; unbound = orchestrator uses the default model.',
+    description: 'Casual conversations and direct replies. Also preferred by the rootAgent when bound; unbound = rootAgent uses the default model.',
     kind: 'text',
   },
   {
@@ -101,7 +101,7 @@ export const RETIRED_TOPIC_ALIASES: Readonly<Record<string, string>> = {
   research: 'writing',
   communication: 'writing',
   pm: 'writing',
-  // orchestrator-direct text topics with no distinct lane
+  // root agent-direct text topics with no distinct lane
   simple: 'chat',
   local: 'chat',
   // per-feature background topics → the one background lane

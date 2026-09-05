@@ -1,4 +1,7 @@
 import dns from 'node:dns';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
+import { Readable } from 'node:stream';
 
 /**
  * The single boundary for "this output is too big to hand a model". Exported
@@ -112,7 +115,6 @@ export async function fetchGuarded(url: string, init: RequestInit = {}, maxRedir
     throw new Error(`URL blocked (SSRF guard): ${validation.reason}`);
   }
 
-  const parsed = new URL(url);
   const addresses = validation.addresses ?? [];
 
   // Redirects must NOT be followed by the underlying fetch — the guard only
@@ -129,36 +131,126 @@ export async function fetchGuarded(url: string, init: RequestInit = {}, maxRedir
   if (addresses.length === 0) {
     res = await fetch(url, guardedInit);
   } else {
-    const pinnedIp = addresses[0];
-    const host = parsed.hostname;
-    // Bracket IPv6 literals in the URL authority.
-    const ipAuthority = pinnedIp.includes(':') ? `[${pinnedIp}]` : pinnedIp;
-    const pinnedUrl = new URL(url);
-    pinnedUrl.hostname = ipAuthority;
-
-    const headers = new Headers(guardedInit.headers);
-    if (!headers.has('host')) headers.set('host', parsed.host);
-
-    const pinnedInit: RequestInit & { tls?: { serverName: string } } = {
-      ...guardedInit,
-      headers,
-    };
-    if (parsed.protocol === 'https:') {
-      // Keep correct SNI + cert hostname verification against the real host while
-      // the socket goes to the vetted IP (Bun-specific tls option).
-      pinnedInit.tls = { serverName: host };
-    }
-    res = await fetch(pinnedUrl.toString(), pinnedInit);
+    res = await fetchPinned(url, addresses[0], guardedInit);
   }
 
   if (wantsFollow && res.status >= 300 && res.status < 400) {
     const location = res.headers.get('location');
     if (location && maxRedirects > 0) {
+      // Drain the hop we are abandoning. Its body is a live socket, and with
+      // keep-alive an unread one is held until GC — Reader and Deep Research
+      // follow a redirect on most real URLs, so it accumulates per fetch.
+      await res.body?.cancel().catch(() => { /* already closed */ });
       const next = new URL(location, url).toString(); // resolve relative redirects
       return fetchGuarded(next, init, maxRedirects - 1);
     }
   }
   return res;
+}
+
+/**
+ * `RequestInit['body']` reduced to bytes. Covers what `fetch` accepts and this
+ * path can send without streaming; anything else is refused loudly rather than
+ * silently sent as "[object Object]".
+ */
+function toBodyBuffer(body: BodyInit): Buffer {
+  if (typeof body === 'string') return Buffer.from(body);
+  if (body instanceof URLSearchParams) return Buffer.from(body.toString());
+  if (Buffer.isBuffer(body)) return body;
+  if (ArrayBuffer.isView(body)) return Buffer.from(body.buffer, body.byteOffset, body.byteLength);
+  if (body instanceof ArrayBuffer) return Buffer.from(body);
+  throw new TypeError(`fetchPinned: unsupported body type ${body?.constructor?.name ?? typeof body}`);
+}
+
+/**
+ * One hop with the socket pinned to an already-vetted IP, while SNI, the Host
+ * header and certificate verification all still use the real hostname.
+ *
+ * This cannot be `fetch`: pinning there meant rewriting the URL to the IP and
+ * restoring the hostname through `tls: { serverName }`, which is a Bun option.
+ * Node's undici ignores unknown init keys silently, so after the Node
+ * migration every guarded HTTPS request went out with the IP as SNI and died
+ * in the handshake ("fetch failed") — Reader, Deep Research, webhook actions
+ * and provider discovery all lost their outbound path at once. `node:http(s)`
+ * has a `lookup` hook, which pins the address without touching the URL, so
+ * nothing has to be un-done afterwards.
+ */
+export async function fetchPinned(url: string, ip: string, init: RequestInit = {}): Promise<Response> {
+  const parsed = new URL(url);
+  const send = parsed.protocol === 'https:' ? httpsRequest : httpRequest;
+
+  const headers: Record<string, string> = {};
+  new Headers(init.headers).forEach((value, key) => {
+    headers[key] = value;
+  });
+
+  // Materialise the body up front so its length is known. Without an explicit
+  // Content-Length, `node:http` falls back to `Transfer-Encoding: chunked`,
+  // which undici's `fetch` never did for a string body — and plenty of webhook
+  // receivers (API Gateway and several WAFs among them) reject a chunked
+  // request body outright. `src/hooks/actions.ts` POSTs JSON through here.
+  // `node:http` neither negotiates nor decodes content-encoding, so a caller
+  // that asks for gzip would get compressed bytes handed to `res.text()` as if
+  // they were HTML. Refusing to ask is the whole fix: servers reply identity.
+  delete headers['accept-encoding'];
+  delete headers['Accept-Encoding'];
+  headers['accept-encoding'] = 'identity';
+
+  const body = init.body == null ? null : toBodyBuffer(init.body);
+  if (body && headers['content-length'] === undefined && headers['Content-Length'] === undefined) {
+    headers['content-length'] = String(body.byteLength);
+  }
+
+  return new Promise<Response>((resolve, reject) => {
+    const req = send(
+      url,
+      {
+        method: init.method ?? 'GET',
+        headers,
+        // `all: true` is not optional to support: Node's happy-eyeballs
+        // (autoSelectFamily, on by default since 20) asks for the whole list,
+        // and answering with a bare string there throws "Invalid IP address".
+        lookup: ((hostname: string, options: { all?: boolean }, cb: (...a: unknown[]) => void) => {
+          const family = ip.includes(':') ? 6 : 4;
+          void hostname;
+          if (options?.all) cb(null, [{ address: ip, family }]);
+          else cb(null, ip, family);
+        }) as never,
+      },
+      (res) => {
+        const resHeaders = new Headers();
+        for (const [key, value] of Object.entries(res.headers)) {
+          if (Array.isArray(value)) for (const one of value) resHeaders.append(key, one);
+          else if (value !== undefined) resHeaders.set(key, value);
+        }
+        const status = res.statusCode ?? 502;
+        // 204/205/304 are null-body statuses — Response rejects a body on them.
+        const nullBody = status === 204 || status === 205 || status === 304;
+        if (nullBody) res.resume();
+        resolve(
+          new Response(nullBody ? null : (Readable.toWeb(res) as ReadableStream<Uint8Array>), {
+            status,
+            statusText: res.statusMessage,
+            headers: resHeaders,
+          }),
+        );
+      },
+    );
+
+    req.on('error', reject);
+
+    const signal = init.signal;
+    if (signal) {
+      const abort = (): void => {
+        req.destroy(new Error('The operation was aborted'));
+      };
+      if (signal.aborted) abort();
+      else signal.addEventListener('abort', abort, { once: true });
+    }
+
+    if (body) req.write(body);
+    req.end();
+  });
 }
 
 /** True for a clean dotted-quad IPv4 or a hex-grouped IPv6 literal. */

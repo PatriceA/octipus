@@ -2,7 +2,7 @@
  * Run/trace correlation (WS4 observability, items 1–2).
  *
  * A `runId` is minted once per orchestrated turn in
- * `OrchestratorService.handleMessage` and carried implicitly via
+ * `AgentService.handleMessage` and carried implicitly via
  * `AsyncLocalStorage` for the lifetime of that turn — including every child
  * agent, tool call, and LLM request it fans out to. Two consumers read it
  * without any threading:

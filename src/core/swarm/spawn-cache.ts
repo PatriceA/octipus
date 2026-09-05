@@ -1,4 +1,4 @@
-import type { AgentRole } from '@/core/orchestrator/types';
+import type { AgentRole } from '@/core/agent/types';
 import { coreLogger } from '@/utils/logger';
 import { swarmNodeRepository } from './node-repository';
 import type { AgentNode, ChildResult } from './types';

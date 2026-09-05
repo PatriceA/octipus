@@ -20,8 +20,8 @@ import { buildEmbeddingVersion, embedPrefixTag, EmbeddingService } from '@/core/
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
-import { filterPII } from '@/core/orchestrator/pii-filter';
-import { SECURITY_PREAMBLE } from '@/core/orchestrator/roles';
+import { filterPII } from '@/core/agent/pii-filter';
+import { SECURITY_PREAMBLE } from '@/core/agent/roles';
 import type { Memory } from '@/db/schema/memories';
 import type { CandidateFact } from './extractor';
 import { getMemoryRepository } from './repository';
@@ -78,6 +78,25 @@ export function parseJudgeAction(raw: string): JudgeAction | null {
     /* fall through */
   }
   return null;
+}
+
+/**
+ * Cosine similarity below which the nearest stored memory is treated as
+ * unrelated to the candidate — the judge is not asked, and the candidate is
+ * ADDed. Deliberately low: the cost of being wrong above it is one redundant
+ * judge call, and the cost of being wrong below it is a fact the user told us
+ * and we threw away.
+ */
+export const JUDGE_RELEVANCE_FLOOR = 0.5;
+
+/**
+ * The nearest stored memory, or null when it is too far away to be about the
+ * same thing. Pure, so the branch that decides whether a fact survives has a
+ * check that does not need an embedding model and a database behind it.
+ */
+export function relevantClosest<T extends { similarity: number }>(nearest: T | null | undefined): T | null {
+  if (!nearest) return null;
+  return nearest.similarity >= JUDGE_RELEVANCE_FLOOR ? nearest : null;
 }
 
 async function decide(candidate: CandidateFact, closest: Memory | null, userId: string): Promise<JudgeAction> {
@@ -185,16 +204,29 @@ export async function judgeAndApply(
     const similar = await repo.searchSimilar(queryVec, {
       userId: ctx.userId,
       agentScope: ctx.agentScope ?? null,
+      workspaceId: ctx.workspaceId ?? null,
       factType: candidate.factType,
       limit: 1,
     });
-    const closest = similar[0] ?? null;
+    // `searchSimilar` returns the nearest neighbour with no floor, so on a
+    // sparse corpus "closest" can be an unrelated fact. Handing that pair to
+    // the judge asks it to compare two things that have nothing to do with
+    // each other, and `decide` fails CLOSED (NOOP) — so a genuinely new fact
+    // was being silently dropped because the user happened to have one
+    // unrelated memory already. Below the floor there is nothing to restate,
+    // refine or negate, which is the definition of ADD.
+    //
+    // This is the mirror of the verbatim guard below, and the reason the
+    // threshold argument there does not apply in this direction: a
+    // contradiction ("prefers spaces" vs stored "prefers tabs") embeds CLOSE
+    // to the fact it negates, so it stays above the floor and still reaches
+    // the judge.
+    const nearest = similar[0] ?? null;
+    const closest = relevantClosest(nearest);
     // Deterministic duplicate guard: NOOP without the (small, lenient) LLM judge
     // ONLY when the candidate is a VERBATIM restatement of the closest memory.
-    // A pure similarity threshold is unsafe — a contradiction ("prefers spaces"
-    // vs stored "prefers tabs") embeds close to the fact it negates, so it must
-    // still reach decide() to become an UPDATE/DELETE. Identical text cannot be a
-    // contradiction, so short-circuiting it is safe (and skips the judge call).
+    // Identical text cannot be a contradiction, so short-circuiting it is safe
+    // (and skips the judge call).
     const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
     const action = closest && norm(closest.content) === norm(candidate.content)
       ? 'NOOP'

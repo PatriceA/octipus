@@ -1,27 +1,27 @@
 import type { AgentEvent } from '@/core/agent-base';
-import type { OrchestratorEvent } from '@/core/orchestrator/service';
+import type { TurnEvent } from '@/core/agent/service';
 import type { PermissionRequestEvent } from '@/security/permissions';
 import { coreLogger } from '@/utils/logger';
 import type { GatewayHub } from './hub';
 
 /**
- * Bridge existing orchestrator and agent manager events to the gateway event bus.
- * This runs after both the gateway hub and orchestrator are initialized.
+ * Bridge existing root agent and agent manager events to the gateway event bus.
+ * This runs after both the gateway hub and root agent are initialized.
  *
- * Call `connectEventBridge(hub)` from the startup sequence after the orchestrator is ready.
+ * Call `connectEventBridge(hub)` from the startup sequence after the root agent is ready.
  */
 export function connectEventBridge(hub: GatewayHub): () => void {
   const cleanups: (() => void)[] = [];
 
-  // Bridge orchestrator events → gateway event bus
+  // Bridge root agent events → gateway event bus
   try {
-    const { getOrchestratorService } = require('@/core/orchestrator');
-    const orchestrator = getOrchestratorService();
+    const { getAgentService } = require('@/core/agent');
+    const rootAgent = getAgentService();
 
-    const unsubOrch = orchestrator.onEvent((event: OrchestratorEvent) => {
+    const unsubOrch = rootAgent.onEvent((event: TurnEvent) => {
       hub.publishEvent({
-        type: mapOrchestratorEventType(event.type),
-        source: 'orchestrator',
+        type: mapTurnEventType(event.type),
+        source: 'root',
         userId: event.userId,
         sessionId: event.sessionId,
         payload: event.data,
@@ -29,9 +29,9 @@ export function connectEventBridge(hub: GatewayHub): () => void {
     });
 
     cleanups.push(unsubOrch);
-    coreLogger.debug('Connected orchestrator events to gateway event bus');
+    coreLogger.debug('Connected rootAgent events to gateway event bus');
   } catch {
-    coreLogger.debug('Orchestrator not available for event bridge (may not be initialized yet)');
+    coreLogger.debug('Root agent not available for event bridge (may not be initialized yet)');
   }
 
   // Bridge agent manager events → gateway event bus
@@ -42,7 +42,7 @@ export function connectEventBridge(hub: GatewayHub): () => void {
     const unsubAgent = agentManager.onEvent((event: AgentEvent) => {
       // AgentEvent carries { type, agentId, data, timestamp } — no userId/
       // sessionId (those are undefined here; agent lifecycle events reach
-      // clients via the orchestrator bridge's worker_spawned/worker_completed
+      // clients via the root agent bridge's worker_spawned/worker_completed
       // → agent.spawned/agent.completed mapping above). The worker's emitted
       // `type` union is thought|action|observation|error|complete|
       // status_change|permission_request.
@@ -130,13 +130,13 @@ export function connectEventBridge(hub: GatewayHub): () => void {
 }
 
 /**
- * Map orchestrator event types to gateway event type namespaces.
+ * Map root agent event types to gateway event type namespaces.
  */
-function mapOrchestratorEventType(type: string): import('./protocol').GatewayEventType {
+function mapTurnEventType(type: string): import('./protocol').GatewayEventType {
   switch (type) {
     case 'chat_response': return 'chat.response';
-    case 'status_update': return 'orchestrator.status';
-    case 'approval_required': return 'orchestrator.approval_required';
+    case 'status_update': return 'rootAgent.status';
+    case 'approval_required': return 'agent.approval_required';
     case 'worker_spawned': return 'agent.spawned';
     case 'worker_completed': return 'agent.completed';
     case 'pipeline_event': return 'pipeline.event';

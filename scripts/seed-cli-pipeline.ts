@@ -59,7 +59,11 @@ const [existing] = await db
 if (existing) {
   await db
     .update(pipelineTemplates)
-    .set({ steps, description: source.description, updatedAt: new Date() })
+    // `parameters` travels with the steps it belongs to: a step can reference
+    // `{{param.x}}`, and a clone that took the steps without the declarations
+    // would expand nothing — leaving a literal `{{param.verifyCommand}}` for
+    // the framework to run as a command.
+    .set({ steps, parameters: source.parameters, description: source.description, updatedAt: new Date() })
     .where(eq(pipelineTemplates.id, existing.id));
   console.log(`updated '${TEMPLATE_NAME}'`);
 } else {
@@ -69,6 +73,7 @@ if (existing) {
     isPreset: false,
     userId: null as never,
     steps,
+    parameters: source.parameters,
   });
   console.log(`seeded '${TEMPLATE_NAME}'`);
 }

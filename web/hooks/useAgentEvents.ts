@@ -11,7 +11,7 @@ export interface AgentTimelineEvent {
   timestamp: Date;
 }
 
-export interface OrchestratorTimelineEvent {
+export interface RootTimelineEvent {
   id: string;
   type: 'chat_response' | 'status_update' | 'approval_required' | 'worker_spawned' | 'worker_completed' | 'pipeline_event';
   sessionId: string;
@@ -48,7 +48,7 @@ const MAX_TIMELINE_EVENTS = 500;
  */
 export function useAgentEvents(agentId?: string) {
   const [events, setEvents] = useState<AgentTimelineEvent[]>([]);
-  const [orchestratorEvents] = useState<OrchestratorTimelineEvent[]>([]);
+  const [rootEvents] = useState<RootTimelineEvent[]>([]);
   const cursorRef = useRef(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -123,7 +123,7 @@ export function useAgentEvents(agentId?: string) {
 
   return {
     events,
-    orchestratorEvents,
+    rootEvents,
     isConnected: true, // Polling doesn't have a connection concept
     clearEvents,
   };

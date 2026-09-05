@@ -138,7 +138,7 @@ describe.skipIf(!isIntegration)('Scheduler (Integration)', () => {
 
   test('heartbeat: writing a tick yields a fresh, non-stale heartbeat', async () => {
     // Exercise the same write the worker loop performs, without spinning up the
-    // infinite loop (which would outlive the test and hit Redis post-teardown).
+    // infinite loop (which would outlive the test and hit storage post-teardown).
     await (scheduler as unknown as { maybeWriteHeartbeat(): Promise<void> }).maybeWriteHeartbeat();
 
     const hb = await scheduler.getHeartbeat();

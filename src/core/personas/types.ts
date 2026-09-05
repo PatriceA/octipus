@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /**
- * Persona = the orchestrator's identity. Loaded from YAML at startup,
+ * Persona = the root agent's identity. Loaded from YAML at startup,
  * then per-user overrides land in the `profiles` table with
  * `category='assistant'`.
  *

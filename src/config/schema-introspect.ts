@@ -32,7 +32,7 @@ function shapeOf(s: any): Record<string, any> | null {
 }
 
 /**
- * Resolve the zod schema for a setting key (e.g. 'orchestrator.liteMaxIterations'
+ * Resolve the zod schema for a setting key (e.g. 'agent.liteMaxIterations'
  * → the ZodNumber). Returns null for keys that don't map into the config schema
  * (e.g. pure vault-only settings), so callers can fall back to type checks.
  */

@@ -8,7 +8,7 @@
  * summary, a question, and sometimes a list of choices.
  *
  * It exists because the request had nowhere to land. The backend emitted
- * `orchestrator.approval_required`, the protocol declared it, and the TUI had
+ * `agent.approval_required`, the protocol declared it, and the TUI had
  * no handler — so the screen showed `Waiting: running request_user_approval
  * (40.0s)` ticking upward with no prompt and no way to answer, until the turn
  * timed out. Two of four measured runs died that way.

@@ -1,7 +1,7 @@
 /**
  * Pattern detector for skill auto-extension.
  *
- * Observes orchestrator runs; fingerprints over (topic, toolSequence, briefShape).
+ * Observes root agent runs; fingerprints over (topic, toolSequence, briefShape).
  * When a fingerprint recurs ≥3 times per user within a rolling 14-day window
  * AND a suppression from a prior rejection isn't active, emits a proposal.
  *

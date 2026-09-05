@@ -58,7 +58,7 @@ export async function testGatewayWS(runner: TestRunner, client: APIClient) {
         sessionId,
         content: 'Reply with just the word "ok".',
       });
-      // Orchestrator response can be slow on a cold model — give it 30s.
+      // The root agent's response can be slow on a cold model — give it 30s.
       const evt = await ws.waitForEvent('chat.response', 30_000);
       const payload = (evt as any).event.payload;
       assert(!!payload, 'chat.response event should carry a payload');

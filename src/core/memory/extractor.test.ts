@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { looksWorthExtracting, parseExtractorResponse } from './extractor';
-import { parseJudgeAction } from './judge';
+import { JUDGE_RELEVANCE_FLOOR, parseJudgeAction, relevantClosest } from './judge';
 import { renderMemoriesBlock } from './retrieval';
 import type { Memory } from '@/db/schema/memories';
 
@@ -144,5 +144,32 @@ describe('memory.extractor — edge cases', () => {
     });
     const facts = parseExtractorResponse(raw);
     expect(facts[0].content).toBe('User loves Rust');
+  });
+});
+
+describe('memory.judge — relevance floor', () => {
+  // `searchSimilar` has no floor: it returns the nearest neighbour however far
+  // away it is. Handing an unrelated pair to the judge asked it to compare two
+  // things with nothing to do with each other, and `decide` fails closed
+  // (NOOP) — so a genuinely new fact was dropped because the user happened to
+  // already have one unrelated memory. Live symptom: "Remember my UPS is
+  // octi-ups-7" came back `stored: false` against a stored project codename.
+  test('an unrelated nearest match is not treated as a match at all', () => {
+    expect(relevantClosest({ similarity: 0.12, content: 'unrelated' })).toBeNull();
+  });
+
+  test('a close match still reaches the judge, so contradictions can UPDATE', () => {
+    const near = { similarity: 0.88, content: 'The user prefers tabs' };
+    expect(relevantClosest(near)).toBe(near);
+  });
+
+  test('nothing stored yet is also no match', () => {
+    expect(relevantClosest(null)).toBeNull();
+    expect(relevantClosest(undefined)).toBeNull();
+  });
+
+  test('the floor sits below any plausible restatement and above noise', () => {
+    expect(JUDGE_RELEVANCE_FLOOR).toBeGreaterThan(0);
+    expect(JUDGE_RELEVANCE_FLOOR).toBeLessThan(1);
   });
 });

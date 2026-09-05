@@ -2,7 +2,7 @@ import { and, desc, eq, gte, isNull, lte } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { memories } from '@/db/schema/memories';
 import { taskState } from '@/db/schema/task-state';
-import { SECURITY_PREAMBLE } from '@/core/orchestrator/roles';
+import { SECURITY_PREAMBLE } from '@/core/agent/roles';
 import { type CompletionOptions, getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';

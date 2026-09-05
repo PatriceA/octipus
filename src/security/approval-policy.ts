@@ -6,7 +6,7 @@
  * has to answer, which is what to DO with an ASK when the caller may not be
  * able to reach a human. That answer was hardcoded in two places —
  * `tool-executor.ts` (the agent loop) and `base-tool.ts` (the tool's own
- * middleware) — as "any role that is not the orchestrator auto-approves",
+ * middleware) — as "any role that is not the root agent auto-approves",
  * with a comment in each asking the other to be kept in sync. Two copies of a
  * security decision is one copy too many; this is the one.
  *

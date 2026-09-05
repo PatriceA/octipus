@@ -194,6 +194,24 @@ async function executeSpawnAgent(
 
   let prompt = interpolateTemplate(config.agentPrompt || '', context);
 
+  // The away digest is deterministic — read it here and hand the agent the
+  // facts, rather than spending a model turn asking it to collect them.
+  // Fail-soft: a digest that cannot be built must not stop the hook. It is
+  // applied to whatever the agent will actually receive (see `message`
+  // below): a message-triggered hook runs on the message, not the prompt.
+  let digestBlock = '';
+  const digestHours = Number(config.awayDigestHours);
+  if (Number.isFinite(digestHours) && digestHours > 0 && userId !== 'system') {
+    try {
+      const { collectAwayDigest, defaultSince, renderAwayDigest } = await import('@/core/digest/away');
+      const { backgroundUserPrincipal } = await import('@/core/tasks/sourced');
+      const digest = await collectAwayDigest(backgroundUserPrincipal(userId), defaultSince(new Date(), digestHours));
+      digestBlock = renderAwayDigest(digest);
+    } catch (err) {
+      coreLogger.warn({ err, hookId: hook?.id }, 'away digest unavailable for this hook run; proceeding without it');
+    }
+  }
+
   // Embed trigger context (webhook payload, tool result, etc.) into the prompt
   if (context.webhook) {
     // If a rendered message template is available (from incoming webhook), use it
@@ -214,22 +232,24 @@ async function executeSpawnAgent(
     prompt += `\n\n--- Tool Context ---\n${JSON.stringify(context.tool, null, 2)}`;
   }
 
-  const message = context.message?.content || prompt;
+  const withDigest = (text: string) => (digestBlock ? `${digestBlock}\n\n${text}` : text);
+  prompt = withDigest(prompt);
+  const message = context.message?.content ? withDigest(context.message.content) : prompt;
 
-  // If orchestrated, route through the orchestrator instead of bare spawn
+  // If orchestrated, route through the root agent instead of bare spawn
   if (config.orchestrated) {
-    const { getOrchestratorService } = await import('@/core/orchestrator');
-    const orchestrator = getOrchestratorService();
+    const { getAgentService } = await import('@/core/agent');
+    const rootAgent = getAgentService();
 
     // A heartbeat hook routes on the 'heartbeat' channel so the run is tagged
     // origin='heartbeat' (RunContext) for auditability; everything else is 'hook'.
     const channel = hook?.trigger === 'heartbeat' ? 'heartbeat' : 'hook';
-    const result = await orchestrator.handleMessage(sessionId, userId, message, channel);
+    const result = await rootAgent.handleMessage(sessionId, userId, message, channel);
 
     // For orchestrated hooks, notify the owner with the result if either:
-    // - orchestratorNotify is true (scheduled tasks that should deliver results)
+    // - notifyRoot is true (scheduled tasks that should deliver results)
     // - notifyOwner is true (explicit owner notification)
-    if ((config.orchestratorNotify || config.notifyOwner) && userId && result.response) {
+    if ((config.notifyRoot || config.notifyOwner) && userId && result.response) {
       notifyOwnerWithResult(userId, result.response).catch((err) => {
         coreLogger.error({ error: err }, 'Failed to notify owner with orchestrated result');
       });

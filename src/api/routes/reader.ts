@@ -3,6 +3,7 @@ import { apiContext } from '@/api/context';
 import { runReaderAction } from '@/core/reader/actions';
 import { fetchReaderDoc } from '@/core/reader/fetch';
 import type { ReaderActionKind } from '@/core/reader/types';
+import { createTasksFromSource, readerItemsToTasks } from '@/core/tasks/sourced';
 import { isAuthenticated } from '@/security/principal';
 
 const ACTIONS: ReaderActionKind[] = ['summarize', 'simplify', 'translate', 'action_items', 'ask'];
@@ -72,6 +73,32 @@ export const readerRoutes = new Elysia({ prefix: '/reader' })
         text: t.Optional(t.String({ maxLength: 100_000 })),
         action: t.String(),
         argument: t.Optional(t.String({ maxLength: 500 })),
+      }),
+      detail: { tags: ['reader'] },
+    }
+  )
+
+  // Save extracted action items to the user's to-do list (source: reader).
+  .post(
+    '/tasks',
+    async ({ user, principal, body, set }) => {
+      if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
+      const inputs = readerItemsToTasks(body.items, { url: body.url, title: body.title });
+      if (inputs.length === 0) {
+        set.status = 400;
+        return { error: 'No action items to save' };
+      }
+      const created = await createTasksFromSource(principal, 'reader', inputs);
+      return { created: created.length, tasks: created.map((x) => ({ id: x.id, title: x.title })) };
+    },
+    {
+      body: t.Object({
+        items: t.Array(t.String({ maxLength: 1000 }), { minItems: 1, maxItems: 50 }),
+        url: t.Optional(t.String({ maxLength: 2048 })),
+        title: t.Optional(t.String({ maxLength: 500 })),
       }),
       detail: { tags: ['reader'] },
     }

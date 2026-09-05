@@ -2,18 +2,18 @@ import { getConfig } from '@/config';
 import type { AnyAgentWorker } from '@/core/agent-manager';
 import { getAgentManager } from '@/core/agent-manager';
 import { sessionRepository } from '@/db/repositories/session-repository';
-import { isPlanMode, stripMutatingTools } from '@/core/orchestrator/plan-mode';
+import { isPlanMode, stripMutatingTools } from '@/core/agent/plan-mode';
 import type { AgentWorker, ToolHandler } from '@/core/agent-worker';
 import type { GatewayHub } from '@/core/gateway/hub';
 import { getGatewayHub } from '@/core/gateway/hub';
-import { getOrchestratorHooks } from '@/core/orchestrator/hooks';
-import { buildSecurityReminder, guardInput } from '@/core/orchestrator/input-guard';
-import { estimateToolSchemaTokens, logPromptComposition } from '@/core/orchestrator/prompt-budget';
-import { formatCriticalRules, getRoleConfig, getToolsForRole } from '@/core/orchestrator/roles';
-import { applyToolCap, isSmallModel } from '@/core/orchestrator/small-model';
-import type { AgentRole } from '@/core/orchestrator/types';
-import { pipelineMetadata } from '@/core/orchestrator/worker-spawner';
-import { countChangedFiles, snapshotWorkspace } from '@/core/orchestrator/workspace-snapshot';
+import { getAgentHooks } from '@/core/agent/hooks';
+import { buildSecurityReminder, guardInput } from '@/core/agent/input-guard';
+import { estimateToolSchemaTokens, logPromptComposition } from '@/core/agent/prompt-budget';
+import { formatCriticalRules, getRoleConfig, getToolsForRole } from '@/core/agent/roles';
+import { applyToolCap, isSmallModel } from '@/core/agent/small-model';
+import type { AgentRole } from '@/core/agent/types';
+import { pipelineMetadata } from '@/core/agent/worker-spawner';
+import { countChangedFiles, snapshotWorkspace } from '@/core/agent/workspace-snapshot';
 import { recordSwarmSpawn } from '@/core/telemetry';
 import type { AgentContext } from '@/core/types';
 import { agentRepository } from '@/db/repositories/agent-repository';
@@ -111,16 +111,16 @@ export interface SpawnChildInternalOpts {
   /** Tag logged on spawn — distinguishes normal spawns from escalation. */
   reason?: 'normal' | 'escalation' | 'retry';
   /**
-   * The RESOLVED orchestrator tier for this turn, threaded down from
+   * The RESOLVED root agent tier for this turn, threaded down from
    * `createSpawnChildTool`. Only `resolveChildRole` reads it, to decide whether
    * the deterministic role-fit rewrite applies (it is a small-model workaround).
    *
-   * Threaded rather than re-derived: `resolveOrchestratorMode` already resolved
+   * Threaded rather than re-derived: `resolvePromptTier` already resolved
    * it once for this turn, using the model's `metadata.paramCount` when the id
    * carries no size tag. Deriving it a second time from the id alone would give
    * a different answer for the same model.
    */
-  orchestratorIsLite?: boolean;
+  rootIsLite?: boolean;
 }
 
 /**
@@ -216,13 +216,13 @@ export class SwarmSpawner {
     parentContext: AgentContext,
     internal: SpawnChildInternalOpts = {},
   ): Promise<ChildResult> {
-    const hooks = getOrchestratorHooks();
+    const hooks = getAgentHooks();
     const childDepth = parent.depth + 1;
     const startedAt = Date.now();
 
     let childRole: AgentRole;
     try {
-      childRole = this.resolveChildRole(params, internal.orchestratorIsLite);
+      childRole = this.resolveChildRole(params, internal.rootIsLite);
     } catch (err) {
       // A malformed spawn reports too: `spawn:after` is the seam subscribers
       // count on, and this throw happens before `spawn:before` could fire.
@@ -302,7 +302,7 @@ export class SwarmSpawner {
 
     const childDepth: 1 | 2 = (parent.depth + 1) as 1 | 2;
     const childKind: 'agent' | 'subagent' = childDepth === 1 ? 'agent' : 'subagent';
-    const childRole = this.resolveChildRole(params, internal.orchestratorIsLite);
+    const childRole = this.resolveChildRole(params, internal.rootIsLite);
     const topicPath = this.buildTopicPath(parent.topicPath, params.topic, params.subtopic);
 
     // WS4 observability — count spawns that clear the depth gate, by child role,
@@ -314,7 +314,7 @@ export class SwarmSpawner {
     recordSwarmSpawn(childRole, childDepth, !!params.plan?.length);
 
     // ── Same-role guard ─────────────────────────────────────────────
-    // At depth 0→1 (Orchestrator → Agent): Orchestrator role is unique, so
+    // At depth 0→1 (Root agent → Agent): Root agent role is unique, so
     // same-role is effectively impossible — but we keep the guard for
     // escalation safety.
     // At depth 1→2 (Agent → Subagent): ALLOWED. Lets a research agent fan
@@ -523,7 +523,7 @@ export class SwarmSpawner {
 
     // Plan mode is inherited by every child, at every depth. This is the OTHER
     // spawn path — `spawn_child` comes through here, `worker-spawner` handles
-    // the orchestrator's own workers — and filtering only one of them is
+    // the root agent's own workers — and filtering only one of them is
     // filtering neither: an agent short of a tool delegates, which is exactly
     // how a planning turn ended up editing the file it was asked to plan.
     //
@@ -565,7 +565,7 @@ export class SwarmSpawner {
     // after resolution (the tier needs the bound model) but BEFORE the skill
     // loader is appended, so the loader can never be the thing the cap drops.
     if (isSmall) {
-      childTools = applyToolCap(childTools, getConfig().orchestrator.smallModelMaxTools, {
+      childTools = applyToolCap(childTools, getConfig().agent.smallModelMaxTools, {
         role: childRole,
         modelId: childModel,
       });
@@ -1253,7 +1253,7 @@ export class SwarmSpawner {
         userId: opts.parentContext.userId,
         // Memory-redesign Phase B — inherit the parent's workspace so
         // task_state and memories rows written by the child carry the
-        // same scope as the orchestrator that spawned them.
+        // same scope as the root agent that spawned them.
         workspaceId: opts.parentContext.workspaceId ?? null,
         topic: getRoleConfig(opts.childRole).defaultTopic,
         model: opts.childModel,
@@ -1701,7 +1701,7 @@ export class SwarmSpawner {
 
   // ── Root-node construction helper ──────────────────────────────────
 
-  static makeOrchestratorRoot(opts: {
+  static makeSwarmRoot(opts: {
     id: string;
     rootSessionId: string;
     role: AgentRole;
@@ -1714,7 +1714,7 @@ export class SwarmSpawner {
       id: opts.id,
       rootSessionId: opts.rootSessionId,
       parentNodeId: null,
-      kind: 'orchestrator',
+      kind: 'root',
       depth: 0,
       role: opts.role,
       topicPath: opts.topicPath || 'root',
@@ -1735,7 +1735,7 @@ export class SwarmSpawner {
 
   // ── Internals ──────────────────────────────────────────────────────
 
-  private resolveChildRole(params: SpawnChildParams, orchestratorIsLite = false): AgentRole {
+  private resolveChildRole(params: SpawnChildParams, rootIsLite = false): AgentRole {
     // Validator in swarm-tool.ts guarantees role is set — it rejects
     // spawns missing a resolvable role. Silent defaulting to 'general'
     // was the source of wrong-model routing.
@@ -1748,7 +1748,7 @@ export class SwarmSpawner {
     // the classifier reads as coding is a misroute (an "architect" doing code
     // changes). Rewrite to `coding` and log.
     //
-    // LITE orchestrators only, which is what it was written for: prompt hints
+    // LITE rootAgents only, which is what it was written for: prompt hints
     // don't hold for them. A capable (full) model read the whole request before
     // choosing, so overriding it with a keyword table's read of the task brief
     // alone replaces judgement with a guess.
@@ -1757,7 +1757,7 @@ export class SwarmSpawner {
     // and the rewrite was gated on the wrong one — a router-tier root never
     // reached this method at all. Router mode is gone (Phase 9); every small
     // model now resolves to lite, so this reads as the tier it always meant.
-    const fit = applyRoleFit(params.role, params.taskBrief, orchestratorIsLite);
+    const fit = applyRoleFit(params.role, params.taskBrief, rootIsLite);
     if (fit.rewrittenFrom) {
       coreLogger.info(
         { from: fit.rewrittenFrom, to: fit.role, taskBrief: params.taskBrief.slice(0, 120) },
@@ -1857,7 +1857,7 @@ export class SwarmSpawner {
             'Expert lists skillIds that are missing from skill registry — child will run with partial domain knowledge',
           );
         }
-        // Index-only injection (matches the orchestrator's spawnWorker path):
+        // Index-only injection (matches the root agent's spawnWorker path):
         // one line per skill, not the full body. A multi-skill expert otherwise
         // dumps tens of k tokens into every child prompt — bloat a fan-out child
         // can't use, and which actively skews small models (see the 743d4b66
@@ -1914,7 +1914,7 @@ export class SwarmSpawner {
     //      for every plan-less (recon/judgment) delegation.
     //   3. lane→model mapping (topic primary binding)
     //   4. fail loud — do NOT inherit parent model. The parent's model is
-    //      whatever the orchestrator happened to pick; it has no claim to
+    //      whatever the root agent happened to pick; it has no claim to
     //      being right for the child's topic. Inheriting hides routing bugs.
     //
     // The lane is the expert's assigned topic (experts.topic) when an expert
@@ -2000,7 +2000,7 @@ export class SwarmSpawner {
     // modelPreference) are authoritative. Previously we'd downgrade a child
     // whose bound model cost more than the parent's — that silently
     // overrode the user's "this topic uses this model" configuration and
-    // sent every child to the orchestrator's model. If cost is a concern,
+    // sent every child to the root agent's model. If cost is a concern,
     // configure it via the Models page.
 
     // Capability gate (RC7): the worker path checks a bound model can actually
@@ -2015,7 +2015,7 @@ export class SwarmSpawner {
     // reroute above, not the original candidate.
     let isSmall = false;
     try {
-      const routerMax = getConfig().orchestrator.routerSmallModelMaxParams;
+      const routerMax = getConfig().agent.smallModelMaxParams;
       let bound = await registry.getModelByModelId(candidate);
       if (bound) {
         const { staticCapabilityWarnings } = await import('@/models/capability-gate');
@@ -2024,7 +2024,7 @@ export class SwarmSpawner {
           coreLogger.warn({ childRole, model: candidate, warnings }, 'Swarm child bound to a weak model');
         }
         if (childUsesTools && !bound.supportsTools && bound.provider !== 'cli') {
-          const { findToolCapableFallback } = await import('@/core/orchestrator/model-selector');
+          const { findToolCapableFallback } = await import('@/core/agent/model-selector');
           const alt = await findToolCapableFallback(candidate);
           if (alt) {
             coreLogger.warn(
@@ -2229,7 +2229,7 @@ export function applyScorerVerdict(
  * Read from the session rather than from a context object because the ROOT does
  * not carry it in metadata (only `worker-spawner` sets that, on children) — so
  * a gate on a child spawned directly by the root would otherwise see nothing.
- * Same condition `worker-spawner` and `orchestrator-runner` apply, so all three
+ * Same condition `worker-spawner` and `root-runner` apply, so all three
  * readings of "is this a dev-mode session and where is it" agree.
  */
 async function devProjectPathForSession(sessionId?: string): Promise<string | undefined> {
@@ -2284,7 +2284,7 @@ export function composeChildMessage(
   // Ground every child in "today" — without this, time-relative requests
   // ("who played yesterday", "latest news") make the model fall back to its
   // training cutoff and reason about a stale date (e.g. assuming an event
-  // hasn't happened yet). The orchestrator grounds its own system prompt
+  // hasn't happened yet). The root agent grounds its own system prompt
   // (worker-spawner.ts / direct-response.ts), but swarm children spawned here
   // were not — this closes that gap using the shared single-clock format.
   parts.push(
@@ -2295,7 +2295,7 @@ export function composeChildMessage(
   );
 
   // Always surface the user's actual request — prevents the child from
-  // drifting into what it *thinks* the user wanted based on orchestrator
+  // drifting into what it *thinks* the user wanted based on root agent
   // paraphrasing alone.
   if (brief.originalUserRequest) {
     parts.push(`ORIGINAL USER REQUEST (verbatim):\n${brief.originalUserRequest}`);

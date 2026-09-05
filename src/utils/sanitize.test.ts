@@ -1,6 +1,6 @@
 import dns from 'node:dns';
 import { describe, expect, test, vi } from 'vitest';
-import { assertPublicAddress, fetchGuarded, safeRegExp, sanitizeToolOutput, validateExternalUrl } from './sanitize';
+import { assertPublicAddress, fetchGuarded, fetchPinned, safeRegExp, sanitizeToolOutput, validateExternalUrl } from './sanitize';
 
 describe('validateExternalUrl', () => {
   test('rejects malformed URL', async () => {
@@ -212,5 +212,43 @@ describe('fetchGuarded (H3)', () => {
   });
   test('throws on a disallowed scheme', async () => {
     await expect(fetchGuarded('file:///etc/passwd')).rejects.toThrow(/SSRF guard|scheme/i);
+  });
+});
+
+describe('fetchPinned', () => {
+  // The regression this guards: `fetch` + Bun's `tls.serverName` silently
+  // stopped pinning under Node, and nothing failed until a live HTTPS fetch
+  // died in the TLS handshake. Here the server is bound to 127.0.0.1 while the
+  // request is made to a hostname that resolves nowhere useful — it can only
+  // arrive if the address really was pinned, and the Host header proves the
+  // URL was left alone.
+  test('pins the socket to the given IP and keeps the real Host header', async () => {
+    const { createServer } = await import('node:http');
+    const seen: { host?: string; method?: string; body: string } = { body: '' };
+    const server = createServer((req, res) => {
+      seen.host = req.headers.host;
+      seen.method = req.method;
+      req.on('data', (c: Buffer) => { seen.body += c.toString(); });
+      req.on('end', () => {
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end('pinned-ok');
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const port = (server.address() as { port: number }).port;
+
+    try {
+      const res = await fetchPinned(`http://octipus-pin-test.invalid:${port}/x`, '127.0.0.1', {
+        method: 'POST',
+        body: 'ping',
+      });
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe('pinned-ok');
+      expect(seen.host).toBe(`octipus-pin-test.invalid:${port}`);
+      expect(seen.method).toBe('POST');
+      expect(seen.body).toBe('ping');
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
   });
 });

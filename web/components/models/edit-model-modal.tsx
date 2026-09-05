@@ -160,7 +160,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
         };
       }
 
-      // Parameter count drives orchestrator auto-mode selection. Apply it last
+      // Parameter count drives root agent auto-mode selection. Apply it last
       // so none of the provider-specific metadata branches above clobber it,
       // and only send metadata when there's something to persist.
       {
@@ -244,11 +244,11 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
               value={formData.paramCountB}
               onChange={(e) => setFormData({ ...formData, paramCountB: e.target.value })}
               placeholder="e.g. 128 for a 128B model"
-              title="Used to auto-select the orchestrator mode when Orchestrator > Mode is 'auto'"
+              title="Used to auto-select the rootAgent mode when Root agent > Mode is 'auto'"
               className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface"
             />
             <p className="text-xs text-on-surface-variant mt-0.5">
-              Drives the orchestrator mode (router/lite/full) when mode is <code className="bg-surface-container-high px-1 rounded">auto</code>.
+              Drives the rootAgent mode (router/lite/full) when mode is <code className="bg-surface-container-high px-1 rounded">auto</code>.
               External model IDs without a size tag (e.g. <code className="bg-surface-container-high px-1 rounded">deepseek-v4-flash</code>) default to <strong>lite</strong> until set here. Leave empty to infer from the model ID.
             </p>
           </div>

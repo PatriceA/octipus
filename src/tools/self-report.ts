@@ -106,7 +106,7 @@ async function expertsSection(userId?: string) {
 }
 
 async function pipelinesSection(userId?: string) {
-  const { listAvailableTemplates } = await import('@/core/orchestrator/templates');
+  const { listAvailableTemplates } = await import('@/core/agent/templates');
   return (await listAvailableTemplates(userId)).map((t) => ({ name: t.name, stages: t.stageCount }));
 }
 

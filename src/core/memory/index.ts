@@ -1,12 +1,12 @@
 /**
  * Memory-redesign Phase D — public entry points.
  *
- * Auto-fires from the orchestrator and every specialist on every
+ * Auto-fires from the root agent and every specialist on every
  * turn. The extractor short-circuits unless the operator has bound
  * a model to topic='memory_extraction' so this costs nothing until
- * opt-in. See `src/core/orchestrator/service.ts` (top-of-turn
+ * opt-in. See `src/core/agent/service.ts` (top-of-turn
  * retrieval + post-turn fire-and-forget update) and
- * `src/core/orchestrator/worker-spawner.ts` (per-specialist
+ * `src/core/agent/worker-spawner.ts` (per-specialist
  * injection).
  */
 
@@ -14,7 +14,7 @@ import { extractFacts } from './extractor';
 import { judgeAndApply, type JudgeContext, type JudgeOutcome } from './judge';
 
 export { extractFacts, looksWorthExtracting, parseExtractorResponse, type CandidateFact, type ExtractorInput } from './extractor';
-export { judgeAndApply, parseJudgeAction, type JudgeAction, type JudgeContext, type JudgeOutcome } from './judge';
+export { judgeAndApply, JUDGE_RELEVANCE_FLOOR, parseJudgeAction, relevantClosest, type JudgeAction, type JudgeContext, type JudgeOutcome } from './judge';
 export { retrieveForContext, renderMemoriesBlock } from './retrieval';
 export { getMemoryRepository, MemoryRepository, type MemoryAccessScope } from './repository';
 

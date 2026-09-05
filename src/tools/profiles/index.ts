@@ -25,7 +25,7 @@ export class ProfilesTool extends BaseTool {
         { name: 'get_profile', description: 'Get a profile by ID or name', parameters: { id: { type: 'string', description: 'Profile ID' }, name: { type: 'string', description: 'Profile name' } }, returns: 'Profile details' },
         { name: 'create_profile', description: 'Create a new profile', parameters: { name: { type: 'string', description: 'Name', required: true } }, returns: 'Created profile' },
         { name: 'update_profile', description: 'Update profile fields', parameters: { id: { type: 'string', description: 'Profile ID', required: true } }, returns: 'Updated profile' },
-        { name: 'add_fact', description: 'Add a fact to a profile', parameters: { id: { type: 'string', description: 'Profile ID', required: true }, key: { type: 'string', description: 'Fact key', required: true }, value: { type: 'string', description: 'Fact value', required: true } }, returns: 'Updated profile' },
+        { name: 'add_fact', description: 'Add a fact to the profile of someone the user knows. For facts about the user themselves, prefer remember_this where available.', parameters: { id: { type: 'string', description: 'Profile ID', required: true }, key: { type: 'string', description: 'Fact key', required: true }, value: { type: 'string', description: 'Fact value', required: true } }, returns: 'Updated profile' },
         { name: 'remove_fact', description: 'Remove a fact from a profile', parameters: { id: { type: 'string', description: 'Profile ID', required: true }, key: { type: 'string', description: 'Fact key', required: true } }, returns: 'Updated profile' },
         { name: 'delete_profile', description: 'Delete a profile', parameters: { id: { type: 'string', description: 'Profile ID', required: true } }, returns: 'Deletion result' },
         { name: 'search_profiles', description: 'Search profiles by query', parameters: { query: { type: 'string', description: 'Search query', required: true } }, returns: 'Matching profiles' },
@@ -164,7 +164,22 @@ export class ProfilesTool extends BaseTool {
 
     this.registerTool(
       'add_fact',
-      'Add or update a fact on a profile. If the key already exists, it is replaced.',
+      // The boundary is load-bearing, not editorial. Profile facts are injected
+      // only for people-related queries (see worker-spawner), while
+      // `remember_this` writes to long-term memory, which is injected on EVERY
+      // turn. Asked to "remember this about me", a model that picked this tool
+      // stored the fact somewhere recall never looks: the next session could
+      // only produce it when the user thought to say "check your stored facts".
+      //
+      // "prefer … when you have it", not "do not use this": `remember_this` is
+      // a ROOT-only meta-tool (`createMetaTools` is called from `root-runner`
+      // alone). A spawned worker holds `profiles` and no alternative, so a
+      // flat prohibition would make it drop the fact entirely instead of
+      // storing it in the less-visible place.
+      'Add or update a fact on the profile of someone the USER KNOWS (a colleague, a family member, a contact). ' +
+        'If the key already exists, it is replaced. For a fact about the USER THEMSELVES, prefer `remember_this` ' +
+        'when you have it — that writes to long-term memory, which is re-read on every future turn, whereas a ' +
+        'profile fact about the user is only surfaced for people-related queries.',
       createParameterSchema({
         id: { type: 'string', description: 'Profile ID', required: true },
         key: { type: 'string', description: 'Fact key (e.g., location, birthday, likes, email, phone, job, hobby)', required: true },

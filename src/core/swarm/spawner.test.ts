@@ -408,7 +408,7 @@ function makeNode(over: Partial<AgentNode> = {}): AgentNode {
     id: 'node-1',
     rootSessionId: '00000000-0000-0000-0000-0000000000aa',
     parentNodeId: null,
-    kind: 'orchestrator',
+    kind: 'root',
     depth: 0,
     role: 'general',
     topicPath: 'root',
@@ -468,10 +468,10 @@ describe('SwarmSpawner — Phase 2 depth enforcement', () => {
     expect(result.notes).toMatch(/depth 2/i);
   });
 
-  test('same-role at depth 0→1 is still blocked (orchestrator never maps to agent anyway, but the guard stands)', async () => {
+  test('same-role at depth 0→1 is still blocked (rootAgent never maps to agent anyway, but the guard stands)', async () => {
     const spawner = new SwarmSpawner({} as never);
-    // Use a non-orchestrator role at depth 0 just to exercise the guard —
-    // real orchestrators have role 'orchestrator' which never collides
+    // Use a non-root agent role at depth 0 just to exercise the guard —
+    // real rootAgents have role 'root' which never collides
     // with a specialist role, but the guard must still fire if collision
     // somehow happens (e.g. bad role resolution).
     const parent = makeNode({

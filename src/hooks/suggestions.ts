@@ -44,30 +44,9 @@ export async function getHookSuggestions(userId: string): Promise<HookSuggestion
   const calendarProvider = hasGoogle ? 'Google Calendar' : 'Outlook Calendar';
 
   // ─── Daily Briefings ─────────────────────────────────────────────
-
-  if (hasEmail || hasCalendar) {
-    suggestions.push({
-      id: 'morning-briefing',
-      name: 'Morning Briefing',
-      description: 'Daily summary at 8 AM: calendar events, unread emails, weather, and top news for your interests',
-      category: 'daily-briefing',
-      integration: hasGoogle ? 'google' : 'microsoft',
-      trigger: 'schedule',
-      triggerConfig: { cronExpression: '0 8 * * *' },
-      action: 'spawn_agent',
-      actionConfig: {
-        agentPrompt: `Generate my morning briefing for today. Include:
-1. Today's calendar events from ${calendarProvider} — list times and titles
-2. Unread email summary from ${emailProvider} — flag urgent items, group by sender importance
-3. Current weather for my location (check my profile for location)
-4. Top 3 tech/AI news headlines from the web
-
-Format as a clean, scannable digest. Keep it concise — bullet points, not paragraphs.`,
-        orchestrated: true,
-        orchestratorNotify: true,
-      },
-    });
-  }
+  // The morning briefing is no longer a suggestion: every user gets one
+  // seeded and enabled at registration (`src/core/briefing.ts`), with a
+  // prompt that only reads the integrations that are actually connected.
 
   if (hasTelegram) {
     suggestions.push({
@@ -88,7 +67,7 @@ ${hasEmail ? `4. Any important emails that still need a response` : ''}
 
 Keep it brief and actionable. Highlight anything that needs attention tomorrow.`,
         orchestrated: true,
-        orchestratorNotify: true,
+        notifyRoot: true,
       },
     });
   }
@@ -113,7 +92,7 @@ Keep it brief and actionable. Highlight anything that needs attention tomorrow.`
 
 Use the email processor tool with batch processing. Present results grouped by urgency level.`,
         orchestrated: true,
-        orchestratorNotify: true,
+        notifyRoot: true,
       },
     });
 
@@ -135,7 +114,7 @@ Use the email processor tool with batch processing. Present results grouped by u
 
 Use the email processor tool to iterate through emails in batches. Report what you'd recommend archiving or unsubscribing from — don't take action without confirmation.`,
         orchestrated: true,
-        orchestratorNotify: true,
+        notifyRoot: true,
       },
     });
 
@@ -157,7 +136,7 @@ Use the email processor tool to iterate through emails in batches. Report what y
 
 Keep the digest scannable — 2-3 sentences per email max.`,
         orchestrated: true,
-        orchestratorNotify: true,
+        notifyRoot: true,
       },
     });
   }
@@ -181,7 +160,7 @@ Keep the digest scannable — 2-3 sentences per email max.`,
 - Note any prep needed (e.g., "Review PR before standup")
 - Show free time blocks if any`,
         orchestrated: true,
-        orchestratorNotify: true,
+        notifyRoot: true,
       },
     });
 
@@ -202,7 +181,7 @@ Keep the digest scannable — 2-3 sentences per email max.`,
 4. Suggested focus/deep-work blocks in free time
 5. Any deadlines or important dates this week`,
         orchestrated: true,
-        orchestratorNotify: true,
+        notifyRoot: true,
       },
     });
   }
@@ -227,7 +206,7 @@ Keep the digest scannable — 2-3 sentences per email max.`,
 
 Format as a standup-ready summary I can paste directly.`,
       orchestrated: true,
-      orchestratorNotify: true,
+      notifyRoot: true,
     },
   });
 
@@ -249,7 +228,7 @@ Format as a standup-ready summary I can paste directly.`,
 
 Prioritize by age — oldest PRs first.`,
       orchestrated: true,
-      orchestratorNotify: true,
+      notifyRoot: true,
     },
   });
 
@@ -271,7 +250,7 @@ Prioritize by age — oldest PRs first.`,
 
 Don't apply any updates — just report findings.`,
       orchestrated: true,
-      orchestratorNotify: true,
+      notifyRoot: true,
     },
   });
 
@@ -295,7 +274,7 @@ Don't apply any updates — just report findings.`,
 
 Only report problems. If everything is healthy, just say "All systems healthy" with a one-line summary.`,
       orchestrated: true,
-      orchestratorNotify: true,
+      notifyRoot: true,
     },
   });
 
@@ -317,7 +296,7 @@ Only report problems. If everything is healthy, just say "All systems healthy" w
 
 Report what can be cleaned up and how much space it would free. Don't run docker prune without confirmation.`,
       orchestrated: true,
-      orchestratorNotify: true,
+      notifyRoot: true,
     },
   });
 
@@ -339,7 +318,7 @@ Report what can be cleaned up and how much space it would free. Don't run docker
 
 Only notify if there are actual errors. Skip routine info messages.`,
       orchestrated: true,
-      orchestratorNotify: true,
+      notifyRoot: true,
     },
   });
 
@@ -363,7 +342,7 @@ Only notify if there are actual errors. Skip routine info messages.`,
 
 Aim for 5-7 items. Quality over quantity — skip minor updates and marketing announcements.`,
       orchestrated: true,
-      orchestratorNotify: true,
+      notifyRoot: true,
     },
   });
 
@@ -383,7 +362,7 @@ Aim for 5-7 items. Quality over quantity — skip minor updates and marketing an
 3. Report what was removed: orphaned documents, stale agent outputs, short entries, duplicates
 4. Show knowledge base stats after cleanup`,
       orchestrated: true,
-      orchestratorNotify: true,
+      notifyRoot: true,
     },
   });
 

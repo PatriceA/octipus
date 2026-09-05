@@ -1,12 +1,12 @@
-import { getOrchestratorHooks } from '@/core/orchestrator/hooks';
-import { SECURITY_PREAMBLE } from '@/core/orchestrator/roles';
+import { getAgentHooks } from '@/core/agent/hooks';
+import { SECURITY_PREAMBLE } from '@/core/agent/roles';
 import { coreLogger } from '@/utils/logger';
 import { installNarrationBridge } from './narration-bridge';
 import { getPersonaRegistry } from './registry';
 import { resolvePersonaForUser } from './resolver';
 
 /**
- * Wire the persona system into the orchestrator. Call once at startup
+ * Wire the persona system into the root agent. Call once at startup
  * (idempotent — safe to call multiple times; only one subscriber
  * registers thanks to the module-level guard).
  *
@@ -39,7 +39,7 @@ export function installPersonaHook(): () => void {
   // idempotent.
   installNarrationBridge();
 
-  const off = getOrchestratorHooks().register('before-agent-start', async (ctx) => {
+  const off = getAgentHooks().register('before-agent-start', async (ctx) => {
     if (!ctx.root) return;
 
     const persona = await resolvePersonaForUser(ctx.userId);

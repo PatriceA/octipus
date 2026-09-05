@@ -49,14 +49,14 @@ The map for everything under `docs/`. Start with **Getting Started**, then jump 
 | [MCP-INTEGRATION.md](MCP-INTEGRATION.md) | Connecting external MCP servers (client side) with lazy tool discovery. |
 | [MCP-SERVER.md](MCP-SERVER.md) | The standalone MCP server Octipus exposes to CLI models. |
 | [PROFILES.md](PROFILES.md) | People & profiles. |
-| [PROMPTING.md](PROMPTING.md) | Prompting guidance, including the orchestrator persona. |
+| [PROMPTING.md](PROMPTING.md) | Prompting guidance, including the root agent persona. |
 | [DESKTOP.md](DESKTOP.md) | The native desktop client (Tauri): thin-client connection to any backend, installation, and configuration. |
 
 ## Architecture
 
 | Doc | What it covers |
 |-----|----------------|
-| [AGENT-ARCHITECTURE.md](AGENT-ARCHITECTURE.md) | The orchestrator → agent → subagent swarm model and how a message becomes work. |
+| [AGENT-ARCHITECTURE.md](AGENT-ARCHITECTURE.md) | The root agent → agent → subagent swarm model and how a message becomes work. |
 | [SWARM-RELIABILITY.md](SWARM-RELIABILITY.md) | Swarm receipts, scorer gates, and the crash-resume ledger. |
 | [EXPERT-TOPIC-SKILL-ROUTING.md](EXPERT-TOPIC-SKILL-ROUTING.md) | How experts, topics, and skills are selected for a request. |
 | [TOOL-ROUTING.md](TOOL-ROUTING.md) | How tools and experts are routed to agents. |
@@ -70,7 +70,7 @@ The map for everything under `docs/`. Start with **Getting Started**, then jump 
 
 | Doc | What it covers |
 |-----|----------------|
-| [DEVELOPMENT.md](DEVELOPMENT.md) | Project layout, commands (`octi`, `bun run …`), and how to add tools / skills / experts. |
+| [DEVELOPMENT.md](DEVELOPMENT.md) | Project layout, commands (`octi`, `npm run …`), and how to add tools / skills / experts. |
 | [TESTING.md](TESTING.md) | Unit, integration, E2E, and web test suites. |
 | [QA.md](QA.md) | Manual QA / feature-validation walkthroughs. |
 | [OBSERVABILITY.md](OBSERVABILITY.md) | Prometheus metrics, run correlation, and logging. |

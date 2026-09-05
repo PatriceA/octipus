@@ -1,81 +1,51 @@
-import { randomUUID } from 'node:crypto';
-import { and, eq } from 'drizzle-orm';
 import { Elysia, t } from '@/api/http';
-import { getDb } from '@/db/postgres';
-import { experts } from '@/db/schema/experts';
-import { skillProposals } from '@/db/schema/skill-proposals';
-import { skills } from '@/db/schema/skills';
+import { apiContext } from '@/api/context';
+import {
+  approveProposal,
+  listPendingProposals,
+  rejectProposal,
+} from '@/services/skill-proposal-service';
 import { coreLogger } from '@/utils/logger';
 
+/**
+ * Scope every query to the caller unless they are the system principal or an
+ * admin. Before this the list returned — and approve/reject accepted — every
+ * user's pending proposals.
+ */
+function ownerFilter(user: { id: string; isAdmin?: boolean } | undefined): string | undefined {
+  if (!user || user.id === 'system' || user.isAdmin) return undefined;
+  return user.id;
+}
+
 export const skillProposalRoutes = new Elysia({ prefix: '/skills/proposals' })
-  .get('/', async ({ set }) => {
+  .use(apiContext)
+  .get('/', async ({ user, set }) => {
     try {
-      const db = getDb();
-      const rows = await db.select().from(skillProposals).where(eq(skillProposals.status, 'pending'));
-      return { proposals: rows };
+      return { proposals: await listPendingProposals(ownerFilter(user)) };
     } catch (err) {
       set.status = 500;
       return { error: (err as Error).message };
     }
   })
-  .post('/:id/approve', async ({ params, body, set }) => {
+  .post('/:id/approve', async ({ params, body, user, set }) => {
     try {
-      const db = getDb();
-      const [proposal] = await db.select().from(skillProposals)
-        .where(and(eq(skillProposals.id, params.id), eq(skillProposals.status, 'pending')))
-        .limit(1);
-      if (!proposal) { set.status = 404; return { error: 'proposal not found or not pending' }; }
-
-      const overrideName = (body as any)?.name as string | undefined;
-      const overrideContent = (body as any)?.systemPrompt as string | undefined;
-
-      // A distilled *procedure* promotes into a skill; a *specialist* into an
-      // expert (the default / legacy path). Each is atomic with the status
-      // flip: without the transaction a failed status update would leave an
-      // orphan row with the proposal still 'pending' (re-approvable → dupes).
-      if (proposal.kind === 'skill') {
-        const skill = await db.transaction(async (tx) => {
-          const [created] = await tx.insert(skills).values({
-            id: randomUUID(),
-            name: overrideName ?? proposal.name,
-            description: proposal.description,
-            content: overrideContent ?? proposal.draftPromptTemplate,
-            category: 'general',
-            isSystem: false,
-            userId: proposal.userId,
-          }).returning();
-
-          await tx.update(skillProposals)
-            .set({ status: 'promoted' })
-            .where(eq(skillProposals.id, params.id));
-
-          return created;
-        });
-
-        coreLogger.info({ proposalId: params.id, skillId: skill?.id }, 'Skill proposal promoted to skill');
-        return { promoted: true, skill };
-      }
-
-      const expertRole = (body as any)?.role ?? 'general';
-      const expert = await db.transaction(async (tx) => {
-        const [created] = await tx.insert(experts).values({
-          userId: proposal.userId,
-          name: overrideName ?? proposal.name,
-          description: proposal.description,
-          role: expertRole,
-          systemPrompt: overrideContent ?? proposal.draftPromptTemplate,
-          isSystem: false,
-        }).returning();
-
-        await tx.update(skillProposals)
-          .set({ status: 'promoted' })
-          .where(eq(skillProposals.id, params.id));
-
-        return created;
+      const result = await approveProposal(params.id, {
+        userId: ownerFilter(user),
+        name: body?.name,
+        systemPrompt: body?.systemPrompt,
+        role: body?.role,
       });
-
-      coreLogger.info({ proposalId: params.id, expertId: expert?.id }, 'Skill proposal promoted to expert');
-      return { promoted: true, expert };
+      if (!result) { set.status = 404; return { error: 'proposal not found or not pending' }; }
+      // `skill` / `expert` are the keys this route has always returned; an
+      // out-of-repo client (the mobile app) reads them. `kind`/`id`/`name` are
+      // additive so a client doesn't have to know which key to look under.
+      return {
+        promoted: true,
+        kind: result.promoted,
+        id: result.id,
+        name: result.name,
+        ...(result.promoted === 'skill' ? { skill: result.record } : { expert: result.record }),
+      };
     } catch (err) {
       coreLogger.error({ err }, 'Skill proposal approve failed');
       set.status = 500;
@@ -88,15 +58,11 @@ export const skillProposalRoutes = new Elysia({ prefix: '/skills/proposals' })
       systemPrompt: t.Optional(t.String()),
     })),
   })
-  .post('/:id/reject', async ({ params, set }) => {
+  .post('/:id/reject', async ({ params, user, set }) => {
     try {
-      const db = getDb();
-      // 90-day suppression
-      const suppressUntil = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
-      await db.update(skillProposals)
-        .set({ status: 'rejected', rejectedUntil: suppressUntil })
-        .where(eq(skillProposals.id, params.id));
-      return { rejected: true, suppressedUntil: suppressUntil };
+      const suppressedUntil = await rejectProposal(params.id, ownerFilter(user));
+      if (!suppressedUntil) { set.status = 404; return { error: 'proposal not found or not pending' }; }
+      return { rejected: true, suppressedUntil };
     } catch (err) {
       set.status = 500;
       return { error: (err as Error).message };
