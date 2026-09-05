@@ -1081,6 +1081,33 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
     envVar: 'HEARTBEAT_MAX_RUNS_PER_DAY',
   },
+  {
+    key: 'heartbeat.probeGithub',
+    category: 'heartbeat',
+    valueType: 'boolean',
+    defaultValue: true,
+    description: 'Heartbeat probe: wake for open pull requests of yours whose checks are failing (one gh call per run; silently off when gh is not authenticated).',
+    isSecret: false,
+    envVar: 'HEARTBEAT_PROBE_GITHUB',
+  },
+  {
+    key: 'heartbeat.probeCalendar',
+    category: 'heartbeat',
+    valueType: 'boolean',
+    defaultValue: true,
+    description: 'Heartbeat probe: wake for calendar events starting soon on a connected Google or Microsoft calendar.',
+    isSecret: false,
+    envVar: 'HEARTBEAT_PROBE_CALENDAR',
+  },
+  {
+    key: 'heartbeat.calendarLookaheadMinutes',
+    category: 'heartbeat',
+    valueType: 'number',
+    defaultValue: 60,
+    description: 'How far ahead the calendar probe looks for events about to start (5–1440 minutes).',
+    isSecret: false,
+    envVar: 'HEARTBEAT_CALENDAR_LOOKAHEAD_MINUTES',
+  },
 ];
 
 /** Get a setting definition by key */

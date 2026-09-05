@@ -461,17 +461,17 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `channels` | 1 |
 | `core` | `config` | 27 |
 | `core` | `connectors` | 2 |
-| `core` | `db` | 156 |
+| `core` | `db` | 157 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 4 |
 | `core` | `mcp` | 3 |
 | `core` | `models` | 62 |
-| `core` | `security` | 34 |
+| `core` | `security` | 36 |
 | `core` | `services` | 1 |
 | `core` | `shared` | 5 |
 | `core` | `skills` | 6 |
 | `core` | `tools` | 12 |
-| `core` | `utils` | 128 |
+| `core` | `utils` | 131 |
 | `db` | `config` | 3 |
 | `db` | `core` | 5 |
 | `db` | `models` | 1 |
@@ -533,11 +533,11 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `mcp` | 1 |
 | `tools` | `models` | 6 |
 | `tools` | `plugins` | 1 |
-| `tools` | `security` | 21 |
+| `tools` | `security` | 20 |
 | `tools` | `services` | 1 |
 | `tools` | `shared` | 2 |
 | `tools` | `skills` | 2 |
-| `tools` | `utils` | 27 |
+| `tools` | `utils` | 28 |
 | `tools` | `visual` | 2 |
 | `tools` | `voice` | 3 |
 | `tui-editor` | `mcp` | 2 |
@@ -547,6 +547,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tui-pi` | `voice` | 2 |
 | `utils` | `core` | 3 |
 | `utils` | `models` | 2 |
+| `utils` | `security` | 1 |
 | `visual` | `models` | 1 |
 | `visual` | `utils` | 2 |
 | `voice` | `capabilities` | 1 |
@@ -586,6 +587,7 @@ Two modules that import each other. Not fatal, but it is what blocks an extracti
 - models <-> utils
 - plugins <-> tools
 - security <-> tools
+- security <-> utils
 
 ## Event matrix
 

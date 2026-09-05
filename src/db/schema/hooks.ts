@@ -94,6 +94,14 @@ export interface TriggerConfig {
   // calendar day (in the config tz) the count applies to; it resets on rollover.
   heartbeatDayKey?: string;
   heartbeatRunsToday?: number;
+  /**
+   * External probe items already surfaced (PR url + rollup state, calendar
+   * event identity). A red PR or an upcoming meeting has no "done" a user can
+   * click, so without this the same item would wake the heartbeat every tick.
+   * Pruned to what the latest probe still sees, so a cleared item re-fires
+   * if it comes back.
+   */
+  heartbeatSeen?: { prs?: string[]; events?: string[] };
 }
 
 export interface ActionConfig {
