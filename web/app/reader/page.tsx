@@ -1,6 +1,6 @@
 'use client';
 
-import { Clock, FileText, Languages, Loader2, Sparkles, Wand2, ListChecks, HelpCircle } from 'lucide-react';
+import { Clock, FileText, Languages, Loader2, Sparkles, Wand2, ListChecks, HelpCircle, ListPlus } from 'lucide-react';
 import { useState } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
@@ -41,6 +41,28 @@ export default function ReaderPage() {
   const [error, setError] = useState('');
   const [result, setResult] = useState<ActionResult | null>(null);
   const [actionLoading, setActionLoading] = useState<ActionKind | null>(null);
+  const [savedCount, setSavedCount] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  // Action items are only useful once they are on the to-do list.
+  const saveAsTasks = async () => {
+    if (!doc || !result?.items?.length) return;
+    setSaving(true);
+    setError('');
+    try {
+      const res = await api.post<{ created?: number; error?: string }>('/reader/tasks', {
+        items: result.items,
+        url: doc.url,
+        title: doc.title,
+      });
+      if (res.error) setError(res.error);
+      else setSavedCount(res.created ?? 0);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const read = async () => {
     const u = url.trim();
@@ -69,6 +91,7 @@ export default function ReaderPage() {
     }
     setActionLoading(kind);
     setResult(null);
+    setSavedCount(null);
     setError('');
     try {
       const res = await api.post<ActionResult & { error?: string }>('/reader/action', {
@@ -162,9 +185,25 @@ export default function ReaderPage() {
               <div className="rounded-xs border border-outline-variant/10 bg-surface p-3">
                 <h3 className="text-xs uppercase tracking-wide text-on-surface-variant mb-2">{result.action.replace('_', ' ')}</h3>
                 {result.items && result.items.length > 0 ? (
-                  <ul className="list-disc pl-5 space-y-1 text-sm text-on-surface">
-                    {result.items.map((it, i) => <li key={i}>{it}</li>)}
-                  </ul>
+                  <div className="space-y-2">
+                    <ul className="list-disc pl-5 space-y-1 text-sm text-on-surface">
+                      {result.items.map((it, i) => <li key={i}>{it}</li>)}
+                    </ul>
+                    {savedCount === null ? (
+                      <button
+                        onClick={saveAsTasks}
+                        disabled={saving}
+                        className="flex items-center gap-1.5 px-2.5 py-1.5 text-sm rounded-xs border border-outline-variant/20 hover:bg-surface-container-high disabled:opacity-50 text-on-surface"
+                      >
+                        {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ListPlus className="w-3.5 h-3.5" />}
+                        save as to-dos
+                      </button>
+                    ) : (
+                      <p className="text-xs text-on-surface-variant">
+                        {savedCount} added to your <a href="/tasks" className="text-primary hover:underline">to-do list</a>.
+                      </p>
+                    )}
+                  </div>
                 ) : (
                   <p className="text-sm text-on-surface whitespace-pre-wrap">{result.output}</p>
                 )}

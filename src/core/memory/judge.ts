@@ -204,6 +204,7 @@ export async function judgeAndApply(
     const similar = await repo.searchSimilar(queryVec, {
       userId: ctx.userId,
       agentScope: ctx.agentScope ?? null,
+      workspaceId: ctx.workspaceId ?? null,
       factType: candidate.factType,
       limit: 1,
     });

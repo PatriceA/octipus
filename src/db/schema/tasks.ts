@@ -44,6 +44,8 @@ export interface TaskSourceRef {
   sessionId?: string;
   messageId?: string;
   url?: string;
+  /** Documents row the task was made from (e.g. a Deep Research report). */
+  documentId?: string;
   /** Free-form label, e.g. "Acme thread" or the email subject. */
   label?: string;
 }

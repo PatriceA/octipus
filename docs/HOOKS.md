@@ -246,6 +246,27 @@ The **Calendar tab** in the Hooks & Tasks page shows a weekly grid of scheduled 
 0 9 * * 1-5     Weekdays at 9:00 AM
 ```
 
+### Daily Briefing (seeded)
+
+Every user gets one scheduled hook at registration, **Daily Briefing**: weekdays
+at 08:00 (UTC by default), an orchestrated `spawn_agent` turn whose result is
+delivered to the user. The prompt is integration-agnostic — it always reads the
+to-do list and notifications, and only reads calendar / mail / GitHub when those
+tools are connected, finishing with the three actions to take first. It is an
+ordinary hook: edit the schedule or timezone, pause it, or delete it on the
+Hooks page. It costs one agent turn per weekday.
+
+Users who registered before it existed, or who paused it, can bring it back:
+
+```bash
+curl -X POST localhost:3005/api/hooks/briefing -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"timezone":"Europe/Berlin"}'
+curl -X DELETE localhost:3005/api/hooks/briefing -H "Authorization: Bearer $TOKEN"   # pause
+```
+
+Code: `src/core/briefing.ts`. The heartbeat ([HEARTBEAT.md](./HEARTBEAT.md)) is
+the complementary loop — silent unless something is pending, off by default.
+
 ### Task Status (derived)
 
 | Status | Condition |
@@ -296,6 +317,8 @@ Each log entry contains:
 | GET | `/api/hooks/executions/all` | All user executions |
 | GET | `/api/hooks/suggestions` | Suggested hooks |
 | POST | `/api/hooks/suggestions/:id/apply` | Apply suggestion |
+| POST | `/api/hooks/briefing` | Ensure (create / re-enable) the seeded Daily Briefing; optional `timezone`, `cronExpression` |
+| DELETE | `/api/hooks/briefing` | Pause the Daily Briefing |
 
 ### Recurring Tasks (compatibility)
 

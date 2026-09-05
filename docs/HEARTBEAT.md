@@ -7,7 +7,8 @@ in on its own, adapted to a multi-user platform with per-user gating, quotas,
 and quiet hours.
 
 **Off by default.** Nothing runs until you enable it globally *and* a user opts
-in.
+in. The one proactive turn that IS on by default is the seeded weekday
+**Daily Briefing** hook — see [HOOKS.md](./HOOKS.md#daily-briefing-seeded).
 
 ## How it works
 

@@ -349,6 +349,7 @@ export class AgentService {
           const memories = await retrieveForContext({
             userId,
             agentScope: classification.topic ?? null,
+            workspaceId,
             limit: 20,
           });
           planMemoryBlock = renderMemoriesBlock(memories);
@@ -491,6 +492,9 @@ export class AgentService {
         const memories = await retrieveForContext({
           userId,
           agentScope: memoryScope,
+          // Client / project isolation: a fact learned in one workspace stays
+          // there. Falls back to "every row" only when no workspace resolved.
+          workspaceId,
           limit: 20,
         });
         memoryBlock = renderMemoriesBlock(memories);

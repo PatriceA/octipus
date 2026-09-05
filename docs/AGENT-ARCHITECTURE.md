@@ -227,7 +227,7 @@ Children **inherit topic bindings, not the parent's model**. If a research Agent
 
 | Role | Tools | Default Skills | Use Case |
 |------|-------|---------------|----------|
-| coding | filesystem, shell, git, knowledge, task_state, mcp | architecture, data-structures, db-design, api-design | Code implementation |
+| coding | filesystem, shell, git, github, knowledge, task_state, repo_registry, mcp | architecture, data-structures, db-design, api-design | Code implementation |
 | review | filesystem, shell, git, knowledge, task_state, visual | architecture, testing, security, performance | Code review |
 | research | websearch, knowledge, filesystem, profiles, artifacts, artifacts_toolbox, task_state, mcp | technical-writing | Investigation |
 | design | browser, filesystem | design-principles, design-frameworks | UI/UX |
@@ -238,7 +238,7 @@ Children **inherit topic bindings, not the parent's model**. If a research Agent
 | qa | browser, browser-ext, shell, docker, filesystem, knowledge, task_state, visual, artifacts, artifacts_toolbox | test-automation, performance | Testing |
 | finance | browser, websearch, filesystem | financial-analysis | Financial work |
 | automation | shell, docker, filesystem, scheduling, mcp | automation-patterns, devops | Workflows |
-| pm | filesystem, messaging | project-management, technical-writing | Project mgmt |
+| pm | filesystem, messaging, tasks, knowledge, github | project-management, technical-writing | Project mgmt |
 | writing | filesystem, browser, websearch, knowledge, task_state, messaging | technical-writing, api-design | Documentation |
 | communication | google-workspace, microsoft365, messaging, scheduling, profiles, email-processor, voice | — | Email/calendar |
 | architecture | filesystem, shell, knowledge, task_state, websearch, mcp | — | System design |

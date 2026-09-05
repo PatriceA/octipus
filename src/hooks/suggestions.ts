@@ -44,30 +44,9 @@ export async function getHookSuggestions(userId: string): Promise<HookSuggestion
   const calendarProvider = hasGoogle ? 'Google Calendar' : 'Outlook Calendar';
 
   // ─── Daily Briefings ─────────────────────────────────────────────
-
-  if (hasEmail || hasCalendar) {
-    suggestions.push({
-      id: 'morning-briefing',
-      name: 'Morning Briefing',
-      description: 'Daily summary at 8 AM: calendar events, unread emails, weather, and top news for your interests',
-      category: 'daily-briefing',
-      integration: hasGoogle ? 'google' : 'microsoft',
-      trigger: 'schedule',
-      triggerConfig: { cronExpression: '0 8 * * *' },
-      action: 'spawn_agent',
-      actionConfig: {
-        agentPrompt: `Generate my morning briefing for today. Include:
-1. Today's calendar events from ${calendarProvider} — list times and titles
-2. Unread email summary from ${emailProvider} — flag urgent items, group by sender importance
-3. Current weather for my location (check my profile for location)
-4. Top 3 tech/AI news headlines from the web
-
-Format as a clean, scannable digest. Keep it concise — bullet points, not paragraphs.`,
-        orchestrated: true,
-        notifyRoot: true,
-      },
-    });
-  }
+  // The morning briefing is no longer a suggestion: every user gets one
+  // seeded and enabled at registration (`src/core/briefing.ts`), with a
+  // prompt that only reads the integrations that are actually connected.
 
   if (hasTelegram) {
     suggestions.push({
