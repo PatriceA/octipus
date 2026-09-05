@@ -71,6 +71,24 @@ in `src/core/tasks/sourced.ts`:
 | `email` | **To-do** on an open message (`POST /api/email/message/:id/task`) — subject as title, sender + snippet in notes, triage priority mapped onto task priority, category *Email*. The email-processor tool also tells the agent to `create_task` for mail that needs the user. |
 | `research` | Automatic on every finished Deep Research run — one *Review research: …* task pointing at the saved document (`sourceRef.documentId`), category *Research*. |
 
+## Inbox (notifications)
+
+Every notification the platform raises for a user — an agent finished or
+failed, a pipeline completed, stopped or errored, an approval is waiting — lands
+in the `notifications` table and in the header bell. The **inbox** page is the
+full view of the same rows: filter by unread / agents / pipelines / approvals,
+mark one or all read, and follow each row to the thing that happened (the
+agent view, the pipelines page, the chat that is waiting for the approval).
+
+- Routes: `src/api/routes/notifications.ts` (`GET /api/notifications`
+  with `?unread=1`, `?type=<prefix>`, `limit`, `offset` — filters apply in
+  SQL so paging is over the filtered set; `POST /api/notifications/:id/read`,
+  `POST /api/notifications/read-all`)
+- Web: `web/app/notifications/page.tsx` (sidebar entry **inbox**)
+- Producers: `worker-spawner.ts`, `pipeline-manager.ts`, `approval-manager.ts`
+  via `getNotificationService().notify(...)`; the `metadata` they attach
+  (`workerId`, `pipelineId`, `requestId`) is what the inbox links on.
+
 ## Email triage
 
 Batch, per-email AI classification and actions over Gmail / Microsoft 365.

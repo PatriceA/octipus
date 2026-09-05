@@ -523,6 +523,13 @@ export class ScopedDocumentRepo {
 // Notifications
 // ─────────────────────────────────────────────────────────────────────
 
+export interface NotificationListFilter {
+  /** Only unread rows. */
+  unread?: boolean;
+  /** Only rows whose `type` starts with this (e.g. `agent`, `pipeline`, `approval`). */
+  typePrefix?: string;
+}
+
 export class ScopedNotificationRepo {
   constructor(private readonly principal: Principal) {
     requireAuth(principal);
@@ -530,8 +537,15 @@ export class ScopedNotificationRepo {
 
   private get db() { return getDb(); }
 
-  async list(limit = 50, offset = 0): Promise<Notification[]> {
+  /**
+   * Newest first. Filters apply in SQL so paging is over the filtered set —
+   * an inbox that filters client-side over one page hides every match that
+   * fell outside it.
+   */
+  async list(limit = 50, offset = 0, filter: NotificationListFilter = {}): Promise<Notification[]> {
     const filters: (SQL | undefined)[] = [eq(notifications.userId, this.principal.userId)];
+    if (filter.unread) filters.push(eq(notifications.read, false));
+    if (filter.typePrefix) filters.push(sql`${notifications.type} LIKE ${`${filter.typePrefix.replace(/[%_\\]/g, '\\$&')}%`}`);
     filters.push(workspaceFilter(this.principal, notifications.workspaceId));
     return this.db
       .select()
