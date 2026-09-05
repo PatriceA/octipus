@@ -21,7 +21,7 @@ or local Piper). Detail for each stage is in the sections below.
  WAV 16 kHz mono ──base64──▶ POST /api/voice/transcribe
    │
    ▼  whisper.cpp (ggml-small.bin)             transcribeAudioBuffer → else Voxtral / OpenAI; stripNonSpeech
- transcript ──▶ sendMessage() ──▶ 🧠 ORCHESTRATOR ──▶ chat_response
+ transcript ──▶ sendMessage() ──▶ 🧠 ROOT AGENT ──▶ chat_response
                                                           │
    ┌──────────────────────────────────────────────────────┘
    ▼  /api/voice/speak (whole reply) → stripForSpeech
@@ -40,7 +40,7 @@ or local Piper). Detail for each stage is in the sections below.
    └─ openai  : OpenAIRealtimeSTTEngine → wss OpenAI realtime
    │
    ▼  {type:transcript} frames (running text) → client VAD dispatches delta on silence
- sendMessage() ──▶ 🧠 ORCHESTRATOR + voice-plan-gate ──▶ chat_response
+ sendMessage() ──▶ 🧠 ROOT AGENT + voice-plan-gate ──▶ chat_response
    │                        ╲___ narrator: {type:speak} lifecycle frames over /ws
    ▼  per-sentence /api/voice/speak → Mistral TTS ──▶ 🔊
         ◀── barge-in: sustained over-talk (RMS) stops playback, reopens mic (pre-roll flush)
@@ -54,7 +54,7 @@ or local Piper). Detail for each stage is in the sections below.
    ▼  twilioMediaToPcm16k:  muLawDecode → 8 kHz PCM → resamplePcm16(8k→16k)   [StreamingResampler]
  16 kHz PCM ──▶ per-utterance WhisperEngine.streamTranscribe ──▶ transcript
    │
-   ▼  generatePhoneReply  (voice-topic model, short prompt — NOT the full orchestrator)
+   ▼  generatePhoneReply  (voice-topic model, short prompt — NOT the full root agent)
  reply ── Mistral TTS → mp3 → ffmpeg → 16 kHz PCM
    │
    ▼  pcm16kToTwilioMedia:  resamplePcm16(16k→8k) → muLawEncode → base64
@@ -64,7 +64,7 @@ or local Piper). Detail for each stage is in the sections below.
 **Where they converge**
 
 ```text
- Lines 1 & 2 ─▶ orchestrator.handleMessage (full pipeline + voice-plan-gate)
+ Lines 1 & 2 ─▶ AgentService.handleMessage (full pipeline + voice-plan-gate)
  Line 3      ─▶ generatePhoneReply (direct-LLM fast path)
                         │
         planning turns (web) + phone reply run on the  ► voice-topic model ◄  (Gemini Flash Lite)
@@ -121,7 +121,7 @@ Pick the engine in **Settings → Voice → "Which engine speaks replies aloud"*
 ## Realtime Web Voice Conversation
 
 The web chat (`/chat`) has a live, hands-free voice mode: you speak, Octipus
-transcribes, runs the **same orchestrator pipeline as typed chat**, and speaks
+transcribes, runs the **same root agent pipeline as typed chat**, and speaks
 the reply back — with barge-in and per-sentence streaming TTS. Two mic modes
 share one owner (only one active at a time):
 
@@ -132,14 +132,14 @@ share one owner (only one active at a time):
   and receives a running transcript back. Client-side VAD segments utterances;
   barge-in interrupts the spoken reply when you talk over it (Phase 4c).
 
-### The speak-to-the-orchestrator loop
+### The speak-to-the-root agent loop
 
 A spoken turn runs the *same* path as text — classification, memory, agent
 spawning — so nothing downstream is voice-specific. What differs is a
-**voice-only conversation layer** inside the orchestrator:
+**voice-only conversation layer** inside the root agent:
 
-**Propose-then-confirm gate** (`src/core/orchestrator/voice-plan-gate.ts`, wired
-in `src/core/orchestrator/service.ts` `handleMessageInner`). With the mic on, a
+**Propose-then-confirm gate** (`src/core/agent/voice-plan-gate.ts`, wired
+in `src/core/agent/service.ts` `handleMessageInner`). With the mic on, a
 work request is **not dispatched immediately**. Octipus proposes an approach out
 loud — or asks one short clarifying question when the request is vague — and
 waits for your go:
@@ -151,14 +151,14 @@ waits for your go:
 
 Pending-plan state is per-session and in-memory. Affirmation vs. cancellation is
 decided by wording, because the classifier tags both "yes" and "no" as
-`approval`. The gate is **read-only over the orchestrator** — it can't spawn
+`approval`. The gate is **read-only over the root agent** — it can't spawn
 anything itself, so there's no runaway; the only thing that starts work is your
 spoken confirmation. Typed chat is unaffected (gated on a per-session voice
 flag set by the mic toggle over `/ws`).
 
 **Backend narrator** (`src/voice/narrator.ts`, wired in `src/api/websocket.ts`).
 Long agent turns are narrated as they happen instead of read back stale:
-orchestrator lifecycle events (`worker_spawned`, `worker_completed`) become
+root agent lifecycle events (`worker_spawned`, `worker_completed`) become
 `{type:"speak"}` frames over the persistent `/ws` socket ("On it — I've started
 the researcher…"), scoped to the voice-mode session. The actual reply is spoken
 from the `chat_response` message, **fresh per turn** — so voice is decoupled from
@@ -200,7 +200,7 @@ testing); when omitted it follows the setting:
 |------|------|
 | Realtime STT WebSocket (`/voice`) | `src/api/voice-ws.ts` |
 | Backend narrator + `speak` frames | `src/voice/narrator.ts`, `src/api/websocket.ts` |
-| Propose-then-confirm gate | `src/core/orchestrator/voice-plan-gate.ts`, `src/core/orchestrator/service.ts` |
+| Propose-then-confirm gate | `src/core/agent/voice-plan-gate.ts`, `src/core/agent/service.ts` |
 | Telephony media stream (`/voice/media/:provider`) | `src/api/voice-media-ws.ts` |
 | Web hooks | `web/hooks/useVoiceRealtime.ts`, `web/hooks/useVoiceConversation.ts` |
 | Audio codec (μ-law / resample) | `src/voice/audio-codec.ts` |
@@ -354,7 +354,7 @@ Agent: "Call the client and discuss the project timeline"
 → Repeat until hangup
 ```
 
-**The conversation loop is fast** — it bypasses the orchestrator entirely:
+**The conversation loop is fast** — it bypasses the root agent entirely:
 
 ```
 Caller speaks → Provider STT (~1s) → Direct LLM call (~1-3s) → Provider TTS (~0.5s)

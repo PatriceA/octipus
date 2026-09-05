@@ -51,7 +51,7 @@ export const taskState = pgTable('task_state', {
    * What this task represents — `assignment` (parent told child to do
    * X), `review` (QA on a peer's output), `finding` (an observation
    * worth surfacing), etc. Free-form text so new kinds can land without
-   * a schema migration; the orchestrator and cleanup policy are the
+   * a schema migration; the root agent and cleanup policy are the
    * only callers that care about the value.
    */
   taskKind: text('task_kind').notNull(),

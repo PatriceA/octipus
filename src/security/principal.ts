@@ -4,7 +4,7 @@
  *
  * Phase 0 introduces the type and the helpers that build it; the rest of
  * the codebase still passes raw `userId` strings around. Phase 1 refactors
- * repositories and the orchestrator to take a `Principal` instead.
+ * repositories and the root agent to take a `Principal` instead.
  *
  * The `kind` discriminator lets the auth layer represent:
  *   - `user`         — a human authenticated via session cookie / bearer

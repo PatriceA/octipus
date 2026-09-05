@@ -4,7 +4,7 @@
  * the permission contract is read=ALLOW / write=ASK.
  *
  * Invocations use role:'general' (an autonomous worker) so the base-tool
- * permission gate is skipped exactly as it is for orchestrator-spawned workers
+ * permission gate is skipped exactly as it is for root agent-spawned workers
  * in production — the realistic agent path.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';

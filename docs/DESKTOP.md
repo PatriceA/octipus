@@ -16,7 +16,7 @@ and log in.
 
 | Question | Answer |
 |---|---|
-| What is it? | A native desktop window wrapping the Octipus web UI (Next.js static export) |
+| What is it? | A native desktop window wrapping the Octipus web UI (Vite static build) |
 | Does it run a backend? | **No** — it connects to an existing one |
 | How to launch | `octi desktop` (dev) · `octi desktop --build` (distributable bundle) |
 | Install deps (once) | `scripts/install-desktop-deps.sh` or `install.sh --desktop` |
@@ -31,11 +31,11 @@ and log in.
 ### 1. Core deps (already installed if you followed quick start)
 
 ```bash
-bun install
-cd web && bun install && cd ..
+npm install
+cd web && npm install && cd ..
 ```
 
-The Tauri CLI is pulled from `web/` by `bun install` — no separate `cargo
+The Tauri CLI is pulled from `web/` by `npm install` — no separate `cargo
 install tauri-cli` needed.
 
 ### 2. Desktop-only deps (Rust + system libs)
@@ -84,8 +84,8 @@ curl -fsSL https://raw.githubusercontent.com/PatriceA/octipus/main/scripts/insta
 octi desktop
 ```
 
-This runs `bun run tauri:dev` in `web/`, which:
-1. Starts the Next.js dev server on port `3008`.
+This runs `npm run tauri:dev` in `web/`, which:
+1. Starts the Vite dev server on port `3008`.
 2. Opens the Tauri window pointed at that dev server.
 
 Changes to the web frontend hot-reload in the window. The backend must already
@@ -100,7 +100,7 @@ octi desktop --build
 
 Produces a platform-specific installer/binary under
 `web/src-tauri/target/release/bundle/`. This is equivalent to
-`bun run tauri:build` in `web/`.
+`npm run tauri:build` in `web/`.
 
 ---
 
@@ -138,7 +138,7 @@ to start one (or point at a remote URL from the connection screen).
 Tauri shell (web/src-tauri/)
     │
     ▼
-Next.js static export (web/out/)   — served by the dev server (port 3008 in dev)
+Vite static build (web/out/)       — served by the dev server (port 3008 in dev)
     │
     ▼  HTTPS / HTTP  (bearer token auth)
 Octipus backend (port 3005 by default)
@@ -156,7 +156,7 @@ logic in the shell beyond window management.
 |---|---|---|
 | `octi desktop` says `cargo not found` | Rust toolchain missing | Run `scripts/install-desktop-deps.sh` |
 | Build fails: `webkit2gtk` not found | Tauri system libs missing | Run `scripts/install-desktop-deps.sh` (with sudo, the default) |
-| Window opens but shows a blank page | Next.js dev server not ready yet | Wait a few seconds; the dev server starts before the window opens but can be slow on first run |
+| Window opens but shows a blank page | Vite dev server not ready yet | Wait a few seconds; the dev server starts before the window opens but can be slow on first run |
 | Connection screen loops / can't log in | CORS misconfiguration, or the backend is not running | Confirm `octi start` is up; check `http://localhost:3005/api/health/ready` |
 | App connects but requests fail | Bearer-token mismatch | Log out and log in again from the connection screen to refresh the token |
 | `tauri:dev` crashes with Chromium/WebKit errors | WebKit/webkit2gtk version mismatch | Re-run `scripts/install-desktop-deps.sh` to upgrade system libs |

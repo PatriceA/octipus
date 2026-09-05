@@ -1,6 +1,6 @@
 /**
  * One-off: bind the `voice` topic to the fast Gemini Flash Lite model so the
- * orchestrator's spoken planning turns route to it (snappy) instead of the
+ * root agent's spoken planning turns route to it (snappy) instead of the
  * default. Reversible — rebind in the Topics page or re-run with another model.
  * Run: `bun scripts/bind-voice-topic.ts`. Restart the backend to clear its cache.
  */

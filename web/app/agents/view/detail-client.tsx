@@ -72,14 +72,14 @@ export default function AgentDetailPage() {
     refetchInterval: 5000,
   });
 
-  // Fetch pipeline if this agent is an orchestrator for one
+  // Fetch pipeline if this agent is a root agent for one
   const { data: pipelineData } = useQuery({
     queryKey: ['agent-pipeline', agentId],
     queryFn: async () => {
       try {
-        const pipelines = await api.get<{ pipelines: Array<{ id: string; orchestratorAgentId: string }> }>('/pipelines');
+        const pipelines = await api.get<{ pipelines: Array<{ id: string; rootAgentId: string }> }>('/pipelines');
         const match = pipelines?.pipelines?.find(
-          (p: any) => p.orchestratorAgentId === agentId
+          (p: any) => p.rootAgentId === agentId
         );
         if (match) {
           return api.get<PipelineDetail>(`/pipelines/${match.id}`);

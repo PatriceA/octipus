@@ -8,7 +8,7 @@ turns and sessions, all sharing the same pgvector install:
 | Surface | What it stores | Schema | Hot files |
 |---|---|---|---|
 | **Knowledge base** | Document chunks, message chunks, image captions, per-repo maps + `AGENTS.md`, agent-flagged knowledge artefacts. **Never raw source code** — see [Code-exclusion policy](#code-exclusion-policy-raw-code-is-never-indexed). | `embeddings` | `src/core/rag/embeddings.ts`, `src/core/rag/retention-service.ts` |
-| **Long-term memory** | Atomic user-scoped facts (preference, profile, relationship, …) with supersession history | `memories` (+ `memories_active` view) | `src/core/memory/*` |
+| **Long-term memory** | Atomic user-scoped facts (preference, profile, relationship, …) with supersession history; retrieval is scoped to the current workspace (rows written under another workspace never surface — a fact learned for one client stays with that client; user-level rows with no workspace surface everywhere) | `memories` (+ `memories_active` view) | `src/core/memory/*` |
 | **Workflow state** | Typed sibling-agent outputs scoped to a session, with LISTEN/NOTIFY fan-out | `task_state` | `src/core/agent-task-recorder.ts`, `src/db/repositories/task-state-repository.ts`, `src/db/task-state-listener.ts` |
 | **Knowledge graph** | Authored markdown notes and the explicit edges between knowledge entities (`[[wikilinks]]`, `#tags`) — see [KNOWLEDGE-GRAPH.md](KNOWLEDGE-GRAPH.md) | `notes`, `knowledge_links` | `src/core/knowledge/*` |
 
@@ -259,7 +259,7 @@ specialists that look up documents also look up sibling outputs.
 | security | ✓ | ✓ | Reference past audits and findings |
 | qa | ✓ | ✓ | Cross-reference test reports |
 | architecture | ✓ | ✓ | Reference design notes + audits |
-| design, devops, finance, automation, pm, communication | ✗ | ✗ | Domain-bounded; lookups come via the orchestrator |
+| design, devops, finance, automation, pm, communication | ✗ | ✗ | Domain-bounded; lookups come via the root agent |
 
 ## Retention
 
@@ -334,7 +334,7 @@ warning when drift is detected; the operator can get the breakdown
 with:
 
 ```bash
-bun run db:check-embedding-drift
+npm run db:check-embedding-drift
 ```
 
 The script exits 1 on drift so a CI gate can pick it up.
@@ -413,7 +413,7 @@ CREATE INDEX embeddings_repo_id_idx ON embeddings (repo_id);
 2. An embedding model registered in the model registry under topic
    `embedding`. `ollama pull nomic-embed-text` then create the model
    row from the Models page is the path of least resistance.
-3. `bun run db:migrate` to run every migration up to 0056.
+3. `npm run db:migrate` to run every migration up to 0056.
 4. Optionally bind a model to topic `memory_extraction` to enable
    the long-term memory pipeline (Phase D); the knowledge-base path
    is independent.
@@ -442,6 +442,6 @@ CREATE INDEX embeddings_repo_id_idx ON embeddings (repo_id);
 | `mcp-server/src/tools/knowledge.ts` | External-model MCP bridge |
 | `src/core/memory/{extractor,judge,retrieval,repository}.ts` | Layer 1 — long-term user-fact memory (extract → judge → apply, turn-start retrieve, supersession chain) |
 | `src/db/task-state-listener.ts` | Layer 3 — LISTEN/NOTIFY subscriber for `task_state_<session_id>` fan-out (Postgres only) |
-| `src/core/orchestrator/meta-tools.ts` (`remember_this`) | Agent-callable memory write — only path the LLM uses to promote a fact |
+| `src/core/agent/meta-tools.ts` (`remember_this`) | Agent-callable memory write — only path the LLM uses to promote a fact |
 | `src/api/routes/memory.ts` | Operator REST — list / chain / soft-delete user memories |
 | `web/app/memory/page.tsx` | UI for the same — including supersession-chain view |

@@ -7,6 +7,19 @@ import type { Config } from './schema';
 const WORKSPACE_ROOT = join(homedir(), '.octipus', 'workspace');
 
 /**
+ * First env var that is set, by name. Used where a setting was renamed: the
+ * new name wins, the retired one still works, and an install that never
+ * touched its .env keeps the value it had.
+ */
+function env(...names: string[]): string | undefined {
+  for (const name of names) {
+    const value = process.env[name];
+    if (value !== undefined && value !== '') return value;
+  }
+  return undefined;
+}
+
+/**
  * Load ALL config from environment variables (legacy behavior).
  * Used only during: (1) first boot before runtime config, (2) env-to-DB migration.
  */
@@ -31,6 +44,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       defaultModel: process.env.OLLAMA_DEFAULT_MODEL || defaultConfig.ollama!.defaultModel!,
       requestTimeout: parseInt(process.env.OLLAMA_REQUEST_TIMEOUT || '300000', 10),
       keepAlive: process.env.OLLAMA_KEEP_ALIVE || '10m',
+      unifiedMemory: process.env.OLLAMA_UNIFIED_MEMORY === 'true',
     },
     security: {
       masterKey: process.env.MASTER_KEY || '',
@@ -109,17 +123,18 @@ export function loadFromEnvLegacy(): Partial<Config> {
       maxIterations: parseInt(process.env.AGENT_MAX_ITERATIONS || '50', 10),
       contextWindowSize: parseInt(process.env.CONTEXT_WINDOW_SIZE || '32000', 10),
       maxTokenBudget: parseInt(process.env.AGENT_MAX_TOKEN_BUDGET || '100000', 10),
-    },
-    orchestrator: {
-      mode: (process.env.ORCHESTRATOR_MODE as 'auto' | 'full' | 'lite') || 'auto',
-      liteMaxIterations: parseInt(process.env.ORCHESTRATOR_LITE_MAX_ITERATIONS || '8', 10),
-      routerSmallModelMaxParams: parseInt(process.env.ORCHESTRATOR_ROUTER_MAX_PARAMS || '10000000000', 10),
-      liteModelMaxParams: parseInt(process.env.ORCHESTRATOR_LITE_MAX_PARAMS || '24000000000', 10),
-      smallModelMaxTools: parseInt(process.env.ORCHESTRATOR_SMALL_MODEL_MAX_TOOLS || '7', 10),
+      // The `ORCHESTRATOR_*` names are still read as a fallback: they are set
+      // in real .env files, and dropping them would silently reset a tuned
+      // install to defaults rather than fail loudly.
+      promptTier: (env('AGENT_PROMPT_TIER', 'ORCHESTRATOR_MODE') as 'auto' | 'full' | 'lite') || 'auto',
+      liteMaxIterations: parseInt(env('AGENT_LITE_MAX_ITERATIONS', 'ORCHESTRATOR_LITE_MAX_ITERATIONS') || '8', 10),
+      smallModelMaxParams: parseInt(env('AGENT_SMALL_MODEL_MAX_PARAMS', 'ORCHESTRATOR_ROUTER_MAX_PARAMS') || '10000000000', 10),
+      liteModelMaxParams: parseInt(env('AGENT_LITE_MAX_PARAMS', 'ORCHESTRATOR_LITE_MAX_PARAMS') || '24000000000', 10),
+      smallModelMaxTools: parseInt(env('AGENT_SMALL_MODEL_MAX_TOOLS', 'ORCHESTRATOR_SMALL_MODEL_MAX_TOOLS') || '7', 10),
       pipelineTokenBudget: parseInt(process.env.PIPELINE_TOKEN_BUDGET || '2000000', 10),
-      lazyToolDiscovery: process.env.ORCHESTRATOR_LAZY_TOOLS !== 'false',
-      orchestratorTimeoutMs: parseInt(process.env.ORCHESTRATOR_TIMEOUT_MS || '1800000', 10),
-      orchestratorHookTimeoutMs: parseInt(process.env.ORCHESTRATOR_HOOK_TIMEOUT_MS || '2700000', 10),
+      lazyToolDiscovery: env('AGENT_LAZY_TOOLS', 'ORCHESTRATOR_LAZY_TOOLS') !== 'false',
+      turnTimeoutMs: parseInt(env('AGENT_TURN_TIMEOUT_MS', 'ORCHESTRATOR_TIMEOUT_MS') || '1800000', 10),
+      hookTurnTimeoutMs: parseInt(env('AGENT_HOOK_TURN_TIMEOUT_MS', 'ORCHESTRATOR_HOOK_TIMEOUT_MS') || '2700000', 10),
     },
     multiuser: {
       // No `enabled` flag — Octipus is always multi-user. These sub-flags

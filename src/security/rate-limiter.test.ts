@@ -10,7 +10,7 @@ import {
  * the `checkUserFanOutBudget` helper that wraps it into a pre-built
  * `ChildResult` rejection.
  *
- * Integration portion exercises the real Redis sliding-window path
+ * Integration portion exercises the real storage-backed sliding-window path
  * (via docker-compose.test.yml). Unit portion covers pure helpers that
  * don't need a live backend.
  */

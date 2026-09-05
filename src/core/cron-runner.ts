@@ -256,7 +256,7 @@ async function processCronTick(): Promise<void> {
       const isDatetimeTask = !!scheduledAt && !cronExpression;
 
       // IMPORTANT: Update nextRunAt BEFORE executing — hook execution can take minutes/hours
-      // (e.g. spawning an orchestrator + research agent). Without this, the next cron tick
+      // (e.g. spawning a root agent + research agent). Without this, the next cron tick
       // finds the same hook still "due" and fires it again, causing duplicate executions.
       const nextRun = isDatetimeTask ? null : getNextCronDate(cronExpression, timezone);
       if (isDatetimeTask) {

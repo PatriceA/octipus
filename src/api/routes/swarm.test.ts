@@ -28,7 +28,7 @@ describe.skipIf(!isIntegration)('Swarm API (Integration)', () => {
   let otherUserId: string;
   let sessionId: string;
   let otherSessionId: string;
-  let orchestratorNodeId: string;
+  let rootNodeId: string;
   let agentNodeId: string;
   let subagentNodeId: string;
   let outsiderNodeId: string;
@@ -72,19 +72,19 @@ describe.skipIf(!isIntegration)('Swarm API (Integration)', () => {
     sessionId = mySession.id;
     otherSessionId = otherSession.id;
 
-    orchestratorNodeId = randomUUID();
+    rootNodeId = randomUUID();
     agentNodeId = randomUUID();
     subagentNodeId = randomUUID();
     outsiderNodeId = randomUUID();
 
     await db.insert(swarmNodes).values([
       {
-        id: orchestratorNodeId,
+        id: rootNodeId,
         rootSessionId: sessionId,
         parentNodeId: null,
         depth: 0,
-        kind: 'orchestrator',
-        role: 'orchestrator',
+        kind: 'root',
+        role: 'general',
         topicPath: 'root',
         model: 'gpt-4',
         status: 'running',
@@ -96,7 +96,7 @@ describe.skipIf(!isIntegration)('Swarm API (Integration)', () => {
       {
         id: agentNodeId,
         rootSessionId: sessionId,
-        parentNodeId: orchestratorNodeId,
+        parentNodeId: rootNodeId,
         depth: 1,
         kind: 'agent',
         role: 'security',
@@ -138,8 +138,8 @@ describe.skipIf(!isIntegration)('Swarm API (Integration)', () => {
         rootSessionId: otherSessionId,
         parentNodeId: null,
         depth: 0,
-        kind: 'orchestrator',
-        role: 'orchestrator',
+        kind: 'root',
+        role: 'general',
         topicPath: 'root',
         model: 'gpt-4',
         status: 'running',
@@ -178,7 +178,7 @@ describe.skipIf(!isIntegration)('Swarm API (Integration)', () => {
     const { body } = await hit(`/swarm/nodes?rootSessionId=${sessionId}`);
     expect(body.nodes).toBeInstanceOf(Array);
     const ids = body.nodes.map((n: { id: string }) => n.id);
-    expect(ids).toContain(orchestratorNodeId);
+    expect(ids).toContain(rootNodeId);
     expect(ids).toContain(agentNodeId);
     expect(ids).toContain(subagentNodeId);
     expect(ids).not.toContain(outsiderNodeId);

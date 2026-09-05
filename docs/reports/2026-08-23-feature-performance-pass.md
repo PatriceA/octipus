@@ -36,16 +36,16 @@ The last three are new harnesses written for this pass; the rest already existed
 
 | Scenario | Run A | Run B | Tokens | Tools | Routed to |
 |---|---|---|---|---|---|
-| simple question | 3.8s | 2.6s | ~8.4k | 0 | orchestrator answers |
-| follow-up (pronoun resolution) | 2.3s | 4.8s | ~8.5k | 0 | orchestrator answers |
-| today's date | 6.6s | 4.4s | ~8.4k | 0 | orchestrator answers |
+| simple question | 3.8s | 2.6s | ~8.4k | 0 | root agent answers |
+| follow-up (pronoun resolution) | 2.3s | 4.8s | ~8.5k | 0 | root agent answers |
+| today's date | 6.6s | 4.4s | ~8.4k | 0 | root agent answers |
 | shell command | 25.2s | 31.7s | ~46k | 1 | coding |
 | write and read a file | 40.5s | 3m43s | 58k / 186k | 2 / 14 | coding |
 | oversized output | 34.7s | 1m7s | ~50k | 1 | coding |
 | knowledge base lookup | 28.7s | 23.0s | ~65k | 1 | research |
 | delegation, three bullets | 31.1s | 34.0s | ~26k | 0 | review |
 | create an artifact | 41.0s | 31.3s | 47k / 57k | 1 / 2 | coding |
-| refuse to print a secret | 26.8s | 24.3s | ~8.9k | 0 | orchestrator answers |
+| refuse to print a secret | 26.8s | 24.3s | ~8.9k | 0 | root agent answers |
 
 **Delivery lag** — the measure that caught the old latency bug, the time a user waits *after* their answer already exists — over 86 runs today: median 11ms, p95 19ms. The three outliers in the 30-day window (4m11s, 3m10s, 26s) all predate this session. Nothing produced during this pass waited on post-answer bookkeeping.
 
@@ -53,7 +53,7 @@ The last three are new harnesses written for this pass; the rest already existed
 
 ## Two numbers worth acting on
 
-**A one-line question costs ~8.4k tokens.** Every trivial turn — "what is the capital of France" — carries about 8,400 tokens of prompt. That is the system prompt plus tool JSON schema, and it is the floor for every interaction the orchestrator answers itself. Halving it is worth more than any latency work on this list.
+**A one-line question costs ~8.4k tokens.** Every trivial turn — "what is the capital of France" — carries about 8,400 tokens of prompt. That is the system prompt plus tool JSON schema, and it is the floor for every interaction the root agent answers itself. Halving it is worth more than any latency work on this list.
 
 **The same task can cost 3× more on a second run.** The write-and-read-a-file scenario took 40s / 58k tokens / 2 tool calls once and 3m43s / 186k tokens / 14 tool calls the next time, with the same prompt and the same model. Median latency is stable (28.7s vs 31.3s across runs) but the tail is not, and the variance is in how many tool calls the model decides to make.
 
@@ -75,7 +75,7 @@ Everything below was found by running the product, not by reading it.
 
 **Shutdown did not wait for agents.** `stopAll` asked every worker to stop and returned, so the gateway, the MCP bridge and the API server went down underneath work still in flight. It now waits for quiescence, bounded so it cannot outlast the force-exit watchdog, and drops subscribers first — but only at process shutdown, never for the live `/stop-all` command, whose subscribers are the UI's event stream.
 
-**The orchestrator reported its own toolset as the product's capability.** Asked what Octipus uses for a vector store, it answered "Octipus has no searchable knowledge base exposed in this session" — in three of four runs. It holds `profiles` and nothing else by design, with a `research` specialist one spawn away that has exactly that tool. Both delegation prompts now say plainly that a tool it does not hold is a reason to spawn, not a reason to decline. Measured after: two of two runs delegate and answer correctly, in 12.5s and 14.6s.
+**The root agent reported its own toolset as the product's capability.** Asked what Octipus uses for a vector store, it answered "Octipus has no searchable knowledge base exposed in this session" — in three of four runs. It holds `profiles` and nothing else by design, with a `research` specialist one spawn away that has exactly that tool. Both delegation prompts now say plainly that a tool it does not hold is a reason to spawn, not a reason to decline. Measured after: two of two runs delegate and answer correctly, in 12.5s and 14.6s.
 
 **Ordinary use signed the user out — twice over.** This is the one only a real browser could find. Clicking through seven pages and sending a message produced a storm of 401s, an empty settings page and a composer that stayed disabled a minute after a valid login.
 
@@ -93,7 +93,7 @@ The E2E swarm suite compared every child's model against its lane binding, while
 
 This report was written mid-pass. Everything it raised was worked afterwards; the outcomes are recorded here so the report is not read as a live list. The detail is in [the rebuild plan](../plans/rebuild-execution-plan.md).
 
-**Prompt overhead — CLOSED, and the diagnosis was wrong.** The ~8.4k was not oversized, it was uncached. The repo has had an Anthropic cache breakpoint since Phase 2b, and the orchestrator was busting it every turn by concatenating six per-turn blocks — long-term memory, the attached-file block, the security reminder, the topic hint, the ambiguity notice, the output directive — into the static tier ahead of the cut. They are volatile now and the prefix is stable. The orchestrator's own turn also had no prompt accounting at all: `logPromptComposition` had been wired into the worker and swarm paths and never into the path this report measured.
+**Prompt overhead — CLOSED, and the diagnosis was wrong.** The ~8.4k was not oversized, it was uncached. The repo has had an Anthropic cache breakpoint since Phase 2b, and the root agent was busting it every turn by concatenating six per-turn blocks — long-term memory, the attached-file block, the security reminder, the topic hint, the ambiguity notice, the output directive — into the static tier ahead of the cut. They are volatile now and the prefix is stable. The root agent's own turn also had no prompt accounting at all: `logPromptComposition` had been wired into the worker and swarm paths and never into the path this report measured.
 
 **Tool-call variance — NARROWED.** Both existing loop guards are consecutive-only, so the alternating shape behind the 14-call run tripped neither. A run-wide redundant-call check now nudges once on the fourth identical call. Advisory, not enforcing: a re-read after a write is a different answer to the same question, and a cap that truncates real work is worse than the tokens it saves.
 

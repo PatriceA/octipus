@@ -17,7 +17,7 @@ Standalone MCP server (`mcp-server/`) that exposes Octipus capabilities as MCP t
 | `octipus_get_messages` | Get messages from a session |
 | `octipus_list_models` | List available AI models |
 | `octipus_model_health` | Get model health status |
-| `octipus_chat` | Send a message through the orchestrator |
+| `octipus_chat` | Send a message through the root agent |
 | `octipus_chat_with_expert` | Chat using a specific expert |
 | `octipus_list_experts` | List available experts |
 | `octipus_list_tools` | List available tools |

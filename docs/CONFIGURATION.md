@@ -97,7 +97,7 @@ Resolution order inside the swarm spawner (`SwarmSpawner.resolveChildModelAndExp
 2. `ModelRegistry.getModelForTopic(childRole)` — otherwise the model bound to the child's topic.
 3. Throw — if neither resolves, with a message pointing at the Models page. No silent fallback.
 
-- Orchestrator, Agent and Subagent children all resolve their model the same way — **children inherit topic bindings, not the parent's model.**
+- Root agent, Agent and Subagent children all resolve their model the same way — **children inherit topic bindings, not the parent's model.**
 - The embedding path (`litellm-client.ts:embed()`) and vision path (`visual/analyzer.ts`) resolve the `embedding` / `vision` topic bindings the same way, or throw.
 
 Bind models to topics via the web UI (**Settings → Models → Edit → Topics**) or the API (`PATCH /api/models/:name`).
@@ -115,7 +115,7 @@ Swarm node hard budgets (tokens, wall-clock, fan-out) are baked into `src/core/s
 
 | Key | Default | Purpose |
 |---|---|---|
-| `orchestrator.pipelineTokenBudget` | 2_000_000 | Token pool for one pipeline RUN, summed over every node visit and checked at each node boundary. `0` disables it. Per-node caps (a template step's `maxTokens`) bound a single visit; this bounds the run, which is the only bound a `foreach` loop respects — plan items can be appended while it runs, so the number of visits is not known when the run starts. Env: `PIPELINE_TOKEN_BUDGET`. |
+| `agent.pipelineTokenBudget` | 2_000_000 | Token pool for one pipeline RUN, summed over every node visit and checked at each node boundary. `0` disables it. Per-node caps (a template step's `maxTokens`) bound a single visit; this bounds the run, which is the only bound a `foreach` loop respects — plan items can be appended while it runs, so the number of visits is not known when the run starts. Env: `PIPELINE_TOKEN_BUDGET`. |
 | `multiuser.unattendedDenyActions` | `[]` | Tool actions to REFUSE rather than auto-approve when the caller cannot reach a human (any spawned worker). Entries name a container (`shell`) or one action (`shell__run`). Empty means today's behaviour: an ASK-level action an unattended worker hits is auto-approved, because blocking it would hang the worker forever rather than protect anything. Env: `UNATTENDED_DENY_ACTIONS` (comma-separated). |
 
 ## Compaction Config

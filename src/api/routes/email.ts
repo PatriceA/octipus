@@ -12,6 +12,7 @@ import {
   summarizeMessage,
   triageInbox,
 } from '@/core/email';
+import { createTasksFromSource, emailToTask } from '@/core/tasks/sourced';
 import { isAuthenticated } from '@/security/principal';
 
 /**
@@ -127,6 +128,27 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
       }
     },
     { params: t.Object({ id: t.String() }), body: t.Object({ instruction: t.Optional(t.String()) }), detail: { tags: ['email'] } }
+  )
+
+  // Turn a message into a to-do (source: email). The task carries the
+  // subject, sender, snippet and the provider message id so the list links
+  // back to the thread; a triaged "high" email lands as a high-priority task.
+  .post(
+    '/message/:id/task',
+    async ({ user, principal, params, set }) => {
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+      try {
+        const provider = await detectProvider(user.id);
+        if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
+        const message = await getMessage(user.id, provider, params.id);
+        const [task] = await createTasksFromSource(principal, 'email', [emailToTask(message)]);
+        return { task: { id: task.id, title: task.title, priority: task.priority } };
+      } catch (err) {
+        set.status = 400;
+        return { error: (err as Error).message };
+      }
+    },
+    { params: t.Object({ id: t.String() }), detail: { tags: ['email'] } }
   )
 
   // Archive a message (explicit).

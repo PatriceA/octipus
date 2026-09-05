@@ -41,7 +41,7 @@ const previewHints = new Map<string, string>([
   ['web_search', 'query'],
   ['web_fetch', 'url'],
   ['websearch__search', 'query'],
-  // Swarm / orchestrator meta-tools
+  // Swarm / root agent meta-tools
   ['spawn_child', 'subtopic'],
   ['escalate_to_different_expert', 'subtopic'],
   ['create_pipeline', 'name'],

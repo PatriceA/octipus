@@ -145,7 +145,7 @@ function ExpertForm({
             </span>
           </label>
           <label className="block sm:col-span-2">
-            <span className="block text-xs text-on-surface-variant mb-1">Description (the orchestrator routes by this — say what the expert is good at)</span>
+            <span className="block text-xs text-on-surface-variant mb-1">Description (work is routed by this — say what the expert is good at)</span>
             <input className={inputCls} value={form.description} onChange={(e) => set({ description: e.target.value })} placeholder="e.g. German tax law: VAT, income tax, filing deadlines" />
           </label>
         </div>
@@ -403,7 +403,7 @@ export default function ExpertsPage() {
       <PageHeader
         title="experts"
         badge={<GraduationCap className="w-5 h-5 text-on-surface-variant" />}
-        description="The specialists the orchestrator can route work to. Each expert carries a role (its tools + base prompt) and a topic lane (which model serves it) — add your own experts and they become routable immediately."
+        description="The specialists work can be delegated to. Each expert carries a role (its tools + base prompt) and a topic lane (which model serves it) — add your own experts and they become routable immediately."
       />
 
       {user && (

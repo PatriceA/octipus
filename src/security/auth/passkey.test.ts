@@ -6,7 +6,7 @@
  *
  * The WebAuthn primitives are mocked (real attestations can't be produced in a
  * unit test) via controllable verdicts; storage runs on the real in-memory
- * provider so the Redis-backed challenge cache round-trips; the Postgres-backed
+ * provider so the cached challenge round-trips; the Postgres-backed
  * user/audit repositories are mocked.
  */
 import { randomBytes, randomUUID } from 'node:crypto';

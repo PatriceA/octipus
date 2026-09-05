@@ -21,8 +21,6 @@ import type { AgentMessage } from '@/core/types';
 
 process.env.LOG_LEVEL ??= 'error';
 process.env.NODE_ENV ??= 'test';
-process.env.DATABASE_URL ??= 'postgres://test:test@localhost:5432/octipus_test';
-process.env.REDIS_URL ??= 'redis://localhost:6379';
 const rand = (n: number) => randomBytes(n).toString('hex');
 process.env.MASTER_KEY ??= `test-master-${rand(24)}`;
 process.env.JWT_SECRET ??= `test-jwt-${rand(24)}`;
@@ -840,7 +838,7 @@ describeUnit('LiteLLMClient — singleton', () => {
   // and reset must rebuild it so a key that lands after the first build (e.g.
   // a vault secret resolved by loadRuntimeConfig, after the gateway self-check
   // already built the client) is actually picked up. Without the reset wired
-  // into startup, the orchestrator kept the empty-default 'sk-litellm'
+  // into startup, the root agent kept the empty-default 'sk-litellm'
   // placeholder for the whole process and every completion 401'd.
   test('reset rebuilds the client with the apiKey resolved after first build', () => {
     const cfg = realConfig as { getConfig: () => unknown; refreshConfigKey: (k: string, v: unknown) => void };

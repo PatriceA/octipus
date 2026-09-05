@@ -1,5 +1,5 @@
 /**
- * Mid-run steering routing — trySteerRunningOrchestrator. Uses spyOn (not
+ * Mid-run steering routing — trySteerRunningRootAgent. Uses spyOn (not
  * mock.module, which is process-wide and leaks) on the agent-manager singleton
  * and the repos. guardInput is left real so the security-hole regression is
  * covered against the actual patterns.
@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { getAgentManager } from '@/core/agent-manager';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
-import { trySteerRunningOrchestrator } from './message-handler';
+import { trySteerRunningRootAgent } from './message-handler';
 
 type FakeOpts = {
   role: string;
@@ -31,7 +31,7 @@ function fakeWorker(opts: FakeOpts): unknown {
   return w;
 }
 
-describe('trySteerRunningOrchestrator', () => {
+describe('trySteerRunningRootAgent', () => {
   const sid = '00000000-0000-0000-0000-000000000000';
   const mgr = getAgentManager();
   const getBySessionSpy = vi.spyOn(mgr, 'getBySession');
@@ -51,19 +51,19 @@ describe('trySteerRunningOrchestrator', () => {
     incSpy.mockReset();
   });
 
-  test('no running root agent → false, no persist', async () => {
+  test('no running rootAgent → false, no persist', async () => {
     getBySessionSpy.mockReturnValue([] as never);
-    expect(await trySteerRunningOrchestrator(sid, 'focus on auth')).toBe(false);
+    expect(await trySteerRunningRootAgent(sid, 'focus on auth')).toBe(false);
     expect(createSpy).not.toHaveBeenCalled();
     expect(incSpy).not.toHaveBeenCalled();
   });
 
-  test('running root agent → steers, persists, increments, returns true', async () => {
+  test('running rootAgent → steers, persists, increments, returns true', async () => {
     const steered: { role?: string; content?: string } = {};
     const w = fakeWorker({ role: 'general', root: true, onSteer: (m) => { Object.assign(steered, m); } });
     getBySessionSpy.mockReturnValue([w] as never);
 
-    const r = await trySteerRunningOrchestrator(sid, 'focus on the auth module');
+    const r = await trySteerRunningRootAgent(sid, 'focus on the auth module');
     expect(r).toBe(true);
     expect(steered.role).toBe('user');
     expect(steered.content).toBe('focus on the auth module');
@@ -74,14 +74,14 @@ describe('trySteerRunningOrchestrator', () => {
   test('a spawned child is NOT steered — only the turn\'s root', async () => {
     const w = fakeWorker({ role: 'coding' });
     getBySessionSpy.mockReturnValue([w] as never);
-    expect(await trySteerRunningOrchestrator(sid, 'hi')).toBe(false);
+    expect(await trySteerRunningRootAgent(sid, 'hi')).toBe(false);
     expect(createSpy).not.toHaveBeenCalled();
   });
 
   test('CLI worker without steer() is skipped', async () => {
     const w = fakeWorker({ role: 'general', root: true, steerable: false });
     getBySessionSpy.mockReturnValue([w] as never);
-    expect(await trySteerRunningOrchestrator(sid, 'hi')).toBe(false);
+    expect(await trySteerRunningRootAgent(sid, 'hi')).toBe(false);
   });
 
   test('blocked input is not a hole around the guard → false, not steered, not persisted', async () => {
@@ -89,19 +89,19 @@ describe('trySteerRunningOrchestrator', () => {
     const w = fakeWorker({ role: 'general', root: true, onSteer: () => { steered = true; } });
     getBySessionSpy.mockReturnValue([w] as never);
     // 'rm -rf /' trips the command-injection block pattern in input-guard.
-    const r = await trySteerRunningOrchestrator(sid, 'rm -rf /');
+    const r = await trySteerRunningRootAgent(sid, 'rm -rf /');
     expect(r).toBe(false);
     expect(steered).toBe(false);
     expect(createSpy).not.toHaveBeenCalled();
   });
 
-  test('root agent finishes between status-check and steer → false, no orphaned persist', async () => {
+  test('rootAgent finishes between status-check and steer → false, no orphaned persist', async () => {
     // getStatus: 'running' at filter time, 'completed' at the post-steer recheck.
     let steered = false;
     const w = fakeWorker({ role: 'general', root: true, statusSeq: ['running', 'completed'], onSteer: () => { steered = true; } });
     getBySessionSpy.mockReturnValue([w] as never);
 
-    const r = await trySteerRunningOrchestrator(sid, 'change course');
+    const r = await trySteerRunningRootAgent(sid, 'change course');
     expect(r).toBe(false);
     // steer() was attempted (dead-queue copy is harmless) but we must NOT persist.
     expect(steered).toBe(true);
@@ -109,12 +109,12 @@ describe('trySteerRunningOrchestrator', () => {
     expect(incSpy).not.toHaveBeenCalled();
   });
 
-  test('picks the root agent among multiple session workers', async () => {
+  test('picks the rootAgent among multiple session workers', async () => {
     let steeredRole = '';
     const child = fakeWorker({ role: 'coding' });
     const orch = fakeWorker({ role: 'general', root: true, onSteer: () => { steeredRole = 'root'; } });
     getBySessionSpy.mockReturnValue([child, orch] as never);
-    expect(await trySteerRunningOrchestrator(sid, 'hi')).toBe(true);
+    expect(await trySteerRunningRootAgent(sid, 'hi')).toBe(true);
     expect(steeredRole).toBe('root');
   });
 });

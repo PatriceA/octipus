@@ -3,7 +3,7 @@
  *
  * The media-stream handler needs a transcript → short spoken reply, the same
  * "fast path" the Gather webhook uses (direct LLM with a voice/expert prompt, no
- * orchestrator, for latency). Factored out here so the streaming path reuses it.
+ * root agent, for latency). Factored out here so the streaming path reuses it.
  *
  * ponytail: the webhook fast path in routes/voice.ts still inlines an equivalent
  * block; converge it onto this helper in a follow-up (left untouched now to keep
@@ -57,7 +57,7 @@ export async function generatePhoneReply(
 
   let modelId: string | undefined;
   try {
-    const { ModelSelector } = await import('../../core/orchestrator/model-selector');
+    const { ModelSelector } = await import('../../core/agent/model-selector');
     modelId = (await new ModelSelector().selectForWorker('voice', false)).model;
   } catch {
     /* fall through to default */

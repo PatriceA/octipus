@@ -2,7 +2,7 @@
  * Memory-redesign Phase D — turn-start retrieval.
  *
  * `retrieveForContext(scope)` — top-N active memories ordered by
- * access_count + recency. The orchestrator and every specialist
+ * access_count + recency. The root agent and every specialist
  * inject these into their system context every turn, no LLM call.
  * Bumps access_count + last_accessed_at on the rows actually
  * returned (fire-and-forget), so the LFU signal grows organically.

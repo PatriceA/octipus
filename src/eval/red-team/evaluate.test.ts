@@ -1,9 +1,9 @@
 /**
  * A red-team run must never report a defence it did not verify.
  *
- * `classification` and `routes_to_role` need a running orchestrator. A
+ * `classification` and `routes_to_role` need a running root agent. A
  * standalone run has none, and they used to report `passed: true` with the
- * message "requires orchestrator integration" — a self-declared pass counted
+ * message "requires root agent integration" — a self-declared pass counted
  * toward the attack being defended. The role-confusion plugin exists to test
  * whether an attacker can steer the system into a privileged role, and its
  * `routes_to_role` assertion therefore could not fail.

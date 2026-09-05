@@ -1,7 +1,7 @@
 /**
  * Translate raw provider/agent error messages into user-readable text.
  *
- * The orchestrator's user-facing failure path used to render the raw
+ * The root agent's user-facing failure path used to render the raw
  * `(error as Error).message` directly into chat. That works for clear
  * messages but leaks ugly internals when a provider returns a JSON blob —
  * notably Ollama's `{"error":"Value looks like object, but can't find

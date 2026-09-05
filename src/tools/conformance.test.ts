@@ -2,7 +2,7 @@
  * Tool conformance (T2) — structural coverage across the ENTIRE built-in tool
  * surface, most of which had no tests. Rather than brittle, mock-heavy tests
  * for each I/O-bound tool, this exercises every auto-discovered tool's manifest
- * and registered handlers and asserts the invariants the orchestrator,
+ * and registered handlers and asserts the invariants the root agent,
  * permission system, and provider envelopes rely on:
  *
  *   - unique tool container IDs (registry.register throws on dupes)
@@ -111,6 +111,40 @@ describe('tool handlers', () => {
     test(`${folder}: handler names are unique within the tool`, () => {
       const names = tool.getToolHandlers().map((h) => h.name);
       expect(new Set(names).size).toBe(names.length);
+    });
+  }
+});
+
+describe('required parameters', () => {
+  // The regression: `create_live_artifact` declares `slug` required, the model
+  // omitted it, the tool's own guard (`SLUG_RE.test(args.slug as string)`)
+  // tested the string "undefined" and passed, and the user got a raw Postgres
+  // NOT NULL violation. `required` was a declaration nothing enforced. This
+  // asserts the central guard, for every tool that declares one.
+  const withRequired = tools.flatMap(({ folder, tool }) =>
+    tool.getToolHandlers()
+      .map((h) => ({
+        folder,
+        handler: h,
+        required: ((h.parameters as { required?: unknown })?.required ?? []) as string[],
+      }))
+      .filter((x) => Array.isArray(x.required) && x.required.length > 0),
+  );
+
+  test('some tools declare required parameters', () => {
+    expect(withRequired.length).toBeGreaterThan(0);
+  });
+
+  for (const { folder, handler, required } of withRequired) {
+    test(`${folder}: ${handler.name} refuses a call missing ${required[0]}`, async () => {
+      // Every required key present except the first, so the call is rejected
+      // for the one missing name and cannot reach the tool body's side effects.
+      const args: Record<string, unknown> = {};
+      for (const key of required.slice(1)) args[key] = 'x';
+      const result = (await handler.execute(args, { id: 'conformance', userId: 'conformance' } as never)) as {
+        error?: string;
+      };
+      expect(result?.error, `${handler.name} should reject a missing required param`).toContain(required[0]);
     });
   }
 });

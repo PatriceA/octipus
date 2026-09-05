@@ -345,7 +345,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       }
 
       // Stop the target agent and all other agents in the same session
-      // (e.g. stopping the orchestrator should also stop child CLI workers)
+      // (e.g. stopping the root agent should also stop child CLI workers)
       const stopped = agentManager.stopSession(context.sessionId);
 
       return { stopped: stopped > 0 };

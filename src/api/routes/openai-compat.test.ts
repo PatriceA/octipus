@@ -12,7 +12,7 @@
  * the pattern in `litellm-provider.test.ts`, we pin our OWN stubs (spreading the
  * real module so other exports survive) driven by mutable impls, and restore the
  * real modules in `afterAll` so this file doesn't pollute later suites. The
- * orchestrator barrel is NOT contaminated, so `getOrchestratorService` is spied
+ * root agent barrel is NOT contaminated, so `getAgentService` is spied
  * normally.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -45,7 +45,7 @@ vi.mock('@/models/model-registry', async () => ({
   getModelRegistry: () => ({ getAllModels: () => getAllModelsImpl() }),
 }));
 
-const { getOrchestratorService } = await import('@/core/orchestrator');
+const { getAgentService } = await import('@/core/agent');
 const { openaiCompatRoutes } = await import('./openai-compat');
 
 type ElysiaLike = { handle: (req: Request) => Promise<Response> };
@@ -85,7 +85,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.restoreAllMocks(); // revert getOrchestratorService spies
+  vi.restoreAllMocks(); // revert getAgentService spies
 });
 
 afterAll(() => {
@@ -100,7 +100,7 @@ describe('GET /v1/models', () => {
     expect(body.error.type).toBe('authentication_error');
   });
 
-  test('lists the orchestrator model + registry models', async () => {
+  test('lists the rootAgent model + registry models', async () => {
     getAllModelsImpl = async () => [
       { name: 'gpt-4o', provider: 'openai' },
       { name: 'llama3.2', provider: 'ollama' },
@@ -110,7 +110,7 @@ describe('GET /v1/models', () => {
     const body = await res.json();
     expect(body.object).toBe('list');
     const ids = body.data.map((m: { id: string }) => m.id);
-    expect(ids).toContain('octipus/orchestrator');
+    expect(ids).toContain('octipus/agent');
     expect(ids).toContain('gpt-4o');
     expect(ids).toContain('llama3.2');
     expect(body.data.every((m: { object: string }) => m.object === 'model')).toBe(true);
@@ -213,15 +213,15 @@ describe('POST /v1/chat/completions — passthrough mode', () => {
   });
 });
 
-describe('POST /v1/chat/completions — orchestrator mode', () => {
-  test('octipus/orchestrator routes the last user message and maps the response', async () => {
-    const spy = vi.spyOn(getOrchestratorService(), 'handleMessage').mockResolvedValue({
+describe('POST /v1/chat/completions — agent mode', () => {
+  test('octipus/agent routes the last user message and maps the response', async () => {
+    const spy = vi.spyOn(getAgentService(), 'handleMessage').mockResolvedValue({
       response: 'orchestrated reply', sessionId: 's1',
       classification: { type: 'task', confidence: 1 }, metadata: { tokens: 42 },
     } as never);
 
     const res = await post(appFor(fullUser), {
-      model: 'octipus/orchestrator',
+      model: 'octipus/agent',
       messages: [
         { role: 'user', content: 'first' },
         { role: 'assistant', content: 'ack' },
@@ -231,7 +231,7 @@ describe('POST /v1/chat/completions — orchestrator mode', () => {
     });
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.model).toBe('octipus/orchestrator');
+    expect(body.model).toBe('octipus/agent');
     expect(body.choices[0].message.content).toBe('orchestrated reply');
     expect(body.usage.total_tokens).toBe(42);
 
@@ -243,15 +243,28 @@ describe('POST /v1/chat/completions — orchestrator mode', () => {
     expect(channel).toBe('api');
   });
 
-  test('defaults to orchestrator when no model is given', async () => {
-    vi.spyOn(getOrchestratorService(), 'handleMessage').mockResolvedValue({
+  test('defaults to the agent model when no model is given', async () => {
+    vi.spyOn(getAgentService(), 'handleMessage').mockResolvedValue({
       response: 'default routed', classification: { type: 'casual', confidence: 1 },
     } as never);
     const res = await post(appFor(fullUser), { messages: [{ role: 'user', content: 'hi' }] });
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.model).toBe('octipus/orchestrator');
+    expect(body.model).toBe('octipus/agent');
     expect(body.usage.total_tokens).toBe(0); // metadata absent → 0
+  });
+
+  test('the retired `octipus/orchestrator` id still routes, for clients configured with it', async () => {
+    vi.spyOn(getAgentService(), 'handleMessage').mockResolvedValue({
+      response: 'still works', classification: { type: 'casual', confidence: 1 },
+    } as never);
+    const res = await post(appFor(fullUser), {
+      model: 'octipus/orchestrator',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.choices[0].message.content).toBe('still works');
   });
 
   test('malformed body (empty messages) → 400 invalid_request_error envelope', async () => {

@@ -23,7 +23,7 @@ import {
 /**
  * Repository for a pipeline's graph — nodes, edges, and plan items. Execution
  * logic (the walker, retry routing, approval gates) lives in
- * `src/core/orchestrator/pipeline-manager.ts`; that module goes through this
+ * `src/core/agent/pipeline-manager.ts`; that module goes through this
  * repository instead of touching `getDb()` directly so the data layer stays
  * swappable and conforms to the rest of the codebase.
  */

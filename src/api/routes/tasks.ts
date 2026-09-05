@@ -2,6 +2,9 @@ import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import type { NewTask } from '@/db/schema/tasks';
 import { scopedRepos } from '@/db/repositories/scoped';
+import { nextActions } from '@/core/tasks/next';
+import { dateOnlyToEndOfDay } from '@/core/tasks/rank';
+import { resolveUserTimezone } from '@/core/tasks/timezone';
 import { isAuthenticated } from '@/security/principal';
 
 const STATUSES = ['open', 'done', 'archived'] as const;
@@ -13,8 +16,14 @@ function completionPatch(nextStatus: string | undefined, wasCompleted: boolean):
   return {};
 }
 
-/** Parse an ISO due-date, throwing a clear error on garbage rather than storing NaN. */
-function parseDueAt(value: string): Date {
+/**
+ * Parse a due date. A bare `YYYY-MM-DD` (what the date picker sends) means
+ * the end of that day in the user's zone; anything else is ISO 8601. Throws
+ * a clear error on garbage rather than storing NaN.
+ */
+async function parseDueAt(value: string, userId: string, tz: string | undefined): Promise<Date> {
+  const dateOnly = dateOnlyToEndOfDay(value, await resolveUserTimezone(userId, tz));
+  if (dateOnly) return dateOnly;
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) throw new Error(`Invalid dueAt "${value}" — expected an ISO 8601 date`);
   return d;
@@ -35,13 +44,21 @@ function normalizeCategory(value: string | null | undefined): string | null {
 export const taskRoutes = new Elysia({ prefix: '/tasks' })
   .use(apiContext)
 
-  // List the caller's tasks. ?status= filters; ?due=today returns tasks due by end of today.
+  // List the caller's tasks. ?status= filters; ?due=today returns tasks due by
+  // end of today; ?view=next returns open tasks in next-action order, each
+  // with a `bucket` and a one-line `reason` (see core/tasks/rank.ts). `?tz=`
+  // is the browser's IANA zone — "today" is the user's day, not the server's.
   .get(
     '/',
     async ({ user, principal, query, set }) => {
       if (!user || !isAuthenticated(principal)) {
         set.status = 401;
         return { error: 'Not authenticated' };
+      }
+      if (query?.view === 'next') {
+        const limit = query?.limit ? Math.max(1, Math.min(200, Number.parseInt(query.limit, 10) || 200)) : 200;
+        const { timezone, ranked } = await nextActions(principal, { category: query?.category, tz: query?.tz, limit });
+        return { timezone, tasks: ranked.map((r) => ({ ...r.task, bucket: r.bucket, reason: r.reason })) };
       }
       let dueBefore: Date | undefined;
       if (query?.due === 'today') {
@@ -56,6 +73,9 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         status: t.Optional(t.Union(STATUSES.map((s) => t.Literal(s)))),
         due: t.Optional(t.String()),
         category: t.Optional(t.String()),
+        view: t.Optional(t.Literal('next')),
+        limit: t.Optional(t.String()),
+        tz: t.Optional(t.String({ maxLength: 64 })),
       }),
       detail: { tags: ['tasks'] },
     }
@@ -96,7 +116,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
           notes: body.notes ?? null,
           priority: body.priority ?? 0,
           category: normalizeCategory(body.category),
-          dueAt: body.dueAt ? parseDueAt(body.dueAt) : null,
+          dueAt: body.dueAt ? await parseDueAt(body.dueAt, user.id, body.tz) : null,
           source: 'user',
         });
         return task;
@@ -112,6 +132,8 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         priority: t.Optional(t.Integer({ minimum: 0, maximum: 3 })),
         category: t.Optional(t.String({ maxLength: 100 })),
         dueAt: t.Optional(t.String()),
+        /** Browser zone; decides which day a bare `YYYY-MM-DD` dueAt ends on. */
+        tz: t.Optional(t.String({ maxLength: 64 })),
       }),
       detail: { tags: ['tasks'] },
     }
@@ -142,7 +164,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
           status: body.status,
           priority: body.priority,
           category: body.category !== undefined ? normalizeCategory(body.category) : undefined,
-          dueAt: body.dueAt !== undefined ? (body.dueAt ? parseDueAt(body.dueAt) : null) : undefined,
+          dueAt: body.dueAt !== undefined ? (body.dueAt ? await parseDueAt(body.dueAt, user.id, body.tz) : null) : undefined,
           ...completionPatch(body.status, Boolean(existing.completedAt)),
         });
         if (!updated) {
@@ -164,6 +186,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         priority: t.Optional(t.Integer({ minimum: 0, maximum: 3 })),
         category: t.Optional(t.Union([t.String({ maxLength: 100 }), t.Null()])),
         dueAt: t.Optional(t.Union([t.String(), t.Null()])),
+        tz: t.Optional(t.String({ maxLength: 64 })),
       }),
       detail: { tags: ['tasks'] },
     }

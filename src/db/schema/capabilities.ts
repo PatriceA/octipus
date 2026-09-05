@@ -4,8 +4,8 @@ import { boolean, index, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-o
  * `capabilities` — the persisted state of every optional tool / external
  * binary Octipus knows how to use (Playwright, MCP server, ripgrep, …).
  *
- * Source of truth for orchestrator gating decisions: instead of each
- * agent re-probing on spawn, the orchestrator reads from this table.
+ * Source of truth for root agent gating decisions: instead of each
+ * agent re-probing on spawn, the root agent reads from this table.
  * `octi setup` and a periodic boot probe write the rows.
  *
  * Why a table and not just memory: Docker / multi-machine deployments

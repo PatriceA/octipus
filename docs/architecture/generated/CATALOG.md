@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts` and verified in CI, so it ca
 
 ## HTTP surface
 
-383 mounted routes across 60 route files. The path is the full one, group prefix included — what a client actually calls.
+387 mounted routes across 61 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -109,6 +109,7 @@ Derived from the source by `scripts/gen-catalog.ts` and verified in CI, so it ca
 | DELETE | `/api/devices/:sessionId` | `src/api/routes/devices.ts` |
 | POST | `/api/devices/pair/generate` | `src/api/routes/devices.ts` |
 | POST | `/api/devices/pair/redeem` | `src/api/routes/devices.ts` |
+| GET | `/api/digest/away` | `src/api/routes/digest.ts` |
 | GET | `/api/documents` | `src/api/routes/documents.ts` |
 | DELETE | `/api/documents/:id` | `src/api/routes/documents.ts` |
 | GET | `/api/documents/:id` | `src/api/routes/documents.ts` |
@@ -122,6 +123,7 @@ Derived from the source by `scripts/gen-catalog.ts` and verified in CI, so it ca
 | POST | `/api/email/message/:id/mark-read` | `src/api/routes/email.ts` |
 | POST | `/api/email/message/:id/reply-options` | `src/api/routes/email.ts` |
 | POST | `/api/email/message/:id/summarize` | `src/api/routes/email.ts` |
+| POST | `/api/email/message/:id/task` | `src/api/routes/email.ts` |
 | POST | `/api/email/send` | `src/api/routes/email.ts` |
 | POST | `/api/email/triage` | `src/api/routes/email.ts` |
 | GET | `/api/eval/compare` | `src/api/routes/eval.ts` |
@@ -158,9 +160,8 @@ Derived from the source by `scripts/gen-catalog.ts` and verified in CI, so it ca
 | GET | `/api/health/features` | `src/api/routes/health.ts` |
 | GET | `/api/health/live` | `src/api/routes/health.ts` |
 | GET | `/api/health/models` | `src/api/routes/health.ts` |
-| GET | `/api/health/orchestrator` | `src/api/routes/health.ts` |
 | GET | `/api/health/ready` | `src/api/routes/health.ts` |
-| GET | `/api/health/redis` | `src/api/routes/health.ts` |
+| GET | `/api/health/storage` | `src/api/routes/health.ts` |
 | GET | `/api/health/time` | `src/api/routes/health.ts` |
 | GET | `/api/hooks` | `src/api/routes/hooks.ts` |
 | POST | `/api/hooks` | `src/api/routes/hooks.ts` |
@@ -170,6 +171,8 @@ Derived from the source by `scripts/gen-catalog.ts` and verified in CI, so it ca
 | GET | `/api/hooks/:id/executions` | `src/api/routes/hooks.ts` |
 | POST | `/api/hooks/:id/test` | `src/api/routes/hooks.ts` |
 | POST | `/api/hooks/:id/toggle` | `src/api/routes/hooks.ts` |
+| DELETE | `/api/hooks/briefing` | `src/api/routes/hooks.ts` |
+| POST | `/api/hooks/briefing` | `src/api/routes/hooks.ts` |
 | GET | `/api/hooks/executions/all` | `src/api/routes/hooks.ts` |
 | POST | `/api/hooks/incoming/:hookId` | `src/api/routes/webhook-incoming.ts` |
 | GET | `/api/hooks/suggestions` | `src/api/routes/hooks.ts` |
@@ -284,6 +287,7 @@ Derived from the source by `scripts/gen-catalog.ts` and verified in CI, so it ca
 | POST | `/api/plugins/:name/reload` | `src/api/routes/plugins.ts` |
 | POST | `/api/reader` | `src/api/routes/reader.ts` |
 | POST | `/api/reader/action` | `src/api/routes/reader.ts` |
+| POST | `/api/reader/tasks` | `src/api/routes/reader.ts` |
 | GET | `/api/recurring-tasks` | `src/api/routes/recurring-tasks.ts` |
 | POST | `/api/recurring-tasks` | `src/api/routes/recurring-tasks.ts` |
 | DELETE | `/api/recurring-tasks/:id` | `src/api/routes/recurring-tasks.ts` |
@@ -416,18 +420,18 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `utils` | 1 |
 | `api` | `capabilities` | 2 |
 | `api` | `channels` | 7 |
-| `api` | `config` | 19 |
+| `api` | `config` | 18 |
 | `api` | `connectors` | 1 |
-| `api` | `core` | 68 |
-| `api` | `db` | 97 |
+| `api` | `core` | 75 |
+| `api` | `db` | 93 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 5 |
 | `api` | `mcp` | 3 |
 | `api` | `models` | 28 |
 | `api` | `plugins` | 1 |
-| `api` | `security` | 67 |
-| `api` | `services` | 3 |
-| `api` | `skills` | 1 |
+| `api` | `security` | 68 |
+| `api` | `services` | 4 |
+| `api` | `skills` | 2 |
 | `api` | `tools` | 3 |
 | `api` | `utils` | 58 |
 | `api` | `voice` | 23 |
@@ -457,16 +461,17 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `channels` | 1 |
 | `core` | `config` | 27 |
 | `core` | `connectors` | 2 |
-| `core` | `db` | 147 |
+| `core` | `db` | 157 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 4 |
 | `core` | `mcp` | 3 |
-| `core` | `models` | 61 |
-| `core` | `security` | 34 |
+| `core` | `models` | 62 |
+| `core` | `security` | 36 |
+| `core` | `services` | 1 |
 | `core` | `shared` | 5 |
 | `core` | `skills` | 6 |
-| `core` | `tools` | 11 |
-| `core` | `utils` | 127 |
+| `core` | `tools` | 12 |
+| `core` | `utils` | 131 |
 | `db` | `config` | 3 |
 | `db` | `core` | 5 |
 | `db` | `models` | 1 |
@@ -483,7 +488,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `extensions` | `utils` | 3 |
 | `hooks` | `channels` | 2 |
 | `hooks` | `config` | 2 |
-| `hooks` | `core` | 4 |
+| `hooks` | `core` | 6 |
 | `hooks` | `db` | 7 |
 | `hooks` | `security` | 1 |
 | `hooks` | `tools` | 1 |
@@ -507,11 +512,11 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `services` | `capabilities` | 5 |
 | `services` | `config` | 3 |
 | `services` | `core` | 1 |
-| `services` | `db` | 2 |
+| `services` | `db` | 6 |
 | `services` | `models` | 15 |
 | `services` | `security` | 2 |
 | `services` | `setup` | 1 |
-| `services` | `utils` | 3 |
+| `services` | `utils` | 4 |
 | `setup` | `utils` | 1 |
 | `skills` | `config` | 1 |
 | `skills` | `core` | 1 |
@@ -522,25 +527,27 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `api` | 2 |
 | `tools` | `channels` | 1 |
 | `tools` | `config` | 5 |
-| `tools` | `core` | 30 |
-| `tools` | `db` | 22 |
+| `tools` | `core` | 34 |
+| `tools` | `db` | 24 |
 | `tools` | `hooks` | 1 |
+| `tools` | `mcp` | 1 |
 | `tools` | `models` | 6 |
 | `tools` | `plugins` | 1 |
-| `tools` | `security` | 21 |
+| `tools` | `security` | 20 |
 | `tools` | `services` | 1 |
 | `tools` | `shared` | 2 |
-| `tools` | `skills` | 1 |
-| `tools` | `utils` | 26 |
+| `tools` | `skills` | 2 |
+| `tools` | `utils` | 28 |
 | `tools` | `visual` | 2 |
 | `tools` | `voice` | 3 |
 | `tui-editor` | `mcp` | 2 |
 | `tui-editor` | `tui-pi` | 23 |
 | `tui-pi` | `config` | 1 |
-| `tui-pi` | `core` | 1 |
+| `tui-pi` | `core` | 3 |
 | `tui-pi` | `voice` | 2 |
 | `utils` | `core` | 3 |
 | `utils` | `models` | 2 |
+| `utils` | `security` | 1 |
 | `visual` | `models` | 1 |
 | `visual` | `utils` | 2 |
 | `voice` | `capabilities` | 1 |
@@ -568,6 +575,7 @@ Two modules that import each other. Not fatal, but it is what blocks an extracti
 - core <-> extensions
 - core <-> hooks
 - core <-> models
+- core <-> services
 - core <-> skills
 - core <-> tools
 - core <-> utils
@@ -579,6 +587,7 @@ Two modules that import each other. Not fatal, but it is what blocks an extracti
 - models <-> utils
 - plugins <-> tools
 - security <-> tools
+- security <-> utils
 
 ## Event matrix
 
@@ -589,6 +598,7 @@ Every member of the `GatewayEventType` union in `src/core/gateway/protocol.ts`, 
 | Event type | Declared | Published from | Covered by |
 |---|---|---|---|
 | `agent.action` | yes | `src/core/gateway/event-bridge.ts` | — |
+| `agent.approval_required` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `agent.blocked` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `agent.completed` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `agent.event` | yes | `src/core/gateway/event-bridge.ts` | — |
@@ -602,16 +612,16 @@ Every member of the `GatewayEventType` union in `src/core/gateway/protocol.ts`, 
 | `chat.message` | yes | `src/core/gateway/message-handler.ts` | — |
 | `chat.response` | yes | `src/core/gateway/event-bridge.ts`, `src/core/gateway/message-handler.ts` | — |
 | `extension.notify` | yes | `src/extensions/api.ts` | — |
-| `orchestrator.approval_required` | yes | `src/core/gateway/event-bridge.ts` | — |
-| `orchestrator.status` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `permission.request` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `pipeline.event` | yes | `src/core/gateway/event-bridge.ts` | — |
-| `session.compaction_stalled` | yes | `src/core/orchestrator/session-compaction.ts` | — |
+| `rootAgent.status` | yes | `src/core/gateway/event-bridge.ts` | — |
+| `session.compaction_stalled` | yes | `src/core/agent/session-compaction.ts` | — |
+| `session.stats` | yes | `src/core/gateway/message-handler.ts` | — |
 | `swarm.budget_warning` | yes | `src/core/swarm/spawner.ts` | `swarm.*`, `swarm.budget_warning` |
 | `swarm.call_graph_cycle_blocked` | yes | `src/core/swarm/spawner.ts` | `swarm.*` |
 | `swarm.narration` | yes | `src/core/personas/narration-bridge.ts` | `swarm.*` |
-| `swarm.node_completed` | yes | `src/core/orchestrator/orchestrator-runner.ts`, `src/core/orchestrator/worker-spawner.ts`, `src/core/swarm/spawner.ts` | `swarm.*`, `swarm.node_completed` |
-| `swarm.node_spawned` | yes | `src/core/orchestrator/orchestrator-runner.ts`, `src/core/orchestrator/worker-spawner.ts`, `src/core/swarm/spawner.ts` | `swarm.*`, `swarm.node_spawned` |
+| `swarm.node_completed` | yes | `src/core/agent/root-runner.ts`, `src/core/agent/worker-spawner.ts`, `src/core/swarm/spawner.ts` | `swarm.*`, `swarm.node_completed` |
+| `swarm.node_spawned` | yes | `src/core/agent/root-runner.ts`, `src/core/agent/worker-spawner.ts`, `src/core/swarm/spawner.ts` | `swarm.*`, `swarm.node_spawned` |
 | `team.completed` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `team.started` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `test.event` | yes | — | — |

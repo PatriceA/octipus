@@ -75,10 +75,10 @@ Register a second model (e.g. `nomic-embed-text`) and bind it to the
 
 | Setting | Env var | Default | Purpose |
 |---|---|---|---|
-| `orchestrator.mode` | `ORCHESTRATOR_MODE` | `auto` | `auto` derives the prompt tier from model size; pin to `lite` to force the small-model path. |
-| `orchestrator.routerSmallModelMaxParams` | `ORCHESTRATOR_ROUTER_MAX_PARAMS` | `10e9` | The "small model" threshold: below it prompts and tool sets are trimmed everywhere. Named for the router mode it used to select, which no longer exists. |
-| `orchestrator.liteMaxIterations` | `ORCHESTRATOR_LITE_MAX_ITERATIONS` | `8` | Hard iteration cap for a lite-tier root agent — the bound that keeps a 9B model's loop from wandering. |
-| `orchestrator.smallModelMaxTools` | `ORCHESTRATOR_SMALL_MODEL_MAX_TOOLS` | `7` | Max tools handed to a small-tier worker — fewer tools, more reliable tool calls. |
+| `agent.promptTier` | `AGENT_PROMPT_TIER` | `auto` | `auto` derives the prompt tier from model size; pin to `lite` to force the small-model path. |
+| `agent.smallModelMaxParams` | `AGENT_SMALL_MODEL_MAX_PARAMS` | `10e9` | The "small model" threshold: below it prompts and tool sets are trimmed everywhere. Named for the router mode it used to select, which no longer exists. |
+| `agent.liteMaxIterations` | `AGENT_LITE_MAX_ITERATIONS` | `8` | Hard iteration cap for a lite-tier root agent — the bound that keeps a 9B model's loop from wandering. |
+| `agent.smallModelMaxTools` | `AGENT_SMALL_MODEL_MAX_TOOLS` | `7` | Max tools handed to a small-tier worker — fewer tools, more reliable tool calls. |
 
 ## How Octipus adapts to a small model
 
@@ -123,5 +123,5 @@ extraction/judgment/research return parseable output instead of prose.
 - **Agent fails with malformed tool-call JSON** — the model is a weak
   tool-caller. Run `check-capabilities` and switch to a known-good model.
 - **RAG / memory returns nothing** — bind an `embedding` model.
-- **Mode isn't what you expect** — `orchestrator.mode` is `auto`; check the
+- **Mode isn't what you expect** — `agent.promptTier` is `auto`; check the
   default model's size, or pin the mode explicitly.

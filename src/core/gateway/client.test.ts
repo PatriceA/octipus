@@ -3,7 +3,7 @@ import { GatewayClient } from './client';
 
 /**
  * Regression: `respondPermission` used to emit `approval.respond` (the
- * orchestrator-approval channel) rather than `permission.respond` (the
+ * root agent-approval channel) rather than `permission.respond` (the
  * tool-permission channel). The two are routed by different handlers
  * server-side, so the TUI's "approve" tap landed in the wrong queue
  * and never released the waiting agent — users had to re-approve from

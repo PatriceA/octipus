@@ -661,7 +661,7 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                   onChange={e => setOrchestrated(e.target.checked)}
                   className="rounded"
                 />
-                Route through orchestrator (recommended — enables multi-stage pipelines)
+                Route through rootAgent (recommended — enables multi-stage pipelines)
               </label>
               <label className="flex items-center gap-2 text-sm text-on-surface">
                 <input
@@ -1008,7 +1008,7 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
               </div>
               <label className="flex items-center gap-2 text-sm text-on-surface">
                 <input type="checkbox" checked={orchestrated} onChange={e => setOrchestrated(e.target.checked)} className="rounded" />
-                Route through orchestrator
+                Route through rootAgent
               </label>
               <label className="flex items-center gap-2 text-sm text-on-surface">
                 <input type="checkbox" checked={notifyOwner} onChange={e => setNotifyOwner(e.target.checked)} className="rounded" />

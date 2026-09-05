@@ -29,14 +29,6 @@ describe('Config (Unit)', () => {
       expect(dbConfig.poolSize).toBeGreaterThan(0);
     });
 
-    test('has required redis config', () => {
-      const redisConfig = {
-        url: 'redis://localhost:6379',
-      };
-
-      expect(redisConfig.url).toContain('redis://');
-    });
-
     test('has required security config', () => {
       const securityConfig = {
         masterKey: 'a'.repeat(32),

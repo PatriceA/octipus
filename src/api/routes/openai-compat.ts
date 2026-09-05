@@ -1,7 +1,7 @@
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { SSE_HEADERS, chunkText, sseData, sseDone } from '@/api/sse';
-import { getOrchestratorService } from '@/core/orchestrator';
+import { getAgentService } from '@/core/agent';
 import type { AgentMessage } from '@/core/types';
 import { getModelRegistry } from '@/models/model-registry';
 import { getProviderRouter } from '@/models/providers';
@@ -15,11 +15,12 @@ import { apiLogger } from '@/utils/logger';
  *
  * Lets off-the-shelf OpenAI SDKs talk to Octipus. Two request modes:
  *
- *   - `octipus/orchestrator` (the default when no model is given) runs the
+ *   - `octipus/agent` (the default when no model is given) runs the
  *     conversation's latest user message through the full agent turn — the root
  *     agent with its tools, which delegates to specialists when it needs one.
- *     The id is kept for compatibility; there has been no separate orchestrator
- *     since Phase 9. This mode is **session-stateful**: pass a stable
+ *     The former id `octipus/root agent` is still accepted, because it is
+ *     configured in other people's clients. This mode is
+ *     **session-stateful**: pass a stable
  *     `user` field (or `X-Octipus-Session` header) to keep a conversation
  *     sticky; otherwise each call runs in a fresh ephemeral session.
  *   - a raw registry **model id** (e.g. `gpt-4o`, `llama3.2`) is a single-turn
@@ -35,7 +36,17 @@ import { apiLogger } from '@/utils/logger';
  * text (WS6 step 1). Token-true streaming is a later step; see `src/api/sse.ts`.
  */
 
-const ORCHESTRATOR_MODEL = 'octipus/orchestrator';
+/**
+ * The virtual model id that means "route this through Octipus itself" rather
+ * than straight at a registry model. `octipus/root agent` was its name until
+ * the routing hop was deleted; it stays accepted because it is configured in
+ * other people's OpenAI clients, where a rename we make is an outage they get.
+ */
+const AGENT_MODEL = 'octipus/agent';
+// The retired id, frozen. A rename sweep already rewrote this literal once —
+// which turns the compatibility alias into a 400 for exactly the clients it
+// exists to keep working. It is a wire value, not an identifier.
+const AGENT_MODEL_ALIASES = new Set([AGENT_MODEL, 'octipus/orchestrator']);
 
 /** OpenAI error envelope. Returns the body; caller sets `set.status`. */
 function oaiError(
@@ -56,7 +67,7 @@ interface OaiMessage {
   content: string;
 }
 
-/** The last user turn — the message the orchestrator acts on. */
+/** The last user turn — the message the root agent acts on. */
 function lastUserMessage(messages: OaiMessage[]): string | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i].role === 'user') return messages[i].content;
@@ -125,7 +136,7 @@ export const openaiCompatRoutes = new Elysia()
     return oaiError((error as Error)?.message || 'Internal error', 'server_error');
   })
 
-  // GET /v1/models — registry models + the virtual orchestrator model.
+  // GET /v1/models — registry models + the virtual agent model.
   .get('/models', async ({ user, principal, set }) => {
     if (!user || !isAuthenticated(principal)) {
       set.status = 401;
@@ -133,7 +144,7 @@ export const openaiCompatRoutes = new Elysia()
     }
     const created = nowUnix();
     const data: Array<{ id: string; object: 'model'; created: number; owned_by: string }> = [
-      { id: ORCHESTRATOR_MODEL, object: 'model', created, owned_by: 'octipus' },
+      { id: AGENT_MODEL, object: 'model', created, owned_by: 'octipus' },
     ];
     try {
       const models = await getModelRegistry().getAllModels();
@@ -141,12 +152,12 @@ export const openaiCompatRoutes = new Elysia()
         data.push({ id: m.name, object: 'model', created, owned_by: m.provider });
       }
     } catch (err) {
-      apiLogger.warn({ err }, '/v1/models: registry listing failed; returning orchestrator only');
+      apiLogger.warn({ err }, '/v1/models: registry listing failed; returning the agent model only');
     }
     return { object: 'list', data };
   })
 
-  // POST /v1/chat/completions — orchestrator route or provider passthrough.
+  // POST /v1/chat/completions — agent route or provider passthrough.
   .post(
     '/chat/completions',
     async ({ user, principal, body, set, request }) => {
@@ -159,19 +170,19 @@ export const openaiCompatRoutes = new Elysia()
         return oaiError(`API token missing required scope "${API_SCOPES.CHAT}"`, 'authentication_error', 'insufficient_scope');
       }
 
-      const model = body.model?.trim() || ORCHESTRATOR_MODEL;
+      const model = body.model?.trim() || AGENT_MODEL;
       const messages = body.messages as OaiMessage[];
       if (!Array.isArray(messages) || messages.length === 0) {
         set.status = 400;
         return oaiError('`messages` must be a non-empty array', 'invalid_request_error', 'messages');
       }
 
-      // Reject octipus/<something-other-than-orchestrator> explicitly rather
-      // than silently treating it as a passthrough model id that won't resolve.
-      if (model.startsWith('octipus/') && model !== ORCHESTRATOR_MODEL) {
+      // Reject octipus/<anything-else> explicitly rather than silently
+      // treating it as a passthrough model id that won't resolve.
+      if (model.startsWith('octipus/') && !AGENT_MODEL_ALIASES.has(model)) {
         set.status = 400;
         return oaiError(
-          `Unknown Octipus model "${model}". Use "${ORCHESTRATOR_MODEL}" or a registry model id (see GET /v1/models).`,
+          `Unknown Octipus model "${model}". Use "${AGENT_MODEL}" or a registry model id (see GET /v1/models).`,
           'invalid_request_error',
           'model_not_found',
         );
@@ -181,8 +192,8 @@ export const openaiCompatRoutes = new Elysia()
       const wantStream = body.stream === true;
 
       try {
-        if (model === ORCHESTRATOR_MODEL) {
-          // ── Orchestrator mode (session-stateful) ───────────────────────
+        if (AGENT_MODEL_ALIASES.has(model)) {
+          // ── Agent mode (session-stateful) ──────────────────────────────
           const prompt = lastUserMessage(messages);
           if (!prompt) {
             set.status = 400;
@@ -193,14 +204,14 @@ export const openaiCompatRoutes = new Elysia()
           const sticky = request.headers.get('x-octipus-session') || body.user;
           const sessionId = sticky || `oai-${generateId()}`;
 
-          const result = await getOrchestratorService().handleMessage(
+          const result = await getAgentService().handleMessage(
             sessionId,
             user.id,
             prompt,
             'api',
           );
           const content = result.response;
-          // The orchestrator exposes only a total token count; report it as
+          // The root agent exposes only a total token count; report it as
           // total (and completion) with prompt unknown. Passthrough mode below
           // reports the provider's exact split.
           const total = result.metadata?.tokens ?? 0;

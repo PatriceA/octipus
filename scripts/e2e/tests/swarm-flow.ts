@@ -1,4 +1,4 @@
-import { deriveParamCount } from '../../../src/core/orchestrator/mode-selector';
+import { deriveParamCount } from '../../../src/core/agent/prompt-tier';
 import { canonicalTopic } from '../../../src/models/topics';
 import type { APIClient } from '../client';
 import { fixtures } from '../fixtures';
@@ -12,9 +12,9 @@ import { GatewayWSClient, type WsFrame } from '../ws-client';
  * Three scenarios:
  *   1. Topic coverage — every specialist role has a model bound in the DB.
  *      Without this, children will fail-loud with "No model bound to topic".
- *   2. Simple job — one user turn, orchestrator picks one role, spawns
+ *   2. Simple job — one user turn, root agent picks one role, spawns
  *      exactly one level, response returns, no Subagents.
- *   3. Complex job — multi-topic prompt. Orchestrator fans out; at least
+ *   3. Complex job — multi-topic prompt. Root agent fans out; at least
  *      one Agent (depth 1) spawns; ideally a Subagent (depth 2) appears.
  *      Each spawned node's model must match its topic's DB binding
  *      (proves topic→model routing; catches the "inherit parent model" bug).
@@ -50,7 +50,7 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
   }
 
   // ── Specialist roles every swarm child could pick ────────────────────
-  // Mirrors `AgentRole` minus 'orchestrator' (see src/core/orchestrator/types.ts).
+  // Mirrors `AgentRole` minus 'root' (see src/core/agent/types.ts).
   const SPECIALIST_ROLES = [
     'research', 'coding', 'review', 'qa', 'communication', 'general',
     'design', 'devops', 'security', 'data', 'ai',
@@ -168,7 +168,7 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
   interface SpawnEvent {
     nodeId: string;
     parentNodeId: string | null;
-    kind: 'orchestrator' | 'agent' | 'subagent';
+    kind: 'root' | 'agent' | 'subagent';
     depth: 0 | 1 | 2;
     role: string;
     model: string;
@@ -293,9 +293,9 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
 
   // ── Shared assertions about a spawn set ──────────────────────────────
   function assertModelMatchesTopic(spawn: SpawnEvent): void {
-    // Orchestrator is seeded with the default model; specialist roles must
+    // Root agent is seeded with the default model; specialist roles must
     // come from their topic binding.
-    if (spawn.kind === 'orchestrator') return;
+    if (spawn.kind === 'root') return;
     // An expert pins its own model on purpose; that is a choice, not a leak.
     const pinned = spawn.expertId ? expertModelById[spawn.expertId] : undefined;
     if (pinned && spawn.model === pinned) return;
@@ -317,7 +317,7 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
   }
 
   // ── 2. Simple job — single agent, single level ──────────────────────
-  await runner.test('Simple job — orchestrator delegates once, answer returns', async () => {
+  await runner.test('Simple job — root agent delegates once, answer returns', async () => {
     const sessionId = await newSession('simple');
     const timeoutMs = 90_000;
     const { spawns, completions, response, error } = await runTurn(
@@ -333,7 +333,7 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
 
     // Hard invariant: every spawned node must reach status='completed'.
     // A tool_error / timeout is a test failure even if the top-level
-    // response string looked fine — the orchestrator hid the child failure.
+    // response string looked fine — the root agent hid the child failure.
     assertAllSpawnsSucceeded(spawns, completions);
 
     // Depth constraint: simple job must NOT spawn Subagents.
@@ -341,13 +341,13 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
     assert(
       subagents.length === 0,
       `Simple job spawned ${subagents.length} subagent(s): ${subagents.map(s => s.role).join(',')}. ` +
-        `LLM over-delegated — tighten orchestrator prompt or check Agent-depth spawn guard.`,
+        `LLM over-delegated — tighten root agent prompt or check Agent-depth spawn guard.`,
     );
 
     // Every spawn (agent or subagent) must use the topic-bound model.
     for (const s of spawns) assertModelMatchesTopic(s);
 
-    // Fan-out bound: orchestrator should have spawned at most ONE child.
+    // Fan-out bound: root agent should have spawned at most ONE child.
     const depth1 = spawns.filter(s => s.kind === 'agent');
     assert(
       depth1.length <= 1,
@@ -355,7 +355,7 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
     );
   });
 
-  // ── 3. Complex job — orchestrator → agent → subagents ───────────────
+  // ── 3. Complex job — root agent → agent → subagents ───────────────
   await runner.test('Complex job — 3-level swarm fans out, results aggregate, answer returns', async () => {
     if (process.env.E2E_SKIP_SLOW_SWARM === '1') {
       console.log('    \x1b[33m⊘ E2E_SKIP_SLOW_SWARM=1 — skipping\x1b[0m');
@@ -371,11 +371,11 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
       // Multi-faceted prompt that maps cleanly to multiple specialist roles.
       //
       // The instruction MUST explicitly order delegation. Left implicit,
-      // orchestrator LLMs (esp. deepseek-chat) often synthesize directly —
+      // root agent LLMs (esp. deepseek-chat) often synthesize directly —
       // which makes the fan-out contract untestable. We want to prove the
       // routing works when delegation is chosen, not gamble on the LLM's
       // mood.
-      'You are the orchestrator. Do NOT answer directly — you MUST use ' +
+      'You are the root agent. Do NOT answer directly — you MUST use ' +
         'spawn_child to delegate each of the three sub-parts below to the ' +
         'best-fitting specialist role (data, security, devops, review, etc.), ' +
         'then synthesize their outputs into the final answer. ' +
@@ -398,15 +398,15 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
     // Hard invariant: every spawned node must reach status='completed'.
     assertAllSpawnsSucceeded(spawns, completions);
 
-    // The Orchestrator itself should have registered as a depth-0 node.
-    const roots = spawns.filter(s => s.kind === 'orchestrator');
-    assert(roots.length >= 1, `expected at least one orchestrator node in the swarm, got ${roots.length}`);
+    // The Root agent itself should have registered as a depth-0 node.
+    const roots = spawns.filter(s => s.kind === 'root');
+    assert(roots.length >= 1, `expected at least one root agent node in the swarm, got ${roots.length}`);
 
     // Delegation happened: at least one Agent (depth 1).
     const agents = spawns.filter(s => s.kind === 'agent');
     assert(
       agents.length >= 1,
-      `Complex job produced no Agent (depth 1) spawns — orchestrator refused to delegate. ` +
+      `Complex job produced no Agent (depth 1) spawns — root agent refused to delegate. ` +
         `spawns seen: ${spawns.map(s => `${s.kind}:${s.role}`).join(',')}`,
     );
 
@@ -481,7 +481,7 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
     );
 
     // Strong assertion: if a Subagent DID spawn, it must come from an Agent
-    // parent (never directly from the Orchestrator or from another Subagent).
+    // parent (never directly from the Root agent or from another Subagent).
     for (const sa of subagents) {
       const parent = spawns.find(p => p.nodeId === sa.parentNodeId);
       assert(!!parent, `Subagent ${sa.nodeId} has no recorded parent spawn`);
@@ -499,9 +499,9 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
   });
 
   // ── 3c. Parallel fan-out ─────────────────────────────────────────────
-  // Proves orchestrator can spawn multiple children *concurrently*. The
+  // Proves root agent can spawn multiple children *concurrently*. The
   // swarm-tool schema exposes `parallelGroup`; tool-executor runs same-
-  // group calls via `Promise.all`. If the orchestrator emits them
+  // group calls via `Promise.all`. If the root agent emits them
   // serially (spawn → await → spawn), we lose this optimisation.
   //
   // Detection: look at the spawn wall-clock timestamps. Parallel siblings
@@ -517,8 +517,8 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
     const { spawns, completions, response, error } = await runTurn(
       sessionId,
       // Three independent, orthogonal sub-questions. The prompt *explicitly*
-      // asks for parallelism so the orchestrator uses `parallelGroup`.
-      'You are the orchestrator. Use spawn_child THREE TIMES IN THE SAME ' +
+      // asks for parallelism so the root agent uses `parallelGroup`.
+      'You are the root agent. Use spawn_child THREE TIMES IN THE SAME ' +
         'TURN with the same `parallelGroup` value (e.g. "q1") so the three ' +
         'children run concurrently. Do NOT answer directly. The three ' +
         'independent questions: ' +
@@ -541,12 +541,12 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
 
     const agents = spawns.filter((s) => s.kind === 'agent');
     if (agents.length < 2) {
-      // Orchestrator refused to fan out enough — this scenario can't prove
+      // Root agent refused to fan out enough — this scenario can't prove
       // parallelism with <2 siblings. Surface as a soft skip rather than a
       // false pass (the prompt was explicit; this usually means the LLM
       // decided to answer directly, which scenario "Complex job" already
       // flags).
-      console.log(`    \x1b[33m⊘ orchestrator produced ${agents.length} agent(s); cannot check overlap — skipping\x1b[0m`);
+      console.log(`    \x1b[33m⊘ root agent produced ${agents.length} agent(s); cannot check overlap — skipping\x1b[0m`);
       return;
     }
 
@@ -598,7 +598,7 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
     assert(
       anyOverlap,
       `All agent spawns ran strictly sequentially. Timeline:\n    ${timeline}\n    ` +
-        'Either orchestrator did not use parallelGroup, or tool-executor regressed to serial execution.',
+        'Either root agent did not use parallelGroup, or tool-executor regressed to serial execution.',
     );
   });
 
@@ -622,30 +622,30 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
     assertAllSpawnsSucceeded(spawns, completions);
   });
 
-  // ── 5. Size → orchestrator mode (auto) ───────────────────────────────
+  // ── 5. Size → root agent mode (auto) ───────────────────────────────
   // The runtime half of the model-size → mode feature: in `auto` mode the
-  // orchestrator mode is re-derived each turn from the default model's param
+  // root agent mode is re-derived each turn from the default model's param
   // count against the configured thresholds (router < small < lite < full).
-  // The size→mode *mapping* is unit-tested (mode-selector.test.ts); here we
+  // The size→mode *mapping* is unit-tested (prompt-tier.test.ts); here we
   // prove the chosen mode actually changes runtime BEHAVIOUR end-to-end.
   //
   // Discriminator (deterministic, not LLM-mood-dependent): router mode runs a
-  // single role-scoped worker with NO orchestrator node in the swarm, while
-  // lite/full always create a depth-0 'orchestrator' node up-front — regardless
+  // single role-scoped worker with NO root agent node in the swarm, while
+  // lite/full always create a depth-0 'root' node up-front — regardless
   // of whether the LLM chooses to delegate. So we hold the model fixed and slide
-  // the thresholds across its size, asserting the orchestrator node appears or
+  // the thresholds across its size, asserting the root agent node appears or
   // disappears accordingly.
   //
-  // Admin-only (mutates global orchestrator settings) — skips cleanly otherwise.
-  await runner.test('Auto mode derives orchestrator behaviour from model size (router ↔ full)', async () => {
+  // Admin-only (mutates global root agent settings) — skips cleanly otherwise.
+  await runner.test('Auto mode derives the root prompt tier from model size (lite ↔ full)', async () => {
     // Two trivial "say ok" turns — lighter than the 6-min fan-out scenarios
     // above, so it is NOT gated behind E2E_SKIP_SLOW_SWARM; it self-skips when
     // the caller lacks admin or the model size can't be derived.
 
     // Admin gate: a non-admin PUT returns 403 — skip rather than fail.
-    const gate = await client.request<{ error?: string }>('PUT', '/settings/orchestrator.mode', { value: 'auto' });
+    const gate = await client.request<{ error?: string }>('PUT', '/settings/agent.promptTier', { value: 'auto' });
     if (gate.status === 403 || (gate.data?.error || '').includes('Admin')) {
-      console.log('    \x1b[33m⊘ requires admin to flip orchestrator settings — skipping\x1b[0m');
+      console.log('    \x1b[33m⊘ requires admin to flip root agent settings — skipping\x1b[0m');
       return;
     }
     assertStatus(gate.status, 200);
@@ -661,10 +661,10 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
 
     // Read + remember the live values so we can restore them afterwards.
     const { data: cat } = await client.request<{ settings?: Array<{ key: string; value: unknown }> }>(
-      'GET', '/settings/category/orchestrator',
+      'GET', '/settings/category/agent',
     );
     const original = new Map((cat.settings ?? []).map((s) => [s.key, s.value]));
-    const KEYS = ['orchestrator.mode', 'orchestrator.routerSmallModelMaxParams', 'orchestrator.liteModelMaxParams'];
+    const KEYS = ['agent.promptTier', 'agent.smallModelMaxParams', 'agent.liteModelMaxParams'];
 
     const setKey = async (key: string, value: unknown) => {
       const { status, data } = await client.request<{ error?: string }>('PUT', `/settings/${key}`, { value });
@@ -673,37 +673,37 @@ export async function testSwarmFlow(runner: TestRunner, client: APIClient) {
 
     try {
       // ROUTER: thresholds set ABOVE the model size ⇒ params < router cap ⇒ router.
-      await setKey('orchestrator.routerSmallModelMaxParams', params + 1);
-      await setKey('orchestrator.liteModelMaxParams', params + 2);
+      await setKey('agent.smallModelMaxParams', params + 1);
+      await setKey('agent.liteModelMaxParams', params + 2);
       const routerTurn = await runTurn(await newSession('mode-router'), 'Say "ok" and nothing else.', 60_000);
       assert(!routerTurn.error, `router-mode turn errored: ${routerTurn.error}`);
       assertAllSpawnsSucceeded(routerTurn.spawns, routerTurn.completions);
-      const routerOrch = routerTurn.spawns.filter((s) => s.kind === 'orchestrator');
+      const routerOrch = routerTurn.spawns.filter((s) => s.kind === 'root');
       assert(
         routerOrch.length === 0,
-        `router mode (params ${params} < cap ${params + 1}) must NOT spawn an orchestrator node, saw ${routerOrch.length}. ` +
+        `lite tier (params ${params} < cap ${params + 1}) must NOT spawn a root node, saw ${routerOrch.length}. ` +
           'Either auto-mode mis-derived the mode, or the router short-circuit regressed.',
       );
 
       // FULL: thresholds set BELOW the model size ⇒ params >= lite cap ⇒ full.
-      await setKey('orchestrator.routerSmallModelMaxParams', 1);
-      await setKey('orchestrator.liteModelMaxParams', 2);
+      await setKey('agent.smallModelMaxParams', 1);
+      await setKey('agent.liteModelMaxParams', 2);
       const fullTurn = await runTurn(await newSession('mode-full'), 'Say "ok" and nothing else.', 90_000);
       assert(!fullTurn.error, `full-mode turn errored: ${fullTurn.error}`);
       assertAllSpawnsSucceeded(fullTurn.spawns, fullTurn.completions);
-      const fullOrch = fullTurn.spawns.filter((s) => s.kind === 'orchestrator');
+      const fullOrch = fullTurn.spawns.filter((s) => s.kind === 'root');
       assert(
         fullOrch.length >= 1,
-        `full mode (params ${params} >= caps) must spawn a depth-0 orchestrator node, saw ${fullOrch.length}. ` +
+        `full tier (params ${params} >= caps) must spawn a depth-0 root node, saw ${fullOrch.length}. ` +
           'Either auto-mode mis-derived the mode, or the swarm root node stopped being recorded.',
       );
 
       console.log(
         `    \x1b[2m→ model '${defaultModelId}' (~${(params / 1e9).toFixed(1)}B): ` +
-          'router-cap above size ⇒ no orchestrator node; caps below size ⇒ orchestrator node present.\x1b[0m',
+          'small-model cap above size ⇒ no root node; caps below size ⇒ root node present.\x1b[0m',
       );
     } finally {
-      // Restore the original orchestrator settings, whatever they were.
+      // Restore the original root agent settings, whatever they were.
       for (const key of KEYS) {
         if (original.has(key)) {
           const { status } = await client.request('PUT', `/settings/${key}`, { value: original.get(key) });

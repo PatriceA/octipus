@@ -20,8 +20,8 @@ export interface Model {
     description?: string;
     /**
      * Parameter count as a raw number (e.g. 7_000_000_000 for a 7B model).
-     * Drives the orchestrator mode selector (router/lite/full) when
-     * `orchestrator.mode` is `auto`. Absent for external model IDs that
+     * Drives the root agent mode selector (router/lite/full) when
+     * `agent.promptTier` is `auto`. Absent for external model IDs that
      * carry no size tag — set it here so they don't dead-end at lite.
      */
     paramCount?: number;
@@ -81,7 +81,7 @@ export interface LiteLLMModel {
 }
 
 /**
- * Topics used by the orchestrator for role-based model routing.
+ * Topics used by the root agent for role-based model routing.
  *
  * KEEP IN SYNC with src/models/topics.ts (TOPICS) — single source of truth.
  * web cannot import backend src (its tsconfig only maps @/* to the web root),
@@ -93,7 +93,7 @@ export const AVAILABLE_TOPICS = [
   // model lanes (text)
   { value: 'agents', label: 'Agents', description: 'All expert/worker agents — the main text lane. Every specialist resolves its model here unless the expert pins its own model or lane.' },
   { value: 'writing', label: 'Writing', description: 'Long-form text roles — Researcher, Writer, Project Manager, Communication. Split from Agents so this work can run on a cheaper/faster model. Unbound = these roles fail loud; bind a model or leave them on Agents.' },
-  { value: 'chat', label: 'Chat', description: 'Casual conversations and direct replies. Also preferred by the orchestrator when bound; unbound = orchestrator uses the default model.' },
+  { value: 'chat', label: 'Chat', description: 'Casual conversations and direct replies. Also preferred by the rootAgent when bound; unbound = rootAgent uses the default model.' },
   { value: 'voice', label: 'Voice', description: 'Phone call conversations (Twilio/Telnyx/Plivo) — bind a fast model for low latency. Unbound = falls back to the default model.' },
   // automated background text tasks (one lane)
   { value: 'background', label: 'Background', description: 'Automated background tasks: memory extraction, knowledge-base review, evaluation, chunk summarization, tool-call translation. Bind a cheap/local model. Unbound = these features stay off.' },
@@ -110,7 +110,7 @@ export const AVAILABLE_TOPICS = [
  * historically carries the role name; the backend canonicalizes it to the
  * 'agents' lane for model resolution.
  *
- * KEEP IN SYNC with src/core/orchestrator/roles/<name>/config.ts.
+ * KEEP IN SYNC with src/core/agent/roles/<name>/config.ts.
  */
 export const WORKER_ROLES = [
   { value: 'general', label: 'General' },

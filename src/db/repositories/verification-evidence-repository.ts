@@ -16,7 +16,7 @@ export function computeSessionVerified(rows: Array<{ passed: boolean }>): boolea
 }
 
 /**
- * Append-only access to the verification evidence ledger. Orchestrator code
+ * Append-only access to the verification evidence ledger. Root-agent code
  * records a row whenever a completion check runs; the API/UI reads a session's
  * history to show what was actually verified. Never reach into `getDb()`
  * directly from verification logic — go through here.

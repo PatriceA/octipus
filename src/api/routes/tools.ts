@@ -1,6 +1,6 @@
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
-import { ROLE_CONFIGS } from '@/core/orchestrator/roles';
+import { ROLE_CONFIGS } from '@/core/agent/roles';
 import { getExtensionRegistry } from '@/extensions/registry';
 import { getMCPBridge } from '@/mcp/bridge';
 import { getPermissionManager } from '@/security/permissions';

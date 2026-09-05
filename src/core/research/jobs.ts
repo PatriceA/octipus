@@ -3,6 +3,7 @@
  * starts a job and the client polls for progress + the finished report (same
  * pattern as the hwfit installer).
  */
+import { backgroundUserPrincipal, createTasksFromSource, researchFollowUpTask } from '@/core/tasks/sourced';
 import { coreLogger } from '@/utils/logger';
 import { persistReport } from './persist';
 import { defaultResearchDeps, type ResearchDeps, runResearch } from './service';
@@ -21,6 +22,8 @@ export interface ResearchJob {
   report?: ReportDoc;
   /** Document id of the saved report, once persisted + indexed into the KB. */
   documentId?: string;
+  /** To-do created to review the report (source: research), when it succeeded. */
+  taskId?: string;
   error?: string;
   startedAt: number;
 }
@@ -74,6 +77,19 @@ export function startResearch(
       // can be referenced later. Fail-soft: a persistence hiccup still returns
       // the report to the client.
       job.documentId = (await persistReport(report, userId)) ?? undefined;
+      // A report nobody is reminded to read is a report nobody acts on: one
+      // follow-up to-do per run, pointing at the saved document. Fail-soft
+      // like persistence — the report is the deliverable, the task is a nudge.
+      try {
+        const [task] = await createTasksFromSource(
+          backgroundUserPrincipal(userId),
+          'research',
+          [researchFollowUpTask(report, job.documentId)],
+        );
+        job.taskId = task?.id;
+      } catch (err) {
+        coreLogger.warn({ question, err: (err as Error).message }, 'research: report saved but follow-up task failed');
+      }
       job.stage = 'done';
       job.status = 'done';
     } catch (err) {

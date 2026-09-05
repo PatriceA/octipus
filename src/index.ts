@@ -38,7 +38,7 @@ async function main() {
     await initializeVault();
     logger.info('Vault initialized');
 
-    // Initialize gateway (database, redis, etc.) — uses bootstrap config from .env
+    // Initialize gateway (database, storage, etc.) — uses bootstrap config from .env
     const gateway = getGateway();
     await gateway.start();
 
@@ -91,7 +91,7 @@ async function main() {
     // the gateway KB self-check exercises the embedding provider, which lazily
     // constructs the LiteLLMClient). Those captured the pre-load default config
     // — crucially an EMPTY litellm.apiKey, since vault secrets are only resolved
-    // here in loadRuntimeConfig(). Without this reset the orchestrator keeps
+    // here in loadRuntimeConfig(). Without this reset the root agent keeps
     // using the 'sk-litellm' placeholder for the whole process and every
     // completion 401s ("Invalid proxy server token"). Hot-reload only fires on
     // CHANGE events, so the initial load needs an explicit reset.
@@ -177,7 +177,7 @@ async function main() {
       .catch((err) => logger.error({ err }, 'Product docs auto-index failed (non-fatal) — server continues'));
 
     // Probe optional capabilities (Playwright, MCP, docker, …) and persist
-    // their state to the `capabilities` table so the orchestrator can
+    // their state to the `capabilities` table so the root agent can
     // gate agent dispatch on tool availability. Non-fatal — if probing
     // fails we still boot, agents will surface "tool unavailable" hints
     // at spawn time instead.
@@ -185,7 +185,7 @@ async function main() {
       const { getCapabilityService } = await import('@/capabilities/service');
       await getCapabilityService().probeAll();
     } catch (err) {
-      logger.error({ err }, 'capability probe failed — orchestrator will fall back to per-spawn probes');
+      logger.error({ err }, 'capability probe failed — rootAgent will fall back to per-spawn probes');
     }
 
     // Connect to MCP servers
@@ -208,7 +208,7 @@ async function main() {
     logger.info('Gateway hub started');
 
     // Persona system: install the `before-agent-start` hook so the
-    // orchestrator's system prompt gets the persona block, and the
+    // root agent's system prompt gets the persona block, and the
     // narration bridge so swarm.node_spawned/completed events get
     // mirrored as `swarm.narration` for channel UIs. Synchronous so
     // the first message after boot is never persona-less.
@@ -230,7 +230,7 @@ async function main() {
     // that walked it is gone. Mark those paused so their last checkpoint is
     // resumable instead of the run looking live forever.
     {
-      const { getPipelineManager } = await import('@/core/orchestrator');
+      const { getPipelineManager } = await import('@/core/agent');
       const interrupted = await getPipelineManager().reconcileInterrupted();
       if (interrupted > 0) logger.info({ interrupted }, 'Paused pipelines interrupted by a restart');
     }
@@ -314,7 +314,7 @@ async function main() {
       logger.debug({ err }, 'embedding drift check skipped (non-fatal)');
     }
 
-    // Wire gateway message handler and bridge orchestrator/agent events
+    // Wire gateway message handler and bridge root agent/agent events
     wireMessageHandler(gatewayHub);
     const disconnectBridge = connectEventBridge(gatewayHub);
 
@@ -341,7 +341,7 @@ async function main() {
     logger.info('Cron scheduler started');
 
     // Start the task-queue worker loop. Without this, getScheduler().schedule()
-    // (e.g. artifact cleanup) fills the Redis queue but nothing ever drains it.
+    // (e.g. artifact cleanup) fills the storage queue but nothing ever drains it.
     const { getScheduler } = await import('@/core/scheduler');
     getScheduler().start();
 

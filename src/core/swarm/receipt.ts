@@ -34,7 +34,7 @@ export interface SideEffectCounters {
   approvalsDenied: number;
   /**
    * ASK-level calls auto-approved without a human because the worker is an
-   * autonomous (non-orchestrator) agent. Swarm children are autonomous, so
+   * autonomous (non-root agent) agent. Swarm children are autonomous, so
    * this — not `approvalsRequired` — is the meaningful approval signal in a
    * child's receipt.
    */
@@ -145,7 +145,7 @@ export interface SwarmReceipt {
  * Lives here rather than next to one formatter because BOTH child-result
  * surfaces need it: the await path (`swarm-tool.formatChildResult`) and the
  * detached path (`collect-tool.formatCollectedResults`). Detach is the default
- * for an orchestrator (`maxPendingDetached: 6`), so a receipt that renders only
+ * for a root agent (`maxPendingDetached: 6`), so a receipt that renders only
  * on the await path is invisible on the flow that actually runs.
  */
 export function formatReceiptBlock(receipt: SwarmReceipt | undefined): string {

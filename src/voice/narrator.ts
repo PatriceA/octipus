@@ -1,10 +1,10 @@
 /**
- * Voice narrator — turns orchestrator/agent lifecycle events into short spoken
+ * Voice narrator — turns root agent/agent lifecycle events into short spoken
  * lines. Phase A is a pure templater: no LLM, no state, can't spawn anything.
- * It only describes what the orchestrator already did, so it has zero runaway
+ * It only describes what the root agent already did, so it has zero runaway
  * surface (the only thing that starts work is the user's spoken request).
  *
- * Wired in `src/api/websocket.ts`: each `orchestrator.onEvent` / `agentManager
+ * Wired in `src/api/websocket.ts`: each `AgentService.onEvent` / `agentManager
  * .onEvent` that already reaches a `/ws` client also gets narrated as a
  * `{type:"speak"}` frame when that connection has voice enabled. `/voice` can't
  * carry this — it's half-duplex and closes after each utterance (voice-ws.ts).
@@ -13,7 +13,7 @@
  * and the `speak` frame stay the same.
  */
 
-/** The subset of the orchestrator/agent event shape the narrator reads. */
+/** The subset of the root agent/agent event shape the narrator reads. */
 export interface NarratableEvent {
   type: string;
   data?: unknown;
@@ -53,7 +53,7 @@ export function narrate(event: NarratableEvent): string | null {
     }
     default:
       // The actual reply (casual, proposal, work answer) reaches the web client
-      // as a `chat_response` WS message and is spoken there — the orchestrator
+      // as a `chat_response` WS message and is spoken there — the root agent
       // never emits it as an event, so the narrator only handles LIFECYCLE here.
       // status_update, pipeline_event, approval_required, raw agent_event: not
       // narrated in Phase A. Add cases here as the vision grows.

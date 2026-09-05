@@ -41,13 +41,20 @@ export function readLocalToken(): string | null {
 }
 
 /**
+ * Is this connection physically on this machine? The `local` trust tier means
+ * "same box as the server", so every path that grants it has to ask.
+ */
+export function isLoopbackIp(remoteIp: string): boolean {
+  return ['127.0.0.1', '::1', '::ffff:127.0.0.1', 'localhost'].includes(remoteIp);
+}
+
+/**
  * Validate a local auth token using timing-safe comparison.
  * Also validates that the connection comes from localhost.
  */
 export function validateLocalAuth(token: string, remoteIp: string): { valid: boolean; reason?: string } {
   // Only allow from localhost
-  const localhostIps = ['127.0.0.1', '::1', '::ffff:127.0.0.1', 'localhost'];
-  if (!localhostIps.includes(remoteIp)) {
+  if (!isLoopbackIp(remoteIp)) {
     return { valid: false, reason: 'Local auth only allowed from localhost' };
   }
 

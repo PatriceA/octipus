@@ -33,7 +33,7 @@ const MIN_TOKEN_LEN = 4;
  * machinery whose vocabulary is fixed and will never echo a task brief.
  *
  * An iteration made up entirely of these is NEUTRAL: it neither counts as drift
- * nor clears it. Without this, an orchestrator polling `collect_children` while
+ * nor clears it. Without this, a root agent polling `collect_children` while
  * a long child works would accumulate a drift signal on every poll and
  * eventually abort — which cascade-cancels the very children it was waiting
  * for. `ToolLoopDetector` learned the same lesson: these names are in its

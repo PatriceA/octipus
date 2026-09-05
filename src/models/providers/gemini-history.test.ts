@@ -82,7 +82,7 @@ describe('sanitizeGeminiHistory (G1 + item 8)', () => {
 
   test('conformance replay: a multi-turn flash-lite-style history reaches the wire with no orphan tool_calls', () => {
     const history: AgentMessage[] = [
-      { role: 'system', content: 'you are an orchestrator', timestamp: now },
+      { role: 'system', content: 'you are a rootAgent', timestamp: now },
       { role: 'user', content: 'delegate the task', timestamp: now },
       {
         role: 'assistant',

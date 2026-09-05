@@ -14,12 +14,12 @@ The env vars listed in each table below are therefore bootstrap hints, not the l
 
 ## Architecture
 
-Every channel extends `BaseChannel` and plugs into the **Unified Message Interface (UMI)**. The UMI normalizes messages from all channels into a common `UnifiedMessage` format and routes them to the orchestrator. Replies flow back through the same channel.
+Every channel extends `BaseChannel` and plugs into the **Unified Message Interface (UMI)**. The UMI normalizes messages from all channels into a common `UnifiedMessage` format and routes them to the root agent. Replies flow back through the same channel.
 
 ```
 User ─── Telegram ──┐
 User ─── Slack ─────┤
-User ─── Teams ─────┼──► UMI ──► Orchestrator ──► Worker(s) ──► UMI ──► Channel ──► User
+User ─── Teams ─────┼──► UMI ──► Root agent ──► Worker(s) ──► UMI ──► Channel ──► User
 User ─── WhatsApp ──┤
 User ─── WebChat ───┘
 ```
@@ -37,11 +37,11 @@ Supported file types: images (PNG, JPG, WEBP), PDFs, Office documents (DOCX, XLS
 
 ### Persona narration
 
-Live swarm events (`swarm.node_spawned`, `swarm.node_completed`, `swarm.budget_warning`) are mirrored as a separate `swarm.narration` event with the active persona's rendered text — e.g., "Octipus dispatches a research arm.", "qa arm failed. Predictable." Channels subscribe independently; default volume (`persona.narration: minimal`) keeps it from flooding chats. Per-user setting; the user controls it via `/persona narration off|minimal|chatty` or the web `/persona` page. See [PROMPTING.md](PROMPTING.md#orchestrator-persona).
+Live swarm events (`swarm.node_spawned`, `swarm.node_completed`, `swarm.budget_warning`) are mirrored as a separate `swarm.narration` event with the active persona's rendered text — e.g., "Octipus dispatches a research arm.", "qa arm failed. Predictable." Channels subscribe independently; default volume (`persona.narration: minimal`) keeps it from flooding chats. Per-user setting; the user controls it via `/persona narration off|minimal|chatty` or the web `/persona` page. See [PROMPTING.md](PROMPTING.md#root agent-persona).
 
 ### Side-channel messages
 
-`chat.interject` is a gateway message type that routes a user message directly through the persona-aware `directResponse` without going through the orchestrator queue. The reply lands as a `chat.message` event with `sideChannel: true` and persona attribution ("Octipus — side question: …") so UIs can render it distinctly from the main thread. Useful when the user wants a quick aside while a swarm is running. The running orchestrator is neither cancelled nor blocked.
+`chat.interject` is a gateway message type that routes a user message directly through the persona-aware `directResponse` without going through the root agent queue. The reply lands as a `chat.message` event with `sideChannel: true` and persona attribution ("Octipus — side question: …") so UIs can render it distinctly from the main thread. Useful when the user wants a quick aside while a swarm is running. The running root agent is neither cancelled nor blocked.
 
 ## Account Linking
 

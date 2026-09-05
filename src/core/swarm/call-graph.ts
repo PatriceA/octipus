@@ -9,7 +9,7 @@
  *  - Tracks per-node ancestors so the spawner and escalation tool can walk
  *    up the tree cheaply without a DB round-trip.
  *
- * Lifecycle: one graph per orchestrator root. Keyed by `rootSessionId` in
+ * Lifecycle: one graph per root agent root. Keyed by `rootSessionId` in
  * the module-level registry. GC'd when the caller signals `release()`
  * (usually when the root agent completes, fails, or is cancelled).
  *
@@ -18,7 +18,7 @@
  */
 
 import { createHash } from 'crypto';
-import type { AgentRole } from '@/core/orchestrator/types';
+import type { AgentRole } from '@/core/agent/types';
 import { DuplicateSpawnError } from './errors';
 import type { TaskBrief } from './types';
 
@@ -72,7 +72,7 @@ export class SwarmCallGraph {
     this.startedAt = Date.now();
   }
 
-  /** Register the root orchestrator node. Idempotent on same id. */
+  /** Register the root root agent node. Idempotent on same id. */
   registerRoot(opts: { id: string; topicPath: string; role: AgentRole }): void {
     if (this.nodes.has(opts.id)) return;
     this.nodes.set(opts.id, {
@@ -94,7 +94,7 @@ export class SwarmCallGraph {
    * not later in `register()`. The child node is only built after several
    * `await`s, so two identical detached spawns fired in the same tick would
    * both pass a check-only gate and both spawn — the exact duplicate the
-   * orchestrator produced. Reserving here closes that race; the caller must
+   * root agent produced. Reserving here closes that race; the caller must
    * `releaseFingerprint()` if the spawn is then denied before `register()`.
    *
    * Throws `DuplicateSpawnError`. Caller (spawner) catches and returns a
@@ -248,7 +248,7 @@ export function peekCallGraph(rootSessionId: string): SwarmCallGraph | undefined
 }
 
 /**
- * GC hook: drop the graph. Safe to call multiple times. Call on orchestrator
+ * GC hook: drop the graph. Safe to call multiple times. Call on root agent
  * root completion / failure / cancellation.
  */
 export function releaseCallGraph(rootSessionId: string): void {

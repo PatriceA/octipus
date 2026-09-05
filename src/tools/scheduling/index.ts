@@ -71,7 +71,7 @@ export class SchedulingTool extends BaseTool {
         action: { type: 'string', description: 'Action type: notify, spawn_agent, webhook, execute_tool', required: true },
         notify_message: { type: 'string', description: 'Message template for notify action. Use {{field.path}} for variables.' },
         agent_prompt: { type: 'string', description: 'Prompt for spawn_agent action' },
-        orchestrated: { type: 'boolean', description: 'Route through orchestrator (for spawn_agent)', default: true },
+        orchestrated: { type: 'boolean', description: 'Route through rootAgent (for spawn_agent)', default: true },
         max_executions: { type: 'number', description: 'Maximum number of times to execute (1 = one-time event, null = unlimited)' },
         is_enabled: { type: 'boolean', description: 'Enable the hook immediately', default: true },
       }),
