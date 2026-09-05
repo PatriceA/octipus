@@ -8,7 +8,7 @@ turns and sessions, all sharing the same pgvector install:
 | Surface | What it stores | Schema | Hot files |
 |---|---|---|---|
 | **Knowledge base** | Document chunks, message chunks, image captions, per-repo maps + `AGENTS.md`, agent-flagged knowledge artefacts. **Never raw source code** — see [Code-exclusion policy](#code-exclusion-policy-raw-code-is-never-indexed). | `embeddings` | `src/core/rag/embeddings.ts`, `src/core/rag/retention-service.ts` |
-| **Long-term memory** | Atomic user-scoped facts (preference, profile, relationship, …) with supersession history | `memories` (+ `memories_active` view) | `src/core/memory/*` |
+| **Long-term memory** | Atomic user-scoped facts (preference, profile, relationship, …) with supersession history; retrieval is scoped to the current workspace (rows written under another workspace never surface — a fact learned for one client stays with that client; user-level rows with no workspace surface everywhere) | `memories` (+ `memories_active` view) | `src/core/memory/*` |
 | **Workflow state** | Typed sibling-agent outputs scoped to a session, with LISTEN/NOTIFY fan-out | `task_state` | `src/core/agent-task-recorder.ts`, `src/db/repositories/task-state-repository.ts`, `src/db/task-state-listener.ts` |
 | **Knowledge graph** | Authored markdown notes and the explicit edges between knowledge entities (`[[wikilinks]]`, `#tags`) — see [KNOWLEDGE-GRAPH.md](KNOWLEDGE-GRAPH.md) | `notes`, `knowledge_links` | `src/core/knowledge/*` |
 

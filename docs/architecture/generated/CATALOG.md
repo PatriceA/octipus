@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts` and verified in CI, so it ca
 
 ## HTTP surface
 
-382 mounted routes across 60 route files. The path is the full one, group prefix included — what a client actually calls.
+386 mounted routes across 60 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -122,6 +122,7 @@ Derived from the source by `scripts/gen-catalog.ts` and verified in CI, so it ca
 | POST | `/api/email/message/:id/mark-read` | `src/api/routes/email.ts` |
 | POST | `/api/email/message/:id/reply-options` | `src/api/routes/email.ts` |
 | POST | `/api/email/message/:id/summarize` | `src/api/routes/email.ts` |
+| POST | `/api/email/message/:id/task` | `src/api/routes/email.ts` |
 | POST | `/api/email/send` | `src/api/routes/email.ts` |
 | POST | `/api/email/triage` | `src/api/routes/email.ts` |
 | GET | `/api/eval/compare` | `src/api/routes/eval.ts` |
@@ -169,6 +170,8 @@ Derived from the source by `scripts/gen-catalog.ts` and verified in CI, so it ca
 | GET | `/api/hooks/:id/executions` | `src/api/routes/hooks.ts` |
 | POST | `/api/hooks/:id/test` | `src/api/routes/hooks.ts` |
 | POST | `/api/hooks/:id/toggle` | `src/api/routes/hooks.ts` |
+| DELETE | `/api/hooks/briefing` | `src/api/routes/hooks.ts` |
+| POST | `/api/hooks/briefing` | `src/api/routes/hooks.ts` |
 | GET | `/api/hooks/executions/all` | `src/api/routes/hooks.ts` |
 | POST | `/api/hooks/incoming/:hookId` | `src/api/routes/webhook-incoming.ts` |
 | GET | `/api/hooks/suggestions` | `src/api/routes/hooks.ts` |
@@ -283,6 +286,7 @@ Derived from the source by `scripts/gen-catalog.ts` and verified in CI, so it ca
 | POST | `/api/plugins/:name/reload` | `src/api/routes/plugins.ts` |
 | POST | `/api/reader` | `src/api/routes/reader.ts` |
 | POST | `/api/reader/action` | `src/api/routes/reader.ts` |
+| POST | `/api/reader/tasks` | `src/api/routes/reader.ts` |
 | GET | `/api/recurring-tasks` | `src/api/routes/recurring-tasks.ts` |
 | POST | `/api/recurring-tasks` | `src/api/routes/recurring-tasks.ts` |
 | DELETE | `/api/recurring-tasks/:id` | `src/api/routes/recurring-tasks.ts` |
@@ -417,7 +421,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 7 |
 | `api` | `config` | 18 |
 | `api` | `connectors` | 1 |
-| `api` | `core` | 67 |
+| `api` | `core` | 71 |
 | `api` | `db` | 93 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 5 |
@@ -456,7 +460,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `channels` | 1 |
 | `core` | `config` | 27 |
 | `core` | `connectors` | 2 |
-| `core` | `db` | 150 |
+| `core` | `db` | 153 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 4 |
 | `core` | `mcp` | 3 |

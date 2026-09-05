@@ -8,6 +8,14 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 
 ## Now (in flight)
 
+- **Daily-driver gaps.** What a developer / PO / consultant needs to run
+  their day on Octipus, in six phases plus the *Octipus goes enterprise*
+  track (the org-level connector that owns identity, content visibility,
+  connectors and policy). Phase 0 shipped 2026-09-05: workspace-scoped
+  memory, reader / email / research → to-dos, `pm` and `coding` tooled for
+  their own prompts, a seeded Daily Briefing hook. Plan:
+  [docs/plans/daily-driver-gaps.md](docs/plans/daily-driver-gaps.md).
+
 - **Mock-provider scaffold for the model layer.** `src/models/litellm-client.ts`
   (988 lines) and `src/models/providers/index.ts` are at 0% coverage
   because they front network IO; meaningful unit tests need a mock

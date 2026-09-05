@@ -1,6 +1,7 @@
 import { desc, eq, or, sql } from 'drizzle-orm';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
+import { disableDailyBriefingHook, ensureDailyBriefingHook } from '@/core/briefing';
 import { getDb } from '@/db/postgres';
 import { scopedRepos } from '@/db/repositories/scoped';
 import { hookExecutions } from '@/db/schema/hook-executions';
@@ -199,6 +200,37 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
       }),
       detail: { tags: ['hooks'] },
     }
+  )
+
+  // Daily briefing — the seeded proactive hook. Ensure (create or re-enable)
+  // for users who registered before it existed or paused it; disable to pause.
+  .post(
+    '/briefing',
+    async ({ user, principal, body }) => {
+      if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
+      const id = await ensureDailyBriefingHook(user.id, {
+        timezone: body?.timezone,
+        cronExpression: body?.cronExpression,
+      });
+      const hook = await scopedRepos(principal).hooks.findById(id);
+      return hook ?? { id };
+    },
+    {
+      body: t.Optional(t.Object({
+        timezone: t.Optional(t.String({ maxLength: 64 })),
+        cronExpression: t.Optional(t.String({ maxLength: 64 })),
+      })),
+      detail: { tags: ['hooks'] },
+    },
+  )
+  .delete(
+    '/briefing',
+    async ({ user, principal }) => {
+      if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
+      await disableDailyBriefingHook(user.id);
+      return { disabled: true };
+    },
+    { detail: { tags: ['hooks'] } },
   )
 
   // Get hook suggestions based on configured integrations
