@@ -51,6 +51,16 @@ The user's personal to-do list. Agents can add, update, and complete items.
 Distinct from `src/tools/task-state/` — a read-only inter-agent/workflow state tool
 that shares neither storage nor concept.
 
+**What next.** `GET /api/tasks?view=next` (and `list_tasks` with `view: "next"`)
+returns open tasks in next-action order — overdue → due today → high priority →
+new from email / research / reading in the last 48h → due this week → backlog —
+each with a `bucket` and a one-line `reason`. "Today" is the user's calendar
+day: the page passes the browser's zone as `?tz=`, the tool uses the user's
+saved timezone preference, and both fall back to UTC — never the server's
+zone. The ranking is one pure function (`src/core/tasks/rank.ts`) shared by
+the tool, the API and the tasks page's *what next* grouping (the default); the
+Daily Briefing asks the tool for this view rather than re-sorting.
+
 **Provenance.** Every task carries `source` (`user | agent | reader | research |
 email`) and a `sourceRef` linking back to where it came from. The producers live
 in `src/core/tasks/sourced.ts`:

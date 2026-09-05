@@ -59,7 +59,7 @@ describe('ensureDailyBriefingHook', () => {
     expect(row.action).toBe('spawn_agent');
     expect(row.actionConfig.orchestrated).toBe(true);
     expect(row.actionConfig.notifyRoot).toBe(true);
-    expect(row.actionConfig.agentPrompt).toContain('list_tasks');
+    expect(row.actionConfig.agentPrompt).toContain('list_tasks with view "next"');
     expect(row.actionConfig.agentPrompt).toContain('Next three');
     // Scheduled, not "due now": the cron runner picks it up on the next 08:00 weekday.
     expect(row.nextRunAt).not.toBeNull();

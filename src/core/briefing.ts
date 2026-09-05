@@ -32,7 +32,7 @@ export function dailyBriefingPrompt(): string {
   return [
     'Prepare my daily briefing for today. Use only what tools actually return; skip any section whose integration is not connected, and say so in one line instead of inventing content.',
     '',
-    '1. To-dos: list_tasks — overdue first, then due today, then the top open items by priority. Name the ones that came from email or research so I know where they came from.',
+    '1. To-dos: list_tasks with view "next" — it returns open tasks already ranked (overdue, due today, high priority, new from email/research, due this week) with a reason each. Show the top items in that order with their reasons; do not re-sort them.',
     '2. Calendar: if a calendar tool is available, today\'s events with times; flag conflicts and anything without an agenda.',
     '3. Inbox: if a mail tool is available, unread mail since yesterday — the ones that need a reply or a decision, grouped by sender. Do not summarize newsletters.',
     '4. Code: if GitHub is available, my open pull requests (review state, failing checks) and issues assigned to me.',

@@ -1,9 +1,10 @@
 'use client';
 
 import { NotebookPen, Pencil, Plus, RefreshCw, Sparkles, Tag, Trash2 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
+import { NEXT_BUCKET_ORDER, NEXT_BUCKET_TITLE, type NextBucket } from '../../../src/core/tasks/rank';
 
 interface Task {
   id: string;
@@ -16,13 +17,20 @@ interface Task {
   completedAt?: string | null;
   source: string;
   createdAt: string;
+  /** Present only on the `?view=next` response. */
+  bucket?: NextBucket;
+  reason?: string;
 }
 
 const PRIORITY = ['none', 'low', 'medium', 'high'] as const;
-type GroupBy = 'priority' | 'due' | 'category' | 'none';
+type GroupBy = 'next' | 'priority' | 'due' | 'category' | 'none';
 
 /** Patchable fields a row can edit inline (besides notes/status). */
 type TaskPatch = Partial<Pick<Task, 'priority' | 'category' | 'dueAt'>>;
+
+function browserTimezone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
 
 function priorityClasses(p: number): string {
   if (p >= 3) return 'text-error';
@@ -57,6 +65,17 @@ function dueLabel(dueAt?: string | null): { text: string; overdue: boolean } | n
 function groupOpenTasks(tasks: Task[], by: GroupBy): { key: string; title: string; tasks: Task[] }[] {
   if (by === 'none') {
     return [{ key: 'open', title: `Open (${tasks.length})`, tasks }];
+  }
+
+  if (by === 'next') {
+    // The server ranked these (`?view=next`); keep its order inside each
+    // bucket. A task the ranked response did not cover (it never happens
+    // after a complete fetch, but a stale merge could) lands in Backlog
+    // rather than vanishing.
+    return NEXT_BUCKET_ORDER
+      .map((key) => ({ key: `n:${key}`, title: NEXT_BUCKET_TITLE[key], tasks: tasks.filter((t) => (t.bucket ?? 'backlog') === key) }))
+      .filter((g) => g.tasks.length > 0)
+      .map((g) => ({ ...g, title: `${g.title} (${g.tasks.length})` }));
   }
 
   if (by === 'priority') {
@@ -125,19 +144,38 @@ export default function TasksPage() {
   const [newPriority, setNewPriority] = useState(0);
   const [newCategory, setNewCategory] = useState('');
   const [newDue, setNewDue] = useState('');
-  const [groupBy, setGroupBy] = useState<GroupBy>('priority');
+  const [groupBy, setGroupBy] = useState<GroupBy>('next');
 
+  // "next" is ranked server-side (bucket + reason per task, day boundaries in
+  // the browser's timezone); the ranked list only carries open tasks, so the
+  // done section still comes from the plain list. Both requests go out at
+  // once, and a response from an earlier fetch is dropped so a slow reply
+  // cannot overwrite a newer one.
+  const fetchSeq = useRef(0);
   const fetchTasks = useCallback(async () => {
+    const seq = ++fetchSeq.current;
     try {
-      const data = await api.get<{ tasks: Task[] }>('/tasks');
-      setTasks(data.tasks || []);
+      const tz = browserTimezone();
+      const [data, next] = await Promise.all([
+        api.get<{ tasks: Task[] }>('/tasks'),
+        groupBy === 'next' ? api.get<{ tasks: Task[] }>(`/tasks?view=next&tz=${encodeURIComponent(tz)}`) : Promise.resolve(null),
+      ]);
+      if (seq !== fetchSeq.current) return;
+      let all = data.tasks || [];
+      if (next) {
+        const ranked = new Map((next.tasks || []).map((t, i) => [t.id, { ...t, rank: i }]));
+        all = all
+          .map((t) => (ranked.has(t.id) ? { ...t, bucket: ranked.get(t.id)!.bucket, reason: ranked.get(t.id)!.reason } : t))
+          .sort((a, b) => (ranked.get(a.id)?.rank ?? Infinity) - (ranked.get(b.id)?.rank ?? Infinity));
+      }
+      setTasks(all);
       setError('');
     } catch (err) {
-      setError((err as Error).message);
+      if (seq === fetchSeq.current) setError((err as Error).message);
     } finally {
-      setLoading(false);
+      if (seq === fetchSeq.current) setLoading(false);
     }
-  }, []);
+  }, [groupBy]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- load tasks once on mount; fetchTasks sets state from the server
@@ -156,6 +194,8 @@ export default function TasksPage() {
         priority: opts?.title ? 0 : newPriority,
         category: (opts?.category ?? newCategory).trim() || undefined,
         dueAt: opts?.title ? undefined : newDue || undefined,
+        // The date picker sends a bare day; the server ends it in THIS zone.
+        tz: browserTimezone(),
       });
       if (!opts?.title) {
         setNewTitle('');
@@ -174,7 +214,7 @@ export default function TasksPage() {
   const updateFields = async (task: Task, patch: TaskPatch) => {
     setTasks((xs) => xs.map((t) => (t.id === task.id ? { ...t, ...patch } : t)));
     try {
-      await api.patch(`/tasks/${task.id}`, patch);
+      await api.patch(`/tasks/${task.id}`, patch.dueAt !== undefined ? { ...patch, tz: browserTimezone() } : patch);
       await fetchTasks();
     } catch (err) {
       setError((err as Error).message);
@@ -294,13 +334,13 @@ export default function TasksPage() {
       {/* Grouping control */}
       <div className="flex items-center gap-2 text-sm text-on-surface-variant">
         <span>Group by</span>
-        {(['priority', 'due', 'category', 'none'] as GroupBy[]).map((g) => (
+        {(['next', 'priority', 'due', 'category', 'none'] as GroupBy[]).map((g) => (
           <button
             key={g}
             onClick={() => setGroupBy(g)}
             className={`px-2.5 py-1 rounded-full text-xs capitalize ${groupBy === g ? 'bg-primary/10 text-primary' : 'hover:bg-surface-container-high'}`}
           >
-            {g === 'none' ? 'nothing' : g}
+            {g === 'none' ? 'nothing' : g === 'next' ? 'what next' : g}
           </button>
         ))}
       </div>
@@ -464,6 +504,9 @@ function TaskRow({
               <span className="text-[10px] inline-flex items-center gap-0.5 text-on-surface-variant/70">
                 <Sparkles className="w-2.5 h-2.5" /> {task.source}
               </span>
+            )}
+            {task.reason && task.status !== 'done' && (
+              <span className="text-[10px] text-on-surface-variant/70" title="why it ranks here">{task.reason}</span>
             )}
             <button
               onClick={() => { setDraft(task.notes ?? ''); setEditingNotes((v) => !v); }}
