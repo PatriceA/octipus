@@ -1,6 +1,6 @@
 # Daily-Driver Gaps — Plan
 
-**Status:** Phase 0 shipped (this PR); phases 1–6 and the enterprise track are planning only
+**Status:** Phase 0 shipped 2026-09-05 (#328); Phase 1 shipped 2026-09-05 (see below); phases 2–6 and the enterprise track are planning only
 **Created:** 2026-09-05
 **Scope:** What a developer / product owner / technical consultant needs before
 Octipus can run their working day, ordered by what blocks that first. Written
@@ -38,23 +38,40 @@ email are not deduplicated against an earlier task for the same message.
 
 ---
 
-## Phase 1 — "tell me what to do" (highest value per line)
+## Phase 1 — "tell me what to do" — SHIPPED (2026-09-05)
 
-1. **Next-action ranking on the to-do list.** A pure `rankTasks(tasks, now)`
-   (overdue → due today → priority → source recency) used by `list_tasks`, the
-   briefing prompt, and a `/tasks?view=next` API. No schema. Lives beside
-   `src/core/tasks/sourced.ts`.
-2. **Notification inbox page.** `notifications` exists server-side
-   (`src/core/notification-service.ts`) with no route in `web/app`. One page,
-   mark-read, link to the run or task. The heartbeat probe already counts these.
-3. **"While you were away" digest.** Fold `run_events` since the user's last
-   session (`GET /api/runs/:sessionId/events` exists per run) into one list:
-   runs finished, approvals waiting, tasks created by agents. Render at the top
-   of `/` and inject as the briefing's first section.
-4. **Heartbeat probe sources.** Add "open PR with failing checks" and "calendar
-   event in the next hour" to `src/core/heartbeat.ts`'s deterministic probe so
-   the silent loop wakes for the two things a developer actually wants a nudge
-   on. Still off by default.
+What each item became, and what the per-step review changed:
+
+1. **Next-action ranking.** `rankTasks` in `src/core/tasks/rank.ts` — overdue →
+   due today → high priority → inbound from email/research/reading (48h) →
+   due this week → backlog — with a one-line reason per task. Shared by
+   `list_tasks` (view `next`), `GET /api/tasks?view=next`, the tasks page's
+   default grouping, and the Daily Briefing. Review caught two real bugs: the
+   scoped list's priority-ordered 200-row cap could hide a low-priority
+   overdue task (the view now scans wide), and "today" was the server's
+   calendar day (now the user's: browser zone → saved preference → UTC, with
+   DST-exact boundaries). A bare `YYYY-MM-DD` due date is now the end of that
+   day in the user's zone rather than UTC midnight.
+2. **Inbox page.** `/notifications`, filters applied in SQL (`?unread=1`,
+   `?type=`) so paging is over the filtered set; links to the agent, pipeline
+   or chat behind each row; react-query key shared with the header bell.
+   Nothing pushes notifications to the browser, so the page polls — the first
+   cut listened for an event nobody dispatched.
+3. **Away digest.** `src/core/digest/away.ts` folds finished/failed agents,
+   pipelines finished or waiting, pending approvals, sourced to-dos and the
+   unread notifications that arrived in the window. Dashboard card with
+   "caught up"; `GET /api/digest/away`; prepended to any `spawn_agent` hook
+   with `awayDigestHours` (the seeded briefing uses 24, and rows seeded before
+   the change are brought forward). It reads `agents` / `pipelines` / `tasks`
+   directly rather than folding `run_events` as first planned: the state
+   tables already carry the per-user answer and `run_events` has no user id.
+4. **Heartbeat probes.** `src/core/heartbeat-probes.ts`: open PRs with red
+   checks (one cross-repo GraphQL search, drafts excluded) and calendar events
+   starting within the lookahead window (Google and Microsoft). Two rules
+   from review: the server's `gh` is the operator's identity, so the GitHub
+   probe runs only for admins (a per-user credential is enterprise-track E2);
+   and a red PR has no "done" a user can click, so each hook keeps a seen set
+   and only a new item wakes it. Still off by default.
 
 ## Phase 2 — a backlog, not a list
 
@@ -182,9 +199,9 @@ not competing — federation is how two hubs talk.
 
 ## Sequencing
 
-Phase 1 and Phase 3 first: both are small, both make the existing features
-visible, and Phase 3's job table is what the away digest reads. Phase 2 and 4
-next, in either order, by who is asking. Phase 5 by demand, connector by
+Phase 1 is done. Phase 3 (durable jobs) next: its job table is what the away
+digest should read for research and document runs, which today it cannot see.
+Phase 2 and 4 after that, in either order, by who is asking. Phase 5 by demand, connector by
 connector. The enterprise track opens with E0 as soon as a second person
 shares one Octipus — E0 is one migration and should not wait on E1–E4 being
 designed in full.

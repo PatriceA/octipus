@@ -22,6 +22,38 @@ import { getNextCronDate } from '@/core/cron-runner';
 export const DAILY_BRIEFING_HOOK_NAME = 'Daily Briefing';
 /** Weekdays at 08:00 in the hook's timezone. */
 export const DAILY_BRIEFING_CRON = '0 8 * * 1-5';
+/** Hours of "while you were away" prepended to every briefing run. */
+export const DAILY_BRIEFING_DIGEST_HOURS = 24;
+
+/**
+ * The prompt as it was seeded before the away digest existed. A row whose
+ * prompt still reads like this was never edited by its owner, so the seed
+ * may replace it; a prompt that differs is the owner's and is kept.
+ */
+const LEGACY_PROMPTS: readonly string[] = [
+  [
+    'Prepare my daily briefing for today. Use only what tools actually return; skip any section whose integration is not connected, and say so in one line instead of inventing content.',
+    '',
+    '1. To-dos: list_tasks — overdue first, then due today, then the top open items by priority. Name the ones that came from email or research so I know where they came from.',
+    '2. Calendar: if a calendar tool is available, today\'s events with times; flag conflicts and anything without an agenda.',
+    '3. Inbox: if a mail tool is available, unread mail since yesterday — the ones that need a reply or a decision, grouped by sender. Do not summarize newsletters.',
+    '4. Code: if GitHub is available, my open pull requests (review state, failing checks) and issues assigned to me.',
+    '5. Notifications: anything unread that needs me.',
+    '',
+    'Finish with "Next three": the three actions I should take first today, one line each, with the reason. Keep the whole briefing scannable — bullets, not paragraphs.',
+  ].join('\n'),
+  [
+    'Prepare my daily briefing for today. Use only what tools actually return; skip any section whose integration is not connected, and say so in one line instead of inventing content.',
+    '',
+    '1. To-dos: list_tasks with view "next" — it returns open tasks already ranked (overdue, due today, high priority, new from email/research, due this week) with a reason each. Show the top items in that order with their reasons; do not re-sort them.',
+    '2. Calendar: if a calendar tool is available, today\'s events with times; flag conflicts and anything without an agenda.',
+    '3. Inbox: if a mail tool is available, unread mail since yesterday — the ones that need a reply or a decision, grouped by sender. Do not summarize newsletters.',
+    '4. Code: if GitHub is available, my open pull requests (review state, failing checks) and issues assigned to me.',
+    '5. Notifications: anything unread that needs me.',
+    '',
+    'Finish with "Next three": the three actions I should take first today, one line each, with the reason. Keep the whole briefing scannable — bullets, not paragraphs.',
+  ].join('\n'),
+];
 
 /**
  * The briefing prompt. Written so a user with nothing connected still gets a
@@ -32,7 +64,8 @@ export function dailyBriefingPrompt(): string {
   return [
     'Prepare my daily briefing for today. Use only what tools actually return; skip any section whose integration is not connected, and say so in one line instead of inventing content.',
     '',
-    '1. To-dos: list_tasks — overdue first, then due today, then the top open items by priority. Name the ones that came from email or research so I know where they came from.',
+    '0. While I was away: a "While you were away" block precedes this message with what finished, failed or is waiting on me since yesterday. Lead with it — approvals and failures first — and do not re-query what it already lists.',
+    '1. To-dos: list_tasks with view "next" — it returns open tasks already ranked (overdue, due today, high priority, new from email/research, due this week) with a reason each. Show the top items in that order with their reasons; do not re-sort them.',
     '2. Calendar: if a calendar tool is available, today\'s events with times; flag conflicts and anything without an agenda.',
     '3. Inbox: if a mail tool is available, unread mail since yesterday — the ones that need a reply or a decision, grouped by sender. Do not summarize newsletters.',
     '4. Code: if GitHub is available, my open pull requests (review state, failing checks) and issues assigned to me.',
@@ -61,10 +94,20 @@ export async function ensureDailyBriefingHook(
     .limit(1);
 
   if (existing) {
+    // Rows seeded before the away digest existed carry neither the digest
+    // flag nor the prompt line that reads it. Bring them forward — the flag
+    // always (it only prepends facts), the prompt only when it is still the
+    // seed's text and not the owner's edit.
+    const cfg = existing.actionConfig ?? {};
+    const patch: Partial<typeof cfg> = {};
+    if (cfg.awayDigestHours === undefined) patch.awayDigestHours = DAILY_BRIEFING_DIGEST_HOURS;
+    if (cfg.agentPrompt !== undefined && LEGACY_PROMPTS.includes(cfg.agentPrompt)) patch.agentPrompt = dailyBriefingPrompt();
+    const upgrade = Object.keys(patch).length > 0 ? { actionConfig: { ...cfg, ...patch } } : {};
     if (!existing.isEnabled) {
       await db
         .update(hooks)
         .set({
+          ...upgrade,
           isEnabled: true,
           nextRunAt: getNextCronDate(
             (existing.triggerConfig?.cronExpression as string | undefined) ?? cronExpression,
@@ -74,6 +117,8 @@ export async function ensureDailyBriefingHook(
           updatedAt: now,
         })
         .where(eq(hooks.id, existing.id));
+    } else if (Object.keys(patch).length > 0) {
+      await db.update(hooks).set({ ...upgrade, updatedAt: now }).where(eq(hooks.id, existing.id));
     }
     return existing.id;
   }
@@ -87,7 +132,7 @@ export async function ensureDailyBriefingHook(
       trigger: 'schedule',
       triggerConfig: { cronExpression, timezone },
       action: 'spawn_agent',
-      actionConfig: { agentPrompt: dailyBriefingPrompt(), orchestrated: true, notifyRoot: true },
+      actionConfig: { agentPrompt: dailyBriefingPrompt(), orchestrated: true, notifyRoot: true, awayDigestHours: DAILY_BRIEFING_DIGEST_HOURS },
       isEnabled: true,
       nextRunAt: getNextCronDate(cronExpression, timezone),
     })

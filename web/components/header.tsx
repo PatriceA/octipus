@@ -7,16 +7,9 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { cn } from '@/lib/utils';
+import Link from 'next/link';
+import type { Notification } from '@/lib/types/notifications';
 import { WorkspacePicker } from './workspace-picker';
-
-interface Notification {
-  id: string;
-  type: string;
-  title: string;
-  body?: string;
-  read: boolean;
-  createdAt: string;
-}
 
 interface SearchResult {
   id: string;
@@ -328,6 +321,13 @@ export function Header() {
                   ))
                 )}
               </div>
+              <Link
+                href="/notifications"
+                onClick={() => setIsNotifOpen(false)}
+                className="block px-3 py-2 text-[11px] text-primary hover:underline border-t border-outline-variant/60 bg-surface-container-low"
+              >
+                open inbox →
+              </Link>
             </div>
           )}
         </div>

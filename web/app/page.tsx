@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Activity, Bot, MessageSquare, Zap } from 'lucide-react';
 import { ActiveAgents } from '@/components/dashboard/active-agents';
+import { AwayDigestCard } from '@/components/dashboard/away-digest';
 import { FeatureStatus } from '@/components/dashboard/feature-status';
 import { HealthStatus } from '@/components/dashboard/health-status';
 import { RecentSessions } from '@/components/dashboard/recent-sessions';
@@ -114,6 +115,9 @@ export default function DashboardPage() {
           </StatusBadge>
         }
       />
+
+      {/* What happened since the user last looked — the first thing to read. */}
+      <AwayDigestCard />
 
       {/* Stat counters. Big mono number, label as `> name` so they
           read like ticker rows rather than marketing cards. */}

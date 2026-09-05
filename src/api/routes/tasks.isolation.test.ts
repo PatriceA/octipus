@@ -114,6 +114,24 @@ describe('GET /api/tasks list cross-tenant', () => {
     expect(r.body.tasks.find((t: any) => t.id === bobTaskId)).toBeUndefined();
     expect(r.body.tasks.find((t: any) => t.id === aliceTaskId)).toBeDefined();
   });
+
+  test('view=next ranks only the caller’s open tasks and carries bucket + reason', async () => {
+    const { status, body } = await get(aliceApp, '/api/tasks?view=next&tz=Europe/Berlin');
+    expect(status).toBe(200);
+    expect(body.timezone).toBe('Europe/Berlin');
+    const ids = body.tasks.map((t: any) => t.id);
+    expect(ids).toContain(aliceTaskId);
+    expect(ids).not.toContain(bobTaskId);
+    const mine = body.tasks.find((t: any) => t.id === aliceTaskId);
+    expect(mine.bucket).toBe('backlog');
+    expect(mine.reason).toBe('priority 2');
+  });
+
+  test('an invalid tz falls back to UTC rather than failing the request', async () => {
+    const { status, body } = await get(aliceApp, '/api/tasks?view=next&tz=Mars/Olympus');
+    expect(status).toBe(200);
+    expect(body.timezone).toBe('UTC');
+  });
 });
 
 describe('PATCH /api/tasks/:id cross-tenant', () => {
@@ -149,6 +167,14 @@ describe('own-task lifecycle', () => {
 
     const reopened = await patchJson(aliceApp, `/api/tasks/${id}`, { status: 'open' });
     expect(reopened.body.completedAt).toBeNull();
+  });
+
+  test('a bare YYYY-MM-DD due date ends that day in the given zone', async () => {
+    const r = await postJson(aliceApp, '/api/tasks', { title: 'by friday', dueAt: '2026-09-11', tz: 'Europe/Berlin' });
+    expect(r.status).toBe(200);
+    expect(new Date(r.body.dueAt).toISOString()).toBe('2026-09-11T21:59:59.999Z');
+    const iso = await postJson(aliceApp, '/api/tasks', { title: 'exact', dueAt: '2026-09-11T10:00:00Z', tz: 'Europe/Berlin' });
+    expect(new Date(iso.body.dueAt).toISOString()).toBe('2026-09-11T10:00:00.000Z');
   });
 
   test('invalid status is rejected, not coerced', async () => {

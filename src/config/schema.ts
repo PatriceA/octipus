@@ -460,6 +460,11 @@ export const heartbeatConfigSchema = z.object({
   quietHoursTimezone: z.string().default('UTC'),
   /** Hard cap on heartbeat runs per user per calendar day (in the tz above). */
   maxRunsPerDay: z.number().int().min(1).max(288).default(24),
+  /** Probe: the user's open pull requests with failing checks (one `gh` call per run). */
+  probeGithub: z.boolean().default(true),
+  /** Probe: calendar events starting within `calendarLookaheadMinutes` (one request per connected provider). */
+  probeCalendar: z.boolean().default(true),
+  calendarLookaheadMinutes: z.number().int().min(5).max(1440).default(60),
 });
 
 /**

@@ -22,16 +22,25 @@ export const notificationRoutes = new Elysia({ prefix: '/notifications' })
       if (!user || !isAuthenticated(principal)) return { error: 'Not authenticated' };
 
       const repo = scopedRepos(principal).notifications;
-      const limit = query.limit ? parseInt(query.limit, 10) : 50;
-      const offset = query.offset ? parseInt(query.offset, 10) : 0;
-      const notifications = await repo.list(limit, offset);
-      const unreadCount = await repo.unreadCount();
+      const limit = Math.max(1, Math.min(200, parseInt(query.limit ?? '', 10) || 50));
+      const offset = Math.max(0, parseInt(query.offset ?? '', 10) || 0);
+      // `type` is a prefix (`agent`, `pipeline`, `approval`); anything outside
+      // the producers' `[a-z_]` alphabet is rejected rather than passed to LIKE.
+      if (query.type !== undefined && !/^[a-z_]{1,32}$/.test(query.type)) {
+        return { error: `Invalid type filter "${query.type}"` };
+      }
+      const [notifications, unreadCount] = await Promise.all([
+        repo.list(limit, offset, { unread: query.unread === '1' || query.unread === 'true', typePrefix: query.type }),
+        repo.unreadCount(),
+      ]);
       return { notifications, unreadCount };
     },
     {
       query: t.Object({
         limit: t.Optional(t.String()),
         offset: t.Optional(t.String()),
+        unread: t.Optional(t.String()),
+        type: t.Optional(t.String({ maxLength: 32 })),
       }),
       detail: { tags: ['notifications'] },
     }

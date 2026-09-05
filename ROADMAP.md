@@ -11,9 +11,12 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 - **Daily-driver gaps.** What a developer / PO / consultant needs to run
   their day on Octipus, in six phases plus the *Octipus goes enterprise*
   track (the org-level connector that owns identity, content visibility,
-  connectors and policy). Phase 0 shipped 2026-09-05: workspace-scoped
+  connectors and policy). Phase 0 shipped 2026-09-05 (#328): workspace-scoped
   memory, reader / email / research → to-dos, `pm` and `coding` tooled for
-  their own prompts, a seeded Daily Briefing hook. Plan:
+  their own prompts, a seeded Daily Briefing hook. Phase 1 shipped the same
+  day: next-action ranking on the to-do list, an inbox page, a "while you
+  were away" digest (dashboard + briefing), and heartbeat probes for red
+  PRs and imminent meetings. Plan:
   [docs/plans/daily-driver-gaps.md](docs/plans/daily-driver-gaps.md).
 
 - **Mock-provider scaffold for the model layer.** `src/models/litellm-client.ts`

@@ -246,6 +246,16 @@ The **Calendar tab** in the Hooks & Tasks page shows a weekly grid of scheduled 
 0 9 * * 1-5     Weekdays at 9:00 AM
 ```
 
+### Away digest in a hook prompt
+
+A `spawn_agent` hook may set `actionConfig.awayDigestHours` (a positive
+number). Before the run, the owner's "while you were away" digest for that
+many hours (`src/core/digest/away.ts`: finished and failed agents, pipelines
+finished or waiting, pending approvals, new to-dos, unread count) is rendered
+as markdown and prepended to `agentPrompt`. No model call is spent on it, and
+a digest that cannot be built is logged and skipped rather than failing the
+hook.
+
 ### Daily Briefing (seeded)
 
 Every user gets one scheduled hook at registration, **Daily Briefing**: weekdays
