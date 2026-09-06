@@ -656,7 +656,7 @@ export class ToolExecutor {
             toolId,
           });
 
-          const approved = await permissionManager.waitForApproval(requestId);
+          const approved = await permissionManager.waitForApproval(requestId, { agentId: this.context.id });
 
           if (!approved) {
             this.counters.approvalsDenied++;

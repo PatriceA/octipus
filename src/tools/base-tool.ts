@@ -244,7 +244,7 @@ export abstract class BaseTool {
         );
 
         // Wait for approval (this will block until approved/denied/timeout)
-        const approved = await permissionManager.waitForApproval(requestId);
+        const approved = await permissionManager.waitForApproval(requestId, { agentId: context.id });
 
         if (!approved) {
           throw new Error(`Permission denied for ${this.id}.${action}`);

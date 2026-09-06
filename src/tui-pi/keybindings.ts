@@ -49,6 +49,7 @@ declare module '@mariozechner/pi-tui' {
     'app.help.open': true;
     'app.quit': true;
     'app.voice.talk': true;
+    'app.subagents.toggle': true;
   }
 }
 
@@ -73,6 +74,7 @@ export const OCTIPUS_APP_KEYBINDINGS = {
   'app.help.open':       { defaultKeys: 'f5',               description: 'Show hotkeys' },
   'app.quit':            { defaultKeys: 'ctrl+q',           description: 'Quit' },
   'app.voice.talk':      { defaultKeys: ['alt+t', 'f8'],    description: 'Push-to-talk: start/stop voice input' },
+  'app.subagents.toggle':{ defaultKeys: ['alt+s', 'f7'],    description: 'Expand/collapse the subagent panel' },
 } as const satisfies KeybindingDefinitions;
 
 const DEFAULT_USER_PATH = join(homedir(), '.octipus', 'keybindings.json');

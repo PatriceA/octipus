@@ -18,6 +18,7 @@ import { clearCliSession, readCliSession } from '@/core/gateway/cli-session';
 import { formatChangesMessage } from './changes-render';
 import { ActivityLine } from './components/activity-line';
 import { Composer } from './components/composer';
+import { SubagentPanel } from './components/subagent-panel';
 import { MessagesPane } from './components/messages-pane';
 import { type CumulativeStats, StatusBar } from './components/status-bar';
 import { GatewayAdapter, type AgentSessionEvent } from './gateway-adapter';
@@ -51,6 +52,8 @@ export class OctipusTuiApp {
   private readonly messages = new MessagesPane();
   private readonly activity: ActivityLine;
   private readonly composer: Composer;
+  private readonly subagents = new SubagentPanel();
+  private lastStatus: string | null = null;
   private readonly overlays: OverlayController;
   private readonly sessionId = newSessionId();
   /** Gateway WS URL — also used to derive the HTTP base for status lookups. */
@@ -93,14 +96,17 @@ export class OctipusTuiApp {
 
     this.status.setProject(this.projectPath?.split(/[/\\]/).pop());
 
-    // Layout: status bar, blank line, messages, blank line, activity, composer
+    // Layout: messages, blank line, activity, composer, status bar LAST.
+    // The bar carries counters that have to stay readable — at the top it
+    // scrolled off with the first screenful of output, which is exactly when
+    // the numbers start being interesting.
     const root = new Container();
-    root.addChild(this.status);
-    root.addChild(new Spacer(1));
     root.addChild(this.messages);
     root.addChild(new Spacer(1));
     root.addChild(this.activity);
+    root.addChild(this.subagents);
     root.addChild(this.composer);
+    root.addChild(this.status);
     tui.addChild(root);
     tui.setFocus(this.composer);
 
@@ -112,6 +118,11 @@ export class OctipusTuiApp {
       const kb = getKeybindings();
       if (kb.matches(data, 'app.palette.open')) { this.openCommandPalette(); return { consume: true }; }
       if (kb.matches(data, 'app.voice.talk')) { void this.toggleTalk(); return { consume: true }; }
+      if (kb.matches(data, 'app.subagents.toggle')) {
+        this.subagents.toggle();
+        this.tui.requestRender();
+        return { consume: true };
+      }
       if (matchesKey(data, 'pageUp')) {
         if (this.messages.scrollUp()) this.tui.requestRender();
         return { consume: true };
@@ -213,6 +224,11 @@ export class OctipusTuiApp {
   private handleEvent(event: AgentSessionEvent): void {
     switch (event.kind) {
       case 'status':
+        // A reconnect means the backend went away and came back: whatever
+        // subagents were running belonged to the old process and will never
+        // report a completion.
+        if (event.status === 'connected' && this.lastStatus !== 'connected') this.subagents.reset();
+        this.lastStatus = event.status;
         this.status.setStatus(event.status);
         this.tui.requestRender();
         return;
@@ -231,6 +247,14 @@ export class OctipusTuiApp {
         this.openApprovalPrompt(event.requestId, event.summary, event.question, event.options);
         return;
       case 'agent.start':
+        // A subagent gets its own row in the panel; the activity line stays
+        // the ROOT agent's, so a fan-out doesn't make the main indicator
+        // flicker between children.
+        if (event.subagent && event.nodeId) {
+          this.subagents.start(event.nodeId, event.role, event.model);
+          this.tui.requestRender();
+          return;
+        }
         // Start with iteration 0 so a long-running agent isn't silent
         // between spawn and its first iteration tick (the worker emits
         // iteration_update at the TOP of each loop iteration).
@@ -238,6 +262,11 @@ export class OctipusTuiApp {
         this.activity.setThinking({ role: event.role, iter: 0 });
         return;
       case 'agent.iteration':
+        if (this.subagents.has(event.agentId)) {
+          this.subagents.iteration(event.agentId, event.iteration);
+          this.tui.requestRender();
+          return;
+        }
         this.activity.setThinking({
           role: this.activeAgentRole ?? 'agent',
           iter: event.iteration,
@@ -267,6 +296,17 @@ export class OctipusTuiApp {
         this.tui.requestRender();
         return;
       case 'agent.end':
+        if (this.subagents.has(event.nodeId)) {
+          this.subagents.end(event.nodeId as string);
+          this.cumulative = {
+            tokens: this.cumulative.tokens + event.stats.tokens,
+            cost: this.cumulative.cost + event.stats.cost,
+            turns: this.cumulative.turns,
+          };
+          this.status.setStats(this.cumulative);
+          this.tui.requestRender();
+          return;
+        }
         this.cumulative = {
           tokens: this.cumulative.tokens + event.stats.tokens,
           cost: this.cumulative.cost + event.stats.cost,
@@ -279,6 +319,14 @@ export class OctipusTuiApp {
         this.tui.requestRender();
         return;
       case 'tool':
+        // A subagent's tool calls belong to its row, not to the transcript —
+        // three children fanning out used to bury the conversation under
+        // somebody else's `→ websearch`.
+        if (this.subagents.has(event.agentId)) {
+          this.subagents.tool(event.agentId as string, event.tool);
+          this.tui.requestRender();
+          return;
+        }
         this.activity.setTool(event.tool);
         this.streamToolEvent(event.tool);
         return;
@@ -293,6 +341,7 @@ export class OctipusTuiApp {
           this.cumulative = { ...this.cumulative, turns: 0 };
           this.status.setStats(this.cumulative);
           this.status.setContext(null);
+          this.subagents.reset();
           this.pushMessage('system', 'Chat cleared.');
           return;
         }

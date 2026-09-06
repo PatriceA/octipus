@@ -9,6 +9,7 @@ import { agentLogger, coreLogger } from '@/utils/logger';
 import { type AgentEvent, AgentWorker, type AgentWorkerConfig, type ToolHandler } from './agent-worker';
 import { isCLIProvider } from './cli-agent-factory';
 import { CLIAgentWorker } from './cli-agent-worker';
+import { getPermissionManager } from '@/security/permissions';
 import { getRouter } from './router';
 import type { AgentContext, AgentStatus } from './types';
 
@@ -332,6 +333,11 @@ export class AgentManager {
       // Agent not in memory — may be a zombie DB record. Mark it as stopped.
       agentRepository.updateStatus(agentId, { status: 'stopped', error: 'Stopped manually (not in memory)' })
         .catch(err => agentLogger.error({ err, agentId }, 'Failed to update zombie agent status'));
+      // A zombie can still own a pending permission request. Requests have no
+      // TTL any more, so nothing else would ever clear it.
+      try {
+        getPermissionManager().cancelWaits(agentId);
+      } catch { /* permission manager unavailable */ }
     }
 
     if (!cascade) return true;
