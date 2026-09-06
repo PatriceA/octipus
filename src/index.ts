@@ -12,12 +12,12 @@ import { wireMessageHandler } from '@/core/gateway/message-handler';
 import { seedExperts } from '@/db/seed-experts';
 import { seedPresetTemplates } from '@/db/seed-presets';
 import { loadRolesFromDb, seedRoles } from '@/db/seed-roles';
-import { loadTopicConfigs } from '@/models/topic-config';
 import { seedSkillTopicAssignments } from '@/db/seed-skill-topic-assignments';
 import { seedSkills } from '@/db/seed-skills';
 import { getHookManager } from '@/hooks/manager';
 import { getMCPBridge } from '@/mcp/bridge';
 import { resetLiteLLMClient } from '@/models/litellm-client';
+import { loadTopicConfigs } from '@/models/topic-config';
 import { initializeVault } from '@/security/vault';
 import { registerBuiltinTools } from '@/tools';
 import { logger } from '@/utils/logger';
@@ -360,6 +360,27 @@ async function main() {
     getScheduler().start();
 
     logger.info('Octipus started successfully');
+
+    // `--stdio` (or GATEWAY_STDIO=1): serve the gateway protocol over this
+    // process's stdin/stdout as JSON lines, for an IDE or a parent process
+    // that embeds Octipus as a subprocess. The WebSocket endpoint stays up;
+    // this is one more connection to the same hub. When the parent closes
+    // stdin the embedding is over, and the process shuts down with it.
+    {
+      const { attachStdioAdapter, stdioModeRequested } = await import('@/core/gateway/stdio-adapter');
+      if (stdioModeRequested()) {
+        const adapter = attachStdioAdapter(gatewayHub, {
+          input: process.stdin,
+          output: process.stdout,
+          onClose: (reason) => {
+            logger.info({ reason }, 'stdio gateway connection closed — shutting down');
+            void shutdown();
+          },
+        });
+        if (adapter) logger.info({ connectionId: adapter.connectionId }, 'Gateway serving over stdio (JSON lines); logs on stderr');
+        else logger.error('Gateway could not attach to stdio');
+      }
+    }
 
     // Handle graceful shutdown. Idempotent: SIGTERM immediately followed by
     // SIGINT (or a double Ctrl-C) must not run the teardown twice.

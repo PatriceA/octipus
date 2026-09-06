@@ -666,6 +666,13 @@
       "when": 1785780449103,
       "tag": "0093_task_structure",
       "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1785780449104,
+      "tag": "0094_repo_symbol_index",
+      "breakpoints": true
     }
   ]
 }

@@ -10,7 +10,17 @@ import { buildChildEnv } from '@/security/child-env';
 
 const GH_KEEP_ENV = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'];
 
-export function runGh(args: string[], opts: { timeoutMs?: number } = {}): Promise<string> {
+export interface RunGhOptions {
+  timeoutMs?: number;
+  /**
+   * Exit codes that still resolve with stdout. `gh pr checks` exits 8 while
+   * checks are pending and 1 when one failed, and in both cases its JSON is
+   * the answer the caller wanted, not an error.
+   */
+  acceptExitCodes?: number[];
+}
+
+export function runGh(args: string[], opts: RunGhOptions = {}): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn('gh', args, { env: buildChildEnv(undefined, { keep: GH_KEEP_ENV }) });
     let stdout = '';
@@ -26,7 +36,7 @@ export function runGh(args: string[], opts: { timeoutMs?: number } = {}): Promis
     child.on('error', (err) => { if (timer) clearTimeout(timer); reject(err); });
     child.on('close', (code) => {
       if (timer) clearTimeout(timer);
-      if (code === 0) resolve(stdout);
+      if (code === 0 || (code !== null && opts.acceptExitCodes?.includes(code))) resolve(stdout);
       else reject(new Error(stderr.trim() || `gh command failed with code ${code}`));
     });
   });

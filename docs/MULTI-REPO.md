@@ -52,7 +52,8 @@ Code-oriented roles (architecture, coding, review, research) get the
 | Tool | Purpose |
 |---|---|
 | `list_repos` | The map of the suite — call first to learn what exists. |
-| `get_repo` | One repo's structural digest + its dependency neighbours. |
+| `get_repo` | One repo's structural digest, a symbol outline (the busiest files and what they define) + its dependency neighbours. |
+| `find_symbol` | Where a function, class, type, struct, trait or method (`Owner.method`) is defined — file and line — from the index built at scan time. |
 | `repo_dependents` | Repos that depend on a given repo (impact of a change). |
 | `repo_dependencies` | In-suite repos a given repo depends on. |
 | `scan_repos` | Refresh the registry. |
@@ -86,7 +87,10 @@ and [→ Code-exclusion policy](./RAG.md#code-exclusion-policy-raw-code-is-never
 ## Limitations / roadmap
 
 - **Dependency edges come from manifests** (declared deps), not yet from import
-  analysis. A deeper, symbol-level repo map is planned.
+  analysis. The symbol index (`workspace_repos.symbol_index`, built with
+  tree-sitter at scan time for TypeScript/TSX/JS, Python, Go, Rust and Java)
+  knows what each file defines, not what it imports; a scan rebuilds it
+  whole. Bounded at 2,500 files, 400 KB per file and 20,000 symbols per repo.
 - **No cross-repo fan-out yet** — a change spanning several repos is coordinated
   by the root agent routing workers per repo, not by automatic parallel
   worktrees.

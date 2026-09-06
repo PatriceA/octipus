@@ -1,12 +1,13 @@
+import type { WorkspaceRepo } from '@db/schema/workspace-repos';
 import { existsSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { getConfig } from '@/config';
 import { repoRegistryRepository } from '@/db/repositories/repo-registry-repository';
-import type { WorkspaceRepo } from '@db/schema/workspace-repos';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
-import { type RepoEdge, type RepoGraphNode, buildRepoEdges } from './graph';
+import { buildRepoEdges, type RepoEdge, type RepoGraphNode } from './graph';
 import { scanRoots } from './scanner';
+import { indexRepoSymbols } from './symbols';
 
 /**
  * Registry service — orchestrates scanner + persistence + graph for a user.
@@ -27,6 +28,14 @@ export async function scanUserRepos(userId: string, workspaceId?: string | null)
   const roots = userScanRoots(userId);
   const scanned = scanRoots(roots);
   for (const r of scanned) {
+    // The symbol index is the slow part of a scan (tree-sitter over every
+    // source file) and the part most likely to be unavailable (no WASM
+    // runtime, no grammar for the language). Bounded by its own caps and
+    // never allowed to fail the scan: a repo without symbols is still a repo.
+    const symbolIndex = await indexRepoSymbols(r.rootPath).catch((err) => {
+      coreLogger.warn({ err, repo: r.name }, 'repo symbol indexing failed (non-fatal)');
+      return null;
+    });
     const row = await repoRegistryRepository.upsert({
       userId,
       workspaceId: workspaceId ?? null,
@@ -39,6 +48,7 @@ export async function scanUserRepos(userId: string, workspaceId?: string | null)
       packageName: r.packageName,
       dependencies: r.dependencies,
       repoMap: r.repoMap,
+      symbolIndex: symbolIndex && symbolIndex.fileCount > 0 ? symbolIndex : null,
       hasAgentsMd: r.hasAgentsMd,
       lastScannedAt: new Date(),
     });

@@ -636,6 +636,23 @@ Available via `{ "type": "command", "name": "<cmd>" }`:
 | `/verbose [on\|off]` | Toggle verbose output |
 | `/usage [mode]` | Usage display (off/tokens/full) |
 
+### Gateway over stdio
+
+The same protocol, framed as JSON lines over the process's own stdin and
+stdout, for an IDE or a parent process that embeds Octipus as a subprocess:
+
+```
+octipus --stdio        # or GATEWAY_STDIO=1
+```
+
+One line in is one client message (the `auth` line first, within 5 seconds),
+one line out is one gateway message; lines end in `\n` only. Logs go to
+stderr in this mode so the pipe carries nothing but protocol. Lines are
+handled strictly in order. The WebSocket endpoint stays up alongside; the
+stdio connection is one more client of the same hub, with the same rate
+limits, budgets and event-visibility rule. When stdin ends, the process
+shuts down.
+
 ### Gateway REST API
 
 | Method | Endpoint | Description |
