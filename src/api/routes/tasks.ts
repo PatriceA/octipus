@@ -1,13 +1,15 @@
-import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
-import type { NewTask } from '@/db/schema/tasks';
-import { scopedRepos } from '@/db/repositories/scoped';
+import { Elysia, t } from '@/api/http';
 import { nextActions } from '@/core/tasks/next';
 import { dateOnlyToEndOfDay } from '@/core/tasks/rank';
+import { isTaskStatus, TASK_STATUSES } from '@/core/tasks/status';
+import { normalizeEstimate } from '@/core/tasks/structure';
 import { resolveUserTimezone } from '@/core/tasks/timezone';
+import { scopedRepos } from '@/db/repositories/scoped';
+import type { NewTask } from '@/db/schema/tasks';
 import { isAuthenticated } from '@/security/principal';
 
-const STATUSES = ['open', 'done', 'archived'] as const;
+const STATUSES = TASK_STATUSES;
 
 /** Derive completedAt transitions from a status change. */
 function completionPatch(nextStatus: string | undefined, wasCompleted: boolean): Partial<NewTask> {
@@ -27,6 +29,11 @@ async function parseDueAt(value: string, userId: string, tz: string | undefined)
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) throw new Error(`Invalid dueAt "${value}" — expected an ISO 8601 date`);
   return d;
+}
+
+/** De-duplicate an id list from the body; strings only. */
+function idList(values: string[]): string[] {
+  return [...new Set(values.map((v) => v.trim()).filter(Boolean))];
 }
 
 /** Trim a category; empty string → null (uncategorized). */
@@ -117,6 +124,9 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
           priority: body.priority ?? 0,
           category: normalizeCategory(body.category),
           dueAt: body.dueAt ? await parseDueAt(body.dueAt, user.id, body.tz) : null,
+          estimate: normalizeEstimate(body.estimate),
+          parentId: body.parentId || null,
+          blockedBy: body.blockedBy ? idList(body.blockedBy) : [],
           source: 'user',
         });
         return task;
@@ -132,6 +142,9 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         priority: t.Optional(t.Integer({ minimum: 0, maximum: 3 })),
         category: t.Optional(t.String({ maxLength: 100 })),
         dueAt: t.Optional(t.String()),
+        estimate: t.Optional(t.String({ maxLength: 40 })),
+        parentId: t.Optional(t.String()),
+        blockedBy: t.Optional(t.Array(t.String(), { maxItems: 100 })),
         /** Browser zone; decides which day a bare `YYYY-MM-DD` dueAt ends on. */
         tz: t.Optional(t.String({ maxLength: 64 })),
       }),
@@ -139,7 +152,9 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
     }
   )
 
-  // Update a task (title/notes/status/priority/due/category). Manages completedAt.
+  // Update a task (title/notes/status/priority/due/category/estimate/parent/
+  // blockers). Manages completedAt. A parent or blocker the caller cannot
+  // see, a self-link, or a parent loop is a 400 from the scoped repo.
   .patch(
     '/:id',
     async ({ user, principal, params, body, set }) => {
@@ -153,7 +168,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         set.status = 404;
         return { error: 'Task not found' };
       }
-      if (body.status && !STATUSES.includes(body.status as (typeof STATUSES)[number])) {
+      if (body.status && !isTaskStatus(body.status)) {
         set.status = 400;
         return { error: `Invalid status "${body.status}"` };
       }
@@ -165,6 +180,9 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
           priority: body.priority,
           category: body.category !== undefined ? normalizeCategory(body.category) : undefined,
           dueAt: body.dueAt !== undefined ? (body.dueAt ? await parseDueAt(body.dueAt, user.id, body.tz) : null) : undefined,
+          estimate: body.estimate !== undefined ? normalizeEstimate(body.estimate) : undefined,
+          parentId: body.parentId !== undefined ? body.parentId || null : undefined,
+          blockedBy: body.blockedBy !== undefined ? idList(body.blockedBy ?? []) : undefined,
           ...completionPatch(body.status, Boolean(existing.completedAt)),
         });
         if (!updated) {
@@ -186,6 +204,9 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         priority: t.Optional(t.Integer({ minimum: 0, maximum: 3 })),
         category: t.Optional(t.Union([t.String({ maxLength: 100 }), t.Null()])),
         dueAt: t.Optional(t.Union([t.String(), t.Null()])),
+        estimate: t.Optional(t.Union([t.String({ maxLength: 40 }), t.Null()])),
+        parentId: t.Optional(t.Union([t.String(), t.Null()])),
+        blockedBy: t.Optional(t.Union([t.Array(t.String(), { maxItems: 100 }), t.Null()])),
         tz: t.Optional(t.String({ maxLength: 64 })),
       }),
       detail: { tags: ['tasks'] },

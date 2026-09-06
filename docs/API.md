@@ -248,11 +248,15 @@ Per-user root agent persona — name, tone, narration volume, free-form self-fac
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/tasks` | List user's tasks |
-| POST | `/api/tasks` | Create a task |
-| PATCH | `/api/tasks/:id` | Update task |
-| DELETE | `/api/tasks/:id` | Delete task |
-| POST | `/api/tasks/:id/complete` | Mark task complete |
+| GET | `/api/tasks` | List user's tasks (`?status=`, `?due=today`, `?category=`, `?view=next` for next-action order with a `bucket` and `reason` each) |
+| GET | `/api/tasks/:id` | Get one task |
+| POST | `/api/tasks` | Create a task (`parentId`, `blockedBy[]`, `estimate` optional) |
+| PATCH | `/api/tasks/:id` | Update task; status is `open` / `in_progress` / `done` / `archived`; `parentId: null` and `blockedBy: []` clear the links |
+| DELETE | `/api/tasks/:id` | Delete task (its sub-tasks become top-level) |
+
+A parent or blocker the caller cannot see, a self-link, or a parent loop is a
+`400`. Only an active (open or in-progress) blocker blocks; a done one is
+inert and stays in the array.
 
 ## Recurring Tasks
 

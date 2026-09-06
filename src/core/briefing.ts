@@ -53,6 +53,19 @@ const LEGACY_PROMPTS: readonly string[] = [
     '',
     'Finish with "Next three": the three actions I should take first today, one line each, with the reason. Keep the whole briefing scannable — bullets, not paragraphs.',
   ].join('\n'),
+  // Before task structure: the ranked view had no "in progress" or "waiting" buckets.
+  [
+    'Prepare my daily briefing for today. Use only what tools actually return; skip any section whose integration is not connected, and say so in one line instead of inventing content.',
+    '',
+    '0. While I was away: a "While you were away" block precedes this message with what finished, failed or is waiting on me since yesterday. Lead with it — approvals and failures first — and do not re-query what it already lists.',
+    '1. To-dos: list_tasks with view "next" — it returns open tasks already ranked (overdue, due today, high priority, new from email/research, due this week) with a reason each. Show the top items in that order with their reasons; do not re-sort them.',
+    '2. Calendar: if a calendar tool is available, today\'s events with times; flag conflicts and anything without an agenda.',
+    '3. Inbox: if a mail tool is available, unread mail since yesterday — the ones that need a reply or a decision, grouped by sender. Do not summarize newsletters.',
+    '4. Code: if GitHub is available, my open pull requests (review state, failing checks) and issues assigned to me.',
+    '5. Notifications: anything unread that needs me.',
+    '',
+    'Finish with "Next three": the three actions I should take first today, one line each, with the reason. Keep the whole briefing scannable — bullets, not paragraphs.',
+  ].join('\n'),
 ];
 
 /**
@@ -65,7 +78,7 @@ export function dailyBriefingPrompt(): string {
     'Prepare my daily briefing for today. Use only what tools actually return; skip any section whose integration is not connected, and say so in one line instead of inventing content.',
     '',
     '0. While I was away: a "While you were away" block precedes this message with what finished, failed or is waiting on me since yesterday. Lead with it — approvals and failures first — and do not re-query what it already lists.',
-    '1. To-dos: list_tasks with view "next" — it returns open tasks already ranked (overdue, due today, high priority, new from email/research, due this week) with a reason each. Show the top items in that order with their reasons; do not re-sort them.',
+    '1. To-dos: list_tasks with view "next" — it returns active tasks already ranked (in progress, overdue, due today, high priority, new from email/research, due this week, backlog, then waiting on other tasks) with a reason each. Show the top items in that order with their reasons; do not re-sort them, and leave the waiting ones out unless nothing else is left.',
     '2. Calendar: if a calendar tool is available, today\'s events with times; flag conflicts and anything without an agenda.',
     '3. Inbox: if a mail tool is available, unread mail since yesterday — the ones that need a reply or a decision, grouped by sender. Do not summarize newsletters.',
     '4. Code: if GitHub is available, my open pull requests (review state, failing checks) and issues assigned to me.',

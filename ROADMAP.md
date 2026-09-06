@@ -19,7 +19,9 @@ This doc lists what we are exploring. Order inside each section is rough priorit
   PRs and imminent meetings. Phase 3 the same day: research runs and
   document processing are `background_jobs` rows that survive a restart,
   claimed under a row lock, swept to `interrupted` at boot, and reported in
-  the away digest. Plan:
+  the away digest. Phase 2 shipped 2026-09-06: to-dos have parents, blockers,
+  estimates and an in-progress status, `/tasks` has a board with category
+  lanes, and the `pm` role writes a whole plan as a backlog in one call. Plan:
   [docs/plans/daily-driver-gaps.md](docs/plans/daily-driver-gaps.md).
 
 - **Mock-provider scaffold for the model layer.** `src/models/litellm-client.ts`

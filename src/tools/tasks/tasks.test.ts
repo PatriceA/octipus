@@ -145,3 +145,86 @@ describe('scoped create / list / complete', () => {
     expect(cleared.task.dueAt).toBeNull();
   });
 });
+
+describe('structure: add_tasks, nesting, waiting', () => {
+  test('add_tasks writes a plan as phases with sub-tasks, estimates and dependencies', async () => {
+    const r = await call(
+      'add_tasks',
+      {
+        items: [
+          {
+            title: 'Phase 1: auth',
+            category: 'Auth',
+            estimate: 'L',
+            children: [{ title: 'Login form', estimate: 'S' }, { title: 'Session cookie', estimate: 'M', blockedBy: ['Login form'] }],
+          },
+          { title: 'Phase 2: billing', children: [{ title: 'Stripe checkout', blockedBy: ['#3'] }] },
+        ],
+      },
+      aliceId,
+    );
+    expect(r.error).toBeUndefined();
+    expect(r.added).toBe(5);
+    const byTitle = new Map<string, any>(r.tasks.map((t: any) => [t.title, t]));
+    const auth = byTitle.get('Phase 1: auth');
+    const login = byTitle.get('Login form');
+    const cookie = byTitle.get('Session cookie');
+    const stripe = byTitle.get('Stripe checkout');
+    expect(login.parentId).toBe(auth.id);
+    expect(login.category).toBe('Auth');
+    expect(cookie.blockedBy).toEqual([login.id]);
+    expect(stripe.blockedBy).toEqual([cookie.id]);
+    expect(stripe.parentId).toBe(byTitle.get('Phase 2: billing').id);
+    expect(auth.estimate).toBe('L');
+    expect(auth.source).toBe('agent');
+
+    // list_tasks nests the children and says what each is waiting on.
+    const listed = await call('list_tasks', { category: 'Auth' }, aliceId);
+    const phase = listed.tasks.find((t: any) => t.id === auth.id);
+    expect(phase.children.map((c: any) => c.title)).toEqual(['Login form', 'Session cookie']);
+    expect(phase.waiting).toBe('2 sub-tasks open');
+    expect(phase.children[0].waiting).toBeNull();
+    expect(phase.children[1].waiting).toBe('blocked by "Login form"');
+
+    // Completing the blocker frees the blocked task without touching its blockedBy list.
+    await call('complete_task', { id: login.id }, aliceId);
+    const again = await call('list_tasks', { category: 'Auth' }, aliceId);
+    const cookieRow = again.tasks.find((t: any) => t.id === auth.id).children.find((c: any) => c.id === cookie.id);
+    expect(cookieRow.waiting).toBeNull();
+    expect(cookieRow.blockedBy).toEqual([login.id]);
+  });
+
+  test('add_tasks refuses an unresolvable dependency and writes nothing', async () => {
+    const before = await call('list_tasks', { status: 'all' }, aliceId);
+    const r = await call('add_tasks', { items: [{ title: 'orphan dep', blockedBy: ['does not exist'] }] }, aliceId);
+    expect(r.error).toContain('is blocked by "does not exist"');
+    const after = await call('list_tasks', { status: 'all' }, aliceId);
+    expect(after.tasks.length).toBe(before.tasks.length);
+  });
+
+  test('a blocker or parent belonging to another user is refused', async () => {
+    const bobs = await call('create_task', { title: 'bob private' }, bobId);
+    const asParent = await call('create_task', { title: 'x', parentId: bobs.task.id }, aliceId);
+    expect(asParent).toEqual({ error: 'Parent task not found' });
+    const viaBacklog = await call('add_tasks', { items: [{ title: 'y', blockedBy: [bobs.task.id] }] }, aliceId);
+    expect(viaBacklog).toEqual({ error: `Blocking task not found: ${bobs.task.id}` });
+  });
+
+  test('list_tasks defaults to active tasks; status "all" includes done; in_progress ranks first in view next', async () => {
+    const t = await call('create_task', { title: 'started thing' }, aliceId);
+    const started = await call('update_task', { id: t.task.id, status: 'in_progress' }, aliceId);
+    expect(started.task.status).toBe('in_progress');
+    const done = await call('create_task', { title: 'finished thing' }, aliceId);
+    await call('complete_task', { id: done.task.id }, aliceId);
+
+    const active = await call('list_tasks', {}, aliceId);
+    const activeTitles = active.tasks.map((x: any) => x.title);
+    expect(activeTitles).toContain('started thing');
+    expect(activeTitles).not.toContain('finished thing');
+    const all = await call('list_tasks', { status: 'all' }, aliceId);
+    expect(all.tasks.map((x: any) => x.title)).toContain('finished thing');
+
+    const next = await call('list_tasks', { view: 'next', limit: 50 }, aliceId);
+    expect(next.tasks[0]).toMatchObject({ title: 'started thing', bucket: 'doing', reason: 'in progress' });
+  });
+});

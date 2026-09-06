@@ -3,7 +3,7 @@ import { NEXT_BUCKET_ORDER, dateOnlyToEndOfDay, isValidTimezone, rankTasks } fro
 
 const NOW = new Date('2026-09-07T10:00:00'); // local time, a Monday
 
-type T = { id: string; title: string; status: string; priority: number; dueAt?: string | null; createdAt: string; source?: string };
+type T = { id: string; title: string; status: string; priority: number; dueAt?: string | null; createdAt: string; source?: string; parentId?: string | null; blockedBy?: string[] };
 const mk = (over: Partial<T> & { id: string }): T => ({
   title: over.id,
   status: 'open',
@@ -15,18 +15,47 @@ const mk = (over: Partial<T> & { id: string }): T => ({
 });
 
 describe('rankTasks', () => {
-  test('orders overdue → today → high → inbound → upcoming → backlog', () => {
+  test('orders doing → overdue → today → high → inbound → upcoming → backlog → waiting', () => {
     const tasks = [
+      mk({ id: 'waiting', blockedBy: ['backlog'] }),
       mk({ id: 'backlog' }),
       mk({ id: 'upcoming', dueAt: '2026-09-10T09:00:00' }),
       mk({ id: 'inbound', source: 'email', createdAt: '2026-09-07T08:00:00' }),
       mk({ id: 'high', priority: 3 }),
       mk({ id: 'today', dueAt: '2026-09-07T17:00:00' }),
       mk({ id: 'overdue', dueAt: '2026-09-05T09:00:00' }),
+      mk({ id: 'doing', status: 'in_progress' }),
     ];
     const ranked = rankTasks(tasks, NOW);
-    expect(ranked.map((r) => r.task.id)).toEqual(['overdue', 'today', 'high', 'inbound', 'upcoming', 'backlog']);
+    expect(ranked.map((r) => r.task.id)).toEqual(['doing', 'overdue', 'today', 'high', 'inbound', 'upcoming', 'backlog', 'waiting']);
     expect(ranked.map((r) => r.bucket)).toEqual([...NEXT_BUCKET_ORDER]);
+  });
+
+  test('in-progress tasks rank first with their reason, even when overdue', () => {
+    const ranked = rankTasks([mk({ id: 'late', dueAt: '2026-09-01T09:00:00' }), mk({ id: 'doing', status: 'in_progress', dueAt: '2026-09-01T09:00:00' })], NOW);
+    expect(ranked.map((r) => r.task.id)).toEqual(['doing', 'late']);
+    expect(ranked[0].reason).toBe('in progress');
+  });
+
+  test('a task blocked by an active task waits, even when overdue; a done blocker does not block', () => {
+    const ranked = rankTasks(
+      [
+        mk({ id: 'blocked', dueAt: '2026-09-01T09:00:00', blockedBy: ['blocker'] }),
+        mk({ id: 'free', blockedBy: ['finished'] }),
+        mk({ id: 'blocker', title: 'Ship auth', createdAt: '2026-09-02T00:00:00Z' }),
+        mk({ id: 'finished', status: 'done' }),
+      ],
+      NOW,
+    );
+    expect(ranked.map((r) => r.task.id)).toEqual(['blocker', 'free', 'blocked']);
+    expect(ranked[2]).toMatchObject({ bucket: 'waiting', reason: 'blocked by "Ship auth"' });
+    expect(ranked[1].bucket).toBe('backlog');
+  });
+
+  test('a parent with open sub-tasks waits behind them', () => {
+    const ranked = rankTasks([mk({ id: 'phase', priority: 3 }), mk({ id: 'child', parentId: 'phase' })], NOW);
+    expect(ranked.map((r) => r.task.id)).toEqual(['child', 'phase']);
+    expect(ranked[1]).toMatchObject({ bucket: 'waiting', reason: '1 sub-task open' });
   });
 
   test('drops done and archived tasks', () => {
