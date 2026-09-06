@@ -1919,8 +1919,8 @@ export class SwarmSpawner {
     //
     // The lane is the expert's assigned topic (experts.topic) when an expert
     // matched, else the child role — which canonicalizes via RETIRED_TOPIC_ALIASES
-    // to the 'agents' lane (or 'writing' for the long-form text roles:
-    // research/communication/pm/writing).
+    // to the 'agents' lane ('writing' for the long-form text roles:
+    // communication/pm/writing; 'research' is its own lane).
     const lane = expertLane || childRole;
     let candidate = expertModel;
     // One lookup for the whole routing block — getTopicConfig is an in-memory

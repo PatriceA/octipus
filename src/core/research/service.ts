@@ -146,10 +146,11 @@ export function defaultResearchDeps(userId: string): ResearchDeps {
     complete: async (system, user) => {
       const registry = getModelRegistry();
       // Resolve via the 'research' role so deep research follows the same lane
-      // as the research worker — 'research' canonicalizes to the 'writing' lane.
+      // as the research worker. 'research' is its own lane (it used to alias to
+      // 'writing', which made a model bound to it unreachable).
       const model = await registry.getModelForTopic('research');
       if (!model) {
-        throw new Error('No model is bound to the "writing" topic (the research lane) — bind one on the Topics page.');
+        throw new Error('No model is bound to the "research" topic — bind one on the Topics page.');
       }
       const result = await getLiteLLMClient().complete({
         model: model.modelId,

@@ -82,9 +82,11 @@ describe.skipIf(!isIntegration)('Topic consolidation (Integration)', () => {
       expect(m?.modelId).toBe('lane-backup-id');
     });
 
-    test("long-form role topic 'research' now resolves the writing lane (unbound here)", async () => {
-      // research → writing (not agents); this fixture binds no writing model, so
-      // it fails loud — proving the re-route, not the agents fallback.
+    test("'research' resolves its OWN lane, not writing and not agents", async () => {
+      // The alias to `writing` made a model bound to `research` unreachable —
+      // the highest-token role in the system could not be pinned to a cheap or
+      // local model. This fixture binds neither research nor writing, so a
+      // null here proves it resolves research (fail loud), not the agents lane.
       const m = await getModelRegistry().getModelForTopic('research');
       expect(m).toBeNull();
     });

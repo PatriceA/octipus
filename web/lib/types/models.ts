@@ -92,7 +92,8 @@ export interface LiteLLMModel {
 export const AVAILABLE_TOPICS = [
   // model lanes (text)
   { value: 'agents', label: 'Agents', description: 'All expert/worker agents — the main text lane. Every specialist resolves its model here unless the expert pins its own model or lane.' },
-  { value: 'writing', label: 'Writing', description: 'Long-form text roles — Researcher, Writer, Project Manager, Communication. Split from Agents so this work can run on a cheaper/faster model. Unbound = these roles fail loud; bind a model or leave them on Agents.' },
+  { value: 'writing', label: 'Writing', description: 'Long-form text roles — Writer, Project Manager, Communication. Split from Agents so this work can run on a cheaper/faster model. Unbound = these roles fail loud; bind a model or leave them on Agents.' },
+  { value: 'research', label: 'Research', description: 'Investigation and deep research — the highest-token work in the system, since a researcher fans out into children that each re-send a growing context. Its own lane so it can be pinned to a local or cheap model. Unbound = research fails loud.' },
   { value: 'chat', label: 'Chat', description: 'Casual conversations and direct replies. Also preferred by the rootAgent when bound; unbound = rootAgent uses the default model.' },
   { value: 'voice', label: 'Voice', description: 'Phone call conversations (Twilio/Telnyx/Plivo) — bind a fast model for low latency. Unbound = falls back to the default model.' },
   // automated background text tasks (one lane)

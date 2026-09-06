@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { isIntegration, setupIntegrationDb, teardownIntegration, truncateTables } from '@/test-helpers/integration';
+import { eq } from 'drizzle-orm';
 import { SwarmSpawner } from './spawner';
 
 /**
@@ -31,6 +32,16 @@ describe.skipIf(!isIntegration)('SwarmSpawner — executor model resolution (W9)
       topicRoles: { agents: 'primary' },
     } as never);
     await reg.registerModel({ name: 'exec-model', provider: 'ollama', modelId: 'exec-id', isEnabled: true } as never);
+    // `research` is its own lane — a model bound here used to be unreachable
+    // (the role aliased to `writing`), which is what this fixture proves.
+    await reg.registerModel({
+      name: 'local-research-model', provider: 'ollama', modelId: 'research-id', isEnabled: true,
+      topicRoles: { research: 'primary' },
+    } as never);
+    await reg.registerModel({
+      name: 'writing-model', provider: 'ollama', modelId: 'writing-id', isEnabled: true,
+      topicRoles: { writing: 'primary' },
+    } as never);
 
     const spawner = new SwarmSpawner({} as never);
     resolve = (parentModel, childRole, msg, hasPlan = false) =>
@@ -113,5 +124,32 @@ describe.skipIf(!isIntegration)('SwarmSpawner — executor model resolution (W9)
     // asymmetry this test pins rather than changes.
     const recon = await resolveWithExpert('parent-id', 'coding', 'do coding', expert.id, false);
     expect(recon.model).toBe('expert-choice-id');
+  });
+
+  test('a research child resolves the RESEARCH binding, not writing and not agents', async () => {
+    // The role used to canonicalize to the `writing` lane, so a model bound to
+    // `research` — the highest-token role there is — was never consulted.
+    expect((await resolve('parent-id', 'research', 'look into it', false)).model).toBe('research-id');
+    expect((await resolve('parent-id', 'research', 'look into it', true)).model).toBe('research-id');
+  });
+
+  test('an expert parked on the writing lane still routes research through writing', async () => {
+    // The lane comes from the EXPERT when one matches, so pointing the lane at
+    // `research` in code is only half the fix — the shipped Researcher expert
+    // had to move too (migration 0096). This pins the mechanism that makes the
+    // expert's lane authoritative, so the migration's absence would show up.
+    const { getDb } = await import('@/db/postgres');
+    const { experts } = await import('@/db/schema/experts');
+    const [parked] = await getDb()
+      .insert(experts)
+      .values({ name: 'Parked Researcher', role: 'research', topic: 'writing', isSystem: true } as never)
+      .returning();
+
+    expect((await resolveWithExpert('parent-id', 'research', 'look into it', parked.id, false)).model)
+      .toBe('writing-id');
+
+    await getDb().update(experts).set({ topic: 'research' }).where(eq(experts.id, parked.id));
+    expect((await resolveWithExpert('parent-id', 'research', 'look into it', parked.id, false)).model)
+      .toBe('research-id');
   });
 });
