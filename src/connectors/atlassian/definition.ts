@@ -1,5 +1,9 @@
 import type { ConnectorDefinition } from '../types';
 
+/** Discovery URL for OAuth metadata per MCP spec. */
+export const ATLASSIAN_OAUTH_DISCOVERY_URL =
+  'https://mcp.atlassian.com/.well-known/oauth-authorization-server';
+
 /**
  * Atlassian Remote MCP Server connector.
  * Endpoint: https://mcp.atlassian.com/v1/mcp/authv2
@@ -11,6 +15,7 @@ export const ATLASSIAN_CONNECTOR: ConnectorDefinition = {
   description: 'Connect Jira and Confluence via the Atlassian Remote MCP Server',
   logoUrl: '/logos/atlassian.svg',
   mcpEndpoint: 'https://mcp.atlassian.com/v1/mcp/authv2',
+  oauthDiscoveryUrl: ATLASSIAN_OAUTH_DISCOVERY_URL,
   oauthScopes: [
     'read:me',
     'read:jira-work',
@@ -20,7 +25,3 @@ export const ATLASSIAN_CONNECTOR: ConnectorDefinition = {
     'offline_access',
   ],
 };
-
-/** Discovery URL for OAuth metadata per MCP spec. */
-export const ATLASSIAN_OAUTH_DISCOVERY_URL =
-  'https://mcp.atlassian.com/.well-known/oauth-authorization-server';

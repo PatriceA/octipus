@@ -1,5 +1,5 @@
-import { index, pgTable, real, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
+import { index, pgTable, real, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 /**
  * Knowledge-graph Tier 1 — explicit directed edges between knowledge
@@ -97,7 +97,7 @@ export type KnowledgeLink = typeof knowledgeLinks.$inferSelect;
 export type NewKnowledgeLink = typeof knowledgeLinks.$inferInsert;
 
 /** Entities an edge can connect. Free text in the column; this is the canonical set. */
-export type KnowledgeEntityType = 'note' | 'document' | 'memory' | 'artifact' | 'tag';
+export type KnowledgeEntityType = 'note' | 'document' | 'memory' | 'artifact' | 'tag' | 'profile';
 
 /** Canonical relationship kinds. Free text in the column; this is the canonical set. */
 export type KnowledgeLinkType =
@@ -106,7 +106,9 @@ export type KnowledgeLinkType =
   | 'contradicts'
   | 'mentions'
   | 'child_of'
-  | 'tagged';
+  | 'tagged'
+  /** Someone was present at, or is the subject of, the thing on the other end. */
+  | 'attended';
 
 /** Provenance of an edge. */
 export type KnowledgeLinkOrigin = 'user' | 'agent' | 'wikilink' | 'suggestion';

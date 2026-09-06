@@ -17,12 +17,13 @@
  * now refuses to come up with an empty registry rather than degrading to one.
  */
 import { toolLogger } from '@/utils/logger';
-import { BaseTool } from './base-tool';
-
 import * as ArtifactsModule from './artifacts';
 import * as ArtifactsToolboxModule from './artifacts-toolbox';
+import * as AtlassianModule from './atlassian';
+import { BaseTool } from './base-tool';
 import * as BrowserModule from './browser';
 import * as BrowserExtModule from './browser-ext';
+import * as DataModule from './data';
 import * as DockerModule from './docker';
 import * as DocumentsModule from './documents';
 import * as EmailProcessorModule from './email-processor';
@@ -51,8 +52,10 @@ import * as WebsearchModule from './websearch';
 const MODULES: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
   ['artifacts', ArtifactsModule],
   ['artifacts-toolbox', ArtifactsToolboxModule],
+  ['atlassian', AtlassianModule],
   ['browser', BrowserModule],
   ['browser-ext', BrowserExtModule],
+  ['data', DataModule],
   ['docker', DockerModule],
   ['documents', DocumentsModule],
   ['email-processor', EmailProcessorModule],

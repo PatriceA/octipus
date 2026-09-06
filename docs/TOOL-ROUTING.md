@@ -29,21 +29,21 @@ root itself runs as `general`, so anything in that row it does without spawning.
 | Category | Role | Tools Available | Trigger Keywords (examples) |
 |----------|------|----------------|----------------------------|
 | coding | coding | filesystem, shell, git, github, knowledge, task_state, repo_registry, skill-distill, mcp | "implement", "write code", "fix bug", "refactor", "typescript", "react", "git commit" |
-| research | research | websearch, knowledge, task_state, filesystem, profiles, artifacts, artifacts_toolbox, repo_registry, skill-distill, mcp | "research", "investigate", "search the web", "compare", "find out", "tell me about" |
+| research | research | websearch, knowledge, task_state, filesystem, profiles, artifacts, artifacts_toolbox, documents, repo_registry, skill-distill, mcp | "research", "investigate", "search the web", "compare", "find out", "tell me about" |
 | devops | devops | shell, docker, git, filesystem, mcp | "docker", "kubernetes", "deploy", "CI/CD", "nginx", "terraform" |
 | security | security | shell, filesystem, browser, browser-ext, websearch, knowledge, task_state, mcp | "vulnerability", "audit", "OWASP", "threat model", "security review" |
-| data | data | shell, filesystem, knowledge, task_state, artifacts, artifacts_toolbox, mcp | "database schema", "SQL query", "migration", "ETL", "data pipeline" |
-| writing | writing | filesystem, browser, websearch, knowledge, task_state, messaging | "documentation", "write docs", "readme", "technical writing", "changelog" |
+| data | data | data, shell, filesystem, knowledge, task_state, artifacts, artifacts_toolbox, documents, mcp | "database schema", "SQL query", "migration", "ETL", "data pipeline", "query the database", "analyse this CSV" |
+| writing | writing | filesystem, browser, websearch, knowledge, task_state, messaging, documents | "documentation", "write docs", "readme", "technical writing", "changelog" |
 | design | design | browser, filesystem | "UI design", "UX", "wireframe", "mockup", "accessibility" |
 | finance | finance | browser, websearch, filesystem | "budget", "financial analysis", "ROI", "cost analysis" |
-| communication | communication | google-workspace, microsoft365, messaging, scheduling, profiles, email-processor, voice | "email", "gmail", "calendar", "phone call", "call me", "outlook" |
+| communication | communication | google-workspace, microsoft365, messaging, scheduling, profiles, notes, email-processor, voice | "email", "gmail", "calendar", "phone call", "call me", "outlook" |
 | automation | automation | shell, docker, filesystem, scheduling, mcp | "schedule", "cron", "recurring task", "remind me", "automate" |
 | architecture | architecture | filesystem, shell, knowledge, task_state, websearch, repo_registry, mcp | "architecture", "system design", "requirements", "technical specification", "design document" |
 | qa | qa | browser, browser-ext, shell, docker, filesystem, knowledge, task_state, visual, artifacts, artifacts_toolbox | "run tests", "test suite", "validate", "verify", "validation" |
 | review | review | filesystem, shell, git, github, knowledge, task_state, repo_registry, visual | "review the code", "code review", "linting", "test coverage" |
 | ai | ai | shell, filesystem, browser, browser-ext, websearch, knowledge, task_state, mcp | "ML model", "RAG", "training", "neural network", "embedding" |
-| general | general | filesystem, browser-ext, websearch, messaging, knowledge, notes, tasks, task_state, scheduling, profiles, email-processor, artifacts, artifacts_toolbox, skill-distill, mcp | "browser", "screenshot", "telegram", "send message", "knowledge base" |
-| pm | pm | filesystem, messaging, tasks, knowledge, github, skill-distill | "project plan", "estimates", "timeline", "deliverables" |
+| general | general | filesystem, browser-ext, websearch, messaging, knowledge, notes, tasks, task_state, scheduling, profiles, email-processor, artifacts, artifacts_toolbox, documents, skill-distill, mcp | "browser", "screenshot", "telegram", "send message", "knowledge base" |
+| pm | pm | filesystem, messaging, tasks, knowledge, github, atlassian, skill-distill | "project plan", "estimates", "timeline", "deliverables", "jira", "confluence" |
 
 ### Prompt Examples → Routing
 

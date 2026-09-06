@@ -1,4 +1,4 @@
-import { getKnowledgeGraph, entityRefFromSourceId, type EntityRef, type TraversalDirection } from '@/core/knowledge/graph';
+import { type EntityRef, entityRefFromSourceId, getKnowledgeGraph, type TraversalDirection } from '@/core/knowledge/graph';
 import { slugify } from '@/core/knowledge/wikilink';
 import { CODE_NOT_INDEXED_MESSAGE, isCodeFile } from '@/core/rag/code-detection';
 import { type EmbeddingPurpose, getEmbeddingService } from '@/core/rag/embeddings';
@@ -99,6 +99,7 @@ export class KnowledgeTool extends BaseTool {
         { name: 'index_file', description: 'Index a file into the knowledge base', parameters: { path: { type: 'string', description: 'File path', required: true } }, returns: 'Number of chunks indexed' },
         { name: 'index_directory', description: 'Index all matching files in a directory', parameters: { path: { type: 'string', description: 'Directory path', required: true } }, returns: 'Index results with file and chunk counts' },
         { name: 'cleanup_knowledge', description: 'Remove orphaned, stale, short, and duplicate entries from the knowledge base', parameters: { dry_run: { type: 'boolean', description: 'Preview only' } }, returns: 'Cleanup summary with counts' },
+        { name: 'verify_knowledge', description: 'Mark knowledge entries as still true as of now', parameters: { ids: { type: 'array', description: 'Entry ids from search results', required: true } }, returns: 'How many entries were re-verified' },
         { name: 'knowledge_stats', description: 'Get detailed knowledge base statistics', parameters: {}, returns: 'Stats including counts, age distribution, and coverage' },
         { name: 'link_knowledge', description: 'Create an explicit directed edge between two knowledge entities', parameters: { from_type: { type: 'string', description: 'Source entity type', required: true }, from_id: { type: 'string', description: 'Source entity id', required: true } }, returns: 'The created edge id and whether it resolved' },
         { name: 'get_backlinks', description: 'List edges pointing at an entity (or sharing a tag/ref)', parameters: { ref: { type: 'string', description: 'Slug or tag to look up' } }, returns: 'Inbound edges' },
@@ -129,7 +130,7 @@ export class KnowledgeTool extends BaseTool {
       createParameterSchema({
         query: { type: 'string', description: 'The search query', required: true },
         limit: { type: 'number', description: 'Max results to return (default: 5)', default: 5 },
-        purpose: { type: 'string', description: 'Filter by row purpose: document, message, image_description, knowledge_artifact, ephemeral, or omit for all. (Raw source code is never indexed — use the repo_registry tool to navigate code.)' },
+        purpose: { type: 'string', description: 'Filter by row purpose: document, note, message, image_description, knowledge_artifact, ephemeral, or omit for all. (Raw source code is never indexed — use the repo_registry tool to navigate code.)' },
         mode: { type: 'string', description: 'Search mode: hybrid (default), semantic (vector only), keyword (full-text only), or graph (hybrid entry points, then follow authored knowledge_links edges one hop).' },
         min_similarity: { type: 'number', description: 'Minimum cosine similarity (0–1) to keep a result. Defaults: 0.35 semantic, 0.3 hybrid, 0 keyword.' },
         repos: { type: 'string', description: 'Optional comma-separated repo names or ids to scope the search to (multi-repo). Omit to search across all repos and non-repo content. Get repo names/ids from the repo_registry tool.' },
@@ -181,8 +182,13 @@ export class KnowledgeTool extends BaseTool {
             sourceId: r.sourceId,
             filePath: r.metadata.filePath,
             repoId: r.repoId ?? undefined,
+            // Age is what tells the model whether to quote this as current
+            // fact or to go and check. Ranking already down-ranks stale rows;
+            // saying so lets the model hedge instead of asserting.
+            ageDays: r.ageDays,
+            stale: (r.ageDays ?? 0) > 365,
           })),
-          hint: 'Use read_knowledge with an entry ID to get the full content. Similarity is cosine (0–1); below 0.3 means the match is weak.',
+          hint: 'Use read_knowledge with an entry ID to get the full content. Similarity is cosine (0–1); below 0.3 means the match is weak. ageDays is how long since the fact was written or last confirmed — say so rather than quoting an old entry as current. If you confirm one is still true, call verify_knowledge with its id.',
         };
 
         if (mode !== 'graph') return base;
@@ -303,15 +309,36 @@ export class KnowledgeTool extends BaseTool {
     );
 
     this.registerTool(
-      'link_knowledge',
-      'Create an explicit edge between two knowledge entities (note, document, memory, artifact). Edges are directed and authored — unlike similarity, they record an intentional relationship the agent can later traverse and explain. Provide either to_id (resolved target) or to_ref (a slug for a target that may not exist yet — a "ghost" link that resolves when the target is created).',
+      'verify_knowledge',
+      'Mark knowledge entries as still true as of now, after you have checked them against a current source. Retrieval down-ranks an entry the longer it has been since it was written or last verified, and search results report that age — this is how a fact that is still correct gets its standing back. Only call it for entries you actually confirmed; verifying something you did not check makes stale knowledge look fresh, which is worse than leaving it old.',
       createParameterSchema({
-        from_type: { type: 'string', description: 'Source entity type: note | document | memory | artifact', required: true },
+        ids: { type: 'array', description: 'Entry ids from search results', required: true, items: { type: 'string' } },
+      }),
+      async (args) => {
+        const ids = Array.isArray(args.ids) ? (args.ids as unknown[]).map(String) : [];
+        if (ids.length === 0) return { error: 'Pass the ids of the entries you confirmed.' };
+        const verified = await getEmbeddingService().markVerified(ids);
+        return {
+          verified,
+          missing: ids.length - verified,
+          message: verified === 0
+            ? 'No entries matched those ids — nothing was changed.'
+            : `${verified} entr${verified === 1 ? 'y is' : 'ies are'} now marked verified as of today.`,
+        };
+      },
+      { permissionAction: 'index' },
+    );
+
+    this.registerTool(
+      'link_knowledge',
+      'Create an explicit edge between two knowledge entities (note, document, memory, artifact, profile). Edges are directed and authored — unlike similarity, they record an intentional relationship the agent can later traverse and explain. Provide either to_id (resolved target) or to_ref (a slug for a target that may not exist yet — a "ghost" link that resolves when the target is created).',
+      createParameterSchema({
+        from_type: { type: 'string', description: 'Source entity type: note | document | memory | artifact | profile', required: true },
         from_id: { type: 'string', description: 'Source entity UUID', required: true },
         to_type: { type: 'string', description: 'Target entity type (omit for an unresolved ghost link)' },
         to_id: { type: 'string', description: 'Target entity UUID (omit for a ghost link by ref)' },
         to_ref: { type: 'string', description: 'Canonical target slug. Strongly recommended whenever you know the target title — it is what get_backlinks(ref) and ghost resolution match on. If omitted while to_id is given, the id is stored as the ref and backlink-by-slug lookups will not find this edge.' },
-        link_type: { type: 'string', description: 'references (default) | derived_from | contradicts | mentions | child_of', default: 'references' },
+        link_type: { type: 'string', description: 'references (default) | derived_from | contradicts | mentions | child_of | attended', default: 'references' },
         label: { type: 'string', description: 'Optional edge label / alias' },
       }),
       async (args, context) => {
@@ -342,7 +369,7 @@ export class KnowledgeTool extends BaseTool {
       'get_backlinks',
       'List edges pointing AT an entity ("what links to X"). Pass entity_id for resolved backlinks, or ref to also include unresolved ghost links and tag membership (ref = a tag).',
       createParameterSchema({
-        entity_type: { type: 'string', description: 'Entity type when using entity_id: note | document | memory | artifact' },
+        entity_type: { type: 'string', description: 'Entity type when using entity_id: note | document | memory | artifact | profile' },
         entity_id: { type: 'string', description: 'Entity UUID' },
         ref: { type: 'string', description: 'Canonical slug/tag to find backlinks by reference (catches ghosts + tags)' },
       }),
@@ -367,7 +394,7 @@ export class KnowledgeTool extends BaseTool {
       'traverse_knowledge',
       'Walk the authored knowledge graph from an entry entity via bounded BFS. Returns the entities reached by following edges, with the hop depth and which edge reached each. Use this to gather context the author explicitly connected, complementing similarity search.',
       createParameterSchema({
-        entry_type: { type: 'string', description: 'Entry entity type: note | document | memory | artifact', required: true },
+        entry_type: { type: 'string', description: 'Entry entity type: note | document | memory | artifact | profile', required: true },
         entry_id: { type: 'string', description: 'Entry entity UUID', required: true },
         hops: { type: 'number', description: 'Max BFS depth (default 2)', default: 2 },
         direction: { type: 'string', description: 'out | in | both (default both)', default: 'both' },

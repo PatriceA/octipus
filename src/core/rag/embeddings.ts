@@ -2,7 +2,7 @@ import { createHash } from 'crypto';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { cleanupAuditLog } from '@/db/schema/cleanup-log';
-import { cosineSimilarity, type EmbeddingMetadata, embeddings } from '@/db/schema/embeddings';
+import { ageInDaysSql, cosineSimilarity, type EmbeddingMetadata, embeddings, freshnessFactorSql } from '@/db/schema/embeddings';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { coreLogger } from '@/utils/logger';
 import { chunkMarkdown, looksLikeMarkdown, type StructuralChunk } from './markdown-chunker';
@@ -87,6 +87,17 @@ export interface SearchResult {
   headingLevel?: number | null;
   /** Source repository (`workspace_repos.id`) for multi-repo scoping. NULL = non-repo content. */
   repoId?: string | null;
+  /**
+   * When the content was last written or re-confirmed. NULL for a row written
+   * before the column existed — treat it as `createdAt`, which is what the
+   * ranking does.
+   */
+  lastVerifiedAt?: Date | null;
+  /**
+   * Days since that verification. Surfaced so a caller can say "this is two
+   * years old" rather than quoting it as current fact.
+   */
+  ageDays?: number;
 }
 
 const MAX_CHUNK_SIZE = 1000; // chars per chunk
@@ -312,6 +323,9 @@ export class EmbeddingService {
       sectionPath: structural?.sectionPath ?? null,
       headingLevel: structural?.headingLevel ?? null,
       docId: structural?.docId ?? null,
+      // Writing content IS verifying it: whatever produced this chunk saw the
+      // source say so just now.
+      lastVerifiedAt: sql`now()`,
     })
       // Dedup is enforced by the (purpose, source_id, content_sha256) unique
       // index. A re-index of unchanged content is a no-op rather than an
@@ -320,7 +334,10 @@ export class EmbeddingService {
         target: [embeddings.purpose, embeddings.sourceId, embeddings.contentSha256],
         // Refresh repoId on conflict too — otherwise re-indexing identical content
         // under a (newly) different repo scope would leave the old/NULL repoId.
-        set: { lastAccessedAt: sql`now()`, repoId: sql`excluded.repo_id` },
+        // Re-indexing byte-identical content means the source still says it,
+        // which is exactly what `last_verified_at` records — so a nightly
+        // re-crawl keeps unchanged facts fresh without rewriting a row.
+        set: { lastAccessedAt: sql`now()`, lastVerifiedAt: sql`now()`, repoId: sql`excluded.repo_id` },
       })
       .returning({ id: embeddings.id });
     return result[0].id;
@@ -610,10 +627,15 @@ export class EmbeddingService {
         headingLevel: embeddings.headingLevel,
         repoId: embeddings.repoId,
         similarity: similarityExpr,
+        lastVerifiedAt: embeddings.lastVerifiedAt,
+        ageDays: ageInDaysSql(),
       })
       .from(embeddings)
       .where(conditions)
-      .orderBy(desc(similarityExpr))
+      // Freshness multiplies the score but is NOT folded into the reported
+      // `similarity` — a caller comparing against `minSimilarity` must still
+      // be comparing cosine distance, not cosine distance times age.
+      .orderBy(desc(sql`${similarityExpr} * ${freshnessFactorSql()}`))
       .limit(limit);
 
     const out = results
@@ -628,6 +650,8 @@ export class EmbeddingService {
         sectionPath: r.sectionPath,
         headingLevel: r.headingLevel,
         repoId: r.repoId,
+        lastVerifiedAt: r.lastVerifiedAt,
+        ageDays: Math.round(Number(r.ageDays) || 0),
       }))
       .filter(r => r.similarity >= minSimilarity);
     this.recordAccess(out.map((r) => r.id));
@@ -758,10 +782,14 @@ export class EmbeddingService {
       )
       SELECT c.cosine_sim AS similarity, c.rrf_score, c.has_fts_match,
              e.id, e.content, e.abstract, e.purpose, e.source_id, e.metadata,
-             e.section_path, e.heading_level, e.repo_id
+             e.section_path, e.heading_level, e.repo_id, e.last_verified_at,
+             ${ageInDaysSql('e')} AS age_days
       FROM combined c
       JOIN embeddings e ON e.id = c.id
-      ORDER BY c.rrf_score DESC
+      -- Freshness scales the fused rank only; the similarity column stays the
+      -- raw cosine value the API contract promises, so a caller's
+      -- minSimilarity bar means the same thing it always did.
+      ORDER BY c.rrf_score * ${freshnessFactorSql('e')} DESC
       LIMIT ${limit}
     `);
 
@@ -778,6 +806,8 @@ export class EmbeddingService {
       section_path: string[] | null;
       heading_level: number | null;
       repo_id: string | null;
+      last_verified_at: Date | null;
+      age_days: number | string;
     }>(results)
       .map(r => ({
         id: r.id,
@@ -791,6 +821,8 @@ export class EmbeddingService {
         sectionPath: r.section_path,
         headingLevel: r.heading_level,
         repoId: r.repo_id,
+        lastVerifiedAt: r.last_verified_at,
+        ageDays: Math.round(Number(r.age_days) || 0),
       }))
       // Keep when raw cosine similarity passes the bar, or when an exact
       // keyword (FTS) hit makes the entry relevant on lexical grounds alone.
@@ -834,6 +866,40 @@ export class EmbeddingService {
       .catch((err) => {
         coreLogger.warn({ err, count: ids.length }, 'embeddings.recordAccess failed (non-fatal)');
       });
+  }
+
+  /**
+   * Record that these chunks were checked and are still true.
+   *
+   * Deliberately NOT on the `recordAccess` path: reading a stale fact does
+   * not make it fresher, and folding the two together would mean the most
+   * frequently retrieved wrong answer also looked like the most recently
+   * confirmed one.
+   *
+   * Awaited rather than fire-and-forget, because a caller who says "verified"
+   * needs to know whether it stuck.
+   */
+  async markVerified(ids: string[]): Promise<number> {
+    const unique = [...new Set(ids)].filter((id) => typeof id === 'string' && id.length > 0);
+    if (unique.length === 0) return 0;
+    const db = getDb();
+    const updated = await db
+      .update(embeddings)
+      .set({ lastVerifiedAt: sql`now()` })
+      .where(inArray(embeddings.id, unique))
+      .returning({ id: embeddings.id });
+    return updated.length;
+  }
+
+  /** The same, addressed by the source that produced the chunks. */
+  async markVerifiedBySource(purpose: EmbeddingPurpose, sourceId: string): Promise<number> {
+    const db = getDb();
+    const updated = await db
+      .update(embeddings)
+      .set({ lastVerifiedAt: sql`now()` })
+      .where(and(eq(embeddings.purpose, purpose), eq(embeddings.sourceId, sourceId)))
+      .returning({ id: embeddings.id });
+    return updated.length;
   }
 
   // ── Read by ID ────────────────────────────────────────────────────

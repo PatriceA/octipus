@@ -26,7 +26,13 @@ This doc lists what we are exploring. Order inside each section is rough priorit
   and job logs and answers threads; an *Address Review* stage closes the
   review loop in the Full Development Cycle; the repo registry indexes
   symbols with tree-sitter (`find_symbol`); the gateway runs over stdio as
-  JSON lines (`--stdio`). Plan:
+  JSON lines (`--stdio`). Phase 5 the same day: a `data` tool group runs
+  read-only SQL against a registered database or a workspace CSV;
+  `export_document` writes a deliverable out as .docx or .xlsx; Jira and
+  Confluence are named tools the `pm` role holds and Linear is a second
+  connector; `channel_history` / `channel_search` read Slack and Teams back;
+  meetings become notes linked to the people who attended, and knowledge
+  chunks carry a `last_verified_at` that retrieval down-ranks by. Plan:
   [docs/plans/daily-driver-gaps.md](docs/plans/daily-driver-gaps.md).
 
 - **Mock-provider scaffold for the model layer.** `src/models/litellm-client.ts`

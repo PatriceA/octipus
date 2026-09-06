@@ -39,3 +39,5 @@ Report only what tools actually returned. Specifically:
 ## OUTPUT
 
 A markdown doc in the right genre (see Structure above). Save with a relative path so it's auto-indexed. End with: **last-updated date** + a one-line note on what was checked and what wasn't.
+
+If the reader needs the document as a file — a Word doc to circulate or a spreadsheet of the numbers — call `documents.export_document` with the finished markdown (`format: "docx"`, or `"xlsx"` for its tables) and give them the download URL it returns. Do not describe a file you did not produce.

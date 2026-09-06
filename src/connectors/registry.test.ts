@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import type { ConnectorDefinition, UserConnectorStatus } from './types';
 import { ATLASSIAN_CONNECTOR } from './atlassian/definition';
+import { ALL_CONNECTORS, findConnector, isConnectorId } from './definitions';
+import { LINEAR_CONNECTOR } from './linear/definition';
 
 describe('connector types', () => {
   test('ConnectorDefinition shape compiles', () => {
@@ -10,6 +12,7 @@ describe('connector types', () => {
       description: 'Test connector',
       logoUrl: '/logos/test.svg',
       mcpEndpoint: 'https://example.com/mcp',
+      oauthDiscoveryUrl: 'https://example.com/.well-known/oauth-authorization-server',
       oauthScopes: ['read:me', 'offline_access'],
     };
     expect(def.id).toBe('test');
@@ -24,11 +27,32 @@ describe('connector types', () => {
   });
 });
 
-describe('atlassian definition', () => {
-  test('has required fields', () => {
+describe('built-in definitions', () => {
+  test('atlassian has required fields', () => {
     expect(ATLASSIAN_CONNECTOR.id).toBe('atlassian');
     expect(ATLASSIAN_CONNECTOR.mcpEndpoint).toBe('https://mcp.atlassian.com/v1/mcp/authv2');
     expect(ATLASSIAN_CONNECTOR.oauthScopes.length).toBeGreaterThan(0);
+  });
+
+  test('linear has required fields', () => {
+    expect(LINEAR_CONNECTOR.id).toBe('linear');
+    expect(LINEAR_CONNECTOR.mcpEndpoint).toBe('https://mcp.linear.app/mcp');
+    expect(LINEAR_CONNECTOR.oauthScopes).toEqual(['read', 'write']);
+  });
+
+  test('every connector carries a discovery URL and a unique id', () => {
+    // Registration is driven entirely off the discovery document, so a
+    // definition without one cannot be connected at all.
+    const ids = new Set<string>();
+    for (const connector of ALL_CONNECTORS) {
+      expect(connector.oauthDiscoveryUrl).toMatch(/^https:\/\/.+\/\.well-known\//);
+      expect(ids.has(connector.id)).toBe(false);
+      ids.add(connector.id);
+    }
+    expect(findConnector('atlassian')?.name).toBe('Atlassian');
+    expect(findConnector('nope')).toBeUndefined();
+    expect(isConnectorId('linear')).toBe(true);
+    expect(isConnectorId('google')).toBe(false);
   });
 });
 

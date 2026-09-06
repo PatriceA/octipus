@@ -37,6 +37,44 @@ curl -X POST http://localhost:3005/api/documents/upload \
 ### Messaging Channels
 File attachments from Telegram, Slack, WhatsApp, and Teams are automatically downloaded and enqueued for processing via the `AttachmentHandler`. Processable MIME types include images (PNG, JPEG, TIFF, BMP, WebP), PDFs, Office documents (Word, Excel), and text files.
 
+## Exporting a deliverable
+
+Reading docx / xlsx / pptx has always worked; nothing wrote them, so an agent's
+report could only leave as markdown. `documents.export_document` closes that:
+
+```
+export_document { title, markdown, format: "docx" | "xlsx", summary? }
+  → { documentId, filename, mimeType, size, downloadUrl, format }
+```
+
+- **docx** carries headings, bold / italic / inline code, bullet and numbered
+  lists (real Word numbering, not bullet characters), block quotes, code
+  blocks, horizontal rules and tables. If the markdown does not open with a
+  level-1 heading, `title` becomes one.
+- **xlsx** makes one sheet per markdown table, named after the heading above
+  it. Cells that are unambiguously numeric become numbers so the sheet can be
+  summed; a value with a leading zero stays text so a phone number survives.
+  Markdown with no table is an error naming what is missing, not an empty
+  workbook.
+
+The file lands in the user's Documents under the `Exports` category as a
+`completed` row — deliberately not enqueued for processing, since the OCR
+queue exists to extract text from what a human uploaded and running it over
+our own output would only re-derive what we already had. It is fetched at
+`GET /api/documents/:id/raw?download=1`, which is the `downloadUrl` the tool
+returns.
+
+No new dependency: xlsx is written with SheetJS (already used to read
+spreadsheets) and the docx package is built directly on `jszip` (already used
+to read pptx speaker notes). A `.docx` is a zip of five small XML parts, and
+the repo's rule is not to add a library for something it can already do. The
+tests verify the output by reading it back with `mammoth` — the same library
+the processor uses to read Word files — so what is asserted is that a real
+Word reader can open it.
+
+The `documents` group is held by the `writing`, `research`, `data` and
+`general` roles.
+
 ### Agent Tool
 Agents with the `documents` tool can list, view, and search uploaded documents.
 

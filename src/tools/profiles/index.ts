@@ -1,6 +1,7 @@
 import type { ToolManifest } from '@/core/types';
 import { ProfileRepository } from '@/db/repositories/profile-repository';
 import type { ProfileFact } from '@/db/schema/profiles';
+import { toolLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
 export class ProfilesTool extends BaseTool {
@@ -130,7 +131,27 @@ export class ProfilesTool extends BaseTool {
           isUserProfile,
         });
 
-        return { created: true, profile: this.formatProfile(profile) };
+        // Meetings this person attended before they had a profile left ghost
+        // edges by name. Binding them here is what makes "what did we agree
+        // with Alan" work on history, not only on meetings from now on.
+        let linkedMeetings = 0;
+        try {
+          const { resolveAttendeeLinks } = await import('@/core/knowledge/meetings');
+          linkedMeetings = await resolveAttendeeLinks(userId, profile.id, profile.name);
+        } catch (err) {
+          // The profile is real either way; a failed backfill is worth a line
+          // in the log, not a failed call.
+          toolLogger.warn(
+            { err, userId, profileId: profile.id },
+            'profiles: could not bind past meeting links for the new profile',
+          );
+        }
+
+        return {
+          created: true,
+          profile: this.formatProfile(profile),
+          ...(linkedMeetings > 0 ? { linkedMeetings } : {}),
+        };
       },
       { requiresPermission: false },
     );

@@ -1,10 +1,10 @@
 import { getCanvasBuilder } from '@/core/knowledge/canvas';
-import { isRootAgent } from '@/core/types';
 import { getNoteService } from '@/core/knowledge/notes';
 import { getSuggestionService } from '@/core/knowledge/suggestions';
 import { getVaultSync } from '@/core/knowledge/vault';
 import { getEmbeddingService } from '@/core/rag/embeddings';
 import type { ToolManifest } from '@/core/types';
+import { isRootAgent } from '@/core/types';
 import { getKnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
 import { getNoteRepository } from '@/db/repositories/note-repository';
 import { BaseTool, createParameterSchema } from '../base-tool';
@@ -37,6 +37,8 @@ export class NotesTool extends BaseTool {
         { name: 'list_notes', description: 'List notes, optionally by kind or tag', parameters: {}, returns: 'Notes (newest first)' },
         { name: 'search_notes', description: 'Hybrid search over note content', parameters: { query: { type: 'string', description: 'Search query', required: true } }, returns: 'Matching notes' },
         { name: 'capture_note', description: 'Append a timestamped line to today\'s daily note', parameters: { text: { type: 'string', description: 'Text to capture', required: true } }, returns: 'The daily note' },
+        { name: 'write_meeting_note', description: 'Save meeting notes, linking each attendee to their profile', parameters: { title: { type: 'string', description: 'Meeting title', required: true } }, returns: 'The note id and the attendee links' },
+        { name: 'import_calendar_meetings', description: 'Create meeting notes from the connected calendars', parameters: { days: { type: 'number', description: 'Days either side of today' } }, returns: 'Imported and skipped meetings' },
         { name: 'suggest_links', description: 'Suggest unlinked but related entities for a note', parameters: { note_id: { type: 'string', description: 'Note id', required: true } }, returns: 'Suggested connections with similarity' },
         { name: 'archive_note', description: 'Soft-delete (archive) a note', parameters: { id: { type: 'string', description: 'Note id', required: true } }, returns: 'Whether the note was archived' },
         { name: 'query_notes', description: 'Bases-style property query over notes', parameters: {}, returns: 'Matching notes as a table' },
@@ -171,6 +173,71 @@ export class NotesTool extends BaseTool {
     );
 
     this.registerTool(
+      'write_meeting_note',
+      'Save what happened in a meeting, so it can be searched later and connected to the people who were there. Pass the attendees and each becomes an edge to their profile — bound when a profile exists, and left as a ghost that binds automatically if the profile is created later. Re-saving the same title on the same date updates the same note, so this is safe to call again with fuller notes. Use this rather than write_note whenever the content is a meeting: it is what makes "what did we agree with Ada in March" answerable.',
+      createParameterSchema({
+        title: { type: 'string', description: 'What the meeting was — used with the date to identify the note', required: true },
+        body: { type: 'string', description: 'The notes: decisions, actions and who owns them' },
+        at: { type: 'string', description: 'When it happened, ISO-8601. Defaults to now.' },
+        attendees: { type: 'array', description: 'Who was there — names, email addresses, or "Name <email>"', items: { type: 'string' } },
+        source: { type: 'string', description: 'Where this came from, e.g. pasted, transcript, google' },
+      }),
+      async (args, context) => {
+        if (!context.userId) throw new Error('write_meeting_note requires an authenticated user context');
+        const { ingestMeeting } = await import('@/core/knowledge/meetings');
+        const result = await ingestMeeting({
+          userId: context.userId,
+          workspaceId: context.workspaceId ?? null,
+          title: String(args.title),
+          at: typeof args.at === 'string' && args.at.trim() ? new Date(args.at).toISOString() : undefined,
+          body: typeof args.body === 'string' ? args.body : undefined,
+          attendees: parseAttendees(args.attendees),
+          source: typeof args.source === 'string' ? args.source : 'pasted',
+          createdByAgentId: context.role && !isRootAgent(context) ? context.id : null,
+        });
+        return {
+          ...result,
+          hint: result.attendees.some((a) => a.profileId === null)
+            ? 'Some attendees have no profile yet. Create one with profiles.create_profile and the meeting links to it automatically.'
+            : undefined,
+        };
+      },
+    );
+
+    this.registerTool(
+      'import_calendar_meetings',
+      'Create a meeting note for each event on the user\'s connected calendars (Google and/or Microsoft) in a window around today, with the attendees linked. Skips all-day entries, and never overwrites a note somebody has already written into — so it is safe to run every morning. Reports which calendars answered; if none are connected it says so rather than returning an empty list as if the diary were empty.',
+      createParameterSchema({
+        days_back: { type: 'number', description: 'How many days before today to import (default 1)', default: 1 },
+        days_ahead: { type: 'number', description: 'How many days after today to import (default 1)', default: 1 },
+        include_all_day: { type: 'boolean', description: 'Include all-day entries (holidays, out-of-office). Default false.', default: false },
+      }),
+      async (args, context) => {
+        if (!context.userId) throw new Error('import_calendar_meetings requires an authenticated user context');
+        const back = clampDays(args.days_back, 1);
+        const ahead = clampDays(args.days_ahead, 1);
+        const now = Date.now();
+        const { importCalendarMeetings } = await import('@/core/calendar/import-meetings');
+        const result = await importCalendarMeetings({
+          userId: context.userId,
+          workspaceId: context.workspaceId ?? null,
+          from: new Date(now - back * 86_400_000),
+          to: new Date(now + ahead * 86_400_000),
+          includeAllDay: args.include_all_day === true,
+          createdByAgentId: context.role && !isRootAgent(context) ? context.id : null,
+        });
+        if (result.providers.length === 0 && !result.partial) {
+          return {
+            imported: [],
+            skipped: [],
+            message: 'No calendar is connected for this user. Connect Google or Microsoft in Settings > Integrations first.',
+          };
+        }
+        return result;
+      },
+    );
+
+    this.registerTool(
       'suggest_links',
       'Suggest related but not-yet-linked entities for a note, using semantic similarity. Returns candidates — use link_knowledge (knowledge tool) to accept one.',
       createParameterSchema({
@@ -278,6 +345,35 @@ export class NotesTool extends BaseTool {
       { permissionAction: 'write' },
     );
   }
+}
+
+/**
+ * Attendees arrive as free text from a model: a bare name, an address, or the
+ * `Name <email>` form a calendar invite uses. All three have to work, because
+ * the alternative is a nested-object parameter a small model gets wrong.
+ */
+function parseAttendees(raw: unknown): { name?: string; email?: string }[] {
+  if (!Array.isArray(raw)) return [];
+  const out: { name?: string; email?: string }[] = [];
+  for (const entry of raw) {
+    const text = String(entry ?? '').trim();
+    if (text.length === 0) continue;
+    const angled = /^(.*?)\s*<([^>]+)>$/.exec(text);
+    if (angled) {
+      const person: { name?: string; email?: string } = { email: angled[2].trim() };
+      if (angled[1].trim()) person.name = angled[1].trim().replace(/^["']|["']$/g, '');
+      out.push(person);
+      continue;
+    }
+    out.push(text.includes('@') && !text.includes(' ') ? { email: text } : { name: text });
+  }
+  return out;
+}
+
+function clampDays(raw: unknown, fallback: number): number {
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(Math.floor(n), 60));
 }
 
 export const notesTool = new NotesTool();

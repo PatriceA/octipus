@@ -1,6 +1,6 @@
 # Daily-Driver Gaps — Plan
 
-**Status:** Phases 0, 1 and 3 shipped 2026-09-05 (#328, #329, #330); Phases 2 and 4 shipped 2026-09-06 (#331, and the PR after it); phases 5–6 and the enterprise track are planning only
+**Status:** Phases 0, 1 and 3 shipped 2026-09-05 (#328, #329, #330); Phases 2, 4 and 5 shipped 2026-09-06 (#331, #332, and the PR after it); phase 6 and the enterprise track are planning only
 **Created:** 2026-09-05
 **Scope:** What a developer / product owner / technical consultant needs before
 Octipus can run their working day, ordered by what blocks that first. Written
@@ -201,27 +201,91 @@ transport (the protocol has none on the socket either; replies correlate by
 `sessionId` and event type); no incremental re-index (a scan rebuilds the
 symbol index); no import-graph edges between files.
 
-## Phase 5 — process and analyse
+## Phase 5 — process and analyse — SHIPPED (2026-09-06)
 
-1. **Data tools.** `sql_query` (read-only, over a vault-held connection string)
-   and `csv_query` (DuckDB-style over a workspace file) as one `data` tool
-   group; the `data` role gets them.
-2. **Office output.** The document processor reads docx/xlsx/pptx; nothing
-   writes them. One `documents_export` tool (markdown → docx via the existing
-   `mammoth` sibling `docx`, tables → xlsx via SheetJS already in deps) so a
-   client deliverable can leave as a file.
-3. **PM connectors.** The Atlassian remote MCP connector
-   (`src/connectors/atlassian/definition.ts`) is generic `connector_call_tool`;
-   promote Jira issues / Confluence pages to named tools the `pm` role holds,
-   and add Linear as a second `ConnectorDefinition`. Notion/Asana wait for a
-   user who asks.
-4. **Channel read.** Slack/Teams adapters only reply when addressed. Add
-   `channel_history` / `channel_search` tools behind the existing permission
-   levels so "what did the team decide yesterday" is answerable.
-5. **Meeting notes + calendar into knowledge.** Ingest calendar events and
-   pasted / uploaded meeting notes as `note` purpose with the attendees as
-   profile links; a freshness column (`last_verified_at`) on knowledge chunks so
-   retrieval can down-rank stale facts instead of only deleting old ones.
+1. **Data tools.** A `data` tool group the `data` role holds. `sql_query` runs
+   one read-only statement against a database the user registered; `csv_query`
+   runs SQL over a CSV, TSV or spreadsheet in the workspace, and returns the
+   schema first when called without a query so the model does not have to
+   guess column names. Read-only is enforced twice: a lexical guard
+   (`core/data/sql-guard.ts`) that blanks strings and comments before scanning
+   for writes, so a data-modifying CTE and a second statement after a
+   semicolon are both refused with a message the model can act on, and a
+   `SET TRANSACTION READ ONLY` transaction with a statement timeout that would
+   refuse the write anyway. The connection is named, never pasted: the model
+   passes a vault entry *name*, and only entries the user tagged `database`
+   resolve — so the tool cannot be pointed at an API key or at a database the
+   user did not mean to expose. `list_connections` shows what is available.
+
+2. **Office output.** `documents.export_document` turns markdown into a `.docx`
+   or its tables into an `.xlsx`, lands the file in the user's Documents as a
+   `completed` row and returns a download URL. Roles that produce deliverables
+   — `writing`, `research`, `data` and `general` — now hold the `documents`
+   group, which no role previously did.
+
+3. **PM connectors.** Jira and Confluence are named tools (`atlassian`) the
+   `pm` role holds: sites, issue search by JQL, read / create / update /
+   comment / transition, and Confluence search, read, create and update.
+   Linear is a second `ConnectorDefinition`, which meant generalising the
+   connector OAuth path — dynamic client registration, token storage, refresh
+   and the HTTP routes were all written around the literal string
+   `atlassian` in seven places. They are now definition-driven, so a third
+   connector is a definition file and one line.
+
+4. **Channel read.** `messaging.channel_history` and `channel_search`, behind
+   a new `read` permission (ALLOW). Slack reads history, threads and replies
+   on the bot token; Teams reads through the signed-in user's Graph token, so
+   an agent sees exactly the conversations its user can see. Slack's wire
+   markup is turned back into readable text with real names.
+
+5. **Meeting notes + calendar into knowledge.** `notes.write_meeting_note`
+   saves a meeting as a `note`-purpose note with an edge to every attendee —
+   bound to their profile when one exists, left as a ghost that binds
+   automatically when the profile is created later, including retroactively
+   for meetings already recorded. `notes.import_calendar_meetings` creates one
+   such note per calendar event around today, and never overwrites a note
+   somebody has written into, so it is safe on a schedule. `last_verified_at`
+   (migration 0095) is stamped when a chunk is written or re-confirmed, and
+   retrieval multiplies its score by a bounded freshness factor — at most a
+   40% penalty, reached at one year — so a stale fact ranks below a fresh one
+   without ever being hidden. `verify_knowledge` is how a fact that is still
+   true gets its standing back, and search results now report the age.
+
+**Deviations from the plan above, and why.**
+
+- **No new dependencies.** The plan named DuckDB for `csv_query` and the `docx`
+  package for the Word export. Both would have been dependencies for something
+  the tree can already do: `csv_query` loads the file into an in-memory PGlite
+  (the embedded storage backend, already a dependency), which also means both
+  data tools speak the same PostgreSQL dialect; the docx writer builds the
+  OOXML package on `jszip`, already used to read pptx speaker notes. The
+  export is verified by reading it back with `mammoth` — the same library the
+  document processor uses to read Word files — so the test proves a real Word
+  reader can open it, not merely that the XML is what we wrote.
+- **Named connector tools resolve, they do not hard-code.** A capability
+  declares candidate remote tool names and candidate argument names, and
+  resolves against the connector's own `tools/list` at call time. Hard-coding
+  `getJiraIssue` would make the tool group silently dead the next time
+  Atlassian renames something; when nothing matches, the error names the tools
+  that DO exist so the model can fall back to `connector_call_tool`.
+- **Teams reads through Graph, not the bot.** `TeamsChannel` holds a Bot
+  Framework credential and an in-memory map of conversations it has seen — it
+  cannot read history at all. The `microsoft365` delegated token can, which is
+  also the right privacy answer.
+- **Slack search needs a user token.** Slack does not expose `search.messages`
+  to bot tokens. `slack.userToken` is a new optional setting; without it,
+  `channel_search` scans one named channel's history and says in the result
+  that it did (`method: "scan"`) rather than returning an empty list as if
+  nothing matched.
+- **Attendees bind on an exact match only.** `profiles` has no email column,
+  so an attendee is matched by an `email` fact or an exact name. A partial
+  name match is refused: binding "Ada" to "Ada Lovelace" is a guess, and a
+  wrong edge on a meeting record is worse than a ghost that resolves later.
+
+Not done, on purpose: Linear has a definition and OAuth but no named tools
+(the capability table it would need is the same shape as the Atlassian one);
+`sql_query` speaks PostgreSQL only; the freshness decay is a fixed curve
+rather than a per-purpose policy.
 
 ## Phase 6 — memory quality
 
@@ -288,7 +352,7 @@ not competing — federation is how two hubs talk.
 
 ## Sequencing
 
-Phases 0 to 4 are done. Phase 5 by demand, connector by connector; Phase 6
-after measuring recall. The enterprise track opens with E0 as soon as a second person
-shares one Octipus — E0 is one migration and should not wait on E1–E4 being
-designed in full.
+Phases 0 to 5 are done. Phase 6 after measuring recall on the
+`recalls_memory` eval assertion. The enterprise track opens with E0 as soon as
+a second person shares one Octipus — E0 is one migration and should not wait on
+E1–E4 being designed in full.

@@ -493,10 +493,36 @@ Authored markdown notes — the knowledge graph's Tier 2 surface. Full model in
 
 ## Connectors
 
+A connector is a remote MCP server the user authorises once, per user, over
+OAuth 2.1 with PKCE. Octipus registers itself as a public client dynamically
+against the server's own discovery document, so a connector is a definition
+file (id, name, MCP endpoint, discovery URL, scopes) and nothing else — there
+is no per-connector OAuth code. Built in today: **Atlassian** (Jira and
+Confluence) and **Linear**.
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/connectors` | List available connectors |
-| GET | `/api/connectors/:id` | Get connector details |
+| GET | `/api/connectors` | List available connectors with this user's connection status |
+| POST | `/api/connectors/:id/authorize` | Start the OAuth flow; returns `{ url }` to open in a popup |
+| GET | `/api/connectors/:id/callback` | OAuth redirect target; posts `connector:connected` to the opener |
+| DELETE | `/api/connectors/:id` | Disconnect — deletes this user's stored tokens |
+
+Tokens live in the vault under `connector_<id>_access_token` /
+`_refresh_token` / `_token_expiry`, per user; the dynamically registered client
+and its endpoints are system-scoped under `connector_<id>_client_id` /
+`_auth_endpoint` / `_token_endpoint`.
+
+Every connected connector is reachable through the generic
+`connector_list_tools` / `connector_call_tool` pair. Atlassian additionally has
+named tools (`atlassian_sites`, `jira_search`, `jira_get_issue`,
+`jira_create_issue`, `jira_update_issue`, `jira_comment`,
+`jira_transition_issue`, `jira_list_projects`, `confluence_search`,
+`confluence_get_page`, `confluence_create_page`, `confluence_update_page`),
+held by the `pm` role. Those resolve the remote tool by capability rather than
+by a hard-coded name — an ordered list of candidate names and argument names,
+matched against the server's own `tools/list` at call time — so a vendor
+rename does not silently kill the tool group. When nothing matches, the error
+names the remote tools that do exist.
 
 ## Plugins
 

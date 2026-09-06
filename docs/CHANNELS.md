@@ -139,6 +139,7 @@ Once linked, your channel identity is bound to your web account. This enables sh
 | `slack.botToken` | `SLACK_BOT_TOKEN` | Vault | Bot token (`xoxb-...`) (secret, stored in vault) |
 | `slack.appToken` | `SLACK_APP_TOKEN` | Vault | App-level token (`xapp-...`) (secret, stored in vault) |
 | `slack.signingSecret` | `SLACK_SIGNING_SECRET` | Vault | Signing secret from app settings (secret, stored in vault) |
+| `slack.userToken` | `SLACK_USER_TOKEN` | Vault | Optional user token (`xoxp-...`). **Only needed for `channel_search`** — Slack does not expose `search.messages` to bot tokens at all. Add the `search:read` User Token Scope under *OAuth & Permissions*, reinstall, and copy the **User** OAuth Token. Without it, `channel_search` scans one named channel's history instead and says so in its result. |
 
 ### Features
 
@@ -148,6 +149,7 @@ Once linked, your channel identity is bound to your web account. This enables sh
 - Rich message blocks with Markdown
 - Socket Mode (no public endpoint needed)
 - Account linking via `link` keyword
+- Reading history and searching messages — see [Reading a conversation back](#reading-a-conversation-back)
 
 ---
 
@@ -180,6 +182,45 @@ Once linked, your channel identity is bound to your web account. This enables sh
 - Proactive messaging via conversation references
 - File attachments
 - Adaptive card support
+
+---
+
+## Reading a conversation back
+
+Channels are two-way. Besides replying when addressed, an agent can read what
+was said — which is what makes "what did the team decide yesterday"
+answerable. Two tools on the `messaging` group, behind a new `read` permission
+(default ALLOW):
+
+| Tool | What it does |
+|---|---|
+| `channel_history` | Recent messages from a channel or chat, newest first. Optional `after` / `before` (ISO-8601) and `thread` (a message id) to read one thread. |
+| `channel_search` | Messages matching a query. Quote a phrase to match it whole. |
+
+**Slack** reads on the bot token, so the bot must be a member of the channel —
+`channel_history` says so, and names similar channels it can see, rather than
+returning nothing. `target` is the channel name (with or without the `#`) or
+its id. Message text is un-escaped and mentions are resolved to real names, so
+a quoted decision reads as prose rather than `<@U123>`.
+
+Search is the one asymmetric case: Slack does not allow bot tokens to call
+`search.messages`. With `slack.userToken` set, `channel_search` uses Slack's
+own index. Without it, pass a `target` and it scans that channel's recent
+history instead, reporting `method: "scan"` and how many messages it looked
+at — never an empty list that reads like "nothing matched".
+
+**Teams** reads through Microsoft Graph on the **signed-in user's** delegated
+token (the same one the `microsoft365` tool group uses), not through the bot.
+The Bot Framework credential the Teams channel holds cannot read history at
+all, and reading as the user is also the right privacy answer: an agent sees
+exactly the conversations its user can see. `target` is `Team/Channel` (e.g.
+`Engineering/General`) or a chat id — a bare channel name is refused, because
+the same name exists in many teams and guessing would answer a question about
+the wrong one. Search uses the Graph search API across everything the user can
+see, so it needs no channel.
+
+Transcripts are capped and trimmed by whole messages, never mid-sentence: half
+a quote attributed to a named person is worse than a shorter transcript.
 
 ---
 
