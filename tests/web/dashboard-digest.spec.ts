@@ -10,6 +10,10 @@ const digest = {
   },
   pipelines: [{ id: 'p-1', title: 'Bug Fix', status: 'awaiting_approval', waitingOnYou: true }],
   approvals: [{ id: 'r-1', sessionId: 's-1', summary: 'Delete branch', question: 'Proceed?' }],
+  jobs: [
+    { id: 'j-1', kind: 'research', title: 'Is PGlite production-ready?', status: 'done', resultRef: 'doc-1' },
+    { id: 'j-2', kind: 'document', title: 'invoice.pdf', status: 'error', error: 'OCR model unavailable' },
+  ],
   tasks: [{ id: 't-1', title: 'Reply to Ada', source: 'email' }],
   unreadNotifications: 2,
   empty: false,
@@ -29,10 +33,12 @@ test.describe('dashboard — while you were away', () => {
     await expect(card.getByText(/exit 1/)).toBeVisible();
     await expect(card.getByRole('link', { name: 'qa' })).toHaveAttribute('href', '/agents/view?id=ag-2');
     await expect(card.getByRole('link', { name: 'Reply to Ada' })).toHaveAttribute('href', '/tasks');
+    await expect(card.getByText(/OCR model unavailable/)).toBeVisible();
+    await expect(card.getByRole('link', { name: 'Is PGlite production-ready?' })).toHaveAttribute('href', '/documents');
     await expect(card.getByRole('link', { name: /2 new unread/ })).toHaveAttribute('href', '/notifications');
     // Sections render in "needs you first" order.
     const titles = await card.locator('p.uppercase').allTextContents();
-    expect(titles.map((t) => t.split(' — ')[0])).toEqual(['waiting on you', 'pipelines waiting on you', 'failed', 'finished', 'new to-dos for you']);
+    expect(titles.map((t) => t.split(' — ')[0])).toEqual(['waiting on you', 'pipelines waiting on you', 'failed', 'background work failed', 'finished', 'background work', 'new to-dos for you']);
   });
 
   test('"caught up" moves the window start to now and re-asks the server', async ({ authenticatedPage: page }) => {
@@ -44,7 +50,7 @@ test.describe('dashboard — while you were away', () => {
       if (!since) return json(route, 200, digest);
       const ageMs = Date.now() - new Date(since).getTime();
       expect(ageMs).toBeLessThan(60_000);
-      return json(route, 200, { ...digest, since, agents: { completed: [], failed: [] }, pipelines: [], approvals: [], tasks: [], unreadNotifications: 0, empty: true });
+      return json(route, 200, { ...digest, since, agents: { completed: [], failed: [] }, pipelines: [], approvals: [], jobs: [], tasks: [], unreadNotifications: 0, empty: true });
     });
     await page.goto('/');
     const card = page.getByTestId('away-digest');

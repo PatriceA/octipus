@@ -1,10 +1,11 @@
 /**
  * "While you were away" — one list of what happened to a user's work since
  * a point in time: agents that finished or failed, pipelines that completed
- * or now wait on them, approvals blocking a run, to-dos that other things
+ * or now wait on them, approvals blocking a run, background work (research
+ * runs, document processing) that finished or died, to-dos that other things
  * created for them, and how much of the inbox is unread.
  *
- * The state tables (`agents`, `pipelines`, `tasks`, `notifications`) already
+ * The state tables (`agents`, `pipelines`, `background_jobs`, `tasks`, `notifications`) already
  * hold the answer per user; this folds them into one shape and one rendering
  * so the dashboard card, the API and the Daily Briefing agree on what "away"
  * contained. Pending approvals are in-process (`ApprovalManager`), so they
@@ -17,6 +18,8 @@ export interface AgentBrief { id: string; role: string; status: 'completed' | 'f
 export interface PipelineBrief { id: string; title: string; status: string; summary?: string | null; changedAt: string; waitingOnYou: boolean }
 export interface ApprovalBrief { id: string; sessionId: string; summary: string; question: string }
 export interface TaskBrief { id: string; title: string; source: string; createdAt: string }
+/** A research run or a document that finished, failed, or was cut off by a restart. */
+export interface JobBrief { id: string; kind: string; title: string; status: 'done' | 'error' | 'interrupted'; error?: string | null; resultRef?: string | null; finishedAt: string }
 
 export interface AwayDigest {
   since: string;
@@ -24,6 +27,7 @@ export interface AwayDigest {
   agents: { completed: AgentBrief[]; failed: AgentBrief[] };
   pipelines: PipelineBrief[];
   approvals: ApprovalBrief[];
+  jobs: JobBrief[];
   tasks: TaskBrief[];
   /** Unread notifications CREATED in the window — not the whole inbox backlog. */
   unreadNotifications: number;
@@ -71,9 +75,10 @@ export async function collectAwayDigest(
   const now = (deps.now ?? (() => new Date()))();
   const from = clampSince(since, now);
   const repos = scopedRepos(principal);
-  const [agents, pipelines, tasks, unreadNotifications, approvals] = await Promise.all([
+  const [agents, pipelines, jobs, tasks, unreadNotifications, approvals] = await Promise.all([
     repos.agents.finishedSince(from, SECTION_CAP),
     repos.pipelines.changedSince(from, SECTION_CAP),
+    repos.jobs.finishedSince(from, SECTION_CAP),
     repos.tasks.createdSince(from, { excludeSource: 'user', limit: SECTION_CAP }),
     // Windowed: an unread notification from last week is the inbox's business,
     // not this window's — otherwise "nothing happened" is never reachable.
@@ -100,6 +105,15 @@ export async function collectAwayDigest(
     changedAt: p.updatedAt.toISOString(),
     waitingOnYou: WAITING_STATUSES.has(p.status),
   }));
+  const jobBriefs: JobBrief[] = jobs.map((j) => ({
+    id: j.id,
+    kind: j.kind,
+    title: j.title,
+    status: j.status as JobBrief['status'],
+    error: j.error,
+    resultRef: j.resultRef,
+    finishedAt: (j.finishedAt ?? j.updatedAt).toISOString(),
+  }));
   const taskBriefs: TaskBrief[] = tasks.map((t) => ({ id: t.id, title: t.title, source: t.source, createdAt: t.createdAt.toISOString() }));
   return {
     since: from.toISOString(),
@@ -107,9 +121,11 @@ export async function collectAwayDigest(
     agents: { completed, failed },
     pipelines: pipelineBriefs,
     approvals,
+    jobs: jobBriefs,
     tasks: taskBriefs,
     unreadNotifications,
-    empty: completed.length + failed.length + pipelineBriefs.length + approvals.length + taskBriefs.length + unreadNotifications === 0,
+    empty:
+      completed.length + failed.length + pipelineBriefs.length + approvals.length + jobBriefs.length + taskBriefs.length + unreadNotifications === 0,
   };
 }
 
@@ -164,6 +180,13 @@ export function renderAwayDigest(d: AwayDigest, opts: { maxPerSection?: number }
     for (const a of d.agents.failed.slice(0, cap)) lines.push(`- ${a.role}${a.status === 'stopped' ? ' (stopped)' : ''}${a.error ? `: ${a.error.slice(0, 160)}` : ''}`);
     const m = more(d.agents.failed.length); if (m) lines.push(m);
   }
+  const jobsFailed = d.jobs.filter((j) => j.status !== 'done');
+  const jobsDone = d.jobs.filter((j) => j.status === 'done');
+  if (jobsFailed.length) {
+    lines.push('', `**Background work failed — ${jobsFailed.length}** (${countBy(jobsFailed, (j) => j.kind)})`);
+    for (const j of jobsFailed.slice(0, cap)) lines.push(`- ${j.kind}: ${j.title.slice(0, 80)}${j.status === 'interrupted' ? ' (interrupted by a restart)' : j.error ? `: ${j.error.slice(0, 160)}` : ''}`);
+    const m = more(jobsFailed.length); if (m) lines.push(m);
+  }
   if (finished.length) {
     lines.push('', `**Pipelines — ${finished.length}**`);
     for (const p of finished.slice(0, cap)) lines.push(`- ${p.title}: ${p.status}${p.summary ? ` — ${p.summary.slice(0, 160)}` : ''}`);
@@ -173,6 +196,11 @@ export function renderAwayDigest(d: AwayDigest, opts: { maxPerSection?: number }
     lines.push('', `**Finished — ${d.agents.completed.length} agent${d.agents.completed.length === 1 ? '' : 's'}** (${countBy(d.agents.completed, (a) => a.role)})`);
     for (const a of d.agents.completed.slice(0, cap)) lines.push(`- ${a.role}${humanDuration(a.durationMs)}`);
     const m = more(d.agents.completed.length); if (m) lines.push(m);
+  }
+  if (jobsDone.length) {
+    lines.push('', `**Background work — ${jobsDone.length}** (${countBy(jobsDone, (j) => j.kind)})`);
+    for (const j of jobsDone.slice(0, cap)) lines.push(`- ${j.kind}: ${j.title.slice(0, 80)}`);
+    const m = more(jobsDone.length); if (m) lines.push(m);
   }
   if (d.tasks.length) {
     lines.push('', `**New to-dos for you — ${d.tasks.length}** (${countBy(d.tasks, (t) => `from ${t.source}`)})`);

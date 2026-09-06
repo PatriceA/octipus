@@ -198,6 +198,20 @@ async function main() {
     await hookManager.loadHooks();
     logger.info('Hooks loaded');
 
+    // Background jobs (research runs, document processing): a job still
+    // `running` is a lie after a restart. Mark it interrupted, then let the
+    // document worker drain what was only queued — nothing had begun on those,
+    // so running them now is safe. BEFORE the channels come up: a channel
+    // attachment arriving during boot would otherwise be claimed by this
+    // process and then swept by it as if a dead one held it.
+    {
+      const { recoverBackgroundJobs } = await import('@/core/jobs/recover');
+      const { interrupted, pruned } = await recoverBackgroundJobs();
+      if (interrupted > 0 || pruned > 0) logger.info({ interrupted, pruned }, 'Background jobs reconciled after restart');
+      const { getDocumentQueue } = await import('@/core/documents/queue');
+      getDocumentQueue().resume();
+    }
+
     // Initialize messaging channels (reads config from DB now)
     await initializeChannels();
     logger.info('Channels initialized');

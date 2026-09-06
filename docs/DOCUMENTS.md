@@ -150,14 +150,14 @@ Each file is stored with a UUID filename to avoid collisions. The original filen
 
 ## Queue System
 
-The `DocumentQueue` processes documents sequentially (one at a time) and emits events for real-time tracking:
+The `DocumentQueue` processes documents sequentially (one at a time per process) and emits events for real-time tracking. The queue itself is the `background_jobs` table (`kind = 'document'`), not an in-process array: `enqueue` writes a row, the worker claims the oldest `queued` row under a row lock, and at boot the queue drains whatever a previous process left queued. A document that was mid-extraction when the process died is marked `failed` with "Interrupted by a restart" (its job `interrupted`) rather than re-run — the same rule pipelines follow. A document deleted while it was being processed closes its job as `cancelled`, which the digest does not report. Finished jobs stay for thirty days so the "while you were away" digest can report them.
 
 | Event | Parameters | Description |
 |-------|------------|-------------|
 | `enqueued` | `documentId, userId` | Document added to queue |
 | `processing` | `documentId, userId` | Processing started |
 | `completed` | `documentId, userId` | Processing finished successfully |
-| `failed` | `documentId, error, userId` | Processing failed with error |
+| `failed` | `documentId, error, userId` | Processing failed — including an extraction the processor recorded as `failed` on the document |
 
 Events are forwarded to WebSocket clients (filtered by userId) for real-time UI updates.
 
@@ -222,7 +222,8 @@ Status enum: `queued` | `processing` | `completed` | `failed`
 | File | Purpose |
 |------|---------|
 | `src/core/documents/processor.ts` | DocumentProcessor -- 7-step pipeline |
-| `src/core/documents/queue.ts` | DocumentQueue -- sequential processing with events |
+| `src/core/documents/queue.ts` | DocumentQueue -- sequential processing over `background_jobs` rows, with events |
+| `src/core/jobs/recover.ts` | Boot sweep: interrupts `running` jobs, repairs their documents, prunes old rows |
 | `src/api/routes/documents.ts` | REST API endpoints (upload, list, detail) |
 | `src/channels/attachment-handler.ts` | Channel attachment download and enqueue |
 | `src/db/schema/documents.ts` | Drizzle schema |

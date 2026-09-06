@@ -40,6 +40,7 @@ import { and, asc, count, desc, eq, gte, inArray, ne, type SQL, sql } from 'driz
 import { isAdmin, isAuthenticated, type Principal } from '@/security/principal';
 import { getDb } from '../postgres';
 import { type AgentRecord, agents, type NewAgentRecord } from '../schema/agents';
+import { type BackgroundJob, backgroundJobs } from '../schema/background-jobs';
 import { type DocumentRecord, documents, type NewDocumentRecord } from '../schema/documents';
 import { type Hook, hooks } from '../schema/hooks';
 import { type Message, messages, type NewMessage } from '../schema/messages';
@@ -809,6 +810,64 @@ export class ScopedPipelineRepo {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Background jobs (research runs, document processing)
+// ─────────────────────────────────────────────────────────────────────
+
+export type ChangedJobRow = Pick<BackgroundJob, 'id' | 'kind' | 'title' | 'status' | 'error' | 'resultRef' | 'updatedAt' | 'finishedAt'>;
+
+/** Read side of `background_jobs`: the poller and the digest. Writes are the workers' (`BackgroundJobRepository`). */
+export class ScopedJobRepo {
+  constructor(private readonly principal: Principal) {
+    requireAuth(principal);
+  }
+
+  private get db() { return getDb(); }
+
+  /** The job only if the principal owns it (or is an admin): a foreign id is indistinguishable from a missing one. */
+  async findById(id: string): Promise<BackgroundJob | null> {
+    if (!isUuid(id)) return null;
+    const filters: (SQL | undefined)[] = [eq(backgroundJobs.id, id)];
+    if (!isAdmin(this.principal)) filters.push(eq(backgroundJobs.userId, this.principal.userId));
+    filters.push(workspaceFilter(this.principal, backgroundJobs.workspaceId));
+    const rows = await this.db
+      .select()
+      .from(backgroundJobs)
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  /**
+   * Jobs that reached a terminal state since `since`, newest first. A job
+   * still running is not news; one the restart killed is, which is why
+   * `interrupted` counts.
+   */
+  async finishedSince(since: Date, limit = 50): Promise<ChangedJobRow[]> {
+    const filters: (SQL | undefined)[] = [
+      eq(backgroundJobs.userId, this.principal.userId),
+      inArray(backgroundJobs.status, ['done', 'error', 'interrupted']),
+      gte(backgroundJobs.updatedAt, since),
+    ];
+    filters.push(workspaceFilter(this.principal, backgroundJobs.workspaceId));
+    return this.db
+      .select({
+        id: backgroundJobs.id,
+        kind: backgroundJobs.kind,
+        title: backgroundJobs.title,
+        status: backgroundJobs.status,
+        error: backgroundJobs.error,
+        resultRef: backgroundJobs.resultRef,
+        updatedAt: backgroundJobs.updatedAt,
+        finishedAt: backgroundJobs.finishedAt,
+      })
+      .from(backgroundJobs)
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
+      .orderBy(desc(backgroundJobs.updatedAt))
+      .limit(limit);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Tasks (personal todos — feature #6)
 // ─────────────────────────────────────────────────────────────────────
 
@@ -937,6 +996,7 @@ export interface ScopedRepos {
   hooks: ScopedHookRepo;
   pipelines: ScopedPipelineRepo;
   tasks: ScopedTaskRepo;
+  jobs: ScopedJobRepo;
 }
 
 /**
@@ -958,5 +1018,6 @@ export function scopedRepos(principal: Principal): ScopedRepos {
     hooks: new ScopedHookRepo(principal),
     pipelines: new ScopedPipelineRepo(principal),
     tasks: new ScopedTaskRepo(principal),
+    jobs: new ScopedJobRepo(principal),
   };
 }

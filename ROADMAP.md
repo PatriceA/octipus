@@ -16,7 +16,10 @@ This doc lists what we are exploring. Order inside each section is rough priorit
   their own prompts, a seeded Daily Briefing hook. Phase 1 shipped the same
   day: next-action ranking on the to-do list, an inbox page, a "while you
   were away" digest (dashboard + briefing), and heartbeat probes for red
-  PRs and imminent meetings. Plan:
+  PRs and imminent meetings. Phase 3 the same day: research runs and
+  document processing are `background_jobs` rows that survive a restart,
+  claimed under a row lock, swept to `interrupted` at boot, and reported in
+  the away digest. Plan:
   [docs/plans/daily-driver-gaps.md](docs/plans/daily-driver-gaps.md).
 
 - **Mock-provider scaffold for the model layer.** `src/models/litellm-client.ts`

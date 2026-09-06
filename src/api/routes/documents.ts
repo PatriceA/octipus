@@ -53,7 +53,7 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
     }
 
     const files = Array.isArray(body.files) ? body.files : [body.files];
-    const results: Array<{ id: string; filename: string; status: string }> = [];
+    const results: Array<{ id: string; filename: string; status: string; error?: string }> = [];
     const docs = scopedRepos(principal).documents;
 
     for (const file of files) {
@@ -86,8 +86,19 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
         status: 'queued',
       });
 
-      // Enqueue for processing
-      getDocumentQueue().enqueue(doc.id, user.id);
+      // Enqueue for processing — a row, so the upload survives a restart. If
+      // the row cannot be written the document would sit at `queued` with
+      // nothing to pick it up, so say so on the document and in the response
+      // and carry on with the other files.
+      try {
+        await getDocumentQueue().enqueue(doc.id, user.id, { title: originalName, workspaceId: doc.workspaceId });
+      } catch (err) {
+        const reason = `Could not queue for processing: ${(err as Error).message}`;
+        logger.error({ err, documentId: doc.id, filename: originalName }, 'Document uploaded but not queued');
+        await docs.updateStatus(doc.id, 'failed', reason).catch(() => undefined);
+        results.push({ id: doc.id, filename: originalName, status: 'failed', error: reason });
+        continue;
+      }
 
       results.push({ id: doc.id, filename: originalName, status: 'queued' });
       logger.info({ documentId: doc.id, filename: originalName, size: file.size }, 'Document uploaded');
@@ -134,7 +145,7 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
         createdAt: d.createdAt,
         processedAt: d.processedAt,
       })),
-      queue: getDocumentQueue().getStatus(),
+      queue: await getDocumentQueue().getStatus(),
     };
   }, {
     query: t.Object({
@@ -227,8 +238,7 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
     }
 
     // Remove from queue if still queued
-    const queue = getDocumentQueue();
-    queue.removeFromQueue(params.id);
+    await getDocumentQueue().removeFromQueue(params.id);
 
     // Delete the file from disk
     if (doc.storagePath && existsSync(doc.storagePath)) {
@@ -267,7 +277,7 @@ export const documentRoutes = new Elysia({ prefix: '/documents' })
 
     if (doc.status === 'queued') {
       // Remove from queue and mark as failed/cancelled
-      queue.removeFromQueue(params.id);
+      await queue.removeFromQueue(params.id);
       await repo.updateStatus(params.id, 'failed', 'Cancelled by user');
       logger.info({ documentId: params.id }, 'Queued document cancelled');
       return { success: true, action: 'removed_from_queue' };

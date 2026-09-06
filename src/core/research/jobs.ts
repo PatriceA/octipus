@@ -2,8 +2,16 @@
  * Background research jobs. Research takes seconds-to-minutes, so the route
  * starts a job and the client polls for progress + the finished report (same
  * pattern as the hwfit installer).
+ *
+ * The job is a `background_jobs` row, not an in-process record: a restart
+ * used to empty the map this module kept, so a client polling its job id got
+ * a 404 for work that may well have finished. Now the row outlives the
+ * process; a run the restart killed reads as `error` with a reason, the boot
+ * sweep having marked it (`src/core/jobs/recover.ts`).
  */
 import { backgroundUserPrincipal, createTasksFromSource, researchFollowUpTask } from '@/core/tasks/sourced';
+import { backgroundJobRepository } from '@/db/repositories/background-job-repository';
+import type { BackgroundJob } from '@/db/schema/background-jobs';
 import { coreLogger } from '@/utils/logger';
 import { persistReport } from './persist';
 import { defaultResearchDeps, type ResearchDeps, runResearch } from './service';
@@ -28,55 +36,81 @@ export interface ResearchJob {
   startedAt: number;
 }
 
-const jobs = new Map<string, ResearchJob>();
-/** Keep finished jobs around long enough for the client to poll the result. */
-const JOB_TTL_MS = 30 * 60_000;
+interface ResearchPayload { question: string; depth: ResearchDepth }
+interface ResearchResult { report?: ReportDoc; documentId?: string; taskId?: string }
 
-/** Drop jobs older than the TTL so the Map can't grow unbounded. */
-function pruneJobs(): void {
-  const cutoff = Date.now() - JOB_TTL_MS;
-  for (const [id, j] of jobs) {
-    if (j.startedAt < cutoff) jobs.delete(id);
-  }
+/**
+ * The row as the poller has always seen it. `interrupted` is an error from
+ * the client's side — the run stopped and will not continue — so it is
+ * reported as one, with the sweep's reason.
+ */
+export function researchJobFromRow(row: BackgroundJob): ResearchJob {
+  const payload = row.payload as unknown as ResearchPayload;
+  const result = (row.result ?? {}) as ResearchResult;
+  const status: ResearchJob['status'] =
+    row.status === 'done' ? 'done' : row.status === 'running' || row.status === 'queued' ? 'running' : 'error';
+  return {
+    id: row.id,
+    userId: row.userId,
+    question: payload.question,
+    depth: payload.depth,
+    status,
+    stage: row.stage ?? 'planning',
+    detail: row.detail ?? undefined,
+    report: result.report,
+    documentId: result.documentId ?? row.resultRef ?? undefined,
+    taskId: result.taskId,
+    error: row.error ?? undefined,
+    startedAt: (row.startedAt ?? row.createdAt).getTime(),
+  };
 }
 
-export function getResearchJob(id: string): ResearchJob | undefined {
-  return jobs.get(id);
+/** Unscoped read — routes go through `scopedRepos(principal).jobs` instead so ownership is enforced. */
+export async function getResearchJob(id: string): Promise<ResearchJob | undefined> {
+  const row = await backgroundJobRepository.findById(id);
+  return row && row.kind === 'research' ? researchJobFromRow(row) : undefined;
 }
 
 /**
- * Start a research job and return it immediately. `deps` is injectable for
- * tests; production passes the default search/fetch/model deps.
+ * Start a research job and return it once its row exists. `deps` is
+ * injectable for tests; production passes the default search/fetch/model
+ * deps. The run itself continues in the background and reports through the
+ * row; `getResearchJob` / the scoped repo read it back.
  */
-export function startResearch(
+export async function startResearch(
   question: string,
   depth: ResearchDepth,
   userId: string,
   deps: ResearchDeps = defaultResearchDeps(userId),
-): ResearchJob {
-  pruneJobs();
-  const job: ResearchJob = {
-    id: globalThis.crypto.randomUUID(),
+): Promise<ResearchJob> {
+  const row = await backgroundJobRepository.create({
+    kind: 'research',
     userId,
-    question,
-    depth,
+    title: question,
+    payload: { question, depth } satisfies ResearchPayload,
     status: 'running',
-    stage: 'planning',
-    startedAt: Date.now(),
+    // Research runs on the caller's thread, not through a worker: it starts
+    // now, so the row starts as `running` rather than waiting to be claimed.
+  });
+  const jobId = row.id;
+
+  // Progress writes are chained so they reach the row in the order the run
+  // reported them; a lost write costs a stale stage line, nothing more.
+  let progressChain: Promise<void> = Promise.resolve();
+  const report = (stage: string, detail?: string) => {
+    progressChain = progressChain
+      .then(() => backgroundJobRepository.progress(jobId, { stage, detail: detail ?? null }))
+      .catch((err: unknown) => coreLogger.warn({ jobId, err: (err as Error).message }, 'research: progress write failed'));
   };
-  jobs.set(job.id, job);
 
   void (async () => {
     try {
-      const report = await runResearch(question, depth, deps, (stage, detail) => {
-        job.stage = stage;
-        job.detail = detail;
-      });
-      job.report = report;
+      const reportDoc = await runResearch(question, depth, deps, report);
+      const result: ResearchResult = { report: reportDoc };
       // Always emit a document and add it to the knowledge base so the report
       // can be referenced later. Fail-soft: a persistence hiccup still returns
       // the report to the client.
-      job.documentId = (await persistReport(report, userId)) ?? undefined;
+      result.documentId = (await persistReport(reportDoc, userId)) ?? undefined;
       // A report nobody is reminded to read is a report nobody acts on: one
       // follow-up to-do per run, pointing at the saved document. Fail-soft
       // like persistence — the report is the deliverable, the task is a nudge.
@@ -84,20 +118,28 @@ export function startResearch(
         const [task] = await createTasksFromSource(
           backgroundUserPrincipal(userId),
           'research',
-          [researchFollowUpTask(report, job.documentId)],
+          [researchFollowUpTask(reportDoc, result.documentId)],
         );
-        job.taskId = task?.id;
+        result.taskId = task?.id;
       } catch (err) {
         coreLogger.warn({ question, err: (err as Error).message }, 'research: report saved but follow-up task failed');
       }
-      job.stage = 'done';
-      job.status = 'done';
+      await progressChain;
+      const closed = await backgroundJobRepository.finish(jobId, {
+        status: 'done',
+        result: result as unknown as Record<string, unknown>,
+        resultRef: result.documentId ?? null,
+      });
+      if (!closed) coreLogger.warn({ jobId }, 'research: job finished but its row was no longer running (swept by a restart?)');
     } catch (err) {
-      job.status = 'error';
-      job.error = (err as Error).message;
-      coreLogger.error({ question, err: job.error }, 'research: job failed');
+      const message = (err as Error).message;
+      coreLogger.error({ question, err: message }, 'research: job failed');
+      await progressChain;
+      await backgroundJobRepository
+        .finish(jobId, { status: 'error', error: message })
+        .catch((e: unknown) => coreLogger.error({ jobId, err: (e as Error).message }, 'research: could not record failure'));
     }
   })();
 
-  return job;
+  return researchJobFromRow(row);
 }

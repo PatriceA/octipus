@@ -7,6 +7,7 @@ const base = (over: Partial<AwayDigest> = {}): AwayDigest => ({
   agents: { completed: [], failed: [] },
   pipelines: [],
   approvals: [],
+  jobs: [],
   tasks: [],
   unreadNotifications: 0,
   empty: true,
@@ -48,6 +49,11 @@ describe('renderAwayDigest', () => {
         ],
         failed: [{ id: 'a4', role: 'qa', status: 'failed', finishedAt: '', error: 'exit code 1' }],
       },
+      jobs: [
+        { id: 'j1', kind: 'research', title: 'Is PGlite production-ready?', status: 'done', resultRef: 'doc-1', finishedAt: '' },
+        { id: 'j2', kind: 'document', title: 'invoice.pdf', status: 'error', error: 'OCR model unavailable', finishedAt: '' },
+        { id: 'j3', kind: 'document', title: 'deck.pptx', status: 'interrupted', error: 'Interrupted by a restart', finishedAt: '' },
+      ],
       tasks: [
         { id: 't1', title: 'Reply to Ada', source: 'email', createdAt: '' },
         { id: 't2', title: 'Review research: PGlite', source: 'research', createdAt: '' },
@@ -55,7 +61,7 @@ describe('renderAwayDigest', () => {
       unreadNotifications: 3,
     }));
     const headings = text.split('\n').filter((l) => l.startsWith('**')).map((l) => l.slice(2, l.indexOf(' —')));
-    expect(headings).toEqual(['Waiting on you', 'Pipelines waiting on you', 'Failed', 'Pipelines', 'Finished', 'New to-dos for you']);
+    expect(headings).toEqual(['Waiting on you', 'Pipelines waiting on you', 'Failed', 'Background work failed', 'Pipelines', 'Finished', 'Background work', 'New to-dos for you']);
     expect(text).toContain('- Delete branch: Proceed?');
     expect(text).toContain('- Bug Fix (awaiting approval)');
     expect(text).toContain('**Failed — 1 agent** (qa)');
@@ -63,6 +69,11 @@ describe('renderAwayDigest', () => {
     expect(text).toContain('- Full Development Cycle: completed — Shipped the migration.');
     expect(text).toContain('**Finished — 3 agents** (coding ×2, research)');
     expect(text).toContain('- coding in 1m 35s');
+    expect(text).toContain('**Background work failed — 2** (document ×2)');
+    expect(text).toContain('- document: invoice.pdf: OCR model unavailable');
+    expect(text).toContain('- document: deck.pptx (interrupted by a restart)');
+    expect(text).toContain('**Background work — 1** (research)');
+    expect(text).toContain('- research: Is PGlite production-ready?');
     expect(text).toContain('**New to-dos for you — 2** (from email, from research)');
     expect(text).toContain('3 new unread notifications in the inbox.');
   });

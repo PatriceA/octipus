@@ -86,17 +86,43 @@ What each item became, and what the per-step review changed:
    `plan` tool rather than a second parser. Pipeline `foreach` over `plan_items`
    already exists — reuse its shape.
 
-## Phase 3 — durable background work
+## Phase 3 — durable background work — SHIPPED (2026-09-05)
 
-`pipeline_checkpoints` + the boot sweep are the model; nothing else got it.
+`pipeline_checkpoints` + the boot sweep were the model; the two lighter kinds
+of work now follow it.
 
-1. **Research jobs** (`src/core/research/jobs.ts`, in-memory `Map`, 30-min TTL)
-   → a `background_jobs` row (`kind`, `status`, `stage`, `payload`, `result_ref`)
-   written through `kv_queue`. The route polls the row; a boot sweep marks
-   `running` rows `interrupted` (never auto-resumes — same rule as pipelines).
-2. **Document processing queue** (`src/core/documents/queue.ts`, in-process
-   array) → the same table.
-3. Surface both in the away digest (Phase 1.3).
+1. **`background_jobs`** (`src/db/schema/background-jobs.ts`, migration 0092):
+   one row per research run or document going through extraction — `kind`,
+   `status` (`queued` → `running` → `done` | `error` | `interrupted`), `stage` /
+   `detail` as the progress line, `payload` for what the worker needs, `result`
+   for what the poller wants back, `result_ref` for the durable thing the run
+   produced. The row is the queue: `claimNext` takes the oldest `queued` row of
+   a kind under `FOR UPDATE SKIP LOCKED`, so a second process cannot run the
+   same document twice. Not written through `kv_queue` as first sketched — a
+   second table holding the same fact (what is waiting) would have meant two
+   writes per job and a reconcile between them; one table with a locked claim
+   is the same durability with nothing to keep in step.
+2. **Research jobs.** `startResearch` writes the row as `running` and reports
+   stages into it; `GET /api/research/:jobId` reads it back through the scoped
+   repo, same shape as before. A run the restart killed reads as `error` with
+   "Interrupted by a restart" rather than a 404.
+3. **Document queue.** `enqueue` is a row; the worker drains rows it did not
+   enqueue itself, which is how an upload survives a restart (`resume()` at
+   boot after the sweep). A document whose extraction failed is now a failed
+   job with the document's own error — the old queue emitted `completed`
+   regardless, because the processor swallows its errors.
+4. **Boot sweep** (`src/core/jobs/recover.ts`): `running` → `interrupted`
+   (never auto-resumed — the pipeline rule), the document behind an
+   interrupted job marked `failed` with the reason, terminal rows pruned after
+   thirty days.
+5. **Away digest** gains a `jobs` section — failures and interruptions with
+   the "needs you" sections, finished runs with the finished ones — on the
+   dashboard card, in the briefing block and in the markdown rendering.
+
+Found while writing the claim: an `UPDATE … WHERE id IN (SELECT … LIMIT 1 FOR
+UPDATE SKIP LOCKED)` claimed more than one row under PGlite — the semi-join
+rescans the subquery per candidate. `id = (subquery)` is planned once and is
+the shape `kv_queue`'s pop already used.
 
 ## Phase 4 — the developer loop
 
@@ -199,9 +225,8 @@ not competing — federation is how two hubs talk.
 
 ## Sequencing
 
-Phase 1 is done. Phase 3 (durable jobs) next: its job table is what the away
-digest should read for research and document runs, which today it cannot see.
-Phase 2 and 4 after that, in either order, by who is asking. Phase 5 by demand, connector by
+Phases 0, 1 and 3 are done. Phase 2 and 4 next, in either order, by who is
+asking. Phase 5 by demand, connector by
 connector. The enterprise track opens with E0 as soon as a second person
 shares one Octipus — E0 is one migration and should not wait on E1–E4 being
 designed in full.
