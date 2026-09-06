@@ -66,7 +66,7 @@ PR #28 / migration 0056). Valid values:
 | `image_description` | Vision-LLM caption + OCR text written by `documents/processor.ts` for image uploads | Tied to the parent `documents` row |
 | `knowledge_artifact` | Reserved for agent-flagged outputs worth long-term storage | 365 days, LFU prune below 1 access after 180 days |
 | `message` | Conversation chunks indexed for recall (not currently auto-written; compaction handles long-term recall via `compaction_entries`) | 90 days |
-| `note` | Note bodies chunked by `NoteService.save` (`source_id='note:<id>'`) — see [KNOWLEDGE-GRAPH.md](KNOWLEDGE-GRAPH.md) | **No policy row**: never age-reaped. Chunks are replaced on every save and deleted with the note |
+| `note` | Note bodies chunked by `NoteService.save` (`source_id='note:<id>'`), including meeting notes written by `write_meeting_note` / `import_calendar_meetings` — see [KNOWLEDGE-GRAPH.md](KNOWLEDGE-GRAPH.md) | **No policy row**: never age-reaped. Chunks are replaced on every save and deleted with the note |
 | `ephemeral` | Health probes, transient observations | 7 days |
 
 `agent_output` is no longer a value. Memory-redesign Phase B moved
@@ -163,6 +163,35 @@ Results carry the section path when the structural chunker produced
 them, so callers can render "you are reading under § A / § B"
 context next to a hit without a second query. `getAncestorHeadings`
 remains for callers that want the full ancestor chunk objects.
+
+### Freshness
+
+Every row carries `last_verified_at` (migration 0097): when the content was
+written, or when someone last confirmed it is still true. It is stamped by
+`store()` — writing content is confirming it — and refreshed when byte-identical
+content is re-indexed, so a nightly re-crawl keeps unchanged facts current
+without rewriting a row. It is deliberately NOT the same as `last_accessed_at`:
+reading a stale fact does not make it fresher, and folding the two together
+would make the most-retrieved wrong answer look like the most recently
+confirmed one.
+
+Retrieval multiplies a row's score by a freshness factor: a linear decay to a
+floor of 0.6 at one year since verification (`MAX_STALENESS_PENALTY`,
+`STALENESS_HORIZON_DAYS` in `src/db/schema/embeddings.ts`). The ceiling is the
+point — a 40% penalty re-orders near-ties and lets a fresh answer win, but
+never buries a chunk that is the only real match. Rows written before the
+column existed have NULL there and fall back to `created_at`, so they rank
+exactly as they did before.
+
+The multiplier applies to the ordering only. The reported `similarity` stays
+the raw cosine value, so `min_similarity` means what it always meant and an
+old-but-exact match ranks lower rather than disappearing.
+
+Search results report `ageDays` and `stale` so a model can say "this is two
+years old" instead of quoting it as current fact. `verify_knowledge(ids)` is
+how a fact that is still true gets its standing back — call it only for
+entries actually checked against a current source, since verifying something
+unchecked makes stale knowledge look fresh, which is worse than leaving it old.
 
 `read_knowledge(id)` returns the full L2 content + metadata for a
 specific entry.

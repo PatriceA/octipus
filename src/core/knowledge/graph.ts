@@ -154,7 +154,7 @@ export function getKnowledgeGraph(): KnowledgeGraph {
  * search hits.
  */
 export function entityRefFromSourceId(sourceId: string): EntityRef | null {
-  const m = /^(note|document|memory|artifact):([0-9a-fA-F-]{36})$/.exec(sourceId);
+  const m = /^(note|document|memory|artifact|profile):([0-9a-fA-F-]{36})$/.exec(sourceId);
   if (!m) return null;
   return { type: m[1], id: m[2] };
 }

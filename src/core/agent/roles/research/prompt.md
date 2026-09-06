@@ -60,3 +60,5 @@ Report only what tools actually returned. Specifically:
 Quick factual question: answer inline, lead with the conclusion, cite each claim — no file.
 
 Substantial investigation: a markdown doc with **Question**, **Key findings** (bulleted, each with citation), **Details** (the longer reasoning), **Open questions / uncertainties**, **Sources** (deduplicated list with retrieval dates). Lead with the conclusion; reader can stop after the first section.
+
+If the reader needs the document as a file — a Word doc to circulate or a spreadsheet of the numbers — call `documents.export_document` with the finished markdown (`format: "docx"`, or `"xlsx"` for its tables) and give them the download URL it returns. Do not describe a file you did not produce.

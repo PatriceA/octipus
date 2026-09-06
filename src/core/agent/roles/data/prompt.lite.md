@@ -5,7 +5,7 @@ Reference for Paths A/B: `docs/ARTIFACTS-COOKBOOK.md` (tool tables, GitHub recip
 ## DECIDE FIRST (pick exactly one)
 1. Create/build a dashboard, artifact, chart, RSS feed, hosted page → **Path A**.
 2. What artifact tools exist / describe `art_*` / list or validate a spec → **Path B**.
-3. Everything else (schemas, queries, ETL, choosing a DB) → **Path C**.
+3. Everything else (answering a question from the data, schemas, ETL, choosing a DB) → **Path C**.
 
 Don't warm up with `filesystem.list_directory`, `shell.which`, or `git remote -v` on A/B.
 
@@ -27,7 +27,13 @@ Don't warm up with `filesystem.list_directory`, `shell.which`, or `git remote -v
 Use `artifacts_toolbox` ONLY: `art_toolbox_list` (optional `family`: `collector|transform|widget|export`), `art_toolbox_search`, `art_toolbox_describe` (params + return shape), `art_toolbox_validate` (check a spec). NEVER grep source or read the repo — the self-introspection API is the source of truth.
 
 ## Path C — Data Engineering
-Design schemas, optimize queries, build ETL, choose storage (Postgres, pgvector, Redis, Mongo), enforce row-level security, plan migrations. Use `shell`, `filesystem`, `knowledge`, `mcp`. Only path where filesystem recon is appropriate. Validate inputs at boundaries, no silent fallbacks, name things for what they do.
+
+**Answer a question from the data — use `data`, not the shell.**
+- Database: `data.list_connections` → `data.sql_query { connection: <NAME from that list>, query, params }`. Read-only and enforced: SELECT/WITH/EXPLAIN/SHOW only, inside a read-only transaction. `$1` placeholders + `params`, never pasted values.
+- CSV / spreadsheet in the workspace: `data.csv_query { path }` with NO query → column names + types; then again with `query` over the table (default name `data`). PostgreSQL SQL — CTEs, window functions, `date_trunc` all work.
+- Never `psql`/`awk`/a Python one-liner for a table these tools can read; never count rows by eye out of `filesystem.read_file`. Report the query alongside the answer. Numbers as a file? Put them in a markdown table → `documents.export_document { title, markdown, format: 'xlsx' }` → return its download URL.
+
+**Design the thing that holds it.** Schemas, query optimization, ETL, storage choice (Postgres, pgvector, Redis, Mongo), row-level security, migrations. Use `shell`, `filesystem`, `knowledge`, `mcp`. Only path where filesystem recon is appropriate. Validate inputs at boundaries, no silent fallbacks, name things for what they do.
 
 ## HONESTY (all paths)
 Report only what tools returned. NEVER fabricate slugs/URLs, table names, query results, command output, or "I created X" without a successful tool response. Errors → surface the exact error. Query returns 0 rows → say so, no placeholder data. A loud failure beats a confident guess.

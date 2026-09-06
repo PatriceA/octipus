@@ -39,7 +39,8 @@ The map for everything under `docs/`. Start with **Getting Started**, then jump 
 | [CHAT-COMMANDS.md](CHAT-COMMANDS.md) | The `/`-commands available in chat (expert, think, persona, compact, …). |
 | [RAG.md](RAG.md) | The knowledge base: auto-indexing and hybrid (BM25 + vector) search. |
 | [KNOWLEDGE-GRAPH.md](KNOWLEDGE-GRAPH.md) | Notes, `[[wikilinks]]`, authored edges, graph traversal, Obsidian/Canvas interop. |
-| [DOCUMENTS.md](DOCUMENTS.md) | Document ingestion, OCR, and management. |
+| [DOCUMENTS.md](DOCUMENTS.md) | Document ingestion, OCR, management, and exporting a deliverable as .docx / .xlsx. |
+| [DATA-TOOLS.md](DATA-TOOLS.md) | Read-only SQL against a registered database or a workspace CSV, and how a connection is registered. |
 | [ENRICHMENT.md](ENRICHMENT.md) | Reader, deep research, tasks, and email-triage enrichment features. |
 | [ARTIFACTS.md](ARTIFACTS.md) | Live hosted HTML artifacts produced by agents. |
 | [ARTIFACTS-COOKBOOK.md](ARTIFACTS-COOKBOOK.md) | Worked examples and recipes for building artifacts. |

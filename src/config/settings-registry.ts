@@ -192,6 +192,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     vaultName: 'slack_signing_secret',
     envVar: 'SLACK_SIGNING_SECRET',
   },
+  {
+    key: 'slack.userToken',
+    category: 'channels',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'Slack user token (xoxp-) — only needed for channel_search, which Slack does not expose to bot tokens',
+    isSecret: true,
+    vaultName: 'slack_user_token',
+    envVar: 'SLACK_USER_TOKEN',
+  },
 
   // ── Teams ──
   {

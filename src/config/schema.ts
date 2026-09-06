@@ -129,6 +129,13 @@ export const slackConfigSchema = z.object({
   botToken: z.string().optional(),
   appToken: z.string().optional(),
   signingSecret: z.string().optional(),
+  /**
+   * Optional user token (xoxp-). Slack's `search.messages` is only available
+   * to a user token — a bot token cannot call it at all — so without this
+   * `channel_search` can only scan the history of a named channel. Reading
+   * history and replies needs nothing beyond the bot token.
+   */
+  userToken: z.string().optional(),
 });
 
 // WhatsApp configuration schema

@@ -47,14 +47,14 @@ duplication.
 | `from_type` / `from_id` | Source endpoint. |
 | `to_type` / `to_id` | Target endpoint — **NULL until resolved** (see [ghost edges](#ghost-edges)). |
 | `to_ref` | Canonical target reference (slug/tag). Always present; the dedup key. |
-| `link_type` | `references` \| `derived_from` \| `contradicts` \| `mentions` \| `child_of` \| `tagged` (free text — a new kind needs no migration). |
+| `link_type` | `references` \| `derived_from` \| `contradicts` \| `mentions` \| `child_of` \| `tagged` \| `attended` (free text — a new kind needs no migration). |
 | `label` | Edge label / wikilink alias. |
 | `origin` | `user` \| `agent` \| `wikilink` \| `suggestion`. |
 | `confidence` | Set for non-authored edges, and for a *guessed* binding (see [fuzzy resolution](#fuzzy-resolution-of-ghost-links)). NULL for exact/authored edges. |
 | `created_by_agent_id` | NULL = user-authored. |
 
 The edge is **polymorphic by design**: endpoints address `note`, `document`,
-`memory`, `artifact`, or `tag` rows, so there is no real FK on
+`memory`, `artifact`, `profile`, or `tag` rows, so there is no real FK on
 `from_id`/`to_id`. Referential cleanup is app-side in
 `KnowledgeLinkRepository` (see [Lifecycle](#lifecycle-and-retention)).
 
@@ -198,7 +198,7 @@ Obsidian vault.
 | `body_sha256` | Change detection — an unchanged save is a no-op. |
 | `frontmatter` | Obsidian-style properties (jsonb). |
 | `tags` | Denormalised from `#tags` for cheap filtering (GIN index). |
-| `note_kind` | `note` \| `daily` \| `moc` \| `literature` (free text). |
+| `note_kind` | `note` \| `daily` \| `moc` \| `literature` \| `meeting` (free text). |
 | `note_date` | The calendar day a daily note covers. |
 | `pinned`, `archived_at` | Archive is a soft delete; notes don't hard-delete by default. |
 | `created_by_agent_id` | NULL = user-authored. |
@@ -207,6 +207,32 @@ Slug uniqueness uses **two partial unique indexes** (workspace NULL and
 workspace NOT NULL). A single unique index over `(user, workspace, slug)`
 would let duplicate user-level slugs through, because Postgres treats NULL
 workspace values as distinct.
+
+### Meetings
+
+A meeting is a note of kind `meeting`, plus one `attended` edge per person.
+There is no meetings table: the note already indexes into `embeddings` with
+`purpose='note'`, so it inherits search, scoping and retention for free, and
+the only genuinely new thing is who was in the room.
+
+`ingestMeeting` (`src/core/knowledge/meetings.ts`) is the single entry point,
+behind `notes.write_meeting_note` for pasted notes and transcripts, and
+`notes.import_calendar_meetings` for the connected Google / Microsoft
+calendars.
+
+- **The slug is date + title**, so re-saving the same meeting updates one note
+  instead of accumulating a copy per sync. That is what makes a scheduled
+  morning import safe.
+- **An imported note is never overwritten once someone writes into it.** The
+  invite body ends with a placeholder; its absence means a human has been
+  here, and the import skips the event with a reason.
+- **Attendees bind exactly or not at all.** An attendee matches a profile by an
+  `email` fact or an exact name. A partial name match is refused — binding
+  "Ada" to "Ada Lovelace" is a guess, and a wrong edge on a meeting record is
+  worse than an unresolved one.
+- **An unknown attendee leaves a ghost edge** keyed by their name slug.
+  Creating the profile later binds every past meeting they attended, through
+  `resolveAttendeeLinks`, which `profiles.create_profile` calls.
 
 ### The save pipeline
 

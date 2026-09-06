@@ -1,0 +1,12 @@
+-- Freshness for knowledge chunks.
+--
+-- Retention could only delete an old chunk; there was no way to say "this
+-- fact was still true as of X", so retrieval had to treat a three-year-old
+-- statement exactly like today's. `last_verified_at` is stamped when a chunk
+-- is written or re-confirmed, and retrieval down-ranks by how long ago that
+-- was (see `freshnessFactor` in src/db/schema/embeddings.ts).
+--
+-- Left NULL for existing rows on purpose: every reader coalesces to
+-- `created_at`, so an un-backfilled row behaves exactly as it did before, and
+-- a table with millions of chunks does not need a rewrite to deploy this.
+ALTER TABLE "embeddings" ADD COLUMN IF NOT EXISTS "last_verified_at" timestamp with time zone;

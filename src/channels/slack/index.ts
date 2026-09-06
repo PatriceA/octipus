@@ -276,6 +276,19 @@ export class SlackChannel extends BaseChannel {
     if (mimeType.startsWith('audio/')) return 'audio';
     return 'file';
   }
+
+  /**
+   * The connected bot's Web API client, or null when Slack is not running.
+   *
+   * The channel is otherwise write-only — it posts replies and reacts. The
+   * read tools (`messaging.channel_history` / `channel_search`) need the same
+   * authenticated client to call `conversations.history`, and building a
+   * second one from config would double the places a rotated token has to
+   * reach. Mirrors `TeamsChannel.getAdapter()`.
+   */
+  getWebClient(): WebClient | null {
+    return this.app?.client ?? null;
+  }
 }
 
 export const slackChannel = new SlackChannel();

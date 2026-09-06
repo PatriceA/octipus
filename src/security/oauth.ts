@@ -1,8 +1,8 @@
 import { createHash, randomBytes } from 'crypto';
 import { and, eq } from 'drizzle-orm';
 import { getConfig } from '@/config';
-import { getDb } from '@/db/postgres';
 import { rawStore } from '@/db/cache';
+import { getDb } from '@/db/postgres';
 import { vault } from '@/db/schema/vault';
 import { securityLogger } from '@/utils/logger';
 import { getVault } from './vault';
@@ -66,15 +66,39 @@ export const OAUTH_VAULT_NAMES = {
   },
 } as const;
 
-// --- Atlassian OAuth vault keys ---
+// --- Connector OAuth vault keys ---
 
-const ATLASSIAN_CLIENT_ID_KEY = 'connector_atlassian_client_id';
-const ATLASSIAN_AUTH_ENDPOINT_KEY = 'connector_atlassian_auth_endpoint';
-const ATLASSIAN_TOKEN_ENDPOINT_KEY = 'connector_atlassian_token_endpoint';
+/**
+ * Vault entry names for one connector's OAuth material.
+ *
+ * The first three are system-scoped (the dynamically registered client and the
+ * endpoints it was registered against); the last three are per-user. The
+ * `connector_<id>_*` shape is the same one Atlassian already used, so
+ * generalising it left every existing row where it was.
+ */
+export function connectorVaultKeys(connectorId: string): {
+  clientId: string;
+  authEndpoint: string;
+  tokenEndpoint: string;
+  accessToken: string;
+  refreshToken: string;
+  tokenExpiry: string;
+} {
+  return {
+    clientId: `connector_${connectorId}_client_id`,
+    authEndpoint: `connector_${connectorId}_auth_endpoint`,
+    tokenEndpoint: `connector_${connectorId}_token_endpoint`,
+    accessToken: `connector_${connectorId}_access_token`,
+    refreshToken: `connector_${connectorId}_refresh_token`,
+    tokenExpiry: `connector_${connectorId}_token_expiry`,
+  };
+}
 
-export const ATLASSIAN_USER_ACCESS_TOKEN_KEY = 'connector_atlassian_access_token';
-export const ATLASSIAN_USER_REFRESH_TOKEN_KEY = 'connector_atlassian_refresh_token';
-export const ATLASSIAN_USER_TOKEN_EXPIRY_KEY = 'connector_atlassian_token_expiry';
+const ATLASSIAN_KEYS = connectorVaultKeys('atlassian');
+
+export const ATLASSIAN_USER_ACCESS_TOKEN_KEY = ATLASSIAN_KEYS.accessToken;
+export const ATLASSIAN_USER_REFRESH_TOKEN_KEY = ATLASSIAN_KEYS.refreshToken;
+export const ATLASSIAN_USER_TOKEN_EXPIRY_KEY = ATLASSIAN_KEYS.tokenExpiry;
 
 // --- Provider Configs ---
 
@@ -132,29 +156,31 @@ async function getProviderConfig(provider: string): Promise<OAuthProviderConfig 
         redirectUri: `${publicUrl}/api/auth/oauth/microsoft/callback`,
       };
     }
-    case 'atlassian': {
-      const v = getVault();
-      const clientId = await v.getSystemSecret(ATLASSIAN_CLIENT_ID_KEY);
-      const authorizationUrl = await v.getSystemSecret(ATLASSIAN_AUTH_ENDPOINT_KEY);
-      const tokenUrl = await v.getSystemSecret(ATLASSIAN_TOKEN_ENDPOINT_KEY);
-      if (!clientId || !authorizationUrl || !tokenUrl) return null;
+    default: {
+      // Every remaining provider is a built-in connector: a public OAuth 2.1
+      // client registered dynamically against the connector's own discovery
+      // document. Nothing here is connector-specific except the id.
+      const { findConnector } = await import('@/connectors/definitions');
+      const connector = findConnector(provider);
+      if (!connector) return null;
 
-      const { ATLASSIAN_CONNECTOR } = await import('@/connectors/atlassian/definition');
-      const atlasConfig = getConfig();
-      const atlasPublicUrl = atlasConfig.oauth?.publicUrl || `http://localhost:${atlasConfig.api.port}`;
+      const keys = connectorVaultKeys(connector.id);
+      const clientId = await v.getSystemSecret(keys.clientId);
+      const authorizationUrl = await v.getSystemSecret(keys.authEndpoint);
+      const tokenUrl = await v.getSystemSecret(keys.tokenEndpoint);
+      if (!clientId || !authorizationUrl || !tokenUrl) return null;
 
       return {
         authorizationUrl,
         tokenUrl,
         clientId,
+        // A public client: PKCE is the proof, there is no secret to keep.
         clientSecret: '',
-        scopes: ATLASSIAN_CONNECTOR.oauthScopes,
-        redirectUri: `${atlasPublicUrl}/api/connectors/atlassian/callback`,
+        scopes: connector.oauthScopes,
+        redirectUri: `${publicUrl}/api/connectors/${connector.id}/callback`,
         additionalParams: {},
       };
     }
-    default:
-      return null;
   }
 }
 
@@ -259,11 +285,13 @@ export class OAuthManager {
       : undefined;
 
     // Store tokens in vault.
-    // Atlassian uses dedicated per-key vault entries (connector_atlassian_*)
-    // consumed by getAtlassianAccessToken; the generic storage path is skipped
+    // A connector uses dedicated per-key vault entries (connector_<id>_*)
+    // consumed by getConnectorAccessToken; the generic storage path is skipped
     // to avoid maintaining two writers that can drift out of sync.
-    if (provider === 'atlassian') {
-      await storeAtlassianUserTokens(
+    const { isConnectorId } = await import('@/connectors/definitions');
+    if (isConnectorId(provider)) {
+      await storeConnectorUserTokens(
+        provider,
         stateData.userId,
         tokens.access_token,
         tokens.refresh_token,
@@ -537,22 +565,34 @@ export function getOAuthManager(): OAuthManager {
   return oauthManagerInstance;
 }
 
-// --- Atlassian Dynamic Client Registration ---
+// --- Connector Dynamic Client Registration ---
 
-interface AtlassianOAuthMetadata {
+interface ConnectorOAuthMetadata {
   clientId: string;
   authorizationEndpoint: string;
   tokenEndpoint: string;
 }
 
-export async function discoverAndRegisterAtlassian(
+/**
+ * Register Octipus as a public OAuth client with a connector's authorization
+ * server, using the RFC 7591 dynamic registration endpoint its discovery
+ * document advertises.
+ *
+ * This is what makes a connector a definition rather than a code path: the
+ * server tells us where to send the user and where to redeem the code, and we
+ * tell it where to send them back.
+ */
+export async function discoverAndRegisterConnector(
+  connectorId: string,
   publicUrl: string,
-): Promise<AtlassianOAuthMetadata> {
-  const { ATLASSIAN_OAUTH_DISCOVERY_URL } = await import('@/connectors/atlassian/definition');
+): Promise<ConnectorOAuthMetadata> {
+  const { findConnector } = await import('@/connectors/definitions');
+  const connector = findConnector(connectorId);
+  if (!connector) throw new Error(`Unknown connector: ${connectorId}`);
 
-  const discoveryRes = await fetch(ATLASSIAN_OAUTH_DISCOVERY_URL);
+  const discoveryRes = await fetch(connector.oauthDiscoveryUrl);
   if (!discoveryRes.ok) {
-    throw new Error(`Atlassian OAuth discovery failed (${discoveryRes.status})`);
+    throw new Error(`${connector.name} OAuth discovery failed (${discoveryRes.status})`);
   }
   const discovery = await discoveryRes.json() as {
     authorization_endpoint: string;
@@ -561,7 +601,7 @@ export async function discoverAndRegisterAtlassian(
   };
 
   if (!discovery.registration_endpoint) {
-    throw new Error('Atlassian OAuth discovery did not return a registration_endpoint');
+    throw new Error(`${connector.name} OAuth discovery did not return a registration_endpoint`);
   }
 
   const registrationRes = await fetch(discovery.registration_endpoint, {
@@ -569,7 +609,7 @@ export async function discoverAndRegisterAtlassian(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       client_name: 'Octipus',
-      redirect_uris: [`${publicUrl}/api/connectors/atlassian/callback`],
+      redirect_uris: [`${publicUrl}/api/connectors/${connector.id}/callback`],
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],
       token_endpoint_auth_method: 'none',
@@ -578,12 +618,12 @@ export async function discoverAndRegisterAtlassian(
 
   if (!registrationRes.ok) {
     const body = await registrationRes.text().catch(() => '');
-    throw new Error(`Atlassian client registration failed (${registrationRes.status}): ${body}`);
+    throw new Error(`${connector.name} client registration failed (${registrationRes.status}): ${body}`);
   }
 
   const registration = await registrationRes.json() as { client_id: string };
   if (!registration.client_id) {
-    throw new Error('Atlassian registration response missing client_id');
+    throw new Error(`${connector.name} registration response missing client_id`);
   }
 
   return {
@@ -593,64 +633,75 @@ export async function discoverAndRegisterAtlassian(
   };
 }
 
-// --- Atlassian User Token Storage ---
+/** @deprecated Use `discoverAndRegisterConnector('atlassian', publicUrl)`. */
+export function discoverAndRegisterAtlassian(publicUrl: string): Promise<ConnectorOAuthMetadata> {
+  return discoverAndRegisterConnector('atlassian', publicUrl);
+}
 
-export async function storeAtlassianUserTokens(
+// --- Connector User Token Storage ---
+
+export async function storeConnectorUserTokens(
+  connectorId: string,
   userId: string,
   accessToken: string,
   refreshToken: string | undefined,
   expiresInSeconds: number | undefined,
 ): Promise<void> {
   const v = getVault();
+  const keys = connectorVaultKeys(connectorId);
   const expiresAt = expiresInSeconds
     ? new Date(Date.now() + expiresInSeconds * 1000).toISOString()
     : '';
 
   // Delete existing tokens to avoid accumulation
   const existing = await v.list(userId);
-  const tokenNames = [
-    ATLASSIAN_USER_ACCESS_TOKEN_KEY,
-    ATLASSIAN_USER_REFRESH_TOKEN_KEY,
-    ATLASSIAN_USER_TOKEN_EXPIRY_KEY,
-  ];
+  const tokenNames = [keys.accessToken, keys.refreshToken, keys.tokenExpiry];
   for (const entry of existing) {
     if (tokenNames.includes(entry.name ?? '')) {
       await v.delete(userId, entry.id);
     }
   }
 
-  await v.store(userId, ATLASSIAN_USER_ACCESS_TOKEN_KEY, accessToken, {
-    credentialType: 'oauth_token',
-  });
+  await v.store(userId, keys.accessToken, accessToken, { credentialType: 'oauth_token' });
   if (refreshToken) {
-    await v.store(userId, ATLASSIAN_USER_REFRESH_TOKEN_KEY, refreshToken, {
-      credentialType: 'oauth_token',
-    });
+    await v.store(userId, keys.refreshToken, refreshToken, { credentialType: 'oauth_token' });
   }
   if (expiresAt) {
-    await v.store(userId, ATLASSIAN_USER_TOKEN_EXPIRY_KEY, expiresAt, {
-      credentialType: 'other',
-    });
+    await v.store(userId, keys.tokenExpiry, expiresAt, { credentialType: 'other' });
   }
 }
 
-// --- Atlassian Access Token Retrieval (with refresh) ---
+/** @deprecated Use `storeConnectorUserTokens('atlassian', ...)`. */
+export function storeAtlassianUserTokens(
+  userId: string,
+  accessToken: string,
+  refreshToken: string | undefined,
+  expiresInSeconds: number | undefined,
+): Promise<void> {
+  return storeConnectorUserTokens('atlassian', userId, accessToken, refreshToken, expiresInSeconds);
+}
+
+// --- Connector Access Token Retrieval (with refresh) ---
 
 // Refresh buffer matches OAuthManager.getValidToken (5 minutes) so all
 // providers refresh on the same cadence.
-const ATLASSIAN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
+const CONNECTOR_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
-// Per-user in-flight refresh promises. Concurrent callers during expiry
-// share a single token-endpoint round-trip instead of stampeding.
-const atlassianRefreshInFlight = new Map<string, Promise<string | null>>();
+// Per-(connector, user) in-flight refresh promises. Concurrent callers during
+// expiry share a single token-endpoint round-trip instead of stampeding.
+const connectorRefreshInFlight = new Map<string, Promise<string | null>>();
 
-async function refreshAtlassianAccessToken(userId: string): Promise<string | null> {
+async function refreshConnectorAccessToken(
+  connectorId: string,
+  userId: string,
+): Promise<string | null> {
   const v = getVault();
-  const refreshToken = await v.getByName(userId, ATLASSIAN_USER_REFRESH_TOKEN_KEY);
+  const keys = connectorVaultKeys(connectorId);
+  const refreshToken = await v.getByName(userId, keys.refreshToken);
   if (!refreshToken) return null;
 
-  const tokenEndpoint = await v.getSystemSecret(ATLASSIAN_TOKEN_ENDPOINT_KEY);
-  const clientId = await v.getSystemSecret(ATLASSIAN_CLIENT_ID_KEY);
+  const tokenEndpoint = await v.getSystemSecret(keys.tokenEndpoint);
+  const clientId = await v.getSystemSecret(keys.clientId);
   if (!tokenEndpoint || !clientId) return null;
 
   const res = await fetch(tokenEndpoint, {
@@ -664,7 +715,7 @@ async function refreshAtlassianAccessToken(userId: string): Promise<string | nul
   });
 
   if (!res.ok) {
-    securityLogger.warn({ userId, status: res.status }, 'Atlassian token refresh failed');
+    securityLogger.warn({ userId, connectorId, status: res.status }, 'Connector token refresh failed');
     return null;
   }
 
@@ -674,28 +725,44 @@ async function refreshAtlassianAccessToken(userId: string): Promise<string | nul
     expires_in?: number;
   };
 
-  await storeAtlassianUserTokens(userId, tokens.access_token, tokens.refresh_token, tokens.expires_in);
+  await storeConnectorUserTokens(
+    connectorId,
+    userId,
+    tokens.access_token,
+    tokens.refresh_token,
+    tokens.expires_in,
+  );
   return tokens.access_token;
 }
 
-export async function getAtlassianAccessToken(userId: string): Promise<string | null> {
+export async function getConnectorAccessToken(
+  connectorId: string,
+  userId: string,
+): Promise<string | null> {
   const v = getVault();
-  const accessToken = await v.getByName(userId, ATLASSIAN_USER_ACCESS_TOKEN_KEY);
+  const keys = connectorVaultKeys(connectorId);
+  const accessToken = await v.getByName(userId, keys.accessToken);
   if (!accessToken) return null;
 
-  const expiryStr = await v.getByName(userId, ATLASSIAN_USER_TOKEN_EXPIRY_KEY);
+  const expiryStr = await v.getByName(userId, keys.tokenExpiry);
   const isExpired = expiryStr
-    ? new Date(expiryStr).getTime() - ATLASSIAN_REFRESH_BUFFER_MS < Date.now()
+    ? new Date(expiryStr).getTime() - CONNECTOR_REFRESH_BUFFER_MS < Date.now()
     : false;
 
   if (!isExpired) return accessToken;
 
-  const existing = atlassianRefreshInFlight.get(userId);
+  const inFlightKey = `${connectorId}:${userId}`;
+  const existing = connectorRefreshInFlight.get(inFlightKey);
   if (existing) return existing;
 
-  const refreshPromise = refreshAtlassianAccessToken(userId).finally(() => {
-    atlassianRefreshInFlight.delete(userId);
+  const refreshPromise = refreshConnectorAccessToken(connectorId, userId).finally(() => {
+    connectorRefreshInFlight.delete(inFlightKey);
   });
-  atlassianRefreshInFlight.set(userId, refreshPromise);
+  connectorRefreshInFlight.set(inFlightKey, refreshPromise);
   return refreshPromise;
+}
+
+/** @deprecated Use `getConnectorAccessToken('atlassian', userId)`. */
+export function getAtlassianAccessToken(userId: string): Promise<string | null> {
+  return getConnectorAccessToken('atlassian', userId);
 }

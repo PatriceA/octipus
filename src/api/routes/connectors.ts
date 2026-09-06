@@ -1,26 +1,13 @@
-import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
+import { Elysia, t } from '@/api/http';
 import { getConfig } from '@/config';
-import { ATLASSIAN_CONNECTOR } from '@/connectors/atlassian/definition';
-import type { ConnectorDefinition } from '@/connectors/types';
+import { ALL_CONNECTORS, findConnector } from '@/connectors/definitions';
 import {
-  ATLASSIAN_USER_ACCESS_TOKEN_KEY,
-  ATLASSIAN_USER_REFRESH_TOKEN_KEY,
-  ATLASSIAN_USER_TOKEN_EXPIRY_KEY,
+  connectorVaultKeys,
+  discoverAndRegisterConnector,
   OAuthManager,
-  discoverAndRegisterAtlassian,
 } from '@/security/oauth';
 import { getVault } from '@/security/vault';
-
-/** All available connectors. */
-const ALL_CONNECTORS: ConnectorDefinition[] = [ATLASSIAN_CONNECTOR];
-
-/** Vault key names for Atlassian user tokens. */
-const ATLASSIAN_TOKEN_KEY_NAMES = [
-  ATLASSIAN_USER_ACCESS_TOKEN_KEY,
-  ATLASSIAN_USER_REFRESH_TOKEN_KEY,
-  ATLASSIAN_USER_TOKEN_EXPIRY_KEY,
-];
 
 /** Derive the public URL used for OAuth redirect URIs. */
 function getPublicUrl(): string {
@@ -81,14 +68,13 @@ export const connectorRoutes = new Elysia({ prefix: '/connectors' })
 
           try {
             // Check if user has an access token stored for this connector
-            if (connector.id === 'atlassian') {
-              const accessToken = await vault.getByName(user.id, ATLASSIAN_USER_ACCESS_TOKEN_KEY);
-              connected = !!accessToken;
+            const keys = connectorVaultKeys(connector.id);
+            const accessToken = await vault.getByName(user.id, keys.accessToken);
+            connected = !!accessToken;
 
-              if (connected) {
-                const expiry = await vault.getByName(user.id, ATLASSIAN_USER_TOKEN_EXPIRY_KEY);
-                expiresAt = expiry ?? undefined;
-              }
+            if (connected) {
+              const expiry = await vault.getByName(user.id, keys.tokenExpiry);
+              expiresAt = expiry ?? undefined;
             }
           } catch {
             // If vault lookup fails, treat as not connected
@@ -121,30 +107,32 @@ export const connectorRoutes = new Elysia({ prefix: '/connectors' })
 
       const { id } = params;
 
-      if (id !== 'atlassian') {
+      const connector = findConnector(id);
+      if (!connector) {
         return { error: `Unknown connector: ${id}` };
       }
 
       const vault = getVault();
       const publicUrl = getPublicUrl();
+      const keys = connectorVaultKeys(connector.id);
 
       // Check if client_id is already registered; if not, do dynamic registration
-      const existingClientId = await vault.getSystemSecret('connector_atlassian_client_id');
+      const existingClientId = await vault.getSystemSecret(keys.clientId);
 
       if (!existingClientId) {
         try {
-          const metadata = await discoverAndRegisterAtlassian(publicUrl);
-          await vault.setSystemSecret('connector_atlassian_client_id', metadata.clientId);
-          await vault.setSystemSecret('connector_atlassian_auth_endpoint', metadata.authorizationEndpoint);
-          await vault.setSystemSecret('connector_atlassian_token_endpoint', metadata.tokenEndpoint);
+          const metadata = await discoverAndRegisterConnector(connector.id, publicUrl);
+          await vault.setSystemSecret(keys.clientId, metadata.clientId);
+          await vault.setSystemSecret(keys.authEndpoint, metadata.authorizationEndpoint);
+          await vault.setSystemSecret(keys.tokenEndpoint, metadata.tokenEndpoint);
         } catch (err) {
-          return { error: `Failed to register Atlassian OAuth client: ${(err as Error).message}` };
+          return { error: `Failed to register ${connector.name} OAuth client: ${(err as Error).message}` };
         }
       }
 
       try {
         const oauthManager = new OAuthManager();
-        const { url } = await oauthManager.generateAuthorizationUrl(user.id, 'atlassian');
+        const { url } = await oauthManager.generateAuthorizationUrl(user.id, connector.id);
         return { url };
       } catch (err) {
         return { error: (err as Error).message };
@@ -217,7 +205,8 @@ export const connectorRoutes = new Elysia({ prefix: '/connectors' })
 
       const { id } = params;
 
-      if (id !== 'atlassian') {
+      const connector = findConnector(id);
+      if (!connector) {
         return { error: `Unknown connector: ${id}` };
       }
 
@@ -226,7 +215,8 @@ export const connectorRoutes = new Elysia({ prefix: '/connectors' })
       try {
         // List all user vault entries and delete matching token keys
         const entries = await vault.list(user.id);
-        const tokenKeyNames = ATLASSIAN_TOKEN_KEY_NAMES;
+        const keys = connectorVaultKeys(connector.id);
+        const tokenKeyNames = [keys.accessToken, keys.refreshToken, keys.tokenExpiry];
 
         for (const entry of entries) {
           if (tokenKeyNames.includes(entry.name ?? '')) {

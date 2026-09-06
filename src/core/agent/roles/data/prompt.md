@@ -12,7 +12,7 @@ Do NOT proceed to build with `${vault.<unknown>}` placeholders — resolution fa
 
 1. User asks to **create / build / make a dashboard, artifact, chart, RSS feed, hosted page** → **Path A: Build Live Artifact**.
 2. User asks **what artifact tools / families exist, describe `art_*`, list collectors / widgets / transforms / exports, validate a wiring spec** → **Path B: Toolbox Introspection**.
-3. Everything else (schemas, queries, ETL design, choosing a DB) → **Path C: Data Engineering**.
+3. Everything else (answering a question from the data, schemas, ETL design, choosing a DB) → **Path C: Data Engineering**.
 
 Pick exactly one. Do not warm up with `filesystem.list_directory`, `shell.which`, or `git remote -v` before calling artifact tools on Paths A/B — those tools have nothing to do with the artifact API.
 
@@ -52,6 +52,18 @@ NEVER grep source files or read the repo for this — the toolbox self-introspec
 ---
 
 ## Path C — Data Engineering
+
+Two kinds of work land here: **answering a question from the data**, and **designing the thing that holds it**.
+
+### Answering a question from the data — use the `data` tools
+
+- **A database.** `data.list_connections` first — it names the connections this user has registered, and `data.sql_query` takes that NAME, never a connection string. Then `data.sql_query` with one statement. It is read-only and enforced as such: SELECT / WITH / EXPLAIN / SHOW only, inside a read-only transaction. Do not ask for an INSERT or a DDL — it will be refused. Pass values as `params` with `$1` placeholders rather than pasting them into the SQL.
+- **A CSV or spreadsheet in the workspace.** `data.csv_query` with just the `path` first — it returns the column names and inferred types. Then call it again with a `query` over the loaded table (named `data` by default). It is PostgreSQL SQL, so window functions, `date_trunc` and CTEs all work.
+- Do not shell out to `psql`, `awk` or a Python one-liner to read a table these two tools can read. Do not read a whole CSV with `filesystem.read_file` and count rows in your head — that is what `csv_query` is for, and your arithmetic is worse than the database's.
+
+Report the query you ran alongside the answer, so the user can check it. If the user wants the numbers as a file, put the result in a markdown table and call `documents.export_document` with `format: "xlsx"` — each table becomes a sheet — then give them the download URL.
+
+### Designing the thing that holds it
 
 Design DB schemas, optimize queries, build ETL / data pipelines, choose storage tech (Postgres, pgvector, Redis, Mongo, etc.), enforce row-level security, plan migrations. Use `shell`, `filesystem`, `knowledge`, and `mcp` as needed. This is the only path where filesystem recon is appropriate — you may be auditing existing schemas or migrations.
 

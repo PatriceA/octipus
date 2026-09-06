@@ -1,11 +1,9 @@
 import type { ToolHandler } from '@/core/agent-base';
-import { coreLogger } from '@/utils/logger';
 import { MCPProtocol, type MCPToolDefinition } from '@/mcp/protocol';
+import { coreLogger } from '@/utils/logger';
+import { ALL_CONNECTORS, findConnector } from './definitions';
 import { OAuthHTTPTransport } from './oauth-http-transport';
-import { ATLASSIAN_CONNECTOR } from './atlassian/definition';
 import type { ConnectorDefinition } from './types';
-
-const ALL_CONNECTORS: ConnectorDefinition[] = [ATLASSIAN_CONNECTOR];
 
 export class ConnectorRegistry {
   constructor(
@@ -132,7 +130,14 @@ export class ConnectorRegistry {
     };
   }
 
-  private async fetchConnectorTools(
+  /**
+   * The remote server's own tool list.
+   *
+   * Public because the named connector tools (`src/tools/atlassian`) resolve
+   * a capability against it rather than hard-coding a remote tool name that
+   * the vendor is free to rename.
+   */
+  async fetchConnectorTools(
     connector: ConnectorDefinition,
     userId: string,
   ): Promise<MCPToolDefinition[]> {
@@ -153,7 +158,8 @@ export class ConnectorRegistry {
     }
   }
 
-  private async callConnectorTool(
+  /** Invoke one tool on a connector. Public for the same reason as above. */
+  async callConnectorTool(
     connector: ConnectorDefinition,
     userId: string,
     toolName: string,
@@ -209,11 +215,13 @@ let registryInstance: ConnectorRegistry | null = null;
 export function getConnectorRegistry(): ConnectorRegistry {
   if (!registryInstance) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { getAtlassianAccessToken } = require('@/security/oauth') as typeof import('@/security/oauth');
+    const { getConnectorAccessToken } = require('@/security/oauth') as typeof import('@/security/oauth');
     registryInstance = new ConnectorRegistry(
       async (connectorId, userId) => {
-        if (connectorId === 'atlassian') return getAtlassianAccessToken(userId);
-        return null;
+        // An unknown id must not reach the vault: `connector_<id>_access_token`
+        // built from an arbitrary string is a lookup by attacker-chosen name.
+        if (!findConnector(connectorId)) return null;
+        return getConnectorAccessToken(connectorId, userId);
       },
     );
   }

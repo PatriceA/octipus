@@ -56,6 +56,7 @@ BOOTSTRAP_BASE_URL=                    # for litellm: the proxy URL
 TELEGRAM_BOT_TOKEN=                    # From @BotFather
 SLACK_BOT_TOKEN=                       # xoxb-...
 SLACK_APP_TOKEN=                       # xapp-...
+SLACK_USER_TOKEN=                      # xoxp-... optional; only channel_search needs it
 TEAMS_APP_ID=
 TEAMS_APP_PASSWORD=
 WHATSAPP_ACCESS_TOKEN=                 # Meta Cloud API token

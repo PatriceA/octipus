@@ -1,6 +1,8 @@
+export { AtlassianTool, atlassianTool } from './atlassian';
 export { BaseTool, createParameterSchema, type ToolAvailability, type ToolContext, type ToolExecutionOptions } from './base-tool';
 export { BrowserTool, browserTool } from './browser';
 export { BrowserExtTool, browserExtTool } from './browser-ext';
+export { DataTool, dataTool } from './data';
 export { DockerTool, dockerTool } from './docker';
 export { DocumentsTool, documentsTool } from './documents';
 export { EmailProcessorTool, emailProcessorTool } from './email-processor';

@@ -7,7 +7,7 @@ export class DocumentsTool extends BaseTool {
   readonly id = 'documents';
   readonly name = 'Documents';
   readonly version = '1.0.0';
-  readonly description = 'List, view, and search uploaded documents — access OCR text, summaries, and categories.';
+  readonly description = 'List, view, and search uploaded documents, and export a written deliverable as a Word document or a spreadsheet.';
 
   override async checkAvailability(): Promise<ToolAvailability> {
     try {
@@ -34,11 +34,13 @@ export class DocumentsTool extends BaseTool {
       permissions: [
         { action: 'read', description: 'Read and list documents', defaultLevel: 'ALLOW' },
         { action: 'search', description: 'Search documents via knowledge base', defaultLevel: 'ALLOW' },
+        { action: 'export', description: 'Write a document to the user\'s files as .docx or .xlsx', defaultLevel: 'ALLOW' },
       ],
       tools: [
         { name: 'list_documents', description: 'List uploaded documents with optional filters', parameters: { category: { type: 'string', description: 'Filter by category' }, status: { type: 'string', description: 'Filter by status' } }, returns: 'List of documents' },
         { name: 'get_document', description: 'Get document details including OCR text and summary', parameters: { id: { type: 'string', description: 'Document ID', required: true } }, returns: 'Document details with OCR text and summary' },
         { name: 'search_documents', description: 'Search documents using hybrid search', parameters: { query: { type: 'string', description: 'Search query', required: true } }, returns: 'Matching document entries' },
+        { name: 'export_document', description: 'Export markdown as a .docx, or its tables as an .xlsx', parameters: { title: { type: 'string', description: 'Document title', required: true }, markdown: { type: 'string', description: 'Markdown body', required: true }, format: { type: 'string', description: 'docx or xlsx' } }, returns: 'The document id and a download URL' },
       ],
     };
   }
@@ -154,6 +156,58 @@ export class DocumentsTool extends BaseTool {
         };
       },
       { requiresPermission: false },
+    );
+
+    this.registerTool(
+      'export_document',
+      'Turn a finished piece of writing into a file the user can open and send on. Give it the whole deliverable as markdown. format="docx" writes a Word document (headings, bold/italic, bullet and numbered lists, quotes, code blocks and tables all carry over); format="xlsx" writes a spreadsheet with one sheet per markdown table, named after the heading above each table. Returns a download URL. Use this when the user asks for a document, a report, a deck of numbers or "send me a file" — not for saving working notes, which belong in notes or filesystem.',
+      createParameterSchema({
+        title: { type: 'string', description: 'Document title — also the download filename', required: true },
+        markdown: { type: 'string', description: 'The whole document as markdown', required: true },
+        format: { type: 'string', description: 'docx (default) or xlsx', enum: ['docx', 'xlsx'], default: 'docx' },
+        summary: { type: 'string', description: 'One-line summary shown in the documents list' },
+      }),
+      async (args, context) => {
+        if (!context.userId) {
+          throw new Error('export_document requires an authenticated user context');
+        }
+        const title = String(args.title ?? '').trim();
+        const markdown = String(args.markdown ?? '');
+        const format = String(args.format ?? 'docx').toLowerCase();
+        if (format !== 'docx' && format !== 'xlsx') {
+          return { error: `Unknown format "${format}" — use docx or xlsx` };
+        }
+        if (markdown.trim().length === 0) {
+          return { error: 'markdown is empty — pass the document body' };
+        }
+
+        const {
+          DOCX_MIME, DocumentExportError, XLSX_MIME,
+          markdownToDocx, markdownToSheets, sheetsToXlsx,
+        } = await import('@/core/documents/export');
+
+        try {
+          const content = format === 'docx'
+            ? await markdownToDocx(markdown, { title })
+            : await sheetsToXlsx(markdownToSheets(markdown));
+
+          const { saveExportedDocument } = await import('@/core/documents/export-store');
+          const saved = await saveExportedDocument({
+            userId: context.userId,
+            workspaceId: context.workspaceId ?? null,
+            title: title.length > 0 ? title : 'Export',
+            extension: format,
+            mimeType: format === 'docx' ? DOCX_MIME : XLSX_MIME,
+            content,
+            summary: typeof args.summary === 'string' ? args.summary : undefined,
+          });
+          return { ...saved, format };
+        } catch (error) {
+          if (error instanceof DocumentExportError) return { error: error.message };
+          throw error;
+        }
+      },
+      { permissionAction: 'export' },
     );
   }
 }

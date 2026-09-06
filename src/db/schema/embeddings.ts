@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { customType, index, integer, jsonb, pgTable, smallint, text, timestamp, uniqueIndex, uuid, type AnyPgColumn } from 'drizzle-orm/pg-core';
+import { type AnyPgColumn, customType, index, integer, jsonb, pgTable, smallint, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { documents } from './documents';
 import { workspaceRepos } from './workspace-repos';
 
@@ -80,6 +80,18 @@ export const embeddings = pgTable('embeddings', {
   accessCount: integer('access_count').notNull().default(0),
   /** Last time this row appeared in a search result. NULL = never queried. */
   lastAccessedAt: timestamp('last_accessed_at', { withTimezone: true }),
+  /**
+   * Last time the content was written or re-confirmed as still true.
+   *
+   * Distinct from `last_accessed_at`, which only says somebody read it —
+   * reading a stale fact does not make it fresher. Retrieval multiplies its
+   * score by `freshnessFactor` over this column, so an old, unreviewed chunk
+   * loses to a recent one on a near-tie without ever being hidden.
+   *
+   * NULL means never explicitly verified; every reader coalesces to
+   * `created_at`, which is when the content was first known to be true.
+   */
+  lastVerifiedAt: timestamp('last_verified_at', { withTimezone: true }),
   /**
    * Memory-redesign Phase C — document hierarchy. The chunker that
    * structures a document into heading + body chunks links each chunk
@@ -177,6 +189,53 @@ export const cosineSimilarity = (column: AnyPgColumn, vector: number[]) => {
   validateVector(vector);
   const vectorLiteral = `[${vector.join(',')}]`;
   return sql`1 - (${column} <=> ${vectorLiteral}::vector)`;
+};
+
+/**
+ * How much of a chunk's score staleness may take away, and over how long.
+ *
+ * Deliberately bounded. A 40% ceiling re-orders near-ties and lets a fresh
+ * answer beat an old one, but never buries a chunk that is the only real
+ * match — an old fact is usually still the right fact, just worth a second
+ * look. Reached linearly at one year since the content was last verified.
+ */
+export const MAX_STALENESS_PENALTY = 0.4;
+export const STALENESS_HORIZON_DAYS = 365;
+
+/**
+ * Both helpers take the table's alias because one caller is a drizzle query
+ * over the bare table and the other is a hand-written CTE that aliases it to
+ * `e`; a drizzle column reference renders the full table name and would not
+ * resolve inside the alias. The alias is code-controlled and validated here,
+ * never user input.
+ */
+function aliased(alias: string): string {
+  if (!/^[a-z_][a-z0-9_]*$/i.test(alias)) {
+    throw new Error(`Invalid SQL alias: ${alias}`);
+  }
+  return alias === 'embeddings' ? '"embeddings"' : alias;
+}
+
+/** Days since the chunk was last verified, falling back to when it was created. */
+export const ageInDaysSql = (alias = 'embeddings') => {
+  const t = aliased(alias);
+  return sql.raw(
+    `GREATEST(0, EXTRACT(EPOCH FROM (now() - COALESCE(${t}.last_verified_at, ${t}.created_at))) / 86400.0)`,
+  );
+};
+
+/**
+ * A multiplier in [1 - MAX_STALENESS_PENALTY, 1] for how recently a chunk was
+ * verified. Rows written before the column existed have NULL there and fall
+ * back to `created_at`, so they score exactly as they did before.
+ */
+export const freshnessFactorSql = (alias = 'embeddings') => {
+  const t = aliased(alias);
+  return sql.raw(
+    `(1.0 - LEAST(${MAX_STALENESS_PENALTY}, ${MAX_STALENESS_PENALTY} * ` +
+    `GREATEST(0, EXTRACT(EPOCH FROM (now() - COALESCE(${t}.last_verified_at, ${t}.created_at))) / 86400.0)` +
+    ` / ${STALENESS_HORIZON_DAYS}))`,
+  );
 };
 
 // Helper for vector distance search (L2 distance)
