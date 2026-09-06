@@ -71,14 +71,127 @@ export function cleanSlackText(text: string, users?: Map<string, string>): strin
     .replace(/&amp;/g, '&');
 }
 
-/** Strip the HTML Teams sends so a message body reads as text. */
+/** Elements whose *content* is code, not message text, and goes with the tag. */
+const DROP_CONTENT = new Set(['script', 'style']);
+
+/** Tags that end a line, and how much whitespace they are worth. */
+const BREAK_AFTER: Record<string, string> = {
+  p: '\n\n',
+  div: '\n',
+  li: '\n',
+  tr: '\n',
+  h1: '\n',
+  h2: '\n',
+  h3: '\n',
+  h4: '\n',
+  h5: '\n',
+  h6: '\n',
+};
+
+interface ScannedTag {
+  name: string;
+  closing: boolean;
+  /** Index just past the tag's `>`. */
+  end: number;
+}
+
+/**
+ * Read one tag starting at `<`, or null when this is a bare `<` in text.
+ *
+ * The quoted-attribute handling is the point: `<div title="a>b">` contains a
+ * `>` that does not end the tag, and a scan that stops at the first one leaves
+ * `b">` behind as if it were message text.
+ */
+function scanTag(html: string, start: number): ScannedTag | null {
+  let i = start + 1;
+  const closing = html[i] === '/';
+  if (closing) i++;
+
+  const nameStart = i;
+  while (i < html.length && /[a-zA-Z0-9]/.test(html[i])) i++;
+  if (i === nameStart) return null; // `<` followed by something that is not a tag name
+  const name = html.slice(nameStart, i).toLowerCase();
+
+  let quote: string | null = null;
+  while (i < html.length) {
+    const ch = html[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === '>') {
+      return { name, closing, end: i + 1 };
+    }
+    i++;
+  }
+  // Unterminated tag: treat the rest of the input as markup rather than
+  // emitting a half-parsed fragment as if the sender had typed it.
+  return { name, closing, end: html.length };
+}
+
+/**
+ * Strip the HTML Teams sends so a message body reads as text.
+ *
+ * Scanned rather than regex-replaced. A `<[^>]+>` filter is wrong on three
+ * inputs a chat platform really produces — an attribute containing `>`, a
+ * comment (whose body and closing `-->` survive), and a `<script>` block
+ * (whose source becomes message text) — and quoting a mangled or injected
+ * fragment back to a model as "what was said in the channel" is exactly the
+ * failure this function exists to prevent.
+ */
 export function cleanHtml(html: string): string {
-  return html
-    .replace(/<br\s*\/?>/gi, '\n')
-    // A paragraph break reads as a blank line; a list item or a div is one.
-    .replace(/<\/p>/gi, '\n\n')
-    .replace(/<\/(div|li|h[1-6])>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
+  let out = '';
+  let i = 0;
+
+  while (i < html.length) {
+    if (html[i] !== '<') {
+      out += html[i];
+      i++;
+      continue;
+    }
+
+    if (html.startsWith('<!--', i)) {
+      const end = html.indexOf('-->', i + 4);
+      i = end === -1 ? html.length : end + 3;
+      continue;
+    }
+    if (html.startsWith('<![CDATA[', i)) {
+      const end = html.indexOf(']]>', i + 9);
+      i = end === -1 ? html.length : end + 3;
+      continue;
+    }
+    // Doctype and processing instructions: `<!doctype …>`, `<?xml …?>`.
+    if (html.startsWith('<!', i) || html.startsWith('<?', i)) {
+      const end = html.indexOf('>', i + 2);
+      i = end === -1 ? html.length : end + 1;
+      continue;
+    }
+
+    const tag = scanTag(html, i);
+    if (!tag) {
+      // A bare `<` the sender typed. Keep it — it is their text.
+      out += '<';
+      i++;
+      continue;
+    }
+    i = tag.end;
+
+    if (!tag.closing && DROP_CONTENT.has(tag.name)) {
+      const close = html.toLowerCase().indexOf(`</${tag.name}`, i);
+      if (close === -1) {
+        i = html.length;
+      } else {
+        const closeTag = scanTag(html, close);
+        i = closeTag ? closeTag.end : html.length;
+      }
+      continue;
+    }
+
+    if (tag.name === 'br') out += '\n';
+    else if (tag.closing) out += BREAK_AFTER[tag.name] ?? '';
+  }
+
+  return out
     .replace(/&nbsp;/g, ' ')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')

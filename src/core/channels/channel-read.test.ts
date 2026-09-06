@@ -101,6 +101,41 @@ describe('cleanHtml', () => {
     expect(cleanHtml('<p>We ship <b>Friday</b></p><p>Agreed&nbsp;&amp; done</p>'))
       .toBe('We ship Friday\n\nAgreed & done');
   });
+
+  it('does not leak an attribute that contains a closing bracket', () => {
+    // A `<[^>]+>` filter stops at the `>` inside the quotes and leaves `b">`
+    // in the transcript as if the sender had typed it.
+    expect(cleanHtml('<div title="a>b">hello</div>')).toBe('hello');
+    expect(cleanHtml("<a href='x?p=1>2'>link</a>")).toBe('link');
+  });
+
+  it('drops a comment whole, body and closing marker', () => {
+    expect(cleanHtml('<!-- <b>hidden</b> --> visible')).toBe('visible');
+    expect(cleanHtml('before<!-- unterminated')).toBe('before');
+  });
+
+  it('drops script and style source rather than reading it as message text', () => {
+    // Quoting executable source back to a model as "what was said in the
+    // channel" is the failure this function exists to prevent.
+    expect(cleanHtml('<script>alert(1)</script>ok')).toBe('ok');
+    expect(cleanHtml('<style>body{color:red}</style>ok')).toBe('ok');
+    expect(cleanHtml('<script src="x">alert(1)</script>ok')).toBe('ok');
+  });
+
+  it('keeps a bare angle bracket the sender typed', () => {
+    expect(cleanHtml('2 < 3 and 4 > 3')).toBe('2 < 3 and 4 > 3');
+    expect(cleanHtml('a <- b')).toBe('a <- b');
+  });
+
+  it('drops a doctype and an unterminated tag', () => {
+    expect(cleanHtml('<!doctype html><p>hi</p>')).toBe('hi');
+    expect(cleanHtml('hi <div class="x')).toBe('hi');
+  });
+
+  it('breaks lines on the tags that end one', () => {
+    expect(cleanHtml('<ul><li>one</li><li>two</li></ul>')).toBe('one\ntwo');
+    expect(cleanHtml('a<br>b<br/>c')).toBe('a\nb\nc');
+  });
 });
 
 describe('matchesQuery', () => {
