@@ -8,11 +8,12 @@
  * (re-approvable → duplicates).
  */
 import { randomUUID } from 'node:crypto';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { experts } from '@/db/schema/experts';
 import { type SkillProposalRecord, skillProposals } from '@/db/schema/skill-proposals';
 import { skills } from '@/db/schema/skills';
+import { normalizeSkillName } from '@/tools/skill-distill/distiller';
 import { coreLogger } from '@/utils/logger';
 
 /** 90 days — how long a rejected proposal stays suppressed. */
@@ -74,16 +75,61 @@ async function promote(id: string, opts: ApproveOptions): Promise<ApproveResult>
   // A distilled *procedure* promotes into a skill; a *specialist* into an
   // expert (the default / legacy path).
   if (proposal.kind === 'skill') {
+    let merged = false;
+    const name = opts.name ?? proposal.name;
+    const content = opts.systemPrompt ?? proposal.draftPromptTemplate;
+    const normalized = normalizeSkillName(name);
+
     const skill = await db.transaction(async (tx) => {
-      const [created] = await tx.insert(skills).values({
-        id: randomUUID(),
-        name: opts.name ?? proposal.name,
-        description: proposal.description,
-        content: opts.systemPrompt ?? proposal.draftPromptTemplate,
-        category: 'general',
-        isSystem: false,
-        userId: proposal.userId,
-      }).returning();
+      // Approving a proposal for a skill the user already has updates that
+      // skill rather than filing a second row under the same name. Looked up
+      // INSIDE the transaction: read outside, the row could be deleted before
+      // the update, which would match nothing and still flip the proposal to
+      // `promoted` — a proposal that can never be approved again and no skill
+      // to show for it. A name that normalizes to nothing ('---') matches
+      // every other such name, so it never merges.
+      const [duplicate] = normalized
+        ? await tx
+            .select({ id: skills.id })
+            .from(skills)
+            .where(and(
+              eq(skills.userId, proposal.userId),
+              isNull(skills.archivedAt),
+              sql`trim(both '-' from lower(regexp_replace(${skills.name}, '[^a-zA-Z0-9]+', '-', 'g'))) = ${normalized}`,
+            ))
+            .limit(1)
+        : [];
+
+      const [created] = duplicate
+        ? await tx.update(skills)
+            .set({
+              name,
+              description: proposal.description,
+              content,
+              // Name/description changed, so the stored vector no longer
+              // describes this row — same contract SkillRepository.update
+              // enforces. Left stale, discovery and the distiller's own
+              // near-duplicate check would compare against the old text.
+              descriptionEmbedding: null,
+              descriptionHash: null,
+              updatedAt: new Date(),
+            })
+            .where(eq(skills.id, duplicate.id))
+            .returning()
+        : await tx.insert(skills).values({
+            id: randomUUID(),
+            name,
+            description: proposal.description,
+            content,
+            category: 'general',
+            isSystem: false,
+            userId: proposal.userId,
+          }).returning();
+
+      // The update matched nothing (row deleted mid-transaction) — roll back
+      // rather than promote a proposal into thin air.
+      if (!created) throw new AlreadyResolvedError();
+      merged = Boolean(duplicate);
 
       // Filter on `pending`, not just the id: the SELECT above is outside this
       // transaction, so two approvals racing (the REST route and `/proposals
@@ -97,7 +143,10 @@ async function promote(id: string, opts: ApproveOptions): Promise<ApproveResult>
       return created;
     });
 
-    coreLogger.info({ proposalId: id, skillId: skill?.id }, 'Skill proposal promoted to skill');
+    coreLogger.info(
+      { proposalId: id, skillId: skill?.id, merged },
+      merged ? 'Skill proposal merged into existing skill' : 'Skill proposal promoted to skill',
+    );
     return { promoted: 'skill', id: skill.id, name: skill.name, record: skill };
   }
 
