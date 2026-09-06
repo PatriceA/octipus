@@ -245,7 +245,7 @@ symbol index); no import-graph edges between files.
    for meetings already recorded. `notes.import_calendar_meetings` creates one
    such note per calendar event around today, and never overwrites a note
    somebody has written into, so it is safe on a schedule. `last_verified_at`
-   (migration 0096) is stamped when a chunk is written or re-confirmed, and
+   (migration 0097) is stamped when a chunk is written or re-confirmed, and
    retrieval multiplies its score by a bounded freshness factor — at most a
    40% penalty, reached at one year — so a stale fact ranks below a fresh one
    without ever being hidden. `verify_knowledge` is how a fact that is still

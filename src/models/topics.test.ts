@@ -46,11 +46,19 @@ describe('canonical topic registry', () => {
   });
 
   test('the long-form text roles canonicalize to the writing lane', () => {
-    for (const role of ['research', 'communication', 'pm']) {
+    for (const role of ['communication', 'pm']) {
       expect(canonicalTopic(role)).toBe('writing');
     }
     // `writing` is its own canonical lane now — passes through unchanged.
     expect(canonicalTopic('writing')).toBe('writing');
+  });
+
+  test('research is its own lane, so a model bound to it is actually used', () => {
+    // It used to alias to `writing`, which made the binding unreachable: the
+    // highest-token role in the system could not be pinned to a cheap model.
+    expect(canonicalTopic('research')).toBe('research');
+    expect(ALL_TOPIC_VALUES).toContain('research');
+    expect(TEXT_TOPIC_VALUES).toContain('research');
   });
 
   test('every retired background topic canonicalizes to the background lane', () => {

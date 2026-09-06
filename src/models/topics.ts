@@ -39,7 +39,13 @@ export const TOPICS: readonly TopicDef[] = [
   {
     value: 'writing',
     label: 'Writing',
-    description: 'Long-form text roles — Researcher, Writer, Project Manager, Communication. Split out from Agents so this class of work can run on a cheaper/faster (e.g. flash) model while Agents keeps a stronger model for coding and precision work. Unbound = these roles fall back to nothing (fail loud); bind a model here or leave them on Agents.',
+    description: 'Long-form text roles — Writer, Project Manager, Communication. Split out from Agents so this class of work can run on a cheaper/faster (e.g. flash) model while Agents keeps a stronger model for coding and precision work. Unbound = these roles fall back to nothing (fail loud); bind a model here or leave them on Agents.',
+    kind: 'text',
+  },
+  {
+    value: 'research',
+    label: 'Research',
+    description: 'Investigation and deep research — the highest-token work in the system: a researcher fans out into children that each re-send a growing context, so a single question can cost more than a day of chat. Its own lane so it can be pinned to a local or cheap model without dragging Writing down with it. Unbound = research fails loud.',
     kind: 'text',
   },
   {
@@ -69,9 +75,9 @@ export const TOPICS: readonly TopicDef[] = [
 /**
  * Retired topic values → their canonical lane. The worker-role topics collapse
  * into `agents` (docs/plans/topic-consolidation.md Phase 3) — except the four
- * long-form text roles (research/communication/pm/writing) which route to the
- * `writing` lane. The 5 per-feature background topics collapse into
- * `background`; `simple` and `local` had no runtime consumer and fold into
+ * long-form text roles (communication/pm/writing) which route to the
+ * `writing` lane. `research` is its own lane — see TOPICS. The 5 per-feature
+ * background topics collapse into `background`; `simple` and `local` had no runtime consumer and fold into
  * `chat`.
  *
  * Aliasing (not hard removal) keeps every existing caller working: role
@@ -97,8 +103,10 @@ export const RETIRED_TOPIC_ALIASES: Readonly<Record<string, string>> = {
   automation: 'agents',
   // … except the long-form text roles, which route to the `writing` lane so
   // they can run on a cheaper/faster model. (`writing` itself is a canonical
-  // lane now, so it is intentionally absent here — it resolves to itself.)
-  research: 'writing',
+  // lane now, so it is intentionally absent here — it resolves to itself.
+  // `research` left too: it is the highest-token role in the system, and the
+  // alias made its own binding unreachable — a model bound to `research` was
+  // never consulted by anything.)
   communication: 'writing',
   pm: 'writing',
   // root agent-direct text topics with no distinct lane
