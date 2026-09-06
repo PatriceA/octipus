@@ -20,7 +20,8 @@ export const tasks = pgTable('tasks', {
   workspaceId: uuid('workspace_id'),
   title: text('title').notNull(),
   notes: text('notes'),
-  status: text('status').default('open').notNull(), // 'open' | 'done' | 'archived'
+  /** 'open' | 'in_progress' | 'done' | 'archived' — see core/tasks/status.ts. */
+  status: text('status').default('open').notNull(),
   priority: integer('priority').default(0).notNull(), // 0 none .. 3 high
   /**
    * Free-form user category / list ("Shopping", "House work", "Car"). NULL =
@@ -28,6 +29,19 @@ export const tasks = pgTable('tasks', {
    * existing ones for reuse but never constrains the set.
    */
   category: text('category'),
+  /**
+   * Structure (daily-driver plan, Phase 2). A task can sit under a parent
+   * (a phase, an epic, a bigger task) and wait on other tasks. `parentId` is
+   * a self-FK with ON DELETE SET NULL in the migration (deleting a phase
+   * frees its children rather than taking them along); `blockedBy` holds
+   * task ids and only OPEN blockers block — a done, archived or deleted id
+   * in the array is inert, so the array is never rewritten on the blocker's
+   * behalf. `estimate` is free text in whatever unit the user works in
+   * ("S", "M", "3h"); the pm role speaks T-shirt sizes.
+   */
+  parentId: uuid('parent_id'),
+  blockedBy: uuid('blocked_by').array().default([]).notNull(),
+  estimate: text('estimate'),
   dueAt: timestamp('due_at', { withTimezone: true }),
   completedAt: timestamp('completed_at', { withTimezone: true }),
   /** Provenance: 'user' | 'agent' | 'reader' | 'research' | 'email'. */
@@ -38,6 +52,7 @@ export const tasks = pgTable('tasks', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userStatusDueIdx: index('tasks_user_status_due_idx').on(table.userId, table.status, table.dueAt),
+  parentIdx: index('tasks_parent_idx').on(table.parentId),
 }));
 
 export interface TaskSourceRef {

@@ -183,3 +183,64 @@ describe('own-task lifecycle', () => {
     expect(bad.body).toEqual({ error: 'Invalid status "bogus"' });
   });
 });
+
+describe('task structure (parent, blockers, estimate, in_progress)', () => {
+  test('a parent or blocker the caller cannot see is "not found" — no link across tenants', async () => {
+    const asParent = await postJson(aliceApp, '/api/tasks', { title: 'under bob', parentId: bobTaskId });
+    expect(asParent.status).toBe(400);
+    expect(asParent.body).toEqual({ error: 'Parent task not found' });
+
+    const asBlocker = await postJson(aliceApp, '/api/tasks', { title: 'after bob', blockedBy: [bobTaskId] });
+    expect(asBlocker.status).toBe(400);
+    expect(asBlocker.body).toEqual({ error: `Blocking task not found: ${bobTaskId}` });
+
+    const patched = await patchJson(aliceApp, `/api/tasks/${aliceTaskId}`, { parentId: bobTaskId });
+    expect(patched.status).toBe(400);
+    expect(patched.body).toEqual({ error: 'Parent task not found' });
+  });
+
+  test('own parent and blockers are stored; estimate and in_progress round-trip', async () => {
+    const phase = await postJson(aliceApp, '/api/tasks', { title: 'Phase 1', estimate: 'L' });
+    expect(phase.body.estimate).toBe('L');
+    expect(phase.body.blockedBy).toEqual([]);
+    const first = await postJson(aliceApp, '/api/tasks', { title: 'first', parentId: phase.body.id, estimate: ' S ' });
+    expect(first.body.parentId).toBe(phase.body.id);
+    expect(first.body.estimate).toBe('S');
+    const second = await postJson(aliceApp, '/api/tasks', { title: 'second', parentId: phase.body.id, blockedBy: [first.body.id, first.body.id] });
+    expect(second.body.blockedBy).toEqual([first.body.id]);
+
+    const started = await patchJson(aliceApp, `/api/tasks/${first.body.id}`, { status: 'in_progress' });
+    expect(started.body.status).toBe('in_progress');
+    expect(started.body.completedAt).toBeNull();
+
+    // The ranked view: the parent waits on its sub-tasks, the blocked one on its blocker, the started one leads.
+    const next = await get(aliceApp, '/api/tasks?view=next&tz=UTC');
+    const byId = new Map<string, any>(next.body.tasks.map((t: any) => [t.id, t]));
+    expect(byId.get(first.body.id)).toMatchObject({ bucket: 'doing' });
+    expect(byId.get(second.body.id)).toMatchObject({ bucket: 'waiting', reason: 'blocked by "first"' });
+    expect(byId.get(phase.body.id)).toMatchObject({ bucket: 'waiting', reason: '2 sub-tasks open' });
+
+    const cleared = await patchJson(aliceApp, `/api/tasks/${second.body.id}`, { blockedBy: null, parentId: null, estimate: null });
+    expect(cleared.body).toMatchObject({ blockedBy: [], parentId: null, estimate: null });
+  });
+
+  test('a task cannot be its own parent, and a parent loop is refused', async () => {
+    const a = await postJson(aliceApp, '/api/tasks', { title: 'a' });
+    const b = await postJson(aliceApp, '/api/tasks', { title: 'b', parentId: a.body.id });
+    const self = await patchJson(aliceApp, `/api/tasks/${a.body.id}`, { parentId: a.body.id });
+    expect(self.body).toEqual({ error: 'A task cannot be its own parent' });
+    const loop = await patchJson(aliceApp, `/api/tasks/${a.body.id}`, { parentId: b.body.id });
+    expect(loop.status).toBe(400);
+    expect(loop.body).toEqual({ error: 'That parent would make the task its own ancestor' });
+    const selfBlock = await patchJson(aliceApp, `/api/tasks/${a.body.id}`, { blockedBy: [a.body.id] });
+    expect(selfBlock.body).toEqual({ error: 'A task cannot block itself' });
+  });
+
+  test('deleting a parent frees its children instead of deleting them', async () => {
+    const phase = await postJson(aliceApp, '/api/tasks', { title: 'doomed phase' });
+    const child = await postJson(aliceApp, '/api/tasks', { title: 'survivor', parentId: phase.body.id });
+    await del(aliceApp, `/api/tasks/${phase.body.id}`);
+    const after = await get(aliceApp, `/api/tasks/${child.body.id}`);
+    expect(after.body.parentId).toBeNull();
+  });
+});

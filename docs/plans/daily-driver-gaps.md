@@ -1,6 +1,6 @@
 # Daily-Driver Gaps — Plan
 
-**Status:** Phase 0 shipped 2026-09-05 (#328); Phase 1 shipped 2026-09-05 (see below); phases 2–6 and the enterprise track are planning only
+**Status:** Phases 0, 1 and 3 shipped 2026-09-05 (#328, #329, #330); Phase 2 shipped 2026-09-06 (see below); phases 4–6 and the enterprise track are planning only
 **Created:** 2026-09-05
 **Scope:** What a developer / product owner / technical consultant needs before
 Octipus can run their working day, ordered by what blocks that first. Written
@@ -73,18 +73,44 @@ What each item became, and what the per-step review changed:
    and a red PR has no "done" a user can click, so each hook keeps a seen set
    and only a new item wakes it. Still off by default.
 
-## Phase 2 — a backlog, not a list
+## Phase 2 — a backlog, not a list — SHIPPED (2026-09-06)
 
-1. **Task structure.** `parent_id`, `blocked_by uuid[]`, `estimate text`
-   (S/M/L/XL or hours — the pm prompt already speaks that language) on `tasks`.
-   One migration; `tasks` tool gains the fields; `list_tasks` returns children
-   nested.
-2. **Board view.** `/tasks` gets a column view by status with drag; grouping by
-   `category` (the "still open" item from the 2026-06-10 QA pass).
-3. **PM deliverables → backlog.** The `pm` role's plan output is parsed into
-   tasks (phase = category, task = row, dependency = `blocked_by`) through the
-   `plan` tool rather than a second parser. Pipeline `foreach` over `plan_items`
-   already exists — reuse its shape.
+1. **Task structure** (migration 0093): `parent_id` (self-FK, `ON DELETE SET
+   NULL` — deleting a phase frees its children), `blocked_by uuid[]`,
+   `estimate text`, and a fourth status, `in_progress`. The rules that make
+   the columns mean something live in `src/core/tasks/structure.ts`, pure and
+   shared with the web bundle: only an *active* blocker blocks (a done or
+   deleted id in the array is inert, so nobody rewrites arrays when a task
+   completes); a parent with active sub-tasks is *waiting* the same way a
+   blocked task is; nesting is a view over flat rows. The scoped repo checks
+   every parent and blocker for ownership (a foreign id is "not found"),
+   refuses self-links and parent loops. The ranker gains two buckets:
+   *In progress* first (finish what is started), *Waiting on other tasks*
+   last, judged against the whole active set — so `nextActions` now ranks
+   everything and filters by category afterwards, or a blocker in another
+   category would look inert. `list_tasks` defaults to active tasks, nests
+   `children` and says why a task is `waiting`; `status: "all"` is explicit.
+2. **Board view.** `/tasks` has a list | board toggle (remembered per browser).
+   The board is one column per status (Open, In progress, Done — archived
+   stays out of the way, as in the list), category lanes inside each column
+   so a plan's phases read as rows across it, HTML5 drag between columns with
+   arrow buttons for keyboards, and cards carrying estimate, sub-task progress,
+   due date and the waiting reason. The list nests sub-tasks under their
+   parent within a group and shows `[>]` for in progress.
+3. **PM deliverables → backlog.** Not a parser over the pm's markdown and not
+   the pipeline `plan` tool either — that tool is scoped to the running
+   pipeline's `plan_items`, which is a different table with a different owner.
+   What was reused is its *shape*: `tasks__add_tasks` takes the same
+   `{ title, detail }` items plus `category` (the phase; children inherit
+   it), `estimate`, `priority`, `dueAt`, `blockedBy` (another item's title,
+   its `#n` position, or an existing task id) and `children`. Parsing is pure
+   (`src/core/tasks/backlog.ts`) and validates every reference before a row
+   is written; a dependency that resolves to nothing fails the call. The pm
+   prompts now write plans through it and mark tasks `in_progress` on start.
+
+Not done in Phase 2, on purpose: no drag-to-reorder within a column (order is
+still the ranker's or the list's); no board lane for archived tasks; the
+board does not nest cards (a sub-task is a card that names its parent).
 
 ## Phase 3 — durable background work — SHIPPED (2026-09-05)
 
@@ -225,8 +251,7 @@ not competing — federation is how two hubs talk.
 
 ## Sequencing
 
-Phases 0, 1 and 3 are done. Phase 2 and 4 next, in either order, by who is
-asking. Phase 5 by demand, connector by
+Phases 0 to 3 are done. Phase 4 next. Phase 5 by demand, connector by
 connector. The enterprise track opens with E0 as soon as a second person
 shares one Octipus — E0 is one migration and should not wait on E1–E4 being
 designed in full.

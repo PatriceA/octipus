@@ -1,18 +1,23 @@
 'use client';
 
-import { NotebookPen, Pencil, Plus, RefreshCw, Sparkles, Tag, Trash2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Columns3, CornerDownRight, List, Lock, NotebookPen, Pencil, Plus, RefreshCw, Ruler, Sparkles, Tag, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 import { NEXT_BUCKET_ORDER, NEXT_BUCKET_TITLE, type NextBucket } from '../../../src/core/tasks/rank';
+import { isActiveStatus, TASK_STATUS_TITLE, type TaskStatus } from '../../../src/core/tasks/status';
+import { type Nested, nestTasks, toLookup, waitingOn, waitingReason } from '../../../src/core/tasks/structure';
 
 interface Task {
   id: string;
   title: string;
   notes?: string | null;
-  status: 'open' | 'done' | 'archived';
+  status: TaskStatus;
   priority: number;
   category?: string | null;
+  estimate?: string | null;
+  parentId?: string | null;
+  blockedBy?: string[] | null;
   dueAt?: string | null;
   completedAt?: string | null;
   source: string;
@@ -24,9 +29,33 @@ interface Task {
 
 const PRIORITY = ['none', 'low', 'medium', 'high'] as const;
 type GroupBy = 'next' | 'priority' | 'due' | 'category' | 'none';
+type View = 'list' | 'board';
+/** The board's lanes, left to right. Archived stays out of the way, as in the list. */
+const BOARD_COLUMNS: readonly TaskStatus[] = ['open', 'in_progress', 'done'];
+const VIEW_KEY = 'octipus.tasks.view';
 
 /** Patchable fields a row can edit inline (besides notes/status). */
-type TaskPatch = Partial<Pick<Task, 'priority' | 'category' | 'dueAt'>>;
+type TaskPatch = Partial<Pick<Task, 'priority' | 'category' | 'dueAt' | 'estimate'>>;
+
+function readView(): View {
+  try {
+    return localStorage.getItem(VIEW_KEY) === 'board' ? 'board' : 'list';
+  } catch {
+    return 'list';
+  }
+}
+
+/** One-line "why can't I start this" for a task, judged against everything on the page. */
+function waitingText(task: Task, lookup: ReadonlyMap<string, Task>): string | null {
+  return waitingReason(waitingOn(task, lookup));
+}
+
+/** Sub-task progress for a parent: done out of all, or null when it has none. */
+function subtaskProgress(task: Task, all: readonly Task[]): { done: number; total: number } | null {
+  const kids = all.filter((t) => t.parentId === task.id);
+  if (kids.length === 0) return null;
+  return { done: kids.filter((t) => !isActiveStatus(t.status)).length, total: kids.length };
+}
 
 function browserTimezone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -145,6 +174,15 @@ export default function TasksPage() {
   const [newCategory, setNewCategory] = useState('');
   const [newDue, setNewDue] = useState('');
   const [groupBy, setGroupBy] = useState<GroupBy>('next');
+  const [view, setView] = useState<View>(readView);
+  const chooseView = (v: View) => {
+    setView(v);
+    try {
+      localStorage.setItem(VIEW_KEY, v);
+    } catch {
+      /* per-viewer convenience only */
+    }
+  };
 
   // "next" is ranked server-side (bucket + reason per task, day boundaries in
   // the browser's timezone); the ranked list only carries open tasks, so the
@@ -221,14 +259,21 @@ export default function TasksPage() {
     }
   };
 
-  const toggleDone = async (task: Task) => {
+  // Status moves (the checkbox, the board's drag and arrows, the row's status
+  // picker) all go through here. Optimistic so a dragged card lands at once.
+  const setStatus = async (task: Task, status: TaskStatus) => {
+    if (task.status === status) return;
+    setTasks((xs) => xs.map((t) => (t.id === task.id ? { ...t, status } : t)));
     try {
-      await api.patch(`/tasks/${task.id}`, { status: task.status === 'done' ? 'open' : 'done' });
+      await api.patch(`/tasks/${task.id}`, { status });
       await fetchTasks();
     } catch (err) {
       setError((err as Error).message);
+      await fetchTasks();
     }
   };
+
+  const toggleDone = (task: Task) => setStatus(task, task.status === 'done' ? 'open' : 'done');
 
   const updateNotes = async (task: Task, notes: string) => {
     // Optimistic: update local state immediately so the prop reflects the new
@@ -260,9 +305,12 @@ export default function TasksPage() {
     );
   }
 
-  const openTasks = tasks.filter((t) => t.status === 'open');
+  const openTasks = tasks.filter((t) => isActiveStatus(t.status));
   const done = tasks.filter((t) => t.status === 'done');
   const openGroups = groupOpenTasks(openTasks, groupBy);
+  // Blockers and parents are looked up across every task on the page, so a
+  // blocked task says so whichever group its blocker sits in.
+  const lookup = toLookup(tasks);
   // Existing categories across all tasks — offered for reuse in inputs so the
   // user doesn't have to remember exact spellings (the QA: "how should I know
   // all the titles").
@@ -331,21 +379,46 @@ export default function TasksPage() {
         </button>
       </div>
 
-      {/* Grouping control */}
-      <div className="flex items-center gap-2 text-sm text-on-surface-variant">
-        <span>Group by</span>
-        {(['next', 'priority', 'due', 'category', 'none'] as GroupBy[]).map((g) => (
-          <button
-            key={g}
-            onClick={() => setGroupBy(g)}
-            className={`px-2.5 py-1 rounded-full text-xs capitalize ${groupBy === g ? 'bg-primary/10 text-primary' : 'hover:bg-surface-container-high'}`}
-          >
-            {g === 'none' ? 'nothing' : g === 'next' ? 'what next' : g}
-          </button>
-        ))}
+      {/* View + grouping controls */}
+      <div className="flex flex-wrap items-center gap-2 text-sm text-on-surface-variant">
+        <div className="inline-flex rounded-full border border-outline-variant/20 p-0.5" role="group" aria-label="View">
+          {(['list', 'board'] as View[]).map((v) => (
+            <button
+              key={v}
+              onClick={() => chooseView(v)}
+              aria-pressed={view === v}
+              data-testid={`tasks-view-${v}`}
+              className={`px-2.5 py-1 rounded-full text-xs inline-flex items-center gap-1 ${view === v ? 'bg-primary/10 text-primary' : 'hover:bg-surface-container-high'}`}
+            >
+              {v === 'list' ? <List className="w-3 h-3" /> : <Columns3 className="w-3 h-3" />} {v}
+            </button>
+          ))}
+        </div>
+        {view === 'list' && (
+          <>
+            <span className="ml-2">Group by</span>
+            {(['next', 'priority', 'due', 'category', 'none'] as GroupBy[]).map((g) => (
+              <button
+                key={g}
+                onClick={() => setGroupBy(g)}
+                className={`px-2.5 py-1 rounded-full text-xs capitalize ${groupBy === g ? 'bg-primary/10 text-primary' : 'hover:bg-surface-container-high'}`}
+              >
+                {g === 'none' ? 'nothing' : g === 'next' ? 'what next' : g}
+              </button>
+            ))}
+          </>
+        )}
+        {view === 'board' && <span className="ml-2 text-xs">columns by status, lanes by category — drag a card, or use its arrows</span>}
       </div>
 
-      {openTasks.length === 0 ? (
+      {view === 'board' ? (
+        <TaskBoard
+          tasks={tasks.filter((t) => t.status !== 'archived')}
+          lookup={lookup}
+          onSetStatus={setStatus}
+          onDelete={deleteTask}
+        />
+      ) : openTasks.length === 0 ? (
         <div className="py-10 text-center font-mono animate-enter">
           <p aria-hidden className="text-2xl text-on-surface-variant/40">[ ]</p>
           <p className="mt-2 text-sm text-on-surface-variant/70">nothing to do — add a task above, or ask an agent to remind you</p>
@@ -356,7 +429,9 @@ export default function TasksPage() {
             key={g.key}
             title={g.title}
             tasks={g.tasks}
+            lookup={lookup}
             onToggle={toggleDone}
+            onSetStatus={setStatus}
             onDelete={deleteTask}
             onUpdateNotes={updateNotes}
             onUpdateFields={updateFields}
@@ -368,8 +443,8 @@ export default function TasksPage() {
         ))
       )}
 
-      {done.length > 0 && (
-        <TaskGroup title={`Done (${done.length})`} tasks={done} onToggle={toggleDone} onDelete={deleteTask} onUpdateNotes={updateNotes} onUpdateFields={updateFields} />
+      {view === 'list' && done.length > 0 && (
+        <TaskGroup title={`Done (${done.length})`} tasks={done} lookup={lookup} onToggle={toggleDone} onSetStatus={setStatus} onDelete={deleteTask} onUpdateNotes={updateNotes} onUpdateFields={updateFields} />
       )}
     </div>
   );
@@ -378,7 +453,9 @@ export default function TasksPage() {
 function TaskGroup({
   title,
   tasks,
+  lookup,
   onToggle,
+  onSetStatus,
   onDelete,
   onUpdateNotes,
   onUpdateFields,
@@ -386,7 +463,9 @@ function TaskGroup({
 }: {
   title: string;
   tasks: Task[];
+  lookup: ReadonlyMap<string, Task>;
   onToggle: (t: Task) => void;
+  onSetStatus: (t: Task, status: TaskStatus) => void;
   onDelete: (id: string) => void;
   onUpdateNotes: (t: Task, notes: string) => void;
   onUpdateFields: (t: Task, patch: TaskPatch) => void;
@@ -399,12 +478,29 @@ function TaskGroup({
     onAddToCategory(t);
     setInlineTitle('');
   };
+  // Sub-tasks sit under their parent when both are in this group; a child
+  // whose parent landed elsewhere (a different bucket, or done) stays a
+  // row of its own so nothing disappears from a filtered view.
+  const renderTree = (node: Nested<Task>, depth: number): React.ReactNode => (
+    <div key={node.id} className={depth > 0 ? 'pl-6' : undefined}>
+      <TaskRow
+        task={node}
+        depth={depth}
+        waiting={waitingText(node, lookup)}
+        subtasks={subtaskProgress(node, [...lookup.values()])}
+        onToggle={onToggle}
+        onSetStatus={onSetStatus}
+        onDelete={onDelete}
+        onUpdateNotes={onUpdateNotes}
+        onUpdateFields={onUpdateFields}
+      />
+      {node.children.length > 0 && <div className="mt-1 space-y-1">{node.children.map((c) => renderTree(c, depth + 1))}</div>}
+    </div>
+  );
   return (
     <div className="space-y-2 stagger">
       <h2 className="section-label">{title}</h2>
-      {tasks.map((task) => (
-        <TaskRow key={task.id} task={task} onToggle={onToggle} onDelete={onDelete} onUpdateNotes={onUpdateNotes} onUpdateFields={onUpdateFields} />
-      ))}
+      {nestTasks(tasks).map((node) => renderTree(node, 0))}
       {onAddToCategory && (
         <div className="flex gap-2 pl-8">
           <input
@@ -439,13 +535,21 @@ function toDateInput(dueAt?: string | null): string {
 
 function TaskRow({
   task,
+  depth = 0,
+  waiting,
+  subtasks,
   onToggle,
+  onSetStatus,
   onDelete,
   onUpdateNotes,
   onUpdateFields,
 }: {
   task: Task;
+  depth?: number;
+  waiting: string | null;
+  subtasks: { done: number; total: number } | null;
   onToggle: (t: Task) => void;
+  onSetStatus: (t: Task, status: TaskStatus) => void;
   onDelete: (id: string) => void;
   onUpdateNotes: (t: Task, notes: string) => void;
   onUpdateFields: (t: Task, patch: TaskPatch) => void;
@@ -471,23 +575,40 @@ function TaskRow({
   };
 
   return (
-    <div className="px-3 py-2.5 rounded-xs border border-outline-variant/10 bg-surface">
+    <div className="px-3 py-2.5 rounded-xs border border-outline-variant/10 bg-surface" data-testid="task-row" data-depth={depth}>
       <div className="flex items-center gap-3">
         <button
           onClick={() => onToggle(task)}
           aria-label={task.status === 'done' ? 'Mark open' : 'Mark done'}
-          className={`shrink-0 font-mono text-sm leading-none select-none ${task.status === 'done' ? 'text-tertiary' : 'text-on-surface-variant/70 hover:text-primary'}`}
+          title={task.status === 'in_progress' ? 'In progress — click to mark done' : undefined}
+          className={`shrink-0 font-mono text-sm leading-none select-none ${task.status === 'done' ? 'text-tertiary' : task.status === 'in_progress' ? 'text-primary hover:text-tertiary' : 'text-on-surface-variant/70 hover:text-primary'}`}
         >
-          {task.status === 'done' ? '[x]' : '[ ]'}
+          {task.status === 'done' ? '[x]' : task.status === 'in_progress' ? '[>]' : '[ ]'}
         </button>
         <div className="min-w-0 flex-1">
-          <p className={`text-sm ${task.status === 'done' ? 'line-through text-on-surface-variant' : 'text-on-surface'}`}>
-            {task.title}
+          <p className={`text-sm flex items-center gap-1.5 ${task.status === 'done' ? 'line-through text-on-surface-variant' : 'text-on-surface'}`}>
+            {depth > 0 && <CornerDownRight className="w-3 h-3 shrink-0 text-on-surface-variant/50" aria-hidden />}
+            <span className="min-w-0 truncate">{task.title}</span>
           </p>
-          <div className="flex items-center gap-2 mt-0.5">
+          <div className="flex flex-wrap items-center gap-2 mt-0.5">
             {task.priority > 0 && (
               <span title={PRIORITY[task.priority]} className={`text-[10px] font-mono font-semibold ${priorityClasses(task.priority)}`}>
                 P{task.priority}
+              </span>
+            )}
+            {task.estimate && (
+              <span title="estimate" className="text-[10px] font-mono inline-flex items-center gap-0.5 text-on-surface-variant">
+                <Ruler className="w-2.5 h-2.5" /> {task.estimate}
+              </span>
+            )}
+            {subtasks && (
+              <span title="sub-tasks done" className="text-[10px] font-mono text-on-surface-variant">
+                {subtasks.done}/{subtasks.total} sub-tasks
+              </span>
+            )}
+            {waiting && task.status !== 'done' && (
+              <span className="text-[10px] inline-flex items-center gap-0.5 text-error/80" title="cannot start yet">
+                <Lock className="w-2.5 h-2.5" /> {waiting}
               </span>
             )}
             {task.category && (
@@ -589,9 +710,237 @@ function TaskRow({
               <option key={label} value={i}>{label}</option>
             ))}
           </select>
+          <input
+            type="text"
+            defaultValue={task.estimate ?? ''}
+            placeholder="Estimate (S/M/L, 3h)"
+            title="Effort estimate"
+            onBlur={(e) => {
+              const v = e.target.value.trim();
+              if (v !== (task.estimate ?? '')) onUpdateFields(task, { estimate: v || null });
+            }}
+            className="w-32 rounded-xs border border-outline-variant/20 bg-surface px-2 py-1 text-xs text-on-surface"
+          />
+          <select
+            value={task.status}
+            aria-label="Status"
+            onChange={(e) => onSetStatus(task, e.target.value as TaskStatus)}
+            className="rounded-xs border border-outline-variant/20 bg-surface px-2 py-1 text-xs text-on-surface"
+          >
+            {(Object.keys(TASK_STATUS_TITLE) as TaskStatus[]).map((st) => (
+              <option key={st} value={st}>{TASK_STATUS_TITLE[st]}</option>
+            ))}
+          </select>
           <button onClick={() => setEditingMeta(false)} className="text-[11px] px-2 py-1 text-on-surface-variant hover:text-on-surface">Done</button>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * The board: one column per status, lanes by category inside each column
+ * (a PM's phases are categories, so a plan reads as phase rows across the
+ * board). Cards drag between columns with the browser's own drag-and-drop;
+ * the arrow buttons do the same move for keyboards and touch.
+ */
+function TaskBoard({
+  tasks,
+  lookup,
+  onSetStatus,
+  onDelete,
+}: {
+  tasks: Task[];
+  lookup: ReadonlyMap<string, Task>;
+  onSetStatus: (t: Task, status: TaskStatus) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [over, setOver] = useState<TaskStatus | null>(null);
+
+  const lanes = [...new Set(tasks.map((t) => t.category?.trim()).filter((c): c is string => !!c))].sort((a, b) => a.localeCompare(b));
+  const laneOf = (t: Task) => t.category?.trim() || '';
+  const laneKeys = [...lanes, ''];
+
+  const drop = (status: TaskStatus) => {
+    const task = dragging ? lookup.get(dragging) : undefined;
+    setDragging(null);
+    setOver(null);
+    if (task) onSetStatus(task, status);
+  };
+
+  if (tasks.length === 0) {
+    return (
+      <div className="py-10 text-center font-mono animate-enter">
+        <p aria-hidden className="text-2xl text-on-surface-variant/40">[ ]</p>
+        <p className="mt-2 text-sm text-on-surface-variant/70">nothing on the board — add a task above, or ask the project manager for a plan</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-x-auto" data-testid="task-board">
+      <div className="grid gap-3 min-w-[42rem]" style={{ gridTemplateColumns: `repeat(${BOARD_COLUMNS.length}, minmax(0, 1fr))` }}>
+        {BOARD_COLUMNS.map((status, col) => {
+          const inColumn = tasks.filter((t) => t.status === status);
+          return (
+            <section
+              key={status}
+              aria-label={TASK_STATUS_TITLE[status]}
+              data-testid={`board-column-${status}`}
+              onDragOver={(e) => {
+                if (!dragging) return;
+                e.preventDefault();
+                if (over !== status) setOver(status);
+              }}
+              onDragLeave={() => over === status && setOver(null)}
+              onDrop={(e) => {
+                e.preventDefault();
+                drop(status);
+              }}
+              className={`rounded-xs border p-2 min-h-[12rem] transition-colors ${over === status ? 'border-primary bg-primary/5' : 'border-outline-variant/10 bg-surface-container-low/40'}`}
+            >
+              <h2 className="section-label mb-2">
+                {TASK_STATUS_TITLE[status]} ({inColumn.length})
+              </h2>
+              <div className="space-y-3">
+                {laneKeys.map((lane) => {
+                  const cards = inColumn.filter((t) => laneOf(t) === lane);
+                  if (cards.length === 0) return null;
+                  return (
+                    <div key={lane || '__none'} data-testid="board-lane">
+                      <p className="text-[10px] uppercase tracking-wide text-on-surface-variant/70 mb-1 inline-flex items-center gap-1">
+                        <Tag className="w-2.5 h-2.5" /> {lane || 'Uncategorized'}
+                      </p>
+                      <div className="space-y-1.5">
+                        {cards.map((task) => (
+                          <BoardCard
+                            key={task.id}
+                            task={task}
+                            waiting={waitingText(task, lookup)}
+                            subtasks={subtaskProgress(task, tasks)}
+                            parentTitle={task.parentId ? (lookup.get(task.parentId)?.title ?? null) : null}
+                            dragging={dragging === task.id}
+                            prev={col > 0 ? BOARD_COLUMNS[col - 1] : null}
+                            next={col < BOARD_COLUMNS.length - 1 ? BOARD_COLUMNS[col + 1] : null}
+                            onDragStart={(e) => {
+                              e.dataTransfer.setData('text/plain', task.id);
+                              e.dataTransfer.effectAllowed = 'move';
+                              setDragging(task.id);
+                            }}
+                            onDragEnd={() => {
+                              setDragging(null);
+                              setOver(null);
+                            }}
+                            onMove={(st) => onSetStatus(task, st)}
+                            onDelete={() => onDelete(task.id)}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function BoardCard({
+  task,
+  waiting,
+  subtasks,
+  parentTitle,
+  dragging,
+  prev,
+  next,
+  onDragStart,
+  onDragEnd,
+  onMove,
+  onDelete,
+}: {
+  task: Task;
+  waiting: string | null;
+  subtasks: { done: number; total: number } | null;
+  parentTitle: string | null;
+  dragging: boolean;
+  prev: TaskStatus | null;
+  next: TaskStatus | null;
+  onDragStart: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDragEnd: () => void;
+  onMove: (status: TaskStatus) => void;
+  onDelete: () => void;
+}) {
+  const due = dueLabel(task.dueAt);
+  return (
+    <div
+      draggable
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      data-testid="board-card"
+      className={`group rounded-xs border border-outline-variant/15 bg-surface px-2.5 py-2 cursor-grab active:cursor-grabbing ${dragging ? 'opacity-40' : ''}`}
+    >
+      <p className={`text-sm leading-snug ${task.status === 'done' ? 'line-through text-on-surface-variant' : 'text-on-surface'}`}>{task.title}</p>
+      {parentTitle && (
+        <p className="text-[10px] text-on-surface-variant/70 inline-flex items-center gap-0.5 mt-0.5">
+          <CornerDownRight className="w-2.5 h-2.5" /> {parentTitle}
+        </p>
+      )}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1">
+        {task.priority > 0 && (
+          <span title={PRIORITY[task.priority]} className={`text-[10px] font-mono font-semibold ${priorityClasses(task.priority)}`}>
+            P{task.priority}
+          </span>
+        )}
+        {task.estimate && (
+          <span title="estimate" className="text-[10px] font-mono inline-flex items-center gap-0.5 text-on-surface-variant">
+            <Ruler className="w-2.5 h-2.5" /> {task.estimate}
+          </span>
+        )}
+        {subtasks && (
+          <span className="text-[10px] font-mono text-on-surface-variant">
+            {subtasks.done}/{subtasks.total}
+          </span>
+        )}
+        {due && (
+          <span className={`text-[10px] ${due.overdue && task.status !== 'done' ? 'text-error' : 'text-on-surface-variant'}`}>due {due.text}</span>
+        )}
+        {task.source !== 'user' && (
+          <span className="text-[10px] inline-flex items-center gap-0.5 text-on-surface-variant/70">
+            <Sparkles className="w-2.5 h-2.5" /> {task.source}
+          </span>
+        )}
+        {waiting && task.status !== 'done' && (
+          <span className="text-[10px] inline-flex items-center gap-0.5 text-error/80" title="cannot start yet">
+            <Lock className="w-2.5 h-2.5" /> {waiting}
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-1 mt-1.5 opacity-60 group-hover:opacity-100 group-focus-within:opacity-100">
+        <button
+          onClick={() => prev && onMove(prev)}
+          disabled={!prev}
+          aria-label={prev ? `Move to ${TASK_STATUS_TITLE[prev]}` : 'Already in the first column'}
+          className="text-on-surface-variant hover:text-primary disabled:opacity-30"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" />
+        </button>
+        <button
+          onClick={() => next && onMove(next)}
+          disabled={!next}
+          aria-label={next ? `Move to ${TASK_STATUS_TITLE[next]}` : 'Already in the last column'}
+          className="text-on-surface-variant hover:text-primary disabled:opacity-30"
+        >
+          <ArrowRight className="w-3.5 h-3.5" />
+        </button>
+        <span className="flex-1" />
+        <button onClick={onDelete} aria-label="Delete task" className="text-on-surface-variant hover:text-error">
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
     </div>
   );
 }

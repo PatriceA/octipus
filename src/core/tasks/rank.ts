@@ -8,6 +8,7 @@
  * Briefing asks the tool for this view rather than re-sorting.
  *
  * Buckets, in order:
+ *   doing     — already in progress (finish what is started)
  *   overdue   — due date passed (most overdue first)
  *   today     — due by the end of today (earliest first)
  *   high      — priority 3 with no due date pressure
@@ -15,30 +16,38 @@
  *               (something outside the user's head asked for attention)
  *   upcoming  — due by the end of the 7th day from today
  *   backlog   — everything else, by priority then recency
+ *   waiting   — blocked by an active task, or a parent whose sub-tasks are
+ *               still open (the work is elsewhere; see structure.ts)
  *
  * "Today" is a calendar day in the USER's timezone, not the server's: the
  * caller passes the zone (browser-reported, or the user's preference), and
- * the day boundaries are computed in it. Only open tasks are ranked.
+ * the day boundaries are computed in it. Only active (open or in-progress)
+ * tasks are ranked, and "waiting" is judged against that same set: a
+ * blocker that is not active does not block.
  * `reason` is the one-line justification the UI and the briefing show next
  * to the task — a rank without a reason is a guess the user cannot argue with.
  */
 
-export type NextBucket = 'overdue' | 'today' | 'high' | 'inbound' | 'upcoming' | 'backlog';
+import { isActiveStatus } from './status';
+import { type StructuredTask, toLookup, waitingOn, waitingReason } from './structure';
 
-export const NEXT_BUCKET_ORDER: readonly NextBucket[] = ['overdue', 'today', 'high', 'inbound', 'upcoming', 'backlog'];
+export type NextBucket = 'doing' | 'overdue' | 'today' | 'high' | 'inbound' | 'upcoming' | 'backlog' | 'waiting';
+
+export const NEXT_BUCKET_ORDER: readonly NextBucket[] = ['doing', 'overdue', 'today', 'high', 'inbound', 'upcoming', 'backlog', 'waiting'];
 
 export const NEXT_BUCKET_TITLE: Record<NextBucket, string> = {
+  doing: 'In progress',
   overdue: 'Overdue',
   today: 'Due today',
   high: 'High priority',
   inbound: 'New from email, research and reading',
   upcoming: 'Due this week',
   backlog: 'Backlog',
+  waiting: 'Waiting on other tasks',
 };
 
 /** The subset of a task row the ranker reads. */
-export interface RankableTask {
-  status: string;
+export interface RankableTask extends StructuredTask {
   priority: number;
   dueAt?: Date | string | null;
   createdAt: Date | string;
@@ -147,10 +156,24 @@ function describeSource(source: string | undefined): string {
 
 interface DayBounds { startOfToday: number; endOfToday: number; endOfWindow: number }
 
-function classify<T extends RankableTask>(task: T, nowMs: number, days: DayBounds): { bucket: NextBucket; reason: string; sortKey: number } {
+function classify<T extends RankableTask>(
+  task: T,
+  nowMs: number,
+  days: DayBounds,
+  lookup: ReadonlyMap<string, T>,
+): { bucket: NextBucket; reason: string; sortKey: number } {
   const dueMs = toMs(task.dueAt);
   const createdMs = toMs(task.createdAt) ?? nowMs;
 
+  // Waiting is judged first: an overdue task that cannot be started yet is
+  // still not the next action — the blocker is, and it ranks on its own.
+  const waiting = waitingReason(waitingOn(task, lookup));
+  if (waiting) {
+    return { bucket: 'waiting', reason: waiting, sortKey: dueMs ?? -task.priority * 1e15 - createdMs };
+  }
+  if (task.status === 'in_progress') {
+    return { bucket: 'doing', reason: 'in progress', sortKey: dueMs ?? Number.MAX_SAFE_INTEGER };
+  }
   if (dueMs !== null && dueMs < nowMs) {
     let late: string;
     if (dueMs >= days.startOfToday) late = 'today';
@@ -183,9 +206,12 @@ function classify<T extends RankableTask>(task: T, nowMs: number, days: DayBound
 }
 
 /**
- * Rank open tasks into next-action order. Stable within a bucket by the
+ * Rank active tasks into next-action order. Stable within a bucket by the
  * bucket's own key (most overdue first, earliest due first, newest inbound
- * first, highest priority first). Non-open tasks are dropped, not sorted last.
+ * first, highest priority first). Done and archived tasks are dropped, not
+ * sorted last. Pass the WHOLE active set: blockers and children are looked
+ * up in it, so a task ranked against a filtered subset may look free when
+ * it is not.
  */
 export function rankTasks<T extends RankableTask>(
   tasks: readonly T[],
@@ -200,9 +226,10 @@ export function rankTasks<T extends RankableTask>(
     endOfWindow: endOfDayIn(nowMs + UPCOMING_WINDOW_DAYS * DAY_MS, tz),
   };
   const bucketRank = new Map(NEXT_BUCKET_ORDER.map((b, i) => [b, i]));
-  return tasks
-    .filter((t) => t.status === 'open')
-    .map((task) => ({ task, ...classify(task, nowMs, days) }))
+  const active = tasks.filter((t) => isActiveStatus(t.status));
+  const lookup = toLookup(active);
+  return active
+    .map((task) => ({ task, ...classify(task, nowMs, days, lookup) }))
     .sort((a, b) => (bucketRank.get(a.bucket)! - bucketRank.get(b.bucket)!) || (a.sortKey - b.sortKey))
     .map(({ task, bucket, reason }) => ({ task, bucket, reason }));
 }

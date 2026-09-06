@@ -872,8 +872,10 @@ export class ScopedJobRepo {
 // ─────────────────────────────────────────────────────────────────────
 
 export interface TaskListFilter {
-  /** Restrict to a status ('open' | 'done' | 'archived'). */
+  /** Restrict to one status ('open' | 'in_progress' | 'done' | 'archived'). */
   status?: string;
+  /** Restrict to any of these statuses (e.g. the active pair). Ignored when `status` is set. */
+  statuses?: string[];
   /** Only tasks due on/before this instant (for "what's due today"). */
   dueBefore?: Date;
   /** Restrict to a user category/list (exact match; '' / 'none' → uncategorized). */
@@ -908,6 +910,7 @@ export class ScopedTaskRepo {
   async listOwn(filter: TaskListFilter = {}): Promise<Task[]> {
     const filters: (SQL | undefined)[] = [eq(tasks.userId, this.principal.userId)];
     if (filter.status) filters.push(eq(tasks.status, filter.status));
+    else if (filter.statuses?.length) filters.push(inArray(tasks.status, filter.statuses));
     if (filter.dueBefore) filters.push(sql`${tasks.dueAt} IS NOT NULL AND ${tasks.dueAt} <= ${filter.dueBefore}`);
     if (filter.category !== undefined) {
       const c = filter.category.trim();
@@ -939,8 +942,56 @@ export class ScopedTaskRepo {
       .limit(opts.limit ?? 50);
   }
 
+  /**
+   * The subset of `ids` the principal owns (workspace-scoped like every
+   * other read). Cross-tenant and unknown ids simply do not come back.
+   */
+  async ownedIds(ids: readonly string[]): Promise<Set<string>> {
+    const valid = [...new Set(ids.filter(isUuid))];
+    if (valid.length === 0) return new Set();
+    const filters: (SQL | undefined)[] = [inArray(tasks.id, valid)];
+    if (!isAdmin(this.principal)) filters.push(eq(tasks.userId, this.principal.userId));
+    filters.push(workspaceFilter(this.principal, tasks.workspaceId));
+    const rows = await this.db
+      .select({ id: tasks.id })
+      .from(tasks)
+      .where(and(...filters.filter((f): f is SQL => f !== undefined)));
+    return new Set(rows.map((r) => r.id));
+  }
+
+  /**
+   * Check the structural fields of a write before it happens: the parent
+   * and every blocker must be tasks the principal can see (a foreign id is
+   * "not found", never a link across tenants), a task cannot be its own
+   * parent or blocker, and re-parenting cannot close a loop. Throws with a
+   * message fit for the API's 400 / the tool's `error` field.
+   */
+  private async checkStructure(patch: Partial<NewTask>, selfId?: string): Promise<void> {
+    const parentId = patch.parentId ?? null;
+    const blockedBy = patch.blockedBy ?? [];
+    if (parentId && parentId === selfId) throw new Error('A task cannot be its own parent');
+    if (selfId && blockedBy.includes(selfId)) throw new Error('A task cannot block itself');
+    const wanted = [...(parentId ? [parentId] : []), ...blockedBy];
+    if (wanted.length === 0) return;
+    const owned = await this.ownedIds(wanted);
+    if (parentId && !owned.has(parentId)) throw new Error('Parent task not found');
+    const missing = blockedBy.find((id) => !owned.has(id));
+    if (missing) throw new Error(`Blocking task not found: ${missing}`);
+    if (parentId && selfId) {
+      // Walk up from the proposed parent; reaching ourselves is a cycle.
+      // Bounded: only a loop already in the data could run past the cap.
+      let cursor: string | null = parentId;
+      for (let depth = 0; cursor; depth += 1) {
+        if (cursor === selfId || depth >= 50) throw new Error('That parent would make the task its own ancestor');
+        const row: Task | null = await this.findById(cursor);
+        cursor = row?.parentId ?? null;
+      }
+    }
+  }
+
   /** Create a task pinned to the principal. Ignores any user_id in `data`. */
   async create(data: Omit<NewTask, 'userId'>): Promise<Task> {
+    await this.checkStructure(data);
     const result = await this.db
       .insert(tasks)
       .values({
@@ -957,6 +1008,7 @@ export class ScopedTaskRepo {
     if (!isUuid(id)) return null;
     const { userId: _drop, ...safe } = patch;
     void _drop;
+    if (safe.parentId !== undefined || safe.blockedBy !== undefined) await this.checkStructure(safe, id);
     const filters: (SQL | undefined)[] = [eq(tasks.id, id)];
     if (!isAdmin(this.principal)) filters.push(eq(tasks.userId, this.principal.userId));
     filters.push(workspaceFilter(this.principal, tasks.workspaceId));
