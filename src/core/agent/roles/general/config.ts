@@ -7,7 +7,7 @@ export const meta: RoleMeta = {
   // shell/terminal tool is mounted in this session" — true of the role, and
   // wrong about the product. Execution is still gated by the shell tool's own
   // permission + sandbox, which is where that decision belongs.
-  toolIds: ['filesystem', 'shell', 'browser-ext', 'websearch', 'messaging', 'knowledge', 'notes', 'tasks', 'task_state', 'scheduling', 'profiles', 'email-processor', 'artifacts', 'artifacts_toolbox', 'skill-distill', 'mcp'],
+  toolIds: ['filesystem', 'shell', 'browser-ext', 'websearch', 'messaging', 'knowledge', 'notes', 'tasks', 'task_state', 'scheduling', 'profiles', 'email-processor', 'artifacts', 'artifacts_toolbox', 'skill-distill', 'mcp', 'mcp_admin'],
   // Lazy tool discovery (Ollama, non-small only): general is a catch-all with the
   // biggest payload (~53k). Core covers the prompt's explicitly-routed everyday
   // intents (filesystem, websearch, knowledge, messaging, notes, tasks); the

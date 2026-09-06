@@ -49,6 +49,8 @@ export const OCTIPUS_SLASH_COMMANDS: OctipusSlashCommand[] = [
   gw({ name: 'cost',      description: 'Show cumulative token usage and cost' }),
   gw({ name: 'proposals', description: 'Review distilled skill/expert proposals — list, approve, reject',
        argumentHint: '[approve|reject] [n]',                                                 aliases: ['skills-proposals'] }),
+  gw({ name: 'mcp',       description: 'MCP servers — status, or reconnect one after restarting it',
+       argumentHint: '[reconnect] [server]' }),
   gw({ name: 'diff',      description: 'Show git diff for workspace changes' }),
   gw({ name: 'changes',   description: 'Review workspace changes — list, or a file diff',
        argumentHint: '[file]' }),
