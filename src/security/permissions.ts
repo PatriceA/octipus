@@ -16,7 +16,13 @@ import { generateId } from '@/utils/crypto';
 import { coreLogger, securityLogger } from '@/utils/logger';
 import { safeRegExp } from '@/utils/sanitize';
 
-const PERMISSION_REQUEST_TTL = 300000; // 5 minutes
+/**
+ * Permission requests do not expire. A human takes as long as a human takes,
+ * and the old 5-minute TTL denied the call out from under them — the agent
+ * reported "rejected, expired, or undeliverable" for a request the user was
+ * still reading. A wait ends when it is answered, or when the agent it belongs
+ * to is stopped (`cancelWaits`).
+ */
 
 export interface PermissionCheckResult {
   allowed: boolean;
@@ -46,6 +52,10 @@ export interface PermissionRequestEvent {
 export class PermissionManager {
   private get db() { return getDb(); }
   private pendingRequests: Map<string, (approved: boolean, resolution?: string) => void> = new Map();
+  /** requestIds currently awaited, by the agent that is blocked on them. */
+  private waitsByAgent: Map<string, Set<string>> = new Map();
+  /** Notified when an agent starts or stops waiting on a human. */
+  private waitListeners: Set<(agentId: string, waiting: boolean) => void> = new Set();
   private requestListeners: Set<(request: PermissionRequestEvent) => void> = new Set();
 
   /**
@@ -300,7 +310,6 @@ export class PermissionManager {
         toolName: callerToolName || action,
         toolArguments: context,
       },
-      expiresAt: new Date(Date.now() + PERMISSION_REQUEST_TTL),
     };
 
     await this.db.insert(permissionRequests).values(request);
@@ -334,23 +343,104 @@ export class PermissionManager {
   /**
    * Wait for permission approval
    */
-  async waitForApproval(requestId: string, timeoutMs: number = PERMISSION_REQUEST_TTL): Promise<boolean> {
+  async waitForApproval(
+    requestId: string,
+    opts?: { agentId?: string; timeoutMs?: number },
+  ): Promise<boolean> {
     return new Promise((resolve) => {
-      // Set up callback
-      this.pendingRequests.set(requestId, (approved) => {
+      const settle = (approved: boolean) => {
+        this.pendingRequests.delete(requestId);
+        this.untrackWait(opts?.agentId, requestId);
         resolve(approved);
-      });
+      };
+      this.pendingRequests.set(requestId, settle);
+      this.trackWait(opts?.agentId, requestId);
 
-      // Set timeout
-      setTimeout(() => {
-        const callback = this.pendingRequests.get(requestId);
-        if (callback) {
-          this.pendingRequests.delete(requestId);
-          this.expireRequest(requestId).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in permissions'));
-          resolve(false);
-        }
-      }, timeoutMs);
+      // No deadline unless a caller explicitly asks for one. Nothing in the
+      // product does; the option exists for a caller that genuinely cannot
+      // block (a batch job), not as a default.
+      if (opts?.timeoutMs && opts.timeoutMs > 0) {
+        setTimeout(() => {
+          if (!this.pendingRequests.has(requestId)) return;
+          this.expireRequest(requestId).catch((err: unknown) =>
+            coreLogger.error({ err }, 'background task failed in permissions'));
+          settle(false);
+        }, opts.timeoutMs);
+      }
     });
+  }
+
+  /**
+   * Release every wait belonging to `agentId`, as unapproved. Called when a
+   * worker is stopped: without it, an aborted agent would sit on an
+   * unanswerable request forever now that the requests have no TTL.
+   */
+  cancelWaits(agentId: string): number {
+    const requestIds = this.waitsByAgent.get(agentId);
+    const count = requestIds?.size ?? 0;
+    for (const requestId of [...(requestIds ?? [])]) {
+      const callback = this.pendingRequests.get(requestId);
+      // `callback` is the `settle` closure, which untracks the wait and emits
+      // the wait-state-off transition once the agent's set drains — don't
+      // duplicate either here.
+      callback?.(false);
+    }
+    // Also expire the ROWS, including any this process isn't waiting on: an
+    // agent killed as a cross-process zombie (agent-manager's not-in-memory
+    // branch, the orphan reaper) leaves a pending request nobody will ever
+    // answer, and with no TTL it would sit in the approvals list forever.
+    this.expireRequestsForAgent(agentId).catch((err: unknown) =>
+      coreLogger.error({ err, agentId }, 'background task failed in permissions'));
+    if (count > 0) securityLogger.info({ agentId, count }, 'Permission waits cancelled with the agent');
+    return count;
+  }
+
+  /** Expire every pending request belonging to an agent. */
+  private async expireRequestsForAgent(agentId: string): Promise<void> {
+    await this.db
+      .update(permissionRequests)
+      .set({ status: 'expired' })
+      .where(and(eq(permissionRequests.agentId, agentId), eq(permissionRequests.status, 'pending')));
+  }
+
+  /**
+   * Subscribe to "this agent is blocked on a human" transitions. The worker
+   * uses it to stop its wall clock: with no TTL, a turn would otherwise die of
+   * its own timeout while the prompt sat on screen. Returns an unsubscribe.
+   */
+  onWaitStateChange(listener: (agentId: string, waiting: boolean) => void): () => void {
+    this.waitListeners.add(listener);
+    return () => this.waitListeners.delete(listener);
+  }
+
+  private emitWaitState(agentId: string, waiting: boolean): void {
+    for (const listener of this.waitListeners) {
+      try {
+        listener(agentId, waiting);
+      } catch (err) {
+        coreLogger.error({ err, agentId }, 'permission wait listener failed');
+      }
+    }
+  }
+
+  private trackWait(agentId: string | undefined, requestId: string): void {
+    if (!agentId) return;
+    const set = this.waitsByAgent.get(agentId) ?? new Set<string>();
+    const wasIdle = set.size === 0;
+    set.add(requestId);
+    this.waitsByAgent.set(agentId, set);
+    if (wasIdle) this.emitWaitState(agentId, true);
+  }
+
+  private untrackWait(agentId: string | undefined, requestId: string): void {
+    if (!agentId) return;
+    const set = this.waitsByAgent.get(agentId);
+    if (!set) return;
+    set.delete(requestId);
+    if (set.size === 0) {
+      this.waitsByAgent.delete(agentId);
+      this.emitWaitState(agentId, false);
+    }
   }
 
   /**
@@ -483,6 +573,27 @@ export class PermissionManager {
   }
 
   /**
+   * Mark every request left pending by a previous process as expired.
+   *
+   * Requests have no deadline any more, and the promise waiting on one lives
+   * in this process's memory — so a row still `pending` at boot belongs to an
+   * agent that no longer exists. Without this sweep those rows would replay
+   * into the web permission banner at every connect, forever. Returns how many
+   * were released.
+   */
+  async releaseOrphanedRequests(): Promise<number> {
+    const released = await this.db
+      .update(permissionRequests)
+      .set({ status: 'expired' })
+      .where(eq(permissionRequests.status, 'pending'))
+      .returning({ id: permissionRequests.id });
+    if (released.length > 0) {
+      securityLogger.info({ count: released.length }, 'Released permission requests orphaned by a restart');
+    }
+    return released.length;
+  }
+
+  /**
    * Get pending permission requests for a user
    */
   async getPendingRequests(userId: string): Promise<PermissionRequest[]> {
@@ -493,7 +604,8 @@ export class PermissionManager {
         and(
           eq(permissionRequests.userId, userId),
           eq(permissionRequests.status, 'pending'),
-          sql`${permissionRequests.expiresAt} > NOW()`
+          // A request with no expiry never times out — the common case now.
+          sql`(${permissionRequests.expiresAt} IS NULL OR ${permissionRequests.expiresAt} > NOW())`
         )
       );
   }

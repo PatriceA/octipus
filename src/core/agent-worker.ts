@@ -30,6 +30,7 @@ import {
   DriftDetectedError,
 } from './swarm/errors';
 import type { ChildResult, PendingChild } from './swarm/types';
+import { getPermissionManager } from '@/security/permissions';
 import { ToolExecutor } from './tool-executor';
 import { DetachedChildManager } from './agent-worker/detached-child-manager';
 import { DriftDetector } from './agent-worker/drift-detector';
@@ -262,9 +263,30 @@ export class AgentWorker extends BaseAgentWorker {
     return this.detached.collectAll(timeoutMs);
   }
 
+  /**
+   * A pause that is still open — currently only "a human is looking at a
+   * permission prompt". Counted from `elapsed()` while it runs, not just when
+   * it ends: the wall race arms a timer at call time, so a credit that lands
+   * afterwards would arrive after the turn was already killed.
+   */
+  private pauseStartedAt: number | null = null;
+
+  /** Stop the wall clock. Idempotent — nested waits keep the earliest start. */
+  private beginPause(): void {
+    if (this.pauseStartedAt === null) this.pauseStartedAt = Date.now();
+  }
+
+  /** Resume the wall clock, banking the paused stretch. */
+  private endPause(): void {
+    if (this.pauseStartedAt === null) return;
+    this.pausedMs += Date.now() - this.pauseStartedAt;
+    this.pauseStartedAt = null;
+  }
+
   /** Milliseconds of *active* work since agent start (excludes child-wait time). */
   private elapsed(): number {
-    return Math.max(0, Date.now() - this.startTime - this.pausedMs);
+    const openPause = this.pauseStartedAt === null ? 0 : Date.now() - this.pauseStartedAt;
+    return Math.max(0, Date.now() - this.startTime - this.pausedMs - openPause);
   }
 
   /** Public elapsed time for status reporting (active only). */
@@ -313,6 +335,8 @@ export class AgentWorker extends BaseAgentWorker {
 
   /** Optional parent AbortSignal — chained so that parent abort cascades down. */
   private parentSignalCleanup: (() => void) | null = null;
+  /** Unsubscribe from permission wait-state events. */
+  private permissionWaitCleanup: (() => void) | null = null;
 
   constructor(
     context: import('./types').AgentContext,
@@ -326,6 +350,20 @@ export class AgentWorker extends BaseAgentWorker {
       (type, data) => this.emit(type, data),
       (ms) => this.addPausedMs(ms),
     );
+
+    // A permission prompt stops this worker's wall clock. Both approval paths
+    // (tool-executor and base-tool) register their wait with the permission
+    // manager, so subscribing here covers both without either knowing about
+    // the worker.
+    try {
+      this.permissionWaitCleanup = getPermissionManager().onWaitStateChange(
+        (agentId: string, waiting: boolean) => {
+          if (agentId !== this.context.id) return;
+          if (waiting) this.beginPause();
+          else this.endPause();
+        },
+      );
+    } catch { /* permission manager unavailable (tests / early boot) */ }
 
     // Swarm Phase 2: chain parent AbortSignal → this worker's controller.
     // Any ancestor cancellation flows down. The `once` listener is cleaned up
@@ -755,15 +793,27 @@ export class AgentWorker extends BaseAgentWorker {
     // M race sites this produces N×M identical errors in the same millisecond.
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        const msg = `Agent timeout exceeded (${Math.round(this.elapsed() / 1000)}s / ${Math.round(this.config.timeout / 1000)}s) during ${label}`;
-        agentLogger.error({
-          agentId: this.context.id, sessionId: this.context.sessionId,
-          iteration: this.iteration, elapsedMs: this.elapsed(),
-          phase: label, timeoutMs: this.config.timeout,
-        }, msg);
-        reject(new Error(msg));
-      }, remaining);
+      const arm = (delay: number) => {
+        timer = setTimeout(() => {
+          // The clock may have stopped since this timer was armed — a human
+          // has been holding a permission prompt open. Re-arm for whatever is
+          // actually left rather than killing a turn that spent the interval
+          // waiting on a person.
+          const left = this.config.timeout - this.elapsed();
+          if (left > 0) {
+            arm(left);
+            return;
+          }
+          const msg = `Agent timeout exceeded (${Math.round(this.elapsed() / 1000)}s / ${Math.round(this.config.timeout / 1000)}s) during ${label}`;
+          agentLogger.error({
+            agentId: this.context.id, sessionId: this.context.sessionId,
+            iteration: this.iteration, elapsedMs: this.elapsed(),
+            phase: label, timeoutMs: this.config.timeout,
+          }, msg);
+          reject(new Error(msg));
+        }, delay);
+      };
+      arm(remaining);
     });
     try {
       return await Promise.race([promise, timeoutPromise]);
@@ -2097,6 +2147,16 @@ export class AgentWorker extends BaseAgentWorker {
   override stop(reason?: string): void {
     const stopReason = reason || 'stopped';
     this.abortController.abort(stopReason);
+    // Requests no longer expire, so a stopped agent would otherwise sit on an
+    // unanswerable prompt forever. Release its waits as unapproved.
+    try {
+      getPermissionManager().cancelWaits(this.context.id);
+    } catch { /* permission manager unavailable */ }
+    if (this.permissionWaitCleanup) {
+      this.permissionWaitCleanup();
+      this.permissionWaitCleanup = null;
+    }
+    this.endPause();
     if (this.parentSignalCleanup) {
       this.parentSignalCleanup();
       this.parentSignalCleanup = null;

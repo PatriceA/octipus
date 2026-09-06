@@ -42,12 +42,12 @@ export type AgentSessionEvent =
   | { kind: 'message';        role: Role; content: string }
   | { kind: 'permission';     requestId: string; toolName: string; detail: string }
   | { kind: 'approval';       requestId: string; summary: string; question: string; options: string[] }
-  | { kind: 'agent.start';    role: string; model: string; nodeId?: string }
+  | { kind: 'agent.start';    role: string; model: string; nodeId?: string; subagent?: boolean }
   | { kind: 'agent.end';      stats: AgentEndStats; nodeId?: string; role?: string }
   | { kind: 'agent.iteration'; agentId: string; iteration: number }
   | { kind: 'session.stats';  stats: SessionStats }
   | { kind: 'identity';       user: string | null }
-  | { kind: 'tool';           tool: ToolEventState }
+  | { kind: 'tool';           tool: ToolEventState; agentId?: string }
   | { kind: 'command.result'; name: string; result: unknown; error?: string }
   | { kind: 'agent.write';    path: string; newText: string }
   | { kind: 'expert';         expertId: string | null }
@@ -328,7 +328,7 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
       const model = pickString(payload, 'model') ?? '';
       const nodeId = pickString(payload, 'nodeId');
       const topicPath = pickString(payload, 'topicPath');
-      out.push({ kind: 'agent.start', role, model, nodeId });
+      out.push({ kind: 'agent.start', role, model, nodeId, subagent: true });
       const label = topicPath && topicPath !== 'root' ? `${role} → ${topicPath}` : role;
       out.push({
         kind: 'message', role: 'system',
@@ -379,6 +379,10 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
 
     case 'agent.action': {
       const data = asRecord(payload.data) ?? payload;
+      // Which agent ran the tool. Carried so the TUI can fold a subagent's
+      // calls into its own row instead of interleaving them with the root
+      // agent's in the transcript.
+      const actor = pickString(payload, 'agentId') ?? pickString(data, 'agentId');
       const type = pickString(data, 'type');
       const mcpServer = pickString(data, 'mcpServer');
       if (type === 'tool_call' || type === 'cli_tool_use') {
@@ -387,7 +391,7 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
         // Prefer the adapter-supplied human title (e.g. codex "git status")
         // over a re-derived arg summary.
         const preview = pickString(data, 'title') ?? summarizeToolArgs(name, args);
-        out.push({ kind: 'tool', tool: { state: 'pending', name, preview, mcpServer } });
+        out.push({ kind: 'tool', agentId: actor, tool: { state: 'pending', name, preview, mcpServer } });
         const write = extractAgentWrite(name, args);
         if (write) out.push({ kind: 'agent.write', path: write.path, newText: write.newText });
       } else if (type === 'cli_tool_result' || type === 'tool_result') {
@@ -399,6 +403,7 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
         const preview = output?.split('\n')[0]?.slice(0, 80);
         out.push({
           kind: 'tool',
+          agentId: actor,
           tool: { state: isError ? 'error' : 'completed', name, preview, mcpServer },
         });
       } else if (type === 'tool_call_complete') {
@@ -425,6 +430,7 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
           : (resultSummary ?? (resultPreview ? resultPreview.slice(0, 80) : undefined));
         out.push({
           kind: 'tool',
+          agentId: actor,
           tool: { state: isError ? 'error' : 'completed', name: label, preview, mcpServer },
         });
         // Surface a one-liner narration too so the activity log shows

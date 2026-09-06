@@ -414,7 +414,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `hooks` | 1 |
 | `(root)` | `mcp` | 1 |
 | `(root)` | `models` | 2 |
-| `(root)` | `security` | 3 |
+| `(root)` | `security` | 4 |
 | `(root)` | `skills` | 1 |
 | `(root)` | `tools` | 3 |
 | `(root)` | `utils` | 1 |
@@ -464,9 +464,9 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `db` | 167 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 4 |
-| `core` | `mcp` | 3 |
+| `core` | `mcp` | 5 |
 | `core` | `models` | 62 |
-| `core` | `security` | 38 |
+| `core` | `security` | 40 |
 | `core` | `services` | 1 |
 | `core` | `shared` | 5 |
 | `core` | `skills` | 6 |
@@ -516,6 +516,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `services` | `models` | 15 |
 | `services` | `security` | 2 |
 | `services` | `setup` | 1 |
+| `services` | `tools` | 1 |
 | `services` | `utils` | 4 |
 | `setup` | `utils` | 1 |
 | `skills` | `config` | 1 |
@@ -528,17 +529,17 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `channels` | 1 |
 | `tools` | `config` | 5 |
 | `tools` | `connectors` | 2 |
-| `tools` | `core` | 58 |
-| `tools` | `db` | 24 |
+| `tools` | `core` | 59 |
+| `tools` | `db` | 29 |
 | `tools` | `hooks` | 1 |
-| `tools` | `mcp` | 1 |
+| `tools` | `mcp` | 2 |
 | `tools` | `models` | 6 |
 | `tools` | `plugins` | 1 |
 | `tools` | `security` | 22 |
 | `tools` | `services` | 1 |
 | `tools` | `shared` | 2 |
 | `tools` | `skills` | 2 |
-| `tools` | `utils` | 29 |
+| `tools` | `utils` | 31 |
 | `tools` | `visual` | 2 |
 | `tools` | `voice` | 3 |
 | `tui-editor` | `mcp` | 2 |
@@ -590,6 +591,7 @@ Two modules that import each other. Not fatal, but it is what blocks an extracti
 - plugins <-> tools
 - security <-> tools
 - security <-> utils
+- services <-> tools
 
 ## Event matrix
 

@@ -444,6 +444,73 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   });
 
   registry.register({
+    name: 'mcp',
+    aliases: [],
+    description: 'MCP servers — /mcp for status, /mcp reconnect [server] after restarting one',
+    args: [
+      { name: 'action', required: false, description: 'reconnect' },
+      { name: 'server', required: false, description: 'Server id or name (omit for all enabled)' },
+    ],
+    minTrustLevel: 'user',
+    handler: async (ctx) => {
+      const { getMCPBridge } = await import('@/mcp/bridge');
+      const bridge = getMCPBridge();
+      const configs = bridge.getServerConfigs();
+      if (configs.length === 0) return { text: 'No MCP servers configured. Add one on the MCP page.' };
+
+      const action = (ctx.args.action || '').toLowerCase();
+
+      if (!action) {
+        const lines = configs.map((cfg) => {
+          const conn = bridge.getConnection(cfg.id);
+          const status = cfg.isEnabled === false ? 'disabled' : (conn?.status ?? 'disconnected');
+          const detail = conn?.status === 'connected'
+            ? `${conn.tools.length} tool(s)`
+            : (conn?.error ?? '');
+          return `  ${statusIcon(status)} ${cfg.name} (${cfg.id}) — ${status}${detail ? ` · ${detail}` : ''}`;
+        });
+        return {
+          text: `MCP servers:\n${lines.join('\n')}\n\nRestarted one? /mcp reconnect [server]`,
+        };
+      }
+
+      if (action !== 'reconnect') {
+        return { text: `Unknown action "${action}". Use /mcp or /mcp reconnect [server].` };
+      }
+
+      // Reconnecting rebinds a process-wide bridge every user's agents call,
+      // so it takes the same admin/local trust that stopping agents does.
+      if (ctx.trustLevel !== 'local' && ctx.trustLevel !== 'system' && !(ctx.metadata as { isAdmin?: boolean } | undefined)?.isAdmin) {
+        return { text: 'Reconnecting an MCP server needs an admin account.' };
+      }
+
+      const wanted = (ctx.args.server || '').toLowerCase();
+      const targets = wanted
+        ? configs.filter((c) => c.id.toLowerCase() === wanted || c.name.toLowerCase() === wanted)
+        : configs.filter((c) => c.isEnabled !== false);
+      if (targets.length === 0) {
+        return { text: wanted ? `No MCP server matches "${ctx.args.server}".` : 'No enabled MCP servers.' };
+      }
+
+      const { getMcpCircuitBreaker } = await import('@/mcp/circuit-breaker');
+      const results: string[] = [];
+      for (const server of targets) {
+        // A server that was down has an open circuit and may have burned its
+        // auto-reconnect attempts; a manual reconnect clears both.
+        getMcpCircuitBreaker().reset(server.id);
+        try {
+          await bridge.disconnect(server.id);
+          const conn = await bridge.connect(server);
+          results.push(`  ✅ ${server.name} — ${conn.tools.length} tool(s)`);
+        } catch (err) {
+          results.push(`  ❌ ${server.name} — ${(err as Error).message}`);
+        }
+      }
+      return { text: `Reconnected:\n${results.join('\n')}` };
+    },
+  });
+
+  registry.register({
     name: 'diff',
     aliases: [],
     description: 'Show git diff for workspace changes',
@@ -573,4 +640,12 @@ export function getCommandRegistry(): CommandRegistry {
     registerBuiltinCommands(instance);
   }
   return instance;
+}
+
+/** Status glyph for the /mcp list. */
+function statusIcon(status: string): string {
+  if (status === 'connected') return '✅';
+  if (status === 'connecting') return '⏳';
+  if (status === 'disabled') return '⏸️';
+  return '❌';
 }

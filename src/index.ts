@@ -102,6 +102,17 @@ async function main() {
     await initPermissionRules();
     logger.info('Permission rules initialized');
 
+    // Permission requests no longer expire on a timer, so anything still
+    // pending belongs to an agent that died with the previous process — the
+    // promise that was waiting on it is gone. Release them rather than replay
+    // unanswerable prompts into the UI forever.
+    try {
+      const { getPermissionManager } = await import('@/security/permissions');
+      await getPermissionManager().releaseOrphanedRequests();
+    } catch (err) {
+      logger.warn({ err }, 'Could not release orphaned permission requests');
+    }
+
     // Subscribe to settings changes for hot-reload
     initializeHotReload();
 

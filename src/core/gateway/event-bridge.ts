@@ -77,10 +77,16 @@ export function connectEventBridge(hub: GatewayHub): () => void {
       // subtype so the TUI (and any other `/gateway` client) can match it
       // instead of fishing through the generic `agent.event` bucket.
       const subtype = event.type === 'action' ? 'agent.action' : 'agent.event';
+      // `source` is dropped before the payload reaches a client, so the agent
+      // has to ride IN the payload — without it a client can't tell a
+      // subagent's tool call from the root agent's.
+      const data = event.data ?? event;
       hub.publishEvent({
         type: subtype,
         source: `agent:${event.agentId}`,
-        payload: event.data ?? event,
+        payload: typeof data === 'object' && data !== null && !Array.isArray(data)
+          ? { agentId: event.agentId, ...(data as Record<string, unknown>) }
+          : data,
       });
     });
 

@@ -1,4 +1,3 @@
-import { and, eq } from 'drizzle-orm';
 import type { ToolManifest } from '@/core/types';
 import { getDb } from '@/db/postgres';
 import { messageRepository } from '@/db/repositories/message-repository';
@@ -9,6 +8,7 @@ import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
 import { toolLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema } from '../base-tool';
+import { type DedupHit, findExisting } from './dedup';
 import { parseDistilledSkill, skillFingerprint, SKILL_DISTILL_SYSTEM_PROMPT } from './distiller';
 import { readTrajectoryRecordLine, trajectoryToDistillMaterial } from './trajectory-source';
 
@@ -117,25 +117,13 @@ export class SkillDistillTool extends BaseTool {
           return { distilled: false, message: 'Nothing worth distilling into a reusable skill.' };
         }
 
-        // 4. Dedup: if an identical pending proposal already exists, return it
-        //    rather than spawning a duplicate (proposal-spam guard).
+        // 4. Dedup. Before this the only guard was an exact-name match against
+        //    PENDING proposals, so the same procedure landed once per name the
+        //    model happened to pick, and a rejection suppressed nothing.
         const db = getDb();
         const fingerprint = skillFingerprint(context.userId, distilled.name);
-        const [existing] = await db
-          .select()
-          .from(skillProposals)
-          .where(and(eq(skillProposals.fingerprint, fingerprint), eq(skillProposals.status, 'pending')))
-          .limit(1);
-        if (existing) {
-          return {
-            distilled: true,
-            proposalId: existing.id,
-            name: existing.name,
-            deduped: true,
-            status: 'pending',
-            note: 'An identical pending skill proposal already exists.',
-          };
-        }
+        const existing = await findExisting(context.userId, fingerprint, distilled);
+        if (existing) return describeExisting(existing);
 
         // 5. File the proposal (pending review). kind='skill' routes the approve
         //    path to create a skill, not an expert.
@@ -203,6 +191,35 @@ export class SkillDistillTool extends BaseTool {
 
     return { material, sourceRef: `trajectory:${ref}` };
   }
+}
+
+/** Turn a dedup hit into the tool result the model sees — no proposal filed. */
+function describeExisting(hit: DedupHit): Record<string, unknown> {
+  if (hit.kind === 'skill') {
+    return {
+      distilled: false,
+      deduped: true,
+      existingSkillId: hit.id,
+      name: hit.name,
+      message: `Already covered by the existing skill "${hit.name}" — nothing filed. Edit that skill if it needs updating.`,
+    };
+  }
+  if (hit.kind === 'suppressed') {
+    return {
+      distilled: false,
+      deduped: true,
+      name: hit.name,
+      message: `"${hit.name}" was rejected and stays suppressed until ${hit.until.toISOString().slice(0, 10)} — nothing filed.`,
+    };
+  }
+  return {
+    distilled: true,
+    deduped: true,
+    proposalId: hit.id,
+    name: hit.name,
+    status: 'pending',
+    message: `An equivalent proposal ("${hit.name}") is already pending review.`,
+  };
 }
 
 /** Auto-discovered singleton (see src/tools/discovery.ts). */

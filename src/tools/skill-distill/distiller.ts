@@ -65,10 +65,46 @@ export function parseDistilledSkill(raw: string): DistilledSkill | null {
 }
 
 /**
+ * Normalized form of a skill name: lowercase, punctuation collapsed to single
+ * dashes. `Token Rotation Procedure` and `token-rotation-procedure` are the
+ * same skill; before this they hashed differently and both got filed.
+ */
+export function normalizeSkillName(name: string): string {
+  return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+/**
  * Stable dedup fingerprint for a distilled skill. Keyed on the normalized name
- * so re-distilling the same procedure updates/collides rather than spawning
- * duplicate proposals (mirrors the auto-extension proposal fingerprinting).
+ * so re-distilling the same procedure collides rather than spawning duplicate
+ * proposals. Name variants that survive normalization ("vault-token-rotation"
+ * vs "secure-credential-rotation") are caught by the embedding check instead.
  */
 export function skillFingerprint(userId: string, name: string): string {
-  return createHash('sha256').update(`${userId}:${name.trim().toLowerCase()}`).digest('hex');
+  // A name of pure punctuation normalizes to '' — falling back to the raw
+  // lowercased name keeps two such names from hashing to the same skill.
+  const key = normalizeSkillName(name) || name.trim().toLowerCase();
+  return createHash('sha256').update(`${userId}:${key}`).digest('hex');
+}
+
+/** Cosine similarity above which two skills are the same procedure, differently named. */
+export const NEAR_DUPLICATE_SIMILARITY = 0.85;
+
+/** Cosine similarity of two equal-length vectors. 0 when either is degenerate. */
+export function cosine(a: number[], b: number[]): number {
+  if (a.length !== b.length || a.length === 0) return 0;
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  if (na === 0 || nb === 0) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+/** The text a skill is compared by — name and description, not the body. */
+export function similarityText(skill: { name: string; description: string }): string {
+  return `${skill.name}\n${skill.description}`;
 }

@@ -53,7 +53,10 @@ export const permissionRequests = pgTable('permission_requests', {
   resolvedBy: uuid('resolved_by').references(() => users.id),
   resolvedAt: timestamp('resolved_at', { withTimezone: true }),
   resolution: text('resolution'), // User's response or reason
-  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  /** NULL = never expires, which is now the default: a human answers when
+   *  they answer. Kept nullable-with-a-value for a caller that opts into a
+   *  deadline explicitly. */
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userIdIdx: index('permission_requests_user_id_idx').on(table.userId),

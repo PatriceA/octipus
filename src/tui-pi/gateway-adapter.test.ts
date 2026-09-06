@@ -231,4 +231,33 @@ describe('agent.blocked — a quiet worker says what it waits on', () => {
     expect(event.stats.contextTokens).toBeUndefined();
     expect(event.stats.contextWindow).toBeUndefined();
   });
+
+  test('a tool call carries the agent that ran it, so a subagent can be folded away', () => {
+    const events = decodeGatewayEvent({
+      type: 'agent.action',
+      payload: { agentId: 'child-7', type: 'tool_call', toolName: 'websearch', args: { query: 'x' } },
+    });
+    const tool = events.find((e) => e.kind === 'tool');
+    expect(tool).toBeDefined();
+    if (tool?.kind !== 'tool') throw new Error('wrong kind');
+    expect(tool.agentId).toBe('child-7');
+    expect(tool.tool.name).toBe('websearch');
+  });
+
+  test('a swarm spawn is flagged as a subagent; the root spawn is not', () => {
+    const child = decodeGatewayEvent({
+      type: 'swarm.node_spawned',
+      payload: { kind: 'agent', nodeId: 'child-7', role: 'research', model: 'ornith:35b' },
+    }).find((e) => e.kind === 'agent.start');
+    if (child?.kind !== 'agent.start') throw new Error('wrong kind');
+    expect(child.subagent).toBe(true);
+    expect(child.nodeId).toBe('child-7');
+
+    const root = decodeGatewayEvent({
+      type: 'agent.spawned',
+      payload: { agentId: 'root-1', role: 'general' },
+    }).find((e) => e.kind === 'agent.start');
+    if (root?.kind !== 'agent.start') throw new Error('wrong kind');
+    expect(root.subagent).toBeUndefined();
+  });
 });

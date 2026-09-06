@@ -158,3 +158,90 @@ describe('skill-proposal approve atomicity (M14)', () => {
     expect(prop.kind).toBe('expert');
   });
 });
+
+describe('approveProposal merges into an existing skill', () => {
+  beforeEach(async () => {
+    const { getDb } = await import('@/db/postgres');
+    const { skills } = await import('@/db/schema/skills');
+    const { skillProposals } = await import('@/db/schema/skill-proposals');
+    await getDb().delete(skills);
+    await getDb().delete(skillProposals);
+  });
+
+  async function seedSkillProposal(name: string, content: string): Promise<string> {
+    const { getDb } = await import('@/db/postgres');
+    const { skillProposals } = await import('@/db/schema/skill-proposals');
+    const [row] = await getDb().insert(skillProposals).values({
+      userId,
+      fingerprint: randomUUID(),
+      name,
+      description: 'rotate a token',
+      draftPromptTemplate: content,
+      kind: 'skill',
+      lastExemplarAt: new Date(),
+    }).returning();
+    return row.id;
+  }
+
+  test('approving a proposal for a skill the user already has updates it instead of adding a second row', async () => {
+    const { getDb } = await import('@/db/postgres');
+    const { skills } = await import('@/db/schema/skills');
+    const { approveProposal } = await import('@/services/skill-proposal-service');
+    const db = getDb();
+
+    const existingId = randomUUID();
+    await db.insert(skills).values({
+      id: existingId,
+      name: 'Token Rotation',
+      description: 'old description',
+      content: 'old steps',
+      category: 'general',
+      userId,
+    });
+
+    const proposalId = await seedSkillProposal('token-rotation', 'new steps');
+    const result = await approveProposal(proposalId, { userId });
+
+    expect(result).toMatchObject({ promoted: 'skill', id: existingId });
+    const rows = await db.select().from(skills);
+    expect(rows.length).toBe(1);
+    expect(rows[0].content).toBe('new steps');
+  });
+
+  test('the merge clears the stale embedding so the row gets re-embedded', async () => {
+    const { getDb } = await import('@/db/postgres');
+    const { skills } = await import('@/db/schema/skills');
+    const { approveProposal } = await import('@/services/skill-proposal-service');
+    const db = getDb();
+
+    await db.insert(skills).values({
+      id: randomUUID(),
+      name: 'Token Rotation',
+      description: 'old description',
+      content: 'old steps',
+      category: 'general',
+      userId,
+      descriptionEmbedding: [1, 0, 0, 0],
+      descriptionHash: 'stale',
+    });
+
+    await approveProposal(await seedSkillProposal('token-rotation', 'new steps'), { userId });
+
+    const [row] = await db.select().from(skills);
+    expect(row.descriptionEmbedding).toBeNull();
+    expect(row.descriptionHash).toBeNull();
+  });
+
+  test('a genuinely new skill still inserts', async () => {
+    const { getDb } = await import('@/db/postgres');
+    const { skills } = await import('@/db/schema/skills');
+    const { approveProposal } = await import('@/services/skill-proposal-service');
+
+    const proposalId = await seedSkillProposal('backup-restore', 'restore steps');
+    await approveProposal(proposalId, { userId });
+
+    const rows = await getDb().select().from(skills);
+    expect(rows.length).toBe(1);
+    expect(rows[0].name).toBe('backup-restore');
+  });
+});

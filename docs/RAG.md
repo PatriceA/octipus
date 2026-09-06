@@ -166,7 +166,7 @@ remains for callers that want the full ancestor chunk objects.
 
 ### Freshness
 
-Every row carries `last_verified_at` (migration 0095): when the content was
+Every row carries `last_verified_at` (migration 0096): when the content was
 written, or when someone last confirmed it is still true. It is stamped by
 `store()` — writing content is confirming it — and refreshed when byte-identical
 content is re-indexed, so a nightly re-crawl keeps unchanged facts current
