@@ -1,7 +1,7 @@
+import type { RepoDependency, RepoKind } from '@db/schema/workspace-repos';
 import { execSync } from 'child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { basename, join } from 'path';
-import type { RepoDependency, RepoKind } from '@db/schema/workspace-repos';
 import { coreLogger } from '@/utils/logger';
 import { MANIFEST_FILENAMES, type ParsedManifest, parseManifest } from './manifests';
 

@@ -50,6 +50,7 @@ export class RepoRegistryRepository {
           packageName: rec.packageName ?? null,
           dependencies: rec.dependencies,
           repoMap: rec.repoMap ?? null,
+          symbolIndex: rec.symbolIndex ?? null,
           hasAgentsMd: rec.hasAgentsMd,
           lastScannedAt: rec.lastScannedAt ?? null,
           updatedAt: new Date(),

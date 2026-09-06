@@ -1,6 +1,6 @@
 # Daily-Driver Gaps — Plan
 
-**Status:** Phases 0, 1 and 3 shipped 2026-09-05 (#328, #329, #330); Phase 2 shipped 2026-09-06 (see below); phases 4–6 and the enterprise track are planning only
+**Status:** Phases 0, 1 and 3 shipped 2026-09-05 (#328, #329, #330); Phases 2 and 4 shipped 2026-09-06 (#331, and the PR after it); phases 5–6 and the enterprise track are planning only
 **Created:** 2026-09-05
 **Scope:** What a developer / product owner / technical consultant needs before
 Octipus can run their working day, ordered by what blocks that first. Written
@@ -150,19 +150,56 @@ UPDATE SKIP LOCKED)` claimed more than one row under PGlite — the semi-join
 rescans the subquery per candidate. `id = (subquery)` is planned once and is
 the shape `kv_queue`'s pop already used.
 
-## Phase 4 — the developer loop
+## Phase 4 — the developer loop — SHIPPED (2026-09-06)
 
-1. **GitHub depth.** `src/tools/github/index.ts` is a `gh` wrapper: add
-   line-level review comments, check-run + job-log fetch, PR diff, labels and
-   milestones. GitLab already has job logs; match it.
-2. **Review-response loop.** `review` stays read-only; a `coding` stage that
-   reads open review threads and pushes fixes, wired as the existing QA
-   backward edge in the *Full Development Cycle* preset (`src/db/seed-presets.ts`).
-3. **Repo map.** The registry has build/test/lint commands and a dependency
-   graph but no symbols. A per-repo symbol index (tree-sitter is already a dep
-   for the TUI) feeds `get_repo` so a worker reads the map before the files.
-4. **IDE reach.** The gateway RPC-stdio adapter on the roadmap is the cheapest
-   path; a VS Code extension is out of scope until it lands.
+1. **GitHub depth.** The `github` tool gains the reads a reviewer needs and
+   the writes a coder answering a review needs: `pr_diff` (unified, or files
+   only; capped), `pr_review_threads` (GraphQL: file, line, resolved state,
+   comments, thread id), `pr_review_comment` (a line comment on the head
+   commit, or a reply inside a thread), `pr_resolve_thread`, `pr_checks`
+   (tolerates gh's "pending" and "failed" exit codes — the JSON is the
+   answer either way), `job_log` (the *tail* of a job or a run's failed
+   steps; CI logs are megabytes and the failure is at the end), `label_list`
+   / `set_labels`, `milestone_list` / `set_milestone`. Every id and repo is
+   validated before it reaches `gh` (`assertNumber` rejects `"7; rm"`, which
+   `parseInt` would have read as 7). The review prompts list the new reads
+   as allowed and the new writes as forbidden; the coding prompts describe
+   the loop: threads → fix → reply with the commit → resolve.
+2. **Review-response loop.** Not a backward edge after all: QA's `qa_fail`
+   edge still targets Implementation (re-reviewing an unchanged tree was the
+   argument, and it holds). What was missing was the stage the read-only
+   reviewer's findings reach. *Address Review* is a `coding` stage between
+   Code Review and QA in the loop body, with `github`: it lists the
+   actionable findings, adds the open PR threads when the work is on a PR,
+   fixes, runs the checks for what it touched, commits, replies in each
+   thread and resolves it. It declares neither `producesArtifacts` nor
+   `runsCommands` on purpose — a clean review is a legitimate no-op, and
+   either flag would fail the stage for having nothing to do; QA, next,
+   proves the tree still holds.
+3. **Repo map.** `workspace_repos.symbol_index` (migration 0094) holds
+   top-level declarations per file — functions, classes, interfaces, types,
+   enums, structs, traits, modules, constants, and members as
+   `Owner.member` — with line numbers and an exported/public flag where the
+   language has one. Parsed at scan time with the tree-sitter grammars the
+   TUI already ships (TypeScript/TSX/JS, Python, Go, Rust, Java), through a
+   grammar loader now shared with the editor (`utils/tree-sitter-grammars`).
+   Bounded: 2,500 files, 400 KB per file, 20,000 symbols, build and vendor
+   directories skipped; a grammar that will not load skips its language
+   instead of failing the scan. `get_repo` returns an *outline* (busiest
+   files first, exported names, capped) and `find_symbol` searches the whole
+   index (exact, prefix, then substring). The index is never sent to RAG.
+4. **IDE reach.** The gateway now speaks its protocol over stdin/stdout as
+   strict-LF JSON lines: `octipus --stdio` (or `GATEWAY_STDIO=1`) attaches
+   the process's own stdio as one more connection to the same hub, so the
+   auth deadline, rate limits, budgets and the event-visibility rule apply
+   unchanged; logs move to stderr so the pipe stays clean; stdin's end shuts
+   the process down. Lines are handled strictly in order. A VS Code
+   extension stays out of scope; it now has a transport to sit on.
+
+Not done in Phase 4, on purpose: no request-id correlation on the stdio
+transport (the protocol has none on the socket either; replies correlate by
+`sessionId` and event type); no incremental re-index (a scan rebuilds the
+symbol index); no import-graph edges between files.
 
 ## Phase 5 — process and analyse
 
@@ -251,7 +288,7 @@ not competing — federation is how two hubs talk.
 
 ## Sequencing
 
-Phases 0 to 3 are done. Phase 4 next. Phase 5 by demand, connector by
-connector. The enterprise track opens with E0 as soon as a second person
+Phases 0 to 4 are done. Phase 5 by demand, connector by connector; Phase 6
+after measuring recall. The enterprise track opens with E0 as soon as a second person
 shares one Octipus — E0 is one migration and should not wait on E1–E4 being
 designed in full.

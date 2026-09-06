@@ -1,5 +1,5 @@
-import type { AgentEvent } from '@/core/agent-base';
 import type { TurnEvent } from '@/core/agent/service';
+import type { AgentEvent } from '@/core/agent-base';
 import type { PermissionRequestEvent } from '@/security/permissions';
 import { coreLogger } from '@/utils/logger';
 import type { GatewayHub } from './hub';

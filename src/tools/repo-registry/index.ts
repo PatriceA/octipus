@@ -1,7 +1,8 @@
-import type { ToolManifest } from '@/core/types';
+import type { WorkspaceRepo } from '@db/schema/workspace-repos';
 import { buildRepoEdges, dependenciesOf, dependentsOf } from '@/core/repos/graph';
 import { loadRepoGraph, repoToGraphNode, scanUserRepos, toRepoSummary } from '@/core/repos/registry-service';
-import type { WorkspaceRepo } from '@db/schema/workspace-repos';
+import { findSymbols, outlineSymbols, type SymbolKind } from '@/core/repos/symbols';
+import type { ToolManifest } from '@/core/types';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
 /**
@@ -30,7 +31,8 @@ export class RepoRegistryTool extends BaseTool {
       ],
       tools: [
         { name: 'list_repos', description: 'List repositories in the workspace with kind, languages, and dependency counts.', parameters: {}, returns: 'Array of repo summaries' },
-        { name: 'get_repo', description: 'Get one repo: structural map, languages, commands, and its in-registry dependencies/dependents.', parameters: { repo: { type: 'string', description: 'Repo name or id', required: true } }, returns: 'Full repo detail + graph neighbours' },
+        { name: 'get_repo', description: 'Get one repo: structural map, symbol outline (what is defined where), languages, commands, and its in-registry dependencies/dependents.', parameters: { repo: { type: 'string', description: 'Repo name or id', required: true } }, returns: 'Full repo detail + graph neighbours' },
+        { name: 'find_symbol', description: 'Find where a function, class, type or method is defined in a repo (file and line), from the symbol index built at scan time.', parameters: { repo: { type: 'string', description: 'Repo name or id', required: true }, query: { type: 'string', description: 'Symbol name or part of one', required: true } }, returns: 'Matching symbols with path and line' },
         { name: 'repo_dependents', description: 'Repos that depend on the given repo (what breaks if you change it).', parameters: { repo: { type: 'string', description: 'Repo name or id', required: true } }, returns: 'Array of dependent repos' },
         { name: 'repo_dependencies', description: 'In-registry repos the given repo depends on.', parameters: { repo: { type: 'string', description: 'Repo name or id', required: true } }, returns: 'Array of dependency repos' },
         { name: 'scan_repos', description: 'Re-scan the workspace to refresh the registry (detect new repos, manifests, AGENTS.md).', parameters: {}, returns: 'Count of repos found' },
@@ -53,7 +55,7 @@ export class RepoRegistryTool extends BaseTool {
 
     this.registerTool(
       'get_repo',
-      'Read one repository: its structural digest (top-level dirs, entry points, build/test/lint commands), languages, and its in-suite dependency neighbours. This is the cheap "mental model" — prefer it over reading the directory tree.',
+      'Read one repository: its structural digest (top-level dirs, entry points, build/test/lint commands), a symbol outline (the files with the most declarations and what they define), languages, and its in-suite dependency neighbours. This is the cheap "mental model" — read it before the files, then find_symbol to open the right one.',
       createParameterSchema({ repo: { type: 'string', description: 'Repo name or id', required: true } }),
       async (args, context) => {
         const userId = requireUserId(context);
@@ -71,10 +73,43 @@ export class RepoRegistryTool extends BaseTool {
           defaultBranch: repo.defaultBranch ?? undefined,
           hasAgentsMd: repo.hasAgentsMd,
           repoMap: repo.repoMap ?? undefined,
+          symbols: repo.symbolIndex
+            ? {
+                files: repo.symbolIndex.fileCount,
+                symbols: repo.symbolIndex.symbolCount,
+                indexedAt: repo.symbolIndex.indexedAt,
+                truncated: repo.symbolIndex.truncated,
+                outline: outlineSymbols(repo.symbolIndex),
+              }
+            : undefined,
           dependencies: dependenciesOf(repo.id, nodes, edges).map((n) => n.name),
           dependents: dependentsOf(repo.id, nodes, edges).map((n) => n.name),
           lastScannedAt: repo.lastScannedAt ?? undefined,
         };
+      },
+      { permissionAction: 'read' },
+    );
+
+    this.registerTool(
+      'find_symbol',
+      'Find where a symbol is defined in a repository — functions, classes, interfaces, types, enums, structs, traits and methods (as Owner.method) — with file path and line, from the index built at scan time. Exact and prefix matches rank first. Use this instead of grepping the tree; then read only the file it names.',
+      createParameterSchema({
+        repo: { type: 'string', description: 'Repo name or id', required: true },
+        query: { type: 'string', description: 'Symbol name, or part of one (case-insensitive)', required: true },
+        kind: { type: 'string', description: 'Restrict to one kind', enum: ['function', 'method', 'class', 'interface', 'type', 'enum', 'struct', 'trait', 'module', 'constant'] },
+        limit: { type: 'number', description: 'Max results (default 50, max 200)' },
+      }),
+      async (args, context) => {
+        const userId = requireUserId(context);
+        const { repos } = await loadRepoGraph(userId);
+        const repo = resolveRepo(repos, String(args.repo));
+        if (!repo) return { error: `No repo matching "${args.repo}". Call list_repos.` };
+        if (!repo.symbolIndex) return { repo: repo.name, count: 0, symbols: [], note: 'No symbol index yet — call scan_repos.' };
+        const hits = findSymbols(repo.symbolIndex, String(args.query ?? ''), {
+          kind: args.kind as SymbolKind | undefined,
+          limit: args.limit !== undefined ? Number(args.limit) : undefined,
+        });
+        return { repo: repo.name, count: hits.length, symbols: hits, indexedAt: repo.symbolIndex.indexedAt };
       },
       { permissionAction: 'read' },
     );

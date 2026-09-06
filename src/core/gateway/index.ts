@@ -19,3 +19,4 @@ export {
   type TrustLevel,
 } from './protocol';
 export { GatewayRateLimiter } from './rate-limiter';
+export { attachStdioAdapter, type StdioAdapter, type StdioAdapterOptions, stdioModeRequested } from './stdio-adapter';

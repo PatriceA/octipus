@@ -6,6 +6,10 @@ import { ringBufferStream } from './log-stream';
 
 const logLevel = process.env.LOG_LEVEL || 'info';
 const logFormat = process.env.LOG_FORMAT || 'pretty';
+// When the gateway is served over this process's own stdio (`--stdio`),
+// stdout is the protocol pipe and a log line on it is a corrupt message.
+// Logs go to stderr in that mode; `LOG_STDERR=1` asks for the same otherwise.
+const useStderr = process.env.LOG_STDERR === '1' || process.env.GATEWAY_STDIO === '1' || process.argv.includes('--stdio');
 
 const stdoutStream =
   logFormat === 'pretty'
@@ -13,12 +17,15 @@ const stdoutStream =
         colorize: true,
         translateTime: 'SYS:standard',
         ignore: 'pid,hostname',
+        destination: useStderr ? 2 : 1,
       }) as unknown as NodeJS.WritableStream)
-    : process.stdout;
+    : useStderr
+      ? process.stderr
+      : process.stdout;
 
-// Multistream: stdout (pretty or raw) + in-process ring buffer for the
-// live log dashboard. Both receive newline-delimited JSON from pino;
-// pino-pretty transforms its copy before printing.
+// Multistream: stdout (pretty or raw; stderr in stdio mode) + in-process ring
+// buffer for the live log dashboard. Both receive newline-delimited JSON from
+// pino; pino-pretty transforms its copy before printing.
 const streams = pino.multistream([
   { stream: stdoutStream },
   { stream: ringBufferStream },

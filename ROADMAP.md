@@ -21,7 +21,12 @@ This doc lists what we are exploring. Order inside each section is rough priorit
   claimed under a row lock, swept to `interrupted` at boot, and reported in
   the away digest. Phase 2 shipped 2026-09-06: to-dos have parents, blockers,
   estimates and an in-progress status, `/tasks` has a board with category
-  lanes, and the `pm` role writes a whole plan as a backlog in one call. Plan:
+  lanes, and the `pm` role writes a whole plan as a backlog in one call.
+  Phase 4 the same day: the `github` tool reads diffs, review threads, checks
+  and job logs and answers threads; an *Address Review* stage closes the
+  review loop in the Full Development Cycle; the repo registry indexes
+  symbols with tree-sitter (`find_symbol`); the gateway runs over stdio as
+  JSON lines (`--stdio`). Plan:
   [docs/plans/daily-driver-gaps.md](docs/plans/daily-driver-gaps.md).
 
 - **Mock-provider scaffold for the model layer.** `src/models/litellm-client.ts`
@@ -276,11 +281,13 @@ All three landed. What each actually became:
   on the existing `CompactionState` + `compaction_entries` table. Still open:
   branch summarization for `/tree`-style navigation (paired with the
   session-as-tree item under **Later**).
-- **RPC stdio adapter for the gateway.** Today gateway is WS-only. Add a
-  second `GatewayAdapter` that speaks strict-LF JSONL over stdin/stdout with
-  the same typed protocol (`prompt` / `steer` / `followUp` /
-  `streamingBehavior`, request-id correlation). Unlocks IDE / CI / subprocess
-  embedding without a WS server. Mirrors pi-mono's `--mode rpc`.
+- **RPC stdio adapter for the gateway — SHIPPED (2026-09-06).**
+  `src/core/gateway/stdio-adapter.ts`: `octipus --stdio` serves the same
+  typed protocol as strict-LF JSON lines over the process's stdin/stdout,
+  as one more connection to the hub (auth, rate limits, budgets and event
+  visibility unchanged); logs go to stderr; stdin's end shuts the process
+  down. Still open: request-id correlation (the socket protocol has none
+  either — replies correlate by `sessionId` and event type).
 - **Per-tool `executionMode` override.** Today meta-tools all run through the
   root agent with global concurrency. Add `executionMode: "sequential"` on
   the tool definition itself for tools with shared-state hazards

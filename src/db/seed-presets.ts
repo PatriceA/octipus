@@ -124,8 +124,8 @@ honestly, and an item too small to review on its own wastes a full loop.`,
         description: 'Write the code following the approved architecture plan.',
         topic: 'coding',
         toolIds: ['filesystem', 'shell', 'git'],
-        // Runs once per PLAN ITEM. These four are consecutive, so they form one
-        // loop body: implement -> test -> review -> QA, per item.
+        // Runs once per PLAN ITEM. These five are consecutive, so they form one
+        // loop body: implement -> test -> review -> address review -> QA, per item.
         loopOverPlan: true,
         // Inherited by the loop head: the user approves the PLAN once, before
         // the first item runs — not once per item, and not before it exists.
@@ -178,8 +178,8 @@ Report what you implemented and any deviations from the plan.`,
         // them. Its declared tools are now enforced, and without git it left the
         // suites it wrote uncommitted beside the product.
         toolIds: ['filesystem', 'shell', 'browser', 'git'],
-        // Runs once per PLAN ITEM. These four are consecutive, so they form one
-        // loop body: implement -> test -> review -> QA, per item.
+        // Runs once per PLAN ITEM. These five are consecutive, so they form one
+        // loop body: implement -> test -> review -> address review -> QA, per item.
         loopOverPlan: true,
         requiresApproval: false,
         // Its whole purpose is to EXECUTE the suite. A Testing agent that ran no
@@ -237,8 +237,8 @@ Report:
         description: 'Review the implementation for quality, bugs, and security. Run tests and linters.',
         topic: 'review',
         toolIds: ['filesystem', 'shell', 'git', 'knowledge'],
-        // Runs once per PLAN ITEM. These four are consecutive, so they form one
-        // loop body: implement -> test -> review -> QA, per item.
+        // Runs once per PLAN ITEM. These five are consecutive, so they form one
+        // loop body: implement -> test -> review -> address review -> QA, per item.
         loopOverPlan: true,
         requiresApproval: false,
         // See the note on Implementation above: this stage had every tool it
@@ -273,12 +273,45 @@ Provide specific, actionable feedback with file paths and line numbers.
 Rate overall quality: Excellent / Good / Needs Work / Critical Issues.`,
       },
       {
+        name: 'Address Review',
+        description: 'Act on the review: fix what it found, answer open review threads on the PR, push.',
+        topic: 'coding',
+        toolIds: ['filesystem', 'shell', 'git', 'github', 'knowledge'],
+        // Runs once per PLAN ITEM. These five are consecutive, so they form one
+        // loop body: implement -> test -> review -> address review -> QA, per item.
+        loopOverPlan: true,
+        requiresApproval: false,
+        // The review-response half of the loop. `Code Review` is read-only by
+        // contract, so its findings used to reach nobody until QA failed and
+        // the whole Implementation stage re-ran over the same tree. This stage
+        // is the coder reading the review — and, when the work lives on a PR,
+        // the threads human reviewers left on it — and pushing the fixes.
+        // Deliberately declares neither `producesArtifacts` nor
+        // `runsCommands`: a clean review is a legitimate no-op, and either
+        // flag would fail the stage for having nothing to do. QA, next, is
+        // the stage that proves the tree still holds.
+        promptTemplate: `Act on the code review below. You are the coder; the reviewer could not change files.
+
+Task: {{description}}
+
+Code review results:
+{{previousOutput}}
+
+1. List every actionable finding from the review (file:line, what is wrong). Skip praise and "consider" remarks that change nothing.
+2. If the work is on a pull request, call github pr_review_threads for the open threads human reviewers left, and add those to the list. If github is unavailable or there is no PR, say so in one line and move on.
+3. Fix each item: read the file, make the change, run the project's checks for the part you touched (report the exact command and exit code). Commit with a message that names what the review asked for. Push when the branch has a remote.
+4. For each PR thread you addressed, reply in the thread (pr_review_comment with reply_to, naming the commit) and pr_resolve_thread. A thread you disagree with gets a reply saying why, and stays open.
+5. If the review found nothing actionable and there are no open threads, say "Nothing to address" and stop — do not invent work.
+
+Report: findings addressed (file:line → what changed, commit), threads answered, anything you left open and why, and the check commands you ran with their exit codes.`,
+      },
+      {
         name: 'QA Validation',
         description: 'Validate the implementation works end-to-end. Run full test suite and check for regressions.',
         topic: 'qa',
         toolIds: ['browser', 'browser-ext', 'shell', 'filesystem'],
-        // Runs once per PLAN ITEM. These four are consecutive, so they form one
-        // loop body: implement -> test -> review -> QA, per item.
+        // Runs once per PLAN ITEM. These five are consecutive, so they form one
+        // loop body: implement -> test -> review -> address review -> QA, per item.
         loopOverPlan: true,
         requiresApproval: false,
         // The auditor of record. Without this type the stage runs as prose: no

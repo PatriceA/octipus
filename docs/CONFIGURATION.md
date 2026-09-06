@@ -31,6 +31,8 @@ SESSION_SECRET=your-session-secret-at-least-32-chars
 API_PORT=3005
 API_HOST=0.0.0.0
 LOG_LEVEL=info
+LOG_STDERR=0                           # 1 = write logs to stderr instead of stdout
+GATEWAY_STDIO=0                        # 1 = also serve the gateway protocol over this process's stdin/stdout as JSON lines (same as `--stdio`); logs move to stderr
 CORS_ORIGINS=http://localhost:3007   # your web origin; code default is http://localhost:3001
 
 # ─── Models ───────────────────────────────────────────────────

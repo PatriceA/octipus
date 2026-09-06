@@ -155,7 +155,7 @@ describe('shipped presets compile to runnable graphs', () => {
     });
   }
 
-  test('Full Development Cycle loops implement -> test -> review -> QA per plan item', () => {
+  test('Full Development Cycle loops implement -> test -> review -> address review -> QA per plan item', () => {
     const dev = presets.find((p) => p.name === 'Full Development Cycle')!;
     const g = compileTemplateToGraph(dev.steps.map(stepConfigToStageTemplate));
     const loop = g.nodes.find((n) => n.kind === 'foreach');
@@ -164,8 +164,18 @@ describe('shipped presets compile to runnable graphs', () => {
       'Implementation',
       'Testing',
       'Code Review',
+      'Address Review',
       'QA Validation',
     ]);
+    // The review-response stage is a coder (it writes), sits between the
+    // read-only reviewer and the auditor, and declares no evidence flag: a
+    // clean review is a legitimate no-op.
+    const address = dev.steps.find((s) => s.name === 'Address Review')!;
+    expect(address.topic).toBe('coding');
+    expect(address.readOnly).toBeUndefined();
+    expect(address.producesArtifacts).toBeUndefined();
+    expect(address.runsCommands).toBeUndefined();
+    expect(address.toolIds).toContain('github');
     // Exactly one step writes the plan the loop consumes.
     expect(dev.steps.filter((s) => s.producesPlan).map((s) => s.name)).toEqual([
       'Requirements & Architecture',
