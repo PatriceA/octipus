@@ -32,7 +32,15 @@ This doc lists what we are exploring. Order inside each section is rough priorit
   Confluence are named tools the `pm` role holds and Linear is a second
   connector; `channel_history` / `channel_search` read Slack and Teams back;
   meetings become notes linked to the people who attended, and knowledge
-  chunks carry a `last_verified_at` that retrieval down-ranks by. Plan:
+  chunks carry a `last_verified_at` that retrieval down-ranks by. Phase 6 the
+  same day, and it started by measuring: `recalls_memory` turned out to have
+  no eval suite at all, so there was nothing to decide from. A benchmark on a
+  40-fact corpus put recall at 50% for the shipped access-count ordering —
+  a query-independent block cannot do better, and `recordAccess` makes it a
+  ratchet a newly learned fact can never climb. Long-term memory retrieval
+  now interleaves that ordering with one ranked against the turn, only once
+  the corpus outgrows the 250-token block, and `eval/memory.yaml` covers the
+  assertion end to end. Plan:
   [docs/plans/daily-driver-gaps.md](docs/plans/daily-driver-gaps.md).
 
 - **Mock-provider scaffold for the model layer.** `src/models/litellm-client.ts`

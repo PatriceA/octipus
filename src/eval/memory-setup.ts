@@ -76,19 +76,32 @@ export async function seedMemories(userId: string, seeds: MemorySeed[]): Promise
           'Bind a model to the `embedding` topic before running memory-aware evals.',
       );
     }
-    const row = await repo.addNew({
-      userId,
-      workspaceId: null,
-      agentScope: seed.agentScope ?? null,
-      factType: seed.factType,
-      content: seed.content,
-      embedding: vector,
-      embeddingVersion: `eval/${vector.length}`,
-      sourceMessageId: null,
-      confidence: 1,
-      validUntil: null,
-    });
-    ids.push(row.id);
+    try {
+      const row = await repo.addNew({
+        userId,
+        workspaceId: null,
+        agentScope: seed.agentScope ?? null,
+        factType: seed.factType,
+        content: seed.content,
+        embedding: vector,
+        embeddingVersion: `eval/${vector.length}`,
+        sourceMessageId: null,
+        confidence: 1,
+        validUntil: null,
+      });
+      ids.push(row.id);
+    } catch (err) {
+      // `memories.user_id` is a foreign key. A well-formed UUID that belongs to
+      // nobody passes `memorySetupBlocker` and then fails here, and the raw
+      // constraint error does not tell the operator what to change.
+      const message = (err as Error).message;
+      throw new Error(
+        /foreign key|user_id/i.test(message)
+          ? `memorySetup could not seed for user ${userId}: no such user in the target install. ` +
+            'context.userId must be a user that exists there, not just a valid UUID.'
+          : `memorySetup could not seed "${seed.content.slice(0, 60)}": ${message}`,
+      );
+    }
   }
   return ids;
 }

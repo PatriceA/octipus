@@ -199,6 +199,60 @@ specific entry.
 The optional `repos` filter scopes a search to one or more repositories — see
 [Repo-scoped knowledge](#repo-scoped-knowledge-multi-repo).
 
+## Long-term memory retrieval
+
+A different table (`memories`) and a different question. The knowledge base
+answers "what do we have written down about this"; memory answers "what do I
+know about the person I am talking to". Every turn injects a block of it into
+the system prompt, bounded at 250 tokens (`DEFAULT_MEMORY_TOKEN_BUDGET`).
+
+Two orderings feed that block, and the reason there are two is the whole of
+this section.
+
+`retrieveTop` ranks by `access_count` then `updated_at` — frequency and
+recency. It is the right answer to "what is always worth knowing about this
+user" and it never looks at the question. While the whole corpus fits the
+budget that costs nothing, because every fact is injected either way. That is
+the case for a new user, and it is why the ordering was fine for a year.
+
+Once the corpus outgrows the budget, ranking by frequency alone measurably
+loses facts. `src/core/memory/recall.test.ts` runs the number on a 40-fact
+corpus — the size a daily user reaches in a few months — and asks twelve
+questions each of which exactly one fact answers:
+
+| Ordering | Answers that reached the model |
+|---|---|
+| `access_count` + recency | 50% |
+| interleaved with relevance | 100% |
+
+Half is not bad luck, it is the ceiling: a query-independent ordering returns
+the *same* block for every question, so the answer is present only if it
+happens to be one of the rows the budget admitted, and no phrasing of the
+question can change that. Worse, the ordering is self-reinforcing —
+`recordAccess` bumps exactly the rows it just returned, so a fact learned last
+week starts at `access_count = 0` and can never climb past the incumbents. You
+tell the assistant something, it agrees, and from the next turn the fact is
+invisible.
+
+So above the budget the corpus is asked a second question — `retrieveRelevant`,
+nearest the turn by cosine — and the two lists are **interleaved**, not
+concatenated. Alternating bounds each ordering's share of the block: the most
+relevant fact is always in, and one topical question can never evict everything
+the assistant always needs to know. There is no similarity floor; the rows are
+the user's own facts, so the eight nearest the turn are the eight most related
+things known about them, and a cosine threshold would be a model-specific
+constant tuned on nothing.
+
+The semantic pass is skipped entirely when it cannot help or cannot run:
+
+- the corpus already fits the budget (the common case, and the cheap one — no
+  embedding call is made at all),
+- the caller passed no turn text,
+- no model is bound to the `embedding` topic, or the embedding call fails.
+
+Each of those falls back to exactly the pre-Phase-6 block, so the feature has
+no configuration and no failure mode beyond "you get what you got before".
+
 ## Code-exclusion policy (raw code is never indexed)
 
 **Raw source-code files are never stored in the knowledge base.** Indexing whole
@@ -470,6 +524,7 @@ CREATE INDEX embeddings_repo_id_idx ON embeddings (repo_id);
 | `src/db/migrations/0073_cloudy_glorian.sql` | Added `embeddings.repo_id` (multi-repo scope) + index |
 | `mcp-server/src/tools/knowledge.ts` | External-model MCP bridge |
 | `src/core/memory/{extractor,judge,retrieval,repository}.ts` | Layer 1 — long-term user-fact memory (extract → judge → apply, turn-start retrieve, supersession chain) |
+| `src/core/memory/recall.test.ts` | The recall benchmark behind the two-ordering design above |
 | `src/db/task-state-listener.ts` | Layer 3 — LISTEN/NOTIFY subscriber for `task_state_<session_id>` fan-out (Postgres only) |
 | `src/core/agent/meta-tools.ts` (`remember_this`) | Agent-callable memory write — only path the LLM uses to promote a fact |
 | `src/api/routes/memory.ts` | Operator REST — list / chain / soft-delete user memories |

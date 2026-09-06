@@ -155,7 +155,20 @@ outcome. Two constraints, both to keep a green run honest:
 
 Facts are embedded through the normal embedding service, so a model must be
 bound to the `embedding` topic; a test that cannot be seeded is reported as a
-failed test naming the reason, never run without its facts.
+failed test naming the reason, never run without its facts. `context.userId`
+must name a user that EXISTS in the target install — `memories.user_id` is a
+foreign key, so a well-formed UUID belonging to nobody passes validation and
+then fails the insert.
+
+`eval/memory.yaml` is the suite that uses all of this. One test seeds
+twenty-four true-but-irrelevant facts alongside the one that answers the
+question, because a single-fact test cannot fail: it fits the injected block
+whatever the ranking, and would have passed just as well before there was any
+ranking to test (see
+[Long-term memory retrieval](RAG.md#long-term-memory-retrieval)). The last
+test in the suite asserts the opposite direction — a question the seeded facts
+do not answer must not be answered from them, since a model that recites its
+whole memory block scores perfectly on recall and is useless.
 
 ---
 

@@ -15,7 +15,7 @@ import { judgeAndApply, type JudgeContext, type JudgeOutcome } from './judge';
 
 export { extractFacts, looksWorthExtracting, parseExtractorResponse, type CandidateFact, type ExtractorInput } from './extractor';
 export { judgeAndApply, JUDGE_RELEVANCE_FLOOR, parseJudgeAction, relevantClosest, type JudgeAction, type JudgeContext, type JudgeOutcome } from './judge';
-export { retrieveForContext, renderMemoriesBlock } from './retrieval';
+export { retrieveForContext, renderMemoriesBlock, DEFAULT_MEMORY_TOKEN_BUDGET, RELEVANT_CANDIDATE_LIMIT, type MemoryContextScope } from './retrieval';
 export { getMemoryRepository, MemoryRepository, type MemoryAccessScope } from './repository';
 
 export interface UpdateMemoriesInput extends JudgeContext {
