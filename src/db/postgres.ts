@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import { getConfig } from '@/config';
 import { dbLogger } from '@/utils/logger';
 import * as schema from './schema';
@@ -161,6 +162,11 @@ export function getDb(): DrizzleDB {
   const mode = (process.env.STORAGE_MODE || 'external') as 'embedded' | 'external';
   if (mode === 'external') {
     const config = getConfig();
+    // `require` is not defined in an ES module, so this whole fallback threw
+    // ReferenceError instead of connecting — and every caller that swallows a
+    // getDb() failure (the eval runner's getDefaultModel, for one) reported
+    // the symptom as "no models configured".
+    const require = createRequire(import.meta.url);
     const postgresMod = require('postgres');
     const postgres = postgresMod.default || postgresMod;
     const drizzleMod = require('drizzle-orm/postgres-js');
