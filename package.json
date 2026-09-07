@@ -90,7 +90,7 @@
     "@types/bun": "^1.4.0",
     "@types/js-yaml": "4.0.9",
     "@types/ws": "^8.5.10",
-    "@vitest/coverage-v8": "4.1.11",
+    "@vitest/coverage-v8": "5.0.0",
     "drizzle-kit": "^0.31.10",
     "esbuild": "0.28.2",
     "tree-sitter-go": "0.25.0",
