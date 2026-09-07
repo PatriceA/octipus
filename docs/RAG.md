@@ -218,14 +218,14 @@ corpus fits the budget that costs nothing, because every fact is injected
 either way. That is the case for a new user, and it is why the ordering was
 fine for a year.
 
-Once the corpus outgrows the budget, ranking by frequency alone measurably
-loses facts. `src/core/memory/recall.test.ts` runs the number on a 40-fact
-corpus — the size a daily user reaches in a few months — and asks twelve
-questions each of which exactly one fact answers:
+Once the corpus outgrows the budget, ranking by standing value alone
+measurably loses facts. `src/core/memory/recall.test.ts` runs the number on a
+40-fact corpus — the size a daily user reaches in a few months — and asks
+twelve questions each of which exactly one fact answers:
 
 | Ordering | Answers that reached the model |
 |---|---|
-| `access_count` + recency | 50% |
+| standing value alone | 50% |
 | interleaved with relevance | 100% |
 
 Half is not bad luck, it is the ceiling: a query-independent ordering returns

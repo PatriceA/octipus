@@ -7,9 +7,10 @@
  *
  * Two orderings, and the reason there are two (daily-driver plan, Phase 6)
  * ───────────────────────────────────────────────────────────────────────
- * `retrieveTop` ranks by access_count + recency. That is the right answer to
- * "what is always worth knowing" and the wrong one to "what bears on THIS
- * question", because it does not look at the question. While the whole corpus
+ * `retrieveTop` ranks by standing value — how often a fact has been reached
+ * for, faded by how long ago that was. That is the right answer to "what is
+ * always worth knowing" and the wrong one to "what bears on THIS question",
+ * because it does not look at the question. While the whole corpus
  * fits the token budget the distinction is academic — everything is injected
  * either way — and for a new user it always fits.
  *
@@ -117,7 +118,7 @@ export interface MemoryContextScope extends MemoryAccessScope {
   /**
    * What the turn is about — the user's message, or a worker's task. Present:
    * memories are also ranked against it once the corpus outgrows the budget.
-   * Absent: frequency + recency only, exactly as before Phase 6.
+   * Absent: standing value only, exactly as before Phase 6.
    */
   query?: string;
   /** Budget the caller will render with. Only affects whether ranking runs. */
