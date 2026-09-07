@@ -13,14 +13,20 @@
  * fits the token budget the distinction is academic — everything is injected
  * either way — and for a new user it always fits.
  *
- * Once it does not fit, ranking by frequency alone measurably loses facts (see
- * `recall.test.ts`, which runs the numbers): the block becomes the same twenty
- * rows every turn, and because `recordAccess` bumps exactly the rows it just
- * returned, those twenty keep winning. A fact learned last week starts at
- * access_count 0 and can never climb past them. So above the budget we ask the
- * corpus a second question — nearest the turn — and interleave the two answers,
- * which bounds each ordering's share of the block instead of letting either
- * take all of it.
+ * Once it does not fit, ranking by standing value alone measurably loses facts
+ * (see `recall.test.ts`, which runs the numbers): the block becomes the same
+ * twenty rows every turn, and no phrasing of the question can reach a
+ * twenty-first. So above the budget we ask the corpus a second question —
+ * nearest the turn — and interleave the two answers, which bounds each
+ * ordering's share of the block instead of letting either take all of it.
+ *
+ * What counts as an access
+ * ────────────────────────
+ * Only the rows the relevance pass found. This module used to count every row
+ * it returned, which made the standing ordering measure its own output: the
+ * page was fetched, every row on it was marked accessed, those rows scored
+ * highest next turn, and a row that never made the page had no way to ever be
+ * counted. See the note at the call below.
  *
  * Everything about the semantic pass is opt-out-by-default-safe: no query text,
  * no embedding model, or an embedding call that throws, and the result is
@@ -127,14 +133,29 @@ export async function retrieveForContext(scope: MemoryContextScope): Promise<Mem
   // a full page could always have had a 21st row behind it.
   const standing = await repo.retrieveTop({ ...scope, limit: limit + 1 });
   const overflows = standing.length > limit || fitToBudget(standing, budget).dropped > 0;
+  if (!overflows || !scope.query?.trim()) return standing.slice(0, limit);
 
-  let rows = standing.slice(0, limit);
-  if (overflows && scope.query?.trim()) {
-    const relevant = await rankAgainstTurn(scope, limit);
-    if (relevant.length > 0) rows = interleave(relevant, rows, limit);
-  }
+  const relevant = await rankAgainstTurn(scope, limit);
+  if (relevant.length === 0) return standing.slice(0, limit);
 
-  repo.recordAccess(rows.map((r) => r.id));
+  const rows = interleave(relevant, standing.slice(0, limit), limit);
+
+  // Count the rows the turn REACHED FOR — the ones the relevance pass found —
+  // and not the ones that were merely along for the ride.
+  //
+  // Bumping everything returned is what made the old ordering a ratchet: the
+  // standing list was fetched, every row in it was counted as "accessed", and
+  // so the same rows kept scoring highest forever, while a row outside the
+  // page had no way to ever be counted. Inclusion was measuring itself. Under
+  // this rule `access_count` means "how often has this fact turned out to bear
+  // on something", which is a signal about the fact rather than about the
+  // query that fetched it — and a starved row can finally earn its way up,
+  // because the relevance pass can reach rows the standing page never shows.
+  //
+  // Nothing is counted on the paths above, either: when the whole corpus is
+  // injected, "which row was accessed" carries no information at all.
+  const reachedFor = new Set(relevant.map((r) => r.id));
+  repo.recordAccess(rows.filter((r) => reachedFor.has(r.id)).map((r) => r.id));
   return rows;
 }
 

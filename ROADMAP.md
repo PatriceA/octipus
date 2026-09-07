@@ -37,10 +37,12 @@ This doc lists what we are exploring. Order inside each section is rough priorit
   no eval suite at all, so there was nothing to decide from. A benchmark on a
   40-fact corpus put recall at 50% for the shipped access-count ordering —
   a query-independent block cannot do better, and `recordAccess` makes it a
-  ratchet a newly learned fact can never climb. Long-term memory retrieval
+  ratchet a newly learned fact could never climb. Long-term memory retrieval
   now interleaves that ordering with one ranked against the turn, only once
-  the corpus outgrows the 250-token block, and `eval/memory.yaml` covers the
-  assertion end to end. Plan:
+  the corpus outgrows the 250-token block; `access_count` counts the rows a
+  turn reached for rather than every row it returned, and fades with time, so
+  a starved fact can finally climb onto the standing page. `eval/memory.yaml`
+  covers the assertion end to end. Plan:
   [docs/plans/daily-driver-gaps.md](docs/plans/daily-driver-gaps.md).
 
 - **Mock-provider scaffold for the model layer.** `src/models/litellm-client.ts`

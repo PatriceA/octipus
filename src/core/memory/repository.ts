@@ -19,19 +19,23 @@
  *                       Used by the judge to find supersedable rows.
  *   - `retrieveTop`   — turn-start fetch: top-N active memories
  *                       across the visible scopes, ordered by
- *                       access_count + recency.
+ *                       standing value (how often a fact has been
+ *                       reached for, faded by how long ago).
  *   - `retrieveRelevant`
  *                     — the same fetch ordered by distance from the
  *                       turn instead. The retrieval module is what
  *                       callers invoke; these two are its primitives.
  *   - `recordAccess`  — fire-and-forget bump of access_count +
  *                       last_accessed_at. Same shape as the
- *                       EmbeddingService LFU signal.
+ *                       EmbeddingService LFU signal. Call it for
+ *                       rows a turn REACHED FOR, never for rows that
+ *                       were merely included: see the note in
+ *                       `retrieval.ts`.
  */
 
 import { and, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { type Memory, memories, type NewMemory } from '@/db/schema/memories';
+import { type Memory, memories, type NewMemory, standingScoreSql } from '@/db/schema/memories';
 import { coreLogger } from '@/utils/logger';
 
 export type MemoryAccessScope = {
@@ -203,9 +207,13 @@ export class MemoryRepository {
    * Turn-start: retrieve top-N active memories scoped to
    * (user_id, agent_scope ∈ {NULL, currentRole}, workspace_id ∈ {NULL,
    * currentWorkspace}). A fact learned while working for one client must not
-   * surface in another client's workspace. Ordered by
-   * `access_count DESC, updated_at DESC` — frequently-recalled and
-   * recently-changed facts surface first.
+   * surface in another client's workspace.
+   *
+   * Ordered by `standingScoreSql` — how often a fact has been reached for,
+   * faded by how long ago that was. See the note on the constant in
+   * `db/schema/memories.ts` for why it is not the raw `access_count DESC` this
+   * used to be. `updated_at` breaks ties, so a corpus nobody has read yet
+   * (every score equal) still comes back newest-first.
    *
    * This ordering is query-INDEPENDENT on purpose: it answers "what is always
    * worth knowing about this user", and it is the whole block while the corpus
@@ -218,7 +226,7 @@ export class MemoryRepository {
       .select()
       .from(memories)
       .where(and(...this.scopeConditions(scope)))
-      .orderBy(desc(memories.accessCount), desc(memories.updatedAt))
+      .orderBy(desc(standingScoreSql), desc(memories.updatedAt))
       .limit(scope.limit ?? 20);
   }
 

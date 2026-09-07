@@ -240,7 +240,7 @@ describe.skipIf(!isIntegration)('MemoryRepository (Integration)', () => {
     expect(hits.map((h) => h.content)).toEqual(['client A fact']);
   });
 
-  test('retrieveTop orders by access_count desc then updated_at desc', async () => {
+  test('retrieveTop puts the more-reached-for fact first', async () => {
     const a = await repo.addNew({
       userId, workspaceId, agentScope: null, factType: 'preference',
       content: 'A', embedding: VEC(0.1), embeddingVersion: 'test/8', sourceMessageId: null, confidence: 1,
@@ -249,7 +249,10 @@ describe.skipIf(!isIntegration)('MemoryRepository (Integration)', () => {
       userId, workspaceId, agentScope: null, factType: 'preference',
       content: 'B', embedding: VEC(0.2), embeddingVersion: 'test/8', sourceMessageId: null, confidence: 1,
     });
-    // Bump A's counter so it wins on access_count.
+    // Bump A's counter so it wins on standing value. Both rows are equally
+    // recent here, so frequency is the only thing left to order by — the
+    // recency half of the score is covered in recall.test.ts, which can
+    // backdate a row.
     repo.recordAccess([a.id]);
     // recordAccess is fire-and-forget; settle.
     await new Promise((r) => setTimeout(r, 50));

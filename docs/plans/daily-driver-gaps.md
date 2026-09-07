@@ -341,10 +341,35 @@ the shipped design keeps both. No similarity floor either: a cosine threshold
 is a model-specific constant, and the rows are the user's own facts, so the
 eight nearest the turn are the eight most related things known about them.
 
-Not done, on purpose: `access_count` still has no decay, so it remains a
-ratchet on its own. The relevance pass is what lets a starved row surface at
-all, and adding a second scoring change in the same phase would have made the
-measurement unattributable.
+**4. The ratchet itself**, once the measurement above was banked and the
+relevance change could no longer be confounded with it. Two rules, and they
+only make sense together:
+
+- `access_count` is bumped only for rows the **relevance pass found**, never
+  for rows merely included in the block. Marking everything returned as
+  "accessed" made the standing page measure its own output — the page was
+  fetched, every row on it was counted, those rows won again next turn, and a
+  row that had never made the page could never be counted. The same
+  distinction the knowledge base already draws between `markVerified` and
+  `recordAccess`.
+- The standing score is `ln(1 + access_count)` faded by a bounded recency
+  multiplier (`standingScoreSql`, floor 0.5 over 180 days). Logarithmic
+  because two recalls versus ten is real and forty versus fifty is noise;
+  faded because a fact that mattered during a project that ended last spring
+  should not outrank everything learned since, forever; bounded because decay
+  should re-order near-ties, not delete standing.
+
+`recall.test.ts` gained the tests that hold this: a merely-included row is not
+counted, a quiet habit loses to a modest current one, a heavy hitter is
+overtaken rather than buried, and — the composition of all of it — a fact the
+standing page has never shown climbs onto it within a few turns that reach for
+it, which was impossible by construction before.
+
+That work also caught a bug in the benchmark itself: in embedded mode
+`executeRaw` runs a statement and returns `[]` regardless, so the snapshot the
+per-question isolation restored from was always empty and the restore was a
+silent no-op. Fixed to `queryRaw`; the 50% / 100% figures above are from the
+re-run with the isolation actually working.
 
 ---
 

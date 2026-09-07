@@ -8,7 +8,8 @@
  * often the memory that answers it survives into the 250-token block. Two
  * strategies, same corpus, same budget:
  *
- *   - `retrieveTop`        — access_count + recency, what shipped in Phase D.
+ *   - `retrieveTop`        — the standing ordering alone, which is what the
+ *                            whole block was before Phase 6.
  *   - `retrieveForContext` — the same list interleaved with a relevance pass.
  *
  * It asserts the gap rather than printing it, so the claim in the plan doc and
@@ -34,6 +35,12 @@ import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import type { MemoryRepository } from './repository';
 
 const userId = randomUUID();
+/**
+ * A second user for the ordering tests at the bottom. The scope filter is the
+ * isolation: these rows are invisible to the benchmark corpus and vice versa,
+ * so both can live in one database without either warming the other's counters.
+ */
+const scoreUserId = randomUUID();
 const LIMIT = 20;
 let repo: MemoryRepository;
 let retrieveForContext: typeof import('./retrieval').retrieveForContext;
@@ -206,8 +213,12 @@ async function warmAccessCounters(turns: number): Promise<void> {
 type Snapshot = Array<{ id: string; access_count: number }>;
 
 async function snapshotAccess(): Promise<Snapshot> {
-  const { executeRaw } = await import('@/db/postgres');
-  return (await executeRaw('SELECT id, access_count FROM memories')) as Snapshot;
+  // `queryRaw`, not `executeRaw`: in embedded mode the latter runs the
+  // statement and returns [] regardless, so a SELECT through it silently reads
+  // nothing — and a restore built on an empty snapshot is a no-op that looks
+  // like isolation.
+  const { queryRaw } = await import('@/db/postgres');
+  return (await queryRaw('SELECT id, access_count FROM memories')).rows as Snapshot;
 }
 
 /** Put the counters back, so each question is asked of the same install. */
@@ -226,7 +237,10 @@ beforeAll(async () => {
   const { runMigrations } = await import('@/db/migrate');
   await runMigrations();
   const { seedUsers } = await import('@/test-helpers/multiuser-fixtures');
-  await seedUsers([{ id: userId, username: 'recall-bench-user' }]);
+  await seedUsers([
+    { id: userId, username: 'recall-bench-user' },
+    { id: scoreUserId, username: 'standing-score-user' },
+  ]);
 
   const retrieval = await import('./retrieval');
   retrieveForContext = retrieval.retrieveForContext;
@@ -274,7 +288,7 @@ describe('memory recall at the injected-block budget', () => {
     expect(rendered).toBeLessThan(LIMIT);
   });
 
-  test('frequency + recency alone loses half the answers', async () => {
+  test('the standing ordering alone loses half the answers', async () => {
     const { recall } = await measure('frequency');
     // Query-independent ordering returns one fixed block for every question,
     // so recall is just "how many of the twelve happen to be in that block" —
@@ -337,6 +351,30 @@ describe('the fallbacks that keep the relevance pass optional', () => {
     expect(rows.length).toBe(LIMIT);
   });
 
+  test('a row that was merely included is not counted as accessed', async () => {
+    // The rule that stops the standing ordering measuring its own output. Rows
+    // ride along in the block because they scored well; only the ones the
+    // relevance pass actually reached for are evidence of anything.
+    const ask = TARGETS[6].ask;
+    const relevant = await repo.retrieveRelevant(queryVectors.get(ask) as number[], { userId, limit: 8 });
+    const reachedFor = new Set(relevant.map((r) => r.id));
+
+    const before = new Map((await snapshotAccess()).map((r) => [r.id, Number(r.access_count)]));
+    const rows = await retrieveForContext({ userId, limit: LIMIT, query: ask });
+    // recordAccess is fire-and-forget; let it land.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const after = new Map((await snapshotAccess()).map((r) => [r.id, Number(r.access_count)]));
+
+    const passengers = rows.filter((r) => !reachedFor.has(r.id));
+    expect(passengers.length).toBeGreaterThan(0);
+    for (const row of passengers) {
+      expect(after.get(row.id)).toBe(before.get(row.id));
+    }
+    for (const row of rows.filter((r) => reachedFor.has(r.id))) {
+      expect(after.get(row.id)).toBe((before.get(row.id) as number) + 1);
+    }
+  });
+
   test('standing facts keep half the block — one question cannot evict them', async () => {
     // The interleave is what guarantees this. Concatenating instead would let
     // a single topical question fill the block with eight facts about that
@@ -347,5 +385,118 @@ describe('the fallbacks that keep the relevance pass optional', () => {
     });
     const relevantIds = new Set(relevant.map((r) => r.id));
     expect(rows.filter((r) => !relevantIds.has(r.id)).length).toBeGreaterThanOrEqual(rows.length / 2);
+  });
+});
+
+/**
+ * How the always-on half is ordered, on its own small corpus.
+ *
+ * `retrieveTop` used to be `access_count DESC, updated_at DESC`, which never
+ * forgot: whatever was useful during one project outranked everything learned
+ * afterwards for the life of the install. These three cases are the score's
+ * whole contract.
+ */
+describe('standing value', () => {
+  interface Scored {
+    content: string;
+    accessCount: number;
+    /** Days since the fact was last reached for. */
+    daysAgo: number;
+  }
+
+  async function seedScored(rows: Scored[]): Promise<void> {
+    const { executeRaw } = await import('@/db/postgres');
+    await executeRaw(`DELETE FROM memories WHERE user_id = '${scoreUserId}'`);
+    for (const row of rows) {
+      const created = await repo.addNew({
+        userId: scoreUserId, workspaceId: null, agentScope: null,
+        factType: 'preference', content: row.content,
+        embedding: offAxisVector(), embeddingVersion: `bench/${TOPIC_COUNT}`,
+        sourceMessageId: null, confidence: 1, validUntil: null,
+      });
+      await executeRaw(
+        `UPDATE memories SET access_count = ${row.accessCount},
+           last_accessed_at = now() - interval '${row.daysAgo} days'
+         WHERE id = '${created.id}'`,
+      );
+    }
+  }
+
+  async function order(): Promise<string[]> {
+    return (await repo.retrieveTop({ userId: scoreUserId })).map((r) => r.content);
+  }
+
+  test('at equal recency, the fact reached for more often wins', async () => {
+    await seedScored([
+      { content: 'reached once', accessCount: 1, daysAgo: 1 },
+      { content: 'reached often', accessCount: 12, daysAgo: 1 },
+    ]);
+    expect(await order()).toEqual(['reached often', 'reached once']);
+  });
+
+  test('at equal frequency, the one reached for recently wins', async () => {
+    await seedScored([
+      { content: 'quiet since spring', accessCount: 6, daysAgo: 200 },
+      { content: 'useful this week', accessCount: 6, daysAgo: 2 },
+    ]);
+    expect(await order()).toEqual(['useful this week', 'quiet since spring']);
+  });
+
+  test('a habit that has gone quiet loses to a modest current one', async () => {
+    // The case the raw count could never express. Thirty recalls during a
+    // project that ended six months ago is not more useful today than five
+    // recalls this week, and under the old ordering it outranked it forever.
+    await seedScored([
+      { content: 'last quarter obsession', accessCount: 30, daysAgo: 200 },
+      { content: 'what I am doing now', accessCount: 5, daysAgo: 1 },
+    ]);
+    expect((await order())[0]).toBe('what I am doing now');
+  });
+
+  test('the fade has a floor — a heavy hitter is not buried, only overtaken', async () => {
+    // Bounded on purpose, like the knowledge base's freshness factor: decay
+    // re-orders near-ties, it does not delete standing. A fact recalled thirty
+    // times still beats one recalled twice, however long ago it last came up.
+    await seedScored([
+      { content: 'long-standing fact', accessCount: 30, daysAgo: 3000 },
+      { content: 'barely used', accessCount: 2, daysAgo: 1 },
+    ]);
+    expect((await order())[0]).toBe('long-standing fact');
+  });
+});
+
+/**
+ * The composition of the two rules above, which is the point of the change:
+ * a fact the standing page has never shown can now earn its way onto it.
+ *
+ * Under the old behaviour this was impossible by construction. The page was
+ * fetched, every row on it was marked accessed, and a row that had never been
+ * on the page had no way to be counted — so the twenty rows that happened to
+ * be there when the install warmed up stayed there for good.
+ */
+describe('a starved fact can climb', () => {
+  test('turns that reach for it put it on the standing page', async () => {
+    const ask = 'What did we agree about the on-call rota?';
+    const content = 'The user takes the on-call rota only in weeks without a client workshop.';
+    await repo.addNew({
+      userId, workspaceId: null, agentScope: null,
+      factType: 'workflow_note', content,
+      embedding: topicVector(5), embeddingVersion: `bench/${TOPIC_COUNT}`,
+      sourceMessageId: null, confidence: 1, validUntil: null,
+    });
+    queryVectors.set(ask, noisyVector(5, 0));
+
+    const onPage = async () => (await repo.retrieveTop({ userId, limit: LIMIT })).some((r) => r.content === content);
+    expect(await onPage()).toBe(false);
+
+    // Ten turns is a generous bound, not a measurement: the assertion is that
+    // the ceiling is gone, not how many turns it takes to climb through it.
+    let turns = 0;
+    while (turns < 10 && !(await onPage())) {
+      await retrieveForContext({ userId, limit: LIMIT, query: ask });
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      turns++;
+    }
+    expect(await onPage()).toBe(true);
   });
 });
