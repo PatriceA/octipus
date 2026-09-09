@@ -6,6 +6,50 @@ import { type ChildProcessHandle, spawnProcess } from '@/utils/proc';
 
 const EVAL_RESULTS_DIR = resolve(process.cwd(), 'eval', 'results');
 
+/**
+ * A suite name or model id, and nothing that argv would read as an option.
+ *
+ * `POST /eval/run` puts these straight into the argv of a process that
+ * inherits the server's environment, so a value like `--evalDir` or
+ * `--output=/etc/x` is an argument-injection, not a suite name (CodeQL
+ * js/command-line-injection, alert 15). Spawning without a shell keeps
+ * metacharacters inert; it does not stop a value from BEING a flag.
+ */
+const ARGV_SAFE = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
+
+function rejectUnsafeArg(label: string, value: string | undefined): string | null {
+  if (value === undefined) return null;
+  return ARGV_SAFE.test(value)
+    ? null
+    : `Invalid ${label}: use letters, digits and . _ : / - only, and do not start with "-".`;
+}
+
+/**
+ * The argv for a run, or the reason it was refused. Exported so the validation
+ * and the shape of the spawned command are testable without standing up the
+ * route (mirrors `resolveEvalResultPath`).
+ */
+export function buildEvalRunArgv(opts: {
+  type?: 'eval' | 'red-team';
+  suite?: string;
+  model?: string;
+}): { argv: string[] } | { error: string } {
+  const error = rejectUnsafeArg('suite', opts.suite) ?? rejectUnsafeArg('model', opts.model);
+  if (error) return { error };
+
+  // Node, via the same tsx + markdown-loader invocation every package script
+  // uses. This used to spawn `bun`, which the repo stopped running on.
+  const argv = ['npx', 'tsx', '--import', './scripts/md-loader.mjs'];
+  if (opts.type === 'red-team') {
+    argv.push('src/eval/red-team/cli.ts');
+  } else {
+    argv.push('src/eval/cli.ts');
+    if (opts.suite) argv.push('--suite', opts.suite);
+  }
+  if (opts.model) argv.push('--model', opts.model);
+  return { argv };
+}
+
 interface SavedEvalFile {
   id: string;
   filename: string;
@@ -122,6 +166,13 @@ export const evalRoutes = new Elysia({ prefix: '/eval' })
       set.status = 401;
       return { error: 'Not authenticated' };
     }
+    // Starting a run spawns a process that inherits the server's environment —
+    // its provider keys included — and spends money on model calls. That is an
+    // operator action, not something every account holder may trigger.
+    if (!user.isAdmin) {
+      set.status = 403;
+      return { error: 'Admin access required' };
+    }
 
     const { suite, type = 'eval', model } = body as { suite?: string; type?: 'eval' | 'red-team'; model?: string };
 
@@ -131,8 +182,8 @@ export const evalRoutes = new Elysia({ prefix: '/eval' })
       return { error: `An eval is already running (started ${running.startedAt.toISOString()})`, running: true };
     }
 
-    // Fail loud if no model is selected AND no DB default exists, instead of crashing
-    // mid-run inside the CLI runner.
+    // Fail loud if no model is selected AND no DB default exists, instead of
+    // crashing mid-run inside the CLI runner.
     if (!model) {
       const { getModelRegistry } = await import('@/models');
       const registry = getModelRegistry();
@@ -148,19 +199,14 @@ export const evalRoutes = new Elysia({ prefix: '/eval' })
       }
     }
 
-    const runId = `run-${Date.now()}`;
-    const args: string[] = [];
-
-    if (type === 'red-team') {
-      args.push('run', 'src/eval/red-team/cli.ts');
-      if (model) args.push('--model', model);
-    } else {
-      args.push('run', 'src/eval/cli.ts');
-      if (suite) args.push('--suite', suite);
-      if (model) args.push('--model', model);
+    const built = buildEvalRunArgv({ type, suite, model });
+    if ('error' in built) {
+      set.status = 400;
+      return { error: built.error };
     }
 
-    const proc = spawnProcess(['bun', ...args], {
+    const runId = `run-${Date.now()}`;
+    const proc = spawnProcess(built.argv, {
       cwd: process.cwd(),
       stdout: 'pipe',
       stderr: 'pipe',
