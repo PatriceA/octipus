@@ -58,21 +58,26 @@ export interface ChildProcessHandle<_In = unknown, _Out = unknown, _Err = unknow
  */
 const EXECUTABLE_NAME = /^[A-Za-z0-9_./\\:+-]+$/;
 
-function assertExecutable(command: string): void {
+function safeExecutable(command: string): string {
   if (command.startsWith('-')) {
     throw new Error(`spawnProcess: refusing a command that starts with "-": ${command}`);
   }
-  if (!EXECUTABLE_NAME.test(command)) {
+  const match = EXECUTABLE_NAME.exec(command);
+  if (!match) {
     throw new Error(`spawnProcess: refusing a command with unexpected characters: ${command}`);
   }
+  // The MATCH is what gets spawned, not the argument — the validated value and
+  // the used value are the same object, so no later edit can let one drift
+  // from the other (and a taint analysis can see the barrier).
+  return match[0];
 }
 
 /** `spawnProcess(['ls'], opts)` and `spawnProcess({ cmd: ['ls'], ...opts })`. */
 export function spawnProcess(first: string[] | SpawnConfig, options: SpawnConfig = {}): ChildProcessHandle {
   const config: SpawnConfig = Array.isArray(first) ? { ...options, cmd: first } : first;
-  const [command, ...args] = config.cmd ?? [];
-  if (!command) throw new Error('spawnProcess: no command given');
-  assertExecutable(command);
+  const [rawCommand, ...args] = config.cmd ?? [];
+  if (!rawCommand) throw new Error('spawnProcess: no command given');
+  const command = safeExecutable(rawCommand);
 
   const stdio: SpawnOptions['stdio'] = [
     config.stdin ?? 'ignore',
