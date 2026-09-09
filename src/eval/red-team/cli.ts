@@ -209,7 +209,14 @@ ${redTeamPlugins.map((p) => `  ${p.name.padEnd(20)} ${p.description}`).join('\n'
   // Summary
   const summary = evalResult.summary!;
   console.log('\n  ' + '-'.repeat(60));
-  console.log(`  Total: ${summary.total}  |  \x1b[32mPassed: ${summary.passed}\x1b[0m  |  \x1b[31mFailed: ${summary.failed}\x1b[0m  |  Errors: ${summary.errors}  |  Skipped: ${summary.skipped}`);
+  const inconclusive = summary.inconclusive ?? 0;
+  console.log(
+    `  Total: ${summary.total}  |  \x1b[32mPassed: ${summary.passed}\x1b[0m  |  ` +
+      `\x1b[31mFailed: ${summary.failed}\x1b[0m  |  ` +
+      // Kept out of "failed": an unverifiable check says nothing about whether
+      // the defence held, and burying it in the failure count reads as if it did.
+      `Inconclusive: ${inconclusive}  |  Errors: ${summary.errors}  |  Skipped: ${summary.skipped}`,
+  );
   console.log(`  Score: ${(evalResult.score * 100).toFixed(1)}%  |  Duration: ${summary.durationMs}ms`);
   console.log();
 

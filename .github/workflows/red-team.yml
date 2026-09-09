@@ -48,11 +48,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Bun (+ dependency cache)
+      - name: Setup Node (+ dependency cache)
         uses: ./.github/actions/node-setup
 
       - name: Install dependencies
         run: npm ci
 
       - name: Generate red-team suite (dry-run)
-        run: npm run src/eval/red-team/cli.ts --dry-run
+        # `npm run <file>` looks up a package script and fails with "Missing
+        # script"; running a TS file directly is `npx tsx`. Left over from the
+        # Bun migration, where `bun run <file>` did execute a file — so this
+        # job reported failure without ever generating a test case.
+        run: npx tsx --import ./scripts/md-loader.mjs src/eval/red-team/cli.ts --dry-run

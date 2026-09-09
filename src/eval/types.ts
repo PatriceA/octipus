@@ -133,6 +133,8 @@ export interface EvalSuiteResult {
     total: number;
     passed: number;
     failed: number;
+    /** Tests whose verdict rests on a check the runner could not make. */
+    inconclusive?: number;
     errors: number;
     skipped: number;
     durationMs: number;
