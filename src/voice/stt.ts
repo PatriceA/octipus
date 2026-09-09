@@ -2,7 +2,7 @@ import { type ChildProcessHandle as Subprocess, spawnProcess as spawn } from '@/
 import { EventEmitter } from 'events';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { logger } from '../utils/logger';
 import { FrameAccumulator, StreamingResampler } from './audio-codec';
 import { resolveWhisperBinary, whisperSpawnEnv } from './whisper';
@@ -164,7 +164,11 @@ export class WhisperEngine extends EventEmitter implements STTEngine {
       await writeFileAt(sourcePath, audio);
       tempSource = true;
     } else {
-      sourcePath = audio;
+      // Absolute, always. This path becomes an ARGUMENT to ffmpeg and to
+      // whisper, and a relative one beginning with `-` would be read as an
+      // option by both. Callers pass a buffer (the channel attachment path) or
+      // a path they built; neither needs it to stay relative.
+      sourcePath = isAbsolute(audio) ? audio : resolve(audio);
     }
 
     // audioPath/jsonPath are set inside the try so a conversion failure still

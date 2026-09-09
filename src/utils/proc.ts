@@ -42,11 +42,37 @@ export interface ChildProcessHandle<_In = unknown, _Out = unknown, _Err = unknow
   kill(signal?: NodeJS.Signals | number): void;
 }
 
+/**
+ * What argv[0] is allowed to look like: a program name or a path to one.
+ *
+ * Every spawn in the process funnels through here, and the element that lands
+ * in argv[0] decides which binary runs. Nothing legitimate needs a shell
+ * metacharacter or a leading `-` in that position, while a value that has one
+ * is either an injected option or a command line someone hoped would reach a
+ * shell. Refusing it is a one-line barrier for all ~25 call sites — cheaper
+ * than proving, at each of them, that the name cannot be influenced.
+ *
+ * Arguments are NOT restricted: they are passed as an array to `spawn` without
+ * a shell, so metacharacters in them are inert. Callers that build an argument
+ * out of a path should pass an ABSOLUTE one, so it cannot be read as a flag.
+ */
+const EXECUTABLE_NAME = /^[A-Za-z0-9_./\\:+-]+$/;
+
+function assertExecutable(command: string): void {
+  if (command.startsWith('-')) {
+    throw new Error(`spawnProcess: refusing a command that starts with "-": ${command}`);
+  }
+  if (!EXECUTABLE_NAME.test(command)) {
+    throw new Error(`spawnProcess: refusing a command with unexpected characters: ${command}`);
+  }
+}
+
 /** `spawnProcess(['ls'], opts)` and `spawnProcess({ cmd: ['ls'], ...opts })`. */
 export function spawnProcess(first: string[] | SpawnConfig, options: SpawnConfig = {}): ChildProcessHandle {
   const config: SpawnConfig = Array.isArray(first) ? { ...options, cmd: first } : first;
   const [command, ...args] = config.cmd ?? [];
   if (!command) throw new Error('spawnProcess: no command given');
+  assertExecutable(command);
 
   const stdio: SpawnOptions['stdio'] = [
     config.stdin ?? 'ignore',
