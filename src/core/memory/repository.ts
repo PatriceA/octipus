@@ -18,17 +18,24 @@
  *                       scoped to `(userId, factType, agentScope?)`.
  *                       Used by the judge to find supersedable rows.
  *   - `retrieveTop`   — turn-start fetch: top-N active memories
- *                       across the visible scopes. The retrieval
- *                       module is what callers actually invoke;
- *                       this is its data primitive.
+ *                       across the visible scopes, ordered by
+ *                       standing value (how often a fact has been
+ *                       reached for, faded by how long ago).
+ *   - `retrieveRelevant`
+ *                     — the same fetch ordered by distance from the
+ *                       turn instead. The retrieval module is what
+ *                       callers invoke; these two are its primitives.
  *   - `recordAccess`  — fire-and-forget bump of access_count +
  *                       last_accessed_at. Same shape as the
- *                       EmbeddingService LFU signal.
+ *                       EmbeddingService LFU signal. Call it for
+ *                       rows a turn REACHED FOR, never for rows that
+ *                       were merely included: see the note in
+ *                       `retrieval.ts`.
  */
 
 import { and, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { type Memory, type NewMemory, memories } from '@/db/schema/memories';
+import { type Memory, memories, type NewMemory, standingScoreSql } from '@/db/schema/memories';
 import { coreLogger } from '@/utils/logger';
 
 export type MemoryAccessScope = {
@@ -89,6 +96,37 @@ export class MemoryRepository {
   }
 
   /**
+   * Validate a query vector before it reaches SQL. The driver parameterises
+   * the literal, but a NaN from a calling-side bug should surface here rather
+   * than as a confusing pgvector error several frames away.
+   */
+  private vectorLiteral(queryEmbedding: number[]): string | null {
+    if (!Array.isArray(queryEmbedding) || queryEmbedding.length === 0) return null;
+    for (let i = 0; i < queryEmbedding.length; i++) {
+      if (typeof queryEmbedding[i] !== 'number' || !Number.isFinite(queryEmbedding[i])) {
+        throw new Error(`memories: queryEmbedding[${i}] is not a finite number`);
+      }
+    }
+    return `[${queryEmbedding.join(',')}]`;
+  }
+
+  /** Rows visible to a scope: same user, live, and role/workspace-compatible. */
+  private scopeConditions(scope: MemoryAccessScope) {
+    const scopeFilter = scope.agentScope
+      ? or(isNull(memories.agentScope), eq(memories.agentScope, scope.agentScope))
+      : isNull(memories.agentScope);
+    return [
+      eq(memories.userId, scope.userId),
+      isNull(memories.supersededBy),
+      or(isNull(memories.validUntil), sql`${memories.validUntil} > now()`),
+      scopeFilter,
+      scope.workspaceId
+        ? or(isNull(memories.workspaceId), eq(memories.workspaceId, scope.workspaceId))
+        : undefined,
+    ];
+  }
+
+  /**
    * Vector similarity top-k over active memories, scoped. The judge
    * uses this to decide whether a candidate fact updates an existing
    * memory — so the scope MUST match (same user, same fact_type,
@@ -100,19 +138,8 @@ export class MemoryRepository {
     scope: MemoryAccessScope & { factType: string; limit?: number },
   ): Promise<Array<Memory & { similarity: number }>> {
     const limit = scope.limit ?? 5;
-    // Validate the vector before letting it touch SQL. The driver
-    // parameterises the literal below, but we still refuse non-finite
-    // entries early so a NaN can't escape a calling-side bug into a
-    // confusing pgvector error.
-    if (!Array.isArray(queryEmbedding) || queryEmbedding.length === 0) {
-      return [];
-    }
-    for (let i = 0; i < queryEmbedding.length; i++) {
-      if (typeof queryEmbedding[i] !== 'number' || !Number.isFinite(queryEmbedding[i])) {
-        throw new Error(`memories.searchSimilar: queryEmbedding[${i}] is not a finite number`);
-      }
-    }
-    const vecLiteral = `[${queryEmbedding.join(',')}]`;
+    const vecLiteral = this.vectorLiteral(queryEmbedding);
+    if (vecLiteral === null) return [];
     // Parameterised — Drizzle binds `vecLiteral` as a placeholder and
     // pgvector casts it server-side. Earlier draft used sql.raw which
     // splices the literal directly; parameterising defeats the
@@ -149,42 +176,64 @@ export class MemoryRepository {
   }
 
   /**
+   * Turn-start relevance: top-k active memories nearest the TURN, across every
+   * fact type.
+   *
+   * Distinct from `searchSimilar`, and the difference is the point.
+   * `searchSimilar` answers the judge's question — "is this new fact an update
+   * to an existing one?" — so it pins `fact_type` and ignores expiry, because
+   * an expired row is still a row you can supersede. This answers the reader's
+   * question — "what do I know that bears on what was just asked?" — where
+   * pinning a fact type would be nonsense (nobody asks a question of one
+   * fact_type) and returning an expired fact would be a lie.
+   */
+  async retrieveRelevant(
+    queryEmbedding: number[],
+    scope: MemoryAccessScope & { limit?: number },
+  ): Promise<Array<Memory & { similarity: number }>> {
+    const vecLiteral = this.vectorLiteral(queryEmbedding);
+    if (vecLiteral === null) return [];
+    const similarity = sql<number>`1 - (${memories.embedding} <=> ${vecLiteral}::vector)`;
+    const rows = await this.db
+      .select({ row: memories, similarity })
+      .from(memories)
+      .where(and(...this.scopeConditions(scope)))
+      // `id` for the same reason as in `retrieveTop`: equal similarity must
+      // not mean arbitrary order.
+      .orderBy(desc(similarity), desc(memories.id))
+      .limit(scope.limit ?? 8);
+    return rows.map((r) => ({ ...r.row, similarity: Number(r.similarity) || 0 }));
+  }
+
+  /**
    * Turn-start: retrieve top-N active memories scoped to
    * (user_id, agent_scope ∈ {NULL, currentRole}, workspace_id ∈ {NULL,
    * currentWorkspace}). A fact learned while working for one client must not
-   * surface in another client's workspace. Ordered by
-   * `access_count DESC, updated_at DESC` — frequently-recalled and
-   * recently-changed facts surface first. Vector ranking is the
-   * judge's job; for plain recall, recency + frequency are the
-   * cheapest signals that actually correlate with usefulness.
+   * surface in another client's workspace.
+   *
+   * Ordered by `standingScoreSql` — how often a fact has been reached for,
+   * faded by how long ago that was. See the note on the constant in
+   * `db/schema/memories.ts` for why it is not the raw `access_count DESC` this
+   * used to be. `updated_at` breaks ties, so a corpus nobody has read yet
+   * (every score equal) still comes back newest-first — and `id` breaks THAT
+   * tie, because rows written in one batch share a timestamp and Postgres is
+   * free to return equal rows in any order. Without it two identical calls
+   * could return different blocks, which is both a flaky prompt and a flaky
+   * test.
+   *
+   * This ordering is query-INDEPENDENT on purpose: it answers "what is always
+   * worth knowing about this user", and it is the whole block while the corpus
+   * still fits the token budget. Once it does not, `retrieveForContext` pairs
+   * it with `retrieveRelevant` — see the note there for why one ordering alone
+   * is not enough.
    */
   async retrieveTop(scope: MemoryAccessScope & { limit?: number }): Promise<Memory[]> {
-    const limit = scope.limit ?? 20;
-    const scopeFilter = scope.agentScope
-      ? or(isNull(memories.agentScope), eq(memories.agentScope, scope.agentScope))
-      : isNull(memories.agentScope);
-    const workspaceScope = scope.workspaceId
-      ? or(isNull(memories.workspaceId), eq(memories.workspaceId, scope.workspaceId))
-      : undefined;
-    const rows = await this.db
+    return this.db
       .select()
       .from(memories)
-      .where(
-        and(
-          eq(memories.userId, scope.userId),
-          isNull(memories.supersededBy),
-          // Skip expired memories.
-          or(
-            isNull(memories.validUntil),
-            sql`${memories.validUntil} > now()`,
-          ),
-          scopeFilter,
-          workspaceScope,
-        ),
-      )
-      .orderBy(desc(memories.accessCount), desc(memories.updatedAt))
-      .limit(limit);
-    return rows;
+      .where(and(...this.scopeConditions(scope)))
+      .orderBy(desc(standingScoreSql), desc(memories.updatedAt), desc(memories.id))
+      .limit(scope.limit ?? 20);
   }
 
   recordAccess(ids: string[]): void {

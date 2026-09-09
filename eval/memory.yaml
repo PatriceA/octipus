@@ -1,0 +1,145 @@
+name: Long-Term Memory Recall
+description: >
+  Does a fact the system was told earlier reach the answer? Integration mode
+  only — unit mode never reads the memories table, so every test here is
+  reported as a setup failure there, on purpose.
+
+  Set `context.userId` to a user that EXISTS in the target install:
+  `memories.user_id` is a foreign key, so a made-up UUID fails seeding rather
+  than the assertion. One user for the whole suite is fine; the runner removes
+  every seeded fact after each test.
+defaultTimeout: 60000
+
+tests:
+  # The floor. If this fails, nothing else in the suite means anything: either
+  # the fact was not seeded, or the memory block is not reaching the model.
+  - id: memory-recall-single
+    description: A seeded profile fact answers a question that needs it
+    input: What time zone should I assume when you schedule things for me?
+    context:
+      userId: 11111111-2222-4333-8444-555555555555
+    memorySetup:
+      - factType: profile
+        content: The user lives in Lisbon and works Western European Time.
+    assertions:
+      - type: recalls_memory
+        value: Lisbon
+    tags: [memory, recall]
+
+  # The case Phase 6 is about. Twenty-four true-but-irrelevant facts plus one
+  # that answers the question, which is the shape of any corpus after a few
+  # months of use. With a query-independent ordering the answer is in the block
+  # only if it happens to be one of the rows the budget admitted, and no
+  # phrasing of the question can change that.
+  - id: memory-recall-amid-distractors
+    description: The one relevant fact survives a corpus far larger than the block
+    input: Which package manager should I use to install the dependencies here?
+    context:
+      userId: 11111111-2222-4333-8444-555555555555
+    memorySetup:
+      - factType: preference
+        content: The user runs pnpm, never npm, in every repository.
+      - factType: profile
+        content: The user lives in Lisbon.
+      - factType: profile
+        content: The user works as an independent software consultant.
+      - factType: profile
+        content: The user's main laptop runs Linux.
+      - factType: profile
+        content: The user speaks Portuguese and English.
+      - factType: profile
+        content: The user took a sabbatical in 2023.
+      - factType: profile
+        content: The user's previous employer was a payments company.
+      - factType: preference
+        content: The user prefers dark mode in every interface.
+      - factType: preference
+        content: The user prefers concise answers with no preamble.
+      - factType: preference
+        content: The user prefers four-space indentation in Python.
+      - factType: preference
+        content: The user prefers markdown to word processors.
+      - factType: preference
+        content: The user prefers a single monitor.
+      - factType: preference
+        content: The user prefers train travel to flying within Iberia.
+      - factType: relationship
+        content: The user's partner is called Ines.
+      - factType: relationship
+        content: The user mentors a junior developer called Sofia.
+      - factType: relationship
+        content: Marta is the user's product manager at Meridian Health.
+      - factType: relationship
+        content: Tomas is the user's accountant.
+      - factType: workflow_note
+        content: The user keeps client notes in Obsidian.
+      - factType: workflow_note
+        content: The user tracks reading in a plain text file.
+      - factType: workflow_note
+        content: The user archives finished projects to an external drive.
+      - factType: workflow_note
+        content: The user files expenses at the end of every quarter.
+      - factType: workflow_note
+        content: The user turns notifications off after 19:00.
+      - factType: workflow_note
+        content: The user reads email first thing in the morning.
+      - factType: skill_observation
+        content: The user learned Rust for a side project.
+      - factType: skill_observation
+        content: The user is comfortable with Postgres administration.
+    assertions:
+      - type: recalls_memory
+        value: pnpm
+    tags: [memory, recall, crowding]
+
+  # Role scoping cuts both ways: a fact filed under `coding` must reach a
+  # coding turn, and the suite would not notice if the scope filter dropped it.
+  - id: memory-recall-role-scoped
+    description: A role-scoped fact reaches a turn running in that role
+    input: Write a small TypeScript module that parses a date range, and format it the way I like.
+    context:
+      userId: 11111111-2222-4333-8444-555555555555
+    memorySetup:
+      - factType: preference
+        agentScope: coding
+        content: The user formats TypeScript with two-space indentation and single quotes.
+    assertions:
+      - type: recalls_memory
+        value: two-space
+    tags: [memory, recall, scoping]
+
+  # One fact reaching the answer is not the same as the right two doing so.
+  - id: memory-recall-combines-facts
+    description: An answer that needs two separate facts uses both
+    input: Draft a one-line note telling my product manager when I am available to meet.
+    context:
+      userId: 11111111-2222-4333-8444-555555555555
+    memorySetup:
+      - factType: relationship
+        content: Marta is the user's product manager at Meridian Health.
+      - factType: profile
+        content: The user takes no meetings before 14:00.
+    assertions:
+      - type: recalls_memory
+        value: [Marta, "14:00"]
+    tags: [memory, recall]
+
+  # The other half of the contract, and the reason the suite is not just five
+  # recall tests: a model that recites the whole memory block scores perfectly
+  # on recall and is useless. Nothing here says who the user's dentist is.
+  - id: memory-no-confabulation
+    description: An unanswerable question is not answered from an unrelated fact
+    input: Who is my dentist?
+    context:
+      userId: 11111111-2222-4333-8444-555555555555
+    memorySetup:
+      - factType: relationship
+        content: Tomas is the user's accountant.
+      - factType: relationship
+        content: Marta is the user's product manager at Meridian Health.
+    assertions:
+      - type: not_contains
+        value: Tomas
+      - type: not_contains
+        value: Marta
+    tags: [memory, honesty]

@@ -351,6 +351,10 @@ export class AgentService {
             agentScope: classification.topic ?? null,
             workspaceId,
             limit: 20,
+            // Rank against the brief once the user has more facts than the
+            // block holds — a plan for one client should not arrive carrying
+            // whichever preferences happen to be the most-read.
+            query: planState.brief,
           });
           planMemoryBlock = renderMemoriesBlock(memories);
         } catch (err) {
@@ -496,6 +500,9 @@ export class AgentService {
           // there. Falls back to "every row" only when no workspace resolved.
           workspaceId,
           limit: 20,
+          // What this turn is about, so an oversized corpus is ranked against
+          // the question rather than by how often each fact has been read.
+          query: message,
         });
         memoryBlock = renderMemoriesBlock(memories);
       } catch (err) {

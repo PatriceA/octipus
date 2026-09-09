@@ -66,6 +66,27 @@ export async function seedMemories(userId: string, seeds: MemorySeed[]): Promise
   const repo = getMemoryRepository();
 
   const ids: string[] = [];
+  try {
+    await insertSeeds(userId, seeds, ids, embeddings, repo);
+  } catch (err) {
+    // Roll back what did land. The ids are collected in a local array that is
+    // thrown away with the error, so a failure on fact 15 of 24 — a rate-
+    // limited embedding call, a DB hiccup — used to leave 14 invented facts
+    // attached to a REAL user's long-term memory, where nothing would ever
+    // remove them and every later turn would retrieve them.
+    await clearMemories(ids).catch(() => { /* best effort: the throw below is the real news */ });
+    throw err;
+  }
+  return ids;
+}
+
+async function insertSeeds(
+  userId: string,
+  seeds: MemorySeed[],
+  ids: string[],
+  embeddings: Awaited<ReturnType<typeof import('@/core/rag/embeddings').getEmbeddingService>>,
+  repo: ReturnType<typeof import('@/core/memory/repository').getMemoryRepository>,
+): Promise<void> {
   for (const seed of seeds) {
     let vector: number[];
     try {
@@ -76,21 +97,33 @@ export async function seedMemories(userId: string, seeds: MemorySeed[]): Promise
           'Bind a model to the `embedding` topic before running memory-aware evals.',
       );
     }
-    const row = await repo.addNew({
-      userId,
-      workspaceId: null,
-      agentScope: seed.agentScope ?? null,
-      factType: seed.factType,
-      content: seed.content,
-      embedding: vector,
-      embeddingVersion: `eval/${vector.length}`,
-      sourceMessageId: null,
-      confidence: 1,
-      validUntil: null,
-    });
-    ids.push(row.id);
+    try {
+      const row = await repo.addNew({
+        userId,
+        workspaceId: null,
+        agentScope: seed.agentScope ?? null,
+        factType: seed.factType,
+        content: seed.content,
+        embedding: vector,
+        embeddingVersion: `eval/${vector.length}`,
+        sourceMessageId: null,
+        confidence: 1,
+        validUntil: null,
+      });
+      ids.push(row.id);
+    } catch (err) {
+      // `memories.user_id` is a foreign key. A well-formed UUID that belongs to
+      // nobody passes `memorySetupBlocker` and then fails here, and the raw
+      // constraint error does not tell the operator what to change.
+      const message = (err as Error).message;
+      throw new Error(
+        /foreign key|user_id/i.test(message)
+          ? `memorySetup could not seed for user ${userId}: no such user in the target install. ` +
+            'context.userId must be a user that exists there, not just a valid UUID.'
+          : `memorySetup could not seed "${seed.content.slice(0, 60)}": ${message}`,
+      );
+    }
   }
-  return ids;
 }
 
 /**

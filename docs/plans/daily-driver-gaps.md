@@ -1,6 +1,6 @@
 # Daily-Driver Gaps — Plan
 
-**Status:** Phases 0, 1 and 3 shipped 2026-09-05 (#328, #329, #330); Phases 2, 4 and 5 shipped 2026-09-06 (#331, #332, and the PR after it); phase 6 and the enterprise track are planning only
+**Status:** Phases 0, 1 and 3 shipped 2026-09-05 (#328, #329, #330); Phases 2, 4, 5 and 6 shipped 2026-09-06 (#331, #332, #333, and the PR after it); the enterprise track is planning only
 **Created:** 2026-09-05
 **Scope:** What a developer / product owner / technical consultant needs before
 Octipus can run their working day, ordered by what blocks that first. Written
@@ -287,12 +287,89 @@ Not done, on purpose: Linear has a definition and OAuth but no named tools
 `sql_query` speaks PostgreSQL only; the freshness decay is a fixed curve
 rather than a per-purpose policy.
 
-## Phase 6 — memory quality
+## Phase 6 — memory quality — SHIPPED (2026-09-06)
 
-Workspace scoping shipped. Still open: semantic recall was removed in favour of
-access-count + recency (`retrieval.ts`); with per-workspace corpora now small,
-reinstating a vector rerank inside the 250-token budget is cheap and safe.
-Decide after measuring recall on the `recalls_memory` eval assertion.
+The gate was "decide after measuring recall on the `recalls_memory` eval
+assertion". The first finding was that this could not be done: **no eval suite
+used `memorySetup` at all**, so `recalls_memory` had been shipped with zero
+coverage and there was nothing to measure. Phase 6 is therefore the
+measurement, the suite that was missing, and the change the numbers justified.
+
+**1. The measurement** (`src/core/memory/recall.test.ts`). A 40-fact corpus —
+what a daily user reaches in a few months — with the access counters warmed by
+running the real retrieval loop, then twelve questions each answered by exactly
+one fact. Recall is "did that fact survive into the 250-token block":
+
+| Ordering | Answers that reached the model |
+|---|---|
+| `access_count` + recency (what shipped in Phase D) | **50%** |
+| interleaved with a relevance pass | **100%** |
+
+Half is the ceiling, not bad luck: a query-independent ordering returns the
+same block for every question. And the ordering is a ratchet — `recordAccess`
+bumps exactly the rows it just returned, so a fact learned this week starts at
+`access_count = 0` and can never climb past the incumbents. That case has its
+own test, because it is the one that makes the product feel broken: you tell it
+something, it agrees, and the fact is invisible from the next turn on.
+
+The vectors in the benchmark are synthetic (one unit direction per topic), so
+it measures the *ranking* with the embedder assumed competent, not any
+embedder's quality. Stated in the file header rather than left for a reader to
+infer.
+
+**2. The missing suite** (`eval/memory.yaml`). Five tests, integration-only.
+The one that matters seeds twenty-four irrelevant facts beside the answer,
+because a single-fact recall test cannot fail — it fits the block whatever the
+ranking. The last test asserts the other direction: a question the seeded facts
+do not answer must not be answered from them, or a model that recites its whole
+memory block would score 100%.
+
+**3. The change.** `retrieveRelevant` on the repository (nearest the turn, all
+fact types, expiry respected — unlike the judge's `searchSimilar`, and the
+comment says why), and `retrieveForContext` gained an optional `query`. It
+fetches one row past the limit so "the corpus fits the budget" is a fact rather
+than a guess; when it fits, nothing changes and **no embedding call is made**.
+When it does not, the two orderings are **interleaved rather than
+concatenated**, which bounds each one's share of the block: the most relevant
+fact is always in, and one topical question cannot evict everything the
+assistant always needs to know. Call sites pass the turn text — the user's
+message, the plan brief, the worker's task.
+
+Deviations from the plan text: it said "vector rerank", which would have meant
+*replacing* the ordering. Measuring showed both orderings carry real signal, so
+the shipped design keeps both. No similarity floor either: a cosine threshold
+is a model-specific constant, and the rows are the user's own facts, so the
+eight nearest the turn are the eight most related things known about them.
+
+**4. The ratchet itself**, once the measurement above was banked and the
+relevance change could no longer be confounded with it. Two rules, and they
+only make sense together:
+
+- `access_count` is bumped only for rows the **relevance pass found**, never
+  for rows merely included in the block. Marking everything returned as
+  "accessed" made the standing page measure its own output — the page was
+  fetched, every row on it was counted, those rows won again next turn, and a
+  row that had never made the page could never be counted. The same
+  distinction the knowledge base already draws between `markVerified` and
+  `recordAccess`.
+- The standing score is `ln(1 + access_count)` faded by a bounded recency
+  multiplier (`standingScoreSql`, floor 0.5 over 180 days). Logarithmic
+  because two recalls versus ten is real and forty versus fifty is noise;
+  faded because a fact that mattered during a project that ended last spring
+  should not outrank everything learned since, forever; bounded because decay
+  should re-order near-ties, not delete standing.
+
+`recall.test.ts` gained the tests that hold this: a merely-included row is not
+counted, a quiet habit loses to a modest current one, a heavy hitter is
+overtaken rather than buried, and — the composition of all of it — a fact the
+standing page has never shown climbs onto it within a few turns that reach for
+it, which was impossible by construction before.
+
+That work also caught a bug in the benchmark itself: in embedded mode
+`executeRaw` runs a statement and returns `[]` regardless, so the snapshot the
+per-question isolation restored from was always empty and the restore was a
+silent no-op. Fixed to `queryRaw`; the 50% / 100% figures above are from the
+re-run with the isolation actually working.
 
 ---
 
@@ -352,7 +429,6 @@ not competing — federation is how two hubs talk.
 
 ## Sequencing
 
-Phases 0 to 5 are done. Phase 6 after measuring recall on the
-`recalls_memory` eval assertion. The enterprise track opens with E0 as soon as
+Phases 0 to 6 are done. The enterprise track opens with E0 as soon as
 a second person shares one Octipus — E0 is one migration and should not wait on
 E1–E4 being designed in full.

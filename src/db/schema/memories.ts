@@ -105,3 +105,44 @@ export type MemoryFactType =
   | 'relationship'
   | 'skill_observation'
   | 'workflow_note';
+
+// ── Standing value ───────────────────────────────────────────────────
+//
+// How the always-on half of the injected memory block is ordered. Two
+// ingredients, and the second one is why this is not just `access_count DESC`.
+//
+// Frequency is taken as `ln(1 + access_count)` rather than the raw count: the
+// difference between a fact recalled twice and one recalled ten times is real,
+// the difference between forty and fifty is noise, and a linear count lets one
+// long-running project's facts sit permanently above everything else.
+//
+// Recency then fades a fact that has not been reached for. Without it the
+// score is a ratchet — whatever was useful during one project outranks
+// everything learned since, for as long as the install lives. The fade is
+// bounded (a floor of 1 - MAX_STANDING_DECAY) for the same reason the
+// knowledge-base freshness factor is: it re-orders near-ties and lets a
+// current fact win, but never buries a fact that is genuinely the most-used
+// thing known about the user.
+//
+// `last_accessed_at` is NULL until a fact is first reached for, so the fade
+// starts from `updated_at` — the moment the fact was learned. A fact written
+// today therefore scores as freshly-relevant, which is the honest reading of
+// "the user just told us this".
+
+/** Floor of the recency multiplier: a long-untouched fact keeps half its value. */
+export const MAX_STANDING_DECAY = 0.5;
+/** Days over which the multiplier walks from 1.0 down to that floor. */
+export const STANDING_HORIZON_DAYS = 180;
+
+/**
+ * `ln(1 + access_count)` scaled by that recency multiplier. Used by
+ * `MemoryRepository.retrieveTop`, which selects from the bare table — hence
+ * plain column references rather than the alias dance the embeddings
+ * equivalent needs for its hand-written CTE.
+ */
+export const standingScoreSql = sql<number>`
+  (1.0 + LN(1.0 + ${memories.accessCount}))
+  * (1.0 - LEAST(${MAX_STANDING_DECAY}, ${MAX_STANDING_DECAY}
+      * GREATEST(0, EXTRACT(EPOCH FROM (now() - COALESCE(${memories.lastAccessedAt}, ${memories.updatedAt}))) / 86400.0)
+      / ${STANDING_HORIZON_DAYS}))
+`;

@@ -973,6 +973,9 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
         workspaceId: context.workspaceId ?? null,
         // Coarse candidate cap; renderMemoriesBlock trims to a token budget.
         limit: 20,
+        // The worker's own brief, so a large corpus is ranked against the job
+        // this specialist was actually spawned to do.
+        query: `${task}\n${input}`,
       });
       const memBlock = renderMemoriesBlock(memRows);
       if (memBlock) volatileParts.push(memBlock);

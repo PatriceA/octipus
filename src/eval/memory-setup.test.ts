@@ -123,6 +123,43 @@ describe('seedMemories', () => {
     embedSpy.mockRestore();
     repoSpy.mockRestore();
   });
+
+  test('a user that does not exist is named as the problem, not the constraint', async () => {
+    // `memorySetupBlocker` only checks the SHAPE of the id, so a well-formed
+    // UUID belonging to nobody reaches the insert and trips the foreign key.
+    // The operator's fix is "use a real user", which the raw error never says.
+    const embedSpy = vi.spyOn(embeddings, 'getEmbeddingService').mockReturnValue({
+      generateEmbedding: async () => [0.1, 0.2, 0.3],
+    } as unknown as ReturnType<typeof embeddings.getEmbeddingService>);
+    const repoSpy = vi.spyOn(memoryRepo, 'getMemoryRepository').mockReturnValue({
+      addNew: async () => {
+        throw new Error('insert or update on table "memories" violates foreign key constraint "memories_user_id_fkey"');
+      },
+    } as unknown as ReturnType<typeof memoryRepo.getMemoryRepository>);
+
+    await expect(seedMemories(UUID, [{ factType: 'profile', content: 'x' }])).rejects.toThrow(
+      /no such user in the target install/,
+    );
+
+    embedSpy.mockRestore();
+    repoSpy.mockRestore();
+  });
+
+  test('any other write failure keeps its own message', async () => {
+    const embedSpy = vi.spyOn(embeddings, 'getEmbeddingService').mockReturnValue({
+      generateEmbedding: async () => [0.1, 0.2, 0.3],
+    } as unknown as ReturnType<typeof embeddings.getEmbeddingService>);
+    const repoSpy = vi.spyOn(memoryRepo, 'getMemoryRepository').mockReturnValue({
+      addNew: async () => { throw new Error('connection terminated'); },
+    } as unknown as ReturnType<typeof memoryRepo.getMemoryRepository>);
+
+    await expect(seedMemories(UUID, [{ factType: 'profile', content: 'x' }])).rejects.toThrow(
+      /connection terminated/,
+    );
+
+    embedSpy.mockRestore();
+    repoSpy.mockRestore();
+  });
 });
 
 describe('clearMemories', () => {
@@ -144,3 +181,38 @@ describe('clearMemories', () => {
     dbSpy.mockRestore();
   });
 });
+
+describe('seedMemories rollback', () => {
+  test('a failure part-way through removes the facts that already landed', async () => {
+    // The ids live in a local array that is discarded with the throw, so the
+    // runner's `finally` had nothing to clear: a hiccup on fact 3 of 24 left
+    // two invented facts on a REAL user's long-term memory, permanently.
+    const added: string[] = [];
+    const deleted: string[][] = [];
+    vi.spyOn(embeddings, 'getEmbeddingService').mockReturnValue({
+      generateEmbedding: async (text: string) => {
+        if (text.includes('boom')) throw new Error('embedding provider down');
+        return [0.1, 0.2, 0.3];
+      },
+    } as unknown as ReturnType<typeof embeddings.getEmbeddingService>);
+    vi.spyOn(memoryRepo, 'getMemoryRepository').mockReturnValue({
+      addNew: async () => { added.push(`row-${added.length + 1}`); return { id: `row-${added.length}` }; },
+    } as unknown as ReturnType<typeof memoryRepo.getMemoryRepository>);
+    vi.spyOn(postgres, 'getDb').mockReturnValue({
+      delete: () => ({ where: async (..._args: unknown[]) => { deleted.push([...added]); } }),
+    } as unknown as ReturnType<typeof postgres.getDb>);
+
+    await expect(
+      seedMemories(UUID, [
+        { factType: 'profile', content: 'The user lives in Lisbon.' },
+        { factType: 'profile', content: 'The user prefers espresso.' },
+        { factType: 'profile', content: 'boom' },
+      ]),
+    ).rejects.toThrow(/embedding provider down/);
+
+    expect(added).toEqual(['row-1', 'row-2']);
+    expect(deleted).toEqual([['row-1', 'row-2']]);
+    vi.restoreAllMocks();
+  });
+});
+
