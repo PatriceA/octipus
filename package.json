@@ -57,7 +57,7 @@
     "@electric-sql/pglite-pgvector": "0.0.5",
     "@hono/node-server": "2.1.1",
     "@mariozechner/pi-tui": "~0.73.1",
-    "@simplewebauthn/server": "^13.3.3",
+    "@simplewebauthn/server": "^14.0.1",
     "@sinclair/typebox": "0.34.52",
     "@slack/bolt": "^4.7.2",
     "botbuilder": "^4.22.1",
@@ -90,7 +90,7 @@
     "@types/bun": "^1.4.0",
     "@types/js-yaml": "4.0.9",
     "@types/ws": "^8.5.10",
-    "@vitest/coverage-v8": "4.1.11",
+    "@vitest/coverage-v8": "^5.0.0",
     "drizzle-kit": "^0.31.10",
     "esbuild": "0.28.2",
     "tree-sitter-go": "0.25.0",
@@ -101,7 +101,7 @@
     "tsx": "4.23.13",
     "typescript": "7.0.2",
     "vite-tsconfig-paths": "6.1.1",
-    "vitest": "4.1.11",
+    "vitest": "^5.0.0",
     "web-tree-sitter": "0.27.0"
   },
   "engines": {

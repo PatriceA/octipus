@@ -1,8 +1,13 @@
 import {
   type AuthenticationResponseJSON,
-  type AuthenticatorTransportFuture,
+  type AuthenticatorTransport,
   generateAuthenticationOptions,
   generateRegistrationOptions,
+  // The library's own JSON option types, rather than the hand-rolled copies
+  // this file used to carry: those drifted the moment the library added a
+  // field, and v14 is where that showed up as a type error.
+  type PublicKeyCredentialCreationOptionsJSON,
+  type PublicKeyCredentialRequestOptionsJSON,
   type RegistrationResponseJSON,
   type VerifiedAuthenticationResponse,
   type VerifiedRegistrationResponse,
@@ -47,7 +52,7 @@ export class PasskeyAuth {
     const existingCredentials = (user.passkeyCredentials as PasskeyCredential[]).map((cred) => ({
       id: cred.id,
       type: 'public-key' as const,
-      transports: cred.transports as AuthenticatorTransportFuture[] | undefined,
+      transports: cred.transports as AuthenticatorTransport[] | undefined,
     })) as any;
 
     const options = await generateRegistrationOptions({
@@ -128,7 +133,7 @@ export class PasskeyAuth {
     options: PublicKeyCredentialRequestOptionsJSON;
     challenge: string;
   }> {
-    let allowCredentials: { id: string; transports?: AuthenticatorTransportFuture[] }[] | undefined;
+    let allowCredentials: { id: string; transports?: AuthenticatorTransport[] }[] | undefined;
 
     if (userId) {
       const user = await userRepository.findById(userId);
@@ -136,7 +141,7 @@ export class PasskeyAuth {
         allowCredentials = (user.passkeyCredentials as PasskeyCredential[]).map((cred) => ({
           id: cred.id,
           type: 'public-key' as const,
-          transports: cred.transports as AuthenticatorTransportFuture[] | undefined,
+          transports: cred.transports as AuthenticatorTransport[] | undefined,
         })) as any;
       }
     }
@@ -196,7 +201,7 @@ export class PasskeyAuth {
         id: credential.id,
         publicKey: new Uint8Array(Buffer.from(credential.publicKey, 'base64')),
         counter: credential.counter,
-        transports: credential.transports as AuthenticatorTransportFuture[] | undefined,
+        transports: credential.transports as AuthenticatorTransport[] | undefined,
       },
     });
 
@@ -258,30 +263,6 @@ export class PasskeyAuth {
       createdAt: c.createdAt,
     }));
   }
-}
-
-// Type definitions for browser WebAuthn API
-interface PublicKeyCredentialCreationOptionsJSON {
-  challenge: string;
-  rp: { name: string; id?: string };
-  user: { id: string; name: string; displayName: string };
-  pubKeyCredParams: { type: 'public-key'; alg: number }[];
-  timeout?: number;
-  excludeCredentials?: { id: string; type: 'public-key'; transports?: string[] }[];
-  authenticatorSelection?: {
-    authenticatorAttachment?: 'platform' | 'cross-platform';
-    residentKey?: 'discouraged' | 'preferred' | 'required';
-    userVerification?: 'discouraged' | 'preferred' | 'required';
-  };
-  attestation?: 'none' | 'indirect' | 'direct' | 'enterprise';
-}
-
-interface PublicKeyCredentialRequestOptionsJSON {
-  challenge: string;
-  timeout?: number;
-  rpId?: string;
-  allowCredentials?: { id: string; type: 'public-key'; transports?: string[] }[];
-  userVerification?: 'discouraged' | 'preferred' | 'required';
 }
 
 // Singleton instance

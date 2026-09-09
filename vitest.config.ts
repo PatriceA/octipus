@@ -99,15 +99,14 @@ export default defineConfig({
       reportsDirectory: 'coverage',
       exclude: ['**/octipus-ext-*/**', '**/*.test.ts', 'node_modules/**'],
     },
+    // Since Vitest 5 an inline project inherits the config that declares it,
+    // so the plugin and resolver above already apply here — repeating them
+    // applies the markdown transform twice and warns on every run.
     projects: [
       {
-        plugins: [markdownAsText()],
-        resolve: { tsconfigPaths: true },
         test: { ...common, name: 'unit', include: pure, exclude: NEVER },
       },
       {
-        plugins: [markdownAsText()],
-        resolve: { tsconfigPaths: true },
         test: {
           ...common,
           name: 'database',

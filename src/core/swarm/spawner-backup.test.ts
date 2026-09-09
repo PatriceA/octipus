@@ -7,7 +7,7 @@
  * stub backup lookup and the spawner's private `singleSpawnAndRun` is
  * instance-patched.
  */
-import { afterAll, describe, expect, test, vi } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
 // Plain-object snapshot taken before this file mocks the module. Restoring from
 // the live `import * as` namespace does NOT work — bun's `mock.module` leaves
@@ -26,22 +26,23 @@ let backupModelId: string | null = null;
 // leaks forward. No-op + skip under the integration runner, whose real-DB
 // suites would break if this partial mock leaked into them.
 const inIntegration = process.env.INTEGRATION === '1';
-if (!inIntegration) {
-  vi.mock('@/models/model-registry', () => ({
+
+// Top level, because `vi.mock` is hoisted whatever it is nested inside — the
+// old `if (!inIntegration)` wrapper read as a guard and was none: the stub was
+// installed under the integration runner too. The condition belongs in the
+// FACTORY, which runs where it is written, so the real module is returned when
+// a real database is present. (Vitest 5 makes the nested form an error.)
+vi.mock('@/models/model-registry', async (importOriginal) => {
+  if (process.env.INTEGRATION === '1') return await importOriginal<object>();
+  return {
     getModelRegistry: () => ({
       getBackupModelForTopic: async () => (backupModelId ? { modelId: backupModelId } : null),
       getModelForTopic: async () => null,
       getModelByModelId: async () => null,
       getDefaultModel: async () => null,
     }),
-  }));
-  // Restore the real module after this suite — bun's mock.module is
-  // process-global, so without this the partial stub leaks into later suites
-  // (e.g. memory.extractor, which then sees a getModelRegistry() missing the
-  // methods it needs). This mirrors openai-compat.test.ts.
-  afterAll(() => {
-  });
-}
+  };
+});
 
 const { SwarmSpawner } = await import('./spawner');
 type ChildResult = import('./types').ChildResult;

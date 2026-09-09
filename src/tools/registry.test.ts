@@ -35,7 +35,7 @@ describe('ToolRegistry (Unit)', () => {
   test('prevents duplicate registration', async () => {
     const tool = createMockTool('mock-tool');
     await registry.register(tool);
-    expect(registry.register(tool)).rejects.toThrow('Tool already registered: mock-tool');
+    await expect(registry.register(tool)).rejects.toThrow('Tool already registered: mock-tool');
   });
 
   test('initializes on registration by default', async () => {
