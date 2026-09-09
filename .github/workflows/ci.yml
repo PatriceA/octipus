@@ -136,6 +136,12 @@ jobs:
 
       - name: Install Tauri system dependencies
         run: |
+          # The runner image ships Google's Chrome apt source, and when its
+          # index is broken upstream ("Hash Sum mismatch") every apt-get update
+          # on the machine fails with it — a red build for a repository nothing
+          # here installs from. Drop it first.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
+                     /etc/apt/sources.list.d/google-chrome.sources
           sudo apt-get update
           # --no-install-recommends: the plain install pulls ~188 packages
           # (gstreamer, pipewire, docs) and spent 16 min in the Azure mirror

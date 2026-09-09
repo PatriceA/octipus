@@ -45,7 +45,13 @@ jobs:
       # Installs the Chromium build matching the pinned @playwright/test, plus
       # its OS libraries.
       - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
+        # `--with-deps` runs apt-get update, which fails whenever Google's
+        # Chrome index (shipped in the runner image, unused here — Playwright
+        # brings its own browser) is broken upstream. Drop that source first.
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
+                     /etc/apt/sources.list.d/google-chrome.sources
+          npx playwright install --with-deps chromium
 
       # Built up front so playwright.config.ts can start the static server
       # instantly rather than waiting on a lazy dev server.
