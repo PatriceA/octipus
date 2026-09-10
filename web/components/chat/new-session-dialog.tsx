@@ -30,6 +30,8 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
   const [projectPath, setProjectPath] = useState('');
   const [projects, setProjects] = useState<ProjectEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadErrors, setLoadErrors] = useState<string[]>([]);
+  const loadVersion = useRef(0);
   const [showDropdown, setShowDropdown] = useState(false);
 
   // Create repository state
@@ -55,7 +57,9 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
   // Function declaration (hoisted) so the mount effect above can reference it
   // before its textual position without a temporal-dead-zone access.
   async function loadProjects() {
+    const version = ++loadVersion.current;
     setLoading(true);
+    const errors: string[] = [];
     try {
       const ws = await api.get<{ rootPath: string; additionalPaths: string[] }>('/workspace');
       if (ws?.rootPath) {
@@ -82,7 +86,7 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
               if (dirs.find(d => d.path === childPath)) continue;
               dirs.push({ name: e.name, path: childPath, hasGit: false, hasSummary: false });
             }
-          } catch {}
+          } catch (err) { errors.push(`${basePath}: ${err instanceof Error ? err.message : 'Could not read folder'}`); }
         };
 
         await listChildren(ws.rootPath);
@@ -92,10 +96,13 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
           await listChildren(p);
         }
 
-        setProjects(dirs);
-      }
-    } catch {}
-    setLoading(false);
+        if (version === loadVersion.current) setProjects(dirs);
+      } else { errors.push('Workspace is unavailable.'); }
+    } catch (err) { errors.push(err instanceof Error ? err.message : 'Could not load workspace'); }
+    if (version === loadVersion.current) {
+      setLoadErrors(errors);
+      setLoading(false);
+    }
   }
 
   const handleCreateRepo = async () => {
@@ -213,6 +220,11 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
                 Projects are subfolders of your workspace root and any additional paths
                 configured in Settings → Integrations.
               </p>
+              {loadErrors.length > 0 && <div role="status" className="text-warning text-xs mb-3">
+                <p>Project list may be incomplete.</p>
+                {loadErrors.map(message => <p key={message}>{message}</p>)}
+                <button className="underline" disabled={loading} onClick={() => void loadProjects()}>Retry loading projects</button>
+              </div>}
               <div className="relative">
                 <div className="flex gap-2">
                   <div className="flex-1 relative">
@@ -222,7 +234,7 @@ export function NewSessionDialog({ open, onClose, onCreate }: NewSessionDialogPr
                       value={projectPath}
                       onChange={(e) => setProjectPath(e.target.value)}
                       onFocus={() => setShowDropdown(true)}
-                      placeholder={projects.length > 0 ? 'Select a project…' : 'No projects found — add a path in Settings → Integrations'}
+                      placeholder={loading ? 'Loading projects…' : loadErrors.length ? 'Some projects could not be loaded' : projects.length > 0 ? 'Select a project…' : 'No projects found — add a workspace path'}
                       className="w-full pl-10 pr-8 py-2.5 bg-surface-container border border-outline-variant/10 rounded-lg text-sm text-on-surface placeholder-on-surface-variant focus:ring-2 focus:ring-primary"
                     />
                     {projects.length > 0 && (

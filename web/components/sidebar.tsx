@@ -48,66 +48,51 @@ interface NavGroup {
 }
 
 const navGroups: NavGroup[] = [
-  {
-    label: 'main',
-    items: [
-      { name: 'dashboard', href: '/', icon: LayoutDashboard },
-      { name: 'chat', href: '/chat', icon: MessageSquare },
-      { name: 'to-do', href: '/tasks', icon: ListTodo },
-      { name: 'inbox', href: '/notifications', icon: Bell },
-      { name: 'email', href: '/email', icon: Mail },
-      { name: 'reader', href: '/reader', icon: Newspaper },
-      { name: 'notes', href: '/notes', icon: NotebookPen },
-      { name: 'documents', href: '/documents', icon: FileText },
-      { name: 'profiles', href: '/profiles', icon: Users },
-      { name: 'persona', href: '/persona', icon: Fingerprint },
-    ],
-  },
-  {
-    label: 'ai & automation',
-    items: [
-      { name: 'agents', href: '/agents', icon: Bot },
-      { name: 'experts', href: '/experts', icon: GraduationCap },
-      { name: 'research', href: '/research', icon: Telescope },
-      { name: 'models', href: '/models', icon: Cpu },
-      { name: 'topics', href: '/topics', icon: Tags },
-      { name: 'pipelines', href: '/pipelines', icon: GitBranch },
-      { name: 'tools', href: '/tools', icon: Wrench },
-      { name: 'skills', href: '/skills', icon: BookOpen },
-      { name: 'knowledge', href: '/knowledge', icon: Brain },
-      { name: 'memory', href: '/memory', icon: Brain },
-      { name: 'evaluations', href: '/eval', icon: FlaskConical },
-      { name: 'artifacts', href: '/artifacts', icon: Globe, badge: 'BETA' },
-    ],
-  },
-  {
-    label: 'system',
-    items: [
-      { name: 'mcp', href: '/mcp', icon: Cable },
-      { name: 'hooks', href: '/hooks', icon: Webhook },
-    ],
-  },
-  {
-    label: 'admin',
-    items: [
-      { name: 'secrets', href: '/secrets', icon: KeyRound },
-      { name: 'settings', href: '/settings', icon: Settings },
-    ],
-  },
+  { label: 'Work', items: [
+    { name: 'overview', href: '/', icon: LayoutDashboard },
+    { name: 'chat', href: '/chat', icon: MessageSquare },
+    { name: 'to-do', href: '/tasks', icon: ListTodo },
+    { name: 'inbox', href: '/notifications', icon: Bell },
+    { name: 'research', href: '/research', icon: Telescope },
+    { name: 'agent activity', href: '/agents', icon: Bot },
+  ] },
+  { label: 'Library', items: [
+    { name: 'notes', href: '/notes', icon: NotebookPen },
+    { name: 'documents', href: '/documents', icon: FileText },
+    { name: 'reader', href: '/reader', icon: Newspaper },
+    { name: 'knowledge', href: '/knowledge', icon: Brain },
+    { name: 'artifacts', href: '/artifacts', icon: Globe, badge: 'BETA' },
+  ] },
+  { label: 'Automations', items: [
+    { name: 'pipelines', href: '/pipelines', icon: GitBranch },
+    { name: 'hooks & schedules', href: '/hooks', icon: Webhook },
+  ] },
+  { label: 'Connections', items: [
+    { name: 'models', href: '/models', icon: Cpu },
+    { name: 'mcp & connectors', href: '/mcp', icon: Cable },
+    { name: 'email', href: '/email', icon: Mail },
+  ] },
+  { label: 'Settings', items: [
+    { name: 'settings & channels', href: '/settings', icon: Settings },
+    { name: 'tools', href: '/tools', icon: Wrench },
+    { name: 'scoped permissions', href: '/permissions', icon: KeyRound },
+    { name: 'persona', href: '/persona', icon: Fingerprint },
+    { name: 'people & profiles', href: '/profiles', icon: Users },
+    { name: 'memory', href: '/memory', icon: Brain },
+    { name: 'experts', href: '/experts', icon: GraduationCap },
+    { name: 'skills', href: '/skills', icon: BookOpen },
+    { name: 'topics', href: '/topics', icon: Tags },
+    { name: 'evaluations', href: '/eval', icon: FlaskConical },
+    { name: 'secrets', href: '/secrets', icon: KeyRound },
+  ] },
 ];
-
-const adminOnlyGroup: NavGroup = {
-  label: 'multi-user',
-  items: [
-    { name: 'users', href: '/admin/users', icon: Users },
-  ],
-};
 
 export function Sidebar() {
   const pathname = usePathname();
   const { collapsed, toggle } = useSidebarStore();
   const { user } = useAuth();
-  const groups = user?.isAdmin ? [...navGroups, adminOnlyGroup] : navGroups;
+  const groups = navGroups.map(group => group.label === 'Settings' && user?.isAdmin
+    ? { ...group, items: [...group.items, { name: 'users', href: '/admin/users', icon: Users }] } : group);
 
   return (
     <aside
@@ -145,12 +130,10 @@ export function Sidebar() {
           (here just rendered inline so it's keyboard-readable). */}
       <nav className="flex-1 overflow-y-auto py-3 px-1.5 space-y-3">
         {groups.map((group) => (
-          <div key={group.label}>
-            {!collapsed && (
-              <div className="px-2 mb-1 section-label text-[10px]">
-                {group.label}
-              </div>
-            )}
+          <details key={`${group.label}:${collapsed}`} open={group.items.some(item => item.href === '/' ? pathname === '/' : pathname.startsWith(item.href))}>
+            <summary className="px-2 py-2 text-xs cursor-pointer text-on-surface hover:text-primary" title={group.label}>
+              {collapsed ? group.label.slice(0, 1) : group.label}
+            </summary>
             <div>
               {group.items.map((item) => {
                 const isActive =
@@ -162,6 +145,7 @@ export function Sidebar() {
                     key={item.name}
                     href={item.href}
                     title={collapsed ? item.name : undefined}
+                    aria-current={isActive ? 'page' : undefined}
                     className={cn(
                       'group relative flex items-center gap-2 text-[13px] transition-colors',
                       collapsed
@@ -196,7 +180,7 @@ export function Sidebar() {
                 );
               })}
             </div>
-          </div>
+          </details>
         ))}
       </nav>
 

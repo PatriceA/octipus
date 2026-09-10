@@ -30,14 +30,14 @@ If anything in here is wrong, unclear, or out of date, that is itself a bug — 
 ### Clone and run
 
 ```bash
-git clone https://github.com/YOUR_ORG/octipus.git
+git clone https://github.com/PatriceA/octipus.git
 cd octipus
 
 npm install
 cd web && npm install && cd ..
 
 npm run setup          # Interactive wizard — "Embedded" mode for zero-deps
-bin/octi start
+bin/octi start web
 ```
 
 Open http://localhost:3007. If anything crashes or refuses to start, that is a bug — file it.
@@ -67,39 +67,39 @@ npm run lint           # Biome
 ```
 octipus/
 ├── src/
-│   ├── api/                  # Elysia REST routes
+│   ├── api/                  # Hono REST routes
 │   ├── channels/             # telegram, slack, whatsapp, teams, webchat
 │   ├── core/
 │   │   ├── gateway/          # WebSocket entry + command registry
-│   │   ├── orchestrator/     # Classifier, router, roles, pipelines, meta-tools
+│   │   ├── agent/            # Root turn, roles, pipelines, meta-tools
 │   │   ├── agent-manager.ts  # Worker lifecycle
 │   │   └── rag/              # Auto-indexer, hybrid search
 │   ├── db/                   # Drizzle schema, repositories, migrations
 │   ├── mcp/                  # MCP client bridge (external servers)
-│   ├── models/               # LiteLLM client, provider conformance
-│   └── tui/                  # Ink terminal UI
-├── mcp-server/               # Standalone MCP server (59+ tools)
+│   ├── models/               # Provider clients, model registry, conformance
+│   └── tui-pi/               # Terminal chat (pi-tui); editor in tui-editor/
+├── mcp-server/               # Standalone MCP server
 ├── web/                      # Vite + React Router dashboard (chat, agents, eval, profiles)
 ├── docs/                     # Architecture + API docs
 ├── eval/                     # YAML test scenarios
 ├── DESIGN.md                 # Design principles
 ├── ROADMAP.md                # Directions
-└── bin/octi             # CLI entry point
+└── bin/octi                  # CLI entry point
 ```
 
-Never duplicate config between backend and web. Shared types live in `src/types` or a dedicated package; import, don't copy-paste.
+Never duplicate config between backend and web. Shared definitions live in `src/shared/` and their owning backend modules; import, don't copy-paste.
 
 ---
 
 ## How to add a role
 
-Octipus roles follow a **node-folder pattern** inspired by [Weft](https://github.com/WeaveMindAI/weft). One folder per role under `src/core/orchestrator/roles/<name>/` with two or three files:
+Octipus roles follow a **node-folder pattern** inspired by [Weft](https://github.com/WeaveMindAI/weft). One folder per role under `src/core/agent/roles/<name>/` with two or three files:
 
-- `config.ts` — role metadata (model preferences, tool allowlist via `toolIds` array, complexity profile)
-- `prompt.md` — system prompt (markdown, hot-reloadable)
+- `config.ts` — role metadata (role identity, tool allowlist via `toolIds`, and default topic)
+- `prompt.md` — system prompt (markdown, bundled at build time)
 - `prompt.lite.md` — optional compact system prompt for low-context-window models
 
-Register the folder in `src/core/orchestrator/roles/index.ts` — three static
+Register the folder in `src/core/agent/roles/index.ts` — three static
 import lines plus one row in the list. It used to be a runtime directory scan,
 which returned an empty registry in the bundled artifact (`import.meta.url`
 resolves inside `dist/`); static imports are what a bundler can see, and a
@@ -111,16 +111,16 @@ Before opening the PR:
 - [ ] Role works end-to-end: user message → the root agent delegates to it via `spawn_child` → worker spawned → reply
 - [ ] System prompt has a clear one-line description and deliverable template
 - [ ] Tool allowlist is minimal (principle of least privilege)
-- [ ] Classifier keywords added to `src/core/orchestrator/classifier.ts` if the role has a distinct topic
+- [ ] Classifier keywords added to `src/core/agent/classifier.ts` if the role has a distinct topic
 - [ ] `npm run typecheck`, `npm test`, `npm run eval` all pass
 
 ### Role design rules
 
 These come from [DESIGN.md](./DESIGN.md) — do not skip them.
 
-- **One job per role.** If a role is doing five unrelated things based on flags, it is five roles.
+- **Focused specialists.** Add a role for a distinct responsibility. The general root role covers broader work.
 - **Tool allowlist is minimal.** A role should only have the tools it actually needs. No wildcarding.
-- **Typed deliverable.** Every role has a documented output shape. No "returns a string, figure it out".
+- **Explicit deliverable.** Describe the expected output and how it will be verified. Prompt instructions are not runtime output-schema validation.
 - **Fail loud.** No silent fallbacks. If a tool fails, surface the error to the user.
 
 ---
@@ -131,7 +131,7 @@ Skills inject domain knowledge into a role's system prompt. There are two types:
 
 **System skills** (DB-backed, with embeddings):
 - Seeded in `src/db/seed-skills.ts`
-- Managed via the web UI at Settings > Skills
+- Managed via the web UI at Skills (`/skills`)
 
 **Filesystem skills** (agentskills.io spec):
 - Create a `SKILL.md` (or flat `*.md`) file in one of these locations:
@@ -223,7 +223,7 @@ directly and are the only ones allowed to:
   not a single domain)
 - `src/core/gateway/commands.ts` (expert lookup inline for a
   command-router; isolated)
-- `src/core/orchestrator/templates.ts` (pipeline template lookups
+- `src/core/agent/templates.ts` (pipeline template lookups
   inline for the orchestrator hot path)
 - Migration scripts in `scripts/`
 

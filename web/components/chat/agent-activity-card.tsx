@@ -16,7 +16,7 @@ export interface TrackedAgent {
   /** The turn's root agent — Octipus itself, not a specialist it spawned. */
   root?: boolean;
   model: string;
-  status: 'running' | 'completed' | 'failed';
+  status: 'running' | 'completed' | 'failed' | 'stopped';
   toolCalls: ToolCallInfo[];
   startTime: number;
   endTime?: number;

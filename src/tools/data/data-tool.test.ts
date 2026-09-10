@@ -62,7 +62,7 @@ function writeWorkspaceFile(userId: string, name: string, body: string): string 
 beforeAll(async () => {
   process.env.STORAGE_MODE = 'embedded';
   process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'octipus-data-tool-'));
-  process.env.WORKSPACE_ROOT ??= mkdtempSync(join(tmpdir(), 'octipus-data-ws-'));
+  process.env.WORKSPACE_PATH = mkdtempSync(join(tmpdir(), 'octipus-data-ws-'));
   const { initializeDb, executeRaw } = await import('@/db/postgres');
   await initializeDb();
   const { runMigrations } = await import('@/db/migrate');

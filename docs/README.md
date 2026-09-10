@@ -2,6 +2,10 @@
 
 The map for everything under `docs/`. Start with **Getting Started**, then jump to the area you need. For repo-wide context see the top-level [`README.md`](../README.md) and [`AGENT.md`](../AGENT.md).
 
+Current improvement sequence: [Product consolidation](plans/product-consolidation-2026-09.md).
+Its implementation phases are planned; the current execution reference remains
+[Agent Architecture](AGENT-ARCHITECTURE.md).
+
 ## Getting Started
 
 | Doc | What it covers |
@@ -9,7 +13,7 @@ The map for everything under `docs/`. Start with **Getting Started**, then jump 
 | [CONFIGURATION.md](CONFIGURATION.md) | Environment variables, ports, Docker services, and the settings you set before first boot. |
 | [CONFIGURATION-PRECEDENCE.md](CONFIGURATION-PRECEDENCE.md) | How `.env` (first-boot seed), the DB `settings` table, and the vault interact — and why the DB wins at runtime. |
 | [DOCKER.md](DOCKER.md) | Running Octipus and its services (Postgres, Ollama, LiteLLM) with Docker. |
-| [SMALL-MODELS.md](SMALL-MODELS.md) | Running the whole stack on a single small local model. |
+| [SMALL-MODELS.md](SMALL-MODELS.md) | Local text-model setup, embedding requirements, and capability limits. |
 
 ## Channels
 

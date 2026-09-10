@@ -1,3 +1,5 @@
+import { getPermissionManager } from '@/security/permissions';
+import { auditRepository } from '@/db/repositories/audit-repository';
 /**
  * The review-loop functions of the GitHub tool, with `gh` mocked: what
  * matters is the exact argv each function hands to the CLI and how it reads
@@ -167,4 +169,11 @@ describe('labels and milestones', () => {
     await call('set_milestone', { repo: 'acme/app', number: 8, kind: 'pr', milestone: '' });
     expect(runGh.mock.calls[2][0]).toEqual(['pr', 'edit', '8', '-R', 'acme/app', '--remove-milestone']);
   });
+});
+
+// These suites verify the tool body; policy reachability is covered with real
+// storage in security/dispatch-authorization.test.ts.
+beforeEach(() => {
+  vi.spyOn(getPermissionManager(), 'check').mockResolvedValue({ allowed: true, level: 'ALLOW', requiresApproval: false });
+  vi.spyOn(auditRepository, 'log').mockResolvedValue(undefined as never);
 });

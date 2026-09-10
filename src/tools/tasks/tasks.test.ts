@@ -32,7 +32,7 @@ function ctx(userId: string): AgentContext {
     id: 'agent-1',
     sessionId: 'sess-1',
     userId,
-    role: 'general', // autonomous worker → permission gate skipped
+    role: 'general', // explicit test permission authorizes writes
     topic: 'general',
     model: 'test',
     status: 'running',
@@ -60,6 +60,8 @@ beforeAll(async () => {
 
   tool = new TasksTool();
   await tool.initialize();
+  const { getPermissionManager } = await import('@/security/permissions');
+  for (const user of [aliceId, bobId]) await getPermissionManager().setPermission(user, 'tasks', 'write', 'ALLOW');
   handlers = (tool as unknown as { tools: Map<string, ToolHandler> }).tools;
 });
 

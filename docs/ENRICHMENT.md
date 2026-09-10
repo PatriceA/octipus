@@ -26,17 +26,19 @@ Flow: plan queries → gather sources (SSRF-guarded fetch) → synthesize a sect
 cited report → render. Depth (`quick` / `standard` / `deep`) bounds fan-out width
 and source count (`DEPTH_BUDGET`).
 
-**Output is always a document.** On completion the report is serialized to Markdown,
-saved as a `Documents` record (category `Research`), and indexed into the knowledge
-base so future agent turns can retrieve and cite it (`persist.ts` →
-`getEmbeddingService().indexText`). Knowledge indexing is fail-soft: if no embedding
-model is configured the document is still saved (and the reason logged). The web page
-links the finished report to the Documents view.
+On completion, Octipus attempts to save the Markdown report as a `Documents`
+record (category `Research`) and index it into the knowledge base. Indexing is
+fail-soft: if embeddings are unavailable, the document can still be saved and the
+reason is logged. Document persistence can also fail; the completed job can carry
+the report without a document link. Check `documentId` before treating it as a
+saved document.
 
-> Live **job tracking** (progress/stage) is held in an in-memory map with a TTL
-> (`jobs.ts`) — it does not survive a restart and is process-local. The **report
-> itself** is durable once persisted as a document, and so is the follow-up
-> to-do the run creates (see [To-Do List → Provenance](#to-do-list)).
+Job tracking is stored in `background_jobs`. The job record survives a restart;
+the running computation does not resume automatically. The boot recovery sweep
+marks abandoned work as `interrupted`, exposed by the research polling API as
+`error` with a reason. Saved documents and any successfully created follow-up
+to-do remain durable. See `src/core/research/jobs.ts` and
+`src/core/jobs/recover.ts`.
 
 ## To-Do List
 

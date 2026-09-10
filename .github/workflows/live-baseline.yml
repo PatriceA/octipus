@@ -1,0 +1,31 @@
+name: Live provider baseline
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+permissions:
+  contents: read
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    environment: live-evaluation
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/node-setup
+      - run: npm ci
+      - name: Measure configured provider (missing configuration is unmeasured)
+        run: npm run test:live-baseline
+        env:
+          OCTIPUS_EVAL_URL: ${{ vars.OCTIPUS_EVAL_URL }}
+          OCTIPUS_EVAL_MODEL: ${{ vars.OCTIPUS_EVAL_MODEL }}
+          OCTIPUS_EVAL_PROVIDER: ${{ vars.OCTIPUS_EVAL_PROVIDER }}
+          OCTIPUS_EVAL_BUDGET_REFERENCE: ${{ vars.OCTIPUS_EVAL_BUDGET_REFERENCE }}
+          OCTIPUS_API_KEY: ${{ secrets.OCTIPUS_EVAL_API_KEY }}
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: live-provider-baseline
+          path: live-baseline.json

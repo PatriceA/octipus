@@ -159,7 +159,7 @@ export class EmailProcessorTool extends BaseTool {
           instruction: 'Process each email and decide: reply, label, archive, delete, task, or skip. Use the email tools directly for actions (gmail_reply/mail_reply, gmail_label, gmail_delete/mail_delete). When an email needs something from the user, create_task with source "email", the subject as title and the sender in notes, so it lands on their to-do list. Pass nextPageToken to process_emails to get the next batch.',
         };
       },
-      { requiresPermission: false },
+      { permissionAction: 'process' },
     );
 
     this.registerTool(
@@ -192,7 +192,7 @@ export class EmailProcessorTool extends BaseTool {
         const result = await readHandler.execute({ id }, context);
         return typeof result === 'string' ? JSON.parse(result) : result;
       },
-      { requiresPermission: false },
+      { permissionAction: 'process' },
     );
   }
 }

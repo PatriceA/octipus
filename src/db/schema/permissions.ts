@@ -24,7 +24,7 @@ export const toolPermissions = pgTable('skill_permissions', {
 }));
 
 export interface PermissionCondition {
-  type: 'path_pattern' | 'command_pattern' | 'time_window' | 'rate_limit' | 'ip_whitelist';
+  type: 'session' | 'workspace' | 'path_pattern' | 'command_pattern' | 'time_window' | 'rate_limit' | 'ip_whitelist';
   value: string | number | TimeWindow | RateLimitConfig;
 }
 

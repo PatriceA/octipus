@@ -1,128 +1,159 @@
 # Octipus Design Principles
 
-> **Note.** This document was drafted fast to ship the public release. If you have the time and taste to rewrite it more cleanly, a PR that improves the writing is as welcome as one that fixes a bug.
+These principles guide changes to Octipus. They describe the intended direction,
+not a guarantee that every existing path already meets it. Current execution
+behavior is documented in [Agent Architecture](docs/AGENT-ARCHITECTURE.md);
+implementation gaps and proposed changes belong in the
+[consolidation plan](docs/plans/product-consolidation-2026-09.md).
 
-A reference for contributors. These are the opinions that guide every decision. If a feature fights one of these, it does not ship in its current shape. Arguments welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) — but the burden of proof is on the change, not the principle.
+## Start with one agent
 
----
+The default interaction runs a root agent with tools. It can answer directly or
+use `spawn_child` for a bounded task that benefits from delegation. There is no
+separate model deciding whether the root runs. Classification supports context
+selection and small-model hints; it does not choose the specialist for the root.
 
-## Coordination, not replacement
+Delegation should earn its coordination cost through better results or shorter
+completion time. Agent count is not a measure of success. Pipelines remain useful
+for explicit stages, retries, and human input.
 
-Octipus coordinates things, it does not replace them. LLMs, databases, APIs, humans, tools, channels — these are **primitives**, not libraries you bolt on. The root agent's job is to wire them together correctly and cheaply.
+## Make handoffs explicit and verify outcomes
 
-The surface area of the core is small on purpose. You learn the root agent, roles, pipelines, and the permission model once. Everything else is nodes composed of those.
+Resolve a worker's role, model, available tools, and budget before execution.
+Describe the requested deliverable and the evidence needed to assess it. Validate
+structured inputs at boundaries and reject malformed requests clearly.
 
-## If it routes, the contract is sound
+Types and role metadata catch some incompatible requests. They cannot guarantee
+that a model understands the task, that a tool succeeds, or that an answer is
+correct. Prompt-defined deliverables are not enforced output schemas. Use tool
+records and independent checks to assess completion; a model's own success claim
+is insufficient.
 
-Same philosophy as a type checker, but for agent handoffs. Before a worker starts:
+## Give specialists a focused job
 
-- **Classification happens deterministically.** Keyword heuristics first, LLM only when ambiguous. The classifier is a cheap, explainable filter — the root agent is the expensive reasoner, not a routing lookup.
-- **Role contracts are typed.** Every role has a documented input shape, tool allowlist, and deliverable format. A worker cannot be spawned without a resolved role config.
-- **Pipelines are sequences of typed stages.** Stage N's output is stage N+1's input. Handoff context is a structured document, not a freeform blob.
+Keep specialist prompts and tool allowlists focused on their responsibilities.
+Use explicit tool IDs rather than wildcards. The general root role necessarily
+covers a broader range of work; tool availability is still separate from permission
+to execute an action.
 
-The only failures after routing are external: a tool returns an error, an API times out, a human never responds. The *contract* is not in question at that point — the world is.
+Add a role only when its distinct responsibilities justify it. Avoid multiplying
+roles to compensate for an unclear prompt or workflow.
 
-## One job per role
+## Share mechanisms where they help
 
-If a role is branching on config flags to do five unrelated things, it is five roles. The classifier + router exists precisely so you can be specific. A bloated role is a routing failure disguised as flexibility.
+Prefer shared execution, permission, and lifecycle mechanisms over per-role
+exceptions. Add an abstraction when multiple real paths need it, and keep its
+inputs and ownership explicit. Do not build a general engine solely for a
+hypothetical future use case.
 
-Corollary: **tool allowlists are minimal**. A role gets only the tools it actually needs. No wildcards. A security worker does not need shell write. A writer does not need `git push`. Principle of least privilege applies to agents too.
+Where both visual and text editing exist, make them projections of the same
+stored definition. Do not promise interchangeable editors or arbitrary recursive
+composition for capabilities that do not implement them.
 
-## No special cases
+## Keep channels as adapters
 
-When a capability is needed, the language of the platform gets a general feature and the node uses it. No role ever requires custom root agent support.
+Channels should translate user input and execution events through shared backend
+contracts. Put execution policy in the backend. Clients differ in what they can
+render and whether they can deliver an approval prompt; document those differences
+instead of assuming identical behavior across surfaces.
 
-"Wait for approval" is not approval-specific. It is "pause the pipeline until an external signal arrives" — used by human approval, webhook gates, and scheduled resumes. "Remember a fact about the user" is not a profile-specific feature. It is a generic fact store that profiles happen to use.
+## Report failure and uncertainty accurately
 
-Two things fall out:
+A failed tool call must remain a failure in the worker's context and execution
+record. Invalid input needs a specific error. Recovery and provider failover
+should be inspectable, with the reason recorded.
 
-1. The core stays small.
-2. When contributors learn a pattern, it works everywhere. No per-role escape hatches to memorize.
+The same principle applies to the UI: unavailable data is not zero, a disconnected
+client is not evidence of an idle run, and an attempted save is not a saved file.
+Distinguish loading, stale, unavailable, interrupted, and completed states. A
+recoverable secondary failure may be logged without aborting the primary work,
+but any missing deliverable must be apparent.
 
-## Channels are adapters, not features
+Error classification lives in `src/core/errors/classification.ts` and
+`src/core/swarm/errors.ts`. Knowledge readiness is exposed through
+`/api/knowledge/readiness`; callers should check actual write and indexing results.
 
-Telegram, Slack, WhatsApp, Teams, WebChat, TUI — all speak the same gateway protocol. A feature added to one channel that cannot be expressed through the gateway is wrong. Fix the gateway.
+## Keep execution permissions separate from prompt guidance
 
-A corollary: **sessions are channel-agnostic at the root agent level**. The root agent sees `sessionId`, not `telegram_chat_id`. Channels resolve sessions on the way in and translate events on the way out.
+The `SECURITY_PREAMBLE`, input checks, and output guard provide model guidance and
+prompt-injection mitigations. They are not substitutes for permission checks,
+sandbox boundaries, or authorization at tool execution. Do not edit the preamble
+without an issue and an argument.
 
-## Fail loud
+**Current behavior:** `ASK` remains an approval requirement. Attended descendants
+inherit their session’s approval surface; unattended calls return blocked. Stored
+`DENY` wins over broad allow rules. Tool middleware rechecks authorization after
+argument hooks, and the MCP bridge checks before sending to an external server.
+Scoped grants bind a tool action to a session, workspace, or argument pattern and
+an expiry. Existing run budgets still apply. An approval receipt is single-use and
+bound to the caller, action, and arguments.
 
-No silent fallbacks. Nodes either work or fail with a clear error. Every failure surfaces to the user unless explicitly swallowed with a logged reason.
+See [migration notes and evidence](docs/reports/consolidation-2026-09-10.md).
+These checks do not establish the safety of external programs launched by CLI
+workers or turn argument patterns into a filesystem/shell sandbox. Reviewing the
+execution code and measuring live-provider quality remain separate work.
 
-- If a tool returns an error, the worker sees the error — not a fabricated successful-looking reply.
-- If a model provider is down, the failover engages or the request fails with a named reason. Never a silent "generic octipus" stub.
-- If an input is malformed, it is rejected at the boundary with a specific message. Never coerced into something pretend-valid.
-- If a topic has no model bound, the spawner throws. No default-model fallback, no "try LiteLLM and hope". The user configured the topic map; we follow it or surface the gap.
-- If the knowledge base can't embed (missing model, dead vector store), every write path returns 503 with reasons. The KB is never silently unavailable — `/api/knowledge/readiness` is the ground truth.
+## Persist what users need after interruption
 
-Error classification lives in `src/core/errors/classification.ts` (`FailoverReason`, `RecoveryAction`, `classifyError`). All model providers route errors through it. Swarm-level classification (`src/core/swarm/errors.ts`) maps thrown errors onto `ChildResult.status` so parents see a typed failure, not an opaque string.
+Messages, execution records, and saved deliverables belong in durable storage.
+Typing indicators and live event transport may remain ephemeral. A durable record
+does not mean the work itself can resume from any point.
 
-## Security preamble is load-bearing
+Pipeline checkpoints support stage-level recovery; restarting a worker can repeat
+work inside that stage. Background research jobs retain their records across a
+restart, but interrupted computation is reported as an error rather than resumed
+automatically. Make recovery boundaries and potentially repeated side effects
+clear to the user.
 
-Every worker and the root agent get the `SECURITY_PREAMBLE` at the start of their system prompt. It is not a nice-to-have. The input guard (39 regex patterns) and output guard (LLM-based) layer on top but do not replace it. Do not edit the preamble without an issue and an argument.
+## Bound delegation and account for its limits
 
-## Durable where it matters, ephemeral where it helps
+Swarm delegation uses `spawn_child` in a fixed three-level tree: root agent →
+Agent → Subagent. Token budgets cascade; cancellation follows the child tree.
+Budget and timeout checks constrain execution, but are not a guarantee of exact
+billing or immediate cancellation of external work already in progress.
 
-- **Messages, sessions, agents, audit trail, vault** → durable. DB-backed. Survive restart. Auditable.
-- **Worker event streams, typing indicators, gateway pub/sub** → ephemeral. In-memory. Replayable from buffer (200 events per session) but not persisted past process lifetime.
+Receipts record observed tool activity and unavailable evidence. They explicitly
+do not certify correctness or security. See
+[Swarm Reliability](docs/SWARM-RELIABILITY.md).
 
-Confusing the two is where bugs grow. If a user needs to see an event after a crash, it lives in the DB. If the only consumer is a live WS, the event bus is enough.
+## Configure models explicitly
 
-## Two views of the same thing
+Resolve specialist models through topic bindings in `ModelRegistry`; unbound
+worker topics fail at spawn time. The root can use the configured default model.
+Children resolve their own topic bindings rather than simply inheriting their
+parent's model. Keep deployment-specific model names out of implementation code.
 
-A pipeline, a role configuration, a skill — each has a **code form** (JSON, markdown, TS) and a **visual form** (DAG graph, config form, rendered prompt). Editing one updates the other. Neither is canonical; both are projections.
+Support local models and embedded storage as useful deployment options. Document
+capability limits: tool calling depends on the model, retrieval needs embeddings,
+and hosted models or external integrations require their respective services.
+Self-hosting does not imply every configured workflow keeps its data local.
 
-This mirrors the [Weft](https://github.com/WeaveMindAI/weft) graph↔code duality. Applied to octipus:
+## Make behavior inspectable
 
-- Pipelines render as stage DAGs in the web UI, editable in either view.
-- Roles render as config forms *and* as the raw markdown prompt. Power users prefer raw; newcomers prefer forms. Both work.
-- Skills are markdown files with typed frontmatter — the form view reads frontmatter, the prompt view reads the body.
+Help users understand what ran, what changed, what evidence was checked, and what
+remains unresolved. Reuse execution records for status views. Label estimated cost
+and incomplete evidence, and keep detailed traces available without making users
+read them to understand an ordinary result.
 
-## Recursive composability
+## Match evaluation claims to evidence
 
-Pipelines are nodes. A pipeline stage can itself be a pipeline. A swarm node can be wrapped as a role. Skills can be composed.
+Changes to routing, prompts, roles, or tool selection should run the relevant eval
+suite and report its configuration and results. Verify outcomes through files,
+API state, or other independent evidence. Test both that a guard rejects its
+failure case and that the shipping execution path actually reaches it.
 
-A 100-stage system still looks like 5 blocks at the top level because each block hides a pipeline or swarm that hides more pipelines or swarms. No hidden coupling, no global scope — only inputs, outputs, and handoff context cross a boundary.
+Current CI includes unit tests, database integration, and browser tests with
+stubbed API calls. The red-team workflow runs a **dry-run** that checks test-case
+generation without calling a model. It does not establish adversarial model
+performance, and it is not a live-model regression gate. See
+[Testing](docs/TESTING.md) for the boundaries of each suite.
 
-## Swarm is a first-class primitive
+## Keep maintenance proportional to demonstrated value
 
-Delegation has one shape: `spawn_child`. The tree is fixed depth 3 (root agent → Agent → Subagent). Budgets cascade on tokens (pool-shared) and stay per-node on wall-clock (parent excludes time spent waiting on children via `pausedMs`). Every node has hard caps enforced pre-LLM-call — breach throws structured errors (`BudgetExceededError`, `ChildTimeoutError`, `CascadedCancellationError`). Cycle protection is per-session fingerprints; cascade cancel is an `AbortSignal` tree.
+The core is already substantial. Reduce coupling as it is touched, with tests at
+execution boundaries, rather than promising a small core or starting a wholesale
+rewrite. Every new tool, channel, and screen adds maintenance and validation work.
+Prioritize reliable everyday workflows over catalog size.
 
-What this buys: no runaway spend, no silent deep recursion, no one-off "team" or "worker" primitives to memorize. One mechanism for fan-out, one shape for hand-off, one set of budgets to reason about. Pipelines still exist for **explicit staged handover with human gates** — that's a different problem, kept separate on purpose. See [.octipus/swarm-design.md](./.octipus/swarm-design.md).
-
-## Config-driven, no hardcoded models
-
-Model resolution goes through `ModelRegistry.getModelForTopic(role)`. Every role has a matching topic; the user binds models to topics in the DB or web UI. There is no hardcoded "default model" fallback — an unbound topic fails loud at spawn time. Children in a swarm inherit **topic bindings, not the parent's model**. A research Agent spawning a security Subagent resolves the model bound to `security`, independent of the parent.
-
-This means swapping a model for a whole role is one config change. It also means when you see an unexpected model in logs, it's because a topic binding caused it — not because some code path hardcoded it. The rule: if you're about to write `model: 'gpt-4o'` in source code, you're wrong. Bind it to a topic.
-
-## Observability over cleverness
-
-If the system does something surprising, the user should be able to find out why without reading the source. Source attribution (recent messages, profile facts, knowledge base hits) is appended to replies by default. Event logs are exposed in the web UI. The agents overview lists every agent that ran, not just live ones.
-
-Clever routing that is hard to inspect is worse than obvious routing that is slow.
-
-## Local first, cloud second
-
-Octipus should be fully usable with:
-
-- Local models via Ollama
-- Embedded PostgreSQL (PGlite) instead of a real DB
-- In-process cache instead of an external cache server
-- No external API keys at all
-
-Cloud providers are upgrades, not requirements. A new feature that only works with a specific cloud provider is suspicious.
-
-## Evaluation is part of the build
-
-Every non-trivial change to routing, roles, prompts, or tool selection goes through the eval harness (`npm run eval`). Red-team tests (prompt injection, role confusion, tool misuse, data leakage, off-topic drift) are part of CI. A regression in the eval suite blocks merge.
-
-## Small core, large catalog
-
-The core (root agent, gateway, permission system, vault, DB schema) should stay small and rarely change. The catalog (roles, skills, tools, channels, experts, pipeline templates) grows freely. When in doubt, push complexity to the catalog, not the core.
-
----
-
-## Argue with these
-
-Some of these will age badly. If you have a real argument — not "this is annoying", but "this prevents X and costs Y" — open an issue. Principles get updated when the reasoning for them no longer holds. But the default is to preserve them: many have been paid for in bugs.
+Principles can change when implementation evidence supports a better approach.
+Record the reason, current behavior, and migration implications together.

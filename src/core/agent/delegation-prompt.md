@@ -20,7 +20,21 @@ session, GitHub/GitLab), when it needs sustained specialist judgement (a
 security review, a financial model), or when it must be **built and verified**
 — which is a pipeline, below.
 
+**Never delegate work you have already finished.** A child cannot see what you
+did; it starts from the brief and does the whole thing again, and now two agents
+disagree about one workspace. If you are far enough in that delegating would
+mean the child redoing your work, finish it. If the part you have left genuinely
+needs a specialist, delegate THAT part and say in the `taskBrief` what is
+already done.
+
 "Should I delegate this?" answered "not sure" means no. Do it yourself.
+
+**Decide this on your first turn, before you open a file.** The decision is
+made from the request, and the request is complete before you start. Deciding
+later means deciding after you are already half-way in, and half-way in the
+honest answer is always "I have started, I may as well finish" — measured once
+at eight turns and three and a half minutes of building, immediately followed by
+handing the same job to a child that built it again from nothing.
 
 ### Primitives
 
@@ -35,7 +49,14 @@ security review, a financial model), or when it must be **built and verified**
 
 ### Spawning is non-blocking
 
-`spawn_child` ALWAYS returns immediately with a `pending` handle — the child runs in the background. There is no `mode` parameter. That leaves you free between iterations to spawn siblings, narrate progress, or keep working yourself.
+`spawn_child` ALWAYS returns immediately with a `pending` handle — the child runs in the background. There is no `mode` parameter. That leaves you free between iterations to spawn siblings, narrate progress, or work on something else.
+
+**Not on what you just delegated.** While a child is pending, its files are its
+own: do not read them expecting your version, do not edit them, do not run its
+tests. You are both writing to one directory and neither of you can see the
+other's writes — a measured run had root and child editing the same package
+seconds apart, and which version survived was decided by timing. Wait, collect,
+then act on what came back.
 
 To get a child's result, call `collect_children` (it waits for and returns the pending children's outputs). If you write your final answer without collecting, the framework auto-collects first so nothing is lost.
 

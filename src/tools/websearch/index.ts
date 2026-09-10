@@ -101,7 +101,7 @@ export class WebSearchTool extends BaseTool {
         max_results: { type: 'number', description: 'Maximum results to return (default: 10)', required: false },
       }),
       async (args) => this.search(args),
-      { requiresPermission: false },
+      { permissionAction: 'search' },
     );
 
     this.registerTool(
@@ -112,7 +112,7 @@ export class WebSearchTool extends BaseTool {
         max_length: { type: 'number', description: 'Maximum text length to return (default: 10000)', required: false },
       }),
       async (args) => this.fetchPage(args),
-      { requiresPermission: false },
+      { permissionAction: 'fetch' },
     );
   }
 

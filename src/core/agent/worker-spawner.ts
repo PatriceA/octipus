@@ -1,3 +1,4 @@
+import { channelCanPrompt } from '@/security/approval-policy';
 import { resolve } from 'path';
 import { getConfig } from '@/config';
 import { shouldUseLazyDiscovery } from './lazy-tools';
@@ -126,7 +127,9 @@ export async function handleExpertMessage(
   // Model lane: the expert's assigned topic (see experts.topic), falling back
   // to the role default for pre-consolidation rows.
   const expertLane = expert.topic || roleConfig.defaultTopic;
+  const originSession = await sessionRepository.findById(sessionId);
   const context: AgentContext = {
+    attended: channelCanPrompt(originSession?.channelType),
     id: `expert-${Date.now()}`,
     sessionId,
     userId,
@@ -1146,6 +1149,7 @@ Use these MCP tools when the task benefits from them — especially for people-r
   }
 
   const worker = await agentManager.spawn({
+    attended: context.attended ?? false,
     sessionId: context.sessionId,
     userId: context.userId,
     workspaceId: context.workspaceId ?? null,

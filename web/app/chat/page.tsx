@@ -113,6 +113,8 @@ export default function ChatPage() {
   const { activeWorkspace } = useWorkspace();
   const [mounted, setMounted] = useState(false);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [sessionListError, setSessionListError] = useState<string | null>(null);
+  const [historyErrors, setHistoryErrors] = useState<Record<string, string>>({});
   const deletedSessionsRef = useRef<Set<string>>(new Set());
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionStates, setSessionStates] = useState<Map<string, SessionState>>(new Map());
@@ -215,6 +217,8 @@ export default function ChatPage() {
   const loadSessions = useCallback(async () => {
     try {
       const data = await api.get<{ sessions: Array<{ id: string; title: string; updatedAt: string; messageCount: number; tokenCount?: number; status: string; channelType?: string; context?: { devMode?: boolean; projectName?: string } }>; maxTokenBudget?: number }>('/sessions');
+      setSessionListError(null);
+      if (data?.sessions?.length === 0) setSessions([]);
       if (data?.maxTokenBudget != null) setMaxTokenBudget(data.maxTokenBudget);
       if (data?.sessions?.length) {
         const items: SessionInfo[] = data.sessions
@@ -246,7 +250,7 @@ export default function ChatPage() {
 
         return items;
       }
-    } catch {}
+    } catch (error) { setSessionListError(error instanceof Error ? error.message : 'Could not refresh sessions.'); }
     return [];
   }, [updateSessionState]);
 
@@ -365,7 +369,7 @@ export default function ChatPage() {
             // itself and the panel lists only what it dispatched.
             root: a.root === true,
             model: a.model,
-            status: (isFinished ? (a.status === 'failed' ? 'failed' : 'completed') : 'running') as TrackedAgent['status'],
+            status: (isFinished ? (a.status === 'failed' ? 'failed' : a.status === 'stopped' || a.status === 'paused' ? 'stopped' : 'completed') : 'running') as TrackedAgent['status'],
             // A finished agent won't emit more results — clear any tool row that
             // was persisted without a result so it doesn't restore as a spinner.
             toolCalls: isFinished ? finalizePendingToolCalls(toolCalls) : toolCalls,
@@ -441,7 +445,10 @@ export default function ChatPage() {
           : prev.fileChanges;
         return { ...prev, messages: mergedMessages, trackedAgents: mergedAgents, fileChanges: mergedFileChanges };
       });
-    } catch {}
+      setHistoryErrors(prev => ({ ...prev, [sessionId]: '' }));
+    } catch (error) {
+      setHistoryErrors(prev => ({ ...prev, [sessionId]: error instanceof Error ? error.message : 'Could not refresh history.' }));
+    }
   }, [updateSessionState]);
 
   // Initialize
@@ -613,6 +620,8 @@ export default function ChatPage() {
     switch (data.type) {
       case 'connected':
         setConnectionStatus('connected');
+        void loadSessions();
+        if (activeSessionId) void loadSessionMessages(activeSessionId);
         break;
 
       case 'chat_response': {
@@ -1611,6 +1620,15 @@ export default function ChatPage() {
 
   return (
     <div className="h-full flex">
+      {sessionListError && <div role="status" className="absolute z-20 bottom-2 left-2 rounded border border-warning bg-surface p-3 text-sm">
+        Sessions unavailable. {sessionListError} <button className="underline" onClick={() => void loadSessions()}>Retry sessions</button>
+      </div>}
+      {activeSessionId && historyErrors[activeSessionId] && (
+        <div role="status" className="absolute z-20 top-2 left-1/4 right-4 rounded border border-warning bg-surface p-3 text-sm">
+          History unavailable. Previously loaded messages may be stale. {historyErrors[activeSessionId]}
+          <button className="ml-2 underline" onClick={() => void loadSessionMessages(activeSessionId)}>Retry history</button>
+        </div>
+      )}
       {/* New session dialog */}
       <NewSessionDialog
         open={showNewSessionDialog}

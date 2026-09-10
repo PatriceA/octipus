@@ -10,6 +10,7 @@
  * are separated from the one DB write (`createTasksFromSource`) so the shape
  * of what lands on the to-do list is unit-testable without a database.
  */
+import { createHash } from 'node:crypto';
 import { scopedRepos } from '@/db/repositories/scoped';
 import type { Task, TaskSourceRef } from '@/db/schema/tasks';
 import type { Principal } from '@/security/principal';
@@ -137,17 +138,19 @@ export async function createTasksFromSource(
   for (const input of inputs) {
     const title = normalizeTaskTitle(input.title);
     if (!title) continue;
-    created.push(
-      await repo.create({
-        title,
-        notes: input.notes ?? null,
-        priority: Math.max(0, Math.min(3, Math.trunc(input.priority ?? 0))),
-        category: input.category ?? null,
-        dueAt: input.dueAt ?? null,
-        source,
-        sourceRef: input.sourceRef,
-      }),
-    );
+    const identity = input.sourceRef?.url ?? input.sourceRef?.messageId ?? input.sourceRef?.documentId;
+    const data = {
+      title, notes: input.notes ?? null,
+      priority: Math.max(0, Math.min(3, Math.trunc(input.priority ?? 0))),
+      category: input.category ?? null, dueAt: input.dueAt ?? null, source, sourceRef: input.sourceRef,
+    };
+    if (identity) {
+      const hash = createHash('sha256').update(JSON.stringify([
+        principal.userId, principal.workspaceId ?? null, source, identity, title.toLowerCase(),
+      ])).digest('hex');
+      const id = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
+      created.push(await repo.createOnce({ ...data, id }));
+    } else created.push(await repo.create(data));
   }
   return created;
 }

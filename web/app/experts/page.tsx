@@ -403,7 +403,7 @@ export default function ExpertsPage() {
       <PageHeader
         title="experts"
         badge={<GraduationCap className="w-5 h-5 text-on-surface-variant" />}
-        description="The specialists work can be delegated to. Each expert carries a role (its tools + base prompt) and a topic lane (which model serves it) — add your own experts and they become routable immediately."
+        description="Experts are specialist presets. A role defines available tools and base instructions; a topic selects the model. You can start ordinary work in Chat without choosing an expert."
       />
 
       {user && (

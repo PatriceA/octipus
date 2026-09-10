@@ -1,5 +1,9 @@
 # Agent Architecture
 
+Current execution reference. For design goals see [DESIGN.md](../DESIGN.md); for
+proposed changes see the [consolidation plan](plans/product-consolidation-2026-09.md).
+Historical rebuild plans record earlier decisions and may describe superseded paths.
+
 ## Core Concepts
 
 ### Tools
@@ -29,7 +33,7 @@ Every system expert includes three structured prompt sections that are automatic
 
 | Field | Schema Column | Purpose |
 |-------|--------------|---------|
-| **Critical Rules** | `criticalRules` (string[]) | Hard constraints the agent must follow (e.g., "Never commit directly to main", "Always validate user input") |
+| **Critical Rules** | `criticalRules` (string[]) | Prompt guidance (e.g., "Never commit directly to main", "Always validate user input"); execution policy must enforce hard constraints separately |
 | **Deliverable Template** | `deliverableTemplate` (text) | Expected output format — defines the structure of the agent's final response (e.g., code review format with sections for issues, suggestions, summary) |
 | **Success Metrics** | `successMetrics` (string[]) | Evaluation criteria for the agent's output (e.g., "All tests pass", "No security vulnerabilities introduced") |
 

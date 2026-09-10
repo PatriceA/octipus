@@ -1003,6 +1003,18 @@ export class ScopedTaskRepo {
     return result[0];
   }
 
+  /** Idempotent source ingestion; a retry returns the existing owned task. */
+  async createOnce(data: Omit<NewTask, 'userId'> & { id: string }): Promise<Task> {
+    await this.checkStructure(data);
+    const [created] = await this.db.insert(tasks).values({ ...data,
+      userId: this.principal.userId, workspaceId: this.principal.workspaceId ?? null,
+    }).onConflictDoNothing({ target: tasks.id }).returning();
+    if (created) return created;
+    const existing = await this.findById(data.id);
+    if (!existing) throw new Error('Source task conflicts with an inaccessible task');
+    return existing;
+  }
+
   /** Update only if owned. `completedAt` is managed by the route/tool. */
   async update(id: string, patch: Partial<NewTask>): Promise<Task | null> {
     if (!isUuid(id)) return null;

@@ -47,15 +47,10 @@ interface UsageData {
 }
 
 export default function DashboardPage() {
-  const { data: health, isFetching: healthFetching } = useQuery({
+  const healthQuery = useQuery({
     queryKey: ['health'],
-    queryFn: async () => {
-      try {
-        return await api.get<HealthData>('/health/detailed');
-      } catch {
-        return null;
-      }
-    },
+    retry: false,
+    queryFn: async () => await api.get<HealthData>('/health/detailed'),
     refetchInterval: (query) => {
       const h = query.state.data?.health;
       if (!h) return 3000;
@@ -67,41 +62,36 @@ export default function DashboardPage() {
     },
   });
 
-  const { data: usage } = useQuery({
+  const usageQuery = useQuery({
     queryKey: ['usage'],
-    queryFn: async () => {
-      try {
-        return await api.get<UsageData>('/models/usage');
-      } catch {
-        return null;
-      }
-    },
+    retry: false,
+    queryFn: async () => await api.get<UsageData>('/models/usage'),
   });
 
   // The user's own session count. The card previously showed `health.agents.total`
   // — the GLOBAL agent count — so creating one chat (root agent + worker = 2
   // agents) read as "2 sessions". `total` is the full per-user count.
-  const { data: sessionData } = useQuery({
+  const sessionsQuery = useQuery({
     queryKey: ['sessions', 'count'],
-    queryFn: async () => {
-      try {
-        return await api.get<{ total?: number }>('/sessions?limit=1');
-      } catch {
-        return null;
-      }
-    },
+    retry: false,
+    queryFn: async () => await api.get<{ total?: number }>('/sessions?limit=1'),
   });
 
+  const health = healthQuery.data;
+  const usage = usageQuery.data;
+  const sessionData = sessionsQuery.data;
+  const healthFetching = healthQuery.isFetching;
   const stats = [
-    { name: 'active agents',  value: health?.agents?.running || 0,         icon: Bot,             tone: 'text-primary' },
-    { name: 'your sessions',  value: sessionData?.total || 0,              icon: MessageSquare,   tone: 'text-tertiary' },
-    { name: 'api requests',   value: usage?.stats?.requestCount || 0,      icon: Activity,        tone: 'text-primary' },
-    { name: 'total cost',     value: `$${(usage?.stats?.totalCost || 0).toFixed(2)}`, icon: Zap, tone: 'text-warning' },
+    { name: 'active agents', value: health?.agents?.running, icon: Bot, tone: 'text-primary', query: healthQuery },
+    { name: 'your sessions', value: sessionData?.total, icon: MessageSquare, tone: 'text-tertiary', query: sessionsQuery },
+    { name: 'api requests', value: usage?.stats?.requestCount, icon: Activity, tone: 'text-primary', query: usageQuery },
+    { name: 'total cost', value: usage?.stats?.totalCost == null ? undefined : `$${usage.stats.totalCost.toFixed(2)}`, icon: Zap, tone: 'text-warning', query: usageQuery },
   ];
-
-  const runningAgents = health?.agents?.running ?? 0;
-  const statusVariant = runningAgents > 0 ? 'success' : 'neutral';
-  const statusLabel = runningAgents > 0 ? `${runningAgents} live` : 'idle';
+  const runningAgents = health?.agents?.running;
+  const statusVariant = healthQuery.isError ? 'neutral' : runningAgents ? 'success' : 'neutral';
+  const statusLabel = healthQuery.isError ? 'status unavailable'
+    : runningAgents == null ? (healthQuery.isPending ? 'loading' : 'status unavailable')
+    : runningAgents > 0 ? `${runningAgents} live` : 'idle';
 
   return (
     <div className="space-y-6 font-mono">
@@ -110,11 +100,17 @@ export default function DashboardPage() {
         title="dashboard"
         description="live overview · agents · sessions · token usage · system health"
         badge={
-          <StatusBadge variant={statusVariant} dot pulse={runningAgents > 0}>
+          <StatusBadge variant={statusVariant} dot pulse={runningAgents != null && runningAgents > 0}>
             {statusLabel}
           </StatusBadge>
         }
       />
+
+      <div className="flex flex-wrap gap-3 text-sm" aria-label="Start work">
+        <a href="/chat" className="text-primary underline">Work on a project</a>
+        <a href="/research" className="text-primary underline">Research a question</a>
+        <a href="/tasks" className="text-primary underline">Plan follow-up tasks</a>
+      </div>
 
       {/* What happened since the user last looked — the first thing to read. */}
       <AwayDigestCard />
@@ -131,8 +127,15 @@ export default function DashboardPage() {
                   {stat.name}
                 </p>
                 <p className="mt-2 text-3xl text-on-surface tabular-nums">
-                  {stat.value}
+                  {stat.value ?? (stat.query.isPending ? 'Loading…' : 'Unavailable')}
                 </p>
+                {stat.query.isError && (
+                  <div className="mt-2 text-xs text-warning" role="status">
+                    <p>{stat.value != null ? `Stale · last updated ${new Date(stat.query.dataUpdatedAt).toLocaleTimeString()}` : 'Could not load this value.'}</p>
+                    <p>{stat.query.error?.message}</p>
+                    <button className="underline mt-1" onClick={() => void stat.query.refetch()}>Retry {stat.name}</button>
+                  </div>
+                )}
               </div>
               <stat.icon className={`w-4 h-4 mt-1 shrink-0 ${stat.tone}`} aria-hidden />
             </div>

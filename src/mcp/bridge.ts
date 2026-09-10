@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 import { getConfig } from '@/config';
 import { getSettingsService } from '@/config/settings-service';
 import type { ToolHandler } from '@/core/agent-worker';
-import type { MCPServer, MCPTool } from '@/core/types';
+import type { AgentContext, MCPServer, MCPTool } from '@/core/types';
 import { coreLogger } from '@/utils/logger';
 import { getMcpCircuitBreaker } from './circuit-breaker';
 import { type MCPCapabilities, MCPMethods, type MCPPrompt, MCPProtocol, type MCPResource, type MCPToolDefinition } from './protocol';
@@ -347,7 +347,11 @@ export class MCPBridge extends EventEmitter {
   /**
    * Call a tool on an MCP server
    */
-  async callTool(serverId: string, toolName: string, args: Record<string, unknown>): Promise<unknown> {
+  async callTool(serverId: string, toolName: string, args: Record<string, unknown>, context: AgentContext, authorizationArgs = args): Promise<unknown> {
+    // Every caller, including artifact refreshes, reaches this boundary before transport.
+    const { authorizeMcpDispatch } = await import('@/security/mcp-authorization');
+    await authorizeMcpDispatch(context, `${serverId}.${toolName}`, authorizationArgs);
+
     const breaker = getMcpCircuitBreaker();
     if (!breaker.canCall(serverId)) {
       const st = breaker.getState(serverId);
@@ -559,9 +563,10 @@ export class MCPBridge extends EventEmitter {
           name: `mcp_${serverId}_${tool.name}`,
           description: `[MCP:${connection.server.name}] ${tool.description}`,
           parameters: tool.inputSchema,
-          toolId: `mcp:${serverId}`,
-          execute: async (args) => {
-            return bridge.callTool(serverId, tool.name, args);
+          toolId: 'mcp',
+          permissionAction: `${serverId}.${tool.name}`,
+          execute: async (args, context) => {
+            return bridge.callTool(serverId, tool.name, args, context);
           },
         });
       }
@@ -653,12 +658,13 @@ export class MCPBridge extends EventEmitter {
           required: ['server_id', 'tool_name'],
         },
         toolId: 'mcp',
-        execute: async (args) => {
+        permissionAction: args => `${args.server_id}.${args.tool_name}`,
+        execute: async (args, context) => {
           const serverId = args.server_id as string;
           const toolName = args.tool_name as string;
           const toolArgs = (args.arguments as Record<string, unknown>) || {};
 
-          return bridge.callTool(serverId, toolName, toolArgs);
+          return bridge.callTool(serverId, toolName, toolArgs, context, args);
         },
       },
     ];

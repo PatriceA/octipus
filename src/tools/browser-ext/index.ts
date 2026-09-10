@@ -328,7 +328,7 @@ export class BrowserExtTool extends BaseTool {
         timeout: args.timeout as number | undefined,
         tabId: args.tabId as number | undefined,
       }),
-      { requiresPermission: false },
+      { permissionAction: 'extract' },
     );
 
     this.registerTool(
@@ -346,7 +346,7 @@ export class BrowserExtTool extends BaseTool {
         duration: args.duration as number | undefined,
         tabId: args.tabId as number | undefined,
       }),
-      { requiresPermission: false },
+      { permissionAction: 'extract' },
     );
 
     // ── JavaScript & State ──

@@ -19,6 +19,14 @@ export const meta: RoleMeta = {
   // the tail, the model did not call `list_tools` — it asserted the tool did
   // not exist and stopped. A capability the user names directly cannot depend
   // on the model choosing to go looking for it.
-  coreToolIds: ['filesystem', 'shell', 'websearch', 'knowledge', 'messaging', 'notes', 'tasks'],
+  //
+  // `skill-distill` is core for the same reason, measured the same way. Asked to
+  // "save this as a reusable skill", the root did not go looking for the tool
+  // that does exactly that: it read octipus's own `external-loader.ts`, decided
+  // skills live in `~/.codex/skills/`, worked for four minutes and created
+  // nothing. "Save this as a skill" names the capability as directly as "run
+  // this command" does, and the whole toolbox is 181 tokens of schema — about
+  // 2% of the core set — so the discovery round trip was never worth its price.
+  coreToolIds: ['filesystem', 'shell', 'websearch', 'knowledge', 'messaging', 'notes', 'tasks', 'skill-distill'],
   defaultTopic: 'general',
 };

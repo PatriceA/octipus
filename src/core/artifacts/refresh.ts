@@ -303,11 +303,11 @@ function attr(s: string | undefined): string | undefined {
 }
 
 // ── mcp ──────────────────────────────────────────────────────────────
-async function runMcp(cfg: McpSourceConfig, _principalId: string): Promise<unknown> {
+async function runMcp(cfg: McpSourceConfig, principalId: string): Promise<unknown> {
   if (!cfg.server || !cfg.tool) throw new Error('mcp source: missing server/tool');
   const { getMCPBridge } = await import('@/mcp');
   const bridge = getMCPBridge();
-  return bridge.callTool(cfg.server, cfg.tool, (cfg.params ?? {}) as Record<string, unknown>);
+  return bridge.callTool(cfg.server, cfg.tool, (cfg.params ?? {}) as Record<string, unknown>, buildSyntheticContext(principalId));
 }
 
 // ── skill_query ──────────────────────────────────────────────────────

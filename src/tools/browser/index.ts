@@ -287,7 +287,7 @@ export class BrowserTool extends BaseTool {
 
         return { closed: args.pageId };
       },
-      { requiresPermission: false }
+      { permissionAction: 'navigate' }
     );
 
     this.registerTool(

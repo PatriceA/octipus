@@ -1,5 +1,5 @@
 import { and, eq, sql } from 'drizzle-orm';
-import type { PermissionLevel } from '@/core/types';
+import type { AgentContext, PermissionLevel } from '@/core/types';
 import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import {
@@ -25,6 +25,7 @@ import { safeRegExp } from '@/utils/sanitize';
  */
 
 export interface PermissionCheckResult {
+  source?: string;
   allowed: boolean;
   level: PermissionLevel;
   requiresApproval: boolean;
@@ -51,6 +52,7 @@ export interface PermissionRequestEvent {
 
 export class PermissionManager {
   private get db() { return getDb(); }
+  private preparedWaits = new Map<string, Promise<boolean>>();
   private pendingRequests: Map<string, (approved: boolean, resolution?: string) => void> = new Map();
   /** requestIds currently awaited, by the agent that is blocked on them. */
   private waitsByAgent: Map<string, Set<string>> = new Map();
@@ -92,42 +94,10 @@ export class PermissionManager {
     userId: string,
     toolId: string,
     action: string,
-    context?: Record<string, unknown>
+    context?: Record<string, unknown>,
+    scope?: Pick<AgentContext, 'sessionId' | 'workspaceId'>,
+    options?: { revalidate?: boolean; defaultLevel?: PermissionLevel; dangerous?: boolean },
   ): Promise<PermissionCheckResult> {
-    // 1. Check rule engine first (deny→allow→ask pattern matching)
-    try {
-      const { getPermissionRuleEngine } = await import('./permission-rules');
-      const ruleEngine = getPermissionRuleEngine();
-      if (ruleEngine.getRuleCount() > 0) {
-        const ruleResult = ruleEngine.evaluate(toolId, action, context);
-        if (ruleResult) {
-          switch (ruleResult.decision) {
-            case 'deny':
-              return { allowed: false, level: 'DENY', requiresApproval: false, reason: `Denied by rule: ${ruleResult.rule}` };
-            case 'allow':
-              // A blanket ALLOW does not cover an action its own tool declares
-              // `dangerous`. The shipped rules include `filesystem(*)` — "the
-              // filesystem tool has its own guards", which are path-containment
-              // guards, not destruction guards — and rules match on tool + path,
-              // never on action, so that one line silently outranked
-              // `delete: ASK, dangerous: true` in the manifest. An agent told to
-              // empty a directory simply called `delete_file` twenty-one times
-              // and no approval was ever consulted.
-              //
-              // Falling through (rather than returning ASK here) keeps the
-              // manifest and any stored per-user level authoritative for the
-              // dangerous action, which is where those decisions belong.
-              if (!this.isDangerousAction(toolId, action)) {
-                return { allowed: true, level: 'ALLOW', requiresApproval: false };
-              }
-              break;
-            case 'ask':
-              return { allowed: false, level: 'ASK', requiresApproval: true, reason: `Requires approval: ${ruleResult.rule}` };
-          }
-        }
-      }
-    } catch { /* rule engine not initialized */ }
-
     // 2. Get permission configuration from DB
     const permission = await this.db
       .select()
@@ -141,8 +111,25 @@ export class PermissionManager {
       )
       .limit(1);
 
+    // Stored DENY cannot be overridden by broad allow rules or grant expiry.
+    if (permission[0]?.level === 'DENY') {
+      return { allowed: false, level: 'DENY', requiresApproval: false,
+        reason: 'Action is denied by policy', source: `permission:${permission[0].id}` };
+    }
+    const { getPermissionRuleEngine } = await import('./permission-rules');
+    const rule = getPermissionRuleEngine().evaluate(toolId, action, context);
+    if (rule?.decision === 'deny') {
+      return { allowed: false, level: 'DENY', requiresApproval: false,
+        reason: `Denied by rule: ${rule.rule}`, source: 'rule' };
+    }
+    // Explicit per-user policies take precedence over broad allow/ask rules.
+    if (!permission[0] && rule && !(rule.decision === 'allow' && (options?.dangerous ?? this.isDangerousAction(toolId, action)))) {
+      const allowed = rule.decision === 'allow';
+      return { allowed, level: allowed ? 'ALLOW' : 'ASK', requiresApproval: !allowed, source: 'rule' };
+    }
+
     // Fall back to the tool's default permission level, or ASK if not found
-    let defaultLevel: PermissionLevel = 'ASK';
+    let defaultLevel: PermissionLevel = options?.defaultLevel ?? 'ASK';
     try {
       const registry = getToolRegistry();
       const toolInstance = registry.get(toolId);
@@ -167,11 +154,13 @@ export class PermissionManager {
     }
 
     // Check conditions if any
-    if (permission[0]?.conditions && context) {
+    if (permission[0]?.conditions?.length) {
       const conditionsResult = await this.checkConditions(
         permission[0].conditions as PermissionCondition[],
-        context,
+        context ?? {},
         { userId, toolId, action },
+        scope,
+        options,
       );
       if (!conditionsResult.passed) {
         return {
@@ -189,14 +178,7 @@ export class PermissionManager {
           allowed: true,
           level: 'ALLOW',
           requiresApproval: false,
-        };
-
-      case 'DENY':
-        return {
-          allowed: false,
-          level: 'DENY',
-          requiresApproval: false,
-          reason: 'Action is denied by policy',
+          source: permission[0] ? `permission:${permission[0].id}` : 'manifest',
         };
 
       case 'ASK':
@@ -215,26 +197,32 @@ export class PermissionManager {
   private async checkConditions(
     conditions: PermissionCondition[],
     context: Record<string, unknown>,
-    identity: { userId: string; toolId: string; action: string }
+    identity: { userId: string; toolId: string; action: string },
+    scope?: Pick<AgentContext, 'sessionId' | 'workspaceId'>,
+    options?: { revalidate?: boolean },
   ): Promise<{ passed: boolean; reason?: string }> {
     for (const condition of conditions) {
       switch (condition.type) {
+        case 'session':
+        case 'workspace': {
+          const actual = condition.type === 'session' ? scope?.sessionId : scope?.workspaceId;
+          if (!actual || actual !== condition.value) return { passed: false, reason: 'Outside permission scope' };
+          break;
+        }
         case 'path_pattern': {
-          const path = context.path as string;
-          if (path && typeof condition.value === 'string') {
-            const pattern = safeRegExp(condition.value);
-            if (!pattern) {
-              return { passed: false, reason: 'Invalid or too complex path pattern' };
-            }
-            if (!pattern.test(path)) {
-              return { passed: false, reason: `Path does not match pattern: ${condition.value}` };
-            }
+          const paths = ['path', 'source', 'destination', 'file_path', 'filePath', 'directory', 'cwd']
+            .flatMap(key => typeof context[key] === 'string' ? [context[key] as string] : []);
+          if (!paths.length || typeof condition.value !== 'string') return { passed: false, reason: 'Required path scope is missing' };
+          const pattern = safeRegExp(condition.value);
+          if (!pattern || paths.some(path => !pattern.test(path))) {
+            return { passed: false, reason: 'A path is outside the permitted pattern' };
           }
           break;
         }
 
         case 'command_pattern': {
           const command = context.command as string;
+          if (!command || typeof condition.value !== 'string') return { passed: false, reason: 'Required command scope is missing' };
           if (command && typeof condition.value === 'string') {
             const pattern = safeRegExp(condition.value);
             if (!pattern) {
@@ -264,6 +252,7 @@ export class PermissionManager {
         }
 
         case 'rate_limit': {
+          if (options?.revalidate) break;
           const cfg = condition.value as RateLimitConfig;
           if (!cfg || !Number.isFinite(cfg.maxRequests) || !Number.isFinite(cfg.windowMs) || cfg.maxRequests <= 0 || cfg.windowMs <= 0) {
             // Fail loud: a misconfigured rate-limit policy must not silently
@@ -279,6 +268,7 @@ export class PermissionManager {
           }
           break;
         }
+        default: return { passed: false, reason: `Unsupported permission condition: ${condition.type}` };
       }
     }
 
@@ -313,6 +303,8 @@ export class PermissionManager {
     };
 
     await this.db.insert(permissionRequests).values(request);
+    // Install the waiter before notifying clients: a fast answer must not be lost.
+    this.preparedWaits.set(requestId, this.waitForApproval(requestId, { agentId }));
 
     await auditRepository.log({
       userId,
@@ -347,6 +339,18 @@ export class PermissionManager {
     requestId: string,
     opts?: { agentId?: string; timeoutMs?: number },
   ): Promise<boolean> {
+    const prepared = this.preparedWaits.get(requestId);
+    if (prepared) {
+      this.preparedWaits.delete(requestId);
+      if (!opts?.timeoutMs || opts.timeoutMs <= 0) return prepared;
+      const timeout = setTimeout(() => {
+        const settle = this.pendingRequests.get(requestId);
+        if (!settle) return;
+        this.expireRequest(requestId).catch(err => coreLogger.error({ err }, 'Could not expire approval'));
+        settle(false);
+      }, opts.timeoutMs);
+      try { return await prepared; } finally { clearTimeout(timeout); }
+    }
     return new Promise((resolve) => {
       const settle = (approved: boolean) => {
         this.pendingRequests.delete(requestId);
@@ -468,6 +472,7 @@ export class PermissionManager {
     const filters = [
       eq(permissionRequests.id, requestId),
       eq(permissionRequests.status, 'pending'),
+      sql`(${permissionRequests.expiresAt} IS NULL OR ${permissionRequests.expiresAt} > NOW())`,
     ];
     if (!opts?.admin) filters.push(eq(permissionRequests.userId, resolvedBy));
 
@@ -646,7 +651,7 @@ export class PermissionManager {
           conditions: options?.conditions || [],
           grantedBy: options?.grantedBy,
           reason: options?.reason,
-          expiresAt: options?.expiresAt,
+          expiresAt: options?.expiresAt ?? null,
           updatedAt: new Date(),
         })
         .where(eq(toolPermissions.id, existing[0].id))

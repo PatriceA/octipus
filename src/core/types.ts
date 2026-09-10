@@ -26,13 +26,7 @@ export interface AgentContext {
    * all key on this, and every one of them meant "root", not "the orchestrator".
    */
   root?: boolean;
-  /**
-   * A person is waiting on this turn and can answer a question — the root of an
-   * interactive turn (chat, API, a channel message). False for the root of an
-   * unattended run (a hook, a heartbeat, a scheduled task), where an approval
-   * prompt reaches nobody and only burns the request's TTL before failing.
-   * Undefined on a spawned child, which is never attended either way.
-   */
+  /** Whether the initiating session can relay approval requests. Inherited by children. */
   attended?: boolean;
   status: AgentStatus;
   createdAt: Date;
@@ -84,6 +78,7 @@ export interface ToolResult {
   toolCallId: string;
   result: unknown;
   error?: string;
+  errorCode?: string;
 }
 
 // Task Types

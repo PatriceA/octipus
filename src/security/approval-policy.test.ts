@@ -11,7 +11,8 @@ describe('canPromptHuman', () => {
     // Keyed on `root`, not on the role name: since Phase 9 the root runs as an
     // ordinary role, so a role string no longer identifies it.
     expect(canPromptHuman({ role: 'general', root: true })).toBe(true);
-    expect(canPromptHuman({})).toBe(true);
+    expect(canPromptHuman({})).toBe(false);
+    expect(canPromptHuman({ attended: true, role: 'coding' })).toBe(true);
   });
 
   test('an unattended root cannot either — a hook run has nobody to ask', () => {
@@ -46,10 +47,9 @@ describe('routeApproval', () => {
       .toBe('ask_human');
   });
 
-  test('ASK auto-approves for a worker — blocking would hang it forever', () => {
+  test('ASK blocks unattended work without authorizing it', () => {
     const d = routeApproval({ level: 'ASK', role: 'coding', toolId: 'shell', action: 'run' });
-    expect(d.route).toBe('execute');
-    expect(d.autoApproved).toBe(true);
+    expect(d.route).toBe('blocked');
   });
 
   test('a named action is refused instead of auto-approved', () => {
@@ -88,7 +88,7 @@ describe('routeApproval', () => {
         level: 'ASK', role: 'coding', toolId: 'shell', action: 'run',
         unattendedDenyActions: ['filesystem__delete_file', ''],
       }).route,
-    ).toBe('execute');
+    ).toBe('blocked');
   });
 });
 

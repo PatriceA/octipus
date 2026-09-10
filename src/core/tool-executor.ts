@@ -6,6 +6,7 @@ import { spillToolOutput } from './tool-output-spill';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { getConfig } from '@/config';
+import { withDispatchAuthorization } from '@/security/dispatch-authorization';
 import { routeApproval } from '@/security/approval-policy';
 import { getPermissionManager } from '@/security/permissions';
 import { agentLogger, coreLogger } from '@/utils/logger';
@@ -596,7 +597,9 @@ export class ToolExecutor {
         this.context.userId,
         toolId,
         permAction,
-        toolCall.arguments
+        toolId === 'mcp' && bareName === 'mcp_call_tool'
+          ? (toolCall.arguments.arguments as Record<string, unknown> | undefined) ?? {} : toolCall.arguments,
+        this.context,
       );
 
       // ONE policy decision, shared with `base-tool.ts` — see
@@ -613,7 +616,7 @@ export class ToolExecutor {
         unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions,
       });
 
-      if (decision.route === 'deny') {
+      if (decision.route === 'deny' || decision.route === 'blocked') {
         const reason = permResult.reason || decision.reason;
         agentLogger.info(
           { agentId: this.context.id, tool: toolCall.name, reason },
@@ -624,7 +627,8 @@ export class ToolExecutor {
         results.push({
           toolCallId: toolCall.id,
           result: null,
-          error: `Permission denied: ${reason || 'action is not allowed'}. Do NOT retry this action — it is blocked by policy.`,
+          errorCode: decision.route === 'blocked' ? 'approval_required' : 'permission_denied',
+          error: `${decision.route === 'blocked' ? 'Approval required' : 'Permission denied'}: ${reason || 'action is not allowed'}. Do NOT retry this action — it is blocked by policy.`,
         });
 
         await auditRepository.logToolDenied(
@@ -637,6 +641,7 @@ export class ToolExecutor {
         continue;
       }
 
+      let authorizationSource = permResult.source ?? 'policy';
       if (permResult.level === 'ASK') {
         if (decision.route === 'ask_human') {
           this.counters.approvalsRequired++;
@@ -644,9 +649,10 @@ export class ToolExecutor {
             this.context.userId,
             this.context.id,
             toolId,
-            toolCall.name,
+            permAction,
             toolCall.arguments,
-            this.context.sessionId
+            this.context.sessionId,
+            toolCall.name,
           );
 
           this.emitFn('permission_request', {
@@ -658,6 +664,7 @@ export class ToolExecutor {
 
           const approved = await permissionManager.waitForApproval(requestId, { agentId: this.context.id });
 
+          authorizationSource = `approval:${requestId}`;
           if (!approved) {
             this.counters.approvalsDenied++;
             agentLogger.info(
@@ -686,25 +693,11 @@ export class ToolExecutor {
                 `(rejected, expired, or undeliverable on this channel).`,
             );
           }
-        } else {
-          this.counters.autoApproved++;
-          // `action` and the deny list are on this line because without them it
-          // cannot answer the only question anyone asks it: WHICH permission
-          // was waved through, and was the list that should have stopped it
-          // even populated. Diagnosing an auto-approved `rm -rf` from
-          // `tool: shell__run` alone is guesswork.
-          agentLogger.info(
-            {
-              agentId: this.context.id,
-              tool: toolCall.name,
-              toolId,
-              action: permAction,
-              role: this.context.role,
-              unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions,
-            },
-            'Auto-approving ASK-level tool for autonomous worker'
-          );
         }
+      }
+
+      if (this.context.status === 'stopped' || this.context.status === 'failed') {
+        throw new Error('Agent stopped before tool execution');
       }
 
       // ALLOW path (or approved ASK) — execute tool
@@ -727,7 +720,8 @@ export class ToolExecutor {
 
       try {
         const toolExecStart = Date.now();
-        const result = await tool.execute(toolCall.arguments, this.context);
+        const result = await withDispatchAuthorization(this.context, toolId, permAction, toolCall.arguments, authorizationSource,
+          () => tool.execute(toolCall.arguments, this.context));
         const toolExecMs = Date.now() - toolExecStart;
 
         agentLogger.info({
@@ -805,7 +799,7 @@ export class ToolExecutor {
           this.context.sessionId,
           toolCall.name,
           toolId,
-          { args: toolCall.arguments, result: resultStr.slice(0, 10_000), durationMs: toolExecMs }
+          { args: toolCall.arguments, result: resultStr.slice(0, 10_000), durationMs: toolExecMs, authorizationSource }
         );
 
         // Post-tool hook (fire-and-forget, can't block after execution)

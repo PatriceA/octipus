@@ -164,7 +164,7 @@ export class MessagingTool extends BaseTool {
           })),
         };
       },
-      { requiresPermission: false },
+      { permissionAction: 'list' },
     );
 
     this.registerTool(
@@ -202,7 +202,7 @@ export class MessagingTool extends BaseTool {
 
         return { contacts };
       },
-      { requiresPermission: false },
+      { permissionAction: 'list' },
     );
 
     this.registerTool(

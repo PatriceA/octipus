@@ -19,6 +19,7 @@
  */
 
 import { existsSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { commandPolicyViolation, matchElevatedCommand, tokenizeSafe } from '@/tools/shell/policy';
 import { coreLogger } from '@/utils/logger';
@@ -101,7 +102,31 @@ export type Scorer =
    * the capability gate above is what stands in for that, and it is a coarser
    * instrument.
    */
-  | { kind: 'command_exit_zero'; command: string; timeoutMs?: number };
+  | { kind: 'command_exit_zero'; command: string; timeoutMs?: number }
+  /**
+   * Passes when ANY of its members passes. The one gate that can be stated
+   * without knowing how the child will work.
+   *
+   * A single `command_exit_zero` asserts both that the work is right and that
+   * one exact command proves it. The second half is a guess about a child that
+   * has not run yet — which runner it reaches for, what it names its tests,
+   * whether it ships a suite at all — and when the guess is wrong the child is
+   * marked `contract_failed` for work that was correct. That is not a
+   * hypothetical: a build that passed every one of its acceptance tests was
+   * re-dispatched twice because the verification command named a path the gate
+   * could not spawn.
+   *
+   * So: state the alternatives.
+   *
+   *     {"kind":"any_of","scorers":[
+   *       {"kind":"command_exit_zero","command":"pytest -q"},
+   *       {"kind":"command_exit_zero","command":"python3 -m unittest discover"}]}
+   *
+   * Members are evaluated in order and evaluation stops at the first pass, so
+   * put the cheapest first. Nesting is one level deep by design — a tree of
+   * alternatives is a program, and a gate is a check.
+   */
+  | { kind: 'any_of'; scorers: Scorer[] };
 
 export interface ScorerFailure {
   /** Human-readable scorer label, e.g. `regex(/PASS/)` or `file_exists`. */
@@ -538,6 +563,49 @@ export async function runScorers(
  */
 export class ScorerNotEvaluated extends Error {}
 
+/**
+ * Re-quote a verification command whose PATH was split into argv by a space.
+ *
+ * The gate runs argv-only, deliberately: no shell, so no injection. The model
+ * therefore cannot write `cd X && pytest`, and when it needs to name a file it
+ * writes the path out in full. If the workspace sits under a directory with a
+ * space in its name, an unquoted absolute path becomes two arguments and the
+ * interpreter is handed the first half:
+ *
+ *     python3 /home/me/Github Rep/proj/test_x.py
+ *     → argv ['python3', '/home/me/Github', 'Rep/proj/test_x.py']
+ *     → can't find '__main__' module in '/home/me/Github'
+ *
+ * That is a defective CHECK, not failed work, and it cost a correct build two
+ * re-dispatches before this existed. The repair is deliberately narrow: a run
+ * of tokens is rejoined only when the run names something that actually exists
+ * and its first token alone does not. It cannot introduce a metacharacter —
+ * `tokenizeSafe` has already refused every one — and it cannot reach outside
+ * the workspace, because the caller resolved `cwd` through `WorkspaceFS`.
+ *
+ * Left alone: a command the author quoted (they have said what they meant), and
+ * one where no rejoining names a real path. The residual, stated: two separate
+ * arguments whose concatenation happens to be an existing path would be merged.
+ */
+export function requoteSplitPath(command: string, cwd: string): string {
+  if (/['"]/.test(command)) return command;
+  const argv = tokenizeSafe(command);
+  if (!argv || argv.length < 3) return command;
+
+  const real = (p: string): boolean => existsSync(isAbsolute(p) ? p : join(cwd, p));
+
+  for (let start = 1; start < argv.length - 1; start++) {
+    // Only a token that looks like a path and is NOT one is worth repairing.
+    if (!argv[start].includes('/') || real(argv[start])) continue;
+    for (let end = argv.length; end > start + 1; end--) {
+      const joined = argv.slice(start, end).join(' ');
+      if (joined.includes("'") || !real(joined)) continue;
+      return [...argv.slice(0, start), `'${joined}'`, ...argv.slice(end)].join(' ');
+    }
+  }
+  return command;
+}
+
 /** Evaluate one scorer. Returns a failure, or null when it passes. */
 async function evaluate(
   scorer: Scorer,
@@ -545,6 +613,28 @@ async function evaluate(
   ctx: ScorerContext,
 ): Promise<ScorerFailure | null> {
   switch (scorer.kind) {
+    case 'any_of': {
+      // First pass wins and the rest are not run — members are alternatives,
+      // not a checklist, and the cheap one is meant to go first.
+      const misses: ScorerFailure[] = [];
+      for (const member of scorer.scorers) {
+        const failure = await evaluate(member, result, ctx);
+        if (!failure) return null;
+        misses.push(failure);
+      }
+      return {
+        scorer: `any_of(${scorer.scorers.map((m) => m.kind).join(', ')})`,
+        // Every alternative, not just the last: the retry brief has to say what
+        // ALL the accepted routes to "done" were, or the child cannot tell
+        // which one it was closest to satisfying.
+        reason:
+          `none of the ${misses.length} alternatives passed — ` +
+          misses.map((m) => `${m.scorer}: ${m.reason}`).join('; '),
+        // Retryable only if some route back is: a set of alternatives the child
+        // has no power over is still a set it has no power over.
+        retryable: misses.some((m) => m.retryable !== false),
+      };
+    }
     case 'non_empty': {
       const text = asText(result, 'output').trim();
       return text.length > 0 ? null : { scorer: 'non_empty', reason: 'output is empty' };
@@ -879,7 +969,14 @@ async function evaluate(
       // the process sandbox and its runner probe.
       const { LocalShellOperations } = await import('@/tools/shell/local-operations');
       try {
-        const res = await new LocalShellOperations().exec(scorer.command, cwd, {
+        const repaired = requoteSplitPath(scorer.command, cwd);
+        if (repaired !== scorer.command) {
+          coreLogger.info(
+            { original: truncate(scorer.command, 80), repaired: truncate(repaired, 80) },
+            'Scorer command had a path split by a space — re-quoted before running',
+          );
+        }
+        const res = await new LocalShellOperations().exec(repaired, cwd, {
           timeout: timeoutMs,
           ...(ctx.signal ? { signal: ctx.signal } : {}),
           // Never `unsafe`. Safe mode is what makes `tokenizeSafe` reject shell
@@ -1017,7 +1114,10 @@ export function deriveToolOutageScorer(): Scorer {
  * entry (fail loud — a malformed scorer spec is reported, not silently dropped).
  * A missing/empty arg yields an empty list (scorers are opt-in).
  */
-export function parseScorers(raw: unknown): { scorers: Scorer[] } | { error: string } {
+export function parseScorers(
+  raw: unknown,
+  depth = 0,
+): { scorers: Scorer[] } | { error: string } {
   if (raw === undefined || raw === null) return { scorers: [] };
   if (!Array.isArray(raw)) return { error: 'scorers must be an array' };
   if (raw.length > 20) return { error: 'too many scorers (max 20)' };
@@ -1029,6 +1129,21 @@ export function parseScorers(raw: unknown): { scorers: Scorer[] } | { error: str
     const e = entry as Record<string, unknown>;
     const kind = e.kind;
     switch (kind) {
+      case 'any_of': {
+        // One level only. `parseScorers` is called on the members, and a member
+        // that is itself an `any_of` is refused there rather than here, so the
+        // depth cap holds however deep the nesting was attempted.
+        if (depth > 0) {
+          return { error: `scorers[${i}] (any_of) cannot be nested inside another any_of` };
+        }
+        if (!Array.isArray(e.scorers) || e.scorers.length < 2) {
+          return { error: `scorers[${i}].scorers (any_of) must be an array of at least 2 scorers` };
+        }
+        const inner = parseScorers(e.scorers, depth + 1);
+        if ('error' in inner) return { error: `scorers[${i}].${inner.error}` };
+        scorers.push({ kind: 'any_of', scorers: inner.scorers });
+        break;
+      }
       case 'non_empty':
         scorers.push({ kind: 'non_empty' });
         break;

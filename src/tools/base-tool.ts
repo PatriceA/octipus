@@ -3,7 +3,9 @@ import { getAgentHooks } from '@/core/agent/hooks';
 import { isCancellationError } from '@/core/swarm/errors';
 import { recordToolExecution } from '@/core/telemetry';
 import type { AgentContext, ToolManifest, } from '@/core/types';
-import { canPromptHuman, isListedAction, routeApproval } from '@/security/approval-policy';
+import { ApprovalBlockedError, consumeDispatchAuthorization } from '@/security/dispatch-authorization';
+import { auditRepository } from '@/db/repositories/audit-repository';
+import { routeApproval } from '@/security/approval-policy';
 import { getPermissionManager } from '@/security/permissions';
 import { injectSecrets, redactSecretValues } from '@/security/secret-injector';
 import { toolLogger } from '@/utils/logger';
@@ -164,93 +166,46 @@ export abstract class BaseTool {
     // A `tool:before` handler may have rewritten the arguments.
     args = before.args;
 
-    // Permission check.
-    //
-    // Phase 1c: the legacy `isSystemUser` bypass is honored only when
-    // `multiuser.enforcePermissions` is false. With enforcement on,
-    // every tool dispatch is gated — system pseudo-users (MCP, API
-    // bridges) that need to skip the prompt must instead carry a real
-    // user identity and rely on policy/allowlist.
-    const isSystemUser = (context.metadata as Record<string, unknown>)?.isSystemUser === true;
-    let enforce = false;
-    let unattendedDenyActions: string[] | undefined;
-    try {
-      const { getConfig } = await import('@/config');
-      const mu = getConfig().multiuser;
-      enforce = !!mu?.enforcePermissions;
-      unattendedDenyActions = mu?.unattendedDenyActions;
-    } catch { /* config not loaded — fall through to legacy behavior */ }
-
-    const skipForSystem = isSystemUser && !enforce;
-    // An unattended caller cannot be asked anything, so unless the operator has
-    // named actions to refuse in that case, the whole check is a DB round-trip
-    // whose only possible outcome is "carry on" — skipped here on the tool hot
-    // path, exactly as before. When the list IS set, we pay for the check and
-    // let the shared policy decide. (The agent loop checks every call anyway,
-    // so a stored DENY is still enforced there.)
-    //
-    // Keyed on THIS action, not on whether the list is non-empty. The list
-    // stopped being empty by default (`shell.execute_destructive`,
-    // `filesystem.delete`), and a mere length test would have re-armed the
-    // round-trip for every unattended call to every tool in the system — the
-    // hot path this skip exists to protect — to guard two actions.
-    const action =
-      typeof options?.permissionAction === 'function'
-        ? options.permissionAction(args)
-        : options?.permissionAction || toolName;
-    const skipForUnattended =
-      !canPromptHuman(context) && !isListedAction(unattendedDenyActions, this.id, action);
-    if (options?.requiresPermission !== false && !skipForSystem && !skipForUnattended) {
-      const permissionManager = getPermissionManager();
-
-      const check = await permissionManager.check(context.userId, this.id, action, args);
-
-      // One shared policy with the agent loop — see `security/approval-policy.ts`.
-      // The rule this replaces (an inline "not the root agent ⇒ skip the
-      // check entirely") lived here as a copy of the one in
-      // `tool-executor.ts`, and is the reason a worker's approval request used
-      // to hang forever: nobody relays it. Asking the policy also means an
-      // operator's `unattendedDenyActions` is honoured on THIS path too, where
-      // the old skip could not express a refusal at all.
-      const decision = routeApproval({
-        level: check.allowed ? 'ALLOW' : check.requiresApproval ? 'ASK' : 'DENY',
-        role: context.role,
-        toolId: this.id,
-        action,
-        unattendedDenyActions,
-      });
-
-      if (decision.route === 'deny') {
-        throw new Error(
-          `Permission denied for ${this.id}.${action}: ${check.reason ?? decision.reason}`,
-        );
-      }
-
-      if (decision.route === 'ask_human') {
-        // Request approval
-        const requestId = await permissionManager.requestApproval(
-          context.userId,
-          context.id,
-          this.id,
-          action,
-          args,
-          context.sessionId,
-          toolName,
-        );
-
-        toolLogger.info(
-          { toolId: this.id, tool: toolName, requestId },
-          'Awaiting permission approval'
-        );
-
-        // Wait for approval (this will block until approved/denied/timeout)
+    const action = typeof options?.permissionAction === 'function'
+      ? options.permissionAction(args) : options?.permissionAction || toolName;
+    const priorAuthorization = consumeDispatchAuthorization(context, this.id, action, args);
+    const permissionManager = getPermissionManager();
+    // Recheck after the argument-rewriting waterfall, even for unattended/system calls.
+    const manifestPermission = this.getManifest().permissions.find(permission => permission.action === action);
+    const check = await permissionManager.check(context.userId, this.id, action, args, context,
+      { revalidate: !!priorAuthorization, defaultLevel: manifestPermission?.defaultLevel, dangerous: manifestPermission?.dangerous });
+    const decision = routeApproval({
+      level: check.level, role: context.role, root: context.root,
+      attended: context.attended, toolId: this.id, action,
+    });
+    let authorizationSource = check.source ?? 'policy';
+    if (decision.route === 'deny') {
+      throw new Error(`Permission denied for ${this.id}.${action}: ${check.reason ?? decision.reason}`);
+    }
+    if (check.level === 'ASK') {
+      if (priorAuthorization?.startsWith('approval:')) {
+        authorizationSource = priorAuthorization;
+      } else if (decision.route === 'blocked') {
+        throw new ApprovalBlockedError(`${this.id}.${action}: ${decision.reason}`);
+      } else {
+        const requestId = await permissionManager.requestApproval(context.userId, context.id,
+          this.id, action, args, context.sessionId || undefined, toolName);
         const approved = await permissionManager.waitForApproval(requestId, { agentId: context.id });
-
-        if (!approved) {
-          throw new Error(`Permission denied for ${this.id}.${action}`);
-        }
+        if (!approved) throw new Error(`Approval was not granted for ${this.id}.${action}`);
+        authorizationSource = `approval:${requestId}`;
+        const current = await permissionManager.check(context.userId, this.id, action, args, context,
+          { revalidate: true, defaultLevel: manifestPermission?.defaultLevel, dangerous: manifestPermission?.dangerous });
+        if (current.level === 'DENY') throw new Error('Permission was revoked while awaiting approval');
       }
     }
+    if (context.status === 'stopped' || context.status === 'failed') {
+      throw new Error('Agent stopped before tool execution');
+    }
+    await auditRepository.log({
+      userId: context.userId, action: 'permission_granted', resourceType: 'tool',
+      resourceId: `${this.id}.${action}`, sessionId: /^[0-9a-f-]{36}$/i.test(context.sessionId) ? context.sessionId : undefined,
+      details: { authorizationSource, agentId: context.id, action, toolId: this.id },
+    });
 
     // Inject secrets if needed
     let processedArgs = args;

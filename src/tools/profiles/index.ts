@@ -68,7 +68,7 @@ export class ProfilesTool extends BaseTool {
           })),
         };
       },
-      { requiresPermission: false },
+      { permissionAction: 'manage' },
     );
 
     this.registerTool(
@@ -99,7 +99,7 @@ export class ProfilesTool extends BaseTool {
 
         return { error: 'Provide either id or name.' };
       },
-      { requiresPermission: false },
+      { permissionAction: 'manage' },
     );
 
     this.registerTool(
@@ -153,7 +153,7 @@ export class ProfilesTool extends BaseTool {
           ...(linkedMeetings > 0 ? { linkedMeetings } : {}),
         };
       },
-      { requiresPermission: false },
+      { permissionAction: 'manage' },
     );
 
     this.registerTool(
@@ -180,7 +180,7 @@ export class ProfilesTool extends BaseTool {
 
         return { updated: true, profile: this.formatProfile(profile) };
       },
-      { requiresPermission: false },
+      { permissionAction: 'manage' },
     );
 
     this.registerTool(
@@ -220,7 +220,7 @@ export class ProfilesTool extends BaseTool {
 
         return { updated: true, profile: this.formatProfile(profile) };
       },
-      { requiresPermission: false },
+      { permissionAction: 'manage' },
     );
 
     this.registerTool(
@@ -236,7 +236,7 @@ export class ProfilesTool extends BaseTool {
 
         return { updated: true, profile: this.formatProfile(profile) };
       },
-      { requiresPermission: false },
+      { permissionAction: 'manage' },
     );
 
     this.registerTool(
@@ -251,7 +251,7 @@ export class ProfilesTool extends BaseTool {
 
         return { deleted: true, message: 'Profile deleted.' };
       },
-      { requiresPermission: false },
+      { permissionAction: 'manage' },
     );
 
     this.registerTool(
@@ -278,7 +278,7 @@ export class ProfilesTool extends BaseTool {
           })),
         };
       },
-      { requiresPermission: false },
+      { permissionAction: 'manage' },
     );
   }
 

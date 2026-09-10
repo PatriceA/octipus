@@ -3,6 +3,8 @@ import { apiContext } from '@/api/context';
 import { ROLE_CONFIGS } from '@/core/agent/roles';
 import { getExtensionRegistry } from '@/extensions/registry';
 import { getMCPBridge } from '@/mcp/bridge';
+import { ApprovalBlockedError } from '@/security/dispatch-authorization';
+import type { PermissionCondition } from '@/db/schema/permissions';
 import { getPermissionManager } from '@/security/permissions';
 import { getToolRegistry } from '@/tools/registry';
 import { apiLogger } from '@/utils/logger';
@@ -153,6 +155,7 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
           level: p.level,
           reason: p.reason,
           expiresAt: p.expiresAt,
+          conditions: p.conditions,
         })),
       };
     },
@@ -162,18 +165,38 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
   // Set a permission level for a tool action
   .put(
     '/permissions',
-    async ({ user, body }) => {
+    async ({ user, body, set }) => {
       if (!user) {
         return { error: 'Not authenticated' };
       }
 
       const pm = getPermissionManager();
+      const conditions: PermissionCondition[] = [];
+      const scope = body.scope;
+      let expiresAt: Date | undefined;
+      if (scope) {
+        expiresAt = new Date(scope.expiresAt);
+        if (!Number.isFinite(expiresAt.getTime()) || expiresAt <= new Date() ||
+            (!scope.sessionId && !scope.workspaceId && !scope.pathPattern && !scope.commandPattern)) {
+          set.status = 400;
+          return { error: 'A scoped permission needs a future expiry and a session, workspace, path, or command scope.' };
+        }
+        if (scope.sessionId) conditions.push({ type: 'session', value: scope.sessionId });
+        if (scope.workspaceId) conditions.push({ type: 'workspace', value: scope.workspaceId });
+        if (scope.pathPattern) conditions.push({ type: 'path_pattern', value: scope.pathPattern });
+        if (scope.commandPattern) conditions.push({ type: 'command_pattern', value: scope.commandPattern });
+        const existing = (await pm.getUserPermissions(user.id)).find(p => p.toolId === body.toolId && p.action === body.action);
+        if (existing?.level === 'DENY' && body.level === 'ALLOW') {
+          set.status = 409;
+          return { error: 'This action is denied. Review and change the denial before granting unattended access.' };
+        }
+      }
       const result = await pm.setPermission(
         user.id,
         body.toolId,
         body.action,
         body.level as 'ALLOW' | 'ASK' | 'DENY',
-        { grantedBy: user.id, reason: body.reason }
+        { grantedBy: user.id, reason: body.reason, conditions, expiresAt }
       );
 
       return {
@@ -190,6 +213,13 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
         action: t.String(),
         level: t.Union([t.Literal('ALLOW'), t.Literal('ASK'), t.Literal('DENY')]),
         reason: t.Optional(t.String()),
+        scope: t.Optional(t.Object({
+          expiresAt: t.String(),
+          sessionId: t.Optional(t.String()),
+          workspaceId: t.Optional(t.String()),
+          pathPattern: t.Optional(t.String()),
+          commandPattern: t.Optional(t.String()),
+        })),
       }),
       detail: { tags: ['tools'] },
     }
@@ -255,7 +285,7 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
   // Execute a tool directly via API (used by MCP server bridge)
   .post(
     '/:toolId/tools/:toolName/execute',
-    async ({ user, params, body }) => {
+    async ({ user, principal, params, body, set }) => {
       if (!user) {
         return { error: 'Not authenticated' };
       }
@@ -274,9 +304,11 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
         id: `api-${Date.now().toString(36)}`,
         sessionId: '',
         userId,
+        workspaceId: principal?.workspaceId ?? null,
         topic: 'api',
         model: 'api',
         role: 'general',
+        attended: false,
         status: 'running',
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -287,7 +319,9 @@ export const toolRoutes = new Elysia({ prefix: '/tools' })
         const result = await tool.execute(body.args || {}, context);
         return { result };
       } catch (err) {
-        return { error: `Tool execution failed: ${(err as Error).message}` };
+        set.status = err instanceof ApprovalBlockedError ? 409 : 400;
+        return { error: `Tool execution failed: ${(err as Error).message}`,
+          code: err instanceof ApprovalBlockedError ? err.code : 'tool_execution_failed' };
       }
     },
     {

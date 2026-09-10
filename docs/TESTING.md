@@ -1,101 +1,102 @@
 # Testing
 
-This project has four distinct test surfaces. Each is scoped so it runs fast
-and doesn't need the full stack.
+The suites below test different boundaries. Passing UI tests with stubbed API
+responses or generating adversarial prompts does not prove that a real model can
+complete a task through the deployed application.
 
-## 1. Unit + integration tests — `npm test`
+## Unit and embedded database tests
 
-Runs the Vitest suite (`src/**/*.test.ts`, `scripts/**/*.test.ts`) across two
-projects. Files that touch a database — embedded PGlite or the shared test
-Postgres — run in the `database` project at one worker; everything else runs at
-full width in `unit`. The split is classified by reading the files, not from a
-list, because a file in the wrong project hangs or deadlocks rather than
-failing (see `vitest.config.ts`). Most specs are pure in-process and fine
-offline.
+`npm test` runs Vitest across `unit` and `database` projects. The configuration
+includes `.test.ts` and `.spec.ts` files in `src/` and `scripts/`, plus CLI tests
+in `bin/`. Database-marked suites run with one worker to avoid shared-database
+conflicts and concurrent PGlite problems. See `vitest.config.ts` for discovery.
 
-```
-npm test               # unit + integration under src/ and scripts/
-npm run test:tui       # just the TUI tests (src/tui-pi and src/tui-editor)
+```bash
+npm test
+npm run test:tui
 ```
 
-The TUI suite uses `ink-testing-library` with a compatibility shim (see
-`src/tui/test-utils.tsx`) to bridge ink v4's stdin expectations with the v3
-testing library's stdin mock. The `MockGatewayClient` mirrors the real
-`GatewayClient` API so tests never hit the backend WS.
+External Postgres tests gated on `INTEGRATION=1` are skipped in the ordinary
+lane. A green `npm test` does not mean those tests ran. The terminal clients live
+in `src/tui-pi/` and `src/tui-editor/`; they use pi-tui.
 
-## 2. API + WS E2E — `scripts/e2e/`
+## External database integration
 
-End-to-end HTTP + WebSocket tests against a running backend.
-
-```
-npm run test:e2e
-```
-
-See `scripts/e2e/index.ts` for the root agent and `scripts/e2e/fixtures.ts`
-for the shared auth / session state.
-
-## 3. Web UI E2E — Playwright
-
-Full browser-based tests against the Vite-built web app at `http://localhost:3007`,
-with the backend on `http://localhost:3005/api` for real routes and heavy
-`page.route()` interception for everything else.
-
-```
-npm run test:web:install   # one-time: playwright install chromium
-npm run test:web           # headless Chromium
-npm run test:web:headed    # headed (watch it run)
-npm run test:web:ui        # Playwright's interactive UI mode
-npm run test:web:list      # list discovered tests without running
-```
-
-Config lives at `playwright.config.ts` and tests at `tests/web/*.spec.ts`.
-
-Key design notes:
-
-- **Dev server orchestration**: `playwright.config.ts`'s `webServer` block
-  builds the web bundle and serves it with `web/serve.mjs`. Every `/api/**`
-  call is stubbed in the browser, so no backend is needed. In CI we don't
-  reuse existing servers; locally we do.
-  Set `PLAYWRIGHT_SKIP_WEBSERVERS=1` to run against a hand-started stack.
-- **Auth fixture** (`tests/web/fixtures/auth.ts`): the `authenticatedPage`
-  fixture seeds `localStorage` with a stub token + intercepts `/api/auth/me`
-  so the AuthProvider passes the guard. When `MASTER_KEY` is set in env, the
-  real key is used and we exercise the master-key auth path.
-- **Mock-heavy**: the UI is under test here, not the backend (the backend has
-  881+ unit tests of its own). Default stubs in `tests/web/fixtures/api-stubs.ts`
-  cover sessions, models, experts, MCP, knowledge, skills, pipelines, swarm,
-  settings — tests compose or override as needed.
-- **Console-error watchdog**: the auth fixture wires `page.on('pageerror')`
-  and `page.on('console')` so any unhandled page error or `console.error`
-  fails the test via `expectNoConsoleErrors(consoleErrors)`. A short
-  `ERROR_ALLOWLIST` filters known-benign Next.js dev noise (favicon 404,
-  fast-refresh notices, React DevTools suggestion).
-- **Accessibility**: `@axe-core/playwright` runs on the dashboard + chat page
-  and fails on serious/critical violations.
-- **Mobile**: the `responsive.spec.ts` suite runs under the `chromium-mobile`
-  project (Pixel 5 viewport) — see `playwright.config.ts`.
-
-## 4. Integration harness — `npm run test:integration`
-
-Previously-skipped integration tests backed by `docker-compose.test.yml`. Spins up an isolated Postgres and runs specs that need real DB transactions or cross-process pub/sub. Coverage includes MCP transports (stdio + SSE) and storage provider parity (Postgres vs in-memory).
-
-```
+```bash
 npm run test:integration
 ```
 
-The compose file is scoped to this harness — ports don't collide with the dev stack.
+The harness brings up the isolated test Postgres from
+`docker-compose.test.yml`, migrates it, and runs the integration-enabled suite.
+It exercises database behavior including permissions and tenant boundaries with
+mocked model providers. Docker is required. The default host port is 5443; use
+`TEST_POSTGRES_PORT` if that port is occupied.
 
-## 5. CI matrix
+## API and WebSocket E2E
 
-| Surface           | Command             | Needs docker? | Typical time |
-|-------------------|---------------------|---------------|--------------|
-| Unit + TUI        | `npm test`          | no            | ~5s          |
-| Integration (DB)  | `npm run test:integration` | yes (test compose) | ~30s |
-| API E2E           | `npm run test:e2e`  | yes           | ~1–2 min     |
-| Web UI (Playwright) | `npm run test:web` | no (webServer auto-starts) | ~2–5 min |
+```bash
+npm run test:e2e
+```
 
-Run them all in parallel lanes; the Web UI lane is fully self-contained because
-it intercepts all provider calls — no API keys needed.
+These tests exercise a running backend. Inspect `scripts/test-e2e.ts` and
+`scripts/e2e/` for required configuration and the selected scenarios. They are a
+separate command from the default CI unit and database lanes. Report which
+scenarios ran and which providers were real or mocked.
+
+## Browser UI tests
+
+```bash
+npm run test:web:install
+npm run test:web
+npm run test:web:headed
+npm run test:web:ui
+npm run test:web:list
+```
+
+Playwright builds and serves the production Vite web bundle at
+`http://localhost:3007`. The shared fixtures intercept API requests, including a
+catch-all for otherwise unmocked paths, so no backend or provider keys are needed.
+These tests validate frontend behavior against fixtures, not authentication or
+execution through a real backend. Even supplying `MASTER_KEY` to the fixture does
+not remove that API interception.
+
+Configuration: `playwright.config.ts`. Tests and fixtures: `tests/web/`.
+The configured project is desktop Chromium; responsive behavior must be assessed
+from individual specs rather than assuming a separate mobile project exists.
+Console-error and accessibility checks provide additional UI coverage.
+
+## Model evaluations and red-team checks
+
+```bash
+npm run eval
+npm run eval:routing
+npm run eval:quality
+npx tsx --import ./scripts/md-loader.mjs src/eval/red-team/cli.ts --dry-run
+```
+
+The committed red-team workflow runs **only the dry-run**: it checks generation
+and harness operation without making model calls. It runs weekly, on demand, and
+on PRs matching its red-team paths. It does not test the resistance of a deployed
+model to prompt injection, and it does not gate arbitrary prompt or role changes
+on live adversarial results.
+
+Changes to prompts, roles, routing, or tool selection should run relevant actual
+evaluations and report their model configuration, results, and skipped cases.
+The consolidation acceptance lanes below add production-path checks and an
+opt-in live baseline. Their evidence is separate from the generator dry-run.
+
+## Current CI evidence
+
+| Lane | What it establishes | What it does not establish |
+| --- | --- | --- |
+| Backend | Typecheck, lint, catalog consistency, unit/embedded tests, coverage ratchet, dependency audit | Real-provider task completion |
+| Integration | External Postgres behavior with integration tests enabled | Live model quality |
+| Web E2E | Browser behavior with API fixtures | Client → real backend → tool execution |
+| Red-team | Adversarial case generation in dry-run mode | Actual model resistance to attacks |
+
+Workflow definitions in `.github/workflows/` are authoritative for triggers and
+commands. Do not report skipped tests as passed. Keep runtime estimates in dated
+measurement reports rather than treating them as fixed properties of a suite.
 
 ### Swarm test coverage
 
@@ -124,3 +125,35 @@ webServer block times out, bump its `timeout:` in `playwright.config.ts`.
 **TUI tests fail with `stdin.ref is not a function`**: make sure your tests
 import `render` from `src/tui/test-utils.tsx`, not directly from
 `ink-testing-library` — the shim in `test-utils` patches the Stdin mock.
+
+
+## Consolidation acceptance lanes
+
+`npm run test:acceptance` builds and starts the production backend with an isolated
+embedded database and a local scripted provider. It checks a real model-adapter
+request, a repository diff and unchanged file, unattended refusal with no write,
+and persisted messages after process restart and reauthentication. CI gates this
+lane and uploads its JSON report. Scripted output is lifecycle evidence, not a
+model-quality score.
+
+`src/core/research/workflow-acceptance.test.ts` exercises research persistence,
+source provenance, concurrent task-ingestion retries, and interrupted-job recovery
+against embedded storage. `src/security/dispatch-authorization.test.ts` exercises
+actual dispatch guards with independently observed side effects, including MCP.
+Browser tests in `tests/web/consolidation.spec.ts` use API fixtures for failure and
+recovery states; they do not claim to test the model/backend integration.
+
+`npm run test:live-baseline` uses the existing eval runner with three fixed cases,
+one at a time, and a three-minute client limit. Set `OCTIPUS_EVAL_URL`,
+`OCTIPUS_EVAL_MODEL`, `OCTIPUS_EVAL_PROVIDER`, `OCTIPUS_API_KEY`, and
+`OCTIPUS_EVAL_BUDGET_REFERENCE` for a **dedicated** backend/provider account with a
+spending limit. The reference identifies that configured limit; it does not set
+one. A client timeout does not cancel backend work or enforce a monetary cap.
+Missing configuration writes an unmeasured report and exits 2. The
+`live-baseline.yml` workflow supports manual and published-release runs through
+the `live-evaluation` environment. It measures a baseline, without inventing a
+quality threshold. It is a post-publication check, not a pre-release gate.
+
+Provider quality, direct/delegated comparisons, first useful feedback, exact spend,
+and approval/tool-error counts remain unmeasured where telemetry is absent.
+Run live baseline locally before release if a release decision depends on it.

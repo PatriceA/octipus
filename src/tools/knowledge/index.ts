@@ -121,7 +121,7 @@ export class KnowledgeTool extends BaseTool {
           summary: `${stats.total} entries across ${Object.keys(stats.byPurpose).length} purposes. Avg content length: ${stats.avgContentLength} chars. Abstract coverage: ${stats.abstractCoverage.withAbstract}/${stats.total}.`,
         };
       },
-      { requiresPermission: false },
+      { permissionAction: 'search' },
     );
 
     this.registerTool(
@@ -215,7 +215,7 @@ export class KnowledgeTool extends BaseTool {
           hint: `${base.hint} 'linked' lists entities reached by following authored edges from the matched entries.`,
         };
       },
-      { requiresPermission: false },
+      { permissionAction: 'search' },
     );
 
     this.registerTool(
@@ -241,7 +241,7 @@ export class KnowledgeTool extends BaseTool {
           language: entry.metadata.language,
         };
       },
-      { requiresPermission: false },
+      { permissionAction: 'search' },
     );
 
     this.registerTool(
@@ -387,7 +387,7 @@ export class KnowledgeTool extends BaseTool {
           backlinks: links.map((l) => ({ id: l.id, from: { type: l.fromType, id: l.fromId }, linkType: l.linkType, label: l.label, origin: l.origin })),
         };
       },
-      { requiresPermission: false },
+      { permissionAction: 'search' },
     );
 
     this.registerTool(
@@ -418,7 +418,7 @@ export class KnowledgeTool extends BaseTool {
           count: result.nodes.length,
         };
       },
-      { requiresPermission: false },
+      { permissionAction: 'search' },
     );
   }
 }

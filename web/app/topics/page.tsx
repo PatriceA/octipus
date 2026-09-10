@@ -273,7 +273,7 @@ export default function TopicsPage() {
       <PageHeader
         title="topics"
         badge={<Tags className="w-5 h-5 text-on-surface-variant" />}
-        description="Per-topic model routing and overrides. Assign the primary/backup model each topic routes to, an optional executor model (planner→executor split), and per-topic temperature / max-token overrides."
+        description="Topics bind kinds of work to models. Start with one text model for all text topics; override a topic when a specialist needs a different model. Embedding and vision capabilities need compatible models."
       />
       {!canEdit && (
         <p className="text-sm text-warning">Read-only — admin access is required to change topic configuration.</p>

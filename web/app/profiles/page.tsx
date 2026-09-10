@@ -789,7 +789,7 @@ export default function ProfilesPage() {
       <div>
         <h1 className="text-base font-semibold lowercase"><span className="text-outline">octi:</span><span className="text-on-surface">~/profiles</span><span className="text-primary font-bold"> $</span><span aria-hidden className="term-caret" /></h1>
         <p className="text-on-surface-variant mt-2">
-          Store information about people, organizations, and relationships. Your own profile is automatically shared with agents for personalized responses.
+          Profiles describe people, organizations, and relationships; they are optional context for your assistant. Your own profile is automatically shared with agents for personalized responses.
         </p>
       </div>
 

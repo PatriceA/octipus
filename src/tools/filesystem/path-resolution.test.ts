@@ -1,3 +1,5 @@
+import { getPermissionManager } from '@/security/permissions';
+import { auditRepository } from '@/db/repositories/audit-repository';
 /**
  * Filesystem tool — path resolution + sandbox validation.
  *
@@ -16,7 +18,7 @@
  * `WORKSPACE_PATH`, in both the per-user nested layout (real users) and the
  * flat layout (system jobs).
  */
-import { afterAll, afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
@@ -333,4 +335,11 @@ describe('system jobs — flat workspace root (no per-user nesting)', () => {
       tool.handler('read_file').execute({ path: '/etc/passwd' }, ctx({ userId: 'system' })),
     ).rejects.toThrow(/outside allowed workspace directories/);
   });
+});
+
+// These suites verify the tool body; policy reachability is covered with real
+// storage in security/dispatch-authorization.test.ts.
+beforeEach(() => {
+  vi.spyOn(getPermissionManager(), 'check').mockResolvedValue({ allowed: true, level: 'ALLOW', requiresApproval: false });
+  vi.spyOn(auditRepository, 'log').mockResolvedValue(undefined as never);
 });

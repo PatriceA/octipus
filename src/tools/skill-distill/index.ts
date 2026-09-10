@@ -154,7 +154,7 @@ export class SkillDistillTool extends BaseTool {
           note: 'Filed as a pending skill proposal for review (not yet a live skill).',
         };
       },
-      { requiresPermission: false },
+      { permissionAction: 'distill' },
     );
   }
 

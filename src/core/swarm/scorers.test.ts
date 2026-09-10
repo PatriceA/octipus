@@ -188,7 +188,7 @@ describe('runScorers — file_exists', () => {
     // inside a temp dir, which the sandbox accepts via the resolver only if
     // under an allowed root; to keep the test hermetic we assert the negative
     // (missing file) deterministically and the positive via an allowed tmp path.
-    const dir = mkdtempSync(join(tmpdir(), 'assistant-scorer-'));
+    const dir = mkdtempSync(join('/tmp', 'assistant-scorer-'));
     const file = join(dir, 'report.md');
     writeFileSync(file, '# done');
 
@@ -783,7 +783,7 @@ describe('command_exit_zero — environment faults are not the child’s defect'
 });
 
 describe('command_exit_zero — the operator’s permission decision', () => {
-  it('RUNS on the default ASK level — the level shell.execute actually ships', async () => {
+  it('REFUSES unattended verification on ASK without prior authorization', async () => {
     // The defect this pins: demanding ALLOW refuses every default install.
     // `shell.execute` ships as ASK, and ASK auto-approves for a worker that
     // cannot prompt a human — so the child runs `npm test` through its own
@@ -800,7 +800,7 @@ describe('command_exit_zero — the operator’s permission decision', () => {
       { canRunCommands: true, userId: 'system', role: 'coding' },
     );
     spy.mockRestore();
-    expect(out.passed).toBe(true);
+    expect(out.passed).toBe(false);
   });
 
   it('refuses when shell.execute is DENY for the user, tool or no tool', async () => {

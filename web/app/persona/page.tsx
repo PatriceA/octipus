@@ -128,7 +128,7 @@ export default function PersonaPage() {
     <div className="mx-auto max-w-3xl space-y-8 p-8 text-on-surface">
       <PageHeader
         title="persona"
-        description={'octi’s identity and voice. per-user, applied across every channel — tui, web, telegram, slack. the base persona is Octipus, an octopus-machine collective that talks about itself in the third person and uses "we" for its swarm.'}
+        description="Persona controls the assistant’s name, voice, and presentation across channels. The default works for ordinary chat; changing it does not grant tools or permissions."
       />
 
       {error && (

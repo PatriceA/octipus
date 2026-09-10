@@ -4,13 +4,15 @@
 
 # Octipus
 
+A self-hosted AI workspace for projects, knowledge, and connected tools.
+
 > **v0.2 · alpha · building in public.** A working, opinionated platform — not a finished product. Breaking changes happen; migration notes ship with them. Treat it as a foundation to build on.
 
 **Website:** [https://octipus.cc](https://octipus.cc)
 
 ---
 
-## Install in 90 seconds
+## Install
 
 One-shot installer — clones the repo, installs deps, drops you into
 `octi setup`, and leaves you at the `octi` CLI:
@@ -73,15 +75,29 @@ does the same thing the installer does — see
 
 ## What it is
 
-Driven by the ultimate "What if?", Octipus is a living ecosystem built for relentless exploration. What if there's a more elegant solution? What if an entirely new capability redefines the workflow? We thrive on constant evolution and adaptation. Every agent arm acts autonomously, perpetually seeking uncharted, optimized paths. In our philosophy, everything is mutable—the only anchors are our resilient root agent architecture and the dedicated purpose of our models. 
+Octipus is an open-source, self-hosted AI workspace for working with projects,
+knowledge, and connected tools. You can use it through a web interface, terminal,
+or messaging channel, and choose local or hosted model providers.
 
-This isn't just software; it's a boundless playground for every conceivable idea, providing multi-purpose, all-spanning coverage for any use case imaginable. 
+The root agent answers with its own tools and can delegate bounded tasks to
+specialist agents. Pipelines support explicit stages and human input. Available
+capabilities depend on your models, installed tools, connections, and permissions.
 
 ## Project goal
 
-Octipus is the definitive, omni-capable root agent that delegates your most ambitious digital tasks to a swarm of autonomous experts. It isn't restricted by predefined boundaries—you send a directive, and it seamlessly breaks it down, dispatches the right agents, and executes in parallel. It reads your codebase, restructures your architecture, engineers solutions, and adapts on the fly. 
+The goal is to make everyday work easier to carry out and inspect: investigate a
+codebase, prepare a sourced report, or turn information into follow-up tasks.
+Octipus provides execution records, configurable permissions, and budget controls
+to help you understand what ran and what needs attention.
 
-Designed to be infinitely extensible, Octipus gives you the ultimate sandbox. You maintain total control of your data and models, while Octipus morphs to become the exact intelligent infrastructure your imagination demands.
+This is an alpha project. Model output and tool execution can fail, and completed
+work still needs verification. Local models support a self-hosted setup; hosted
+providers and external connectors receive the data sent to them. Self-hosting
+lets you choose those connections, but does not make every workflow local.
+
+The next improvement cycle focuses on predictable permissions, clearer navigation,
+accurate status reporting, and measured workflow reliability. See the
+[consolidation plan](docs/plans/product-consolidation-2026-09.md).
 
 ## Community
 
@@ -122,8 +138,8 @@ Deep dive: [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md) · [.octipus
 - **Fail-loud routing** — strict `getModelForTopic()`, no silent fallbacks; unbound topics fail at spawn time with a clear error.
 - **Root agent persona** — per-user identity (name, tone, narration, free-form facts) layered between `SECURITY_PREAMBLE` and the role prompt via the `before-agent-start` hook; six presets ship under `personas/`. Default is *Octipus*, the dry octopus-machine.
 - **Root agent detach** — parent can detach children and use `collect_children` to await later; enables narration and user interaction while children run in parallel.
-- **Enrichment features** — Reader (fetch + extract web content), Deep Research (cited report saved to Documents + indexed into the knowledge base; live job tracking in-memory), To-Do list (recurring via scheduler), Email triage (batch classification), Hardware-aware onboarding (curated Ollama catalog + LIVE registry sizing).
-- **27 E2E test modules** + 1900+ unit tests + red-team plugins (prompt injection, role confusion, tool misuse, data leakage, off-topic drift).
+- **Enrichment features** — Reader (fetch + extract web content), Deep Research (cited reports with document persistence and knowledge indexing when available; durable job tracking; interrupted work is reported after restart), To-Do list (recurring via scheduler), Email triage (batch classification), Hardware-aware onboarding (curated Ollama catalog + LIVE registry sizing).
+- **Testing and evaluation** — unit, database integration, and browser suites, plus model evals and adversarial case generators. The red-team CI job is a dry-run without model calls; see [Testing](docs/TESTING.md) for what each suite verifies.
 
 ## Technologies and ideas worth a look
 
@@ -132,7 +148,7 @@ Deep dive: [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md) · [.octipus
 - **PGlite** for embedded mode — zero external deps, single-user.
 - **WebSocket gateway** with typed Zod protocol — every channel speaks the same dialect.
 - **Three-tier permission system** (ALLOW / ASK / DENY) with pre/post hooks and audit trail.
-- **Three-layer prompt-injection defense** — system preamble + 39-pattern input guard + LLM output guard.
+- **Prompt-injection mitigations** — a system preamble, input checks, and an LLM output guard supplement execution permissions; they do not guarantee that hostile input will be detected.
 - **AES-256-GCM encrypted vault** with per-tool access control.
 - **Topic → model routing** — config-driven, no hardcoded defaults.
 - **Browser extension** for human-in-the-loop control of the user's real Chrome.

@@ -1,7 +1,7 @@
 'use client';
 
 import { Loader2 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Markdown } from '@/components/ui/markdown-renderer';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
@@ -45,6 +45,9 @@ export default function ResearchPage() {
   const [depth, setDepth] = useState('standard');
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState('');
+  const pollVersion = useRef(0);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { pollVersion.current++; if (timer.current) clearTimeout(timer.current); }, []);
 
   const running = job?.status === 'running';
 
@@ -66,27 +69,33 @@ export default function ResearchPage() {
   };
 
   const poll = (jobId: string) => {
+    const version = ++pollVersion.current;
+    if (timer.current) clearTimeout(timer.current);
     const deadline = Date.now() + 10 * 60_000; // research is bounded; stop after ~10 min
     const tick = async () => {
+      if (version !== pollVersion.current) return;
       if (Date.now() > deadline) {
-        setError('Research timed out.');
-        setJob((j) => (j ? { ...j, status: 'error' } : j));
+        setError('Stopped checking after ten minutes. The backend may still be working; refresh status to check.');
         return;
       }
       try {
         const j = await api.get<Job>(`/research/${jobId}`);
+        if (version !== pollVersion.current) return;
         setJob(j);
+        setError('');
         if (j.status === 'running') {
-          setTimeout(tick, 1200);
+          timer.current = setTimeout(tick, 1200);
         } else if (j.status === 'error') {
           setError(j.error || 'Research failed');
         }
-      } catch {
-        setTimeout(tick, 1500);
+      } catch (err) {
+        if (version !== pollVersion.current) return;
+        setError(`Status unavailable; retrying. ${err instanceof Error ? err.message : 'Connection failed'}`);
+        timer.current = setTimeout(tick, 1500);
       }
     };
-    setJob({ id: jobId, status: 'running', stage: 'planning' });
-    setTimeout(tick, 800);
+    setJob(current => current?.id === jobId ? current : { id: jobId, status: 'running', stage: 'planning' });
+    timer.current = setTimeout(tick, 800);
   };
 
   const report = job?.report;
@@ -144,6 +153,7 @@ export default function ResearchPage() {
         <div className="bg-error/10 border border-error/20 rounded-xs px-4 py-3 text-error text-sm">
           {error}
           <button onClick={() => setError('')} className="ml-2 underline">dismiss</button>
+          {job?.id && <button className="ml-2 underline" onClick={() => poll(job.id)}>Refresh status</button>}
         </div>
       )}
 
@@ -166,10 +176,11 @@ export default function ResearchPage() {
             {job?.documentId && (
               <p className="text-sm mt-2">
                 <a href="/documents" className="text-primary hover:underline">
-                  Saved to Documents &amp; added to the knowledge base →
+                  Saved to Documents →
                 </a>
               </p>
             )}
+            {!job?.documentId && <p role="status" className="text-warning text-sm mt-2">Report available here, but no saved document was confirmed.</p>}
             {job?.taskId && (
               <p className="text-sm mt-1">
                 <a href="/tasks" className="text-primary hover:underline">

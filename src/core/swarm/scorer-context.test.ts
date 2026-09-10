@@ -36,7 +36,7 @@ describe('buildScorerContext', () => {
       toolId: 'shell',
       action: 'shell__run',
     });
-    expect(withRole.route).toBe('execute');
+    expect(withRole.route).toBe('blocked');
 
     const withoutRole = routeApproval({
       level: 'ASK',
@@ -46,7 +46,7 @@ describe('buildScorerContext', () => {
       toolId: 'shell',
       action: 'shell__run',
     });
-    expect(withoutRole.route).toBe('ask_human');
+    expect(withoutRole.route).toBe('blocked');
   });
 
   it('reports the shell capability from the resolved toolset', () => {

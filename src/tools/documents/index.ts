@@ -87,7 +87,7 @@ export class DocumentsTool extends BaseTool {
           })),
         };
       },
-      { requiresPermission: false },
+      { permissionAction: 'read' },
     );
 
     this.registerTool(
@@ -117,7 +117,7 @@ export class DocumentsTool extends BaseTool {
           metadata: doc.metadata,
         };
       },
-      { requiresPermission: false },
+      { permissionAction: 'read' },
     );
 
     this.registerTool(
@@ -155,7 +155,7 @@ export class DocumentsTool extends BaseTool {
           hint: 'Use get_document with the document ID (from sourceId, format "doc:<uuid>") to get full details.',
         };
       },
-      { requiresPermission: false },
+      { permissionAction: 'search' },
     );
 
     this.registerTool(

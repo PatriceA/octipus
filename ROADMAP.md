@@ -6,6 +6,17 @@ This doc lists what we are exploring. Order inside each section is rough priorit
 
 ---
 
+## Current priority — consolidation (2026-09-10)
+
+The [product consolidation plan](docs/plans/product-consolidation-2026-09.md)
+sets the order for the next improvement cycle: preserve approval requirements
+across delegation, report unavailable and interrupted state accurately, prove
+complete workflows, simplify navigation, and reduce coupling where those changes
+need it. Documentation and the phases 1–4 code changes are implemented locally;
+[validation and remaining measurements](docs/reports/consolidation-2026-09-10.md)
+are recorded separately. The execution refactor remains deferred. Existing feature proposals below remain available for later review and
+are not an instruction to expand scope during this cycle.
+
 ## Now (in flight)
 
 - **Daily-driver gaps.** What a developer / PO / consultant needs to run
@@ -189,8 +200,9 @@ All three landed. What each actually became:
   the one place, pure and exhaustively testable, and it can express what two
   inline conditions could not — `multiuser.unattendedDenyActions`, the actions
   an operator wants REFUSED rather than silently auto-approved when nobody is
-  watching (empty by default: a list invented for everyone would break working
-  runs).
+  watching. The current defaults are `shell.execute_destructive` and
+  `filesystem.delete`; unattended ASK now blocks unless a matching grant exists.
+  See the consolidation implementation report for migration and evidence.
   The rest of the original item was re-read against the code and mostly does not
   exist as a problem. Quotas are budgets, and they now live in two named places
   (`LEVEL_DEFAULT` for swarm, `pipelineTokenBudget` + a step's `maxTokens` for

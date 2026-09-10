@@ -41,6 +41,8 @@
     "test:integration:down": "docker compose -f docker-compose.test.yml down -v",
     "test:integration:migrate": "DATABASE_URL=postgres://octipus:test@localhost:${TEST_POSTGRES_PORT:-5443}/octipus_test tsx --import ./scripts/md-loader.mjs scripts/migrate.ts",
     "test:integration": "tsx --import ./scripts/md-loader.mjs scripts/test-integration.ts",
+    "test:live-baseline": "tsx --import ./scripts/md-loader.mjs scripts/e2e/live-baseline.ts",
+    "test:acceptance": "npm run build && tsx --import ./scripts/md-loader.mjs scripts/e2e/acceptance.ts",
     "test:e2e": "tsx --import ./scripts/md-loader.mjs scripts/test-e2e.ts",
     "eval": "tsx --import ./scripts/md-loader.mjs src/eval/cli.ts",
     "eval:routing": "tsx --import ./scripts/md-loader.mjs src/eval/cli.ts --suite routing",

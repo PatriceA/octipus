@@ -1,3 +1,4 @@
+import { channelCanPrompt } from '@/security/approval-policy';
 import { getConfig } from '@/config';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { getNotificationService } from '@/core/notification-service';
@@ -1704,7 +1705,9 @@ export class PipelineManager {
     // caller of a resume is an HTTP request or a boot-time sweep, neither of
     // which holds the agent context the original run was started with, and
     // everything downstream needs from it is on the row.
+    const originSession = await sessionRepository.findById(pipeline.sessionId);
     const context: AgentContext = {
+      attended: channelCanPrompt(originSession?.channelType),
       id: pipeline.rootAgentId,
       sessionId: pipeline.sessionId,
       userId: pipeline.userId,

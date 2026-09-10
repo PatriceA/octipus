@@ -1,35 +1,14 @@
-/**
- * Where an approval decision is made (roadmap wave 3, deterministic policy).
- *
- * `PermissionManager` answers what the STORED permission for a tool action is
- * (ALLOW / ASK / DENY). It does not answer the question the runtime actually
- * has to answer, which is what to DO with an ASK when the caller may not be
- * able to reach a human. That answer was hardcoded in two places —
- * `tool-executor.ts` (the agent loop) and `base-tool.ts` (the tool's own
- * middleware) — as "any role that is not the root agent auto-approves",
- * with a comment in each asking the other to be kept in sync. Two copies of a
- * security decision is one copy too many; this is the one.
- *
- * The rule the copies encoded is preserved exactly: an autonomous worker cannot
- * prompt anyone, so blocking on approval would hang it forever, and hanging is
- * not safer than proceeding — it is the same outcome with the budget still
- * running. What the copies could not express, and this can, is the exception:
- * `unattendedDenyActions` names the actions that must be REFUSED rather than
- * silently auto-approved when nobody is watching. Empty by default, because a
- * pipeline stage legitimately does almost anything inside its workspace and a
- * list invented here would break working runs; it exists so an operator can
- * state their own limit in one place instead of patching two.
- */
-
+/** Shared dispatch policy: delegation never turns ASK into authorization. */
 import type { PermissionLevel } from '@/core/types';
 
 export type ApprovalRoute =
-  /** Run it. Either allowed outright, or an ASK nobody can be asked about. */
+  /** Run an explicitly allowed action. */
   | 'execute'
   /** Block and ask a human — only ever chosen when one can actually answer. */
   | 'ask_human'
   /** Refuse. The model is told, and must not retry. */
-  | 'deny';
+  | 'deny'
+  | 'blocked';
 
 export interface ApprovalContext {
   /** The stored permission for this action. */
@@ -38,14 +17,13 @@ export interface ApprovalContext {
   role?: string;
   /** The caller is the turn's ROOT agent. */
   root?: boolean;
-  /** …and a person is actually waiting on it. Undefined means "assume yes",
-   *  which is the interactive/direct path's answer. */
+  /** …and a person is actually waiting on it. Undefined uses the legacy root-only fallback. */
   attended?: boolean;
   toolId: string;
   /** The permission action, which is usually the tool name. */
   action: string;
   /**
-   * Actions to refuse rather than auto-approve when the caller is unattended.
+   * Legacy actions to deny rather than report blocked when unattended.
    * Matched as `toolId` (whole container) or `toolId__action` / `toolId.action`.
    */
   unattendedDenyActions?: string[];
@@ -55,22 +33,12 @@ export interface ApprovalDecision {
   route: ApprovalRoute;
   /** Human-readable, and shown to the model on a denial. */
   reason?: string;
-  /** True when an ASK was resolved without a human — the counter the loop tracks. */
-  autoApproved?: boolean;
 }
 
-/**
- * Can this caller reach a person? Only the ROOT agent of a turn can: every
- * other agent is a child something spawned, and its approval request would be
- * relayed by nobody. Keyed on `root` rather than `role === 'orchestrator'`
- * since Phase 9 — the root now runs as an ordinary role.
- *
- * A caller with no role at all is the interactive/direct path (chat, API,
- * CLI), which does reach a person — the same reading both call sites had.
- */
+/** Attendance is inherited from the initiating session, including by children. */
 export function canPromptHuman(caller: { role?: string; root?: boolean; attended?: boolean }): boolean {
-  if (!caller.role) return true;
-  return caller.root === true && caller.attended !== false;
+  if (caller.attended !== undefined) return caller.attended;
+  return caller.root === true;
 }
 
 /**
@@ -84,8 +52,8 @@ export function canPromptHuman(caller: { role?: string; root?: boolean; attended
  * been asked.
  *
  * Deliberately a DENYLIST, not an allowlist. Getting it wrong in this direction
- * costs a stall; getting it wrong the other way silently auto-approves an ASK on
- * a surface that would have shown the user a prompt. So a channel is treated as
+ * costs a stall; getting it wrong the other way blocks an ASK on
+ * a surface that could have shown the user a prompt. So a channel is treated as
  * attended unless it is known to have no way to ask — and a new client type
  * keeps the prompting behaviour by default.
  *
@@ -144,5 +112,8 @@ export function routeApproval(ctx: ApprovalContext): ApprovalDecision {
         `(unattendedDenyActions). Report what you needed and stop.`,
     };
   }
-  return { route: 'execute', autoApproved: true };
+  return {
+    route: 'blocked',
+    reason: 'Approval required, but this run has no approval channel. Configure a scoped permission before restarting the action.',
+  };
 }

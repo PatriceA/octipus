@@ -94,7 +94,7 @@ eval/             YAML eval scenarios
 scripts/          migrate, setup, backup, doctor, e2e, integration, key rotation
 docs/             feature & architecture docs (see README Documentation table)
 .octipus/         design notes (swarm-design, audits, plans)
-AGENTS.md         per-repo curated project guide (universal agents.md convention)
+AGENT.md          canonical contributor guidance for coding agents
 ```
 
 ## Commands
@@ -119,7 +119,7 @@ AGENTS.md         per-repo curated project guide (universal agents.md convention
 | DB studio        | `npm run db:studio`              |
 | Setup wizard     | `npm run setup`                  |
 | TUI client       | `npm run tui` (edit: `npm run tui:edit`) |
-| Doctor / preflight | `npm run scripts/doctor.ts`    |
+| Doctor / preflight | `bin/octi doctor`              |
 
 Default ports: backend `3005`, web `3007`. Use `bin/octi` rather than raw
 `npm run` when starting the full stack so channels, web, and workers come up
@@ -265,14 +265,15 @@ Octipus features a comprehensive voice subsystem (`src/voice/`) divided into thr
 | Voice / TUI clients                   | `src/voice/`, `src/tui-pi/`, `src/tui-editor/` |
 | Architecture deep dive                | `docs/AGENT-ARCHITECTURE.md`              |
 | Every route, module edge, event type  | `docs/architecture/generated/CATALOG.md` (generated, CI-gated) |
-| **Where the work stands right now**   | `docs/plans/rebuild-execution-plan.md` → *Where this stands* |
+| **Current improvement plan**          | `docs/plans/product-consolidation-2026-09.md` |
 | Full docs index                       | `README.md` → Documentation table         |
 
 ## When in doubt
 
-0. Read *Where this stands* in `docs/plans/rebuild-execution-plan.md` before
-   starting anything structural. It carries what is done, what is deliberately
-   NOT being built and why, and what the next step actually is.
+0. Read `docs/plans/product-consolidation-2026-09.md` for current improvement
+   priorities and `docs/AGENT-ARCHITECTURE.md` for current execution behavior.
+   The rebuild plan records historical decisions; re-check its findings against
+   the implementation before using them as a description of current behavior.
 1. Search `docs/` for an existing doc on the area.
 2. Check `.octipus/` for design notes and audits.
 3. Look at a sibling implementation (existing role, tool, channel) and follow

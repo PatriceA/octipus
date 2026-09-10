@@ -114,7 +114,7 @@ export class NotesTool extends BaseTool {
           backlinks: backlinks.map((b) => ({ from: { type: b.fromType, id: b.fromId }, linkType: b.linkType, label: b.label })),
         };
       },
-      { requiresPermission: false },
+      { permissionAction: 'read' },
     );
 
     this.registerTool(
@@ -133,7 +133,7 @@ export class NotesTool extends BaseTool {
         });
         return { notes: list.map((n) => ({ id: n.id, slug: n.slug, title: n.title, kind: n.noteKind, tags: n.tags, updatedAt: n.updatedAt })) };
       },
-      { requiresPermission: false },
+      { permissionAction: 'read' },
     );
 
     this.registerTool(
@@ -150,7 +150,7 @@ export class NotesTool extends BaseTool {
           hint: 'sourceId is note:<noteId>. Use read_note to load the full note.',
         };
       },
-      { requiresPermission: false },
+      { permissionAction: 'read' },
     );
 
     this.registerTool(
@@ -248,7 +248,7 @@ export class NotesTool extends BaseTool {
         const suggestions = await getSuggestionService().suggestForNote(context.userId, args.note_id as string, (args.limit as number) || 5);
         return { suggestions, hint: suggestions.length === 0 ? 'No suggestions (either nothing related, or no embedding model configured).' : 'Accept a suggestion with knowledge.link_knowledge.' };
       },
-      { requiresPermission: false },
+      { permissionAction: 'read' },
     );
 
     this.registerTool(
@@ -296,7 +296,7 @@ export class NotesTool extends BaseTool {
         });
         return { notes: rows.map((n) => ({ id: n.id, slug: n.slug, title: n.title, kind: n.noteKind, tags: n.tags, noteDate: n.noteDate, frontmatter: n.frontmatter, updatedAt: n.updatedAt })) };
       },
-      { requiresPermission: false },
+      { permissionAction: 'read' },
     );
 
     this.registerTool(
@@ -315,7 +315,7 @@ export class NotesTool extends BaseTool {
         );
         return canvas;
       },
-      { requiresPermission: false },
+      { permissionAction: 'read' },
     );
 
     this.registerTool(

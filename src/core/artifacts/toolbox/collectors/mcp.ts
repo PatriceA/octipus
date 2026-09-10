@@ -4,6 +4,7 @@
  * we just dispatch.
  */
 
+import { buildSyntheticContext } from '../../refresh';
 import type { ToolboxTool } from '../types';
 
 interface Params {
@@ -42,13 +43,13 @@ export const mcpCollector: ToolboxTool<Params, unknown> = {
     'The bridge handles reconnects; transient failures surface as `art_collect_mcp` errors.',
   ],
 
-  async execute(params) {
+  async execute(params, ctx) {
     if (!params.server || !params.tool) {
       throw new Error('art_collect_mcp: missing `server` or `tool`');
     }
     const { getMCPBridge } = await import('@/mcp');
     const bridge = getMCPBridge();
-    return bridge.callTool(params.server, params.tool, (params.params ?? {}) as Record<string, unknown>);
+    return bridge.callTool(params.server, params.tool, (params.params ?? {}) as Record<string, unknown>, { ...buildSyntheticContext(ctx.principalId), workspaceId: ctx.workspaceId });
   },
 };
 

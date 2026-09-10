@@ -111,7 +111,7 @@ describe('who may actually run it', () => {
     expect(decision.reason).toMatch(/human approval/i);
   });
 
-  test('an ordinary command from the same child still runs', () => {
+  test('an ASK command from an unattended child is blocked', () => {
     // The fix must not stop a worker doing its job — only the undoable part.
     expect(
       routeApproval({
@@ -121,7 +121,7 @@ describe('who may actually run it', () => {
         role: 'coding',
         unattendedDenyActions: DENY,
       }),
-    ).toEqual({ route: 'execute', autoApproved: true });
+    ).toEqual(expect.objectContaining({ route: 'blocked' }));
   });
 
   test('an empty deny list is what the bug looked like', () => {
@@ -135,7 +135,7 @@ describe('who may actually run it', () => {
         role: 'coding',
         unattendedDenyActions: [],
       }),
-    ).toEqual({ route: 'execute', autoApproved: true });
+    ).toEqual(expect.objectContaining({ route: 'blocked' }));
   });
 });
 
@@ -212,7 +212,7 @@ describe('the other way out of the room', () => {
     }
   });
 
-  test('a worker can still write and read — only the undoable part is gated', async () => {
+  test('all unattended ASK actions require prior authorization', async () => {
     const { defaultConfig } = await import('@/config/defaults');
     const deny = defaultConfig.multiuser?.unattendedDenyActions ?? [];
 
@@ -228,7 +228,7 @@ describe('the other way out of the room', () => {
         role: 'coding',
         unattendedDenyActions: deny,
       });
-      expect(decision.route, `${toolId}.${action} should still run`).toBe('execute');
+      expect(decision.route, `${toolId}.${action} should still run`).toBe('blocked');
     }
   });
 });
