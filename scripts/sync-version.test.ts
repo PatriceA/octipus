@@ -1,10 +1,24 @@
 import { describe, expect, test } from 'vitest';
-import { isValidVersion, normalizeVersion, setVersion } from './sync-version';
+import { isValidVersion, normalizeVersion, resolveTargetRoot, setVersion } from './sync-version';
 
 describe('normalizeVersion', () => {
   test('strips a leading v', () => {
     expect(normalizeVersion('v0.2.0')).toBe('0.2.0');
     expect(normalizeVersion('0.2.0')).toBe('0.2.0');
+  });
+
+  test('expands a two-component release tag', () => {
+    expect(normalizeVersion('v0.3')).toBe('0.3.0');
+    expect(normalizeVersion('  12.34  ')).toBe('12.34.0');
+    expect(normalizeVersion('v1.2-rc.1')).toBe('1.2.0-rc.1');
+    expect(normalizeVersion('v1.2+build.5')).toBe('1.2.0+build.5');
+  });
+
+  test('leaves malformed and complete versions for validation', () => {
+    expect(normalizeVersion('v1')).toBe('1');
+    expect(normalizeVersion('v1.2.3.4')).toBe('1.2.3.4');
+    expect(normalizeVersion('v1.two')).toBe('1.two');
+    expect(normalizeVersion('v1.2-')).toBe('1.2-');
   });
 });
 
@@ -47,5 +61,12 @@ describe('setVersion', () => {
 
   test('throws when no version field exists', () => {
     expect(() => setVersion('{"name":"x"}', '1.0.0')).toThrow('no "version" field');
+  });
+});
+
+describe('resolveTargetRoot', () => {
+  test('defaults to the repository above the helper and accepts a payload override', () => {
+    expect(resolveTargetRoot(undefined, '/tooling/scripts')).toBe('/tooling');
+    expect(resolveTargetRoot('/release/payload', '/tooling/scripts')).toBe('/release/payload');
   });
 });

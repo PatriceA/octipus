@@ -1,6 +1,6 @@
 name: Release
 
-# Tag-driven release. Push a `v*` tag (e.g. `v0.2.0`) to:
+# Tag-driven release. Push a `v*` tag (e.g. `v0.3` or `v0.3.0`) to:
 #   1. gate on the core CI checks (typecheck · lint · test),
 #   2. sync package versions to the tag,
 #   3. cut a GitHub Release with notes extracted from CHANGELOG.md,
@@ -9,16 +9,23 @@ name: Release
 # CHANGELOG curation stays manual — this only reads it.
 
 on: # zizmor: ignore[cache-poisoning]
-  # Accepted: release runs only on maintainer-pushed `v*` tags, and the Bun
+  # Accepted: release runs only on maintainer-pushed `v*` tags or maintainer
+  # dispatches for an existing tag, and the npm
   # cache is keyed on the committed package-lock.json hash — a PR can't poison a cache
   # this workflow would restore. Revisit if untrusted contributors can trigger
   # release-like publishing.
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to recover without moving it (e.g. v0.3)'
+        required: true
+        type: string
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 permissions:
@@ -27,20 +34,22 @@ permissions:
 
 jobs:
   release:
-    name: Release ${{ github.ref_name }}
+    name: Release ${{ inputs.tag || github.ref_name }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Surface NPM_TOKEN presence as a plain env flag — `secrets.*` isn't usable
     # directly in a step-level `if`, but env is.
     env:
       HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
           fetch-depth: 0 # full history so the tagged CHANGELOG is present
           persist-credentials: false
 
-      - name: Setup Bun (+ dependency cache)
+      - name: Setup Node (+ dependency cache)
         uses: ./.github/actions/node-setup
 
       - name: Setup Node (for npm publish)
@@ -65,19 +74,26 @@ jobs:
           SESSION_SECRET: ci-dummy-session-secret-for-unit-tests-only-1234567890
 
       # ── Version sync + release notes ──
-      # `github.ref_name` is passed through an env var, never interpolated
+      # The tag is passed through an env var, never interpolated
       # directly into the shell — otherwise a crafted tag name could inject
       # commands into these `run:` steps (zizmor: template-injection).
+      # Use the workflow revision's release helper so a corrected workflow can
+      # recover an existing tag. Application code and tests stay at that tag.
+      - name: Check out release tooling
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tooling
+          sparse-checkout: scripts/sync-version.ts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: Sync package versions to the tag
-        env:
-          REF_NAME: ${{ github.ref_name }}
-        run: npx tsx scripts/sync-version.ts "$REF_NAME"
+        run: npx tsx .release-tooling/scripts/sync-version.ts "$RELEASE_TAG" "$GITHUB_WORKSPACE"
 
       - name: Extract release notes from CHANGELOG
-        env:
-          REF_NAME: ${{ github.ref_name }}
         run: |
-          npx tsx scripts/changelog-extract.ts "$REF_NAME" > RELEASE_NOTES.md
+          npx tsx scripts/changelog-extract.ts "$RELEASE_TAG" > RELEASE_NOTES.md
           echo "----- release notes -----"
           cat RELEASE_NOTES.md
 
@@ -92,10 +108,11 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          name: ${{ github.ref_name }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }}
           body_path: RELEASE_NOTES.md
           draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(env.RELEASE_TAG, '-') }}
           files: |
             mcp-server/*.tgz
 
@@ -105,7 +122,9 @@ jobs:
         working-directory: mcp-server
         # --provenance publishes a signed build-provenance attestation (via the
         # id-token permission above), so consumers can verify the package was
-        # built from this repo's tagged CI. Public repo + GitHub Actions = free.
+        # built by this repository's workflow. In manual recovery, the workflow
+        # revision differs from the explicitly checked-out release tag; inspect
+        # both revisions in the run rather than treating them as identical.
         run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

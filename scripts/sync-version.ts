@@ -12,13 +12,16 @@
  *
  *   npx tsx scripts/sync-version.ts 0.2.0
  *   npx tsx scripts/sync-version.ts v0.2.0        # leading v is stripped
+ *   npx tsx scripts/sync-version.ts v0.3          # normalized to 0.3.0
  */
 import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
-/** Strip a leading `v` and whitespace. */
+/** Strip a leading `v` and expand a two-component release tag to SemVer. */
 export function normalizeVersion(v: string): string {
-  return v.trim().replace(/^v/i, '');
+  const stripped = v.trim().replace(/^v/i, '');
+  const short = stripped.match(/^(\d+)\.(\d+)((?:[-+][0-9A-Za-z.-]+)?)$/);
+  return short ? `${short[1]}.${short[2]}.0${short[3]}` : stripped;
 }
 
 /** True for a plausible semver-ish version (`1.2.3`, optional `-rc.1`/`+build`). */
@@ -38,12 +41,17 @@ export function setVersion(pkgJson: string, version: string): string {
   return pkgJson.replace(re, `$1${version}$2`);
 }
 
+/** Resolve the payload checkout independently from this helper's location. */
+export function resolveTargetRoot(override?: string, scriptDir = import.meta.dirname): string {
+  return override ? resolve(override) : join(scriptDir, '..');
+}
+
 const TARGETS = ['package.json', join('mcp-server', 'package.json')];
 
 if (import.meta.main) {
   const arg = process.argv[2];
   if (!arg) {
-    console.error('Usage: npx tsx scripts/sync-version.ts <version>');
+    console.error('Usage: npx tsx scripts/sync-version.ts <version> [target-repo-root]');
     process.exit(2);
   }
   const version = normalizeVersion(arg);
@@ -52,7 +60,7 @@ if (import.meta.main) {
     process.exit(2);
   }
 
-  const repoRoot = join(import.meta.dirname, '..');
+  const repoRoot = resolveTargetRoot(process.argv[3]);
   for (const rel of TARGETS) {
     const path = join(repoRoot, rel);
     const before = readFileSync(path, 'utf8');
