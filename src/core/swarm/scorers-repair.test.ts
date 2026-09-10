@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { parseScorers, requoteSplitPath } from './scorers';
+import { describe, expect, it, vi } from 'vitest';
+import { parseScorers, requoteSplitPath, runScorers } from './scorers';
 
 // A workspace whose path contains a space — the whole point of the repair.
 const root = mkdtempSync(join(tmpdir(), 'Github Rep '));
@@ -58,5 +58,39 @@ describe('any_of', () => {
         { kind: 'any_of', scorers: [{ kind: 'non_empty' }, { kind: 'non_empty' }] }] },
     ]);
     expect('error' in out).toBe(true);
+  });
+});
+
+describe('the gate really spawns commands (live)', () => {
+  it('runs an unquoted absolute path with a space, and any_of takes the second branch', async () => {
+    // A workspace whose path has a space, like the one this was found in.
+    const live = mkdtempSync(join(tmpdir(), 'Github Rep '));
+    const marker = join(live, 'GATE_RAN');
+    writeFileSync(join(live, 'gate_marker.py'),
+      'import pathlib, sys\n' +
+      'pathlib.Path(__file__).with_name("GATE_RAN").write_text("yes")\n' +
+      'sys.exit(1)\n');
+
+    const permissions = await import('@/security/permissions');
+    const spy = vi.spyOn(permissions, 'getPermissionManager').mockReturnValue({
+      check: async () => ({ allowed: true, level: 'ALLOW', requiresApproval: false }),
+    } as never);
+
+    const out = await runScorers(
+      [{ kind: 'any_of', scorers: [
+        // Unquoted, absolute, and containing a space: without the repair the
+        // interpreter is handed '/…/Github' and the file is never touched.
+        { kind: 'command_exit_zero', command: `python3 ${join(live, 'gate_marker.py')}` },
+        { kind: 'command_exit_zero', command: 'python3 --version' }] }],
+      { output: 'x' },
+      { canRunCommands: true, userId: 'system', role: 'coding', projectPath: live },
+    );
+    spy.mockRestore();
+
+    // The marker is the proof the first command actually ran, path intact.
+    expect(existsSync(marker)).toBe(true);
+    // …and the gate still passed, because the second branch exits zero.
+    expect(out.failures).toEqual([]);
+    expect(out.passed).toBe(true);
   });
 });
