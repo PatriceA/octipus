@@ -27,6 +27,7 @@ export function createHttpBridge(options: HttpBridgeOptions) {
     const origin = req.headers.origin;
     if (origin && !origins.has(origin)) return respond(res, 403, 'Origin not allowed');
     res.setHeader('Vary', 'Origin');
+    // nosemgrep: javascript.express.security.cors-misconfiguration.cors-misconfiguration -- unconfigured origins return 403 above; exact CORS_ORIGINS membership is covered by HTTP transport tests
     if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
