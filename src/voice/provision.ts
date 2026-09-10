@@ -43,8 +43,9 @@ export async function installFasterWhisper(model: FasterWhisperModel, onProgress
   if (!hasUv()) throw new Error(`faster-whisper needs uv. ${UV_INSTALL_HINT}`);
   onProgress(`Downloading faster-whisper "${model}" (int8) …`);
   const proc = spawn({
-    cmd: [
-      'uv', 'run', '--python', '3.12', '--with', 'faster-whisper',
+    command: 'uv',
+    args: [
+      'run', '--python', '3.12', '--with', 'faster-whisper',
       'python', '-c',
       `from faster_whisper import WhisperModel; WhisperModel("${model}", device="cpu", compute_type="int8"); print("ok")`,
     ],

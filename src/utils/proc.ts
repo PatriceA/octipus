@@ -17,7 +17,17 @@ import { Readable, Writable } from 'node:stream';
 export type StdioMode = 'pipe' | 'ignore' | 'inherit';
 
 export interface SpawnConfig {
-  cmd?: string[];
+  /**
+   * The program to run. Its own field, not the head of an argv array: an
+   * array's elements are interchangeable to a reader and to a static analysis,
+   * so `[binary, ...args]` made every argument look like a candidate for
+   * argv[0] (CodeQL alert 15). Separating them means the value that decides
+   * WHICH program runs can never come from the values that are merely passed
+   * to it.
+   */
+  command: string;
+  /** Arguments. Passed as an array to `spawn`, never through a shell. */
+  args?: string[];
   cwd?: string;
   env?: Record<string, string | undefined>;
   stdin?: StdioMode;
@@ -72,12 +82,11 @@ function safeExecutable(command: string): string {
   return match[0];
 }
 
-/** `spawnProcess(['ls'], opts)` and `spawnProcess({ cmd: ['ls'], ...opts })`. */
-export function spawnProcess(first: string[] | SpawnConfig, options: SpawnConfig = {}): ChildProcessHandle {
-  const config: SpawnConfig = Array.isArray(first) ? { ...options, cmd: first } : first;
-  const [rawCommand, ...args] = config.cmd ?? [];
-  if (!rawCommand) throw new Error('spawnProcess: no command given');
-  const command = safeExecutable(rawCommand);
+/** `spawnProcess({ command: 'ls', args: ['-la'] })`. */
+export function spawnProcess(config: SpawnConfig): ChildProcessHandle {
+  if (!config.command) throw new Error('spawnProcess: no command given');
+  const command = safeExecutable(config.command);
+  const args = config.args ?? [];
 
   const stdio: SpawnOptions['stdio'] = [
     config.stdin ?? 'ignore',
@@ -122,8 +131,8 @@ export interface CommandResult {
 }
 
 /** Run to completion and collect both streams. */
-export async function runCommand(cmd: string[], options: SpawnConfig = {}): Promise<CommandResult> {
-  const proc = spawnProcess(cmd, { ...options, stdout: 'pipe', stderr: 'pipe' });
+export async function runCommand(config: SpawnConfig): Promise<CommandResult> {
+  const proc = spawnProcess({ ...config, stdout: 'pipe', stderr: 'pipe' });
   const [stdout, stderr, exitCode] = await Promise.all([
     readAll(proc.stdout),
     readAll(proc.stderr),
@@ -156,7 +165,7 @@ export function whichSync(bin: string): string | null {
 /** Resolve a binary on PATH, or null. */
 export async function which(bin: string): Promise<string | null> {
   const finder = process.platform === 'win32' ? 'where' : 'which';
-  const { exitCode, stdout } = await runCommand([finder, bin]);
+  const { exitCode, stdout } = await runCommand({ command: finder, args: [bin] });
   if (exitCode !== 0) return null;
   return stdout.trim().split('\n')[0] || null;
 }

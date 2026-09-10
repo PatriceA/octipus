@@ -102,7 +102,8 @@ export async function probeWhisper(): Promise<WhisperProbe> {
   }
   try {
     const proc = spawn({
-      cmd: [binaryPath, '--help'],
+      command: binaryPath,
+      args: ['--help'],
       stdout: 'ignore',
       stderr: 'pipe',
       env: whisperSpawnEnv(binaryPath),
@@ -230,13 +231,13 @@ async function doInstall(onProgress: InstallProgress): Promise<void> {
   await rm(srcDir, { recursive: true, force: true });
 
   onProgress(`Cloning whisper.cpp ${WHISPER_TAG}…`);
-  await run(['git', 'clone', '--depth', '1', '--branch', WHISPER_TAG, WHISPER_REPO, srcDir], onProgress);
+  await run('git', ['clone', '--depth', '1', '--branch', WHISPER_TAG, WHISPER_REPO, srcDir], onProgress);
 
   onProgress('Configuring (cmake)…');
-  await run(['cmake', '-S', srcDir, '-B', buildDir, '-DBUILD_SHARED_LIBS=ON', '-DCMAKE_BUILD_TYPE=Release', '-DWHISPER_BUILD_EXAMPLES=ON'], onProgress);
+  await run('cmake', ['-S', srcDir, '-B', buildDir, '-DBUILD_SHARED_LIBS=ON', '-DCMAKE_BUILD_TYPE=Release', '-DWHISPER_BUILD_EXAMPLES=ON'], onProgress);
 
   onProgress('Building (this can take a few minutes)…');
-  await run(['cmake', '--build', buildDir, '--config', 'Release', '-j'], onProgress);
+  await run('cmake', ['--build', buildDir, '--config', 'Release', '-j'], onProgress);
 
   onProgress('Staging binary + libraries…');
   const dir = whisperDir();
@@ -248,7 +249,7 @@ async function doInstall(onProgress: InstallProgress): Promise<void> {
   // dereference: the build tree symlinks sonames (libwhisper.so.1 → …so.1.7.4);
   // copy real bytes so the staged dir survives deleting the build tree below.
   await cp(artifacts.binary, whisperBinaryPath(), { dereference: true });
-  if (process.platform !== 'win32') await run(['chmod', '+x', whisperBinaryPath()], onProgress);
+  if (process.platform !== 'win32') await run('chmod', ['+x', whisperBinaryPath()], onProgress);
   for (const lib of artifacts.libs) {
     await cp(lib, join(dir, basename(lib)), { dereference: true });
   }
@@ -331,8 +332,8 @@ async function collectArtifacts(buildDir: string): Promise<Artifacts> {
   return out;
 }
 
-async function run(cmd: string[], onProgress: InstallProgress): Promise<void> {
-  const proc = spawn({ cmd, stdout: 'pipe', stderr: 'pipe' });
+async function run(command: string, args: string[], onProgress: InstallProgress): Promise<void> {
+  const proc = spawn({ command, args, stdout: 'pipe', stderr: 'pipe' });
   // Surface build output line-by-line so a caller can stream it.
   const pump = async (stream: ReadableStream<Uint8Array>) => {
     const reader = stream.getReader();
@@ -352,6 +353,6 @@ async function run(cmd: string[], onProgress: InstallProgress): Promise<void> {
   await Promise.all([pump(proc.stdout!), pump(proc.stderr!)]);
   await proc.exited;
   if (proc.exitCode !== 0) {
-    throw new Error(`Command failed (exit ${proc.exitCode}): ${cmd.join(' ')}`);
+    throw new Error(`Command failed (exit ${proc.exitCode}): ${[command, ...args].join(' ')}`);
   }
 }

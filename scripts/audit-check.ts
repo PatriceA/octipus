@@ -269,7 +269,7 @@ export function loadAllowlist(path: string): AllowlistEntry[] {
 async function runNpmAudit(): Promise<{ stdout: string; stderr: string }> {
   // `npm audit`, not `bun audit` — Bun is no longer installed anywhere this
   // runs. `--omit=dev` is npm's spelling of `--prod`.
-  return runCommand(['npm', 'audit', '--omit=dev', '--json']);
+  return runCommand({ command: 'npm', args: ['audit', '--omit=dev', '--json'] });
 }
 
 function report(result: EvaluationResult): void {

@@ -203,7 +203,8 @@ export class VoiceService {
     if (this.recordProc) return; // already recording — ignore double-press
     this.recordPath = `/tmp/voice-ptt-${Date.now()}.wav`;
     this.recordProc = spawnProcess({
-      cmd: ['arecord', '-f', 'S16_LE', '-r', '16000', '-c', '1', this.recordPath],
+      command: 'arecord',
+      args: ['-f', 'S16_LE', '-r', '16000', '-c', '1', this.recordPath],
       stdout: 'pipe',
       stderr: 'pipe',
     });
@@ -256,7 +257,8 @@ export class VoiceService {
       // Use aplay for Linux, afplay for macOS
       const player = process.platform === 'darwin' ? 'afplay' : 'aplay';
       const proc = spawnProcess({
-        cmd: [player, tempPath],
+        command: player,
+        args: [tempPath],
         stdout: 'pipe',
         stderr: 'pipe',
       });

@@ -137,7 +137,7 @@ export async function evaluateWakeGate(gate: WakeGate): Promise<WakeGateResult> 
   try {
     if (gate.kind === 'command') {
       const timeoutMs = gate.timeoutMs ?? 5000;
-      const proc = spawnProcess(['sh', '-c', gate.cmd], { stdout: 'pipe', stderr: 'pipe' });
+      const proc = spawnProcess({ command: 'sh', args: ['-c', gate.cmd], stdout: 'pipe', stderr: 'pipe' });
       const timer = setTimeout(() => proc.kill(), timeoutMs);
       const exit = await proc.exited;
       clearTimeout(timer);

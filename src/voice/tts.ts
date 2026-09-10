@@ -58,7 +58,8 @@ export class PiperEngine extends EventEmitter implements TTSEngine {
       }
 
       const proc = spawn({
-        cmd: ['piper', ...args],
+        command: 'piper',
+        args,
         stdin: 'pipe',
         stdout: 'pipe',
         stderr: 'pipe',
@@ -155,8 +156,9 @@ export class KokoroEngine extends EventEmitter implements TTSEngine {
       const { kokoroModelDir } = await import('./provision');
       const worker = join(import.meta.dirname, 'kokoro_tts_worker.py');
       const proc = spawn({
-        cmd: [
-          'uv', 'run', '--python', '3.12', '--with', 'kokoro-onnx', '--with', 'soundfile',
+        command: 'uv',
+        args: [
+          'run', '--python', '3.12', '--with', 'kokoro-onnx', '--with', 'soundfile',
           worker, inputPath, outputPath,
           '--model-dir', kokoroModelDir(),
           '--voice', this.options.voice || KOKORO_DEFAULT_VOICE,

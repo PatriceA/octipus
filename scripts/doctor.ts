@@ -416,7 +416,7 @@ export async function checkLogSanity(): Promise<CheckResult> {
 export async function checkDiskSpace(): Promise<CheckResult> {
   try {
     const home = homedir();
-    const proc = spawnProcess(['df', '-k', home], { stdout: 'pipe', stderr: 'pipe' });
+    const proc = spawnProcess({ command: 'df', args: ['-k', home], stdout: 'pipe', stderr: 'pipe' });
     if (await proc.exited !== 0) {
       return { name: 'Disk space', status: 'warn', detail: 'df probe failed', critical: false };
     }

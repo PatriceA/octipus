@@ -12,7 +12,8 @@ describe('buildEvalRunArgv', () => {
   test('a suite name is passed as a value, not spliced into a command', () => {
     const built = buildEvalRunArgv({ suite: 'memory' });
     expect(built).toEqual({
-      argv: ['npx', 'tsx', '--import', './scripts/md-loader.mjs', 'src/eval/cli.ts', '--suite', 'memory'],
+      command: 'npx',
+      args: ['tsx', '--import', './scripts/md-loader.mjs', 'src/eval/cli.ts', '--suite', 'memory'],
     });
   });
 
@@ -35,17 +36,18 @@ describe('buildEvalRunArgv', () => {
 
   test('a real model id with : / . - is accepted', () => {
     const built = buildEvalRunArgv({ model: 'deepseek/deepseek-v4-flash-0731' });
-    expect(built).toEqual({ argv: expect.arrayContaining(['--model', 'deepseek/deepseek-v4-flash-0731']) });
+    expect(built).toEqual({ command: 'npx', args: expect.arrayContaining(['--model', 'deepseek/deepseek-v4-flash-0731']) });
     const ollama = buildEvalRunArgv({ model: 'ornith:35b' });
-    expect(ollama).toEqual({ argv: expect.arrayContaining(['--model', 'ornith:35b']) });
+    expect(ollama).toEqual({ command: 'npx', args: expect.arrayContaining(['--model', 'ornith:35b']) });
   });
 
   test('the red-team run takes no --suite, and runs on Node', () => {
     const built = buildEvalRunArgv({ type: 'red-team', suite: 'ignored', model: 'ornith:35b' });
     expect(built).toEqual({
-      argv: ['npx', 'tsx', '--import', './scripts/md-loader.mjs', 'src/eval/red-team/cli.ts', '--model', 'ornith:35b'],
+      command: 'npx',
+      args: ['tsx', '--import', './scripts/md-loader.mjs', 'src/eval/red-team/cli.ts', '--model', 'ornith:35b'],
     });
     // It used to spawn `bun`, which this repo no longer runs on.
-    expect((built as { argv: string[] }).argv).not.toContain('bun');
+    expect((built as { command: string }).command).not.toBe('bun');
   });
 });

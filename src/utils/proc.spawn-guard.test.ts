@@ -11,29 +11,29 @@ import { spawnProcess } from './proc';
 
 describe('spawnProcess argv[0] guard', () => {
   test('a flag-shaped command is refused', () => {
-    expect(() => spawnProcess(['-rf', '/'])).toThrow(/starts with "-"/);
+    expect(() => spawnProcess({ command: '-rf', args: ['/'] })).toThrow(/starts with "-"/);
   });
 
   test('shell metacharacters in the command are refused', () => {
     for (const cmd of ['sh -c "id"', 'ls;id', 'ls|id', 'ls$(id)', 'ls`id`', 'ls&', 'ls>out']) {
-      expect(() => spawnProcess([cmd])).toThrow(/unexpected characters/);
+      expect(() => spawnProcess({ command: cmd })).toThrow(/unexpected characters/);
     }
   });
 
   test('an empty command is still refused', () => {
-    expect(() => spawnProcess([])).toThrow(/no command given/);
+    expect(() => spawnProcess({ command: '' })).toThrow(/no command given/);
   });
 
   test('ordinary commands and absolute paths still run', async () => {
-    const plain = spawnProcess(['echo', 'hi'], { stdout: 'ignore', stderr: 'ignore' });
+    const plain = spawnProcess({ command: 'echo', args: ['hi'], stdout: 'ignore', stderr: 'ignore' });
     expect(await plain.exited).toBe(0);
-    const absolute = spawnProcess(['/bin/echo', 'hi'], { stdout: 'ignore', stderr: 'ignore' });
+    const absolute = spawnProcess({ command: '/bin/echo', args: ['hi'], stdout: 'ignore', stderr: 'ignore' });
     expect(await absolute.exited).toBe(0);
   });
 
   test('arguments are untouched — they never reach a shell', async () => {
     // `;id` is inert as an argument; only argv[0] is restricted.
-    const proc = spawnProcess(['echo', ';id', '$(id)'], { stdout: 'ignore', stderr: 'ignore' });
+    const proc = spawnProcess({ command: 'echo', args: [';id', '$(id)'], stdout: 'ignore', stderr: 'ignore' });
     expect(await proc.exited).toBe(0);
   });
 });

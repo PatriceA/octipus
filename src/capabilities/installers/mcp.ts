@@ -21,8 +21,8 @@ const installer: InstallerModule = {
       return { ok: false, detail: `mcp-server directory not found at ${cwd}` };
     }
 
-    const run = async (cmd: string[], step: string) => {
-      const proc = spawnProcess(cmd, { cwd, stdout: 'pipe', stderr: 'pipe' });
+    const run = async (command: string, args: string[], step: string) => {
+      const proc = spawnProcess({ command, args, cwd, stdout: 'pipe', stderr: 'pipe' });
       const [stdout, stderr, exit] = await Promise.all([
         new Response(proc.stdout).text(),
         new Response(proc.stderr).text(),
@@ -35,8 +35,8 @@ const installer: InstallerModule = {
     };
 
     try {
-      const out1 = await run(['npm', 'install', '--silent'], 'npm install');
-      const out2 = await run(['npm', 'run', 'build', '--silent'], 'npm run build');
+      const out1 = await run('npm', ['install', '--silent'], 'npm install');
+      const out2 = await run('npm', ['run', 'build', '--silent'], 'npm run build');
       return { ok: true, detail: 'MCP server built (mcp-server/dist/index.js).', output: out1 + out2 };
     } catch (err) {
       return { ok: false, detail: err instanceof Error ? err.message : String(err) };

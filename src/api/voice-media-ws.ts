@@ -80,7 +80,11 @@ async function synthesizeReplyPcm16k(text: string): Promise<Int16Array | null> {
   const out = join(tmpdir(), `phone-tts-${crypto.randomUUID()}.pcm`);
   try {
     await writeFileAt(src, mp3);
-    const ff = spawn({ cmd: ['ffmpeg', '-y', '-i', src, '-ar', '16000', '-ac', '1', '-f', 's16le', out], stderr: 'pipe' });
+    const ff = spawn({
+      command: 'ffmpeg',
+      args: ['-y', '-i', src, '-ar', '16000', '-ac', '1', '-f', 's16le', out],
+      stderr: 'pipe',
+    });
     await ff.exited;
     if (ff.exitCode !== 0) {
       apiLogger.error({ stderr: (await new Response(ff.stderr).text()).slice(-200) }, 'phone TTS ffmpeg failed');

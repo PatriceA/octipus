@@ -79,7 +79,8 @@ async function toWhisperWav(sourcePath: string): Promise<string> {
   let proc: Subprocess<'ignore', 'pipe', 'pipe'>;
   try {
     proc = spawn({
-      cmd: ['ffmpeg', '-nostdin', '-y', '-i', sourcePath, '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', '-f', 'wav', out],
+      command: 'ffmpeg',
+      args: ['-nostdin', '-y', '-i', sourcePath, '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', '-f', 'wav', out],
       stdout: 'pipe',
       stderr: 'pipe',
     });
@@ -195,7 +196,8 @@ export class WhisperEngine extends EventEmitter implements STTEngine {
       }
 
       const proc = spawn({
-        cmd: [binary, ...args],
+        command: binary,
+        args,
         stdout: 'pipe',
         stderr: 'pipe',
         // Co-located libs (self-contained install) resolve via this env.
@@ -356,8 +358,9 @@ export class FasterWhisperEngine extends EventEmitter implements STTEngine {
     if (this.proc) return;
     const worker = join(import.meta.dirname, 'faster_whisper_worker.py');
     const proc = spawn({
-      cmd: [
-        'uv', 'run', '--python', '3.12', '--with', 'faster-whisper', worker,
+      command: 'uv',
+      args: [
+        'run', '--python', '3.12', '--with', 'faster-whisper', worker,
         '--model', this.options.model || 'small',
         '--language', this.options.language || 'en',
       ],

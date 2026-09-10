@@ -105,7 +105,8 @@ with sd.InputStream(samplerate=sample_rate_val, channels=1, dtype='float32',
     const pythonPath = process.env.PYTHON_PATH || 'python3';
 
     this.process = spawn({
-      cmd: [pythonPath, '-c', script],
+      command: pythonPath,
+      args: ['-c', script],
       stdout: 'pipe',
       stderr: 'pipe',
       env: {
@@ -291,7 +292,8 @@ finally:
     const pythonPath = process.env.PYTHON_PATH || 'python3';
 
     this.process = spawn({
-      cmd: [pythonPath, '-c', script],
+      command: pythonPath,
+      args: ['-c', script],
       stdout: 'pipe',
       stderr: 'pipe',
       env: {
@@ -448,7 +450,8 @@ with sd.InputStream(samplerate=sample_rate, channels=1, dtype='float32',
     const pythonPath = process.env.PYTHON_PATH || 'python3';
 
     this.process = spawn({
-      cmd: [pythonPath, '-c', script],
+      command: pythonPath,
+      args: ['-c', script],
       stdout: 'pipe',
       stderr: 'pipe',
       env: {

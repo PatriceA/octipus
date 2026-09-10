@@ -25,29 +25,30 @@ function rejectUnsafeArg(label: string, value: string | undefined): string | nul
 }
 
 /**
- * The argv for a run, or the reason it was refused. Exported so the validation
- * and the shape of the spawned command are testable without standing up the
- * route (mirrors `resolveEvalResultPath`).
+ * The command and arguments for a run, or the reason it was refused. Exported
+ * so the validation and the shape of the spawned command are testable without
+ * standing up the route (mirrors `resolveEvalResultPath`). The command is
+ * fixed here and never built from request data.
  */
 export function buildEvalRunArgv(opts: {
   type?: 'eval' | 'red-team';
   suite?: string;
   model?: string;
-}): { argv: string[] } | { error: string } {
+}): { command: string; args: string[] } | { error: string } {
   const error = rejectUnsafeArg('suite', opts.suite) ?? rejectUnsafeArg('model', opts.model);
   if (error) return { error };
 
   // Node, via the same tsx + markdown-loader invocation every package script
   // uses. This used to spawn `bun`, which the repo stopped running on.
-  const argv = ['npx', 'tsx', '--import', './scripts/md-loader.mjs'];
+  const args = ['tsx', '--import', './scripts/md-loader.mjs'];
   if (opts.type === 'red-team') {
-    argv.push('src/eval/red-team/cli.ts');
+    args.push('src/eval/red-team/cli.ts');
   } else {
-    argv.push('src/eval/cli.ts');
-    if (opts.suite) argv.push('--suite', opts.suite);
+    args.push('src/eval/cli.ts');
+    if (opts.suite) args.push('--suite', opts.suite);
   }
-  if (opts.model) argv.push('--model', opts.model);
-  return { argv };
+  if (opts.model) args.push('--model', opts.model);
+  return { command: 'npx', args };
 }
 
 interface SavedEvalFile {
@@ -206,7 +207,9 @@ export const evalRoutes = new Elysia({ prefix: '/eval' })
     }
 
     const runId = `run-${Date.now()}`;
-    const proc = spawnProcess(built.argv, {
+    const proc = spawnProcess({
+      command: built.command,
+      args: built.args,
       cwd: process.cwd(),
       stdout: 'pipe',
       stderr: 'pipe',

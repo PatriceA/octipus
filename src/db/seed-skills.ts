@@ -158,7 +158,7 @@ async process_file(args: Record<string, unknown>): Promise<unknown> {
 \`\`\`typescript
 async run_command(args: Record<string, unknown>): Promise<unknown> {
   const cmd = args.command as string;
-  const proc = spawnProcess(['sh', '-c', cmd], { stdout: 'pipe', stderr: 'pipe' });
+  const proc = spawnProcess({ command: 'sh', args: ['-c', cmd], stdout: 'pipe', stderr: 'pipe' });
   const stdout = await new Response(proc.stdout).text();
   const stderr = await new Response(proc.stderr).text();
   const exitCode = await proc.exited;

@@ -81,9 +81,9 @@ export async function httpJson<T>(url: string, init?: RequestInit, timeoutMs = 2
 
 /** Resolve a binary on PATH. Returns the absolute path or null. */
 export async function commandExists(bin: string): Promise<string | null> {
-  const cmd = platform() === 'win32' ? ['where', bin] : ['which', bin];
+  const finder = platform() === 'win32' ? 'where' : 'which';
   try {
-    const proc = spawnProcess(cmd, { stdout: 'pipe', stderr: 'pipe' });
+    const proc = spawnProcess({ command: finder, args: [bin], stdout: 'pipe', stderr: 'pipe' });
     const exit = await proc.exited;
     if (exit !== 0) return null;
     const out = (await new Response(proc.stdout).text()).trim();
@@ -193,9 +193,9 @@ const MB_PER_BYTE = 1 / (1024 * 1024);
  * Run a command and capture stdout, or null on non-zero exit / spawn failure.
  * Read-only by contract — callers only pass query commands.
  */
-async function runCapture(cmd: string[], timeoutMs = 4000): Promise<string | null> {
+async function runCapture(command: string, args: string[], timeoutMs = 4000): Promise<string | null> {
   try {
-    const proc = spawnProcess(cmd, { stdout: 'pipe', stderr: 'ignore' });
+    const proc = spawnProcess({ command, args, stdout: 'pipe', stderr: 'ignore' });
     const timer = setTimeout(() => proc.kill(), timeoutMs);
     const exit = await proc.exited;
     clearTimeout(timer);
@@ -308,7 +308,7 @@ async function detectAmdGpu(): Promise<{ gpu: DetectedGpu; sources: HardwareSour
 
   if (await commandExists('rocm-smi')) {
     sources.push('rocm-smi');
-    const out = await runCapture(['rocm-smi', '--showmeminfo', 'vram', '--json']);
+    const out = await runCapture('rocm-smi', ['--showmeminfo', 'vram', '--json']);
     if (out) vramMB = parseRocmSmiVram(out);
   }
 
@@ -350,8 +350,7 @@ export async function probeHardware(): Promise<HardwareProfile> {
   } else {
     // NVIDIA — the common discrete-GPU case.
     if (await commandExists('nvidia-smi')) {
-      const out = await runCapture([
-        'nvidia-smi',
+      const out = await runCapture('nvidia-smi', [
         '--query-gpu=name,memory.total',
         '--format=csv,noheader,nounits',
       ]);

@@ -29,7 +29,9 @@ const installer: InstallerModule = {
     }
 
     try {
-      const proc = spawnProcess(['sh', '-c', 'curl -fsSL https://ollama.com/install.sh | sh'], {
+      const proc = spawnProcess({
+        command: 'sh',
+        args: ['-c', 'curl -fsSL https://ollama.com/install.sh | sh'],
         stdout: 'pipe',
         stderr: 'pipe',
       });

@@ -302,7 +302,9 @@ async function bootBackend(apiHost: string, apiPort: string): Promise<BackendHan
   //
   // Both `--import` flags are required: tsx to run TypeScript, md-loader because
   // role prompts are `.md` imports Node cannot read on its own.
-  const proc = spawnProcess([process.execPath, '--import', 'tsx', '--import', './scripts/md-loader.mjs', 'src/index.ts'], {
+  const proc = spawnProcess({
+    command: process.execPath,
+    args: ['--import', 'tsx', '--import', './scripts/md-loader.mjs', 'src/index.ts'],
     cwd: process.cwd(),
     stdout: 'pipe',
     stderr: 'pipe',

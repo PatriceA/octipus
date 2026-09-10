@@ -36,10 +36,11 @@ async function backupDatabase(outputPath: string): Promise<void> {
     const database = url.pathname.slice(1);
     const user = url.username;
 
-    const dump = await runCommand(
-      ['pg_dump', '-h', host, '-p', port, '-U', user, '-d', database, '-F', 'c', '-f', backupFile],
-      { env: { ...process.env, PGPASSWORD: url.password } },
-    );
+    const dump = await runCommand({
+      command: 'pg_dump',
+      args: ['-h', host, '-p', port, '-U', user, '-d', database, '-F', 'c', '-f', backupFile],
+      env: { ...process.env, PGPASSWORD: url.password },
+    });
     if (dump.exitCode !== 0) throw new Error(dump.stderr.trim() || `pg_dump exited ${dump.exitCode}`);
 
     console.log(`✅ Database backed up to ${backupFile}`);
@@ -65,7 +66,7 @@ async function backupConfig(outputPath: string): Promise<void> {
     const configFiles = ['.env', 'config.json'].filter(f => existsSync(f)).concat(skillManifests);
 
     if (configFiles.length > 0) {
-      const proc = spawnProcess(['tar', '-czf', backupFile, ...configFiles], { stdout: 'ignore', stderr: 'pipe' });
+      const proc = spawnProcess({ command: 'tar', args: ['-czf', backupFile, ...configFiles], stdout: 'ignore', stderr: 'pipe' });
       await proc.exited;
       console.log(`✅ Configuration backed up to ${backupFile}`);
     } else {
@@ -116,10 +117,11 @@ async function restoreDatabase(backupFile: string): Promise<void> {
     const database = url.pathname.slice(1);
     const user = url.username;
 
-    const restore = await runCommand(
-      ['pg_restore', '-h', host, '-p', port, '-U', user, '-d', database, '-c', backupFile],
-      { env: { ...process.env, PGPASSWORD: url.password } },
-    );
+    const restore = await runCommand({
+      command: 'pg_restore',
+      args: ['-h', host, '-p', port, '-U', user, '-d', database, '-c', backupFile],
+      env: { ...process.env, PGPASSWORD: url.password },
+    });
     if (restore.exitCode !== 0) throw new Error(restore.stderr.trim() || `pg_restore exited ${restore.exitCode}`);
 
     console.log('✅ Database restored');
@@ -188,7 +190,7 @@ async function main() {
     console.log('Available backups:\n');
 
     try {
-      const proc = spawnProcess(['ls', '-la', outputPath], { stdout: 'pipe' });
+      const proc = spawnProcess({ command: 'ls', args: ['-la', outputPath], stdout: 'pipe' });
       const files = await new Response(proc.stdout).text();
       console.log(files);
     } catch {
