@@ -1,5 +1,9 @@
 # Plan: agent-spawn hardening (follow-ups)
 
+> **Dated follow-up backlog (July 2026).** Some items may have shipped or been
+> superseded. Confirm current behavior in `src/core/swarm/`, current tests, and
+> `docs/SWARM-RELIABILITY.md` before treating an item as open.
+
 Running backlog for the swarm/spawn work. Seeded from the run-743d4b66
 post-mortem (`docs/postmortems/2026-07-07-run-743d4b66-world-cup-research.md`);
 items 2/3/4/6/8 of that post-mortem shipped in PR #179. This file tracks what's

@@ -41,8 +41,7 @@ What we layer on top, under `src/tui-pi/` and `src/tui-editor/`:
 - Theme + glyph table with terminal-aware emoji fallback.
 
 The previous TUI was based on Ink (React for the terminal). Replaced
-in May 2026 — pi-tui's diff renderer is dramatically faster on long
-chats and the shared `Editor` primitive lets the chat composer and
+in May 2026 — pi-tui provides differential rendering, and the shared `Editor` primitive lets the chat composer and
 the file editor evolve in lockstep.
 
 ---
@@ -227,7 +226,7 @@ automatically when the gateway isn't running. This suite still runs on
 it needs the `bun` binary on PATH:
 
 ```bash
-bun test tests/tui/
+npm run test:tui
 ```
 
 See `tests/tui/harness.ts` for the keystroke + ANSI-stripping helper

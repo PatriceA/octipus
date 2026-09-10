@@ -78,7 +78,20 @@ MCP_AUTO_START=true
 
 ### Which roles get MCP access?
 
-MCP meta-tools are available to these roles: **research**, **coding**, **general**, **devops**, **security**, **data**, **ai**, **automation**, **architecture**. Other roles (qa, design, review, communication, finance, pm, writing, root agent) don't include MCP by default — add `'mcp'` to their `toolIds` in `src/core/agent/roles/<name>/config.ts` if needed.
+MCP meta-tools are available to these roles: **research**, **coding**, **general**, **devops**, **security**, **data**, **ai**, **automation**, **architecture**. The root runs as `general` and therefore has MCP access. Other roles (qa, design, review, communication, finance, pm, writing) don't include MCP by default — add `'mcp'` to their `toolIds` in `src/core/agent/roles/<name>/config.ts` if needed.
+
+## Execution permissions
+
+Tool discovery does not authorize execution. The bridge checks each outbound
+call using tool ID `mcp` and action `<serverId>.<remoteToolName>`, including lazy
+calls and artifact refresh/collection. ASK prompts through an attended session;
+unattended calls are blocked. Stored DENY takes precedence. Reviewed grants can
+be limited by session, workspace, argument patterns, and expiry; see
+[Tools API](API.md#tools).
+
+Old expanded-tool overrides using `mcp:<serverId>` need review and recreation
+under the canonical `mcp` action identity. These checks govern bridge dispatch,
+not the internal behavior or isolation of an external MCP server.
 
 ## Managing servers
 
@@ -197,7 +210,7 @@ octi restart
 Octipus will auto-connect to n8n on startup. Verify with:
 
 ```bash
-curl http://localhost:3005/api/mcp/servers | jq
+curl -H "Authorization: Bearer $OCTIPUS_API_TOKEN" http://localhost:3005/api/mcp/servers | jq
 ```
 
 ### Troubleshooting

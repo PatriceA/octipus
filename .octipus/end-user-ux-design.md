@@ -1,5 +1,9 @@
 # End-User UX Initiative — Workspace, Live Work Stream & In-Chat Files
 
+> **Historical design record (2026-06-01).** “Today” statements and proposed
+> paths describe the repository at that date. Use the current web UI, API
+> documentation, and `docs/ENRICHMENT.md` as the source of truth.
+
 > Design note, 2026-06-01. Strategic response to the Odysseus comparison
 > (`.octipus/` reading + chat analysis): Octipus is strong on the professional/
 > platform side (swarm, typed roles, multi-channel, multi-tenant security) but

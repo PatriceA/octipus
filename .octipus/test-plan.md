@@ -1,5 +1,9 @@
 # Test Plan for Octipus Project
 
+> **Historical test-plan snapshot.** Suite counts and Bun commands below are
+> obsolete. Use `docs/TESTING.md` and `package.json` for the current Node-based
+> validation commands and evidence boundaries.
+
 ## Scope and Objectives
 This test plan covers the comprehensive testing strategy for Octipus project, focusing on:
 1. **Unit Testing**: Core functionality validation

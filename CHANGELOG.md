@@ -48,6 +48,11 @@ and pipelines are unchanged.
   via `multiuser.unattendedDenyActions`) applies instead of waiting out the
   five-minute request TTL and then failing.
 
+  **Superseded 2026-09-10:** unattended `ASK` actions now return
+  `approval_required`; they are not auto-approved. Stored `DENY` decisions take
+  precedence over broad allow rules. See
+  [`docs/reports/consolidation-2026-09-10.md`](docs/reports/consolidation-2026-09-10.md).
+
 **Two latent bugs fixed on the way, both of which affected any install.**
 `loadRolesFromDb` rebuilt each in-memory role from the four columns the `roles`
 table has, so at boot it silently dropped `readOnly` — the only per-handler

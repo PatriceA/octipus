@@ -1,7 +1,7 @@
 # Swarm Reliability & Verification
 
-Three additions make the swarm (Root agent → Agent → Subagent) **auditable**,
-**verifiable**, and **resumable** without changing how delegation works. They
+Three mechanisms record observed activity, check selected completion conditions,
+and reconcile interrupted swarm nodes (Root agent → Agent → Subagent). They
 share one principle from `DESIGN.md` — *fail loud, no silent fallbacks* — turned
 into concrete machinery:
 
@@ -42,7 +42,7 @@ transcript.
     "commandsRun": 1,        // shell__run + shell__run_background
     "approvalsRequired": 0,  // ASK-level calls that prompted a human
     "approvalsDenied": 0,    // …that the human rejected
-    "autoApproved": 3,       // ASK-level calls auto-approved (autonomous workers)
+    "autoApproved": 0,       // legacy counter; unattended ASK now blocks
     "permissionDenials": 0,  // blocked by policy or a pre-tool hook
     "toolErrors": 1,         // tool executions that threw
     "byName": { "filesystem__write_file": 2, "shell__run": 1, "websearch__search": 4 }
@@ -79,9 +79,9 @@ reused, while the outer `status: "cache_hit"` signals the reuse.
 
 ## 2. Scorer gates — verify the typed deliverable
 
-Every role already declares an `expectedOutput` shape (house rule #4). A
-**scorer** is a cheap, deterministic check that the deliverable *actually*
-satisfies it. A parent attaches scorers to a `spawn_child` call; they run **after
+Roles describe expected deliverables in metadata and prompts; this is not
+runtime output-schema validation. A **scorer** checks a selected property of
+the deliverable. A parent attaches scorers to a `spawn_child` call; they run **after
 the child returns `ok`, before the result reaches the parent**. Any failure flips
 the result to **`contract_failed`** so the parent retries/corrects instead of
 synthesizing against output that missed the brief.
@@ -114,6 +114,7 @@ synthesizing against output that missed the brief.
 | `file_exists` | a path exists in the child's workspace | `path` |
 | `command_exit_zero` | a command run in the child's workspace exits 0 | `command`, `timeoutMs` |
 | `side_effect` | the child's deterministic receipt meets thresholds | `minFilesChanged`, `minCommandsRun`, `maxToolErrors`, `requireWorkingTools` |
+| `any_of` | at least one member scorer passes (evaluated in order) | `scorers[]`; one level of alternatives |
 
 `command_exit_zero` is the only one that produces NEW evidence rather than
 reading evidence already collected — it is what lets "done" mean "the suite
@@ -128,8 +129,10 @@ child, bounded by `swarm.contractRetries` — see the contract-retry loop in
 `spawner.ts`. Failures the child has no power over (no shell tool, a denied
 permission, a denylisted command) are marked non-retryable and surfaced once.
 
-Scorers are **opt-in** and validated at the spawn boundary — a malformed spec is
+Explicit scorer specifications are validated at the spawn boundary — a malformed spec is
 rejected loudly (`spawn_child: invalid scorers: …`), not silently dropped.
+The framework can also add derived checks, including a total-tool-outage gate;
+explicit scorer lists are not the only source of verification.
 
 ### Safety notes
 
@@ -147,8 +150,8 @@ rejected loudly (`spawn_child: invalid scorers: …`), not silently dropped.
 
 A first-class `swarm_node_status` value — **not** mapped onto `tool_error` — so a
 missed contract is queryable and visible as its own failure class in the
-swarm-tree UI. It is **not** auto-retried (distinct from `tool_error`); the
-parent LLM decides. Failed scorers are surfaced explicitly on both the await
+swarm-tree UI. Retryable contract failures receive the bounded `swarm.contractRetries`
+retry first; exhausted or non-retryable failures reach the parent LLM. Failed scorers are surfaced explicitly on both the await
 (`formatChildResult`) and detached (`collect_children`) parent surfaces:
 
 ```
@@ -165,13 +168,13 @@ parent LLM decides. Failed scorers are surfaced explicitly on both the await
 ## 3. Ledger + resume — durable, replayable swarms
 
 `swarm_nodes` holds the *current* state of each node. The **ledger**
-(`swarm_ledger` table) holds the append-only *history* of transitions, so a swarm
+(`run_events` rows with `subject = 'swarm_node'`) holds the append-only *history* of transitions, so a swarm
 interrupted by a crash, sleep, or restart can be **replayed and reconciled
 deterministically**.
 
 ### Event model
 
-One row per lifecycle transition, keyed by `root_session_id`, ordered by a global
+One row per lifecycle transition, keyed by `run_id` (the root session ID), ordered by a global
 `bigserial seq`:
 
 | event | meaning |
@@ -195,10 +198,10 @@ aid, not on the critical path).
   to `cancelled` only if it is still `running`. Running it twice is a no-op. It
   marks orphaned work terminal — it does **not** re-execute agents (reviving the
   model work is a deliberate follow-up).
-- **Multi-instance safe.** An **age guard** (aligned with the orphan reaper's
-  `orphanReaperIntervalMs`) means a booting instance won't cancel a *sibling's*
-  freshly-spawned, still-running nodes — only nodes whose last event is older than
-  the threshold are reconciled.
+- **Age-based reconciliation.** An **age guard** (aligned with the orphan reaper's
+  `orphanReaperIntervalMs`) avoids reconciling newly spawned nodes — only nodes whose last event is older
+  than the threshold are reconciled. It does not prove that an older node is
+  orphaned; a long-running sibling instance may still own it.
 
 ### Boot sequence
 
@@ -212,7 +215,7 @@ On startup (`src/index.ts`, after DB init) two passes run in order:
    using the same age threshold.
 
 **Code:** `src/core/swarm/ledger.ts` (pure fold + `SwarmLedger`),
-`ledger-repository.ts`, table in `src/db/schema/swarm-ledger.ts`.
+`ledger-repository.ts`, table in `src/db/schema/run-events.ts`.
 
 ---
 
@@ -224,7 +227,7 @@ On startup (`src/index.ts`, after DB init) two passes run in order:
 | ------ | ------ | -------- |
 | `ok` / `completed` | normal success | — |
 | `cache_hit` | result served from the per-session cache | — |
-| `contract_failed` | a scorer gate failed (§2) | no — parent decides |
+| `contract_failed` | a scorer gate failed (§2) | bounded contract retry when retryable; parent decides after exhaustion |
 | `tool_error` | the child crashed | yes (once, new node) |
 | `cancelled` | cascade/admin cancel, or ledger reconcile (§3) | — |
 
@@ -245,4 +248,4 @@ per-node and process-local.
 
 **Can I query receipts/contract failures?** Yes — receipts via
 `swarm_nodes.result->'receipt'`; contract failures via `status = 'contract_failed'`
-or the `swarm_ledger`.
+or the swarm rows in `run_events`.

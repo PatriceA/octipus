@@ -1,5 +1,9 @@
 # End-User Enrichment — Master Plan
 
+> **Archived roadmap (2026-06-01).** The listed features later shipped in some
+> form. Proposed scope and “today” statements below are historical; see
+> `docs/ENRICHMENT.md` and the feature-specific documentation for current behavior.
+
 > Strategic roadmap, 2026-06-01. Octipus is strong on the professional/platform
 > side (swarm, typed roles, multi-channel, multi-tenant security) but thin on
 > **end-user daily-driver features** and the "fun" side. Triggered by the

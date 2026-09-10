@@ -1,5 +1,9 @@
 # Octipus Swarm Upgrade — Strategic Plan
 
+> **Historical strategic plan.** Ground-truth paths and “current” behavior below
+> refer to the repository at authoring time. See `docs/SWARM-RELIABILITY.md` and
+> `docs/AGENT-ARCHITECTURE.md` for the current implementation.
+
 ## Context
 
 Three research/integration questions for Octipus swarm (kernel.sh dropped per user):

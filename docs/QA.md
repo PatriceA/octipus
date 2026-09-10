@@ -1,13 +1,15 @@
 # QA — v0.1 feature validation
 
 Manual validation steps for the six features closed in the 2026-04-26
-roadmap sweep. Run through these after deploying a build that includes
-commit `c29453c` or later.
+roadmap sweep. These are historical manual scenarios, expanded over time, not a record of
+checks passed by the current build. Some setup instructions and expected states
+refer to retired designs; verify them against current source before executing.
+Use [Testing](TESTING.md) for current automated lanes and evidence limits.
 
 ## Prerequisites
 
 - A running octipus instance (`npm run dev` or the docker compose stack).
-- Web UI reachable (default `http://localhost:3017`) with at least one
+- Web UI reachable (local default `http://localhost:3007`; Compose default `http://localhost:3017`) with at least one
   user account and one configured model in **Settings → Models**.
 - `psql` (or any Postgres client) with access to Octipus
   database. **External mode only** — embedded PGlite is fine for most
@@ -1310,7 +1312,7 @@ every turn.
    specialist with `status='done'`. `review` rows have
    `task_kind='review'`, `qa`/`security` rows `task_kind='finding'`.
 3. Root agent rows must NOT appear (recorder skips
-   `role='root agent'`).
+   `root=true` (the root's role is `general`)).
 4. Send a follow-up message; the second-wave agent calls
    `list_recent_session_tasks` (auto-allowed) and sees the prior
    outputs. `read_task_state(id)` returns the full
@@ -1468,7 +1470,7 @@ writes are **admin-only**.
 1. `GET /api/topics` → **expect** a `topics[]` array, each entry carrying
    `value`, `label`, `primaryModel`, `backupModel`, `executorModel`,
    `temperature`, `maxTokens`.
-2. In the UI (or `PUT /api/topics/agents/binding { primaryModel: "<modelA>" }`),
+2. In the UI (or `PUT /api/topics/general/binding { primaryModel: "<modelA>" }`),
    set a primary for the `agents` lane. **Expect** `200` and the topic's
    `primaryModel` now reads `<modelA>`.
 3. Verify persistence: `SELECT name, topic_roles FROM model_config WHERE
@@ -1479,7 +1481,7 @@ writes are **admin-only**.
 
 ### 10.2 Backup (fallback) model
 
-1. Set a backup: `PUT /api/topics/agents/binding { primaryModel: "<modelA>",
+1. Set a backup: `PUT /api/topics/general/binding { primaryModel: "<modelA>",
    backupModel: "<modelB>" }`. **Expect** the topic's `backupModel` = `<modelB>`
    and `model_config.topic_roles` for `<modelB>` shows `{"agents":"backup"}`.
 2. Bind a **non-existent** model name → **expect** `400 Unknown model: <name>`
@@ -1492,13 +1494,13 @@ writes are **admin-only**.
 
 ### 10.3 Executor model + extras
 
-1. `PATCH /api/topics/agents/config { executorModel: "<modelC>",
+1. `PATCH /api/topics/general/config { executorModel: "<modelC>",
    temperature: 0.2, maxTokens: 4096 }` → **expect** `200` echoing the
    resolved config.
 2. **True PATCH semantics:** re-send `{ temperature: 0.5 }` only. **Expect**
    `executorModel` and `maxTokens` **unchanged**, `temperature` now `0.5`
    (omitted fields keep their value; a present `null` clears).
-3. `GET /api/topics` → **expect** the `agents` row reflects
+3. `GET /api/topics` → **expect** the `general` row reflects
    `executorModel/temperature/maxTokens`.
 4. Non-admin `PATCH` → **expect** `403`; unknown topic → **expect** `404`.
 

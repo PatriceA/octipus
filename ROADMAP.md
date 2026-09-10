@@ -12,7 +12,7 @@ The [product consolidation plan](docs/plans/product-consolidation-2026-09.md)
 sets the order for the next improvement cycle: preserve approval requirements
 across delegation, report unavailable and interrupted state accurately, prove
 complete workflows, simplify navigation, and reduce coupling where those changes
-need it. Documentation and the phases 1–4 code changes are implemented locally;
+need it. Documentation and the phases 1–4 code changes are on `main`;
 [validation and remaining measurements](docs/reports/consolidation-2026-09-10.md)
 are recorded separately. The execution refactor remains deferred. Existing feature proposals below remain available for later review and
 are not an instruction to expand scope during this cycle.
@@ -56,14 +56,11 @@ are not an instruction to expand scope during this cycle.
   covers the assertion end to end. Plan:
   [docs/plans/daily-driver-gaps.md](docs/plans/daily-driver-gaps.md).
 
-- **Mock-provider scaffold for the model layer.** `src/models/litellm-client.ts`
-  (988 lines) and `src/models/providers/index.ts` are at 0% coverage
-  because they front network IO; meaningful unit tests need a mock
-  provider that speaks the provider interface (complete / embed /
-  stream / error classes), records calls, and returns scripted
-  responses. Once it lands, the existing test files for capability
-  routing, cost tracking, rate limiting, and provider discovery
-  can finally assert on what the client actually does. **Help wanted.**
+- **Provider-boundary test coverage.** The acceptance harness has a scripted
+  OpenAI-compatible provider, and conformance tests have local provider doubles.
+  The larger LiteLLM client and provider registry still need more direct tests
+  for completion, embedding, streaming, and classified failures. Prefer
+  extending those shared seams over adding one-off HTTP mocks. **Help wanted.**
 
 
 - **Live Artifacts — BETA.** `src/core/artifacts/`, `/api/artifacts`,
@@ -74,7 +71,8 @@ are not an instruction to expand scope during this cycle.
   garbage-collection policy, slug-collision UX, agent-authored
   refresh loop. Stays in **Now** until the BETA flag drops.
 
-- **Schema directory grouping.** `src/db/schema/` is 57 flat files.
+- **Schema directory grouping.** `src/db/schema/` currently has 58 flat
+  TypeScript files.
   Still searchable, but the next 5-10 additions will start to bite.
   Proposed grouping: `schema/{auth,orchestration,rag,memory,artifacts,audit,settings}/`.
   Non-breaking — `index.ts` re-exports preserve the import surface.
@@ -1116,7 +1114,7 @@ Three deferred items moved to **Now** above.
 ### Earlier
 
 - Gateway hub with typed Zod protocol, multi-client auth (session, local, HMAC, API key), connection budgets, rate limiting
-- 16 roles + 16 expert personas + 22 domain skills, all DB-seeded for runtime editing
+- 16 roles, 18 seeded expert definitions, and 22 seeded skills, editable at runtime
 - 59+ MCP tools across 19 groups (filesystem, shell, git, browser, web search, Docker, Workspace, M365, GitHub/GitLab, knowledge base, profiles, scheduling, voice, cross-channel messaging, and more)
 - Three-tier permission system (ALLOW / ASK / DENY) with rule matchers, pre/post hooks, audit trail
 - Three-layer prompt-injection defense (system preamble + 39-pattern input guard + LLM output guard)

@@ -3,8 +3,9 @@
 The map for everything under `docs/`. Start with **Getting Started**, then jump to the area you need. For repo-wide context see the top-level [`README.md`](../README.md) and [`AGENT.md`](../AGENT.md).
 
 Current improvement sequence: [Product consolidation](plans/product-consolidation-2026-09.md).
-Its implementation phases are planned; the current execution reference remains
-[Agent Architecture](AGENT-ARCHITECTURE.md).
+Phases 1–4 are implemented; live-provider measurements and the broader execution
+review remain open in the [status report](reports/consolidation-2026-09-10.md).
+The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 
 ## Getting Started
 

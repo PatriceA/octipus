@@ -1,5 +1,9 @@
 # LLM Prompt Compression — Follow-ups Plan
 
+> **Historical follow-up plan (July 2026).** The parent phases had shipped when
+> this was written. Deferred items and Bun-era commands below are a dated
+> backlog, not current contributor instructions.
+
 ## Context
 
 The five phases of `docs/plans/llm-prompt-compression.md` shipped (PRs

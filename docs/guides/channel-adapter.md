@@ -1,6 +1,6 @@
 # Building a Channel Adapter
 
-Channel adapters bridge external messaging platforms to Octipus via the Gateway protocol.
+Built-in channel adapters bridge external messaging platforms through the Unified Message Interface (UMI). Gateway clients use a separate WebSocket frame schema; adapters are in-process classes.
 
 ## Architecture
 
@@ -21,6 +21,10 @@ YourChannel extends BaseChannel (your code)
 
 ### 1. Extend BaseChannel
 
+The following is SDK-specific pseudocode, not a drop-in implementation. Define
+and type `MyPlatformClient`, load credentials through the config/vault integration,
+and map real message IDs and error handling before using it.
+
 ```typescript
 // src/channels/my-platform/index.ts
 import { BaseChannel } from '../interface';
@@ -30,7 +34,7 @@ export class MyPlatformChannel extends BaseChannel {
   readonly type: ChannelType = 'my-platform';
   readonly name = 'My Platform';
 
-  private client: any = null;
+  private client: MyPlatformClient | null = null;
 
   async connect(): Promise<void> {
     // Initialize your platform SDK
@@ -75,26 +79,22 @@ export class MyPlatformChannel extends BaseChannel {
 }
 ```
 
-### 2. Register with the UMI
+### 2. Make the channel discoverable
 
-Add your channel to the channel initialization in `src/channels/index.ts`:
-
-```typescript
-import { MyPlatformChannel } from './my-platform';
-
-// In initializeChannels():
-if (config.myPlatform?.enabled) {
-  const channel = new MyPlatformChannel();
-  umi.register(channel);
-}
-```
+Export a `BaseChannel` instance or a constructible subclass from
+`src/channels/<name>/index.ts`. `src/channels/discovery.ts` discovers it;
+`src/channels/index.ts` registers discovered channels with UMI. Override
+`isEnabled(config)` to gate startup on configured credentials, following a
+sibling adapter. Register any new settings and secret mappings, and verify the
+channel is also present in the production bundle.
 
 ### 3. Add ChannelType
 
 Add your channel type to `src/core/types.ts`:
 
 ```typescript
-export type ChannelType = 'telegram' | 'slack' | 'teams' | 'whatsapp' | 'webchat' | 'my-platform';
+// Append 'my-platform' to the existing ChannelType union.
+// Preserve existing API/test channel members.
 ```
 
 And update the configuration schema in `src/config/schema.ts` to include settings for your channel if needed.

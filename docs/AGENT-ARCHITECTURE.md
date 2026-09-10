@@ -47,7 +47,7 @@ Runtime instances that execute tasks using an LLM tool loop. Each agent has a co
 ### Root agent
 Depth-0 root of the swarm, and the agent the user is talking to. It runs as an ordinary role — `general` (`ROOT_ROLE`) — with the general toolset **plus** the `spawn_child` / `collect_children` / `create_pipeline` meta-tools, so it answers with its own tools and delegates sub-topics to specialist Agents when one is genuinely needed. Owns the final user-facing reply.
 
-Until Phase 9 of the rebuild plan this was a dedicated `root agent` role holding meta-tools and `profiles` and nothing else, reached through a keyword classifier that decided per message whether to run it at all. It could do no work, so half its runs answered from parametric memory after a second model had already read the same message. Both the classifier branch and the tool-less role are gone; `AgentContext.root` is what identifies the root now, since the role string no longer does.
+Until Phase 9 of the rebuild plan this was a dedicated `root agent` role holding meta-tools and `profiles` and nothing else, reached through a keyword classifier that decided per message whether to run it at all. That design added a routing hop and restricted direct tool work. Both the classifier branch and the tool-less role are gone; `AgentContext.root` is what identifies the root now, since the role string no longer does.
 
 **Location:** `src/core/agent/service.ts` and `root-runner.ts`, role prompt at `src/core/agent/roles/general/prompt.md`, delegation mechanics at `src/core/agent/delegation-prompt.md`
 
@@ -130,7 +130,7 @@ Root agent (depth 0)
 
 1. **`spawn_child`** (single) — default for single-role delegation with structured output.
 2. **`spawn_child`** (multiple, parallel or sequential) — when the task has distinct sub-topics.
-3. **`create_pipeline`** — the verified build loop, and the **preferred primitive for development work**: it plans the work into items, runs implement → test → review → QA once per item, and routes a failed QA verdict back to the implementer (bounded) before escalating. Prefer it over `spawn_child` whenever the user asks to build, implement, fix, refactor, migrate or ship something and "done" can be settled by *running* something — not by whether the user said "staged". A single `spawn_child` for that work skips the verification loop and leaves the child's own word as the only evidence. Not for questions, writing, or read-only audits, which have nothing to re-run. Pipelines are root-only; Agents and Subagents cannot call `create_pipeline`. Also startable outside a chat turn via `POST /api/pipelines`.
+3. **`create_pipeline`** — a root-only staged workflow for work needing explicit implementation, testing, review, and QA steps. Development templates can retry failed QA within configured bounds. The current delegation prompt prefers pipelines for development tasks with runnable checks. That is prompt guidance; a pipeline does not itself prove correctness. A single delegated task can also attach independent scorer checks. Pipelines can be started through `POST /api/pipelines`.
 
 The legacy `spawn_worker` and `spawn_team` meta-tools are **removed from the LLM-visible tool surface**. The `worker-spawner.ts` internals still back pipeline stages (sequential handover, non-LLM) but the LLM no longer sees either primitive.
 
@@ -148,7 +148,7 @@ Every node has a hard budget envelope enforced pre-LLM-call inside `AgentWorker.
 - **Wall-clock does NOT cascade**: each node gets its own `LEVEL_DEFAULT` wall cap. Parent's clock excludes time spent awaiting children via `AgentWorker.pausedMs`.
 - **Fan-out**: per-node cap enforced synchronously by the spawner before concurrency/cache/budget math. Per-turn parallel cap (4) is a secondary guard in `tool-executor.ts`; overflow returns `concurrency_limit`.
 
-Defaults live in `src/core/swarm/types.ts` (`LEVEL_DEFAULT`, `BUDGET_RESERVE_FRACTION`).
+Live defaults are configurable under `swarm.levelDefaults`; `src/core/swarm/types.ts` supplies fallback `LEVEL_DEFAULT` values and `BUDGET_RESERVE_FRACTION`. Budget checks do not guarantee exact billing or immediate cancellation of external work.
 
 ### Cycle / Duplicate Protection
 
@@ -254,7 +254,7 @@ Some models (Qwen3, DeepSeek) emit `<think>...</think>` reasoning blocks that co
 
 - **Model-level:** "Disable Thinking" checkbox in the model Add/Edit dialog sets `extraBody: { think: false }` — prevents the model from generating reasoning tokens entirely (Ollama)
 - **Agent workers (root agent AND experts):** Strip `think:false` from extraBody so the model can reason before emitting tool calls. Empirically (2026-05-12 QA), Ollama with `think:false` produces malformed tool-call JSON that the Go-side parser rejects ("Value looks like object, but can't find closing '}'"); with thinking ON, the same models emit valid tool calls. The override applies to every role that uses tools, not just experts.
-- **LLM client safety net:** `<think>` blocks are stripped from both sync and streaming responses before delivery, so users never see raw reasoning output
+- **LLM client safety net:** `<think>` blocks are stripped from both sync and streaming responses before delivery, to reduce exposure of raw reasoning markup; provider formats can vary
 
 **Strategy:** Keep thinking enabled for any agent that emits tool calls (root agent, experts) — the cost in tokens is much smaller than the cost of a failed tool call + retry storm. Disable thinking only for the toolless surfaces (`direct-response.ts` — voice propose, `chat.interject`), where there are no tool calls to corrupt.
 

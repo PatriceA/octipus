@@ -1,5 +1,9 @@
 # Goose-Inspired Enhancements — Phased Plan
 
+> **Archived planning record (2026-06-19).** The “Draft” status below is the
+> plan's status when created. Later work is summarized in this directory's
+> README; branch names, commands, and proposed details remain historical.
+
 **Created:** 2026-06-19
 **Status:** Draft for review (extendable — add workstreams as sections)
 **Source:** Evaluation of Block/Goose (block/goose, AAIF) against Octipus.

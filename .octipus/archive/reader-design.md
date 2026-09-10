@@ -1,5 +1,9 @@
 # Reader (Article / Page Rewrite)
 
+> **Archived design record (2026-06-01).** The feature later shipped, but this
+> proposal is not current product documentation. See `docs/ENRICHMENT.md` and
+> `src/core/reader/` for current behavior.
+
 > Design note, 2026-06-01. Feature #4 from `end-user-enrichment-plan.md`.
 > A clean, distraction-free reading view with AI actions on top. Thin backend
 > (we already fetch + extract pages); the value is the focused UI + the

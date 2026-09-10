@@ -1,5 +1,9 @@
 # Voice live-conversation — fixes & next steps
 
+> **Historical post-launch plan (2026-07-13/14).** The “in progress” status and
+> rebuild instructions below are preserved from that work. Use `docs/VOICE.md`
+> for the current voice surface and supported providers.
+
 > **Status: in progress.** Phase 4 (realtime voice) is fully merged to `main`. This
 > plan captures the post-launch fixes from live testing (2026-07-13/14) and the
 > remaining work. Written as a context-reset handoff.

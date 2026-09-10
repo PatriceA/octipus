@@ -1,5 +1,9 @@
 # Follow-up — agent-quality issues observed 2026-06-10
 
+> **Historical QA record.** This preserves symptoms and evidence from one run
+> on 2026-06-10. It is not a current defect list; verify each finding against
+> current code and tests before treating it as open.
+
 Observed while running the multi-user e2e on `feat/multiuser-only` against a
 live stack (orchestrator = `deepseek-v4-flash`). None are caused by the
 multi-user change; they are pre-existing agent-quality / observability gaps

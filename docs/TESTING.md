@@ -122,10 +122,9 @@ webServer block times out, bump its `timeout:` in `playwright.config.ts`.
 **Playwright specs picked up by the unit runner**: they are excluded in
 `vitest.config.ts`. `npm run test:web` is the only thing that runs them.
 
-**TUI tests fail with `stdin.ref is not a function`**: make sure your tests
-import `render` from `src/tui/test-utils.tsx`, not directly from
-`ink-testing-library` — the shim in `test-utils` patches the Stdin mock.
-
+**TUI test failures**: the current clients use pi-tui, with tests under
+`src/tui-pi/` and `src/tui-editor/`. Run `npm run test:tui`; the retired Ink
+`src/tui/test-utils.tsx` shim no longer exists.
 
 ## Consolidation acceptance lanes
 

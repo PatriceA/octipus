@@ -1,5 +1,9 @@
 # Pipelines must not mark a stage done on the child's word alone
 
+> **Historical implementation plan.** This captures the failure and proposed
+> remediation at the time it was written. Check current pipeline code and tests
+> before using it as an open-work list.
+
 ## The failure
 
 Measured 2026-08-01, session `7bbc1ead-9435-43a5-b19a-1a0e33b8554a`.

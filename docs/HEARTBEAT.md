@@ -70,7 +70,7 @@ it. If the note is absent, the heartbeat still runs on the probe findings alone.
 
 ## Enabling
 
-**Globally** (operator) — set in DB settings or via env:
+**Globally** (operator) — set in DB settings, or use these environment values before first-boot migration:
 
 ```
 HEARTBEAT_ENABLED=true
@@ -81,8 +81,8 @@ HEARTBEAT_QUIET_HOURS_TZ=America/New_York
 HEARTBEAT_MAX_RUNS_PER_DAY=24
 ```
 
-**Per user** — call `ensureHeartbeatHook(userId)` (a settings toggle wires to
-this). It creates one enabled `trigger='heartbeat'` hook, idempotently.
+**Per user** — backend integrations call `ensureHeartbeatHook(userId)`. A
+first-class settings-page toggle is not yet wired. It creates one enabled `trigger='heartbeat'` hook, idempotently.
 `disableHeartbeatHook(userId)` turns it back off. The global switch still gates
 whether any user's hook actually runs.
 
@@ -98,6 +98,9 @@ whether any user's hook actually runs.
 | `heartbeat.probeGithub` | `true` | Wake for your open PRs with failing checks (`HEARTBEAT_PROBE_GITHUB`). |
 | `heartbeat.probeCalendar` | `true` | Wake for calendar events about to start (`HEARTBEAT_PROBE_CALENDAR`). |
 | `heartbeat.calendarLookaheadMinutes` | `60` | How far ahead the calendar probe looks (5–1440; `HEARTBEAT_CALENDAR_LOOKAHEAD_MINUTES`). |
+
+Unattended agent actions remain subject to permissions: ASK blocks rather than
+auto-approving. Standing instructions are prompt guidance, not a grant of access.
 
 ## Safety rails
 

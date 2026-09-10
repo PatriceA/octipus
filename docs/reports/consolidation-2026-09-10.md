@@ -1,7 +1,9 @@
 # Consolidation implementation and evidence
 
-2026-09-10. Phases 1–4 are implemented locally. No deployment or release is implied.
-The broad execution refactor (phase 5) is deliberately deferred.
+2026-09-10. Phases 1–4 shipped on `main` in commit `93296268`; all eight
+GitHub Actions workflows for that commit completed successfully. This records
+repository and CI evidence, not a deployment or release. The broad execution
+refactor (phase 5) is deliberately deferred.
 
 ## Behavior and migration
 

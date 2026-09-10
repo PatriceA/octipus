@@ -91,7 +91,7 @@ In addition to registering tools, plugins can subscribe to the root agent's `bef
 import { getAgentHooks } from '@/core/agent/hooks';
 
 getAgentHooks().register('before-agent-start', (ctx) => {
-  if (ctx.role !== 'root agent') return;
+  if (!ctx.root) return;
   ctx.systemPrompt += '\n\n# project notes\n- All paths are relative to repo root.';
 });
 ```
@@ -116,7 +116,7 @@ See `extensions/example-plugin/` for a working example with a greeting tool and 
 ## Versioned contract (`@octipus/plugin-sdk`)
 
 The `plugin.json` shape, the host API-version compatibility rule, and the
-validation kit are owned by the published `@octipus/plugin-sdk` package, so
+validation kit are owned by the repository's `@octipus/plugin-sdk` package, so
 plugin authors and the host validate against the **same** definition.
 
 ### `apiVersion`

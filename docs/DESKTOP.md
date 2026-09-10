@@ -116,8 +116,8 @@ URL, e.g.:
 | Another machine on the LAN | `http://192.168.1.x:3005` |
 | Remote / cloud deployment | `https://your.octipus.example.com` |
 
-Authentication uses a **bearer token** (the web UI cookie is translated to an
-`Authorization: Bearer` header for cross-origin compatibility). Log in with your
+Authentication uses a **bearer token** returned by the mobile-login endpoint
+and attached as `Authorization: Bearer` for cross-origin requests. Log in with your
 normal Octipus credentials.
 
 If you are running a local backend for the first time:

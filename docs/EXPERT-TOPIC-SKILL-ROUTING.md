@@ -192,7 +192,7 @@ To assign a model to a topic, use the **Models** page in the web UI:
 2. Select the topic(s) this model should handle
 3. The model will be used when agents with that role/topic are spawned
 
-**Fail-loud, no default fallback.** `ModelRegistry.getModelForTopic(topic)` is the single authoritative entry point. If a topic has no model bound, the spawner returns null and throws with a message directing the user to the Models page — there is no silent "default model" fallback. Same rule applies to the `embedding` / `vision` / `ocr` topics: the knowledge base self-check (`/api/knowledge/readiness`) surfaces a 503 if no embedding model is bound. (Default fallback applies *only* to the root agent, which can be selected via `selectForOrchestration()`; worker agents refuse the fallback.)
+**Fail-loud, no default fallback.** `ModelRegistry.getModelForTopic(topic)` is the single authoritative entry point. If a topic has no model bound, the spawner returns null and throws with a message directing the user to the Models page — there is no silent "default model" fallback. Embedding and vision consumers generally use topic resolution: the knowledge base self-check (`/api/knowledge/readiness`) surfaces a 503 if no embedding model is bound. Document image extraction also retains a legacy direct OCR fallback; see [Documents](DOCUMENTS.md#ocr--vision-model). (Default model fallback applies *only* to the root agent, which can be selected via `selectForOrchestration()`; worker agents refuse the fallback.)
 
 ## Swarm Children Inherit Topic Bindings
 

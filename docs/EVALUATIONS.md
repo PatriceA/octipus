@@ -116,8 +116,8 @@ out because they change what a run can tell you.
 ### Regression gating
 
 ```bash
-npm run eval --baseline latest        # newest file in eval/results/
-npm run eval --baseline eval/baseline.json
+npm run eval -- --baseline latest        # newest file in eval/results/
+npm run eval -- --baseline eval/baseline.json
 ```
 
 Compares this run to a previous results file PER TEST and exits 1 when a test
@@ -293,7 +293,7 @@ Capabilities gate conformance tests (test is `skipped` rather than `failed` when
 
 The Evaluations page is at `/eval` and has three tabs.
 
-**Suite Tests** — results from the `npm test` eval suite run against the live service.
+**Suite Tests** — results from the YAML eval harness (`npm run eval`); integration mode calls a live service, while unit mode exercises the classifier.
 
 **Conformance** — matrix view of model × test results. Run controls let you trigger a new conformance run against all enabled models or a specific model. Past runs are listed with date and pass rate.
 
@@ -331,7 +331,7 @@ Full interactive docs at `http://localhost:3005/swagger` (tag: `evaluations`).
 ## Quick Start
 
 ```bash
-# 1. Start services (PostgreSQL, Ollama)
+# 1. Configure storage (embedded or PostgreSQL) and the provider under test
 docker compose -f /path/to/docker-services/docker-compose.yml up -d
 
 # 2. Start the backend

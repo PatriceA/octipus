@@ -1,5 +1,9 @@
 # Hermes v0.18 adoption plan
 
+> **Historical adoption plan (July 2026).** Its in-progress status, source
+> comparison, paths, and Bun commands are dated. Reassess remaining ideas
+> against the current agent architecture before implementation.
+
 > Source comparison: Hermes Agent v0.18.2 (tag `v2026.7.7.2`, 2026-07-08); the
 > substantive release is v0.18.0 "Judgment" (2026-07-01). This plan covers what
 > we steal, what we finish, and the one spike. Features we decided to ignore

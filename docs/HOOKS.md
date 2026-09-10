@@ -326,7 +326,7 @@ Each log entry contains:
 | GET | `/api/hooks/:id/executions` | Execution history for hook |
 | GET | `/api/hooks/executions/all` | All user executions |
 | GET | `/api/hooks/suggestions` | Suggested hooks |
-| POST | `/api/hooks/suggestions/:id/apply` | Apply suggestion |
+| POST | `/api/hooks/suggestions/:suggestionId/apply` | Apply suggestion |
 | POST | `/api/hooks/briefing` | Ensure (create / re-enable) the seeded Daily Briefing; optional `timezone`, `cronExpression` |
 | DELETE | `/api/hooks/briefing` | Pause the Daily Briefing |
 

@@ -1,13 +1,13 @@
 # API Reference
 
-All endpoints are under `/api` with JWT Bearer authentication (except the health routes and the auth endpoints that issue or exchange credentials).
+This guide describes common routes. The [generated HTTP catalog](architecture/generated/CATALOG.md#http-surface) is the generated mounted-route inventory and links each route to its implementation. Most routes use `/api`; hosted artifacts, the gateway, and `/v1` have separate paths. Authentication can use a session cookie or Bearer token. Public health/authentication routes and signed webhook/SSO flows have their own requirements.
 
 ## Getting an API token
 
-Every authenticated endpoint expects an `Authorization: Bearer <token>` header. Throughout these docs the placeholder is `$OCTIPUS_API_TOKEN`. There are two ways to get a token:
+For scripts, use an `Authorization: Bearer <token>` header. The browser normally uses an HttpOnly session cookie. Throughout these docs the placeholder is `$OCTIPUS_API_TOKEN`. There are two ways to get a token:
 
-- **Login JWT** — `POST /api/auth/login` returns a session JWT. Good for short-lived / interactive use; it expires.
-- **Personal Access Token** — create a long-lived token under **Settings → API Tokens** in the web UI (or `POST /api/api-tokens`). Best for scripts, cron, and webhooks. Manage them via the [API Tokens](#api-tokens) endpoints; revoke with `DELETE /api/api-tokens/:id`.
+- **Login JWT** — `POST /api/auth/login-mobile` returns a session token in the body for native/script clients. `POST /api/auth/login` sets the browser cookie and does not return the token in JSON. Sessions expire.
+- **Personal Access Token** — create a long-lived token under **Settings → API Tokens** in the web UI (or `POST /api/auth/api-tokens`). Best for scripts, cron, and webhooks. Manage them via the [API Tokens](#api-tokens) endpoints; revoke with `DELETE /api/auth/api-tokens/:id`.
 
 Admin-only endpoints (anything marked *admin*, plus system-scoped vault writes) require a token belonging to an admin user. Export it once:
 
@@ -54,8 +54,6 @@ curl -H "Authorization: Bearer $OCTIPUS_API_TOKEN" http://localhost:3005/api/aut
 | GET | `/api/agents/:id` | Get agent details |
 | DELETE | `/api/agents/:id` | Stop and remove agent |
 | POST | `/api/agents/:id/message` | Send message to agent |
-| POST | `/api/agents/:id/pause` | Pause agent |
-| POST | `/api/agents/:id/resume` | Resume paused agent |
 | GET | `/api/agents/:id/events` | Get agent events (cursor-based: `?after=<seq>`) |
 
 ## Sessions
@@ -82,7 +80,7 @@ curl -H "Authorization: Bearer $OCTIPUS_API_TOKEN" http://localhost:3005/api/aut
 | PATCH | `/api/models/:name` | Update model config |
 | DELETE | `/api/models/:name` | Delete model |
 | POST | `/api/models/:name/default` | Set as default model |
-| GET | `/api/models/routing` | Get topic routing |
+| GET | `/api/topics` | Get topic bindings and configuration |
 | GET | `/api/models/health` | Check provider health |
 | GET | `/api/models/cli/status` | CLI tool availability |
 | GET | `/api/models/cli/quota` | CLI quota status |
@@ -113,10 +111,9 @@ curl -H "Authorization: Bearer $OCTIPUS_API_TOKEN" http://localhost:3005/api/aut
 | GET | `/api/hooks` | List all hooks |
 | POST | `/api/hooks` | Create hook |
 | GET | `/api/hooks/:id` | Get hook details |
-| PUT | `/api/hooks/:id` | Update hook |
+| PATCH | `/api/hooks/:id` | Update hook |
 | DELETE | `/api/hooks/:id` | Delete hook |
-| POST | `/api/hooks/:id/enable` | Enable hook |
-| POST | `/api/hooks/:id/disable` | Disable hook |
+| POST | `/api/hooks/:id/toggle` | Toggle hook enabled state |
 
 ## Vault
 
@@ -178,7 +175,7 @@ curl -H "Authorization: Bearer $OCTIPUS_API_TOKEN" http://localhost:3005/api/aut
 
 ## Persona
 
-Per-user root agent persona — name, tone, narration volume, free-form self-facts — plus the per-arm voices that shadow it. Same controls as the `/persona` slash command (see [CHAT-COMMANDS.md](CHAT-COMMANDS.md#personas-root agent-identity)) and the web `/persona` page. Writes delegate to `handlePersonaCommand` so validation matches across all three surfaces.
+Per-user root agent persona — name, tone, narration volume, free-form self-facts — plus the per-arm voices that shadow it. Same controls as the `/persona` slash command (see [CHAT-COMMANDS.md](CHAT-COMMANDS.md#persona)) and the web `/persona` page. Writes delegate to `handlePersonaCommand` so validation matches across all three surfaces.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -189,7 +186,7 @@ Per-user root agent persona — name, tone, narration volume, free-form self-fac
 | DELETE | `/api/persona/facts/:idx` | Remove the N-th free-form fact (0-indexed across `extra:*`) |
 | POST | `/api/persona/reset` | Restore Octipus default — drops custom name and facts |
 | GET | `/api/persona/arms` | Per-arm persona bindings (`{ arms: { review: "terse-engineer" } }`); `{}` when no arm has its own voice |
-| PUT | `/api/persona/arms/:role` | Shadow one arm's voice with `{ presetId }`. 400 with the reason for an unknown role/preset, or for `root agent` (use `PATCH /api/persona`) |
+| PUT | `/api/persona/arms/:role` | Shadow one arm's voice with `{ presetId }`. 400 with the reason for an unknown role/preset; for the root identity use `PATCH /api/persona` |
 | DELETE | `/api/persona/arms/:role` | Clear it — that arm runs with no persona, as before |
 
 ## Tools
@@ -198,11 +195,26 @@ Per-user root agent persona — name, tone, narration volume, free-form self-fac
 |--------|----------|-------------|
 | GET | `/api/tools` | List registered tools |
 | GET | `/api/tools/:id` | Get tool details |
-| GET | `/api/tools/tools/all` | All tools (built-in + MCP combined) |
+| GET | `/api/tools/all` | All built-in and expanded MCP tool definitions |
 | GET | `/api/tools/permissions` | User permission overrides |
-| PUT | `/api/tools/permissions` | Set permission level |
+| PUT | `/api/tools/permissions` | Set an override, optionally scoped with expiry |
 | DELETE | `/api/tools/permissions/:toolId/:action` | Reset permission |
 | POST | `/api/tools/:toolId/tools/:toolName/execute` | Execute a tool function |
+
+An override body contains `toolId`, `action`, `level` (`ALLOW`, `ASK`, `DENY`),
+optional `reason`, and optional `scope`. A scope requires a future `expiresAt`
+and at least one of `sessionId`, `workspaceId`, `pathPattern`, `commandPattern`.
+Scope conditions are combined; unavailable/mismatched scope evidence blocks.
+A scoped ALLOW cannot overwrite an existing DENY (`409`); review that denial
+first. Removing an override restores the manifest default, which may be ALLOW;
+set ASK explicitly when the intent is to require approval.
+
+Direct execution accepts `{ "args": { ... } }` and runs unattended. ASK returns
+HTTP `409` with `code: "approval_required"`; other execution failures return
+`400` with `code: "tool_execution_failed"`. An attended agent's descendants can
+use the session's approval surface. MCP permissions use tool ID `mcp`, action
+`<serverId>.<remoteToolName>`. Argument patterns constrain authorization, not
+filesystem or shell isolation.
 
 ## Notifications
 
@@ -224,7 +236,6 @@ Per-user root agent persona — name, tone, narration volume, free-form self-fac
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/reader` | Fetch and extract article/page content |
-| GET | `/api/reader/:id` | Get reader result |
 
 ## Documents
 
@@ -242,7 +253,7 @@ Per-user root agent persona — name, tone, narration volume, free-form self-fac
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/research` | Start a deep research job |
-| GET | `/api/research/jobs/:jobId` | Get research job status and results |
+| GET | `/api/research/:jobId` | Get persisted research job status and results |
 
 ## Tasks
 
@@ -272,41 +283,38 @@ inert and stays in the array.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/email/send` | Send an email (gated) |
-| GET | `/api/email/triage` | Get email triage results |
+| POST | `/api/email/triage` | Run email triage |
 
 ## Capabilities
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/capabilities/hwfit` | Get hardware-fit model recommendations |
+| GET | `/api/capabilities` | List available capabilities and status |
 
 ## SAML & SSO
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/saml/metadata` | Retrieve SAML metadata |
-| POST | `/api/saml/acs` | SAML assertion consumer service |
+| GET | `/api/saml/:orgSlug/metadata` | Retrieve organization SAML metadata |
+| POST | `/api/saml/:orgSlug/acs` | Organization SAML assertion consumer service |
 
 ## SCIM (System for Cross-domain Identity Management)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/scim/2.0/Users` | List users |
-| POST | `/api/scim/2.0/Users` | Create user |
-| GET | `/api/scim/2.0/Users/:id` | Get user |
-| PUT | `/api/scim/2.0/Users/:id` | Update user |
-| DELETE | `/api/scim/2.0/Users/:id` | Delete user |
-| GET | `/api/scim/2.0/Groups` | List groups |
+| GET | `/api/scim/v2/Users` | List users |
+| POST | `/api/scim/v2/Users` | Create user |
+| GET | `/api/scim/v2/Users/:id` | Get user |
+| PATCH | `/api/scim/v2/Users/:id` | Apply supported SCIM user updates |
+| DELETE | `/api/scim/v2/Users/:id` | Delete user |
+| GET | `/api/scim/v2/Groups` | List groups |
 
 ## Organizations & Admin
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/orgs` | List organizations (admin) |
-| POST | `/api/orgs` | Create organization (admin) |
-| GET | `/api/orgs/:id` | Get org details |
-| PATCH | `/api/orgs/:id` | Update org |
-| DELETE | `/api/orgs/:id` | Delete org |
+| GET | `/api/admin/orgs` | List organizations (admin) |
+| POST | `/api/admin/orgs` | Create organization (admin) |
 | GET | `/api/admin/users` | List all users (admin) |
 | POST | `/api/admin/users` | Create user (admin) |
 | PATCH | `/api/admin/users/:id` | Update user (admin) |
@@ -409,9 +417,9 @@ Authored markdown notes — the knowledge graph's Tier 2 surface. Full model in
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/skill-topic-assignments` | List skill-topic bindings |
-| POST | `/api/skill-topic-assignments` | Create assignment |
-| DELETE | `/api/skill-topic-assignments/:id` | Delete assignment |
+| GET | `/api/skills/topics` | List skill-topic bindings |
+| POST | `/api/skills/topics` | Create assignment |
+| DELETE | `/api/skills/topics/:id` | Delete assignment |
 
 ## Metrics
 
@@ -423,14 +431,13 @@ Authored markdown notes — the knowledge graph's Tier 2 surface. Full model in
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/logs` | List logs (paginated) |
+| GET | `/api/logs/recent` | Get recent logs |
 
 ## Memory
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/memory` | Get memory state |
-| POST | `/api/memory/index` | Index memory |
 | DELETE | `/api/memory/:id` | Delete memory entry |
 
 ## Search
@@ -444,7 +451,7 @@ Authored markdown notes — the knowledge graph's Tier 2 surface. Full model in
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/workspace` | Get workspace info |
-| PATCH | `/api/workspace` | Update workspace |
+| PUT | `/api/workspace` | Update workspace |
 
 ## Settings
 
@@ -461,35 +468,38 @@ Authored markdown notes — the knowledge graph's Tier 2 surface. Full model in
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/channel-bindings` | List channel bindings |
-| POST | `/api/channel-bindings` | Create binding |
-| DELETE | `/api/channel-bindings/:id` | Delete binding |
+| GET | `/api/auth/channel-bindings` | List channel bindings |
+| POST | `/api/auth/channel-bindings/redeem` | Redeem a channel binding code |
+| DELETE | `/api/auth/channel-bindings/:channelType/:externalId` | Remove channel binding |
 
 ## Devices
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/devices` | List devices |
-| POST | `/api/devices` | Register device |
-| DELETE | `/api/devices/:id` | Unregister device |
+| POST | `/api/devices/pair/generate` | Generate device pairing code |
+| DELETE | `/api/devices/:sessionId` | Revoke device session |
 
 ## API Tokens
 
+Tokens are shown once at creation; revoke and create a replacement to rotate.
+An empty scope list is full access. Restrict automation tokens to the scopes
+required by their routes; see `src/security/scopes.ts` for supported names.
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/api-tokens` | List API tokens |
-| POST | `/api/api-tokens` | Create token |
-| DELETE | `/api/api-tokens/:id` | Revoke token |
-| POST | `/api/api-tokens/:id/rotate` | Rotate token |
+| GET | `/api/auth/api-tokens` | List API tokens |
+| POST | `/api/auth/api-tokens` | Create token |
+| DELETE | `/api/auth/api-tokens/:id` | Revoke token |
 
 ## OAuth
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/oauth/providers` | List available OAuth providers |
-| POST | `/api/oauth/connect` | Initiate OAuth flow |
-| GET | `/api/oauth/callback` | OAuth callback handler |
-| DELETE | `/api/oauth/:provider` | Disconnect OAuth provider |
+| GET | `/api/auth/oauth/:provider/status` | Get provider connection status |
+| GET | `/api/auth/oauth/:provider/authorize` | Initiate OAuth flow |
+| GET | `/api/auth/oauth/:provider/callback` | OAuth callback |
+| POST | `/api/auth/oauth/:provider/disconnect` | Disconnect OAuth provider |
 
 ## Connectors
 
@@ -529,50 +539,46 @@ names the remote tools that do exist.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/plugins` | List plugins |
-| POST | `/api/plugins` | Install plugin |
-| DELETE | `/api/plugins/:id` | Uninstall plugin |
+| POST | `/api/plugins/:name/reload` | Reload installed plugin from disk |
+| GET | `/api/plugins/:name` | Get loaded plugin details |
 
-## Webhooks (Outgoing)
+## Webhooks
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/webhooks` | List outgoing webhooks |
-| POST | `/api/webhooks` | Create webhook |
-| PATCH | `/api/webhooks/:id` | Update webhook |
-| DELETE | `/api/webhooks/:id` | Delete webhook |
-| POST | `/api/webhooks/:id/test` | Test webhook delivery |
+Outgoing webhook delivery is configured as a hook action; there is no separate
+outgoing-webhook CRUD API. See [Hooks](HOOKS.md) and [Webhooks](WEBHOOKS.md).
+`POST /api/webhooks/:path` receives configured webhook triggers.
 
 ## Webhook Incoming
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/hooks/incoming/:hookId` | Receive inbound webhook (no auth) |
+| POST | `/api/hooks/incoming/:hookId` | Receive inbound webhook (hook-configured authentication/signature checks) |
 
 ## Teams Webhook (Channel Integration)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/webhooks/teams` | Microsoft Teams webhook receiver |
+| POST | `/api/channels/teams/webhook` | Teams webhook receiver |
 
 ## WhatsApp Webhook (Channel Integration)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/webhooks/whatsapp` | WhatsApp Cloud API webhook receiver |
+| POST | `/api/channels/whatsapp/webhook` | WhatsApp webhook receiver |
 
 ## Evaluations
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/evaluations` | List evaluations |
-| POST | `/api/evaluations` | Run evaluation |
-| GET | `/api/evaluations/:id` | Get evaluation results |
+| GET | `/api/evaluations/eval/runs` | List evaluator runs |
+| POST | `/api/evaluations/eval/run` | Start evaluator run |
+| GET | `/api/evaluations/eval/runs/:id` | Get evaluator run results |
 
 ## Eval
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/eval` | Execute eval scenario |
+| POST | `/api/eval/run` | Run YAML eval scenarios |
 
 ## Artifacts
 
@@ -601,7 +607,7 @@ names the remote tools that do exist.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/artifact-pages/:id` | Get artifact page info |
+| GET | `/a/:slug` | Serve hosted artifact page; DNS-less deployments also expose /__artifacts__/a/:slug |
 
 ## Gateway WebSocket
 
@@ -705,22 +711,22 @@ enforced on completions (unscoped tokens are full-access — see
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/v1/models` | List available models: `octipus/root agent` + every registry model. |
+| GET | `/v1/models` | List available models: `octipus/agent` + every registry model. |
 | POST | `/v1/chat/completions` | Chat completion (streaming and non-streaming). |
 
 ### Model modes
 
-- **`octipus/root agent`** (default when `model` is omitted) runs the latest
+- **`octipus/agent`** (default when `model` is omitted) runs the latest
   user message through the full agent turn — the root agent with its tools,
-  delegating to specialists when it needs one. The id is unchanged for
-  compatibility; there is no separate root agent behind it any more. This
+  delegating to specialists when it needs one. The older `octipus/orchestrator` ID remains accepted as a compatibility alias. This
   mode is **session-stateful**: pass a stable `user` field (or an
   `X-Octipus-Session` header) to keep a conversation sticky; otherwise each
   call runs in a fresh ephemeral session.
 - **A registry model id** (e.g. `gpt-4o`, `llama3.2`, from `GET /v1/models`) is
   a single-turn **passthrough** to that provider — no tools, no session — and
-  honors OpenAI's stateless `messages`-array semantics exactly. Real provider
-  token usage is returned.
+  forwards the supplied text `messages` array. Provider-reported token usage
+  is returned. This is a limited text chat-completions surface, not full
+  OpenAI API compatibility (no multimodal content arrays or client tool schemas).
 
 ### Example — Python SDK
 
@@ -731,7 +737,7 @@ client = OpenAI(base_url="https://your-host/v1", api_key="octi_…")
 
 # Root agent pipeline
 resp = client.chat.completions.create(
-    model="octipus/root agent",
+    model="octipus/agent",
     messages=[{"role": "user", "content": "Summarize today's open PRs"}],
     user="my-session-id",  # optional: keep the conversation sticky
 )
@@ -752,14 +758,16 @@ for chunk in client.chat.completions.create(
 curl https://your-host/v1/chat/completions \
   -H "Authorization: Bearer octi_…" \
   -H "Content-Type: application/json" \
-  -d '{"model":"octipus/root agent","messages":[{"role":"user","content":"hello"}]}'
+  -d '{"model":"octipus/agent","messages":[{"role":"user","content":"hello"}]}'
 ```
 
 ### Notes & limits
 
+- Agent-mode usage has no prompt/completion split: the observed total is
+  reported in `completion_tokens` and `total_tokens`, with `prompt_tokens: 0`.
 - **Streaming** (`stream: true`) is protocol-correct SSE that chunks the final
   message text. Token-true streaming (per-delta) is a planned follow-up.
 - `octipus/<role>` model ids (forced single-role) are **not yet wired** and
-  return `400 model_not_found`; use `octipus/root agent` or a registry model.
+  return `400 model_not_found`; use `octipus/agent` or a registry model.
 - Errors use the OpenAI error envelope (`invalid_request_error`,
   `authentication_error`, `server_error`) so SDK error handling works.

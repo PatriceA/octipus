@@ -1,25 +1,26 @@
 # Configuration
 
-Create a `.env` file or use `npm run setup` to generate one interactively.
+Create a `.env` file or use `npm run setup` to generate one interactively. Runtime settings migrate to the database on first boot; later changes belong in Settings or the API. Bootstrap fields remain environment-backed. See [Configuration precedence](CONFIGURATION-PRECEDENCE.md).
 
 ## Ports
 
 | Service | Port | Env Var |
 |---------|------|---------|
 | Backend API | 3005 | `API_PORT` (or `PORT`) |
-| Web UI | 3007 | — (fixed in `web/package.json`) |
+| Web UI | 3007 | `WEB_PORT` (Vite development server and production server) |
 
 `.env.example` ships `PORT=3005`, so that is the port you get from a normal
 install; with neither `API_PORT` nor `PORT` set, the code falls back to 3000
-(`src/config/bootstrap-loader.ts`). The web dev server is pinned to 3007 by
-`next dev -p 3007` and is not read from the environment — under Docker
+(`src/config/bootstrap-loader.ts`). The Vite development server defaults to 3007 and accepts `WEB_PORT` — under Docker
 Compose the host-side ports are `OCTIPUS_API_PORT` (default 3015) and
 `OCTIPUS_WEB_PORT` (default 3017), mapped onto 3005/3007 in the container.
 
 ## Environment Variables
 
 ```env
-# ─── Required ─────────────────────────────────────────────────
+# ─── Storage (choose embedded or external) ────────────────────
+STORAGE_MODE=external                 # embedded uses PGlite; no PostgreSQL service needed
+# DATA_DIR=~/.octipus/data             # embedded database directory
 DATABASE_URL=postgres://user:password@localhost:5432/octipus
 
 # Security keys (minimum 32 characters each, use `npm run setup` to generate)
@@ -78,7 +79,7 @@ N8N_API_KEY=
 MCP_SERVERS_CONFIG=./mcp-servers.json     # Path to MCP client server config (see MCP-INTEGRATION.md)
 
 # ─── Migrations ──────────────────────────────────────────────
-SKIP_MIGRATIONS=false                  # Set to true for production deploys
+SKIP_MIGRATIONS=false                  # Use true only if migrations are applied separately before deployment
 
 # ─── Voice (optional) ────────────────────────────────────────
 WHISPER_MODEL_PATH=
@@ -92,7 +93,7 @@ SPINNER_STYLE=classic                  # TUI spinner style: classic | kawaii
 
 ## Topic → Model Routing (Authoritative)
 
-Model resolution for every agent runs through `ModelRegistry.getModelForTopic(role)`. **There are no hardcoded model defaults.** Each role has a matching topic, and the model bound to that topic in the DB (or via the **Models** page in the web UI) is used.
+Specialist model resolution uses topic bindings through `ModelRegistry.getModelForTopic(role)`, with expert preferences and executor/backup bindings where configured. The general root can use the configured default model. See [Model routing](MODEL-ROUTING.md) for planner/executor selection.
 
 Resolution order inside the swarm spawner (`SwarmSpawner.resolveChildModelAndExpert`):
 
@@ -100,7 +101,7 @@ Resolution order inside the swarm spawner (`SwarmSpawner.resolveChildModelAndExp
 2. `ModelRegistry.getModelForTopic(childRole)` — otherwise the model bound to the child's topic.
 3. Throw — if neither resolves, with a message pointing at the Models page. No silent fallback.
 
-- Root agent, Agent and Subagent children all resolve their model the same way — **children inherit topic bindings, not the parent's model.**
+- Agent and Subagent children resolve their own topic bindings, not the parent's model. The root alone can fall back to the configured default.
 - The embedding path (`litellm-client.ts:embed()`) and vision path (`visual/analyzer.ts`) resolve the `embedding` / `vision` topic bindings the same way, or throw.
 
 Bind models to topics via the web UI (**Settings → Models → Edit → Topics**) or the API (`PATCH /api/models/:name`).
@@ -112,14 +113,14 @@ Bind models to topics via the web UI (**Settings → Models → Edit → Topics*
 | `swarm.perUserSpawnsPerMinute` | 30 | Per-user rate limit on `spawn_child` invocations. Enforced by `rate-limiter.ts`. |
 | `swarm.orphanReaperIntervalMs` | 600000 | Interval for the orphan reaper sweep that flips long-running `swarm_nodes` to `cancelled` after process restart. |
 
-Swarm node hard budgets (tokens, wall-clock, fan-out) are baked into `src/core/swarm/types.ts` as `LEVEL_DEFAULT`. Overriding them is not a documented config knob — change the file and rebuild.
+Swarm level budgets are configurable under `swarm.levelDefaults.root`, `.agent`, and `.subagent` (`tokens`, `wallMs`, `fanOut`, `maxPendingDetached`). `getLevelDefault` in `src/core/swarm/types.ts` reads them, falling back to `LEVEL_DEFAULT`. These are execution bounds, not exact billing limits. `swarm.contractRetries` defaults to `1` (range 0–5) for retryable failed scorer gates.
 
 ## Pipeline Config
 
 | Key | Default | Purpose |
 |---|---|---|
 | `agent.pipelineTokenBudget` | 2_000_000 | Token pool for one pipeline RUN, summed over every node visit and checked at each node boundary. `0` disables it. Per-node caps (a template step's `maxTokens`) bound a single visit; this bounds the run, which is the only bound a `foreach` loop respects — plan items can be appended while it runs, so the number of visits is not known when the run starts. Env: `PIPELINE_TOKEN_BUDGET`. |
-| `multiuser.unattendedDenyActions` | `[]` | Tool actions to REFUSE rather than auto-approve when the caller cannot reach a human (any spawned worker). Entries name a container (`shell`) or one action (`shell__run`). Empty means today's behaviour: an ASK-level action an unattended worker hits is auto-approved, because blocking it would hang the worker forever rather than protect anything. Env: `UNATTENDED_DENY_ACTIONS` (comma-separated). |
+| `multiuser.unattendedDenyActions` | `[]` | Legacy additional deny list for unattended calls; entries name a container (`shell`) or action (`shell__run`). ASK is blocked for unattended calls even when this list is empty. Attended children inherit their session approval surface. Use reviewed, scoped, expiring grants for permitted automation. Env: `UNATTENDED_DENY_ACTIONS` (comma-separated). |
 
 ## Compaction Config
 
@@ -131,7 +132,7 @@ Swarm node hard budgets (tokens, wall-clock, fan-out) are baked into `src/core/s
 
 ## Docker Services
 
-The project uses shared Docker services. These must be running before starting:
+Embedded mode requires no external database service. For external mode, provide PostgreSQL with pgvector. The following is an example for operators who maintain a separate `~/docker-services` Compose project; that directory is not shipped by Octipus:
 
 ```bash
 # Start required services
@@ -144,7 +145,7 @@ docker compose up -d ollama litellm searxng
 
 | Service | Port | Image | Required |
 |---------|------|-------|----------|
-| PostgreSQL | 5432 | `pgvector/pgvector:pg16` | Yes |
+| PostgreSQL | 5432 | `pgvector/pgvector:pg16` | External storage mode only |
 | Ollama | 11434 | `ollama/ollama:rocm` | No |
 | LiteLLM | 4000 | `ghcr.io/berriai/litellm:main-latest` | No |
 | SearXNG | 8888 | `searxng/searxng:latest` | No |

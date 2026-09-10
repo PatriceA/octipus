@@ -67,7 +67,8 @@ See [docs/DOCKER.md](docs/DOCKER.md).
 from `OCTIPUS_SETUP_*` env vars (`_STORAGE`, `_ADMIN_USER`,
 `_ADMIN_PASS`, `_PROVIDER`, `_API_KEY`, `_MODEL`, `_INSTALL_CAPS`).
 
-**Cloning manually instead?** `git clone && npm install && octi setup`
+**Cloning manually instead?** `git clone`, install the workspace dependencies,
+then run `npm run setup`
 does the same thing the installer does — see
 [CONTRIBUTING.md](CONTRIBUTING.md) for the dev path.
 
@@ -95,9 +96,11 @@ work still needs verification. Local models support a self-hosted setup; hosted
 providers and external connectors receive the data sent to them. Self-hosting
 lets you choose those connections, but does not make every workflow local.
 
-The next improvement cycle focuses on predictable permissions, clearer navigation,
-accurate status reporting, and measured workflow reliability. See the
-[consolidation plan](docs/plans/product-consolidation-2026-09.md).
+The current improvement cycle focuses on measuring workflow reliability and
+reviewing the execution code. Permission, status-reporting, navigation, and
+acceptance-test changes from phases 1–4 are on `main`; the remaining evidence
+and limitations are tracked in the
+[consolidation report](docs/reports/consolidation-2026-09-10.md).
 
 ## Community
 
@@ -120,7 +123,7 @@ Channels → Gateway (WebSocket, typed Zod protocol)
             → Agents (3-level Swarm: root → Agent → Subagent)
               → Tools / Skills / Experts / Pipelines
                 → Models (Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LiteLLM, CLI)
-                  → Postgres + pgvector (or PGlite + in-memory for embedded)
+                  → Postgres + pgvector (or embedded PGlite)
 ```
 
 **Hierarchy:** Tools (executable capabilities) → Skills (domain knowledge) → Experts (pre-configured personas) → Agents (runtime workers, 3-level Swarm via `spawn_child`) → Pipelines (sequential handover with approval gates).
@@ -129,16 +132,16 @@ Deep dive: [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md) · [.octipus
 
 ## Key points covered in v0.2
 
-- **3-level Swarm** with `spawn_child` meta-tool — `await` and `detach` modes, `parallelGroup` fan-out, `collect_children` for explicit gather. Per-node hard budgets (tokens / wall-clock / fan-out), `AbortSignal` cascade cancel, fingerprint cycle protection, escalation on budget breach.
+- **3-level Swarm** with `spawn_child` meta-tool — `await` and `detach` modes, `parallelGroup` fan-out, `collect_children` for explicit gather. Per-node token, wall-clock, and fan-out limits; cancellation propagation; fingerprint cycle protection; and escalation on a detected budget breach. Limits constrain Octipus execution but cannot guarantee exact provider billing or immediate cancellation of external work.
 - **Error classification** — single canonical taxonomy (`FailoverReason`, `RecoveryAction`, `ClassifiedError`). All model providers migrated off ad-hoc string matching.
 - **Anti-thrashing session compaction** — LLM summarization with stall detection, ≥15% savings gate, hard-ceiling safety valve.
-- **Trajectory learning** — JSONL audit log of every agent run, daily rolling, opt-out via env. Foundation for offline eval and fine-tuning.
+- **Trajectory records** — JSONL records of agent runs, daily rolling, with an environment opt-out. These records are inputs for offline evaluation or training workflows; they do not make the running system learn automatically.
 - **Skill auto-extension** — pattern fingerprinting → `skill_proposals` queue with curator lifecycle (usage tracking, archive after 90d); review UI surfaces high-frequency patterns; never auto-promotes.
 - **MCP circuit breaker** — closed/open/half-open with exponential backoff, admin reset, UI badge.
 - **Fail-loud routing** — strict `getModelForTopic()`, no silent fallbacks; unbound topics fail at spawn time with a clear error.
 - **Root agent persona** — per-user identity (name, tone, narration, free-form facts) layered between `SECURITY_PREAMBLE` and the role prompt via the `before-agent-start` hook; six presets ship under `personas/`. Default is *Octipus*, the dry octopus-machine.
 - **Root agent detach** — parent can detach children and use `collect_children` to await later; enables narration and user interaction while children run in parallel.
-- **Enrichment features** — Reader (fetch + extract web content), Deep Research (cited reports with document persistence and knowledge indexing when available; durable job tracking; interrupted work is reported after restart), To-Do list (recurring via scheduler), Email triage (batch classification), Hardware-aware onboarding (curated Ollama catalog + LIVE registry sizing).
+- **Enrichment features** — Reader (fetch + extract web content), Deep Research (report generation with source references, document persistence and knowledge indexing when available; durable job tracking; interrupted work is reported after restart), To-Do list (recurring via scheduler), Email triage (batch classification), and hardware-aware onboarding (curated Ollama catalog plus registry data).
 - **Testing and evaluation** — unit, database integration, and browser suites, plus model evals and adversarial case generators. The red-team CI job is a dry-run without model calls; see [Testing](docs/TESTING.md) for what each suite verifies.
 
 ## Technologies and ideas worth a look
@@ -157,12 +160,12 @@ Deep dive: [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md) · [.octipus
 
 | Area | What's there |
 |---|---|
-| **Agents** | 3-level Swarm, 16 roles, 16 expert personas, 22 domain skills |
+| **Agents** | 3-level Swarm, 16 roles, 18 seeded expert definitions, 22 seeded skills |
 | **Models** | Ollama, OpenAI, Anthropic, Gemini, Grok, DeepSeek, Mistral, Z.AI (GLM), Moonshot (Kimi), OpenRouter, Voyage, custom OpenAI/Gemini-compat, LiteLLM, CLI (Claude / Gemini / Codex) |
-| **Tools** | Filesystem, shell (local/SSH/Docker), git, browser (Playwright + extension), web search, Docker, knowledge base, scheduling, voice, M365, GitHub/GitLab, MCP — 88 across 26 groups |
+| **Tools** | Filesystem, shell (local/SSH/Docker), git, browser (Playwright + extension), web search, Docker, knowledge base, scheduling, voice, M365, GitHub/GitLab, and external MCP bridges. The standalone MCP server exposes 88 tools across 26 groups. |
 | **Channels** | Telegram, Slack, Teams, WhatsApp, web UI, TUI (chat shell + editor, built on [pi-tui](https://www.npmjs.com/package/@mariozechner/pi-tui)), voice (Twilio), MCP server |
 | **Knowledge** | Hybrid search (BM25 + vector), tiered content, auto-indexing, document ingest + OCR, authored knowledge graph (notes, `[[wikilinks]]`, Obsidian vault + Canvas) |
-| **Enrichment** | Reader (fetch + extract), Deep Research (cited report → Documents + knowledge base), To-Do list, Email triage, Hardware-aware onboarding |
+| **Enrichment** | Reader (fetch + extract), Deep Research (report with source references → Documents + knowledge base when available), To-Do list, Email triage, Hardware-aware onboarding |
 | **Automation** | Hooks, webhooks, cron tasks, plugin system |
 | **Eval** | Provider conformance suite, 16 built-in assertion types, red-team plugins (5 attacks, 49 cases) |
 | **Security** | WebAuthn passkeys, TOTP 2FA, JWT sessions, encrypted vault, audit log |
@@ -179,8 +182,8 @@ cd octipus && npm install
 cd web && npm install && cd ..
 cd mcp-server && npm install && cd ..   # standalone MCP server (not a root workspace)
 npm run setup        # the single wizard (same as `octi setup`)
-octi start web       # backend + web UI (server / browser)
-# …or plain `octi start` for the backend alone, then `octi tui` / `octi desktop`
+bin/octi start web   # backend + web UI (server / browser)
+# …or `bin/octi start` for the backend alone, then `npm run tui` / `bin/octi desktop`
 ```
 
 Then open [http://localhost:3007](http://localhost:3007) and log in
@@ -213,8 +216,8 @@ Requirements: **Node ≥ 24**, **Docker** (for the full stack), **Postgres 16** 
 
 Highlights from the [roadmap](./ROADMAP.md):
 
-- **Auto-discovery for tools and channels** — folder convention like roles already have.
-- **Skill auto-extension promotion path** — review UI for proposals, one-click promote.
+- **Execution-code review** — simplify shared dispatch and lifecycle paths without weakening permission boundaries.
+- **Measured workflow baselines** — run the opt-in live-provider suite and record its configuration and limits.
 - **Trajectory learning consumers** — labeled training pairs from recorded runs.
 - **Dynamic role definition from chat** — "define a role that does X with tools Y" → live role.
 - **Skill marketplace** — export/import signed JSON, install from the web UI.
@@ -232,8 +235,8 @@ Open directions (later): federation between Octipus instances, local-first sync 
 | **[Swarm Reliability & Verification](docs/SWARM-RELIABILITY.md)** | Receipts, scorer gates, crash-resume ledger |
 | **[Tool & Expert Routing](docs/TOOL-ROUTING.md)** | What triggers which tool, role, expert |
 | **[Channels](docs/CHANNELS.md)** | Telegram, Slack, Teams, WhatsApp, WebChat, Voice, MCP |
-| **[Chat Commands](docs/CHAT-COMMANDS.md)** | Slash commands across all channels |
-| **[API Reference](docs/API.md)** | Complete REST API |
+| **[Chat Commands](docs/CHAT-COMMANDS.md)** | Slash commands and channel availability |
+| **[API Reference](docs/API.md)** | REST and WebSocket API reference |
 | **[Architecture Catalog](docs/architecture/generated/CATALOG.md)** | Generated from the source and gated in CI: every mounted route, the module import graph, the gateway event matrix |
 | **[Enrichment Features](docs/ENRICHMENT.md)** | Reader, Deep Research, Tasks, Email triage, Hardware-aware onboarding |
 | **[Configuration](docs/CONFIGURATION.md)** | Env vars, ports, services |

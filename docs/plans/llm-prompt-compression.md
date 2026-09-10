@@ -1,5 +1,9 @@
 # LLM Prompt Compression & Token Efficiency — Plan
 
+> **Historical implementation plan (July 2026).** Its measurements describe the
+> earlier orchestrator architecture and its phases later shipped. Use current
+> agent architecture and testing documentation for present behavior.
+
 ## Context
 
 Analysis of Octipus's LLM communication (July 2026) found that prompts are

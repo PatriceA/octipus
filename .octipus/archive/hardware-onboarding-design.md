@@ -1,5 +1,9 @@
 # Hardware-Aware Local-Model Onboarding (`hwfit`)
 
+> **Archived design record (2026-06-01).** The feature later shipped, but this
+> proposal is not a current setup guide. See `src/capabilities/hwfit/` and the
+> setup documentation for current behavior and supported environments.
+
 > Design note, 2026-06-01. Feature #3 from `end-user-enrichment-plan.md`.
 > Adapts Odysseus's "Cookbook" / `hwfit`: scan the host's hardware, recommend
 > models that actually fit, and offer click-to-install-and-serve. This is the

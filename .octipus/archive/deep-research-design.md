@@ -1,5 +1,9 @@
 # Deep Research → Cited Report
 
+> **Archived design record (2026-06-01).** The feature later shipped, but this
+> proposal is not current product documentation. See `docs/ENRICHMENT.md` and
+> `src/core/research/` for current behavior.
+
 > Design note, 2026-06-01. Feature #5 from `end-user-enrichment-plan.md`.
 > Odysseus's headline "multi-step synthesis into reports." Octipus already has
 > the hard parts (a `research` role with the right tools, the swarm, RAG, the

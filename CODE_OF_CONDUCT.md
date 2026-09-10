@@ -52,7 +52,11 @@ Applies within all community spaces and when an individual officially represents
 
 ## Enforcement
 
-Report abusive, harassing, or otherwise unacceptable behavior to the maintainers via GitHub Issues (mark sensitive items as security advisories) or email if listed in `SECURITY.md`. All complaints reviewed promptly and fairly. Reporter privacy and security respected.
+Do not report abusive, harassing, or otherwise unacceptable behavior in a public
+issue. Contact a maintainer through an existing private channel; if none is
+available, use a private GitHub Security Advisory and label it as a conduct
+report. Maintainers will limit disclosure to the people needed to review and
+resolve the report.
 
 ## Enforcement Guidelines
 

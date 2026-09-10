@@ -1,6 +1,6 @@
 # Running Octipus on one small local model
 
-Octipus is built to run fully self-hosted on local models (Ollama). This guide
+Octipus supports self-hosted deployments using local models through Ollama. This guide
 covers the realistic setup for a small machine — a single chat model around or
 below ~10B parameters — what works, what degrades, and how to configure it.
 
@@ -9,9 +9,9 @@ below ~10B parameters — what works, what degrades, and how to configure it.
 
 ## The realistic minimum: 1 chat model + 1 embedding model
 
-"One model" can't literally be one model. Embedding and vision are different
-model *classes* — a chat model cannot produce embeddings or read images. So the
-practical minimum is:
+Text chat can use a single model. Retrieval needs an embedding-capable model;
+image processing needs a vision-capable model or configured OCR path. Some chat
+models also support vision, so separate model counts depend on capabilities:
 
 | Role | Model class | Example (Ollama) | Required? |
 |---|---|---|---|
@@ -30,13 +30,10 @@ The real bottleneck on small models is **not** prompt length — it's reliable
 tool-call JSON. A model that can't emit valid tool calls will fail at agent work
 even though everything else is configured correctly.
 
-- Known-good local tool-callers: `qwen2.5:32b`, `glm-4.x-flash`, and other
-  proven instruct models.
-- Known-risk: the **qwen3** family via Ollama reliably emits malformed
-  tool-call JSON. This is a **full-tier** risk mainly — the lite tier runs a
-  trimmed prompt with a capped tool set that most qwen3 sizes survive. Octipus does **not** silently swap qwen3 off
-  the default; if you have hardware that would push qwen3 into full mode
-  (≥24B) pick a proven tool-caller instead.
+- Tool-call reliability depends on the exact model, quantization, provider
+  parser, prompt, and context size. Earlier QA runs found malformed JSON with
+  some Qwen3/Ollama combinations; this is historical evidence, not a verdict
+  on every release in that family. Treat the model names here as examples.
 - Verify any model before relying on it:
   `POST /api/models/:name/check-capabilities` runs a tool-calling + JSON
   conformance probe and returns a `capable` / `incapable` verdict.
@@ -60,11 +57,15 @@ In the **Models** page, use the **"Use for all topics"** action on a model (the
 layers icon), or call the API directly:
 
 ```bash
-curl -X POST http://localhost:3005/api/models/<name>/use-for-all-topics
+curl -X POST http://localhost:3005/api/topics/assign-all \
+  -H "Authorization: Bearer $OCTIPUS_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"<registered-model-name>"}'
 ```
 
-This binds the model to every text topic and makes it the default. The response
-lists `embedding` / `ocr` / `vision` as still unbound — add those separately.
+This binds the model as primary for text topics and makes it the default.
+Embedding, OCR, and vision bindings are not assigned by this action; configure
+models with the required capabilities separately.
 
 ### 3. Add an embedding model
 

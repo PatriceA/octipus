@@ -1,5 +1,9 @@
 # Agent Harness Refactor — QA 2026-07-03 root causes and plan
 
+> **Dated implementation plan.** Findings and paths reflect the July 2026
+> architecture. This file records rationale and phased work; it is not current
+> architecture documentation or a reliable list of open tasks.
+
 Source: QA run 2026-07-03 (sessions `1465ab5b` FIFA/orchestrator, `1f70f70a` chore-wars/codex+automation).
 Every finding below was verified against the live agent event logs (via MCP) and traced to code.
 

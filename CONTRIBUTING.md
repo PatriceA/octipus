@@ -35,6 +35,8 @@ cd octipus
 
 npm install
 cd web && npm install && cd ..
+# Optional, only when changing the standalone MCP server:
+cd mcp-server && npm install && cd ..
 
 npm run setup          # Interactive wizard — "Embedded" mode for zero-deps
 bin/octi start web
@@ -206,29 +208,12 @@ If you disagree with any of these, open an issue — don't silently re-enable.
 
 ## Database access pattern
 
-**Default: use a repository.** Every domain table has a class in
-`src/db/repositories/<name>-repository.ts`. New domain code goes
-through one. The repository owns the Drizzle calls; callers see typed
-methods.
-
-**Explicitly permitted exceptions** — these files reach `getDb()`
-directly and are the only ones allowed to:
-
-- `src/core/rag/embeddings.ts` + `src/core/rag/retention-service.ts`
-  (RAG is its own service with its own query patterns; a repository
-  here would be a one-call wrapper per query)
-- `src/core/rag/health.ts` (single probe row, no shared shape)
-- `src/core/notification-service.ts` (single-table service)
-- `src/core/cron-runner.ts` (touches multiple tables for scheduling;
-  not a single domain)
-- `src/core/gateway/commands.ts` (expert lookup inline for a
-  command-router; isolated)
-- `src/core/agent/templates.ts` (pipeline template lookups
-  inline for the orchestrator hot path)
-- Migration scripts in `scripts/`
-
-If you're tempted to add to this list, write a one-line comment
-explaining why a repository wouldn't help.
+**Default: use a repository.** Shared domain queries belong in a typed class in
+`src/db/repositories/`. Some services and API routes currently use `getDb()`
+directly for local, cross-table, or performance-sensitive queries. Treat those
+as existing design choices rather than a closed allowlist. Before adding another
+direct query, check whether a repository already owns the table and explain why
+the query should remain with its caller.
 
 ---
 

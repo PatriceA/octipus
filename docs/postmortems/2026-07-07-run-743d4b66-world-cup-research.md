@@ -1,5 +1,9 @@
 # Post-mortem: Run 743d4b66 — World Cup research drift (2026-07-07)
 
+> **Historical incident record.** Findings describe the named run and the code
+> at that time. Remediation status in this document is historical; current
+> behavior must be checked against the implementation and test suite.
+
 **Status:** code-enforceable fixes applied 2026-07-08 (items 2, 3, 4, 6, 8). Deferred: 1 (infra — SearXNG container network), 5 (budget binding — needs runtime investigation), 7 (capability gate — larger redesign).
 **Severity:** high — user-visible failure, 85 minutes of wasted compute, ~25 unrequested files written to the workspace
 **Session:** `1966368e-51cb-440d-834d-64dc1f62bfdd`

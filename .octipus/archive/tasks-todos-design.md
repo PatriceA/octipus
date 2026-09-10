@@ -1,5 +1,9 @@
 # Tasks / TODOs (Personal)
 
+> **Archived design record (2026-06-01).** The feature later shipped in some
+> form, but this proposal is not current product documentation. See
+> `docs/ENRICHMENT.md` and `src/tools/tasks/` for current behavior.
+
 > Design note, 2026-06-01. Feature #6 from `end-user-enrichment-plan.md`.
 > A personal task list the **agent can read, create, and complete**. This is
 > genuinely greenfield: `recurring_tasks` is cron *automation* and `task_state`

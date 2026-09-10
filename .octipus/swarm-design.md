@@ -1,5 +1,10 @@
 # Swarm Design — 3-Level Agent Hierarchy
 
+> **Historical design record.** The three-level limit remains relevant, but
+> “Orchestrator” terminology, paths, test counts, and implementation details
+> below describe the pre-rebuild architecture. See `docs/AGENT-ARCHITECTURE.md`
+> and `docs/SWARM-RELIABILITY.md` for current behavior.
+
 **Status:** Phases 1–3 shipped 2026-04-20
 **Scope:** 3 fixed levels (Orchestrator → Agent → Subagent). No cost-based routing. Existing expert system preserved.
 

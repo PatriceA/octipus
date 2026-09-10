@@ -38,7 +38,7 @@ These are classified as "casual" and get a quick response without spawning agent
 
 The root agent (the entity you talk to) has a per-user identity layered between `SECURITY_PREAMBLE` and the role prompt at every turn. Default is **Octipus** — an octopus-machine that refers to itself in the third person, uses "we" for the swarm, and gives short dry replies. The voice applies to the casual-chat path AND the root agent's narration of swarm work ("Octipus dispatches a research arm.", "qa arm failed. Predictable.").
 
-Customize via `/persona name <X>`, `/persona tone <…>`, `/persona say <fact>`. Switch presets with `/persona use mentor`. Six presets ship; full list at [CHAT-COMMANDS.md](CHAT-COMMANDS.md#personas-root agent-identity).
+Customize via `/persona name <X>`, `/persona tone <…>`, `/persona say <fact>`. Switch presets with `/persona use mentor`. Six presets ship; full list at [CHAT-COMMANDS.md](CHAT-COMMANDS.md#persona).
 
 Specialist children do **not** inherit the persona — they stay role-defined (Coder, Reviewer, etc.). The persona is host-level only.
 
@@ -134,7 +134,7 @@ our pricing data, and a third draft a market positioning document.
 
 1. **Single `spawn_child`** — default for a single-role task with structured output.
 2. **Multiple `spawn_child`** — when the task has distinct sub-topics; use `parallelGroup` to fan out.
-3. **`create_pipeline`** — the verified build loop, and what development work should go through by default: it plans the work into items and runs implement → test → review → QA once per item, routing a failed QA verdict back to the implementer (bounded) before escalating to you. Expect it whenever you ask to build, implement, fix, refactor or ship something and "done" can be settled by *running* something; not for a question, a piece of writing or a read-only audit, which have nothing to re-run. Pipelines are root-only.
+3. **`create_pipeline`** — a root-only staged workflow for work needing explicit implementation, testing, review, and QA steps. Development templates can retry failed QA within configured bounds. The current delegation prompt prefers pipelines for development tasks with runnable checks. That is prompt guidance; a pipeline does not itself prove correctness. A single delegated task can also attach independent scorer checks. Pipelines can be started through `POST /api/pipelines`.
 
 Children inherit the model bound to their role's topic (via `ModelRegistry.getModelForTopic`), not the parent's model. If a topic has no binding the spawner throws loudly — no silent default model.
 

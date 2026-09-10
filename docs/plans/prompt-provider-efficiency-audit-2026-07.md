@@ -1,5 +1,9 @@
 # Prompt Generation & Provider Efficiency Audit — 2026-07
 
+> **Historical audit and backlog.** Provider documentation and source paths were
+> checked in July 2026. Provider APIs and Octipus internals can change; reverify
+> unresolved findings before implementation.
+
 Full audit of (1) prompt generation, (2) provider-specific tool use vs current
 API docs, (3) primary/backup/executor model routing, (4) CLI-model prompting
 and tool/skill discovery. Successor to `llm-prompt-compression.md` /

@@ -21,7 +21,7 @@ Standalone MCP server (`mcp-server/`) that exposes Octipus capabilities as MCP t
 | `octipus_chat_with_expert` | Chat using a specific expert |
 | `octipus_list_experts` | List available experts |
 | `octipus_list_tools` | List available tools |
-| `octipus_execute_tool` | Execute any tool (filesystem, shell, git, browser-ext, etc.) |
+| `octipus_execute_tool` | Execute a registered tool subject to caller permissions |
 | `octipus_list_skills` | List domain knowledge skills |
 | `octipus_get_skill` | Get skill details |
 | `octipus_create_skill` | Create a custom domain knowledge skill |
@@ -35,6 +35,10 @@ Standalone MCP server (`mcp-server/`) that exposes Octipus capabilities as MCP t
 | `octipus_delete_recurring_task` | Delete a recurring task |
 
 The table above shows commonly used tools. The server registers 88 tools in total — see `mcp-server/src/tools/` for the complete list.
+
+Direct execution runs unattended: ASK actions return an approval-required error.
+Configure reviewed permissions before automation; possession of an MCP/API token
+does not bypass the permission gate. See [Tools API](API.md#tools).
 
 ## Setup
 

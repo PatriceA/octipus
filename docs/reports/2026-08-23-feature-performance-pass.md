@@ -1,5 +1,9 @@
 # Feature and performance pass — 2026-08-23
 
+> **Historical measurement report.** Results apply to the named 2026-08-23
+> environment and revisions. They are not current performance guarantees;
+> rerun the current harnesses before using them as a baseline.
+
 Scope: the rebuild plan's Phase 3 and Phase 4 work, the independent items that came with it, and then a full measured pass over the product through both clients — the web UI in a real browser and the TUI in a real pty — against a live backend on this machine.
 
 Twenty-one commits on `main`, `ce99d53b`..`8f7af29d`, 44 files, +2239/−107. Every lane green at the end.

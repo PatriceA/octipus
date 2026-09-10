@@ -2,7 +2,7 @@
 
 ## Overview
 
-Octipus runs as a multi-container Docker application with three services:
+Octipus runs as a multi-container Docker application with two services:
 
 | Service | Image | Purpose |
 |---------|-------|---------|
@@ -14,13 +14,17 @@ Octipus runs as a multi-container Docker application with three services:
 ```bash
 # Copy and configure environment
 cp .env.example .env.docker
+# Edit .env.docker: generate security keys, choose POSTGRES_PASSWORD,
+# and set STORAGE_MODE=external for this Compose stack.
 
 # Build and start
-docker compose up --build -d
+docker compose --env-file .env.docker up --build -d
 
 # View logs
-docker compose logs -f octipus
+docker compose --env-file .env.docker logs -f octipus
 ```
+
+Use `--env-file .env.docker` for Compose interpolation as well as the service's `env_file`; otherwise explicit environment entries can override your file with empty or default values.
 
 **Ports** (configurable via env):
 
@@ -83,12 +87,12 @@ Docker containers are isolated from the host system. This affects what Octipus c
 
 ## Docker Socket (Sibling Containers)
 
-The Docker socket is mounted into the container, allowing Octipus to spawn **sibling containers** on the host's Docker engine. This enables running tools that aren't installed in the main image.
+The Docker socket mount is disabled by default. Enabling it allows Octipus to spawn **sibling containers** on the host's Docker engine and grants access beyond the main application container.
 
 ```yaml
-# docker-compose.yml (already configured)
+# Optional volume under services.octipus (Linux/macOS)
 volumes:
-  - //var/run/docker.sock:/var/run/docker.sock
+  - /var/run/docker.sock:/var/run/docker.sock
 ```
 
 ### Use cases
@@ -101,7 +105,7 @@ volumes:
 
 Docker socket access is powerful — a container with socket access can manage all containers on the host, including creating privileged containers. The Octipus shell tool requires permission for `docker` commands (elevated command list). Only enable this in trusted environments.
 
-To disable Docker socket access, remove or comment out the socket volume mount in `docker-compose.yml`.
+Keep the socket mount commented out unless you explicitly need it. Container filesystem/process restrictions described above do not constitute host isolation once the Docker socket is available.
 
 ## Adding Host Directory Access
 
@@ -123,24 +127,24 @@ Mount into subdirectories of `/data/workspace` so agents can access them via the
 
 ```bash
 # Rebuild and restart (preserves data volumes)
-docker compose down && docker compose up --build -d
+docker compose --env-file .env.docker down && docker compose --env-file .env.docker up --build -d
 
 # Full reset (deletes all data)
-docker compose down -v && docker compose up --build -d
+docker compose --env-file .env.docker down -v && docker compose --env-file .env.docker up --build -d
 ```
 
 ## Troubleshooting
 
 ### Container won't start
 ```bash
-docker compose logs octipus    # Check for startup errors
-docker compose ps                # Check container status
+docker compose --env-file .env.docker logs octipus    # Check for startup errors
+docker compose --env-file .env.docker ps                # Check container status
 ```
 
 ### Browser extension can't connect
 - Ensure the API port is exposed and accessible from the host
 - The WebSocket URL should be `ws://localhost:{OCTIPUS_API_PORT}/ws/browser-bridge`
-- Check that `MASTER_KEY` is set in both `.env.docker` and the browser extension
+- Use a user session token or personal access token in the browser extension; `MASTER_KEY` is not an API credential
 
 ### SSH from container
 To use SSH from within the container, mount your SSH keys:

@@ -1,5 +1,11 @@
 # Changelog
 
+Historical change entries below describe their original revisions and are not a
+complete current release ledger. Retired runtimes, flags, paths, and model
+behavior remain in older entries. For the current stack and validation lanes,
+see [Development](DEVELOPMENT.md), [Testing](TESTING.md), and the
+[consolidation report](reports/consolidation-2026-09-10.md).
+
 ## 2026-04-20 — Swarm, Topic-Bound Routing, Fail-Loud, MCP Circuit Breaker
 
 ### Swarm Orchestration (3-Level Hierarchy)

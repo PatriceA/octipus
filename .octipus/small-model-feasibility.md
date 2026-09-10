@@ -1,5 +1,9 @@
 # Running Octipus on one small local model — feasibility & plan
 
+> **Dated feasibility note (2026-06-13).** Model examples, measurements, and
+> architectural references describe that revision. See `docs/SMALL-MODELS.md`
+> and current provider documentation before using its recommendations.
+
 > Design note, 2026-06-13. Scope decision (owner): **pragmatic** — the realistic
 > minimum is **1 small chat model + 1 small embedding model**, vision optional.
 > This note records the feasibility investigation and the plan; gap #2 (a

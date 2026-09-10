@@ -1,8 +1,10 @@
 # Archived design notes
 
-One-time design/planning documents for features that have since **shipped**.
-Kept for historical rationale; they no longer describe pending work. The
-implementation is the source of truth — see the code paths below.
+One-time design/planning documents for features that have since shipped in
+some form. Kept for historical rationale; their proposed scope, paths,
+commands, and claims describe the repository when they were written and may
+not match the current implementation. The current documentation and code are
+the source of truth — the table below points to the relevant code areas.
 
 | Note | Shipped as |
 |------|-----------|

@@ -17,37 +17,22 @@ The migration handles this gracefully — if the extension can't be created, it 
 
 **Problem**: Drizzle ORM migrations fail because the metadata journal file is missing.
 
-**Solution**:
-```bash
-mkdir -p src/db/migrations/meta
-```
-Create `src/db/migrations/meta/_journal.json`:
-```json
-{
-  "version": "7",
-  "dialect": "postgresql",
-  "entries": [
-    {
-      "idx": 0,
-      "version": "7",
-      "when": 1708000000000,
-      "tag": "0000_initial",
-      "breakpoints": true
-    }
-  ]
-}
-```
+**Solution**: restore `src/db/migrations/meta/_journal.json` from the same
+repository revision as the migration SQL files (or reinstall the matching
+release). Do not invent a one-entry journal: it can omit migrations while
+making the install appear initialized. Then run `npm run db:migrate` against
+the intended database and inspect the result.
 
 ## Collation Version Mismatch Warning
 
 **Problem**: PostgreSQL warns about collation version mismatch.
 
-**Cause**: Database created with a different OS/glibc version. Harmless.
+**Cause**: Database created with a different collation-library version. This
+can affect index ordering; do not dismiss it as harmless.
 
-**Solution** (optional):
-```sql
-ALTER DATABASE octipus REFRESH COLLATION VERSION;
-```
+**Solution**: follow the PostgreSQL upgrade/reindex procedure for your
+installation before refreshing the recorded collation version. Refreshing the
+version alone does not rebuild affected indexes.
 
 ## Model Registry Duplicate Key on Restart
 
@@ -124,7 +109,7 @@ Alternatively `PATCH /api/models/:name` with `{ "topicRoles": { "security": "pri
 - **Delegate earlier** — move `spawn_child` calls before expensive parent synthesis.
 - **Reduce fan-out** — parallel children divide the parent's remaining pool. Four parallel subagents after heavy parent use can each get very little. Prefer sequential spawns or fewer parallel groups.
 - **Escalate instead of respawn** — if all parallel children return `budget`, use `escalate_to_different_expert` (1/Agent lifetime) rather than respawning tighter.
-- If you keep hitting this on the Root agent, bump `LEVEL_DEFAULT[0].tokens` in `src/core/swarm/types.ts`. Wall-clock does **not** cascade, only tokens.
+- If you keep hitting this on the Root agent, review `swarm.levelDefaults.root.tokens` in Settings. Wall-clock does **not** cascade, only tokens.
 
 ## Rate-limit 429 on Free OpenRouter Models
 
@@ -170,23 +155,16 @@ ERROR: Root agent agent failed
   error: { reason: "tool_call_invalid", message: "{\"error\":\"Value looks like object, but can't find closing '}' symbol\"}", providerHint: "ollama" }
 ```
 
-**Cause**: The root agent is the only role in the swarm that *must* emit valid tool-call JSON every turn (it routes work via `spawn_child` / `create_pipeline`). Some local models produce JSON that Ollama's strict Go-side parser rejects — the body text quoted above is verbatim from Ollama, not Octipus. Octipus already classifies this as retryable, but retries don't help when the problem is structural to the model.
+**Cause**: the provider rejected a malformed tool call. The root runs as a
+general agent and can answer without a tool call; tool JSON failures can affect
+both the root and specialists.
 
-**Local-model root agent compatibility (observed 2026-05-12 QA run)**:
+Earlier May 2026 QA runs found failures with some Qwen3/Ollama combinations.
+Those observations do not establish compatibility for current model releases,
+quantizations, or parser versions. Run the model capability probe and a small
+representative task using the exact configuration you intend to deploy.
 
-| Model | As root agent | Notes |
-|---|---|---|
-| `glm-4.7-flash:latest` | ✅ Works | Tested end-to-end; recommended baseline for local root agent. |
-| `qwen2.5:32b+` | ✅ Generally works | Proven tool-calling track record at 32B+. |
-| `qwen3:*`, `qwen3.6:*` (any size up to 35B observed) | ❌ Fails (full mode) | All Qwen3 family sizes tested fail the root agent tool-call JSON path with the unbalanced-JSON parser error. Fine as a *worker* model, and survivable in the lite tier (trimmed prompt, capped tools). Just don't pin it as the default if your hardware can run a 24B+ model and you'd land in full mode. |
-| `qwen3-vl:*` | (vision-only, not for root agent) | Distinct family — but a VL model shouldn't be the root agent anyway. |
-
-**Recommended setup** (full tier only — the lite tier is not affected):
-- **Local-only**: install `glm-4.7-flash:latest` in Ollama and bind it as default. Use Qwen models for *workers* (writing, coding, etc.) where their output is plain text, not tool-call JSON.
-- **Hybrid**: keep a cloud model (Deepseek, OpenAI, Anthropic, Gemini) as the root agent default.
-
-**Solution**:
-1. In **Models → add model**, pull `glm-4.7-flash:latest` (or any cloud model) and set it as the default for the root agent topic.
-2. Restart the backend or trigger a model reload — the next chat turn will pick the new default.
-
-Octipus no longer auto-swaps known-unreliable root agents. The bad-list / swap logic was removed because the failure mode is specific to full-tier swarm coordination — the lite tier runs a trimmed prompt with a capped tool set and one delegation per request, so a small qwen3 set as default and landing there shouldn't be silently replaced.
+Check `supportsTools`, prompt tier, context size, and the provider error. If the
+model cannot reliably call the required tools, explicitly select another tested
+model. Octipus does not automatically replace an entire model family based on
+the old compatibility list. See [Small models](SMALL-MODELS.md).

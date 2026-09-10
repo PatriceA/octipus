@@ -1,5 +1,9 @@
 # Planner→Executor: explicit plan-driven delegation
 
+> **Status: dated design plan.** Statements about what “already exists” describe the
+> repository at authoring time. Current execution behavior is documented in
+> `docs/AGENT-ARCHITECTURE.md` and `docs/SWARM-RELIABILITY.md`.
+
 ## Goal
 
 Make the big model actually *plan* before it hands work to a cheap executor,

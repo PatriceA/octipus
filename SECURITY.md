@@ -8,10 +8,12 @@ Octipus is under active development. Security fixes target the `main` branch onl
 
 **Do not file security issues as public GitHub issues.**
 
-Use one of:
+Open a **GitHub Security Advisory** at the repo's
+**Security → Advisories → New draft advisory**.
 
-1. **GitHub Security Advisory** — open a private advisory at the repo's **Security → Advisories → New draft advisory**. Preferred.
-2. **Email** — send details to the address listed in the repo's top-level `README.md` under "Security". PGP welcome, not required.
+If GitHub Advisories are unavailable to you, contact the maintainer privately
+through an existing trusted channel. Do not include exploit details in a public
+issue or discussion.
 
 ### What to include
 
@@ -24,9 +26,9 @@ Use one of:
 
 | When | What |
 |---|---|
-| Within 72 hours | Acknowledgement that the report landed |
-| Within 7 days | Initial triage — severity, scope, planned fix window |
-| Within 30 days | Fix merged to `main` for high-severity issues, or a written explanation of delay |
+| Within 72 hours | We aim to acknowledge that the report landed |
+| Within 7 days | We aim to provide an initial triage: severity, scope, and next steps |
+| After triage | Timing depends on severity, complexity, and coordinated-disclosure needs |
 | On release | Credit in the advisory and release notes (unless you prefer anonymity) |
 
 ## Scope

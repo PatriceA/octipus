@@ -17,7 +17,7 @@ octipus/
 │   │   ├── cli-agent-worker.ts  # CLI model agent (Claude Code, Antigravity, Codex, Mistral Vibe)
 │   │   ├── tool-executor.ts     # Tool execution with permissions
 │   │   ├── agent-manager.ts
-│   │   ├── root agent/   # Message classification, worker spawning, pipelines
+│   │   ├── agent/        # Root turn, worker spawning, pipelines
 │   │   └── types.ts
 │   ├── db/                 # Database layer (Drizzle ORM, migrations, seeds)
 │   ├── hooks/              # Event-driven automation
@@ -33,8 +33,8 @@ octipus/
 ├── browser-extension/      # Chrome extension for real browser control
 ├── eval/                   # YAML-based capability eval suites
 ├── scripts/
-│   ├── e2e/                # E2E test suite (27 modules, 142 tests)
-│   └── setup.ts            # Bootstrap setup wizard
+│   ├── e2e/                # API/WS and production artifact acceptance harnesses
+│   └── setup-wizard.ts     # Bootstrap setup wizard
 └── docs/                   # Documentation
 ```
 
@@ -43,10 +43,10 @@ octipus/
 | Command | Description |
 |---------|-------------|
 | `npm run dev` | Start backend with hot reload |
-| `npm run start` | Start backend (no watch) |
+| `npm run start` | Run built `dist/index.js` (build first) |
 | `npm run start:all` | Start backend + web UI via `bin/octi start web` (plain `octi start` is backend-only) |
 | `npm run stop:all` | Stop full stack via `bin/octi stop` |
-| `npm test` | Run unit and integration tests |
+| `npm test` | Run Vitest unit and embedded-database projects |
 | `npm run test:tui` | Run TUI tests only |
 | `npm run test:e2e` | Run E2E API test suite |
 | `npm run test:web` | Run web UI E2E tests (Playwright) |
@@ -58,10 +58,10 @@ octipus/
 | `npm run db:generate` | Generate migrations from schema changes |
 | `npm run db:studio` | Open Drizzle Studio |
 | `npm run setup` | Interactive setup wizard |
-| `npm run eval` | Run eval suite (can add `--suite routing` or `--suite quality`) |
-| `npm run eval --baseline latest` | Same, plus a regression gate: exits 1 if any test that PASSED in the newest `eval/results/*.json` now fails, even when the overall score improved. Pass a path instead of `latest` to pin a committed baseline. |
+| `npm run eval` | Run eval suite (append `-- --suite routing` or `-- --suite quality`) |
+| `npm run eval -- --baseline latest` | Same, plus a regression gate: exits 1 if any test that PASSED in the newest `eval/results/*.json` now fails, even when the overall score improved. Pass a path instead of `latest` to pin a committed baseline. |
 | `npm run build` | Build backend for distribution |
-| `npm run build:cli` | Compile `bin/octi.ts` → static `dist/octi` binary |
+| `npm run build:cli` | Bundle `bin/octi.ts` → executable `dist/octi` JavaScript (requires Node) |
 | `npm run backup` | Backup database, config, vault |
 | `octi doctor` | Run environment health checks (what is wired, what is missing) |
 | `octi init` | Run the pi-tui setup wizard (falls back to `npm run setup` on non-TTY) |
@@ -70,8 +70,8 @@ octipus/
 
 ```bash
 npm test                              # Unit tests
-npm test src/utils/crypto.test.ts     # Specific file
-npm test --coverage                   # With coverage
+npm test -- src/utils/crypto.test.ts     # Specific file
+npm test -- --coverage                   # With coverage
 npm run test:e2e                      # E2E (requires running server)
 ```
 
@@ -79,7 +79,7 @@ npm run test:e2e                      # E2E (requires running server)
 
 ### New Tool
 1. Create `src/tools/<name>/index.ts` extending `BaseTool`
-2. Register in `src/tools/index.ts`
+2. Follow a sibling manifest and handler shape; built-ins are discovered by `src/tools/discovery.ts`. Add the tool ID to the roles that should receive it and define its permission actions.
 
 ### New Skill
 Create via the API (`POST /api/skills`) or add to `src/db/seed-skills.ts` for system skills.

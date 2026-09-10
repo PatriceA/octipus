@@ -1,4 +1,4 @@
-# Octipus vs OpenClaw — Feature, Quality & Architecture Comparison
+# Historical OpenClaw comparison — July 2026
 
 Comparison with [OpenClaw](https://github.com/openclaw/openclaw) as of
 July 2026 (OpenClaw `main` @ `fe261b0f`, version `2026.7.2`; Octipus
@@ -6,14 +6,18 @@ July 2026 (OpenClaw `main` @ `fe261b0f`, version `2026.7.2`; Octipus
 source, not from marketing pages. Goal: find gaps in both directions
 and decide which are worth closing.
 
+> **Archived comparison, not current guidance.** The external matrices below
+> have not been reverified. Counts and feature labels are historical observations;
+> use the linked current Octipus guides for present behavior.
+
 ## Legend
 
-- **Yes** — fully implemented
+- **Yes** — reported present in the historical inventory; not a completeness or quality guarantee
 - **Partial** — implemented with limitations
 - **No** — not implemented
 - **N/A** — not applicable to the project's architecture/positioning
 
-## Positioning — read this first
+## Historical positioning
 
 The two projects overlap heavily in capability but aim at different
 products, which reframes many "gaps" as deliberate scope choices:
@@ -26,12 +30,6 @@ products, which reframes many "gaps" as deliberate scope choices:
 | State | Local-first: JSON5 config, SQLite, markdown memory files | DB-first: Postgres + pgvector (PGlite embedded mode), config in DB |
 | Scale of codebase | ~993k LOC in `src/`, 152 bundled plugins, 21 workspace packages, native Swift/Kotlin apps | ~147k LOC in `src/` + ~38k web, single repo, small core |
 | Maturity | CalVer `2026.7.2`, auto-update feed, 71 CI workflows | v0.1 alpha, semver-ish 0.x, 12 CI workflows |
-
-OpenClaw is roughly 6× the codebase and several times the surface
-area. A line-by-line feature race is unwinnable and undesirable; the
-useful question is which OpenClaw capabilities matter for a
-multi-user orchestration platform, and which Octipus capabilities
-OpenClaw structurally cannot match.
 
 ## Core agent capabilities
 
@@ -195,164 +193,34 @@ multi-user platform; OpenClaw's is better for a personal assistant.
 | Protocol client SDK | Yes (`gateway-client`, generated Swift models) | Partial (typed Zod protocol, no published client pkg) |
 | OpenAI-compatible HTTP API | Yes | Yes (mounted at `/v1`) |
 
-## Quality comparison
+## Status after the historical inventory
 
-| Signal | OpenClaw | Octipus |
-|---|---|---|
-| Source size | ~993k LOC `src/` + 105k packages + native apps | ~166k LOC `src/` + 36k web + 3k mcp-server |
-| Test files | 7,240 (incl. 105 e2e, live tests, contract shards) | 410 (unit, integration vs Docker Postgres, 27 API/WS e2e modules, 20 Playwright web specs, TUI e2e, a11y) |
-| Test:source ratio (src) | ~0.43 (4,042 / 9,475 files) | ~0.35 (410 / 1,156 files) |
-| CI | 71 workflows: sharded matrices, macOS/iOS/Android/Windows lanes, perf regression, install smoke, release validation | 12 workflows: `ci.yml` (backend, web, desktop/Tauri, mcp-server jobs) plus CodeQL, semgrep, zizmor, dependency-review, integration, install-smoke, red-team, browser-extension, release |
-| Security CI | CodeQL, semgrep/opengrep, zizmor, dependency guard | CodeQL, semgrep/opengrep, zizmor, blocking dependency audit w/ allowlist |
-| Type strictness | strict TS everywhere, tsgo lanes | strict TS everywhere |
-| Lint/format | oxlint + oxfmt + knip + markdownlint + shellcheck + swiftlint + ktlint, pre-commit | Biome (curated rules, formatter deliberately off), ESLint on web |
-| Docs | 708 markdown files, Mintlify site, i18n | ~78 files in `docs/`, thorough for size |
-| Release engineering | CalVer, changelog 15k lines w/ PR credits, appcast auto-update, RELEASING.md, maturity scorecard | 0.x alpha, Keep-a-Changelog (51KB), no release automation |
-| Error handling | logger pkg, retry/failover docs, tool-call repair, loop detection, watchdogs, restart-recovery | centralized error taxonomy (`FailoverReason`/`RecoveryAction`), fail-loud doctrine, typed swarm errors |
-| TODO debt | n/a (not measured) | 7 TODO/FIXME occurrences across `src/` (not CI-enforced) |
+The tables above preserve the July inventory's reported observations. Neither
+OpenClaw's current implementation nor those external feature classifications was
+revalidated in the September 2026 documentation review. They must not be read as
+current compatibility claims, measured quality, or proof of missing capabilities
+in another project.
 
-Read fairly: OpenClaw's numbers reflect a ~3-year-old project with a
-large contributor base and sponsors; Octipus is a young alpha with
-unusually good hygiene for its stage (strict TS, error taxonomy,
-red-team evals, near-zero TODO debt). The per-file test ratio is in
-the same league. The real quality gaps are in *infrastructure around
-the code* — CI breadth, security scanning, release automation — not
-in code discipline.
+Octipus has changed since that inventory: heartbeat hooks, mid-run steering,
+local-runtime presets, a plugin contract package, and release/install workflows
+have implementations in this repository. Current details belong in
+[Heartbeat](HEARTBEAT.md), [Agent architecture](AGENT-ARCHITECTURE.md),
+[Custom providers](CUSTOM-PROVIDERS.md), [Plugins](PLUGINS.md), and
+[Testing](TESTING.md).
 
-## Architecture comparison
+Several original conclusions were too strong and have been withdrawn:
 
-**Shared shape.** Both converge on the same macro-architecture:
-channel adapters → a long-lived gateway speaking a typed WebSocket
-protocol → an agent runtime with tool policy and sandboxing → model
-providers with failover. Both treat channels as thin adapters and
-keep one authoritative daemon.
+- Source size, test-file ratios, TODO counts, and feature checkmarks do not
+  establish relative engineering quality.
+- A swarm ledger reconciles interrupted nodes; it does not resume arbitrary
+  interrupted agent computation. Receipts record observed tool activity and
+  explicitly do not certify correctness or security.
+- Tenant scoping, vault encryption, and prompt guards are implemented controls,
+  not evidence of “governance-grade security.” Red-team CI is a fixture-generation
+  dry-run, not a measured adversarial success rate.
+- No conclusion about one architecture's inability to support a feature follows
+  from this inventory. No comparative performance or reliability benchmark was
+  run for this document.
 
-**Where they diverge:**
-
-- **State.** Octipus is database-centric: Postgres + pgvector behind
-  Drizzle, 77 migrations, 55+ schemas, runtime config stored in the DB
-  and editable via API/UI; `.env` holds only secrets. OpenClaw is
-  file-centric: JSON5 config with `$include`, SQLite side-stores,
-  markdown memory in a workspace directory. Octipus's model gives
-  transactional multi-user state, RLS, and auditability; OpenClaw's
-  gives greppable, syncable, human-editable local state. Each is
-  correct for its product.
-- **Protocol toolchain.** Octipus: Zod-typed WS protocol + ~90 REST
-  routes with Swagger. OpenClaw: TypeBox → JSON Schema → generated
-  Swift models, versioned frames, idempotency keys on side-effecting
-  methods, published `gateway-client`. OpenClaw's pipeline is the more
-  industrialized pattern and is what makes its native apps cheap to
-  keep in sync — directly relevant to Octipus's mobile roadmap.
-- **Extensibility boundary.** OpenClaw pushes almost everything —
-  channels, providers, tools, speech, even memory — behind a plugin
-  SDK with a package contract and contract tests in CI; the core is a
-  kernel. Octipus keeps a small curated core ("small core, large
-  catalog" per DESIGN.md) with plugins as a side door. OpenClaw's
-  approach scales contribution (152 plugins) but yields a huge
-  maintenance surface; Octipus's keeps quality but concentrates all
-  work on the core team.
-- **Orchestration.** This is Octipus's structural lead: an LLM-driven root
-  agent that delegates via `spawn_child`, config-driven topic→model binding,
-  budgeted 3-level swarm with cascade cancel, ledger crash-resume, and
-  verification receipts. OpenClaw's multi-agent story (routing +
-  subagents + external harnesses) is broader but shallower — no spawn
-  budgets, no crash-resume of agent trees, no verification layer.
-- **Runtime bet.** Octipus: Node + Hono (migrated off Bun/Elysia during
-  the rebuild — boring, maximally compatible).
-  OpenClaw: Node 22+ (boring, maximally compatible — likely one
-  reason its plugin ecosystem grew).
-
-## Gap analysis — Octipus gaps vs OpenClaw
-
-> Implementation plan for the items below:
-> [docs/plans/openclaw-gap-integration.md](plans/openclaw-gap-integration.md).
-
-Ordered by recommended priority, filtered through Octipus's
-positioning (multi-user orchestration platform — not a personal
-assistant, so device nodes, personal-account WhatsApp, and 25
-channels are *not* automatically goals).
-
-**High value, aligned with positioning:**
-
-1. **CI & security engineering.** CodeQL/semgrep/zizmor and a blocking
-   dependency audit are now in place; release automation and cross-OS
-   install smoke tests are still open. Cheapest remaining credibility gap
-   to close.
-2. **Heartbeat / proactive loop.** OpenClaw's heartbeat + standing
-   orders make the assistant *initiate*. Octipus has cron and hooks
-   but no periodic "look at your goals and act" turn. Natural fit for
-   the existing scheduler + swarm.
-3. **Plugin SDK maturity.** Publish a plugin contract package +
-   contract tests and support install-from-npm/git. The
-   proposal/curator skill lifecycle is already better than OpenClaw's;
-   plugins need the same rigor before a marketplace (roadmap) is viable.
-4. **Observability exporters.** Prometheus metrics already ship
-   (`/api/metrics`, `octipus_*` gauges/counters); OTel traces are the
-   remaining gap. Table stakes for a self-hosted multi-user platform;
-   OpenClaw ships both as plugins.
-5. **Tool catalog search.** Shipped — `list_tools`/`describe_tool`
-   lazy discovery plus embedding-ranked `tool_search`
-   (`src/tools/tool-search.ts`) already do what OpenClaw's
-   experimental `tool_search` pattern targets.
-6. **OpenAI-compatible HTTP API.** Shipped — mounted at `/v1`
-   (`src/api/routes/openai-compat.ts`), sharing the REST auth surface.
-
-**Medium value:**
-
-7. **Channel breadth — selectively.** Discord is explicitly out; but
-   Signal, Matrix, and SMS are common in Octipus's self-hosted
-   audience and each fits the existing adapter interface. Email as a
-   first-class inbound channel (the triage enrichment already exists)
-   may be worth more than any chat network.
-8. **Provider breadth — mostly solved via LiteLLM**, but two real
-   gaps: consumer-subscription OAuth (ChatGPT/Codex plans) and
-   first-class llama.cpp/LM Studio/vLLM endpoints (today: manual
-   custom-provider config).
-9. **Mobile.** Already on the roadmap via the gateway protocol. Steal
-   OpenClaw's schema-generation trick (protocol schema → generated
-   client models) rather than hand-writing clients.
-10. **Mid-run steering.** A queue to inject user guidance into a
-    running swarm without cancelling it.
-
-**Lower priority / conscious non-goals:**
-
-11. Media generation (image/music/video) — plugin territory.
-12. Device nodes (camera/screen/location) — belongs to OpenClaw's
-    personal-device product, not a server platform.
-13. i18n — revisit when user base warrants.
-14. Personal-account WhatsApp (Baileys) — ToS-risky; Cloud API is the
-    right call for a platform.
-
-## Gap analysis — OpenClaw gaps (Octipus advantages)
-
-Where Octipus is ahead and should press, because OpenClaw's
-architecture makes these hard to retrofit:
-
-1. **True multi-tenancy** — orgs, RLS, SAML/SCIM, passkeys, quotas,
-   impersonation. OpenClaw is single-user by design; its file/SQLite
-   state model cannot express this.
-2. **Orchestration rigor** — spawn budgets, cascade cancel,
-   crash-resume ledger, verification receipts, approval-gated
-   pipelines. Differentiator vs both OpenClaw and Claude-Code-class
-   harnesses; SWARM-RELIABILITY.md is unique material.
-3. **Built-in hybrid RAG/knowledge base** (pgvector BM25+vector with
-   retention) vs plugin-optional memory.
-4. **Governance-grade security** — encrypted vault with key rotation,
-   3-layer injection defense, in-repo red-team suite, isolation tests.
-5. **DB-backed runtime configuration** editable via API/UI vs
-   restart-and-edit-JSON5.
-6. **Eval framework as part of the build** (YAML suites + red-team)
-   vs post-hoc QA harness.
-
-## Bottom line
-
-OpenClaw wins on breadth (channels, providers, devices, plugins) and
-on engineering infrastructure (CI, release, protocol toolchain,
-docs volume). Octipus wins on depth where it has chosen to compete:
-multi-user trust model, orchestration reliability, built-in
-knowledge/memory, and security governance. The gaps most worth
-closing are infrastructure gaps (security CI, observability, plugin
-SDK, protocol-driven client generation), plus two product gaps that
-fit the positioning: a proactive heartbeat loop and selective channel
-additions (email, Signal/Matrix). The breadth race — 25 channels, 60
-providers, device fleets — is OpenClaw's game and not worth playing.
+Use the [current consolidation plan](plans/product-consolidation-2026-09.md)
+for improvement priorities instead of the original comparative ranking.

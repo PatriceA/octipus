@@ -2,7 +2,7 @@
 
 > **v2.0.0**: Extension upgraded from 8 to 24 commands. New capabilities include tab management, advanced interactions (hover, drag, scroll, key press), storage access, console/network monitoring, and dialog handling. New permissions required: `tabs`, `cookies`.
 
-Chrome extension that gives AI agents access to the user's real browser — with existing cookies, sessions, and authentication. No bot detection, no Playwright sandboxes.
+Chrome extension that gives AI agents access to the user's real browser — with existing cookies, sessions, and authentication. It uses the logged-in browser profile; sites can still reject automation or require user interaction.
 
 ## Why
 
@@ -10,7 +10,7 @@ Playwright runs in an isolated browser with no cookies or login state. Many site
 
 - Navigate and interact with authenticated pages
 - Use existing OAuth sessions (GitHub, Google, etc.)
-- Bypass bot detection and CAPTCHAs
+- Work in the existing browser session; CAPTCHA challenges may still require the user
 - Take screenshots of real page state
 
 ## Architecture
@@ -61,7 +61,7 @@ sudo dnf install chromium
 
 1. Click the extension icon in the toolbar
 2. Enter the backend URL: `ws://localhost:3005`
-3. Enter your API key (master key from `.env`)
+3. Enter a personal access token or session token (see [API authentication](API.md#getting-an-api-token)); the vault `MASTER_KEY` is not accepted for API authentication
 4. Click **Connect**
 
 The badge shows **ON** when connected, **OFF** when disconnected.
@@ -176,7 +176,7 @@ The `browser-ext` tool is available to these roles:
 
 ## Security
 
-- WebSocket authenticated via API token or master key (passed as `token` query parameter)
+- WebSocket authenticated via personal access token or session token (passed as `token` query parameter)
 - `evaluate`, `get_cookies`, `set_cookies`, `get_storage`, `set_storage`, and `get_network` marked as dangerous — require explicit permission approval
 - Navigation, tab management, and interaction commands require ASK-level approval
 - Screenshots, content extraction, console capture, and element highlighting default to ALLOW
@@ -186,7 +186,7 @@ The `browser-ext` tool is available to these roles:
 
 **Extension won't connect:**
 - Check that the backend is running (`npm run dev`)
-- Verify the API key is either a valid API token (from Settings → API Tokens) or the `MASTER_KEY` in `.env`
+- Verify the API key is a valid personal access token (from Settings → API Tokens) or session token; do not use `MASTER_KEY`
 - Check the service worker console in `chromium://extensions` for errors
 
 **Commands time out:**

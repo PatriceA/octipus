@@ -45,7 +45,7 @@ A special profile row with `category='assistant'` stores the root agent's per-us
 | `narration` | Live swarm narration volume: `off|minimal|chatty` |
 | `extra:N` | Free-form rules added via `/persona say` or the web UI |
 
-Auto-created on first edit. See [CHAT-COMMANDS.md](CHAT-COMMANDS.md#personas-root agent-identity) for the slash commands and the [UX revamp plan](plans/ux-personality-revamp.md) for the full design.
+Auto-created on first edit. See [CHAT-COMMANDS.md](CHAT-COMMANDS.md#persona) for the slash commands and the [UX revamp plan](plans/ux-personality-revamp.md) for the full design.
 
 ## Agent Tools
 

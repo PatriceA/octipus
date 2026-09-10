@@ -18,12 +18,24 @@
 > layered on top, not whether multi-user isolation applies at all.
 > Scope: extend Octipus from a single-tenant self-hosted instance into a
 > central backend serving multiple authenticated users (and, optionally,
-> organizations) with strict data, secret, and execution isolation.
+> organizations) with scoped data, secrets, and execution controls. Their presence is not proof
+> of complete tenant isolation across every integration.
 > Note: the backend runtime is Node + Hono (Bun/Elysia are gone — see
 > [DEVELOPMENT.md](../DEVELOPMENT.md)). Below, "Elysia plugin"/"Elysia
 > route"/"Elysia handler" refer to the local `Elysia`-named compat class in
 > `src/api/http` that wraps Hono, not the third-party `elysia` package,
 > which is not a dependency.
+
+## How to read this record
+
+This file combines implementation notes with the original phased proposal.
+Historical sections retain retired flags, proposed paths, estimates, and old
+behavior; they are not a current operator runbook or a security certification.
+Use [Configuration](../CONFIGURATION.md), [API](../API.md), and
+[Design principles](../../DESIGN.md) for current interfaces and limits.
+In particular, `MULTIUSER=false` and system-user permission bypasses below are
+retired: unattended ASK blocks, attended descendants inherit the approval
+surface, and MCP dispatch checks canonical action permissions.
 
 ## Phase 0 — what landed
 

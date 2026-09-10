@@ -168,15 +168,12 @@ BaseChannel (abstract, src/channels/interface.ts)
 Adapters are reached through the `UnifiedMessageInterface` (`getUMI()`), which
 owns registration and routing — see [the channel-adapter guide](../guides/channel-adapter.md).
 
-### Adapter ↔ Gateway Messages
+### Adapter communication
 
-| Direction | Message | Description |
-|-----------|---------|-------------|
-| Adapter → Gateway | `channel.message` | Incoming user message |
-| Adapter → Gateway | `channel.status` | Connection status |
-| Gateway → Adapter | `channel.send` | Send response to user |
-| Gateway → Adapter | `channel.react` | Set emoji reaction |
-| Gateway → Adapter | `channel.typing` | Typing indicator |
+Channel adapters call the `UnifiedMessageInterface` methods and receive shared
+backend events. They do not send a separate `channel.message` / `channel.send`
+wire protocol. The actual gateway frames are defined in
+`src/core/gateway/protocol.ts`; use that schema when implementing a client.
 
 ## API Endpoints
 
@@ -220,8 +217,6 @@ src/api/
 ├── gateway-ws.ts         # /gateway WebSocket endpoint
 └── routes/gateway.ts     # REST API for dashboard
 
-src/tui/
-├── gateway-client.ts     # WebSocket client with reconnect
-├── app.tsx               # Ink terminal UI
-└── index.tsx             # Entry point
+src/tui-pi/              # pi-tui terminal client
+src/tui-editor/          # pi-tui code editor
 ```

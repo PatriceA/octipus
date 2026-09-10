@@ -1,5 +1,10 @@
 # Rebuild session findings — 2026-08-22
 
+> **Historical implementation record.** Measurements and repository state are
+> scoped to the named 2026-08-22 commits. Current architecture and validation
+> are documented in `docs/AGENT-ARCHITECTURE.md`, `docs/TESTING.md`, and the
+> generated catalog.
+
 Companion to [rebuild-execution-plan.md](rebuild-execution-plan.md). What the first working session through that plan actually found, as opposed to what it set out to do. Eight commits on `main`, `a912a5f3` through `860e8a9d`.
 
 The plan's phases produced less than the bugs found while walking them, so this document leads with the bugs.

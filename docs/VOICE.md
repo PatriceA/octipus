@@ -12,7 +12,7 @@ Three input pipelines, one brain, one mouth. They differ only in how audio gets
 all speak back through the configured TTS engine (Voxtral by default; also OpenAI
 or local Piper). Detail for each stage is in the sections below.
 
-**Line 1 — Turn-based web** (`useVoiceConversation.ts`): record an utterance, POST it, get one reply.
+**Line 1 — Recorded input web** (`useVoiceConversation.ts`): record an utterance, POST it, get one reply.
 
 ```text
 🎤 mic ──▶ MediaRecorder (webm/ogg)          AnalyserNode RMS VAD; stops after SILENCE_MS (2 s)
@@ -125,7 +125,7 @@ transcribes, runs the **same root agent pipeline as typed chat**, and speaks
 the reply back — with barge-in and per-sentence streaming TTS. Two mic modes
 share one owner (only one active at a time):
 
-- **Turn-based** (`web/hooks/useVoiceConversation.ts`): record an utterance →
+- **Recorded input** (`web/components/chat/prompt-input.tsx`): record an utterance →
   `POST /api/voice/transcribe` → send as a chat turn → speak the reply.
 - **Realtime / streaming** (`web/hooks/useVoiceRealtime.ts`, Phase 4b): holds a
   duplex WebSocket to `/voice` open, streams 16 kHz mono PCM off an AudioWorklet,
@@ -162,7 +162,7 @@ root agent lifecycle events (`worker_spawned`, `worker_completed`) become
 `{type:"speak"}` frames over the persistent `/ws` socket ("On it — I've started
 the researcher…"), scoped to the voice-mode session. The actual reply is spoken
 from the `chat_response` message, **fresh per turn** — so voice is decoupled from
-turn timing and never repeats a stale answer.
+turn timing and attempts to discard stale speech events.
 
 **Fast voice model.** Interactive planning turns run on whatever model is mapped
 to the **`voice` topic** (e.g. a flash-tier model) so they stay snappy; the heavy
@@ -202,7 +202,7 @@ testing); when omitted it follows the setting:
 | Backend narrator + `speak` frames | `src/voice/narrator.ts`, `src/api/websocket.ts` |
 | Propose-then-confirm gate | `src/core/agent/voice-plan-gate.ts`, `src/core/agent/service.ts` |
 | Telephony media stream (`/voice/media/:provider`) | `src/api/voice-media-ws.ts` |
-| Web hooks | `web/hooks/useVoiceRealtime.ts`, `web/hooks/useVoiceConversation.ts` |
+| Web hooks | `web/hooks/useVoiceRealtime.ts`, `web/components/chat/prompt-input.tsx` |
 | Audio codec (μ-law / resample) | `src/voice/audio-codec.ts` |
 
 > **Known gap:** streaming TTS synthesizes and plays one sentence at a time, so
@@ -354,7 +354,7 @@ Agent: "Call the client and discuss the project timeline"
 → Repeat until hangup
 ```
 
-**The conversation loop is fast** — it bypasses the root agent entirely:
+**The conversation loop uses a shorter path** — it bypasses the root agent entirely:
 
 ```
 Caller speaks → Provider STT (~1s) → Direct LLM call (~1-3s) → Provider TTS (~0.5s)

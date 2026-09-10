@@ -252,4 +252,3 @@ browser-local).
 - Stale comment `src/tools/voice/index.ts:4` ("Leverages the existing VoiceService…") —
   the file never touches `VoiceService`.
 - `web/components/chat/chat-input.tsx` — unused legacy input with its own mic handler.
-```

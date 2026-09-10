@@ -2,7 +2,7 @@
 
 # Architecture catalog
 
-Derived from the source by `scripts/gen-catalog.ts` and verified in CI, so it cannot drift the way a hand-written architecture document does. Change the code, then regenerate.
+Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committed catalog matches the generator output; this verifies freshness, not complete coverage or runtime behavior. Change the source, then regenerate.
 
 ## HTTP surface
 

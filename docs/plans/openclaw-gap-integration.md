@@ -1,5 +1,9 @@
 # Plan: OpenClaw gap integration
 
+> **Dated integration plan (July 2026).** This mixes implemented work, rejected
+> ideas, and follow-ups. Status markers are historical; current capability
+> claims belong in `docs/OPENCLAW-COMPARISON.md` and feature documentation.
+
 Source: `docs/OPENCLAW-COMPARISON.md` (July 2026). This plan covers the
 gaps ranked "worth closing" there, mapped onto the actual extension
 points in the codebase (all file references verified 2026-07-11).

@@ -1,152 +1,23 @@
-# Capability Comparison: Octipus vs competitor
+# Capability review
 
-Feature comparison with [competitor](https://docs.competitor.ai/) as of March 2026.
+The former comparison used an unidentified “competitor” and an unverifiable
+placeholder URL. Its feature rankings and superiority claims have been removed;
+they are not a sound basis for choosing a product.
 
-## Legend
-- **Yes** — fully implemented
-- **Partial** — implemented with limitations
-- **No** — not implemented
-- **N/A** — not applicable to our architecture
+For Octipus's current capabilities and limitations, use:
 
-## Core Capabilities
+| Area | Current reference | What still needs evaluation |
+|---|---|---|
+| Agent execution | [Agent architecture](AGENT-ARCHITECTURE.md) | Task correctness, suitable delegation, and provider-specific tool reliability |
+| Tool permissions | [Tools API](API.md#tools) | Coverage of each integration and external execution boundary |
+| Swarm evidence | [Swarm reliability](SWARM-RELIABILITY.md) | Independent acceptance criteria; receipts do not certify correctness |
+| Knowledge and documents | [RAG](RAG.md), [Documents](DOCUMENTS.md) | Retrieval quality and extraction accuracy on your corpus |
+| Channels and voice | [Channels](CHANNELS.md), [Voice](VOICE.md) | Live credentials, provider behavior, and client-specific interaction limits |
+| Deployment | [Configuration](CONFIGURATION.md), [Docker](DOCKER.md) | Deployment-specific isolation, recovery, and resource requirements |
+| Validation | [Testing](TESTING.md) | Live-provider quality remains separate from fixture-based CI |
 
-| Capability | competitor | Octipus | Notes |
-|---|---|---|---|
-| Multi-agent orchestration | Yes | Yes | Root agent + 16 specialist roles |
-| Sub-agent spawning | Yes (depth/concurrency limits) | Yes (3-level swarm) | Root agent → Agent → Subagent via `spawn_child`; hard depth cap 2 |
-| Parallel fan-out | Yes | Yes | `spawn_child` with `parallelGroup`, `Promise.all` execution |
-| Pipeline (sequential) | Yes | Yes | `create_pipeline` with handoff context (Root agent-only) |
-| Budget cascade (tokens/wall/fan-out) | Partial | Yes | Per-node hard caps, pool-shared tokens, pausedMs wall clock |
-| Cycle / duplicate protection | — | Yes | Per-session fingerprint `SwarmCallGraph` |
-| Cascade cancel | Partial | Yes | AbortSignal tree + DB walk in `AgentManager.stop({cascade})` |
-| Role-based routing | Yes | Yes | 16 worker roles + root agent |
-| Topic → model routing | Partial | Yes | `ModelRegistry.getModelForTopic()` authoritative; fail-loud on unbound topics; swaps to Ollama if needed for tool support |
-| Expert system / personas | Yes | Yes | DB-backed presets with tools + skills |
-
-## Channels
-
-| Channel | competitor | Octipus | Notes |
-|---|---|---|---|
-| WebChat | Yes | Yes | WebSocket-based |
-| Telegram | Yes | Yes | Polling via grammy |
-| Slack | Yes | Yes | Socket mode via Bolt |
-| WhatsApp | Yes | Yes | Cloud API webhooks |
-| Microsoft Teams | Yes | Yes | Bot Framework webhook |
-| Discord | Yes | No | Not planned currently |
-| Signal | Yes | No | Not planned currently |
-| SMS | Yes | No | Not planned currently |
-
-## Tools
-
-| Tool | competitor | Octipus | Notes |
-|---|---|---|---|
-| Web search | Yes | Yes | SearXNG backend |
-| Browser automation (Playwright) | Yes | Yes | Isolated headless browser |
-| Real browser control | No | Yes | Browser extension (browser-ext) |
-| Shell/command execution | Yes | Yes | Sandboxed per workspace |
-| File system read/write | Yes | Yes | Workspace-scoped |
-| Git operations | Yes | Yes | Dedicated git tool |
-| Docker management | Yes | Yes | Container/image/compose ops |
-| GitHub integration | Yes | Yes | Issues, PRs, releases |
-| Knowledge base (RAG) | Yes (BM25 + vector) | Yes (hybrid BM25 + pgvector) | Tiered content (L0/L1/L2) |
-| Document processing / OCR | Yes | Yes | glm-ocr via Ollama |
-| Email (Google Workspace) | Yes | Yes | OAuth2 integration |
-| Email (Microsoft 365) | Yes | Yes | Graph API integration |
-| Calendar management | Yes | Yes | Google + Microsoft |
-| Voice/TTS | Partial | Partial | Kokoro TTS |
-| Image generation | Yes (via services) | No | Could add via nanobanana |
-| Cross-channel messaging | Yes | Yes | Unified messaging tool |
-| MCP protocol | No | Yes | External tool integration |
-
-## Browser Automation (Detailed)
-
-| Feature | competitor | Octipus (browser-ext) | Octipus (Playwright) |
-|---|---|---|---|
-| Navigate to URL | Yes | Yes | Yes |
-| Click elements | Yes | Yes (+ double-click) | Yes |
-| Type/fill inputs | Yes | Yes | Yes |
-| Screenshot | Yes | Yes | Yes (+ full-page, element) |
-| Extract page content | Yes | Yes | Yes (text, HTML) |
-| Execute JavaScript | Yes | Yes | Yes |
-| Tab management (new/close/select) | Yes | Yes | N/A (page-based) |
-| Hover element | Yes | Yes | Yes |
-| Press keyboard key | Yes | Yes (+ modifiers) | Yes |
-| Scroll (direction + to element) | Yes | Yes | Yes |
-| Select dropdown option | Yes | Yes | Yes |
-| Drag and drop | Yes | Yes | Yes |
-| Wait for element/text | Yes | Yes | Yes |
-| Highlight element (debug) | Yes | Yes | N/A |
-| Cookie read/write | Yes | Yes | N/A |
-| localStorage/sessionStorage | Yes | Yes | N/A |
-| Console log capture | Yes | Yes | N/A |
-| Network request monitoring | Yes | Yes (Performance API) | N/A |
-| Dialog handling (alert/confirm) | Yes | Yes | N/A |
-| PDF generation | Yes | N/A | Yes |
-| Real browser (user sessions) | Partial (attach mode) | Yes (default) | No |
-| Device emulation | Yes | No | Possible via Playwright |
-| Performance tracing | Yes | No | Possible via Playwright |
-
-## Automation & Scheduling
-
-| Feature | competitor | Octipus | Notes |
-|---|---|---|---|
-| Cron-based scheduling | Yes | Yes | Hooks with cronExpression |
-| Event-driven hooks | Yes | Yes | 8 trigger types |
-| Webhook triggers | Yes | Yes | Custom webhook endpoints |
-| Recurring task management | Yes | Yes | UI + API + MCP |
-| Agent-spawning actions | Yes | Yes | orchestrated agent spawning |
-
-## Security
-
-| Feature | competitor | Octipus | Notes |
-|---|---|---|---|
-| Tool access profiles | Yes | Yes | Permission system (ALLOW/ASK/DENY) |
-| Per-action permissions | Yes | Yes | Tool-level permission checks |
-| Model failover chains | Yes | Yes | Fallback models via LiteLLM |
-| Security preamble | No | Yes | Injected into all worker prompts |
-| Prompt injection protection | Partial | Yes | SECURITY_PREAMBLE + input guard |
-| Credential vault | Partial | Yes | Encrypted credential storage |
-| Red-team test suite | No | Yes | Automated security eval suite |
-
-## Knowledge & RAG
-
-| Feature | competitor | Octipus | Notes |
-|---|---|---|---|
-| Vector search (cosine) | Yes | Yes | pgvector with HNSW index |
-| BM25 full-text search | Yes | Yes | PostgreSQL tsvector + GIN |
-| Hybrid search (RRF) | Yes | Yes | Reciprocal Rank Fusion |
-| Tiered content loading | Yes | Yes | L0 abstract, L1 overview, L2 full |
-| Auto-indexing agent outputs | Yes | Yes | Agent files auto-indexed |
-| Document processing pipeline | Yes | Yes | Upload → OCR → categorize → index |
-| File categorization | Yes | Yes | LLM-based categorization |
-
-## UI & Experience
-
-| Feature | competitor | Octipus | Notes |
-|---|---|---|---|
-| Web UI | Yes | Yes | React + Tailwind |
-| Settings management | Yes | Yes | Hot-reload config |
-| Agent monitoring | Yes | Yes | Events, logs, status |
-| Session history | Yes | Yes | Full message history |
-| File upload (webchat) | Yes | Yes | Multi-file upload support |
-| Permission prompts | Yes | Yes | Channel-based + web approval |
-
-## Gaps (competitor has, we don't)
-
-1. **Discord/Signal/SMS channels** — Lower priority; existing 5 channels cover most use cases
-2. **Image generation** — Could integrate nanobanana service; not core functionality
-3. **Device emulation** — competitor can emulate mobile devices; could add via Playwright options
-4. **Performance tracing** — competitor has trace start/stop; could add via Playwright trace API
-
-## Advantages (We have, competitor doesn't)
-
-1. **Real browser control (default)** — browser-ext connects to user's actual browser with cookies/sessions as the primary browser tool, not just an attach mode
-2. **MCP protocol support** — Extend capabilities via external MCP servers
-3. **Expert system** — DB-backed personas with role + tools + domain skills
-4. **Domain knowledge skills** — Injected best practices (security, architecture, testing)
-5. **Red-team testing** — Automated security evaluation suite
-6. **Encrypted credential vault** — Secure secret storage
-7. **Security preamble** — Hardened prompts for weaker models
-8. **Pipeline templates** — Pre-built multi-stage workflows
-9. **Hot-reload configuration** — Runtime config changes without restart
-10. **Dual browser tools** — Both real browser (browser-ext) AND isolated Playwright, chosen per task
+A useful future comparison should pin both projects' revisions, use the same
+workloads, record measured outcomes and cost, and distinguish implemented code
+from independently verified behavior. No such comparative benchmark is claimed
+here. The [OpenClaw record](OPENCLAW-COMPARISON.md) is a historical inventory,
+not a current ranking.

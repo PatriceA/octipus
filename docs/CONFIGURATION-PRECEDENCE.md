@@ -4,7 +4,7 @@ Two stores, two stages. Knowing which wins when is important.
 
 ## TL;DR
 
-- **`.env`** is bootstrap-only. Read once on first boot, then ignored.
+- **`.env`** supplies bootstrap fields on every start. Registered runtime settings and secrets migrate to DB/vault on first boot; later environment edits do not replace those stored values. Some process-level controls (for example `GATEWAY_STDIO` and artifact hosting variables) are still read directly from the environment.
 - **DB `settings` table** is the runtime source of truth. Changed via the
   web UI, `/settings` API, or directly. Survives restarts.
 - **Vault** (encrypted `vault` table) holds secrets. Referenced by name
@@ -54,16 +54,17 @@ mirrors the DB. DB writes hot-reload through the cache.
 | `BOOTSTRAP_PROVIDER` etc. | `.env`       | first-boot only; no effect once a model is in DB |
 | LLM provider configs      | DB `model_config` | Models page / API                    |
 | Channel tokens            | Vault        | Channels page                             |
-| Topic → role bindings     | DB `settings` | Models page                              |
+| Topic → model bindings    | DB `model_config.topic_roles`, `topics_config` | Topics / Models page or API |
 | Persona presets           | DB `profiles`, YAML in `personas/` | `/persona ...` slash command |
 | Workspace path            | DB `settings` | UI / API                                 |
 
 ## "I edited my .env but nothing changed"
 
 That's expected for any field tracked in `settings`. After first boot,
-DB wins. To force a re-seed from `.env`, delete the
-`_system.envMigrated` row in the `settings` table and restart — the
-migration runs again and overwrites DB values with the current .env.
+DB wins. Edit those values through Settings or the API. Removing the
+`_system.envMigrated` sentinel reruns migration, but does not force an
+overwrite: existing non-default settings and existing vault secrets are
+preserved (`src/config/migrate-env-to-db.ts`).
 
 For bootstrap-only fields (`STORAGE_MODE`, `DATABASE_URL`,
 `MASTER_KEY`, …), the .env IS the source of truth — but you must
@@ -79,20 +80,23 @@ Practical reasons:
 3. **Everything else** benefits from web UI editability, audit
    trails, and multi-user scoping. Lives in DB.
 
-The split is annoying once. The fix is `octi doctor`, which tells you
-exactly what's missing from each side.
+Use `octi doctor` for available environment and service checks; it is not a complete configuration audit.
 
 ## Rotating the master key
 
-Don't. The master key encrypts every vault entry — rotating it makes
-existing API keys, channel tokens, and SSO secrets unrecoverable.
+Changing `MASTER_KEY` alone makes existing vault ciphertext unreadable. Use
+`scripts/rotate-master-key.ts` to re-encrypt active vault rows:
 
-If you genuinely need to rotate (compromised key, fresh install), the
-safe procedure is:
-1. Export every vault entry's plaintext via the Secrets page.
-2. Generate a new `MASTER_KEY` and put it in `.env`.
-3. Restart Octipus.
-4. Re-add every secret via the UI.
+1. Back up the database and preserve the old key securely; stop backend writers.
+2. Export `OLD_MASTER_KEY`, `NEW_MASTER_KEY` (at least 32 characters each),
+   and the deployment's storage variables in the maintenance shell.
+3. Run `npx tsx scripts/rotate-master-key.ts --dry-run` to count candidates.
+   This dry-run does not prove that each row can be decrypted.
+4. Run `npx tsx scripts/rotate-master-key.ts`. Inspect the final `failed` count:
+   partial row failures are logged but currently do **not** cause a nonzero exit.
+   Resolve them before changing the deployment key. Re-running the same old/new
+   pair skips rows already rotated.
+5. Set deployment `MASTER_KEY` to the new key, restart, and verify vault reads.
 
-`npm run setup` will refuse to overwrite an existing `MASTER_KEY` for
-this reason.
+The script rotates active rows only and does not modify deployment environment
+files. Keep the backup and old key according to your recovery requirements.

@@ -151,7 +151,7 @@ Only images and PDFs are sent to the OCR model. PDFs first attempt text extracti
 | Images | `.png`, `.jpg`, `.jpeg`, `.tiff`, `.bmp`, `.webp` | `image/png`, `image/jpeg`, `image/tiff`, `image/bmp`, `image/webp` |
 | PDF | `.pdf` | `application/pdf` |
 
-**OCR model:** `glm-ocr` via Ollama (default endpoint: `http://localhost:11435`). The image is base64-encoded and sent to the `/api/generate` endpoint with a text extraction prompt.
+**OCR selection:** the processor resolves the `ocr` topic, using a provider-native OCR endpoint when available. Otherwise it uses OCR/vision model bindings; scanned PDFs need `pdftoppm` (Poppler) for the page-rendering path. The image path also retains a legacy direct Ollama fallback from `workspace.ocrModel` / `workspace.ocrEndpoint` (defaults `glm-ocr` / `http://localhost:11435`). That fallback is not a model recommendation or a guarantee that the endpoint exists.
 
 ## Categories
 

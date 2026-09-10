@@ -45,7 +45,7 @@ pullable tags from a curated catalog (`src/capabilities/hwfit/catalog.json`).
 
 Octipus routes by **parameter count**, derived from `metadata.paramCount` or
 parsed from the model tag (`qwen3:8b` → 8B; `qwen3:30b-a3b` MoE → counted by
-total). See `deriveParamCount` (`src/core/agent/mode-selector.ts`).
+total). See `deriveParamCount` (`src/core/agent/model-selector.ts`).
 
 A model under **`routerSmallModelMaxParams` (default 10B)** is treated as
 **small** and gets:
@@ -94,7 +94,8 @@ OpenAI-style tool schema in `ollama-provider.ts`). Two things to know:
    rejects (`"Value looks like object, but can't find closing '}'"`). Octipus
    therefore **strips a `think:false` from `extraBody`** for tool-calling workers
    (`agent-worker.ts`). The reasoning tokens are stripped before delivery, so
-   users never see them — the only effect is reliable tool calls. Casual chat
+   the delivery path attempts to remove them. This mitigation does not guarantee
+   valid tool calls for every model/version. Casual chat
    (no tools) keeps the model's configured `think` setting.
 
 ### Lazy tool discovery

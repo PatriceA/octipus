@@ -27,7 +27,7 @@ scrape_configs:
     authorization:
       credentials: ${METRICS_TOKEN}
     static_configs:
-      - targets: ['octipus:3000']
+      - targets: ['octipus:3005']
 ```
 
 ## Metric catalog
@@ -55,7 +55,7 @@ scrape_configs:
 | `octipus_llm_requests_total` | counter | `provider`, `model`, `status` | `ProviderRouter.complete` / `.stream` |
 | `octipus_llm_request_duration_seconds` | histogram | `provider`, `model` | " |
 | `octipus_llm_tokens_total` | counter | `provider`, `model`, `direction` | non-streaming completions (prompt/completion tokens) |
-| `octipus_swarm_spawns_total` | counter | `role`, `depth`, `planned` | child agent spawns (`SwarmSpawner.spawnChild`); `planned="true"` = parent supplied a `plan` (child routed to the lane executorModel) |
+| `octipus_swarm_spawns_total` | counter | `role`, `depth`, `planned` | child agent spawns (`SwarmSpawner.spawnChild`); `planned="true"` = parent supplied a `plan` (an executor is used only if configured) |
 | `octipus_channel_messages_total` | counter | `channel`, `direction` | inbound/outbound channel messages |
 
 Metric emission is best-effort: every emit is wrapped so a telemetry error can
@@ -85,8 +85,8 @@ Events emitted outside any orchestrated turn have a `NULL` `run_id`.
 ## Verification evidence
 
 Completion checks are recorded to an append-only `verification_evidence` ledger
-so a task is judged against **evidence**, not the model's word, and that
-evidence survives a crash. Today QA-validation verdicts (initial + each retry)
+to preserve the checks recorded for a task. A QA verdict may itself be
+model-generated; the ledger does not turn that verdict into independent proof. Today QA-validation verdicts (initial + each retry)
 are persisted; the schema-gate and `pre_verify` kinds are reserved for the
 follow-up work.
 
@@ -108,7 +108,8 @@ GET /api/verification/:sessionId
 
 `verified` **fails loud**: a session with *no* recorded evidence is **not**
 verified (never assume a pass we can't show); it is `true` only when at least
-one check ran and none failed. Recording is best-effort at the call site — a
+one check ran and none failed. This aggregate describes recorded checks, not
+all required acceptance criteria, and does not certify task correctness. Recording is best-effort at the call site — a
 ledger write can never break the pipeline.
 
 ## Trajectory export

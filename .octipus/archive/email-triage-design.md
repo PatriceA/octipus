@@ -1,5 +1,9 @@
 # Email — Triage-Lite Inbox (over the existing headless backend)
 
+> **Archived design record (2026-06-01).** The feature later shipped in some
+> form, but this proposal is not current product documentation. See
+> `docs/ENRICHMENT.md` and `src/core/email/` for current behavior.
+
 > Design note, 2026-06-01. Feature #7 from `end-user-enrichment-plan.md`.
 > The one we were torn on. Recommendation (carried from the master plan): build
 > a focused **triage assistant**, not a full mail client. The backend already

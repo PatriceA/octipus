@@ -217,9 +217,9 @@ think you need to break one, open an issue first.
 - **DB schema change** → edit Drizzle schema in `src/db/schema/`, then
   `npm run db:generate` to produce a migration, then `npm run db:migrate`.
 
-## Voice Integration Architecture
+## Voice integration architecture
 
-Octipus features a comprehensive voice subsystem (`src/voice/`) divided into three distinct execution paths:
+Octipus has a voice subsystem (`src/voice/`) divided into three execution paths.
 
 1. **Batch Processing (REST API)**
    - **Endpoints:** `/api/voice/transcribe` and `/api/voice/speak` (in `src/api/routes/voice.ts`).

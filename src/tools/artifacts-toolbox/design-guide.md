@@ -18,9 +18,9 @@ Match the effort to the job. A status page does not need a hero.
 
 ## Palette
 
-Octipus's own vocabulary, shared with the web app, the TUI and the mobile
-client. Use it unless the user asks for something else — an artifact that looks
-like the product it came from reads as intentional.
+This dark palette is based on the web application's visual vocabulary. Use it
+unless the user asks for something else — an artifact that looks like the
+product it came from reads as intentional.
 
 | Role | Hex | Use for |
 | --- | --- | --- |
@@ -41,9 +41,11 @@ quiet.
 
 ## Type
 
-`JetBrains Mono` for everything — it is the product's voice, and the font is
-already loaded on the artifact host. Set a scale and stay on it: one display
-size, one heading, one body, one caption. Give headings
+Use a system monospace stack such as
+`ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace`. The artifact host
+does not load a remote font, so JetBrains Mono is used only when it is installed
+on the viewer's system. Set a scale and stay on it: one display size, one
+heading, one body, one caption. Give headings
 `text-wrap: balance`, keep running text near 65–75 characters wide, and letter-space
 uppercase labels slightly (`0.08em`). Use `font-variant-numeric: tabular-nums`
 anywhere digits line up in a column.

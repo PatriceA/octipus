@@ -8,7 +8,7 @@ run in CI (`.github/workflows/ci.yml`, backend job) as a **blocking** step:
 npx tsx scripts/audit-check.ts
 ```
 
-The check runs `bun audit --prod --json`, and fails (exit 1) if **any** reported
+The check runs `npm audit --omit=dev --json`, and fails (exit 1) if **any** reported
 advisory is not covered by an un-expired entry here — or if any entry here has
 itself expired (so stale exceptions are noticed and cleaned up).
 
@@ -19,7 +19,7 @@ The file is a JSON array of entries. Each entry:
 ```jsonc
 [
   {
-    // Advisory id to ignore. Either the numeric bun/npm advisory id
+    // Advisory id to ignore. Either the numeric npm advisory id
     // (e.g. "1120743") OR the GHSA identifier (e.g. "GHSA-hmw2-7cc7-3qxx").
     // Matching is done against both the numeric id and the GHSA of each
     // reported advisory, so either form works.

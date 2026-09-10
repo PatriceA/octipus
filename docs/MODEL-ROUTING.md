@@ -87,7 +87,7 @@ Notes and edge cases:
   signals that the thinking is done and only mechanical execution remains, so the
   executor's cost savings apply. If an expert must run on a specific model even
   for planned work, either leave the lane's `executorModel` empty (planner == executor)
-  or remove the expert's `modelPreference` and rely on topic bindings.
+  and bind the required model as the topic primary or expert preference.
 - **Executor bound but never used** means agents aren't sending plans. This is
   now observable (below) instead of silent.
 - **Unregistered executor name** fails loud — but only when a plan actually
@@ -120,7 +120,7 @@ gate provider availability but do not pick fallbacks.
   - `Planned child routed to the lane executorModel (cheap executor path)`
   - `Plan-less child: skipping configured executorModel, resolving topic
     primary (recon path)`
-  - `Planned child: expert modelPreference overrides the lane executorModel`
+  - `Planned child: lane executorModel overrides expert modelPreference (mechanical execution)`
 - Per-model cost attribution in `cost_log` (`models/cost-tracker.ts`) shows
   the spend shift once planned children start landing on the executor.
 
@@ -128,7 +128,7 @@ gate provider availability but do not pick fallbacks.
 
 | Concern | File |
 |---|---|
-| Child model resolution (expert → executor → primary) | `src/core/swarm/spawner.ts` (`resolveChildModelAndExpert`) |
+| Child model resolution (planned executor → expert preference → primary) | `src/core/swarm/spawner.ts` (`resolveChildModelAndExpert`) |
 | Worker model resolution | `src/core/agent/worker-spawner.ts` |
 | `plan` schema + validation + delegation guidance | `src/core/swarm/swarm-tool.ts` |
 | Executor binding storage/cache | `src/models/topic-config.ts` (`topics_config`) |

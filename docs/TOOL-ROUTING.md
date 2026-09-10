@@ -42,7 +42,7 @@ root itself runs as `general`, so anything in that row it does without spawning.
 | qa | qa | browser, browser-ext, shell, docker, filesystem, knowledge, task_state, visual, artifacts, artifacts_toolbox | "run tests", "test suite", "validate", "verify", "validation" |
 | review | review | filesystem, shell, git, github, knowledge, task_state, repo_registry, visual | "review the code", "code review", "linting", "test coverage" |
 | ai | ai | shell, filesystem, browser, browser-ext, websearch, knowledge, task_state, mcp | "ML model", "RAG", "training", "neural network", "embedding" |
-| general | general | filesystem, browser-ext, websearch, messaging, knowledge, notes, tasks, task_state, scheduling, profiles, email-processor, artifacts, artifacts_toolbox, documents, skill-distill, mcp | "browser", "screenshot", "telegram", "send message", "knowledge base" |
+| general | general | filesystem, shell, browser-ext, websearch, messaging, knowledge, notes, tasks, task_state, scheduling, profiles, email-processor, artifacts, artifacts_toolbox, documents, skill-distill, mcp, mcp_admin | "browser", "screenshot", "telegram", "send message", "knowledge base" |
 | pm | pm | filesystem, messaging, tasks, knowledge, github, atlassian, skill-distill | "project plan", "estimates", "timeline", "deliverables", "jira", "confluence" |
 
 ### Prompt Examples → Routing
@@ -87,7 +87,7 @@ root itself runs as `general`, so anything in that row it does without spawning.
 
 ### Special Routing Rules (from root agent system prompt)
 
-These override keyword classification:
+These are prompt guidance and examples, not deterministic routing rules. The general root can perform work itself when its tools suffice:
 
 | Pattern | Routes To | Reason |
 |---------|-----------|--------|
@@ -118,34 +118,19 @@ The root agent:
 2. Builds expert system prompt with: security preamble + expert identity + role prompt + critical rules + deliverable template + success metrics + domain knowledge from skills
 3. Spawns a worker with the expert's role tools and system prompt
 
-### Available Built-in Tools
+### Available built-in tools
 
-| Tool ID | Actions |
-|---------|---------|
-| filesystem | read_file, write_file, create_file, list_directory, search_files, create_directory, delete_file, copy_file, move_file, file_info |
-| shell | execute_command |
-| git | status, diff, log, commit, push, pull, branch, checkout, clone, create_repo |
-| browser | navigate, click, type, hover, drag, screenshot, pdf, get_content, evaluate |
-| browser-ext | get_tabs, navigate, click, type, screenshot, get_content, cookies, storage, console, network |
-| websearch | search |
-| docker | ps, logs, exec, images, build, run, stop, remove |
-| google-workspace | gmail_list, gmail_read, gmail_send, calendar_list, calendar_create, drive_list, drive_download, contacts_list, tasks_list |
-| microsoft365 | outlook_list, outlook_read, outlook_send, calendar_list, calendar_create, onedrive_list, todo_list, contacts_list |
-| knowledge | search_knowledge, index_knowledge, delete_knowledge |
-| profiles | search_profiles, list_profiles, create_profile, add_profile_fact, update_profile |
-| scheduling | list_hooks, create_hook, update_hook, delete_hook |
-| voice | initiate_call, continue_call, end_call, get_status, list_calls |
-| email-processor | process_emails |
-| messaging | send_message |
-| mcp | mcp_list_tools, mcp_call_tool (lazy discovery of external MCP tools) |
+The role table above lists tool containers, not individual callable functions.
+Use `GET /api/tools`, `GET /api/tools/all`, or `GET /api/tools/role-map` for
+current handler names, schemas, and role bindings. Manifests in `src/tools/`
+are authoritative; callable names and permission action names can differ.
+Tool availability does not authorize execution: ASK needs an attended approval
+surface or a valid reviewed grant; unattended ASK is blocked.
 
-## Model Selection
+## Model selection
 
-When a worker is spawned, the model is selected based on:
-1. **Topic-based routing** — each role has a `defaultTopic` that maps to a model via `ModelRegistry.getModelForTopic(topic)`
-2. **Tool support validation** — if the topic-bound model lacks tool support, the spawner swaps to a local Ollama tool-capable model
-3. **Fail-loud** — if no topic-specific model is bound, the spawner throws with a message directing the user to the Models page (no default model fallback for workers)
-4. **Expert preference fallback** — expert's `modelPreference` (if set) is used only when no topic binding exists
-5. **Voice topic** — voice calls use a dedicated fast model for low latency
-
-Configure per-topic model routing in Settings → Models or via the API.
+Planned children use a configured lane executor first; otherwise an expert's
+explicit model preference precedes the topic primary. Unresolved specialist
+bindings fail with a configuration error. The root can use the configured
+default. See [Model routing](MODEL-ROUTING.md) for executor, backup, and worker
+path details; model capabilities and routing behavior differ by execution path.

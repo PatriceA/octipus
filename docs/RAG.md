@@ -527,7 +527,7 @@ CREATE INDEX embeddings_repo_id_idx ON embeddings (repo_id);
 2. An embedding model registered in the model registry under topic
    `embedding`. `ollama pull nomic-embed-text` then create the model
    row from the Models page is the path of least resistance.
-3. `npm run db:migrate` to run every migration up to 0056.
+3. `npm run db:migrate` to apply all migrations shipped with your checkout.
 4. Optionally bind a model to topic `memory_extraction` to enable
    the long-term memory pipeline (Phase D); the knowledge-base path
    is independent.

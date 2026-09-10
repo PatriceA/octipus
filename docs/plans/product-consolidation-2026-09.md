@@ -1,7 +1,9 @@
 # Product consolidation: predictable everyday work
 
 Date: 2026-09-10
-Status: phases 1–4 implemented in the working tree; validation and remaining measurement gaps are recorded in [the implementation report](../reports/consolidation-2026-09-10.md). Phase 5 is deferred.
+Status: phases 1–4 shipped on `main` in commit `93296268`; validation and
+remaining measurement gaps are recorded in [the implementation
+report](../reports/consolidation-2026-09-10.md). Phase 5 is deferred.
 
 ## Outcome and scope
 

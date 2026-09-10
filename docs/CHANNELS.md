@@ -37,7 +37,7 @@ Supported file types: images (PNG, JPG, WEBP), PDFs, Office documents (DOCX, XLS
 
 ### Persona narration
 
-Live swarm events (`swarm.node_spawned`, `swarm.node_completed`, `swarm.budget_warning`) are mirrored as a separate `swarm.narration` event with the active persona's rendered text — e.g., "Octipus dispatches a research arm.", "qa arm failed. Predictable." Channels subscribe independently; default volume (`persona.narration: minimal`) keeps it from flooding chats. Per-user setting; the user controls it via `/persona narration off|minimal|chatty` or the web `/persona` page. See [PROMPTING.md](PROMPTING.md#root agent-persona).
+Live swarm events (`swarm.node_spawned`, `swarm.node_completed`, `swarm.budget_warning`) are mirrored as a separate `swarm.narration` event with the active persona's rendered text — e.g., "Octipus dispatches a research arm.", "qa arm failed. Predictable." Channels subscribe independently; default volume (`persona.narration: minimal`) keeps it from flooding chats. Per-user setting; the user controls it via `/persona narration off|minimal|chatty` or the web `/persona` page. See [PROMPTING.md](PROMPTING.md#root-agent-persona).
 
 ### Side-channel messages
 

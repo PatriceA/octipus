@@ -1,6 +1,6 @@
 # Data Tools
 
-Read-only SQL, for the `data` role. Two tools in one group:
+Read-only SQL, for the `data` role. Three tools in one group:
 
 | Tool | What it does |
 |---|---|
@@ -9,7 +9,7 @@ Read-only SQL, for the `data` role. Two tools in one group:
 | `csv_query` | Runs SQL over a CSV, TSV or spreadsheet in the workspace. |
 
 Before this, the `data` role could design a query but not run one — its
-prompt sent it to `shell` and `psql`, which is neither auditable nor safe.
+prompt sent it to `shell` and `psql`, without this tool's connection allowlisting and read-only transaction checks.
 
 ## Registering a connection
 

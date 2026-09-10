@@ -1,5 +1,10 @@
 # Atlassian MCP Connector Implementation Plan
 
+> **Historical implementation plan (2026-05-20).** The stack, paths, commands,
+> and unchecked task boxes below preserve the original plan. They are not a
+> current setup guide or backlog. See `docs/PLUGINS.md` and current connector
+> code for implemented behavior.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add an Atlassian built-in connector to Octipus that uses OAuth 2.1 + PKCE + Dynamic Client Registration to connect each user's own Atlassian account, exposing Atlassian MCP tools to agents.

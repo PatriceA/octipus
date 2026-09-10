@@ -222,7 +222,7 @@ Entry points:
   of the tests, so it needs the `bun` binary on PATH.
 
 ```bash
-bun test tests/tui/
+npm run test:tui
 ```
 
 Skipped when the gateway isn't running on `API_PORT`.
