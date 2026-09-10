@@ -189,7 +189,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Bun (+ dependency cache)
+      - name: Setup Node (+ dependency cache)
         uses: ./.github/actions/node-setup
 
       - name: Install deps
@@ -200,8 +200,8 @@ jobs:
         run: npx tsc --noEmit
         working-directory: mcp-server
 
-      - name: Build
-        run: npm run build
+      - name: Build and test MCP authentication and transport
+        run: npm test
         working-directory: mcp-server
 
       - name: Verify dist/index.js exists

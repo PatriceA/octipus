@@ -3,7 +3,7 @@
  * All methods correspond to existing API endpoints or the new tool execution endpoint.
  */
 
-import { getAuthHeaders } from './auth.js';
+import { AuthSession } from './auth.js';
 
 export interface SearchResult {
   title: string;
@@ -107,6 +107,8 @@ export interface MemoryRow {
 }
 
 export class OctiClient {
+  private readonly auth = new AuthSession();
+
   constructor(
     private baseUrl: string,
   ) {}
@@ -115,17 +117,25 @@ export class OctiClient {
     path: string,
     options: RequestInit = {},
   ): Promise<T> {
-    const authHeaders = await getAuthHeaders(this.baseUrl);
     const url = `${this.baseUrl}${path}`;
-
-    const res = await fetch(url, {
+    let authHeaders = await this.auth.getHeaders(this.baseUrl);
+    const send = (headers: Record<string, string>) => fetch(url, {
       ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...authHeaders,
-        ...options.headers,
-      },
+      headers: { 'Content-Type': 'application/json', ...headers, ...options.headers },
     });
+    let res = await send(authHeaders);
+
+    if (res.status === 401 && this.auth.canRefresh) {
+      await res.body?.cancel().catch(() => undefined);
+      const refreshed = await this.auth.refreshAfterUnauthorized(
+        this.baseUrl,
+        authHeaders.Authorization,
+      );
+      if (refreshed) {
+        authHeaders = refreshed;
+        res = await send(authHeaders);
+      }
+    }
 
     if (!res.ok) {
       const body = await res.text().catch(() => '');

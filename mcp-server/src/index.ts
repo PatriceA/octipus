@@ -19,6 +19,7 @@
 
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createServer } from './server.js';
+import { createHttpBridge } from './http.js';
 
 // Parse CLI args
 const args = process.argv.slice(2);
@@ -28,85 +29,44 @@ function getArg(name: string): string | undefined {
 }
 
 const transport = getArg('transport') || 'stdio';
-const port = parseInt(getArg('port') || '3010', 10);
+const port = Number(getArg('port') || '3010');
+const host = getArg('host') || process.env.MCP_HOST || '127.0.0.1';
 const octiUrl = process.env.OCTIPUS_URL || 'http://localhost:3005';
 
 async function main(): Promise<void> {
-  const server = createServer(octiUrl);
-
   if (transport === 'stdio') {
+    const server = createServer(octiUrl);
     const stdioTransport = new StdioServerTransport();
     await server.connect(stdioTransport);
     // Server runs until stdin closes
   } else if (transport === 'http') {
-    // HTTP/SSE transport for remote access
-    const { SSEServerTransport } = await import('@modelcontextprotocol/sdk/server/sse.js');
-
-    const corsOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3005').split(',').map(o => o.trim());
-    const mcpApiKey = process.env.MCP_API_KEY;
-
-    const { createServer: createHttpServer } = await import('http');
-    const httpServer = createHttpServer(async (req, res) => {
-      // CORS headers — restrict to configured origins
-      const requestOrigin = req.headers.origin;
-      if (requestOrigin && corsOrigins.includes(requestOrigin)) {
-        // nosemgrep: javascript.express.security.cors-misconfiguration.cors-misconfiguration -- origin reflected only after allowlist membership check against CORS_ORIGINS
-        res.setHeader('Access-Control-Allow-Origin', requestOrigin);
-      } else if (corsOrigins.length === 1) {
-        res.setHeader('Access-Control-Allow-Origin', corsOrigins[0]);
-      }
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-      res.setHeader('Vary', 'Origin');
-
-      if (req.method === 'OPTIONS') {
-        res.writeHead(204);
-        res.end();
-        return;
-      }
-
-      const url = new URL(req.url || '/', `http://localhost:${port}`);
-
-      // API key authentication for /sse and /messages endpoints
-      if (mcpApiKey && (url.pathname === '/sse' || url.pathname === '/messages')) {
-        const authHeader = req.headers.authorization;
-        const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
-        if (token !== mcpApiKey) {
-          res.writeHead(401, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Unauthorized — invalid or missing API key' }));
-          return;
-        }
-      }
-
-      if (url.pathname === '/sse') {
-        const sseTransport = new SSEServerTransport('/messages', res);
-        await server.connect(sseTransport);
-      } else if (url.pathname === '/messages') {
-        // Collect body
-        const chunks: Buffer[] = [];
-        for await (const chunk of req) {
-          chunks.push(chunk as Buffer);
-        }
-        const _body = Buffer.concat(chunks).toString();
-
-        // The SSE transport handles message routing internally
-        // This endpoint receives JSON-RPC messages from the client
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok' }));
-      } else if (url.pathname === '/health') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', transport: 'http' }));
-      } else {
-        res.writeHead(404);
-        res.end('Not found');
-      }
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid HTTP port');
+    const bridge = createHttpBridge({
+      backendUrl: octiUrl,
+      apiKey: process.env.MCP_API_KEY || '',
+      allowedOrigins: (process.env.CORS_ORIGINS || 'http://localhost:3007').split(','),
     });
-
-    httpServer.listen(port, () => {
-      console.error(`Octipus MCP server (HTTP) listening on port ${port}`);
-      console.error(`  SSE endpoint: http://localhost:${port}/sse`);
-      console.error(`  Octipus URL: ${octiUrl}`);
+    await new Promise<void>((resolve, reject) => {
+      bridge.httpServer.once('error', reject);
+      bridge.httpServer.listen(port, host, () => {
+        bridge.httpServer.removeListener('error', reject);
+        resolve();
+      });
     });
+    bridge.httpServer.on('error', error => console.error('MCP HTTP listener error:', error.message));
+    let stopping = false;
+    const stop = () => {
+      if (stopping) return;
+      stopping = true;
+      void bridge.close().catch(() => {
+        console.error('MCP HTTP shutdown failed');
+        process.exitCode = 1;
+      });
+    };
+    process.once('SIGINT', stop);
+    process.once('SIGTERM', stop);
+    console.error(`Octipus MCP server (HTTP/SSE) listening on ${host}:${port}`);
+
   } else {
     console.error(`Unknown transport: ${transport}. Use "stdio" or "http".`);
     process.exit(1);

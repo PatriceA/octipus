@@ -1,10 +1,4 @@
-/**
- * Auth helper — reads credentials from environment and provides headers for API calls.
- *
- * Supports two modes:
- *   1. API key via OCTIPUS_API_KEY env var (sent as Bearer token)
- *   2. Username/password via OCTIPUS_USER + OCTIPUS_PASSWORD (auto-login, caches JWT)
- */
+/** Authentication for requests from the MCP bridge to the Octipus backend. */
 
 export interface AuthConfig {
   apiKey?: string;
@@ -12,8 +6,12 @@ export interface AuthConfig {
   password?: string;
 }
 
-let cachedToken: string | null = null;
-let tokenExpiry = 0;
+interface LoginResponse {
+  token?: unknown;
+  expiresAt?: unknown;
+}
+
+const LOGIN_DEVICE_NAME = 'Octipus MCP server';
 
 export function getAuthConfig(): AuthConfig {
   return {
@@ -23,50 +21,93 @@ export function getAuthConfig(): AuthConfig {
   };
 }
 
-/**
- * Get authorization headers for API requests.
- * If an API key is set, use it directly as a Bearer token.
- * If username/password are set, login first and cache the JWT.
- */
-export async function getAuthHeaders(baseUrl: string): Promise<Record<string, string>> {
-  const config = getAuthConfig();
+function bearer(token: string): Record<string, string> {
+  return { Authorization: `Bearer ${token}` };
+}
 
-  // Direct API key — simplest mode
-  if (config.apiKey) {
-    return { Authorization: `Bearer ${config.apiKey}` };
+/** Client-local authentication state, including one shared in-flight login. */
+export class AuthSession {
+  private cachedToken: string | null = null;
+  private tokenRefreshAt = 0;
+  private loginPromise: Promise<string> | null = null;
+
+  constructor(private readonly config: AuthConfig = getAuthConfig()) {}
+
+  get canRefresh(): boolean {
+    return !this.config.apiKey && !!this.config.username && !!this.config.password;
   }
 
-  // Username/password — login and cache JWT
-  if (config.username && config.password) {
-    if (cachedToken && Date.now() < tokenExpiry) {
-      return { Authorization: `Bearer ${cachedToken}` };
-    }
+  async getHeaders(baseUrl: string): Promise<Record<string, string>> {
+    if (this.config.apiKey) return bearer(this.config.apiKey);
 
-    const res = await fetch(`${baseUrl}/api/auth/login`, {
+    const { username, password } = this.config;
+    if (!username && !password) return {};
+    if (!username || !password) {
+      throw new Error('Both OCTIPUS_USER and OCTIPUS_PASSWORD are required for credential login');
+    }
+    if (this.cachedToken && Date.now() < this.tokenRefreshAt) return bearer(this.cachedToken);
+    return bearer(await this.login(baseUrl, username, password));
+  }
+
+  /** Refresh only if the rejected token is still this client's current token. */
+  async refreshAfterUnauthorized(
+    baseUrl: string,
+    rejectedAuthorization: string | undefined,
+  ): Promise<Record<string, string> | null> {
+    if (!this.canRefresh) return null;
+    const rejectedToken = rejectedAuthorization?.startsWith('Bearer ')
+      ? rejectedAuthorization.slice('Bearer '.length)
+      : null;
+    if (!rejectedToken || rejectedToken === this.cachedToken) {
+      this.cachedToken = null;
+      this.tokenRefreshAt = 0;
+    }
+    return this.getHeaders(baseUrl);
+  }
+
+  private async login(baseUrl: string, username: string, password: string): Promise<string> {
+    if (this.loginPromise) return this.loginPromise;
+    this.loginPromise = this.performLogin(baseUrl, username, password);
+    try {
+      return await this.loginPromise;
+    } finally {
+      this.loginPromise = null;
+    }
+  }
+
+  private async performLogin(baseUrl: string, username: string, password: string): Promise<string> {
+    const res = await fetch(`${baseUrl}/api/auth/login-mobile`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        username: config.username,
-        password: config.password,
-      }),
+      body: JSON.stringify({ username, password, deviceName: LOGIN_DEVICE_NAME }),
     });
 
     if (!res.ok) {
-      throw new Error(`Login failed: ${res.status} ${res.statusText}`);
+      const payload = await res.json().catch(() => null) as { requiresTOTP?: unknown } | null;
+      const reason = payload?.requiresTOTP === true ? ' (TOTP is required)' : '';
+      throw new Error(`Login failed: ${res.status}${reason}`);
     }
 
-    const data = (await res.json()) as { token?: string };
-    if (!data.token) {
+    const data = await res.json() as unknown;
+    if (!data || typeof data !== 'object') {
+      throw new Error('Login response is not an object');
+    }
+    const login = data as LoginResponse;
+    if (typeof login.token !== 'string' || login.token.length === 0) {
       throw new Error('Login response missing token');
     }
+    if (typeof login.expiresAt !== 'string' && !(login.expiresAt instanceof Date)) {
+      throw new Error('Login response missing expiresAt');
+    }
 
-    cachedToken = data.token;
-    // Cache for 23 hours (tokens typically expire in 24h)
-    tokenExpiry = Date.now() + 23 * 60 * 60 * 1000;
+    const expiresAt = new Date(login.expiresAt).getTime();
+    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+      throw new Error('Login response has invalid or expired expiresAt');
+    }
 
-    return { Authorization: `Bearer ${cachedToken}` };
+    const lifetime = expiresAt - Date.now();
+    this.cachedToken = login.token;
+    this.tokenRefreshAt = expiresAt - Math.min(30_000, Math.floor(lifetime / 2));
+    return login.token;
   }
-
-  // No auth configured — requests will be unauthenticated
-  return {};
 }

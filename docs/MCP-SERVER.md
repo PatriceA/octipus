@@ -46,6 +46,14 @@ does not bypass the permission gate. See [Tools API](API.md#tools).
 cd mcp-server && npm install && npm run build
 ```
 
+## Backend authentication
+
+Set `OCTIPUS_API_KEY` to a personal access token (preferred) or a session JWT.
+Alternatively, set both `OCTIPUS_USER` and `OCTIPUS_PASSWORD` for an account without
+TOTP; the bridge uses `/api/auth/login-mobile` and refreshes according to the
+returned expiry. Credential mode retries a backend `401` once after refreshing.
+API-key mode takes precedence and does not retry authentication failures.
+
 ## Claude Code (`.mcp.json`)
 
 ```json
@@ -93,8 +101,21 @@ octipus_execute_tool(tool_id="browser-ext", tool_name="navigate", args={"url": "
 
 Requires the Chrome extension to be connected. See [Browser Extension](BROWSER-EXTENSION.md).
 
-## HTTP Transport
+## HTTP transport
 
 ```bash
-node mcp-server/dist/index.js --transport http --port 3010
+MCP_API_KEY=choose-a-separate-transport-key node mcp-server/dist/index.js --transport http
 ```
+
+The legacy HTTP+SSE listener defaults to `127.0.0.1:3010`; use `--host` (or
+`MCP_HOST`) and `--port` to change it. `MCP_API_KEY` is mandatory for HTTP mode
+and must accompany both `GET /sse` and `POST /messages?sessionId=<id>` as a Bearer
+token. Each SSE connection owns a separate protocol session; requests dispatch
+through the SDK and results return over that connection.
+
+`CORS_ORIGINS` defaults to `http://localhost:3007`; requests declaring another
+origin are rejected. Native clients without an Origin header still need the
+key. All clients use the same backend account configured through `OCTIPUS_*`;
+this is not per-user authentication. Use TLS for remote deployment. This is
+legacy SSE, not Streamable HTTP. See the [package guide](../mcp-server/README.md)
+for configuration, lifecycle, and test details.
