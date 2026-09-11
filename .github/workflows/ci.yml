@@ -61,6 +61,10 @@ jobs:
       - name: Catalog is current
         run: npm run catalog:check
 
+      - name: Build CLI tool bridge (spawned CLI runs resolve mcp-server/dist)
+        run: npm ci && npm run build
+        working-directory: mcp-server
+
       - name: Test
         run: npm run test -- --coverage
         env:

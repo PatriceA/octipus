@@ -48,5 +48,9 @@ jobs:
       # Brings up Postgres, migrates, runs INTEGRATION=1 tests, and
       # tears the stack down on exit (pass or fail). ubuntu-latest ships Docker
       # + Compose v2, so no extra setup is required.
+      - name: Build CLI tool bridge (spawned CLI runs resolve mcp-server/dist)
+        run: npm ci && npm run build
+        working-directory: mcp-server
+
       - name: Integration tests
         run: npx tsx scripts/test-integration.ts
