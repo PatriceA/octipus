@@ -4,12 +4,11 @@
  * Composes the chat surface: status bar, scrolling messages pane,
  * pi Editor as composer, and pi-tui overlays for permission prompts
  * and the command palette (Ctrl+P). Submit handler routes the
- * TUI-local commands (`/exit`, `/quit`, `/cost`, `/project`) and
+ * TUI-local commands (see `source: 'tui'` in slash-commands.ts) and
  * forwards everything else to the gateway adapter.
  *
  * State that belongs to multiple components (cumulative tokens,
- * pending permissions) lives in plain fields here for now. Phase 4
- * will hoist it into proper stores when the UI grows beyond chat.
+ * session list, pending overlays) lives in plain fields here.
  */
 import { randomUUID } from 'node:crypto';
 import { Container, getKeybindings, matchesKey, type OverlayHandle, Spacer, type TUI } from '@mariozechner/pi-tui';
@@ -23,11 +22,17 @@ import { MessagesPane } from './components/messages-pane';
 import { type CumulativeStats, StatusBar } from './components/status-bar';
 import { GatewayAdapter, type AgentSessionEvent } from './gateway-adapter';
 import { createOverlayController, type OverlayController } from './overlays/registry';
+import { OCTIPUS_APP_KEYBINDINGS } from './keybindings';
+import { findSlashCommand, OCTIPUS_SLASH_COMMANDS } from './slash-commands';
 import type { VoiceService } from '@/voice';
 
 export interface OctipusTuiAppOptions {
   gatewayUrl?: string;
   projectPath?: string;
+  /** Resume this session: its transcript is replayed once the gateway connects. */
+  sessionId?: string;
+  /** Process exit hook (tests swap it out). */
+  exit?: (code: number) => void;
   /**
    * Optional shutdown hook. When set, /exit and /quit call this BEFORE
    * exiting the process so the runtime can tear down the alt-screen and
@@ -45,6 +50,19 @@ function sanitize(text: string): string {
   return text.replace(/[︎️]/g, '');
 }
 
+interface SessionRow { id: string; title: string; updatedAt: string; messages: number }
+const isSessionRow = (v: unknown): v is SessionRow => {
+  const r = v as SessionRow | null;
+  return !!r && typeof r.id === 'string' && typeof r.title === 'string';
+};
+interface HistoryRow { role: 'user' | 'assistant'; content: string; at: string }
+const isHistoryRow = (v: unknown): v is HistoryRow => {
+  const r = v as HistoryRow | null;
+  return !!r && (r.role === 'user' || r.role === 'assistant') && typeof r.content === 'string';
+};
+/** Keybindings the chat shell actually handles (the rest of `app.*` belongs to the editor). */
+const CHAT_HOTKEYS = ['app.palette.open', 'app.help.open', 'app.subagents.toggle', 'app.voice.talk', 'app.quit'] as const;
+
 export class OctipusTuiApp {
   readonly tui: TUI;
   readonly adapter: GatewayAdapter;
@@ -55,7 +73,14 @@ export class OctipusTuiApp {
   private readonly subagents = new SubagentPanel();
   private lastStatus: string | null = null;
   private readonly overlays: OverlayController;
-  private readonly sessionId = newSessionId();
+  /** Mutable: `/resume` re-points every later command and chat at another session. */
+  private sessionId: string;
+  private sessionList: SessionRow[] = [];
+  /** Session to fall back to if the gateway refuses the one `/resume` switched to. */
+  private sessionBeforeResume: string | null = null;
+  /** Replay the resumed session's transcript on the first connect. */
+  private resumePending: boolean;
+  private readonly exit: (code: number) => void;
   /** Gateway WS URL — also used to derive the HTTP base for status lookups. */
   private readonly gatewayUrl?: string;
   private projectPath?: string;
@@ -64,8 +89,12 @@ export class OctipusTuiApp {
   private permissionHandle: OverlayHandle | null = null;
   private paletteHandle: OverlayHandle | null = null;
   private loginHandle: OverlayHandle | null = null;
-  /** Most-recent role seen on agent.start — used to label `iter N` ticks. */
+  /** Most-recent role/model seen on agent.start — used to label `iter N` ticks. */
   private activeAgentRole: string | null = null;
+  private activeAgentModel: string | undefined;
+  /** Reply text streamed so far in the current iteration (see `delta`). */
+  private streamText = '';
+  private streamIteration = -1;
   /** Last pending tool line streamed to messages pane (for completion dedupe). */
   private lastStreamedTool: string | null = null;
   private exiting = false;
@@ -82,6 +111,9 @@ export class OctipusTuiApp {
 
   constructor(tui: TUI, options: OctipusTuiAppOptions) {
     this.tui = tui;
+    this.sessionId = options.sessionId ?? newSessionId();
+    this.resumePending = options.sessionId !== undefined;
+    this.exit = options.exit ?? ((code) => process.exit(code));
     // Scope incoming gateway events to this TUI's own session so we don't
     // surface swarm/agent activity from concurrent web-chat or other-TUI
     // sessions that share the WS connection.
@@ -119,6 +151,8 @@ export class OctipusTuiApp {
     tui.addInputListener((data) => {
       const kb = getKeybindings();
       if (kb.matches(data, 'app.palette.open')) { this.openCommandPalette(); return { consume: true }; }
+      if (kb.matches(data, 'app.help.open')) { this.pushMessage('system', this.hotkeysText()); return { consume: true }; }
+      if (kb.matches(data, 'app.quit')) { this.quit(); return { consume: true }; }
       if (kb.matches(data, 'app.voice.talk')) { void this.toggleTalk(); return { consume: true }; }
       if (kb.matches(data, 'app.subagents.toggle')) {
         this.subagents.toggle();
@@ -144,8 +178,35 @@ export class OctipusTuiApp {
   async start(): Promise<void> {
     this.tui.start();
     await this.adapter.connect();
-    // Show the root agent run mode (Router/Light/Full) once connected, so the
-    // user sees how Octipus is running from the first screen. Non-critical.
+  }
+
+  private quit(): void {
+    void this.stop().then(() => this.exit(0));
+  }
+
+  /** The reply (or the turn) is complete: the streamed text is superseded. */
+  private clearStream(): void {
+    this.streamText = '';
+    this.streamIteration = -1;
+    this.messages.setLive(null);
+  }
+
+  private hotkeysText(): string {
+    const kb = getKeybindings();
+    const rows: Array<[string, string]> = CHAT_HOTKEYS.map((id) => [kb.getKeys(id).map(String).join(' / '), OCTIPUS_APP_KEYBINDINGS[id].description]);
+    rows.push(['PageUp / PageDown', 'Scroll the transcript'], ['Up / Down', 'Composer input history'], ['\\ then Enter', 'Newline in the composer']);
+    const w = Math.max(...rows.map(([k]) => k.length));
+    return `Hotkeys (override in ~/.octipus/keybindings.json):\n${rows.map(([k, d]) => `  ${k.padEnd(w)}  ${d}`).join('\n')}`;
+  }
+
+  /** Replace the transcript with a session's stored conversation (`/history`, `/resume`, `--session`). */
+  private renderHistory(data: unknown): void {
+    const rows = Array.isArray(data) ? data.filter(isHistoryRow) : [];
+    this.messages.reset();
+    this.subagents.reset();
+    for (const m of rows) this.messages.push({ role: m.role, content: sanitize(m.content), timestamp: new Date(m.at) });
+    this.messages.scrollToBottom();
+    this.pushMessage('system', `Session ${this.sessionId.slice(0, 8)} · ${rows.length} message${rows.length === 1 ? '' : 's'} replayed.`);
   }
 
   /** Derive the HTTP API base from the gateway WS URL (ws://host:port/gateway
@@ -230,6 +291,7 @@ export class OctipusTuiApp {
         if (this.planPoll) { clearInterval(this.planPoll); this.planPoll = null; }
         if (event.status === 'connected') {
           this.planPoll = setInterval(() => this.adapter.sendCommand('work-plan-status'), 4000);
+          if (this.resumePending) { this.resumePending = false; this.adapter.sendCommand('history'); }
         } else if (this.lastStatus === 'connected') {
           this.lastPlanSummary = 'Unavailable · connection lost';
           this.status.setPlan(this.lastPlanSummary);
@@ -243,7 +305,21 @@ export class OctipusTuiApp {
         this.status.setStatus(event.status);
         this.tui.requestRender();
         return;
+      case 'delta':
+        // A new iteration means the previous text was reasoning before a tool
+        // call, not the reply: keep it as its own message so the trail stays
+        // visible, then start the next live block.
+        if (event.iteration !== this.streamIteration) {
+          if (this.streamText.trim()) this.pushMessage('assistant', this.streamText);
+          this.streamText = '';
+          this.streamIteration = event.iteration;
+        }
+        this.streamText += event.delta;
+        this.messages.setLive(this.streamText);
+        this.tui.requestRender();
+        return;
       case 'message':
+        if (event.role === 'assistant') this.clearStream();
         this.pushMessage(event.role, event.content);
         // Speak the reply to a voice turn (one-shot; no-op if TTS isn't configured).
         if (event.role === 'assistant' && this.speakNextReply) {
@@ -270,7 +346,9 @@ export class OctipusTuiApp {
         // between spawn and its first iteration tick (the worker emits
         // iteration_update at the TOP of each loop iteration).
         this.activeAgentRole = event.role;
-        this.activity.setThinking({ role: event.role, iter: 0 });
+        this.activeAgentModel = event.model || undefined;
+        this.clearStream(); // a new turn: whatever a failed one left half-streamed is not history
+        this.activity.setThinking({ role: event.role, iter: 0, model: this.activeAgentModel });
         return;
       case 'agent.iteration':
         if (this.subagents.has(event.agentId)) {
@@ -281,6 +359,7 @@ export class OctipusTuiApp {
         this.activity.setThinking({
           role: this.activeAgentRole ?? 'agent',
           iter: event.iteration,
+          model: this.activeAgentModel,
         });
         return;
       case 'identity':
@@ -327,6 +406,8 @@ export class OctipusTuiApp {
         this.activity.setTool(null);
         this.activity.setThinking(null);
         this.activeAgentRole = null;
+        this.activeAgentModel = undefined;
+        this.clearStream();
         this.tui.requestRender();
         return;
       case 'tool':
@@ -351,6 +432,33 @@ export class OctipusTuiApp {
         }
         if (event.name === 'work-plan' && !event.error && typeof event.result === 'string') {
           this.pushMessage('assistant', event.result);
+          return;
+        }
+        if (event.name === 'history') {
+          if (!event.error && Array.isArray(event.data)) {
+            this.sessionBeforeResume = null;
+            this.renderHistory(event.data);
+            return;
+          }
+          // Refused or unknown: nothing may be sent under that id.
+          const fallback = this.sessionBeforeResume ?? newSessionId();
+          this.sessionBeforeResume = null;
+          this.pushMessage('system', `Could not open session ${this.sessionId.slice(0, 8)}: ${event.error ?? String(event.result)} — continuing in ${fallback.slice(0, 8)}.`);
+          this.sessionId = fallback;
+          return;
+        }
+        if (event.name === 'sessions' && Array.isArray(event.data)) {
+          this.sessionList = event.data.filter(isSessionRow);
+          if (this.sessionList.length) {
+            this.pushMessage('system', `/sessions:\n${String(event.result)}\n  /resume <n> reopens one.`);
+            return;
+          }
+        }
+        // The gateway's roster only knows its own commands; add the ones handled here.
+        if (findSlashCommand(event.name)?.name === 'help' && !event.error && typeof event.result === 'string') {
+          const local = OCTIPUS_SLASH_COMMANDS.filter((c) => c.source === 'tui')
+            .map((c) => `  /${c.name}${c.argumentHint ? ` ${c.argumentHint}` : ''} — ${c.description}`).join('\n');
+          this.pushMessage('system', `/help: ${event.result}\n\nTUI commands:\n${local}`);
           return;
         }
 
@@ -380,6 +488,7 @@ export class OctipusTuiApp {
         return;
       }
       case 'error':
+        this.clearStream();
         this.pushMessage('system', `Error: ${event.message}`);
         return;
       case 'expert':
@@ -638,8 +747,31 @@ export class OctipusTuiApp {
     switch (name) {
       case 'exit':
       case 'quit':
-        void this.stop().then(() => process.exit(0));
+        this.quit();
         return;
+      case 'hotkeys':
+        this.pushMessage('system', this.hotkeysText());
+        return;
+      case 'resume': {
+        const n = Number(value);
+        const row = Number.isInteger(n) && n >= 1
+          ? this.sessionList[n - 1]
+          : value ? this.sessionList.find((s) => s.id.startsWith(value)) : undefined;
+        const id = row?.id ?? (/^[0-9a-f-]{36}$/i.test(value) ? value : undefined);
+        if (!id) {
+          this.pushMessage('system', value ? `No session matches "${value}" — run /sessions first.` : 'Usage: /resume <n|id> (see /sessions).');
+          return;
+        }
+        this.sessionBeforeResume = this.sessionId;
+        this.sessionId = id;
+        this.lastPlanSummary = null;
+        this.status.setPlan(null);
+        this.cumulative = { tokens: 0, cost: 0, turns: 0 };
+        this.status.setStats(this.cumulative);
+        this.status.setContext(null);
+        this.adapter.sendCommand('history');
+        return;
+      }
       case 'login':
         this.openLoginPrompt();
         return;

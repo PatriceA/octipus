@@ -61,6 +61,7 @@ export class CustomGeminiCompatProvider extends BaseCustomProvider implements Mo
     }
 
     const data = (await res.json()) as GeminiResponse;
+    options.accountingResponse?.({ model: data.modelVersion ?? options.model, usage: geminiUsage(data.usageMetadata) });
     const latencyMs = Date.now() - startTime;
     return this.parseResponse(data, (cfg.model?.modelId || options.model), latencyMs);
   }
@@ -128,9 +129,9 @@ export class CustomGeminiCompatProvider extends BaseCustomProvider implements Mo
       tools: options.tools,
       toolChoice: options.toolChoice,
       stream: streaming,
-      responseMimeType: (options.extraBody?.responseMimeType as string | undefined)
+      responseMimeType: (options.responseFormat && options.responseFormat.type !== 'text' ? 'application/json' : undefined) || (options.extraBody?.responseMimeType as string | undefined)
         || (options.extraBody?.response_mime_type as string | undefined),
-      responseSchema: (options.extraBody?.responseSchema as Record<string, unknown> | undefined)
+      responseSchema: (options.responseFormat?.type === 'json_schema' ? options.responseFormat.json_schema.schema : undefined) || (options.extraBody?.responseSchema as Record<string, unknown> | undefined)
         || (options.extraBody?.response_schema as Record<string, unknown> | undefined),
       disableThinking: options.extraBody?.think === false
         || options.extraBody?.disableThinking === true
@@ -189,11 +190,7 @@ export class CustomGeminiCompatProvider extends BaseCustomProvider implements Mo
       // Gemini reports STOP even on tool-call turns — normalize to tool_calls
       // when we parsed any (item 39).
       finishReason: toolCalls.length ? 'tool_calls' : mapFinishReason(candidate.finishReason),
-      usage: {
-        inputTokens: data.usageMetadata?.promptTokenCount || 0,
-        outputTokens: data.usageMetadata?.candidatesTokenCount || 0,
-        totalTokens: data.usageMetadata?.totalTokenCount || 0,
-      },
+      usage: geminiUsage(data.usageMetadata),
       model: data.modelVersion || modelId,
       latencyMs,
     };
@@ -229,6 +226,8 @@ interface GeminiCandidate {
 interface GeminiResponse {
   candidates?: GeminiCandidate[];
   usageMetadata?: {
+    thoughtsTokenCount?: number;
+    cachedContentTokenCount?: number;
     promptTokenCount?: number;
     candidatesTokenCount?: number;
     totalTokenCount?: number;
@@ -267,6 +266,7 @@ async function* parseGeminiSseStream(
   const rawToolCalls: Array<Record<string, unknown>> = [];
   let finishReason: string | undefined;
   let sawToolCall = false;
+  let usage: GeminiResponse['usageMetadata'];
 
   try {
     while (true) {
@@ -290,6 +290,7 @@ async function* parseGeminiSseStream(
           try { data = JSON.parse(payload) as GeminiResponse; }
           catch { continue; }
 
+          if (data.usageMetadata) usage = data.usageMetadata;
           const candidate = data.candidates?.[0];
           const parts = candidate?.content?.parts || [];
           let toolIdx = toolCallBuffers.size;
@@ -342,10 +343,19 @@ async function* parseGeminiSseStream(
   // Gemini reports STOP even on tool-call turns — normalize (item 39).
   if (sawToolCall) {
     yield {
+      usage: geminiUsage(usage),
       finishReason: 'tool_calls',
       providerRaw: { content: { role: 'model', parts: rawToolCalls } },
     };
   } else if (finishReason) {
-    yield { finishReason };
+    yield { finishReason, usage: geminiUsage(usage) };
   }
+}
+
+
+function geminiUsage(u: GeminiResponse['usageMetadata']): CompletionResult['usage'] {
+  const inputTokens = u?.promptTokenCount ?? 0;
+  const outputTokens = (u?.candidatesTokenCount ?? 0) + (u?.thoughtsTokenCount ?? 0);
+  return { inputTokens, outputTokens, totalTokens: u?.totalTokenCount ?? inputTokens + outputTokens,
+    cacheReadTokens: u?.cachedContentTokenCount, reasoningTokens: u?.thoughtsTokenCount, available: u != null };
 }

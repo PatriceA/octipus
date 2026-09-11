@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-389 mounted routes across 61 route files. The path is the full one, group prefix included — what a client actually calls.
+391 mounted routes across 61 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -218,6 +218,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | PATCH | `/api/models/:name` | `src/api/routes/models.ts` |
 | POST | `/api/models/:name/check-capabilities` | `src/api/routes/models.ts` |
 | POST | `/api/models/:name/default` | `src/api/routes/models.ts` |
+| GET | `/api/models/billing/report` | `src/api/routes/models.ts` |
 | GET | `/api/models/cli/quota` | `src/api/routes/models.ts` |
 | POST | `/api/models/cli/quota/:provider/clear` | `src/api/routes/models.ts` |
 | GET | `/api/models/cli/quota/:provider/history` | `src/api/routes/models.ts` |
@@ -240,6 +241,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/models/usage` | `src/api/routes/models.ts` |
 | GET | `/api/models/usage/daily` | `src/api/routes/models.ts` |
 | GET | `/api/models/usage/global` | `src/api/routes/models.ts` |
+| GET | `/api/models/usage/session/:sessionId` | `src/api/routes/models.ts` |
 | GET | `/api/notes` | `src/api/routes/notes.ts` |
 | POST | `/api/notes` | `src/api/routes/notes.ts` |
 | DELETE | `/api/notes/:id` | `src/api/routes/notes.ts` |
@@ -425,14 +427,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `config` | 18 |
 | `api` | `connectors` | 1 |
 | `api` | `core` | 77 |
-| `api` | `db` | 95 |
+| `api` | `db` | 96 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 5 |
 | `api` | `mcp` | 3 |
-| `api` | `models` | 28 |
+| `api` | `models` | 30 |
 | `api` | `plugins` | 1 |
 | `api` | `security` | 69 |
-| `api` | `services` | 4 |
+| `api` | `services` | 5 |
 | `api` | `shared` | 1 |
 | `api` | `skills` | 2 |
 | `api` | `tools` | 3 |
@@ -464,11 +466,11 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `channels` | 2 |
 | `core` | `config` | 30 |
 | `core` | `connectors` | 2 |
-| `core` | `db` | 171 |
+| `core` | `db` | 176 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 4 |
 | `core` | `mcp` | 5 |
-| `core` | `models` | 62 |
+| `core` | `models` | 66 |
 | `core` | `security` | 46 |
 | `core` | `services` | 1 |
 | `core` | `shared` | 9 |
@@ -501,12 +503,12 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `mcp` | `security` | 1 |
 | `mcp` | `utils` | 3 |
 | `models` | `config` | 9 |
-| `models` | `core` | 22 |
+| `models` | `core` | 23 |
 | `models` | `db` | 11 |
 | `models` | `security` | 18 |
 | `models` | `services` | 1 |
-| `models` | `shared` | 1 |
-| `models` | `utils` | 35 |
+| `models` | `shared` | 4 |
+| `models` | `utils` | 37 |
 | `plugins` | `security` | 1 |
 | `plugins` | `tools` | 1 |
 | `plugins` | `utils` | 2 |
@@ -520,9 +522,9 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `services` | `core` | 2 |
 | `services` | `db` | 6 |
 | `services` | `models` | 15 |
-| `services` | `security` | 2 |
+| `services` | `security` | 3 |
 | `services` | `setup` | 1 |
-| `services` | `shared` | 1 |
+| `services` | `shared` | 2 |
 | `services` | `tools` | 1 |
 | `services` | `utils` | 4 |
 | `setup` | `utils` | 1 |
@@ -620,6 +622,7 @@ Every member of the `GatewayEventType` union in `src/core/gateway/protocol.ts`, 
 | `artifact.source_error` | yes | `src/core/artifacts/events.ts` | — |
 | `artifact.version_updated` | yes | `src/core/artifacts/events.ts` | — |
 | `audit` | yes | `src/core/gateway/hub.ts` | — |
+| `chat.delta` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `chat.message` | yes | `src/core/gateway/message-handler.ts` | — |
 | `chat.response` | yes | `src/core/gateway/event-bridge.ts`, `src/core/gateway/message-handler.ts` | — |
 | `extension.notify` | yes | `src/extensions/api.ts` | — |

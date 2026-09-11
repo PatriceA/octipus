@@ -122,7 +122,7 @@ const antigravityConfig: CLIToolConfig = {
     content: stdout.trim(),
     finishReason: 'stop',
     // agy reports no token usage in print mode.
-    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false },
     model: 'cli/antigravity',
     latencyMs: Date.now() - startTime,
   }),
@@ -159,6 +159,7 @@ const codexCliConfig: CLIToolConfig = {
       let content = '';
       let inputTokens = 0;
       let outputTokens = 0;
+      let sawUsage = false;
       for (const line of lines) {
         try {
           const event = JSON.parse(line);
@@ -169,6 +170,7 @@ const codexCliConfig: CLIToolConfig = {
           } else if (event.type === 'result' && event.text) {
             content = event.text;
           } else if (event.type === 'turn.completed' && event.usage) {
+            sawUsage = true;
             inputTokens = event.usage.input_tokens ?? inputTokens;
             outputTokens = event.usage.output_tokens ?? outputTokens;
           }
@@ -187,7 +189,7 @@ const codexCliConfig: CLIToolConfig = {
       return {
         content,
         finishReason: 'stop',
-        usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
+        usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, available: sawUsage },
         model: 'cli/codex-cli',
         latencyMs: Date.now() - startTime,
       };
@@ -195,7 +197,7 @@ const codexCliConfig: CLIToolConfig = {
       return {
         content: stdout.trim(),
         finishReason: 'stop',
-        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false },
         model: 'cli/codex-cli',
         latencyMs: Date.now() - startTime,
       };
@@ -242,7 +244,7 @@ const vibeCliConfig: CLIToolConfig = {
           finishReason: 'stop',
           // vibe's JSON carries no usage/cost fields — usage is unknown (0).
           // Budget is enforced via --max-tokens / --max-price instead.
-          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false },
           model: 'cli/vibe',
           latencyMs: Date.now() - startTime,
         };
@@ -251,7 +253,7 @@ const vibeCliConfig: CLIToolConfig = {
       return {
         content: stdout.trim(),
         finishReason: 'stop',
-        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false },
         model: 'cli/vibe',
         latencyMs: Date.now() - startTime,
       };
@@ -260,7 +262,7 @@ const vibeCliConfig: CLIToolConfig = {
       return {
         content: stdout.trim(),
         finishReason: 'stop',
-        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false },
         model: 'cli/vibe',
         latencyMs: Date.now() - startTime,
       };
@@ -324,7 +326,7 @@ function parseClaudeStyleOutput(modelLabel: string) {
       return {
         content,
         finishReason: 'stop',
-        usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
+        usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, available: data.input_tokens != null || data.usage?.input_tokens != null },
         model: modelLabel,
         latencyMs: Date.now() - startTime,
       };
@@ -332,7 +334,7 @@ function parseClaudeStyleOutput(modelLabel: string) {
       return {
         content: stdout.trim(),
         finishReason: 'stop',
-        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false },
         model: modelLabel,
         latencyMs: Date.now() - startTime,
       };

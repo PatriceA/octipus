@@ -40,6 +40,7 @@ export interface SessionStats {
 export type AgentSessionEvent =
   | { kind: 'status';         status: ConnectionStatus }
   | { kind: 'message';        role: Role; content: string }
+  | { kind: 'delta';          delta: string; iteration: number }
   | { kind: 'permission';     requestId: string; toolName: string; detail: string }
   | { kind: 'approval';       requestId: string; summary: string; question: string; options: string[] }
   | { kind: 'agent.start';    role: string; model: string; nodeId?: string; subagent?: boolean }
@@ -48,7 +49,7 @@ export type AgentSessionEvent =
   | { kind: 'session.stats';  stats: SessionStats }
   | { kind: 'identity';       user: string | null }
   | { kind: 'tool';           tool: ToolEventState; agentId?: string }
-  | { kind: 'command.result'; name: string; result: unknown; error?: string }
+  | { kind: 'command.result'; name: string; result: unknown; error?: string; data?: unknown }
   | { kind: 'agent.write';    path: string; newText: string }
   | { kind: 'expert';         expertId: string | null }
   | { kind: 'error';          message: string };
@@ -93,7 +94,7 @@ export class GatewayAdapter {
       getWorkspace: () => this.workspaceSlug ?? this.externalGetWorkspace?.() ?? null,
       onStatusChange: (status) => this.emit({ kind: 'status', status }),
       onResponse: (response) => this.emit({ kind: 'message', role: 'assistant', content: response }),
-      onCommandResult: (name, result, error) => this.emit({ kind: 'command.result', name, result, error }),
+      onCommandResult: (name, result, error, data) => this.emit({ kind: 'command.result', name, result, error, data }),
       onError: (message) => this.emit({ kind: 'error', message }),
       onEvent: (event) => this.decode(event),
       onIdentityChange: (identity) => this.emit({ kind: 'identity', user: identity?.username ?? null }),
@@ -152,7 +153,7 @@ export class GatewayAdapter {
   }
 
   sendCommand(name: string, args?: Record<string, string>): void {
-    this.client.sendCommand(name, args);
+    this.client.sendCommand(name, args, this.getSessionId?.() ?? undefined);
   }
 
   respondApproval(requestId: string, approved: boolean, response: string): void {
@@ -449,6 +450,20 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
       }
       return out;
     }
+
+    // A slice of the root agent's reply as it is produced; the whole text
+    // still arrives as chat.response.
+    case 'chat.delta': {
+      const delta = pickString(payload, 'delta');
+      if (delta) out.push({ kind: 'delta', delta, iteration: pickNumber(payload, 'iteration') ?? 0 });
+      return out;
+    }
+
+    // The gateway steered a running turn with the user's message instead of
+    // starting a new one; without this the two are indistinguishable.
+    case 'chat.message':
+      if (payload.injected === true) out.push({ kind: 'message', role: 'system', content: 'Steering the running turn with your message.' });
+      return out;
 
     // GatewayClient handles chat.response via onResponse.
     case 'chat.response':

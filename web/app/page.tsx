@@ -43,7 +43,7 @@ interface HealthData {
 }
 
 interface UsageData {
-  stats?: { requestCount: number; totalCost: number };
+  stats?: { requestCount: number; totalCost: number; unknownCostRequests?: number; estimatedCost?: number; reportedCost?: number; cacheReadTokens?: number; cacheCreationTokens?: number; totalInputTokens?: number; estimatedCacheSavings?: number };
 }
 
 export default function DashboardPage() {
@@ -85,7 +85,7 @@ export default function DashboardPage() {
     { name: 'active agents', value: health?.agents?.running, icon: Bot, tone: 'text-primary', query: healthQuery },
     { name: 'your sessions', value: sessionData?.total, icon: MessageSquare, tone: 'text-tertiary', query: sessionsQuery },
     { name: 'api requests', value: usage?.stats?.requestCount, icon: Activity, tone: 'text-primary', query: usageQuery },
-    { name: 'total cost', value: usage?.stats?.totalCost == null ? undefined : `$${usage.stats.totalCost.toFixed(2)}`, icon: Zap, tone: 'text-warning', query: usageQuery },
+    { name: usage?.stats?.unknownCostRequests ? 'known cost (incomplete)' : 'recorded cost (may include estimates)', value: usage?.stats?.totalCost == null ? undefined : `$${usage.stats.totalCost.toFixed(2)}`, icon: Zap, tone: 'text-warning', query: usageQuery },
   ];
   const runningAgents = health?.agents?.running;
   const statusVariant = healthQuery.isError ? 'neutral' : runningAgents ? 'success' : 'neutral';
@@ -143,6 +143,19 @@ export default function DashboardPage() {
         ))}
       </div>
 
+      {usage?.stats && <Card className="p-4 space-y-2">
+        <p className="text-sm text-on-surface">Usage and cost details</p>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs text-on-surface-variant">
+          <span>Provider-reported: ${(usage.stats.reportedCost ?? 0).toFixed(4)}</span>
+          <span>Estimated: ${(usage.stats.estimatedCost ?? 0).toFixed(4)}</span>
+          <span>Unknown cost: {usage.stats.unknownCostRequests ?? 0} requests</span>
+          <span>Cache hit ratio: {usage.stats.totalInputTokens ? (100 * Number(usage.stats.cacheReadTokens ?? 0) / usage.stats.totalInputTokens).toFixed(1) : '0.0'}%</span>
+          <span>Cache reads: {Number(usage.stats.cacheReadTokens ?? 0).toLocaleString()} tokens</span>
+          <span>Cache writes: {Number(usage.stats.cacheCreationTokens ?? 0).toLocaleString()} tokens</span>
+          <span>Estimated net cache savings: ${(usage.stats.estimatedCacheSavings ?? 0).toFixed(4)}</span>
+        </div>
+        <p className="text-xs text-on-surface-variant">Savings use known model rates. Historical entries may use older estimates. Provider billing remains authoritative.</p>
+      </Card>}
       <HealthStatus health={health?.health} isFetching={healthFetching} />
 
       <FeatureStatus />

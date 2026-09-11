@@ -8,7 +8,7 @@ export interface GatewayClientOptions {
   url?: string;
   onEvent?: (event: any) => void;
   onResponse?: (response: string) => void;
-  onCommandResult?: (name: string, result: unknown, error?: string) => void;
+  onCommandResult?: (name: string, result: unknown, error?: string, data?: unknown) => void;
   onStatusChange?: (status: ConnectionStatus) => void;
   onError?: (error: string) => void;
   /**
@@ -158,8 +158,8 @@ export class GatewayClient {
   /**
    * Send a command.
    */
-  sendCommand(name: string, args?: Record<string, string>): void {
-    this.send({ type: 'command', name, args });
+  sendCommand(name: string, args?: Record<string, string>, sessionId?: string): void {
+    this.send({ type: 'command', name, args, sessionId });
   }
 
   /**
@@ -266,7 +266,13 @@ export class GatewayClient {
         break;
 
       case 'command.result':
-        this.options.onCommandResult?.(msg.name, msg.result, msg.error);
+        this.options.onCommandResult?.(msg.name, msg.result, msg.error, msg.data);
+        break;
+
+      case 'events_dropped':
+        // Backpressure on the server side: the transcript now has holes and a
+        // spinner may never see its completion. Say so instead of hanging quietly.
+        this.options.onError?.(`Gateway dropped ${msg.count} event(s) (${msg.reason}) — the transcript may be incomplete.`);
         break;
 
       case 'pong':

@@ -1,3 +1,4 @@
+import { normalizeUsage } from './usage';
 import OpenAI from 'openai';
 import type {
   ChatCompletionCreateParams,
@@ -11,7 +12,6 @@ import { parseToolCallArguments } from '@/models/tool-call-args';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
-import { extractCachedTokens } from './usage';
 
 const DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1';
 
@@ -75,6 +75,7 @@ export class DeepSeekProvider implements ModelProvider {
 
     try {
       const response = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
+      options.accountingResponse?.({ model: response.model ?? options.model, requestId: response.id, usage: normalizeUsage(response.usage) });
       const latencyMs = Date.now() - startTime;
       if (!response.choices?.length) {
         throw classifyError(new Error(`Provider returned empty response (no choices) for model ${params.model || options.model}`), 'deepseek');
@@ -89,12 +90,8 @@ export class DeepSeekProvider implements ModelProvider {
       const result: CompletionResult = {
         content: choice.message.content || '',
         finishReason: choice.finish_reason || 'stop',
-        usage: {
-          inputTokens: response.usage?.prompt_tokens || 0,
-          outputTokens: response.usage?.completion_tokens || 0,
-          totalTokens: response.usage?.total_tokens || 0,
-          ...extractCachedTokens(response.usage),
-        },
+        usage: normalizeUsage(response.usage),
+        requestId: response.id,
         model: response.model,
         latencyMs,
         ...(reasoningContent ? { reasoningContent } : {}),
@@ -182,6 +179,7 @@ export class DeepSeekProvider implements ModelProvider {
       top_p: options.topP,
       stop: options.stopSequences,
       stream: true,
+      stream_options: { include_usage: true },
     };
 
     if (options.tools?.length) {
@@ -208,6 +206,7 @@ export class DeepSeekProvider implements ModelProvider {
     let reasoning = '';
 
     for await (const chunk of stream) {
+      if (chunk.usage) yield { usage: normalizeUsage(chunk.usage), requestId: chunk.id, model: chunk.model };
       const delta = chunk.choices[0]?.delta;
 
       if (delta?.content) {

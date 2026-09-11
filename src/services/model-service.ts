@@ -12,9 +12,8 @@
  * `userId`.
  */
 import { z } from 'zod';
-import { getCLIToolConfig } from '@/core/cli-agent-factory';
-import { validateScopedExtraArgs } from '@/shared/cli-capabilities';
 import { getConfig } from '@/config';
+import { getCLIToolConfig } from '@/core/cli-agent-factory';
 import type { NewModelConfigEntry } from '@/db/schema/models';
 import { getCapabilitiesForModel } from '@/models/capabilities';
 import { checkModelCapabilities } from '@/models/capability-gate';
@@ -24,6 +23,8 @@ import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
 import { getProviderRouter } from '@/models/providers';
 import { getQuotaTracker } from '@/models/quota-tracker';
+import { validateScopedExtraArgs } from '@/shared/cli-capabilities';
+import { anthropicNativeMessagesEnabled, providerControls, validateProviderSettings } from '@/shared/provider-settings';
 import { coreLogger } from '@/utils/logger';
 
 // ── List / read ──────────────────────────────────────────────────────
@@ -35,6 +36,7 @@ export async function listModels(userId: string, isAdmin: boolean) {
     ? await registry.getAllModelsIncludeDisabled()
     : await registry.getModelsForUser(userId);
 
+  const anthropicNative = anthropicNativeMessagesEnabled(process.env.ANTHROPIC_NATIVE_MESSAGES);
   return {
     models: models.map((m) => ({
       id: m.id,
@@ -44,6 +46,7 @@ export async function listModels(userId: string, isAdmin: boolean) {
       endpoint: m.endpoint,
       apiKeyRef: m.apiKeyRef,
       maxTokens: m.maxTokens,
+      defaultMaxTokens: m.defaultMaxTokens,
       contextWindow: m.contextWindow,
       supportsVision: m.supportsVision,
       supportsTools: m.supportsTools,
@@ -55,8 +58,18 @@ export async function listModels(userId: string, isAdmin: boolean) {
       isEnabled: m.isEnabled,
       isDefault: m.isDefault,
       metadata: m.metadata,
+      providerControls: providerControls(m.provider, m.modelId, anthropicNative),
     })),
   };
+}
+
+function validateOutputLimits(maxTokens: unknown, defaultMaxTokens: unknown): string | null {
+  const maximum = maxTokens === undefined ? 4096 : maxTokens;
+  const perRequest = defaultMaxTokens === undefined ? 4096 : defaultMaxTokens;
+  if (typeof maximum !== 'number' || !Number.isInteger(maximum) || maximum <= 0) return 'maxTokens must be a positive integer.';
+  if (typeof perRequest !== 'number' || !Number.isInteger(perRequest) || perRequest <= 0) return 'defaultMaxTokens must be a positive integer.';
+  if (perRequest > maximum) return 'defaultMaxTokens must not exceed maxTokens.';
+  return null;
 }
 
 /** Get one model by name, with derived capabilities. */
@@ -73,6 +86,20 @@ export async function getModelByName(name: string) {
 // Metadata is replaced by registry.updateModel, so validate the effective value
 // when a model ID changes without replacing its existing metadata.
 const cliMetadataSchema = z.object({
+  providerSettings: z.object({
+    reasoningEffort: z.enum(['low', 'medium', 'high']).optional(),
+    thinkingBudget: z.number().int().min(1024).optional(),
+    strictTools: z.boolean().optional(),
+    cachePolicy: z.enum(['default', 'off', 'session']).optional(),
+    cachedContent: z.string().regex(/^cachedContents\/[a-zA-Z0-9_-]+$/).optional(),
+  }).strict().optional(),
+  pricing: z.object({
+    cacheRead: z.number().finite().nonnegative().optional(),
+    cacheWrite: z.number().finite().nonnegative().optional(),
+    source: z.string().optional(),
+    verifiedAt: z.string().optional(),
+    free: z.boolean().optional(),
+  }).strict().optional(),
   cliAgent: z.object({
     extraArgs: z.array(z.string()).optional(),
   }).passthrough().optional(),
@@ -81,7 +108,8 @@ const cliMetadataSchema = z.object({
 function validateCliMetadata(modelId: string, metadata: unknown): string | null {
   const parsed = cliMetadataSchema.safeParse(metadata);
   if (!parsed.success) {
-    return 'Invalid CLI metadata: metadata and cliAgent must be objects; extraArgs must be an array of strings.';
+    if (parsed.error.issues.some(i => i.path.length === 0 || i.path[0] === 'cliAgent')) return 'Invalid CLI metadata: metadata and cliAgent must be objects; extraArgs must be an array of strings.';
+    return 'Invalid model metadata: ' + parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ');
   }
   const extraArgs = parsed.data?.cliAgent?.extraArgs;
   const cli = getCLIToolConfig(modelId);
@@ -112,8 +140,14 @@ export async function registerModel(body: Record<string, unknown>) {
     };
   }
 
+  for (const key of ['costPerInputToken', 'costPerOutputToken']) if (body[key] != null && (typeof body[key] !== 'number' || !Number.isFinite(body[key]) || (body[key] as number) < 0)) return { error: `${key} must be a finite nonnegative number.` };
+  const outputLimitError = validateOutputLimits(body.maxTokens, body.defaultMaxTokens);
+  if (outputLimitError) return { error: outputLimitError };
   const validationError = validateCliMetadata(modelId, body.metadata);
   if (validationError) return { error: validationError };
+
+  const settingsError = validateProviderSettings(provider, modelId, (body.metadata as import('@/db/schema/models').ModelMetadata | undefined)?.providerSettings, (body.defaultMaxTokens ?? 4096) as number, anthropicNativeMessagesEnabled(process.env.ANTHROPIC_NATIVE_MESSAGES));
+  if (settingsError) return { error: settingsError };
 
   const registry = getModelRegistry();
 
@@ -160,6 +194,7 @@ export async function updateModel(name: string, body: Record<string, unknown>) {
     ...safeUpdate
   } = body;
 
+  for (const key of ['costPerInputToken', 'costPerOutputToken']) if (body[key] != null && (typeof body[key] !== 'number' || !Number.isFinite(body[key]) || (body[key] as number) < 0)) return { status: 400 as const, error: `${key} must be a finite nonnegative number.` };
   try {
     const registry = getModelRegistry();
     const existing = await registry.getModel(name);
@@ -169,6 +204,11 @@ export async function updateModel(name: string, body: Record<string, unknown>) {
       safeUpdate.metadata === undefined ? existing.metadata : safeUpdate.metadata,
     );
     if (validationError) return { status: 400 as const, error: validationError };
+    const effective = { ...existing, ...safeUpdate } as NewModelConfigEntry;
+    const outputLimitError = validateOutputLimits(effective.maxTokens, effective.defaultMaxTokens);
+    if (outputLimitError) return { status: 400 as const, error: outputLimitError };
+    const settingsError = validateProviderSettings(effective.provider, effective.modelId, effective.metadata?.providerSettings, effective.defaultMaxTokens ?? 4096, anthropicNativeMessagesEnabled(process.env.ANTHROPIC_NATIVE_MESSAGES));
+    if (settingsError) return { status: 400 as const, error: settingsError };
     const model = await registry.updateModel(name, safeUpdate as Partial<NewModelConfigEntry>);
     if (!model) {
       return { status: 404 as const, error: 'Model not found' };

@@ -1,5 +1,6 @@
 'use client';
 
+import { ProviderSettingsFields } from './provider-settings-fields';
 import { Terminal, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { validateScopedExtraArgs } from '../../../src/shared/cli-capabilities';
@@ -76,6 +77,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
     endpoint: model.endpoint || '',
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,
+    defaultMaxTokens: model.defaultMaxTokens ?? Math.min(4096, model.maxTokens),
     priority: model.priority,
     supportsVision: model.supportsVision,
     supportsTools: model.supportsTools,
@@ -99,6 +101,8 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
     customPathOverride: customProvider?.pathOverride || '',
     customApiKeyRef: model.apiKeyRef || '',
   });
+  const [providerSettings, setProviderSettings] = useState(model.metadata?.providerSettings ?? {});
+  const [pricing, setPricing] = useState(model.metadata?.pricing ?? {});
   const [error, setError] = useState('');
   const [discoveredCliModels, setDiscoveredCliModels] = useState<DiscoveredModel[]>([]);
   const [cliTools, setCliTools] = useState<CLITool[]>([]);
@@ -157,6 +161,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
         endpoint: formData.endpoint || undefined,
         contextWindow: formData.contextWindow,
         maxTokens: formData.maxTokens,
+        defaultMaxTokens: formData.defaultMaxTokens,
         priority: formData.priority,
         supportsVision: formData.supportsVision,
         supportsTools: formData.supportsTools,
@@ -250,6 +255,18 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
         }
       }
 
+      if (!isCli) {
+        const supportedSettings = { ...providerSettings };
+        const controls = model.providerControls;
+        if (controls) {
+          if (!controls.reasoning) delete supportedSettings.reasoningEffort;
+          if (!controls.thinkingBudget) delete supportedSettings.thinkingBudget;
+          if (!controls.strictTools) delete supportedSettings.strictTools;
+          if (!controls.cachePolicy) delete supportedSettings.cachePolicy;
+          if (!controls.cachedContent) delete supportedSettings.cachedContent;
+        }
+        payload.metadata = { ...model.metadata, ...(payload.metadata as object), providerSettings: supportedSettings, pricing };
+      }
       await onSave(model.name, payload);
       onClose();
     } catch (err) {
@@ -351,6 +368,10 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
             </div>
           )}
 
+          {!isCli && <label className="block text-sm">Default output limit per request (tokens)
+            <input className="w-full rounded-lg bg-surface-container-high px-3 py-2" type="number" min={1} max={formData.maxTokens} value={formData.defaultMaxTokens} onChange={e => setFormData({ ...formData, defaultMaxTokens: Number(e.target.value) })} />
+          </label>}
+          {!isCli && <ProviderSettingsFields controls={model.providerControls} provider={model.provider} model={model.modelId} settings={providerSettings} pricing={pricing} onSettings={setProviderSettings} onPricing={setPricing} />}
           <div className="flex flex-wrap gap-4">
             <label className="flex items-center gap-2 cursor-pointer">
               <input

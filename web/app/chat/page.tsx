@@ -1,5 +1,7 @@
 'use client';
 
+import { SessionCost } from '@/components/chat/session-cost';
+
 import { PanelRight, PanelRightClose, Paperclip, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import FileViewer from '@/components/chat/file-viewer';
@@ -129,6 +131,8 @@ export default function ChatPage() {
   const [models, setModels] = useState<Array<{ name: string; isDefault: boolean }>>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  /** Root reply text streamed so far for one session/iteration; superseded by chat_response. */
+  const [streaming, setStreaming] = useState<{ sessionId: string; iteration: number; text: string } | null>(null);
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [showSidePanel, setShowSidePanel] = useState(true);
@@ -628,6 +632,7 @@ export default function ChatPage() {
       case 'chat_response': {
         setIsLoading(false);
         setStatusMessage(null);
+        setStreaming(null);
         const meta: MessageMetadata | undefined = data.metadata ? {
           model: data.metadata.model,
           tokens: data.metadata.tokens,
@@ -729,6 +734,7 @@ export default function ChatPage() {
       case 'chat_error':
         setIsLoading(false);
         setStatusMessage(null);
+        setStreaming(null);
         voiceTurnRef.current = false; // failed spoken turn — don't speak the next reply
         // The voice hook unsticks itself from 'thinking' on isLoading's falling edge.
         if (eventSessionId || activeSessionId) {
@@ -1067,6 +1073,15 @@ export default function ChatPage() {
 
   const handleAgentEvent = (data: any, sessionId: string | null) => {
     if (!sessionId) return;
+    if (data.event === 'thought' && data.data?.type === 'text_delta' && typeof data.data.delta === 'string') {
+      const { delta, iteration } = data.data as { delta: string; iteration: number };
+      // Same iteration: append. New iteration: keep the lead-in ("Let me check…")
+      // visible above the continuation until the reply replaces the block.
+      setStreaming((prev) => prev && prev.sessionId === sessionId
+        ? { ...prev, iteration, text: prev.iteration === iteration ? prev.text + delta : `${prev.text.trimEnd()}\n\n${delta}` }
+        : { sessionId, iteration, text: delta });
+      return;
+    }
     // Terminal lifecycle for a tracked agent — no more tool results are
     // coming, so stop any still-spinning tool rows (P1.5). Covers CLI agents
     // whose finalization arrives as an agent_event rather than a swarm event.
@@ -1323,6 +1338,7 @@ export default function ChatPage() {
         updateSessionState(item.id, () => newSessionState());
         setIsLoading(false);
         setStatusMessage(null);
+        setStreaming(null);
       }
     } catch (error) {
       console.error('Failed to create session:', error);
@@ -1624,6 +1640,7 @@ export default function ChatPage() {
       {sessionListError && <div role="status" className="absolute z-20 bottom-2 left-2 rounded border border-warning bg-surface p-3 text-sm">
         Sessions unavailable. {sessionListError} <button className="underline" onClick={() => void loadSessions()}>Retry sessions</button>
       </div>}
+      {activeSessionId && <SessionCost sessionId={activeSessionId} />}
       {activeSessionId && historyErrors[activeSessionId] && (
         <div role="status" className="absolute z-20 top-2 left-1/4 right-4 rounded border border-warning bg-surface p-3 text-sm">
           History unavailable. Previously loaded messages may be stale. {historyErrors[activeSessionId]}
@@ -1666,6 +1683,7 @@ export default function ChatPage() {
           fileChanges={activeState?.fileChanges}
           isLoading={isLoading}
           statusMessage={statusMessage}
+          streamingText={isLoading && streaming?.sessionId === activeSessionId ? streaming.text : null}
           onOpenFile={setOpenFilePath}
         />
 

@@ -1,3 +1,4 @@
+import { normalizeUsage } from './usage';
 import OpenAI from 'openai';
 import type {
   ChatCompletionCreateParams,
@@ -11,7 +12,6 @@ import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus, QuotaStatus } from './interface';
 import { applyAnthropicCacheControl, isAnthropicFamily } from './prompt-cache';
-import { extractCachedTokens } from './usage';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -71,6 +71,7 @@ export class OpenRouterProvider implements ModelProvider {
 
     try {
       const response = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
+      options.accountingResponse?.({ model: response.model ?? options.model, requestId: response.id, usage: normalizeUsage(response.usage) });
       const latencyMs = Date.now() - startTime;
 
       if (!response.choices?.length) {
@@ -83,12 +84,8 @@ export class OpenRouterProvider implements ModelProvider {
       const result: CompletionResult = {
         content: choice.message.content || '',
         finishReason: choice.finish_reason || 'stop',
-        usage: {
-          inputTokens: usage?.prompt_tokens || 0,
-          outputTokens: usage?.completion_tokens || 0,
-          totalTokens: usage?.total_tokens || 0,
-          ...extractCachedTokens(usage),
-        },
+        usage: normalizeUsage(usage),
+        requestId: response.id,
         model: response.model,
         latencyMs,
       };
@@ -152,6 +149,7 @@ export class OpenRouterProvider implements ModelProvider {
       top_p: options.topP,
       stop: options.stopSequences,
       stream: true,
+      stream_options: { include_usage: true },
     };
 
     if (isAnthropicFamily(options.model)) applyAnthropicCacheControl(params.messages, options.model);
@@ -177,6 +175,7 @@ export class OpenRouterProvider implements ModelProvider {
     const toolCallBuffers = new Map<number, { id: string; name: string; arguments: string }>();
 
     for await (const chunk of stream) {
+      if (chunk.usage) yield { usage: normalizeUsage(chunk.usage), requestId: chunk.id, model: chunk.model };
       const delta = chunk.choices[0]?.delta;
 
       if (delta?.content) {

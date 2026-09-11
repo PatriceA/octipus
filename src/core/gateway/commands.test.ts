@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { CommandRegistry, registerBuiltinCommands } from './commands';
 
@@ -213,5 +214,57 @@ describe('CommandRegistry', () => {
       trustLevel: 'user',
     });
     expect(result!.text).toBe('Hello Alice');
+  });
+});
+
+describe('/sessions and /history (TUI resume)', () => {
+  const user = '11111111-2222-4333-8444-555555555555';
+  const ctx = { userId: user, sessionId: 'sess-1', clientType: 'tui', trustLevel: 'user' as const };
+  let registry: CommandRegistry;
+  beforeEach(() => { registry = new CommandRegistry(); registerBuiltinCommands(registry); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  test('/sessions labels a generically titled session with its first question and returns data', async () => {
+    const updatedAt = new Date('2026-09-11T10:00:00Z');
+    vi.spyOn(sessionRepository, 'listByUser').mockResolvedValue([
+      { id: 'aaaaaaaa-0000-4000-8000-000000000000', title: 'tui conversation', channelType: 'tui', messageCount: 4, updatedAt },
+      { id: 'bbbbbbbb-0000-4000-8000-000000000000', title: 'Named one', channelType: 'webchat', messageCount: 1, updatedAt },
+    ] as never);
+    vi.spyOn(messageRepository, 'findBySession').mockResolvedValue([{ content: '  what is   the weather\nin Berlin?' }] as never);
+    const result = await registry.execute('/sessions', ctx);
+    expect(result!.text).toContain(' 1  aaaaaaaa  2026-09-11 10:00    4 msg  what is the weather in Berlin?');
+    expect(result!.text).toContain('Named one');
+    expect(result!.data).toMatchObject([{ id: 'aaaaaaaa-0000-4000-8000-000000000000', title: 'what is the weather in Berlin?' }, { title: 'Named one' }]);
+  });
+
+  test('/history refuses another user\'s session and an unknown one alike', async () => {
+    const findById = vi.spyOn(sessionRepository, 'findById');
+    const getLast = vi.spyOn(messageRepository, 'getLastMessages');
+    findById.mockResolvedValue({ id: 'sess-1', userId: '22222222-2222-4333-8444-555555555555' } as never);
+    expect((await registry.execute('/history', ctx))!.text).toBe('Session not found.');
+    findById.mockResolvedValue(null);
+    expect((await registry.execute('/history', ctx))!.text).toBe('Session not found.');
+    expect(getLast).not.toHaveBeenCalled();
+  });
+
+  test('/history replays user and assistant turns oldest first, skipping tool rows', async () => {
+    const at = (s: number) => new Date(1_700_000_000_000 + s * 1000);
+    vi.spyOn(sessionRepository, 'findById').mockResolvedValue({ id: 'sess-1', userId: user } as never);
+    vi.spyOn(messageRepository, 'getLastMessages').mockResolvedValue([
+      { role: 'assistant', content: 'hi back', createdAt: at(2) },
+      { role: 'tool', content: '{"ok":true}', createdAt: at(1) },
+      { role: 'user', content: 'hello', createdAt: at(0) },
+    ] as never);
+    const result = await registry.execute('/history', ctx);
+    expect(result!.data).toEqual([
+      { role: 'user', content: 'hello', at: at(0).toISOString() },
+      { role: 'assistant', content: 'hi back', at: at(2).toISOString() },
+    ]);
+    expect(result!.text).toBe('❯ hello\n\n  hi back');
+  });
+
+  test('/history without a session says so', async () => {
+    const result = await registry.execute('/history', { ...ctx, sessionId: undefined });
+    expect(result!.text).toBe('No active session.');
   });
 });

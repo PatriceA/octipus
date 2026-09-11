@@ -157,6 +157,7 @@ export async function directResponse(
 
     const result = await client.complete({
       model: modelName,
+      modelConfigName: resolvedModel?.name,
       messages: [
         { role: 'system', content: systemContent, timestamp: new Date() },
         ...historyMessages,
@@ -165,6 +166,7 @@ export async function directResponse(
       maxTokens: casualCap,
       extraBody: modelMeta?.extraBody,
       userId,
+      sessionId,
     });
 
     const tokens = result.usage?.totalTokens || 0;

@@ -208,6 +208,8 @@ export const agentConfigSchema = z.object({
   maxIterations: z.number().min(1).max(1000).default(50),
   contextWindowSize: z.number().min(1000).default(32000),
   maxTokenBudget: z.number().min(0).default(100000), // 0 = unlimited
+  /** Stream the root agent's text to chat clients as it is produced. Off = whole reply at the end. */
+  streaming: z.boolean().default(true),
   /**
    * Root-agent prompt tier. 'auto' (default) re-derives it every turn from the
    * current default model's parameter count, so swapping to a smaller model

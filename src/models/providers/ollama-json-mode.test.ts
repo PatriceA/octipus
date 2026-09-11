@@ -79,4 +79,26 @@ describe('OllamaProvider JSON mode', () => {
     // default and every cold-load risks the timeout loop we fixed.
     expect(calls[0].body.keep_alive).toBe('10m');
   });
+
+  test('native completion observes usage before a missing message is rejected', async () => {
+    globalThis.fetch = (() => Promise.resolve(Response.json({
+      model: 'qwen-wire:7b',
+      done: true,
+      prompt_eval_count: 8,
+      eval_count: 5,
+    }))) as typeof fetch;
+    const provider = new OllamaProvider('http://localhost:11434');
+    let observed: unknown;
+
+    await expect(provider.complete({
+      ...baseOpts,
+      responseFormat: { type: 'json_object' },
+      accountingResponse: (value) => { observed = value; },
+    })).rejects.toThrow('no message');
+
+    expect(observed).toMatchObject({
+      model: 'qwen-wire:7b',
+      usage: { inputTokens: 8, outputTokens: 5, totalTokens: 13, available: true },
+    });
+  });
 });

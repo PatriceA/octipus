@@ -1,3 +1,4 @@
+vi.mock('./cost-tracker', () => ({ getCostTracker: () => ({ logUsageWithCost: vi.fn(async () => ({})) }) }));
 import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 
@@ -353,7 +354,7 @@ describeUnit('LiteLLMClient — completeViaProxy', () => {
     const client = new LiteLLMClient();
     const res = await client.completeViaProxy({ model: 'gpt-4', messages: [userMsg('hi')] });
     expect(res.content).toBe('hello');
-    expect(res.usage).toEqual({ inputTokens: 10, outputTokens: 5, totalTokens: 15 });
+    expect(res.usage).toMatchObject({ inputTokens: 10, outputTokens: 5, totalTokens: 15 });
     expect(res.finishReason).toBe('stop');
     expect(res.model).toBe('gpt-4');
     expect(typeof res.latencyMs).toBe('number');
@@ -785,7 +786,7 @@ describeUnit('LiteLLMClient — completeVision', () => {
       mimeType: 'image/png',
     });
     expect(res.content).toBe('a cat');
-    expect(res.usage).toEqual({ inputTokens: 3, outputTokens: 2, totalTokens: 5 });
+    expect(res.usage).toMatchObject({ inputTokens: 3, outputTokens: 2, totalTokens: 5 });
     const userContent = captured.messages[0].content;
     expect(userContent[0]).toEqual({ type: 'text', text: 'what is this' });
     expect(userContent[1].image_url.url).toBe('data:image/png;base64,AAA');

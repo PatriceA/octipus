@@ -28,7 +28,9 @@ export class ActivityLine implements Component {
   /** Live agent thinking indicator: { role, iter } when a worker's reasoning
    *  loop is mid-iteration but hasn't fired a tool call yet. Cleared on
    *  agent.end / tool. */
-  private thinking: { role: string; iter: number } | null = null;
+  private thinking: { role: string; iter: number; model?: string } | null = null;
+  /** When the current thinking run started; kept across iteration ticks so the elapsed counter spans the turn. */
+  private thinkingSince = 0;
 
   constructor(private readonly tui: TUI) {}
 
@@ -37,7 +39,8 @@ export class ActivityLine implements Component {
    * `agent.iteration` events. Pass `null` to clear (used when the agent
    * completes or when a tool call takes over the activity line).
    */
-  setThinking(state: { role: string; iter: number } | null): void {
+  setThinking(state: { role: string; iter: number; model?: string } | null): void {
+    if (state && !this.thinking) this.thinkingSince = Date.now();
     this.thinking = state;
     // A tool call always wins visually — when both are active, the tool
     // line shows. Only animate when there's no tool to display.
@@ -93,9 +96,11 @@ export class ActivityLine implements Component {
     }
     if (this.thinking) {
       const symbol = SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length];
+      const elapsed = Math.round((Date.now() - this.thinkingSince) / 1000);
+      const model = this.thinking.model ? ` · ${this.thinking.model}` : '';
       const line =
         `${chalk.hex(palette.accent)(symbol)} ` +
-        `${chalk.hex(palette.dim)(`thinking · ${this.thinking.role} · iter ${this.thinking.iter}`)}`;
+        `${chalk.hex(palette.dim)(`thinking · ${this.thinking.role} · iter ${this.thinking.iter} · ${elapsed}s${model}`)}`;
       return [truncateToWidth(line, width)];
     }
     return [];

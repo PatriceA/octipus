@@ -1,3 +1,5 @@
+import { recordProviderUsage } from './instrumented';
+import { normalizeUsage } from './usage';
 import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
 import { coreLogger, modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
@@ -75,10 +77,11 @@ export class VoyageProvider implements ModelProvider {
       throw classified;
     }
 
-    const data = await response.json() as { data: Array<{ embedding: number[] }> };
+    const data = await response.json() as { data: Array<{ embedding: number[] }>; usage?: { total_tokens?: number } };
     if (!Array.isArray(data?.data)) {
       throw classifyError(new Error('Voyage returned no embeddings data'), this.name);
     }
+    await recordProviderUsage({ model, messages: [], requestType: 'embedding' }, this.name, { model, usage: normalizeUsage(data.usage ? { prompt_tokens: data.usage.total_tokens, completion_tokens: 0 } : undefined) });
     return data.data.map(d => d.embedding);
   }
 

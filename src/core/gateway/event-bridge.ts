@@ -53,7 +53,24 @@ export function connectEventBridge(hub: GatewayHub): () => void {
       // of-thought) stay internal — surfacing them as gateway events
       // would explode bandwidth and leak reasoning.
       if (event.type === 'thought') {
-        const data = event.data as { type?: string; iteration?: number; reason?: string; blockedForMs?: number } | undefined;
+        const data = event.data as { type?: string; iteration?: number; reason?: string; blockedForMs?: number; delta?: string } | undefined;
+        if (data?.type === 'text_delta' && typeof data.delta === 'string') {
+          // Scoped to the owner and session: the hub filters by userId, the
+          // TUI by envelope sessionId.
+          const ctx = agentManager.get(event.agentId)?.getContext();
+          // An unscoped delta would pass the hub's owner filter and every TUI's
+          // session filter — a trailing chunk from an already-removed agent is
+          // dropped, not broadcast.
+          if (!ctx) return;
+          hub.publishEvent({
+            type: 'chat.delta',
+            source: `agent:${event.agentId}`,
+            userId: ctx.userId,
+            sessionId: ctx.sessionId,
+            payload: { agentId: event.agentId, delta: data.delta, iteration: data.iteration ?? 0 },
+          });
+          return;
+        }
         if (data?.type === 'iteration_update' && typeof data.iteration === 'number') {
           hub.publishEvent({
             type: 'agent.iteration',

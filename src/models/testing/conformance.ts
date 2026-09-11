@@ -1,3 +1,4 @@
+import { getCapabilitiesForModel } from '../capabilities';
 /**
  * Model conformance test suite.
  *
@@ -94,9 +95,9 @@ function msg(role: 'system' | 'user' | 'assistant' | 'tool', content: string, ex
  */
 /**
  * Providers that do NOT support responseFormat: { type: 'json_object' }.
- * Anthropic's OpenAI-compat endpoint ignores/rejects it.
+ * Native Claude now supports JSON Schema output.
  */
-const NO_STRUCTURED_OUTPUT_PROVIDERS = new Set(['anthropic']);
+const NO_STRUCTURED_OUTPUT_PROVIDERS = new Set<string>();
 
 export function capabilitiesFromModel(model: ModelConfigEntry): ModelCapabilities {
   const topics = model.topics ?? [];
@@ -110,7 +111,7 @@ export function capabilitiesFromModel(model: ModelConfigEntry): ModelCapabilitie
     multiturn: isChatModel,
     systemRole: isChatModel,
     tools: model.supportsTools && isChatModel,
-    structuredOutput: model.supportsTools && isChatModel && !NO_STRUCTURED_OUTPUT_PROVIDERS.has(model.provider),
+    structuredOutput: model.supportsTools && isChatModel && !NO_STRUCTURED_OUTPUT_PROVIDERS.has(model.provider) && (model.provider !== 'anthropic' || getCapabilitiesForModel(model).structuredOutput),
     media: model.supportsVision,
     embeddings: isEmbeddingModel,
   };
@@ -307,8 +308,8 @@ const testCases: ConformanceTestCase[] = [
     requiredCapability: 'structuredOutput',
     async run(ctx) {
       const result = await ctx.complete({
-        messages: [msg('user', PROMPTS.structuredOutput)],
-        responseFormat: { type: 'json_object' },
+        messages: [msg('user', ctx.model.provider === 'anthropic' ? 'Return an object with a colors array containing three color names.' : PROMPTS.structuredOutput)],
+        responseFormat: ctx.model.provider === 'anthropic' ? { type: 'json_schema', json_schema: { name: 'result', schema: { type: 'object', properties: { colors: { type: 'array', items: { type: 'string' } } }, required: ['colors'], additionalProperties: false } } } : { type: 'json_object' },
         temperature: 0,
         maxTokens: 256,
       });
@@ -469,7 +470,7 @@ export async function runConformanceTests(
     // Models with direct API keys have provider='openai'/'anthropic'/etc. → call directly.
     const isLiteLLMRouted = model.provider === 'litellm';
     const complete: TestContext['complete'] = async (opts) => {
-      const fullOpts = { ...opts, model: model.modelId, extraBody, userId: options?.userId };
+      const fullOpts = { ...opts, model: model.modelId, modelConfigName: model.name, extraBody, userId: options?.userId };
       if (isLiteLLMRouted) {
         return client.completeViaProxy(fullOpts);
       }

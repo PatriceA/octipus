@@ -1,3 +1,4 @@
+import { normalizeUsage } from '../usage';
 import OpenAI from 'openai';
 import type {
   ChatCompletionCreateParams,
@@ -11,7 +12,6 @@ import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from '../interface';
 import { BaseCustomProvider, type ResolvedCustomConfig } from './base-custom-provider';
-import { extractCachedTokens } from '../usage';
 
 /**
  * Custom OpenAI-compatible provider.
@@ -71,6 +71,7 @@ export class CustomOpenAICompatProvider extends BaseCustomProvider implements Mo
 
     try {
       const response = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
+      options.accountingResponse?.({ model: response.model ?? options.model, requestId: response.id, usage: normalizeUsage(response.usage) });
       const latencyMs = Date.now() - startTime;
       const choice = response.choices?.[0];
       if (!choice) {
@@ -83,12 +84,8 @@ export class CustomOpenAICompatProvider extends BaseCustomProvider implements Mo
       const result: CompletionResult = {
         content: choice.message.content || '',
         finishReason: choice.finish_reason || 'stop',
-        usage: {
-          inputTokens: response.usage?.prompt_tokens || 0,
-          outputTokens: response.usage?.completion_tokens || 0,
-          totalTokens: response.usage?.total_tokens || 0,
-          ...extractCachedTokens(response.usage),
-        },
+        usage: normalizeUsage(response.usage),
+        requestId: response.id,
         model: response.model || cfg.model?.modelId || options.model,
         latencyMs,
       };
@@ -125,6 +122,7 @@ export class CustomOpenAICompatProvider extends BaseCustomProvider implements Mo
       top_p: options.topP,
       stop: options.stopSequences,
       stream: true,
+      stream_options: { include_usage: true },
     };
 
     if (options.tools?.length) {
@@ -136,41 +134,58 @@ export class CustomOpenAICompatProvider extends BaseCustomProvider implements Mo
 
     modelLogger.debug({ model: params.model, provider: this.name }, 'Starting streaming completion via custom-openai');
 
-    let stream;
-    try {
-      stream = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
-    } catch (err) {
-      throw classifyError(err, this.name);
-    }
     const toolCallBuffers = new Map<number, { id: string; name: string; arguments: string }>();
+    let activeParams = params;
+    let retriedWithoutUsage = false;
+    let receivedUpstreamChunk = false;
 
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta;
+    while (true) {
+      try {
+        const stream = await client.chat.completions.create(activeParams, options.signal ? { signal: options.signal } : undefined);
+        for await (const chunk of stream) {
+          // Once an upstream chunk arrives, retrying could duplicate output even
+          // if that chunk itself carries no user-visible delta.
+          receivedUpstreamChunk = true;
+          if (chunk.usage) yield { usage: normalizeUsage(chunk.usage), requestId: chunk.id, model: chunk.model };
+          const delta = chunk.choices[0]?.delta;
 
-      if (delta?.content) yield { content: delta.content };
+          if (delta?.content) yield { content: delta.content };
 
-      if (delta?.tool_calls) {
-        for (const tc of delta.tool_calls) {
-          if (!toolCallBuffers.has(tc.index)) {
-            toolCallBuffers.set(tc.index, { id: tc.id || '', name: '', arguments: '' });
+          if (delta?.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              if (!toolCallBuffers.has(tc.index)) {
+                toolCallBuffers.set(tc.index, { id: tc.id || '', name: '', arguments: '' });
+              }
+              const buffer = toolCallBuffers.get(tc.index)!;
+              if (tc.id) buffer.id = tc.id;
+              if (tc.function?.name) buffer.name = tc.function.name;
+              if (tc.function?.arguments) buffer.arguments += tc.function.arguments;
+
+              yield {
+                toolCallDelta: {
+                  id: buffer.id,
+                  name: tc.function?.name,
+                  arguments: tc.function?.arguments,
+                },
+              };
+            }
           }
-          const buffer = toolCallBuffers.get(tc.index)!;
-          if (tc.id) buffer.id = tc.id;
-          if (tc.function?.name) buffer.name = tc.function.name;
-          if (tc.function?.arguments) buffer.arguments += tc.function.arguments;
 
-          yield {
-            toolCallDelta: {
-              id: buffer.id,
-              name: tc.function?.name,
-              arguments: tc.function?.arguments,
-            },
-          };
+          if (chunk.choices[0]?.finish_reason) {
+            yield { finishReason: chunk.choices[0].finish_reason };
+          }
         }
-      }
-
-      if (chunk.choices[0]?.finish_reason) {
-        yield { finishReason: chunk.choices[0].finish_reason };
+        return;
+      } catch (err) {
+        const requestedUsage = (activeParams.stream_options as { include_usage?: boolean } | undefined)?.include_usage === true;
+        if (!retriedWithoutUsage && !receivedUpstreamChunk && requestedUsage && isUnsupportedStreamUsageError(err)) {
+          retriedWithoutUsage = true;
+          activeParams = { ...activeParams };
+          delete activeParams.stream_options;
+          modelLogger.warn({ model: params.model, provider: this.name }, 'Upstream rejected stream usage; retrying without stream_options');
+          continue;
+        }
+        throw classifyError(err, this.name);
       }
     }
   }
@@ -244,4 +259,20 @@ export class CustomOpenAICompatProvider extends BaseCustomProvider implements Mo
       };
     });
   }
+}
+
+/** True only for a 400 that identifies the optional streaming-usage field. */
+export function isUnsupportedStreamUsageError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { status?: unknown; message?: unknown; error?: unknown; body?: unknown };
+  if (candidate.status !== 400) return false;
+  const detail = [candidate.message, candidate.error, candidate.body]
+    .map((value) => typeof value === 'string' ? value : safeStringify(value))
+    .join(' ');
+  return /stream_options|include_usage/i.test(detail);
+}
+
+function safeStringify(value: unknown): string {
+  if (value == null) return '';
+  try { return JSON.stringify(value); } catch { return String(value); }
 }

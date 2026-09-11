@@ -1,3 +1,5 @@
+import { recordProviderUsage } from './instrumented';
+import { normalizeUsage } from './usage';
 import OpenAI from 'openai';
 import type {
   ChatCompletionCreateParams,
@@ -13,20 +15,11 @@ import { sanitizeSchemaForGemini } from './custom/gemini-envelope';
 import { sanitizeGeminiHistory } from './gemini-history';
 import { fetchWithRetryAfter, withTimeoutSignal } from './http-retry';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
-import { extractCachedTokens } from './usage';
 
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
 
-/**
- * The Gemini flash tier burns thinking tokens before emitting the tool call; a
- * 4096 cap lets thinking starve it. The OpenAI-compat endpoint does not expose
- * thinkingConfig, so raise the ceiling instead (documented tradeoff — item 7).
- */
-const GEMINI_FLASH_MIN_MAX_TOKENS = 8192;
+// Thinking is controlled by reasoning_effort or extra_body.google.thinking_config.
 
-function isGeminiFlash(modelId: string): boolean {
-  return /gemini-[\d.]*-?flash/i.test(modelId) || /flash/i.test(modelId);
-}
 
 /** Run every tool's parameters through the shared Gemini schema sanitizer (G2). */
 export function sanitizeToolsForGemini(tools: ChatCompletionTool[]): ChatCompletionTool[] {
@@ -68,12 +61,9 @@ export class GeminiProvider implements ModelProvider {
     };
 
     if (options.temperature != null) body.temperature = options.temperature;
-    // Raise the flash-tier ceiling so thinking can't starve the tool call
-    // (the compat endpoint doesn't accept thinkingConfig — item 7).
+    // Honor the configured ceiling; reasoning effort is independently configurable.
     if (options.maxTokens != null) {
-      body.max_tokens = isGeminiFlash(options.model)
-        ? Math.max(options.maxTokens, GEMINI_FLASH_MIN_MAX_TOKENS)
-        : options.maxTokens;
+      body.max_tokens = options.maxTokens;
     }
     if (options.topP != null) body.top_p = options.topP;
     if (options.stopSequences?.length) body.stop = options.stopSequences;
@@ -121,6 +111,7 @@ export class GeminiProvider implements ModelProvider {
     }
 
     const data = await res.json() as any;
+    options.accountingResponse?.({ model: data.model ?? options.model, requestId: data.id, usage: normalizeUsage(data.usage) });
     const latencyMs = Date.now() - startTime;
     const choice = data.choices?.[0];
     if (!choice) throw classifyError(new Error('Gemini returned no choices'), 'gemini');
@@ -128,12 +119,8 @@ export class GeminiProvider implements ModelProvider {
     const result: CompletionResult = {
       content: choice.message?.content || '',
       finishReason: choice.finish_reason || 'stop',
-      usage: {
-        inputTokens: data.usage?.prompt_tokens || 0,
-        outputTokens: data.usage?.completion_tokens || 0,
-        totalTokens: data.usage?.total_tokens || 0,
-        ...extractCachedTokens(data.usage),
-      },
+      usage: normalizeUsage(data.usage),
+      requestId: data.id,
       model: data.model || options.model,
       latencyMs,
       // Stash raw assistant message so thought_signature survives the next
@@ -178,7 +165,7 @@ export class GeminiProvider implements ModelProvider {
           tool_call_id: msg.toolCallId || 'unknown',
         });
       } else if (msg.role === 'assistant' && msg.toolCalls?.length) {
-        if (msg.providerRaw) {
+        if (msg.providerRaw?.role === 'assistant' && Array.isArray(msg.providerRaw.tool_calls)) {
           result.push(msg.providerRaw);
         } else {
           // Fallback: reconstruct. Missing thought_signature — Gemini 3 may
@@ -224,13 +211,12 @@ export class GeminiProvider implements ModelProvider {
       model: options.model,
       messages: this.formatMessagesRaw(sanitizeGeminiHistory(options.messages)) as ChatCompletionMessageParam[],
       stream: true,
+      stream_options: { include_usage: true },
     };
 
     if (options.temperature != null) params.temperature = options.temperature;
     if (options.maxTokens != null) {
-      params.max_tokens = isGeminiFlash(options.model)
-        ? Math.max(options.maxTokens, GEMINI_FLASH_MIN_MAX_TOKENS)
-        : options.maxTokens;
+      params.max_tokens = options.maxTokens;
     }
     if (options.topP != null) params.top_p = options.topP;
     if (options.stopSequences?.length) params.stop = options.stopSequences;
@@ -258,6 +244,7 @@ export class GeminiProvider implements ModelProvider {
     const rawToolCalls: Array<Record<string, unknown>> = [];
 
     for await (const chunk of stream) {
+      if (chunk.usage) yield { usage: normalizeUsage(chunk.usage), requestId: chunk.id, model: chunk.model };
       const delta = chunk.choices[0]?.delta;
 
       if (delta?.content) {
@@ -338,6 +325,7 @@ export class GeminiProvider implements ModelProvider {
       encoding_format: 'float',
     });
 
+    await recordProviderUsage({ model, messages: [], requestType: 'embedding' }, this.name, { model, usage: normalizeUsage(response.usage) });
     return response.data.map((d) => d.embedding);
   }
 

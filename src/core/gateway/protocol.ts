@@ -87,6 +87,8 @@ export type GatewayEventType =
   // Chat
   | 'chat.response'
   | 'chat.message'
+  // Streamed slice of the root agent's reply text; the full text follows as chat.response.
+  | 'chat.delta'
   // Approval / permission flows
   | 'agent.approval_required'
   | 'rootAgent.status'
@@ -172,6 +174,8 @@ export const CommandSchema = z.object({
   type: z.literal('command'),
   name: z.string().min(1).max(50),
   args: z.record(z.string(), z.string()).optional(),
+  /** Session to run against. The connection adopts it, so a client can resume a session before its first chat.send. */
+  sessionId: z.string().uuid().optional(),
 });
 
 export const SubscribeSchema = z.object({
@@ -291,6 +295,8 @@ export interface CommandResultMessage {
   name: string;
   result: unknown;
   error?: string;
+  /** Structured payload for clients that render more than text (session lists, transcripts). */
+  data?: unknown;
 }
 
 export interface ErrorMessage {

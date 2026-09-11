@@ -1,3 +1,5 @@
+import { recordProviderUsage } from './instrumented';
+import { normalizeUsage } from './usage';
 import OpenAI from 'openai';
 import type {
   ChatCompletionCreateParams,
@@ -184,6 +186,7 @@ export class OllamaProvider implements ModelProvider {
 
     try {
       const response = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
+      options.accountingResponse?.({ model: response.model ?? options.model, requestId: response.id, usage: normalizeUsage(response.usage) });
       const latencyMs = Date.now() - startTime;
       if (!response.choices?.length) {
         throw new Error(`Provider returned empty response (no choices) for model ${params.model || options.model}`);
@@ -204,11 +207,8 @@ export class OllamaProvider implements ModelProvider {
       const result: CompletionResult = {
         content,
         finishReason: choice.finish_reason || 'stop',
-        usage: {
-          inputTokens: response.usage?.prompt_tokens || 0,
-          outputTokens: response.usage?.completion_tokens || 0,
-          totalTokens: response.usage?.total_tokens || 0,
-        },
+        usage: normalizeUsage(response.usage),
+        requestId: response.id,
         model: response.model,
         latencyMs,
       };
@@ -331,6 +331,7 @@ export class OllamaProvider implements ModelProvider {
     }
 
     let data: {
+      model?: string;
       message?: { role: string; content: string; tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }> };
       done: boolean;
       done_reason?: string;
@@ -342,6 +343,16 @@ export class OllamaProvider implements ModelProvider {
     } catch (err) {
       throw classifyError(new Error(`Ollama native API returned invalid JSON: ${(err as Error).message}`), 'ollama');
     }
+    const responseModel = data.model || options.model;
+    const usage: CompletionResult['usage'] = {
+      available: data.prompt_eval_count != null && data.eval_count != null,
+      inputTokens: data.prompt_eval_count || 0,
+      outputTokens: data.eval_count || 0,
+      totalTokens: (data.prompt_eval_count || 0) + (data.eval_count || 0),
+    };
+    // Observe native usage before interpreting the message/tool payload. Ollama
+    // has already completed the generation at this point.
+    options.accountingResponse?.({ model: responseModel, usage });
     if (!data?.message) {
       throw classifyError(new Error('Ollama native API returned no message'), 'ollama');
     }
@@ -351,12 +362,8 @@ export class OllamaProvider implements ModelProvider {
     const result: CompletionResult = {
       content: data.message.content || '',
       finishReason: data.done_reason || 'stop',
-      usage: {
-        inputTokens: data.prompt_eval_count || 0,
-        outputTokens: data.eval_count || 0,
-        totalTokens: (data.prompt_eval_count || 0) + (data.eval_count || 0),
-      },
-      model: options.model,
+      usage,
+      model: responseModel,
       latencyMs,
     };
 
@@ -406,7 +413,7 @@ export class OllamaProvider implements ModelProvider {
           };
         }
       }
-      yield { finishReason: result.finishReason };
+      yield { finishReason: result.finishReason, usage: result.usage, model: result.model, requestId: result.requestId };
       return;
     }
 
@@ -420,6 +427,7 @@ export class OllamaProvider implements ModelProvider {
       top_p: options.topP,
       stop: options.stopSequences,
       stream: true,
+      stream_options: { include_usage: true },
     };
     this.applyKeepAlive(params);
 
@@ -445,6 +453,7 @@ export class OllamaProvider implements ModelProvider {
     const toolCallBuffers = new Map<number, { id: string; name: string; arguments: string }>();
 
     for await (const chunk of stream) {
+      if (chunk.usage) yield { usage: normalizeUsage(chunk.usage), requestId: chunk.id, model: chunk.model };
       const delta = chunk.choices[0]?.delta;
 
       // Do NOT promote 'reasoning' deltas into content — mirrors complete()'s
@@ -498,6 +507,7 @@ export class OllamaProvider implements ModelProvider {
       encoding_format: 'float',
     });
 
+    await recordProviderUsage({ model, messages: [], requestType: 'embedding' }, this.name, { model, usage: normalizeUsage(response.usage) });
     return response.data.map((d) => d.embedding);
   }
 

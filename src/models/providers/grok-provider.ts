@@ -1,3 +1,4 @@
+import { normalizeUsage } from './usage';
 import OpenAI from 'openai';
 import type {
   ChatCompletionCreateParams,
@@ -10,7 +11,7 @@ import { repairTruncatedJson } from '@/utils/json-repair';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
-import { cacheAffinityKey, extractCachedTokens } from './usage';
+import { cacheAffinityKey } from './usage';
 
 const GROK_BASE_URL = 'https://api.x.ai/v1';
 
@@ -23,7 +24,7 @@ function grokReqOpts(
 ): { signal?: AbortSignal; headers?: Record<string, string> } {
   const reqOpts: { signal?: AbortSignal; headers?: Record<string, string> } = {};
   if (options.signal) reqOpts.signal = options.signal;
-  const convId = cacheAffinityKey(options.sessionId, options.userId);
+  const convId = options.cachePolicy === 'off' ? undefined : cacheAffinityKey(options.sessionId, options.userId);
   if (convId) reqOpts.headers = { 'x-grok-conv-id': convId };
   return reqOpts;
 }
@@ -79,6 +80,7 @@ export class GrokProvider implements ModelProvider {
 
     try {
       const response = await client.chat.completions.create(params, reqOpts);
+      options.accountingResponse?.({ model: response.model ?? options.model, requestId: response.id, usage: normalizeUsage(response.usage) });
       const latencyMs = Date.now() - startTime;
       if (!response.choices?.length) {
         throw classifyError(new Error(`Provider returned empty response (no choices) for model ${params.model || options.model}`), 'grok');
@@ -88,12 +90,8 @@ export class GrokProvider implements ModelProvider {
       const result: CompletionResult = {
         content: choice.message.content || '',
         finishReason: choice.finish_reason || 'stop',
-        usage: {
-          inputTokens: response.usage?.prompt_tokens || 0,
-          outputTokens: response.usage?.completion_tokens || 0,
-          totalTokens: response.usage?.total_tokens || 0,
-          ...extractCachedTokens(response.usage),
-        },
+        usage: normalizeUsage(response.usage),
+        requestId: response.id,
         model: response.model,
         latencyMs,
       };
@@ -160,6 +158,7 @@ export class GrokProvider implements ModelProvider {
       top_p: options.topP,
       stop: options.stopSequences,
       stream: true,
+      stream_options: { include_usage: true },
     };
 
     if (options.tools?.length) {
@@ -183,6 +182,7 @@ export class GrokProvider implements ModelProvider {
     const toolCallBuffers = new Map<number, { id: string; name: string; arguments: string }>();
 
     for await (const chunk of stream) {
+      if (chunk.usage) yield { usage: normalizeUsage(chunk.usage), requestId: chunk.id, model: chunk.model };
       const delta = chunk.choices[0]?.delta;
 
       if (delta?.content) {

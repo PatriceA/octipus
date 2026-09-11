@@ -7,11 +7,14 @@ import { classifyError } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
 import { transformMessagesForProvider } from '@/models/message-transform';
 import { parseToolCallArguments } from '@/models/tool-call-args';
+import { anthropicNativeMessagesEnabled } from '@/shared/provider-settings';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import {
+  anthropicAccountingResponse,
   buildCachedSystem,
   clampAnthropicTemperature,
+  configureAnthropicBody,
   parseAnthropicResponse,
   parseAnthropicSseStream,
   toAnthropicMessages,
@@ -19,6 +22,7 @@ import {
 } from './custom/anthropic-compat-provider';
 import { createIdleAbort, fetchWithRetryAfter, withTimeoutSignal } from './http-retry';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
+import { normalizeUsage } from './usage';
 
 const ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1/';
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -26,14 +30,11 @@ const ANTHROPIC_VERSION = '2023-06-01';
 /**
  * Opt-in flag (Phase A2) to route this provider through the NATIVE
  * `/v1/messages` endpoint instead of the OpenAI-compat `/v1/chat/completions`
- * one. The native path supports `cache_control` prompt caching (the compat
- * layer strips it); the compat path stays the default until failover parity is
- * proven on the native path (see the follow-ups plan). Default OFF — set
- * ANTHROPIC_NATIVE_MESSAGES=1 to enable and A/B it.
+ * one. Native Messages is the default, including prompt caching and structured
+ * outputs. ANTHROPIC_NATIVE_MESSAGES=0 is an explicit compatibility rollback.
  */
 function nativeMessagesEnabled(): boolean {
-  const v = process.env.ANTHROPIC_NATIVE_MESSAGES;
-  return v === '1' || v === 'true';
+  return anthropicNativeMessagesEnabled(process.env.ANTHROPIC_NATIVE_MESSAGES);
 }
 
 /**
@@ -94,6 +95,7 @@ export class AnthropicProvider implements ModelProvider {
 
     try {
       const response = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
+      options.accountingResponse?.({ model: response.model ?? options.model, requestId: response.id, usage: normalizeUsage(response.usage) });
       const latencyMs = Date.now() - startTime;
       if (!response.choices?.length) {
         throw classifyError(new Error(`Provider returned empty response (no choices) for model ${params.model || options.model}`), 'anthropic');
@@ -103,11 +105,8 @@ export class AnthropicProvider implements ModelProvider {
       const result: CompletionResult = {
         content: choice.message.content || '',
         finishReason: choice.finish_reason || 'stop',
-        usage: {
-          inputTokens: response.usage?.prompt_tokens || 0,
-          outputTokens: response.usage?.completion_tokens || 0,
-          totalTokens: response.usage?.total_tokens || 0,
-        },
+        usage: normalizeUsage(response.usage),
+        requestId: response.id,
         model: response.model,
         latencyMs,
       };
@@ -161,6 +160,7 @@ export class AnthropicProvider implements ModelProvider {
       // response_format deliberately NOT sent — ignored by the compat layer
       // (see complete()).
       stream: true,
+      stream_options: { include_usage: true },
     };
 
     if (options.tools?.length) {
@@ -185,6 +185,7 @@ export class AnthropicProvider implements ModelProvider {
     const toolCallBuffers = new Map<number, { id: string; name: string; arguments: string }>();
 
     for await (const chunk of stream) {
+      if (chunk.usage) yield { usage: normalizeUsage(chunk.usage), requestId: chunk.id, model: chunk.model };
       const delta = chunk.choices[0]?.delta;
 
       if (delta?.content) {
@@ -235,7 +236,7 @@ export class AnthropicProvider implements ModelProvider {
       max_tokens: options.maxTokens || 4096,
       stream,
     };
-    if (system) body.system = buildCachedSystem(system, options.model);
+    if (system) body.system = options.cachePolicy === 'off' ? system : buildCachedSystem(system, options.model);
     if (options.temperature != null) body.temperature = clampAnthropicTemperature(options.temperature);
     if (options.topP != null) body.top_p = options.topP;
     if (options.stopSequences?.length) body.stop_sequences = options.stopSequences;
@@ -248,13 +249,8 @@ export class AnthropicProvider implements ModelProvider {
         : options.toolChoice === 'none' ? { type: 'none' }
         : { type: 'auto' };
     }
-    // NOTE: options.responseFormat is intentionally NOT forwarded — Anthropic's
-    // native /v1/messages has no response_format field (structured output is via
-    // tools/prefill, not a JSON mode). The compat endpoint accepts it; the native
-    // path can't, so a json_object request degrades to prose here. B1's schema
-    // enforcement validates in-app and doesn't depend on this, but callers that
-    // rely on provider JSON mode must keep the flag off.
     if (options.extraBody) Object.assign(body, options.extraBody);
+    configureAnthropicBody(body, options);
     return body;
   }
 
@@ -290,6 +286,9 @@ export class AnthropicProvider implements ModelProvider {
       throw classifyError({ status: res.status, message: errText.slice(0, 500) || `HTTP ${res.status}` }, 'anthropic');
     }
     const data = await res.json();
+    // Account from the decoded wire envelope before semantic content parsing,
+    // which can still reject malformed tool/content blocks.
+    options.accountingResponse?.(anthropicAccountingResponse(data, options.model));
     return parseAnthropicResponse(data, options.model, Date.now() - startTime);
   }
 

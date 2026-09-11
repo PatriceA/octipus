@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, test, vi } from 'vitest';
 import { ClassifiedError, FailoverReason } from '@/core/errors/classification';
 import { OpenAIProvider } from './openai-provider';
 import { AnthropicProvider } from './anthropic-provider';
@@ -98,6 +98,8 @@ describe('OpenAIProvider classified errors', () => {
 // ── Anthropic Provider ───────────────────────────────────────────────
 
 describe('AnthropicProvider classified errors', () => {
+  beforeEach(() => vi.stubEnv('ANTHROPIC_NATIVE_MESSAGES', '0'));
+  afterEach(() => vi.unstubAllEnvs());
   const cases: Array<{ name: string; err: SdkError; reason: FailoverReason }> = [
     { name: '429 rate limit', err: { status: 429, message: 'Rate limit exceeded' }, reason: FailoverReason.RATE_LIMIT },
     { name: '401 auth failed', err: { status: 401, message: 'Invalid API key' }, reason: FailoverReason.AUTH_FAILED },

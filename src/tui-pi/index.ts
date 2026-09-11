@@ -1,11 +1,10 @@
 /**
  * Phase 1 entry for the pi-tui-based Octipus shell.
  *
- *   npx tsx src/tui-pi/index.ts [--project /path | /path]
+ *   npx tsx src/tui-pi/index.ts [--project /path | /path] [--session <id>]
  *
  * Builds the runtime, mounts OctipusTuiApp, connects to the gateway.
- * Once Phase 8 lands, `bin/octi tui` and `package.json#scripts.tui`
- * point here and the old src/tui/ tree is deleted.
+ * `bin/octi tui` and `package.json#scripts.tui` point here.
  */
 import { resolve } from 'node:path';
 import { OctipusTuiApp } from './app';
@@ -14,6 +13,8 @@ import { createRuntime } from './runtime';
 export interface LaunchOptions {
   gatewayUrl?: string;
   projectPath?: string;
+  /** Resume an existing session instead of starting a blank one (`--session <id>`). */
+  sessionId?: string;
 }
 
 export async function launchOctipusTui(options: LaunchOptions = {}): Promise<void> {
@@ -24,6 +25,7 @@ export async function launchOctipusTui(options: LaunchOptions = {}): Promise<voi
   const app = new OctipusTuiApp(runtime.tui, {
     gatewayUrl: runtime.gatewayUrl,
     projectPath: options.projectPath,
+    sessionId: options.sessionId,
     onShutdown: runtime.shutdown,
   });
   await app.start();
@@ -52,6 +54,8 @@ export function parseProjectArg(args: string[]): string | undefined {
     if ((arg === '--project' || arg === '-p') && args[i + 1]) {
       fromFlag = resolve(args[i + 1] as string);
       i++;
+    } else if (arg === '--session') {
+      i++; // its value is a session id, not a path
     } else if (!arg.startsWith('-') && arg !== '' && fromPositional === undefined) {
       // FIRST bare argument only. Last-one-wins over every positional let a
       // stray `octi tui somefile.txt` silently outrank the launcher's own
@@ -66,6 +70,13 @@ export function parseProjectArg(args: string[]): string | undefined {
   return fromFlag ?? fromPositional;
 }
 
+/** `--session <id>`: the session to resume. Undefined when absent or malformed. */
+export function parseSessionArg(args: string[]): string | undefined {
+  const value = args[args.indexOf('--session') + 1];
+  return args.includes('--session') && value && /^[0-9a-f-]{36}$/i.test(value) ? value : undefined;
+}
+
 if (import.meta.main) {
-  void launchOctipusTui({ projectPath: parseProjectArg(process.argv.slice(2)) });
+  const argv = process.argv.slice(2);
+  void launchOctipusTui({ projectPath: parseProjectArg(argv), sessionId: parseSessionArg(argv) });
 }

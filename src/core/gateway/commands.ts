@@ -30,6 +30,8 @@ export interface CommandContext {
 export interface CommandResult {
   text: string;
   ephemeral?: boolean;
+  /** Structured form of `text` for clients that can render it (TUI session picker, transcript replay). */
+  data?: unknown;
 }
 
 // ── Trust Level Ordering ──────────────────────────────────────────
@@ -390,6 +392,54 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
         coreLogger.error({ err, sessionId: ctx.sessionId }, 'clear command failed');
         return { text: `Clear failed: ${(err as Error).message}` };
       }
+    },
+  });
+
+  registry.register({
+    name: 'sessions',
+    aliases: [],
+    description: 'List your recent sessions (TUI: /resume <n|id> reopens one)',
+    minTrustLevel: 'user',
+    handler: async (ctx) => {
+      const { resolveUserId } = await import('./resolve-user');
+      const { sessionRepository } = await import('@/db/repositories/session-repository');
+      const { messageRepository } = await import('@/db/repositories/message-repository');
+      const rows = await sessionRepository.listByUser(await resolveUserId(ctx.userId), 15);
+      const data = await Promise.all(rows.map(async (s) => {
+        // The default title is "<channel> conversation" — the first question is the useful label.
+        const generic = !s.title || / conversation$/.test(s.title);
+        const first = generic ? (await messageRepository.findBySession(s.id, 1, 0, ['user']))[0]?.content : undefined;
+        const title = (generic ? first : s.title)?.replace(/\s+/g, ' ').trim().slice(0, 60) || s.title || s.channelType;
+        return { id: s.id, title, channel: s.channelType, messages: s.messageCount, updatedAt: s.updatedAt.toISOString() };
+      }));
+      const text = data.length
+        ? data.map((s, i) => `${String(i + 1).padStart(2)}  ${s.id.slice(0, 8)}  ${s.updatedAt.slice(0, 16).replace('T', ' ')}  ${String(s.messages).padStart(3)} msg  ${s.title}`).join('\n')
+        : 'No sessions yet.';
+      return { text, data };
+    },
+  });
+
+  registry.register({
+    name: 'history',
+    aliases: [],
+    description: 'Replay this session\'s conversation (last 50 messages)',
+    minTrustLevel: 'user',
+    handler: async (ctx) => {
+      if (!ctx.sessionId) return { text: 'No active session.' };
+      // Gate here as well as at adoption: `chat.send` also binds the connection
+      // to a session, and a transcript must never follow a bare id.
+      const { sessionRepository } = await import('@/db/repositories/session-repository');
+      const { resolveUserId } = await import('./resolve-user');
+      const session = await sessionRepository.findById(ctx.sessionId);
+      const trusted = ctx.trustLevel === 'local' || ctx.trustLevel === 'system';
+      if (!session || (!trusted && session.userId !== await resolveUserId(ctx.userId))) return { text: 'Session not found.' };
+      const { messageRepository } = await import('@/db/repositories/message-repository');
+      const rows = (await messageRepository.getLastMessages(ctx.sessionId, 50)).reverse();
+      const data = rows
+        .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content.trim())
+        .map((m) => ({ role: m.role, content: m.content, at: m.createdAt.toISOString() }));
+      if (data.length === 0) return { text: 'No messages in this session yet.', data };
+      return { text: data.map((m) => `${m.role === 'user' ? '❯' : ' '} ${m.content}`).join('\n\n'), data };
     },
   });
 

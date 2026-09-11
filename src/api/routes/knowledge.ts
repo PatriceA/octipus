@@ -1,3 +1,4 @@
+import { withProviderUsageContext } from '@/models/providers/instrumented';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { CODE_NOT_INDEXED_MESSAGE, isCodeFile } from '@/core/rag/code-detection';
@@ -128,14 +129,14 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
       let results;
       switch (mode) {
         case 'semantic':
-          results = await service.search(query, limit, purposeTyped, threshold, undefined, scope);
+          results = await withProviderUsageContext({ userId: user.id }, () => service.search(query, limit, purposeTyped, threshold, undefined, scope));
           break;
         case 'keyword':
           results = await service.ftsSearch(query, limit, purposeTyped, undefined, scope);
           break;
         case 'hybrid':
         default:
-          results = await service.hybridSearch(query, limit, purposeTyped, undefined, threshold, undefined, scope);
+          results = await withProviderUsageContext({ userId: user.id }, () => service.hybridSearch(query, limit, purposeTyped, undefined, threshold, undefined, scope));
           break;
       }
       return { results, mode, query, minSimilarity: threshold };
@@ -306,9 +307,9 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
         const globPatterns = patterns ? patterns.split(',').map((p: string) => p.trim()) : undefined;
         // Per-file guard: a globbed leaf that realpath-resolves outside the
         // workspace (e.g. a symlink to /etc) is skipped, not indexed.
-        const result = await indexer.indexDirectory(safePath, globPatterns, {
+        const result = await withProviderUsageContext({ userId: user.id }, () => indexer.indexDirectory(safePath, globPatterns, {
           isAllowed: (p) => fs.resolveOptional(p) !== null,
-        });
+        }));
         logger.info({ path: safePath, filesIndexed: result.filesIndexed, chunksStored: result.chunksStored, errors: result.errors.length, userId: user.id }, 'Directory indexed');
         // If every file failed, 5xx so the UI shows red, not a happy green check.
         if (result.filesIndexed === 0 && result.errors.length > 0) {
@@ -327,7 +328,7 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
           logger.info({ path: safePath, userId: user.id }, 'Index request rejected — raw code file');
           return { error: CODE_NOT_INDEXED_MESSAGE };
         }
-        const chunks = await indexer.indexFile(safePath, validPurpose);
+        const chunks = await withProviderUsageContext({ userId: user.id }, () => indexer.indexFile(safePath, validPurpose));
         logger.info({ path: safePath, chunks, userId: user.id }, 'File indexed');
         if (chunks === 0) {
           // indexText returns 0 either for empty content or every-chunk-failed

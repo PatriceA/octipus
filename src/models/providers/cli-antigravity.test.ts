@@ -27,7 +27,7 @@ describe('antigravityConfig (replaces Gemini CLI)', () => {
     expect(r.content).toBe('The answer is 42.');
     expect(r.model).toBe('cli/antigravity');
     // agy reports no usage in print mode.
-    expect(r.usage).toEqual({ inputTokens: 0, outputTokens: 0, totalTokens: 0 });
+    expect(r.usage).toEqual({ inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false });
     expect(r.latencyMs).toBeGreaterThanOrEqual(0);
   });
 

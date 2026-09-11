@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { SelectItem } from '@mariozechner/pi-tui';
+import { OCTIPUS_SLASH_COMMANDS } from '../slash-commands';
 import { CommandPalette } from './command-palette';
 
 const ITEMS: SelectItem[] = [
@@ -26,7 +27,7 @@ describe('CommandPalette', () => {
   test('default item set comes from OCTIPUS_SLASH_COMMANDS when none supplied', () => {
     const palette = new CommandPalette({ onCommand: () => {}, onCancel: () => {} });
     const text = palette.render(80).map(strip).join('\n');
-    expect(text).toContain('/help');
+    expect(text).toContain(`/${OCTIPUS_SLASH_COMMANDS[0].name}`);
   });
 
   test('Escape cancels', () => {

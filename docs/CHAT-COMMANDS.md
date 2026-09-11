@@ -20,6 +20,8 @@ Chat commands are slash commands you can use in any channel (WebChat, Telegram, 
 | `/plan [on|off]` | Toggle plan-first mode: explore and propose before implementation |
 | `/capture <text>` | Append a timestamped line to today's daily note; `[[wikilinks]]` and `#tags` in the text are wired into the [knowledge graph](KNOWLEDGE-GRAPH.md) immediately |
 | `/cost` | Show token usage and cost for the session |
+| `/sessions` | List your recent sessions (the TUI's `/resume <n|id>` reopens one) |
+| `/history` | Replay the current session's last 50 user/assistant messages |
 | `/cancel` | Abort an active multi-step command |
 | `/eval` | Run evaluation scenarios or compare models |
 

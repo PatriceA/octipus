@@ -39,7 +39,7 @@ describe('vibeCliConfig', () => {
     expect(r.content).toBe('PONG');
     expect(r.model).toBe('cli/vibe');
     // vibe reports no usage — must be zeroed (budget enforced via CLI caps).
-    expect(r.usage).toEqual({ inputTokens: 0, outputTokens: 0, totalTokens: 0 });
+    expect(r.usage).toEqual({ inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false });
     expect(r.latencyMs).toBeGreaterThanOrEqual(0);
   });
 

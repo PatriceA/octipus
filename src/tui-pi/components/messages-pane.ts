@@ -58,6 +58,8 @@ export class MessagesPane implements Component {
    * of view until they `scrollToBottom()`.
    */
   private scrollOffset = 0;
+  /** Reply text still streaming in; drawn under the history, never stored in it. */
+  private live: string | null = null;
 
   constructor(options: MessagesPaneOptions = {}) {
     this.maxVisible = options.maxVisible ?? 30;
@@ -75,7 +77,14 @@ export class MessagesPane implements Component {
     this.dirty = true;
   }
 
+  setLive(text: string | null): void {
+    if (text === this.live) return;
+    this.live = text;
+    this.dirty = true;
+  }
+
   reset(): void {
+    this.live = null;
     this.history.length = 0;
     this.scrollOffset = 0;
     this.dirty = true;
@@ -146,6 +155,13 @@ export class MessagesPane implements Component {
       }
 
       if (i < visible.length - 1) lines.push('');
+    }
+
+    if (this.live && this.scrollOffset === 0) {
+      const prefix = ROLE_PREFIX.assistant;
+      const wrapped = wrapTextWithAnsi(this.live, Math.max(1, width - visibleWidth(prefix)));
+      if (lines.length) lines.push('');
+      for (const line of wrapped) lines.push(prefix + line);
     }
 
     // Hint when scrolled away from the live tail.

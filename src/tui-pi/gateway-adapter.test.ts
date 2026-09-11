@@ -261,3 +261,23 @@ describe('agent.blocked — a quiet worker says what it waits on', () => {
     expect(root.subagent).toBeUndefined();
   });
 });
+
+describe('decodeGatewayEvent — steering acknowledgement', () => {
+  test('an injected chat.message says the running turn was steered', () => {
+    const out = decodeGatewayEvent({ type: 'chat.message', payload: { role: 'user', content: 'also X', injected: true } });
+    expect(out).toEqual([{ kind: 'message', role: 'system', content: 'Steering the running turn with your message.' }]);
+  });
+  test('an ordinary chat.message echo is ignored (the TUI already shows the user line)', () => {
+    expect(decodeGatewayEvent({ type: 'chat.message', payload: { role: 'user', content: 'hi' } })).toEqual([]);
+  });
+});
+
+describe('decodeGatewayEvent — streamed reply', () => {
+  test('chat.delta becomes a delta event with its iteration', () => {
+    expect(decodeGatewayEvent({ type: 'chat.delta', payload: { agentId: 'a', delta: 'Hel', iteration: 2 } }))
+      .toEqual([{ kind: 'delta', delta: 'Hel', iteration: 2 }]);
+  });
+  test('an empty delta is dropped', () => {
+    expect(decodeGatewayEvent({ type: 'chat.delta', payload: { delta: '' } })).toEqual([]);
+  });
+});

@@ -2,6 +2,7 @@ export interface Model {
   id: string;
   name: string;
   provider: string;
+  providerControls?: import('../../../src/shared/provider-settings').ProviderControls;
   modelId: string;
   endpoint?: string;
   apiKeyRef?: string | null;
@@ -12,11 +13,14 @@ export interface Model {
   supportsStreaming: boolean;
   contextWindow: number;
   maxTokens: number;
+  defaultMaxTokens?: number | null;
   topics: string[];
   priority: number;
   costPerInputToken: number;
   costPerOutputToken: number;
   metadata?: {
+    providerSettings?: import('../../../src/shared/provider-settings').ProviderSettings;
+    pricing?: import('../../../src/shared/provider-settings').ModelPricing;
     description?: string;
     /**
      * Parameter count as a raw number (e.g. 7_000_000_000 for a 7B model).

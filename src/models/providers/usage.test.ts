@@ -38,3 +38,17 @@ describe('extractCachedTokens', () => {
     expect(extractCachedTokens({ prompt_tokens: 100 })).toEqual({});
   });
 });
+
+import { normalizeUsage } from './usage';
+test('normalizes reported cost, cache writes and reasoning details', () => {
+  expect(normalizeUsage({ prompt_tokens: 100, completion_tokens: 20, cost: 0,
+    prompt_tokens_details: { cached_tokens: 50, cache_write_tokens: 10 },
+    completion_tokens_details: { reasoning_tokens: 8 } })).toMatchObject({
+    inputTokens: 100, outputTokens: 20, totalTokens: 120, cacheReadTokens: 50,
+    cacheCreationTokens: 10, reasoningTokens: 8, reportedCost: 0, available: true,
+  });
+});
+test('missing usage is not a free request; invalid charges are ignored', () => {
+  expect(normalizeUsage(undefined).available).toBe(false);
+  expect(normalizeUsage({ cost: -1 })).not.toHaveProperty('reportedCost');
+});

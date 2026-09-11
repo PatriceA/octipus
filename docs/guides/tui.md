@@ -66,10 +66,76 @@ the file editor evolve in lockstep.
 ### Slash commands (chat shell)
 
 The composer's autocomplete pops up after `/`. Local commands are
-intercepted before reaching the gateway:
+intercepted before reaching the gateway; everything else is forwarded, and
+`/help` shows both halves. A test (`slash-commands.sync.test.ts`) keeps the
+gateway half of the autocomplete list identical to the gateway's registry.
 
 | Command | Handled by | Description |
 |---|---|---|
+| `/exit`, `/quit` | TUI | Quit |
+| `/project [path]` | TUI | Show or set the active project path |
+| `/workspace [slug\|-]` | TUI | Show or switch the active workspace |
+| `/login`, `/logout`, `/whoami` | TUI | Sign in to an account, sign out, show who this terminal acts as |
+| `/resume <n\|id>` | TUI | Reopen a session from `/sessions` (by row number or id prefix) and replay it |
+| `/hotkeys` | TUI | Show the chat shell keybindings |
+| `/help` (`/h`, `/?`) | gateway | List available commands |
+| `/status` (`/s`) | gateway | Session + agents + expert |
+| `/sessions` | gateway | List your recent sessions |
+| `/history` | gateway | Replay this session's last 50 messages |
+| `/expert <name\|reset>` | gateway | Switch / list experts |
+| `/abort` (`/stop`, `/cancel`) | gateway | Cancel running agents |
+| `/plan [on\|off]` | gateway | Toggle plan mode |
+| `/work-plan`, `/plan-feedback <change>` | gateway | Show the visible work plan; give feedback on it |
+| `/compact [focus]` | gateway | Compact session context |
+| `/clear` (`/cls`, `/reset`) | gateway | Reset root agent + clear chat |
+| `/cost` | gateway | Token usage and cost for this session |
+| `/proposals [approve\|reject] [n]` | gateway | Review distilled skill/expert proposals |
+| `/mcp [reconnect] [server]` | gateway | MCP server status / reconnect |
+| `/diff` | gateway | Workspace git diff |
+| `/changes [file]` | gateway | Review workspace changes — list, or a file diff |
+| `/reload-extensions` (`/reload`) | gateway | Re-discover and reload user extensions |
+| `/persona` | gateway | Configure the root agent persona |
+| `/version` (`/v`) | gateway | Build info |
+
+### Resuming a session
+
+Every `octi tui` launch starts a fresh session. To pick an earlier one up:
+
+```
+octi tui --session <id>        # replay that session on connect
+/sessions                      # inside the shell: list recent sessions
+/resume 2                      # reopen row 2 (or /resume <id prefix>)
+```
+
+The transcript is replayed from the database, the plan line and counters
+reset, and the next message continues that conversation.
+
+### Keybindings (chat shell)
+
+| Key | Action |
+|---|---|
+| `Ctrl+P` / `F4` | Command palette |
+| `F5` | Print hotkeys |
+| `Alt+S` / `F7` | Expand/collapse the subagent panel |
+| `Alt+T` / `F8` | Push-to-talk: start/stop voice input |
+| `Ctrl+Q` | Quit |
+| `PageUp` / `PageDown` | Scroll the transcript |
+| `Up` / `Down` (in composer) | Navigate chat input history |
+| `Tab` (in composer) | Accept completion / fuzzy file completion |
+| `\\` then `Enter` | Newline in chat input (terminals without `Shift+Enter`) |
+
+### While the agent runs
+
+The reply streams into the transcript as the model produces it (setting
+`agent.streaming`, on by default; text from an earlier iteration stays as its
+own message when the agent goes on to call a tool). The activity line shows
+`thinking · <role> · iter N · <elapsed>s · <model>` until a tool call takes it
+over. A message typed while a turn is running
+steers that turn (the shell prints "Steering the running turn"); if the
+gateway had to drop events under load, the shell says so rather than leaving
+a spinner hanging.
+
+---|---|---|
 | `/exit`, `/quit` | TUI | Quit |
 | `/cost` | TUI | Show cumulative tokens / turns / cost |
 | `/project [path]` | TUI | Show or set the active project path |

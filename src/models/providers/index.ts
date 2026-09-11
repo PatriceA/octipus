@@ -1,3 +1,4 @@
+import { instrumentProvider } from './instrumented';
 import { getConfig } from '@/config';
 import { recordLlmRequest } from '@/core/telemetry';
 import { coreLogger, modelLogger } from '@/utils/logger';
@@ -157,6 +158,7 @@ export class ProviderRouter {
     if (config.litellm.proxyUrl) {
       this.providers.push(new LiteLLMProvider());
     }
+    this.providers = this.providers.map(instrumentProvider);
   }
 
   /** Get the provider that handles a given model (name-based heuristic) */

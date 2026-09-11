@@ -1,10 +1,12 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
   getCapabilitiesForModel,
   PROVIDER_CAPABILITY_DEFAULTS,
   type ModelCapabilities,
 } from './capabilities';
 import type { ModelConfigEntry } from '@/db/schema/models';
+
+afterEach(() => vi.unstubAllEnvs());
 
 // ── Helpers ───────────────────────────────────────────────────
 
@@ -74,13 +76,13 @@ describe('PROVIDER_CAPABILITY_DEFAULTS', () => {
     expect(caps.structuredOutput).toBe(true);
   });
 
-  test('anthropic: tools+streaming+media but no embeddings or structuredOutput', () => {
+  test('anthropic: native structured output, tools, streaming and media; no embeddings', () => {
     const caps = PROVIDER_CAPABILITY_DEFAULTS['anthropic'];
     expect(caps.tools).toBe(true);
     expect(caps.streaming).toBe(true);
     expect(caps.media).toBe(true);
     expect(caps.embeddings).toBe(false);
-    expect(caps.structuredOutput).toBe(false);
+    expect(caps.structuredOutput).toBe(true);
   });
 
   test('gemini: systemRole=false (converted to user turn)', () => {
@@ -232,6 +234,19 @@ describe('getCapabilitiesForModel', () => {
   });
 
   describe('metadata.capabilities override', () => {
+    test('anthropic model gates preserve an explicit structured-output disable', () => {
+      const model = makeModel('anthropic', {
+        modelId: 'claude-sonnet-4-6',
+        metadata: { capabilities: { structuredOutput: false } } as any,
+      });
+      expect(getCapabilitiesForModel(model).structuredOutput).toBe(false);
+    });
+
+    test('anthropic rollback disables structured output even on a supported model', () => {
+      vi.stubEnv('ANTHROPIC_NATIVE_MESSAGES', '0');
+      expect(getCapabilitiesForModel(makeModel('anthropic', { modelId: 'claude-sonnet-4-6' })).structuredOutput).toBe(false);
+    });
+
     test('metadata.capabilities overrides provider defaults for fields not covered by DB flags', () => {
       // embeddings and structuredOutput are not DB-flag fields, so metadata wins.
       // tools is covered by supportsTools DB flag — the DB flag (true by default) wins over metadata.

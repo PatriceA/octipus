@@ -1,3 +1,4 @@
+import { withProviderUsageContext } from '@/models/providers/instrumented';
 import { formatWorkPlanContext } from './agent/work-plan-context';
 import { workPlanRepository } from '@/db/repositories/work-plan-repository';
 import { mkdirSync, writeFileSync } from 'fs';
@@ -9,8 +10,8 @@ import { agentRepository } from '@/db/repositories/agent-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
-import { getCostTracker } from '@/models/cost-tracker';
-import { type CompletionResult, getLiteLLMClient } from '@/models/litellm-client';
+import { type CompletionOptions, type CompletionResult, getLiteLLMClient } from '@/models/litellm-client';
+import { collectStream } from '@/models/stream-collect';
 import { getModelRegistry } from '@/models/model-registry';
 import { type ToolShimSchema, proseShowsToolIntent, translateToToolCall } from '@/models/toolshim';
 import { applyTopicParamOverrides, getTopicConfig } from '@/models/topic-config';
@@ -134,6 +135,9 @@ export function startBlockedHeartbeat(
   (timer as unknown as { unref?: () => void }).unref?.();
   return () => clearInterval(timer);
 }
+
+/** What a completion is asked of: a direct provider or the LiteLLM client (both expose the same pair). */
+type CompletionTarget = Pick<import('@/models/providers/interface').ModelProvider, 'complete' | 'stream'>;
 
 export class AgentWorker extends BaseAgentWorker {
   private toolExecutor: ToolExecutor;
@@ -1338,18 +1342,18 @@ export class AgentWorker extends BaseAgentWorker {
         const toolMessages: AgentMessage[] = await this.whileBlocked(blockedReason(toolCalls, isFinal, isCollect), () => {
           if (isFinal) {
             // Legitimately long (may await human approval) — no wall race.
-            return this.toolExecutor.handleToolCalls(toolCalls);
+            return withProviderUsageContext({ userId: this.context.userId, sessionId: this.context.sessionId, agentId: this.context.id }, () => this.toolExecutor.handleToolCalls(toolCalls));
           }
           if (isCollect) {
             // Self-bounds (~child wall); keep a generous absolute backstop.
             return this.raceAbsolute(
-              this.toolExecutor.handleToolCalls(toolCalls),
+              withProviderUsageContext({ userId: this.context.userId, sessionId: this.context.sessionId, agentId: this.context.id }, () => this.toolExecutor.handleToolCalls(toolCalls)),
               'handleToolCalls:collect_children',
               this.config.selfTimedToolCeilingMs ?? DEFAULT_SELF_TIMED_TOOL_CEILING_MS,
             );
           }
           return this.raceTimeout(
-            this.toolExecutor.handleToolCalls(toolCalls),
+            withProviderUsageContext({ userId: this.context.userId, sessionId: this.context.sessionId, agentId: this.context.id }, () => this.toolExecutor.handleToolCalls(toolCalls)),
             'handleToolCalls',
           );
         });
@@ -1888,6 +1892,9 @@ export class AgentWorker extends BaseAgentWorker {
       apiKey,
       userId: this.context.userId,
       sessionId: this.context.sessionId,
+      agentId: this.context.id,
+      modelConfigName: model.name,
+      requestType: 'toolshim',
       signal: deadline.signal,
     };
 
@@ -1907,20 +1914,6 @@ export class AgentWorker extends BaseAgentWorker {
       this.abortController.signal.removeEventListener('abort', onParentAbort);
     }
 
-    await getCostTracker().logUsageWithCost(
-      this.context.userId,
-      model.modelId,
-      result.usage.inputTokens,
-      result.usage.outputTokens,
-      {
-        sessionId: this.context.sessionId,
-        agentId: this.context.id,
-        requestType: 'chat',
-        metadata: { toolshim: true, iteration: this.iteration },
-        cachedInputTokens: result.usage.cacheReadTokens,
-        cacheCreationTokens: result.usage.cacheCreationTokens,
-      },
-    );
 
     return result.content;
   }
@@ -1962,8 +1955,8 @@ export class AgentWorker extends BaseAgentWorker {
       blockedReason(toolCalls, this.toolExecutor.hasFinalToolCall(toolCalls), toolCalls.some((tc) => tc.name === 'collect_children')),
       () =>
         isSelfTimedTool
-          ? this.toolExecutor.handleToolCalls(toolCalls)
-          : this.raceTimeout(this.toolExecutor.handleToolCalls(toolCalls), 'handleToolCalls'),
+          ? withProviderUsageContext({ userId: this.context.userId, sessionId: this.context.sessionId, agentId: this.context.id }, () => this.toolExecutor.handleToolCalls(toolCalls))
+          : this.raceTimeout(withProviderUsageContext({ userId: this.context.userId, sessionId: this.context.sessionId, agentId: this.context.id }, () => this.toolExecutor.handleToolCalls(toolCalls)), 'handleToolCalls'),
     );
     this.messages.push(...toolMessages);
 
@@ -1973,7 +1966,6 @@ export class AgentWorker extends BaseAgentWorker {
   private async getCompletion(): Promise<CompletionResult> {
     const client = getLiteLLMClient();
     const registry = getModelRegistry();
-    const costTracker = getCostTracker();
 
     const model = await registry.getModel(this.context.model) || await registry.getModelByModelId(this.context.model);
     if (!model) {
@@ -2030,7 +2022,8 @@ export class AgentWorker extends BaseAgentWorker {
     // G1 one-shot escalation: if the PREVIOUS turn's tool calls had to be
     // recovered from prose (text-parse/shim), force the next call to emit a
     // structured tool call (toolChoice 'required'), then fall back to 'auto'.
-    const escalateToolChoice = this.forceToolChoiceNextTurn && tools.length > 0;
+    const claudeThinking = model.provider === 'anthropic' && (metadata?.providerSettings?.thinkingBudget || (extraBody?.thinking as { type?: string } | undefined)?.type === 'enabled' || /claude-(?:fable|mythos)-5[.-]1/.test(model.modelId));
+    const escalateToolChoice = this.forceToolChoiceNextTurn && tools.length > 0 && !claudeThinking;
     this.forceToolChoiceNextTurn = false;
 
     // Dropping the tool definitions on a turn where tools are DISABLED (a
@@ -2072,41 +2065,28 @@ export class AgentWorker extends BaseAgentWorker {
         apiKey,
         userId: this.context.userId,
         sessionId: this.context.sessionId,
+        agentId: this.context.id,
+        modelConfigName: model.name,
+        accountingMetadata: { iteration: this.iteration },
       },
       getTopicConfig(this.context.topic),
     );
 
     // Route to the correct provider based on DB config.
     // Direct providers (openrouter, openai, anthropic, etc.) bypass LiteLLM.
-    let result: CompletionResult;
+    let target: CompletionTarget = client;
+    let providerName = 'litellm';
     if (model.provider && model.provider !== 'litellm') {
       const { getProviderRouter } = await import('@/models/providers');
-      const router = getProviderRouter();
-      const directProvider = router.getProviderByName(model.provider);
+      const directProvider = getProviderRouter().getProviderByName(model.provider);
       if (directProvider) {
         agentLogger.debug({ model: litellmModel, provider: model.provider }, 'Using direct provider');
-        result = await directProvider.complete(completionOpts);
-      } else {
-        result = await client.complete(completionOpts);
+        target = directProvider;
+        providerName = model.provider;
       }
-    } else {
-      result = await client.complete(completionOpts);
     }
+    const result = await this.completeViaTarget(target, providerName, completionOpts);
 
-    await costTracker.logUsageWithCost(
-      this.context.userId,
-      this.context.model,
-      result.usage.inputTokens,
-      result.usage.outputTokens,
-      {
-        sessionId: this.context.sessionId,
-        agentId: this.context.id,
-        requestType: 'chat',
-        metadata: { iteration: this.iteration },
-        cachedInputTokens: result.usage.cacheReadTokens,
-        cacheCreationTokens: result.usage.cacheCreationTokens,
-      },
-    );
 
     const octiMessage: AgentMessage = {
       role: 'assistant',
@@ -2127,6 +2107,29 @@ export class AgentWorker extends BaseAgentWorker {
     }
 
     return result;
+  }
+
+  /**
+   * The root turn streams so the user sees text as it is produced; children
+   * complete silently. A stream that fails before its first chunk is retried
+   * without streaming (nothing was shown yet); one that fails later propagates
+   * like any completion error.
+   */
+  private async completeViaTarget(target: CompletionTarget, providerName: string, opts: CompletionOptions): Promise<CompletionResult> {
+    const streaming = isRootAgent(this.context) && getConfig().agent?.streaming !== false && typeof target.stream === 'function';
+    if (!streaming) return target.complete(opts);
+    const progress = { chunks: 0 };
+    try {
+      return await collectStream(
+        target.stream(opts), opts, providerName,
+        (delta) => this.emit('thought', { type: 'text_delta', delta, iteration: this.iteration }),
+        progress,
+      );
+    } catch (err) {
+      if (progress.chunks > 0 || this.abortController.signal.aborted) throw err;
+      agentLogger.warn({ err, model: opts.model, provider: providerName }, 'Stream failed before its first chunk — completing without streaming');
+      return target.complete(opts);
+    }
   }
 
   /**

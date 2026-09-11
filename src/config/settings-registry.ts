@@ -320,6 +320,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
     envVar: 'AGENT_MAX_TOKEN_BUDGET',
   },
+  {
+    key: 'agent.streaming',
+    category: 'agent',
+    valueType: 'boolean',
+    defaultValue: true,
+    description:
+      'Stream the root agent\'s reply text to the web chat and TUI as it is produced. Turn off if a provider misbehaves on streamed tool calls; replies then arrive whole.',
+    isSecret: false,
+  },
 
   {
     key: 'agent.promptTier',

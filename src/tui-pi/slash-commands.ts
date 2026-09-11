@@ -6,10 +6,9 @@
  * (`src/core/gateway/commands.ts`) plus a handful of TUI-only
  * commands handled in `app.ts` without hitting the gateway.
  *
- * Phase 7 will replace this hardcoded list with a live snapshot
- * fetched from the gateway so extensions/skills/templates appear
- * automatically. Until then, we keep the static list close to
- * the truth and lean on `/help` for the authoritative roster.
+ * `slash-commands.sync.test.ts` pins the gateway half of this list to the
+ * registry, so a command added on either side without the other fails CI.
+ * Extension-registered commands still only appear in `/help`.
  */
 import type { SlashCommand } from '@mariozechner/pi-tui';
 
@@ -34,6 +33,11 @@ export const OCTIPUS_SLASH_COMMANDS: OctipusSlashCommand[] = [
   tui({ name: 'login',    description: 'Sign in to your Octipus account (memories, vault secrets, settings)' }),
   tui({ name: 'logout',   description: 'Sign out — falls back to the local machine account' }),
   tui({ name: 'whoami',   description: 'Show which account this terminal is acting as' }),
+  tui({ name: 'workspace', description: 'Show or switch the active workspace (- for default)',
+        argumentHint: '<slug|->' }),
+  tui({ name: 'resume',   description: 'Reopen a session from /sessions by number or id',
+        argumentHint: '<n|id>' }),
+  tui({ name: 'hotkeys',  description: 'Show the chat shell keybindings' }),
 
   // ── Gateway built-ins (src/core/gateway/commands.ts) ───────────
   gw({ name: 'help',      description: 'List available commands',                            aliases: ['h', '?'] }),
@@ -49,6 +53,9 @@ export const OCTIPUS_SLASH_COMMANDS: OctipusSlashCommand[] = [
        argumentHint: '[focus]' }),
   gw({ name: 'clear',     description: 'Reset rootAgent context and clear the chat',     aliases: ['cls', 'reset'] }),
   gw({ name: 'cost',      description: 'Show cumulative token usage and cost' }),
+  gw({ name: 'sessions',  description: 'List your recent sessions' }),
+  gw({ name: 'history',   description: 'Replay this session\'s conversation' }),
+  gw({ name: 'persona',   description: 'Configure the root agent persona' }),
   gw({ name: 'proposals', description: 'Review distilled skill/expert proposals — list, approve, reject',
        argumentHint: '[approve|reject] [n]',                                                 aliases: ['skills-proposals'] }),
   gw({ name: 'mcp',       description: 'MCP servers — status, or reconnect one after restarting it',
@@ -56,7 +63,7 @@ export const OCTIPUS_SLASH_COMMANDS: OctipusSlashCommand[] = [
   gw({ name: 'diff',      description: 'Show git diff for workspace changes' }),
   gw({ name: 'changes',   description: 'Review workspace changes — list, or a file diff',
        argumentHint: '[file]' }),
-  gw({ name: 'reload',    description: 'Re-discover and reload user extensions',             aliases: ['reload-extensions'] }),
+  gw({ name: 'reload-extensions', description: 'Re-discover and reload user extensions',     aliases: ['reload'] }),
   gw({ name: 'version',   description: 'Show Octipus version and build info',                aliases: ['v'] }),
 ];
 

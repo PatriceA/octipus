@@ -1,3 +1,4 @@
+import { recordProviderUsage } from '@/models/providers/instrumented';
 import { randomUUID } from 'crypto';
 import { type ChildProcess, spawn } from 'child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
@@ -165,6 +166,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
    * so an error run surfaces as failed, never a soft success (C3).
    */
   private runError: string | null = null;
+  private accountingModelName: string | undefined;
   /**
    * Cleanup for the parent AbortSignal listener. Symmetric with `AgentWorker`
    * (Swarm Phase 2): when an ancestor aborts, the cascade reaches the CLI
@@ -503,6 +505,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
     const model =
       (await registry.getModel(this.context.model)) ||
       (await registry.getModelByModelId(this.context.model));
+    this.accountingModelName = model?.name;
     return model?.metadata?.cliAgent || {};
   }
 
@@ -609,10 +612,23 @@ export class CLIAgentWorker extends BaseAgentWorker {
     const previousCounters = this.parser?.getSideEffectCounters();
     if (previousCounters) this.pastParserCounters = mergeCounters(this.pastParserCounters ?? emptyCounters(), previousCounters);
     const invocationStartIteration = this.iteration;
+    let invocationUsage: import('@/models/litellm-client').CompletionResult['usage'] = { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false };
     const parser = this.parser = new CLIOutputParser(
       this.context.id,
       this.context.model,
-      (type, data) => this.emit(type, data),
+      (type, data) => {
+        const stats = (data as { stats?: { inputTokens?: number; outputTokens?: number; totalTokens?: number; cacheRead?: number; cacheCreation?: number } }).stats;
+        if (type === 'thought' && stats?.totalTokens != null) {
+          const claude = toolConfig.modelProvider === 'anthropic' || toolConfig.modelProvider === 'zai' || toolConfig.modelProvider === 'moonshot';
+          const input = (stats.inputTokens ?? 0) + (claude ? (stats.cacheRead ?? 0) + (stats.cacheCreation ?? 0) : 0);
+          invocationUsage = { inputTokens: (claude ? 0 : invocationUsage.inputTokens) + input,
+            outputTokens: (claude ? 0 : invocationUsage.outputTokens) + (stats.outputTokens ?? 0),
+            totalTokens: (claude ? 0 : invocationUsage.totalTokens) + stats.totalTokens,
+            cacheReadTokens: (claude ? 0 : invocationUsage.cacheReadTokens ?? 0) + (stats.cacheRead ?? 0),
+            cacheCreationTokens: stats.cacheCreation, available: stats.totalTokens > 0 };
+        }
+        this.emit(type, data);
+      },
       {
         isBridgedTool: name => /^mcp__octipus__|^octipus[_.]|^octipus_run_[a-f0-9]+\./.test(name),
         onTurn: () => {
@@ -841,6 +857,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
             try {
               const parsed = toolConfig.parseOutput(rawStdout, startTime);
               accumulatedText = parsed.content;
+              invocationUsage = parsed.usage;
               if (parsed.usage.totalTokens > 0) {
                 this.totalTokens += parsed.usage.totalTokens;
               }
@@ -866,6 +883,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
               }
             }
           }
+
+          await recordProviderUsage({ model: this.context.model, modelConfigName: this.accountingModelName, messages: [], userId: this.context.userId, sessionId: this.context.sessionId, agentId: this.context.id, requestType: 'cli' }, 'cli', { model: this.context.model, usage: invocationUsage }, code !== 0 || this.aborted || !!this.runError);
 
           if (this.budgetExceeded) {
             reject(new BudgetExceededError({

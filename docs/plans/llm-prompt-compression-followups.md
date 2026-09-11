@@ -1,3 +1,6 @@
+> Current behavior: native Anthropic Messages is now the default. The historical
+> opt-in rollout below is superseded by [Direct Providers](../DIRECT-PROVIDERS.md).
+
 # LLM Prompt Compression — Follow-ups Plan
 
 > **Historical follow-up plan (July 2026).** The parent phases had shipped when

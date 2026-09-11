@@ -18,6 +18,24 @@ import { resolveUserId } from './resolve-user';
  */
 type SteerableWorker = { steer: (m: { role: 'user'; content: string; timestamp: Date }) => void };
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * May this connection use `sessionId`? Null when yes: the session is the
+ * caller's own, does not exist yet (a fresh client id), or the caller is a
+ * trusted console. Otherwise the refusal text. One gate for every path that
+ * binds a connection to a session (chat.send, command adoption) — before it,
+ * any authenticated client could attach to another user's existing session
+ * by id and read or extend it.
+ */
+export async function sessionAccessError(sessionId: string, context: Pick<ConnectionContext, 'userId' | 'trustLevel'>): Promise<string | null> {
+  if (context.trustLevel === 'local' || context.trustLevel === 'system') return null;
+  if (!UUID_RE.test(sessionId)) return null; // channel-style ids resolve per user inside resolveSession
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const session = await sessionRepository.findById(sessionId);
+  return session && session.userId !== await resolveUserId(context.userId) ? 'Session not found' : null;
+}
+
 /** Exported for unit tests. */
 export async function trySteerRunningRootAgent(sessionId: string, content: string): Promise<boolean> {
   const { getAgentManager } = await import('@/core/agent-manager');
@@ -107,6 +125,11 @@ async function handleChatSend(
     const { getAgentService } = await import('@/core/agent');
     const rootAgent = getAgentService();
 
+    const refused = await sessionAccessError(message.sessionId, context);
+    if (refused) {
+      hub.connectionManager.sendToConnection(connectionId, { type: 'error', code: 'SESSION_NOT_FOUND', message: refused });
+      return;
+    }
     // Track the session on the connection for /status command
     context.sessionId = message.sessionId;
 
@@ -390,6 +413,17 @@ async function handleCommand(
   const registry = getCommandRegistry();
   const input = `/${message.name}${message.args ? ' ' + Object.values(message.args).join(' ') : ''}`;
 
+  // A client may point the connection at a session before its first chat.send
+  // (resume). Only the owner's sessions; trusted consoles act for the admin.
+  if (message.sessionId && message.sessionId !== context.sessionId) {
+    const refused = await sessionAccessError(message.sessionId, context);
+    if (refused) {
+      hub.connectionManager.sendToConnection(connectionId, { type: 'command.result', name: message.name, result: null, error: refused });
+      return;
+    }
+    context.sessionId = message.sessionId;
+  }
+
   const result = await registry.execute(input, {
     userId: context.userId,
     sessionId: context.sessionId,
@@ -403,6 +437,7 @@ async function handleCommand(
     name: message.name,
     result: result?.text || null,
     error: result ? undefined : 'Unknown command',
+    data: result?.data,
   });
 }
 

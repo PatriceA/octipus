@@ -57,6 +57,8 @@ export interface CLIAgentConfig {
 }
 
 export interface ModelMetadata {
+  providerSettings?: import('@/shared/provider-settings').ProviderSettings;
+  pricing?: import('@/shared/provider-settings').ModelPricing;
   description?: string;
   releaseDate?: string;
   deprecated?: boolean;
@@ -137,6 +139,12 @@ export const costLog = pgTable('cost_log', {
 }));
 
 export interface CostLogMetadata {
+  [key: string]: unknown;
+  costSource?: 'reported' | 'estimated' | 'unknown';
+  estimatedCost?: number | null;
+  reportedCost?: number;
+  pricingSource?: string | null;
+  usageAvailable?: boolean;
   prompt?: string;
   latencyMs?: number;
   cached?: boolean;

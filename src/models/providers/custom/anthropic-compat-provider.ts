@@ -1,13 +1,13 @@
-import { classifyError, ClassifiedError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
-import type { AgentMessage, ToolCall } from '@/core/types';
 import type { ChatCompletionTool } from 'openai/resources/chat/completions';
+import { ClassifiedError, classifyError, FailoverReason, RecoveryAction } from '@/core/errors/classification';
+import type { AgentMessage, ToolCall } from '@/core/types';
 import { transformMessagesForProvider } from '@/models/message-transform';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../../litellm-client';
 import { createIdleAbort, fetchWithRetryAfter, withTimeoutSignal } from '../http-retry';
 import type { ModelProvider, ProviderHealthStatus } from '../interface';
-import { BaseCustomProvider, type ResolvedCustomConfig } from './base-custom-provider';
 import { buildCachedBlocks, splitVolatileSystem } from '../prompt-cache';
+import { BaseCustomProvider, type ResolvedCustomConfig } from './base-custom-provider';
 
 /**
  * Custom Anthropic-compatible provider.
@@ -72,7 +72,11 @@ export class CustomAnthropicCompatProvider extends BaseCustomProvider implements
     }
 
     const data = (await res.json()) as AnthropicResponse;
-    return this.parseResponse(data, (cfg.model?.modelId || options.model), Date.now() - startTime);
+    const modelId = cfg.model?.modelId || options.model;
+    // Observe the wire-level usage before parsing content/tool blocks. A paid
+    // response with malformed semantic content must still reach accounting.
+    options.accountingResponse?.(anthropicAccountingResponse(data, modelId));
+    return this.parseResponse(data, modelId, Date.now() - startTime);
   }
 
   async *stream(options: CompletionOptions): AsyncGenerator<StreamChunk> {
@@ -134,12 +138,13 @@ export class CustomAnthropicCompatProvider extends BaseCustomProvider implements
       max_tokens: options.maxTokens ?? CustomAnthropicCompatProvider.DEFAULT_MAX_TOKENS,
       stream: streaming,
     };
-    if (system) body.system = buildCachedSystem(system, (body.model as string) || options.model);
+    if (system) body.system = options.cachePolicy === 'off' ? system : buildCachedSystem(system, (body.model as string) || options.model);
     if (options.temperature != null) body.temperature = clampAnthropicTemperature(options.temperature);
     if (options.topP != null) body.top_p = options.topP;
     if (options.stopSequences?.length) body.stop_sequences = options.stopSequences;
     if (options.tools?.length) body.tools = toAnthropicTools(options.tools);
     if (options.extraBody) Object.assign(body, options.extraBody);
+    configureAnthropicBody(body, options);
 
     const path = cfg.custom.pathOverride || '/v1/messages';
     const { headers, queryParams } = this.buildHeaders(cfg.custom, cfg.apiKey);
@@ -182,36 +187,54 @@ export function parseAnthropicResponse(data: AnthropicResponse, modelId: string,
     }
   }
 
-  const cacheRead = data.usage?.cache_read_input_tokens;
-  const cacheCreate = data.usage?.cache_creation_input_tokens;
-  // Anthropic reports input_tokens EXCLUSIVE of cache reads/creation. Fold
-  // them in so inputTokens is the grand total (OpenAI convention) and
-  // cacheReadTokens/cacheCreationTokens stay subsets — the shape cost-tracker
-  // and telemetry expect across all providers.
-  const freshInput = data.usage?.input_tokens || 0;
-  const inputTokens = freshInput + (cacheRead || 0) + (cacheCreate || 0);
+  const accounting = anthropicAccountingResponse(data, modelId);
   const result: CompletionResult = {
     content: textParts.join(''),
     finishReason: mapStopReason(data.stop_reason),
-    usage: {
-      inputTokens,
-      outputTokens: data.usage?.output_tokens || 0,
-      totalTokens: inputTokens + (data.usage?.output_tokens || 0),
-      ...(cacheRead != null ? { cacheReadTokens: cacheRead } : {}),
-      ...(cacheCreate != null ? { cacheCreationTokens: cacheCreate } : {}),
-    },
-    model: data.model || modelId,
+    usage: accounting.usage,
+    model: accounting.model,
     latencyMs,
+    requestId: accounting.requestId,
+    providerRaw: { anthropicContent: blocks },
   };
 
   if (toolCalls.length) result.toolCalls = toolCalls;
   return result;
 }
 
+/** Extract billable Anthropic metadata without interpreting semantic content. */
+export function anthropicAccountingResponse(
+  data: AnthropicResponse,
+  modelId: string,
+): Pick<CompletionResult, 'usage' | 'model' | 'requestId'> {
+  const cacheRead = data.usage?.cache_read_input_tokens;
+  const cacheCreate = data.usage?.cache_creation_input_tokens;
+  // Anthropic reports input_tokens EXCLUSIVE of cache reads/creation. Fold
+  // them in so inputTokens is the grand total (OpenAI convention) and the
+  // cache counters remain subsets for pricing and telemetry.
+  const freshInput = data.usage?.input_tokens || 0;
+  const inputTokens = freshInput + (cacheRead || 0) + (cacheCreate || 0);
+  const outputTokens = data.usage?.output_tokens || 0;
+  return {
+    usage: {
+      inputTokens,
+      available: data.usage != null,
+      reasoningTokens: data.usage?.output_tokens_details?.thinking_tokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
+      ...(cacheRead != null ? { cacheReadTokens: cacheRead } : {}),
+      ...(cacheCreate != null ? { cacheCreationTokens: cacheCreate } : {}),
+    },
+    model: data.model || modelId,
+    requestId: data.id,
+  };
+}
+
 // ── Request conversion (OpenAI-shaped AgentMessage → Anthropic wire) ──
 
 interface AnthropicBlock {
-  type: 'text' | 'tool_use' | 'tool_result';
+  type: string;
+  [key: string]: unknown;
   text?: string;
   id?: string;
   name?: string;
@@ -299,6 +322,16 @@ export function toAnthropicMessages(messages: AgentMessage[]): { system?: string
       continue;
     }
 
+    if (msg.role === 'assistant' && Array.isArray(msg.providerRaw?.anthropicContent)) {
+      // Signed thinking/redacted blocks must survive byte-for-byte. Normalize
+      // only tool IDs to the IDs carried by our paired tool-result messages.
+      let toolIndex = 0;
+      const blocks = (msg.providerRaw.anthropicContent as AnthropicBlock[]).map(block =>
+        block.type === 'tool_use' ? { ...block, id: msg.toolCalls?.[toolIndex++]?.id ?? block.id } : block);
+      pushMerged('assistant', blocks);
+      continue;
+    }
+
     if (msg.role === 'assistant' && msg.toolCalls?.length) {
       const blocks: AnthropicBlock[] = [];
       if (msg.content?.trim()) blocks.push({ type: 'text', text: msg.content });
@@ -335,6 +368,7 @@ export function toAnthropicTools(tools: ChatCompletionTool[]): Array<Record<stri
     return {
       name: t.function.name,
       description: t.function.description,
+      ...(t.function.strict ? { strict: true } : {}),
       input_schema: t.function.parameters || { type: 'object', properties: {} },
     };
   });
@@ -355,10 +389,12 @@ function safeParse(s: string): Record<string, unknown> {
 // ── Wire types ──
 
 interface AnthropicResponse {
+  id?: string;
   content?: Array<{ type: string; text?: string; id?: string; name?: string; input?: unknown }>;
   stop_reason?: string;
   model?: string;
   usage?: {
+    output_tokens_details?: { thinking_tokens?: number };
     input_tokens?: number;
     output_tokens?: number;
     cache_read_input_tokens?: number;
@@ -400,6 +436,11 @@ export async function* parseAnthropicSseStream(body: ReadableStream<Uint8Array>,
   // Map content-block index → buffered tool_use call.
   const toolBlocks = new Map<number, { id: string; name: string }>();
   let finishReason: string | undefined;
+  let usage: AnthropicResponse['usage'];
+  let model = '';
+  let requestId: string | undefined;
+  const rawBlocks: any[] = [];
+  const toolJson = new Map<number, string>();
 
   try {
     while (true) {
@@ -427,8 +468,15 @@ export async function* parseAnthropicSseStream(body: ReadableStream<Uint8Array>,
         catch { continue; }
 
         switch (data.type) {
+          case 'message_start': {
+            usage = data.message?.usage;
+            model = data.message?.model ?? '';
+            requestId = data.message?.id;
+            break;
+          }
           case 'content_block_start': {
             const block = data.content_block;
+            if (block && data.index != null) rawBlocks[data.index] = { ...block };
             if (block?.type === 'tool_use' && data.index != null) {
               toolBlocks.set(data.index, { id: block.id || `call_${data.index}`, name: block.name || '' });
               yield { toolCallDelta: { id: block.id || `call_${data.index}`, name: block.name, arguments: '' } };
@@ -437,6 +485,13 @@ export async function* parseAnthropicSseStream(body: ReadableStream<Uint8Array>,
           }
           case 'content_block_delta': {
             const delta = data.delta;
+            const raw = data.index != null ? rawBlocks[data.index] : undefined;
+            if (raw && delta) {
+              if (delta.type === 'text_delta') raw.text = (raw.text ?? '') + (delta.text ?? '');
+              if (delta.type === 'thinking_delta') raw.thinking = (raw.thinking ?? '') + (delta.thinking ?? '');
+              if (delta.type === 'signature_delta') raw.signature = (raw.signature ?? '') + (delta.signature ?? '');
+              if (delta.type === 'input_json_delta') toolJson.set(data.index!, (toolJson.get(data.index!) ?? '') + (delta.partial_json ?? ''));
+            }
             if (delta?.type === 'text_delta' && delta.text) {
               yield { content: delta.text };
             } else if (delta?.type === 'input_json_delta' && data.index != null) {
@@ -445,7 +500,12 @@ export async function* parseAnthropicSseStream(body: ReadableStream<Uint8Array>,
             }
             break;
           }
+          case 'content_block_stop': {
+            if (data.index != null && toolJson.has(data.index)) rawBlocks[data.index].input = JSON.parse(toolJson.get(data.index)!);
+            break;
+          }
           case 'message_delta': {
+            usage = { ...usage, ...data.usage };
             if (data.delta?.stop_reason) finishReason = mapStopReason(data.delta.stop_reason);
             break;
           }
@@ -464,13 +524,47 @@ export async function* parseAnthropicSseStream(body: ReadableStream<Uint8Array>,
     reader.releaseLock();
   }
 
-  if (finishReason) yield { finishReason };
+  if (finishReason) {
+    const result = parseAnthropicResponse({ usage, content: rawBlocks.filter(Boolean), model, id: requestId }, model, 0);
+    yield { finishReason, usage: result.usage, providerRaw: result.providerRaw, model, requestId };
+  }
 }
 
 interface AnthropicStreamEvent {
   type: string;
   index?: number;
-  content_block?: { type?: string; id?: string; name?: string };
-  delta?: { type?: string; text?: string; partial_json?: string; stop_reason?: string };
+  message?: { usage?: AnthropicResponse['usage']; model?: string; id?: string };
+  usage?: AnthropicResponse['usage'];
+  content_block?: { type?: string; id?: string; name?: string; [key: string]: unknown };
+  delta?: { thinking?: string; signature?: string; type?: string; text?: string; partial_json?: string; stop_reason?: string };
   error?: { message?: string };
+}
+
+
+/** Shared policy for native Claude and native-compatible endpoints. */
+export function configureAnthropicBody(body: Record<string, any>, options: CompletionOptions): void {
+  if (options.tools?.length) body.tool_choice = { type: options.toolChoice === 'required' ? 'any' : options.toolChoice === 'none' ? 'none' : 'auto' };
+  if (options.responseFormat?.type === 'json_schema') {
+    body.output_config = { ...body.output_config, format: { type: 'json_schema', schema: options.responseFormat.json_schema.schema } };
+  } else if (options.responseFormat?.type === 'json_object') {
+    // The old compatibility API ignored JSON mode. Native JSON Schema is the
+    // enforceable path; plain JSON-object requests get an explicit instruction.
+    const instruction = { type: 'text', text: 'Return only a valid JSON object.' };
+    body.system = typeof body.system === 'string' ? [{ type: 'text', text: body.system }, instruction] : [...(body.system ?? []), instruction];
+  }
+  if (/(?:opus|sonnet)-4-[7-9]|(?:opus|sonnet|fable|mythos)-[5-9]/.test(options.model)) { delete body.temperature; delete body.top_p; }
+  const manualThinking = body.thinking?.type === 'enabled';
+  const forcedToolsUnsupported = /(?:^|[-/])(?:fable|mythos)-5-1(?:-|$)/i.test(options.model);
+  if (body.thinking && body.thinking.type !== 'disabled') {
+    delete body.temperature;
+    delete body.top_p;
+  } else if (body.temperature != null) {
+    // Claude rejects simultaneous temperature and top_p on some models.
+    delete body.top_p;
+  }
+  if (body.tool_choice?.type === 'any' && (manualThinking || forcedToolsUnsupported)) {
+    throw new Error(manualThinking
+      ? 'Required tool choice is incompatible with manual Claude thinking; select auto or disable thinking.'
+      : 'Required tool choice is not supported by this Claude model; select auto.');
+  }
 }

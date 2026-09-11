@@ -111,3 +111,18 @@ describe('the launcher forwards what it promises', () => {
     expect(() => execFileSync('bash', ['-n', resolve(__dirname, '../../bin/octi')])).not.toThrow();
   });
 });
+
+describe('parseSessionArg', () => {
+  const id = '11111111-2222-4333-8444-555555555555';
+  test('reads --session and keeps its value out of the project path', async () => {
+    const { parseSessionArg } = await import('./index');
+    expect(parseSessionArg(['--session', id])).toBe(id);
+    expect(parseProjectArg(['--session', id])).toBeUndefined();
+    expect(parseProjectArg(['--session', id, '/tmp'])).toBe('/tmp');
+  });
+  test('rejects a malformed id rather than resuming garbage', async () => {
+    const { parseSessionArg } = await import('./index');
+    expect(parseSessionArg(['--session', 'nope'])).toBeUndefined();
+    expect(parseSessionArg([])).toBeUndefined();
+  });
+});

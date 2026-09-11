@@ -1,3 +1,5 @@
+import { recordProviderUsage } from './instrumented';
+import { normalizeUsage } from './usage';
 import OpenAI from 'openai';
 import type {
   ChatCompletionCreateParams,
@@ -10,7 +12,6 @@ import { parseToolCallArguments } from '@/models/tool-call-args';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
-import { extractCachedTokens } from './usage';
 
 // z.ai (Zhipu / GLM) OpenAI-compatible endpoint.
 // https://docs.z.ai/guides/overview/quick-start
@@ -68,6 +69,7 @@ export class ZaiProvider implements ModelProvider {
       // Pin float encoding: the OpenAI SDK otherwise requests base64 and decodes
       // it, which corrupts results if the upstream returns plain float arrays.
       const res = await client.embeddings.create({ model, input: texts, encoding_format: 'float' });
+      await recordProviderUsage({ model, messages: [], requestType: 'embedding' }, this.name, { model, usage: normalizeUsage(res.usage) });
       return res.data.map((d) => d.embedding as number[]);
     } catch (error) {
       throw classifyError(error, this.name);
@@ -106,6 +108,7 @@ export class ZaiProvider implements ModelProvider {
 
     try {
       const response = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
+      options.accountingResponse?.({ model: response.model ?? options.model, requestId: response.id, usage: normalizeUsage(response.usage) });
       const latencyMs = Date.now() - startTime;
       if (!response.choices?.length) {
         throw classifyError(new Error(`Provider returned empty response (no choices) for model ${params.model || options.model}`), this.name);
@@ -113,14 +116,11 @@ export class ZaiProvider implements ModelProvider {
       const choice = response.choices[0];
 
       const result: CompletionResult = {
+        reasoningContent: (choice.message as any).reasoning_content,
         content: choice.message.content || '',
         finishReason: choice.finish_reason || 'stop',
-        usage: {
-          inputTokens: response.usage?.prompt_tokens || 0,
-          outputTokens: response.usage?.completion_tokens || 0,
-          totalTokens: response.usage?.total_tokens || 0,
-          ...extractCachedTokens(response.usage),
-        },
+        usage: normalizeUsage(response.usage),
+        requestId: response.id,
         model: response.model,
         latencyMs,
       };
@@ -169,6 +169,7 @@ export class ZaiProvider implements ModelProvider {
       top_p: options.topP,
       stop: options.stopSequences,
       stream: true,
+      stream_options: { include_usage: true },
     };
 
     if (options.tools?.length) {
@@ -191,7 +192,10 @@ export class ZaiProvider implements ModelProvider {
 
     const toolCallBuffers = new Map<number, { id: string; name: string; arguments: string }>();
 
+    let reasoning = '';
     for await (const chunk of stream) {
+      reasoning += (chunk.choices[0]?.delta as any)?.reasoning_content ?? '';
+      if (chunk.usage) yield { usage: normalizeUsage(chunk.usage), requestId: chunk.id, model: chunk.model };
       const delta = chunk.choices[0]?.delta;
 
       if (delta?.content) {
@@ -219,7 +223,7 @@ export class ZaiProvider implements ModelProvider {
       }
 
       if (chunk.choices[0]?.finish_reason) {
-        yield { finishReason: chunk.choices[0].finish_reason };
+        yield { finishReason: chunk.choices[0].finish_reason, reasoningContent: reasoning || undefined };
       }
     }
   }
@@ -308,6 +312,7 @@ export class ZaiProvider implements ModelProvider {
 
       if (msg.role === 'assistant' && msg.toolCalls?.length) {
         return {
+          reasoning_content: msg.reasoningContent,
           role: 'assistant' as const,
           content: msg.content || null,
           tool_calls: msg.toolCalls.map((tc) => ({
@@ -322,6 +327,7 @@ export class ZaiProvider implements ModelProvider {
       }
 
       return {
+        ...(msg.role === 'assistant' && msg.reasoningContent ? { reasoning_content: msg.reasoningContent } : {}),
         role: msg.role as 'system' | 'user' | 'assistant',
         content: msg.content,
       };

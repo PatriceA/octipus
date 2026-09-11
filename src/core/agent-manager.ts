@@ -202,6 +202,12 @@ export class AgentManager {
 
     // Subscribe to events: buffer for polling + persist to DB + forward to manager handlers
     worker.onEvent((event) => {
+      // Streamed text deltas are transient: forward them, never buffer or
+      // persist (one row per token would swamp agent_events).
+      if ((event.data as { type?: string } | null)?.type === 'text_delta') {
+        for (const handler of this.eventHandlers) handler(event);
+        return;
+      }
       // Buffer the event for polling
       const buffered: BufferedEvent = { seq: ++this.eventSeqCounter, event };
       let buf = this.eventBuffers.get(agentId);

@@ -83,6 +83,22 @@ async function main(): Promise<void> {
       // `/help` is served by the gateway and lists the commands it owns.
       return waitFor('/compact', 20_000);
     });
+    await record('/status names this session', async () => {
+      child.stdin.write('/status\r');
+      return waitFor('Agents: ', 20_000);
+    });
+    await record('/sessions lists the session this run created', async () => {
+      child.stdin.write('/sessions\r');
+      return waitFor(' msg  ', 20_000);
+    });
+    await record('/hotkeys is answered locally', async () => {
+      child.stdin.write('/hotkeys\r');
+      return waitFor('Command palette', 5_000);
+    });
+    await record('/abort with nothing running reports it (spinner is not stuck)', async () => {
+      child.stdin.write('/abort\r');
+      return waitFor('No running agents', 20_000);
+    });
 
     tooled = await record('a tool-backed answer comes back', async () => {
       // The expected string must appear ONLY in the answer: a marker the user

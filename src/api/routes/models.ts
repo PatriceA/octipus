@@ -129,6 +129,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
         endpoint: t.Optional(t.String()),
         apiKeyRef: t.Optional(t.String()),
         maxTokens: t.Optional(t.Number()),
+        defaultMaxTokens: t.Optional(t.Number({ minimum: 1 })),
         contextWindow: t.Optional(t.Number()),
         supportsVision: t.Optional(t.Boolean()),
         supportsTools: t.Optional(t.Boolean()),
@@ -164,6 +165,7 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
         endpoint: t.Optional(t.String()),
         apiKeyRef: t.Optional(t.String()),
         maxTokens: t.Optional(t.Number()),
+        defaultMaxTokens: t.Optional(t.Number({ minimum: 1 })),
         contextWindow: t.Optional(t.Number()),
         // topics/topicRoles are intentionally excluded — topic↔model binding is
         // owned by the Topics page (PUT /topics/:topic/binding), not the model
@@ -498,6 +500,23 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
       detail: { tags: ['models'] },
     }
   )
+
+  .get('/usage/session/:sessionId', async ({ user, params, set }) => {
+    if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+    const { sessionRepository } = await import('@/db/repositories/session-repository');
+    const session = await sessionRepository.findById(params.sessionId);
+    if (!session || session.userId !== user.id) { set.status = 404; return { error: 'Session not found' }; }
+    const { getCostTracker } = await import('@/models/cost-tracker');
+    return { stats: await getCostTracker().getSessionStats(params.sessionId) };
+  }, { params: t.Object({ sessionId: t.String({ format: 'uuid' }) }), detail: { tags: ['models'] } })
+
+  .get('/billing/report', async ({ user, query, set }) => {
+    if (!user?.isAdmin) { set.status = 403; return { error: 'Admin access required' }; }
+    const { getProviderBillingReport, providerBillingErrorStatus } = await import('@/services/provider-billing');
+    try {
+      return await getProviderBillingReport(query.provider, query.start, query.end);
+    } catch (err) { set.status = providerBillingErrorStatus(err); return { error: (err as Error).message }; }
+  }, { query: t.Object({ provider: t.Union([t.Literal('openai'), t.Literal('anthropic')]), start: t.String(), end: t.String() }), detail: { tags: ['models'] } })
 
   // Get global usage (admin only)
   .get(

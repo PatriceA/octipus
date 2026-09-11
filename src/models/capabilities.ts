@@ -1,4 +1,5 @@
 import type { ModelConfigEntry } from '@/db/schema/models';
+import { anthropicNativeMessagesEnabled, supportsClaudeStructuredOutput } from '@/shared/provider-settings';
 
 export interface ModelCapabilities {
   multiturn: boolean;
@@ -44,7 +45,7 @@ export const PROVIDER_CAPABILITY_DEFAULTS: Record<string, ModelCapabilities> = {
     streaming: true,
     systemRole: true,
     embeddings: false,
-    structuredOutput: false,
+    structuredOutput: true,
   },
   gemini: {
     multiturn: true,
@@ -189,5 +190,10 @@ export function getCapabilitiesForModel(model: ModelConfigEntry): ModelCapabilit
     base.streaming = model.supportsStreaming;
   }
 
+  if (model.provider === 'anthropic') {
+    base.structuredOutput = base.structuredOutput
+      && supportsClaudeStructuredOutput(model.modelId)
+      && anthropicNativeMessagesEnabled(process.env.ANTHROPIC_NATIVE_MESSAGES);
+  }
   return base;
 }

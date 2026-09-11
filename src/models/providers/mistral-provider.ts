@@ -1,3 +1,5 @@
+import { recordProviderUsage } from './instrumented';
+import { normalizeUsage } from './usage';
 import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
 import type {
@@ -11,14 +13,14 @@ import type { AgentMessage } from '@/core/types';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, OcrDocument, OcrResult, ProviderHealthStatus } from './interface';
-import { cacheAffinityKey, extractCachedTokens } from './usage';
+import { cacheAffinityKey } from './usage';
 
 const MISTRAL_BASE_URL = 'https://api.mistral.ai/v1';
 
 // Set Mistral's explicit prompt-cache opt-in key on a request body, shared by
 // complete() and stream() (Phase 2c). No-op when there's no session.
 function setMistralCacheKey(params: ChatCompletionCreateParams, options: CompletionOptions): void {
-  const cacheKey = cacheAffinityKey(options.sessionId, options.userId);
+  const cacheKey = options.cachePolicy === 'off' ? undefined : cacheAffinityKey(options.sessionId, options.userId);
   if (cacheKey) (params as unknown as Record<string, unknown>).prompt_cache_key = cacheKey;
 }
 
@@ -132,6 +134,7 @@ export class MistralProvider implements ModelProvider {
 
     try {
       const response = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
+      options.accountingResponse?.({ model: response.model ?? options.model, requestId: response.id, usage: normalizeUsage(response.usage) });
       const latencyMs = Date.now() - startTime;
       if (!response.choices?.length) {
         throw classifyError(new Error(`Provider returned empty response (no choices) for model ${params.model || options.model}`), 'mistral');
@@ -145,12 +148,8 @@ export class MistralProvider implements ModelProvider {
       const result: CompletionResult = {
         content: choice.message.content || '',
         finishReason: choice.finish_reason || 'stop',
-        usage: {
-          inputTokens: response.usage?.prompt_tokens || 0,
-          outputTokens: response.usage?.completion_tokens || 0,
-          totalTokens: response.usage?.total_tokens || 0,
-          ...extractCachedTokens(response.usage),
-        },
+        usage: normalizeUsage(response.usage),
+        requestId: response.id,
         model: response.model,
         latencyMs,
         ...(reasoningContent ? { reasoningContent } : {}),
@@ -199,6 +198,7 @@ export class MistralProvider implements ModelProvider {
       top_p: options.topP,
       stop: options.stopSequences,
       stream: true,
+      stream_options: { include_usage: true },
     };
 
     if (options.tools?.length) {
@@ -226,6 +226,7 @@ export class MistralProvider implements ModelProvider {
     const toolCallBuffers = new Map<number, { id: string; name: string; arguments: string }>();
 
     for await (const chunk of stream) {
+      if (chunk.usage) yield { usage: normalizeUsage(chunk.usage), requestId: chunk.id, model: chunk.model };
       const delta = chunk.choices[0]?.delta;
 
       if (delta?.content) {
@@ -273,6 +274,7 @@ export class MistralProvider implements ModelProvider {
         input: texts,
         encoding_format: 'float',
       });
+      await recordProviderUsage({ model, messages: [], requestType: 'embedding' }, this.name, { model, usage: normalizeUsage(response.usage) });
       return response.data.map((d) => d.embedding);
     } catch (error) {
       modelLogger.error({ error, model, provider: this.name }, 'Mistral embed failed');
@@ -324,6 +326,7 @@ export class MistralProvider implements ModelProvider {
       const pages = (raw.pages || []).map((p) => ({ index: p.index, markdown: p.markdown || '' }));
       modelLogger.debug({ model, pageCount: pages.length, provider: this.name }, 'Mistral OCR successful');
 
+      await recordProviderUsage({ model, messages: [], requestType: 'ocr', accountingMetadata: { pages: pages.length } }, this.name, { model: raw.model || model, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false } });
       return { pages, model: raw.model || model };
     } catch (error) {
       modelLogger.error({ error, model, provider: this.name }, 'Mistral OCR failed');

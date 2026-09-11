@@ -1,3 +1,4 @@
+import { normalizeUsage } from './usage';
 import OpenAI from 'openai';
 import type {
   ChatCompletionCreateParams,
@@ -11,7 +12,6 @@ import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import { sanitizeToolsForGemini } from './gemini-provider';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
-import { extractCachedTokens } from './usage';
 import { parseServiceAccount, type ServiceAccount, VertexTokenManager } from './vertex-token';
 
 const DEFAULT_LOCATION = 'us-central1';
@@ -63,6 +63,7 @@ export class VertexProvider implements ModelProvider {
 
     try {
       const response = await client.chat.completions.create(params, reqOpts);
+      options.accountingResponse?.({ model: response.model ?? options.model, requestId: response.id, usage: normalizeUsage(response.usage) });
       const latencyMs = Date.now() - startTime;
       if (!response.choices?.length) {
         throw classifyError(new Error(`Provider returned empty response (no choices) for model ${model}`), 'vertex');
@@ -72,12 +73,8 @@ export class VertexProvider implements ModelProvider {
       const result: CompletionResult = {
         content: choice.message.content || '',
         finishReason: choice.finish_reason || 'stop',
-        usage: {
-          inputTokens: response.usage?.prompt_tokens || 0,
-          outputTokens: response.usage?.completion_tokens || 0,
-          totalTokens: response.usage?.total_tokens || 0,
-          ...extractCachedTokens(response.usage),
-        },
+        usage: normalizeUsage(response.usage),
+        requestId: response.id,
         model: response.model,
         latencyMs,
       };
@@ -113,6 +110,7 @@ export class VertexProvider implements ModelProvider {
       top_p: options.topP,
       stop: options.stopSequences,
       stream: true,
+      stream_options: { include_usage: true },
     };
     if (options.tools?.length) {
       params.tools = this.prepareTools(model, options.tools);
@@ -129,6 +127,7 @@ export class VertexProvider implements ModelProvider {
 
     const toolCallBuffers = new Map<number, { id: string; name: string; arguments: string }>();
     for await (const chunk of stream) {
+      if (chunk.usage) yield { usage: normalizeUsage(chunk.usage), requestId: chunk.id, model: chunk.model };
       const delta = chunk.choices[0]?.delta;
       if (delta?.content) yield { content: delta.content };
       if (delta?.tool_calls) {

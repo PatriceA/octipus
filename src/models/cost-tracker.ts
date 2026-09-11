@@ -1,3 +1,4 @@
+import { estimateCost } from './pricing';
 import { and, desc, eq, gte, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { Cache } from '@/db/cache';
@@ -9,31 +10,18 @@ export interface UsageStats {
   totalOutputTokens: number;
   totalCost: number;
   requestCount: number;
+  reportedCost?: number;
+  estimatedCost?: number;
+  unknownCostRequests?: number;
+  unknownUsageRequests?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+  estimatedCacheSavings?: number;
 }
 
 export interface ModelUsageStats extends UsageStats {
   modelName: string;
 }
-
-// Cached prompt-read price as a fraction of the base input rate, by provider
-// family. Anthropic/Mistral/DeepSeek publish ~0.1×; OpenAI/Grok/Gemini ~0.5×.
-// Unknown providers default to 0.25× (see calculateCost).
-const CACHED_READ_MULTIPLIER: Record<string, number> = {
-  anthropic: 0.1,
-  'custom-anthropic': 0.1,
-  mistral: 0.1,
-  deepseek: 0.1,
-  // Moonshot (Kimi) cached input ≈ 10-15% of the cache-miss rate.
-  moonshot: 0.1,
-  // z.ai (GLM) context-cache reads billed at a steep discount off input.
-  zai: 0.2,
-  openai: 0.5,
-  'custom-openai': 0.5,
-  grok: 0.5,
-  gemini: 0.5,
-  'custom-gemini': 0.5,
-  openrouter: 0.5,
-};
 
 export interface DailyUsage {
   date: string;
@@ -81,9 +69,8 @@ export class CostTracker {
    * grand-total prompt tokens INCLUDING cached reads and cache-creation;
    * `cachedInputTokens` and `cacheCreationTokens` are subsets of it, each
    * billed at its own rate rather than the base input rate.
-   * ponytail: cached-read multiplier is per-provider-family (Anthropic/Mistral/
-   * DeepSeek reads ≈0.1×, OpenAI/Grok/Gemini ≈0.5×) and cache-write ≈1.25×
-   * (Anthropic 5-min). Upgrade path if a model diverges: per-model rate columns.
+   * Rates are explicit per model; missing cache prices produce an unknown
+   * estimate instead of silently assuming a discount.
    */
   async calculateCost(
     modelName: string,
@@ -91,32 +78,18 @@ export class CostTracker {
     outputTokens: number,
     cachedInputTokens = 0,
     cacheCreationTokens = 0
-  ): Promise<number> {
-    // Get model pricing from config — callers pass either name or modelId
-    const model = await this.db
-      .select()
-      .from(modelConfig)
-      .where(or(eq(modelConfig.name, modelName), eq(modelConfig.modelId, modelName)))
-      .limit(1);
+  ): Promise<number | null> {
+    const model = await this.pricingModel(modelName);
 
-    if (!model[0]) {
-      modelLogger.warn({ model: modelName }, 'Model not found for cost calculation');
-      return 0;
-    }
+    return estimateCost(model, inputTokens, outputTokens, cachedInputTokens, cacheCreationTokens);
+  }
 
-    const inputRate = model[0].costPerInputToken;
-    const readMultiplier = CACHED_READ_MULTIPLIER[model[0].provider] ?? 0.25;
-    // Cached reads + cache-creation are subsets of inputTokens billed at their
-    // own rates — the remainder is fresh input at full price.
-    const fullPriceInput = Math.max(0, inputTokens - cachedInputTokens - cacheCreationTokens);
-
-    // Cost is per 1M tokens
-    const inputCost = (fullPriceInput / 1_000_000) * inputRate;
-    const cachedReadCost = (cachedInputTokens / 1_000_000) * inputRate * readMultiplier;
-    const cacheWriteCost = (cacheCreationTokens / 1_000_000) * inputRate * 1.25;
-    const outputCost = (outputTokens / 1_000_000) * model[0].costPerOutputToken;
-
-    return inputCost + cachedReadCost + cacheWriteCost + outputCost;
+  private async pricingModel(name: string, provider?: string, lookupByModelId = false) {
+    const rows = await this.db.select().from(modelConfig)
+      .where(and(lookupByModelId ? eq(modelConfig.modelId, name) : or(eq(modelConfig.name, name), eq(modelConfig.modelId, name)), provider ? eq(modelConfig.provider, provider) : undefined));
+    // Prefer an exact registry name; ambiguous model IDs must not pick an
+    // arbitrary alias's rates or provider account.
+    return (lookupByModelId ? undefined : rows.find(row => row.name === name)) ?? (rows.length === 1 ? rows[0] : undefined);
   }
 
   /**
@@ -134,17 +107,19 @@ export class CostTracker {
       metadata?: Record<string, unknown>;
       cachedInputTokens?: number;
       cacheCreationTokens?: number;
+      reportedCost?: number;
+      usageAvailable?: boolean;
+      provider?: string;
+      lookupByModelId?: boolean;
     }
   ): Promise<CostLogEntry> {
     const cachedInputTokens = options?.cachedInputTokens ?? 0;
     const cacheCreationTokens = options?.cacheCreationTokens ?? 0;
-    const totalCost = await this.calculateCost(
-      modelName,
-      inputTokens,
-      outputTokens,
-      cachedInputTokens,
-      cacheCreationTokens
-    );
+    const pricingModel = await this.pricingModel(modelName, options?.provider, options?.lookupByModelId);
+    const estimatedCost = pricingModel?.metadata?.pricing?.free ? 0 : options?.usageAvailable === false ? null : estimateCost(pricingModel,
+      inputTokens, outputTokens, cachedInputTokens, cacheCreationTokens);
+    const uncachedCost = options?.usageAvailable === false ? null : estimateCost(pricingModel, inputTokens, outputTokens);
+    const reportedCost = typeof options?.reportedCost === 'number' && Number.isFinite(options.reportedCost) && options.reportedCost >= 0 ? options.reportedCost : undefined;
 
     return this.logUsage({
       userId,
@@ -153,11 +128,23 @@ export class CostTracker {
       outputTokens,
       cachedInputTokens,
       cacheCreationTokens,
-      totalCost,
+      // Unknown entries retain a zero numeric contribution for legacy SQL;
+      // metadata and unknownCostRequests distinguish them from free requests.
+      totalCost: reportedCost ?? estimatedCost ?? 0,
       sessionId: options?.sessionId,
       agentId: options?.agentId,
       requestType: options?.requestType,
-      metadata: options?.metadata || {},
+      metadata: {
+        ...options?.metadata,
+        costSource: reportedCost != null ? 'reported' : estimatedCost != null ? 'estimated' : 'unknown',
+        reportedCost,
+        reportedCostSource: reportedCost != null ? 'provider response' : null,
+        pricingSource: pricingModel ? pricingModel.metadata?.pricing?.source ?? 'model configuration' : null,
+        pricingSnapshot: pricingModel ? { input: pricingModel.costPerInputToken, output: pricingModel.costPerOutputToken, ...pricingModel.metadata?.pricing } : null,
+        estimatedCacheSavings: estimatedCost != null && uncachedCost != null ? uncachedCost - estimatedCost : null,
+        estimatedCost,
+        usageAvailable: options?.usageAvailable ?? true,
+      },
     });
   }
 
@@ -180,6 +167,13 @@ export class CostTracker {
         totalOutputTokens: sql<number>`COALESCE(SUM(${costLog.outputTokens}), 0)::int`,
         totalCost: sql<number>`COALESCE(SUM(${costLog.totalCost}), 0)::float`,
         requestCount: sql<number>`COUNT(*)::int`,
+        estimatedCacheSavings: sql<number>`COALESCE(SUM((${costLog.metadata}->>'estimatedCacheSavings')::float), 0)::float`,
+        reportedCost: sql<number>`COALESCE(SUM(CASE WHEN ${costLog.metadata}->>'costSource' = 'reported' THEN ${costLog.totalCost} ELSE 0 END), 0)::float`,
+        estimatedCost: sql<number>`COALESCE(SUM(CASE WHEN COALESCE(${costLog.metadata}->>'costSource', 'estimated') = 'estimated' THEN ${costLog.totalCost} ELSE 0 END), 0)::float`,
+        unknownUsageRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'usageAvailable' = 'false')::int`,
+        unknownCostRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'costSource' = 'unknown')::int`,
+        cacheReadTokens: sql<number>`COALESCE(SUM(${costLog.cachedInputTokens}), 0)::bigint`,
+        cacheCreationTokens: sql<number>`COALESCE(SUM(${costLog.cacheCreationTokens}), 0)::bigint`,
       })
       .from(costLog)
       .where(and(...conditions));
@@ -211,6 +205,13 @@ export class CostTracker {
         totalOutputTokens: sql<number>`COALESCE(SUM(${costLog.outputTokens}), 0)::int`,
         totalCost: sql<number>`COALESCE(SUM(${costLog.totalCost}), 0)::float`,
         requestCount: sql<number>`COUNT(*)::int`,
+        estimatedCacheSavings: sql<number>`COALESCE(SUM((${costLog.metadata}->>'estimatedCacheSavings')::float), 0)::float`,
+        reportedCost: sql<number>`COALESCE(SUM(CASE WHEN ${costLog.metadata}->>'costSource' = 'reported' THEN ${costLog.totalCost} ELSE 0 END), 0)::float`,
+        estimatedCost: sql<number>`COALESCE(SUM(CASE WHEN COALESCE(${costLog.metadata}->>'costSource', 'estimated') = 'estimated' THEN ${costLog.totalCost} ELSE 0 END), 0)::float`,
+        unknownUsageRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'usageAvailable' = 'false')::int`,
+        unknownCostRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'costSource' = 'unknown')::int`,
+        cacheReadTokens: sql<number>`COALESCE(SUM(${costLog.cachedInputTokens}), 0)::bigint`,
+        cacheCreationTokens: sql<number>`COALESCE(SUM(${costLog.cacheCreationTokens}), 0)::bigint`,
       })
       .from(costLog)
       .where(and(...conditions))
@@ -253,6 +254,13 @@ export class CostTracker {
         totalOutputTokens: sql<number>`COALESCE(SUM(${costLog.outputTokens}), 0)::int`,
         totalCost: sql<number>`COALESCE(SUM(${costLog.totalCost}), 0)::float`,
         requestCount: sql<number>`COUNT(*)::int`,
+        estimatedCacheSavings: sql<number>`COALESCE(SUM((${costLog.metadata}->>'estimatedCacheSavings')::float), 0)::float`,
+        reportedCost: sql<number>`COALESCE(SUM(CASE WHEN ${costLog.metadata}->>'costSource' = 'reported' THEN ${costLog.totalCost} ELSE 0 END), 0)::float`,
+        estimatedCost: sql<number>`COALESCE(SUM(CASE WHEN COALESCE(${costLog.metadata}->>'costSource', 'estimated') = 'estimated' THEN ${costLog.totalCost} ELSE 0 END), 0)::float`,
+        unknownUsageRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'usageAvailable' = 'false')::int`,
+        unknownCostRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'costSource' = 'unknown')::int`,
+        cacheReadTokens: sql<number>`COALESCE(SUM(${costLog.cachedInputTokens}), 0)::bigint`,
+        cacheCreationTokens: sql<number>`COALESCE(SUM(${costLog.cacheCreationTokens}), 0)::bigint`,
       })
       .from(costLog)
       .where(eq(costLog.sessionId, sessionId));
@@ -277,6 +285,13 @@ export class CostTracker {
         totalOutputTokens: sql<number>`COALESCE(SUM(${costLog.outputTokens}), 0)::int`,
         totalCost: sql<number>`COALESCE(SUM(${costLog.totalCost}), 0)::float`,
         requestCount: sql<number>`COUNT(*)::int`,
+        estimatedCacheSavings: sql<number>`COALESCE(SUM((${costLog.metadata}->>'estimatedCacheSavings')::float), 0)::float`,
+        reportedCost: sql<number>`COALESCE(SUM(CASE WHEN ${costLog.metadata}->>'costSource' = 'reported' THEN ${costLog.totalCost} ELSE 0 END), 0)::float`,
+        estimatedCost: sql<number>`COALESCE(SUM(CASE WHEN COALESCE(${costLog.metadata}->>'costSource', 'estimated') = 'estimated' THEN ${costLog.totalCost} ELSE 0 END), 0)::float`,
+        unknownUsageRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'usageAvailable' = 'false')::int`,
+        unknownCostRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'costSource' = 'unknown')::int`,
+        cacheReadTokens: sql<number>`COALESCE(SUM(${costLog.cachedInputTokens}), 0)::bigint`,
+        cacheCreationTokens: sql<number>`COALESCE(SUM(${costLog.cacheCreationTokens}), 0)::bigint`,
       })
       .from(costLog)
       .where(conditions.length > 0 ? and(...conditions) : undefined);

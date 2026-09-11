@@ -181,7 +181,7 @@ export class EmbeddingService {
    * prefixes. An explicit constructor override has no registry row, hence no
    * prefixes.
    */
-  private async resolveModel(): Promise<{ modelId: string; prefixes: EmbedPrefixes }> {
+  private async resolveModel(): Promise<{ modelId: string; modelConfigName?: string; prefixes: EmbedPrefixes }> {
     if (this.model) return { modelId: this.model, prefixes: {} };
     const { getModelRegistry } = await import('@/models/model-registry');
     const registry = getModelRegistry();
@@ -189,15 +189,16 @@ export class EmbeddingService {
     if (!m) {
       throw new Error('No model mapped to topic "embedding". Assign one in the Models page.');
     }
-    return { modelId: m.modelId, prefixes: m.metadata?.embedPrefixes ?? {} };
+    return { modelId: m.modelId, modelConfigName: m.name, prefixes: m.metadata?.embedPrefixes ?? {} };
   }
 
   async generateEmbedding(text: string, side: EmbedSide = 'document'): Promise<number[]> {
     const client = getLiteLLMClient();
     let modelId: string;
+    let modelConfigName: string | undefined;
     let prefixes: EmbedPrefixes;
     try {
-      ({ modelId, prefixes } = await this.resolveModel());
+      ({ modelId, modelConfigName, prefixes } = await this.resolveModel());
     } catch (err) {
       coreLogger.error(
         { err, component: 'embeddings' },
@@ -209,7 +210,7 @@ export class EmbeddingService {
     // (symmetric) models get the text verbatim — same behaviour as before.
     const input = `${prefixes[side] ?? ''}${text}`;
     try {
-      const [embedding] = await client.embed(input, modelId);
+      const [embedding] = await client.embed(input, modelId, modelConfigName ? { modelConfigName } : undefined);
       if (!Array.isArray(embedding) || embedding.length === 0) {
         throw new Error(`Embedding provider returned empty vector for model ${modelId}`);
       }
@@ -239,9 +240,10 @@ export class EmbeddingService {
 
     const client = getLiteLLMClient();
     let modelId: string;
+    let modelConfigName: string | undefined;
     let prefixes: EmbedPrefixes;
     try {
-      ({ modelId, prefixes } = await this.resolveModel());
+      ({ modelId, modelConfigName, prefixes } = await this.resolveModel());
     } catch (err) {
       coreLogger.error(
         { err, component: 'embeddings' },
@@ -254,7 +256,7 @@ export class EmbeddingService {
       const slice = texts.slice(start, start + EMBED_BATCH_SIZE);
       const input = slice.map((t) => `${prefixes[side] ?? ''}${t}`);
       try {
-        const vectors = await client.embed(input, modelId);
+        const vectors = await client.embed(input, modelId, modelConfigName ? { modelConfigName } : undefined);
         // A provider that returns a different count has silently dropped or
         // reordered inputs — vectors would be attributed to the wrong chunk,
         // which is worse than not indexing. Fail the batch instead.

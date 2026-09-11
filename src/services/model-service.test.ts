@@ -1,10 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { registerModel, updateModel } from './model-service';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { listModels, registerModel, updateModel } from './model-service';
 
 const registry = vi.hoisted(() => ({
   getModel: vi.fn(),
   registerModel: vi.fn(),
   updateModel: vi.fn(),
+  getAllModelsIncludeDisabled: vi.fn(),
+  getModelsForUser: vi.fn(),
 }));
 vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => registry }));
 vi.mock('@/models/capabilities', () => ({ getCapabilitiesForModel: () => ({}) }));
@@ -14,6 +16,7 @@ beforeEach(() => {
   registry.registerModel.mockImplementation(async (body) => body);
   registry.updateModel.mockImplementation(async (name, body) => ({ name, ...body }));
 });
+afterEach(() => vi.unstubAllEnvs());
 
 describe('registerModel — OpenRouter slash validation', () => {
   it('rejects an OpenRouter modelId without a slash, naming the offending id', async () => {
@@ -108,5 +111,53 @@ describe('managed CLI model configuration validation', () => {
     expect(await updateModel('missing', { metadata: { cliAgent: { extraArgs: 'invalid' } } }))
       .toEqual({ status: 404, error: 'Model not found' });
     expect(registry.updateModel).not.toHaveBeenCalled();
+  });
+});
+
+describe('direct provider settings validation', () => {
+  const row = { name: 'claude', modelId: 'claude-sonnet-4-6', provider: 'anthropic', maxTokens: 16384, defaultMaxTokens: 4096 };
+  it('rejects a saved manual budget above the actual default output limit', async () => {
+    registry.getModel.mockResolvedValue(row);
+    expect(await updateModel(row.name, { metadata: { providerSettings: { thinkingBudget: 8192 } } })).toMatchObject({ status: 400, error: expect.stringContaining('default output limit') });
+    expect(registry.updateModel).not.toHaveBeenCalled();
+  });
+  it('allows raising the default output limit together with the manual budget', async () => {
+    registry.getModel.mockResolvedValue(row);
+    expect(await updateModel(row.name, { defaultMaxTokens: 16384, metadata: { providerSettings: { thinkingBudget: 8192 } } })).toHaveProperty('ok', true);
+  });
+  it('rejects reasoning effort on a non-reasoning OpenAI model', async () => {
+    registry.getModel.mockResolvedValue(null);
+    expect(await registerModel({ name: 'plain', modelId: 'gpt-4o', provider: 'openai', metadata: { providerSettings: { reasoningEffort: 'high' } } })).toHaveProperty('error');
+    expect(registry.registerModel).not.toHaveBeenCalled();
+  });
+  it('rejects negative model rates', async () => {
+    expect(await registerModel({ name: 'bad', modelId: 'gpt-5', provider: 'openai', costPerInputToken: -1 })).toHaveProperty('error');
+  });
+  it.each([
+    [{ defaultMaxTokens: 0 }, 'positive integer'],
+    [{ defaultMaxTokens: null }, 'positive integer'],
+    [{ defaultMaxTokens: 1.5 }, 'positive integer'],
+    [{ maxTokens: 1024, defaultMaxTokens: 2048 }, 'must not exceed'],
+  ])('rejects invalid output limits on create (%j)', async (limits, message) => {
+    expect(await registerModel({ name: 'bad-limits', modelId: 'gpt-5', provider: 'openai', ...limits })).toMatchObject({ error: expect.stringContaining(message) });
+    expect(registry.registerModel).not.toHaveBeenCalled();
+  });
+  it('uses the DB default of 4096 when validating an omitted create default', async () => {
+    expect(await registerModel({ name: 'small-max', modelId: 'gpt-5', provider: 'openai', maxTokens: 2048 })).toMatchObject({ error: expect.stringContaining('must not exceed') });
+  });
+  it('validates output limits against the effective update', async () => {
+    registry.getModel.mockResolvedValue(row);
+    expect(await updateModel(row.name, { defaultMaxTokens: 20000 })).toMatchObject({ status: 400, error: expect.stringContaining('must not exceed') });
+    expect(registry.updateModel).not.toHaveBeenCalled();
+  });
+  it('rejects native-only Anthropic settings while compatibility rollback is active', async () => {
+    vi.stubEnv('ANTHROPIC_NATIVE_MESSAGES', '0');
+    expect(await registerModel({ name: 'rollback', modelId: 'claude-sonnet-4-6', provider: 'anthropic', metadata: { providerSettings: { strictTools: true } } })).toMatchObject({ error: expect.stringContaining('Strict tools') });
+  });
+  it('returns effective provider controls with each listed model', async () => {
+    vi.stubEnv('ANTHROPIC_NATIVE_MESSAGES', '0');
+    registry.getAllModelsIncludeDisabled.mockResolvedValue([row]);
+    const result = await listModels('admin', true);
+    expect(result.models[0].providerControls).toMatchObject({ reasoning: true, thinkingBudget: true, strictTools: false, cachePolicy: false, cachedContent: false });
   });
 });

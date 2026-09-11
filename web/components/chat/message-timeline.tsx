@@ -721,6 +721,8 @@ interface MessageTimelineProps {
   fileChanges?: FileChange[];
   isLoading: boolean;
   statusMessage: string | null;
+  /** Reply text streamed so far; shown in place of the spinner label while the turn runs. */
+  streamingText?: string | null;
   /** Open a file (by resolved path) in the in-chat file view (Thread 2). */
   onOpenFile?: (path: string) => void;
 }
@@ -738,6 +740,7 @@ export default function MessageTimeline({
   fileChanges,
   isLoading,
   statusMessage,
+  streamingText,
   onOpenFile,
 }: MessageTimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -889,9 +892,13 @@ export default function MessageTimeline({
           <div className="h-7 w-7 rounded-full bg-linear-to-br from-primary to-primary-container flex items-center justify-center shadow-xs">
             <Loader2 className="h-4 w-4 text-on-primary animate-spin" />
           </div>
-          <span className="text-sm text-accent animate-pulse">
-            {statusMessage || 'Thinking...'}
-          </span>
+          {streamingText ? (
+            <div className="text-sm whitespace-pre-wrap break-words min-w-0">{streamingText}</div>
+          ) : (
+            <span className="text-sm text-accent animate-pulse">
+              {statusMessage || 'Thinking...'}
+            </span>
+          )}
         </div>
       )}
 

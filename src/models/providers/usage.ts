@@ -14,11 +14,12 @@ export function extractCachedTokens(rawUsage: unknown): {
   const u = rawUsage as
     | {
         prompt_tokens_details?: { cached_tokens?: number };
+        input_tokens_details?: { cached_tokens?: number };
         prompt_cache_hit_tokens?: number;
       }
     | undefined;
-  const cached = u?.prompt_tokens_details?.cached_tokens ?? u?.prompt_cache_hit_tokens;
-  return cached != null && cached > 0 ? { cacheReadTokens: cached } : {};
+  const cached = u?.prompt_tokens_details?.cached_tokens ?? u?.input_tokens_details?.cached_tokens ?? u?.prompt_cache_hit_tokens;
+  return typeof cached === 'number' && Number.isFinite(cached) && cached > 0 ? { cacheReadTokens: cached } : {};
 }
 
 /**
@@ -36,4 +37,21 @@ export function cacheAffinityKey(
   if (!sessionId) return undefined;
   const digest = createHash('sha256').update(`${userId ?? ''}:${sessionId}`).digest('hex');
   return `octi-${digest.slice(0, 32)}`;
+}
+
+
+/** Preserve billing details at the wire boundary, including a legitimate $0 charge. */
+export function normalizeUsage(raw: any): import('../litellm-client').CompletionResult['usage'] {
+  const count = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0;
+  const inputTokens = count(raw?.prompt_tokens ?? raw?.input_tokens);
+  const outputTokens = count(raw?.completion_tokens ?? raw?.output_tokens);
+  return {
+    inputTokens, outputTokens,
+    totalTokens: count(raw?.total_tokens ?? inputTokens + outputTokens),
+    available: [raw?.prompt_tokens, raw?.input_tokens, raw?.completion_tokens, raw?.output_tokens, raw?.total_tokens].some(v => typeof v === 'number' && Number.isFinite(v) && v >= 0),
+    ...extractCachedTokens(raw),
+    cacheCreationTokens: count(raw?.prompt_tokens_details?.cache_write_tokens ?? raw?.input_tokens_details?.cache_write_tokens),
+    reasoningTokens: count(raw?.completion_tokens_details?.reasoning_tokens ?? raw?.output_tokens_details?.reasoning_tokens),
+    ...(typeof raw?.cost === 'number' && Number.isFinite(raw.cost) && raw.cost >= 0 ? { reportedCost: raw.cost } : {}),
+  };
 }

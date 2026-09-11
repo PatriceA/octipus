@@ -10,12 +10,21 @@ import type { AgentMessage, ToolCall } from '@/core/types';
 import { coerceDeepseekToolChoice, DEEPSEEK_TEMPLATE_LEAK, parseDsmlToolCalls } from '@/models/deepseek-template-recovery';
 import { transformMessagesForProvider } from '@/models/message-transform';
 import { parseToolCallArguments } from '@/models/tool-call-args';
-import { extractCachedTokens } from '@/models/providers/usage';
+import { normalizeUsage } from '@/models/providers/usage';
 import { applyAnthropicCacheControl, isAnthropicFamily } from '@/models/providers/prompt-cache';
 import { modelLogger } from '@/utils/logger';
 
 export interface CompletionOptions {
   model: string;
+  cachePolicy?: 'default' | 'off' | 'session';
+  agentId?: string;
+  requestType?: string;
+  accountingMetadata?: Record<string, unknown>;
+  /** Internal ownership marker, never sent to the provider. */
+  accountingOwner?: boolean;
+  accountingResponse?: (response: Pick<CompletionResult, 'usage' | 'model' | 'requestId'> & { provider?: string }) => void;
+  /** Registry name disambiguates aliases sharing a provider model ID. */
+  modelConfigName?: string;
   messages: AgentMessage[];
   tools?: ChatCompletionTool[];
   temperature?: number;
@@ -23,7 +32,7 @@ export interface CompletionOptions {
   topP?: number;
   stream?: boolean;
   stopSequences?: string[];
-  responseFormat?: { type: 'text' | 'json_object' };
+  responseFormat?: { type: 'text' | 'json_object' } | { type: 'json_schema'; json_schema: { name: string; schema: Record<string, unknown>; strict?: boolean } };
   /**
    * Tool-calling policy. Maps per provider: OpenAI-style `tool_choice`,
    * Anthropic `tool_choice.{type}`, native Gemini `functionCallingConfig.mode`.
@@ -79,9 +88,14 @@ export interface CompletionResult {
     totalTokens: number;
     cacheReadTokens?: number;
     cacheCreationTokens?: number;
+    reasoningTokens?: number;
+    reportedCost?: number;
+    /** False when the upstream omitted usage; zero is otherwise a valid count. */
+    available?: boolean;
   };
   model: string;
   latencyMs: number;
+  requestId?: string;
   /**
    * DeepSeek thinking-mode chain-of-thought. The reasoner returns this
    * alongside `content`; on the next turn we MUST echo it back inside the
@@ -99,6 +113,9 @@ export interface CompletionResult {
 }
 
 export interface StreamChunk {
+  usage?: CompletionResult['usage'];
+  requestId?: string;
+  model?: string;
   content?: string;
   toolCallDelta?: {
     id: string;
@@ -429,6 +446,11 @@ export class LiteLLMClient {
    * the ProviderRouter. Used internally and by the LiteLLMProvider.
    */
   async completeViaProxy(options: CompletionOptions): Promise<CompletionResult> {
+    const { accountCompletion } = await import('./providers/instrumented');
+    return accountCompletion(options, 'litellm', o => this.completeProxyRequest(o));
+  }
+
+  private async completeProxyRequest(options: CompletionOptions): Promise<CompletionResult> {
     const startTime = Date.now();
 
     const params: ChatCompletionCreateParams = {
@@ -461,6 +483,7 @@ export class LiteLLMClient {
 
     try {
       const response = await this.client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
+      options.accountingResponse?.({ model: response.model ?? options.model, requestId: response.id, usage: normalizeUsage(response.usage) });
       const latencyMs = Date.now() - startTime;
       if (!response.choices?.length) {
         throw classifyError(new Error(`Provider returned empty response (no choices) for model ${params.model || options.model}`), 'litellm');
@@ -485,13 +508,8 @@ export class LiteLLMClient {
       const result: CompletionResult = {
         content,
         finishReason: choice.finish_reason || 'stop',
-        usage: {
-          inputTokens: response.usage?.prompt_tokens || 0,
-          outputTokens: response.usage?.completion_tokens || 0,
-          totalTokens: response.usage?.total_tokens || 0,
-          // OpenAI/Anthropic/DeepSeek-via-proxy cached-read normalization.
-          ...extractCachedTokens(response.usage),
-        },
+        usage: normalizeUsage(response.usage),
+        requestId: response.id,
         model: response.model,
         latencyMs,
         ...(reasoningContent ? { reasoningContent } : {}),
@@ -620,6 +638,11 @@ export class LiteLLMClient {
    * Used internally and by the LiteLLMProvider.
    */
   async *streamViaProxy(options: CompletionOptions): AsyncGenerator<StreamChunk> {
+    const { accountStream } = await import('./providers/instrumented');
+    yield* accountStream(options, 'litellm', o => this.streamProxyRequest(o));
+  }
+
+  private async *streamProxyRequest(options: CompletionOptions): AsyncGenerator<StreamChunk> {
     const params: ChatCompletionCreateParams = {
       model: options.model || this.defaultModel,
       messages: this.formatMessages(options.messages),
@@ -628,6 +651,7 @@ export class LiteLLMClient {
       top_p: options.topP,
       stop: options.stopSequences,
       stream: true,
+      stream_options: { include_usage: true },
     };
 
     if (isAnthropicFamily(params.model || '')) applyAnthropicCacheControl(params.messages, params.model);
@@ -655,6 +679,7 @@ export class LiteLLMClient {
     const think = createThinkStreamFilter();
 
     for await (const chunk of stream) {
+      if (chunk.usage) yield { usage: normalizeUsage(chunk.usage), requestId: chunk.id, model: chunk.model };
       const delta = chunk.choices[0]?.delta;
 
       if (delta?.content) {
@@ -710,7 +735,12 @@ export class LiteLLMClient {
    * fallbacks. If the bound provider doesn't implement embeddings, or the
    * provider call fails, the error propagates with its real cause.
    */
-  async embed(text: string | string[], model?: string): Promise<number[][]> {
+  async embed(text: string | string[], model?: string, context?: import('./providers/instrumented').ProviderUsageContext): Promise<number[][]> {
+    const { withProviderUsageContext } = await import('./providers/instrumented');
+    return withProviderUsageContext(context ?? {}, () => this.embedRequest(text, model, context));
+  }
+
+  private async embedRequest(text: string | string[], model?: string, context?: import('./providers/instrumented').ProviderUsageContext): Promise<number[][]> {
     const input = Array.isArray(text) ? text : [text];
 
     // Model resolution:
@@ -734,7 +764,10 @@ export class LiteLLMClient {
 
     const { getProviderRouter } = await import('@/models/providers');
     const router = getProviderRouter();
-    const provider = await router.resolveProvider(embeddingModel);
+    const { getModelRegistry: embeddingRegistry } = await import('./model-registry');
+    const selected = context?.modelConfigName ? await embeddingRegistry().getModel(context.modelConfigName) : undefined;
+    const provider = selected ? router.getProviderByName(selected.provider) : await router.resolveProvider(embeddingModel);
+    if (!provider) throw new Error('Configured embedding provider is unavailable');
 
     if (provider.name === 'litellm') {
       modelLogger.debug(
@@ -758,7 +791,7 @@ export class LiteLLMClient {
     let modelEndpoint: string | undefined;
     try {
       const { getModelRegistry } = await import('@/models/model-registry');
-      const dbModel = await getModelRegistry().getModelByModelId(embeddingModel);
+      const dbModel = selected ?? await getModelRegistry().getModelByModelId(embeddingModel);
       modelEndpoint = dbModel?.endpoint || undefined;
     } catch { /* non-fatal */ }
 
@@ -779,6 +812,8 @@ export class LiteLLMClient {
         input,
         encoding_format: 'float',
       });
+      const { recordProviderUsage } = await import('./providers/instrumented');
+      await recordProviderUsage({ model: embeddingModel, messages: [], requestType: 'embedding' }, 'litellm', { model: embeddingModel, usage: normalizeUsage(response.usage) });
       return response.data.map((d) => d.embedding);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -803,13 +838,35 @@ export class LiteLLMClient {
    * Uses the OpenAI-compatible multimodal content format.
    * Tries a direct provider first (Ollama, OpenAI), falls through to LiteLLM proxy.
    */
-  async completeVision(options: {
+  async completeVision(options: import('./providers/instrumented').ProviderUsageContext & {
+    accountingResponse?: CompletionOptions['accountingResponse'];
     model: string;
     prompt: string;
     imageBase64: string;
     mimeType?: string;
     maxTokens?: number;
-  }): Promise<{ content: string; usage: { inputTokens: number; outputTokens: number; totalTokens: number }; latencyMs: number }> {
+  }): Promise<{ content: string; usage: CompletionResult['usage']; requestId?: string; model?: string; provider?: string; latencyMs: number }> {
+    const { recordProviderUsage } = await import('./providers/instrumented');
+    let observed: (Pick<CompletionResult, 'usage' | 'model' | 'requestId'> & { provider?: string }) | undefined;
+    const scope = { ...options, messages: [], requestType: 'vision' };
+    try {
+      const result = await this.completeVisionRequest({ ...options, accountingResponse: value => { observed = value; } });
+      await recordProviderUsage(scope, result.provider ?? 'unknown', { ...result, model: result.model ?? options.model });
+      return result;
+    } catch (err) {
+      if (observed) await recordProviderUsage(scope, observed.provider ?? 'unknown', observed, true);
+      throw err;
+    }
+  }
+
+  private async completeVisionRequest(options: import('./providers/instrumented').ProviderUsageContext & {
+    accountingResponse?: CompletionOptions['accountingResponse'];
+    model: string;
+    prompt: string;
+    imageBase64: string;
+    mimeType?: string;
+    maxTokens?: number;
+  }): Promise<{ content: string; usage: CompletionResult['usage']; requestId?: string; model?: string; provider?: string; latencyMs: number }> {
     const mediaType = options.mimeType || 'image/png';
     const maxTokens = options.maxTokens || 4096;
     const visionMessages: ChatCompletionMessageParam[] = [
@@ -827,7 +884,7 @@ export class LiteLLMClient {
       const { getProviderRouter } = await import('@/models/providers');
       const router = getProviderRouter();
       const { getModelRegistry: getVisionRegistry } = await import('@/models/model-registry');
-      const visionModelEntry = await getVisionRegistry().getModelByModelId(options.model);
+      const visionModelEntry = options.modelConfigName ? await getVisionRegistry().getModel(options.modelConfigName) : await getVisionRegistry().getModelByModelId(options.model);
 
       // Use the model's configured provider from DB, not the name-based heuristic
       // (e.g. "deepseek-ocr:latest" is an Ollama model, not DeepSeek cloud)
@@ -892,7 +949,8 @@ export class LiteLLMClient {
           stream: false,
         });
 
-        const latencyMs = Date.now() - startTime;
+        options.accountingResponse?.({ provider: provider.name, model: response.model ?? options.model, requestId: response.id, usage: normalizeUsage(response.usage) });
+      const latencyMs = Date.now() - startTime;
         if (!response.choices?.length) {
           throw classifyError(new Error(`Provider returned empty response (no choices) for model ${options.model}`), provider.name);
         }
@@ -907,11 +965,10 @@ export class LiteLLMClient {
 
         return {
           content,
-          usage: {
-            inputTokens: response.usage?.prompt_tokens || 0,
-            outputTokens: response.usage?.completion_tokens || 0,
-            totalTokens: response.usage?.total_tokens || 0,
-          },
+          usage: normalizeUsage(response.usage),
+        model: response.model ?? options.model,
+        provider: provider.name,
+        requestId: response.id,
           latencyMs,
         };
       }
@@ -928,6 +985,7 @@ export class LiteLLMClient {
         stream: false,
       });
 
+      options.accountingResponse?.({ provider: provider.name, model: response.model ?? options.model, requestId: response.id, usage: normalizeUsage(response.usage) });
       const latencyMs = Date.now() - startTime;
       let content = response.choices[0]?.message?.content || '';
       if (content.includes('<think>')) {
@@ -938,11 +996,10 @@ export class LiteLLMClient {
 
       return {
         content,
-        usage: {
-          inputTokens: response.usage?.prompt_tokens || 0,
-          outputTokens: response.usage?.completion_tokens || 0,
-          totalTokens: response.usage?.total_tokens || 0,
-        },
+        usage: normalizeUsage(response.usage),
+        model: response.model ?? options.model,
+        provider: provider.name,
+        requestId: response.id,
         latencyMs,
       };
     } catch (err) {

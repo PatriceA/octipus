@@ -1,3 +1,4 @@
+import { withProviderUsageContext } from '@/models/providers/instrumented';
 import { existsSync } from 'fs';
 import { mkdir, readFile, rename, rmdir, unlink } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -157,6 +158,7 @@ export class DocumentProcessor {
       return;
     }
 
+    return withProviderUsageContext({ userId: doc.userId }, async () => {
     this.logger.info({ documentId, filename: doc.originalName, mimeType: doc.mimeType }, 'Processing document');
 
     try {
@@ -240,6 +242,7 @@ export class DocumentProcessor {
       this.logger.error({ err, documentId }, 'Document processing failed');
       await documentRepository.updateStatus(documentId, 'failed', String(err));
     }
+    });
   }
 
   /**
@@ -263,7 +266,7 @@ export class DocumentProcessor {
     try {
       this.logger.info({ model: ocrModel.modelId, provider: provider.name, filePath }, 'Native OCR extraction');
       const data = (await readFile(filePath)).toString('base64');
-      const result = await provider.ocr({ kind: 'base64', data, mimeType }, ocrModel.modelId);
+      const result = await withProviderUsageContext({ modelConfigName: ocrModel.name }, () => provider.ocr!({ kind: 'base64', data, mimeType }, ocrModel.modelId));
       // Native OCR emits clean markdown — no grounding tokens to strip.
       const text = result.pages.map((p) => p.markdown).join('\n\n').trim();
       return text || null;
@@ -328,6 +331,7 @@ export class DocumentProcessor {
         this.logger.info({ model: ocrModel.modelId, filePath }, 'OCR text extraction');
         const ocrResult = await client.completeVision({
           model: ocrModel.modelId,
+          modelConfigName: ocrModel.name,
           prompt: '<|grounding|>Convert the document to markdown.',
           imageBase64: base64,
           mimeType,
@@ -353,6 +357,7 @@ export class DocumentProcessor {
         this.logger.info({ model: visionModel.modelId, filePath }, 'Vision image analysis');
         const visionResult = await client.completeVision({
           model: visionModel.modelId,
+          modelConfigName: visionModel.name,
           prompt: 'Describe this image in detail. What does it show? Include all visible details, objects, text, colors, and layout.',
           imageBase64: base64,
           mimeType,

@@ -82,3 +82,19 @@ describe('GatewayClient — permission/approval wire format', () => {
     expect(sent[1].type).toBe('approval.respond');
   });
 });
+
+describe('GatewayClient — session-scoped commands and dropped events', () => {
+  test('sendCommand carries the session so a resumed session works before its first chat.send', () => {
+    const { client, sent } = stubClient();
+    client.sendCommand('history', undefined, '11111111-2222-4333-8444-555555555555');
+    expect(sent[0]).toEqual({ type: 'command', name: 'history', args: undefined, sessionId: '11111111-2222-4333-8444-555555555555' });
+  });
+
+  test('events_dropped reaches the UI as an error instead of vanishing', () => {
+    const errors: string[] = [];
+    const client = new GatewayClient({ onError: (m) => errors.push(m) });
+    (client as unknown as { handleMessage: (raw: string) => void })
+      .handleMessage(JSON.stringify({ type: 'events_dropped', count: 12, reason: 'slow consumer' }));
+    expect(errors).toEqual(['Gateway dropped 12 event(s) (slow consumer) — the transcript may be incomplete.']);
+  });
+});

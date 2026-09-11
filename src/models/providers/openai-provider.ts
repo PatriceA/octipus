@@ -1,3 +1,5 @@
+import { recordProviderUsage } from './instrumented';
+import { normalizeUsage } from './usage';
 import OpenAI from 'openai';
 import type {
   ChatCompletionCreateParams,
@@ -109,6 +111,7 @@ export class OpenAIProvider implements ModelProvider {
 
     try {
       const response = await client.chat.completions.create(params, options.signal ? { signal: options.signal } : undefined);
+      options.accountingResponse?.({ model: response.model ?? options.model, requestId: response.id, usage: normalizeUsage(response.usage) });
       const latencyMs = Date.now() - startTime;
       if (!response.choices?.length) {
         throw classifyError(new Error(`Provider returned empty response (no choices) for model ${params.model || options.model}`), 'openai');
@@ -118,11 +121,8 @@ export class OpenAIProvider implements ModelProvider {
       const result: CompletionResult = {
         content: choice.message.content || '',
         finishReason: choice.finish_reason || 'stop',
-        usage: {
-          inputTokens: response.usage?.prompt_tokens || 0,
-          outputTokens: response.usage?.completion_tokens || 0,
-          totalTokens: response.usage?.total_tokens || 0,
-        },
+        usage: normalizeUsage(response.usage),
+        requestId: response.id,
         model: response.model,
         latencyMs,
       };
@@ -162,7 +162,7 @@ export class OpenAIProvider implements ModelProvider {
   async *stream(options: CompletionOptions): AsyncGenerator<StreamChunk> {
     const client = await this.createClient();
 
-    const params: ChatCompletionCreateParams = { ...this.buildParams(options), stream: true };
+    const params: ChatCompletionCreateParams = { ...this.buildParams(options), stream: true, stream_options: { include_usage: true } };
 
     modelLogger.debug({ model: params.model, provider: this.name }, 'Starting streaming completion via OpenAI');
 
@@ -176,6 +176,7 @@ export class OpenAIProvider implements ModelProvider {
     const toolCallBuffers = new Map<number, { id: string; name: string; arguments: string }>();
 
     for await (const chunk of stream) {
+      if (chunk.usage) yield { usage: normalizeUsage(chunk.usage), requestId: chunk.id, model: chunk.model };
       const delta = chunk.choices[0]?.delta;
 
       if (delta?.content) {
@@ -222,7 +223,8 @@ export class OpenAIProvider implements ModelProvider {
       encoding_format: 'float',
     });
 
-    return response.data.map((d) => d.embedding);
+    await recordProviderUsage({ model, messages: [], requestType: 'embedding' }, this.name, { model, usage: normalizeUsage(response.usage) });
+      return response.data.map((d) => d.embedding);
   }
 
   async checkHealth(): Promise<ProviderHealthStatus> {
