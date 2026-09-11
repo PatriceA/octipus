@@ -19,3 +19,13 @@ test('work-plan commands resolve the local principal before touching the plan ro
   expect(read).toHaveBeenCalledWith('sess-1', ADMIN);
   read.mockRestore();
 });
+
+test('before the first message there is no session row, which is "no plan", not an error', async () => {
+  const read = vi.spyOn(workPlanRepository, 'read').mockRejectedValue(new Error('Session not found'));
+  const registry = new CommandRegistry();
+  registerBuiltinCommands(registry);
+  const ctx = { userId: 'local', sessionId: 'fresh', clientType: 'tui', trustLevel: 'local' as const };
+  expect((await registry.execute('/work-plan-status', ctx))!.text).toBe('');
+  expect((await registry.execute('/work-plan', ctx))!.text).toContain('No plan yet');
+  read.mockRestore();
+});

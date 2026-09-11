@@ -130,7 +130,11 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
         // The local console's principal is the literal 'local'; the plan lives under a uuid.
         const { resolveUserId } = await import('./resolve-user');
         const userId = await resolveUserId(ctx.userId);
-        const state = await workPlanRepository.read(ctx.sessionId, userId);
+        // The session row is created by the first message; until then (or for
+        // a session that is not the caller's) there is simply no plan.
+        const state = await workPlanRepository.read(ctx.sessionId, userId)
+          .catch((err: unknown) => { if ((err as Error).message === 'Session not found') return null; throw err; });
+        if (!state) return { text: name === 'work-plan-status' ? '' : 'No plan yet — the session starts with your first message.' };
         if (name === 'work-plan-status') return { text: state.current ? formatWorkPlan(state, true) : '' };
         if (name !== 'plan-feedback') {
           let text = formatWorkPlan(state);
