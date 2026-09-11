@@ -127,7 +127,10 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
       handler: async ctx => {
         // Compact status is machine-read by the TUI: empty text = no plan, error = unavailable.
         if (!ctx.sessionId) return { text: name === 'work-plan-status' ? '' : 'No active session.' };
-        const state = await workPlanRepository.read(ctx.sessionId, ctx.userId);
+        // The local console's principal is the literal 'local'; the plan lives under a uuid.
+        const { resolveUserId } = await import('./resolve-user');
+        const userId = await resolveUserId(ctx.userId);
+        const state = await workPlanRepository.read(ctx.sessionId, userId);
         if (name === 'work-plan-status') return { text: state.current ? formatWorkPlan(state, true) : '' };
         if (name !== 'plan-feedback') {
           let text = formatWorkPlan(state);
@@ -144,7 +147,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
         if (!state.current) return { text: 'No plan published yet.' };
         try {
           const next = addPlanFeedback(state, state.current.id, state.revision, ctx.rawArgs);
-          await workPlanRepository.save(ctx.sessionId, ctx.userId, state.revision, next);
+          await workPlanRepository.save(ctx.sessionId, userId, state.revision, next);
         } catch (err) {
           // Validation and revision conflicts are user-facing, not command failures.
           return { text: err instanceof Error ? err.message : 'Feedback was not saved.' };
