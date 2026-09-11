@@ -1,3 +1,5 @@
+import { addPlanFeedback } from '@/shared/work-plan';
+import { workPlanRepository } from '@/db/repositories/work-plan-repository';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { readSessionFile, SessionFileError, writeSessionFile } from '@/core/session-files';
@@ -84,6 +86,39 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
       detail: { tags: ['sessions'] },
     }
   )
+
+  // Plans share the session's ownership rules and remain available after reload.
+  .get('/:id/plan', async ({ user, principal, params, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    const session = await scopedRepos(principal).sessions.findById(params.id);
+    if (!session) { set.status = 404; return { error: 'Session not found' }; }
+    return { ...await workPlanRepository.read(session.id, session.userId), planMode: session.context?.planMode === true };
+  }, { params: t.Object({ id: t.String() }), detail: { tags: ['sessions'] } })
+  .post('/:id/plan/feedback', async ({ user, principal, params, body, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    const session = await scopedRepos(principal).sessions.findById(params.id);
+    if (!session) { set.status = 404; return { error: 'Session not found' }; }
+    const text = body.text.trim();
+    if (!text) { set.status = 400; return { error: 'Feedback cannot be empty' }; }
+    const state = await workPlanRepository.read(session.id, session.userId);
+    if (!state.current || state.current.id !== body.planId || state.revision !== body.revision) {
+      set.status = 409; return { error: 'Plan changed. Refresh and try again.' };
+    }
+    if (state.current.feedback.length >= 50) { set.status = 400; return { error: 'This plan has reached its feedback limit.' }; }
+    const next = addPlanFeedback(state, body.planId, body.revision, text);
+    try { await workPlanRepository.save(session.id, session.userId, state.revision, next); }
+    catch (error) {
+      if (error instanceof Error && error.message === 'Plan changed. Refresh and try again.') {
+        set.status = 409; return { error: error.message };
+      }
+      throw error;
+    }
+    return next;
+  }, {
+    params: t.Object({ id: t.String() }),
+    body: t.Object({ text: t.String({ minLength: 1, maxLength: 2000 }), planId: t.String(), revision: t.Number({ minimum: 0 }) }),
+    detail: { tags: ['sessions'] },
+  })
 
   // Create new session
   .post(

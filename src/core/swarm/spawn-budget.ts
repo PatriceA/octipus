@@ -58,7 +58,7 @@ export function syncParentTokenUsage(parent: AgentNode): void {
   const worker = (
     parent as unknown as { workerRef?: { current: { getTotalTokens?: () => number } | null } }
   ).workerRef?.current;
-  const ownSpend = worker?.getTotalTokens?.() ?? 0;
+  const ownSpend = parent.ownTokenUsage?.() ?? worker?.getTotalTokens?.() ?? 0;
   // True pool consumption = the node's own worker spend + everything its
   // children have returned so far. Both terms are monotonic; guard against
   // shrinking `used` (a stale/lower reading must never lower the counter).

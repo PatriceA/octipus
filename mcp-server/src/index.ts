@@ -19,6 +19,7 @@
 
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createServer } from './server.js';
+import { createAgentBridgeServer } from './agent-bridge.js';
 import { createHttpBridge } from './http.js';
 
 // Parse CLI args
@@ -35,7 +36,8 @@ const octiUrl = process.env.OCTIPUS_URL || 'http://localhost:3005';
 
 async function main(): Promise<void> {
   if (transport === 'stdio') {
-    const server = createServer(octiUrl);
+    const scoped = process.env.OCTIPUS_AGENT_URL || process.env.OCTIPUS_AGENT_KEY;
+    const server = scoped ? createAgentBridgeServer() : createServer(octiUrl);
     const stdioTransport = new StdioServerTransport();
     await server.connect(stdioTransport);
     // Server runs until stdin closes

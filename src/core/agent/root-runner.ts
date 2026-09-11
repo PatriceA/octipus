@@ -172,7 +172,7 @@ export async function runRootAgent(
   const rootAbortController = new AbortController();
   const rootAllowedToolIds = new Set<string>();
   // Meta-tool ids that the root agent owns by construction.
-  for (const name of ['spawn_child', 'collect_children', 'create_pipeline', 'list_pipeline_templates', 'filter_pii', 'request_user_approval', 'exit_plan_mode', 'send_status_update', 'remember_this', 'remember_about_self', 'reflect']) {
+  for (const name of ['get_work_plan', 'update_work_plan', 'spawn_child', 'collect_children', 'create_pipeline', 'list_pipeline_templates', 'filter_pii', 'request_user_approval', 'exit_plan_mode', 'send_status_update', 'remember_this', 'remember_about_self', 'reflect']) {
     rootAllowedToolIds.add(name);
   }
   // The root's own role tools — the general toolset it works with directly.
@@ -641,12 +641,14 @@ export async function runRootAgent(
   });
 
   const agentId = worker.getContext().id;
+  parentNode.signal = worker.getAbortSignal();
+  parentNode.ownTokenUsage = () => worker.getTotalTokens();
 
   // Wire detach refs: bind the worker's pending-child methods so
   // `spawn_child` (detach mode) and `collect_children` can reach them.
-  // Only full AgentWorkers expose these methods — CLI workers won't,
-  // and the refs simply stay null (the spawn-tool downgrades to await
-  // when hooks are missing).
+  // Only full AgentWorkers expose these methods. CLI workers intentionally
+  // leave the refs null; the late-bound spawn hooks then expose a zero detach
+  // cap and make spawn_child await the child instead of losing its promise.
   const maybeWorker = worker as unknown as {
     registerPendingChild?: (pc: PendingChild) => void;
     pendingDetachedCount?: () => number;

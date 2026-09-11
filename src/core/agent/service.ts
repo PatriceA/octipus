@@ -767,9 +767,10 @@ export class AgentService {
     const running = sessionAgents.find(a => a.getStatus() === 'running');
     if (!running) return false;
 
-    // Only AgentWorker supports steering (CLIAgentWorker is autonomous)
-    if ('steer' in running && typeof (running as any).steer === 'function') {
-      (running as any).steer(message);
+    // Native workers steer before the next model call; CLI workers deliver at
+    // the next Octipus tool response or a bounded follow-up CLI turn.
+    if ('steer' in running && typeof running.steer === 'function') {
+      running.steer(message);
       coreLogger.info({ sessionId, agentId: running.getContext().id }, 'Steering message injected');
       return true;
     }

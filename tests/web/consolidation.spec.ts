@@ -84,7 +84,7 @@ test('project discovery keeps partial results and exposes a retry', async ({ aut
       : route.fulfill({ json: { result: { entries: [{ name: 'good-project', isDirectory: true }] } } });
   });
   await page.goto('/chat');
-  await page.getByRole('button', { name: 'new', exact: true }).click();
+  await page.getByRole('button', { name: 'New work', exact: true }).click();
   await page.getByRole('button', { name: /Development/ }).click();
   await expect(page.getByText('Project list may be incomplete.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Retry loading projects' })).toBeEnabled();

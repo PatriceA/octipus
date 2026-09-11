@@ -115,6 +115,8 @@ Contributions of every size welcome — bug reports, doc fixes, new roles, new c
 
 For security issues, see [SECURITY.md](./SECURITY.md). **Do not** file security reports as public issues.
 
+CLI execution can reuse vendor logins where permitted. See [CLI agents](docs/CLI-AGENTS.md) for subscription, tool, plan and permission behavior.
+
 ## Architecture in one paragraph
 
 ```
@@ -161,7 +163,7 @@ Deep dive: [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md) · [.octipus
 | Area | What's there |
 |---|---|
 | **Agents** | 3-level Swarm, 16 roles, 18 seeded expert definitions, 22 seeded skills |
-| **Models** | Ollama, OpenAI, Anthropic, Gemini, Grok, DeepSeek, Mistral, Z.AI (GLM), Moonshot (Kimi), OpenRouter, Voyage, custom OpenAI/Gemini-compat, LiteLLM, CLI (Claude / Gemini / Codex) |
+| **Models** | Ollama, OpenAI, Anthropic, Gemini, Grok, DeepSeek, Mistral, Z.AI (GLM), Moonshot (Kimi), OpenRouter, Voyage, custom OpenAI/Gemini-compat, LiteLLM, CLI (Claude Code / Codex / Antigravity / Vibe / GLM / Kimi) |
 | **Tools** | Filesystem, shell (local/SSH/Docker), git, browser (Playwright + extension), web search, Docker, knowledge base, scheduling, voice, M365, GitHub/GitLab, and external MCP bridges. The standalone MCP server exposes 88 tools across 26 groups. |
 | **Channels** | Telegram, Slack, Teams, WhatsApp, web UI, TUI (chat shell + editor, built on [pi-tui](https://www.npmjs.com/package/@mariozechner/pi-tui)), voice (Twilio), MCP server |
 | **Knowledge** | Hybrid search (BM25 + vector), tiered content, auto-indexing, document ingest + OCR, authored knowledge graph (notes, `[[wikilinks]]`, Obsidian vault + Canvas) |
@@ -235,6 +237,7 @@ Open directions (later): federation between Octipus instances, local-first sync 
 | **[Swarm Reliability & Verification](docs/SWARM-RELIABILITY.md)** | Receipts, scorer gates, crash-resume ledger |
 | **[Tool & Expert Routing](docs/TOOL-ROUTING.md)** | What triggers which tool, role, expert |
 | **[Channels](docs/CHANNELS.md)** | Telegram, Slack, Teams, WhatsApp, WebChat, Voice, MCP |
+| **[Visible Work Plans](docs/WORK-PLANS.md)** | Follow progress and give feedback in web and terminal conversations |
 | **[Chat Commands](docs/CHAT-COMMANDS.md)** | Slash commands and channel availability |
 | **[API Reference](docs/API.md)** | REST and WebSocket API reference |
 | **[Architecture Catalog](docs/architecture/generated/CATALOG.md)** | Generated from the source and gated in CI: every mounted route, the module import graph, the gateway event matrix |

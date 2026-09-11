@@ -190,12 +190,12 @@ export class AgentManager {
       set.add(agentId);
     }
 
-    // Register global tools (no-op for CLI workers)
+    // Register global tools for native and CLI workers
     for (const tool of this.globalTools.values()) {
       worker.registerTool(tool);
     }
 
-    // Register agent-specific tools (no-op for CLI workers)
+    // Register agent-specific tools for native and CLI workers
     if (options.tools) {
       worker.registerTools(options.tools);
     }

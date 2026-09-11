@@ -1,3 +1,5 @@
+import { formatWorkPlanContext } from './agent/work-plan-context';
+import { workPlanRepository } from '@/db/repositories/work-plan-repository';
 import { mkdirSync, writeFileSync } from 'fs';
 import type { ChatCompletionTool } from 'openai/resources/chat/completions';
 import { homedir } from 'os';
@@ -858,6 +860,8 @@ export class AgentWorker extends BaseAgentWorker {
     }
   }
 
+  private visiblePlanRevision = -1;
+
   private async loop(): Promise<string> {
     while (this.iteration < this.config.maxIterations) {
       // Abort from parent (cascade) or explicit stop(). Swarm Phase 2: surface
@@ -868,6 +872,22 @@ export class AgentWorker extends BaseAgentWorker {
           agentId: this.context.id,
           reason: typeof reason === 'string' ? reason : reason?.message,
         });
+      }
+
+      // Feedback is user input, never a system instruction. A running tool is
+      // allowed to finish; the next model call receives the new revision.
+      if (isRootAgent(this.context) && this.toolExecutor.getTools().has('update_work_plan')) {
+        try {
+          const state = await workPlanRepository.read(this.context.sessionId, this.context.userId);
+          if (state.revision !== this.visiblePlanRevision) {
+            const content = formatWorkPlanContext(state);
+            if (content) this.messages.push({ role: 'user', timestamp: new Date(), content });
+          }
+          this.visiblePlanRevision = state.revision;
+        } catch (err) {
+          // A plan read outage must not fail the turn; the next iteration retries.
+          agentLogger.warn({ err, agentId: this.context.id }, 'Work plan refresh failed; continuing without it');
+        }
       }
 
       this.iteration++;

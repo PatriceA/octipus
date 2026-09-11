@@ -33,7 +33,7 @@ test.describe('accessibility', () => {
     // not-yet-interactive document leaves focus on <body>, which the assertion
     // below (correctly) treats as a failure — so without this the test reports
     // an accessibility defect when what it actually caught was a race.
-    await expect(page.locator('a, button').first()).toBeVisible();
+    await expect(page.getByRole('link', { name: 'overview', exact: true })).toBeVisible();
     // Tab a few times; we should land on something focusable.
     for (let i = 0; i < 5; i++) {
       await page.keyboard.press('Tab');

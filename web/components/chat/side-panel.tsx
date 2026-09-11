@@ -200,7 +200,7 @@ export default function SidePanel({
   };
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto bg-surface-container-low font-mono">
+    <div className="flex h-full flex-col overflow-y-auto bg-surface-container-low font-sans">
       <CollapsibleSection title="connection & model" icon={Settings2}>
         <div className="space-y-3">
           <div className="flex items-center gap-2">
@@ -322,7 +322,7 @@ export default function SidePanel({
                     className="flex w-full items-center gap-1.5 rounded-xs px-1 py-0.5 text-left text-[11px] text-on-surface-variant hover:bg-surface-container hover:text-on-surface disabled:cursor-default"
                   >
                     <FileText className="h-3 w-3 shrink-0 text-primary" />
-                    <span className="truncate font-mono">{name}</span>
+                    <span className="truncate font-sans">{name}</span>
                     <span className="ml-auto shrink-0 text-[9px] uppercase text-outline">{f.action}</span>
                   </button>
                 </li>

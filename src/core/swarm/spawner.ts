@@ -1223,18 +1223,17 @@ export class SwarmSpawner {
       (childNode as unknown as { workerRef: typeof workerRef }).workerRef = workerRef;
 
       try {
-        const { createSpawnChildTool } = await import('./swarm-tool');
+        const { createLateBoundSpawnChildHooks, createSpawnChildTool } = await import('./swarm-tool');
         const { createEscalateTool } = await import('./escalate-tool');
         const { createCollectChildrenTool } = await import('./collect-tool');
         tools.push(
           createSpawnChildTool(
             childNode,
             this,
-            {
-              registerPending: (pc) => detachHookRef.current?.registerPendingChild(pc),
-              pendingCount: () => detachHookRef.current?.pendingDetachedCount() ?? 0,
-              maxPendingDetached: () => getLevelDefault(1).maxPendingDetached,
-            },
+            createLateBoundSpawnChildHooks(
+              detachHookRef,
+              () => getLevelDefault(1).maxPendingDetached,
+            ),
             // This agent's own tier — it is the one choosing its subagent's role.
             { weakModel: opts.childIsSmall === true },
           ),
@@ -1300,6 +1299,10 @@ export class SwarmSpawner {
     }
 
     const childId = worker.getContext().id;
+    if (childNode) {
+      childNode.signal = worker.getAbortSignal();
+      childNode.ownTokenUsage = () => worker.getTotalTokens();
+    }
 
     // Late-bind the worker ref onto the childNode. Only the full
     // `AgentWorker` class exposes detach-mode methods — CLI workers never

@@ -69,6 +69,8 @@ export class OctipusTuiApp {
   /** Last pending tool line streamed to messages pane (for completion dedupe). */
   private lastStreamedTool: string | null = null;
   private exiting = false;
+  private lastPlanSummary: string | null = null;
+  private planPoll: ReturnType<typeof setInterval> | null = null;
   private readonly onShutdown?: () => Promise<void>;
   /** Lazily-built local voice (push-to-talk). Null until first talk-key press. */
   private voice: VoiceService | null = null;
@@ -166,6 +168,7 @@ export class OctipusTuiApp {
     if (this.exiting) return;
     this.exiting = true;
     this.activity.dispose();
+    if (this.planPoll) clearInterval(this.planPoll);
     if (this.voice) { void this.voice.dispose().catch(() => { /* best-effort */ }); }
     try { this.adapter.disconnect(); } catch { /* already disconnected */ }
     // Hand off to the runtime so the alt-screen is properly torn down and
@@ -224,6 +227,14 @@ export class OctipusTuiApp {
   private handleEvent(event: AgentSessionEvent): void {
     switch (event.kind) {
       case 'status':
+        if (this.planPoll) { clearInterval(this.planPoll); this.planPoll = null; }
+        if (event.status === 'connected') {
+          this.planPoll = setInterval(() => this.adapter.sendCommand('work-plan-status'), 4000);
+        } else if (this.lastStatus === 'connected') {
+          this.lastPlanSummary = 'Unavailable · connection lost';
+          this.status.setPlan(this.lastPlanSummary);
+        }
+
         // A reconnect means the backend went away and came back: whatever
         // subagents were running belonged to the old process and will never
         // report a completion.
@@ -331,6 +342,18 @@ export class OctipusTuiApp {
         this.streamToolEvent(event.tool);
         return;
       case 'command.result': {
+        if (event.name === 'work-plan-status') {
+          // Contract with the gateway command: empty text = no plan; error = unavailable.
+          const summary = typeof event.result === 'string' ? event.result : '';
+          const plan = event.error ? 'Unavailable' : summary || null;
+          if (plan !== this.lastPlanSummary) { this.lastPlanSummary = plan; this.status.setPlan(plan); this.tui.requestRender(); }
+          return;
+        }
+        if (event.name === 'work-plan' && !event.error && typeof event.result === 'string') {
+          this.pushMessage('assistant', event.result);
+          return;
+        }
+
         if (event.name === 'clear' && !event.error) {
           this.tui.terminal.clearScreen();
           this.messages.reset();

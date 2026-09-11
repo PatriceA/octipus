@@ -1,6 +1,6 @@
-import { createHash } from 'crypto';
+import { randomUUID } from 'crypto';
 import { type ChildProcess, spawn } from 'child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join as joinPath, resolve as resolvePath } from 'path';
 import { recordAgentCompletion } from '@/core/agent-task-recorder';
@@ -12,11 +12,19 @@ import { WorkspaceFS } from '@/security/workspace-fs';
 import type { CLIAgentConfig } from '@/db/schema/models';
 import { getModelRegistry } from '@/models/model-registry';
 import { getQuotaTracker } from '@/models/quota-tracker';
-import { agentLogger, coreLogger } from '@/utils/logger';
+import { agentLogger } from '@/utils/logger';
 import type { AgentWorkerConfig, ToolHandler } from './agent-base';
 import { BaseAgentWorker } from './agent-base';
-import { CLIArgumentBuilder, CLIOutputParser, sweepStaleFiles } from './cli-adapters';
+import { CLIArgumentBuilder, CLIOutputParser, discoverCodexMcpServers, resolveCliMcpEntry, sweepStaleFiles, type CliRunConnection } from './cli-adapters';
+import { startCliToolBridge, type BridgeResult } from './cli-tool-bridge';
+import { ToolExecutor } from './tool-executor';
+import { answerCliPermissionRequest } from './cli-permissions';
+import { getPermissionManager } from '@/security/permissions';
+import { workPlanRepository } from '@/db/repositories/work-plan-repository';
+import { formatWorkPlanContext } from './agent/work-plan-context';
+import { isPlanMode } from './agent/plan-mode';
 import type { CLIToolConfig } from '@/models/providers/cli-provider';
+import { emptyCounters, mergeCounters, type SideEffectCounters } from './swarm/receipt';
 import { BudgetExceededError } from './swarm/errors';
 import { getCLIToolConfig } from './cli-agent-factory';
 import { isRootAgent } from './types';
@@ -45,6 +53,81 @@ export function isBorrowedProjectDir(
  */
 export class CLIAgentWorker extends BaseAgentWorker {
   private systemMessages: string[] = [];
+  private readonly toolExecutor: ToolExecutor;
+  private connection?: CliRunConnection;
+  private launchCleanup: (() => void) | undefined;
+  private bridge?: Awaited<ReturnType<typeof startCliToolBridge>>;
+  private pastParserCounters: SideEffectCounters | null = null;
+  private readonly abortController = new AbortController();
+  getAbortSignal(): AbortSignal { return this.abortController.signal; }
+  private terminalEmitted = false;
+  private runStartedAt = 0;
+  private pausedMs = 0;
+  private pauseStartedAt: number | null = null;
+  private pauseReasons = new Set<string>();
+  private setPause(reason: string, on: boolean): void {
+    if (on) this.pauseReasons.add(reason); else this.pauseReasons.delete(reason);
+    if (this.pauseReasons.size && this.pauseStartedAt === null) this.pauseStartedAt = Date.now();
+    if (!this.pauseReasons.size && this.pauseStartedAt !== null) {
+      this.pausedMs += Date.now() - this.pauseStartedAt;
+      this.pauseStartedAt = null;
+    }
+  }
+  private elapsed(): number {
+    return Date.now() - this.runStartedAt - this.pausedMs - (this.pauseStartedAt === null ? 0 : Date.now() - this.pauseStartedAt);
+  }
+  private bridgeErrors = new Map<string, boolean>();
+  private steeringQueue: AgentMessage[] = [];
+
+  /** Guidance is delivered at the next Octipus tool response or a follow-up CLI turn. */
+  steer(message: AgentMessage): void {
+    this.steeringQueue.push(message);
+    this.emit('thought', { type: 'steering_queued', delivery: 'next Octipus tool response or follow-up turn' });
+  }
+
+  private async controlContext(): Promise<string> {
+    const state = await workPlanRepository.read(this.context.sessionId, this.context.userId);
+    const guidance = this.steeringQueue.splice(0);
+    this.messages.push(...guidance);
+    return JSON.stringify({
+      agentId: this.context.id, sessionId: this.context.sessionId,
+      workspaceId: this.context.workspaceId, planMode: this.connection?.planMode ?? false,
+      workPlan: formatWorkPlanContext(state), guidance: guidance.map(m => m.content),
+      guidanceDelivery: 'Review this guidance before further affected work. Pending feedback must be acknowledged through update_work_plan.',
+    });
+  }
+
+  private async executeBridgedTool(name: string, args: Record<string, unknown>): Promise<BridgeResult> {
+    const id = randomUUID();
+    const delegation = name === 'spawn_child' || name === 'escalate_to_different_expert' || name === 'collect_children' || this.toolExecutor.getTools().get(name)?.final === true;
+    if (delegation) this.setPause('delegation', true);
+    try {
+      let messages: AgentMessage[];
+      try {
+        messages = await this.toolExecutor.handleToolCalls([{ id, name, arguments: args }]);
+      } catch (error) {
+        // Executor throws are terminal (approval cancellation or final-tool failure).
+        // Preserve an existing user cancellation instead of reclassifying it.
+        if (!this.aborted) {
+          this.runError = error instanceof Error ? error.message : String(error);
+          this.stop();
+        }
+        throw error;
+      }
+      const isError = this.bridgeErrors.get(id) ?? false;
+      let contextText: string;
+      try { contextText = `Octipus run context: ${await this.controlContext()}`; }
+      catch (error) {
+        agentLogger.warn({ error, agentId: this.context.id }, 'CLI context refresh failed after tool execution');
+        contextText = 'Tool execution finished. Run context refresh is temporarily unavailable; use get_cli_run_context before further affected work.';
+      }
+      return { content: [
+        ...messages.map(m => ({ type: 'text' as const, text: m.content })),
+        { type: 'text', text: contextText },
+      ], isError };
+    } finally { this.bridgeErrors.delete(id); if (delegation) this.setPause('delegation', false); }
+  }
+
   private process: ChildProcess | null = null;
   private aborted = false;
   private argBuilder = new CLIArgumentBuilder();
@@ -97,10 +180,22 @@ export class CLIAgentWorker extends BaseAgentWorker {
     opts?: { parentSignal?: AbortSignal },
   ) {
     super(context, config);
+    this.toolExecutor = new ToolExecutor(context, (type, data) => {
+      if (type === 'observation' && data && typeof data === 'object' && 'results' in data) {
+        for (const result of (data as { results: Array<{ toolCallId: string; error?: string }> }).results) {
+          this.bridgeErrors.set(result.toolCallId, !!result.error);
+        }
+      }
+      this.emit(type, data);
+    });
+    this.registerTool({ name: 'get_cli_run_context', description: 'Read the current Octipus plan, feedback and new user guidance. Check before further work and before your final answer.',
+      parameters: { type: 'object', properties: {} }, execute: async () => this.controlContext() });
 
     if (opts?.parentSignal) {
       const parent = opts.parentSignal;
       if (parent.aborted) {
+        this.aborted = true;
+        this.abortController.abort('Parent already stopped');
         // Already aborted at construction — fire on next tick so the caller
         // has a chance to wire onEvent handlers before the abort lands.
         queueMicrotask(() => this.stop());
@@ -125,14 +220,17 @@ export class CLIAgentWorker extends BaseAgentWorker {
    * evidence gate treats it as "no evidence" rather than "wrote nothing".
    */
   override getSideEffectCounters(): import('./swarm/receipt').SideEffectCounters | null {
-    return this.parser?.getSideEffectCounters() ?? null;
+    const parsed = this.parser?.getSideEffectCounters() ?? null;
+    const native = this.toolExecutor.getSideEffectCounters();
+    const observed = parsed || this.pastParserCounters;
+    if (!observed && native.toolCalls === 0 && native.permissionDenials === 0 && native.toolErrors === 0) return null;
+    return mergeCounters(mergeCounters(this.pastParserCounters ?? emptyCounters(), parsed ?? emptyCounters()), native);
   }
 
-  /** No-op — CLI models have their own tools */
-  registerTool(_tool: ToolHandler): void {}
+  /** Expose the same registered handlers through the run-scoped bridge. */
+  registerTool(tool: ToolHandler): void { this.toolExecutor.registerTool(tool); }
 
-  /** No-op — CLI models have their own tools */
-  registerTools(_tools: ToolHandler[]): void {}
+  registerTools(tools: ToolHandler[]): void { this.toolExecutor.registerTools(tools); }
 
   addSystemMessage(content: string): void {
     this.systemMessages.push(content);
@@ -167,40 +265,91 @@ export class CLIAgentWorker extends BaseAgentWorker {
   }
 
   async run(userMessage?: string): Promise<string> {
+    let permissionCleanup: () => void = () => {};
+    try {
+    if (this.aborted) throw new Error('Agent was aborted before starting');
     if (userMessage) {
       await this.addUserMessage(userMessage);
     }
 
+    if (this.aborted) throw new Error('Agent was aborted before starting');
+    this.runStartedAt = Date.now();
+    permissionCleanup = getPermissionManager().onWaitStateChange((agentId, waiting) => {
+      if (agentId === this.context.id) this.setPause('approval', waiting);
+    });
     this.context.status = 'running';
     this.emit('status_change', { status: 'running' });
 
-    try {
-      const result = await this.executeCLI();
-
-      // Don't mark as completed if we were stopped mid-execution
-      if (this.aborted) {
-        this.context.status = 'stopped';
-        this.context.completedAt = new Date();
-        this.emit('status_change', { status: 'stopped' });
-        const durationMs = Date.now() - this.context.createdAt.getTime();
-        agentRepository.updateStatus(this.context.id, {
-          status: 'stopped',
-          iterations: this.iteration,
-          durationMs,
-        }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in cli-agent-worker'));
-        throw new Error(this.abortReason ?? 'Agent was aborted by user');
+      const session = await sessionRepository.findById(this.context.sessionId);
+      if (this.aborted) throw new Error('Agent was aborted before bridge startup');
+      if (!session || session.userId !== this.context.userId) throw new Error('CLI session ownership mismatch');
+      this.bridge = await startCliToolBridge({
+        tools: () => this.toolExecutor.toolsDisabled ? [] : [...this.toolExecutor.getTools().values()],
+        active: () => this.context.status === 'running' && !this.aborted,
+        execute: (name, args) => this.executeBridgedTool(name, args),
+        unqueued: new Set(['get_cli_run_context', 'get_work_plan']),
+      });
+      if (this.aborted) throw new Error('Agent was aborted during bridge startup');
+      this.connection = { url: this.bridge.url, key: this.bridge.key,
+        planMode: isPlanMode(session.context as { planMode?: boolean }), maxIterations: this.config.maxIterations };
+      const helper = resolveCliMcpEntry().replace(/index\.js$/, 'agent-bridge-client.js');
+      const quote = (value: string) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
+      this.addSystemMessage(`You are connected to your Octipus run through the octipus MCP server. Its tools are your actual registered Octipus tools, including skills, plans and delegation when allowed. Prefer these tools for Octipus work.
+` +
+        `Call get_cli_run_context before working and before the final answer. Every Octipus tool response also includes fresh plan feedback and queued user guidance. Respect permissions and do not bypass a refused Octipus tool through vendor tools.
+` +
+        `If your CLI cannot load this MCP server, use its terminal tool to run the bridge helper: ${quote(process.execPath)} ${quote(helper)} tools; or ${quote(process.execPath)} ${quote(helper)} call <tool-name> '<JSON arguments>'. Quote arguments safely. Credentials are supplied by the parent environment; never print them.
+` +
+        `Tool names: ${[...this.toolExecutor.getTools().keys()].join(', ')}.`);
+      this.messages.push({ role: 'user', content: `Octipus run context: ${await this.controlContext()}`, timestamp: new Date() });
+      let result = await this.executeCLI();
+      const checkLateFeedback = async () => {
+        if (!this.toolExecutor.getTools().has('update_work_plan')) return;
+        try {
+          const latest = await workPlanRepository.read(this.context.sessionId, this.context.userId);
+          if (latest.current?.feedback.some(f => f.status === 'pending')) {
+            this.steeringQueue.push({ role: 'user', content: 'New plan feedback arrived. Read the current plan and handle pending feedback before finalizing.', timestamp: new Date() });
+          }
+        } catch (err) {
+          // Feedback stays pending in the plan record; do not fail a finished run over a read outage.
+          agentLogger.warn({ err, agentId: this.context.id }, 'Late plan feedback check failed');
+        }
+      };
+      await checkLateFeedback();
+      // A plain CLI has no mid-turn input protocol. If guidance arrived after
+      // its last bridge call, run a bounded follow-up instead of silently losing it.
+      const buffered = getCLIToolConfig(this.context.model)?.bufferOutput === true;
+      let followups = 0;
+      while (!this.aborted && this.steeringQueue.length > 0 && !buffered && followups < 2 && this.iteration < this.config.maxIterations) {
+        followups++;
+        this.messages.push({ role: 'assistant', content: result, timestamp: new Date() });
+        this.messages.push({ role: 'user', content: `New guidance: ${await this.controlContext()}`, timestamp: new Date() });
+        result = await this.executeCLI();
+        await checkLateFeedback();
       }
+      if (!this.aborted && this.steeringQueue.length > 0) {
+        // Keep the completed work; say plainly what was not applied. Plan feedback
+        // stays pending in the durable record; steering text is already in the
+        // session history, so the next message carries it.
+        const pending = this.steeringQueue.length;
+        const reason = buffered ? 'this CLI reports only at completion' : this.iteration >= this.config.maxIterations ? 'the turn budget is exhausted' : 'the follow-up limit was reached';
+        this.emit('thought', { type: 'guidance_pending', count: pending, reason });
+        result += `\n\n[Octipus] ${pending} guidance/feedback item${pending === 1 ? '' : 's'} arrived after this CLI's last Octipus tool call and ${pending === 1 ? 'was' : 'were'} not applied because ${reason}. Send another message to continue with it.`;
+      }
+
+      if (this.aborted) throw new Error(this.runError ?? this.abortReason ?? 'Agent was aborted by user');
 
       this.context.status = 'completed';
       this.context.completedAt = new Date();
       this.emit('status_change', { status: 'completed' });
       this.emit('complete', { result });
+      this.terminalEmitted = true;
 
       const durationMs = Date.now() - this.context.createdAt.getTime();
       await auditRepository.logAgentCompleted(
         this.context.userId, this.context.sessionId, this.context.id,
         { durationMs, iterations: this.iteration, model: this.context.model, role: this.context.role },
-      );
+      ).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to audit CLI completion'));
 
       agentRepository.updateStatus(this.context.id, {
         status: 'completed',
@@ -224,30 +373,49 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
       return result;
     } catch (error) {
-      this.context.status = 'failed';
+      const wasStopped = this.aborted && !this.abortReason && !this.runError && !this.budgetExceeded;
+      const status = wasStopped ? 'stopped' : 'failed';
+      this.context.status = status;
       this.context.completedAt = new Date();
-      this.emit('status_change', { status: 'failed' });
-      this.emit('error', { error: (error as Error).message });
-
-      const failDurationMs = Date.now() - this.context.createdAt.getTime();
-      await auditRepository.logAgentFailed(
+      if (!this.terminalEmitted) {
+        this.emit('status_change', { status });
+        if (wasStopped) this.emit('complete', { result: 'Agent stopped', stopped: true });
+        else this.emit('error', { error: (error as Error).message });
+        this.terminalEmitted = true;
+      }
+      const durationMs = Date.now() - this.context.createdAt.getTime();
+      if (!wasStopped) await auditRepository.logAgentFailed(
         this.context.userId, this.context.sessionId, this.context.id,
         { error: (error as Error).message, iteration: this.iteration, model: this.context.model, role: this.context.role },
-      );
-
+      ).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to audit CLI failure'));
       agentRepository.updateStatus(this.context.id, {
-        status: 'failed',
-        iterations: this.iteration,
-        durationMs: failDurationMs,
-        error: (error as Error).message,
-      }).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Failed to persist agent failure'));
+        status, iterations: this.iteration, durationMs, totalTokens: this.totalTokens,
+        error: wasStopped ? undefined : (error as Error).message,
+      }).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Failed to persist CLI terminal status'));
 
       throw error;
+    } finally {
+      permissionCleanup();
+      this.launchCleanup?.();
+      this.launchCleanup = undefined;
+      this.abortController.abort('CLI run ended');
+      getPermissionManager().cancelWaits(this.context.id);
+      this.parentSignalCleanup?.();
+      this.parentSignalCleanup = null;
+      if (this.bridge) {
+        try { await this.bridge.close(); }
+        catch (err) { agentLogger.error({ err, agentId: this.context.id }, 'CLI bridge cleanup failed'); }
+        this.bridge = undefined;
+      }
+      this.connection = undefined;
     }
   }
 
   stop(): void {
+    if (this.terminalEmitted) return;
     this.aborted = true;
+    this.abortController.abort('CLI agent stopped');
+    getPermissionManager().cancelWaits(this.context.id);
     if (this.parentSignalCleanup) {
       this.parentSignalCleanup();
       this.parentSignalCleanup = null;
@@ -284,7 +452,11 @@ export class CLIAgentWorker extends BaseAgentWorker {
     }
     this.context.status = 'stopped';
     this.context.completedAt = new Date();
-    this.emit('status_change', { status: 'stopped' });
+    if (!this.terminalEmitted && !this.abortReason && !this.runError && !this.budgetExceeded) {
+      this.emit('status_change', { status: 'stopped' });
+      this.emit('complete', { result: 'Agent stopped', stopped: true });
+      this.terminalEmitted = true;
+    }
     agentLogger.info({ agentId: this.context.id }, 'CLI agent stopped');
   }
 
@@ -353,13 +525,6 @@ export class CLIAgentWorker extends BaseAgentWorker {
     // Adapter family for arg-building + output parsing (defaults to name);
     // vendor CLIs on the claude binary set adapter='Claude Code'.
     const adapterKey = toolConfig.adapter ?? toolConfig.name;
-    const built = this.argBuilder.build(adapterKey, prompt, settings, this.systemMessages, systemPrompt, this.config.maxTokenBudget, this.context.id);
-    const { binary, args, stdinPrompt, useShell } = built;
-    // Vendor CLIs that reuse the `claude` binary (z.ai GLM / Moonshot Kimi) inject
-    // ANTHROPIC_BASE_URL + auth token via buildEnv — merge it over the adapter's env.
-    const toolEnv = toolConfig.buildEnv
-      ? { ...(built.env || {}), ...(await toolConfig.buildEnv()) }
-      : built.env;
 
     agentLogger.info(
       { agentId: this.context.id, tool: toolConfig.name, model: this.context.model },
@@ -420,21 +585,49 @@ export class CLIAgentWorker extends BaseAgentWorker {
       }
     }
 
+    this.launchCleanup?.();
+    this.launchCleanup = undefined;
+    // Async vendor discovery stays out of the synchronous arg builder (event-loop safe).
+    const codexMcpServers = this.connection && adapterKey === 'Codex CLI' ? await discoverCodexMcpServers(workspaceCwd) : undefined;
+    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, this.systemMessages, systemPrompt, Math.max(0, this.config.maxTokenBudget - this.totalTokens), this.context.id, this.connection ? { ...this.connection, workingDirectory: workspaceCwd, codexMcpServers, maxIterations: Math.max(1, this.config.maxIterations - this.iteration) } : undefined);
+    const { binary, args, stdinPrompt, useShell } = built;
+    this.launchCleanup = () => {
+      const configIndex = args.indexOf('--mcp-config');
+      const paths = [built.env?.VIBE_HOME, ...(this.connection && configIndex >= 0 ? [args[configIndex + 1]] : [])];
+      for (const path of paths) if (path) {
+        try { rmSync(path, { recursive: true, force: true }); }
+        catch (err) { agentLogger.warn({ err, path }, 'CLI temporary configuration cleanup failed'); }
+      }
+    };
+    // Vendor CLIs that reuse the `claude` binary (z.ai GLM / Moonshot Kimi) inject
+    // ANTHROPIC_BASE_URL + auth token via buildEnv — merge it over the adapter's env.
+    const toolEnv = toolConfig.buildEnv
+      ? { ...(built.env || {}), ...(await toolConfig.buildEnv()) }
+      : built.env;
+
+
+    const previousCounters = this.parser?.getSideEffectCounters();
+    if (previousCounters) this.pastParserCounters = mergeCounters(this.pastParserCounters ?? emptyCounters(), previousCounters);
+    const invocationStartIteration = this.iteration;
     const parser = this.parser = new CLIOutputParser(
       this.context.id,
       this.context.model,
       (type, data) => this.emit(type, data),
       {
+        isBridgedTool: name => /^mcp__octipus__|^octipus[_.]|^octipus_run_[a-f0-9]+\./.test(name),
         onTurn: () => {
           // Iteration = model turns (C15). Tool-call count is tracked
           // separately by the UI (toolCalls.length); the server owns turns.
           this.iteration++;
+          if (this.iteration > this.config.maxIterations) { this.abortReason = 'CLI agent exceeded its turn limit'; this.stop(); }
           this.emit('thought', { type: 'iteration_update', iteration: this.iteration });
         },
         onTurnCount: (turns) => {
           // Authoritative final count (Claude num_turns) — never regress.
-          if (turns > this.iteration) {
-            this.iteration = turns;
+          const totalTurns = invocationStartIteration + turns;
+          if (totalTurns > this.iteration) {
+            this.iteration = totalTurns;
+            if (this.iteration > this.config.maxIterations) { this.abortReason = 'CLI agent exceeded its turn limit'; this.stop(); }
             this.emit('thought', { type: 'iteration_update', iteration: this.iteration });
           }
         },
@@ -459,16 +652,6 @@ export class CLIAgentWorker extends BaseAgentWorker {
       workspaceCwd,
     );
 
-    // Write temporary project context files so CLI tools pick up the expert identity.
-    // Gemini reads GEMINI.md, Codex reads AGENTS.md from the cwd.
-    // These are cleaned up after the CLI process exits.
-    const tempContextFiles: string[] = [];
-    // Context files we temporarily augmented (a real curated AGENTS.md already
-    // existed): restore the original on cleanup — but ONLY if the file still
-    // holds exactly what we wrote (C13). A concurrent agent in the same cwd may
-    // have rewritten it; blindly restoring our `original` would clobber theirs.
-    const contextFileBackups = new Map<string, { original: string; wroteHash: string }>();
-    const sha = (s: string) => createHash('sha256').update(s).digest('hex');
     agentLogger.info(
       { tool: toolConfig.name, hasSystemPrompt: !!systemPrompt, cwd: workspaceCwd },
       'CLI agent context',
@@ -505,60 +688,16 @@ export class CLIAgentWorker extends BaseAgentWorker {
         [binary, ...args.map((a) => (a.length > 400 ? `<${a.length} chars — see sections above>` : a))].join(' '),
         '```',
       ].join('\n');
-      writeFileSync(dumpPath, body, 'utf-8');
+      writeFileSync(dumpPath, body, { encoding: 'utf-8', mode: 0o600 });
       agentLogger.info({ agentId: this.context.id, path: dumpPath }, 'Dumped CLI agent prompt');
     } catch (err) {
       agentLogger.debug({ err, agentId: this.context.id }, 'Failed to dump CLI agent prompt');
-    }
-    if (systemPrompt) {
-      const contextFileMap: Record<string, string> = {
-        // agy (Antigravity) reads GEMINI.md from the workdir, like gemini-cli did.
-        'Antigravity': 'GEMINI.md',
-        'Codex CLI': 'AGENTS.md',
-        // vibe reads AGENTS.md from the workdir for project context.
-        'Mistral Vibe': 'AGENTS.md',
-      };
-      const contextFileName = contextFileMap[toolConfig.name];
-      if (contextFileName) {
-        const contextFilePath = joinPath(workspaceCwd, contextFileName);
-        try {
-          if (!existsSync(contextFilePath)) {
-            // No existing file — write our prompt and delete it afterward.
-            writeFileSync(contextFilePath, systemPrompt, 'utf-8');
-            tempContextFiles.push(contextFilePath);
-            agentLogger.info({ tool: toolConfig.name, file: contextFileName, path: contextFilePath }, 'Wrote temp context file for CLI agent');
-          } else {
-            // A real curated AGENTS.md (or GEMINI.md) already exists. Prepend our
-            // system prompt so the CLI gets both, then restore the original on exit.
-            const original = readFileSync(contextFilePath, 'utf-8');
-            const augmented = `${systemPrompt}\n\n---\n\n${original}`;
-            contextFileBackups.set(contextFilePath, { original, wroteHash: sha(augmented) });
-            writeFileSync(contextFilePath, augmented, 'utf-8');
-            agentLogger.info({ tool: toolConfig.name, file: contextFileName, path: contextFilePath }, 'Augmented existing context file for CLI agent (will restore)');
-          }
-        } catch (err) {
-          agentLogger.debug({ err, file: contextFileName }, 'Failed to write temp context file');
-        }
-      }
     }
 
     // Cleanup helper — removes temp context files and any ephemeral per-spawn
     // VIBE_HOME the arg builder created for vibe's MCP registration.
     const tempVibeHome = toolEnv?.VIBE_HOME;
     const cleanupContextFiles = () => {
-      for (const f of tempContextFiles) {
-        try { unlinkSync(f); } catch { /* already gone */ }
-      }
-      // Restore any pre-existing context files we augmented — but only if the
-      // file on disk is still exactly what we wrote (C13). If a concurrent
-      // agent rewrote it, leave theirs; the last restorer no longer wins.
-      for (const [f, { original, wroteHash }] of contextFileBackups) {
-        try {
-          if (existsSync(f) && sha(readFileSync(f, 'utf-8')) === wroteHash) {
-            writeFileSync(f, original, 'utf-8');
-          }
-        } catch { /* best effort */ }
-      }
       if (tempVibeHome && tempVibeHome.includes('octipus-cli')) {
         try { rmSync(tempVibeHome, { recursive: true, force: true }); } catch { /* already gone */ }
       }
@@ -576,8 +715,11 @@ export class CLIAgentWorker extends BaseAgentWorker {
       // Minimal env allowlist (C6): a CLI child running with bypassed
       // permissions must NOT inherit the server's DB creds and all API keys.
       // Pass only PATH/HOME/locale/TERM, the CLI's own auth var, and toolEnv.
-      const env = buildChildEnv(toolConfig, toolEnv);
+      const env = buildChildEnv(toolConfig, { ...toolEnv,
+        ...(this.connection ? { OCTIPUS_AGENT_URL: this.connection.url, OCTIPUS_AGENT_KEY: this.connection.key } : {}),
+      }, settings.inheritApiKeys === true);
 
+      if (this.aborted) { cleanupContextFiles(); reject(new Error('Agent was aborted before CLI spawn')); return; }
       this.processExited = false;
       const proc = spawn(binary, args, {
         env,
@@ -600,7 +742,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
           }
         });
         if (stdinPrompt) proc.stdin.write(stdinPrompt);
-        proc.stdin.end();
+        if (!built.keepStdinOpen) proc.stdin.end();
       }
 
       this.process = proc;
@@ -608,19 +750,12 @@ export class CLIAgentWorker extends BaseAgentWorker {
       // Single hard timeout: force-kill on overrun and stamp abortReason so
       // run() reports "timed out" instead of "aborted by user". timeout <= 0
       // means unlimited (matches AgentWorker.withTimeout).
-      const hardTimeout =
-        this.config.timeout > 0
-          ? setTimeout(() => {
-              if (!this.aborted && !this.processExited) {
-                agentLogger.warn(
-                  { agentId: this.context.id, tool: toolConfig.name, timeoutMs: this.config.timeout },
-                  'CLI agent exceeded hard timeout, force-killing',
-                );
-                this.abortReason = `CLI agent ${toolConfig.name} timed out after ${this.config.timeout}ms`;
-                this.stop();
-              }
-            }, this.config.timeout)
-          : undefined;
+      const hardTimeout = this.config.timeout > 0 ? setInterval(() => {
+        if (!this.aborted && !this.processExited && this.elapsed() >= this.config.timeout) {
+          this.abortReason = `CLI agent ${toolConfig.name} timed out after ${this.config.timeout}ms of active work`;
+          this.stop();
+        }
+      }, 250) : undefined;
 
       let accumulatedText = '';
       // stderr ring buffer — keep only the tail so a chatty CLI can't pin
@@ -649,6 +784,16 @@ export class CLIAgentWorker extends BaseAgentWorker {
           if (!line.trim() || this.aborted) continue;
           try {
             const event = JSON.parse(line);
+            if (built.keepStdinOpen && event.type === 'control_request') {
+              void answerCliPermissionRequest(event, this.context, (type, data) => this.emit(type, data)).then(response => {
+                if (!this.aborted && proc.stdin?.writable) proc.stdin.write(JSON.stringify(response) + '\n');
+              }).catch((err: unknown) => {
+                this.runError = `CLI permission protocol failed: ${err instanceof Error ? err.message : String(err)}`;
+                this.stop();
+              });
+              continue;
+            }
+            if (built.keepStdinOpen && event.type === 'result') proc.stdin?.end();
             consecutiveNonJson = 0;
             const result = parser.parse(event, adapterKey);
             if (result) {
@@ -681,7 +826,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
       });
 
       proc.on('close', async (code) => {
-        clearTimeout(hardTimeout);
+        clearInterval(hardTimeout);
         this.process = null;
         // C5: any throw in this async handler used to leave the executeCLI
         // promise unsettled forever (agent stuck "running"). Wrap the whole
@@ -783,7 +928,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
       });
 
       proc.on('error', (err) => {
-        clearTimeout(hardTimeout);
+        clearInterval(hardTimeout);
         this.processExited = true;
         try { cleanupContextFiles(); } catch { /* best effort */ }
         this.process = null;
@@ -809,11 +954,11 @@ function isProcessAlive(pid: number): boolean {
  * CLI's own auth var, and per-tool overrides — NOT the server's full env
  * (DB creds, every API key, internal secrets).
  */
-function buildChildEnv(tool: CLIToolConfig, toolEnv?: Record<string, string>): Record<string, string> {
+export function buildChildEnv(tool: CLIToolConfig, toolEnv?: Record<string, string>, inheritApiKeys = false): Record<string, string> {
   const base: Record<string, string> = {};
   const pass = (k: string) => { const v = process.env[k]; if (v != null) base[k] = v; };
   // Core shell/runtime env every CLI needs to find its binary + config dir.
-  for (const k of ['PATH', 'HOME', 'LANG', 'TERM', 'TZ', 'SHELL', 'USER', 'LOGNAME', 'TMPDIR']) pass(k);
+  for (const k of ['PATH', 'HOME', 'LANG', 'TERM', 'TZ', 'SHELL', 'USER', 'LOGNAME', 'TMPDIR', 'CODEX_HOME']) pass(k);
   // Windows equivalents.
   for (const k of ['SystemRoot', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'PATHEXT', 'ComSpec', 'TEMP', 'TMP']) pass(k);
   // Locale (LC_ALL, LC_CTYPE, …).
@@ -826,7 +971,8 @@ function buildChildEnv(tool: CLIToolConfig, toolEnv?: Record<string, string>): R
     google: ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_APPLICATION_CREDENTIALS'],
     mistral: ['MISTRAL_API_KEY'],
   };
-  for (const k of authByProvider[tool.modelProvider] || []) pass(k);
+  if (inheritApiKeys) for (const k of authByProvider[tool.modelProvider] || []) pass(k);
+  if (tool.modelProvider === 'anthropic') pass('CLAUDE_CODE_OAUTH_TOKEN');
   // Per-tool overrides (e.g. vibe's ephemeral VIBE_HOME).
   Object.assign(base, toolEnv || {});
   // Never let the child think it's running inside Claude Code itself.

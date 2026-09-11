@@ -144,6 +144,41 @@ export class PermissionRuleEngine {
   }
 }
 
+/** Defaults used when `permissions.rules` is unset. Operators who set their own rules replace this whole list. */
+export const DEFAULT_PERMISSION_RULES: PermissionRulesConfig = {
+  allow: [
+    'shell(git:*)',       // Git commands are always safe
+    'shell(ls:*)',        // Listing is safe
+    'shell(cat:*)',       // Reading is safe
+    'shell(echo:*)',      // Echo is safe
+    'filesystem(*)',      // Filesystem tool has its own guards
+    'knowledge(*)',       // Knowledge operations are safe
+    'websearch(*)',       // Web search is safe
+    // Vendor CLI tools relayed through the Claude permission protocol
+    // (toolId `cli-native:<Tool>`): read-only ones pass, everything else
+    // falls through to the default ASK (approval when attended, deny otherwise).
+    'cli-native:Read(*)',
+    'cli-native:Glob(*)',
+    'cli-native:Grep(*)',
+    'cli-native:LS(*)',
+    'cli-native:NotebookRead(*)',
+    'cli-native:WebFetch(*)',
+    'cli-native:WebSearch(*)',
+    'cli-native:TodoWrite(*)',
+  ],
+  deny: [
+    'shell(rm -rf /:*)',  // Never delete root
+    'shell(dd if=/dev:*)', // Never raw disk write
+    'shell(mkfs:*)',      // Never format
+    'shell(:(){ :|:&};:)', // Fork bomb
+  ],
+  ask: [
+    'shell(sudo:*)',      // Escalation needs approval
+    'shell(docker:*)',    // Container ops need approval
+    'shell(systemctl:*)', // Service management needs approval
+  ],
+};
+
 // Singleton
 let engineInstance: PermissionRuleEngine | null = null;
 
@@ -168,29 +203,7 @@ export async function initPermissionRules(): Promise<void> {
     if (rulesConfig) {
       engine.load(rulesConfig);
     } else {
-      // Default rules — sensible defaults
-      engine.load({
-        allow: [
-          'shell(git:*)',       // Git commands are always safe
-          'shell(ls:*)',        // Listing is safe
-          'shell(cat:*)',       // Reading is safe
-          'shell(echo:*)',      // Echo is safe
-          'filesystem(*)',      // Filesystem tool has its own guards
-          'knowledge(*)',       // Knowledge operations are safe
-          'websearch(*)',       // Web search is safe
-        ],
-        deny: [
-          'shell(rm -rf /:*)',  // Never delete root
-          'shell(dd if=/dev:*)', // Never raw disk write
-          'shell(mkfs:*)',      // Never format
-          'shell(:(){ :|:&};:)', // Fork bomb
-        ],
-        ask: [
-          'shell(sudo:*)',      // Escalation needs approval
-          'shell(docker:*)',    // Container ops need approval
-          'shell(systemctl:*)', // Service management needs approval
-        ],
-      });
+      engine.load(DEFAULT_PERMISSION_RULES);
     }
   } catch (err) {
     securityLogger.debug({ err }, 'Permission rules initialization skipped');

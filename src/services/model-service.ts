@@ -11,6 +11,9 @@
  * key lookups, per-user model visibility, usage stats) it takes a plain
  * `userId`.
  */
+import { z } from 'zod';
+import { getCLIToolConfig } from '@/core/cli-agent-factory';
+import { validateScopedExtraArgs } from '@/shared/cli-capabilities';
 import { getConfig } from '@/config';
 import type { NewModelConfigEntry } from '@/db/schema/models';
 import { getCapabilitiesForModel } from '@/models/capabilities';
@@ -66,6 +69,32 @@ export async function getModelByName(name: string) {
 
 // ── Create / update / delete ─────────────────────────────────────────
 
+// Share the input shape and managed-run allowlist across both write paths.
+// Metadata is replaced by registry.updateModel, so validate the effective value
+// when a model ID changes without replacing its existing metadata.
+const cliMetadataSchema = z.object({
+  cliAgent: z.object({
+    extraArgs: z.array(z.string()).optional(),
+  }).passthrough().optional(),
+}).passthrough().nullish();
+
+function validateCliMetadata(modelId: string, metadata: unknown): string | null {
+  const parsed = cliMetadataSchema.safeParse(metadata);
+  if (!parsed.success) {
+    return 'Invalid CLI metadata: metadata and cliAgent must be objects; extraArgs must be an array of strings.';
+  }
+  const extraArgs = parsed.data?.cliAgent?.extraArgs;
+  const cli = getCLIToolConfig(modelId);
+  if (cli && extraArgs) {
+    try {
+      validateScopedExtraArgs(cli.adapter ?? cli.name, extraArgs);
+    } catch (err) {
+      return (err as Error).message;
+    }
+  }
+  return null;
+}
+
 /**
  * Register a new model. Validates the OpenRouter id format and rejects
  * duplicate names. Strips topic bindings (owned by the Topics page).
@@ -82,6 +111,9 @@ export async function registerModel(body: Record<string, unknown>) {
       error: `OpenRouter models require "provider/model" format (e.g., "minimax/minimax-01"), got "${modelId}"`,
     };
   }
+
+  const validationError = validateCliMetadata(modelId, body.metadata);
+  if (validationError) return { error: validationError };
 
   const registry = getModelRegistry();
 
@@ -130,6 +162,13 @@ export async function updateModel(name: string, body: Record<string, unknown>) {
 
   try {
     const registry = getModelRegistry();
+    const existing = await registry.getModel(name);
+    if (!existing) return { status: 404 as const, error: 'Model not found' };
+    const validationError = validateCliMetadata(
+      typeof safeUpdate.modelId === 'string' ? safeUpdate.modelId : existing.modelId,
+      safeUpdate.metadata === undefined ? existing.metadata : safeUpdate.metadata,
+    );
+    if (validationError) return { status: 400 as const, error: validationError };
     const model = await registry.updateModel(name, safeUpdate as Partial<NewModelConfigEntry>);
     if (!model) {
       return { status: 404 as const, error: 'Model not found' };

@@ -1,7 +1,7 @@
 /**
  * Default themes for the pi-tui-based octipus shell.
  *
- * Ports the dark/light palettes from src/tui-editor/theme.ts and
+ * Shares the Deep Sea dark identity with the web workspace and
  * adapts them to pi-tui's chalk-driven theme contracts
  * (EditorTheme, MarkdownTheme, SelectListTheme).
  *
@@ -34,19 +34,19 @@ export interface OctipusPalette {
 
 const dark: OctipusPalette = {
   name: 'dark',
-  fg: '#E6E6E6',
-  dim: '#5A6677',
-  border: '#3A4250',
-  borderFocus: '#7AA2D4',
-  accent: '#7AA2D4',
-  accentDim: '#A0B8CF',
-  warn: '#E0AF68',
-  error: '#C47070',
-  ok: '#7BC4A0',
-  statusFg: '#A0B8CF',
-  selection: '#26334A',
-  cursor: '#7AA2D4',
-  cursorFg: '#0F1216',
+  fg: '#edf5f3',
+  dim: '#a6babd',
+  border: '#34515b',
+  borderFocus: '#92c9c5',
+  accent: '#92c9c5',
+  accentDim: '#b9ded9',
+  warn: '#e8c46a',
+  error: '#f28b82',
+  ok: '#7fd39a',
+  statusFg: '#b9ded9',
+  selection: '#163b44',
+  cursor: '#92c9c5',
+  cursorFg: '#071923',
 };
 
 const light: OctipusPalette = {

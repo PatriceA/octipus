@@ -13,6 +13,7 @@ import { NewSessionDialog, type NewSessionOptions } from '@/components/chat/new-
 import PromptInput, { type Attachment } from '@/components/chat/prompt-input';
 import { type SessionInfo, SessionList } from '@/components/chat/session-list';
 import SidePanel from '@/components/chat/side-panel';
+import WorkPlanPanel from '@/components/chat/work-plan-panel';
 import { GlobalPermissionBanner } from '@/components/global-permission-banner';
 import type { SwarmTreeEvent } from '@/components/swarm-tree';
 import { useVoiceRealtime } from '@/hooks/useVoiceRealtime';
@@ -75,7 +76,7 @@ function welcomeMessage(): ChatMessageData {
   return {
     id: '0',
     role: 'system',
-    content: 'Welcome! I\'m your AI assistant. I\'ll route your requests to the right specialist. How can I help you today?',
+    content: 'What would you like to accomplish? Describe the outcome, and follow the plan and results here.',
     timestamp: new Date(),
   };
 }
@@ -1619,7 +1620,7 @@ export default function ChatPage() {
   }, [realtimeMode, activeSessionId]);
 
   return (
-    <div className="h-full flex">
+    <div className="workspace-chat h-full flex relative">
       {sessionListError && <div role="status" className="absolute z-20 bottom-2 left-2 rounded border border-warning bg-surface p-3 text-sm">
         Sessions unavailable. {sessionListError} <button className="underline" onClick={() => void loadSessions()}>Retry sessions</button>
       </div>}
@@ -1637,7 +1638,7 @@ export default function ChatPage() {
       />
 
       {/* Left panel — Session list */}
-      <div className="w-64 border-r border-outline-variant/10 shrink-0 bg-surface-container-low">
+      <div className="workspace-sessions w-56 border-r border-outline-variant/10 shrink-0 bg-surface-container-low">
         <SessionList
           sessions={sessions}
           activeSessionId={activeSessionId}
@@ -1649,7 +1650,14 @@ export default function ChatPage() {
       </div>
 
       {/* Center — Messages + Input */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="workspace-conversation flex-1 flex flex-col min-w-0 min-h-0">
+        <div className="flex items-center gap-3 border-b border-outline-variant/50 px-4 py-3">
+          <select aria-label="Current conversation" className="min-w-0 flex-1 bg-transparent text-sm" value={activeSessionId || ''} onChange={e => selectSession(e.target.value)}>
+            <option value="" disabled>Choose a conversation</option>
+            {sessions.map(session => <option key={session.id} value={session.id}>{session.title || 'Untitled work'}</option>)}
+          </select>
+          <button type="button" onClick={createSession} className="text-xs text-primary whitespace-nowrap">New work</button>
+        </div>
         {/* Message timeline */}
         <MessageTimeline
           messages={messages}
@@ -1718,7 +1726,7 @@ export default function ChatPage() {
                sent while it is open auto-creates its own session, and confirming
                the dialog then adds a second, empty one. */
             disabled={isLoading || showNewSessionDialog}
-            placeholder={showNewSessionDialog ? 'Choose a session type first...' : activeSessionId ? 'Send a message...' : 'Create a session to start chatting'}
+            placeholder={showNewSessionDialog ? 'Choose a session type first...' : activeSessionId ? 'Send a message or change direction...' : 'Create a session to start chatting'}
             voiceError={realtime.error || voiceUnavailableReason}
             voiceAvailable={voiceAvailable !== false}
             realtimeMode={realtimeMode}
@@ -1735,7 +1743,7 @@ export default function ChatPage() {
           chatting; the right sidebar auto-collapses to make room. reloadSignal
           bumps when the agent writes this path, so the panel live-refreshes. */}
       {openFilePath && activeSessionId && (
-        <div className="flex min-h-0 min-w-[24rem] flex-1 flex-col border-l border-outline-variant/10">
+        <div className="workspace-file-view flex min-h-0 min-w-[24rem] flex-1 flex-col border-l border-outline-variant/10">
           <FileViewer
             sessionId={activeSessionId}
             path={openFilePath}
@@ -1749,8 +1757,10 @@ export default function ChatPage() {
       {/* Right panel — single SidePanel containing: Connection & Model →
           Session Stats → Swarm Tree. Agent Activity was removed; SwarmTree
           replaces it as the canonical live view. */}
-      {showSidePanel && (
-        <div className="w-72 border-l border-outline-variant/10 shrink-0 bg-surface-container flex flex-col overflow-y-auto">
+      {(
+        <div className="workspace-inspector w-80 border-l border-outline-variant/50 shrink-0 bg-surface-container-low flex flex-col overflow-y-auto">
+          <WorkPlanPanel key={activeSessionId ?? 'new'} sessionId={activeSessionId} running={isLoading} files={activeState?.fileChanges ?? []} onOpenFile={setOpenFilePath} onPlanMode={enabled => { void sendMessage(enabled ? '/plan on' : '/plan off'); }} />
+          {showSidePanel && <details open className="border-t border-outline-variant/50 p-4"><summary className="cursor-pointer text-sm text-on-surface-variant">Activity & settings</summary>
           <SidePanel
             totalTokens={sessionTotalTokens}
             maxTokenBudget={maxTokenBudget}
@@ -1780,14 +1790,15 @@ export default function ChatPage() {
               }));
             }}
           />
+          </details>}
         </div>
       )}
 
       {/* Side panel toggle */}
       <button
         onClick={() => setShowSidePanel(!showSidePanel)}
-        className="absolute top-20 right-2 p-1.5 rounded-lg bg-surface-container-highest shadow-xs ring-1 ring-outline-variant/10 text-on-surface-variant hover:text-on-surface z-10 cursor-pointer"
-        title={showSidePanel ? 'Hide panel' : 'Show panel'}
+        className="hidden xl:block absolute bottom-3 right-3 p-1.5 rounded-lg bg-surface-container-highest shadow-xs ring-1 ring-outline-variant/10 text-on-surface-variant hover:text-on-surface z-10 cursor-pointer"
+        title={showSidePanel ? 'Hide activity settings' : 'Show activity settings'}
       >
         {showSidePanel ? <PanelRightClose className="w-4 h-4" /> : <PanelRight className="w-4 h-4" />}
       </button>

@@ -77,6 +77,7 @@ export interface WorkerSwarmParent {
   rootSessionId: string;
   topicPath: string;
   subtopic?: string;
+  signal?: AbortSignal;
 }
 
 type EmitFn = (event: TurnEvent) => void;
@@ -856,8 +857,8 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
       }
 
       // For people-related queries, search for relevant profiles and inject matches.
-      // CLI agents can't call the profiles tool (registerTool is a no-op), so we
-      // resolve profile data here and put it in the prompt context.
+      // Seed useful profile context before the first turn; workers can retrieve
+      // further details through their registered profile tools.
       const peoplePatterns = /\b(who is|wife|husband|partner|mother|father|mom|dad|boss|friend|brother|sister|family|birthday|address|phone|email of|tell me about|remember|my dog|my cat|my pet|company|organization)\b/i;
       if (peoplePatterns.test(task)) {
         // Extract search terms — strip common question words to get the relevant noun
@@ -998,34 +999,8 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     staticParts.push(`\n\nPRODUCT DOCS: Octipus's own product documentation (setup, channels, model providers, configuration) is indexed in the knowledge base (source "octipus-docs"). For any "how do I set up / configure / connect / enable X" question about Octipus itself, call search_knowledge FIRST and answer from the retrieved docs — cite the source file — rather than guessing.`);
   }
 
-  // Inform CLI agents about the Octipus MCP self-server.
-  //
-  // This is CLI-ONLY by design: Claude Code / Gemini / Codex run out-of-process
-  // and have NO in-process tool registry, so they reach Octipus capabilities
-  // (profiles, knowledge, web search, messaging, scheduling, documents) by
-  // connecting to the standalone "octipus" MCP server and calling octipus_* tools.
-  //
-  // In-process LLM agents are different: those same capabilities are already
-  // their DIRECT built-in tools (knowledge, websearch, profiles, …), and the
-  // in-process MCP bridge only ever connects to the user's *external* MCP
-  // servers — never the octipus self-server. The old `else if (!isSmall)` block
-  // therefore advertised a server that isn't in their bridge and duplicated tools
-  // they already hold (and claimed MCP existed even when no external server was
-  // configured and the meta-tools were absent). Removed. LLM agents that have
-  // external MCP servers bound still get the self-describing mcp_list_tools /
-  // mcp_call_tool handlers — no prompt guidance needed.
-  const isCLIModel = finalModel?.startsWith('cli/');
-  if (isCLIModel) {
-    staticParts.push(`\n\nOCTIPUS MCP TOOLS: You have access to the "octipus" MCP server which provides tools for:
-- **People & profiles**: Search/retrieve stored information about people the user knows (octipus_search_profiles, octipus_get_profile)
-- **Knowledge base**: Search the user's knowledge base (octipus_search_knowledge)
-- **Web search**: Search the web (octipus_search) and fetch pages (octipus_fetch_page)
-- **Messaging**: Send messages to the user's channels — Telegram, Slack, etc. (octipus_send_channel_message)
-- **Scheduling**: Create/manage scheduled tasks and automations (octipus_create_recurring_task)
-- **Documents**: Upload and index documents (octipus_upload_document)
-- **Skills**: List available domain skills (octipus_list_skills) and load a skill's full content by id (octipus_get_skill). Skill ids mentioned elsewhere in this prompt (e.g. under "Topic Skills" or "Domain Knowledge (index)") are loaded with octipus_get_skill — \`get_skill\` is the same tool under its MCP name.
-Use these MCP tools when the task benefits from them — especially for people-related questions, knowledge lookups, or cross-channel messaging.`);
-  }
+  // CLI workers advertise their actual run-scoped handlers at launch. Do not
+  // promise the standalone admin MCP catalog or invented octipus_* aliases.
 
   // Assemble the stable prefix: STATIC (cacheable) → SEMI-STATIC → VOLATILE.
   // Ordering within a tier is unchanged; only cross-tier position moves. The
@@ -1075,7 +1050,7 @@ Use these MCP tools when the task benefits from them — especially for people-r
         depth: 1,
       },
       allowedToolIds: new Set(roleTools.map((t) => t.toolId ?? t.name)),
-      signal: undefined as unknown as AbortSignal,
+      signal: overrides.swarmParent.signal ?? agentManager.get(overrides.swarmParent.id)?.getAbortSignal() ?? new AbortController().signal,
     };
     stageNode.allowedToolIds.add('spawn_child');
     try {
@@ -1160,6 +1135,7 @@ Use these MCP tools when the task benefits from them — especially for people-r
     tools: workerTools,
     toolAdvertisement,
     parentAgentId: overrides?.swarmParent?.id,
+    parentSignal: overrides?.swarmParent ? overrides.swarmParent.signal ?? agentManager.get(overrides.swarmParent.id)?.getAbortSignal() : undefined,
     maxTokenBudget: overrides?.maxTokenBudget,
     // The pipeline puts `pipelineId`/`nodeKey` on the stage context; without
     // forwarding them the agent's own metadata is empty and the `plan` tool
@@ -1173,6 +1149,8 @@ Use these MCP tools when the task benefits from them — especially for people-r
   // ── Register stage in swarm_nodes + announce on hub ──
   if (stageNode && overrides?.swarmParent) {
     stageNode.id = workerId;
+    stageNode.signal = worker.getAbortSignal();
+    stageNode.ownTokenUsage = () => worker.getTotalTokens();
     const brief = `${task}\n${input}`.slice(0, 4000);
     const briefHash = taskFingerprint({
       originalUserRequest: task,
@@ -1482,7 +1460,7 @@ interface WorkerRespawnContext {
 
 /**
  * Handle worker failure: transient retry (same model) → topic backup model
- * (Topics page "Backup" binding) → CLI-provider default fallback.
+ * (Topics page "Backup" binding). No implicit CLI-to-API fallback.
  */
 async function handleWorkerFailure(
   error: Error,
@@ -1568,8 +1546,8 @@ async function handleWorkerFailure(
   }
 
   // Respawn the ORIGINAL worker (same assembled prompt + tool surface) on a
-  // given model and run the task. Shared by the transient retry, the topic
-  // backup, and the CLI fallback below.
+  // given model and run the task. Shared by the transient retry and explicit
+  // topic backup below.
   const respawnAndRun = async (model: string): Promise<string> => {
     const agentManager = getAgentManager();
     const retryWorker = await agentManager.spawn({
@@ -1630,8 +1608,8 @@ async function handleWorkerFailure(
   }
 
   // Topic backup model — the "Backup" binding from the Topics page. One
-  // attempt on the configured fallback before the last-resort CLI/default
-  // path. Skipped when unbound or when it would rerun the failed model.
+  // attempt on the configured fallback. Skipped when unbound or when it
+  // would rerun the failed model.
   const registry = getModelRegistry();
   try {
     const backup = await registry.getBackupModelForTopic(lane);
@@ -1648,23 +1626,9 @@ async function handleWorkerFailure(
     coreLogger.error({ error: backupError, role: agentRole }, 'Backup-model worker also failed');
   }
 
-  // CLI sub-agent fallback
-  const failedModelEntry = await registry.getModelByModelId(failedModel);
-  if (failedModelEntry?.provider === 'cli') {
-    const defaultModel = await registry.getDefaultModel();
-    if (defaultModel && defaultModel.modelId !== failedModel && defaultModel.supportsTools) {
-      coreLogger.info(
-        { failedModel, fallbackModel: defaultModel.modelId, role: agentRole },
-        'CLI sub-agent failed, retrying with default model',
-      );
-      try {
-        const fallbackResult = await respawnAndRun(defaultModel.modelId);
-        return fallbackResult;
-      } catch (fallbackError) {
-        coreLogger.error({ error: fallbackError, role: agentRole }, 'Fallback worker also failed');
-      }
-    }
-  }
+  // No implicit CLI → default/API fallback: selecting a subscription-backed
+  // CLI must not silently create a separately billed model invocation. Explicit
+  // topic backup bindings above remain an operator-configured choice.
 
   deps.emit({
     type: 'worker_completed',

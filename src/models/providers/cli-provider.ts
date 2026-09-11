@@ -1,3 +1,4 @@
+import { describeCliCapabilities } from '@/shared/cli-capabilities';
 import { spawn } from 'child_process';
 import { getConfig } from '@/config';
 import { classifyError } from '@/core/errors/classification';
@@ -72,6 +73,8 @@ export interface CLIToolConfig {
    * on the full buffer at close instead of parsing each line as an event.
    */
   bufferOutput?: boolean;
+  /** How a managed run hands the CLI its Octipus tools. Default: per-run MCP config. */
+  toolBridge?: 'mcp' | 'terminal';
 }
 
 // ---- Claude Code CLI ----
@@ -129,6 +132,8 @@ const antigravityConfig: CLIToolConfig = {
   modelProvider: 'google',
   modelFlag: '--model',
   bufferOutput: true,
+  // agy has no per-run MCP config surface; it reaches the bridge via the terminal helper.
+  toolBridge: 'terminal',
   billingInfo: {
     vendor: 'Google',
     planNote: 'Google account via `agy` (antigravity) auth in ~/.gemini — same backend as Gemini CLI',
@@ -581,6 +586,8 @@ export class CLIProvider implements ModelProvider {
     modelProvider: 'anthropic' | 'google' | 'openai' | 'mistral' | 'zai' | 'moonshot';
     modelFlag: string;
     billingInfo: CLIBillingInfo;
+    adapter: string;
+    capabilities: string;
   }[]> {
     const results = [];
     for (const tool of CLI_TOOLS) {
@@ -592,6 +599,8 @@ export class CLIProvider implements ModelProvider {
         modelProvider: tool.modelProvider,
         modelFlag: tool.modelFlag,
         billingInfo: tool.billingInfo,
+        adapter: tool.adapter ?? tool.name,
+        capabilities: describeCliCapabilities(tool),
       });
     }
     return results;

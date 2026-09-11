@@ -2,30 +2,65 @@
 
 import { Terminal, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { validateScopedExtraArgs } from '../../../src/shared/cli-capabilities';
 import { api } from '@/lib/api';
 import { Portal } from '@/components/ui/portal';
-import type { Model } from '@/lib/types/models';
+import type { CLITool, Model } from '@/lib/types/models';
 
-type CliKind = 'claude' | 'antigravity' | 'codex' | null;
+type CliKind = 'claude' | 'antigravity' | 'codex' | 'vibe' | 'glm' | 'kimi' | null;
 
-function detectCliKind(modelId: string): CliKind {
+function fallbackCliKind(modelId: string): CliKind {
   const id = modelId.toLowerCase();
   if (id.includes('claude')) return 'claude';
-  // antigravity (agy) supersedes the gemini CLI but legacy cli/gemini rows still route here.
   if (id.includes('antigravity') || id.includes('agy') || id.includes('gemini')) return 'antigravity';
   if (id.includes('codex')) return 'codex';
+  if (id.includes('vibe')) return 'vibe';
+  if (id.includes('glm') || id.includes('zai')) return 'glm';
+  if (id.includes('kimi') || id.includes('moonshot')) return 'kimi';
   return null;
 }
 
-function cliProviderForKind(kind: CliKind): 'anthropic' | 'gemini' | 'openai' | null {
-  if (kind === 'claude') return 'anthropic';
-  // Antigravity runs on the Gemini/Google backend — discover models via the gemini provider.
-  if (kind === 'antigravity') return 'gemini';
-  if (kind === 'codex') return 'openai';
-  return null;
+function toolMatchesModel(tool: CLITool, modelId: string): boolean {
+  return tool.modelPatterns.some(pattern => modelId === pattern || modelId.startsWith(`${pattern}/`));
+}
+
+function cliKindForTool(tool: CLITool | undefined, modelId: string): CliKind {
+  switch (tool?.modelProvider) {
+    case 'anthropic': return 'claude';
+    case 'google': return 'antigravity';
+    case 'openai': return 'codex';
+    case 'mistral': return 'vibe';
+    case 'zai': return 'glm';
+    case 'moonshot': return 'kimi';
+    default: return fallbackCliKind(modelId);
+  }
+}
+
+function normalizePermissionMode(mode: string | undefined, kind: CliKind): string {
+  switch (mode) {
+    case 'bypassPermissions':
+    case 'danger-full-access':
+    case 'auto-approve':
+    case 'yolo':
+      return 'full';
+    case 'acceptEdits':
+    case 'accept-edits':
+    case 'workspace-write':
+    case 'auto_edit':
+      return 'workspace';
+    case 'auto':
+      return kind === 'codex' ? 'workspace' : mode;
+    case 'default':
+    case 'read-only':
+      return 'safe';
+    default:
+      return mode || '';
+  }
 }
 
 interface DiscoveredModel { id: string; label: string; tier?: string }
+
+const SHARED_PERMISSION_MODES = new Set(['safe', 'workspace', 'full', 'plan']);
 
 export interface EditModelModalProps {
   model: Model;
@@ -51,10 +86,10 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
     costPerInputToken: model.costPerInputToken,
     costPerOutputToken: model.costPerOutputToken,
     // CLI agent settings
-    cliPermissionMode: cliAgent.permissionMode || '',
+    cliPermissionMode: normalizePermissionMode(cliAgent.permissionMode, fallbackCliKind(model.modelId)),
+    cliInheritApiKeys: cliAgent.inheritApiKeys === true,
     cliAllowedTools: (cliAgent.allowedTools || []).join(', '),
     cliMaxBudgetUsd: cliAgent.maxBudgetUsd ?? '',
-    cliMcpConfigPath: cliAgent.mcpConfigPath || '',
     cliExtraArgs: (cliAgent.extraArgs || []).join(' '),
     cliModel: cliAgent.model || '',
     // Custom provider settings
@@ -66,14 +101,37 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
   });
   const [error, setError] = useState('');
   const [discoveredCliModels, setDiscoveredCliModels] = useState<DiscoveredModel[]>([]);
+  const [cliTools, setCliTools] = useState<CLITool[]>([]);
 
   const isCli = model.provider === 'cli';
   const isCustomProvider = model.provider.startsWith('custom-');
-  const cliKind: CliKind = isCli ? detectCliKind(model.modelId) : null;
-  const cliProvider = cliProviderForKind(cliKind);
+  const cliTool = isCli ? cliTools.find(tool => toolMatchesModel(tool, model.modelId)) : undefined;
+  const cliKind: CliKind = isCli ? cliKindForTool(cliTool, model.modelId) : null;
+  // The CLI registry calls this backend "google"; model discovery uses the setup-provider id "gemini".
+  const cliProvider = cliTool?.modelProvider === 'google' ? 'gemini' : cliTool?.modelProvider;
+  const supportsPlanMode = cliKind !== null && cliKind !== 'codex';
+  const supportsClaudeStyleLimits = cliKind === 'claude' || cliKind === 'vibe' || cliKind === 'glm' || cliKind === 'kimi';
+  const supportsModelOverride = cliKind !== 'vibe';
+  const supportsApiKeyInheritance = cliKind !== 'glm' && cliKind !== 'kimi';
+  const preservedNativePermission = formData.cliPermissionMode && !SHARED_PERMISSION_MODES.has(formData.cliPermissionMode)
+    ? formData.cliPermissionMode
+    : null;
 
   useEffect(() => {
-    if (!isCli || !cliProvider) return;
+    if (!isCli) return;
+    let cancelled = false;
+    void api.get<{ tools?: CLITool[] }>('/models/cli/status')
+      .then(res => {
+        if (!cancelled && Array.isArray(res?.tools)) setCliTools(res.tools);
+      })
+      .catch(() => {
+        // Fall back to the model-id detector when the registry is unavailable.
+      });
+    return () => { cancelled = true; };
+  }, [isCli]);
+
+  useEffect(() => {
+    if (!isCli || !cliProvider || !supportsModelOverride) return;
     let cancelled = false;
     (async () => {
       try {
@@ -88,7 +146,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
       }
     })();
     return () => { cancelled = true; };
-  }, [isCli, cliProvider]);
+  }, [isCli, cliProvider, supportsModelOverride]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -137,11 +195,23 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
       }
 
       if (isCli) {
-        const cliAgentConfig: Record<string, unknown> = {};
+        // Keep hidden legacy/forward-compatible settings (notably mcpConfigPath),
+        // while replacing every setting this form actually manages.
+        const cliAgentConfig: Record<string, unknown> = { ...cliAgent };
+        delete cliAgentConfig.permissionMode;
+        delete cliAgentConfig.extraArgs;
+        if (supportsApiKeyInheritance) {
+          delete cliAgentConfig.inheritApiKeys;
+          cliAgentConfig.inheritApiKeys = formData.cliInheritApiKeys;
+        }
         if (formData.cliPermissionMode) cliAgentConfig.permissionMode = formData.cliPermissionMode;
-        if (formData.cliModel.trim()) cliAgentConfig.model = formData.cliModel.trim();
-        // Claude-only fields: only persist when applicable.
-        if (cliKind === 'claude') {
+        if (supportsModelOverride) {
+          delete cliAgentConfig.model;
+          if (formData.cliModel.trim()) cliAgentConfig.model = formData.cliModel.trim();
+        }
+        if (supportsClaudeStyleLimits) {
+          delete cliAgentConfig.allowedTools;
+          delete cliAgentConfig.maxBudgetUsd;
           if (formData.cliAllowedTools.trim()) {
             cliAgentConfig.allowedTools = formData.cliAllowedTools.split(',').map(t => t.trim()).filter(Boolean);
           }
@@ -149,9 +219,12 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
             cliAgentConfig.maxBudgetUsd = Number(formData.cliMaxBudgetUsd);
           }
         }
-        if (formData.cliMcpConfigPath) cliAgentConfig.mcpConfigPath = formData.cliMcpConfigPath;
         if (formData.cliExtraArgs.trim()) {
-          cliAgentConfig.extraArgs = formData.cliExtraArgs.split(/\s+/).filter(Boolean);
+          const extraArgs = formData.cliExtraArgs.split(/\s+/).filter(Boolean);
+          // Same policy the managed run enforces at spawn (and the API at save).
+          // Throws a user-facing message; handleSubmit's catch shows it.
+          if (cliTool?.adapter) validateScopedExtraArgs(cliTool.adapter, extraArgs);
+          cliAgentConfig.extraArgs = extraArgs;
         }
 
         payload.metadata = {
@@ -406,10 +479,16 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
               <p className="text-xs text-on-surface-variant">
                 CLI models run as autonomous sub-agents with their own tools and agent loop.
               </p>
+              <p className="text-xs text-on-surface-variant">
+                {cliTool?.capabilities ?? 'Capabilities are shown once the CLI is detected on this server.'}
+              </p>
+              <p className="text-xs text-on-surface-variant">
+                Octipus configures the scoped tool bridge for each run; no MCP config path is needed here.
+              </p>
 
-              <div>
+              {supportsModelOverride ? <div>
                 <label className="block text-sm font-medium text-on-surface-variant mb-1">
-                  Model {cliKind ? `(${cliKind})` : ''}
+                  Model {cliTool ? `(${cliTool.name})` : cliKind ? `(${cliKind})` : ''}
                 </label>
                 <input
                   type="text"
@@ -428,11 +507,12 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                 )}
                 <p className="text-xs text-on-surface-variant mt-1">
                   Pass-through to the CLI binary. Leave empty to use the vendor default.
-                  {discoveredCliModels.length === 0 && cliProvider && (
-                    <> Configure {cliProvider} API key on Secrets to populate suggestions.</>
-                  )}
                 </p>
-              </div>
+              </div> : (
+                <p className="text-xs text-on-surface-variant">
+                  Vibe uses the active model from its own configuration.
+                </p>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-on-surface-variant mb-1">Permission Mode</label>
@@ -441,26 +521,44 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                   onChange={(e) => setFormData({ ...formData, cliPermissionMode: e.target.value })}
                   className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface text-sm"
                 >
-                  <option value="">Default</option>
-                  {cliKind === 'claude' && <option value="bypassPermissions">Bypass Permissions</option>}
-                  {cliKind === 'claude' && <option value="acceptEdits">Accept Edits</option>}
-                  {cliKind === 'claude' && <option value="plan">Plan Only</option>}
-                  {cliKind === 'antigravity' && <option value="yolo">YOLO</option>}
-                  {cliKind === 'antigravity' && <option value="auto_edit">Auto Edit</option>}
-                  {cliKind === 'codex' && <option value="auto">Auto</option>}
-                  {!cliKind && (
-                    <>
-                      <option value="bypassPermissions">Bypass Permissions (Claude)</option>
-                      <option value="acceptEdits">Accept Edits (Claude)</option>
-                      <option value="plan">Plan Only (Claude)</option>
-                      <option value="yolo">YOLO (Gemini)</option>
-                      <option value="auto_edit">Auto Edit (Gemini)</option>
-                    </>
+                  <option value="">Adapter default</option>
+                  <option value="safe">Safe</option>
+                  <option value="workspace">Workspace edits</option>
+                  <option value="full">Full access</option>
+                  {supportsPlanMode && <option value="plan">Plan only</option>}
+                  {preservedNativePermission && (
+                    <option value={preservedNativePermission} disabled>
+                      Current native setting: {preservedNativePermission}
+                    </option>
                   )}
                 </select>
+                <p className="text-xs text-on-surface-variant mt-1">
+                  Octipus translates this level to the CLI&apos;s native permission controls.
+                </p>
               </div>
 
-              {cliKind === 'claude' && (
+              {supportsApiKeyInheritance ? (
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.cliInheritApiKeys}
+                    onChange={(e) => setFormData({ ...formData, cliInheritApiKeys: e.target.checked })}
+                    className="w-4 h-4 mt-0.5 rounded border-outline-variant text-primary focus:ring-primary"
+                  />
+                  <span className="text-sm text-on-surface-variant">
+                    Pass server API keys to this CLI
+                    <span className="block text-xs mt-0.5">
+                      Off uses the CLI&apos;s existing login and configuration. Enabling this can use separately billed API credentials.
+                    </span>
+                  </span>
+                </label>
+              ) : (
+                <p className="text-xs text-on-surface-variant">
+                  This adapter uses its dedicated {cliKind === 'glm' ? 'z.ai' : 'Moonshot'} credential configured on the Octipus server; API-key inheritance does not apply.
+                </p>
+              )}
+
+              {supportsClaudeStyleLimits && (
                 <div>
                   <label className="block text-sm font-medium text-on-surface-variant mb-1">
                     Max Budget (USD per invocation)
@@ -474,22 +572,11 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                     placeholder="No limit"
                     className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface text-sm"
                   />
-                  <p className="text-xs text-on-surface-variant mt-1">Claude Code only. Leave empty for no limit.</p>
+                  <p className="text-xs text-on-surface-variant mt-1">Leave empty for no per-invocation price limit.</p>
                 </div>
               )}
 
-              <div>
-                <label className="block text-sm font-medium text-on-surface-variant mb-1">MCP Config Path</label>
-                <input
-                  type="text"
-                  value={formData.cliMcpConfigPath}
-                  onChange={(e) => setFormData({ ...formData, cliMcpConfigPath: e.target.value })}
-                  placeholder="/path/to/mcp-config.json"
-                  className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface font-mono text-sm"
-                />
-              </div>
-
-              {cliKind === 'claude' && (
+              {supportsClaudeStyleLimits && (
                 <div>
                   <label className="block text-sm font-medium text-on-surface-variant mb-1">Allowed Tools</label>
                   <input
@@ -499,7 +586,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                     placeholder="Bash, Read, Edit, WebSearch"
                     className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface text-sm"
                   />
-                  <p className="text-xs text-on-surface-variant mt-1">Claude Code only. Comma-separated. Empty = all tools.</p>
+                  <p className="text-xs text-on-surface-variant mt-1">Comma-separated. Empty allows the CLI&apos;s default tools.</p>
                 </div>
               )}
 
@@ -509,9 +596,12 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
                   type="text"
                   value={formData.cliExtraArgs}
                   onChange={(e) => setFormData({ ...formData, cliExtraArgs: e.target.value })}
-                  placeholder="--no-session-persistence --max-turns 10"
+                  placeholder="Leave empty"
                   className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface font-mono text-sm"
                 />
+                <p className="text-xs text-on-surface-variant mt-1">
+                  Only adapter-supported additive flags are accepted. Octipus manages model, permission, bridge, run-limit, and I/O flags.
+                </p>
               </div>
             </div>
           )}

@@ -1,3 +1,7 @@
+import { getCLIToolConfig } from '@/core/cli-agent-factory';
+import { describeCliCapabilities } from '@/shared/cli-capabilities';
+import { addPlanFeedback, formatWorkPlan } from '@/shared/work-plan';
+import { workPlanRepository } from '@/db/repositories/work-plan-repository';
 import { coreLogger } from '@/utils/logger';
 import type { TrustLevel } from './protocol';
 
@@ -114,6 +118,40 @@ export class CommandRegistry {
 // ── Built-in Commands ─────────────────────────────────────────────
 
 export function registerBuiltinCommands(registry: CommandRegistry): void {
+  for (const name of ['work-plan', 'work-plan-status', 'plan-feedback']) {
+    registry.register({
+      name, aliases: [], minTrustLevel: 'user',
+      description: name === 'plan-feedback' ? 'Give feedback on the current work plan' : name === 'work-plan' ? 'Show the current plan, evidence, and feedback' : 'Compact work-plan progress',
+      handler: async ctx => {
+        // Compact status is machine-read by the TUI: empty text = no plan, error = unavailable.
+        if (!ctx.sessionId) return { text: name === 'work-plan-status' ? '' : 'No active session.' };
+        const state = await workPlanRepository.read(ctx.sessionId, ctx.userId);
+        if (name === 'work-plan-status') return { text: state.current ? formatWorkPlan(state, true) : '' };
+        if (name !== 'plan-feedback') {
+          let text = formatWorkPlan(state);
+          {
+            const { getAgentManager } = await import('@/core/agent-manager');
+            const roots = getAgentManager().getBySession(ctx.sessionId).filter(a => a.getContext().root)
+              .sort((a, b) => b.getContext().createdAt.getTime() - a.getContext().createdAt.getTime());
+            const root = roots.find(a => a.getStatus() === 'running') ?? roots[0];
+            const cli = root && getCLIToolConfig(root.getContext().model);
+            if (cli) text += `\n\nCLI: ${describeCliCapabilities(cli)}`;
+          }
+          return { text };
+        }
+        if (!state.current) return { text: 'No plan published yet.' };
+        try {
+          const next = addPlanFeedback(state, state.current.id, state.revision, ctx.rawArgs);
+          await workPlanRepository.save(ctx.sessionId, ctx.userId, state.revision, next);
+        } catch (err) {
+          // Validation and revision conflicts are user-facing, not command failures.
+          return { text: err instanceof Error ? err.message : 'Feedback was not saved.' };
+        }
+        return { text: 'Feedback saved as pending. Running tools may finish first. If the turn has ended, send a message to continue with your feedback.' };
+      },
+    });
+  }
+
   registry.register({
     name: 'help',
     aliases: ['h', '?'],

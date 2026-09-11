@@ -8,52 +8,31 @@
  * 0 solid }`) then beat every utility in the app: `class="border"` computed to
  * `border-width: 0`, so no input, card, table cell or panel could draw an edge
  * and the whole UI read as unstyled. Fonts belong in no layer at all. */
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap');
 
 @import 'tailwindcss';
 
 @custom-variant dark (&:is(.dark *));
 
-/* ──────────────────────────────────────────────────────────────────
-   Octipus terminal-UI palette — unified with the mobile app.
-
-   Every hex below comes from the mobile palette
-   (`mobile-octipus/lib/theme/theme.dart`): #0E0E0E canvas, #8CACFF
-   periwinkle primary, #D5E3FC ice secondary, #FFB7F9 orchid accent,
-   #FF716C coral error, #8CE8B0 mint success, #FFD37A amber warning,
-   #151515 card, #2A2A2A hairline, #8A8A8A dim / #5C5C5C faint text.
-   One colour vocabulary across web / mobile / TUI.
-
-   Old class names (e.g. `bg-primary`, `text-on-surface-variant`,
-   `border-outline-variant`) keep working — only the tokens behind
-   them change. `tertiary` keeps its web semantic (success/OK) and
-   maps to the mobile mint; the mobile pink lives in the new
-   `accent` token for AI / research moments.
-
-   Contrast checks against bg #0E0E0E:
-     text  #FFFFFF  → ~19:1  (AAA body)
-     dim   #8A8A8A  → ~6.3:1 (AA UI text)
-     accent#8CACFF  → ~8.6:1 (AAA UI)
-   On surface #151515 the same tokens stay above AA.
-   ────────────────────────────────────────────────────────────────── */
+/* Deep Sea: shared identity with octipus.cc. Semantic tokens keep existing screens consistent. */
 @theme {
   /* Backgrounds ------------------------------------------------------ */
-  --color-background: #0E0E0E;
-  --color-foreground: #FFFFFF;
+  --color-background: #071923;
+  --color-foreground: #edf5f3;
 
-  /* Primary (accent) — periwinkle ------------------------------------ */
-  --color-primary: #8CACFF;
-  --color-primary-dim: #6E8FE0;
-  --color-primary-container: #1F2A4A;       /* selection-tinted block */
-  --color-primary-fixed: #8CACFF;
-  --color-primary-fixed-dim: #6E8FE0;
+  /* Primary — sea glass ------------------------------------ */
+  --color-primary: #92c9c5;
+  --color-primary-dim: #73aaa7;
+  --color-primary-container: #163b44;       /* selection-tinted block */
+  --color-primary-fixed: #92c9c5;
+  --color-primary-fixed-dim: #73aaa7;
 
   /* Secondary — ice blue for muted emphasis -------------------------- */
-  --color-secondary: #D5E3FC;
-  --color-secondary-dim: #A8B8D8;
-  --color-secondary-container: #1E2430;
-  --color-secondary-fixed: #D5E3FC;
-  --color-secondary-fixed-dim: #A8B8D8;
+  --color-secondary: #cce3e1;
+  --color-secondary-dim: #a6babd;
+  --color-secondary-container: #16303a;
+  --color-secondary-fixed: #cce3e1;
+  --color-secondary-fixed-dim: #a6babd;
 
   /* Tertiary — web semantic is "success / OK" → mobile mint ---------- */
   --color-tertiary: #8CE8B0;
@@ -62,11 +41,11 @@
   --color-tertiary-fixed: #8CE8B0;
   --color-tertiary-fixed-dim: #6FC394;
 
-  /* Accent — mobile orchid; AI / research / expressive moments ------- */
-  --color-accent: #FFB7F9;
-  --color-accent-dim: #D892D0;
-  --color-accent-container: #3A2238;
-  --color-on-accent: #722275;
+  /* Accent — coral for restrained emphasis ------- */
+  --color-accent: #ef9b88;
+  --color-accent-dim: #cf806d;
+  --color-accent-container: #3d2c2b;
+  --color-on-accent: #44271f;
 
   /* Error ----------------------------------------------------------- */
   --color-error: #FF716C;
@@ -79,62 +58,62 @@
   --color-warning-container: #3A2F18;
 
   /* Surfaces — neutral grays, every layer a step brighter ------------ */
-  --color-surface: #1A1A1A;
-  --color-surface-dim: #0E0E0E;
-  --color-surface-bright: #2E2E2E;
-  --color-surface-variant: #1E1E1E;
-  --color-surface-tint: #8CACFF;
+  --color-surface: #102a35;
+  --color-surface-dim: #071923;
+  --color-surface-bright: #24434e;
+  --color-surface-variant: #16323e;
+  --color-surface-tint: #92c9c5;
 
-  --color-surface-container: #151515;
-  --color-surface-container-low: #121212;
-  --color-surface-container-high: #1C1C1C;
-  --color-surface-container-highest: #232323;
-  --color-surface-container-lowest: #0A0A0A;
+  --color-surface-container: #0d2530;
+  --color-surface-container-low: #0a202b;
+  --color-surface-container-high: #14303b;
+  --color-surface-container-highest: #1b3b46;
+  --color-surface-container-lowest: #06151e;
 
   /* Outlines (single-line dim borders — TUI feel) -------------------
      `outline-variant` is the default border colour for every element
      (see the Tailwind v4 compat layer below), so it decides whether the
-     app has edges at all. At #2A2A2A it sat 21/255 off the panel it drew
+     app has edges at all. At #34515b it sat 21/255 off the panel it drew
      on: inputs, cards and table cells were invisible rectangles and the
      UI read as unstyled. Lifted until an edge is legible, with a slight
      cool bias toward the periwinkle accent so it reads chosen. */
-  --color-outline: #767575;
-  --color-outline-variant: #33343B;
+  --color-outline: #748f97;
+  --color-outline-variant: #34515b;
 
   /* Text-on-* (use these instead of hardcoded #fff) ----------------- */
-  --color-on-surface: #FFFFFF;
-  --color-on-surface-variant: #8A8A8A;
+  --color-on-surface: #edf5f3;
+  --color-on-surface-variant: #a6babd;
 
-  --color-on-primary: #002A6D;          /* dark text on accent buttons */
-  --color-on-primary-container: #D5E3FC;
-  --color-on-primary-fixed: #002A6D;
-  --color-on-primary-fixed-variant: #D5E3FC;
+  --color-on-primary: #08202a;          /* dark text on accent buttons */
+  --color-on-primary-container: #cce3e1;
+  --color-on-primary-fixed: #08202a;
+  --color-on-primary-fixed-variant: #cce3e1;
 
   --color-on-secondary: #455367;
-  --color-on-secondary-container: #FFFFFF;
+  --color-on-secondary-container: #edf5f3;
   --color-on-secondary-fixed: #455367;
-  --color-on-secondary-fixed-variant: #FFFFFF;
+  --color-on-secondary-fixed-variant: #edf5f3;
 
   --color-on-tertiary: #053321;
-  --color-on-tertiary-container: #FFFFFF;
+  --color-on-tertiary-container: #edf5f3;
   --color-on-tertiary-fixed: #053321;
-  --color-on-tertiary-fixed-variant: #FFFFFF;
+  --color-on-tertiary-fixed-variant: #edf5f3;
 
   --color-on-error: #490006;
-  --color-on-error-container: #FFFFFF;
+  --color-on-error-container: #edf5f3;
   --color-on-warning: #4A3200;
-  --color-on-warning-container: #FFFFFF;
+  --color-on-warning-container: #edf5f3;
 
-  --color-inverse-surface: #FFFFFF;
-  --color-inverse-on-surface: #0E0E0E;
-  --color-inverse-primary: #1F2A4A;
+  --color-inverse-surface: #edf5f3;
+  --color-inverse-on-surface: #071923;
+  --color-inverse-primary: #163b44;
 
   /* Typography — terminal app, mono everywhere ---------------------- */
-  --font-sans: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  --font-body: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  --font-headline: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  --font-display: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  --font-label: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --font-sans: 'Manrope', ui-sans-serif, system-ui, sans-serif;
+  --font-body: 'Manrope', ui-sans-serif, system-ui, sans-serif;
+  --font-headline: 'Manrope', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Manrope', ui-sans-serif, system-ui, sans-serif;
+  --font-label: 'Manrope', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 
   /* Radii — sharper than before. Mono UIs read cleaner with tight
@@ -164,9 +143,9 @@
 }
 
 body {
-  font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  color: #FFFFFF;
-  background: #0E0E0E;
+  font-family: 'Manrope', ui-sans-serif, system-ui, sans-serif;
+  color: #edf5f3;
+  background: #071923;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -175,12 +154,11 @@ body {
   font-variant-ligatures: contextual;
 }
 
-/* Headings — no separate font; mono everywhere. Tighten letter-
-   spacing slightly so multi-word headings don't sprawl. */
+/* Shared typography; code retains the explicit font-mono utility. */
 h1, h2, h3, h4, h5, h6,
 .font-headline,
 .font-display {
-  font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-family: 'Manrope', ui-sans-serif, system-ui, sans-serif;
   font-weight: 700;
   letter-spacing: -0.01em;
 }
@@ -188,7 +166,7 @@ h1 { letter-spacing: -0.02em; }
 
 /* Label utility — uppercase mono labels (used on stat cards / tags). */
 .font-label {
-  font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-family: 'Manrope', ui-sans-serif, system-ui, sans-serif;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -197,12 +175,12 @@ h1 { letter-spacing: -0.02em; }
 
 /* ── Scrollbar — thin, hairline-toned ────────────────────────────── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #0E0E0E; }
+::-webkit-scrollbar-track { background: #071923; }
 ::-webkit-scrollbar-thumb {
-  background: #2A2A2A;
+  background: #34515b;
   border-radius: 2px;
 }
-::-webkit-scrollbar-thumb:hover { background: #767575; }
+::-webkit-scrollbar-thumb:hover { background: #748f97; }
 
 /* ── Material symbols ── */
 .material-symbols-outlined {
@@ -226,7 +204,7 @@ button, a { transition: all 0.12s ease; }
    focused inputs. */
 .term-prompt::before {
   content: '\276F'; /* ❯ */
-  color: #8CACFF;
+  color: #92c9c5;
   margin-right: 0.5em;
   font-weight: 600;
 }
@@ -244,7 +222,7 @@ button, a { transition: all 0.12s ease; }
   font-weight: 600;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: #8A8A8A;
+  color: #a6babd;
 }
 .section-label::before {
   content: '// ';
@@ -255,8 +233,8 @@ button, a { transition: all 0.12s ease; }
 /* Single-line dim frame — the web equivalent of a TUI bordered pane.
    Pair with surface bg for the "panel" look. */
 .term-frame {
-  border: 1px solid #2A2A2A;
-  background: #151515;
+  border: 1px solid #34515b;
+  background: #0d2530;
 }
 
 /* Status dots — small coloured circles for connection / health state. */
@@ -312,7 +290,7 @@ button, a { transition: all 0.12s ease; }
 }
 .term-caret::after {
   content: '▍';
-  color: #8CACFF;
+  color: #92c9c5;
   margin-left: 0.15em;
   animation: term-blink 1.1s steps(1) infinite;
 }
@@ -352,7 +330,7 @@ button, a { transition: all 0.12s ease; }
 /* ── Selection — accent blue ── */
 ::selection {
   background: rgba(140, 172, 255, 0.35);
-  color: #FFFFFF;
+  color: #edf5f3;
 }
 
 /* Respect reduced motion */
@@ -364,4 +342,32 @@ button, a { transition: all 0.12s ease; }
   }
   .term-caret::after { animation: none; opacity: 1; }
   .dot-live { animation: none; }
+}
+
+/* Conversation and plan remain together at every viewport size. */
+.workspace-inspector { scrollbar-gutter: stable; }
+.work-plan-panel { overflow-wrap: anywhere; }
+.work-plan-panel button:focus-visible, .work-plan-panel summary:focus-visible,
+.workspace-chat select:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; }
+@media (max-width: 1099px) { .workspace-sessions { display: none; } }
+@media (max-width: 1099px) {
+  .workspace-chat { flex-direction: column; }
+  .workspace-inspector { order: -1; width: 100%; max-height: 42%; flex-shrink: 0; border-left: 0; border-bottom: 1px solid var(--color-outline-variant); }
+  .workspace-conversation { flex: 1; }
+  .workspace-inspector > details { display: none; }
+}
+.mobile-nav-toggle { display: none; }
+@media (max-width: 700px) {
+  .app-sidebar { display: none; }
+  .app-sidebar.mobile-open { display: flex; position: fixed; top: 48px; bottom: 0; left: 0; width: 240px; z-index: 50; box-shadow: 12px 0 40px #0008; }
+  .mobile-nav-toggle { display: flex; position: fixed; top: 12px; left: 10px; z-index: 60; color: var(--color-primary); }
+  header { padding-left: 42px !important; }
+  .workspace-file-view { position: absolute; inset: 0; z-index: 30; background: var(--color-background); min-width: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-enter, .animate-spin { animation: none; }
+}
+
+@media (min-width: 701px) {
+  .workspace-chat:has(.workspace-file-view) .workspace-inspector { display: none; }
 }

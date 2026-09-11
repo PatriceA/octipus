@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { applyRoleFit, validateSpawnChildArgs, formatChildResult, createSpawnChildTool, buildSpawnRoleCatalog, buildDelegationGuidance, parsePlan, MAX_PLAN_STEPS, SPAWN_CHILD_ROLES } from './swarm-tool';
-import { LEVEL_DEFAULT, type AgentNode, type ChildResult } from './types';
+import { applyRoleFit, validateSpawnChildArgs, formatChildResult, createLateBoundSpawnChildHooks, createSpawnChildTool, buildSpawnRoleCatalog, buildDelegationGuidance, parsePlan, MAX_PLAN_STEPS, SPAWN_CHILD_ROLES } from './swarm-tool';
+import { LEVEL_DEFAULT, type AgentNode, type ChildResult, type PendingChild } from './types';
 import { SwarmSpawner } from './spawner';
 
 // ── buildSpawnRoleCatalog (depth-1 subagent discoverability) ─────────
@@ -565,6 +565,68 @@ describe('createSpawnChildTool', () => {
     expect(seen).toHaveLength(1);
     expect(String(out)).toContain('status="pending"');
     expect(String(out)).toContain('mode="detach"');
+  });
+
+  test('late-bound hooks await for CLI workers and detach after a native worker is wired', async () => {
+    const parent = makeAgentParent();
+    const modes: Array<string | undefined> = [];
+    const pending: PendingChild[] = [];
+    const ref: {
+      current: {
+        registerPendingChild: (child: PendingChild) => void;
+        pendingDetachedCount: () => number;
+      } | null;
+    } = { current: null };
+    const spawner = {
+      spawnChild: async (_parent: AgentNode, params: { mode?: string }) => {
+        modes.push(params.mode);
+        return {
+          nodeId: `child-${modes.length}`,
+          kind: 'subagent' as const,
+          status: 'ok' as const,
+          output: 'finished child output',
+          usedTokens: 10,
+          durationMs: 100,
+          spawnedChildren: [],
+        };
+      },
+    } as unknown as SwarmSpawner;
+    const tool = createSpawnChildTool(
+      parent,
+      spawner,
+      createLateBoundSpawnChildHooks(ref, () => 3),
+    );
+    const args = {
+      topic: 'research',
+      subtopic: 'runtime-capability',
+      taskBrief: 'Check the runtime-specific delegation path',
+      expectedOutput: { shape: 'summary' },
+    };
+    const context = {
+      id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000',
+      userId: 'u', model: '', topic: '', role: 'research' as const,
+      status: 'running' as const, createdAt: new Date(), updatedAt: new Date(), metadata: {},
+    };
+
+    // A CLI worker leaves the capability ref null. Its child result must be
+    // awaited and returned directly; no untracked promise may be created.
+    const awaited = await tool.execute(args, context);
+    expect(modes).toEqual(['await']);
+    expect(String(awaited)).toContain('finished child output');
+    expect(String(awaited)).not.toContain('status="pending"');
+    expect(pending).toHaveLength(0);
+
+    // Native AgentWorker wiring happens before run(). The same tool closure now
+    // observes the capability and retains background child collection.
+    ref.current = {
+      registerPendingChild: (child) => pending.push(child),
+      pendingDetachedCount: () => pending.length,
+    };
+    const detached = await tool.execute(args, context);
+    expect(modes).toEqual(['await', 'detach']);
+    expect(String(detached)).toContain('status="pending"');
+    expect(pending).toHaveLength(1);
+    await expect(pending[0].promise).resolves.toMatchObject({ output: 'finished child output' });
   });
 
   test('detach mode: cap enforcement — 4th spawn rejected', async () => {

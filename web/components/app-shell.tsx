@@ -31,7 +31,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (isLoading || !isAuthenticated) {
     // TUI-style boot splash: prompt + spinner.
     return (
-      <div className="flex h-screen items-center justify-center bg-background font-mono">
+      <div className="flex h-screen items-center justify-center bg-background font-sans">
         <div className="flex items-center gap-3 text-on-surface-variant text-[13px]">
           <Loader2 className="w-4 h-4 animate-spin text-primary" />
           <span className="text-primary">❯</span>
@@ -46,7 +46,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const fullBleed = pathname === '/chat' || pathname.startsWith('/notes');
 
   return (
-    <div className="flex flex-col h-screen bg-background text-on-surface overflow-hidden font-mono">
+    <div className="flex flex-col h-screen bg-background text-on-surface overflow-hidden font-sans">
       <ImpersonationBanner />
       <div className="flex flex-1 min-h-0">
         <Sidebar />

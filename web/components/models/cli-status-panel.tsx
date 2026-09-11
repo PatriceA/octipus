@@ -101,7 +101,8 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
       </div>
       <p className="text-xs text-on-surface-variant mb-3">
         These vendor CLIs were detected on your system. Billing and quota are vendor-managed —
-        see <a className="underline" href="/docs/features/cli-providers/" target="_blank" rel="noreferrer">CLI Providers docs</a>.
+        provider permission, subscription coverage and extra charges are provider decisions. Octipus uses the CLI’s existing login/configuration.
+        See <a className="underline" href="/docs/features/cli-providers/" target="_blank" rel="noreferrer">CLI Providers docs</a>.
       </p>
       <div className="space-y-3">
         {tools.map(tool => {
@@ -112,6 +113,7 @@ export function CLIStatusPanel({ tools, registeredModels, onAdd, onUpdate }: CLI
 
           return (
             <div key={tool.name} className="space-y-2 border-b border-outline-variant/5 pb-3 last:border-0 last:pb-0">
+              {tool.capabilities && <p className="text-xs text-on-surface-variant">{tool.capabilities}</p>}
               <div className="flex items-center justify-between text-sm">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className={`dot shrink-0 ${

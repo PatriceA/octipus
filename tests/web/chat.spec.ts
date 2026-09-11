@@ -16,14 +16,14 @@ test.describe('chat page', () => {
 
   test('loads chat page with session list', async ({ authenticatedPage: page }) => {
     await page.goto('/chat');
-    await page.waitForLoadState('networkidle');
+    await page.getByLabel('Current conversation').selectOption('sess-1');
     await expect(page).toHaveURL(/\/chat/);
-    await expect(page.getByText(/First chat|Second chat/).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByLabel('Current conversation')).toBeVisible();
   });
 
   test('empty input cannot be submitted', async ({ authenticatedPage: page }) => {
     await page.goto('/chat');
-    await page.waitForLoadState('networkidle');
+    await page.getByLabel('Current conversation').selectOption('sess-1');
     // The Send button is rendered by PromptInput; it may be absent when no session active.
     const submit = page.getByRole('button', { name: /send/i }).first();
     if (await submit.isVisible().catch(() => false)) {
@@ -34,7 +34,7 @@ test.describe('chat page', () => {
 
   test('typing a message updates the input', async ({ authenticatedPage: page }) => {
     await page.goto('/chat');
-    await page.waitForLoadState('networkidle');
+    await page.getByLabel('Current conversation').selectOption('sess-1');
     const input = page.getByPlaceholder(/send a message|create a session/i).first();
     await input.waitFor({ state: 'visible', timeout: 10_000 });
     await input.fill('Hello world');
@@ -43,7 +43,7 @@ test.describe('chat page', () => {
 
   test('long message fills without truncation', async ({ authenticatedPage: page }) => {
     await page.goto('/chat');
-    await page.waitForLoadState('networkidle');
+    await page.getByLabel('Current conversation').selectOption('sess-1');
     const input = page.getByPlaceholder(/send a message|create a session/i).first();
     await input.waitFor({ state: 'visible' });
     const longMsg = 'A'.repeat(2000);
@@ -53,13 +53,8 @@ test.describe('chat page', () => {
 
   test('switching session preserves history visually', async ({ authenticatedPage: page }) => {
     await page.goto('/chat');
-    await page.waitForLoadState('networkidle');
-    const first = page.getByText(/First chat/).first();
-    const second = page.getByText(/Second chat/).first();
-    if (await first.isVisible({ timeout: 5_000 }).catch(() => false)) {
-      await first.click();
-      await second.click();
-      await expect(page.getByText(/First chat|Second chat/).first()).toBeVisible();
-    }
+    await page.getByLabel('Current conversation').selectOption('sess-1');
+    await page.getByLabel('Current conversation').selectOption('sess-2');
+    await expect(page.getByLabel('Current conversation')).toHaveValue('sess-2');
   });
 });

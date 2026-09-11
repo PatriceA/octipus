@@ -70,3 +70,14 @@ describe('StatusBar', () => {
     expect(strip(bar.render(120)[0])).not.toContain('ctx');
   });
 });
+
+test('keeps plan progress on its own bounded line', () => {
+  const bar = new StatusBar();
+  bar.setPlan('2/4 steps done · working: Check a very long change description');
+  const lines = bar.render(40);
+  expect(lines).toHaveLength(2);
+  expect(strip(lines[0])).toContain('2/4 steps done');
+  expect(lines.every(line => visibleWidth(line) <= 40)).toBe(true);
+  bar.setPlan(null);
+  expect(bar.render(40)).toHaveLength(1);
+});

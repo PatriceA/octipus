@@ -184,7 +184,7 @@ export function Header() {
   };
 
   return (
-    <header className="h-12 sticky top-0 z-40 bg-surface-container-lowest/95 backdrop-blur-sm border-b border-outline-variant/40 px-3 shrink-0 flex items-center gap-3 font-mono">
+    <header className="h-12 sticky top-0 z-40 bg-surface-container-lowest/95 backdrop-blur-sm border-b border-outline-variant/40 px-3 shrink-0 flex items-center gap-3 font-sans">
       {/* Command-line style search. The leading `❯` doubles as the
           focus indicator: blue when something's typed, dim otherwise.
           The bar is a single-line frame — no rounded pill. */}

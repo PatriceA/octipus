@@ -17,10 +17,10 @@ Chat commands are slash commands you can use in any channel (WebChat, Telegram, 
 | `/clear` | Clear conversation context and start fresh |
 | `/model [name]` | Switch to a specific model for the session |
 | `/models` | List available models |
-| `/plan` | Start an interactive project planning questionnaire |
+| `/plan [on|off]` | Toggle plan-first mode: explore and propose before implementation |
 | `/capture <text>` | Append a timestamped line to today's daily note; `[[wikilinks]]` and `#tags` in the text are wired into the [knowledge graph](KNOWLEDGE-GRAPH.md) immediately |
 | `/cost` | Show token usage and cost for the session |
-| `/cancel` | Abort a multi-step command (e.g., active `/plan`); works during any command |
+| `/cancel` | Abort an active multi-step command |
 | `/eval` | Run evaluation scenarios or compare models |
 
 ### Persona
@@ -66,6 +66,8 @@ These commands are available in the TUI and gateway clients (not web/channel cli
 
 | Command | Aliases | Description |
 |---------|---------|-------------|
+| `/work-plan` | — | Show the visible plan, evidence, and feedback |
+| `/plan-feedback <change>` | — | Save feedback on the current plan |
 | `/abort` | `/stop`, `/cancel` | Stop running agents (gateway version; `/stop` is root agent version) |
 | `/expert` | `/e` | Switch expert or list available experts (gateway version) |
 | `/status` | `/s` | Show session status, agents, and active expert (gateway version) |
@@ -204,3 +206,5 @@ The TUI has an additional set of commands via the **gateway command registry** (
 - `/clear` resets session context including active plans and expert selection
 - In TUI, `/clear` also clears the terminal screen and scrollback
 - For a completely fresh start, create a new session in the web UI
+
+See [Visible work plans](WORK-PLANS.md) for progress and feedback in the web workspace and TUI.

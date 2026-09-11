@@ -1,5 +1,6 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import type { AgentWorker } from '@/core/agent-worker';
+import { getSwarmSpawner } from '@/core/swarm/spawner';
 import { LEVEL_DEFAULT, type AgentNode, type PendingChild } from '@/core/swarm/types';
 import { swarmConfigSchema } from '@/config/schema';
 import { createMetaTools, type RootSwarmRefs } from './meta-tools';
@@ -66,7 +67,7 @@ describe('createMetaTools — rootAgent swarm wiring', () => {
     expect(parentNode.allowedToolIds.has('collect_children')).toBe(true);
   });
 
-  test('lite mode: spawn_child + collect_children + remember_this, flat spawn schema, no pipeline', () => {
+  test('lite mode: delegation, memory and visible plans, flat spawn schema, no pipeline', () => {
     const parentNode = makeRootNode();
     const refs = makeRefs();
     const tools = createMetaTools(
@@ -77,34 +78,70 @@ describe('createMetaTools — rootAgent swarm wiring', () => {
     // always falling into the auto-collect safety net. Pipeline/pii/reflect
     // stay dropped for the small-model tool surface.
     const names = tools.map((t) => t.name).sort();
-    expect(names).toEqual(['collect_children', 'remember_this', 'spawn_child']);
+    expect(names).toEqual(['collect_children', 'get_work_plan', 'remember_this', 'spawn_child', 'update_work_plan']);
     // Flat lite schema: role + taskBrief only.
     const spawn = tools.find((t) => t.name === 'spawn_child');
     expect(spawn?.parameters.required).toEqual(['role', 'taskBrief']);
     expect(parentNode.allowedToolIds.has('collect_children')).toBe(true);
   });
 
-  test('detach hook indirection: tool reads ref lazily so post-spawn wiring works', () => {
+  test('root spawn awaits while CLI capability ref is null, then detaches once wired', async () => {
     const parentNode = makeRootNode();
     const refs = makeRefs();
+    const modes: Array<string | undefined> = [];
+    const spawn = vi.spyOn(getSwarmSpawner(), 'spawnChild').mockImplementation(async (_parent, params) => {
+      modes.push(params.mode);
+      return {
+        nodeId: `child-${modes.length}`,
+        kind: 'agent',
+        status: 'ok',
+        output: 'completed child result',
+        usedTokens: 10,
+        durationMs: 100,
+        spawnedChildren: [],
+      };
+    });
     const tools = createMetaTools(
       {} as unknown as Parameters<typeof createMetaTools>[0],
       { parentNode, swarmRefs: refs },
     );
-    // Tool factory ran before the worker was created — populate ref now
-    // to simulate post-spawn wiring.
-    let registered: PendingChild | null = null;
-    refs.detachHookRef.current = {
-      registerPendingChild: (pc) => { registered = pc; },
-      pendingDetachedCount: () => (registered ? 1 : 0),
-    };
     const spawnTool = tools.find((t) => t.name === 'spawn_child');
     expect(spawnTool).toBeDefined();
-    // We don't drive the full execute() path here — that's covered by
-    // swarm-tool.test.ts. The point is to assert the closure binding to
-    // the ref holder is intact: when something calls registerPending,
-    // it lands on the actual hook.
-    expect(refs.detachHookRef.current.pendingDetachedCount()).toBe(0);
+    const args = {
+      topic: 'research',
+      subtopic: 'runtime-capability',
+      taskBrief: 'Check the root delegation path',
+      expectedOutput: { shape: 'summary' },
+    };
+    const context = {
+      id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000',
+      userId: 'u', model: '', topic: '', role: 'general' as const,
+      status: 'running' as const, createdAt: new Date(), updatedAt: new Date(), metadata: {},
+    };
+
+    try {
+      // CLI workers intentionally leave the ref null. The root must receive the
+      // completed child output directly instead of an uncollectable handle.
+      const awaited = await spawnTool!.execute(args, context);
+      expect(modes).toEqual(['await']);
+      expect(String(awaited)).toContain('completed child result');
+      expect(String(awaited)).not.toContain('status="pending"');
+
+      // Native worker wiring happens after tool construction but before run().
+      // The same closure must begin registering detached children at that point.
+      const pending: PendingChild[] = [];
+      refs.detachHookRef.current = {
+        registerPendingChild: (pc) => pending.push(pc),
+        pendingDetachedCount: () => pending.length,
+      };
+      const detached = await spawnTool!.execute(args, context);
+      expect(modes).toEqual(['await', 'detach']);
+      expect(String(detached)).toContain('status="pending"');
+      expect(pending).toHaveLength(1);
+      await expect(pending[0].promise).resolves.toMatchObject({ output: 'completed child result' });
+    } finally {
+      spawn.mockRestore();
+    }
   });
 
   test('collect_children references the worker through workerRef (lazy)', async () => {

@@ -12,7 +12,7 @@
  *
  * Backed by ephemeral PGlite — no Docker.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -164,5 +164,111 @@ describe('multiuser.enforcePermissions flag', () => {
       const { resetConfig } = await import('@/config');
       resetConfig();
     }
+  });
+});
+
+// Use the real manager and database so aliases cannot accidentally lose user,
+// action, expiration, or condition filtering at the lookup boundary.
+describe('CLI native permission identity compatibility', () => {
+  beforeEach(async () => {
+    const { getDb } = await import('@/db/postgres');
+    const { toolPermissions } = await import('@/db/schema/permissions');
+    await getDb().delete(toolPermissions);
+    const { DEFAULT_PERMISSION_RULES, getPermissionRuleEngine } = await import('./permission-rules');
+    getPermissionRuleEngine().load(DEFAULT_PERMISSION_RULES);
+  });
+
+  test('legacy stored DENY wins over new read defaults and explicit grants', async () => {
+    const { getPermissionManager } = await import('./permissions');
+    const pm = getPermissionManager();
+    const denied = await pm.setPermission(aliceId, 'cli-native', 'Read', 'DENY', {
+      expiresAt: new Date(Date.now() - 1),
+    });
+    await pm.setPermission(aliceId, 'cli-native:Read', 'Read', 'ALLOW');
+    expect(await pm.check(aliceId, 'cli-native:Read', 'Read')).toMatchObject({
+      allowed: false, level: 'DENY', source: `permission:${denied.id}`,
+    });
+    expect(await pm.check(bobId, 'cli-native:Read', 'Read')).toMatchObject({ allowed: true });
+    expect(await pm.check(aliceId, 'cli-native:Glob', 'Glob')).toMatchObject({ allowed: true });
+  });
+
+  test('legacy deny rules still match vendor arguments despite a specific grant', async () => {
+    const { getPermissionManager } = await import('./permissions');
+    const { getPermissionRuleEngine } = await import('./permission-rules');
+    const pm = getPermissionManager();
+    getPermissionRuleEngine().load({ allow: ['cli-native:Read(*)'], deny: ['cli-native(/secret:*)'] });
+    await pm.setPermission(aliceId, 'cli-native:Read', 'Read', 'ALLOW');
+    expect(await pm.check(aliceId, 'cli-native:Read', 'Read', { file_path: '/secret/token' }))
+      .toMatchObject({ allowed: false, level: 'DENY', source: 'rule' });
+    expect(await pm.check(aliceId, 'cli-native:Read', 'Read', { file_path: '/public/readme' }))
+      .toMatchObject({ allowed: true });
+  });
+
+  test('legacy ASK policies and rules retain approval over new read defaults', async () => {
+    const { getPermissionManager } = await import('./permissions');
+    const { getPermissionRuleEngine } = await import('./permission-rules');
+    const pm = getPermissionManager();
+    await pm.setPermission(aliceId, 'cli-native', 'Read', 'ASK');
+    expect(await pm.check(aliceId, 'cli-native:Read', 'Read'))
+      .toMatchObject({ allowed: false, level: 'ASK', requiresApproval: true });
+    await pm.deletePermission(aliceId, 'cli-native', 'Read');
+    getPermissionRuleEngine().load({ allow: ['cli-native:Read(*)'], ask: ['cli-native(*)'] });
+    expect(await pm.check(aliceId, 'cli-native:Read', 'Read'))
+      .toMatchObject({ allowed: false, level: 'ASK', requiresApproval: true });
+  });
+
+  test('legacy scoped grants apply only to their session and path and still expire', async () => {
+    const { getPermissionManager } = await import('./permissions');
+    const pm = getPermissionManager();
+    const conditions = [
+      { type: 'session' as const, value: 'session-one' },
+      { type: 'path_pattern' as const, value: '^/workspace/' },
+    ];
+    await pm.setPermission(aliceId, 'cli-native', 'Read', 'ALLOW', { conditions });
+    const scope = { sessionId: 'session-one', workspaceId: null };
+    expect(await pm.check(aliceId, 'cli-native:Read', 'Read', { file_path: '/workspace/readme' }, scope))
+      .toMatchObject({ allowed: true });
+    expect(await pm.check(aliceId, 'cli-native:Read', 'Read', { file_path: '/secret' }, scope))
+      .toMatchObject({ allowed: false, requiresApproval: true });
+    expect(await pm.check(aliceId, 'cli-native:Read', 'Read', { file_path: '/workspace/readme' }, { ...scope, sessionId: 'another' }))
+      .toMatchObject({ allowed: false, requiresApproval: true });
+    await pm.setPermission(aliceId, 'cli-native', 'Read', 'ALLOW', { conditions, expiresAt: new Date(Date.now() - 1) });
+    expect(await pm.check(aliceId, 'cli-native:Read', 'Read', { file_path: '/workspace/readme' }, scope))
+      .toMatchObject({ allowed: false, reason: 'Permission expired' });
+  });
+
+  test('specific policies override non-denying legacy policies, while specific denials remain final', async () => {
+    const { getPermissionManager } = await import('./permissions');
+    const pm = getPermissionManager();
+    await pm.setPermission(aliceId, 'cli-native', 'Read', 'ASK');
+    const specific = await pm.setPermission(aliceId, 'cli-native:Read', 'Read', 'ALLOW');
+    expect(await pm.check(aliceId, 'cli-native:Read', 'Read'))
+      .toMatchObject({ allowed: true, source: `permission:${specific.id}` });
+    await pm.setPermission(aliceId, 'cli-native', 'Read', 'ALLOW');
+    await pm.setPermission(aliceId, 'cli-native:Read', 'Read', 'DENY');
+    expect(await pm.check(aliceId, 'cli-native:Read', 'Read')).toMatchObject({ allowed: false, level: 'DENY' });
+  });
+
+  test('legacy rate-limit accounting keeps its original identity during fallback and revalidation', async () => {
+    const { getPermissionManager } = await import('./permissions');
+    const { getRateLimiter } = await import('./rate-limiter');
+    const pm = getPermissionManager();
+    const limiter = vi.spyOn(getRateLimiter(), 'check').mockResolvedValue({ allowed: true, remaining: 1 });
+    try {
+      await pm.setPermission(aliceId, 'cli-native', 'Read', 'ALLOW', {
+        conditions: [{ type: 'rate_limit', value: { maxRequests: 2, windowMs: 60_000 } }],
+      });
+      expect(await pm.check(aliceId, 'cli-native:Read', 'Read')).toMatchObject({ allowed: true });
+      expect(limiter).toHaveBeenCalledWith(`perm:rl:${aliceId}:cli-native:Read`, 2, 60);
+      await pm.check(aliceId, 'cli-native:Read', 'Read', {}, undefined, { revalidate: true });
+      expect(limiter).toHaveBeenCalledTimes(1);
+    } finally { limiter.mockRestore(); }
+  });
+
+  test('compatibility does not alias unrelated tools', async () => {
+    const { getPermissionManager } = await import('./permissions');
+    const pm = getPermissionManager();
+    await pm.setPermission(aliceId, 'cli-native', 'Read', 'DENY');
+    expect(await pm.check(aliceId, 'other:Read', 'Read')).toMatchObject({ level: 'ASK' });
   });
 });

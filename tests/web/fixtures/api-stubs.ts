@@ -23,6 +23,7 @@ export async function stubHealth(page: Page): Promise<void> {
 }
 
 export async function stubSessions(page: Page): Promise<void> {
+  await page.route('**/api/sessions/*/plan', route => json(route, 200, { revision: 0, current: null, previous: [], planMode: false }));
   // List sessions
   await page.route('**/api/sessions', (route) => {
     if (route.request().method() === 'GET') {

@@ -5,16 +5,15 @@ import { Providers } from './providers';
 
 export const metadata: Metadata = {
   title: 'Octipus',
-  description: 'Autonomous Development Platform',
+  description: 'A self-hosted AI workspace. Bring the work together.',
   manifest: '/manifest.json',
   icons: {
     icon: [
-      { url: '/favicon.ico', sizes: 'any' },
-      { url: '/favicon.svg', type: 'image/svg+xml' },
-      { url: '/favicon-96x96.png', type: 'image/png', sizes: '96x96' },
+      { url: '/deepsea.ico', sizes: 'any' },
+      { url: '/deepsea-32.png', type: 'image/png', sizes: '32x32' },
     ],
     apple: [{ url: '/apple-touch-icon.png', sizes: '180x180' }],
-    shortcut: '/favicon.ico',
+    shortcut: '/deepsea.ico',
   },
   appleWebApp: {
     capable: true,
@@ -24,7 +23,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: '#0E0E0E',
+  themeColor: '#071923',
 };
 
 export default function RootLayout({

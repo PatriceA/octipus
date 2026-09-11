@@ -317,3 +317,13 @@ describe('CLIOutputParser — side-effect counters', () => {
     expect(parser.getSideEffectCounters()).toBeNull();
   });
 });
+
+it('does not charge repeated Claude assistant fragments twice', () => {
+  const p = makeParser();
+  const event = { type: 'assistant', message: { id: 'same', content: [{ type: 'tool_use', id: 't', name: 'Read', input: {} }], usage: { input_tokens: 100, output_tokens: 5 } } };
+  p.feed(event, 'Claude Code');
+  p.feed(event, 'Claude Code');
+  p.feed({ ...event, message: { ...event.message, usage: { input_tokens: 100, output_tokens: 9 } } }, 'Claude Code');
+  expect(p.tokenReports.reduce((n, u) => n + u.total, 0)).toBe(109);
+  expect(p.actions('cli_tool_use')).toHaveLength(1);
+});

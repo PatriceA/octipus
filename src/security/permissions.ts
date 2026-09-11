@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { AgentContext, PermissionLevel } from '@/core/types';
 import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
@@ -98,32 +98,44 @@ export class PermissionManager {
     scope?: Pick<AgentContext, 'sessionId' | 'workspaceId'>,
     options?: { revalidate?: boolean; defaultLevel?: PermissionLevel; dangerous?: boolean },
   ): Promise<PermissionCheckResult> {
-    // 2. Get permission configuration from DB
-    const permission = await this.db
+    // Vendor tools used to share `cli-native`. Keep those policies effective
+    // after splitting the identity by tool, without copying or widening grants.
+    const legacyToolId = toolId.startsWith('cli-native:') && toolId.length > 'cli-native:'.length
+      ? 'cli-native' : undefined;
+    const policies = await this.db
       .select()
       .from(toolPermissions)
       .where(
         and(
           eq(toolPermissions.userId, userId),
-          eq(toolPermissions.toolId, toolId),
+          legacyToolId
+            ? inArray(toolPermissions.toolId, [toolId, legacyToolId])
+            : eq(toolPermissions.toolId, toolId),
           eq(toolPermissions.action, action)
         )
-      )
-      .limit(1);
+      );
+    const policy = policies.find(p => p.toolId === toolId)
+      ?? policies.find(p => p.toolId === legacyToolId);
 
     // Stored DENY cannot be overridden by broad allow rules or grant expiry.
-    if (permission[0]?.level === 'DENY') {
+    const deniedPolicy = policies.find(p => p.level === 'DENY');
+    if (deniedPolicy) {
       return { allowed: false, level: 'DENY', requiresApproval: false,
-        reason: 'Action is denied by policy', source: `permission:${permission[0].id}` };
+        reason: 'Action is denied by policy', source: `permission:${deniedPolicy.id}` };
     }
     const { getPermissionRuleEngine } = await import('./permission-rules');
-    const rule = getPermissionRuleEngine().evaluate(toolId, action, context);
-    if (rule?.decision === 'deny') {
+    const engine = getPermissionRuleEngine();
+    const currentRule = engine.evaluate(toolId, action, context);
+    const legacyRule = legacyToolId ? engine.evaluate(legacyToolId, action, context) : null;
+    const deniedRule = [currentRule, legacyRule].find(rule => rule?.decision === 'deny');
+    if (deniedRule) {
       return { allowed: false, level: 'DENY', requiresApproval: false,
-        reason: `Denied by rule: ${rule.rule}`, source: 'rule' };
+        reason: `Denied by rule: ${deniedRule.rule}`, source: 'rule' };
     }
+    // Legacy ASK rules must not disappear behind the new read-tool defaults.
+    const rule = legacyRule?.decision === 'ask' ? legacyRule : (currentRule ?? legacyRule);
     // Explicit per-user policies take precedence over broad allow/ask rules.
-    if (!permission[0] && rule && !(rule.decision === 'allow' && (options?.dangerous ?? this.isDangerousAction(toolId, action)))) {
+    if (!policy && rule && !(rule.decision === 'allow' && (options?.dangerous ?? this.isDangerousAction(toolId, action)))) {
       const allowed = rule.decision === 'allow';
       return { allowed, level: allowed ? 'ALLOW' : 'ASK', requiresApproval: !allowed, source: 'rule' };
     }
@@ -141,10 +153,10 @@ export class PermissionManager {
         }
       }
     } catch { /* registry not ready yet */ }
-    const level: PermissionLevel = permission[0]?.level || defaultLevel;
+    const level: PermissionLevel = policy?.level || defaultLevel;
 
     // Check expiration
-    if (permission[0]?.expiresAt && permission[0].expiresAt < new Date()) {
+    if (policy?.expiresAt && policy.expiresAt < new Date()) {
       return {
         allowed: false,
         level: 'ASK',
@@ -154,11 +166,11 @@ export class PermissionManager {
     }
 
     // Check conditions if any
-    if (permission[0]?.conditions?.length) {
+    if (policy?.conditions?.length) {
       const conditionsResult = await this.checkConditions(
-        permission[0].conditions as PermissionCondition[],
+        policy.conditions as PermissionCondition[],
         context ?? {},
-        { userId, toolId, action },
+        { userId, toolId: policy.toolId, action },
         scope,
         options,
       );
@@ -178,7 +190,7 @@ export class PermissionManager {
           allowed: true,
           level: 'ALLOW',
           requiresApproval: false,
-          source: permission[0] ? `permission:${permission[0].id}` : 'manifest',
+          source: policy ? `permission:${policy.id}` : 'manifest',
         };
 
       case 'ASK':

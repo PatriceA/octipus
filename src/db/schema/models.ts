@@ -40,6 +40,8 @@ export const modelConfig = pgTable('model_config', {
 }));
 
 export interface CLIAgentConfig {
+  /** Explicitly allow server API-key environment variables into the CLI. Default: use CLI login/config. */
+  inheritApiKeys?: boolean;
   /** Permission mode: 'bypassPermissions' (Claude), 'yolo' (Gemini) */
   permissionMode?: string;
   /** Allowed tools whitelist (Claude only) */

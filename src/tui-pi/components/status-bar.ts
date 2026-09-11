@@ -23,6 +23,8 @@ export class StatusBar implements Component {
   private context: ContextFill | null = null;
   private user: string | null = null;
   private mode: string | null = null;
+  private plan: string | null = null;
+  setPlan(plan: string | null): void { this.plan = plan; }
 
   setStatus(status: ConnectionStatus): void { this.status = status; }
   setProject(project: string | undefined): void { this.project = project; }
@@ -81,7 +83,8 @@ export class StatusBar implements Component {
       }
     }
     parts.push(chalk.hex(palette.dim)(this.status));
-    return [truncateToWidth(parts.join('  '), width)];
+    const planLine = this.plan ? [truncateToWidth(chalk.hex(palette.accent)(`Plan · ${this.plan} · /work-plan`), width)] : [];
+    return [...planLine, truncateToWidth(parts.join('  '), width)];
   }
 }
 

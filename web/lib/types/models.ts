@@ -27,6 +27,8 @@ export interface Model {
     paramCount?: number;
     extraBody?: Record<string, unknown>;
     cliAgent?: {
+      /** Allow server-side provider API keys into the CLI process. Defaults to false. */
+      inheritApiKeys?: boolean;
       permissionMode?: string;
       allowedTools?: string[];
       maxBudgetUsd?: number;
@@ -61,6 +63,10 @@ export interface CLITool {
   name: string;
   available: boolean;
   modelPatterns: string[];
+  /** Adapter family (e.g. 'Claude Code' for GLM/Kimi variants); keys the extraArgs policy. */
+  adapter?: string;
+  /** Server-rendered summary of what this adapter can do in a managed run. */
+  capabilities?: string;
   /** Direct provider whose model catalog drives this CLI's picker. */
   modelProvider?: 'anthropic' | 'google' | 'openai' | 'mistral' | 'zai' | 'moonshot';
   /** CLI flag for model selection (display only). */

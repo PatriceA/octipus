@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
-import type { ToolHandler } from '@/core/agent-worker';
 import { classifyMessage } from '@/core/agent/classifier';
 import type { AgentRole } from '@/core/agent/types';
+import type { ToolHandler } from '@/core/agent-worker';
 import { coreLogger } from '@/utils/logger';
 import { formatReceiptBlock } from './receipt';
 import { parseScorers } from './scorers';
@@ -23,6 +23,29 @@ export interface SpawnChildHooks {
   pendingCount: () => number;
   /** Cap from config (typically `swarm.levelDefaults.agent.maxPendingDetached`). */
   maxPendingDetached: () => number;
+}
+
+/**
+ * Build spawn hooks around a worker capability that is only known after the
+ * worker has been created. CLI workers do not own a detached-child manager, so
+ * their ref intentionally remains null and spawn_child must use its blocking
+ * await path. Native AgentWorkers populate the ref before their run starts and
+ * retain the existing detached behavior.
+ */
+export function createLateBoundSpawnChildHooks(
+  ref: {
+    current: {
+      registerPendingChild: (pc: PendingChild) => void;
+      pendingDetachedCount: () => number;
+    } | null;
+  },
+  configuredCap: () => number,
+): SpawnChildHooks {
+  return {
+    registerPending: (pc) => ref.current?.registerPendingChild(pc),
+    pendingCount: () => ref.current?.pendingDetachedCount() ?? 0,
+    maxPendingDetached: () => ref.current ? configuredCap() : 0,
+  };
 }
 
 const CHILD_ROLES_ENUM: AgentRole[] = [
@@ -618,4 +641,3 @@ export function formatChildResult(result: ChildResult): string {
       : '';
   return `<ChildResult ${meta}>${formatReceiptBlock(result.receipt)}\n<output>${outStr}</output>${notes}${scorerFail}\n</ChildResult>`;
 }
-

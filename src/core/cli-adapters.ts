@@ -1,14 +1,18 @@
+import { execFile } from 'node:child_process';
 import { randomBytes } from 'crypto';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { homedir, tmpdir, } from 'os';
-import { isAbsolute, join, resolve } from 'path';
+import { dirname, isAbsolute, join, resolve } from 'path';
+import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import type { CLIAgentConfig } from '@/db/schema/models';
 import { computeLineDiff } from '@/shared/diff';
+import { validateScopedExtraArgs } from '@/shared/cli-capabilities';
 import { coreLogger } from '@/utils/logger';
 import type { AgentEvent } from './agent-base';
-import { type SideEffectCounters, emptyCounters } from './swarm/receipt';
+import { emptyCounters, type SideEffectCounters } from './swarm/receipt';
 
 const IS_WIN = process.platform === 'win32';
+const CLI_BRIDGE_TOOL_TIMEOUT_SECONDS = 7200;
 
 /** How to launch the Octipus MCP server as a stdio child of a CLI tool. */
 interface OctipusMcpLaunch {
@@ -27,26 +31,70 @@ interface OctipusMcpLaunch {
  * the Claude JSON config generator and the vibe TOML/VIBE_HOME generator so the
  * runtime/entry/port/token resolution lives in exactly one place.
  */
-function resolveOctipusMcpLaunch(): OctipusMcpLaunch {
-  const projectRoot = resolve(join(import.meta.dirname, '../..'));
-  const mcpServerEntry = join(projectRoot, 'mcp-server/dist/index.js');
-  const mcpServerSrc = join(projectRoot, 'mcp-server/src/index.ts');
+export interface CliRunConnection {
+  url: string;
+  key: string;
+  planMode: boolean;
+  maxIterations: number;
+  /** Resolve vendor configuration from the same directory used for execution. */
+  workingDirectory?: string;
+  /** Codex only: effective MCP servers from `discoverCodexMcpServers`, disabled for the run. */
+  codexMcpServers?: Array<{ name: string }>;
+}
 
-  // Prefer compiled, fall back to source (bun can run .ts).
-  const entry = existsSync(mcpServerEntry) ? mcpServerEntry : mcpServerSrc;
-  const runtime = existsSync(mcpServerEntry) ? 'node' : 'bun';
+/**
+ * List Codex's effective MCP configuration for a session directory. Async so a
+ * slow `codex` binary never stalls the event loop. The command only reads
+ * config; it does not connect to MCP servers. Errors are sanitized: subprocess
+ * output can contain credentials.
+ */
+export async function discoverCodexMcpServers(workingDirectory: string): Promise<Array<{ name: string }>> {
+  if (typeof workingDirectory !== 'string' || !isAbsolute(workingDirectory)) throw new Error('Scoped Codex MCP discovery requires the absolute session working directory');
+  const env: NodeJS.ProcessEnv = {};
+  for (const name of ['PATH', 'HOME', 'CODEX_HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'SystemRoot', 'PATHEXT', 'ComSpec', 'TEMP', 'TMP', 'TMPDIR']) {
+    if (process.env[name] !== undefined) env[name] = process.env[name];
+  }
+  let configured: unknown;
+  try {
+    const stdout = await new Promise<string>((resolve, reject) => {
+      execFile('codex', ['mcp', 'list', '--json'], {
+        cwd: workingDirectory, env, encoding: 'utf8', timeout: 10_000,
+        maxBuffer: 4 * 1024 * 1024, windowsHide: true,
+        // Windows installs expose a .cmd launcher; all arguments here are fixed.
+        shell: IS_WIN,
+      }, (err, out) => err ? reject(err) : resolve(String(out)));
+    });
+    configured = JSON.parse(stdout);
+  } catch {
+    throw new Error('Cannot inspect effective Codex MCP configuration; refusing to launch an unscoped CLI run. Check codex mcp list --json in the session directory.');
+  }
+  if (!Array.isArray(configured) || configured.some(server => !server || typeof server !== 'object' || typeof server.name !== 'string' || !server.name)) {
+    throw new Error('Invalid Codex MCP configuration listing; refusing to launch an unscoped CLI run');
+  }
+  return configured.map(server => ({ name: server.name as string }));
+}
 
+/** Works both from src/core and the bundled dist/index.js. Never guess a parent. */
+export function resolveCliMcpEntry(moduleDir = import.meta.dirname): string {
+  let dir = resolve(moduleDir);
+  while (true) {
+    const manifest = join(dir, 'package.json');
+    if (existsSync(manifest) && JSON.parse(readFileSync(manifest, 'utf8')).name === 'octipus') {
+      const entry = join(dir, 'mcp-server/dist/index.js');
+      if (!existsSync(entry)) throw new Error('CLI tool bridge is not built. Run npm run build --prefix mcp-server.');
+      return entry;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) throw new Error('Cannot locate Octipus installation for CLI tool bridge');
+    dir = parent;
+  }
+}
+
+function resolveOctipusMcpLaunch(connection?: CliRunConnection): OctipusMcpLaunch {
+  const entry = resolveCliMcpEntry();
   const apiPort = process.env.API_PORT || process.env.PORT || '3005';
-  // Only a scoped API token is accepted by the server now (the MASTER_KEY
-  // fallback was removed with single-user mode). The backend process does NOT
-  // carry OCTIPUS_API_KEY in its env (bin/octi only stamps it into the static
-  // CLI config files), so for octipus-spawned CLI subagents we fall back to the
-  // bootstrap token the server mints on boot (~/.octipus/mcp-token). Without
-  // this, the ephemeral MCP config is keyless and every tool call hits the REST
-  // API anonymously → 401.
-  const apiKey = process.env.OCTIPUS_API_KEY || readMcpBootstrapToken();
-
-  return { runtime, entry, apiUrl: `http://127.0.0.1:${apiPort}`, apiKey };
+  return { runtime: process.execPath, entry, apiUrl: connection?.url ?? `http://127.0.0.1:${apiPort}`,
+    apiKey: connection?.key ?? process.env.OCTIPUS_API_KEY ?? readMcpBootstrapToken() };
 }
 
 /**
@@ -92,12 +140,12 @@ export function sweepStaleFiles(dir: string, prefix: string, maxAgeMs: number): 
  * old 1h-staleness reuse served stale credentials), written 0600 because it
  * carries the scoped API token. Stale per-agent files are swept after 7 days.
  */
-function getOrCreateMcpConfig(agentId?: string): string | null {
+function getOrCreateMcpConfig(agentId?: string, connection?: CliRunConnection): string | null {
   const dir = join(tmpdir(), 'octipus-cli');
   const suffix = agentId || randomBytes(6).toString('hex');
   const configPath = join(dir, `mcp-config-${suffix}.json`);
 
-  const launch = resolveOctipusMcpLaunch();
+  const launch = resolveOctipusMcpLaunch(connection);
 
   const config = {
     mcpServers: {
@@ -105,8 +153,9 @@ function getOrCreateMcpConfig(agentId?: string): string | null {
         command: launch.runtime,
         args: [launch.entry],
         env: {
-          OCTIPUS_URL: launch.apiUrl,
-          ...(launch.apiKey ? { OCTIPUS_API_KEY: launch.apiKey } : {}),
+          ...(connection ? { OCTIPUS_AGENT_URL: launch.apiUrl, OCTIPUS_AGENT_KEY: launch.apiKey } : {
+            OCTIPUS_URL: launch.apiUrl, ...(launch.apiKey ? { OCTIPUS_API_KEY: launch.apiKey } : {}),
+          }),
         },
       },
     },
@@ -126,25 +175,19 @@ function getOrCreateMcpConfig(agentId?: string): string | null {
  * with an inline array-of-tables. (A `[[mcp_servers]]` table block would
  * collide with the existing `mcp_servers = []` and be a TOML redefinition.)
  */
-export function injectVibeMcpServer(config: string, launch: OctipusMcpLaunch): string {
-  // JSON.stringify produces TOML-valid string/array literals for our values
-  // (double-quoted strings, `["..."]` arrays).
-  const command = JSON.stringify(launch.runtime);
-  const argsArr = JSON.stringify([launch.entry]);
-  const env = launch.apiKey
-    ? `, env = { OCTIPUS_URL = ${JSON.stringify(launch.apiUrl)}, OCTIPUS_API_KEY = ${JSON.stringify(launch.apiKey)} }`
-    : `, env = { OCTIPUS_URL = ${JSON.stringify(launch.apiUrl)} }`;
-  const assignment =
-    `mcp_servers = [\n` +
-    `  { name = "octipus", transport = "stdio", command = ${command}, args = ${argsArr}${env} },\n` +
-    `]`;
-
-  // Replace an existing single-line inline `mcp_servers = [ ... ]` assignment.
-  if (/^mcp_servers\s*=\s*\[.*\]\s*$/m.test(config)) {
-    return config.replace(/^mcp_servers\s*=\s*\[.*\]\s*$/m, assignment);
-  }
-  // No inline assignment found (e.g. user uses [[mcp_servers]] tables) — append.
-  return `${config.trimEnd()}\n${assignment}\n`;
+export function injectVibeMcpServer(config: string, launch: OctipusMcpLaunch, scoped = false): string {
+  const parsed = parseToml(config);
+  const existing = parsed.mcp_servers ?? [];
+  if (!Array.isArray(existing)) throw new Error('Vibe mcp_servers must be an array');
+  const urlName = scoped ? 'OCTIPUS_AGENT_URL' : 'OCTIPUS_URL';
+  const keyName = scoped ? 'OCTIPUS_AGENT_KEY' : 'OCTIPUS_API_KEY';
+  parsed.mcp_servers = [
+    ...(scoped ? [] : existing).filter(item => typeof item !== 'object' || item === null || !('name' in item) || !['octipus', 'assistant'].includes(String(item.name))),
+    { name: 'octipus', transport: 'stdio', command: launch.runtime, args: [launch.entry],
+      ...(scoped ? { tool_timeout_sec: CLI_BRIDGE_TOOL_TIMEOUT_SECONDS } : {}),
+      env: { [urlName]: launch.apiUrl, ...(launch.apiKey ? { [keyName]: launch.apiKey } : {}) } },
+  ];
+  return stringifyToml(parsed);
 }
 
 /**
@@ -161,16 +204,16 @@ export function injectVibeMcpServer(config: string, launch: OctipusMcpLaunch): s
  * config.toml mid-write and cross-contaminate session state. The caller is
  * responsible for removing the returned dir when the vibe process exits.
  */
-function getOrCreateVibeHome(): string | null {
+function getOrCreateVibeHome(connection?: CliRunConnection): string | null {
   const realHome = process.env.VIBE_HOME || join(homedir(), '.vibe');
   const realConfig = join(realHome, 'config.toml');
   // Nothing to seed if vibe was never set up — let vibe fall back to defaults
   // (it will still run, just without the Octipus MCP server).
-  if (!existsSync(realConfig)) return null;
+  if (!existsSync(realConfig) && !connection) return null;
 
   const dir = join(tmpdir(), 'octipus-cli', `vibe-home-${randomBytes(8).toString('hex')}`);
   try {
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
 
     // Seed creds + trust list into the fresh dir so vibe finds the API key.
     const realEnv = join(realHome, '.env');
@@ -179,11 +222,12 @@ function getOrCreateVibeHome(): string | null {
     if (existsSync(realTrust)) copyFileSync(realTrust, join(dir, 'trusted_folders.toml'));
 
     // Write config.toml with a fresh MCP launch (entry/port/token) merged in.
-    const launch = resolveOctipusMcpLaunch();
-    const merged = injectVibeMcpServer(readFileSync(realConfig, 'utf-8'), launch);
-    writeFileSync(join(dir, 'config.toml'), merged);
+    const launch = resolveOctipusMcpLaunch(connection);
+    const merged = injectVibeMcpServer(existsSync(realConfig) ? readFileSync(realConfig, 'utf-8') : '', launch, !!connection);
+    writeFileSync(join(dir, 'config.toml'), merged, { mode: 0o600 });
     return dir;
   } catch (err) {
+    if (connection) throw err;
     coreLogger.warn({ err }, 'Failed to seed VIBE_HOME for Octipus MCP — vibe will run without it');
     return null;
   }
@@ -292,7 +336,7 @@ const CLAUDE_PERM_MAP: Record<CLIPermissionLevel, string> = {
   workspace: 'acceptEdits',
   full: 'bypassPermissions',
 };
-const CLAUDE_NATIVE_PERMS = new Set(['default', 'plan', 'acceptEdits', 'bypassPermissions']);
+const CLAUDE_NATIVE_PERMS = new Set(['default', 'manual', 'dontAsk', 'auto', 'plan', 'acceptEdits', 'bypassPermissions']);
 
 const CODEX_PERM_MAP: Record<CLIPermissionLevel, string> = {
   safe: 'read-only',
@@ -312,11 +356,20 @@ export function resolveClaudePermissionMode(mode: string | undefined): string {
 
 export function resolveCodexSandboxMode(mode: string | undefined): string {
   if (!mode) return CODEX_PERM_MAP.workspace; // historical default for spawned agents
+  if (mode === 'auto') return CODEX_PERM_MAP.workspace;
   if (mode in CODEX_PERM_MAP) return CODEX_PERM_MAP[mode as CLIPermissionLevel];
   if (CODEX_NATIVE_PERMS.has(mode)) return mode;
   throw new Error(
     `Invalid permissionMode "${mode}" for Codex CLI — use 'safe'|'workspace'|'full' or a native codex sandbox (${[...CODEX_NATIVE_PERMS].join(', ')})`,
   );
+}
+
+export function resolveVibeMode(mode?: string): string {
+  if (!mode || mode === 'full' || mode === 'yolo') return 'auto-approve';
+  if (['auto-approve', 'accept-edits', 'default'].includes(mode)) return mode;
+  if (mode === 'safe' || mode === 'plan') return 'plan';
+  if (mode === 'workspace' || mode === 'auto_edit' || mode === 'auto') return 'accept-edits';
+  throw new Error(`Unsupported Mistral Vibe permission mode: ${mode}`);
 }
 
 /**
@@ -335,18 +388,20 @@ export class CLIArgumentBuilder {
     systemPrompt?: string | null,
     maxTokenBudget?: number,
     agentId?: string,
-  ): { binary: string; args: string[]; stdinPrompt?: string; useShell?: boolean; env?: Record<string, string> } {
+    connection?: CliRunConnection,
+  ): { binary: string; args: string[]; stdinPrompt?: string; keepStdinOpen?: boolean; useShell?: boolean; env?: Record<string, string> } {
+    if (connection) validateScopedExtraArgs(toolName, settings.extraArgs ?? []);
     // `toolName` is the CLIToolConfig.adapter key (defaults to name). Vendors
     // that reuse the Claude binary (z.ai GLM, Moonshot Kimi) pass 'Claude Code'.
     switch (toolName) {
       case 'Claude Code':
-        return this.buildClaudeArgs(prompt, settings, systemMessages, agentId);
+        return this.buildClaudeArgs(prompt, settings, systemMessages, agentId, connection);
       case 'Antigravity':
-        return this.buildAntigravityArgs(prompt, settings, systemPrompt);
+        return this.buildAntigravityArgs(prompt, settings, systemPrompt, connection);
       case 'Codex CLI':
-        return this.buildCodexArgs(prompt, systemPrompt, settings);
+        return this.buildCodexArgs(prompt, systemPrompt, settings, connection);
       case 'Mistral Vibe':
-        return this.buildVibeArgs(prompt, settings, maxTokenBudget);
+        return this.buildVibeArgs(prompt, settings, maxTokenBudget, connection);
       default:
         throw new Error(`Unknown CLI tool: ${toolName}`);
     }
@@ -356,6 +411,7 @@ export class CLIArgumentBuilder {
     prompt: string,
     settings: CLIAgentConfig,
     maxTokenBudget?: number,
+    connection?: CliRunConnection,
   ): { binary: string; args: string[]; stdinPrompt?: string; env?: Record<string, string> } {
     // vibe -p runs programmatic mode (send prompt → emit JSON message array →
     // exit). --trust skips the workdir trust prompt; --auto-approve allows tool
@@ -371,7 +427,9 @@ export class CLIArgumentBuilder {
       args.push(prompt);
     }
 
-    args.push('--output', 'json', '--trust', '--auto-approve');
+    args.push('--output', 'json', '--trust');
+    args.push('--agent', connection?.planMode ? 'plan' : resolveVibeMode(settings.permissionMode));
+    if (connection?.maxIterations) args.push('--max-turns', String(connection.maxIterations));
 
     // vibe reports no token/cost usage in its output, so the worker's
     // token-budget kill can't fire — let vibe self-limit via its caps instead.
@@ -384,6 +442,7 @@ export class CLIArgumentBuilder {
 
     // allowedTools → vibe --enabled-tools (in -p mode this disables all others).
     if (settings.allowedTools?.length) {
+      if (connection) args.push('--enabled-tools', 'octipus_*');
       for (const tool of settings.allowedTools) {
         args.push('--enabled-tools', tool);
       }
@@ -396,7 +455,7 @@ export class CLIArgumentBuilder {
     // Point vibe at an ephemeral VIBE_HOME that registers the Octipus MCP server
     // (vibe has no --mcp-config flag). Null when vibe isn't set up — then it runs
     // with its own defaults and no Octipus MCP.
-    const vibeHome = getOrCreateVibeHome();
+    const vibeHome = getOrCreateVibeHome(connection);
     const env = vibeHome ? { VIBE_HOME: vibeHome } : undefined;
 
     return {
@@ -412,12 +471,13 @@ export class CLIArgumentBuilder {
     settings: CLIAgentConfig,
     systemMessages: string[],
     agentId?: string,
-  ): { binary: string; args: string[]; stdinPrompt?: string } {
+    connection?: CliRunConnection,
+  ): { binary: string; args: string[]; stdinPrompt?: string; keepStdinOpen?: boolean; env?: Record<string, string> } {
     // Claude Code: -p is a boolean flag (print mode), prompt is positional
     // On Windows: pipe prompt via stdin to avoid shell mangling
     const args: string[] = [];
 
-    if (IS_WIN) {
+    if (IS_WIN || connection) {
       args.push('-p', '--verbose', '--output-format', 'stream-json');
     } else {
       args.push('-p', prompt, '--verbose', '--output-format', 'stream-json');
@@ -431,7 +491,7 @@ export class CLIArgumentBuilder {
 
     // Shared 'safe'|'workspace'|'full' levels translate per adapter (C14);
     // native Claude modes pass through, codex-style values throw.
-    args.push('--permission-mode', resolveClaudePermissionMode(settings.permissionMode));
+    args.push('--permission-mode', connection?.planMode ? 'plan' : resolveClaudePermissionMode(settings.permissionMode));
 
     // Model override: env var > settings > vendor default. Vendor accepts an
     // alias ('sonnet', 'opus') or a full model id ('claude-sonnet-4-6').
@@ -453,7 +513,10 @@ export class CLIArgumentBuilder {
     }
 
     // MCP config: prefer explicit setting, otherwise auto-generate
-    const mcpConfig = settings.mcpConfigPath || getOrCreateMcpConfig(agentId);
+    const mcpConfig = connection ? getOrCreateMcpConfig(agentId, connection) : settings.mcpConfigPath || getOrCreateMcpConfig(agentId);
+    if (connection) {
+      args.push('--strict-mcp-config', '--max-turns', String(connection.maxIterations), '--input-format', 'stream-json', '--permission-prompt-tool', 'stdio');
+    }
     if (mcpConfig) {
       args.push('--mcp-config', mcpConfig);
     }
@@ -470,20 +533,27 @@ export class CLIArgumentBuilder {
       args.push(...settings.extraArgs);
     }
 
-    return { binary: 'claude', args, stdinPrompt: IS_WIN ? prompt : undefined };
+    return { binary: 'claude', args, keepStdinOpen: !!connection,
+      ...(connection ? { env: { MCP_TOOL_TIMEOUT: String(CLI_BRIDGE_TOOL_TIMEOUT_SECONDS * 1000) } } : {}),
+      stdinPrompt: connection ? JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n' : IS_WIN ? prompt : undefined };
   }
 
   private buildAntigravityArgs(
     prompt: string,
     settings: CLIAgentConfig,
     systemPrompt?: string | null,
+    connection?: CliRunConnection,
   ): { binary: string; args: string[]; useShell?: boolean } {
     // agy (Antigravity) replaces the Gemini CLI. `--print <prompt>` runs a
     // single prompt non-interactively and emits PLAIN TEXT (no -o json /
     // stream-json), which the worker buffers via CLIToolConfig.bufferOutput.
     // --dangerously-skip-permissions auto-approves tool calls (the agy
     // equivalent of gemini's --approval-mode yolo).
-    const args: string[] = ['--dangerously-skip-permissions'];
+    const args: string[] = [];
+    if (connection?.planMode || settings.permissionMode === 'safe' || settings.permissionMode === 'plan') args.push('--mode', 'plan');
+    else if (['workspace', 'accept-edits', 'auto_edit', 'auto'].includes(settings.permissionMode ?? '')) args.push('--mode', 'accept-edits', '--sandbox');
+    else if (!settings.permissionMode || settings.permissionMode === 'full' || settings.permissionMode === 'yolo') args.push('--dangerously-skip-permissions');
+    else throw new Error(`Unsupported Antigravity permission mode: ${settings.permissionMode}`);
 
     // Model override: env var > settings. agy uses --model (not gemini's -m);
     // when unset, agy picks the model from its own ~/.gemini config.
@@ -523,6 +593,7 @@ export class CLIArgumentBuilder {
     prompt: string,
     systemPrompt?: string | null,
     settings?: CLIAgentConfig,
+    connection?: CliRunConnection,
   ): { binary: string; args: string[]; stdinPrompt?: string } {
     // Codex: positional prompt or '-' to read from stdin.
     // Multi-line prompts or oversized args break the positional path —
@@ -549,7 +620,7 @@ export class CLIArgumentBuilder {
     // produce — see Claude (`bypassPermissions`) and Gemini (`yolo`)
     // adapters above for the write-enabled equivalents. Operators can
     // dial back per-model via `permissionMode` on the model row.
-    const codexPermMode = resolveCodexSandboxMode(settings?.permissionMode);
+    const codexPermMode = connection?.planMode ? 'read-only' : resolveCodexSandboxMode(settings?.permissionMode);
     const baseArgs = [
       'exec',
       '--skip-git-repo-check',
@@ -557,6 +628,20 @@ export class CLIArgumentBuilder {
       '--ephemeral',
       '--sandbox', codexPermMode,
     ];
+    if (connection) {
+      // Codex merges -c tables, so never overlay a host HTTP/stdio entry.
+      // Ask Codex to resolve every config layer, including trusted project
+      // directories. Preserve CODEX_HOME and its subscription authentication.
+      // Discovery is async and runs in the worker before build (see CLIAgentWorker).
+      const configured = connection.codexMcpServers;
+      if (!configured) throw new Error('Scoped Codex launch requires discovered MCP configuration; refusing to launch an unscoped CLI run');
+      const disabled = configured.map(server => `${JSON.stringify(server.name)}={enabled=false}`);
+      const entry = resolveCliMcpEntry();
+      // Only this private server is auto-approved by Codex: Octipus's native
+      // executor remains responsible for every tool's actual authorization.
+      const server = `{ command = ${JSON.stringify(process.execPath)}, args = [${JSON.stringify(entry)}], env_vars = ["OCTIPUS_AGENT_URL", "OCTIPUS_AGENT_KEY"], default_tools_approval_mode = "approve", tool_timeout_sec = ${CLI_BRIDGE_TOOL_TIMEOUT_SECONDS} }`;
+      baseArgs.push('-c', `mcp_servers={${[...disabled, `octipus_run_${randomBytes(6).toString('hex')}=${server}`].join(',')}}`);
+    }
     if (modelOverride) baseArgs.push('-c', `model="${modelOverride}"`);
     if (settings?.extraArgs?.length) baseArgs.push(...settings.extraArgs);
 
@@ -583,6 +668,8 @@ export interface CLIParserCallbacks {
   onTurn: () => void;
   /** A tool invocation was observed (separate from turns). */
   onToolCall?: () => void;
+  /** Bridge calls are tallied by the native executor, not the outer MCP envelope. */
+  isBridgedTool?: (name: string) => boolean;
   /**
    * Incremental token usage (codex per-turn `turn.completed`, Claude
    * per-assistant-message usage + final `result` reconciliation). Fires
@@ -635,6 +722,7 @@ export class CLIOutputParser {
    * already parse, never inferred from the CLI's prose.
    */
   private counters: SideEffectCounters = emptyCounters();
+  private claudeUsageByMessage = new Map<string, { input: number; output: number }>();
   /**
    * Did we parse a stream shape we actually understand? Only `Claude Code` and
    * `Codex CLI` stream structured events; a buffered-output tool (agy) yields
@@ -667,6 +755,8 @@ export class CLIOutputParser {
    */
   private emit(type: AgentEvent['type'], data: unknown): void {
     const d = data as { type?: string; toolName?: string; isError?: boolean } | null;
+    const bridged = !!d?.toolName && this.callbacks.isBridgedTool?.(d.toolName);
+    if (bridged) { this.emitFn(type, data); return; }
     switch (d?.type) {
       case 'cli_tool_use':
         this.counters.byName[d.toolName || 'tool'] = (this.counters.byName[d.toolName || 'tool'] ?? 0) + 1;
@@ -765,9 +855,10 @@ export class CLIOutputParser {
       // matching tool_result (type:"user") flips the same row (C1).
       for (const block of content) {
         if (block.type === 'tool_use') {
-          this.callbacks.onToolCall?.();
           const toolUseId = (block.id || '') as string;
           const toolName = block.name as string;
+          if (toolUseId && this.toolNamesById.has(toolUseId)) continue;
+          this.callbacks.onToolCall?.();
           if (toolUseId) this.toolNamesById.set(toolUseId, toolName);
           const input = (block.input || {}) as Record<string, unknown>;
           this.emit('action', {
@@ -781,7 +872,7 @@ export class CLIOutputParser {
       }
 
       // Per-message usage — lets the token budget fire mid-run (C16).
-      this.reportClaudeUsage(message?.usage as Record<string, unknown> | undefined);
+      this.reportClaudeUsage(message?.usage as Record<string, unknown> | undefined, messageId);
 
       // Extract text content
       const texts = content
@@ -910,16 +1001,20 @@ export class CLIOutputParser {
   }
 
   /** Report per-assistant-message usage, tracking the running total for the final reconciliation. */
-  private reportClaudeUsage(usage: Record<string, unknown> | undefined): void {
+  private reportClaudeUsage(usage: Record<string, unknown> | undefined, messageId?: string): void {
     if (!usage) return;
     const input = ((usage.input_tokens || 0) as number)
       + ((usage.cache_read_input_tokens || 0) as number)
       + ((usage.cache_creation_input_tokens || 0) as number);
     const output = (usage.output_tokens || 0) as number;
-    const total = input + output;
+    const previous = messageId ? this.claudeUsageByMessage.get(messageId) : undefined;
+    const inputDelta = Math.max(0, input - (previous?.input ?? 0));
+    const outputDelta = Math.max(0, output - (previous?.output ?? 0));
+    if (messageId) this.claudeUsageByMessage.set(messageId, { input: Math.max(input, previous?.input ?? 0), output: Math.max(output, previous?.output ?? 0) });
+    const total = inputDelta + outputDelta;
     if (total <= 0) return;
     this.reportedTokens += total;
-    this.callbacks.onTokenUsage?.({ input, output, total });
+    this.callbacks.onTokenUsage?.({ input: inputDelta, output: outputDelta, total });
   }
 
   private parseCodexEvent(event: Record<string, unknown>, type: string): { text: string; replace?: boolean } | null {

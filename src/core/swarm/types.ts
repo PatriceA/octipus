@@ -244,6 +244,8 @@ export interface AgentNode {
   budget: NodeBudget;
   /** Superset of tools the node is allowed to use. Children intersect with this. */
   allowedToolIds: Set<string>;
+  /** Live own spend, independent of detach support (native and CLI workers). */
+  ownTokenUsage?: () => number;
   /** Abort controller rooted at this node. Parent abort → child abort. */
   signal: AbortSignal;
 }

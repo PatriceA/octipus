@@ -1,13 +1,14 @@
 import type { AgentWorker, ToolHandler } from '@/core/agent-worker';
-import { coreLogger } from '@/utils/logger';
 import { createCollectChildrenTool } from '@/core/swarm/collect-tool';
-import { createSpawnChildTool } from '@/core/swarm/swarm-tool';
+import { createLateBoundSpawnChildHooks, createSpawnChildTool } from '@/core/swarm/swarm-tool';
 import {
   type AgentNode,
   getLevelDefault,
   type PendingChild,
 } from '@/core/swarm/types';
+import { coreLogger } from '@/utils/logger';
 import type { AgentService } from './service';
+import { createWorkPlanTools } from './work-plan-tools';
 
 // Session-scoped idempotency for `remember_this`. A spinning root agent (esp.
 // a weak model idling while children run) can call it many times with the same
@@ -81,7 +82,7 @@ export function createMetaTools(
     'You MUST now respond to the user with a plain-text summary of the result. ' +
     'Do NOT call any more tools. Just write your final answer.';
 
-  const tools: ToolHandler[] = [];
+  const tools: ToolHandler[] = createWorkPlanTools();
 
   // Swarm: register `spawn_child` on the Root agent (depth 0). With
   // `swarmRefs` we also enable detach mode + `collect_children`, so the
@@ -99,11 +100,10 @@ export function createMetaTools(
         createSpawnChildTool(
           options.parentNode,
           undefined,
-          {
-            registerPending: (pc) => detachHookRef.current?.registerPendingChild(pc),
-            pendingCount: () => detachHookRef.current?.pendingDetachedCount() ?? 0,
-            maxPendingDetached: () => getLevelDefault(0).maxPendingDetached,
-          },
+          createLateBoundSpawnChildHooks(
+            detachHookRef,
+            () => getLevelDefault(0).maxPendingDetached,
+          ),
           lite ? { lite: true } : undefined,
         ),
       );
@@ -597,7 +597,7 @@ export function createMetaTools(
 
   if (lite) {
     return tools.filter(
-      (t) => t.name === 'spawn_child' || t.name === 'collect_children' || t.name === 'remember_this',
+      (t) => t.name === 'spawn_child' || t.name === 'collect_children' || t.name === 'remember_this' || t.name === 'get_work_plan' || t.name === 'update_work_plan',
     );
   }
   return tools;
