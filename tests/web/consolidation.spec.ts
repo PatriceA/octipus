@@ -7,10 +7,10 @@ test('unavailable dashboard data is not displayed as zero or idle; retry recover
   await page.route('**/api/health/detailed', route => route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"Health unavailable"}' }));
   await page.goto('/');
   await expect(page.getByText('status unavailable', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Retry total cost' })).toBeVisible({ timeout: 15000 });
+  await expect(page.getByRole('button', { name: /^Retry .*cost/ })).toBeVisible({ timeout: 15000 });
   await expect(page.getByText('$0.00', { exact: true })).toHaveCount(0);
   failing = false;
-  await page.getByRole('button', { name: 'Retry total cost' }).click();
+  await page.getByRole('button', { name: /^Retry .*cost/ }).click();
   await expect(page.getByText('$1.25', { exact: true })).toBeVisible();
 });
 
