@@ -66,6 +66,10 @@ jobs:
         run: npm run typecheck
       - name: Lint
         run: npm run lint
+      # Same as ci.yml: the CLI-agent tests resolve mcp-server/dist at runtime.
+      - name: Build CLI tool bridge (spawned CLI runs resolve mcp-server/dist)
+        run: npm ci && npm run build
+        working-directory: mcp-server
       - name: Test
         run: npm run test
         env:
