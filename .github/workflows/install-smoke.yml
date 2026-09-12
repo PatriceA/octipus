@@ -78,5 +78,10 @@ jobs:
           $octi = "${{ runner.temp }}\octipus-bin\octi.cmd"
           & $octi help; if ($LASTEXITCODE -ne 0) { throw 'octi help failed' }
           & $octi version; if ($LASTEXITCODE -ne 0) { throw 'octi version (TypeScript hand-over) failed' }
-          & $octi doctor --json | Out-Null   # exits 1 without .env — only the run itself is asserted
-          if ($LASTEXITCODE -notin 0, 1) { throw 'octi doctor crashed' }
+          # doctor exits 1 on a fresh install (no .env yet); assert it produced a
+          # real report rather than its exit code, and leave the step at 0.
+          $out = (& $octi doctor --json) -join "`n"
+          $report = $out.Substring([Math]::Max(0, $out.IndexOf('{'))) | ConvertFrom-Json
+          if (-not $report.checks -or $report.checks.Count -lt 5) { throw "octi doctor produced no report:`n$out" }
+          Write-Host "doctor: $($report.summary.ok) ok, $($report.summary.warn) warn, $($report.summary.fail) fail"
+          $global:LASTEXITCODE = 0
