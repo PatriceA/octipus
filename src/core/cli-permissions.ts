@@ -13,7 +13,7 @@ const requestSchema = z.object({
 
 /** Translate Claude's permission control protocol to Octipus's approval surface. */
 export async function answerCliPermissionRequest(
-  raw: unknown, context: AgentContext, emit: (type: AgentEvent['type'], data: unknown) => void,
+  raw: unknown, context: AgentContext, emit: (type: AgentEvent['type'], data: unknown) => void, signal?: AbortSignal,
 ): Promise<unknown> {
   const { request_id, request } = requestSchema.parse(raw);
   const manager = getPermissionManager();
@@ -24,17 +24,18 @@ export async function answerCliPermissionRequest(
     attended: context.attended, toolId, action: request.tool_name,
     unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions });
   let allowed = decision.route === 'execute';
-  if (decision.route === 'ask_human' && context.status === 'running') {
+  if (decision.route === 'ask_human' && context.status === 'running' && !signal?.aborted) {
     const id = await manager.requestApproval(context.userId, context.id, toolId, request.tool_name,
-      request.input, context.sessionId, `CLI: ${request.tool_name}`);
+      request.input, context.sessionId, `CLI: ${request.tool_name}`, signal);
+    if (context.status !== 'running' || signal?.aborted) manager.cancelWaits(context.id);
     emit('permission_request', { requestId: id, toolName: `CLI: ${request.tool_name}`, args: request.input, toolId });
-    allowed = context.status === 'running' && await manager.waitForApproval(id, { agentId: context.id });
+    allowed = await manager.waitForApproval(id, { agentId: context.id });
   }
   if (allowed) {
     const current = await manager.check(context.userId, toolId, request.tool_name, request.input, context, { revalidate: true });
     if (current.level === 'DENY') allowed = false;
   }
-  if (context.status !== 'running') allowed = false;
+  if (context.status !== 'running' || signal?.aborted) allowed = false;
   return { type: 'control_response', response: { subtype: 'success', request_id, response: allowed
     ? { behavior: 'allow', updatedInput: request.input, toolUseID: request.tool_use_id }
     : { behavior: 'deny', message: 'Octipus permission was denied or not granted. Do not bypass this decision.' } } };

@@ -8,7 +8,8 @@ import type { AgentContext } from './types';
 import { addPlanFeedback, type WorkPlanState } from '@/shared/work-plan';
 
 const fixture = vi.hoisted(() => ({ script: '', dir: '', plan: { revision: 0, current: null, previous: [] } as WorkPlanState,
-  check: vi.fn(), execute: vi.fn(), cancel: vi.fn(), readFailure: false, audit: vi.fn(), status: vi.fn() }));
+  check: vi.fn(), execute: vi.fn(), cancel: vi.fn(), readFailure: false, audit: vi.fn(), status: vi.fn(), requestApproval: vi.fn() }));
+vi.mock('@/db/repositories/tool-action-repository', () => ({ toolActionRepository: { pending: async () => [], start: async () => {}, finish: async () => {} } }));
 vi.mock('child_process', async importOriginal => {
   const actual = await importOriginal<typeof import('child_process')>();
   return { ...actual, spawn: (binary: string, args: string[], opts: object) => {
@@ -40,7 +41,7 @@ vi.mock('@/db/repositories/message-repository', () => ({ messageRepository: { cr
 vi.mock('@/db/repositories/agent-repository', () => ({ agentRepository: { updateStatus: fixture.status } }));
 vi.mock('@/db/repositories/audit-repository', () => ({ auditRepository: new Proxy({}, { get: (_target, property) => property === 'logAgentCompleted' ? fixture.audit : async () => {} }) }));
 vi.mock('@/security/permissions', () => ({ getPermissionManager: () => ({ check: fixture.check, cancelWaits: fixture.cancel,
-  requestApproval: async () => 'approval', waitForApproval: async () => false, onWaitStateChange: () => () => {} }) }));
+  requestApproval: fixture.requestApproval, waitForApproval: async () => false, onWaitStateChange: () => () => {} }) }));
 vi.mock('@/hooks/manager', () => ({ getHookManager: () => ({ triggerToolHooks: async () => ({ decision: 'allow' }) }) }));
 
 beforeEach(() => {
@@ -49,6 +50,7 @@ beforeEach(() => {
   fixture.plan = { revision: 0, current: null, previous: [] };
   fixture.check.mockReset().mockImplementation(async (_user: string, tool: string) => ({ level: tool === 'denied' ? 'DENY' : 'ALLOW' }));
   fixture.execute.mockReset();
+  fixture.requestApproval.mockReset().mockResolvedValue('approval');
   fixture.readFailure = false;
   fixture.audit.mockReset().mockResolvedValue(undefined);
   fixture.status.mockReset().mockResolvedValue(undefined);
@@ -248,4 +250,27 @@ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('late guidance with no turn budget kee
   expect(result).toContain('turn budget is exhausted');
   expect(thoughts).toContainEqual(expect.objectContaining({ type: 'guidance_pending', count: 1 }));
   expect(worker.getStatus()).toBe('completed');
+});
+
+
+it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('cancelling during vendor approval creation persists stopped, not protocol failure', async () => {
+  writeFileSync(fixture.script, `
+    console.log(JSON.stringify({type:'control_request',request_id:'cancel-test',request:{subtype:'can_use_tool',tool_name:'Bash',input:{command:'true'}}}));
+    setInterval(() => {}, 1000);
+  `);
+  const worker = sampleWorker();
+  worker.getContext().attended = true;
+  fixture.check.mockResolvedValue({ level: 'ASK' });
+  fixture.requestApproval.mockImplementation(async (...args) => {
+    const signal = args[7] as AbortSignal;
+    expect(signal).toBe(worker.getAbortSignal());
+    worker.stop();
+    await Promise.resolve();
+    throw new Error('Agent stopped while creating approval request');
+  });
+  await expect(worker.run('sample')).rejects.toThrow(/abort|stop/i);
+  expect(fixture.requestApproval).toHaveBeenCalledTimes(1);
+  expect(worker.getStatus()).toBe('stopped');
+  expect(fixture.status).toHaveBeenCalledWith('a', expect.objectContaining({ status: 'stopped' }));
+  expect(fixture.status.mock.calls.some(([, update]) => update.status === 'failed')).toBe(false);
 });

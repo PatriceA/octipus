@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { mkdtempSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -147,4 +147,43 @@ describe('real middleware and executor authorization', () => {
     await expect(bridge.callTool('fixture', 'write', args(), context())).rejects.toThrow('denied'); expect(calls).toBe(1);
   });
 
+});
+
+test('cancelling a running shell tool reaches the real subprocess', async () => {
+  const { ShellTool } = await import('@/tools/shell');
+  const { LocalShellOperations } = await import('@/tools/shell/local-operations');
+  const operations = new LocalShellOperations();
+  const controller = new AbortController();
+  const execute = operations.exec.bind(operations);
+  operations.exec = async (command, cwd, options) => {
+    const timer = setTimeout(() => controller.abort(), 150);
+    try { return await execute(command, cwd, options); }
+    finally { clearTimeout(timer); }
+  };
+  const shell = new ShellTool(operations);
+  await getToolRegistry().register(shell);
+  await getPermissionManager().setPermission(userId, 'shell', 'execute', 'ALLOW');
+  const executor = new ToolExecutor(context(), () => {}, undefined, controller.signal);
+  executor.registerTools(shell.getToolHandlers());
+  const started = Date.now();
+  const result = await executor.handleToolCalls([{ id: 'cancel-shell', name: 'shell__run', arguments: {
+    command: 'sleep 3', cwd: directory, timeout: 5000,
+  } }]);
+  expect(JSON.stringify(result)).toMatch(/cancelled|"aborted"/);
+  expect(Date.now() - started).toBeLessThan(2000);
+});
+
+
+test('cancellation during middleware auditing prevents a filesystem write', async () => {
+  const { auditRepository } = await import('@/db/repositories/audit-repository');
+  const { withExecutionSignal } = await import('@/core/execution-scope');
+  await getPermissionManager().setPermission(userId, writer.id, 'write', 'ALLOW');
+  const controller = new AbortController(); const ctx = context(); const input = args();
+  const audit = vi.spyOn(auditRepository, 'log').mockImplementation(async () => {
+    controller.abort(); return undefined as never;
+  });
+  try {
+    await expect(withExecutionSignal(ctx, controller.signal, () => writer.getToolHandlers()[0].execute(input, ctx))).rejects.toThrow(/stopped/);
+    expect(existsSync(input.path)).toBe(false);
+  } finally { audit.mockRestore(); }
 });

@@ -343,3 +343,9 @@ Add entry to `SYSTEM_EXPERTS` in `src/db/seed-experts.ts` with role, skills, pro
 Agent outputs are automatically indexed into the knowledge base on completion, enabling future agents to retrieve past work. Most specialist roles have access to the `knowledge` tool for search and manual indexing.
 
 See **[RAG Documentation](RAG.md)** for full details on setup, configuration, and architecture.
+
+## Execution reliability
+
+See [Execution reliability audit](EXECUTION-RELIABILITY.md) for cancellation,
+shutdown, approval and restart-reconciliation checks, their regression tests,
+and remaining limits around external side effects and shared-database recovery.

@@ -145,3 +145,18 @@ describe('LocalShellOperations.exec — the deadline actually ends the call', ()
     expect(Date.now() - started).toBeLessThan(1500);
   });
 });
+
+
+describe('shell deadline after the direct child has exited', () => {
+  it('reaps descendants holding the pipes without reporting a finished command as killed', async () => {
+    const result = await new LocalShellOperations().exec('sleep 2 & exit 0', process.cwd(), {
+      unsafe: true, timeout: 100,
+    });
+    // The shell itself exited 0 in time; only the orphaned `sleep` was killed
+    // to release the pipes. Reporting a timeout here is the false-positive the
+    // guard above exists to prevent.
+    expect(result.exitCode).toBe(0);
+    expect(result.timedOut).toBe(false);
+    expect(result.killed).toBe(false);
+  });
+});

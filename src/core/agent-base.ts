@@ -79,6 +79,9 @@ export interface ToolHandler {
    */
   permissionAction?: string | ((args: Record<string, unknown>) => string);
   final?: boolean;
+  /** Trusted handler metadata: BaseTool journals after its middleware checks. */
+  recordsActions?: boolean;
+  replaySafety?: 'read_only' | 'mutation';
   /** Name of the most-informative parameter for compact UI display. */
   previewParam?: string;
   /** Custom preview renderer (overrides `previewParam`). Truncated to 80 chars. */
@@ -96,6 +99,13 @@ export abstract class BaseAgentWorker {
   constructor(context: AgentContext, config: AgentWorkerConfig) {
     this.context = context;
     this.config = config;
+  }
+
+  protected activeRuns = 0;
+
+  /** Includes unwinding work after the visible status has become stopped. */
+  isSettling(): boolean {
+    return this.activeRuns > 0;
   }
 
   abstract run(userMessage?: string): Promise<string>;

@@ -1,3 +1,4 @@
+import { toolActionRepository } from '@/db/repositories/tool-action-repository';
 import { getPermissionManager } from '@/security/permissions';
 import { auditRepository } from '@/db/repositories/audit-repository';
 /**
@@ -84,6 +85,9 @@ async function makeTool(): Promise<TestableFilesystemTool> {
 }
 
 beforeEach(() => {
+  vi.spyOn(toolActionRepository, 'pending').mockResolvedValue([]);
+  vi.spyOn(toolActionRepository, 'start').mockResolvedValue();
+  vi.spyOn(toolActionRepository, 'finish').mockResolvedValue();
   dataRoot = mkdtempSync(join(tmpdir(), 'octipus-fs-tool-'));
   setEnv('WORKSPACE_PATH', dataRoot);
   setEnv('DOCUMENTS_PATH', join(dataRoot, 'documents'));

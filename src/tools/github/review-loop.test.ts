@@ -1,3 +1,4 @@
+import { toolActionRepository } from '@/db/repositories/tool-action-repository';
 import { getPermissionManager } from '@/security/permissions';
 import { auditRepository } from '@/db/repositories/audit-repository';
 /**
@@ -174,6 +175,9 @@ describe('labels and milestones', () => {
 // These suites verify the tool body; policy reachability is covered with real
 // storage in security/dispatch-authorization.test.ts.
 beforeEach(() => {
+  vi.spyOn(toolActionRepository, 'pending').mockResolvedValue([]);
+  vi.spyOn(toolActionRepository, 'start').mockResolvedValue();
+  vi.spyOn(toolActionRepository, 'finish').mockResolvedValue();
   vi.spyOn(getPermissionManager(), 'check').mockResolvedValue({ allowed: true, level: 'ALLOW', requiresApproval: false });
   vi.spyOn(auditRepository, 'log').mockResolvedValue(undefined as never);
 });

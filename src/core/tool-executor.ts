@@ -1,3 +1,5 @@
+import { actionRecovery, isReadOnlyAction } from './action-recovery';
+import { withExecutionSignal } from './execution-scope';
 import { isCancellationError } from '@/core/swarm/errors';
 import { type SideEffectCounters, emptyCounters } from '@/core/swarm/receipt';
 import { renderToolActivity } from '@/core/work-stream/renderers';
@@ -168,7 +170,20 @@ export class ToolExecutor {
      * should not go into the timeout calculation."
      */
     private onDelegationPause?: (durationMs: number) => void,
+    private signal?: AbortSignal,
   ) {}
+
+  private activeBatches = 0;
+
+  isExecuting(): boolean {
+    return this.activeBatches > 0;
+  }
+
+  private assertCanExecute(): void {
+    if (this.signal?.aborted || this.context.status === 'stopped' || this.context.status === 'failed') {
+      throw new Error('Agent stopped before tool execution');
+    }
+  }
 
   get toolsDisabled(): boolean {
     return this._toolsDisabled;
@@ -360,6 +375,7 @@ export class ToolExecutor {
     }
 
     for (const [key, bucket] of groups) {
+      this.assertCanExecute();
       // Singleton group — let the normal sequential path handle it.
       if (bucket.length < 2) continue;
 
@@ -385,6 +401,7 @@ export class ToolExecutor {
       const groupStart = Date.now();
       const promises = group.map(async (tc) => {
         try {
+          this.assertCanExecute();
           const res = await tool.execute(tc.arguments, this.context);
           return { toolCallId: tc.id, result: res } as ToolResult;
         } catch (err) {
@@ -423,6 +440,16 @@ export class ToolExecutor {
    * cap is enforced at the spawner (see `parent.budget.fanOut.cap`).
    */
   async handleToolCalls(toolCalls: ToolCall[]): Promise<AgentMessage[]> {
+    this.activeBatches++;
+    try {
+      return await withExecutionSignal(this.context, this.signal, () => this.executeBatch(toolCalls));
+    } finally {
+      this.activeBatches--;
+    }
+  }
+
+  private async executeBatch(toolCalls: ToolCall[]): Promise<AgentMessage[]> {
+    this.assertCanExecute();
     // Rewrite near-miss names to canonical BEFORE the action snapshot below, so
     // the emitted call names match what executes. Idempotent if the worker
     // already normalized (it does, before its own tool_call event).
@@ -459,6 +486,7 @@ export class ToolExecutor {
     const parallelResults = await this.executeParallelSwarmGroups(toolCalls);
 
     for (const toolCall of toolCalls) {
+      this.assertCanExecute();
       // Swarm: if this call was handled by the parallel fan-out, skip
       // execution but still tally it so the receipt's call count is
       // independent of whether spawns ran in parallel or sequentially.
@@ -653,7 +681,14 @@ export class ToolExecutor {
             toolCall.arguments,
             this.context.sessionId,
             toolCall.name,
+            this.signal,
           );
+
+          if (this.signal?.aborted || this.context.status === 'stopped' || this.context.status === 'failed') {
+            permissionManager.cancelWaits(this.context.id);
+            await permissionManager.waitForApproval(requestId, { agentId: this.context.id });
+            this.assertCanExecute();
+          }
 
           this.emitFn('permission_request', {
             requestId,
@@ -696,9 +731,7 @@ export class ToolExecutor {
         }
       }
 
-      if (this.context.status === 'stopped' || this.context.status === 'failed') {
-        throw new Error('Agent stopped before tool execution');
-      }
+      this.assertCanExecute();
 
       // ALLOW path (or approved ASK) — execute tool
 
@@ -718,10 +751,21 @@ export class ToolExecutor {
         }
       } catch { /* hooks not ready, allow by default */ }
 
+      this.assertCanExecute();
       try {
         const toolExecStart = Date.now();
         const result = await withDispatchAuthorization(this.context, toolId, permAction, toolCall.arguments, authorizationSource,
-          () => tool.execute(toolCall.arguments, this.context));
+          // Internal orchestration tools (toolId 'agent': spawn_child, plans, memory,
+          // status) are not externally observable actions; journaling them would let
+          // a bookkeeping hiccup gate real mutations behind a recovery review.
+          () => tool.recordsActions || tool.replaySafety === 'read_only' || isReadOnlyAction(permAction) || toolId === 'agent'
+            ? tool.execute(toolCall.arguments, this.context)
+            : actionRecovery.run(this.context, toolId, toolCall.name, toolCall.arguments, () => tool.execute(toolCall.arguments, this.context), async () => {
+              const current = await permissionManager.check(this.context.userId, toolId, permAction, toolCall.arguments, this.context, { revalidate: true });
+              if (current.level === 'DENY' || (current.level === 'ASK' && !authorizationSource.startsWith('approval:'))) {
+                throw new Error('Permission changed before tool execution; obtain action authorization again.');
+              }
+            }));
         const toolExecMs = Date.now() - toolExecStart;
 
         agentLogger.info({
@@ -733,13 +777,15 @@ export class ToolExecutor {
         // from "running" to "done" as soon as the tool returns, instead
         // of waiting for the bulk `observation` emit at end-of-batch.
         // Thread 1: carry the rendered title + structured result preview.
-        const completedActivity = renderToolActivity(toolCall.name, toolCall.arguments, result, true);
+        const shellFailed = toolId === 'shell' && result !== null && typeof result === 'object'
+          && 'outcome' in result && result.outcome === 'error';
+        const completedActivity = renderToolActivity(toolCall.name, toolCall.arguments, result, !shellFailed);
         this.emitFn('action', {
           type: 'tool_call_complete',
           toolCallId: toolCall.id,
           name: toolCall.name,
           role: this.context.role,
-          status: 'ok',
+          status: shellFailed ? 'error' : 'ok',
           durationMs: toolExecMs,
           resultPreview: previewToolResult(result),
           title: completedActivity.title,
@@ -747,7 +793,8 @@ export class ToolExecutor {
           result: completedActivity.result,
         });
 
-        results.push({ toolCallId: toolCall.id, result });
+        results.push({ toolCallId: toolCall.id, result, ...(shellFailed ? { error: sanitizeToolOutput(result) } : {}) });
+        if (shellFailed) this.counters.toolErrors++;
         this.recordExecuted(toolCall.name);
 
         // Emit file change events for file-modifying operations.
@@ -800,7 +847,10 @@ export class ToolExecutor {
           toolCall.name,
           toolId,
           { args: toolCall.arguments, result: resultStr.slice(0, 10_000), durationMs: toolExecMs, authorizationSource }
-        );
+        ).catch(err => agentLogger.error(
+          { err, agentId: this.context.id, toolCallId: toolCall.id },
+          'Tool succeeded but its audit record could not be saved',
+        ));
 
         // Post-tool hook (fire-and-forget, can't block after execution)
         try {

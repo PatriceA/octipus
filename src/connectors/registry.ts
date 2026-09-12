@@ -50,6 +50,7 @@ export class ConnectorRegistry {
     const registry = this;
     return {
       name: 'connector_list_tools',
+      replaySafety: 'read_only',
       description:
         'List tools available from connected built-in connectors (e.g. Atlassian Jira/Confluence). ' +
         'Call before connector_call_tool to discover available tools and their parameters.',

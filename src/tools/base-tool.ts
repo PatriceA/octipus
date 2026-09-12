@@ -1,3 +1,5 @@
+import { actionRecovery, isReadOnlyAction } from '@/core/action-recovery';
+import { assertExecutionActive, getExecutionSignal } from '@/core/execution-scope';
 import type { ToolHandler } from '@/core/agent-worker';
 import { getAgentHooks } from '@/core/agent/hooks';
 import { isCancellationError } from '@/core/swarm/errors';
@@ -86,6 +88,7 @@ export abstract class BaseTool {
       // ('profiles__search_profiles') which never matches → the child
       // gets ZERO tools. Must be set.
       toolId: this.id,
+      recordsActions: true,
       // The agent loop checks permissions before it dispatches, and resolves
       // the action from the handler. Without this it looks up the namespaced
       // call name, matches no manifest permission, and falls back to ASK —
@@ -126,6 +129,7 @@ export abstract class BaseTool {
     execute: (args: Record<string, unknown>, context: AgentContext) => Promise<unknown>,
     options?: ToolExecutionOptions
   ): Promise<unknown> {
+    assertExecutionActive(context);
     const toolContext: ToolContext = { ...context, toolId: this.id };
     const hooks = getAgentHooks();
     const hookAgent = {
@@ -189,7 +193,12 @@ export abstract class BaseTool {
         throw new ApprovalBlockedError(`${this.id}.${action}: ${decision.reason}`);
       } else {
         const requestId = await permissionManager.requestApproval(context.userId, context.id,
-          this.id, action, args, context.sessionId || undefined, toolName);
+          this.id, action, args, context.sessionId || undefined, toolName, getExecutionSignal(context));
+        if (context.status === 'stopped' || context.status === 'failed' || getExecutionSignal(context)?.aborted) {
+          permissionManager.cancelWaits(context.id);
+          await permissionManager.waitForApproval(requestId, { agentId: context.id });
+          assertExecutionActive(context);
+        }
         const approved = await permissionManager.waitForApproval(requestId, { agentId: context.id });
         if (!approved) throw new Error(`Approval was not granted for ${this.id}.${action}`);
         authorizationSource = `approval:${requestId}`;
@@ -214,6 +223,8 @@ export abstract class BaseTool {
       processedArgs = await this.injectSecretsInArgs(args, context.userId, resolvedSecretValues);
     }
 
+    assertExecutionActive(context);
+
     // Execute the tool
     toolLogger.debug({ toolId: this.id, tool: toolName }, 'Executing tool');
 
@@ -224,7 +235,15 @@ export abstract class BaseTool {
     let execResult: unknown;
     let execError: unknown;
     try {
-      const result = await execute(processedArgs, toolContext);
+      const result = isReadOnlyAction(action)
+        ? await execute(processedArgs, toolContext)
+        : await actionRecovery.run(context, this.id, `${this.id}__${toolName}`, args, () => execute(processedArgs, toolContext), async () => {
+          const current = await permissionManager.check(context.userId, this.id, action, args, context,
+            { revalidate: true, defaultLevel: manifestPermission?.defaultLevel, dangerous: manifestPermission?.dangerous });
+          if (current.level === 'DENY' || (current.level === 'ASK' && !authorizationSource.startsWith('approval:'))) {
+            throw new Error('Permission changed before tool execution; obtain action authorization again.');
+          }
+        });
       execResult = result;
       toolLogger.debug({ toolId: this.id, tool: toolName }, 'Tool executed successfully');
 

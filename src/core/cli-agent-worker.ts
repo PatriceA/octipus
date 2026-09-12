@@ -24,7 +24,6 @@ import { getPermissionManager } from '@/security/permissions';
 import { workPlanRepository } from '@/db/repositories/work-plan-repository';
 import { formatWorkPlanContext } from './agent/work-plan-context';
 import { isPlanMode } from './agent/plan-mode';
-import type { CLIToolConfig } from '@/models/providers/cli-provider';
 import { emptyCounters, mergeCounters, type SideEffectCounters } from './swarm/receipt';
 import { BudgetExceededError } from './swarm/errors';
 import { DetachedChildManager } from './agent-worker/detached-child-manager';
@@ -213,7 +212,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
         }
       }
       this.emit(type, data);
-    });
+    }, undefined, this.abortController.signal);
     this.registerTool({ name: 'get_cli_run_context', description: 'Read the current Octipus plan, feedback and new user guidance. Check before further work and before your final answer.',
       parameters: { type: 'object', properties: {} }, execute: async () => this.controlContext() });
 
@@ -293,7 +292,20 @@ export class CLIAgentWorker extends BaseAgentWorker {
     );
   }
 
+  override isSettling(): boolean {
+    return super.isSettling() || this.toolExecutor.isExecuting();
+  }
+
   async run(userMessage?: string): Promise<string> {
+    this.activeRuns++;
+    try {
+      return await this.runInternal(userMessage);
+    } finally {
+      this.activeRuns--;
+    }
+  }
+
+  private async runInternal(userMessage?: string): Promise<string> {
     let permissionCleanup: () => void = () => {};
     try {
     if (this.aborted) throw new Error('Agent was aborted before starting');
@@ -873,9 +885,10 @@ export class CLIAgentWorker extends BaseAgentWorker {
           try {
             const event = JSON.parse(line);
             if (built.keepStdinOpen && event.type === 'control_request') {
-              void answerCliPermissionRequest(event, this.context, (type, data) => this.emit(type, data)).then(response => {
+              void answerCliPermissionRequest(event, this.context, (type, data) => this.emit(type, data), this.abortController.signal).then(response => {
                 if (!this.aborted && proc.stdin?.writable) proc.stdin.write(JSON.stringify(response) + '\n');
               }).catch((err: unknown) => {
+                if (this.aborted || this.abortController.signal.aborted) return;
                 this.runError = `CLI permission protocol failed: ${err instanceof Error ? err.message : String(err)}`;
                 this.stop();
               });

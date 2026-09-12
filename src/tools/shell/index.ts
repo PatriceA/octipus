@@ -1,3 +1,4 @@
+import { getExecutionSignal } from '@/core/execution-scope';
 import { resolve } from 'path';
 import { getConfig } from '@/config';
 import { WorkspaceFS } from '@/security/workspace-fs';
@@ -87,7 +88,9 @@ export class ShellTool extends BaseTool {
           role: context?.role,
         }, 'Shell command executing');
 
-        const result = await this.ops.exec(command, cwd, { timeout, env, unsafe, allowNetwork });
+        const result = await this.ops.exec(command, cwd, { timeout, env, unsafe, allowNetwork, signal: getExecutionSignal(context) });
+
+        if (result.aborted) throw new Error('Shell command cancelled');
 
         // Classify the exit code so the agent isn't misled by non-zero codes
         // that are semantically normal (grep=1 "no match", diff=1 "files differ").

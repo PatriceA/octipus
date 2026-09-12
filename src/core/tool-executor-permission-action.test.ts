@@ -1,3 +1,4 @@
+import { toolActionRepository } from '@/db/repositories/tool-action-repository';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { messageRepository } from '@/db/repositories/message-repository';
 import * as permissions from '@/security/permissions';
@@ -43,6 +44,9 @@ const call = (name: string, args: Record<string, unknown> = {}): ToolCall => ({
 let check: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  vi.spyOn(toolActionRepository, 'pending').mockResolvedValue([]);
+  vi.spyOn(toolActionRepository, 'start').mockResolvedValue();
+  vi.spyOn(toolActionRepository, 'finish').mockResolvedValue();
   vi.spyOn(messageRepository, 'create').mockResolvedValue({} as never);
   check = vi.fn().mockResolvedValue({ allowed: true, level: 'ALLOW', requiresApproval: false });
   vi.spyOn(permissions, 'getPermissionManager').mockReturnValue({

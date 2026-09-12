@@ -298,7 +298,9 @@ export class PermissionManager {
     context: Record<string, unknown>,
     sessionId?: string,
     callerToolName?: string,
+    signal?: AbortSignal,
   ): Promise<string> {
+    if (signal?.aborted) throw new Error('Agent stopped before approval request');
     const requestId = generateId();
 
     const request: NewPermissionRequest = {
@@ -315,8 +317,12 @@ export class PermissionManager {
     };
 
     await this.db.insert(permissionRequests).values(request);
+    if (signal?.aborted) {
+      await this.expireRequest(requestId);
+      throw new Error('Agent stopped while creating approval request');
+    }
     // Install the waiter before notifying clients: a fast answer must not be lost.
-    this.preparedWaits.set(requestId, this.waitForApproval(requestId, { agentId }));
+    this.preparedWaits.set(requestId, this.waitForApproval(requestId, { agentId, signal }));
 
     await auditRepository.log({
       userId,
@@ -325,8 +331,12 @@ export class PermissionManager {
       resourceId: requestId,
       sessionId,
       details: { toolId, action, agentId },
-    });
+    }).catch(err => coreLogger.error({ err, requestId }, 'Approval request saved but audit logging failed'));
 
+    if (signal?.aborted) {
+      this.preparedWaits.delete(requestId);
+      throw new Error('Agent stopped while creating approval request');
+    }
     securityLogger.info({ requestId, userId, toolId, action, callerToolName }, 'Permission requested');
 
     // Notify WebSocket listeners
@@ -341,6 +351,10 @@ export class PermissionManager {
       sessionId,
     });
 
+    if (signal?.aborted) {
+      this.preparedWaits.delete(requestId);
+      throw new Error('Agent stopped while creating approval request');
+    }
     return requestId;
   }
 
@@ -349,7 +363,7 @@ export class PermissionManager {
    */
   async waitForApproval(
     requestId: string,
-    opts?: { agentId?: string; timeoutMs?: number },
+    opts?: { agentId?: string; timeoutMs?: number; signal?: AbortSignal },
   ): Promise<boolean> {
     const prepared = this.preparedWaits.get(requestId);
     if (prepared) {
@@ -364,19 +378,28 @@ export class PermissionManager {
       try { return await prepared; } finally { clearTimeout(timeout); }
     }
     return new Promise((resolve) => {
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const onAbort = () => {
+        this.expireRequest(requestId).catch(err => coreLogger.error({ err, requestId }, 'Could not expire cancelled approval'));
+        settle(false);
+      };
       const settle = (approved: boolean) => {
+        if (timeout) clearTimeout(timeout);
+        opts?.signal?.removeEventListener('abort', onAbort);
         this.pendingRequests.delete(requestId);
         this.untrackWait(opts?.agentId, requestId);
         resolve(approved);
       };
       this.pendingRequests.set(requestId, settle);
       this.trackWait(opts?.agentId, requestId);
+      if (opts?.signal?.aborted) { onAbort(); return; }
+      opts?.signal?.addEventListener('abort', onAbort, { once: true });
 
       // No deadline unless a caller explicitly asks for one. Nothing in the
       // product does; the option exists for a caller that genuinely cannot
       // block (a batch job), not as a default.
       if (opts?.timeoutMs && opts.timeoutMs > 0) {
-        setTimeout(() => {
+        timeout = setTimeout(() => {
           if (!this.pendingRequests.has(requestId)) return;
           this.expireRequest(requestId).catch((err: unknown) =>
             coreLogger.error({ err }, 'background task failed in permissions'));
@@ -509,7 +532,7 @@ export class PermissionManager {
         resourceId: requestId,
         sessionId: request.sessionId || undefined,
         details: { toolId: request.toolId, action: request.action, resolvedBy },
-      });
+      }).catch(err => coreLogger.error({ err, requestId }, 'Approval saved but audit logging failed'));
 
       // Notify waiting code
       const callback = this.pendingRequests.get(requestId);
@@ -561,7 +584,7 @@ export class PermissionManager {
         resourceId: requestId,
         sessionId: request.sessionId || undefined,
         details: { toolId: request.toolId, action: request.action, resolvedBy, reason: resolution },
-      });
+      }).catch(err => coreLogger.error({ err, requestId }, 'Denial saved but audit logging failed'));
 
       // Notify waiting code
       const callback = this.pendingRequests.get(requestId);

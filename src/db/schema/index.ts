@@ -54,3 +54,4 @@ export * from './users';
 export * from './vault';
 export * from './verification-evidence';
 export * from './workspace-repos';
+export * from './tool-actions';

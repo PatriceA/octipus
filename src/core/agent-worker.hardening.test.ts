@@ -1,3 +1,4 @@
+import { getPermissionManager } from '@/security/permissions';
 /**
  * Root agent-hardening behaviours on AgentWorker:
  *  - P1.7  stopped worker emits a complete-shaped terminal event + reason
@@ -453,4 +454,73 @@ describe('AgentWorker toolshim gate (native tool-caller ⇒ no translator)', () 
     expect(TOOLSHIM_TIMEOUT_MS).toBeGreaterThan(0);
     expect(TOOLSHIM_TIMEOUT_MS).toBeLessThanOrEqual(60_000);
   });
+});
+
+describe('worker terminal lifecycle regressions', () => {
+  beforeEach(() => {
+    vi.spyOn(auditRepository, 'logAgentCompleted').mockResolvedValue(undefined as never);
+    vi.spyOn(agentRepository, 'updateStatus').mockResolvedValue(undefined as never);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  test('stop during auto-collect synthesis never becomes completed', async () => {
+    const worker = new AgentWorker(mkCtx(), cfg());
+    const events: AgentEvent[] = [];
+    worker.onEvent(e => events.push(e));
+    let turns = 0;
+    (worker as unknown as { loop: () => Promise<string> }).loop = async () => {
+      if (++turns === 2) { worker.stop('cancel merge'); throw new Error('cancelled'); }
+      return 'initial answer';
+    };
+    worker.registerPendingChild(pending('c', {
+      nodeId: 'c', kind: 'subagent', status: 'ok', output: 'child results', usedTokens: 1, durationMs: 1, spawnedChildren: [],
+    }));
+    await expect(worker.run()).rejects.toThrow(/cancel/);
+    expect(worker.getStatus()).toBe('stopped');
+    expect(events.filter(e => e.type === 'complete')).toHaveLength(1);
+    expect(events.some(e => e.type === 'status_change' && (e.data as { status: string }).status === 'completed')).toBe(false);
+    expect(worker.isSettling()).toBe(false);
+  });
+
+  test('a provider ignoring cancellation cannot complete a stopped worker', async () => {
+    const worker = new AgentWorker(mkCtx(), cfg());
+    (worker as unknown as { loop: () => Promise<string> }).loop = async () => {
+      worker.stop(); return 'late provider answer';
+    };
+    await expect(worker.run()).rejects.toThrow(/cancel/i);
+    expect(worker.getStatus()).toBe('stopped');
+  });
+
+  test('completion remains completed if its audit write fails', async () => {
+    vi.spyOn(auditRepository, 'logAgentCompleted').mockRejectedValue(new Error('audit unavailable'));
+    const worker = new AgentWorker(mkCtx(), cfg());
+    (worker as unknown as { loop: () => Promise<string> }).loop = async () => 'done';
+    expect(await worker.run()).toBe('done');
+    expect(worker.getStatus()).toBe('completed');
+    expect(worker.isSettling()).toBe(false);
+  });
+});
+
+
+test('parent cancellation releases a child waiting for approval', async () => {
+  const controller = new AbortController();
+  const worker = new AgentWorker(mkCtx(), cfg(), { parentSignal: controller.signal });
+  const waiting = getPermissionManager().waitForApproval('parent-cancel', { agentId: worker.getContext().id });
+  controller.abort('parent stopped');
+  expect(await waiting).toBe(false);
+  expect(worker.getStatus()).toBe('stopped');
+});
+
+
+test('native completion releases its permission subscription', async () => {
+  const unsubscribe = vi.fn();
+  const subscribe = vi.spyOn(getPermissionManager(), 'onWaitStateChange').mockReturnValue(unsubscribe);
+  const audit = vi.spyOn(auditRepository, 'logAgentCompleted').mockResolvedValue(undefined as never);
+  const update = vi.spyOn(agentRepository, 'updateStatus').mockResolvedValue(undefined as never);
+  try {
+    const worker = new AgentWorker(mkCtx(), cfg());
+    (worker as unknown as { loop: () => Promise<string> }).loop = async () => 'done';
+    await worker.run();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  } finally { subscribe.mockRestore(); audit.mockRestore(); update.mockRestore(); }
 });

@@ -81,3 +81,11 @@ separate concepts.
 The API exposes `GET /api/sessions/:id/plan` and
 `POST /api/sessions/:id/plan/feedback` (body: `planId`, `revision`, `text`). Both
 follow the session's access rules. Agent updates use the same durable record.
+
+
+## Recovery approval
+
+Pipeline resume and rewind can repeat actions from earlier execution. Octipus
+asks for a separate replay review before restarting prior work. Tool mutations
+with unresolved outcomes also require review; read-only checks remain available.
+See [Action recovery](ACTION-RECOVERY.md) for the behavior and its limits.

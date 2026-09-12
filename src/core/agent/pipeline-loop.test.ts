@@ -297,3 +297,68 @@ describe('an item discovered mid-run joins the same loop', () => {
     expect(await planItemStatuses(pipelineId)).toEqual(['done', 'done', 'done']);
   });
 });
+
+describe('pipeline replay consent', () => {
+  test('denied rewind preserves checkpoints and starts no workers', async () => {
+    replies = { QA: [QA_PASS] };
+    const { pipelineId } = await run('prepare recovery fixture');
+    const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+    const checkpoints = await pipelineRepository.getCheckpoints(pipelineId, 100);
+    const oldest = checkpoints[checkpoints.length - 1];
+    const { getPermissionManager } = await import('@/security/permissions');
+    const permissions = getPermissionManager();
+    const unsubscribe = permissions.onRequest(request => { void permissions.deny(request.requestId, userId); });
+    const priorCalls = calls.length;
+    try { await expect(manager.resume(pipelineId, { fromSeq: oldest.seq })).rejects.toThrow('not approved'); }
+    finally { unsubscribe(); }
+    expect(calls).toHaveLength(priorCalls);
+    expect(await pipelineRepository.getCheckpoints(pipelineId, 100)).toEqual(checkpoints);
+    expect((await manager.getPipeline(pipelineId))?.status).toBe('completed');
+  });
+
+  test('another resume cannot pass a pending recovery review', async () => {
+    replies = { QA: [QA_PASS] };
+    const { pipelineId } = await run('prepare concurrent resume fixture');
+    const { getPermissionManager } = await import('@/security/permissions');
+    const permissions = getPermissionManager(); let requestId = '';
+    const unsubscribe = permissions.onRequest(request => { requestId = request.requestId; });
+    const pending = manager.resume(pipelineId);
+    const rejection = expect(pending).rejects.toThrow('not approved');
+    try {
+      await vi.waitFor(() => expect(requestId).not.toBe(''));
+      await expect(manager.resume(pipelineId)).rejects.toThrow('already awaiting');
+      await permissions.deny(requestId, userId);
+      await rejection;
+    } finally { unsubscribe(); }
+  });
+});
+
+test('stop after replay approval but before reconstruction completes does not restart workers', async () => {
+  replies = { QA: [QA_PASS] };
+  const { pipelineId } = await run('prepare stop during resume fixture');
+  const { pipelineRepository } = await import('@/db/repositories/pipeline-repository');
+  const checkpoints = await pipelineRepository.getCheckpoints(pipelineId, 100);
+  const oldest = checkpoints[checkpoints.length - 1];
+  const { getPermissionManager } = await import('@/security/permissions');
+  const permissions = getPermissionManager();
+  let approved = false;
+  const unsubscribe = permissions.onRequest(request => {
+    void permissions.approve(request.requestId, userId).then(() => { approved = true; });
+  });
+  // The second getNodes is recipe reconstruction, after the recovery review.
+  const original = pipelineRepository.getNodes.bind(pipelineRepository);
+  let release!: () => void; let nodeReads = 0;
+  const lookup = vi.spyOn(pipelineRepository, 'getNodes').mockImplementation(async id => {
+    if (++nodeReads === 2) await new Promise<void>(resolve => { release = resolve; });
+    return original(id);
+  });
+  const priorCalls = calls.length;
+  const pending = manager.resume(pipelineId, { fromSeq: oldest.seq });
+  const rejected = expect(pending).rejects.toThrow('Pipeline replay cancelled');
+  try {
+    await vi.waitFor(() => { expect(approved).toBe(true); expect(release).toBeDefined(); });
+    await manager.stop(pipelineId); release(); await rejected;
+    expect(calls).toHaveLength(priorCalls);
+    expect(await pipelineRepository.getCheckpoints(pipelineId, 100)).toEqual(checkpoints);
+  } finally { unsubscribe(); lookup.mockRestore(); }
+});

@@ -70,6 +70,24 @@ export interface BufferedEvent {
 
 export class AgentManager {
   private agents: Map<string, AnyAgentWorker> = new Map();
+  private retiring = new Set<AnyAgentWorker>();
+
+  /** Bounded like stopAll(): a tool that ignores cancellation must not pin a worker in memory forever. */
+  private retainUntilSettled(agent: AnyAgentWorker, maxMs = 120_000): void {
+    if (!agent.isSettling() || this.retiring.has(agent)) return;
+    this.retiring.add(agent);
+    const deadline = Date.now() + maxMs;
+    const check = () => {
+      if (!agent.isSettling()) { this.retiring.delete(agent); return; }
+      if (Date.now() > deadline) {
+        agentLogger.warn({ agentId: agent.getContext().id }, 'Worker still executing after removal deadline; releasing it unsettled');
+        this.retiring.delete(agent);
+        return;
+      }
+      setTimeout(check, 25).unref();
+    };
+    check();
+  }
   private eventHandlers: Set<(event: AgentEvent) => void> = new Set();
   private globalTools: Map<string, ToolHandler> = new Map();
   /** Per-agent event ring buffer for polling (max 200 events per agent) */
@@ -439,9 +457,11 @@ export class AgentManager {
 
     if (opts.silenceListeners) this.eventHandlers.clear();
 
+    const workers = new Set([...this.agents.values(), ...this.retiring]);
     let stopped = 0;
-    for (const [id, agent] of this.agents) {
-      if (agent.getStatus() === 'running') {
+    for (const agent of workers) {
+      const id = agent.getContext().id;
+      if (agent.getStatus() === 'running' || agent.isSettling()) {
         try {
           agent.stop();
           stopped++;
@@ -453,7 +473,7 @@ export class AgentManager {
     }
 
     const running = (): string[] =>
-      [...this.agents.entries()].filter(([, a]) => a.getStatus() === 'running').map(([id]) => id);
+      [...workers].filter(a => a.getStatus() === 'running' || a.isSettling()).map(a => a.getContext().id);
 
     const deadline = Date.now() + timeoutMs;
     let left = running();
@@ -474,9 +494,10 @@ export class AgentManager {
   remove(agentId: string): boolean {
     const agent = this.agents.get(agentId);
     if (agent) {
-      if (agent.getStatus() === 'running') {
+      if (agent.getStatus() === 'running' || agent.isSettling()) {
         agent.stop();
       }
+      this.retainUntilSettled(agent);
       this.agents.delete(agentId);
       this.eventBuffers.delete(agentId);
       this.childrenByParent.delete(agentId);
@@ -589,6 +610,7 @@ export class AgentManager {
         (status === 'completed' || status === 'failed' || status === 'stopped') &&
         now - context.updatedAt.getTime() > maxAgeMs
       ) {
+        this.retainUntilSettled(worker);
         this.agents.delete(id);
         this.eventBuffers.delete(id);
         count++;

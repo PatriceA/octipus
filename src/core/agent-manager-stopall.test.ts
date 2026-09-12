@@ -5,14 +5,17 @@ import { AgentManager } from './agent-manager';
  * Disposing has to reach quiescence, not merely request it — and the two
  * callers of `stopAll` want opposite things from the subscriber registry.
  */
-type FakeWorker = { getStatus: () => string; stop: () => void; getContext: () => { id: string } };
+type FakeWorker = { getStatus: () => string; isSettling: () => boolean; stop: () => void; getContext: () => { id: string } };
 
 function fakeWorker(id: string, stopsAfterMs: number): FakeWorker {
   let status = 'running';
+  let settling = true;
   return {
     getStatus: () => status,
+    isSettling: () => settling,
     stop: () => {
-      setTimeout(() => { status = 'stopped'; }, stopsAfterMs);
+      status = 'stopped';
+      setTimeout(() => { settling = false; }, stopsAfterMs).unref();
     },
     getContext: () => ({ id }),
   };
@@ -28,7 +31,9 @@ describe('AgentManager.stopAll', () => {
   test('waits for a worker that takes a moment to wind down', async () => {
     const mgr = new AgentManager();
     withWorkers(mgr, { a: fakeWorker('a', 120) });
+    const started = Date.now();
     const res = await mgr.stopAll();
+    expect(Date.now() - started).toBeGreaterThanOrEqual(100);
     // Returning while it was still running is the defect: the rest of the
     // teardown then runs against a worker that is still mid-tool.
     expect(res.stopped).toBe(1);
@@ -60,4 +65,14 @@ describe('AgentManager.stopAll', () => {
     await mgr.stopAll({ silenceListeners: true });
     expect((mgr as unknown as { eventHandlers: Set<unknown> }).eventHandlers.size).toBe(0);
   });
+});
+
+test('removed workers remain visible to shutdown until they settle', async () => {
+  const mgr = new AgentManager();
+  withWorkers(mgr, { removed: fakeWorker('removed', 120) });
+  expect(mgr.remove('removed')).toBe(true);
+  const started = Date.now();
+  const result = await mgr.stopAll();
+  expect(Date.now() - started).toBeGreaterThanOrEqual(100);
+  expect(result.stillRunning).toBe(0);
 });

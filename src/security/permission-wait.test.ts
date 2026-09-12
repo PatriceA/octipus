@@ -6,7 +6,7 @@
  *
  * The only escape from an unanswered wait is the agent being stopped.
  */
-import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { PermissionManager } from './permissions';
 
@@ -19,6 +19,7 @@ function stubDb(manager: PermissionManager, onExpire: () => void) {
   Object.defineProperty(manager, 'db', {
     configurable: true,
     get: () => ({
+      insert: () => ({ values: async () => {} }),
       update: () => ({
         set: () => {
           const where = async () => { onExpire(); };
@@ -31,6 +32,7 @@ function stubDb(manager: PermissionManager, onExpire: () => void) {
 }
 
 describe('waitForApproval', () => {
+  afterEach(() => vi.restoreAllMocks());
   let manager: PermissionManager;
   let expired: number;
 
@@ -59,6 +61,13 @@ describe('waitForApproval', () => {
     const pending = manager.waitForApproval('req-2', { agentId: 'a-1' });
     await manager.approve('req-2', 'u-1');
     expect(await pending).toBe(true);
+  });
+
+  test.each(['approve', 'deny'] as const)('%s settles its waiter even if the audit write fails', async (action) => {
+    vi.spyOn(auditRepository, 'log').mockRejectedValue(new Error('audit unavailable'));
+    const pending = manager.waitForApproval('audit-failure', { agentId: 'a-1' });
+    expect(await manager[action]('audit-failure', 'u-1')).toBe(true);
+    expect(await pending).toBe(action === 'approve');
   });
 
   test('stopping the agent releases its waits as unapproved, and expires them', async () => {
@@ -123,5 +132,42 @@ describe('waitForApproval', () => {
     const released = await manager.releaseOrphanedRequests();
     expect(released).toBe(1); // the stub returns one row
     expect(expired).toBe(1);
+  });
+});
+
+
+describe('approval creation cancellation races', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  test('audit failure during creation still returns an answerable request', async () => {
+    const manager = new PermissionManager(); stubDb(manager, () => {});
+    vi.spyOn(auditRepository, 'log').mockRejectedValue(new Error('audit unavailable'));
+    const id = await manager.requestApproval('u-1', 'a-1', 'shell', 'run', {});
+    const waiting = manager.waitForApproval(id, { agentId: 'a-1' });
+    expect(await manager.approve(id, 'u-1')).toBe(true);
+    expect(await waiting).toBe(true);
+  });
+
+  test('cancellation during the insert expires the request without installing a new waiter', async () => {
+    const manager = new PermissionManager(); const controller = new AbortController();
+    let expired = false;
+    Object.defineProperty(manager, 'db', { get: () => ({
+      insert: () => ({ values: async () => { controller.abort(); } }),
+      update: () => ({ set: () => ({ where: async () => { expired = true; } }) }),
+    }) });
+    await expect(manager.requestApproval('u-1', 'a-1', 'shell', 'run', {}, undefined, undefined, controller.signal)).rejects.toThrow(/stopped/);
+    expect(expired).toBe(true);
+    expect(manager.cancelWaits('a-1')).toBe(0);
+  });
+
+  test('a cancellation before the caller starts waiting is retained and then cleaned up', async () => {
+    const manager = new PermissionManager(); stubDb(manager, () => {});
+    vi.spyOn(auditRepository, 'log').mockResolvedValue(undefined as never);
+    const id = await manager.requestApproval('u-1', 'a-1', 'shell', 'run', {});
+    expect(manager.cancelWaits('a-1')).toBe(1);
+    expect(await manager.waitForApproval(id, { agentId: 'a-1' })).toBe(false);
+    const internals = manager as unknown as { preparedWaits: Map<string, unknown>; pendingRequests: Map<string, unknown> };
+    expect(internals.preparedWaits.size).toBe(0);
+    expect(internals.pendingRequests.size).toBe(0);
   });
 });

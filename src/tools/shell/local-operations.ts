@@ -126,6 +126,11 @@ export class LocalShellOperations implements ShellOperations {
       );
     }
 
+    if (options.signal?.aborted) {
+      wrap.cleanup();
+      return { stdout: '', stderr: '', exitCode: null, killed: true, timedOut: false, aborted: true, signal: null };
+    }
+
     return new Promise((resolve, reject) => {
       // No `timeout` option here on purpose: node's own timer kills with
       // SIGTERM on its own schedule, racing the timer below and landing a kill
@@ -181,11 +186,14 @@ export class LocalShellOperations implements ShellOperations {
 
       const timeoutHandle = options.timeout
         ? setTimeout(() => {
-            // `exit` fires before `close`, and the pipes can flush a tick after
-            // the deadline. Without this the command that finished in time is
-            // reported as having blown its budget, and the model is told to
-            // split work that already succeeded.
-            if (child.exitCode !== null || child.signalCode !== null) return;
+            // The direct child already exited: the command finished in time
+            // and only descendants holding the pipes keep `close` from firing
+            // (`sleep 2 & exit 0`). Release them, but do not report a timeout —
+            // that told the model to split work that had succeeded, and the
+            // action journal would file the call as uncertain.
+            // Not `killed`: that flag means the invoked command was killed, and
+            // both the shell tool and the action journal treat it as failure.
+            if (child.exitCode !== null || child.signalCode !== null) { killTree(); return; }
             killed = true;
             timedOut = true;
             killTree();

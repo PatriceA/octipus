@@ -1,3 +1,5 @@
+import { withExecutionSignal } from '@/core/execution-scope';
+import { actionRecovery } from '@/core/action-recovery';
 import { channelCanPrompt } from '@/security/approval-policy';
 import { getConfig } from '@/config';
 import { and, desc, eq, inArray } from 'drizzle-orm';
@@ -1621,9 +1623,18 @@ export class PipelineManager {
    * The node that was interrupted RE-RUNS. Its previous output is already on
    * its row, and a worker turn cannot be resumed halfway.
    */
-  async resume(
+  private resuming = new Map<string, AbortController>();
+
+  async resume(pipelineId: string, opts: { fromSeq?: number } = {}): Promise<{ pipelineId: string; result: string }> {
+    if (this.resuming.has(pipelineId)) throw new Error(`Pipeline ${pipelineId} is already awaiting resume or running.`);
+    this.resuming.set(pipelineId, new AbortController());
+    try { return await this.resumeReviewed(pipelineId, opts); }
+    finally { this.resuming.delete(pipelineId); }
+  }
+
+  private async resumeReviewed(
     pipelineId: string,
-    opts: { fromSeq?: number } = {},
+    opts: { fromSeq?: number },
   ): Promise<{ pipelineId: string; result: string }> {
     const pipeline = await this.getPipeline(pipelineId);
     if (!pipeline) throw new Error(`Pipeline ${pipelineId} not found.`);
@@ -1650,20 +1661,30 @@ export class PipelineManager {
       throw new Error(`Checkpoint ${checkpoint.seq} does not hold a readable walk state.`);
     }
 
-    // A pause request the walker never reached (it was inside the last node
-    // when the run ended) would otherwise fire on the first boundary of THIS
-    // walk and pause it before it did anything.
-    const meta = (pipeline.metadata ?? {}) as Record<string, unknown>;
-    if (meta.pauseRequested) {
-      const { pauseRequested: _drop, ...rest } = meta;
-      await this.updatePipeline(pipelineId, { metadata: rest });
-    }
+    // The context is rebuilt from the pipeline row rather than passed in: the
+    // caller of a resume is an HTTP request or a boot-time sweep, neither of
+    // which holds the agent context the original run was started with, and
+    // everything downstream needs from it is on the row.
+    const originSession = await sessionRepository.findById(pipeline.sessionId);
+    const context: AgentContext = {
+      attended: channelCanPrompt(originSession?.channelType),
+      id: pipeline.rootAgentId,
+      sessionId: pipeline.sessionId,
+      userId: pipeline.userId,
+      workspaceId: pipeline.workspaceId,
+      topic: 'general',
+      role: ROOT_ROLE,
+      root: true,
+      model: '',
+      status: 'running',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      metadata: { pipelineId, resumed: true },
+    };
 
-    // Rewind: anything recorded after the target describes a walk that is being
-    // replaced. Dropping it keeps "resume from the newest" honest.
-    if (opts.fromSeq != null) {
-      await pipelineRepository.deleteCheckpointsAfter(pipelineId, checkpoint.seq);
-    }
+    const priorNodes = await pipelineRepository.getNodes(pipelineId);
+    await withExecutionSignal(context, this.resuming.get(pipelineId)?.signal,
+      () => actionRecovery.reviewPipeline(context, pipelineId, priorNodes.some(node => node.visits > 0)));
 
     // Rebuild what the run was compiled from. The template is read by type and
     // recompiled rather than stored: a graph is a pure function of the template,
@@ -1701,28 +1722,31 @@ export class PipelineManager {
     const storedParams = ((pipeline.metadata ?? {}) as { params?: Record<string, unknown> }).params ?? {};
     const paramVars = paramTemplateVars(resolveRecipeParams(template.parameters, storedParams));
 
-    // The context is rebuilt from the pipeline row rather than passed in: the
-    // caller of a resume is an HTTP request or a boot-time sweep, neither of
-    // which holds the agent context the original run was started with, and
-    // everything downstream needs from it is on the row.
-    const originSession = await sessionRepository.findById(pipeline.sessionId);
-    const context: AgentContext = {
-      attended: channelCanPrompt(originSession?.channelType),
-      id: pipeline.rootAgentId,
-      sessionId: pipeline.sessionId,
-      userId: pipeline.userId,
-      workspaceId: pipeline.workspaceId,
-      topic: 'general',
-      role: ROOT_ROLE,
-      root: true,
-      model: '',
-      status: 'running',
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      metadata: { pipelineId, resumed: true },
-    };
+    const signal = this.resuming.get(pipelineId)?.signal;
+    signal?.throwIfAborted();
+    // A pause request the walker never reached (it was inside the last node
+    // when the run ended) would otherwise fire on the first boundary of THIS
+    // walk and pause it before it did anything.
+    const meta = (pipeline.metadata ?? {}) as Record<string, unknown>;
+    if (meta.pauseRequested) {
+      const { pauseRequested: _drop, ...rest } = meta;
+      signal?.throwIfAborted();
+      await this.updatePipeline(pipelineId, { metadata: rest });
+    }
 
+    // Rewind: anything recorded after the target describes a walk that is being
+    // replaced. Dropping it keeps "resume from the newest" honest.
+    if (opts.fromSeq != null) {
+      signal?.throwIfAborted();
+      await pipelineRepository.deleteCheckpointsAfter(pipelineId, checkpoint.seq);
+    }
+
+    signal?.throwIfAborted();
     await this.updatePipeline(pipelineId, { status: 'running', currentNodeKey: resumeState.cursor });
+    if (signal?.aborted) {
+      await this.updatePipeline(pipelineId, { status: 'paused', summary: 'Pipeline replay cancelled.' });
+      signal.throwIfAborted();
+    }
     coreLogger.info(
       { pipelineId, fromSeq: checkpoint.seq, nodeKey: resumeState.cursor },
       'Resuming pipeline from checkpoint',
@@ -1744,6 +1768,7 @@ export class PipelineManager {
   }
 
   async stop(pipelineId: string): Promise<boolean> {
+    this.resuming.get(pipelineId)?.abort(new Error('Pipeline replay cancelled'));
     const pipeline = await this.getPipeline(pipelineId);
     if (!pipeline || pipeline.status === 'completed' || pipeline.status === 'failed') {
       return false;

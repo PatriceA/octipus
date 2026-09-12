@@ -356,8 +356,31 @@ export class AgentWorker extends BaseAgentWorker {
       context,
       (type, data) => this.emit(type, data),
       (ms) => this.addPausedMs(ms),
+      this.abortController.signal,
     );
 
+    this.subscribePermissionWait();
+
+    // Swarm Phase 2: chain parent AbortSignal → this worker's controller.
+    // Any ancestor cancellation flows down. The `once` listener is cleaned up
+    // on this.stop() to avoid leaks when the parent signal outlives the child.
+    if (opts?.parentSignal) {
+      const parent = opts.parentSignal;
+      if (parent.aborted) {
+        // Already aborted at construction — fire immediately on next tick so
+        // the caller has a chance to wire onEvent handlers first.
+        this.abortController.abort(parent.reason);
+        queueMicrotask(() => this.stop(String(parent.reason ?? 'Parent stopped')));
+      } else {
+        const onAbort = () => this.stop(String(parent.reason ?? 'Parent stopped'));
+        parent.addEventListener('abort', onAbort, { once: true });
+        this.parentSignalCleanup = () => parent.removeEventListener('abort', onAbort);
+      }
+    }
+  }
+
+  private subscribePermissionWait(): void {
+    if (this.permissionWaitCleanup) return;
     // A permission prompt stops this worker's wall clock. Both approval paths
     // (tool-executor and base-tool) register their wait with the permission
     // manager, so subscribing here covers both without either knowing about
@@ -372,21 +395,6 @@ export class AgentWorker extends BaseAgentWorker {
       );
     } catch { /* permission manager unavailable (tests / early boot) */ }
 
-    // Swarm Phase 2: chain parent AbortSignal → this worker's controller.
-    // Any ancestor cancellation flows down. The `once` listener is cleaned up
-    // on this.stop() to avoid leaks when the parent signal outlives the child.
-    if (opts?.parentSignal) {
-      const parent = opts.parentSignal;
-      if (parent.aborted) {
-        // Already aborted at construction — fire immediately on next tick so
-        // the caller has a chance to wire onEvent handlers first.
-        queueMicrotask(() => this.abortController.abort(parent.reason));
-      } else {
-        const onAbort = () => this.abortController.abort(parent.reason);
-        parent.addEventListener('abort', onAbort, { once: true });
-        this.parentSignalCleanup = () => parent.removeEventListener('abort', onAbort);
-      }
-    }
   }
 
   /** Public access so the spawner can plumb token deltas into the swarm node bookkeeping. */
@@ -517,7 +525,25 @@ export class AgentWorker extends BaseAgentWorker {
     }
   }
 
+  override isSettling(): boolean {
+    return super.isSettling() || this.toolExecutor.isExecuting();
+  }
+
   async run(userMessage?: string): Promise<string> {
+    this.activeRuns++;
+    this.subscribePermissionWait();
+    try {
+      return await this.runInternal(userMessage);
+    } finally {
+      this.activeRuns--;
+      this.permissionWaitCleanup?.();
+      this.permissionWaitCleanup = null;
+      this.parentSignalCleanup?.();
+      this.parentSignalCleanup = null;
+    }
+  }
+
+  private async runInternal(userMessage?: string): Promise<string> {
     if (userMessage) {
       await this.addUserMessage(userMessage);
     }
@@ -623,6 +649,7 @@ export class AgentWorker extends BaseAgentWorker {
               finalResult = withMerge;
             }
           } catch (mergeErr) {
+            if (this.abortController.signal.aborted || mergeErr instanceof CascadedCancellationError) throw mergeErr;
             agentLogger.error(
               { err: mergeErr, agentId: this.context.id },
               'Auto-collect synthesis turn failed; returning pre-merge result',
@@ -640,6 +667,9 @@ export class AgentWorker extends BaseAgentWorker {
         }
       }
 
+      if (this.abortController.signal.aborted) {
+        throw new CascadedCancellationError({ agentId: this.context.id, reason: String(this.abortController.signal.reason) });
+      }
       this.context.status = 'completed';
       this.context.completedAt = new Date();
       this.terminalEmitted = true;
@@ -656,7 +686,7 @@ export class AgentWorker extends BaseAgentWorker {
       await auditRepository.logAgentCompleted(
         this.context.userId, this.context.sessionId, this.context.id,
         { durationMs, iterations: this.iteration, totalTokensUsed: this.totalTokensUsed, model: this.context.model, role: this.context.role },
-      );
+      ).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Agent completed but its audit record could not be saved'));
 
       // Persist final state to DB
       agentRepository.updateStatus(this.context.id, {
