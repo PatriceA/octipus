@@ -47,6 +47,9 @@ try {
     Run-Native npm.cmd @('--prefix', 'mcp-server', 'run', 'build')
     & npm.cmd run audit:all
     if ($LASTEXITCODE -ne 0) { Write-Warning 'Dependency audit needs attention. Review the reports above; rerun npm run audit:all from the checkout.' }
+    # Advisory only: a lingering non-zero LASTEXITCODE would fail the caller
+    # (GitHub's pwsh step exits with it) after a successful install.
+    $global:LASTEXITCODE = 0
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
     # A .cmd shim requires neither administrator privileges nor symlink support.
     # OEM encoding: cmd.exe reads the console code page, so a user profile path
