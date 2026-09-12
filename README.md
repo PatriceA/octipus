@@ -6,7 +6,7 @@
 
 A self-hosted AI workspace for projects, knowledge, and connected tools.
 
-> **v0.2 · alpha · building in public.** A working, opinionated platform — not a finished product. Breaking changes happen; migration notes ship with them. Treat it as a foundation to build on.
+> **v0.4 · alpha · building in public.** A working, opinionated platform — not a finished product. Breaking changes happen; migration notes ship with them. Treat it as a foundation to build on.
 
 **Website:** [https://octipus.cc](https://octipus.cc)
 
@@ -92,7 +92,15 @@ Channels → Gateway (WebSocket, typed Zod protocol)
 
 Deep dive: [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md) · [.octipus/swarm-design.md](.octipus/swarm-design.md).
 
-## Key points covered in v0.2
+## Key points covered in v0.4
+
+- **Install and setup** — `--quick` route (embedded storage, five prompts, ends with the web UI open), locked `npm ci` installs with every surface built before the first start, a Docker one-command installer, Node 24.19 floor, and a Windows installer with its own CI job. The wizard binds the chosen model to every text topic, verifies provider settings actually saved, and logs in on rerun instead of re-registering.
+- **Honest diagnostics** — `octi doctor` reads the checkout's `.env`, asks the running backend for provider status, and no longer reports a wrong API key as "not configured".
+- **Streaming and sessions** — root-agent replies stream token by token to the TUI and web; `/sessions`, `/resume`, `--session` and `/history` continue earlier conversations; the status bar carries the work plan, elapsed time and model.
+- **Terminal UI** — one shared event presenter for the chat shell and the editor, a decision queue that never drops an unanswered permission or approval prompt, row scrolling that holds your reading position while replies stream, editor drafts that survive a crash, and an unsaved-changes prompt. The e2e suite runs the shipped entry in a real PTY.
+- **One agent loop per turn** — the orchestrator hop is gone; the agent you talk to holds real tools, with the swarm limits below unchanged.
+
+## Earlier: key points covered in v0.2
 
 - **3-level Swarm** with `spawn_child` meta-tool — `await` and `detach` modes, `parallelGroup` fan-out, `collect_children` for explicit gather. Per-node token, wall-clock, and fan-out limits; cancellation propagation; fingerprint cycle protection; and escalation on a detected budget breach. Limits constrain Octipus execution but cannot guarantee exact provider billing or immediate cancellation of external work.
 - **Error classification** — single canonical taxonomy (`FailoverReason`, `RecoveryAction`, `ClassifiedError`). All model providers migrated off ad-hoc string matching.
