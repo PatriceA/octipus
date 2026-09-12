@@ -1,3 +1,6 @@
+// ponytail: not on pi-tui's public entry (no exports map, so the dist path
+// resolves); if an upgrade breaks it, copy the ~40-line ANSI-aware slicer.
+import { sliceByColumn } from '@mariozechner/pi-tui/dist/utils.js';
 /**
  * pi-tui Component wrapping `editor/buffer.ts`.
  *
@@ -11,7 +14,7 @@
  * CURSOR_MARKER mechanism so IME candidate windows land in the right
  * spot for CJK input methods.
  */
-import { type Component, CURSOR_MARKER, type Focusable, matchesKey, truncateToWidth } from '@mariozechner/pi-tui';
+import { type Component, CURSOR_MARKER, type Focusable, matchesKey, truncateToWidth, visibleWidth } from '@mariozechner/pi-tui';
 import { highlight, type TokenKind } from '../editor/highlight';
 import { hintLineIndex } from '../editor/highlight-tree-sitter';
 import type { BufferRecord, BufferStore } from '../stores/buffer-store';
@@ -38,6 +41,8 @@ export class TextEditor implements Component, Focusable {
   focused = false;
   private height: number;
   private scrollTop = 0;
+  private scrollLeft = 0;
+  private paste: string | null = null;
   private vim: VimState = newVimState();
 
   constructor(private readonly buffers: BufferStore, private readonly options: TextEditorOptions = {}) {
@@ -56,8 +61,26 @@ export class TextEditor implements Component, Focusable {
   handleInput(data: string): void {
     const active = this.buffers.active();
     if (!active) return;
-    if (active.agentLocked) return; // diff overlay owns the buffer
 
+    // Paste accumulation runs even while the agent holds the buffer: a lock
+    // taken mid-paste must still consume the terminator, or every later
+    // keystroke would be swallowed as "paste continuation" forever.
+    if (data.includes('\x1b[200~') || this.paste !== null) {
+      this.paste = (this.paste ?? '') + data.replace('\x1b[200~', '');
+      const end = this.paste.indexOf('\x1b[201~');
+      if (end >= 0) {
+        if (!active.agentLocked) {
+          active.buffer.insert(this.paste.slice(0, end).replace(/\r\n?/g, '\n'));
+          this.buffers.markDirty(active.id, true);
+        }
+        const rest = this.paste.slice(end + '\x1b[201~'.length);
+        this.paste = null;
+        // Keystrokes that arrived in the same chunk as the paste terminator.
+        if (rest) this.handleInput(rest);
+      }
+      return;
+    }
+    if (active.agentLocked) return; // diff overlay owns the buffer
     if (this.isVimActive()) {
       const before = active.buffer.text();
       const result = vimStep(active.buffer, toVimKey(data), this.vim);
@@ -107,17 +130,24 @@ export class TextEditor implements Component, Focusable {
   render(width: number): string[] {
     const active = this.buffers.active();
     const palette = getPalette();
+    if (width <= 0) return [];
     if (!active) {
-      return [chalk.hex(palette.dim)('No buffer open. Press Ctrl+O to open a file.')];
+      return [truncateToWidth(chalk.hex(palette.dim)('No buffer open. Press Ctrl+O to open a file.'), width, ''), ...Array(Math.max(0, this.height - 1)).fill('')];
     }
     this.scrollIntoView(active);
 
     const buf = active.buffer;
     const totalLines = buf.lineCount();
     const cursor = buf.getCursor();
-    const gutterW = String(totalLines).length + 1; // line numbers + space
+    const gutterW = Math.min(Math.max(0, width - 1), String(totalLines).length + 1); // line numbers + space
     const innerW = Math.max(1, width - gutterW);
 
+    const cursorLine = buf.getLine(cursor.line);
+    const cursorCell = visibleWidth(cursorLine.slice(0, cursor.col).replace(/\t/g, ' '.repeat(TAB_WIDTH)));
+    const atCursor = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(cursorLine.slice(cursor.col))][0]?.segment ?? ' ';
+    const cursorWidth = Math.min(innerW, Math.max(1, visibleWidth(atCursor)));
+    if (cursorCell < this.scrollLeft) this.scrollLeft = cursorCell;
+    if (cursorCell + cursorWidth > this.scrollLeft + innerW) this.scrollLeft = cursorCell + cursorWidth - innerW;
     const lines: string[] = [];
     const end = Math.min(totalLines, this.scrollTop + this.height);
     for (let i = this.scrollTop; i < end; i++) {
@@ -133,15 +163,16 @@ export class TextEditor implements Component, Focusable {
       // boundary, corrupting the tree and chat panels.
       hintLineIndex(i);
       const styled = renderLineTokens(lineText, active.language, palette);
-      const truncated = truncateToWidth(styled, innerW, '');
-      let body: string;
+      let body = sliceByColumn(styled, this.scrollLeft, innerW, true);
       if (this.focused && isCursorLine) {
-        body = composeLineWithCursor(lineText, cursor.col, palette);
-        body = truncateToWidth(body, innerW, '');
-      } else {
-        body = truncated;
+        const cursorX = cursorCell - this.scrollLeft;
+        const before = sliceByColumn(styled, this.scrollLeft, cursorX, true);
+        const pad = ' '.repeat(Math.max(0, cursorX - visibleWidth(before)));
+        const glyph = sliceByColumn(lineText + ' ', cursorCell, cursorWidth, true) || ' ';
+        const after = sliceByColumn(styled, cursorCell + cursorWidth, Math.max(0, innerW - cursorX - cursorWidth), true);
+        body = before + pad + CURSOR_MARKER + chalk.bgHex(palette.cursor).hex(palette.cursorFg)(glyph) + after;
       }
-      lines.push(gutter + body);
+      lines.push(truncateToWidth(gutter + body, width, ''));
     }
 
     // Pad to fixed viewport height so the renderer doesn't shrink.
@@ -163,7 +194,7 @@ export class TextEditor implements Component, Focusable {
 }
 
 function formatGutter(lineNumber: number, width: number, palette: ReturnType<typeof getPalette>, current: boolean): string {
-  const text = String(lineNumber).padStart(width - 1, ' ') + ' ';
+  const text = width > 0 ? (String(lineNumber).padStart(width - 1, ' ') + ' ').slice(-width) : '';
   return current ? chalk.hex(palette.accentDim).bold(text) : chalk.hex(palette.dim)(text);
 }
 
@@ -216,14 +247,4 @@ function toVimKey(data: string): VimKey {
   if (data === '\x1b[C') return { char: 'l' };
   if (data === '\x1b[D') return { char: 'h' };
   return { char: '' };
-}
-
-function composeLineWithCursor(line: string, col: number, palette: ReturnType<typeof getPalette>): string {
-  const safeCol = Math.min(Math.max(col, 0), line.length);
-  const before = line.slice(0, safeCol);
-  const at = line.charAt(safeCol) || ' ';
-  const after = line.slice(safeCol + 1);
-  const cursorBg = chalk.bgHex(palette.cursor);
-  const fg = chalk.hex(palette.cursorFg);
-  return before + CURSOR_MARKER + cursorBg(fg(at)) + after;
 }

@@ -552,7 +552,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `visual` | 2 |
 | `tools` | `voice` | 3 |
 | `tui-editor` | `mcp` | 2 |
-| `tui-editor` | `tui-pi` | 23 |
+| `tui-editor` | `tui-pi` | 28 |
 | `tui-editor` | `utils` | 1 |
 | `tui-pi` | `config` | 1 |
 | `tui-pi` | `core` | 3 |

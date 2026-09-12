@@ -42,6 +42,15 @@ interface Entry {
 export class SubagentPanel implements Component {
   private readonly agents = new Map<string, Entry>();
   private expanded = false;
+  private maxRows = 100;
+  private scrollOffset = 0;
+  setMaxRows(rows: number): void { this.maxRows = Math.max(0, rows); }
+  scroll(by: number): boolean {
+    if (!this.expanded) return false;
+    const next = Math.max(0, Math.min(Math.max(0, this.agents.size - Math.max(1, this.maxRows - 1)), this.scrollOffset + by));
+    if (next === this.scrollOffset) return false;
+    this.scrollOffset = next; return true;
+  }
   /** Injected for tests; the real clock otherwise. */
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -104,12 +113,12 @@ export class SubagentPanel implements Component {
 
   /** Forget everything (a `/clear`, or a new turn after all children finished). */
   reset(): void {
-    this.agents.clear();
+    this.agents.clear(); this.scrollOffset = 0;
   }
 
   render(width: number): string[] {
     this.prune();
-    if (this.agents.size === 0) return [];
+    if (this.agents.size === 0 || this.maxRows === 0) return [];
     const palette = getPalette();
     const dim = (text: string) => chalk.hex(palette.dim)(text);
     const entries = [...this.agents.values()];
@@ -131,10 +140,12 @@ export class SubagentPanel implements Component {
     }
 
     const lines = [truncateToWidth(
-      `${chalk.hex(palette.accent)('▾')} ${chalk.hex(palette.statusFg)(`subagents (${entries.length})`)} ${dim('· alt+s to collapse')}`,
+      `${chalk.hex(palette.accent)('▾')} ${chalk.hex(palette.statusFg)(`subagents (${entries.length})`)} ${dim('· alt+s · alt+↑/↓ scroll')}`,
       width,
     )];
-    for (const entry of entries) {
+    const count = Math.max(0, this.maxRows - 1);
+    this.scrollOffset = Math.min(this.scrollOffset, Math.max(0, entries.length - count));
+    for (const entry of entries.slice(this.scrollOffset, this.scrollOffset + count)) {
       lines.push(truncateToWidth(`  ${this.row(entry)}`, width));
     }
     return lines;

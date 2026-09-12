@@ -1,95 +1,40 @@
-/**
- * e2e: pi-tui editor surface (`bun run src/tui-editor/index.ts`).
- *
- * Covers the full keybinding-and-pane workflow that broke in early
- * Phase 5 builds:
- *   - launch + status line
- *   - file tree shows the project directory as the root entry
- *   - Ctrl+\\ cycles focus through editor → chat → tree
- *   - Ctrl+O opens the file picker; typing filters by basename;
- *     Enter opens the highlighted file (does NOT trigger the MCP
- *     overlay via the old Ctrl+M alias collision)
- *   - chat composer accepts input and submits
- *   - /quit terminates cleanly
- *
- * Like the chat suite, this only runs when the gateway is up.
- */
-import { afterEach, describe, expect, it } from 'bun:test';
-import { backendUp, KEY, TuiHarness } from './harness';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { afterEach, describe, expect, test } from 'vitest';
+import { TuiHarness, KEY } from './harness';
+let tui: TuiHarness | undefined;
+afterEach(async () => { await tui?.stop(); tui = undefined; });
 
-const backend = await backendUp();
-const itIfBackend = (...args: Parameters<typeof it>) => (backend ? it(...args) : it.skip(...args));
+describe.skipIf(process.platform === 'win32')('editor in a real POSIX terminal', () => {
+  test('opens, edits, protects unsaved close, saves, and renders the focused pane after resize', async () => {
+    tui = await TuiHarness.start('src/tui-editor/index.ts', 120, 28);
+    await tui.waitFor('focus:editor');
+    tui.send(KEY.CtrlO); await tui.waitFor('Open file');
+    tui.send('example.ts'); tui.send(KEY.Enter); await tui.waitFor('const greeting');
+    await tui.saveScreen('editor');
+    tui.send('X'); await tui.waitFor('Xconst');
+    tui.send(KEY.CtrlW); await tui.waitFor('Unsaved changes');
+    tui.send(KEY.Esc); await tui.waitFor('Unsaved changes', true); await tui.waitFor('Xconst');
+    tui.send('\x13'); await tui.waitFor('Saved');
+    expect(readFileSync(join(tui.project, 'example.ts'), 'utf8')).toMatch(/^Xconst/);
+    tui.resize(50, 16); await tui.waitFor('switch pane');
+    tui.send(KEY.CtrlBackslash); await tui.waitFor('focus:chat');
+    expect(await tui.text()).toContain('Chat');
+    tui.send('hello from editor\r'); await tui.waitFor('A streaming reply');
+    await tui.saveScreen('editor-narrow');
+    tui.event('agent.approval_required', { requestId: 'edit-q', question: 'Keep this change?', options: ['Keep', 'Revise'] });
+    await tui.waitFor('Keep this change?'); tui.send('2'); await tui.waitFor('Keep this change?', true);
+    expect(tui.commands).toContainEqual(expect.objectContaining({ type: 'approval.respond', requestId: 'edit-q', response: 'Revise' }));
+  });
 
-describe('tui-editor', () => {
-  let harness: TuiHarness | null = null;
-
-  afterEach(async () => { await harness?.stop(); harness = null; });
-
-  itIfBackend('renders status bar and tree root on launch', async () => {
-    harness = new TuiHarness({ entry: 'src/tui-editor/index.ts' });
-    await harness.waitFor('Octipus');
-    await harness.waitFor('octipus');                  // tree root + status share the basename
-    expect(harness.stripped()).toContain('focus:editor');
-  }, 10_000);
-
-  itIfBackend('cycles focus across panes on Ctrl+\\\\', async () => {
-    harness = new TuiHarness({ entry: 'src/tui-editor/index.ts' });
-    await harness.waitFor('focus:editor');
-    harness.send(KEY.CtrlBackslash);
-    await harness.waitFor('focus:chat');
-    harness.send(KEY.CtrlBackslash);
-    await harness.waitFor('focus:tree');
-    harness.send(KEY.CtrlBackslash);
-    await harness.waitFor('focus:editor');
-  }, 10_000);
-
-  itIfBackend('chat composer accepts input after focus switch', async () => {
-    harness = new TuiHarness({ entry: 'src/tui-editor/index.ts' });
-    await harness.waitFor('focus:editor');
-    harness.send(KEY.CtrlBackslash);                   // focus chat
-    await harness.waitFor('focus:chat');
-    harness.send('hello editor');
-    harness.send(KEY.Enter);
-    await harness.waitFor('❯ hello editor');
-    // Enter must NOT trigger the MCP overlay (regression: Ctrl+M ≡ \r).
-    expect(harness.stripped()).not.toContain('No MCP servers');
-  }, 10_000);
-
-  itIfBackend('Ctrl+O opens file picker, filter narrows results, Enter opens file', async () => {
-    harness = new TuiHarness({ entry: 'src/tui-editor/index.ts' });
-    await harness.waitFor('focus:editor');
-    harness.send(KEY.CtrlO);
-    await harness.waitFor('Open file');
-    harness.send('readme');
-    await harness.wait(300);
-    expect(harness.stripped()).toContain('filter: readme');
-    expect(harness.stripped()).toContain('README.md');
-    harness.send(KEY.Enter);
-    // Wait for an actual line of README content to land in the editor pane —
-    // matching only on the filename would race with the picker overlay text.
-    await harness.waitFor('# Octipus');
-    expect(harness.tail(40)).not.toContain('No buffer open');
-  }, 10_000);
-
-  itIfBackend('Ctrl+P opens the command palette', async () => {
-    harness = new TuiHarness({ entry: 'src/tui-editor/index.ts' });
-    await harness.waitFor('focus:editor');
-    harness.send(KEY.CtrlP);
-    await harness.waitFor('Command palette');
-    expect(harness.stripped()).toContain('/help');
-  }, 10_000);
-
-  itIfBackend('/quit exits cleanly with status 0', async () => {
-    harness = new TuiHarness({ entry: 'src/tui-editor/index.ts' });
-    await harness.waitFor('focus:editor');
-    harness.send(KEY.CtrlBackslash);
-    await harness.waitFor('focus:chat');
-    harness.send('/quit');
-    harness.send(KEY.Enter);
-    const exitCode = await new Promise<number | null>((resolve) => {
-      harness!.proc.on('exit', (code) => resolve(code));
-      setTimeout(() => resolve(null), 4000);
-    });
-    expect(exitCode).toBe(0);
-  }, 10_000);
+  test('dirty quit defaults to cancel and only exits after explicit discard', async () => {
+    tui = await TuiHarness.start('src/tui-editor/index.ts'); await tui.waitFor('focus:editor');
+    tui.send(KEY.CtrlO); await tui.waitFor('Open file'); tui.send('example.ts\r'); await tui.waitFor('const greeting');
+    tui.send('UNSAVED'); tui.send(KEY.CtrlQ); await tui.waitFor('Unsaved changes');
+    tui.send(KEY.Enter); await tui.waitFor('Unsaved changes', true);
+    expect(tui.proc.exitCode).toBeNull();
+    tui.send(KEY.CtrlQ); await tui.waitFor('Unsaved changes'); tui.send('d');
+    expect(await tui.exited).toBe(0);
+    expect(readFileSync(join(tui.project, 'example.ts'), 'utf8')).not.toContain('UNSAVED');
+  });
 });

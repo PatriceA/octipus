@@ -1,124 +1,123 @@
-/**
- * Minimal e2e harness for the pi-tui chat shell + editor surface.
- *
- * Spawns the entry script under a fixed COLUMNS/LINES window, lets the
- * test push key bytes into stdin, and exposes the captured terminal
- * stream — both raw (with ANSI) and stripped (for visual snapshots).
- *
- * The test never relies on stdin being a real TTY: pi-tui's terminal
- * falls back to env vars when the size isn't reported, which keeps
- * the harness reproducible across machines.
- */
+/** Runs the shipped Node entry in a real PTY and parses the CURRENT terminal screen. */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-
-export interface HarnessOptions {
-  /** Path to the entry script, relative to the project root. */
-  entry: string;
-  /** Width in columns (default 120). */
-  cols?: number;
-  /** Height in rows (default 30). */
-  rows?: number;
-  /** Extra CLI args (forwarded after the entry). */
-  args?: string[];
-  /** Override the working directory (default: project root). */
-  cwd?: string;
-}
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { createInterface } from 'node:readline';
+import { WebSocketServer, type WebSocket } from 'ws';
+import xterm from '@xterm/headless';
+const { Terminal } = xterm;
 
 export class TuiHarness {
+  readonly home = mkdtempSync(join(tmpdir(), 'tui-screen-'));
+  readonly project = join(this.home, 'project');
+  readonly screen: InstanceType<typeof Terminal>;
+  readonly commands: any[] = [];
+  readonly server: WebSocketServer;
   readonly proc: ChildProcessWithoutNullStreams;
-  private buffer = '';
+  readonly exited: Promise<number | null>;
+  private sockets = new Set<WebSocket>();
+  private writes: Promise<void> = Promise.resolve();
+  private error = '';
+  private stopped = false;
 
-  constructor(options: HarnessOptions) {
-    this.proc = spawn('bun', ['run', options.entry, ...(options.args ?? [])], {
-      cwd: options.cwd ?? process.cwd(),
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        COLUMNS: String(options.cols ?? 120),
-        LINES: String(options.rows ?? 30),
-      },
+  private constructor(entry: string, server: WebSocketServer, cols: number, rows: number) {
+    this.server = server;
+    mkdirSync(this.project);
+    writeFileSync(join(this.project, 'example.ts'), 'const greeting = "hello";\n' + 'x'.repeat(120) + '\n');
+    this.screen = new Terminal({ cols, rows, allowProposedApi: true, scrollback: 100 });
+    const port = (server.address() as { port: number }).port;
+    server.on('connection', socket => {
+      this.sockets.add(socket);
+      socket.on('message', raw => {
+        const msg = JSON.parse(String(raw)); this.commands.push(msg);
+        if (msg.type === 'auth') socket.send(JSON.stringify({ type: 'auth_ok' }));
+        if (msg.type === 'command') {
+          const result = msg.name === 'work-plan-status' ? '1/3 steps done · Check rendering'
+            : msg.name === 'work-plan' ? 'Plan: Improve the terminal\n[done] Inspect\n[active] Check rendering\n[pending] Verify'
+            : msg.name === 'plan-feedback' ? 'Feedback saved as pending.' : 'Available: /help /work-plan /plan-feedback';
+          socket.send(JSON.stringify({ type: 'command.result', name: msg.name, result }));
+        }
+        if (msg.type === 'chat.send') {
+          this.event('chat.delta', { delta: 'A streaming reply', iteration: 1 }, msg.sessionId);
+        }
+      });
+      socket.on('close', () => this.sockets.delete(socket));
     });
-    this.proc.stdout.on('data', (data) => { this.buffer += data.toString(); });
-    // Surface stderr through the test stream so failures aren't silent.
-    this.proc.stderr.on('data', (data) => { process.stderr.write(`[harness] ${data}`); });
+    this.proc = spawn('python3', [resolve('tests/tui/pty.py'), String(cols), String(rows), process.execPath,
+      '--import', 'tsx', '--import', './scripts/md-loader.mjs', entry, '--project', this.project], {
+      cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, HOME: this.home, API_PORT: String(port), TERM: 'xterm-256color', COLORTERM: 'truecolor', NO_COLOR: undefined },
+    });
+    createInterface({ input: this.proc.stdout }).on('line', line => {
+      const message = JSON.parse(line);
+      if (message.data) {
+        const data = Buffer.from(message.data, 'base64');
+        this.writes = this.writes.then(() => new Promise<void>(resolve => this.screen.write(data, resolve)));
+      }
+    });
+    this.proc.stderr.on('data', data => { this.error += data; });
+    this.exited = new Promise(resolve => this.proc.once('exit', resolve));
   }
-
-  /** Push raw bytes to stdin (use \x0f for Ctrl+O, \r for Enter, \x1c for Ctrl+\\). */
-  send(bytes: string): void {
-    this.proc.stdin.write(bytes);
+  static async start(entry: string, cols = 100, rows = 28): Promise<TuiHarness> {
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    await new Promise<void>((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
+    return new TuiHarness(entry, server, cols, rows);
   }
-
-  /** Wait for `ms` milliseconds — used to let the render queue settle. */
-  wait(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+  send(input: string): void { this.proc.stdin.write(JSON.stringify({ input }) + '\n'); }
+  resize(cols: number, rows: number): void {
+    this.screen.resize(cols, rows); this.proc.stdin.write(JSON.stringify({ resize: [cols, rows] }) + '\n');
   }
-
-  /** Resolves once the captured stream contains `needle` (after stripping ANSI). */
-  async waitFor(needle: string, timeoutMs = 5000): Promise<void> {
+  event(type: string, payload: unknown, sessionId?: string): void {
+    for (const socket of this.sockets) socket.send(JSON.stringify({ type: 'event', event: { type, payload, sessionId } }));
+  }
+  async text(): Promise<string> {
+    await this.writes;
+    const b = this.screen.buffer.active;
+    return Array.from({ length: this.screen.rows }, (_, row) => b.getLine(b.viewportY + row)?.translateToString(true) ?? '').join('\n');
+  }
+  async waitFor(needle: string, absent = false): Promise<void> {
     const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      if (this.stripped().includes(needle)) return;
-      await this.wait(50);
+    while (Date.now() - start < 8000) {
+      const text = await this.text();
+      if (text.includes(needle) !== absent) return;
+      if (this.proc.exitCode !== null) break;
+      await new Promise(resolve => setTimeout(resolve, 30));
     }
-    throw new Error(`Timed out waiting for "${needle}". Captured tail:\n${this.tail(40)}`);
+    throw new Error(`Screen did not ${absent ? 'remove' : 'show'} ${JSON.stringify(needle)}:\n${await this.text()}\n${this.error}`);
   }
-
-  /** Full ANSI-stripped output from launch to now. */
-  stripped(): string {
-    return this.buffer
-      .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
-      .replace(/\x1b\][^\x07]*\x07/g, '')
-      .replace(/\x1b_[^\x07]*\x07/g, '');
-  }
-
-  /** Last `n` lines of the stripped stream (for snapshot diffs / debugging). */
-  tail(n = 30): string {
-    return this.stripped().split('\n').slice(-n).join('\n');
-  }
-
-  /** Visual snapshot: stripped, with trailing whitespace and blank lines collapsed. */
-  snapshot(): string {
-    return this.stripped()
-      .split('\n')
-      .map((line) => line.replace(/\s+$/, ''))
-      .filter((line) => line.length > 0)
-      .join('\n');
+  async saveScreen(name: string): Promise<void> {
+    const dir = process.env.TUI_SCREENSHOTS_DIR;
+    if (!dir) return;
+    await this.writes; mkdirSync(dir, { recursive: true });
+    const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const rgb = (n: number) => '#' + n.toString(16).padStart(6, '0');
+    const b = this.screen.buffer.active;
+    const rows = Array.from({ length: this.screen.rows }, (_, row) => {
+      const line = b.getLine(b.viewportY + row);
+      let html = '';
+      for (let col = 0; col < this.screen.cols; col++) {
+        const cell = line?.getCell(col);
+        if (!cell || cell.getWidth() === 0) continue;
+        const fg = cell.isFgRGB() ? rgb(cell.getFgColor()) : '#edf5f3';
+        const bg = cell.isBgRGB() ? rgb(cell.getBgColor()) : 'transparent';
+        html += `<span style="color:${fg};background:${bg};font-weight:${cell.isBold() ? 'bold' : 'normal'}">${escape(cell.getChars() || ' ')}</span>`;
+      }
+      return html;
+    });
+    writeFileSync(join(dir, `${name}.html`), `<!doctype html><meta charset="utf-8"><title>${escape(name)}</title><style>body{margin:24px;background:#071923;color:#edf5f3}pre{font:14px/20px "DejaVu Sans Mono",monospace;padding:20px;border:1px solid #34515b;border-radius:8px;width:max-content}</style><pre>${rows.join('\n')}</pre>`);
+    writeFileSync(join(dir, `${name}.txt`), await this.text());
   }
 
   async stop(): Promise<void> {
-    if (this.proc.exitCode !== null) return;
-    this.proc.kill('SIGTERM');
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => { this.proc.kill('SIGKILL'); resolve(); }, 1500);
-      this.proc.on('exit', () => { clearTimeout(timer); resolve(); });
-    });
+    if (this.stopped) return; this.stopped = true;
+    if (this.proc.exitCode === null) this.proc.stdin.write('{"stop":true}\n');
+    const kill = setTimeout(() => { if (this.proc.exitCode === null) this.proc.stdin.write('{"kill":true}\n'); }, 2000);
+    const relayKill = setTimeout(() => this.proc.kill('SIGKILL'), 4000);
+    try { await this.exited; } finally { clearTimeout(kill); clearTimeout(relayKill); }
+    for (const socket of this.sockets) socket.terminate();
+    await new Promise<void>(resolve => this.server.close(() => resolve()));
+    this.screen.dispose(); rmSync(this.home, { recursive: true, force: true });
   }
 }
-
-/**
- * Probe the gateway. Returns true when the API is up — tests that need
- * a live backend skip gracefully when it isn't.
- */
-export async function backendUp(port = Number(process.env.API_PORT ?? 3005)): Promise<boolean> {
-  try {
-    const res = await fetch(`http://localhost:${port}/api/health`, {
-      signal: AbortSignal.timeout(2000),
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
-/** Common key sequences (bytes, not pi-tui ids). */
-export const KEY = {
-  Enter: '\r',
-  Esc: '\x1b',
-  Tab: '\t',
-  Backspace: '\x7f',
-  CtrlO: '\x0f',
-  CtrlP: '\x10',
-  CtrlQ: '\x11',
-  CtrlBackslash: '\x1c',
-  F6: '\x1b[17~',
-} as const;
+export const KEY = { Enter: '\r', Esc: '\x1b', CtrlO: '\x0f', CtrlP: '\x10', CtrlQ: '\x11', CtrlW: '\x17', CtrlBackslash: '\x1c', PageUp: '\x1b[5~', End: '\x1b[F' };

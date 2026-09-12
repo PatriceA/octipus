@@ -1,3 +1,5 @@
+import { renderChatFrame } from './components/chat-frame';
+import { DecisionQueue } from '@/tui-pi/decision-queue';
 /**
  * OctipusTuiApp.
  *
@@ -10,6 +12,7 @@
  * State that belongs to multiple components (cumulative tokens,
  * session list, pending overlays) lives in plain fields here.
  */
+import { ChatSessionPresenter } from './chat-session-presenter';
 import { randomUUID } from 'node:crypto';
 import { Container, getKeybindings, matchesKey, type OverlayHandle, Spacer, type TUI } from '@mariozechner/pi-tui';
 import { loginWithPassword } from '@/core/gateway/cli-login';
@@ -19,7 +22,7 @@ import { ActivityLine } from './components/activity-line';
 import { Composer } from './components/composer';
 import { SubagentPanel } from './components/subagent-panel';
 import { MessagesPane } from './components/messages-pane';
-import { type CumulativeStats, StatusBar } from './components/status-bar';
+import { StatusBar } from './components/status-bar';
 import { GatewayAdapter, type AgentSessionEvent } from './gateway-adapter';
 import { createOverlayController, type OverlayController } from './overlays/registry';
 import { OCTIPUS_APP_KEYBINDINGS } from './keybindings';
@@ -61,10 +64,11 @@ const isHistoryRow = (v: unknown): v is HistoryRow => {
   return !!r && (r.role === 'user' || r.role === 'assistant') && typeof r.content === 'string';
 };
 /** Keybindings the chat shell actually handles (the rest of `app.*` belongs to the editor). */
-const CHAT_HOTKEYS = ['app.palette.open', 'app.help.open', 'app.subagents.toggle', 'app.voice.talk', 'app.quit'] as const;
+const CHAT_HOTKEYS = ['app.palette.open', 'app.help.open', 'app.subagents.toggle', 'app.subagents.scrollUp', 'app.subagents.scrollDown', 'app.voice.talk', 'app.quit'] as const;
 
 export class OctipusTuiApp {
   readonly tui: TUI;
+  private readonly session: ChatSessionPresenter;
   readonly adapter: GatewayAdapter;
   private readonly status = new StatusBar();
   private readonly messages = new MessagesPane();
@@ -84,22 +88,10 @@ export class OctipusTuiApp {
   /** Gateway WS URL — also used to derive the HTTP base for status lookups. */
   private readonly gatewayUrl?: string;
   private projectPath?: string;
-  private cumulative: CumulativeStats = { tokens: 0, cost: 0, turns: 0 };
-  private approvalHandle: OverlayHandle | null = null;
-  private permissionHandle: OverlayHandle | null = null;
+  private readonly decisions: DecisionQueue;
   private paletteHandle: OverlayHandle | null = null;
   private loginHandle: OverlayHandle | null = null;
-  /** Most-recent role/model seen on agent.start — used to label `iter N` ticks. */
-  private activeAgentRole: string | null = null;
-  private activeAgentModel: string | undefined;
-  /** Reply text streamed so far in the current iteration (see `delta`). */
-  private streamText = '';
-  private streamIteration = -1;
-  /** Last pending tool line streamed to messages pane (for completion dedupe). */
-  private lastStreamedTool: string | null = null;
   private exiting = false;
-  private lastPlanSummary: string | null = null;
-  private planPoll: ReturnType<typeof setInterval> | null = null;
   private readonly onShutdown?: () => Promise<void>;
   /** Lazily-built local voice (push-to-talk). Null until first talk-key press. */
   private voice: VoiceService | null = null;
@@ -127,6 +119,8 @@ export class OctipusTuiApp {
     this.composer = new Composer(tui, { basePath: options.projectPath ?? process.cwd() });
     this.activity = new ActivityLine(tui);
     this.overlays = createOverlayController(tui);
+    this.decisions = new DecisionQueue(this.overlays, this.adapter, text => this.pushMessage('system', text), () => { if (!tui.hasOverlay?.()) tui.setFocus(this.composer); });
+    this.session = new ChatSessionPresenter(tui, this.adapter, this.messages, this.status, this.activity, this.subagents, (role, text) => this.pushMessage(role, text));
 
     this.status.setProject(this.projectPath?.split(/[/\\]/).pop());
 
@@ -134,7 +128,12 @@ export class OctipusTuiApp {
     // The bar carries counters that have to stay readable — at the top it
     // scrolled off with the first screenful of output, which is exactly when
     // the numbers start being interesting.
-    const root = new Container();
+    const parts = { messages: this.messages, composer: this.composer, status: this.status, activity: this.activity, subagents: this.subagents };
+    const root = new class extends Container {
+      override render(width: number): string[] {
+        return renderChatFrame(width, tui.terminal?.rows ?? 30, parts);
+      }
+    }();
     root.addChild(this.messages);
     root.addChild(new Spacer(1));
     root.addChild(this.activity);
@@ -150,15 +149,19 @@ export class OctipusTuiApp {
     // installed by `createRuntime`. Users override via ~/.octipus/keybindings.json.
     tui.addInputListener((data) => {
       const kb = getKeybindings();
+      if (this.tui.hasOverlay?.()) return undefined;
       if (kb.matches(data, 'app.palette.open')) { this.openCommandPalette(); return { consume: true }; }
       if (kb.matches(data, 'app.help.open')) { this.pushMessage('system', this.hotkeysText()); return { consume: true }; }
       if (kb.matches(data, 'app.quit')) { this.quit(); return { consume: true }; }
       if (kb.matches(data, 'app.voice.talk')) { void this.toggleTalk(); return { consume: true }; }
+      if (kb.matches(data, 'app.subagents.scrollUp')) { if (this.subagents.scroll(-1)) { this.tui.requestRender(); return { consume: true }; } }
+      if (kb.matches(data, 'app.subagents.scrollDown')) { if (this.subagents.scroll(1)) { this.tui.requestRender(); return { consume: true }; } }
       if (kb.matches(data, 'app.subagents.toggle')) {
         this.subagents.toggle();
         this.tui.requestRender();
         return { consume: true };
       }
+      if (matchesKey(data, 'end') && this.messages.getScrollOffset() > 0) { this.messages.scrollToBottom(); this.tui.requestRender(); return { consume: true }; }
       if (matchesKey(data, 'pageUp')) {
         if (this.messages.scrollUp()) this.tui.requestRender();
         return { consume: true };
@@ -185,12 +188,6 @@ export class OctipusTuiApp {
   }
 
   /** The reply (or the turn) is complete: the streamed text is superseded. */
-  private clearStream(): void {
-    this.streamText = '';
-    this.streamIteration = -1;
-    this.messages.setLive(null);
-  }
-
   private hotkeysText(): string {
     const kb = getKeybindings();
     const rows: Array<[string, string]> = CHAT_HOTKEYS.map((id) => [kb.getKeys(id).map(String).join(' / '), OCTIPUS_APP_KEYBINDINGS[id].description]);
@@ -229,7 +226,8 @@ export class OctipusTuiApp {
     if (this.exiting) return;
     this.exiting = true;
     this.activity.dispose();
-    if (this.planPoll) clearInterval(this.planPoll);
+    this.decisions.dispose();
+    this.session.dispose();
     if (this.voice) { void this.voice.dispose().catch(() => { /* best-effort */ }); }
     try { this.adapter.disconnect(); } catch { /* already disconnected */ }
     // Hand off to the runtime so the alt-screen is properly torn down and
@@ -255,7 +253,7 @@ export class OctipusTuiApp {
     // already there. Mid-scroll messages stay out of view until the
     // user explicitly returns to the latest.
     const wasAtBottom = this.messages.getScrollOffset() === 0;
-    this.messages.push({ role, content: sanitize(content), timestamp: new Date() });
+    this.messages.push({ role, content: sanitize(content).replace(/^Error: /, ''), tone: /^Error:|^✗/.test(content) ? 'error' : 'notice', timestamp: new Date() });
     if (wasAtBottom) this.messages.scrollToBottom();
     this.tui.requestRender();
   }
@@ -266,174 +264,27 @@ export class OctipusTuiApp {
    * permanent transcript entry per call. Dedupes by tool name so a pending
    * + completed pair only writes one combined line.
    */
-  private streamToolEvent(tool: { state: string; name: string; preview?: string; mcpServer?: string }): void {
-    const mcp = tool.mcpServer ? `[mcp:${tool.mcpServer}] ` : '';
-    const preview = tool.preview ? ` → ${tool.preview}` : '';
-    if (tool.state === 'pending' || tool.state === 'executing') {
-      this.lastStreamedTool = `${tool.name}${preview}`;
-      this.pushMessage('system', `→ ${mcp}${this.lastStreamedTool}`);
-    } else if (tool.state === 'error') {
-      this.pushMessage('system', `✗ ${mcp}${tool.name}${preview}`);
-      this.lastStreamedTool = null;
-    } else if (tool.state === 'completed') {
-      // Only echo a completion line when there's an output preview worth
-      // showing; the pending line already named the call.
-      if (tool.preview) this.pushMessage('system', `✓ ${mcp}${tool.name} ${tool.preview}`);
-      this.lastStreamedTool = null;
-    }
-  }
-
   // ── Event handling ─────────────────────────────────────────────
 
   private handleEvent(event: AgentSessionEvent): void {
+    if (event.kind === 'message' && event.role === 'assistant' && this.speakNextReply) {
+      this.speakNextReply = false;
+      void this.voice?.say(event.content).catch(() => {});
+    }
+    if (this.session.handleEvent(event)) return;
     switch (event.kind) {
       case 'status':
-        if (this.planPoll) { clearInterval(this.planPoll); this.planPoll = null; }
-        if (event.status === 'connected') {
-          this.planPoll = setInterval(() => this.adapter.sendCommand('work-plan-status'), 4000);
-          if (this.resumePending) { this.resumePending = false; this.adapter.sendCommand('history'); }
-        } else if (this.lastStatus === 'connected') {
-          this.lastPlanSummary = 'Unavailable · connection lost';
-          this.status.setPlan(this.lastPlanSummary);
-        }
-
-        // A reconnect means the backend went away and came back: whatever
-        // subagents were running belonged to the old process and will never
-        // report a completion.
-        if (event.status === 'connected' && this.lastStatus !== 'connected') this.subagents.reset();
+        // Reconnect bookkeeping (subagent reset, plan poll) lives in the presenter.
+        if (event.status === 'connected' && this.resumePending) { this.resumePending = false; this.adapter.sendCommand('history'); }
         this.lastStatus = event.status;
-        this.status.setStatus(event.status);
-        this.tui.requestRender();
-        return;
-      case 'delta':
-        // A new iteration means the previous text was reasoning before a tool
-        // call, not the reply: keep it as its own message so the trail stays
-        // visible, then start the next live block.
-        if (event.iteration !== this.streamIteration) {
-          if (this.streamText.trim()) this.pushMessage('assistant', this.streamText);
-          this.streamText = '';
-          this.streamIteration = event.iteration;
-        }
-        this.streamText += event.delta;
-        this.messages.setLive(this.streamText);
-        this.tui.requestRender();
-        return;
-      case 'message':
-        if (event.role === 'assistant') this.clearStream();
-        this.pushMessage(event.role, event.content);
-        // Speak the reply to a voice turn (one-shot; no-op if TTS isn't configured).
-        if (event.role === 'assistant' && this.speakNextReply) {
-          this.speakNextReply = false;
-          void this.voice?.say(event.content).catch(() => { /* playback best-effort */ });
-        }
         return;
       case 'permission':
-        this.openPermissionPrompt(event.requestId, event.toolName, event.detail);
+        this.decisions.push(event);
         return;
       case 'approval':
-        this.openApprovalPrompt(event.requestId, event.summary, event.question, event.options);
-        return;
-      case 'agent.start':
-        // A subagent gets its own row in the panel; the activity line stays
-        // the ROOT agent's, so a fan-out doesn't make the main indicator
-        // flicker between children.
-        if (event.subagent && event.nodeId) {
-          this.subagents.start(event.nodeId, event.role, event.model);
-          this.tui.requestRender();
-          return;
-        }
-        // Start with iteration 0 so a long-running agent isn't silent
-        // between spawn and its first iteration tick (the worker emits
-        // iteration_update at the TOP of each loop iteration).
-        this.activeAgentRole = event.role;
-        this.activeAgentModel = event.model || undefined;
-        this.clearStream(); // a new turn: whatever a failed one left half-streamed is not history
-        this.activity.setThinking({ role: event.role, iter: 0, model: this.activeAgentModel });
-        return;
-      case 'agent.iteration':
-        if (this.subagents.has(event.agentId)) {
-          this.subagents.iteration(event.agentId, event.iteration);
-          this.tui.requestRender();
-          return;
-        }
-        this.activity.setThinking({
-          role: this.activeAgentRole ?? 'agent',
-          iter: event.iteration,
-          model: this.activeAgentModel,
-        });
-        return;
-      case 'identity':
-        // Single source of truth for the badge: a login, a logout, and a
-        // session the gateway rejected all arrive here.
-        this.status.setUser(event.user);
-        this.tui.requestRender();
-        return;
-      case 'session.stats':
-        // Authoritative: the backend counted every agent in this session from
-        // the cost log, so it REPLACES the live sum accumulated below (which
-        // only sees the completions this client was sent).
-        this.cumulative = {
-          tokens: event.stats.tokens,
-          cost: event.stats.cost,
-          turns: this.cumulative.turns,
-        };
-        this.status.setStats(this.cumulative);
-        this.status.setContext(
-          event.stats.contextTokens
-            ? { used: event.stats.contextTokens, window: event.stats.contextWindow }
-            : null,
-        );
-        this.tui.requestRender();
-        return;
-      case 'agent.end':
-        if (this.subagents.has(event.nodeId)) {
-          this.subagents.end(event.nodeId as string);
-          this.cumulative = {
-            tokens: this.cumulative.tokens + event.stats.tokens,
-            cost: this.cumulative.cost + event.stats.cost,
-            turns: this.cumulative.turns,
-          };
-          this.status.setStats(this.cumulative);
-          this.tui.requestRender();
-          return;
-        }
-        this.cumulative = {
-          tokens: this.cumulative.tokens + event.stats.tokens,
-          cost: this.cumulative.cost + event.stats.cost,
-          turns: this.cumulative.turns + 1,
-        };
-        this.status.setStats(this.cumulative);
-        this.activity.setTool(null);
-        this.activity.setThinking(null);
-        this.activeAgentRole = null;
-        this.activeAgentModel = undefined;
-        this.clearStream();
-        this.tui.requestRender();
-        return;
-      case 'tool':
-        // A subagent's tool calls belong to its row, not to the transcript —
-        // three children fanning out used to bury the conversation under
-        // somebody else's `→ websearch`.
-        if (this.subagents.has(event.agentId)) {
-          this.subagents.tool(event.agentId as string, event.tool);
-          this.tui.requestRender();
-          return;
-        }
-        this.activity.setTool(event.tool);
-        this.streamToolEvent(event.tool);
+        this.decisions.push(event);
         return;
       case 'command.result': {
-        if (event.name === 'work-plan-status') {
-          // Contract with the gateway command: empty text = no plan; error = unavailable.
-          const summary = typeof event.result === 'string' ? event.result : '';
-          const plan = event.error ? 'Unavailable' : summary || null;
-          if (plan !== this.lastPlanSummary) { this.lastPlanSummary = plan; this.status.setPlan(plan); this.tui.requestRender(); }
-          return;
-        }
-        if (event.name === 'work-plan' && !event.error && typeof event.result === 'string') {
-          this.pushMessage('assistant', event.result);
-          return;
-        }
         if (event.name === 'history') {
           if (!event.error && Array.isArray(event.data)) {
             this.sessionBeforeResume = null;
@@ -469,8 +320,8 @@ export class OctipusTuiApp {
           // come from the session's cost log, which /clear does not touch, so
           // zeroing them here just made the next turn's `session.stats` snap
           // the number back up — a counter that lies until you blink.
-          this.cumulative = { ...this.cumulative, turns: 0 };
-          this.status.setStats(this.cumulative);
+          this.session.cumulative = { ...this.session.cumulative, turns: 0 };
+          this.status.setStats(this.session.cumulative);
           this.status.setContext(null);
           this.subagents.reset();
           this.pushMessage('system', 'Chat cleared.');
@@ -484,17 +335,9 @@ export class OctipusTuiApp {
           return;
         }
         const content = event.error || (typeof event.result === 'string' ? event.result : JSON.stringify(event.result));
-        this.pushMessage('system', `/${event.name}: ${content}`);
+        this.pushMessage('system', `${event.error ? 'Error: ' : ''}/${event.name}: ${content}`);
         return;
       }
-      case 'error':
-        this.clearStream();
-        this.pushMessage('system', `Error: ${event.message}`);
-        return;
-      case 'expert':
-        this.status.setExpert(event.expertId);
-        this.tui.requestRender();
-        return;
       case 'agent.write':
         return;
     }
@@ -612,23 +455,7 @@ export class OctipusTuiApp {
 
   // ── Overlays ───────────────────────────────────────────────────
 
-  private openPermissionPrompt(requestId: string, toolName: string, detail: string): void {
-    if (this.permissionHandle) this.permissionHandle.hide();
 
-    const respond = (approved: boolean): void => {
-      this.adapter.respondPermission(requestId, approved);
-      this.pushMessage('system', approved ? `Approved: ${toolName}` : `Denied: ${toolName}`);
-      this.closePermissionPrompt();
-    };
-
-    this.permissionHandle = this.overlays.showPermissionPrompt({
-      toolName,
-      detail,
-      onApprove: () => respond(true),
-      onDeny:    () => respond(false),
-      onCancel:  () => respond(false),
-    });
-  }
 
   /**
    * The agent has asked the user a question and is BLOCKED on the answer.
@@ -638,36 +465,9 @@ export class OctipusTuiApp {
    * sends a decline, because closing the box without replying leaves the agent
    * waiting exactly as it was before the overlay appeared.
    */
-  private openApprovalPrompt(
-    requestId: string,
-    summary: string,
-    question: string,
-    options: string[],
-  ): void {
-    if (this.approvalHandle) this.approvalHandle.hide();
 
-    this.approvalHandle = this.overlays.showApprovalPrompt({
-      summary,
-      question,
-      options,
-      onRespond: (approved, response) => {
-        this.adapter.respondApproval(requestId, approved, response);
-        this.pushMessage('system', approved ? `Answered: ${response}` : `Declined: ${response}`);
-        if (this.approvalHandle) {
-          this.approvalHandle.hide();
-          this.approvalHandle = null;
-          this.tui.setFocus(this.composer);
-        }
-      },
-    });
-  }
 
-  private closePermissionPrompt(): void {
-    if (!this.permissionHandle) return;
-    this.permissionHandle.hide();
-    this.permissionHandle = null;
-    this.tui.setFocus(this.composer);
-  }
+
 
   /**
    * Sign in and reconnect as that user. The gateway connection carries the
@@ -745,6 +545,8 @@ export class OctipusTuiApp {
     // cost log — the same totals the status bar shows, plus the input/output/
     // request split the old TUI-local counter never had.
     switch (name) {
+      case 'plan-hide':
+        this.status.setPlanDetails(null); this.tui.requestRender(); return;
       case 'exit':
       case 'quit':
         this.quit();
@@ -764,11 +566,7 @@ export class OctipusTuiApp {
         }
         this.sessionBeforeResume = this.sessionId;
         this.sessionId = id;
-        this.lastPlanSummary = null;
-        this.status.setPlan(null);
-        this.cumulative = { tokens: 0, cost: 0, turns: 0 };
-        this.status.setStats(this.cumulative);
-        this.status.setContext(null);
+        this.session.reset();
         this.adapter.sendCommand('history');
         return;
       }

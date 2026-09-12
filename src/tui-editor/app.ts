@@ -1,3 +1,6 @@
+import { UnsavedPrompt } from './components/unsaved-prompt';
+import { DecisionQueue } from '@/tui-pi/decision-queue';
+import { ChatSessionPresenter } from '@/tui-pi/chat-session-presenter';
 /**
  * OctipusEditorApp — pi-tui-based editor + chat surface.
  *
@@ -20,7 +23,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
-import { Container, getKeybindings, type OverlayHandle, Spacer, type TUI } from '@mariozechner/pi-tui';
+import { Container, getKeybindings, matchesKey, type OverlayHandle, Spacer, type TUI } from '@mariozechner/pi-tui';
 import { installOctipusKeybindings } from '@/tui-pi/keybindings';
 import { ApiClient } from './api-client';
 import { ChatPane } from './components/chat-pane';
@@ -45,13 +48,14 @@ import { LayoutStore } from './stores/layout-store';
 import { bindStore } from './stores/use-store';
 import { WorkspaceStore, type WorkspaceMeta } from './stores/workspace-store';
 import { readFileForBuffer, writeFileForBuffer } from './workspace-fs-bridge';
-import { type CumulativeStats, StatusBar } from '@/tui-pi/components/status-bar';
+import { StatusBar } from '@/tui-pi/components/status-bar';
 import { GatewayAdapter, type AgentSessionEvent } from '@/tui-pi/gateway-adapter';
 import { createOverlayController, type OverlayController } from '@/tui-pi/overlays/registry';
 import { chalk } from '@/tui-pi/theme/defaults';
 
 export interface OctipusEditorAppOptions {
   gatewayUrl?: string;
+  exit?: (code: number) => void;
   projectPath?: string;
   /**
    * Optional shutdown hook for /exit, /quit, and Ctrl+Q. Without it, the
@@ -81,30 +85,39 @@ export class OctipusEditorApp {
   private readonly chat: ChatPane;
   private readonly split: SplitPane;
   private readonly overlays: OverlayController;
+  private readonly session: ChatSessionPresenter;
+  private readonly decisions: DecisionQueue;
   private readonly sessionId = newSessionId();
   private readonly projectPath: string;
-  private cumulative: CumulativeStats = { tokens: 0, cost: 0, turns: 0 };
-  private permissionHandle: OverlayHandle | null = null;
   private paletteHandle: OverlayHandle | null = null;
   private filePickerHandle: OverlayHandle | null = null;
   private findHandle: OverlayHandle | null = null;
   private replaceHandle: OverlayHandle | null = null;
   private diffHandle: OverlayHandle | null = null;
+  private diffQueue: Array<{ bufferId: string; label: string; before: string; after: string }> = [];
   private workspaceHandle: OverlayHandle | null = null;
   private mcpHandle: OverlayHandle | null = null;
   private hotkeysHandle: OverlayHandle | null = null;
   private apiClient: ApiClient;
+  private unsavedHandle: OverlayHandle | null = null;
+  private exiting = false;
+  private readonly exit: (code: number) => void;
+  private mcpPoll: ReturnType<typeof setInterval> | null = null;
+  private persistTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly onShutdown?: () => Promise<void>;
 
   constructor(tui: TUI, options: OctipusEditorAppOptions) {
     this.tui = tui;
+    this.exit = options.exit ?? (code => process.exit(code));
     this.adapter = new GatewayAdapter({
       url: options.gatewayUrl,
       getWorkspace: () => this.workspace.get().activeSlug,
+      getSessionId: () => this.sessionId,
     });
     this.projectPath = options.projectPath ? resolve(options.projectPath) : process.cwd();
     this.onShutdown = options.onShutdown;
     this.overlays = createOverlayController(tui);
+    this.decisions = new DecisionQueue(this.overlays, this.adapter, text => this.pushMessage('system', text), () => { if (!tui.hasOverlay?.()) this.refocus(); });
     // The API base URL mirrors the gateway URL but on HTTP. Best-effort —
     // fetches return null on failure and the overlays cope.
     this.apiClient = new ApiClient({
@@ -129,6 +142,7 @@ export class OctipusEditorApp {
       basePath: this.projectPath,
       onSubmit: (text) => this.handleChatSubmit(text),
     });
+    this.session = new ChatSessionPresenter(tui, this.adapter, this.chat.messages, this.status, this.chat.activity, this.chat.subagents, (role, content) => this.pushMessage(role, content));
     this.chat.messages.push({
       role: 'system',
       content: `Welcome to Octipus. Project: ${basenameOf(this.projectPath)}  Type a message or /help for commands.`,
@@ -141,13 +155,8 @@ export class OctipusEditorApp {
       editor: buildEditorPane(this.tabs, this.editor),
       chat: this.chat,
       onResize: (_sizes) => {
-        // Use the terminal's true row count rather than the editor's previous
-        // render height — the latter feeds back into setHeight every cycle and
-        // collapses the panes down to the floor (5 rows).
-        // Subtract the status bar (top) + mode bar (bottom) = 2 rows.
-        const paneRows = Math.max(5, tui.terminal.rows - 2);
-        const editorRows = Math.max(5, paneRows - 1); // tab strip eats 1 row
-        this.editor.setHeight(editorRows);
+        const paneRows = Math.max(0, tui.terminal.rows - this.status.render(tui.terminal.columns).length - 2);
+        this.editor.setHeight(Math.max(1, paneRows - 1));
         this.tree.setHeight(paneRows);
         this.chat.setHeight(paneRows);
       },
@@ -155,7 +164,10 @@ export class OctipusEditorApp {
 
     // Status bar is the single top line; mode bar is the single bottom line.
     this.status.setProject(basenameOf(this.projectPath));
-    const root = new Container();
+    const status = this.status;
+    const root = new class extends Container {
+      override render(width: number): string[] { status.setMaxRows(Math.max(1, Math.floor(tui.terminal.rows / 3))); return super.render(width).slice(0, tui.terminal.rows); }
+    }();
     root.addChild(this.status);
     root.addChild(this.split);
     root.addChild(this.modeBar);
@@ -173,6 +185,7 @@ export class OctipusEditorApp {
 
     // Keep terminal size in the layout store (for editor scroll math + future overlay sizing).
     this.layout.setSize(tui.terminal.columns, tui.terminal.rows);
+    this.layout.subscribe(() => { if (!this.tui.hasOverlay()) this.refocus(); });
 
     // Restore persisted state — failures are non-fatal (defaults applied).
     this.hydrate();
@@ -183,7 +196,8 @@ export class OctipusEditorApp {
     // surface area is small enough that a 10s poll keeps the wiring
     // trivial. Failures are silent (no MCP installed / not loaded yet).
     void this.refreshMcpStatus();
-    setInterval(() => { void this.refreshMcpStatus(); }, 10_000).unref?.();
+    this.mcpPoll = setInterval(() => { void this.refreshMcpStatus(); }, 10_000);
+    this.mcpPoll.unref?.();
   }
 
   private async refreshMcpStatus(): Promise<void> {
@@ -231,11 +245,16 @@ export class OctipusEditorApp {
       if (rec) this.buffers.setActive(rec.id);
     }
 
+    for (const draft of persisted.drafts ?? []) {
+      const rec = draft.path ? this.buffers.openFile(draft.path, draft.text) : this.buffers.openScratch();
+      rec.buffer.setText(draft.text); this.buffers.markDirty(rec.id, true);
+    }
+    if (persisted.drafts?.length) this.pushMessage('system', `Recovered ${persisted.drafts.length} unsaved buffer(s). Review and save your edits.`);
+
     // Persist on every state change (debounced).
-    let timer: ReturnType<typeof setTimeout> | null = null;
     const schedule = () => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => this.persist(), 500);
+      if (this.persistTimer) clearTimeout(this.persistTimer);
+      this.persistTimer = setTimeout(() => this.persist(), 500);
     };
     this.buffers.subscribe(schedule);
     this.layout.subscribe(schedule);
@@ -250,7 +269,7 @@ export class OctipusEditorApp {
       const c = b.buffer.getCursor();
       cursorByPath[b.path] = { line: c.line, col: c.col };
     }
-    savePersistedState({
+    const saved = savePersistedState({
       version: 1,
       openPaths: buffers.buffers.filter((b) => b.path).map((b) => b.path as string),
       activePath: buffers.buffers.find((b) => b.id === buffers.activeId)?.path ?? null,
@@ -259,14 +278,16 @@ export class OctipusEditorApp {
       theme: 'dark',
       editorMode: layout.editorMode,
       cursorByPath,
+      drafts: buffers.buffers.filter(b => b.dirty).map(b => ({ path: b.path, text: b.buffer.text(), label: b.label })),
     }, pathForProject(this.projectPath));
+    if (this.modeBar.setRecoveryFailed(!saved)) this.tui.requestRender();
   }
 
   // ── Files ──────────────────────────────────────────────────────
 
   private openFile(absolutePath: string, options: { activate?: boolean } = {}): void {
     const text = readFileForBuffer(absolutePath);
-    if (text === null) return; // bridge-level errors are silent (binary / >5MB / missing)
+    if (text === null) { this.pushMessage('system', `Error: Cannot open ${absolutePath}: missing, unreadable, binary, or over 5 MB.`); return; }
     const record = this.buffers.openFile(absolutePath, text);
     if (options.activate !== false) this.buffers.setActive(record.id);
     // Seed the tree-sitter parse for this language. Fire-and-forget;
@@ -275,67 +296,61 @@ export class OctipusEditorApp {
     void treeSitterSetSource(detectLanguage(absolutePath), text);
   }
 
-  private saveBuffer(record: { id: string; path: string | null; buffer: { text(): string } }): void {
-    if (!record.path) return; // scratch buffers can't save without a path; future "Save As" overlay
-    const ok = writeFileForBuffer(record.path, record.buffer.text());
-    if (ok) this.buffers.markDirty(record.id, false);
+  private saveBuffer(record: { id: string; path: string | null; buffer: { text(): string } }): boolean {
+    if (!record.path) { this.modeBar.setNotice('Scratch buffer needs a path before saving.'); this.pushMessage('system', 'Error: Scratch buffer needs a file path before saving.'); return false; }
+    if (!writeFileForBuffer(record.path, record.buffer.text())) {
+      this.modeBar.setNotice(`Save failed: ${record.path}. Edits retained.`);
+      this.pushMessage('system', `Error: Could not save ${record.path}. Your edits are still in memory.`); return false;
+    }
+    this.modeBar.setNotice(null);
+    this.buffers.markDirty(record.id, false);
+    this.pushMessage('system', `Saved ${record.path}.`);
+    return true;
+  }
+
+  private confirmUnsaved(ids: string[], proceed: () => void): void {
+    if (this.unsavedHandle) return;
+    const dirty = this.buffers.get().buffers.filter(b => ids.includes(b.id) && b.dirty);
+    if (!dirty.length) { proceed(); return; }
+    const prompt = new UnsavedPrompt(dirty.map(b => b.label), choice => {
+      if (choice === 'save') {
+        for (const id of ids) {
+          const current = this.buffers.get().buffers.find(b => b.id === id);
+          if (current?.dirty && !this.saveBuffer(current)) {
+            prompt.setError('Save failed. Edits retained; cancel to continue editing.'); this.tui.requestRender(); return;
+          }
+        }
+      }
+      if (choice === 'discard') for (const id of ids) this.buffers.markDirty(id, false);
+      this.unsavedHandle?.hide(); this.unsavedHandle = null;
+      if (choice !== 'cancel') proceed();
+      if (!this.tui.hasOverlay()) this.refocus();
+    });
+    this.unsavedHandle = this.overlays.showModal(prompt);
   }
 
   // ── Gateway events ─────────────────────────────────────────────
 
+  private pushMessage(role: 'user' | 'assistant' | 'system', content: string): void {
+    this.chat.messages.push({ role, content: content.replace(/^Error: /, ''), tone: /^Error:|^✗/.test(content) ? 'error' : 'notice', timestamp: new Date() });
+    this.tui.requestRender();
+  }
+
   private handleEvent(event: AgentSessionEvent): void {
+    if (this.session.handleEvent(event)) return;
     switch (event.kind) {
-      case 'status':
-        this.status.setStatus(event.status);
-        this.tui.requestRender();
-        return;
-      case 'message':
-        this.chat.messages.push({ role: event.role, content: event.content, timestamp: new Date() });
-        this.tui.requestRender();
-        return;
-      case 'permission':
-        this.openPermissionPrompt(event.requestId, event.toolName, event.detail);
-        return;
-      case 'agent.end':
-        this.cumulative = {
-          tokens: this.cumulative.tokens + event.stats.tokens,
-          cost: this.cumulative.cost + event.stats.cost,
-          turns: this.cumulative.turns + 1,
-        };
-        this.status.setStats(this.cumulative);
-        this.chat.activity.setTool(null);
-        this.tui.requestRender();
-        return;
-      case 'tool':
-        this.chat.activity.setTool(event.tool);
-        return;
-      case 'command.result': {
+      case 'permission': this.decisions.push(event); return;
+      case 'approval': this.decisions.push(event); return;
+      case 'agent.write': this.handleAgentWrite(event.path, event.newText); return;
+      case 'command.result':
         if (event.name === 'clear' && !event.error) {
-          this.tui.terminal.clearScreen();
           this.chat.messages.reset();
-          this.cumulative = { tokens: 0, cost: 0, turns: 0 };
-          this.status.setStats(this.cumulative);
-          this.chat.messages.push({ role: 'system', content: 'Chat cleared.', timestamp: new Date() });
-          this.tui.requestRender();
+          this.session.cumulative.turns = 0;
+          this.status.setStats(this.session.cumulative);
+          this.pushMessage('system', 'Chat cleared.');
           return;
         }
-        const content = event.error || (typeof event.result === 'string' ? event.result : JSON.stringify(event.result));
-        this.chat.messages.push({ role: 'system', content: `/${event.name}: ${content}`, timestamp: new Date() });
-        this.tui.requestRender();
-        return;
-      }
-      case 'error':
-        this.chat.messages.push({ role: 'system', content: `Error: ${event.message}`, timestamp: new Date() });
-        this.tui.requestRender();
-        return;
-      case 'expert':
-        this.status.setExpert(event.expertId);
-        this.tui.requestRender();
-        return;
-      case 'agent.start':
-        return;
-      case 'agent.write':
-        this.handleAgentWrite(event.path, event.newText);
+        this.pushMessage('system', `${event.error ? 'Error: ' : ''}/${event.name}: ${event.error || (typeof event.result === 'string' ? event.result : JSON.stringify(event.result))}`);
         return;
     }
   }
@@ -363,7 +378,8 @@ export class OctipusEditorApp {
   }
 
   private openDiffOverlay(bufferId: string, label: string, before: string, after: string): void {
-    if (this.diffHandle) this.diffHandle.hide();
+    if (this.diffHandle) { this.diffQueue.push({ bufferId, label, before, after }); return; }
+    this.buffers.setAgentLocked(bufferId, true);
     const overlay = new DiffOverlay({
       bufferLabel: label,
       before,
@@ -393,7 +409,9 @@ export class OctipusEditorApp {
     if (!this.diffHandle) return;
     this.diffHandle.hide();
     this.diffHandle = null;
-    this.refocus();
+    const next = this.diffQueue.shift();
+    if (next) this.openDiffOverlay(next.bufferId, next.label, this.buffers.get().buffers.find(b => b.id === next.bufferId)?.buffer.text() ?? next.before, next.after);
+    else if (!this.tui.hasOverlay()) this.refocus();
   }
 
   // ── Submit / commands ──────────────────────────────────────────
@@ -409,6 +427,7 @@ export class OctipusEditorApp {
       const name = parts[0];
       const value = parts.slice(1).join(' ').trim();
       // TUI-local commands intercepted before going to the gateway.
+      if (name === 'plan-hide') { this.status.setPlanDetails(null); this.tui.requestRender(); return; }
       if (name === 'quit' || name === 'exit' || name === 'q') {
         void this.shutdownAndExit();
         return;
@@ -437,13 +456,22 @@ export class OctipusEditorApp {
 
   private handleGlobalKey(data: string): { consume: true } | undefined {
     const kb = getKeybindings();
+    if (this.tui.hasOverlay()) return undefined;
+    if (kb.matches(data, 'app.subagents.scrollUp')) { if (this.chat.subagents.scroll(-1)) { this.tui.requestRender(); return { consume: true }; } }
+    if (kb.matches(data, 'app.subagents.scrollDown')) { if (this.chat.subagents.scroll(1)) { this.tui.requestRender(); return { consume: true }; } }
+    if (kb.matches(data, 'app.subagents.toggle')) { this.chat.subagents.toggle(); this.tui.requestRender(); return { consume: true }; }
+    if (this.layout.get().focused === 'chat') {
+      if (matchesKey(data, 'pageUp')) { this.chat.messages.scrollUp(); this.tui.requestRender(); return { consume: true }; }
+      if (matchesKey(data, 'pageDown')) { this.chat.messages.scrollDown(); this.tui.requestRender(); return { consume: true }; }
+      if (matchesKey(data, 'end') && this.chat.messages.getScrollOffset() > 0) { this.chat.messages.scrollToBottom(); this.tui.requestRender(); return { consume: true }; }
+    }
     if (kb.matches(data, 'app.tree.toggle'))   { this.layout.toggleTree(); return { consume: true }; }
     if (kb.matches(data, 'app.chat.toggle'))   { this.layout.toggleChat(); return { consume: true }; }
     if (kb.matches(data, 'app.pane.cycle'))    { this.layout.cycleFocus(1); this.refocus(); return { consume: true }; }
     if (kb.matches(data, 'app.buffer.next'))   { this.buffers.cycle(1); return { consume: true }; }
     if (kb.matches(data, 'app.buffer.prev'))   { this.buffers.cycle(-1); return { consume: true }; }
     if (kb.matches(data, 'app.buffer.close'))  {
-      const a = this.buffers.active(); if (a) this.buffers.close(a.id); return { consume: true };
+      const a = this.buffers.active(); if (a) this.confirmUnsaved([a.id], () => this.buffers.close(a.id)); return { consume: true };
     }
     if (kb.matches(data, 'app.file.open'))     { this.openFilePicker(); return { consume: true }; }
     if (kb.matches(data, 'app.find.open'))     { this.openFind(); return { consume: true }; }
@@ -452,16 +480,25 @@ export class OctipusEditorApp {
     if (kb.matches(data, 'app.mcp.list'))      { void this.openMCPServerList(); return { consume: true }; }
     if (kb.matches(data, 'app.palette.open'))  { this.openCommandPalette(); return { consume: true }; }
     if (kb.matches(data, 'app.help.open'))     { this.openHotkeys(); return { consume: true }; }
+    if (matchesKey(data, 'ctrl+c')) { this.requestQuit(); return { consume: true }; }
     if (kb.matches(data, 'app.quit'))          { void this.shutdownAndExit(); return { consume: true }; }
     return undefined;
   }
 
-  private async shutdownAndExit(): Promise<void> {
-    // Tear down alt-screen + drain stdin before the process dies so the
-    // shell's next prompt starts on a clean line instead of overlapping
-    // the editor's bottom border.
-    try { if (this.onShutdown) await this.onShutdown(); } catch { /* non-fatal */ }
-    process.exit(0);
+  requestQuit(): void {
+    this.confirmUnsaved(this.buffers.get().buffers.map(b => b.id), () => { void this.stop().then(() => this.exit(0)); });
+  }
+
+  private async shutdownAndExit(): Promise<void> { this.requestQuit(); }
+
+  async stop(): Promise<void> {
+    if (this.exiting) return;
+    this.exiting = true;
+    if (this.persistTimer) clearTimeout(this.persistTimer);
+    if (this.mcpPoll) clearInterval(this.mcpPoll);
+    this.persist();
+    this.decisions.dispose(); this.session.dispose(); this.adapter.disconnect();
+    try { if (this.onShutdown) await this.onShutdown(); } catch { /* terminal cleanup is best effort */ }
   }
 
   private openCommandPalette(): void {
@@ -505,8 +542,6 @@ export class OctipusEditorApp {
       { handle: this.replaceHandle,      clear: () => { this.replaceHandle = null; } },
       { handle: this.workspaceHandle,    clear: () => { this.workspaceHandle = null; } },
       { handle: this.mcpHandle,          clear: () => { this.mcpHandle = null; } },
-      { handle: this.diffHandle,         clear: () => { this.diffHandle = null; } },
-      { handle: this.permissionHandle,   clear: () => { this.permissionHandle = null; } },
     ];
     for (const { handle, clear } of handles) {
       if (handle) { handle.hide(); clear(); }
@@ -646,26 +681,9 @@ export class OctipusEditorApp {
 
   // ── Overlays (port of chat-shell logic) ────────────────────────
 
-  private openPermissionPrompt(requestId: string, toolName: string, detail: string): void {
-    if (this.permissionHandle) this.permissionHandle.hide();
-    const respond = (approved: boolean): void => {
-      this.adapter.respondPermission(requestId, approved);
-      this.chat.messages.push({
-        role: 'system',
-        content: approved ? `Approved: ${toolName}` : `Denied: ${toolName}`,
-        timestamp: new Date(),
-      });
-      if (this.permissionHandle) { this.permissionHandle.hide(); this.permissionHandle = null; }
-      this.refocus();
-      this.tui.requestRender();
-    };
-    this.permissionHandle = this.overlays.showPermissionPrompt({
-      toolName, detail,
-      onApprove: () => respond(true),
-      onDeny:    () => respond(false),
-      onCancel:  () => respond(false),
-    });
-  }
+
+
+
 }
 
 function buildEditorPane(tabs: TabStrip, editor: TextEditor): Container {

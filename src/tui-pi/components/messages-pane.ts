@@ -1,182 +1,111 @@
-/**
- * Scrolling chat pane.
- *
- * Renders the last N messages with role-aware formatting:
- *   - user / system → wrapped, role-coloured plain text
- *   - assistant     → pi-tui Markdown (headings, code fences, lists,
- *                     links, etc.) via a per-message cached Markdown
- *                     component
- *
- * Markdown rendering can be opted out per message (e.g. when streaming
- * partial chunks where the parser would mis-format incomplete syntax)
- * by passing `markdown: false` on push.
- */
-import { type Component, Markdown, visibleWidth, wrapTextWithAnsi } from '@mariozechner/pi-tui';
-import { colorFor, getMarkdownTheme } from '../theme/defaults';
+/** Shared, row-scrolled transcript for the chat shell and editor. */
+import { type Component, Markdown, truncateToWidth, wrapTextWithAnsi } from '@mariozechner/pi-tui';
+import { chalk, getPalette, getMarkdownTheme } from '../theme/defaults';
 import type { Role } from '../gateway-adapter';
 
 export interface ChatMessage {
   role: Role;
   content: string;
   timestamp: Date;
-  /** Disable markdown rendering for assistant messages (default: enabled). */
   markdown?: boolean;
+  tone?: 'error' | 'notice';
 }
-
 export interface MessagesPaneOptions {
-  /** Maximum visible messages (older messages are dropped from the rendered list, not from history). */
+  /** Initial viewport height in terminal rows. */
   maxVisible?: number;
-  /** Toggle markdown rendering for assistant messages globally (default: true). */
   markdown?: boolean;
-}
-
-const ROLE_PREFIX: Record<Role, string> = {
-  user:      '❯ ',
-  assistant: '  ',
-  system:    '· ',
-};
-
-interface RenderedMessage {
-  role: Role;
-  content: string;
-  markdown?: Markdown;
 }
 
 export class MessagesPane implements Component {
-  private readonly history: RenderedMessage[] = [];
-  private readonly maxVisible: number;
-  private readonly markdownEnabled: boolean;
-  private cachedLines: string[] = [];
-  private cachedWidth = -1;
-  private dirty = true;
-  /**
-   * Number of messages above the bottom of history to skip when
-   * rendering. 0 = pinned to bottom (live tail). Increased by
-   * `scrollUp()`, decreased by `scrollDown()`. Auto-resets to 0 only
-   * when a new message arrives while already pinned at the bottom —
-   * if the user is reading history mid-scroll, new content stays out
-   * of view until they `scrollToBottom()`.
-   */
-  private scrollOffset = 0;
-  /** Reply text still streaming in; drawn under the history, never stored in it. */
+  private history: ChatMessage[] = [];
+  private height: number;
+  private width = 80;
+  private offset = 0;
   private live: string | null = null;
+  private revision = 0;
+  private cachedRevision = -1;
+  private cachedWidth = -1;
+  private cachedLines: string[] = [];
+  private frozen: string[] | null = null;
+  private newer = 0;
+  private messageCache = new WeakMap<ChatMessage, { width: number; lines: string[] }>();
 
-  constructor(options: MessagesPaneOptions = {}) {
-    this.maxVisible = options.maxVisible ?? 30;
-    this.markdownEnabled = options.markdown ?? true;
+  constructor(private readonly options: MessagesPaneOptions = {}) {
+    this.height = options.maxVisible ?? 30;
   }
-
+  setHeight(rows: number): void { this.height = Math.max(0, rows); }
   push(message: ChatMessage): void {
-    const markdownEnabled = this.markdownEnabled && (message.markdown ?? true);
-    const useMarkdown = message.role === 'assistant' && markdownEnabled;
-    this.history.push({
-      role: message.role,
-      content: message.content,
-      markdown: useMarkdown ? new Markdown(message.content, 0, 0, getMarkdownTheme()) : undefined,
-    });
-    this.dirty = true;
+    this.history.push(message);
+    if (this.frozen) this.newer++;
+    this.revision++;
   }
-
   setLive(text: string | null): void {
-    if (text === this.live) return;
-    this.live = text;
-    this.dirty = true;
+    if (this.live !== text) { this.live = text; this.revision++; }
   }
-
   reset(): void {
-    this.live = null;
-    this.history.length = 0;
-    this.scrollOffset = 0;
-    this.dirty = true;
-    this.cachedLines = [];
+    this.history = []; this.live = null; this.offset = 0;
+    this.frozen = null; this.newer = 0; this.revision++;
   }
-
-  /** Page-style scroll up. Returns true when the offset moved. */
-  scrollUp(by: number = this.maxVisible): boolean {
-    const max = Math.max(0, this.history.length - this.maxVisible);
-    const next = Math.min(max, this.scrollOffset + by);
-    if (next === this.scrollOffset) return false;
-    this.scrollOffset = next;
-    this.dirty = true;
+  scrollUp(by = Math.max(1, this.height - 2)): boolean {
+    const lines = this.frozen ?? this.lines(this.width);
+    const next = Math.min(Math.max(0, lines.length - Math.max(1, this.height - 1)), this.offset + by);
+    if (next === this.offset) return false;
+    this.frozen ??= lines.slice();
+    this.offset = next;
     return true;
   }
-
-  /** Page-style scroll down. Returns true when the offset moved. */
-  scrollDown(by: number = this.maxVisible): boolean {
-    const next = Math.max(0, this.scrollOffset - by);
-    if (next === this.scrollOffset) return false;
-    this.scrollOffset = next;
-    this.dirty = true;
+  scrollDown(by = Math.max(1, this.height - 2)): boolean {
+    if (!this.offset) return false;
+    this.offset = Math.max(0, this.offset - by);
+    if (!this.offset) this.scrollToBottom();
     return true;
   }
+  scrollToBottom(): void { this.offset = 0; this.frozen = null; this.newer = 0; }
+  getScrollOffset(): number { return this.offset; }
+  invalidate(): void { this.messageCache = new WeakMap(); this.revision++; }
 
-  scrollToBottom(): void {
-    if (this.scrollOffset === 0) return;
-    this.scrollOffset = 0;
-    this.dirty = true;
-  }
-
-  getScrollOffset(): number {
-    return this.scrollOffset;
-  }
-
-  invalidate(): void {
-    this.dirty = true;
-    this.cachedWidth = -1;
-    for (const message of this.history) message.markdown?.invalidate();
+  private lines(width: number): string[] {
+    if (width === this.cachedWidth && this.revision === this.cachedRevision) return this.cachedLines;
+    const p = getPalette();
+    const lines: string[] = [];
+    const all = this.live ? [...this.history, { role: 'assistant' as const, content: this.live, timestamp: new Date(), markdown: false }] : this.history;
+    for (const [index, msg] of all.entries()) {
+      if (index) lines.push('');
+      const cached = this.messageCache.get(msg);
+      if (cached?.width === width) { lines.push(...cached.lines); continue; }
+      const begin = lines.length;
+      const inner = Math.max(1, width - 2);
+      const error = msg.tone === 'error';
+      const colour = error ? p.error : msg.role === 'user' ? p.accent : p.dim;
+      if (msg.role !== 'system') {
+        lines.push(chalk.bold.hex(msg.role === 'user' ? p.accent : p.fg)(msg.role === 'user' ? 'You' : 'Octipus'));
+      }
+      const markdown = msg.role === 'assistant' && this.options.markdown !== false && msg.markdown !== false;
+      const body = markdown
+        ? new Markdown(msg.content, 0, 0, getMarkdownTheme()).render(inner)
+        : wrapTextWithAnsi((error ? 'Error · ' : '') + msg.content, inner);
+      for (const line of body) {
+        const rail = msg.role === 'user' ? chalk.hex(p.accent)('│ ') : msg.role === 'system' ? chalk.hex(colour)(error ? '! ' : '· ') : '  ';
+        lines.push(rail + (msg.role === 'system' ? chalk.hex(colour)(line) : msg.role === 'user' ? chalk.hex(p.fg)(line) : line));
+      }
+      this.messageCache.set(msg, { width, lines: lines.slice(begin) });
+    }
+    this.cachedWidth = width; this.cachedRevision = this.revision;
+    return this.cachedLines = lines;
   }
 
   render(width: number): string[] {
-    if (!this.dirty && width === this.cachedWidth) return this.cachedLines;
-
-    const total = this.history.length;
-    // Window of `maxVisible` messages ending `scrollOffset` rows above the bottom.
-    const end = Math.max(0, total - this.scrollOffset);
-    const start = Math.max(0, end - this.maxVisible);
-    const visible = this.history.slice(start, end);
-    const lines: string[] = [];
-    for (let i = 0; i < visible.length; i++) {
-      const msg = visible[i];
-      const prefix = ROLE_PREFIX[msg.role];
-      const indent = ' '.repeat(visibleWidth(prefix));
-      const innerWidth = Math.max(1, width - visibleWidth(prefix));
-
-      if (msg.markdown) {
-        const rendered = msg.markdown.render(innerWidth);
-        for (let j = 0; j < rendered.length; j++) {
-          lines.push((j === 0 ? prefix : indent) + rendered[j]);
-        }
-      } else {
-        const color = colorFor(msg.role);
-        const wrapped = wrapTextWithAnsi(msg.content, innerWidth);
-        for (let j = 0; j < wrapped.length; j++) {
-          lines.push(color((j === 0 ? prefix : indent) + wrapped[j]));
-        }
-      }
-
-      if (i < visible.length - 1) lines.push('');
-    }
-
-    if (this.live && this.scrollOffset === 0) {
-      const prefix = ROLE_PREFIX.assistant;
-      const wrapped = wrapTextWithAnsi(this.live, Math.max(1, width - visibleWidth(prefix)));
-      if (lines.length) lines.push('');
-      for (const line of wrapped) lines.push(prefix + line);
-    }
-
-    // Hint when scrolled away from the live tail.
-    if (this.scrollOffset > 0) {
-      const remaining = total - end;
-      const hidden = this.scrollOffset;
-      const hint = `↓ ${hidden} newer message${hidden === 1 ? '' : 's'}` +
-        (remaining > 0 ? ` · ↑ ${remaining} older` : '');
-      lines.push('');
-      lines.push(colorFor('system')(hint));
-    }
-
-    this.cachedLines = lines;
-    this.cachedWidth = width;
-    this.dirty = false;
-    return lines;
+    this.width = Math.max(1, width);
+    if (this.height === 0 || width <= 0) return [];
+    // Freeze the rows being read. Incoming messages and streaming cannot move
+    // the reading position; a resize clips these rows until returning to live.
+    const lines = this.frozen ?? this.lines(width);
+    const hint = this.offset > 0;
+    const budget = Math.max(0, this.height - (hint ? 1 : 0));
+    const end = Math.max(0, lines.length - this.offset);
+    const start = Math.max(0, end - budget);
+    const out = lines.slice(start, end).map(line => truncateToWidth(line, width, ''));
+    if (hint) out.push(truncateToWidth(chalk.hex(getPalette().dim)(`↑ ${start} rows · ↓ ${this.offset} rows${this.newer ? ` · ${this.newer} new` : ''} · End: latest`), width, ''));
+    return out;
   }
 }

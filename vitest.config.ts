@@ -103,6 +103,7 @@ export default defineConfig({
     // so the plugin and resolver above already apply here — repeating them
     // applies the markdown transform twice and warns on every run.
     projects: [
+      { test: { ...common, name: 'terminal', include: ['tests/tui/*.e2e.test.ts'], maxWorkers: 1, fileParallelism: false } },
       {
         test: { ...common, name: 'unit', include: pure, exclude: NEVER },
       },

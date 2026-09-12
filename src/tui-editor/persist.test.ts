@@ -36,7 +36,7 @@ describe('persist', () => {
       cursorByPath: { '/a.ts': { line: 4, col: 7 } },
     };
     expect(savePersistedState(state, path)).toBe(true);
-    expect(loadPersistedState(path)).toEqual(state);
+    expect(loadPersistedState(path)).toEqual({ ...state, drafts: [] });
   });
 
   test('corrupt json falls back to default', () => {
@@ -83,4 +83,13 @@ describe('persist', () => {
     expect(legacy).toMatch(/tui-editor\.json$/);
     expect(legacy).not.toContain('projects');
   });
+});
+
+test('drafts beyond the file-open limit round-trip without silent loss', () => {
+  const path = tmp();
+  const text = 'x'.repeat(5 * 1024 * 1024 + 1);
+  const state = { ...DEFAULT_PERSISTED_STATE, drafts: [{ path: '/large.txt', label: 'large.txt', text }] };
+  expect(savePersistedState(state, path)).toBe(true);
+  expect(loadPersistedState(path).drafts?.[0].text).toBe(text);
+  expect(require('node:fs').statSync(path).mode & 0o777).toBe(0o600);
 });

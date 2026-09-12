@@ -36,3 +36,22 @@ it.each(['1/2 steps done', ''])('restores plan status after reconnect when the s
     else expect(bar.render(120)).toHaveLength(1);
   } finally { await app.stop(); }
 });
+
+it('automatic plan refresh repaints without duplicating transcript', async () => {
+  let root!: Container;
+  const requestRender = vi.fn();
+  const tui = { addChild: (c: Container) => { root = c; }, setFocus: vi.fn(), addInputListener: vi.fn(), requestRender } as unknown as TUI;
+  const app = new OctipusTuiApp(tui, {});
+  try {
+    gateway.listener({ kind: 'command.result', name: 'work-plan', result: 'Plan title\n[>] First' });
+    gateway.listener({ kind: 'command.result', name: 'work-plan-status', result: '1/3 done' });
+    requestRender.mockClear();
+    gateway.listener({ kind: 'command.result', name: 'work-plan', result: 'Plan title\n[>] Second' });
+    expect(requestRender).toHaveBeenCalled();
+    const messages = root.children[0];
+    const transcript = messages.render(120).join('\n');
+    expect(transcript.match(/Plan title/g)).toHaveLength(1);
+    const bar = root.children.find(c => c instanceof StatusBar)!;
+    expect(bar.render(120).join('\n')).toContain('Second');
+  } finally { await app.stop(); }
+});

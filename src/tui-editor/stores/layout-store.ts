@@ -61,8 +61,8 @@ export class LayoutStore {
     for (const fn of this.listeners) fn(this.state);
   }
 
-  toggleTree(): void { this.set({ treeVisible: !this.state.treeVisible }); }
-  toggleChat(): void { this.set({ chatVisible: !this.state.chatVisible }); }
+  toggleTree(): void { this.set({ treeVisible: !this.state.treeVisible, focused: this.state.focused === 'tree' ? 'editor' : this.state.focused }); }
+  toggleChat(): void { this.set({ chatVisible: !this.state.chatVisible, focused: this.state.focused === 'chat' ? 'editor' : this.state.focused }); }
 
   /**
    * Cycle focus across the visible panes. Hidden panes are skipped

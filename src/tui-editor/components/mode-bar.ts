@@ -15,6 +15,10 @@ export interface ModeBarOptions {
 }
 
 export class ModeBar implements Component {
+  private recoveryFailed = false;
+  setRecoveryFailed(failed: boolean): boolean { const changed = failed !== this.recoveryFailed; this.recoveryFailed = failed; return changed; }
+  private notice: string | null = null;
+  setNotice(text: string | null): void { this.notice = text; }
   constructor(
     private readonly layout: LayoutStore,
     private readonly buffers: BufferStore,
@@ -27,6 +31,8 @@ export class ModeBar implements Component {
     const palette = getPalette();
     const layout = this.layout.get();
     const active = this.buffers.active();
+    if (this.recoveryFailed) return [truncateToWidth(chalk.hex(palette.error)('Recovery checkpoint failed. Save your files before closing.'), width)];
+    if (this.notice) return [truncateToWidth(chalk.hex(palette.error)(this.notice), width)];
     const parts: string[] = [];
     parts.push(chalk.bold.hex(palette.accent)(this.modeBadge(layout.editorMode)));
     parts.push(chalk.hex(palette.dim)(`focus:${layout.focused}`));

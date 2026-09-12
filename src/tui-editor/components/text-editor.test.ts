@@ -73,3 +73,27 @@ describe('TextEditor', () => {
     expect(store.get().buffers.find((b) => b.id === rec.id)?.dirty).toBe(true);
   });
 });
+
+test('long lines scroll horizontally and keep the cursor marker in bounds', async () => {
+  const { CURSOR_MARKER, visibleWidth } = await import('@mariozechner/pi-tui');
+  const { editor, rec } = setup('a'.repeat(80) + 'END');
+  rec.buffer.moveLineEnd();
+  const line = editor.render(20)[0];
+  expect(line).toContain(CURSOR_MARKER); expect(strip(line)).toContain('END');
+  expect(visibleWidth(line)).toBeLessThanOrEqual(20);
+  rec.buffer.moveLineStart(); expect(strip(editor.render(20)[0])).toContain('aaaa');
+});
+
+test('cursor after tab and wide glyph uses terminal cells', async () => {
+  const { CURSOR_MARKER, visibleWidth } = await import('@mariozechner/pi-tui');
+  const { editor, rec } = setup('\t界x');
+  rec.buffer.setCursor({ line: 0, col: 2 });
+  const line = editor.render(40)[0];
+  expect(visibleWidth(line.split(CURSOR_MARKER)[0])).toBe(8); // gutter 2 + tab 4 + CJK 2
+});
+
+test('bracketed multiline paste inserts content without escape sequences', () => {
+  const { editor, rec } = setup('');
+  editor.handleInput('\x1b[200~hello\r\n'); editor.handleInput('world\x1b[201~');
+  expect(rec.buffer.text()).toBe('hello\nworld');
+});

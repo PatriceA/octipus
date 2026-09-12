@@ -26,6 +26,10 @@ export async function launchOctipusEditor(options: LaunchEditorOptions = {}): Pr
     projectPath: options.projectPath,
     onShutdown: runtime.shutdown,
   });
+  runtime.setExitHandler(signal => {
+    if (signal === 'SIGINT') app.requestQuit();
+    else void app.stop().then(() => process.exit(0));
+  });
   await app.start();
 }
 

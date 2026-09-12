@@ -1,16 +1,4 @@
-/**
- * pi-tui runtime bootstrap for octipus.
- *
- * Wraps `new TUI(new ProcessTerminal())` with the bits the chat shell
- * needs: SIGINT cleanup, terminal title, API port resolution, and a
- * place to swap in `BunProcessTerminal` later if Bun's stdin raw mode
- * trips ProcessTerminal.
- *
- * For Phase 1 the stock ProcessTerminal works on Bun (verified by
- * bun-runtime smoke test). If a regression appears, drop a custom
- * Terminal implementation here that conforms to pi-tui's `Terminal`
- * interface — the rest of the app sees only the TUI handle.
- */
+/** Node terminal bootstrap: pi-tui, keybindings, connection defaults and shutdown. */
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { type KeybindingsManager, ProcessTerminal, TUI } from '@mariozechner/pi-tui';
@@ -30,10 +18,11 @@ export interface Runtime {
   gatewayUrl: string;
   keybindings: KeybindingsManager;
   shutdown: () => Promise<void>;
+  setExitHandler: (handler: (signal: 'SIGINT' | 'SIGTERM') => void) => void;
 }
 
 /**
- * Read API port from .env (mirrors src/tui/index.tsx:32-48).
+ * Read API port from the environment or checkout configuration.
  */
 export function getApiPort(): string {
   if (process.env.API_PORT) return process.env.API_PORT;
@@ -66,8 +55,8 @@ export function createRuntime(options: RuntimeOptions = {}): Runtime {
     try { await terminal.drainInput(800, 50); } catch { /* drain failure is non-fatal */ }
   };
 
-  process.on('SIGINT', () => { void shutdown().then(() => process.exit(0)); });
-  process.on('SIGTERM', () => { void shutdown().then(() => process.exit(0)); });
-
-  return { tui, gatewayUrl, keybindings, shutdown };
+  let exitHandler = (_signal: 'SIGINT' | 'SIGTERM') => { void shutdown().then(() => process.exit(0)); };
+  process.on('SIGINT', () => exitHandler('SIGINT'));
+  process.on('SIGTERM', () => exitHandler('SIGTERM'));
+  return { tui, gatewayUrl, keybindings, shutdown, setExitHandler: handler => { exitHandler = handler; } };
 }

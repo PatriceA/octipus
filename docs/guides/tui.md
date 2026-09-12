@@ -1,299 +1,125 @@
-# TUI (Terminal User Interface)
+# Terminal chat and editor
 
-Two terminal surfaces ship with Octipus and connect to the gateway over
-the same WebSocket protocol the web UI uses:
+Octipus has two terminal surfaces:
 
-| Surface | Entry | Use it for |
-|---|---|---|
-| **Chat shell** (`src/tui-pi/`) | `octi tui` | Conversational chat with the agent — single composer + scrolling messages, slash commands, command palette. |
-| **Editor** (`src/tui-editor/`) | `octi edit` | Multi-pane workspace: file tree + buffer editor + agent chat side-by-side, with file picker, find/replace, diff overlay, etc. |
+| Surface | Command | Purpose |
+| --- | --- | --- |
+| Chat | `octi tui` | Work with an agent through a conversation, visible plan and activity |
+| Editor | `octi edit` | Edit local files alongside agent chat, with file navigation and diff review |
 
-Both surfaces require the backend to be running (`octi start`), or start both at once with `octi start tui`.
+Use Node **24.19 or newer**. Start the backend with `octi start`, then open either surface. `octi start tui` starts the backend and chat together. Use `--project /path/to/project` to choose a directory; the default is the current directory.
 
-## What this is built on
+Both surfaces use pi-tui for terminal rendering, overlays and the chat composer. The file editor uses Octipus's own buffer, cursor and undo implementation. It is a lightweight editor, not a replacement for a complete IDE.
 
-The terminal surfaces are written on top of
-[`@mariozechner/pi-tui`](https://www.npmjs.com/package/@mariozechner/pi-tui),
-a small differential-rendering TUI library. We use it for:
+## Reading a conversation
 
-- **Component model + differential renderer** — `Component`, `Container`,
-  `TUI`, with screen diffs so only changed cells are written.
-- **Editor primitive** — pi-tui's `Editor` is the underlying composer
-  for both the chat input and the file editor. It ships with paste
-  markers, kill ring, undo stack, history navigation, fuzzy file
-  completion, and slash-command autocomplete out of the box.
-- **Overlay system** — `tui.showOverlay(...)` for modal palettes,
-  permission prompts, file pickers, hotkeys, and diff views.
-- **Keybinding manager** — `getKeybindings()` + the `Keybindings`
-  interface; we extend it with our own ids (`app.palette.open`,
-  `app.tree.toggle`, …) and let users override via
-  `~/.octipus/keybindings.json`.
-- **Glyph helpers** — `truncateToWidth`, `visibleWidth`,
-  `wrapTextWithAnsi`, OSC-aware width measurement (so markdown
-  hyperlinks don't shrink panes).
+User turns have a **You** heading and a vertical rail on every wrapped line. Replies have an **Octipus** heading and render Markdown when complete. Streaming text remains plain until completion. System notices use a muted dot; errors have a visible `! Error` marker as well as an error colour.
 
-What we layer on top, under `src/tui-pi/` and `src/tui-editor/`:
+- `PageUp` and `PageDown` scroll by screen rows, including within one long answer.
+- While reading history, new messages and streaming text do not move the rows being read.
+- `End` returns to the latest output when scrolled back. Otherwise it retains its normal composer behaviour.
+- In the editor, transcript scrolling applies when the chat pane has focus.
+- Resizing while reading history clips the frozen rows to the new width. Returning to the latest output restores wrapping at the new width.
 
-- Gateway adapter (WebSocket + auth + reconnect).
-- Octipus-specific components: status bar, activity line, messages
-  pane, file tree, tab strip, mode bar, file picker, find / replace,
-  diff overlay, hotkeys overlay, workspace picker, MCP server list.
-- Theme + glyph table with terminal-aware emoji fallback.
+The activity line shows thinking, elapsed time, model and current tool activity. `Alt+S` / `F7` expands the subagent panel in either surface; `Alt+Up` / `Alt+Down` scroll its entries when expanded.
 
-The previous TUI was based on Ink (React for the terminal). Replaced
-in May 2026 — pi-tui provides differential rendering, and the shared `Editor` primitive lets the chat composer and
-the file editor evolve in lockstep.
+Both surfaces display streamed responses, identity, backend session usage, permission prompts and agent questions. Questions are queued: answering one reveals the next. Escape explicitly declines an agent question; it does not silently dismiss it and leave the agent waiting.
 
----
+## Plans and feedback
 
-## Chat shell — `octi tui`
+A persistent plan summary shows progress once the agent publishes a plan. It refreshes while connected.
 
-```
-● Octipus  · workspace          connected     17.3k tok · 3 turns · $0.0024
-                                                              ┐
-· Welcome to Octipus. Project: my-repo   Type a message or
-  /help for commands.
+| Command | Action |
+| --- | --- |
+| `/work-plan` | Expand the persistent plan details and put the full plan, evidence and feedback in the transcript |
+| `/plan-hide` | Collapse the persistent details |
+| `/plan-feedback <change>` | Send a correction or suggestion for the current plan |
+| `/plan on` / `/plan off` | Toggle the gateway's planning mode |
 
-❯ what's the weather in Berlin?
-  Agent spawned: research
+The compact details show steps near the active step. The full transcript entry remains available with PageUp. Plan progress is agent-reported, not independent verification. Feedback is recorded as pending; tools already running may finish first. If a turn has ended, send a message to continue with the feedback.
 
-  The current weather in Berlin is …
-─────────────────────────────────────────────────────────────
-                                                              │ composer
-─────────────────────────────────────────────────────────────
-```
-
-### Slash commands (chat shell)
-
-The composer's autocomplete pops up after `/`. Local commands are
-intercepted before reaching the gateway; everything else is forwarded, and
-`/help` shows both halves. A test (`slash-commands.sync.test.ts`) keeps the
-gateway half of the autocomplete list identical to the gateway's registry.
-
-| Command | Handled by | Description |
-|---|---|---|
-| `/exit`, `/quit` | TUI | Quit |
-| `/project [path]` | TUI | Show or set the active project path |
-| `/workspace [slug\|-]` | TUI | Show or switch the active workspace |
-| `/login`, `/logout`, `/whoami` | TUI | Sign in to an account, sign out, show who this terminal acts as |
-| `/resume <n\|id>` | TUI | Reopen a session from `/sessions` (by row number or id prefix) and replay it |
-| `/hotkeys` | TUI | Show the chat shell keybindings |
-| `/help` (`/h`, `/?`) | gateway | List available commands |
-| `/status` (`/s`) | gateway | Session + agents + expert |
-| `/sessions` | gateway | List your recent sessions |
-| `/history` | gateway | Replay this session's last 50 messages |
-| `/expert <name\|reset>` | gateway | Switch / list experts |
-| `/abort` (`/stop`, `/cancel`) | gateway | Cancel running agents |
-| `/plan [on\|off]` | gateway | Toggle plan mode |
-| `/work-plan`, `/plan-feedback <change>` | gateway | Show the visible work plan; give feedback on it |
-| `/compact [focus]` | gateway | Compact session context |
-| `/clear` (`/cls`, `/reset`) | gateway | Reset root agent + clear chat |
-| `/cost` | gateway | Token usage and cost for this session |
-| `/proposals [approve\|reject] [n]` | gateway | Review distilled skill/expert proposals |
-| `/mcp [reconnect] [server]` | gateway | MCP server status / reconnect |
-| `/diff` | gateway | Workspace git diff |
-| `/changes [file]` | gateway | Review workspace changes — list, or a file diff |
-| `/reload-extensions` (`/reload`) | gateway | Re-discover and reload user extensions |
-| `/persona` | gateway | Configure the root agent persona |
-| `/version` (`/v`) | gateway | Build info |
-
-### Resuming a session
-
-Every `octi tui` launch starts a fresh session. To pick an earlier one up:
-
-```
-octi tui --session <id>        # replay that session on connect
-/sessions                      # inside the shell: list recent sessions
-/resume 2                      # reopen row 2 (or /resume <id prefix>)
-```
-
-The transcript is replayed from the database, the plan line and counters
-reset, and the next message continues that conversation.
-
-### Keybindings (chat shell)
+## Chat shortcuts and commands
 
 | Key | Action |
-|---|---|
+| --- | --- |
 | `Ctrl+P` / `F4` | Command palette |
-| `F5` | Print hotkeys |
-| `Alt+S` / `F7` | Expand/collapse the subagent panel |
-| `Alt+T` / `F8` | Push-to-talk: start/stop voice input |
+| `F5` | Show shortcuts |
 | `Ctrl+Q` | Quit |
-| `PageUp` / `PageDown` | Scroll the transcript |
-| `Up` / `Down` (in composer) | Navigate chat input history |
-| `Tab` (in composer) | Accept completion / fuzzy file completion |
-| `\\` then `Enter` | Newline in chat input (terminals without `Shift+Enter`) |
+| `Up` / `Down` in composer | Input history |
+| `Tab` | Completion |
+| `\` then `Enter` | Newline when the terminal does not support Shift+Enter |
+| `Alt+T` / `F8` | Chat shell voice input, when configured |
 
-### While the agent runs
+Typing `/` opens command completion. `/help` lists available commands. Common gateway commands include `/status`, `/abort`, `/cost`, `/changes`, `/expert` and `/compact`.
 
-The reply streams into the transcript as the model produces it (setting
-`agent.streaming`, on by default; text from an earlier iteration stays as its
-own message when the agent goes on to call a tool). The activity line shows
-`thinking · <role> · iter N · <elapsed>s · <model>` until a tool call takes it
-over. A message typed while a turn is running
-steers that turn (the shell prints "Steering the running turn"); if the
-gateway had to drop events under load, the shell says so rather than leaving
-a spinner hanging.
+The standalone chat shell also handles `/login`, `/logout`, `/whoami`, `/project`, `/workspace` and `/resume` locally. These local commands are not all implemented by the editor; its palette includes the shared gateway commands, plan controls and editor shortcuts.
 
----|---|---|
-| `/exit`, `/quit` | TUI | Quit |
-| `/cost` | TUI | Show cumulative tokens / turns / cost |
-| `/project [path]` | TUI | Show or set the active project path |
-| `/help` (`/h`, `/?`) | gateway | List available commands |
-| `/status` (`/s`) | gateway | Session + agents + expert |
-| `/expert <name\|reset>` | gateway | Switch / list experts |
-| `/abort` (`/stop`, `/cancel`) | gateway | Cancel running agents |
-| `/compact [focus]` | gateway | Compact session context |
-| `/clear` (`/cls`, `/reset`) | gateway | Reset root agent + clear chat |
-| `/diff` | gateway | Workspace git diff |
-| `/changes [file]` | gateway | Review workspace changes — list, or a file diff |
-| `/reload-extensions` (`/reload`) | gateway | Re-discover and reload user extensions |
-| `/persona` | gateway | Configure the root agent persona |
-| `/version` (`/v`) | gateway | Build info |
+To resume a chat session:
 
-### Keybindings (chat shell)
-
-| Key | Action |
-|---|---|
-| `Ctrl+P` / `F4` | Command palette |
-| `F5` | Hotkeys overlay |
-| `Alt+T` / `F8` | Push-to-talk: start/stop voice input |
-| `Ctrl+Q` | Quit |
-| `Up` / `Down` (in composer) | Navigate chat input history |
-| `Tab` (in composer) | Accept completion / fuzzy file completion |
-| `\` then `Enter` | Newline in chat input (terminals without `Shift+Enter`) |
-
----
-
-## Editor — `octi edit`
-
-```
-● Octipus  · workspace                              connected
-[+] my-repo            │  README.md                │· Welcome to Octipus.
-  [+] src              │ 1  # Octipus              │  Type /help for cmds.
-        index.ts       │ 2                         │
-  [+] tests            │ 3  > **alpha**            │ ❯ open src/index.ts
-        a.test.ts      │ 4                         │   opening...
-        b.test.ts      │ 5  ## What it is          │
-                       │                           │ ──────────────────
-INS  README.md  markdown  L1:1                     │                   │
-                                                   │ ──────────────────
+```text
+octi tui --session <id>
 ```
 
-Three independently togglable panes:
+Or use `/sessions` followed by `/resume <n|id>` inside the chat shell. The editor currently starts a new agent session on launch; restoring local editor buffers does not resume an agent conversation.
 
-- **Left** — file tree, rooted at `--project` (default: cwd).
-- **Center** — buffer area: tab strip + editor body. Multiple files
-  can be open; switching tabs preserves cursor and undo stacks.
-- **Right** — chat (same composer as the chat shell, same gateway
-  adapter, same slash commands).
+## Working in the editor
 
-Persisted state at `~/.octipus/tui-editor.json` (open buffers,
-cursors, pane visibility, theme, vim-mode toggle).
-
-### Keybindings (editor)
-
-App-level. Overridable via `~/.octipus/keybindings.json` — see
-[`docs/architecture/TUI-EDITOR.md`](../architecture/TUI-EDITOR.md) for
-the full list and the reasoning behind which terminal-collision-prone
-combos are avoided (e.g. no `Ctrl+M` because that's `Enter` in non-Kitty
-terminals, no `Ctrl+H` because that's `Backspace`).
+At 80 columns and wider, the editor shows a file tree, buffer editor and chat. Below 80 columns, it shows the focused pane at full width. Switching focus switches the visible pane too. Hiding a focused side pane returns focus to the editor.
 
 | Key | Action |
-|---|---|
-| `Ctrl+O` | File picker (type to filter, Enter to open) |
-| `Ctrl+S` | Save active buffer |
-| `Ctrl+W` | Close active buffer |
-| `Alt+,` / `F2` | Previous buffer |
-| `Alt+.` / `F3` | Next buffer |
+| --- | --- |
+| `Ctrl+O` | Find and open a file |
+| `Ctrl+S` | Save the active file |
+| `Ctrl+W` | Close a buffer, with unsaved-change protection |
+| `Alt+,` / `F2`, `Alt+.` / `F3` | Previous / next buffer |
 | `Ctrl+B` | Toggle file tree |
-| `Alt+J` | Toggle chat pane |
-| `Ctrl+\` / `F6` | Cycle pane focus (tree → editor → chat) |
-| `Ctrl+F` | Find in buffer |
-| `Alt+R` | Find & replace |
-| `Ctrl+K` | Switch workspace |
+| `Alt+J` | Toggle chat |
+| `Ctrl+\` / `F6` | Cycle focus: editor → chat → tree |
+| `Ctrl+F` | Find |
+| `Alt+R` | Find and replace |
+| `Ctrl+K` | Workspace picker |
 | `Ctrl+E` | MCP server list |
-| `Ctrl+P` / `F4` | Command palette |
-| `F5` | Hotkeys overlay |
-| `Ctrl+Q` | Quit |
+| `Ctrl+Q` | Quit, with unsaved-change protection |
 
-Chat-side fallbacks (typing in the chat composer always works, even
-if a key is hijacked by the host terminal):
+Long lines scroll horizontally to keep the cursor visible. Tabs and wide characters are measured in terminal cells. Bracketed multiline paste inserts text without inserting the terminal control markers.
 
-- `/quit`, `/exit`, `/q` — exit
-- `/keys` (`/hotkeys`) — open hotkeys overlay
-- `/palette` — open command palette
-- `/reload` — reload `~/.octipus/keybindings.json`
+When closing a dirty buffer or quitting, choose **Save**, **Discard**, or **Cancel**. Enter and Escape cancel by default. Failed saves retain the buffer and report an error. Scratch buffers do not yet have a Save As dialog; they remain recoverable drafts until discarded.
 
----
+Layout, open paths, cursor positions and unsaved drafts are checkpointed to:
 
-## Glyphs / emoji
-
-The tree, status bar, and message bullets default to ASCII glyphs
-(`[+]`, `·`, `❯`) on Linux terminals because most distro-default
-fonts don't ship the emoji subset (`📁` then renders as a tofu box).
-Emoji turn on automatically for known emoji-capable terminals
-(`kitty`, `wezterm`, `iTerm.app`, `vscode`, `ghostty`).
-
-Force either way:
-
-```bash
-OCTIPUS_TUI_ICONS=emoji octi tui
-OCTIPUS_TUI_ICONS=ascii octi edit
+```text
+~/.octipus/projects/<project-hash>/tui-editor.json
 ```
 
----
+The state file is private to its owner. Changes are checkpointed after a short debounce and flushed during orderly shutdown, including SIGTERM. Reopening the editor restores drafts as unsaved buffers for review. A forced kill or machine failure can lose edits since the last successful checkpoint. A checkpoint failure is reported in the mode bar.
 
-## Authentication
+Agent file changes to open buffers are queued for diff review in the default lock mode. Accept updates the in-memory buffer; save it to write that buffer to disk. Reject keeps the current buffer. This review controls the editor buffer; it does not undo a filesystem write the agent already performed.
 
-Both surfaces use **local-token authentication** — no password or
-browser login needed.
+## Connection and appearance
 
-On first launch, a token file is created at `~/.octipus/local-token`
-(chmod 600). The gateway accepts this token only from `127.0.0.1`
-connections, so it cannot be used remotely.
-
-To regenerate the token:
+Both clients connect to the gateway, normally `ws://localhost:3005/gateway`, using a stored CLI login or local-token authentication. Override the port with `API_PORT` or the checkout's `.env`:
 
 ```bash
-rm ~/.octipus/local-token   # next launch creates a fresh one
-```
-
-## Connection status
-
-The status bar dot reflects the WebSocket state:
-
-| Status | Color | Meaning |
-|---|---|---|
-| `connected` | green | authenticated and ready |
-| `connecting` | yellow | opening WebSocket |
-| `authenticating` | yellow | sending auth handshake |
-| `disconnected` | red | not connected |
-| `error` | red | connection error |
-
-Drops auto-reconnect with exponential backoff (1s → 30s, 10 attempts).
-
-## Configuration
-
-The TUI connects to `ws://localhost:$API_PORT/gateway`. Override the
-port via the `.env` file (`API_PORT=…`) or the env var:
-
-```bash
-API_PORT=3015 octi tui
 API_PORT=3015 octi edit --project ~/code/myapp
 ```
 
-## End-to-end tests
+The default palette uses the Deep Sea accent colours. Actual background colour and glyph availability depend on the terminal and font. File/status icons have an ASCII fallback:
 
-A harness drives both surfaces under a fixed terminal size and verifies
-launch, focus cycling, slash commands, the file picker, and `/quit`. Skipped
-automatically when the gateway isn't running. This suite still runs on
-`bun:test` (not yet migrated to Vitest with the rest of the test suite), so
-it needs the `bun` binary on PATH:
+```bash
+OCTIPUS_TUI_ICONS=ascii octi edit
+OCTIPUS_TUI_ICONS=emoji octi tui
+```
+
+Keybindings can be overridden in `~/.octipus/keybindings.json`. The editor's `/reload` reloads those bindings; `/hotkeys` displays them.
+
+## Testing
 
 ```bash
 npm run test:tui
 ```
 
-See `tests/tui/harness.ts` for the keystroke + ANSI-stripping helper
-that other TUI tests can build on.
+This runs component, application and terminal regression tests. The terminal tests use **Python 3's standard-library PTY support** plus a Node terminal emulator. They launch the shipped entry points against a controlled local WebSocket fixture, so no running Octipus server, provider credentials or paid model calls are required.
+
+The tests assert current screen contents, including streaming, approvals, plan feedback, resize/focus and save/quit flows. They run in the normal Vitest suite and Linux CI. The real-PTY portion is explicitly skipped on Windows; native Windows terminal rendering still needs separate verification. Tests do not establish compatibility with every terminal or font.
+
+See [TUI architecture](../architecture/TUI-EDITOR.md) for implementation details.

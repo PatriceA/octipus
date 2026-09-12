@@ -2,7 +2,7 @@
  * One-line top status bar: app name, connection dot, project label,
  * cumulative token/cost/turn counters, optional active expert.
  */
-import { type Component, truncateToWidth } from '@mariozechner/pi-tui';
+import { type Component, truncateToWidth, wrapTextWithAnsi } from '@mariozechner/pi-tui';
 import type { ConnectionStatus } from '@/core/gateway/client';
 import { chalk, getPalette } from '../theme/defaults';
 import { getGlyphs } from '../theme/glyphs';
@@ -15,6 +15,8 @@ export interface ContextFill { used: number; window?: number }
 export interface McpSummary { connected: number; total: number }
 
 export class StatusBar implements Component {
+  private maxRows = 12;
+  setMaxRows(rows: number): void { this.maxRows = Math.max(1, rows); }
   private status: ConnectionStatus = 'disconnected';
   private project?: string;
   private expert: string | null = null;
@@ -24,7 +26,10 @@ export class StatusBar implements Component {
   private user: string | null = null;
   private mode: string | null = null;
   private plan: string | null = null;
-  setPlan(plan: string | null): void { this.plan = plan; }
+  private planDetails: string | null = null;
+  setPlanDetails(text: string | null): void { this.planDetails = text; }
+  isPlanExpanded(): boolean { return this.planDetails !== null; }
+  setPlan(plan: string | null): void { this.plan = plan; if (plan === null) this.planDetails = null; }
 
   setStatus(status: ConnectionStatus): void { this.status = status; }
   setProject(project: string | undefined): void { this.project = project; }
@@ -49,7 +54,7 @@ export class StatusBar implements Component {
         ? chalk.hex(palette.warn)('●')
         : chalk.hex(palette.error)('●');
     const title = chalk.bold.hex(palette.accent)('Octipus');
-    const parts: string[] = [`${dot} ${title}`];
+    const parts: string[] = [`${dot} ${title}`, chalk.hex(palette.dim)(this.status)];
     if (this.mode) parts.push(chalk.hex(palette.accent)(`[${this.mode}]`));
     // Whose account this terminal is acting as. `local` is not a user: it
     // reaches no personal memories, vault secrets or account settings, so the
@@ -82,9 +87,16 @@ export class StatusBar implements Component {
         parts.push(chalk.hex(palette.statusFg)(`ctx ${formatTokens(this.context.used)}`));
       }
     }
-    parts.push(chalk.hex(palette.dim)(this.status));
-    const planLine = this.plan ? [truncateToWidth(chalk.hex(palette.accent)(`Plan · ${this.plan} · /work-plan`), width)] : [];
-    return [...planLine, truncateToWidth(parts.join('  '), width)];
+    const planLine = this.plan ? [truncateToWidth(chalk.hex(palette.accent)(`Plan · ${this.plan}`), width)] : [];
+    if (this.planDetails) {
+      const source = this.planDetails.split('\n');
+      const steps = source.filter(line => /^\[(?:x|>|!| |-|done|active|pending)\]/.test(line));
+      const active = steps.findIndex(line => /^\[(?:>|!|active)\]/.test(line));
+      const visible = steps.length ? steps.slice(Math.max(0, active - 1), Math.max(0, active - 1) + 4) : source.slice(0, 4);
+      planLine.push(...visible.flatMap(line => wrapTextWithAnsi(line, Math.max(1, width))).slice(0, 5).map(line => chalk.hex(palette.statusFg)(line)));
+    }
+    if (this.plan || this.planDetails) planLine.push(truncateToWidth(chalk.hex(palette.dim)(this.planDetails ? '/plan-hide · /plan-feedback <change>' : '/work-plan · /plan-feedback <change>'), width));
+    return fitStatusRows([...planLine, truncateToWidth(parts.join('  '), width)], this.maxRows);
   }
 }
 
@@ -92,4 +104,12 @@ function formatTokens(tokens: number): string {
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M tok`;
   if (tokens >= 1_000)     return `${(tokens / 1_000).toFixed(1)}k tok`;
   return `${tokens} tok`;
+}
+
+/** Keep plan identity, its actions, and connection visible when details shrink. */
+export function fitStatusRows(lines: string[], rows: number): string[] {
+  if (lines.length <= rows) return lines;
+  if (rows <= 1) return lines.slice(-1);
+  if (rows === 2) return [lines[0], lines[lines.length - 1]];
+  return [lines[0], ...lines.slice(1, -2).slice(0, rows - 3), ...lines.slice(-2)];
 }

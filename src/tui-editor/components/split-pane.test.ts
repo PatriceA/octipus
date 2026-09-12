@@ -20,10 +20,10 @@ describe('SplitPane', () => {
     const chat   = new FixedComponent(['C1', 'C2', 'C3']);
     const pane = new SplitPane({ layout, tree, editor, chat });
     const lines = pane.render(120).map(strip);
-    expect(lines.length).toBe(3); // tallest pane drives row count
-    expect(lines[0]).toContain('T1');
-    expect(lines[0]).toContain('E1');
-    expect(lines[0]).toContain('C1');
+    expect(lines.length).toBe(4); // tallest pane drives row count
+    expect(lines[1]).toContain('T1');
+    expect(lines[1]).toContain('E1');
+    expect(lines[1]).toContain('C1');
   });
 
   test('hides tree pane when treeVisible toggled off', () => {
@@ -90,4 +90,19 @@ describe('SplitPane', () => {
     const lines = pane.render(80).map(strip);
     for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(80);
   });
+});
+
+test('a narrow terminal displays whichever pane owns input focus', () => {
+  const layout = new LayoutStore();
+  const pane = new SplitPane({ layout, tree: new FixedComponent(['TREE']), editor: new FixedComponent(['EDITOR']), chat: new FixedComponent(['CHAT']) });
+  layout.focus('chat'); expect(pane.render(50).map(strip).join('\n')).toContain('CHAT');
+  expect(pane.render(50).map(strip).join('\n')).not.toContain('EDITOR');
+  layout.toggleChat(); expect(layout.get().focused).toBe('editor');
+  expect(pane.render(50).map(strip).join('\n')).toContain('EDITOR');
+});
+
+test('resize notification happens before any child renders', () => {
+  const layout = new LayoutStore(); let resized = false;
+  const child = { invalidate() {}, render() { expect(resized).toBe(true); return ['x']; } };
+  new SplitPane({ layout, tree: child, editor: child, chat: child, onResize: () => { resized = true; } }).render(120);
 });

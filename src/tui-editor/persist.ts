@@ -25,7 +25,7 @@
  * settings registry that the rest of the app uses.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -42,6 +42,7 @@ export interface PersistedState {
   editorMode: 'modeless' | 'vim';
   /** Cursor position per file, persisted so re-opens land where the user left off. */
   cursorByPath?: Record<string, PersistedCursor>;
+  drafts?: Array<{ path: string | null; text: string; label: string }>;
 }
 
 export const DEFAULT_PERSISTED_STATE: PersistedState = {
@@ -99,6 +100,7 @@ export function loadPersistedState(path: string = legacyDefaultPath()): Persiste
       theme: parsed.theme === 'light' ? 'light' : 'dark',
       editorMode: parsed.editorMode === 'vim' ? 'vim' : 'modeless',
       cursorByPath: sanitizeCursors(parsed.cursorByPath),
+      drafts: Array.isArray(parsed.drafts) ? parsed.drafts.filter(d => d && (d.path === null || typeof d.path === 'string') && typeof d.text === 'string' && typeof d.label === 'string') : [],
     };
   } catch {
     return DEFAULT_PERSISTED_STATE;
@@ -127,7 +129,8 @@ export function savePersistedState(state: PersistedState, path: string = legacyD
     const dir = dirname(path);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     const tmp = `${path}.tmp`;
-    writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8');
+    writeFileSync(tmp, JSON.stringify(state, null, 2), { encoding: 'utf8', mode: 0o600 });
+    chmodSync(tmp, 0o600);
     renameSync(tmp, path);
     return true;
   } catch {

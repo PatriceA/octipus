@@ -45,6 +45,7 @@ export const OCTIPUS_SLASH_COMMANDS: OctipusSlashCommand[] = [
   gw({ name: 'expert',    description: 'Switch expert or list available experts',
        argumentHint: '<name|reset>',                                                         aliases: ['e'] }),
   gw({ name: 'abort',     description: 'Cancel running agents',                              aliases: ['stop', 'cancel'] }),
+  { name: 'plan-hide', description: 'Collapse the expanded plan', source: 'tui' },
   gw({ name: 'work-plan', description: 'Show the current work plan, evidence, and feedback' }),
   gw({ name: 'plan-feedback', description: 'Give feedback on the visible work plan', argumentHint: '<change>' }),
   gw({ name: 'plan',      description: 'Toggle plan mode — explore and propose, change nothing',

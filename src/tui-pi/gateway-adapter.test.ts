@@ -170,9 +170,9 @@ describe('decodeGatewayEvent', () => {
     expect(event.tool.mcpServer).toBe('serpapi');
   });
 
-  test('chat.response is a no-op (handled via onResponse)', () => {
+  test('chat.response is decoded after session filtering', () => {
     const out = decodeGatewayEvent({ type: 'chat.response', payload: { response: 'hi' } });
-    expect(out.length).toBe(0);
+    expect(out).toEqual([{ kind: 'message', role: 'assistant', content: 'hi' }]);
   });
 
   test('unknown event type produces no events', () => {

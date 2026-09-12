@@ -122,3 +122,13 @@ describe('SubagentPanel', () => {
     expect(panel.size).toBe(1);
   });
 });
+
+test('expanded agent list can reach children beyond the visible rows', () => {
+  const panel = new SubagentPanel();
+  for (let n = 0; n < 8; n++) panel.start(`a${n}`, `role-${n}`, 'model');
+  panel.toggle(); panel.setMaxRows(3);
+  expect(strip(panel.render(100)).join('\n')).not.toContain('role-7');
+  expect(panel.scroll(20)).toBe(true);
+  expect(strip(panel.render(100)).join('\n')).toContain('role-7');
+  expect(panel.render(100)).toHaveLength(3);
+});

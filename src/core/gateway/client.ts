@@ -7,7 +7,6 @@ export type ConnectionStatus = 'disconnected' | 'connecting' | 'authenticating' 
 export interface GatewayClientOptions {
   url?: string;
   onEvent?: (event: any) => void;
-  onResponse?: (response: string) => void;
   onCommandResult?: (name: string, result: unknown, error?: string, data?: unknown) => void;
   onStatusChange?: (status: ConnectionStatus) => void;
   onError?: (error: string) => void;
@@ -258,10 +257,8 @@ export class GatewayClient {
         break;
 
       case 'event':
-        if (msg.event.type === 'chat.response') {
-          const payload = msg.event.payload as any;
-          this.options.onResponse?.(payload.response?.response || payload.response || '');
-        }
+        // chat.response reaches consumers through onEvent like every other
+        // event (the TUI adapter decodes it after its session filter).
         this.options.onEvent?.(msg.event);
         break;
 

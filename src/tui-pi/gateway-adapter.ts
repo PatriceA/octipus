@@ -93,7 +93,6 @@ export class GatewayAdapter {
       url: options.url,
       getWorkspace: () => this.workspaceSlug ?? this.externalGetWorkspace?.() ?? null,
       onStatusChange: (status) => this.emit({ kind: 'status', status }),
-      onResponse: (response) => this.emit({ kind: 'message', role: 'assistant', content: response }),
       onCommandResult: (name, result, error, data) => this.emit({ kind: 'command.result', name, result, error, data }),
       onError: (message) => this.emit({ kind: 'error', message }),
       onEvent: (event) => this.decode(event),
@@ -465,9 +464,13 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
       if (payload.injected === true) out.push({ kind: 'message', role: 'system', content: 'Steering the running turn with your message.' });
       return out;
 
-    // GatewayClient handles chat.response via onResponse.
-    case 'chat.response':
+    // Decode after the session filter, just like streamed chunks.
+    case 'chat.response': {
+      const response = payload.response;
+      const content = typeof response === 'string' ? response : response && typeof response === 'object' ? (response as { response?: unknown }).response : '';
+      if (typeof content === 'string') out.push({ kind: 'message', role: 'assistant', content });
       return out;
+    }
   }
 
   return out;

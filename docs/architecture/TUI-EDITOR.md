@@ -1,295 +1,75 @@
-# TUI editor — design
+# Terminal UI architecture
 
-A full-screen terminal editor that doubles as the agent's
-collaborator. The user lives inside a multi-pane editor while the
-agent edits files alongside, and approval gates / chat messages
-appear inline.
+Octipus's chat shell (`src/tui-pi/`) and editor (`src/tui-editor/`) use `@mariozechner/pi-tui` for differential terminal rendering, the chat composer and overlays. The file editor uses Octipus's own `Buffer` and `TextEditor` components.
 
-> **Implementation update (May 2026).** The editor (and chat shell)
-> were rewritten on top of [`@mariozechner/pi-tui`](https://www.npmjs.com/package/@mariozechner/pi-tui)
-> after an initial Ink-based prototype. Pi-tui is a small differential-
-> rendering TUI library — `Component` / `Container` / `TUI` plus a
-> built-in `Editor`, overlay system, and keybindings manager. The
-> sections below reflect the shipping pi-tui implementation.
+## Shared conversation presentation
 
-## What pi-tui gives us
+`ChatSessionPresenter` handles streaming iterations, completed replies, thinking/tool activity, subagent events, identity, session usage and plan status in both surfaces. Application-specific responsibilities such as chat login/resume and editor file operations stay in their respective apps.
 
-| Pi-tui primitive | Used for |
-|---|---|
-| `TUI` + `Container` | Root + pane composition with differential rendering |
-| `Editor` | Both the chat composer **and** the file-buffer editor; ships paste markers, kill ring, undo, history nav, fuzzy file completion, slash-command autocomplete |
-| `tui.showOverlay()` | Modal layer for command palette, file picker, find/replace, diff, hotkeys, permission prompts, workspace picker, MCP list |
-| `KeybindingsManager` | App-level binding ids (`app.palette.open`, …) + user overrides at `~/.octipus/keybindings.json` |
-| `Markdown` component | Assistant message rendering (headings, code fences, links) |
-| `truncateToWidth`, `visibleWidth`, `wrapTextWithAnsi` | OSC-aware width math (markdown hyperlinks don't break pane padding) |
+`GatewayAdapter` scopes event decoding to the active session, including final responses. Commands carry that session ID. The editor creates a fresh session per launch; buffer recovery is separate from agent-session resumption.
 
-What we layer on top, under `src/tui-editor/`:
+`MessagesPane` renders role labels, user rails, Markdown replies and distinct errors. Historical message rendering is cached by message and width; a live delta does not reparse historical Markdown. The viewport scrolls in terminal rows. While reading history, it freezes rendered rows so new events cannot move the reading position. Resizing clips that frozen view; returning to the live tail reflows at the current width.
 
-- Gateway adapter (WebSocket auth + reconnect; reused from the chat shell).
-- App-level components: file tree, tab strip, mode bar, file picker,
-  find/replace overlay, diff overlay, workspace picker, MCP server list,
-  hotkeys overlay.
-- Stores: `BufferStore`, `LayoutStore`, `WorkspaceStore`, `AgentStore`.
-- Theme + glyph helper with terminal-capability emoji fallback.
+`renderChatFrame` allocates rows among transcript, activity, subagents, composer and optional status. Multiline input is cropped around pi-tui's `CURSOR_MARKER`. The plan summary, actions and connection line take priority over expanded details on short screens.
 
-## Goals
+`StatusBar` displays plan progress and optionally steps around the active one. `/work-plan` opens details and adds the full report to the transcript; automatic refreshes update the details without duplicating the transcript entry. `/plan-feedback` uses the existing gateway command. Plans and costs retain the backend's semantics; a displayed step completion is not independent verification.
 
-- **Editor-first**, not chat-first. The center pane is a real text
-  editor with cursor + selection + scrolling. The agent's
-  conversation lives in a side pane.
-- **Multi-buffer** with explicit file backing — open files become
-  buffers; agent edits show up as live in-buffer diffs the user
-  can accept / reject inline.
-- **Pane composition** — left file tree, center editor, right
-  chat. Each pane can be hidden / focused / resized.
-- **Keyboard-first** with discoverable shortcuts via a command
-  palette (`Ctrl+P` / `F4`) and a hotkeys overlay (`F5`).
-- **Agent integration** routes through the existing gateway
-  client; no fork in the auth / session model.
-- **Multi-user aware**: respects the `X-Octipus-Workspace`
-  header so the file tree + agent context match the active workspace.
+`DecisionQueue` serializes permission and approval prompts. Each decision is answered through its corresponding gateway channel. Escape declines. Other global shortcuts do not dismiss a pending modal. Shutdown declines queued requests before disconnecting.
 
-## Layout
+## Editor composition
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ ● Octipus  · workspace          connected     17.3k tok · 3 turns    │  status bar
-├──────────────┬──────────────────────────────┬───────────────────────┤
-│ [+] src/     │  README.md  index.ts         │ Chat                  │
-│   index.ts   │  1  # Octipus                │                       │
-│   foo.ts     │  2                           │ ❯ open src/index.ts   │
-│ [+] tests/   │  3  > alpha                  │   opening …           │
-│              │  …                           │ ────────────────────  │
-│              │                              │                       │
-│              │                              │ ────────────────────  │
-├──────────────┴──────────────────────────────┴───────────────────────┤
-│ INS  README.md  markdown  L1:1                                       │  mode bar
-└──────────────────────────────────────────────────────────────────────┘
-```
+`SplitPane` displays Files, Editor and Chat with a visible focus marker. At widths below 80 columns it renders the focused pane at full width. `LayoutStore` moves focus to the editor when a focused side pane is hidden. Resize callbacks run before child rendering.
 
-Three pane regions, each independently mountable:
+The editor frame sizes itself from the terminal's row count and the rendered status height. The central region contains the tab strip and `TextEditor`; chat reuses the shared frame and subagent panel.
 
-- **Left** — workspace file tree (toggleable with `Ctrl+B`).
-- **Center** — editor + tab strip. Multiple buffers can be open;
-  one is focused. Tabs cycle with `Alt+,` / `Alt+.` (or `F2` / `F3`).
-- **Right** — chat with the agent. Same composer + slash registry as
-  the chat shell. Toggleable with `Alt+J`.
-- **Status bar** (top, single line) — global state.
-- **Mode bar** (bottom, single line) — cursor position, focus pane,
-  active buffer, active permission prompt.
+| Component / store | Responsibility |
+| --- | --- |
+| `BufferStore` | Open buffers, dirty flags, active buffer, agent locks and edit application |
+| `editor/buffer.ts` | Text, cursor, selection and undo/redo |
+| `TextEditor` | Keyboard editing, Vim adapter, paste handling, highlighting and vertical/horizontal viewports |
+| `FileTree`, `FilePicker` | Local project navigation |
+| `FindOverlay`, `ReplaceOverlay` | Buffer search and replacement |
+| `DiffOverlay` | Review proposed changes to an open buffer |
+| `UnsavedPrompt` | Save/discard/cancel before dirty close or quit |
+| `WorkspaceStore`, `ApiClient` | Workspace metadata and HTTP requests |
 
-When the tree and chat are hidden the layout reduces to "fullscreen
-edit": status + tabs + editor + mode bar.
+The editor's horizontal position is measured in terminal cells after tab expansion. ANSI-aware slicing preserves token styling. The focused character carries the cursor marker and contrasting colours.
 
-## Component inventory
+## Saving, recovery and agent edits
 
-Under `src/tui-editor/components/`:
+Close and quit check dirty buffers. Enter/Escape cancel the unsaved prompt. Save errors keep the buffer open. Scratch buffers currently lack a Save As interaction.
 
-- `SplitPane` — three-column layout primitive. Reads `LayoutStore`
-  for pane visibility on every render and sizes panes from the
-  terminal's true row count (`tui.terminal.rows`) — important: an
-  earlier version fed the editor's previous render height back as
-  its setHeight target and the panes collapsed to the floor (5 rows)
-  after a few cycles.
-- `TextEditor` — multi-line buffer editor with cursor, selection,
-  vertical scroll, line numbers, pattern-based syntax highlighting,
-  vim mode (modeless / vim toggle), undo/redo via a transactional
-  buffer.
-- `FileTree` — directory walk with depth + entry caps, selectable,
-  ASCII / emoji glyphs.
-- `TabStrip` — buffer tab list with dirty markers.
-- `ModeBar` — vim mode + filename + language + cursor position +
-  focus pane indicator (`focus:editor` / `focus:chat` / `focus:tree`).
-- `ChatPane` — wraps the chat shell's `MessagesPane` + `ActivityLine`
-  + `Composer`. Pinned-bottom layout: composer at the foot,
-  messages flow up.
-- `FilePicker` — overlay; case-insensitive substring filter on the
-  relative path (pi-tui's built-in `SelectList.setFilter` is a
-  prefix match on `value`, which would be the absolute path —
-  unhelpful, so we rebuild the list per keystroke).
-- `FindOverlay`, `ReplaceOverlay` — incremental find / replace.
-- `DiffOverlay` — `[a]ccept` / `[r]eject` agent edits applied to a
-  locked buffer.
-- `HotkeysOverlay` — paginated, scrollable hotkeys list (Up / Down /
-  PageUp / PageDown / Home).
-- `WorkspacePicker`, `MCPServerList`, `PermissionPrompt`.
+`persist.ts` stores per-project state at `~/.octipus/projects/<hash>/tui-editor.json`. It checkpoints paths, cursor positions, pane settings and dirty text using a temporary file and rename with owner-only file permissions. Drafts restore as dirty buffers. Checkpoints are debounced during editing and flushed by `stop()`; failed checkpoints are reported in the mode bar. This is recovery support, not a guarantee against forced termination or disk failure.
 
-Reused from `src/tui-pi/`:
+The runtime delegates SIGINT to the editor's quit flow. SIGTERM checkpoints and shuts down without waiting for interaction. The normal editor quit path uses the same cleanup for timers, gateway connection and terminal state.
 
-- `StatusBar`, `MessagesPane`, `ActivityLine`, `Composer`,
-  `CommandPalette`, `PermissionPrompt`.
-- `GatewayAdapter` (WebSocket client wrapper).
-- `Keybindings` definitions + `installOctipusKeybindings()`.
-- Theme + glyph helpers.
+Agent proposals for open files are queued as diffs. Resolving one releases its buffer lock and presents the next. Unrelated palette shortcuts cannot discard pending diffs or approvals. Accept changes the local buffer and marks it dirty. It does not imply a filesystem transaction or undo an agent write already made on disk. The optional merge mode replaces buffer text through its undo stack.
 
-## Stores
+## Highlighting
 
-- `BufferStore` — open files → buffer state (text, cursor,
-  selection, dirty flag, language, lock mode).
-- `AgentStore` — chat messages, current tool, pending permissions,
-  cumulative cost.
-- `LayoutStore` — pane visibility, focused pane, editor mode
-  (modeless / vim).
-- `WorkspaceStore` — active workspace slug + project root, fed by
-  `/api/me/workspaces`.
+`installTreeSitterHighlighter()` installs a lazy tree-sitter adapter. `setSource(language, text)` parses an opened buffer and caches tokens by line. Missing grammars or changed text fall back to the line-based highlighter. The packages and grammar assets are resolved from the source installation's dependencies.
 
-Each store is a tiny pub-sub container; components subscribe via
-`bindStore(store, component, tui)` so a state change schedules a
-single render.
+This is not yet a complete incremental editor parser: the cache is per language, and source updates can fall back to regex highlighting. The file editor is deliberately smaller in scope than an IDE; it has no language server, debugger or full Vim compatibility.
 
-## Key bindings
+## Verification
 
-User-overridable at `~/.octipus/keybindings.json`. Defaults:
+`npm run test:tui` runs the component/application tests and `tests/tui/*.e2e.test.ts`. The default Vitest run includes them as well.
 
-| Shortcut | Action | Notes |
-|---|---|---|
-| `Ctrl+O` | File picker | |
-| `Ctrl+S` | Save current buffer | |
-| `Ctrl+W` | Close current buffer | |
-| `Alt+,` / `F2` | Previous buffer | `Ctrl+Tab` was unreliable in non-Kitty terminals |
-| `Alt+.` / `F3` | Next buffer | |
-| `Ctrl+B` | Toggle file tree | |
-| `Alt+J` | Toggle chat pane | `Ctrl+J` collides with `LF` |
-| `Ctrl+\` / `F6` | Cycle focused pane | |
-| `Ctrl+F` | Find in buffer | |
-| `Alt+R` | Find & replace | `Ctrl+H` collides with `Backspace` |
-| `Ctrl+K` | Switch workspace | |
-| `Ctrl+E` | MCP server list | `Ctrl+M` collides with `Enter` |
-| `Ctrl+P` / `F4` | Command palette | |
-| `F5` | Hotkeys overlay | `F1` is hijacked by many terminals |
-| `Alt+T` / `F8` | Push-to-talk: start/stop voice input | |
-| `Ctrl+Q` | Quit | |
-| `Esc` | Cancel current overlay | Inside the editor: leave INSERT mode (vim) |
+The terminal harness launches the actual Node entry points under a POSIX PTY using Python 3, connects them to a controlled WebSocket fixture, and feeds output to `@xterm/headless`. Assertions inspect the current terminal buffer, not an ANSI-stripped history of everything ever printed. Each test uses an isolated home and project directory.
 
-### Bindings we deliberately don't use
+Coverage includes role distinction, long-answer scrolling, stable reading positions, cursor width, multiline paste, shared event handling, approval queues, plan feedback, dirty-buffer protection, recovery and resized layouts. The PTY tests run on Linux CI and skip explicitly on Windows. They do not establish rendering compatibility across all terminal emulators, fonts or operating systems.
 
-`Ctrl+M`, `Ctrl+H`, `Ctrl+J`, `Ctrl+I`, `Ctrl+[` — these are
-indistinguishable from `Enter`, `Backspace`, `LF`, `Tab`, `Esc` on
-terminals without the Kitty keyboard protocol. Binding any of them
-would silently hijack normal text input. `Ctrl+-` / `Ctrl+=` are
-zoom in/out for most terminal emulators.
-
-## Chat fallbacks
-
-Every overlay-opening keybinding has a slash-command equivalent in
-the chat composer, in case a key is hijacked by the host terminal:
-
-- `/quit`, `/exit`, `/q`
-- `/keys`, `/hotkeys` — open the hotkeys overlay
-- `/palette` — open the command palette
-- `/reload` — reload `~/.octipus/keybindings.json`
-
-## Persisted state
-
-`~/.octipus/tui-editor.json`:
-
-- `openPaths` — currently open buffers
-- `activePath` — focused buffer
-- `cursorByPath` — cursor position per file
-- `treeVisible`, `chatVisible`
-- `editorMode` — `'modeless'` or `'vim'`
-
-Loaded on launch; saved 500 ms after every layout / buffer change.
-
-## Coexistence with the chat TUI
-
-`src/tui-pi/` (chat shell) and `src/tui-editor/` (editor) ship
-side-by-side and share:
-
-- `GatewayAdapter` for the WebSocket protocol
-- `Composer`, `MessagesPane`, `ActivityLine`, `StatusBar`
-- The keybinding registry
-- The theme + glyph table
-
-Entry points:
-
-- `octi tui` → `src/tui-pi/index.ts` (chat shell)
-- `octi edit` → `src/tui-editor/index.ts` (editor)
-- `npm run tui:edit` and `./bin/octi-tui-edit.mjs` are equivalent
-  to `octi edit` for scripting.
-
-## Tests
-
-- Unit tests next to each component / store under `src/tui-pi/**`
-  and `src/tui-editor/**`.
-- E2E harness: `tests/tui/harness.ts` spawns the entry script under
-  fixed `COLUMNS` / `LINES`, drives stdin, strips ANSI, exposes
-  `waitFor(needle)`.
-- `tests/tui/chat.e2e.test.ts` and `tests/tui/editor.e2e.test.ts`
-  cover launch, focus cycling, slash commands, the file picker
-  filter, the command palette, and `/quit`. This suite is written
-  against `bun:test` and hasn't been migrated to Vitest with the rest
-  of the tests, so it needs the `bun` binary on PATH.
+Optional screen artifacts:
 
 ```bash
-npm run test:tui
+TUI_SCREENSHOTS_DIR=/tmp/tui-screens npm run test:tui
 ```
 
-Skipped when the gateway isn't running on `API_PORT`.
+This writes HTML/text representations of captured terminal cells for inspection. The HTML uses a chosen dark background; the user's actual terminal controls its own default background and fonts.
 
-## Tree-sitter highlighter (2026-05b)
+## Remaining limits
 
-The pluggable `setHighlighter()` slot is now wired to a
-buffer-oriented tree-sitter adapter at
-`src/tui-editor/editor/highlight-tree-sitter.ts`.
-
-### Grammars
-
-`web-tree-sitter` + the per-language packages
-(`tree-sitter-typescript`, `tree-sitter-python`,
-`tree-sitter-rust`, `tree-sitter-go`, `tree-sitter-java`) are
-runtime dependencies. The `.wasm` files are **not** vendored in
-the repo — the adapter resolves them through Node's module
-resolver (`createRequire(import.meta.url).resolve('tree-sitter-<lang>/package.json')`)
-and reads them from `node_modules/` on first use. Adding a language is an
-`npm install tree-sitter-<lang>` plus one row in `GRAMMAR_FILES`.
-
-### Lifecycle
-
-- `installTreeSitterHighlighter()` runs in `OctipusEditorApp.start()`
-  before the TUI starts. It only registers the function — no
-  WASM is loaded yet.
-- The first call to `setSource(lang, text)` triggers
-  `Parser.init()` (Emscripten / WASM threading bring-up) and the
-  grammar load for `lang`. Both are awaited; failures are
-  swallowed and the line-based fallback runs instead.
-- `OctipusEditorApp.openFile` calls `setSource` for every newly
-  opened buffer, so the cache is warm before the renderer asks
-  for tokens.
-
-### Cache
-
-The adapter parses the **whole buffer** on `setSource` and walks
-the syntax tree once, building a `Map<lineIndex, Token[]>`. The
-editor's render path calls `hintLineIndex(idx)` immediately
-before each `highlight(line, lang)` call so the lookup knows
-which row to fetch — keeping the `(line, lang) => Token[]`
-contract intact. If the cached line text doesn't match the
-incoming line (the buffer drifted from the last `setSource`),
-the lookup falls through to the regex highlighter.
-
-A real-world editor would use tree-sitter's incremental parsing
-(`Parser.parse(text, oldTree)` already wired); we hold the
-previous `Tree` per language but currently re-parse on every
-`setSource`. Wiring incremental edits requires the editor to
-emit text-delta events, which is a follow-up.
-
-### Token mapping
-
-Tree-sitter node types collapse onto the existing `TokenKind`
-union (`keyword | string | number | comment | function | type |
-operator | punctuation | plain`) via three sets in the adapter:
-
-- Named-node sets for strings, numbers, comments, types, and
-  function declarations (covers the common cases across all
-  shipped grammars).
-- Anonymous-node classification for operators, punctuation, and
-  keywords (tree-sitter exposes literal tokens like `function`
-  or `;` as anonymous nodes with their text as the `type`).
-
-Anything we don't have an opinion about stays `plain`, so the
-editor never paints noise.
-
-## Open follow-ups
-
-- Mouse wheel scrolling once pi-tui exposes mouse APIs.
+- Native Windows terminal verification is separate from POSIX PTY tests.
+- Scratch buffers need a Save As workflow.
+- Mouse interactions and draggable pane sizing are not implemented.
+- Local commands such as chat login/resume are not fully shared with the editor.

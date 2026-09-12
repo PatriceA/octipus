@@ -1,57 +1,43 @@
-/**
- * e2e: pi-tui chat shell (`bun run src/tui-pi/index.ts`).
- *
- * Verifies the bits Phase 4 promised end users:
- *   - launch + welcome message
- *   - typing a chat message and submitting it (composer onSubmit wiring)
- *   - slash command autocomplete trigger
- *   - command palette overlay (Ctrl+P)
- *
- * Skips the whole suite when the gateway isn't reachable so CI noise
- * stays low. Run `octi start` first to exercise the suite locally.
- */
-import { afterEach, describe, expect, it } from 'bun:test';
-import { backendUp, KEY, TuiHarness } from './harness';
+import { afterEach, describe, expect, test } from 'vitest';
+import { TuiHarness, KEY } from './harness';
+let tui: TuiHarness | undefined;
+afterEach(async () => { await tui?.stop(); tui = undefined; });
 
-// Top-level await: bun:test registers tests synchronously, so the
-// gateway probe must resolve before the suite is declared.
-const backend = await backendUp();
-const itIfBackend = (...args: Parameters<typeof it>) => (backend ? it(...args) : it.skip(...args));
+describe.skipIf(process.platform === 'win32')('chat in a real POSIX terminal', () => {
+  test('renders distinct turns, streams replies, and keeps a visible plan with feedback', async () => {
+    tui = await TuiHarness.start('src/tui-pi/index.ts');
+    await tui.waitFor('connected');
+    tui.send('Please check rendering 世界 🐙'); tui.send(KEY.Enter);
+    await tui.waitFor('A streaming reply');
+    const screen = await tui.text();
+    expect(screen).toContain('You'); expect(screen).toContain('│ Please check rendering'); expect(screen).toContain('Octipus');
+    tui.send('/work-plan\r'); await tui.waitFor('/plan-hide');
+    await tui.saveScreen('chat');
+    tui.send('/plan-feedback Keep the layout simple\r'); await tui.waitFor('Feedback saved as pending.');
+    expect(tui.commands).toContainEqual(expect.objectContaining({ type: 'command', name: 'plan-feedback', args: { value: 'Keep the layout simple' } }));
+    tui.resize(50, 16); await tui.waitFor('Plan');
+    expect(tui.screen.buffer.active.cursorY).toBeLessThan(16);
+    tui.send('/plan-hide\r'); await tui.waitFor('/plan-hide ·', true);
+  });
 
-describe('tui-pi chat shell', () => {
-  let harness: TuiHarness | null = null;
-
-  afterEach(async () => { await harness?.stop(); harness = null; });
-
-  itIfBackend('renders welcome banner on launch', async () => {
-    harness = new TuiHarness({ entry: 'src/tui-pi/index.ts' });
-    await harness.waitFor('Welcome to Octipus.');
-    await harness.waitFor('connected');
-  }, 10_000);
-
-  itIfBackend('echoes a typed chat message back as a user bubble', async () => {
-    harness = new TuiHarness({ entry: 'src/tui-pi/index.ts' });
-    await harness.waitFor('connected');
-    harness.send('hello');
-    await harness.wait(200);
-    harness.send(KEY.Enter);
-    await harness.waitFor('❯ hello');
-  }, 10_000);
-
-  itIfBackend('shows slash command autocomplete after typing /', async () => {
-    harness = new TuiHarness({ entry: 'src/tui-pi/index.ts' });
-    await harness.waitFor('connected');
-    harness.send('/');
-    await harness.wait(300);
-    expect(harness.stripped()).toContain('help');
-  }, 10_000);
-
-  itIfBackend('opens the command palette on Ctrl+P', async () => {
-    harness = new TuiHarness({ entry: 'src/tui-pi/index.ts' });
-    await harness.waitFor('connected');
-    harness.send(KEY.CtrlP);
-    await harness.wait(300);
-    // Palette renders the slash registry — `expert` is one of the entries.
-    expect(harness.stripped()).toContain('expert');
-  }, 10_000);
+  test('scrolls one long answer and answers queued decisions without losing either', async () => {
+    tui = await TuiHarness.start('src/tui-pi/index.ts', 90, 24);
+    await tui.waitFor('connected');
+    tui.event('chat.response', { response: Array.from({ length: 50 }, (_, n) => `Answer row ${n}`).join('\n') });
+    await tui.waitFor('Answer row 49');
+    tui.send(KEY.PageUp); await tui.waitFor('End: latest');
+    const before = (await tui.text()).split('\n').filter(l => l.includes('Answer row'));
+    tui.event('chat.delta', { delta: 'Fresh streaming content', iteration: 1 });
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect((await tui.text()).split('\n').filter(l => l.includes('Answer row'))).toEqual(before);
+    tui.send(KEY.End); await tui.waitFor('Fresh streaming content');
+    for (const [requestId, question] of [['a', 'First decision?'], ['b', 'Second decision?']]) {
+      tui.event('agent.approval_required', { requestId, question, options: ['Continue', 'Revise'] });
+    }
+    await tui.waitFor('First decision?'); tui.send('2');
+    await tui.waitFor('Second decision?'); tui.send(KEY.Esc);
+    await tui.waitFor('Second decision?', true);
+    expect(tui.commands).toContainEqual(expect.objectContaining({ type: 'approval.respond', requestId: 'a', response: 'Revise' }));
+    expect(tui.commands).toContainEqual(expect.objectContaining({ type: 'approval.respond', requestId: 'b', approved: false }));
+  });
 });

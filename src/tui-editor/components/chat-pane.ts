@@ -1,3 +1,5 @@
+import { renderChatFrame } from '@/tui-pi/components/chat-frame';
+import { SubagentPanel } from '@/tui-pi/components/subagent-panel';
 /**
  * Chat pane shown on the right of the editor.
  *
@@ -22,10 +24,11 @@ export interface ChatPaneOptions {
 }
 
 export class ChatPane extends Container implements Component {
+  readonly subagents = new SubagentPanel();
   readonly messages: MessagesPane;
   readonly activity: ActivityLine;
   readonly composer: Composer;
-  private height = 0;
+  private height: number | null = null;
 
   constructor(options: ChatPaneOptions) {
     super();
@@ -44,14 +47,6 @@ export class ChatPane extends Container implements Component {
   }
 
   override render(width: number): string[] {
-    const messageLines = this.messages.render(width);
-    const activityLines = this.activity.render(width);
-    const composerLines = this.composer.render(width);
-    const target = this.height || (messageLines.length + activityLines.length + composerLines.length);
-    const tail = activityLines.length + composerLines.length;
-    const headBudget = Math.max(0, target - tail);
-    const head = messageLines.slice(-headBudget);
-    const padding = Math.max(0, headBudget - head.length);
-    return [...head, ...Array(padding).fill(''), ...activityLines, ...composerLines];
+    return renderChatFrame(width, this.height ?? 24, this);
   }
 }
