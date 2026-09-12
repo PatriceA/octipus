@@ -11,20 +11,21 @@ Octipus runs as a multi-container Docker application with two services:
 
 ## Quick Start
 
+From a fresh checkout, with Docker Compose v2 and OpenSSL installed:
+
 ```bash
-# Copy and configure environment
-cp .env.example .env.docker
-# Edit .env.docker: generate security keys, choose POSTGRES_PASSWORD,
-# and set STORAGE_MODE=external for this Compose stack.
-
-# Build and start
-docker compose --env-file .env.docker up --build -d
-
-# View logs
-docker compose --env-file .env.docker logs -f octipus
+bash scripts/install-docker.sh
 ```
 
-Use `--env-file .env.docker` for Compose interpolation as well as the service's `env_file`; otherwise explicit environment entries can override your file with empty or default values.
+The installer generates `.env.compose`, builds and starts the stack, waits for health, and runs the setup wizard inside the container. No host Node or `octi` installation is needed. Open **http://localhost:3017** and log in with your setup account.
+
+Keep `.env.compose` with database backups; it contains the vault encryption key and database password. For subsequent commands use `docker compose --env-file .env.compose logs`, `stop`, or `up -d`. Existing deployments must retain their original secrets/environment file rather than generate replacements. See [INSTALLATION.md](INSTALLATION.md) for native and headless paths.
+
+For manual Docker setup, supply MASTER_KEY, JWT_SECRET, SESSION_SECRET and POSTGRES_PASSWORD in a private Compose environment file, then use that same `--env-file` for every command. After startup run:
+
+```bash
+docker compose --env-file .env.compose exec octipus npm run setup -- --remote http://127.0.0.1:3005
+```
 
 **Ports** (configurable via env):
 

@@ -21,7 +21,7 @@ import { capabilities, type CapabilityRow } from '@/db/schema/capabilities';
 import { getToolRegistry } from '@/tools/registry';
 import { logger } from '@/utils/logger';
 
-export type InstallerKind = 'bun-exec' | 'shell' | 'npm-build' | 'copy' | 'manual';
+export type InstallerKind = 'node-exec' | 'shell' | 'npm-build' | 'copy' | 'manual';
 
 export interface InstallResult {
   ok: boolean;
@@ -106,7 +106,7 @@ class CapabilityService {
       capId: string,
       probe: { available: boolean; degraded?: boolean; reason?: string | null; version?: string | null; path?: string | null },
     ) => {
-      const installerKind = INSTALLER_PATHS[capId] ? 'bun-exec' : 'manual';
+      const installerKind = INSTALLER_PATHS[capId] ? 'node-exec' : 'manual';
       const [row] = await db
         .insert(capabilities)
         .values({
@@ -214,7 +214,7 @@ class CapabilityService {
         reason: probe.reason ?? null,
         version: probe.version ?? null,
         path: probe.path ?? null,
-        installerKind: INSTALLER_PATHS[toolId] ? 'bun-exec' : 'manual',
+        installerKind: INSTALLER_PATHS[toolId] ? 'node-exec' : 'manual',
         checkedAt: new Date(),
       })
       .onConflictDoUpdate({

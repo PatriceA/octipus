@@ -21,6 +21,6 @@
   ],
   "keywords": ["octipus", "plugin", "sdk"],
   "engines": {
-    "bun": ">=1.1.0"
+    "node": ">=24.19.0"
   }
 }

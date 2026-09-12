@@ -35,12 +35,19 @@
  * Remote mode (--remote <url>) skips local .env + backend boot and
  * runs the admin/provider/capability steps against the remote API.
  * Used by Docker: container boots itself, host runs setup against it.
+ *
+ * Quick mode (--quick): embedded storage, default data dir / host / port,
+ * asks only for the admin account and a provider + model, skips optional
+ * installs, then runs `octi start web` (which opens the browser).
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline';
+import { createServer } from 'node:net';
+import { parseEnv } from 'node:util';
 import { Writable, type Readable } from 'node:stream';
 import {
   Container,
@@ -73,7 +80,11 @@ const REMOTE_URL = (() => {
   return i >= 0 ? args[i + 1] : null;
 })();
 const NON_INTERACTIVE =
-  args.includes('--non-interactive') || !process.stdout.isTTY || !!process.env.CI;
+  args.includes('--non-interactive') || !process.stdin.isTTY || !process.stdout.isTTY || !!process.env.CI;
+// --quick: embedded storage with default paths/ports, admin + provider only
+// (five prompts), no optional installs, then start the web stack. The full
+// wizard stays available for everyone who wants to choose.
+const QUICK = args.includes('--quick') && !NON_INTERACTIVE;
 
 // ── Utilities ──────────────────────────────────────────────────────
 
@@ -242,11 +253,7 @@ export function readExistingSecrets(
   path = '.env',
 ): { masterKey: string; jwtSecret: string; sessionSecret: string } | null {
   if (!existsSync(path)) return null;
-  const env: Record<string, string> = {};
-  for (const line of readFileSync(path, 'utf8').split('\n')) {
-    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)$/);
-    if (m) env[m[1]] = m[2].trim();
-  }
+  const env = parseEnv(readFileSync(path, 'utf8'));
   const masterKey = env.MASTER_KEY;
   const jwtSecret = env.JWT_SECRET;
   const sessionSecret = env.SESSION_SECRET;
@@ -291,7 +298,21 @@ interface BackendHandle {
   shutdown: () => Promise<void>;
 }
 
-async function bootBackend(apiHost: string, apiPort: string): Promise<BackendHandle> {
+export function setupBackendEnv(cfg: BootstrapConfig, secrets: { masterKey: string; jwtSecret: string; sessionSecret: string }): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    API_HOST: cfg.apiHost, API_PORT: cfg.apiPort,
+    STORAGE_MODE: cfg.storageMode, DATA_DIR: cfg.dataDir, DATABASE_URL: cfg.databaseUrl,
+    MASTER_KEY: secrets.masterKey, JWT_SECRET: secrets.jwtSecret, SESSION_SECRET: secrets.sessionSecret,
+  };
+}
+
+async function bootBackend(apiHost: string, apiPort: string, env: NodeJS.ProcessEnv): Promise<BackendHandle> {
+  await new Promise<void>((resolvePort, reject) => {
+    const probe = createServer();
+    probe.once('error', () => reject(new Error(`Port ${apiPort} on ${apiHost} is already in use or unavailable. Stop the existing server, choose another port, or use octi setup --remote explicitly.`)));
+    probe.listen(Number(apiPort), apiHost, () => probe.close(() => resolvePort()));
+  });
   const url = `http://${apiHost === '0.0.0.0' ? '127.0.0.1' : apiHost}:${apiPort}`;
   // Node directly — no `bun run` (Bun is not a dependency any more; spawning it
   // is why this reported "backend exited before becoming healthy" with no
@@ -308,7 +329,7 @@ async function bootBackend(apiHost: string, apiPort: string): Promise<BackendHan
     cwd: process.cwd(),
     stdout: 'pipe',
     stderr: 'pipe',
-    env: { ...process.env },
+    env,
   });
 
   // Drain BOTH pipes continuously from the start. The backend logs to stdout
@@ -433,11 +454,12 @@ class ApiClient {
 async function runPreBackend(ctx: WizardCtx | null): Promise<BootstrapConfig & { secrets: { masterKey: string; jwtSecret: string; sessionSecret: string } }> {
   // Auto-detect services for sensible defaults.
   const services = await probeAllServices();
+  const silent = NON_INTERACTIVE || QUICK;
 
   let storageMode: 'embedded' | 'external';
-  if (NON_INTERACTIVE) {
+  if (silent) {
     storageMode = (process.env.OCTIPUS_SETUP_STORAGE as 'embedded' | 'external') ||
-      (services.postgres.ok ? 'external' : 'embedded');
+      'embedded';
   } else if (ctx) {
     await infoStep(ctx, 'Welcome', [
       '\x1b[1mOctipus setup\x1b[0m — one nervous system, many arms.',
@@ -455,7 +477,7 @@ async function runPreBackend(ctx: WizardCtx | null): Promise<BootstrapConfig & {
         { value: 'embedded', label: 'Embedded — PGlite + in-process cache', description: 'Zero external deps. Best for personal use / getting started.' },
         { value: 'external', label: 'External — PostgreSQL', description: 'Full production setup. Cache, queue and pub/sub run on the same Postgres.' },
       ],
-      services.postgres.ok ? 'external' : 'embedded',
+      'embedded',
     );
   } else {
     throw new Error('cannot prompt in non-interactive mode without TTY');
@@ -465,21 +487,21 @@ async function runPreBackend(ctx: WizardCtx | null): Promise<BootstrapConfig & {
   let dataDir = resolve(homedir(), '.octipus', 'data');
 
   if (storageMode === 'external') {
-    if (NON_INTERACTIVE) {
+    if (silent) {
       databaseUrl = process.env.OCTIPUS_SETUP_DATABASE_URL || 'postgresql://octipus:octipus@localhost:5432/octipus';
     } else if (ctx) {
       databaseUrl = await textStep(ctx, 'Database URL', 'PostgreSQL connection string', 'postgresql://octipus:octipus@localhost:5432/octipus');
     }
-  } else if (ctx && !NON_INTERACTIVE) {
+  } else if (ctx && !silent) {
     dataDir = await textStep(ctx, 'Data directory', 'Where to store the embedded database', dataDir);
   } else {
     dataDir = process.env.OCTIPUS_SETUP_DATA_DIR || dataDir;
   }
 
-  const apiPort = NON_INTERACTIVE
+  const apiPort = silent
     ? process.env.OCTIPUS_SETUP_API_PORT || '3005'
     : ctx ? await textStep(ctx, 'API port', 'Backend listens here', '3005') : '3005';
-  const apiHost = NON_INTERACTIVE
+  const apiHost = silent
     ? process.env.OCTIPUS_SETUP_API_HOST || '127.0.0.1'
     : ctx ? await textStep(ctx, 'API host', 'Bind address (127.0.0.1 for local-only)', '127.0.0.1') : '127.0.0.1';
 
@@ -515,7 +537,7 @@ async function pickAdmin(ctx: WizardCtx | null): Promise<{ username: string; ema
     return { username, email: process.env.OCTIPUS_SETUP_ADMIN_EMAIL || undefined, password };
   }
   const username = await textStep(ctx, 'Admin account — username', 'You\'ll log in as this user (≥3 chars)', 'admin');
-  const email = await textStep(ctx, 'Admin account — email (optional)', 'Leave blank to skip', '');
+  const email = QUICK ? '' : await textStep(ctx, 'Admin account — email (optional)', 'Leave blank to skip', '');
   const password = await textStep(ctx, 'Admin account — password', 'Min 8 chars, ≥1 upper, ≥1 lower, ≥1 digit', '', true);
   return { username, email: email.trim() || undefined, password };
 }
@@ -524,6 +546,7 @@ async function pickProvider(ctx: WizardCtx | null): Promise<{ providerId: Provid
   if (NON_INTERACTIVE) {
     const providerId = (process.env.OCTIPUS_SETUP_PROVIDER || 'openai') as ProviderId;
     const def = getProvider(providerId);
+    if (def.requiresApiKey && !process.env.OCTIPUS_SETUP_API_KEY?.trim()) throw new Error(`OCTIPUS_SETUP_API_KEY is required for ${def.label}.`);
     return {
       providerId,
       apiKey: process.env.OCTIPUS_SETUP_API_KEY || '',
@@ -560,7 +583,7 @@ async function pickProvider(ctx: WizardCtx | null): Promise<{ providerId: Provid
     const detected = process.env.OLLAMA_URL || process.env.OLLAMA_HOST || 'http://localhost:11434';
     baseUrl = await textStep(ctx, 'Ollama URL', 'Where Ollama is running', detected);
   } else if (def.requiresApiKey) {
-    apiKey = await textStep(ctx, `${def.label} API key`, 'Stored in the vault, never plaintext after setup', '', true);
+    while (!apiKey.trim()) apiKey = await textStep(ctx, `${def.label} API key (required)`, 'Stored in the vault', '', true);
   }
 
   // Try to list live models when the provider supports it.
@@ -638,6 +661,7 @@ const cloudKeyHint = (provider: 'Mistral' | 'OpenAI') =>
  * minutes — an HTTP call would time out); cloud picks just point at the vault.
  */
 async function pickVoice(api: ApiClient): Promise<void> {
+  if (QUICK) return;
   // ── Non-interactive: only local defaults, and only on explicit opt-in. ──
   if (NON_INTERACTIVE) {
     if (process.env.OCTIPUS_SETUP_INSTALL_VOICE !== '1' && process.env.OCTIPUS_SETUP_INSTALL_VOICE !== 'true') return;
@@ -747,6 +771,7 @@ async function pickVoice(api: ApiClient): Promise<void> {
 // ── Main ───────────────────────────────────────────────────────────
 
 async function main() {
+  if (args.includes('--remote') && !REMOTE_URL) throw new Error('--remote requires an http(s) URL.');
   // Remote-mode short-circuit: skip .env + backend boot, use existing API.
   if (REMOTE_URL) {
     process.stdout.write(`octi setup --remote ${REMOTE_URL}\n`);
@@ -769,11 +794,23 @@ async function main() {
   if (existingSecrets) {
     process.stdout.write('\x1b[2m(reusing existing secrets from .env)\x1b[0m\n');
   }
+  if (QUICK) {
+    process.stdout.write('Quick setup: embedded storage, default paths and ports. Rerun `octi setup` without --quick to choose.\n');
+  }
 
   // Pre-backend phase: TUI or non-interactive.
   let ctx: WizardCtx | null = null;
   let cfg: BootstrapConfig & { secrets: { masterKey: string; jwtSecret: string; sessionSecret: string } };
-  if (NON_INTERACTIVE) {
+  if (existingSecrets) {
+    const saved = parseEnv(readFileSync('.env', 'utf8'));
+    cfg = {
+      storageMode: saved.STORAGE_MODE === 'external' ? 'external' : 'embedded',
+      databaseUrl: saved.DATABASE_URL || '', dataDir: saved.DATA_DIR || resolve(homedir(), '.octipus/data'),
+      apiHost: saved.API_HOST || saved.HOST || '127.0.0.1', apiPort: saved.API_PORT || saved.PORT || '3005',
+      bootstrapProvider: '', bootstrapModel: '', bootstrapApiKey: '', bootstrapBaseUrl: '', secrets: existingSecrets,
+    };
+    process.stdout.write('Reusing existing storage and server configuration. Edit .env explicitly to change it.\n');
+  } else if (NON_INTERACTIVE || QUICK) {
     cfg = await runPreBackend(null);
   } else {
     const terminal = new ProcessTerminal();
@@ -803,12 +840,13 @@ async function main() {
 
   // Write .env.
   const env = buildEnv(cfg, cfg.secrets);
-  writeFileSync('.env', env);
+  if (!existingSecrets) writeFileSync('.env', env, { mode: 0o600 });
+  chmodSync('.env', 0o600);
   process.stdout.write('\n\x1b[32m✓ Wrote .env (secrets only — everything else lives in the DB)\x1b[0m\n');
 
   // Boot backend.
   process.stdout.write('Booting backend (runs migrations + seeds — may take ~30s on first boot)…\n');
-  const backend = await bootBackend(cfg.apiHost, cfg.apiPort);
+  const backend = await bootBackend(cfg.apiHost, cfg.apiPort, setupBackendEnv(cfg, cfg.secrets));
   process.stdout.write(`\x1b[32m✓ Backend healthy at ${backend.url}\x1b[0m\n`);
 
   try {
@@ -819,9 +857,21 @@ async function main() {
   }
 
   process.stdout.write('\n\x1b[1;32mSetup complete.\x1b[0m\n');
-  process.stdout.write('  octi start         # full stack (api + web)\n');
+  process.stdout.write('  octi start web     # backend + web UI (localhost:3007 by default)\n');
   process.stdout.write('  octi tui           # terminal chat\n');
-  process.stdout.write('  octi capabilities  # view installed tools\n\n');
+  process.stdout.write('  octi capabilities  # install optional tools (browser, MCP, …)\n\n');
+  if (QUICK) startWeb();
+}
+
+/** Quick mode ends running: hand over to the platform launcher, which opens the browser. */
+function startWeb(): void {
+  const win = process.platform === 'win32';
+  const launcher = resolve(win ? 'bin/octi.cmd' : 'bin/octi');
+  process.stdout.write('Starting backend + web UI…\n');
+  const result = win
+    ? spawnSync('cmd.exe', ['/c', launcher, 'start', 'web'], { stdio: 'inherit' })
+    : spawnSync('bash', [launcher, 'start', 'web'], { stdio: 'inherit' });
+  if (result.status !== 0) process.stdout.write(`\x1b[33m! Start failed — run \`octi start web\` and check \`octi logs\`.\x1b[0m\n`);
 }
 
 /**
@@ -865,7 +915,7 @@ async function maybeRecommendModel(api: ApiClient): Promise<void> {
   //   unset + non-interactive    → tip only (never auto-download GBs in CI
   //                                without an explicit opt-in).
   const forced = process.env.OCTIPUS_SETUP_RECOMMEND === '1';
-  const disabled = process.env.OCTIPUS_SETUP_RECOMMEND === '0';
+  const disabled = process.env.OCTIPUS_SETUP_RECOMMEND === '0' || QUICK;
   const tip = () =>
     process.stdout.write(
       '\x1b[90m· Tip: open the web Models page for "Recommended for your hardware" to install a local model.\x1b[0m\n',
@@ -992,19 +1042,49 @@ export function adminRegisterHint(err: unknown, admin: { username: string; email
 async function runApiPhase(baseUrl: string, _ctx: WizardCtx | null): Promise<void> {
   const api = new ApiClient(baseUrl);
 
+  // Rerun: setup already completed once, so an admin exists — log in instead of
+  // burning a registration attempt (5 per 5 min per IP; the sixth rerun used
+  // to die with HTTP 429 before the wizard ever reached the login branch).
+  const status = await api.get<{ setupComplete?: boolean }>('/api/settings/setup-status').catch(() => ({ setupComplete: false }));
+  const loginAsAdmin = async (admin: { username: string; password: string }) => {
+    const login = await api.post<{ user?: { isAdmin?: boolean } }>('/api/auth/login', {
+      username: admin.username, password: admin.password,
+      totpCode: process.env.OCTIPUS_SETUP_TOTP || undefined,
+    });
+    if (!login.user?.isAdmin) throw new Error('Setup requires an administrator account.');
+  };
+
   // Admin account. Retry in-place on retryable errors (validation 422 / taken
   // username 409) instead of aborting the whole wizard — a weak password or a
   // taken name shouldn't force the user to restart setup from scratch. In
   // non-interactive mode there's nothing to re-prompt, so fail fast as before.
   for (;;) {
     const admin = await pickAdmin(null);
+    if (status.setupComplete) {
+      process.stdout.write(`Logging in as "${admin.username}" (setup already completed once)…\n`);
+      try {
+        await loginAsAdmin(admin);
+        break;
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 401 && !NON_INTERACTIVE) {
+          process.stdout.write('\x1b[33m! Wrong username or password — try again.\x1b[0m\n\n');
+          continue;
+        }
+        throw err instanceof ApiError ? new Error(`Login failed (HTTP ${err.status}): ${err.serverMessage}`) : err;
+      }
+    }
     process.stdout.write(`Registering admin "${admin.username}"…\n`);
     try {
       await api.post('/api/auth/register', admin);
       process.stdout.write('\x1b[32m✓ Admin registered (first-user admin grant applied)\x1b[0m\n');
       break;
     } catch (err) {
-      const retryable = err instanceof ApiError && (err.status === 422 || err.status === 409);
+      if (err instanceof ApiError && (err.status === 409 || err.status === 403)) {
+        process.stdout.write('Using an existing administrator account…\n');
+        await loginAsAdmin(admin);
+        break;
+      }
+      const retryable = err instanceof ApiError && (err.status === 400 || err.status === 422 || err.status === 409);
       if (retryable && !NON_INTERACTIVE) {
         process.stdout.write(`\x1b[33m! ${adminRegisterHint(err, admin)}\x1b[0m\n  Let's try that step again.\n\n`);
         continue;
@@ -1038,29 +1118,28 @@ async function runApiPhase(baseUrl: string, _ctx: WizardCtx | null): Promise<voi
       batch['litellm.proxyUrl'] = provider.baseUrl || 'http://localhost:4000';
       if (provider.apiKey) batch['litellm.apiKey'] = provider.apiKey;
     } else if (def.requiresApiKey && provider.apiKey) {
-      // Direct providers — there's a vaultKey on the def, but the
-      // matching registry entry name uses the `<provider>.apiKey` form
-      // (e.g. openrouter.apiKey). Only OpenRouter has an explicit entry
-      // today; for the others, PATCH the bootstrap key under the
-      // shared `bootstrap.<provider>` path until the registry is
-      // extended. Fall back: write straight to the vault via a
-      // dedicated provider-key route added in P3.3.
+      // Direct providers: `<id>.apiKey` is a registry entry flagged isSecret
+      // whose vaultName is exactly what the provider reads back
+      // (`<id>_api_key`, system scope). A sync test pins that mapping.
       batch[`${def.id}.apiKey`] = provider.apiKey;
     }
     try {
-      await api.put('/api/settings/batch', { settings: batch });
+      // The batch handler answers { updated, errors? } — per-key failures, no
+      // top-level `error`. Checking the wrong field printed ✓ on rejected keys.
+      const saved = await api.put<{ error?: string; errors?: Record<string, string> }>('/api/settings/batch', { settings: batch });
+      const problems = saved.errors ? Object.entries(saved.errors).map(([k, v]) => `${k}: ${v}`) : saved.error ? [saved.error] : [];
+      if (problems.length) throw new Error(problems.join('; '));
       process.stdout.write(`\x1b[32m✓ Provider configured (default model: ${provider.model})\x1b[0m\n`);
     } catch (err) {
-      process.stdout.write(`\x1b[33m! Provider settings partially applied: ${(err as Error).message}\x1b[0m\n`);
+      throw new Error(`Could not save provider settings: ${(err as Error).message}`);
     }
 
-    // Register the chosen model in the registry and mark it the default.
-    // Settings alone don't create a model_config row, and the root agent
-    // resolves chat via getDefaultModel() (isDefault + isEnabled) — so without
-    // this the selected model is "not registered" and chat has no engine, for
-    // EVERY provider. The API key is already in the vault (the settings batch
-    // routed <provider>.apiKey → <provider>_api_key, where providers look it
-    // up), so the row needs no apiKeyRef; ollama/litellm carry their endpoint.
+    // Register the chosen model, then bind it as primary for every text topic
+    // and make it the default in one call (/topics/assign-all). POST /models
+    // deliberately strips `topics`, and worker topics are fail-loud (no default
+    // fallback) — a model bound to nothing breaks every non-root spawn and the
+    // knowledge-base self-check. The API key is already in the vault, so the
+    // row needs no apiKeyRef; ollama/litellm carry their endpoint.
     const modelName = `${def.id} ${provider.model}`;
     try {
       const res = await api.post<{ error?: string }>('/api/models', {
@@ -1068,17 +1147,17 @@ async function runApiPhase(baseUrl: string, _ctx: WizardCtx | null): Promise<voi
         provider: def.id,
         modelId: provider.model,
         ...(provider.baseUrl ? { endpoint: provider.baseUrl } : {}),
-        topics: ['general'],
       });
       // POST returns 200 with {error} on duplicate — a rerun is fine, we still
-      // (re)assert it as the default below.
+      // (re)assert the bindings below.
       if (res?.error && !/already exists/i.test(res.error)) {
-        process.stdout.write(`\x1b[33m! Model register warning: ${res.error}\x1b[0m\n`);
+        throw new Error(res.error);
       }
-      await api.post(`/api/models/${encodeURIComponent(modelName)}/default`, {});
-      process.stdout.write(`\x1b[32m✓ Registered "${modelName}" as the default model\x1b[0m\n`);
+      const bound = await api.post<{ error?: string; topics?: string[] }>('/api/topics/assign-all', { model: modelName });
+      if (bound.error) throw new Error(bound.error);
+      process.stdout.write(`\x1b[32m✓ Registered "${modelName}" as the default model for all ${bound.topics?.length ?? 0} text topics\x1b[0m\n`);
     } catch (err) {
-      process.stdout.write(`\x1b[33m! Could not register the model — set it in the Models page: ${(err as Error).message}\x1b[0m\n`);
+      throw new Error(`Could not register the default model: ${err instanceof ApiError ? err.serverMessage : (err as Error).message}`);
     }
   }
 
@@ -1094,17 +1173,20 @@ async function runApiPhase(baseUrl: string, _ctx: WizardCtx | null): Promise<voi
     process.stdout.write(`\x1b[33m! Could not list capabilities: ${(err as Error).message}\x1b[0m\n`);
   }
   // Only offer capabilities that actually have an installer (installerKind
-  // 'bun-exec'). The rest (email-processor, gitlab, google-workspace, …) are
+  // 'node-exec'). The rest (email-processor, gitlab, google-workspace, …) are
   // configured later via credentials/OAuth in the UI — POSTing /install for
   // them just 409s with "No installer registered".
-  const missing = caps.filter((c) => !c.available && c.installerKind === 'bun-exec').map((c) => c.toolId);
-  const configurable = caps.filter((c) => !c.available && c.installerKind !== 'bun-exec').map((c) => c.toolId);
+  const missing = caps.filter((c) => !c.available && ['node-exec', 'bun-exec'].includes(c.installerKind || '')).map((c) => c.toolId);
+  const configurable = caps.filter((c) => !c.available && !['node-exec', 'bun-exec'].includes(c.installerKind || '')).map((c) => c.toolId);
   if (configurable.length > 0) {
     process.stdout.write(
       `\x1b[2m${configurable.length} capabilities are configured later in the UI (no installer): ${configurable.join(', ')}\x1b[0m\n`,
     );
   }
-  const picks = await pickCapabilities(null, missing);
+  if (QUICK && missing.length > 0) {
+    process.stdout.write(`\x1b[2mOptional tools skipped (${missing.join(', ')}) — install later: octi capabilities install <name>\x1b[0m\n`);
+  }
+  const picks = QUICK ? [] : await pickCapabilities(null, missing);
   for (const cap of picks) {
     process.stdout.write(`Installing capability "${cap}"…\n`);
     try {
@@ -1119,9 +1201,8 @@ async function runApiPhase(baseUrl: string, _ctx: WizardCtx | null): Promise<voi
   await pickVoice(api);
 
   // Mark setup complete.
-  await api.post('/api/settings/setup-complete', {}).catch((err) => {
-    process.stdout.write(`\x1b[33m! Could not mark setup complete: ${(err as Error).message}\x1b[0m\n`);
-  });
+  const completion = await api.post<{ success?: boolean; error?: string }>('/api/settings/setup-complete', {});
+  if (!completion.success) throw new Error(completion.error || 'Could not mark setup complete');
 }
 
 if (import.meta.main) {

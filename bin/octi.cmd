@@ -43,6 +43,20 @@ set "PID_FILE_WEB=%STATE_DIR%\web.pid"
 set "LOG_FILE=%STATE_DIR%\backend.log"
 set "WEB_LOG_FILE=%STATE_DIR%\web.log"
 
+:: Match the backend's precedence: caller environment, checkout .env, default.
+:: These values are inherited by npm and web/serve.mjs, keeping its API proxy
+:: on the same port the setup wizard wrote for the backend.
+if exist "%PROJECT_DIR%\.env" (
+    if not defined API_PORT (
+        for /f "tokens=1,* delims==" %%a in ('findstr /b "API_PORT=" "%PROJECT_DIR%\.env" 2^>nul') do set "API_PORT=%%b"
+    )
+    if not defined API_PORT (
+        for /f "tokens=1,* delims==" %%a in ('findstr /b "PORT=" "%PROJECT_DIR%\.env" 2^>nul') do set "API_PORT=%%b"
+    )
+    if not defined WEB_PORT (
+        for /f "tokens=1,* delims==" %%a in ('findstr /b "WEB_PORT=" "%PROJECT_DIR%\.env" 2^>nul') do set "WEB_PORT=%%b"
+    )
+)
 if not defined API_PORT set "API_PORT=3005"
 if not defined WEB_PORT set "WEB_PORT=3007"
 :: Desktop dev web server (tauri:dev → next dev -p 3008). Distinct from
@@ -80,9 +94,14 @@ if "%COMMAND%"=="help" goto :cmd_help
 if "%COMMAND%"=="--help" goto :cmd_help
 if "%COMMAND%"=="-h" goto :cmd_help
 
-echo   %RED%x%NC% Unknown command: %COMMAND%
-echo.
-goto :cmd_help
+:: Everything else (capabilities, models, persona, plugin, version, …) lives in
+:: the TypeScript dispatcher, which is what Unix installs link as `octi`. Hand
+:: over instead of "Unknown command" so both platforms expose the same set.
+pushd "%PROJECT_DIR%"
+node --import tsx "bin\octi.ts" %*
+set "_RC=%errorlevel%"
+popd
+exit /b %_RC%
 
 :: ─── Banner ──────────────────────────────────────────────────────────────
 :print_banner
@@ -104,7 +123,7 @@ exit /b 0
 
 :check_port
 :: Check if a port is reachable (returns errorlevel 0 if yes)
-:: Usage: call :check_port 5432
+:: Usage: call :check_port 3005
 set "_CP=%~1"
 powershell -NoProfile -Command "try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('localhost', %_CP%); $c.Close(); exit 0 } catch { exit 1 }" >nul 2>&1
 exit /b %errorlevel%
@@ -160,16 +179,8 @@ set "TARGET=backend"
 call :parse_launch_args %~2 %~3 %~4
 if errorlevel 1 exit /b 1
 
-:: Check required services (only for external storage mode)
 if "!STORAGE_MODE!"=="external" (
-    echo   %BLUE%-%NC% Checking services...
-    call :check_port 5432
-    if errorlevel 1 (
-        echo   %RED%x%NC% PostgreSQL not reachable on port 5432
-        echo     %DIM%Start it: cd ~/docker-services ^&^& docker compose up -d db%NC%
-        exit /b 1
-    )
-    echo   %GREEN%v%NC% PostgreSQL is reachable
+    echo   %GREEN%v%NC% External storage %DIM%(backend will verify DATABASE_URL^)%NC%
 ) else (
     echo   %GREEN%v%NC% Embedded mode %DIM%(PGlite + in-process cache^)%NC%
 )
@@ -350,16 +361,8 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: Check required services (only for external storage mode)
 if "!STORAGE_MODE!"=="external" (
-    echo   %BLUE%-%NC% Checking services...
-    call :check_port 5432
-    if errorlevel 1 (
-        echo   %RED%x%NC% PostgreSQL not reachable on port 5432
-        echo     %DIM%Start it: cd ~/docker-services ^&^& docker compose up -d db%NC%
-        exit /b 1
-    )
-    echo   %GREEN%v%NC% PostgreSQL is reachable
+    echo   %GREEN%v%NC% External storage %DIM%(backend will verify DATABASE_URL^)%NC%
 ) else (
     echo   %GREEN%v%NC% Embedded mode %DIM%(PGlite + in-process cache^)%NC%
 )
@@ -458,12 +461,7 @@ echo   %BOLD%Service Status%NC%  %DIM%(!STORAGE_MODE! mode^)%NC%
 echo.
 
 if "!STORAGE_MODE!"=="external" (
-    call :check_port 5432
-    if errorlevel 1 (
-        echo   %RED%x%NC% PostgreSQL: not reachable
-    ) else (
-        echo   %GREEN%v%NC% PostgreSQL: reachable %DIM%(port 5432^)%NC%
-    )
+    echo   %GREEN%v%NC% PostgreSQL: checked by backend readiness %DIM%(DATABASE_URL^)%NC%
 ) else (
     echo   %GREEN%v%NC% PGlite:     embedded database
     echo   %GREEN%v%NC% Cache:      in-process
@@ -781,6 +779,8 @@ if "!PURGE!"=="true" (
     if exist "%PID_FILE_WEB%" del "%PID_FILE_WEB%" >nul 2>&1
     if exist "%LOG_FILE%" del "%LOG_FILE%" >nul 2>&1
     if exist "%WEB_LOG_FILE%" del "%WEB_LOG_FILE%" >nul 2>&1
+    :: The installer's shim would otherwise keep calling the deleted checkout.
+    if exist "%STATE_DIR%\bin\octi.cmd" del "%STATE_DIR%\bin\octi.cmd" >nul 2>&1
 )
 
 echo.
@@ -793,8 +793,8 @@ if "!PURGE!"=="true" (
     echo     %DIM%secrets: %STATE_DIR%\.env.uninstall-backup%NC%
 )
 echo.
-echo   %BLUE%-%NC% Remove the %BOLD%octi%NC% command from your PATH with:
-echo     %DIM%npm rm -g octipus%NC%
+echo   %BLUE%-%NC% The %BOLD%octi%NC% shim is gone; remove %STATE_DIR%\bin from your user PATH
+echo     %DIM%(Settings ^> System ^> Environment variables) if you no longer need it.%NC%
 echo.
 exit /b 0
 

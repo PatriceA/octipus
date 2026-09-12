@@ -205,7 +205,7 @@ export default function RedTeamPage() {
             <ShieldAlert className="w-12 h-12 mx-auto mb-3 text-on-surface-variant" />
             <p className="text-on-surface-variant">No red-team results found</p>
             <p className="text-sm text-on-surface-variant mt-1">
-              Run red-team eval: <code className="bg-surface-container-high px-1.5 py-0.5 rounded text-xs">bun run src/eval/red-team/cli.ts</code>
+              Run red-team eval: <code className="bg-surface-container-high px-1.5 py-0.5 rounded text-xs">node --import tsx --import ./scripts/md-loader.mjs src/eval/red-team/cli.ts</code>
             </p>
           </CardContent>
         </Card>

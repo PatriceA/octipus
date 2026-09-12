@@ -14,14 +14,32 @@
  */
 
 import { execSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, statfsSync } from 'fs';
 import { homedir, platform } from 'os';
 import { join, resolve } from 'path';
 import {
   tcpReachable as tcpProbe,
   httpReachable as httpProbe,
 } from '../src/setup/probes';
-import { spawnProcess } from '@/utils/proc';
+
+/**
+ * Doctor used to read `process.env` for some checks and the `.env` text for
+ * others, and never loaded `.env` itself — so `STORAGE_MODE` was unset on the
+ * CLI, defaulted to "external", and every embedded install was told Postgres
+ * was unreachable. Load the checkout's .env once, without overriding whatever
+ * the caller already exported.
+ */
+export function loadProjectEnv(projectDir: string): void {
+  const envPath = join(projectDir, '.env');
+  if (!existsSync(envPath)) return;
+  try {
+    process.loadEnvFile(envPath);
+  } catch {
+    /* a malformed .env is reported by checkEnvFile */
+  }
+}
+
+const API_BASE = () => `http://localhost:${process.env.API_PORT || process.env.PORT || '3005'}`;
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -64,13 +82,13 @@ export async function checkNodeRuntime(): Promise<CheckResult> {
   // could not fail. `engines.node` in package.json is the real requirement.
   const version = process.versions.node;
   const [major, minor] = version.split('.').map(Number);
-  const ok = major > 24 || (major === 24 && minor >= 9);
+  const ok = major > 24 || (major === 24 && minor >= 19);
   return {
     name: 'Node runtime',
     status: ok ? 'ok' : 'fail',
     detail: `Node ${version}`,
     critical: true,
-    hint: ok ? undefined : 'Octipus requires Node ≥ 24.9 (package.json engines). Upgrade: https://nodejs.org',
+    hint: ok ? undefined : 'Octipus requires Node ≥ 24.19 (package.json engines). Upgrade: https://nodejs.org',
   };
 }
 
@@ -129,7 +147,9 @@ export async function checkStorageMode(projectDir: string): Promise<CheckResult>
 }
 
 export async function checkOllama(): Promise<CheckResult> {
-  const url = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+  // OLLAMA_URL is the name the product reads (settings registry, compose,
+  // legacy loader); the old OLLAMA_BASE_URL existed nowhere else.
+  const url = (process.env.OLLAMA_URL || process.env.OLLAMA_HOST || 'http://localhost:11434').replace(/\/$/, '');
   const reachable = await httpReachable(`${url}/api/tags`);
   if (!reachable) {
     return {
@@ -175,17 +195,21 @@ export async function checkLiteLLM(): Promise<CheckResult> {
   // LITELLM_PROXY_URL. Doctor used to read LITELLM_BASE_URL which is
   // not set anywhere, so it always reported "not configured" even on
   // installs that DO have LiteLLM running.
-  const url = process.env.LITELLM_URL
-    || process.env.LITELLM_PROXY_URL
-    || process.env.LITELLM_BASE_URL;
-  if (!url) {
-    return { name: 'LiteLLM proxy', status: 'warn', detail: 'not configured', critical: false };
-  }
+  //
+  // The wizard writes the proxy URL to the DB (litellm.proxyUrl), which this
+  // CLI cannot read, and the runtime default is localhost:4000 — so with no
+  // env var, probe that default instead of reporting "not configured" while a
+  // proxy is up and in use.
+  const envUrl = process.env.LITELLM_URL || process.env.LITELLM_PROXY_URL || process.env.LITELLM_BASE_URL;
+  const url = (envUrl || 'http://localhost:4000').replace(/\/$/, '');
   const reachable = await httpReachable(`${url}/health`);
+  if (!envUrl && !reachable) {
+    return { name: 'LiteLLM proxy', status: 'warn', detail: 'not configured (optional)', critical: false };
+  }
   return {
     name: 'LiteLLM proxy',
     status: reachable ? 'ok' : 'warn',
-    detail: reachable ? `reachable at ${url}` : `unreachable at ${url}`,
+    detail: reachable ? `reachable at ${url}${envUrl ? '' : ' (runtime default; Settings → LiteLLM overrides)'}` : `unreachable at ${url}`,
     critical: false,
     hint: reachable ? undefined : 'Start the LiteLLM proxy or update LITELLM_URL.',
   };
@@ -228,19 +252,56 @@ export async function checkPostgres(): Promise<CheckResult> {
   if (mode === 'embedded') {
     return { name: 'PostgreSQL', status: 'ok', detail: 'embedded mode, not required', critical: false };
   }
-  const reachable = await tcpReachable('localhost', 5432);
+  // Probe the database the backend will actually use, not a hardcoded 5432.
+  let host = 'localhost';
+  let port = 5432;
+  try {
+    const u = new URL(process.env.DATABASE_URL || '');
+    host = u.hostname || host;
+    port = Number(u.port) || port;
+  } catch { /* unset or unparsable — checkStorageMode reports that */ }
+  const reachable = await tcpReachable(host, port);
   return {
     name: 'PostgreSQL',
     status: reachable ? 'ok' : 'warn',
-    detail: reachable ? 'reachable on localhost:5432' : 'not reachable on localhost:5432',
+    detail: `${reachable ? 'reachable' : 'not reachable'} on ${host}:${port}`,
     critical: false,
-    hint: reachable ? undefined : 'Start PostgreSQL or switch to STORAGE_MODE=embedded.',
+    hint: reachable ? undefined : 'Start PostgreSQL (check DATABASE_URL) or switch to STORAGE_MODE=embedded.',
   };
 }
 
+/**
+ * Provider status straight from the running backend (`/api/health/models` is
+ * unauthenticated). Doctor cannot read the DB, so this is the only truthful
+ * view of what the wizard configured; the env-based Ollama/LiteLLM probes
+ * above stay as a fallback for when nothing is running.
+ */
+export async function checkModelProviders(): Promise<CheckResult> {
+  try {
+    const res = await fetch(`${API_BASE()}/api/health/models`, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const body = (await res.json()) as { providers?: Array<{ provider: string; status: string; models?: number }> };
+    const rows = body.providers ?? [];
+    if (rows.length === 0) {
+      return { name: 'Model providers', status: 'warn', detail: 'backend up, no models registered', critical: false, hint: 'Run `octi setup` or add a model on the Models page.' };
+    }
+    const bad = rows.filter((r) => r.status !== 'healthy');
+    const detail = rows.map((r) => `${r.provider}${r.status === 'healthy' ? '' : ` (${r.status})`}`).join(', ');
+    return {
+      name: 'Model providers',
+      status: bad.length === 0 ? 'ok' : 'warn',
+      detail,
+      critical: false,
+      hint: bad.length ? 'Unhealthy usually means a wrong key or an unreachable endpoint — check Settings → Secrets and the dashboard health card.' : undefined,
+    };
+  } catch (err) {
+    return { name: 'Model providers', status: 'warn', detail: `backend not running (${(err as Error).message}) — start it to verify provider keys`, critical: false };
+  }
+}
+
 export async function checkBackend(): Promise<CheckResult> {
-  const port = process.env.API_PORT || '3005';
-  const reachable = await httpReachable(`http://localhost:${port}/api/health`, 1500);
+  const port = process.env.API_PORT || process.env.PORT || '3005';
+  const reachable = await httpReachable(`${API_BASE()}/api/health`, 1500);
   return {
     name: 'Backend',
     status: reachable ? 'ok' : 'warn',
@@ -416,18 +477,9 @@ export async function checkLogSanity(): Promise<CheckResult> {
 export async function checkDiskSpace(): Promise<CheckResult> {
   try {
     const home = homedir();
-    const proc = spawnProcess({ command: 'df', args: ['-k', home], stdout: 'pipe', stderr: 'pipe' });
-    if (await proc.exited !== 0) {
-      return { name: 'Disk space', status: 'warn', detail: 'df probe failed', critical: false };
-    }
-    const text = await new Response(proc.stdout).text();
-    // Second line, 4th column is "Available" in 1K blocks on Linux/macOS.
-    const cols = text.trim().split('\n')[1]?.split(/\s+/);
-    if (!cols || cols.length < 4) {
-      return { name: 'Disk space', status: 'warn', detail: 'df output not parseable', critical: false };
-    }
-    const availKb = Number(cols[3]);
-    const availGb = availKb / (1024 * 1024);
+    // statfs, not `df`: works on Windows too (both installers end with `octi doctor`).
+    const fs = statfsSync(home);
+    const availGb = (Number(fs.bavail) * Number(fs.bsize)) / (1024 ** 3);
     if (availGb < 1) {
       return {
         name: 'Disk space',
@@ -446,9 +498,8 @@ export async function checkDiskSpace(): Promise<CheckResult> {
       };
     }
     return { name: 'Disk space', status: 'ok', detail: `${availGb.toFixed(1)}GB free`, critical: false };
-  } catch {
-    // Probe not available (Windows); not critical.
-    return { name: 'Disk space', status: 'warn', detail: 'df not available on this platform', critical: false };
+  } catch (err) {
+    return { name: 'Disk space', status: 'warn', detail: `probe failed: ${(err as Error).message}`, critical: false };
   }
 }
 
@@ -462,11 +513,21 @@ export async function checkDiskSpace(): Promise<CheckResult> {
  * doctor and root agent drift apart.
  */
 export async function checkCapabilities(): Promise<CheckResult> {
-  const port = process.env.API_PORT || '3005';
   try {
-    const res = await fetch(`http://localhost:${port}/api/capabilities`, {
+    const res = await fetch(`${API_BASE()}/api/capabilities`, {
       signal: AbortSignal.timeout(2000),
     });
+    if (res.status === 401 || res.status === 403) {
+      // The backend is up; this endpoint just needs a login. Saying
+      // "unreachable" here sent people restarting a healthy server.
+      return {
+        name: 'Capabilities',
+        status: 'warn',
+        detail: 'backend up — capability state needs a login',
+        critical: false,
+        hint: 'See Settings → Capabilities in the web UI, or `octi capabilities` after logging in.',
+      };
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const rows = (await res.json()) as Array<{ toolId: string; available: boolean; reason: string | null }>;
     if (rows.length === 0) {
@@ -496,6 +557,7 @@ export async function checkCapabilities(): Promise<CheckResult> {
 }
 
 export async function runDoctor(projectDir: string): Promise<DoctorReport> {
+  loadProjectEnv(projectDir);
   const checks = await Promise.all([
     checkNodeRuntime(),
     checkEnvFile(projectDir),
@@ -508,6 +570,7 @@ export async function runDoctor(projectDir: string): Promise<DoctorReport> {
     checkLiteLLM(),
     checkPostgres(),
     checkBackend(),
+    checkModelProviders(),
     checkCapabilities(),
     checkMcpServerBuild(projectDir),
     checkBrowserExtension(),

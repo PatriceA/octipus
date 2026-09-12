@@ -8,7 +8,7 @@ import type { InstallerModule } from '@/capabilities/service';
 import { spawnProcess } from '@/utils/proc';
 
 const installer: InstallerModule = {
-  kind: 'bun-exec',
+  kind: 'node-exec',
   install: async () => {
     try {
       const proc = spawnProcess({

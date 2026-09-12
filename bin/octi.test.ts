@@ -11,10 +11,11 @@
  * the commands that do NOT start processes are exercised.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
 import { describe, expect, test } from 'vitest';
 
 const BIN_DIR = dirname(fileURLToPath(import.meta.url));
@@ -33,6 +34,16 @@ function runBash(args: string[]): { stdout: string; code: number } {
     const e = err as { stdout?: string; stderr?: string; status?: number };
     return { stdout: `${e.stdout ?? ''}${e.stderr ?? ''}`, code: e.status ?? 1 };
   }
+}
+
+function isolatedBashProject(envFile: string): { root: string; script: string } {
+  const root = mkdtempSync(join(tmpdir(), 'octi-cli-project-'));
+  const bin = join(root, 'bin');
+  mkdirSync(bin);
+  const script = join(bin, 'octi');
+  copyFileSync(BIN_BASH, script);
+  writeFileSync(join(root, '.env'), envFile);
+  return { root, script };
 }
 
 /** Strip the ANSI the banner and log helpers emit unconditionally. */
@@ -105,5 +116,59 @@ describe('launcher scripts are on the current runtime', () => {
     for (const name of ['octi', 'octi.cmd']) {
       expect(readFileSync(join(BIN_DIR, name), 'utf8')).not.toContain('.next');
     }
+  });
+
+  test('dispatchers do not assume external PostgreSQL is on localhost:5432', () => {
+    expect(readFileSync(join(BIN_DIR, 'octi'), 'utf8')).not.toContain('check_service "localhost" "5432"');
+    expect(readFileSync(join(BIN_DIR, 'octi.cmd'), 'utf8')).not.toContain('call :check_port 5432');
+  });
+});
+
+describe('launcher project configuration', () => {
+  test('bash dispatcher reads API and web ports from the checkout .env', () => {
+    const { root, script } = isolatedBashProject(
+      'STORAGE_MODE=embedded\nAPI_PORT=49123\nWEB_PORT=49124\n',
+    );
+    const home = mkdtempSync(join(tmpdir(), 'octi-cli-home-'));
+    const stdout = execFileSync('bash', [script, 'status'], {
+      cwd: root,
+      env: { ...process.env, HOME: home, NO_COLOR: '1', API_PORT: '', WEB_PORT: '' },
+      encoding: 'utf8',
+    });
+    expect(plain(stdout)).toContain('http://localhost:49123');
+    expect(plain(stdout)).toContain('http://localhost:49124');
+  });
+
+  test('compiled dispatcher resolves a custom install through its executable symlink', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'octi-cli-link-'));
+    const app = join(root, 'custom-app');
+    const dist = join(app, 'dist');
+    const pathDir = join(root, 'path');
+    const cwd = join(root, 'elsewhere');
+    mkdirSync(dist, { recursive: true });
+    mkdirSync(join(app, 'bin'));
+    mkdirSync(pathDir);
+    mkdirSync(cwd);
+    writeFileSync(join(app, 'package.json'), '{"version":"9.8.7"}\n');
+    const executable = join(dist, 'octi');
+    await build({
+      entryPoints: [join(BIN_DIR, 'octi.ts')],
+      outfile: executable,
+      bundle: true,
+      platform: 'node',
+      target: 'node24',
+      format: 'esm',
+      banner: { js: '#!/usr/bin/env node' },
+      logLevel: 'silent',
+    });
+    chmodSync(executable, 0o755);
+    const link = join(pathDir, 'octi');
+    symlinkSync(executable, link);
+    const stdout = execFileSync(link, ['version'], {
+      cwd,
+      env: { ...process.env, HOME: root },
+      encoding: 'utf8',
+    });
+    expect(stdout).toContain('Octipus v9.8.7');
   });
 });

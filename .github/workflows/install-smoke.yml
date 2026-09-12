@@ -32,11 +32,51 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Bun (+ dependency cache)
+      - name: Setup Node (+ dependency cache)
         uses: ./.github/actions/node-setup
 
       - name: Install dependencies
         run: npm ci
 
+      - name: Installer contracts and Node version guard
+        run: node --test scripts/install.test.mjs
+
       - name: Setup → doctor → boot → health
         run: bash scripts/smoke-test.sh
+
+  # The PowerShell installer and the batch launcher had no CI at all: three
+  # Windows-only breaks (capability installs, missing commands, orphaned shim)
+  # shipped unnoticed. This runs the real installer against the checkout and
+  # exercises both launcher paths (native batch command + TypeScript hand-over).
+  windows:
+    name: Smoke (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node (+ dependency cache)
+        uses: ./.github/actions/node-setup
+
+      - name: Run install.ps1 against this checkout
+        shell: pwsh
+        env:
+          OCTIPUS_REPO: ${{ github.workspace }}
+          OCTIPUS_BRANCH: ${{ github.head_ref || github.ref_name }}
+          OCTIPUS_INSTALL_DIR: ${{ runner.temp }}\octipus-app
+          OCTIPUS_BIN_DIR: ${{ runner.temp }}\octipus-bin
+        run: |
+          git -C "$env:OCTIPUS_REPO" branch --force ci-smoke HEAD
+          $env:OCTIPUS_BRANCH = 'ci-smoke'
+          & scripts/install.ps1 -SkipSetup
+
+      - name: Launcher — batch command and TypeScript hand-over
+        shell: pwsh
+        run: |
+          $octi = "${{ runner.temp }}\octipus-bin\octi.cmd"
+          & $octi help; if ($LASTEXITCODE -ne 0) { throw 'octi help failed' }
+          & $octi version; if ($LASTEXITCODE -ne 0) { throw 'octi version (TypeScript hand-over) failed' }
+          & $octi doctor --json | Out-Null   # exits 1 without .env — only the run itself is asserted
+          if ($LASTEXITCODE -notin 0, 1) { throw 'octi doctor crashed' }

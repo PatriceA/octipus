@@ -1,13 +1,12 @@
-# Node is pinned to 24.9, not floated: `crypto.argon2` (every password hash)
-# landed there, and `fs.glob` needs 22. A floating tag that happens to be new
-# enough today would fail at runtime on login, not at build.
+# Node 24.19 includes required crypto APIs and the module-loader fix used by CI.
 # ---- Build stage ----
-FROM node:24.9-bookworm AS build
+FROM node:24.19-bookworm AS build
 WORKDIR /app
 
 # Install dependencies first (layer caching)
-COPY package.json package-lock.json* ./
-RUN npm install
+COPY package.json package-lock.json ./
+COPY scripts/check-node.mjs scripts/check-node.mjs
+RUN npm ci --include=dev
 
 # Copy source
 COPY src/ src/
@@ -25,10 +24,10 @@ RUN npx tsx scripts/build.ts
 # NEXT_PUBLIC_API_PORT is baked into client JS at build time (used for WebSocket)
 ARG NEXT_PUBLIC_API_PORT=3005
 ENV NEXT_PUBLIC_API_PORT=${NEXT_PUBLIC_API_PORT}
-RUN cd web && npm install && npm run build
+RUN cd web && npm ci --include=dev && npm run build
 
 # ---- Runtime stage ----
-FROM node:24.9-bookworm-slim
+FROM node:24.19-bookworm-slim
 WORKDIR /app
 
 # Install runtime system dependencies
@@ -72,10 +71,12 @@ COPY scripts/ scripts/
 COPY mcp-server/ mcp-server/
 COPY eval/ eval/
 COPY bin/ bin/
+COPY browser-extension/ browser-extension/
 # Product docs — auto-indexed into the knowledge base at boot so users can ask
 # "how do I set up X?" (see src/db/seed-docs.ts). Without this the indexer
 # finds nothing in the image.
 COPY docs/ docs/
+COPY personas/ personas/
 
 # Create data directories
 RUN mkdir -p /data/workspace /data/documents /data/extensions
@@ -92,9 +93,9 @@ RUN mkdir -p /data/workspace /data/documents /data/extensions
 # runtime user (below) can launch them — the default per-user cache
 # (~/.cache/ms-playwright) would be unreadable after the USER switch.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN npx playwright install chromium && \
+RUN npx playwright install --with-deps chromium && \
     chmod -R a+rX /ms-playwright && \
-    cd mcp-server && npm install --silent && npm run build --silent && cd ..
+    cd mcp-server && npm ci --include=dev && npm run build --silent && cd ..
 
 # Environment defaults
 ENV NODE_ENV=production \
@@ -109,7 +110,10 @@ ENV NODE_ENV=production \
 # Drop root. The node image ships a non-root `node` user (uid 1000);
 # a compromised agent shell tool would otherwise run as root inside the
 # container (and, if the Docker socket is mounted, host-root-equivalent).
-RUN chown -R node:node /app /data
+RUN ln -s /data/extensions /app/extensions && \
+    mkdir -p /home/node/.octipus && \
+    ln -s /data/extensions /home/node/.octipus/extensions && \
+    chown -R node:node /app /data /home/node/.octipus /ms-playwright
 USER node
 
 # Health check — probe readiness (DB + storage reachable), not just liveness,

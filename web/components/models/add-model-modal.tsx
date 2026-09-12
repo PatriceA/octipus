@@ -818,7 +818,7 @@ export function AddModelModal({ isOpen, onClose, onAdd, loading }: AddModelModal
                     className="w-full px-3 py-2 border border-outline-variant/10 rounded-lg bg-surface-container-high text-on-surface font-mono text-sm"
                   />
                   <p className="text-xs text-on-surface-variant mt-1">
-                    <code className="text-xs bg-surface-container-high px-1 rounded">env:VAR_NAME</code> reads <code className="text-xs bg-surface-container-high px-1 rounded">process.env.VAR_NAME</code> on the backend (must be exported before <code className="text-xs bg-surface-container-high px-1 rounded">bun run dev</code>). A bare name looks up the vault entry by that name. Leave blank to auto-generate a vault key.
+                    <code className="text-xs bg-surface-container-high px-1 rounded">env:VAR_NAME</code> reads <code className="text-xs bg-surface-container-high px-1 rounded">process.env.VAR_NAME</code> on the backend (must be exported before <code className="text-xs bg-surface-container-high px-1 rounded">npm run dev</code>). A bare name looks up the vault entry by that name. Leave blank to auto-generate a vault key.
                   </p>
                 </div>
               </div>

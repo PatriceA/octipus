@@ -16,6 +16,9 @@ set -euo pipefail
 
 PORT="${PORT:-3005}"
 DATA_DIR="$(mktemp -d)"
+SMOKE_HOME="$(mktemp -d)"
+export HOME="$SMOKE_HOME"
+export API_PORT="$PORT"
 # The wizard reads its own port from OCTIPUS_SETUP_API_PORT (default 3005) and
 # will happily ADOPT a backend that already answers there — so with a dev
 # instance running, `octi setup` registered its smoke admin in the developer's
@@ -37,6 +40,8 @@ export MASTER_KEY="smoke-master-key-0123456789-abcdefghijklmnop"
 export JWT_SECRET="smoke-jwt-secret-0123456789-abcdefghijklmnop"
 export SESSION_SECRET="smoke-session-secret-0123456789-abcdefghij"
 # Non-interactive admin (password policy: upper+lower+digit).
+export OCTIPUS_SETUP_PROVIDER=ollama
+export OCTIPUS_SETUP_RECOMMEND=0
 export OCTIPUS_SETUP_ADMIN_USER="smokeadmin"
 export OCTIPUS_SETUP_ADMIN_PASS="SmokeAdminPass123"
 
@@ -56,18 +61,21 @@ fi
 server_pid=""
 cleanup() {
   [ -n "$server_pid" ] && kill "$server_pid" 2>/dev/null || true
+  rm -rf "$SMOKE_HOME"
   rm -rf "$DATA_DIR" 2>/dev/null || true
   if [ -n "$ENV_BACKUP" ]; then
     cp "$ENV_BACKUP" .env && rm -f "$ENV_BACKUP"
+  else
+    rm -f .env
   fi
 }
 trap cleanup EXIT
 
 echo "── 1/3 · octi setup --non-interactive (embedded) ──"
-npx tsx scripts/setup-wizard.ts --non-interactive
+node --import tsx --import ./scripts/md-loader.mjs scripts/setup-wizard.ts --non-interactive
 
 echo "── 2/3 · octi doctor ──"
-npx tsx scripts/doctor.ts
+node --import tsx --import ./scripts/md-loader.mjs scripts/doctor.ts
 
 echo "── 3/3 · boot backend + health check ──"
 # `node --import tsx`, not `npx tsx`: the wrapper process would survive as the

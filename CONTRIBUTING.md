@@ -1,3 +1,5 @@
+For supported runtime requirements and the complete user setup, see [Installation](docs/INSTALLATION.md).
+
 # Contributing to Octipus
 
 > **Note.** Parts of this doc were drafted fast to get the public release out the door. If you have the time and taste to rewrite any of it more cleanly, a PR that improves the writing is as welcome as one that fixes a bug.
@@ -33,10 +35,10 @@ If anything in here is wrong, unclear, or out of date, that is itself a bug — 
 git clone https://github.com/PatriceA/octipus.git
 cd octipus
 
-npm install
-cd web && npm install && cd ..
+npm ci
+cd web && npm ci && cd ..
 # Optional, only when changing the standalone MCP server:
-cd mcp-server && npm install && cd ..
+cd mcp-server && npm ci && cd ..
 
 npm run setup          # Interactive wizard — "Embedded" mode for zero-deps
 bin/octi start web

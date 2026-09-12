@@ -52,7 +52,9 @@
     "root-agent-cost": "tsx --import ./scripts/md-loader.mjs scripts/root-agent-cost.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome lint",
-    "lint:fix": "biome lint --write --unsafe"
+    "lint:fix": "biome lint --write --unsafe",
+    "preinstall": "node scripts/check-node.mjs",
+    "audit:all": "node scripts/audit-all.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.5.4",
@@ -90,10 +92,10 @@
     "@axe-core/playwright": "4.13.0",
     "@biomejs/biome": "2.5.12",
     "@playwright/test": "1.62.1",
-    "@types/bun": "^1.4.0",
     "@types/js-yaml": "4.0.9",
     "@types/ws": "^8.5.10",
     "@vitest/coverage-v8": "^5.0.0",
+    "@xterm/headless": "^6.0.0",
     "drizzle-kit": "^0.31.10",
     "esbuild": "0.28.2",
     "tree-sitter-go": "0.25.0",
@@ -108,7 +110,7 @@
     "web-tree-sitter": "0.27.0"
   },
   "engines": {
-    "node": ">=24.9.0"
+    "node": ">=24.19.0"
   },
   "overrides": {
     "uuid": "^11.1.1",

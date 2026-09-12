@@ -381,7 +381,7 @@ export default function EvalPage() {
                   <FlaskConical className="w-12 h-12 mx-auto mb-3 text-on-surface-variant" />
                   <p className="text-on-surface-variant">No evaluation results yet</p>
                   <p className="text-sm text-on-surface-variant mt-1">
-                    Click &quot;Run Eval&quot; above or run from CLI: <code className="bg-surface-container-high px-1.5 py-0.5 rounded text-xs">bun run src/eval/cli.ts</code>
+                    Click &quot;Run Eval&quot; above or run from CLI: <code className="bg-surface-container-high px-1.5 py-0.5 rounded text-xs">npm run eval --</code>
                   </p>
                 </CardContent>
               </Card>

@@ -93,10 +93,23 @@ export function spawnProcess(config: SpawnConfig): ChildProcessHandle {
     config.stdout ?? 'pipe',
     config.stderr ?? 'pipe',
   ];
+  // Windows: `npm`/`npx` resolve to `.cmd` shims, and Node refuses to spawn a
+  // batch file without a shell (EINVAL, the BatBadBut fix). Every capability
+  // installer hit this and setup reported "install failed" on Windows.
+  // Shell only for .cmd/.bat. Args then go through cmd.exe, so on that path
+  // every argument must be plain (no metacharacters, no spaces) — enforced
+  // here rather than trusted per caller.
+  const resolved = process.platform === 'win32' ? whichSync(command) : null;
+  const shell = !!resolved && /\.(cmd|bat)$/i.test(resolved);
+  if (shell) {
+    const bad = args.find((a) => !/^[A-Za-z0-9][A-Za-z0-9._:\\/@=+-]*$/.test(a));
+    if (bad !== undefined) throw new Error(`spawnProcess: refusing argument with shell-significant characters for ${command}: ${bad}`);
+  }
   const child = nodeSpawn(command, args, {
     cwd: config.cwd,
     env: config.env as NodeJS.ProcessEnv | undefined,
     stdio,
+    shell,
   });
 
   let settled: number | null = null;

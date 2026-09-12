@@ -14,63 +14,23 @@ A self-hosted AI workspace for projects, knowledge, and connected tools.
 
 ## Install
 
-One-shot installer — clones the repo, installs deps, drops you into
-`octi setup`, and leaves you at the `octi` CLI:
+**Requires Node.js 24.19.0 or newer (including npm), Git, and a model provider.** Embedded mode needs no external database. Check `node --version` first; older Node versions can fail on crypto or module loading.
 
 ```bash
-# Linux / macOS / WSL
-curl -fsSL https://raw.githubusercontent.com/PatriceA/octipus/main/scripts/install.sh | bash
-
-# Windows (PowerShell)
-iex (irm https://raw.githubusercontent.com/PatriceA/octipus/main/scripts/install.ps1)
+# Linux / macOS / WSL (Bash + curl) — quick start: five questions, ends with the web UI open
+curl -fsSL https://raw.githubusercontent.com/PatriceA/octipus/main/scripts/install.sh | bash -s -- --quick
 ```
 
-Want the desktop app too? Add `--desktop` to also install the Rust toolchain
-and Tauri system libraries: `… install.sh | bash -s -- --desktop`.
-
-`octi setup` is the only wizard — it walks storage mode (embedded vs.
-external) → generates security keys → boots the backend → registers
-your admin account → wires a model provider and default model →
-installs optional capabilities (Playwright, MCP server, browser
-extension). After it finishes the service is runnable; pick TUI or
-web as your surface.
-
-```bash
-octi start                    # the backend, and nothing else
-octi start web                # …plus the web UI, opened in a browser
-octi start tui                # …plus the terminal chat
-octi tui                      # terminal chat against a backend already running
-octi open                     # web UI in the browser (starts it if needed)
-octi desktop                  # desktop client (Tauri) — connects to any backend
-octi capabilities             # what optional tools are installed
-octi doctor                   # what's wired, what's missing
+```powershell
+# Windows PowerShell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/PatriceA/octipus/main/scripts/install.ps1))) -Quick
 ```
 
-**`.env` holds only secrets** (master key, JWT, session, DB URL,
-and one-shot bootstrap vars). Every other setting — ports,
-providers, channels, workspace paths, feature flags — lives in the
-DB and is editable at runtime via the API or the web UI.
+Quick start uses embedded storage with default paths and ports, asks for an admin account and one model provider, then runs `octi start web` and opens **http://localhost:3007**. Drop `--quick` / `-Quick` for the full wizard (storage mode, ports, optional tools, voice); it ends with `octi start web` as the next step. Add the printed CLI directory to PATH if your shell needs it.
 
-**Prefer Docker?** Root-level `docker-compose.yml` brings up Postgres
-+ Octipus in one shot. Playwright Chromium and the MCP
-server are pre-baked in the image. Configure the container from your
-host:
+For Docker without host Node/npm, clone this repository and run `bash scripts/install-docker.sh`; the web UI is **http://localhost:3017**.
 
-```bash
-docker compose up -d
-octi setup --remote http://localhost:3005   # admin, provider, caps — against the container
-```
-
-See [docs/DOCKER.md](docs/DOCKER.md).
-
-**Headless / CI?** `octi setup --non-interactive` drives every step
-from `OCTIPUS_SETUP_*` env vars (`_STORAGE`, `_ADMIN_USER`,
-`_ADMIN_PASS`, `_PROVIDER`, `_API_KEY`, `_MODEL`, `_INSTALL_CAPS`).
-
-**Cloning manually instead?** `git clone`, install the workspace dependencies,
-then run `npm run setup`
-does the same thing the installer does — see
-[CONTRIBUTING.md](CONTRIBUTING.md) for the dev path.
+**[Full installation guide](docs/INSTALLATION.md)** — prerequisites, one-command start, manual install, headless setup, audits, upgrades, Docker, and troubleshooting.
 
 ---
 
@@ -180,12 +140,14 @@ Full feature breakdown: see the [documentation index](#documentation) below.
 
 ```bash
 git clone https://github.com/PatriceA/octipus.git
-cd octipus && npm install
-cd web && npm install && cd ..
-cd mcp-server && npm install && cd ..   # standalone MCP server (not a root workspace)
+cd octipus && npm ci
+cd web && npm ci && cd ..
+cd mcp-server && npm ci && cd ..   # standalone MCP server (not a root workspace)
+npm run build
+npm --prefix web run build
 npm run setup        # the single wizard (same as `octi setup`)
-bin/octi start web   # backend + web UI (server / browser)
-# …or `bin/octi start` for the backend alone, then `npm run tui` / `bin/octi desktop`
+node bin/octi.mjs start web   # backend + web UI (server / browser); works on Windows too
+# …or `node bin/octi.mjs start` for the backend alone, then `npm run tui` / `node bin/octi.mjs desktop`
 ```
 
 Then open [http://localhost:3007](http://localhost:3007) and log in
@@ -210,7 +172,7 @@ curl -fsSL https://raw.githubusercontent.com/PatriceA/octipus/main/scripts/insta
 **Docker (production):** see [docs/DOCKER.md](docs/DOCKER.md).
 **External Postgres:** see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
-Requirements: **Node ≥ 24**, **Docker** (for the full stack), **Postgres 16** (external mode).
+Requirements: **Node ≥ 24.19**, **Docker** (for the full stack), **Postgres 16** (external mode).
 
 > **Runtime:** Node, everywhere — the server, the scripts, the tests, the TUI and the web build. `npm run build` produces `dist/index.js` and `npm start` runs that artifact, not the source; the web bundle is static files served by `web/serve.mjs`.
 

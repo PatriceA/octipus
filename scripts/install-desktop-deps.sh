@@ -2,7 +2,7 @@
 # Octipus desktop dependency installer.
 #
 # Installs everything the Tauri desktop app needs to BUILD that `octi start`
-# and `bun install` do not: the Rust toolchain plus the platform's Tauri v2
+# and `npm ci` do not: the Rust toolchain plus the platform's Tauri v2
 # system libraries (webkit2gtk et al.). Then warms the Cargo cache.
 #
 # Server/headless installs stay lean — this is deliberately separate from the

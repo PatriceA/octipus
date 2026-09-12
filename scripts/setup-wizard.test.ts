@@ -10,6 +10,7 @@ import {
   buildEnv,
   readExistingSecrets,
   readlinePrompt,
+  setupBackendEnv,
 } from './setup-wizard';
 
 /**
@@ -227,4 +228,29 @@ describe('setup-wizard — readlinePrompt fallback', () => {
     // The prompt itself is still shown before muting kicks in.
     expect(captured).toContain('PROMPT>');
   });
+});
+
+
+test('setup backend uses selected bootstrap values instead of inherited deployment values', () => {
+  const old = process.env.API_PORT;
+  process.env.API_PORT = '3005';
+  try {
+    const env = setupBackendEnv({ ...BASE, apiPort: '31985' }, KEYS);
+    expect(env.API_PORT).toBe('31985');
+    expect(env.STORAGE_MODE).toBe('embedded');
+    expect(env.DATA_DIR).toBe(BASE.dataDir);
+    expect(env.DATABASE_URL).toBe('');
+    expect(env.MASTER_KEY).toBe(KEYS.masterKey);
+  } finally {
+    if (old === undefined) delete process.env.API_PORT;
+    else process.env.API_PORT = old;
+  }
+});
+
+
+test('existing quoted secrets retain their actual values on setup rerun', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'octipus-quoted-env-'));
+  const file = join(dir, '.env');
+  writeFileSync(file, `MASTER_KEY="${KEYS.masterKey}"\nJWT_SECRET='${KEYS.jwtSecret}'\nSESSION_SECRET=${KEYS.sessionSecret}\n`);
+  expect(readExistingSecrets(file)).toEqual(KEYS);
 });

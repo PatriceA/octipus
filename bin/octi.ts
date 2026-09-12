@@ -25,7 +25,7 @@
  */
 
 import { spawn } from 'child_process';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, realpathSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join, resolve } from 'path';
 
@@ -66,17 +66,20 @@ interface PathResolution {
  */
 function resolveProject(): PathResolution {
   const candidates: string[] = [];
-  // 1) Sibling of this script (dev path)
-  try {
-    // `import.meta.dir` is a Bun-ism — undefined on Node, so this candidate
-    // silently dropped out and project resolution fell through to cwd.
-    candidates.push(resolve(import.meta.dirname, '..'));
-  } catch { /* compiled binary has no import.meta */ }
-  // 2) Installer default
+  // 1) Follow the invoked executable back through an installer-created
+  // symlink. import.meta.dirname is the symlink's directory for `dist/octi`,
+  // so by itself it cannot locate a custom OCTIPUS_INSTALL_DIR.
+  const invokedEntry = process.argv[1];
+  if (invokedEntry && existsSync(invokedEntry)) {
+    candidates.push(resolve(dirname(realpathSync(invokedEntry)), '..'));
+  }
+  // 2) Sibling of this module (direct source/dist invocation).
+  candidates.push(resolve(import.meta.dirname, '..'));
+  // 3) Installer default
   candidates.push(join(homedir(), '.octipus', 'app'));
-  // 3) cwd
+  // 4) cwd
   candidates.push(process.cwd());
-  // 4) OCTIPUS_HOME env var
+  // 5) OCTIPUS_HOME env var
   if (process.env.OCTIPUS_HOME) candidates.push(process.env.OCTIPUS_HOME);
 
   for (const dir of candidates) {
@@ -87,6 +90,20 @@ function resolveProject(): PathResolution {
     }
   }
   return { projectDir: null, binOcti: null };
+}
+
+/** Load the resolved checkout's bootstrap environment without overriding the caller. */
+function loadProjectEnv(): void {
+  const projectDir = resolveProject().projectDir;
+  if (!projectDir) return;
+  const envPath = join(projectDir, '.env');
+  if (!existsSync(envPath)) return;
+  try {
+    process.loadEnvFile(envPath);
+  } catch (err) {
+    process.stderr.write(`octi: could not load ${envPath}: ${(err as Error).message}\n`);
+    process.exit(2);
+  }
 }
 
 function projectOrDie(): string {
@@ -104,11 +121,15 @@ async function delegateBash(args: string[]): Promise<never> {
   const { binOcti } = resolveProject();
   if (!binOcti) {
     process.stderr.write(
-      `octi: this command needs the bash dispatcher at <project>/bin/octi but it was not found.\n`,
+      `octi: this command needs the platform launcher at <project>/bin/octi but it was not found.\n`,
     );
     process.exit(2);
   }
-  const code = await runInherit('bash', [binOcti, ...args], dirname(dirname(binOcti)));
+  const projectDir = dirname(dirname(binOcti));
+  // Windows has no bash on PATH by default; the batch launcher is the peer.
+  const code = process.platform === 'win32'
+    ? await runInherit('cmd.exe', ['/c', `${binOcti}.cmd`, ...args], projectDir)
+    : await runInherit('bash', [binOcti, ...args], projectDir);
   process.exit(code);
 }
 
@@ -129,7 +150,9 @@ async function delegateScript(scriptRelPath: string, args: string[]): Promise<ne
     process.stderr.write(`octi: script not found at ${scriptPath}\n`);
     process.exit(2);
   }
-  const code = await runInherit('npx', ['tsx', '--import', './scripts/md-loader.mjs', scriptPath, ...args], projectDir);
+  // Node directly, not `npx tsx`: no wrapper process between us and the script
+  // (signals reach it), and no `npx.cmd` shim to trip Windows' no-shell spawn.
+  const code = await runInherit(process.execPath, ['--import', 'tsx', '--import', './scripts/md-loader.mjs', scriptPath, ...args], projectDir);
   process.exit(code);
 }
 
@@ -266,6 +289,7 @@ async function runVersion(): Promise<never> {
 }
 
 async function main(): Promise<void> {
+  loadProjectEnv();
   const [, , command, ...rest] = process.argv;
   const cmd = (command || 'help').toLowerCase();
 
@@ -324,6 +348,9 @@ async function main(): Promise<void> {
     case 'status':
     case 'logs':
     case 'open':
+    case 'web':
+    case 'webui':
+    case 'desktop':
     case 'uninstall':
       await delegateBash([cmd, ...rest]);
       break;

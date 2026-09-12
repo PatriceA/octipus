@@ -2,14 +2,15 @@
  * Canonical provider registry — the single source of truth for which
  * LLM providers Octipus can be wired against during setup.
  *
- * Surfaces that need to know about providers (CLI wizard, web settings,
- * docker bootstrap, doctor, capability install hints) import from here.
- * No hardcoded provider lists anywhere else.
+ * The setup wizard imports from here. `providers.sync.test.ts` pins this list
+ * to the settings registry (`<id>.apiKey` → vaultName) and to the vault name
+ * each runtime provider actually reads, so the three cannot drift apart.
  *
  * Adding a provider:
  *   1. append to PROVIDERS below
- *   2. ensure the matching client exists in src/models/clients/
- *   3. add a vault key in `vaultKey` if it needs a secret
+ *   2. ensure the matching provider exists in src/models/providers/
+ *   3. add a vault key in `vaultKey` if it needs a secret, and the matching
+ *      `<id>.apiKey` entry in src/config/settings-registry.ts
  *
  * Detection is optional — providers without `detect` show as manual-add.
  */
@@ -23,6 +24,7 @@ export type ProviderId =
   | 'openai'
   | 'anthropic'
   | 'gemini'
+  | 'grok'
   | 'deepseek'
   | 'mistral'
   | 'zai'
@@ -79,8 +81,11 @@ export const PROVIDERS: ProviderDef[] = [
       const count = tags?.models?.length ?? 0;
       return { ...probe, modelCount: count };
     },
-    listModels: async () => {
-      const tags = await httpJson<{ models?: Array<{ name: string }> }>('http://localhost:11434/api/tags');
+    listModels: async ({ baseUrl }) => {
+      // The URL the user just typed, not localhost — a remote Ollama used to be
+      // "detected" and then listed the wrong machine's models.
+      const base = (baseUrl || 'http://localhost:11434').replace(/\/$/, '');
+      const tags = await httpJson<{ models?: Array<{ name: string }> }>(`${base}/api/tags`);
       return tags?.models?.map((m) => m.name) ?? null;
     },
   },
@@ -146,6 +151,23 @@ export const PROVIDERS: ProviderDef[] = [
     kind: 'manual',
     requiresApiKey: true,
     vaultKey: 'gemini_api_key',
+  },
+  {
+    id: 'grok',
+    label: 'xAI Grok',
+    description: 'Grok models. OpenAI-compatible. Requires API key.',
+    defaultModel: 'grok-4',
+    kind: 'manual',
+    requiresApiKey: true,
+    vaultKey: 'xai_api_key',
+    listModels: async ({ apiKey }) => {
+      if (!apiKey) return null;
+      const data = await httpJson<{ data?: Array<{ id: string }> }>(
+        'https://api.x.ai/v1/models',
+        { headers: { Authorization: `Bearer ${apiKey}` } },
+      );
+      return data?.data?.map((m) => m.id) ?? null;
+    },
   },
   {
     id: 'deepseek',

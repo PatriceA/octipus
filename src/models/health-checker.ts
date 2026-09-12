@@ -443,7 +443,10 @@ export class HealthChecker {
 
       if (!result.healthy && result.error) {
         const lower = result.error.toLowerCase();
-        const isNotConfigured = lower.includes('not configured') || lower.includes('api key');
+        // Only the provider's own "no key" message means unconfigured. A 401 body
+        // such as "Your api key … is invalid" used to match 'api key' and show a
+        // wrong key as "Not configured" — the opposite of what the user must fix.
+        const isNotConfigured = lower.includes('not configured') || lower.includes('not available');
         return {
           service: name,
           status: isNotConfigured ? 'not_configured' : 'unhealthy',

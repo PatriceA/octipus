@@ -14,16 +14,9 @@ export class BrowserTool extends BaseTool {
 
   override async checkAvailability(): Promise<ToolAvailability> {
     try {
-      // Quick file-based check without importing playwright (which is slow)
-      const { existsSync } = await import('fs');
-      const { join } = await import('path');
-      const home = process.env.HOME || process.env.USERPROFILE || '';
-      // Playwright stores browsers in ~/.cache/ms-playwright or AppData
-      const possiblePaths = [
-        join(home, '.cache', 'ms-playwright'),
-        join(home, 'AppData', 'Local', 'ms-playwright'),
-      ];
-      const hasPlaywright = possiblePaths.some(p => existsSync(p));
+      const { existsSync } = await import('node:fs');
+      const { chromium } = await import('playwright');
+      const hasPlaywright = existsSync(chromium.executablePath());
       if (!hasPlaywright) {
         return { available: false, reason: 'Playwright browsers not installed (run: npx playwright install chromium)' };
       }

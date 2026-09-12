@@ -85,3 +85,6 @@ coverage/
 
 # stray local log bundle
 logs.zip
+
+# Local Docker installer secrets
+.env.compose

@@ -1,10 +1,6 @@
 version: 2
 updates:
-  # Root app. NOTE: Dependabot cannot write `bun.lock`, so every PR it opens
-  # here bumps `package.json` alone and then fails at
-  # `bun install --frozen-lockfile` in the first job. Treat these PRs as
-  # NOTIFICATIONS: apply the bump locally (`bun install` moves both files),
-  # verify, push to main, and close the PR referencing the commit.
+  # npm package-lock.json is authoritative for each package.
   - package-ecosystem: npm
     directory: /
     schedule:
@@ -30,7 +26,7 @@ updates:
       - dependency-name: "@electric-sql/pglite"
       - dependency-name: "@electric-sql/pglite-pgvector"
 
-  # Next.js web app.
+  # Vite web app.
   - package-ecosystem: npm
     directory: /web
     schedule:

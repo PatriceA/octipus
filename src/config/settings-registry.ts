@@ -576,6 +576,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'GEMINI_API_KEY',
   },
   {
+    key: 'grok.apiKey',
+    category: 'providers',
+    valueType: 'string',
+    defaultValue: '',
+    description: 'xAI Grok API key',
+    isSecret: true,
+    vaultName: 'xai_api_key',
+    envVar: 'XAI_API_KEY',
+  },
+  {
     key: 'deepseek.apiKey',
     category: 'providers',
     valueType: 'string',

@@ -1,4 +1,4 @@
-#!/usr/bin/env tsx
+#!/usr/bin/env node
 /**
  * One-shot launcher for the TUI editor.
  *
@@ -14,9 +14,11 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const entry = join(here, '..', 'src', 'tui-editor', 'index.ts');
 
-const child = spawn('bun', ['run', entry, ...process.argv.slice(2)], {
+const child = spawn(process.execPath, ['--import', 'tsx', '--import', './scripts/md-loader.mjs', entry, '--project', process.cwd(), ...process.argv.slice(2)], {
   stdio: 'inherit',
-  cwd: process.cwd(),
+  cwd: join(here, '..'),
 });
 
 child.on('exit', (code) => process.exit(code ?? 1));
+
+child.on('error', (err) => { console.error(err.message); process.exitCode = 1; });
