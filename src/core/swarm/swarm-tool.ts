@@ -27,10 +27,9 @@ export interface SpawnChildHooks {
 
 /**
  * Build spawn hooks around a worker capability that is only known after the
- * worker has been created. CLI workers do not own a detached-child manager, so
- * their ref intentionally remains null and spawn_child must use its blocking
- * await path. Native AgentWorkers populate the ref before their run starts and
- * retain the existing detached behavior.
+ * worker has been created. Both worker kinds (native and CLI) own a
+ * detached-child manager and populate the ref before their run starts; a null
+ * ref (legacy call sites) makes spawn_child use its blocking await path.
  */
 export function createLateBoundSpawnChildHooks(
   ref: {

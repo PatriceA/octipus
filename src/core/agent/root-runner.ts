@@ -646,9 +646,9 @@ export async function runRootAgent(
 
   // Wire detach refs: bind the worker's pending-child methods so
   // `spawn_child` (detach mode) and `collect_children` can reach them.
-  // Only full AgentWorkers expose these methods. CLI workers intentionally
-  // leave the refs null; the late-bound spawn hooks then expose a zero detach
-  // cap and make spawn_child await the child instead of losing its promise.
+  // Native and CLI workers both expose these methods; a worker without them
+  // leaves the refs null, and the late-bound spawn hooks then expose a zero
+  // detach cap so spawn_child awaits the child instead of losing its promise.
   const maybeWorker = worker as unknown as {
     registerPendingChild?: (pc: PendingChild) => void;
     pendingDetachedCount?: () => number;
@@ -661,6 +661,8 @@ export async function runRootAgent(
       registerPendingChild: maybeWorker.registerPendingChild.bind(worker),
       pendingDetachedCount: maybeWorker.pendingDetachedCount.bind(worker),
     };
+    // CLI workers implement only the detach subset of AgentWorker; consumers of
+    // this ref must feature-detect anything else before calling it.
     rootWorkerRef.current = worker as unknown as AgentWorker;
     // Expose the worker on the node so `spawnChild` can sync the node's
     // token budget (`budget.tokens.used`) from the worker's live spend

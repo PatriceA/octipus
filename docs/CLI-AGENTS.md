@@ -63,8 +63,12 @@ a time. `get_cli_run_context` and `get_work_plan` bypass that queue, so a CLI ca
 still read guidance while an awaited delegation holds it.
 
 Delegation uses the actual native `spawn_child` handler and its role, depth and
-budget constraints. CLI workers currently use awaited children; detached
-collection is not implemented as a CLI worker capability. Cancellation is
+budget constraints, including detach mode: a CLI can fan out several children,
+keep working, and pick their results up with `collect_children`. Every Octipus
+tool response lists still-pending children in the run context. A CLI that
+finishes without collecting gets one bounded follow-up turn to merge the
+results (or, for adapters that report only at completion, the results appended
+to its answer); children still pending after that are cancelled. Cancellation is
 propagated through the worker's abort signal. Vendor-native subagents outside
 Octipus's bridge are not members of Octipus's managed child tree.
 

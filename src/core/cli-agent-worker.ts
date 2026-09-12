@@ -27,6 +27,10 @@ import { isPlanMode } from './agent/plan-mode';
 import type { CLIToolConfig } from '@/models/providers/cli-provider';
 import { emptyCounters, mergeCounters, type SideEffectCounters } from './swarm/receipt';
 import { BudgetExceededError } from './swarm/errors';
+import { DetachedChildManager } from './agent-worker/detached-child-manager';
+import { formatCollectedResults } from './swarm/collect-tool';
+import { swarmNodeRepository } from './swarm/node-repository';
+import type { ChildResult, PendingChild } from './swarm/types';
 import { getCLIToolConfig } from './cli-agent-factory';
 import { buildChildEnv } from './cli-child-env';
 import { getConfig } from '@/config';
@@ -82,6 +86,20 @@ export class CLIAgentWorker extends BaseAgentWorker {
   private bridgeErrors = new Map<string, boolean>();
   private steeringQueue: AgentMessage[] = [];
 
+  /**
+   * Detached subagents not yet collected — the same manager the native worker
+   * uses, so `spawn_child` can detach and `collect_children` works for a CLI.
+   * Child-wait time is already excluded from the active clock by the
+   * delegation pause around every collect (bridged or auto), so the manager's
+   * own credit is a no-op here — crediting both would count the wait twice.
+   */
+  private detached = new DetachedChildManager(this.context.id, () => this.config.timeout, () => {});
+  registerPendingChild(pc: PendingChild): void { this.detached.registerPendingChild(pc); }
+  pendingDetachedCount(): number { return this.detached.count(); }
+  listPendingDetached(): PendingChild[] { return this.detached.list(); }
+  collectDetached(childId: string, timeoutMs: number): Promise<ChildResult | null> { return this.detached.collect(childId, timeoutMs); }
+  collectAllDetached(timeoutMs: number): Promise<ChildResult[]> { return this.detached.collectAll(timeoutMs); }
+
   /** Guidance is delivered at the next Octipus tool response or a follow-up CLI turn. */
   steer(message: AgentMessage): void {
     this.steeringQueue.push(message);
@@ -96,6 +114,10 @@ export class CLIAgentWorker extends BaseAgentWorker {
       agentId: this.context.id, sessionId: this.context.sessionId,
       workspaceId: this.context.workspaceId, planMode: this.connection?.planMode ?? false,
       workPlan: formatWorkPlanContext(state), guidance: guidance.map(m => m.content),
+      ...(this.detached.count() > 0 ? {
+        detachedChildren: this.detached.list().map(pc => ({ childId: pc.childId, topic: pc.topic, runningMs: Date.now() - pc.startedAt })),
+        detachedChildrenNote: 'Call collect_children before your final answer to receive their results; otherwise the run collects them for you.',
+      } : {}),
       guidanceDelivery: 'Review this guidance before further affected work. Pending feedback must be acknowledged through update_work_plan.',
     });
   }
@@ -231,15 +253,10 @@ export class CLIAgentWorker extends BaseAgentWorker {
     return mergeCounters(mergeCounters(this.pastParserCounters ?? emptyCounters(), parsed ?? emptyCounters()), native);
   }
 
-  /**
-   * Expose the same registered handlers through the run-scoped bridge.
-   * `collect_children` is dropped: a CLI worker holds no detached children
-   * (the detach cap is 0, so spawn_child always awaits), and the tool answered
-   * "worker not wired" — an advertised tool that can only fail.
-   */
-  registerTool(tool: ToolHandler): void { if (tool.name !== 'collect_children') this.toolExecutor.registerTool(tool); }
+  /** Expose the same registered handlers through the run-scoped bridge. */
+  registerTool(tool: ToolHandler): void { this.toolExecutor.registerTool(tool); }
 
-  registerTools(tools: ToolHandler[]): void { this.toolExecutor.registerTools(tools.filter(t => t.name !== 'collect_children')); }
+  registerTools(tools: ToolHandler[]): void { this.toolExecutor.registerTools(tools); }
 
   /** Active run time, so `AgentManager.list()` shows a duration while a CLI runs. */
   override getElapsedMs(): number { return this.runStartedAt ? this.elapsed() : 0; }
@@ -349,6 +366,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
         result += `\n\n[Octipus] ${pending} guidance/feedback item${pending === 1 ? '' : 's'} arrived after this CLI's last Octipus tool call and ${pending === 1 ? 'was' : 'were'} not applied because ${reason}. Send another message to continue with it.`;
       }
 
+      if (!this.aborted && this.detached.count() > 0) result = await this.settleDetachedChildren(result, buffered);
+
       if (this.aborted) throw new Error(this.runError ?? this.abortReason ?? 'Agent was aborted by user');
 
       this.context.status = 'completed';
@@ -385,6 +404,9 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
       return result;
     } catch (error) {
+      // Mirror the native worker: abort the cascade, then clear the pending map.
+      this.abortController.abort((error as Error).message || 'parent failed');
+      this.detached.cancelAll((error as Error).message || 'parent failed');
       const wasStopped = this.aborted && !this.abortReason && !this.runError && !this.budgetExceeded;
       const status = wasStopped ? 'stopped' : 'failed';
       this.context.status = status;
@@ -427,6 +449,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
     if (this.terminalEmitted) return;
     this.aborted = true;
     this.abortController.abort('CLI agent stopped');
+    this.detached.cancelAll('CLI agent stopped');
     getPermissionManager().cancelWaits(this.context.id);
     if (this.parentSignalCleanup) {
       this.parentSignalCleanup();
@@ -473,6 +496,43 @@ export class CLIAgentWorker extends BaseAgentWorker {
   }
 
   // ── Private implementation ────────────────────────────────────────
+
+  /**
+   * Same safety net as the native worker: a CLI that finished without
+   * collect_children still gets its children's results. One bounded merge
+   * turn when the adapter streams and there is ample budget left (a merge
+   * that tripped the shared iteration or wall limit would call stop() and
+   * turn a fully collected answer into a failed run); otherwise the
+   * formatted results are appended. Children still pending afterwards are
+   * cancelled.
+   */
+  private async settleDetachedChildren(result: string, buffered: boolean): Promise<string> {
+    const autoTimeoutMs = this.detached.computeAutoCollectTimeoutMs();
+    agentLogger.warn({ agentId: this.context.id, pending: this.detached.count(), autoTimeoutMs }, 'Auto-collecting detached children left by the CLI before finalizing');
+    this.setPause('delegation', true);
+    let collected: ChildResult[] = [];
+    try { collected = await this.collectAllDetached(autoTimeoutMs); } finally { this.setPause('delegation', false); }
+    for (const r of collected) if (r.status !== 'timeout') swarmNodeRepository.markCollected(r.nodeId).catch(() => { /* reaper safety net */ });
+    if (collected.length > 0) {
+      const block = formatCollectedResults(collected);
+      const remainingMs = this.config.timeout - this.elapsed();
+      const canMerge = !this.aborted && !buffered && this.iteration + 1 < this.config.maxIterations
+        && remainingMs > Math.max(60_000, this.config.timeout * 0.2);
+      let merged = '';
+      if (canMerge) {
+        this.messages.push({ role: 'assistant', content: result, timestamp: new Date() });
+        this.messages.push({ role: 'user', content: `Your detached subagents reported. Write ONE unified final answer for the user that merges these results — deduplicate, do not label per child, and say so if they disagree. An entry marked running has not finished: say that rather than inventing its conclusion.\n${block}`, timestamp: new Date() });
+        try { merged = await this.executeCLI(); }
+        catch (err) { agentLogger.warn({ err, agentId: this.context.id }, 'Merge turn for detached results failed; appending them instead'); }
+      }
+      result = merged.trim() ? merged : `${result}\n\n[Octipus] ${collected.length} detached subagent${collected.length === 1 ? '' : 's'} reported after this CLI's last Octipus tool call; the results were not merged into the answer above:\n${block}`;
+    }
+    if (this.detached.count() > 0) {
+      agentLogger.warn({ agentId: this.context.id, pending: this.detached.count() }, 'Cancelling detached children still pending at CLI completion');
+      this.detached.cancelAll('parent completed without collecting all children');
+    }
+    return result;
+  }
 
   /**
    * Build the conversation prompt (user + assistant messages only).

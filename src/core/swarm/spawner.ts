@@ -1304,9 +1304,8 @@ export class SwarmSpawner {
       childNode.ownTokenUsage = () => worker.getTotalTokens();
     }
 
-    // Late-bind the worker ref onto the childNode. Only the full
-    // `AgentWorker` class exposes detach-mode methods — CLI workers never
-    // own detached swarm children so we skip them silently.
+    // Late-bind the worker ref onto the childNode. Native and CLI workers
+    // both expose the detach-mode methods; anything else is skipped silently.
     const maybeWorker = worker as unknown as {
       registerPendingChild?: (pc: PendingChild) => void;
       pendingDetachedCount?: () => number;
@@ -1319,6 +1318,7 @@ export class SwarmSpawner {
       const holder = (childNode as unknown as {
         workerRef?: { current: AgentWorker | null };
       })?.workerRef;
+      // CLI workers implement only the detach subset; feature-detect other methods.
       if (holder) holder.current = worker as unknown as AgentWorker;
       // Also populate the detach-hook ref used by spawn_child.
       const hookHolder = (childNode as unknown as {
