@@ -7,7 +7,7 @@ import { getModelRegistry } from '@/models/model-registry';
 import { generateId } from '@/utils/crypto';
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { type AgentEvent, AgentWorker, type AgentWorkerConfig, type ToolHandler } from './agent-worker';
-import { isCLIProvider } from './cli-agent-factory';
+import { getCLIToolConfig, isCLIProvider } from './cli-agent-factory';
 import { CLIAgentWorker } from './cli-agent-worker';
 import { getPermissionManager } from '@/security/permissions';
 import { getRouter } from './router';
@@ -165,7 +165,9 @@ export class AgentManager {
     // Determine if this is a CLI model (autonomous sub-agent)
     const registry = getModelRegistry();
     const modelEntry = await registry.getModelByModelId(routedModel);
-    const isCLI = modelEntry ? isCLIProvider(modelEntry.provider) : false;
+    // A `cli/...` model without a registry row used to fall through to the
+    // native worker and hit the provider router with a nonsense model name.
+    const isCLI = modelEntry ? isCLIProvider(modelEntry.provider) : !!getCLIToolConfig(routedModel);
 
     let worker: AnyAgentWorker;
 

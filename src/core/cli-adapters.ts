@@ -346,7 +346,11 @@ const CODEX_PERM_MAP: Record<CLIPermissionLevel, string> = {
 const CODEX_NATIVE_PERMS = new Set(['read-only', 'workspace-write', 'danger-full-access']);
 
 export function resolveClaudePermissionMode(mode: string | undefined): string {
-  if (!mode) return CLAUDE_PERM_MAP.full; // historical default for spawned agents
+  // Default is `workspace` (acceptEdits): edits inside the workspace flow, and
+  // everything else raises a native permission request that the stdio relay
+  // routes through Octipus' ALLOW/ASK/DENY. `bypassPermissions` (the old
+  // default) never emits those requests, which made the relay inert.
+  if (!mode) return CLAUDE_PERM_MAP.workspace;
   if (mode in CLAUDE_PERM_MAP) return CLAUDE_PERM_MAP[mode as CLIPermissionLevel];
   if (CLAUDE_NATIVE_PERMS.has(mode)) return mode;
   throw new Error(

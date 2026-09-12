@@ -125,6 +125,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       contextWindowSize: parseInt(process.env.CONTEXT_WINDOW_SIZE || '32000', 10),
       maxTokenBudget: parseInt(process.env.AGENT_MAX_TOKEN_BUDGET || '100000', 10),
       streaming: true, // no env form: the `agent.streaming` setting owns it
+      promptDumps: true, // same: the `agent.promptDumps` setting owns it
       // The `ORCHESTRATOR_*` names are still read as a fallback: they are set
       // in real .env files, and dropping them would silently reset a tuned
       // install to defaults rather than fail loudly.

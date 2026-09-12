@@ -16,6 +16,7 @@ import { getModelRegistry } from '@/models/model-registry';
 import { type ToolShimSchema, proseShowsToolIntent, translateToToolCall } from '@/models/toolshim';
 import { applyTopicParamOverrides, getTopicConfig } from '@/models/topic-config';
 import { getConfig } from '@/config';
+import { sweepStaleFiles } from './cli-adapters';
 import type { ModelConfigEntry } from '@/db/schema/models';
 import { compactMessagesWithSummary, CONTEXT_OVERFLOW_TRUNCATED_MARKER, DEFAULT_TOOL_OUTPUT_SOFT_CAP, truncateOldestToolOutputs } from '@/utils/context-compaction';
 import { agentLogger, coreLogger } from '@/utils/logger';
@@ -545,9 +546,12 @@ export class AgentWorker extends BaseAgentWorker {
     this.lastActivityAt = this.startTime; // a started worker is active until proven stale (reaper heartbeat)
     this.emit('status_change', { status: 'running' });
 
-    try {
+    // Owner-only files, swept after 7 days, gated by `agent.promptDumps` —
+    // this path used to write unbounded, world-readable dumps on every run.
+    if (getConfig().agent?.promptDumps !== false) try {
       const dumpDir = joinPath(homedir(), '.octipus', 'prompts');
       mkdirSync(dumpDir, { recursive: true });
+      sweepStaleFiles(dumpDir, '', 7 * 24 * 3600_000);
       const ts = new Date().toISOString().replace(/[:.]/g, '-');
       const dumpPath = joinPath(dumpDir, `${ts}_${this.context.id}_${this.context.role}.md`);
       const body = [
@@ -559,7 +563,7 @@ export class AgentWorker extends BaseAgentWorker {
         '',
         ...this.messages.map((m, i) => `## [${i}] ${m.role}\n${m.content || ''}`),
       ].join('\n');
-      writeFileSync(dumpPath, body, 'utf-8');
+      writeFileSync(dumpPath, body, { encoding: 'utf-8', mode: 0o600 });
       agentLogger.info({ agentId: this.context.id, path: dumpPath }, 'Dumped agent prompt');
     } catch (err) {
       agentLogger.debug({ err, agentId: this.context.id }, 'Failed to dump agent prompt');
@@ -896,6 +900,9 @@ export class AgentWorker extends BaseAgentWorker {
 
       this.iteration++;
       this.lastActivityAt = Date.now(); // heartbeat — see getActivity()
+      // Same tick the CLI worker emits; the bridge turns it into `agent.iteration`
+      // (the TUI's "iter N" HUD never advanced for native agents).
+      this.emit('thought', { type: 'iteration_update', iteration: this.iteration });
       agentLogger.info({
         agentId: this.context.id, sessionId: this.context.sessionId,
         iteration: this.iteration, elapsedMs: this.elapsed(),

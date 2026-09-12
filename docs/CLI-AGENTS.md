@@ -94,6 +94,20 @@ still bypasses that vendor's prompts; it does not authorize an Octipus tool that
 Octipus denied. Prompt instructions tell the CLI not to work around denials, but
 are not an enforcement boundary for arbitrary vendor-native shell actions.
 
+When a Claude Code model row sets no permission mode, managed runs use
+`workspace` (`acceptEdits`): edits inside the workspace proceed, and every other
+native tool raises a permission request that the stdio relay routes through
+Octipus' ALLOW/ASK/DENY rules. The previous default, `bypassPermissions`, never
+emitted those requests, so the relay was inert unless an operator chose a mode.
+Set `permissionMode: full` on the model row to restore bypass.
+
+Adapters that report no token usage (Mistral Vibe, Antigravity) are accounted
+with a character-based estimate (about four characters per token) flagged as
+`estimated` on the cost row, so token budgets and pipeline pools no longer treat
+those runs as free. The prompt handed to every CLI (and every native agent run)
+is written to `~/.octipus/prompts` as an owner-only file swept after seven days;
+turn the `agent.promptDumps` setting off to write nothing.
+
 Plan mode overrides the configured vendor permission mode for the invocation.
 Native plan mode itself is not a complete shell sandbox; neither is this mapping.
 Managed runs reject extra arguments that could override permission, MCP, input,

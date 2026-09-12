@@ -92,6 +92,8 @@ export interface CompletionResult {
     reportedCost?: number;
     /** False when the upstream omitted usage; zero is otherwise a valid count. */
     available?: boolean;
+    /** True when the counts are a character-based estimate (CLIs that report no usage). */
+    estimated?: boolean;
   };
   model: string;
   latencyMs: number;

@@ -28,6 +28,8 @@ import type { CLIToolConfig } from '@/models/providers/cli-provider';
 import { emptyCounters, mergeCounters, type SideEffectCounters } from './swarm/receipt';
 import { BudgetExceededError } from './swarm/errors';
 import { getCLIToolConfig } from './cli-agent-factory';
+import { buildChildEnv } from './cli-child-env';
+import { getConfig } from '@/config';
 import { isRootAgent } from './types';
 import type { AgentContext, AgentMessage } from './types';
 
@@ -229,10 +231,18 @@ export class CLIAgentWorker extends BaseAgentWorker {
     return mergeCounters(mergeCounters(this.pastParserCounters ?? emptyCounters(), parsed ?? emptyCounters()), native);
   }
 
-  /** Expose the same registered handlers through the run-scoped bridge. */
-  registerTool(tool: ToolHandler): void { this.toolExecutor.registerTool(tool); }
+  /**
+   * Expose the same registered handlers through the run-scoped bridge.
+   * `collect_children` is dropped: a CLI worker holds no detached children
+   * (the detach cap is 0, so spawn_child always awaits), and the tool answered
+   * "worker not wired" — an advertised tool that can only fail.
+   */
+  registerTool(tool: ToolHandler): void { if (tool.name !== 'collect_children') this.toolExecutor.registerTool(tool); }
 
-  registerTools(tools: ToolHandler[]): void { this.toolExecutor.registerTools(tools); }
+  registerTools(tools: ToolHandler[]): void { this.toolExecutor.registerTools(tools.filter(t => t.name !== 'collect_children')); }
+
+  /** Active run time, so `AgentManager.list()` shows a duration while a CLI runs. */
+  override getElapsedMs(): number { return this.runStartedAt ? this.elapsed() : 0; }
 
   addSystemMessage(content: string): void {
     this.systemMessages.push(content);
@@ -596,7 +606,9 @@ export class CLIAgentWorker extends BaseAgentWorker {
     const { binary, args, stdinPrompt, useShell } = built;
     this.launchCleanup = () => {
       const configIndex = args.indexOf('--mcp-config');
-      const paths = [built.env?.VIBE_HOME, ...(this.connection && configIndex >= 0 ? [args[configIndex + 1]] : [])];
+      // Windows writes the system prompt to a temp file (command-line length cap).
+      const sysFileIndex = args.indexOf('--append-system-prompt-file');
+      const paths = [built.env?.VIBE_HOME, ...(this.connection && configIndex >= 0 ? [args[configIndex + 1]] : []), ...(sysFileIndex >= 0 ? [args[sysFileIndex + 1]] : [])];
       for (const path of paths) if (path) {
         try { rmSync(path, { recursive: true, force: true }); }
         catch (err) { agentLogger.warn({ err, path }, 'CLI temporary configuration cleanup failed'); }
@@ -673,7 +685,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
       'CLI agent context',
     );
 
-    try {
+    if (getConfig().agent?.promptDumps !== false) try {
       const dumpDir = joinPath(homedir(), '.octipus', 'prompts');
       mkdirSync(dumpDir, { recursive: true });
       // Cap retention — prompt dumps used to accumulate unboundedly (C13).
@@ -884,6 +896,16 @@ export class CLIAgentWorker extends BaseAgentWorker {
             }
           }
 
+          if (!invocationUsage.available) {
+            // Buffered adapters (Vibe, Antigravity) report no usage. Estimate
+            // from characters so token budgets and pipeline pools stop treating
+            // these runs as free; the row is marked as an estimate.
+            const est = (s: string | null | undefined) => Math.ceil((s?.length ?? 0) / 4);
+            const inputTokens = est(systemPrompt) + est(prompt) + est(stdinPrompt);
+            const outputTokens = est(accumulatedText);
+            invocationUsage = { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, available: true, estimated: true };
+            this.totalTokens += invocationUsage.totalTokens;
+          }
           await recordProviderUsage({ model: this.context.model, modelConfigName: this.accountingModelName, messages: [], userId: this.context.userId, sessionId: this.context.sessionId, agentId: this.context.id, requestType: 'cli' }, 'cli', { model: this.context.model, usage: invocationUsage }, code !== 0 || this.aborted || !!this.runError);
 
           if (this.budgetExceeded) {
@@ -924,16 +946,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
             return;
           }
 
-          // Only persist for the root agent — sub-workers use handleMessage for persistence
-          if (accumulatedText && isRootAgent(this.context)) {
-            await messageRepository.create({
-              sessionId: this.context.sessionId,
-              role: 'assistant',
-              content: accumulatedText,
-              agentId: this.context.id,
-            });
-            await sessionRepository.incrementMessageCount(this.context.sessionId);
-          }
+          // The assistant reply is persisted once, by AgentService after the
+          // output guard — this worker used to write a second, unguarded row.
 
           agentLogger.info(
             { agentId: this.context.id, tool: toolConfig.name, durationMs: Date.now() - startTime, iterations: this.iteration },
@@ -968,33 +982,4 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-/**
- * Minimal env for a spawned CLI child (C6). Only PATH/HOME/locale/TERM, the
- * CLI's own auth var, and per-tool overrides — NOT the server's full env
- * (DB creds, every API key, internal secrets).
- */
-export function buildChildEnv(tool: CLIToolConfig, toolEnv?: Record<string, string>, inheritApiKeys = false): Record<string, string> {
-  const base: Record<string, string> = {};
-  const pass = (k: string) => { const v = process.env[k]; if (v != null) base[k] = v; };
-  // Core shell/runtime env every CLI needs to find its binary + config dir.
-  for (const k of ['PATH', 'HOME', 'LANG', 'TERM', 'TZ', 'SHELL', 'USER', 'LOGNAME', 'TMPDIR', 'CODEX_HOME']) pass(k);
-  // Windows equivalents.
-  for (const k of ['SystemRoot', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'PATHEXT', 'ComSpec', 'TEMP', 'TMP']) pass(k);
-  // Locale (LC_ALL, LC_CTYPE, …).
-  for (const k of Object.keys(process.env)) if (k.startsWith('LC_')) pass(k);
-  // The CLI's own auth vars — scoped per provider so codex doesn't see the
-  // Anthropic key, etc.
-  const authByProvider: Record<string, string[]> = {
-    anthropic: ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'],
-    openai: ['OPENAI_API_KEY', 'CODEX_API_KEY'],
-    google: ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_APPLICATION_CREDENTIALS'],
-    mistral: ['MISTRAL_API_KEY'],
-  };
-  if (inheritApiKeys) for (const k of authByProvider[tool.modelProvider] || []) pass(k);
-  if (tool.modelProvider === 'anthropic') pass('CLAUDE_CODE_OAUTH_TOKEN');
-  // Per-tool overrides (e.g. vibe's ephemeral VIBE_HOME).
-  Object.assign(base, toolEnv || {});
-  // Never let the child think it's running inside Claude Code itself.
-  delete base.CLAUDECODE;
-  return base;
-}
+export { buildChildEnv } from './cli-child-env';

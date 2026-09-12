@@ -329,6 +329,15 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
       'Stream the root agent\'s reply text to the web chat and TUI as it is produced. Turn off if a provider misbehaves on streamed tool calls; replies then arrive whole.',
     isSecret: false,
   },
+  {
+    key: 'agent.promptDumps',
+    category: 'agent',
+    valueType: 'boolean',
+    defaultValue: true,
+    description:
+      'Write every agent run\'s full prompt to ~/.octipus/prompts for post-mortems (owner-only files, swept after 7 days). Off = nothing is written.',
+    isSecret: false,
+  },
 
   {
     key: 'agent.promptTier',

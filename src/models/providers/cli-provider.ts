@@ -1,4 +1,5 @@
 import { describeCliCapabilities } from '@/shared/cli-capabilities';
+import { buildChildEnv } from '@/core/cli-child-env';
 import { spawn } from 'child_process';
 import { getConfig } from '@/config';
 import { classifyError } from '@/core/errors/classification';
@@ -492,7 +493,15 @@ export class CLIProvider implements ModelProvider {
     modelLogger.debug({ tool: tool.name, model: options.model }, 'Executing CLI tool');
 
     try {
-      const stdout = await this.execCli(tool.binaryPath, args, env ? { env } : undefined);
+      // Same allowlisted child env as the agent worker — never the server's
+      // full environment (DB credentials, every provider key). The model row's
+      // `cliAgent.inheritApiKeys` opts a key-mode CLI back into its own key,
+      // exactly as it does for managed runs.
+      const { getModelRegistry } = await import('../model-registry');
+      const row = await getModelRegistry().getModel(options.model).catch(() => null)
+        ?? await getModelRegistry().getModelByModelId(options.model).catch(() => null);
+      const inheritApiKeys = row?.metadata?.cliAgent?.inheritApiKeys === true;
+      const stdout = await this.execCli(tool.binaryPath, args, { env: buildChildEnv(tool, env, inheritApiKeys) });
       const result = tool.parseOutput(stdout, startTime);
 
       // Track usage
@@ -636,7 +645,7 @@ export class CLIProvider implements ModelProvider {
         // Run in the workspace root, not wherever the server was launched — a
         // CLI completion must not read/write the octipus repo by default.
         cwd: resolveWorkspaceRoot(),
-        env: { ...process.env, ...opts?.env },
+        env: opts?.env ?? { ...process.env },
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout,
         shell: process.platform === 'win32' && !noShell,

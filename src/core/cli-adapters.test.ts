@@ -1,7 +1,7 @@
 import { parse as parseToml } from 'smol-toml';
 import { execFile } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CLIArgumentBuilder, discoverCodexMcpServers, injectVibeMcpServer, resolveCodexSandboxMode, resolveVibeMode } from './cli-adapters';
+import { CLIArgumentBuilder, discoverCodexMcpServers, injectVibeMcpServer, resolveClaudePermissionMode, resolveCodexSandboxMode, resolveVibeMode } from './cli-adapters';
 
 vi.mock('node:child_process', () => ({ execFile: vi.fn() }));
 type ExecCb = (err: Error | null, stdout: string, stderr: string) => void;
@@ -333,4 +333,12 @@ it('isolates Vibe MCP servers while preserving model configuration', () => {
   expect(result.mcp_servers).toEqual([
     { name: 'octipus', command: 'node', transport: 'stdio', args: ['/test/index.js'], tool_timeout_sec: 7200, env: { OCTIPUS_AGENT_URL: 'http://127.0.0.1:1', OCTIPUS_AGENT_KEY: 'run-key' } },
   ]);
+});
+
+describe('Claude permission default', () => {
+  it('is workspace (acceptEdits) so native permission requests reach the Octipus relay', () => {
+    expect(resolveClaudePermissionMode(undefined)).toBe('acceptEdits');
+    expect(resolveClaudePermissionMode('full')).toBe('bypassPermissions');
+    expect(resolveClaudePermissionMode('safe')).toBe('default');
+  });
 });

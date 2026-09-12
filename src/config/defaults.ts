@@ -68,6 +68,7 @@ export const defaultConfig: Partial<Config> = {
     contextWindowSize: 32000,
     maxTokenBudget: 100000,
     streaming: true,
+    promptDumps: true,
     promptTier: 'auto',
     liteMaxIterations: 8,
     smallModelMaxParams: 10_000_000_000,
