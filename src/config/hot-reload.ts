@@ -70,6 +70,14 @@ export function initializeHotReload(): void {
           logger.info({ key }, 'Telephony provider cache reset');
           break;
 
+        case 'notifications': {
+          // The FCM service account is cached (including "absent"); drop it so
+          // a pasted or rotated key takes effect without a restart.
+          const { getPushService } = await import('@/core/push/fcm');
+          getPushService().reset();
+          logger.info({ key }, 'Push service cache reset');
+          break;
+        }
         case 'artifacts': {
           // Invalidate the resolved settings + token signing key so the next
           // embed render/sign uses the new value without a process restart.

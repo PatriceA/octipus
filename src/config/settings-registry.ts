@@ -74,6 +74,17 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'LITELLM_API_KEY',
   },
   {
+    key: 'push.fcmServiceAccount',
+    category: 'notifications',
+    valueType: 'string',
+    defaultValue: '',
+    description:
+      'Firebase service-account JSON (with project_id) used to push approvals and permission requests to paired phones. Empty disables push.',
+    isSecret: true,
+    vaultName: 'fcm_service_account',
+    envVar: 'FCM_SERVICE_ACCOUNT_JSON',
+  },
+  {
     key: 'litellm.timeout',
     category: 'litellm',
     valueType: 'number',

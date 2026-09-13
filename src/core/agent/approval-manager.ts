@@ -50,7 +50,7 @@ export class ApprovalManager {
       'approval_required',
       'Approval Required',
       `${summary}\n\n${question}`,
-      { requestId },
+      { requestId, sessionId: context.sessionId },
     ).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in approval-manager'));
 
     return new Promise<unknown>((resolve) => {

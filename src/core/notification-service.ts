@@ -32,6 +32,19 @@ export class NotificationService {
         metadata: metadata || {},
       });
 
+      // Paired phones: approvals are the interrupts a person must not miss.
+      if (type.startsWith('approval')) {
+        import('@/core/push/fcm')
+          .then(({ getPushService }) =>
+            getPushService().sendToUser(userId, {
+              title,
+              body,
+              data: stringValues({ kind: 'approval', type, ...(metadata ?? {}) }),
+            }),
+          )
+          .catch((err) => coreLogger.error({ err, userId, type }, 'Push delivery failed'));
+      }
+
       // Push to WebSocket handlers
       for (const handler of this.wsHandlers) {
         try {
@@ -102,6 +115,16 @@ export class NotificationService {
       .where(and(eq(notifications.userId, userId), eq(notifications.read, false)));
     return result.length;
   }
+}
+
+/** FCM data payloads must be flat string maps. */
+function stringValues(obj: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === undefined || v === null || k === 'deliverTo') continue;
+    out[k] = typeof v === 'string' ? v : JSON.stringify(v);
+  }
+  return out;
 }
 
 let instance: NotificationService | null = null;

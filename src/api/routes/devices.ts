@@ -5,6 +5,7 @@ import { networkInterfaces } from 'os';
 import { apiContext } from '@/api/context';
 import { getSettingsService } from '@/config/settings-service';
 import { rawStore } from '@/db/cache';
+import { getPushService } from '@/core/push/fcm';
 import { getSessionManager } from '@/security/auth/session';
 import { apiLogger } from '@/utils/logger';
 
@@ -138,6 +139,44 @@ export const deviceRoutes = new Elysia({ prefix: '/devices' })
       return { devices: mobileDevices };
     },
     { detail: { tags: ['devices'] } }
+  )
+
+  // Register (or refresh) this device's FCM token
+  .put(
+    '/push-token',
+    async ({ body, user, set }) => {
+      if (!user) {
+        set.status = 401;
+        return { error: 'Authentication required' };
+      }
+      await getPushService().register(user.id, body.token, body.platform, body.deviceName);
+      return { registered: true, pushConfigured: await getPushService().isConfigured() };
+    },
+    {
+      body: t.Object({
+        token: t.String({ minLength: 16, maxLength: 4096 }),
+        platform: t.Union([t.Literal('android'), t.Literal('ios')]),
+        deviceName: t.Optional(t.String({ maxLength: 120 })),
+      }),
+      detail: { tags: ['devices'] },
+    }
+  )
+
+  // Forget this device's FCM token (logout / disconnect)
+  .delete(
+    '/push-token/:token',
+    async ({ params, user, set }) => {
+      if (!user) {
+        set.status = 401;
+        return { error: 'Authentication required' };
+      }
+      const removed = await getPushService().unregister(user.id, params.token);
+      return { removed };
+    },
+    {
+      params: t.Object({ token: t.String() }),
+      detail: { tags: ['devices'] },
+    }
   )
 
   // Revoke a device session

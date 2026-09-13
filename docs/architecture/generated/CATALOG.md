@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-391 mounted routes across 61 route files. The path is the full one, group prefix included — what a client actually calls.
+395 mounted routes across 62 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -109,6 +109,8 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | DELETE | `/api/devices/:sessionId` | `src/api/routes/devices.ts` |
 | POST | `/api/devices/pair/generate` | `src/api/routes/devices.ts` |
 | POST | `/api/devices/pair/redeem` | `src/api/routes/devices.ts` |
+| PUT | `/api/devices/push-token` | `src/api/routes/devices.ts` |
+| DELETE | `/api/devices/push-token/:token` | `src/api/routes/devices.ts` |
 | GET | `/api/digest/away` | `src/api/routes/digest.ts` |
 | GET | `/api/documents` | `src/api/routes/documents.ts` |
 | DELETE | `/api/documents/:id` | `src/api/routes/documents.ts` |
@@ -255,6 +257,8 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/notifications` | `src/api/routes/notifications.ts` |
 | POST | `/api/notifications/:id/read` | `src/api/routes/notifications.ts` |
 | POST | `/api/notifications/read-all` | `src/api/routes/notifications.ts` |
+| POST | `/api/permission-requests/:id/respond` | `src/api/routes/permission-requests.ts` |
+| GET | `/api/permission-requests/pending` | `src/api/routes/permission-requests.ts` |
 | GET | `/api/persona` | `src/api/routes/persona.ts` |
 | PATCH | `/api/persona` | `src/api/routes/persona.ts` |
 | GET | `/api/persona/arms` | `src/api/routes/persona.ts` |
@@ -426,14 +430,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 7 |
 | `api` | `config` | 20 |
 | `api` | `connectors` | 1 |
-| `api` | `core` | 77 |
+| `api` | `core` | 78 |
 | `api` | `db` | 96 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 5 |
 | `api` | `mcp` | 3 |
 | `api` | `models` | 30 |
 | `api` | `plugins` | 1 |
-| `api` | `security` | 69 |
+| `api` | `security` | 71 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 1 |
 | `api` | `skills` | 2 |
@@ -453,7 +457,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `channels` | `utils` | 16 |
 | `channels` | `voice` | 2 |
 | `config` | `channels` | 1 |
-| `config` | `core` | 2 |
+| `config` | `core` | 3 |
 | `config` | `db` | 3 |
 | `config` | `models` | 1 |
 | `config` | `security` | 3 |
@@ -466,17 +470,17 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `channels` | 2 |
 | `core` | `config` | 31 |
 | `core` | `connectors` | 2 |
-| `core` | `db` | 177 |
+| `core` | `db` | 179 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 4 |
 | `core` | `mcp` | 5 |
-| `core` | `models` | 66 |
-| `core` | `security` | 48 |
+| `core` | `models` | 67 |
+| `core` | `security` | 49 |
 | `core` | `services` | 1 |
 | `core` | `shared` | 9 |
 | `core` | `skills` | 6 |
 | `core` | `tools` | 12 |
-| `core` | `utils` | 140 |
+| `core` | `utils` | 141 |
 | `db` | `config` | 3 |
 | `db` | `core` | 5 |
 | `db` | `models` | 1 |
@@ -514,6 +518,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `plugins` | `utils` | 2 |
 | `security` | `config` | 12 |
 | `security` | `connectors` | 3 |
+| `security` | `core` | 1 |
 | `security` | `db` | 48 |
 | `security` | `tools` | 1 |
 | `security` | `utils` | 21 |
@@ -587,6 +592,7 @@ Two modules that import each other. Not fatal, but it is what blocks an extracti
 - core <-> extensions
 - core <-> hooks
 - core <-> models
+- core <-> security
 - core <-> services
 - core <-> skills
 - core <-> tools

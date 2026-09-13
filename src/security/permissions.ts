@@ -351,6 +351,17 @@ export class PermissionManager {
       sessionId,
     });
 
+    // Paired phones get the same interrupt as the open clients; best effort.
+    import('@/core/push/fcm')
+      .then(({ getPushService }) =>
+        getPushService().sendToUser(userId, {
+          title: 'Permission request',
+          body: `${callerToolName || action} · ${toolId}`,
+          data: { kind: 'permission', requestId, toolId, action, ...(sessionId ? { sessionId } : {}) },
+        }),
+      )
+      .catch(err => coreLogger.error({ err, requestId }, 'Push delivery failed'));
+
     if (signal?.aborted) {
       this.preparedWaits.delete(requestId);
       throw new Error('Agent stopped while creating approval request');
