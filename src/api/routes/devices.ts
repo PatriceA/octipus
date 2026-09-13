@@ -1,8 +1,8 @@
 import { randomBytes } from 'crypto';
-import { getConfig } from '@/config';
 import { Elysia, t } from '@/api/http';
 import { networkInterfaces } from 'os';
 import { apiContext } from '@/api/context';
+import { getConfig } from '@/config';
 import { getSettingsService } from '@/config/settings-service';
 import { rawStore } from '@/db/cache';
 import { getPushService } from '@/core/push/fcm';
@@ -49,15 +49,23 @@ export const deviceRoutes = new Elysia({ prefix: '/devices' })
 
       apiLogger.info({ userId: user.id }, 'Device pairing code generated');
 
-      const lanIp = getLanIp();
-      const port = process.env.PORT || process.env.API_PORT || 3005;
+      // The QR must point at an address the phone can reach. A backend bound
+      // to loopback (API_HOST=127.0.0.1, the install default behind a
+      // reverse proxy) would otherwise hand out a LAN URL that refuses every
+      // connection; say so instead of letting the app fail with ECONNREFUSED.
+      const { host, port } = getConfig().api;
+      const loopbackOnly = host === '127.0.0.1' || host === 'localhost' || host === '::1';
+      const lanIp = loopbackOnly ? null : getLanIp();
       const lanUrl = lanIp ? `http://${lanIp}:${port}` : null;
+      const warning = loopbackOnly
+        ? `The API listens on ${host} only, so phones on the LAN cannot reach it. Set API_HOST=0.0.0.0 (or a LAN address) and restart, or configure a public URL.`
+        : lanIp ? null : 'No LAN address found on this host; only the public URL can be used.';
 
       // Include public URL for remote connections (Cloudflare Tunnel etc.)
       const settings = getSettingsService();
       const publicUrl = (await settings.get('oauth.publicUrl') as string) || null;
 
-      return { code, expiresIn: PAIRING_CODE_TTL, serverUrl: lanUrl, publicUrl };
+      return { code, expiresIn: PAIRING_CODE_TTL, serverUrl: lanUrl, publicUrl, warning };
     },
     { detail: { tags: ['devices'] } }
   )

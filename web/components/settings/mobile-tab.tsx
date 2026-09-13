@@ -8,8 +8,9 @@ import { api } from '@/lib/api';
 interface PairingData {
   code: string;
   expiresIn: number;
-  serverUrl?: string;
-  publicUrl?: string;
+  serverUrl?: string | null;
+  publicUrl?: string | null;
+  warning?: string | null;
 }
 
 export function MobileTab() {
@@ -34,11 +35,13 @@ export function MobileTab() {
       setPairing(data);
       setSecondsLeft(data.expiresIn);
 
-      // QR contains LAN URL for local pairing + public URL for remote access after pairing
-      const backendUrl = data.serverUrl
-        || (typeof window !== 'undefined'
-          ? `${window.location.protocol}//${window.location.hostname}:3005`
-          : 'http://localhost:3005');
+      // QR contains LAN URL for local pairing + public URL for remote access after pairing.
+      // Without a reachable LAN URL, fall back to the public URL rather than guessing a
+      // host:3005 the phone cannot open.
+      const backendUrl = data.serverUrl || data.publicUrl;
+      if (!backendUrl) {
+        throw new Error(data.warning || 'The server has no address a phone can reach. Set API_HOST=0.0.0.0 or configure a public URL.');
+      }
 
       const qrPayload = JSON.stringify({
         url: backendUrl,
@@ -134,6 +137,9 @@ export function MobileTab() {
             <p className="text-sm text-on-surface-variant mb-2">
               Scan this QR code with the mobile app
             </p>
+            {pairing.warning && (
+              <p className="text-xs text-warning mb-2">{pairing.warning}</p>
+            )}
 
             <div className="flex items-center justify-center gap-2 mb-4">
               <span className={`text-xs font-mono px-2 py-1 rounded ${
