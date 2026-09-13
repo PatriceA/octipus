@@ -6,6 +6,8 @@
 
 A self-hosted AI workspace for projects, knowledge, and connected tools.
 
+[![Octipus on StartupScores](https://startupscores.com/badge/octipus.svg?style=shield&v=combo&theme=dark)](https://startupscores.com/open-source/octipus)
+
 > **v0.4 · alpha · building in public.** A working, opinionated platform — not a finished product. Breaking changes happen; migration notes ship with them. Treat it as a foundation to build on.
 
 **Website:** [https://octipus.cc](https://octipus.cc)
