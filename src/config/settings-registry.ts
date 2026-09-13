@@ -872,6 +872,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'SESSION_MAX_AGE',
   },
   {
+    key: 'security.mobileSessionMaxAge',
+    category: 'security',
+    valueType: 'number',
+    defaultValue: 2592000000,
+    description:
+      'Lifetime (ms) of sessions minted for paired mobile devices (QR pairing and mobile login). Phones cannot refresh a session, so a short value forces a daily login.',
+    isSecret: false,
+    envVar: 'MOBILE_SESSION_MAX_AGE',
+  },
+  {
     key: 'security.totpIssuer',
     category: 'security',
     valueType: 'string',

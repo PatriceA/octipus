@@ -1,4 +1,5 @@
 import { Elysia, t } from '@/api/http';
+import { getConfig } from '@/config';
 import { apiContext } from '@/api/context';
 import { clearSessionCookie, sessionCookie } from '@/api/session-cookie';
 import { redeemLinkCode } from '@/channels/linking';
@@ -210,6 +211,7 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
       const { token, session } = await sessionManager.create(user.id, {
         ipAddress,
         userAgent: `Mobile: ${ua}`,
+        ttlMs: getConfig().security.mobileSessionMaxAge,
       });
 
       securityLogger.info(

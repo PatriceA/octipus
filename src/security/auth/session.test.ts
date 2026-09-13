@@ -9,6 +9,7 @@
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
+import { sha256 } from '@/utils/crypto';
 
 const rand = (n: number) => randomBytes(n).toString('hex');
 process.env.MASTER_KEY ??= `test-master-${rand(24)}`;
@@ -78,6 +79,19 @@ describe('SessionManager.create', () => {
     expect(new Date(session.expiresAt).getTime()).toBeGreaterThan(Date.now());
 
     expect(await mgr.countForUser(id)).toBe(1);
+  });
+
+  test('validate keeps a long-lived (mobile) session at its own TTL, and the user index outlives it', async () => {
+    const mgr = new SessionManager();
+    const id = seedUser();
+    const thirtyDays = 30 * 24 * 3600 * 1000;
+    const { token } = await mgr.create(id, { ttlMs: thirtyDays });
+    expect(await mgr.validate(token)).not.toBeNull();
+    const cache = (mgr as unknown as { cache: { ttl(key: string): Promise<number> } }).cache;
+    const dayInSec = 24 * 3600;
+    // Re-arming the store with the global 24h default would evict the phone after a day idle.
+    expect(await cache.ttl(`session:${sha256(token)}`)).toBeGreaterThan(dayInSec);
+    expect(await cache.ttl(`user-sessions:${id}`)).toBeGreaterThan(dayInSec);
   });
 
   test('honors a custom ttlMs (short-lived tickets)', async () => {

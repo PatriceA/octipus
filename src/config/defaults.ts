@@ -32,6 +32,7 @@ export const defaultConfig: Partial<Config> = {
     jwtSecret: '', // Must be provided
     sessionSecret: '', // Must be provided
     sessionMaxAge: 86400000,
+    mobileSessionMaxAge: 2592000000,
     totpIssuer: 'Octipus',
     passkeyRpId: 'localhost',
     passkeyRpName: 'Octipus',

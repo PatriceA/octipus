@@ -57,6 +57,7 @@ export const securityConfigSchema = z.object({
   jwtSecret: z.string().min(32),
   sessionSecret: z.string().min(32),
   sessionMaxAge: z.number().min(0).default(86400000), // 24 hours
+  mobileSessionMaxAge: z.number().min(0).default(2592000000), // 30 days
   totpIssuer: z.string().default('Octipus'),
   passkeyRpId: z.string().default('localhost'),
   passkeyRpName: z.string().default('Octipus'),

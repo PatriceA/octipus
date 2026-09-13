@@ -424,7 +424,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `utils` | 1 |
 | `api` | `capabilities` | 2 |
 | `api` | `channels` | 7 |
-| `api` | `config` | 18 |
+| `api` | `config` | 20 |
 | `api` | `connectors` | 1 |
 | `api` | `core` | 77 |
 | `api` | `db` | 96 |

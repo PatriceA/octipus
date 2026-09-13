@@ -1,4 +1,5 @@
 import { randomBytes } from 'crypto';
+import { getConfig } from '@/config';
 import { Elysia, t } from '@/api/http';
 import { networkInterfaces } from 'os';
 import { apiContext } from '@/api/context';
@@ -85,6 +86,7 @@ export const deviceRoutes = new Elysia({ prefix: '/devices' })
       const { token, session } = await sessionManager.create(pairingData.userId, {
         ipAddress,
         userAgent: `Mobile: ${userAgent}`,
+        ttlMs: getConfig().security.mobileSessionMaxAge,
       });
 
       apiLogger.info(

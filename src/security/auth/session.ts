@@ -52,11 +52,24 @@ function isEphemeralSession(s: { createdAt: Date | string; expiresAt: Date | str
 export class SessionManager {
   private cache: Cache;
   private maxAge: number;
+  /**
+   * TTL of the per-user session index. It only lists hashes, so it must
+   * outlive the longest session it can reference (mobile sessions run
+   * longer than browser ones), or a paired phone drops out of the device
+   * list and revocation after a day of nobody else logging in.
+   */
+  private indexTtlSec: number;
 
   constructor() {
     const config = getConfig();
     this.maxAge = config.security.sessionMaxAge;
+    this.indexTtlSec = Math.max(this.maxAge, config.security.mobileSessionMaxAge) / 1000;
     this.cache = new Cache(this.maxAge / 1000);
+  }
+
+  /** Seconds until this session's own expiry; re-arming the store with the global default would cut a long-lived (mobile) session down to `sessionMaxAge`. */
+  private remainingSec(session: { expiresAt: Date | string }): number {
+    return Math.max(1, Math.floor((new Date(session.expiresAt).getTime() - Date.now()) / 1000));
   }
 
   /**
@@ -133,7 +146,7 @@ export class SessionManager {
     const userSessionsKey = `${USER_SESSIONS_PREFIX}${userId}`;
     const userSessions = (await this.cache.get<string[]>(userSessionsKey)) || [];
     userSessions.push(tokenHash);
-    await this.cache.set(userSessionsKey, userSessions, this.maxAge / 1000);
+    await this.cache.set(userSessionsKey, userSessions, this.indexTtlSec);
 
     securityLogger.info({ userId, channelType: options?.channelType, ttlMs }, 'Session created');
 
@@ -159,7 +172,7 @@ export class SessionManager {
 
     // Update last activity
     session.lastActivityAt = new Date();
-    await this.cache.set(`${SESSION_PREFIX}${tokenHash}`, session, this.maxAge / 1000);
+    await this.cache.set(`${SESSION_PREFIX}${tokenHash}`, session, this.remainingSec(session));
 
     return session;
   }
@@ -239,7 +252,7 @@ export class SessionManager {
     const userSessionsKey = `${USER_SESSIONS_PREFIX}${userId}`;
     const userSessions = (await this.cache.get<string[]>(userSessionsKey)) || [];
     const filteredSessions = userSessions.filter((h) => h !== tokenHash);
-    await this.cache.set(userSessionsKey, filteredSessions, this.maxAge / 1000);
+    await this.cache.set(userSessionsKey, filteredSessions, this.indexTtlSec);
 
     await auditRepository.logLogout(userId);
     securityLogger.info({ userId }, 'Session revoked by hash');
@@ -265,7 +278,7 @@ export class SessionManager {
     const userSessionsKey = `${USER_SESSIONS_PREFIX}${session.userId}`;
     const userSessions = (await this.cache.get<string[]>(userSessionsKey)) || [];
     const filteredSessions = userSessions.filter((h) => h !== tokenHash);
-    await this.cache.set(userSessionsKey, filteredSessions, this.maxAge / 1000);
+    await this.cache.set(userSessionsKey, filteredSessions, this.indexTtlSec);
 
     await auditRepository.logLogout(session.userId);
     securityLogger.info({ userId: session.userId }, 'Session revoked');
@@ -328,7 +341,7 @@ export class SessionManager {
     session.expiresAt = new Date(Date.now() + this.maxAge);
     session.lastActivityAt = new Date();
 
-    await this.cache.set(`${SESSION_PREFIX}${tokenHash}`, session, this.maxAge / 1000);
+    await this.cache.set(`${SESSION_PREFIX}${tokenHash}`, session, this.remainingSec(session));
 
     return session;
   }
@@ -362,7 +375,7 @@ export class SessionManager {
     }
 
     if (activeSessions.length !== userSessions.length) {
-      await this.cache.set(userSessionsKey, activeSessions, this.maxAge / 1000);
+      await this.cache.set(userSessionsKey, activeSessions, this.indexTtlSec);
     }
 
     return cleaned;

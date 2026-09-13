@@ -51,6 +51,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       jwtSecret: process.env.JWT_SECRET || '',
       sessionSecret: process.env.SESSION_SECRET || '',
       sessionMaxAge: parseInt(process.env.SESSION_MAX_AGE || '86400000', 10),
+      mobileSessionMaxAge: parseInt(process.env.MOBILE_SESSION_MAX_AGE || '2592000000', 10),
       totpIssuer: process.env.TOTP_ISSUER || defaultConfig.security!.totpIssuer!,
       passkeyRpId: process.env.PASSKEY_RP_ID || defaultConfig.security!.passkeyRpId!,
       passkeyRpName: process.env.PASSKEY_RP_NAME || defaultConfig.security!.passkeyRpName!,
