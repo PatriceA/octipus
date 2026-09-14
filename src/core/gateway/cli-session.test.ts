@@ -4,7 +4,7 @@
  * delete the developer's own session file.
  */
 import { chmodSync, mkdtempSync, readFileSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 
@@ -24,6 +24,23 @@ const session = {
   username: 'patrice', isAdmin: true,
 };
 
+/**
+ * The file must not be group- or world-readable: it holds a bearer token.
+ *
+ * Windows has no POSIX mode bits — `chmod` there only toggles the read-only
+ * flag and `stat().mode` always reads 0o666 — so the assertion would be a
+ * guaranteed failure rather than a check. The protection on that platform is
+ * the ACL on `%USERPROFILE%`, which the process cannot tighten further, so
+ * what is verified there is that the file was written where that ACL applies.
+ */
+function expectUserOnly(path: string): void {
+  if (process.platform === 'win32') {
+    expect(path.startsWith(homedir())).toBe(true);
+    return;
+  }
+  expect(statSync(path).mode & 0o077).toBe(0);
+}
+
 describe('cli session', () => {
   test('absent until written', () => {
     expect(mod.readCliSession()).toBeNull();
@@ -32,7 +49,7 @@ describe('cli session', () => {
   test('round-trips and is written user-only (it is a bearer token)', () => {
     mod.writeCliSession(session);
     expect(mod.readCliSession()).toMatchObject(session);
-    expect(statSync(mod.CLI_SESSION_PATH).mode & 0o077).toBe(0);
+    expectUserOnly(mod.CLI_SESSION_PATH);
   });
 
   test('an expired session reads as absent instead of being sent to the gateway', () => {
@@ -52,7 +69,7 @@ describe('cli session', () => {
     mod.writeCliSession(session);
     chmodSync(mod.CLI_SESSION_PATH, 0o644);
     mod.writeCliSession({ ...session, token: 'sess_new' });
-    expect(statSync(mod.CLI_SESSION_PATH).mode & 0o077).toBe(0);
+    expectUserOnly(mod.CLI_SESSION_PATH);
   });
 
   test('clear removes it and is safe to repeat', () => {

@@ -91,5 +91,9 @@ test('drafts beyond the file-open limit round-trip without silent loss', () => {
   const state = { ...DEFAULT_PERSISTED_STATE, drafts: [{ path: '/large.txt', label: 'large.txt', text }] };
   expect(savePersistedState(state, path)).toBe(true);
   expect(loadPersistedState(path).drafts?.[0].text).toBe(text);
-  expect(require('node:fs').statSync(path).mode & 0o777).toBe(0o600);
+  // POSIX only — Windows has no mode bits for `chmod` to set (see the spill
+  // and cli-session suites for the same note).
+  if (process.platform !== 'win32') {
+    expect(require('node:fs').statSync(path).mode & 0o777).toBe(0o600);
+  }
 });

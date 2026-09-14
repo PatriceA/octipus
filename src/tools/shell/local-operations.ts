@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'child_process';
 import { markToolNotExecuted, ToolNotExecutedError } from '@/core/tool-execution-error';
 import { buildChildEnv, isSensitiveEnvName } from '@/security/child-env';
 import { coreLogger } from '@/utils/logger';
@@ -24,19 +24,38 @@ const MAX_OUTPUT_SIZE = 1024 * 1024; // 1MB
 const liveGroups = new Set<number>();
 let reaperInstalled = false;
 
+/**
+ * Kill a child and everything it started.
+ *
+ * `process.kill(-pid)` — signal the whole process group — is POSIX only. On
+ * Windows it throws, and because every caller wraps the kill in a `catch` that
+ * treats a throw as "already gone", a blown deadline killed NOTHING there: a
+ * `sleep 5` under a 300ms timeout ran its full five seconds and reported exit
+ * 0. `taskkill /T /F` is the platform's equivalent, and it is synchronous,
+ * which the `exit` reaper below requires.
+ */
+function killProcessTree(pid: number | undefined, child?: { kill: (signal?: NodeJS.Signals) => boolean }): void {
+  try {
+    if (process.platform === 'win32') {
+      if (pid !== undefined) spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
+      else child?.kill();
+      return;
+    }
+    if (pid !== undefined) process.kill(-pid, 'SIGKILL');
+    else child?.kill('SIGKILL');
+  } catch {
+    // ESRCH / the tree is already gone. Nothing to do, and `exit` handlers
+    // must not throw.
+  }
+}
+
 function trackGroup(pid: number | undefined): () => void {
   if (pid === undefined) return () => {};
   liveGroups.add(pid);
   if (!reaperInstalled) {
     reaperInstalled = true;
     process.once('exit', () => {
-      for (const gid of liveGroups) {
-        try {
-          process.kill(-gid, 'SIGKILL');
-        } catch {
-          // Already gone. Nothing to do, and `exit` handlers must not throw.
-        }
-      }
+      for (const gid of liveGroups) killProcessTree(gid);
       liveGroups.clear();
     });
   }
@@ -169,14 +188,7 @@ export class LocalShellOperations implements ShellOperations {
       let aborted = false;
 
       /** Kill the whole group, falling back to the child if it is already gone. */
-      const killTree = (): void => {
-        try {
-          if (child.pid) process.kill(-child.pid, 'SIGKILL');
-          else child.kill('SIGKILL');
-        } catch {
-          // ESRCH: the group is already gone. Nothing to do.
-        }
-      };
+      const killTree = (): void => killProcessTree(child.pid, child);
 
       child.stdout.on('data', (data: Buffer) => {
         const chunk = data.toString();

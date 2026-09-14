@@ -37,9 +37,13 @@ describe('spillToolOutput', () => {
     // given outright.
     expect(preview!.length).toBeLessThanOrEqual(50_000);
     expect(preview!.length).toBeGreaterThan(40_000);
-    // Owner-only, whatever the umask says.
-    expect(statSync(join(root, SPILL_DIR, 'call_42.txt')).mode & 0o777).toBe(0o600);
-    expect(statSync(join(root, SPILL_DIR)).mode & 0o777).toBe(0o700);
+    // Owner-only, whatever the umask says. Skipped on Windows, which has no
+    // POSIX mode bits: `chmod` there only toggles read-only and `mode` always
+    // reads 0o666/0o777, so this would fail without saying anything true.
+    if (process.platform !== 'win32') {
+      expect(statSync(join(root, SPILL_DIR, 'call_42.txt')).mode & 0o777).toBe(0o600);
+      expect(statSync(join(root, SPILL_DIR)).mode & 0o777).toBe(0o700);
+    }
   });
 
   test('a provider-shaped id cannot escape the spill directory', async () => {

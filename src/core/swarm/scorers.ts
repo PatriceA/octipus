@@ -19,7 +19,7 @@
  */
 
 import { existsSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, sep } from 'node:path';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { commandPolicyViolation, matchElevatedCommand, tokenizeSafe } from '@/tools/shell/policy';
 import { coreLogger } from '@/utils/logger';
@@ -596,7 +596,11 @@ export function requoteSplitPath(command: string, cwd: string): string {
 
   for (let start = 1; start < argv.length - 1; start++) {
     // Only a token that looks like a path and is NOT one is worth repairing.
-    if (!argv[start].includes('/') || real(argv[start])) continue;
+    // `sep` as well as `/`: a Windows absolute path is `C:\…`, so testing for
+    // a forward slash alone meant the repair never fired on the platform whose
+    // default checkout directory — `C:\Users\<name>\…` under a folder with a
+    // space — is the very case this exists for.
+    if (!(argv[start].includes('/') || argv[start].includes(sep)) || real(argv[start])) continue;
     for (let end = argv.length; end > start + 1; end--) {
       const joined = argv.slice(start, end).join(' ');
       if (joined.includes("'") || !real(joined)) continue;

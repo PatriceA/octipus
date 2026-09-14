@@ -96,7 +96,12 @@ function fixture(options: {
   };
 }
 
-describe('CocoIndexService', () => {
+// The MANAGED install is a Linux/macOS backend feature by design — `install()`
+// refuses win32 outright, so every case below would assert on that refusal
+// instead of on what it means to test. Windows gets the manual route
+// (`CocoIndexWindowsSetup`, docs/MCP-INTEGRATION.md), and the one test that
+// belongs on Windows is the refusal itself, below.
+describe.skipIf(process.platform === 'win32')('CocoIndexService', () => {
   test('builds an isolated local index before exposing the MCP server', async () => {
     const f = fixture();
     await f.service.install('/workspace/repo', 'Snowflake/snowflake-arctic-embed-xs');
@@ -210,8 +215,16 @@ describe('CocoIndexService', () => {
   });
 });
 
-test('runProcess cancellation kills descendants before it settles', async () => {
-  if (process.platform === 'win32') return;
+// The Windows contract: refuse the managed install, and say so in the words
+// the manual-setup UI and MCP-INTEGRATION.md point at. A silent success here
+// would leave a half-built index nothing manages.
+test.skipIf(process.platform !== 'win32')('the managed install refuses Windows and names the supported backends', async () => {
+  const f = fixture();
+  await expect(f.service.install('C:\\src\\project')).rejects.toThrow(/supports Linux and macOS/);
+  expect(f.calls).toHaveLength(0);
+});
+
+test.skipIf(process.platform === 'win32')('runProcess cancellation kills descendants before it settles', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'octipus-coco-process-'));
   const marker = join(dir, 'orphaned');
   const childCode = `setTimeout(() => require('node:fs').writeFileSync(process.argv[1], 'x'), 250)`;

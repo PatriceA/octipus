@@ -15,10 +15,24 @@ describe('the denylist survives quoting', () => {
   it.each([
     ["rm -rf '/'", 'rm -rf /'],
     ['rm -rf "/"', 'rm -rf /'],
-    ['rm -rf \\/', 'rm -rf /'],
   ])('%s tokenizes to %s and is refused', (written, spawned) => {
     expect(tokenizeSafe(written)?.join(' ')).toBe(spawned);
     expect(commandPolicyViolation(written)).toMatch(/Blocked command detected/);
+  });
+
+  // Backslash-escaping is a POSIX idiom; on Windows `\` is the path separator
+  // instead (see `tokenizeSafe`), so this bypass shape only exists where the
+  // escape does.
+  it.skipIf(process.platform === 'win32')('a backslash-escaped slash is unescaped and still refused', () => {
+    expect(tokenizeSafe('rm -rf \\/')?.join(' ')).toBe('rm -rf /');
+    expect(commandPolicyViolation('rm -rf \\/')).toMatch(/Blocked command detected/);
+  });
+
+  // The other side of that change: a Windows absolute path must survive
+  // tokenization byte for byte. It used to come back as `C:Usersmefile.py`.
+  it.skipIf(process.platform !== 'win32')('a Windows path keeps its separators', () => {
+    expect(tokenizeSafe(String.raw`python3 C:\Users\me\file.py`)).toEqual(['python3', String.raw`C:\Users\me\file.py`]);
+    expect(tokenizeSafe(String.raw`type "C:\Program Files\x\a.txt"`)).toEqual(['type', String.raw`C:\Program Files\x\a.txt`]);
   });
 
   it('still refuses the plain form', () => {

@@ -56,7 +56,15 @@ export function tokenizeSafe(cmd: string): string[] | null {
       i++;
       continue;
     }
-    if (c === '\\' && i + 1 < cmd.length) {
+    // POSIX only. On Windows `\` is the path SEPARATOR, and treating it as an
+    // escape silently turned every absolute path an agent wrote —
+    // `C:\Users\me\file.txt` — into `C:Usersmefile.txt`, a path that does not
+    // exist, so the command failed naming something the model never typed.
+    // Nothing is lost: `\ ` for a space is a POSIX idiom, and Windows quotes
+    // with `"`, which the branch above already handles. A `\;` that used to
+    // smuggle a literal `;` into a token is now refused as a metacharacter,
+    // which is the stricter direction.
+    if (c === '\\' && i + 1 < cmd.length && process.platform !== 'win32') {
       buf += cmd[i + 1];
       i += 2;
       continue;

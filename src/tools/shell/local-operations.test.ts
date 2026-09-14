@@ -98,7 +98,9 @@ describe('LocalShellOperations.exec — why a command died', () => {
     expect(res.killed).toBe(true);
     expect(res.timedOut).toBe(true);
     expect(res.aborted).toBe(false);
-    expect(res.signal).toBe('SIGKILL');
+    // Windows has no signals: `taskkill /T /F` ends the tree without one, so
+    // `signal` is null there and `killed`/`timedOut` carry the whole story.
+    if (process.platform !== 'win32') expect(res.signal).toBe('SIGKILL');
   });
 
   it('separates a cancellation from a deadline', async () => {
@@ -121,7 +123,10 @@ describe('LocalShellOperations.exec — why a command died', () => {
 describe('LocalShellOperations.exec — the deadline actually ends the call', () => {
   const ops = new LocalShellOperations();
 
-  it('kills grandchildren that still hold the pipes', async () => {
+  // POSIX only: `sh -c 'a & b'` is shell job control, and the `unsafe` path
+  // spawns `sh`, which a plain Windows host does not have. What the deadline
+  // itself does on Windows is covered by the case above.
+  it.skipIf(process.platform === 'win32')('kills grandchildren that still hold the pipes', async () => {
     // The direct child exits immediately; the backgrounded grandchild keeps
     // stdout open, and `close` — which resolves the call — waits for it. Killing
     // only the child left this pending long past the deadline.
