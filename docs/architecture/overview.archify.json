@@ -1,0 +1,441 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Octipus Architecture Overview",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/PatriceA/octipus",
+      "revision": "2fb7297f4d83c676bc8dbb10bd27cbb860f5bc6a"
+    },
+    "views": [
+      {
+        "id": "user-path",
+        "label": "User request path",
+        "focus": [
+          "clients",
+          "channels",
+          "gateway",
+          "agents",
+          "models",
+          "providers"
+        ],
+        "note": "A message enters through a client or chat channel, the gateway hands it to the root agent, and the provider router calls the bound model."
+      },
+      {
+        "id": "tool-loop",
+        "label": "Tool loop and policy",
+        "focus": [
+          "agents",
+          "tools",
+          "security",
+          "db"
+        ],
+        "note": "Every tool call passes the permission manager; mutating calls are journaled in Postgres for action recovery."
+      },
+      {
+        "id": "cli-agents",
+        "label": "CLI agents",
+        "focus": [
+          "agents",
+          "cliagent",
+          "vendorcli",
+          "tools"
+        ],
+        "note": "Models routed to a vendor CLI run in a managed child that reaches Octipus tools through a per-run loopback MCP bridge."
+      }
+    ]
+  },
+  "layout": {
+    "mode": "grid",
+    "cols": 5,
+    "gapX": 56,
+    "gapY": 90,
+    "cellW": 168,
+    "cellH": 66
+  },
+  "components": [
+    {
+      "id": "clients",
+      "type": "frontend",
+      "label": "Web · TUI · Desktop",
+      "sublabel": "React web, Pi TUI, Tauri desktop",
+      "row": 0,
+      "col": 0,
+      "sources": [
+        {
+          "path": "web/main.tsx",
+          "label": "web entry"
+        },
+        {
+          "path": "src/tui-pi/app.ts",
+          "line": 69,
+          "label": "OctipusTuiApp"
+        },
+        {
+          "path": "web/lib/tauri-backend.ts",
+          "label": "desktop backend URL"
+        }
+      ],
+      "size": [
+        168,
+        64
+      ]
+    },
+    {
+      "id": "channels",
+      "type": "external",
+      "label": "Chat channels",
+      "sublabel": "Slack, Telegram, WhatsApp, Teams",
+      "row": 2,
+      "col": 0,
+      "sources": [
+        {
+          "path": "src/channels/index.ts",
+          "line": 472,
+          "label": "initializeChannels"
+        }
+      ],
+      "size": [
+        168,
+        64
+      ]
+    },
+    {
+      "id": "gateway",
+      "type": "backend",
+      "label": "Gateway hub",
+      "sublabel": "Hono HTTP + WebSocket",
+      "row": 1,
+      "col": 1,
+      "tag": "auth · events",
+      "sources": [
+        {
+          "path": "src/api/server.ts",
+          "line": 412,
+          "label": "startServer"
+        },
+        {
+          "path": "src/core/gateway/hub.ts",
+          "line": 14,
+          "label": "GatewayHub"
+        },
+        {
+          "path": "src/index.ts",
+          "line": 43,
+          "label": "boot"
+        }
+      ],
+      "size": [
+        168,
+        64
+      ]
+    },
+    {
+      "id": "security",
+      "type": "security",
+      "label": "Permissions + vault",
+      "sublabel": "ALLOW / ASK / DENY, vault secrets",
+      "row": 0,
+      "col": 1,
+      "sources": [
+        {
+          "path": "src/security/vault.ts",
+          "line": 31,
+          "label": "initializeVault"
+        },
+        {
+          "path": "src/security/permissions.ts",
+          "label": "permission manager"
+        }
+      ],
+      "size": [
+        168,
+        64
+      ]
+    },
+    {
+      "id": "agents",
+      "type": "backend",
+      "label": "Agent manager",
+      "sublabel": "root agent, swarm, tool loop",
+      "row": 1,
+      "col": 2,
+      "tag": "3-level swarm",
+      "sources": [
+        {
+          "path": "src/core/agent-manager.ts",
+          "line": 71,
+          "label": "AgentManager"
+        },
+        {
+          "path": "src/core/agent-worker.ts",
+          "label": "AgentWorker loop"
+        },
+        {
+          "path": "src/core/swarm/spawner.ts",
+          "line": 148,
+          "label": "SwarmSpawner"
+        }
+      ],
+      "size": [
+        168,
+        64
+      ]
+    },
+    {
+      "id": "db",
+      "type": "database",
+      "label": "Postgres + pgvector",
+      "sublabel": "or embedded PGlite, Drizzle",
+      "row": 2,
+      "col": 2,
+      "sources": [
+        {
+          "path": "src/db/postgres.ts",
+          "line": 158,
+          "label": "getDb"
+        },
+        {
+          "path": "src/db/postgres.ts",
+          "line": 95,
+          "label": "PGlite mode"
+        }
+      ],
+      "size": [
+        168,
+        64
+      ]
+    },
+    {
+      "id": "tools",
+      "type": "backend",
+      "label": "Tool executor",
+      "sublabel": "shell, fs, git, browser, MCP…",
+      "row": 0,
+      "col": 2,
+      "sources": [
+        {
+          "path": "src/core/tool-executor.ts",
+          "label": "ToolExecutor"
+        },
+        {
+          "path": "src/tools/registry.ts",
+          "line": 10,
+          "label": "ToolRegistry"
+        },
+        {
+          "path": "src/mcp/bridge.ts",
+          "line": 28,
+          "label": "MCPBridge"
+        }
+      ],
+      "size": [
+        168,
+        64
+      ]
+    },
+    {
+      "id": "models",
+      "type": "backend",
+      "label": "Provider router",
+      "sublabel": "topic → model, cost tracking",
+      "row": 1,
+      "col": 3,
+      "sources": [
+        {
+          "path": "src/models/providers/index.ts",
+          "line": 114,
+          "label": "ProviderRouter"
+        },
+        {
+          "path": "src/models/model-registry.ts",
+          "line": 14,
+          "label": "ModelRegistry"
+        }
+      ],
+      "size": [
+        168,
+        64
+      ]
+    },
+    {
+      "id": "cliagent",
+      "type": "backend",
+      "label": "CLI agent worker",
+      "sublabel": "per-run loopback MCP bridge",
+      "row": 2,
+      "col": 3,
+      "sources": [
+        {
+          "path": "src/core/cli-agent-worker.ts",
+          "line": 60,
+          "label": "CLIAgentWorker"
+        },
+        {
+          "path": "mcp-server/src/server.ts",
+          "line": 34,
+          "label": "bridge server"
+        }
+      ],
+      "size": [
+        168,
+        64
+      ]
+    },
+    {
+      "id": "providers",
+      "type": "external",
+      "label": "LLM providers",
+      "sublabel": "Anthropic, OpenAI, DeepSeek, Ollama…",
+      "row": 1,
+      "col": 4,
+      "sources": [
+        {
+          "path": "src/models/providers/anthropic-provider.ts",
+          "label": "one adapter per vendor"
+        }
+      ],
+      "size": [
+        168,
+        64
+      ]
+    },
+    {
+      "id": "vendorcli",
+      "type": "external",
+      "label": "Vendor CLIs",
+      "sublabel": "Claude Code, Codex, Vibe, agy",
+      "row": 2,
+      "col": 4,
+      "sources": [
+        {
+          "path": "src/core/cli-adapters.ts",
+          "label": "adapters"
+        }
+      ],
+      "size": [
+        168,
+        64
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Octipus backend (Node 24, single process)",
+      "wraps": [
+        "gateway",
+        "security",
+        "agents",
+        "db",
+        "tools",
+        "models",
+        "cliagent"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "clients-gateway",
+      "from": "clients",
+      "to": "gateway",
+      "label": "HTTP + WebSocket",
+      "variant": "emphasis"
+    },
+    {
+      "id": "channels-gateway",
+      "from": "channels",
+      "to": "gateway",
+      "label": "inbound messages"
+    },
+    {
+      "id": "gateway-agents",
+      "from": "gateway",
+      "to": "agents",
+      "label": "handleMessage",
+      "variant": "emphasis",
+      "labelDy": 56
+    },
+    {
+      "id": "security-agents",
+      "from": "security",
+      "to": "agents",
+      "label": "approvals",
+      "variant": "security"
+    },
+    {
+      "id": "agents-tools",
+      "from": "agents",
+      "to": "tools",
+      "label": "tool calls"
+    },
+    {
+      "id": "agents-models",
+      "from": "agents",
+      "to": "models",
+      "label": "completions",
+      "variant": "emphasis",
+      "labelDy": -26
+    },
+    {
+      "id": "models-cli",
+      "from": "models",
+      "to": "cliagent",
+      "label": "CLI models",
+      "variant": "dashed",
+      "labelDy": 24
+    },
+    {
+      "id": "agents-db",
+      "from": "agents",
+      "to": "db",
+      "label": "sessions, journal",
+      "labelDy": 24
+    },
+    {
+      "id": "models-providers",
+      "from": "models",
+      "to": "providers",
+      "label": "HTTPS APIs",
+      "variant": "emphasis",
+      "labelDy": -26
+    },
+    {
+      "id": "cli-vendor",
+      "from": "cliagent",
+      "to": "vendorcli",
+      "label": "spawn + loopback tool bridge",
+      "labelDy": -26
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Entry points",
+      "items": [
+        "Web UI, Pi TUI and Tauri desktop all speak to one gateway",
+        "Chat channels link platform users to Octipus accounts",
+        "Gateway owns auth, sessions and the event stream"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Agents and tools",
+      "items": [
+        "Root agent is an ordinary general worker keyed on AgentContext.root; delegation runs a fixed Root → Agent → Subagent tree",
+        "Permission rules gate every tool call, including cli-native:* relays",
+        "Vendor CLIs run as managed children with the same tools and permissions"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Models and state",
+      "items": [
+        "Topics bind to models, never hardcoded names; direct HTTP adapters plus Ollama/LiteLLM",
+        "Postgres + pgvector holds sessions, knowledge, memories and the tool_actions journal",
+        "Vault stores every secret; the DB is the config source of truth"
+      ]
+    }
+  ]
+}
