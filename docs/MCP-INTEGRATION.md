@@ -272,14 +272,18 @@ embedding model, and clicks **Install and connect**. The card reports installati
 and connection progress and surfaces setup errors. A remote desktop or browser
 client cannot use a client-local folder unless the backend can also access it.
 
-The managed installer supports Linux and macOS backends. It needs Python 3.11
-or newer and `uv` or `pipx` available to the
+The managed installer runs on Linux, macOS and Windows backends. It needs
+Python 3.11 or newer and `uv` or `pipx` available to the
 Octipus process, or an existing `ccc` installation with local embedding support
 (`cocoindex-code[full]`). The installer does not install
 Python or a Python package manager. In Docker, these prerequisites and the
 selected repository folder must be available inside the backend container.
-Windows users can configure CocoIndex manually through the generic MCP server
-settings; the managed installer does not support Windows executable discovery.
+
+On Windows the installer resolves `ccc.exe` and, because that launcher is a
+compiled binary with no shebang to read, finds the interpreter backing it in
+uv's tool directory (`<uv tool dir>\cocoindex-code\Scripts\python.exe`). The
+manual route below remains available and is the one to use when the backend
+has no `uv`, or when CocoIndex is already installed some other way.
 
 This is an installation-wide MCP server, shared with agents on that Octipus
 server. The selected folder controls where CocoIndex searches; it is not a
@@ -308,10 +312,11 @@ for upstream search and indexing behavior.
 
 ### Windows manual CocoIndex setup
 
-Windows backends can use an individually configured stdio MCP server. The
-managed connector installer currently supports Linux/macOS only. The following
-steps use upstream Windows installation support; native Windows execution has
-not been validated by the Linux smoke test.
+Windows backends can use an individually configured stdio MCP server instead
+of the managed connector. Prefer the managed installer above — it does these
+steps for you, and it now runs on Windows. Use this route when the backend has
+no `uv`, when CocoIndex is already installed another way, or when you want the
+server outside the connector's lifecycle.
 
 Run PowerShell on the **backend machine**, under the Windows account that runs
 Octipus. Installing on a Windows desktop client does not install anything on a

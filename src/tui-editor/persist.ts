@@ -25,7 +25,8 @@
  * settings registry that the rest of the app uses.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { restrictToOwner } from '@/utils/file-acl';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -130,7 +131,7 @@ export function savePersistedState(state: PersistedState, path: string = legacyD
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     const tmp = `${path}.tmp`;
     writeFileSync(tmp, JSON.stringify(state, null, 2), { encoding: 'utf8', mode: 0o600 });
-    chmodSync(tmp, 0o600);
+    restrictToOwner(tmp);
     renameSync(tmp, path);
     return true;
   } catch {

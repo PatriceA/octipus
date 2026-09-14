@@ -10,7 +10,8 @@
  * The file holds a bearer token — same power as the browser's session cookie —
  * so it is written 0600 and never logged.
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { restrictToOwner } from '@/utils/file-acl';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -56,8 +57,9 @@ export function writeCliSession(session: CliSession): void {
   if (!existsSync(OCTIPUS_DIR)) mkdirSync(OCTIPUS_DIR, { recursive: true });
   writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2), { mode: 0o600 });
   // `mode` applies only when the file is created — a re-login over an existing
-  // file would otherwise keep whatever permissions it already had.
-  chmodSync(SESSION_FILE, 0o600);
+  // file would otherwise keep whatever permissions it already had — and it does
+  // nothing at all on Windows, where the restriction is an ACL.
+  restrictToOwner(SESSION_FILE);
 }
 
 /** Remove the stored session. Safe to call when there isn't one. */

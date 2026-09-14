@@ -9,7 +9,7 @@
  * `runCommand` is the shorter form for the common case, where the caller only
  * wants the output and the exit code.
  */
-import { spawn as nodeSpawn, type SpawnOptions } from 'node:child_process';
+import { spawn as nodeSpawn, spawnSync, type SpawnOptions } from 'node:child_process';
 import { accessSync, constants, existsSync } from 'node:fs';
 import { delimiter, isAbsolute, join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
@@ -89,6 +89,34 @@ function safeExecutable(command: string): string {
   // the used value are the same object, so no later edit can let one drift
   // from the other (and a taint analysis can see the barrier).
   return match[0];
+}
+
+/**
+ * Kill a child and everything it started.
+ *
+ * `process.kill(-pid)` — signal the whole process group — is POSIX only. On
+ * Windows it throws, and callers wrap the kill in a `catch` that reads a throw
+ * as "already gone", so a deadline that meant to end a tree ended nothing:
+ * `sleep 5` under a 300ms timeout ran its full five seconds and reported exit
+ * 0. `taskkill /T /F` is the platform's equivalent. Synchronous, because the
+ * `exit`-handler reapers that call it cannot await.
+ *
+ * Requires the child to have been spawned `detached` on POSIX, which is what
+ * gives it a group of its own; Windows needs no such arrangement.
+ */
+export function killProcessTree(pid: number | undefined, child?: { kill: (signal?: NodeJS.Signals) => boolean }): void {
+  try {
+    if (process.platform === 'win32') {
+      if (pid !== undefined) spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+      else child?.kill();
+      return;
+    }
+    if (pid !== undefined) process.kill(-pid, 'SIGKILL');
+    else child?.kill('SIGKILL');
+  } catch {
+    // ESRCH / the tree is already gone. Nothing to do, and `exit` handlers
+    // must not throw.
+  }
 }
 
 /** `spawnProcess({ command: 'ls', args: ['-la'] })`. */

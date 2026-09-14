@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { access, chmod, readFile, realpath, stat } from 'node:fs/promises';
+import { access, readFile, realpath, stat } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, isAbsolute, join, resolve, sep } from 'node:path';
@@ -15,6 +15,8 @@ import {
   COCOINDEX_DEFAULT_EMBEDDING_MODEL,
   type CocoIndexStatus,
 } from '@/shared/cocoindex';
+import { restrictToOwner } from '@/utils/file-acl';
+import { killProcessTree } from '@/utils/proc';
 import { writeFileAt } from '@/utils/fs-file';
 import { coreLogger } from '@/utils/logger';
 
@@ -29,14 +31,12 @@ const liveProcessGroups = new Set<number>();
 let processReaperInstalled = false;
 
 function trackProcessGroup(pid: number | undefined): () => void {
-  if (process.platform === 'win32' || pid === undefined) return () => {};
+  if (pid === undefined) return () => {};
   liveProcessGroups.add(pid);
   if (!processReaperInstalled) {
     processReaperInstalled = true;
     process.once('exit', () => {
-      for (const group of liveProcessGroups) {
-        try { process.kill(-group, 'SIGKILL'); } catch { /* already gone */ }
-      }
+      for (const group of liveProcessGroups) killProcessTree(group);
       liveProcessGroups.clear();
     });
   }
@@ -94,14 +94,10 @@ export const runProcess: ProcessRunner = (command, args, options = {}) =>
     child.stdout?.on('data', (chunk: Buffer) => { stdout = append(stdout, chunk); });
     child.stderr?.on('data', (chunk: Buffer) => { stderr = append(stderr, chunk); });
 
-    const killTree = (): void => {
-      try {
-        if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGKILL');
-        else child.kill('SIGKILL');
-      } catch {
-        // The process group is already gone.
-      }
-    };
+    // `ccc` starts a daemon of its own, so the direct child is not the whole
+    // job: a kill that reaches only it leaves the worker running and holding
+    // the pipes. `killProcessTree` is the POSIX group signal, or `taskkill /T`.
+    const killTree = (): void => killProcessTree(child.pid, child);
     const timeoutMs = options.timeoutMs ?? COMMAND_TIMEOUT_MS;
     const timeout = setTimeout(() => {
       if (settled) return;
@@ -156,7 +152,8 @@ export interface CocoIndexServiceDependencies {
   run: ProcessRunner;
   homeDir: string;
   writeFile: typeof writeFileAt;
-  chmodFile: typeof chmod;
+  /** Owner-only permissions for a file just written. Platform-aware. */
+  restrictFile: (path: string) => void;
   readText: (path: string) => Promise<string>;
   canExecute: (path: string) => Promise<boolean>;
 }
@@ -167,7 +164,7 @@ function defaultDependencies(): CocoIndexServiceDependencies {
     run: runProcess,
     homeDir: homedir(),
     writeFile: writeFileAt,
-    chmodFile: chmod,
+    restrictFile: restrictToOwner,
     readText: (path) => readFile(path, 'utf8'),
     canExecute: async (path) => {
       try { await access(path, fsConstants.X_OK); return true; }
@@ -340,9 +337,6 @@ export class CocoIndexService {
   }
 
   async install(workspacePath: string, embeddingModel?: string): Promise<CocoIndexStatus> {
-    if (process.platform === 'win32') {
-      throw new Error('Managed CocoIndex Code setup currently supports Linux and macOS backends');
-    }
     if (this.removeJob) throw new Error('CocoIndex Code connector removal is still in progress');
     if (this.job) return structuredClone(this.state);
     const conflicting = this.deps.bridge.getServerConfigs().find(
@@ -432,7 +426,7 @@ export class CocoIndexService {
     }, { noRefs: true, lineWidth: -1 });
     const settingsPath = join(configDir, 'global_settings.yml');
     await this.deps.writeFile(settingsPath, globalSettings);
-    await this.deps.chmodFile(settingsPath, 0o600);
+    this.deps.restrictFile(settingsPath);
     const env = this.managedEnvironment(workspacePath);
     await this.deps.run(command, ['init', '--force'], {
       cwd: workspacePath,
@@ -472,7 +466,7 @@ export class CocoIndexService {
       embeddingProvider: 'sentence-transformers',
       embeddingModel: model,
     }, null, 2));
-    await this.deps.chmodFile(metadataPath, 0o600);
+    this.deps.restrictFile(metadataPath);
     if (generation !== this.generation) return;
 
     this.state.status = 'connecting';
@@ -554,10 +548,9 @@ export class CocoIndexService {
 
   private async hasLocalEmbeddingSupport(command: string, signal: AbortSignal): Promise<boolean> {
     try {
-      const firstLine = (await this.deps.readText(command)).split(/\r?\n/, 1)[0] ?? '';
-      const match = firstLine.match(/^#!\s*(\/\S+)/);
-      if (!match || match[1].endsWith('/env')) return false;
-      await this.deps.run(match[1], [
+      const python = await this.interpreterFor(command, signal);
+      if (!python) return false;
+      await this.deps.run(python, [
         '-c',
         'import importlib.util,sys;sys.exit(0 if importlib.util.find_spec("sentence_transformers") else 1)',
       ], {
@@ -567,6 +560,36 @@ export class CocoIndexService {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * The interpreter `ccc` runs on, so the sentence-transformers extra can be
+   * probed rather than guessed.
+   *
+   * On POSIX the launcher is a script and its shebang names the interpreter
+   * outright. On Windows `ccc.exe` is a PE binary — uv ships a compiled
+   * launcher, not a script — so there is no shebang to read. The tool's own
+   * virtualenv is where the interpreter actually lives:
+   * `<uv tool dir>/cocoindex-code/Scripts/python.exe`. Without this the probe
+   * answered "no local embeddings" for every Windows install and re-downloaded
+   * the multi-gigabyte extra on each one.
+   */
+  private async interpreterFor(command: string, signal: AbortSignal): Promise<string | null> {
+    if (process.platform !== 'win32') {
+      const firstLine = (await this.deps.readText(command)).split(/\r?\n/, 1)[0] ?? '';
+      const match = firstLine.match(/^#!\s*(\/\S+)/);
+      if (!match || match[1].endsWith('/env')) return null;
+      return match[1];
+    }
+    try {
+      const result = await this.deps.run('uv', ['tool', 'dir'], { timeoutMs: COMMAND_TIMEOUT_MS, signal });
+      const toolsDir = result.stdout.trim().split(/\r?\n/).at(-1)?.trim();
+      if (!toolsDir) return null;
+      const python = join(toolsDir, 'cocoindex-code', 'Scripts', 'python.exe');
+      return (await this.deps.canExecute(python)) ? python : null;
+    } catch {
+      return null;
     }
   }
 

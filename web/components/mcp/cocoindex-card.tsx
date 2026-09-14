@@ -106,7 +106,7 @@ export function CocoIndexCard() {
               <input required disabled={busy} value={model} onChange={event => setEmbeddingModel(event.target.value)} className="mt-1 block w-full rounded-lg border border-outline-variant/30 bg-surface-container-low p-2 text-sm text-on-surface disabled:opacity-60" />
             </label>
           </div>
-          <p className="text-xs text-on-surface-variant">Managed setup supports Linux and macOS backends. Requires Python 3.11+ and uv or pipx, or an existing CocoIndex installation with local embedding support. Dependencies can use several GB of disk space. Setup downloads the model and builds the initial index, which may take time. Code is embedded locally without an API key.</p>
+          <p className="text-xs text-on-surface-variant">Managed setup runs on Linux, macOS and Windows backends. Requires Python 3.11+ and uv or pipx, or an existing CocoIndex installation with local embedding support. Dependencies can use several GB of disk space. Setup downloads the model and builds the initial index, which may take time. Code is embedded locally without an API key.</p>
           {data.configured && <p className="text-xs text-on-surface-variant">Removing the connector disconnects it from Octipus. The installed package and index files remain on disk.</p>}
           {data.progress && <p role="status" className="text-sm text-primary break-words">{data.progress.message}</p>}
           {(actionError || data.error) && <p role="alert" className="text-sm text-error break-words">{actionError || data.error}</p>}

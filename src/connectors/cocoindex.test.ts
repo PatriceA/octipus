@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from 'vitest';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -27,6 +27,7 @@ function fixture(options: {
   firstProbe?: ReturnType<typeof deferred<boolean>>;
   oldModel?: string;
   indexError?: Error;
+  deps?: Partial<CocoIndexServiceDependencies>;
 } = {}) {
   let servers = [...(options.servers ?? [])];
   let connection: MCPServerConnection | undefined;
@@ -72,7 +73,7 @@ function fixture(options: {
     run,
     homeDir: '/home/test',
     writeFile: vi.fn(async (path, data) => { writes.set(path, String(data)); }),
-    chmodFile: vi.fn(async () => {}),
+    restrictFile: vi.fn(() => {}),
     readText: vi.fn(async (path) => {
       if (path.endsWith('octipus-connector.json') && options.oldModel) {
         return JSON.stringify({ embeddingModel: options.oldModel });
@@ -89,18 +90,18 @@ function fixture(options: {
       return path.endsWith('/ccc');
     }),
   };
+  const merged = { ...deps, ...options.deps };
   return {
-    service: new CocoIndexService(deps), deps, bridge, run, calls, writes,
+    service: new CocoIndexService(merged), deps: merged, bridge, run, calls, writes,
     setLocalExtra(value: boolean) { localExtra = value; },
     getServers: () => servers,
   };
 }
 
-// The MANAGED install is a Linux/macOS backend feature by design — `install()`
-// refuses win32 outright, so every case below would assert on that refusal
-// instead of on what it means to test. Windows gets the manual route
-// (`CocoIndexWindowsSetup`, docs/MCP-INTEGRATION.md), and the one test that
-// belongs on Windows is the refusal itself, below.
+// Posix-shaped FIXTURES, not posix-only logic: every expectation here is
+// written as `/home/test/...` and `/workspace/repo`, which `join` turns into
+// backslash paths on Windows. What the managed install does differently there
+// is covered by its own suite at the bottom of the file.
 describe.skipIf(process.platform === 'win32')('CocoIndexService', () => {
   test('builds an isolated local index before exposing the MCP server', async () => {
     const f = fixture();
@@ -215,13 +216,66 @@ describe.skipIf(process.platform === 'win32')('CocoIndexService', () => {
   });
 });
 
-// The Windows contract: refuse the managed install, and say so in the words
-// the manual-setup UI and MCP-INTEGRATION.md point at. A silent success here
-// would leave a half-built index nothing manages.
-test.skipIf(process.platform !== 'win32')('the managed install refuses Windows and names the supported backends', async () => {
-  const f = fixture();
-  await expect(f.service.install('C:\\src\\project')).rejects.toThrow(/supports Linux and macOS/);
-  expect(f.calls).toHaveLength(0);
+/**
+ * The managed install used to refuse Windows outright. What actually stood in
+ * the way was two POSIX assumptions, not the toolchain: upstream ships a
+ * `win_amd64` wheel and `uv tool install cocoindex-code[full]` produces a
+ * working `ccc.exe`.
+ */
+describe.skipIf(process.platform !== 'win32')('CocoIndexService on Windows', () => {
+  const TOOLS_DIR = 'C:\\uv\\tools';
+  const VENV_PYTHON = join(TOOLS_DIR, 'cocoindex-code', 'Scripts', 'python.exe');
+  const CCC = 'C:\\bin\\ccc.exe';
+
+  function windowsFixture(localExtraPresent: boolean) {
+    const f = fixture({
+      deps: {
+        homeDir: 'C:\\Users\\test',
+        run: vi.fn(async (command: string, args: readonly string[]) => {
+          calls.push({ command, args: [...args] });
+          if (command === VENV_PYTHON && !localExtraPresent) throw new ProcessRunError('missing module', 1);
+          if (command === 'uv' && args.join(' ') === 'tool dir') return { stdout: `${TOOLS_DIR}\r\n`, stderr: '' };
+          if (command === 'uv' && args.join(' ') === 'tool dir --bin') return { stdout: 'C:\\bin\r\n', stderr: '' };
+          if (command === 'uv' && args[1] === 'install') localExtraPresent = true;
+          return { stdout: '', stderr: '' };
+        }),
+        // `ccc.exe` is a PE binary: reading it must never be how the
+        // interpreter is found on this platform.
+        readText: vi.fn(async () => { throw new Error('binary'); }),
+        canExecute: vi.fn(async (path: string) => path === CCC || path === VENV_PYTHON),
+      },
+    });
+    return f;
+  }
+  let calls: Array<{ command: string; args: string[] }> = [];
+  beforeEach(() => { calls = []; });
+
+  test('resolves the interpreter from uv’s tool venv rather than a shebang', async () => {
+    const f = windowsFixture(true);
+    await f.service.install('C:\\src\\project');
+    await f.service.waitForIdle();
+
+    // The probe ran, and it ran against uv's venv interpreter. Reading a
+    // shebang out of `ccc.exe` — which the fixture makes throw, as the real
+    // binary would produce nothing useful — is what used to happen instead,
+    // and it reported "no local embeddings" unconditionally.
+    const probe = calls.find((call) => call.args[0] === '-c' && call.args[1]?.includes('sentence_transformers'));
+    expect(probe?.command).toBe(VENV_PYTHON);
+    expect(calls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ command: 'uv', args: ['tool', 'dir'] }),
+    ]));
+    expect((await f.service.getStatus()).status).toBe('connected');
+  });
+
+  test('installs the local-embedding extra when the venv does not have it', async () => {
+    const f = windowsFixture(false);
+    await f.service.install('C:\\src\\project');
+    await f.service.waitForIdle();
+    expect(calls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ command: 'uv', args: ['tool', 'install', '--upgrade', 'cocoindex-code[full]'] }),
+    ]));
+    expect((await f.service.getStatus()).status).toBe('connected');
+  });
 });
 
 test.skipIf(process.platform === 'win32')('runProcess cancellation kills descendants before it settles', async () => {

@@ -1,7 +1,8 @@
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { markToolNotExecuted, ToolNotExecutedError } from '@/core/tool-execution-error';
 import { buildChildEnv, isSensitiveEnvName } from '@/security/child-env';
 import { coreLogger } from '@/utils/logger';
+import { killProcessTree } from '@/utils/proc';
 import { tokenizeSafe } from './policy';
 import type { ShellExecResult, ShellOperations } from './operations';
 
@@ -23,31 +24,6 @@ const MAX_OUTPUT_SIZE = 1024 * 1024; // 1MB
  */
 const liveGroups = new Set<number>();
 let reaperInstalled = false;
-
-/**
- * Kill a child and everything it started.
- *
- * `process.kill(-pid)` — signal the whole process group — is POSIX only. On
- * Windows it throws, and because every caller wraps the kill in a `catch` that
- * treats a throw as "already gone", a blown deadline killed NOTHING there: a
- * `sleep 5` under a 300ms timeout ran its full five seconds and reported exit
- * 0. `taskkill /T /F` is the platform's equivalent, and it is synchronous,
- * which the `exit` reaper below requires.
- */
-function killProcessTree(pid: number | undefined, child?: { kill: (signal?: NodeJS.Signals) => boolean }): void {
-  try {
-    if (process.platform === 'win32') {
-      if (pid !== undefined) spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
-      else child?.kill();
-      return;
-    }
-    if (pid !== undefined) process.kill(-pid, 'SIGKILL');
-    else child?.kill('SIGKILL');
-  } catch {
-    // ESRCH / the tree is already gone. Nothing to do, and `exit` handlers
-    // must not throw.
-  }
-}
 
 function trackGroup(pid: number | undefined): () => void {
   if (pid === undefined) return () => {};

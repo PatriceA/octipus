@@ -470,7 +470,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `connectors` | `mcp` | 2 |
 | `connectors` | `security` | 3 |
 | `connectors` | `shared` | 1 |
-| `connectors` | `utils` | 3 |
+| `connectors` | `utils` | 5 |
 | `core` | `capabilities` | 1 |
 | `core` | `channels` | 2 |
 | `core` | `config` | 31 |
@@ -485,7 +485,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `shared` | 10 |
 | `core` | `skills` | 6 |
 | `core` | `tools` | 12 |
-| `core` | `utils` | 141 |
+| `core` | `utils` | 143 |
 | `db` | `config` | 3 |
 | `db` | `core` | 5 |
 | `db` | `models` | 1 |
@@ -558,12 +558,12 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `services` | 1 |
 | `tools` | `shared` | 2 |
 | `tools` | `skills` | 2 |
-| `tools` | `utils` | 31 |
+| `tools` | `utils` | 32 |
 | `tools` | `visual` | 2 |
 | `tools` | `voice` | 3 |
 | `tui-editor` | `mcp` | 2 |
 | `tui-editor` | `tui-pi` | 29 |
-| `tui-editor` | `utils` | 1 |
+| `tui-editor` | `utils` | 2 |
 | `tui-pi` | `config` | 1 |
 | `tui-pi` | `core` | 3 |
 | `tui-pi` | `voice` | 2 |
