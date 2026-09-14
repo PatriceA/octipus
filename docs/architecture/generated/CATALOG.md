@@ -451,13 +451,13 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `capabilities` | `models` | 1 |
 | `capabilities` | `setup` | 1 |
 | `capabilities` | `tools` | 1 |
-| `capabilities` | `utils` | 6 |
+| `capabilities` | `utils` | 7 |
 | `channels` | `config` | 6 |
 | `channels` | `core` | 6 |
 | `channels` | `db` | 5 |
 | `channels` | `models` | 2 |
 | `channels` | `security` | 7 |
-| `channels` | `utils` | 16 |
+| `channels` | `utils` | 17 |
 | `channels` | `voice` | 2 |
 | `config` | `channels` | 1 |
 | `config` | `core` | 3 |
@@ -485,7 +485,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `shared` | 10 |
 | `core` | `skills` | 6 |
 | `core` | `tools` | 12 |
-| `core` | `utils` | 143 |
+| `core` | `utils` | 144 |
 | `db` | `config` | 3 |
 | `db` | `core` | 5 |
 | `db` | `models` | 1 |
@@ -500,7 +500,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `eval` | `security` | 2 |
 | `eval` | `utils` | 5 |
 | `extensions` | `core` | 2 |
-| `extensions` | `utils` | 3 |
+| `extensions` | `utils` | 4 |
 | `hooks` | `channels` | 2 |
 | `hooks` | `config` | 2 |
 | `hooks` | `core` | 6 |
@@ -520,7 +520,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `models` | `utils` | 37 |
 | `plugins` | `security` | 1 |
 | `plugins` | `tools` | 1 |
-| `plugins` | `utils` | 2 |
+| `plugins` | `utils` | 3 |
 | `security` | `config` | 12 |
 | `security` | `connectors` | 3 |
 | `security` | `core` | 1 |

@@ -5,7 +5,7 @@
  * noticed for as long as the suite could not run there.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
@@ -51,7 +51,30 @@ describe('restrictToOwner', () => {
       .map((line) => line.replace(path, '').trim())
       .filter(Boolean);
     expect(aces).toHaveLength(1);
-    expect(aces[0]).toContain(process.env.USERNAME as string);
+    // That entry is OWNER RIGHTS — whatever the console code page renders it
+    // as — and not an account name resolved out of the environment.
+    expect(aces[0]).toMatch(/:\(F\)$/);
     expect(out).not.toMatch(/\bBUILTIN\\|\bNT-AUTORITÄT\\|\bNT AUTHORITY\\/);
+    // …and the owner can still use the file it just locked down. Granting to
+    // the wrong principal would lock the process out of its own token.
+    expect(readFileSync(path, 'utf8')).toBe('bearer-token');
+    writeFileSync(path, 'rotated');
+    expect(readFileSync(path, 'utf8')).toBe('rotated');
+  });
+
+  test.skipIf(process.platform !== 'win32')('Windows: the grantee does not come from the environment', () => {
+    const path = secretAt('spoof.json');
+    const previous = { user: process.env.USERNAME, domain: process.env.USERDOMAIN };
+    process.env.USERNAME = 'Guest';
+    process.env.USERDOMAIN = 'ELSEWHERE';
+    try {
+      expect(restrictToOwner(path)).toBe(true);
+      const out = execFileSync('icacls', [path], { encoding: 'utf8' });
+      expect(out).not.toMatch(/Guest|ELSEWHERE/i);
+      expect(readFileSync(path, 'utf8')).toBe('bearer-token');
+    } finally {
+      process.env.USERNAME = previous.user;
+      process.env.USERDOMAIN = previous.domain;
+    }
   });
 });

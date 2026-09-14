@@ -672,7 +672,12 @@ export class FilesystemTool extends BaseTool {
       return existsSync(atRoot) ? atRoot : inSession;
     }
     const resolved = resolve(rawPath);
-    const insideWorkspace = resolved.startsWith(root);
+    // Case-folded on Windows, where `C:\Users\me\ws` and `c:\users\me\ws` are
+    // the same directory and `resolve` preserves whatever case it was handed.
+    // A model writing the lower-case form read as OUTSIDE the workspace, which
+    // skipped both the project lookup and the session redirect.
+    const fold = (value: string): string => (process.platform === 'win32' ? value.toLowerCase() : value);
+    const insideWorkspace = fold(resolved).startsWith(fold(root));
     // Posix-normalised first: these markers are written with `/`, and on
     // Windows `resolved` carries `\`, so none of them ever matched and an
     // absolute path into `sessions/` was treated as an ordinary workspace path.

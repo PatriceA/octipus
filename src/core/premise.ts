@@ -44,10 +44,21 @@ const PATH_EXTENSIONS =
  * way it did.
  */
 const IS_WIN = process.platform === 'win32';
-const PATH_INNER = IS_WIN ? String.raw`[\w./\\-]` : String.raw`[\w./-]`;
-const DRIVE_PREFIX = IS_WIN ? String.raw`(?:[A-Za-z]:[\\/])?` : '';
+/**
+ * The posix token: a `/`-separated path, absolute or relative.
+ *
+ * On Windows a second alternative is added for a DRIVE-ROOTED path — `C:\src\
+ * app.ts` — rather than admitting `\` into the token generally. A brief is
+ * prose, and prose embeds escape sequences: `"…something\nconfig.json…"` is an
+ * ordinary thing to write about JSON, and a general backslash would capture it
+ * as the single token `something\nconfig.json`, find it missing, and render a
+ * PREMISE CHECK note telling the agent its subject does not exist and to stop.
+ * A drive letter is not something an escape sequence produces.
+ */
+const POSIX_TOKEN = String.raw`[\w./-]*[\w-]+\.(?:${PATH_EXTENSIONS})`;
+const WINDOWS_TOKEN = String.raw`[A-Za-z]:[\\/][\w.\\/-]*[\w-]+\.(?:${PATH_EXTENSIONS})`;
 const PATH_TOKEN = new RegExp(
-  String.raw`(?:^|[\s"'\`(\[<])(${DRIVE_PREFIX}${PATH_INNER}*[\w-]+\.(?:${PATH_EXTENSIONS}))\b`,
+  String.raw`(?:^|[\s"'\`(\[<])(${IS_WIN ? `${WINDOWS_TOKEN}|` : ''}${POSIX_TOKEN})\b`,
   'gi',
 );
 

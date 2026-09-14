@@ -18,7 +18,7 @@
  * error over a housekeeping write.
  */
 import { mkdir, writeFile } from 'node:fs/promises';
-import { restrictToOwner } from '@/utils/file-acl';
+import { restrictToOwnerAsync } from '@/utils/file-acl';
 import { dirname } from 'node:path';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { DEFAULT_MAX_LENGTH } from '@/utils/sanitize';
@@ -107,8 +107,8 @@ export async function spillToolOutput(
     // mkdir/writeFile modes are masked by the process umask; set them outright
     // so the file is owner-only whatever the umask says — and on Windows they
     // express nothing, so the restriction has to be applied as an ACL.
-    restrictToOwner(dirname(abs), 'directory');
-    restrictToOwner(abs);
+    await restrictToOwnerAsync(dirname(abs), 'directory');
+    await restrictToOwnerAsync(abs);
     return previewFor(text, relPath);
   } catch (err) {
     coreLogger.warn(

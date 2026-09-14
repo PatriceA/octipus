@@ -1,6 +1,7 @@
 import { readdirSync, statSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { importModuleAt } from '@/utils/import-module';
 import { channelLogger } from '@/utils/logger';
 import { BaseChannel } from './interface';
 
@@ -37,7 +38,7 @@ export async function discoverChannels(): Promise<DiscoveredChannel[]> {
     const indexPath = resolve(dir, 'index.ts');
     let mod: Record<string, unknown>;
     try {
-      mod = await import(indexPath) as Record<string, unknown>;
+      mod = await importModuleAt(indexPath);
     } catch (err) {
       channelLogger.warn({ folder: name, err }, 'channel discovery: import failed — skipping');
       continue;

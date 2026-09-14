@@ -1,4 +1,5 @@
 import { readdir } from 'fs/promises';
+import { importModuleAt } from '@/utils/import-module';
 import { join, resolve } from 'path';
 import { checkApiVersion, manifestTools, validateManifest as validateManifestContract } from '@octipus/plugin-sdk';
 import { createChildLogger } from '@/utils/logger';
@@ -84,7 +85,7 @@ async function loadPlugin(dir: string): Promise<LoadedPlugin> {
     throw new Error(`Plugin "${manifest.name}": entry file "${manifest.main}" not found in ${dir}`);
   }
 
-  const imported = await import(entryPath);
+  const imported = await importModuleAt(entryPath);
   const module = validateModule(imported.default ?? imported, manifest.name);
 
   return { manifest, module, directory: dir };

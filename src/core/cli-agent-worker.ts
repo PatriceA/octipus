@@ -821,15 +821,22 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
       if (this.aborted) { cleanupContextFiles(); reject(new Error('Agent was aborted before CLI spawn')); return; }
       this.processExited = false;
-      // `shell: true` hands the command line to cmd.exe, and Node joins it with
-      // spaces without quoting anything. An unquoted `C:\Program Files\...`
-      // therefore reaches cmd.exe as the command `C:\Program` plus two stray
-      // arguments — which is how every CLI installed under Program Files (and
-      // `process.execPath` itself) failed with "Der Befehl ... ist entweder
-      // falsch geschrieben". cmd.exe's `/s` strips the outer pair Node adds, so
-      // the inner quotes survive to name the binary.
-      const spawnBinary = useShellForSpawn && /\s/.test(binary) ? `"${binary}"` : binary;
-      const proc = spawn(spawnBinary, args, {
+      // `shell: true` hands the command line to cmd.exe, and Node joins
+      // `[command, ...args]` with plain spaces, quoting nothing. An unquoted
+      // `C:\Program Files\…` therefore arrives as the command `C:\Program` plus
+      // two stray arguments — which is how every CLI installed under Program
+      // Files (and `process.execPath` itself) failed with "Der Befehl ... ist
+      // entweder falsch geschrieben".
+      //
+      // Arguments split the same way, and they are likelier to carry a space
+      // than the binary is: `--add-dir C:\Users\John Doe\repo` is an ordinary
+      // workspace. cmd.exe's `/s` strips only the outer pair Node adds, so the
+      // inner quotes survive on both. An argument that already carries a quote
+      // is left alone — it was quoted deliberately by the adapter that built
+      // it, and wrapping it again would nest.
+      const shellQuote = (value: string): string =>
+        useShellForSpawn && /\s/.test(value) && !value.includes('"') ? `"${value}"` : value;
+      const proc = spawn(shellQuote(binary), args.map(shellQuote), {
         env,
         cwd: workspaceCwd,
         stdio: ['pipe', 'pipe', 'pipe'],

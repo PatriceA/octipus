@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { access, readFile, realpath, stat } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import { homedir } from 'node:os';
-import { delimiter, isAbsolute, join, resolve, sep } from 'node:path';
+import { delimiter, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import * as yaml from 'js-yaml';
 import { getConfig } from '@/config';
 import type { MCPServer } from '@/core/types';
@@ -19,6 +19,10 @@ import { restrictToOwner } from '@/utils/file-acl';
 import { killProcessTree } from '@/utils/proc';
 import { writeFileAt } from '@/utils/fs-file';
 import { coreLogger } from '@/utils/logger';
+
+/** The launcher's filename. One constant, because a site that spelled it
+ * `'ccc'` on Windows silently never matched. */
+const CCC_EXECUTABLE = process.platform === 'win32' ? 'ccc.exe' : 'ccc';
 
 const MANAGED_MARKER = 'cocoindex-code';
 const INSTALL_PACKAGE = 'cocoindex-code[full]';
@@ -521,17 +525,18 @@ export class CocoIndexService {
     const pathCandidates = (process.env.PATH ?? '')
       .split(delimiter)
       .filter(Boolean)
-      .map((directory) => join(directory, process.platform === 'win32' ? 'ccc.exe' : 'ccc'));
+      .map((directory) => join(directory, CCC_EXECUTABLE));
     const candidates = [...new Set([
       preferred,
       this.installerCommandCandidate,
       process.env.UV_TOOL_BIN_DIR
-        ? join(process.env.UV_TOOL_BIN_DIR, process.platform === 'win32' ? 'ccc.exe' : 'ccc')
-        : undefined,
+        ? join(process.env.UV_TOOL_BIN_DIR, CCC_EXECUTABLE) : undefined,
       process.env.PIPX_BIN_DIR
-        ? join(process.env.PIPX_BIN_DIR, process.platform === 'win32' ? 'ccc.exe' : 'ccc')
-        : undefined,
-      join(this.deps.homeDir, '.local', 'bin', 'ccc'),
+        ? join(process.env.PIPX_BIN_DIR, CCC_EXECUTABLE) : undefined,
+      // uv's default bin directory on every platform, Windows included —
+      // which is where a Windows `uv tool install` actually lands. Written
+      // without the extension, this candidate could never match there.
+      join(this.deps.homeDir, '.local', 'bin', CCC_EXECUTABLE),
       ...pathCandidates,
     ].filter((value): value is string => !!value))];
     for (const command of candidates) {
@@ -582,15 +587,36 @@ export class CocoIndexService {
       if (!match || match[1].endsWith('/env')) return null;
       return match[1];
     }
-    try {
-      const result = await this.deps.run('uv', ['tool', 'dir'], { timeoutMs: COMMAND_TIMEOUT_MS, signal });
-      const toolsDir = result.stdout.trim().split(/\r?\n/).at(-1)?.trim();
-      if (!toolsDir) return null;
-      const python = join(toolsDir, 'cocoindex-code', 'Scripts', 'python.exe');
-      return (await this.deps.canExecute(python)) ? python : null;
-    } catch {
-      return null;
+    // Both installers, because `installPackage` falls back to pipx when uv is
+    // missing: asking uv alone on a pipx host answers "no local embeddings"
+    // before AND after the install, and the run then fails claiming the extra
+    // was not installed — on a machine where it was.
+    for (const venvRoot of await this.toolVenvRoots(signal)) {
+      const python = join(venvRoot, 'cocoindex-code', 'Scripts', 'python.exe');
+      if (await this.deps.canExecute(python)) return python;
     }
+    // A `ccc.exe` that came from neither — a hand-built venv, a vendored copy —
+    // sits next to its own interpreter: uv and pipx both put the launcher in a
+    // bin directory beside `Scripts`, and a venv keeps them in one place.
+    const sibling = join(dirname(command), 'python.exe');
+    return (await this.deps.canExecute(sibling)) ? sibling : null;
+  }
+
+  /** Where uv and pipx keep their per-tool virtualenvs, whichever are present. */
+  private async toolVenvRoots(signal: AbortSignal): Promise<string[]> {
+    const roots: string[] = [];
+    const ask = async (command: string, args: string[]): Promise<void> => {
+      try {
+        const result = await this.deps.run(command, args, { timeoutMs: COMMAND_TIMEOUT_MS, signal });
+        const line = result.stdout.trim().split(/\r?\n/).at(-1)?.trim();
+        if (line) roots.push(line);
+      } catch {
+        // That installer is not on this host. The other one may be.
+      }
+    };
+    await ask('uv', ['tool', 'dir']);
+    await ask('pipx', ['environment', '--value', 'PIPX_LOCAL_VENVS']);
+    return roots;
   }
 
   private async installPackage(signal: AbortSignal): Promise<void> {
@@ -609,7 +635,7 @@ export class CocoIndexService {
         if (binDir) {
           this.installerCommandCandidate = join(
             binDir,
-            process.platform === 'win32' ? 'ccc.exe' : 'ccc',
+            CCC_EXECUTABLE,
           );
         }
       } catch {

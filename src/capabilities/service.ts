@@ -16,6 +16,7 @@
  */
 
 import { eq } from 'drizzle-orm';
+import { importModuleAt } from '@/utils/import-module';
 import { getDb } from '@/db/postgres';
 import { capabilities, type CapabilityRow } from '@/db/schema/capabilities';
 import { getToolRegistry } from '@/tools/registry';
@@ -80,7 +81,7 @@ async function loadInstaller(toolId: string): Promise<InstallerModule | null> {
   const path = INSTALLER_PATHS[toolId];
   if (!path) return null;
   try {
-    const mod = (await import(path)) as { default?: InstallerModule } & InstallerModule;
+    const mod = (await importModuleAt(path)) as unknown as { default?: InstallerModule } & InstallerModule;
     return (mod.default ?? mod) as InstallerModule;
   } catch (err) {
     logger.warn({ toolId, err }, 'capability installer not found');

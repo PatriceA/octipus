@@ -19,22 +19,22 @@
  * Synchronous on purpose: the callers are, two of them are in a `writeFileSync`
  * path, and a permission that lands a tick after the bytes is a window.
  */
-import { spawnSync } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { chmodSync } from 'node:fs';
 import { coreLogger } from './logger';
 
 /**
- * `DOMAIN\user`, or `user` when the machine is not domain-joined.
+ * OWNER RIGHTS — the well-known SID S-1-3-4, which names whoever owns the file.
  *
- * `USERNAME` alone is ambiguous on a domain — a local and a domain account can
- * share it — and `icacls` resolves the qualified form unambiguously.
+ * Deliberately not `%USERDOMAIN%\%USERNAME%`. Those are ordinary environment
+ * variables, so a parent process picks them, and deciding who may read a bearer
+ * token is this function's entire job: aimed at another principal it would strip
+ * every inherited entry and hand that principal full control, then report
+ * success. The owner is the account that created the file — a fact about the
+ * filesystem, not about the environment — and `icacls` resolves the SID without
+ * consulting either.
  */
-function ownerAccount(): string | null {
-  const user = process.env.USERNAME;
-  if (!user) return null;
-  const domain = process.env.USERDOMAIN;
-  return domain ? `${domain}\\${user}` : user;
-}
+const OWNER_RIGHTS_SID = '*S-1-3-4';
 
 /**
  * Make `path` readable and writable by its owner only.
@@ -45,6 +45,31 @@ function ownerAccount(): string | null {
  * logged at warn rather than swallowed, because "the token file is user-only"
  * is a claim this function is the only evidence for.
  */
+/**
+ * The same restriction, off the event loop.
+ *
+ * On Windows `restrictToOwner` is two `spawnSync` calls, and a process spawn is
+ * tens of milliseconds. In a synchronous writer that is the correct trade — the
+ * permission must land with the bytes — but the tool-output spill path is async
+ * throughout precisely so a large write does not stall every other request, and
+ * blocking it to set an ACL gives that back.
+ */
+export function restrictToOwnerAsync(path: string, kind: 'file' | 'directory' = 'file'): Promise<boolean> {
+  if (process.platform !== 'win32') return Promise.resolve(restrictToOwner(path, kind));
+  const permission = kind === 'directory' ? '(OI)(CI)(F)' : '(F)';
+  return new Promise((done) => {
+    execFile(
+      'icacls',
+      [path, '/inheritance:r', '/grant:r', `${OWNER_RIGHTS_SID}:${permission}`],
+      { windowsHide: true },
+      (err) => {
+        if (err) coreLogger.warn({ path, err }, 'icacls could not restrict the file to its owner');
+        done(!err);
+      },
+    );
+  });
+}
+
 export function restrictToOwner(path: string, kind: 'file' | 'directory' = 'file'): boolean {
   if (process.platform !== 'win32') {
     try {
@@ -56,11 +81,6 @@ export function restrictToOwner(path: string, kind: 'file' | 'directory' = 'file
     }
   }
 
-  const account = ownerAccount();
-  if (!account) {
-    coreLogger.warn({ path }, 'Could not restrict file to its owner: USERNAME is not set');
-    return false;
-  }
   // `(OI)(CI)` on a directory so new children inherit the same single entry;
   // a file takes no inheritance flags. `/grant:r` REPLACES any existing grant
   // for the account rather than adding to it, and `/inheritance:r` drops the
@@ -69,7 +89,7 @@ export function restrictToOwner(path: string, kind: 'file' | 'directory' = 'file
   const permission = kind === 'directory' ? '(OI)(CI)(F)' : '(F)';
   const result = spawnSync(
     'icacls',
-    [path, '/inheritance:r', '/grant:r', `${account}:${permission}`],
+    [path, '/inheritance:r', '/grant:r', `${OWNER_RIGHTS_SID}:${permission}`],
     { stdio: 'ignore', windowsHide: true },
   );
   if (result.error || result.status !== 0) {

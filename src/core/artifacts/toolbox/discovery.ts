@@ -6,6 +6,7 @@
  */
 
 import { readdirSync, statSync } from 'fs';
+import { importModuleAt } from '@/utils/import-module';
 import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { coreLogger } from '@/utils/logger';
@@ -45,7 +46,7 @@ export async function discoverToolbox(): Promise<void> {
 
       let mod: Record<string, unknown>;
       try {
-        mod = await import(path) as Record<string, unknown>;
+        mod = await importModuleAt(path);
       } catch (err) {
         coreLogger.error(
           { folder, file, err: (err as Error).message },

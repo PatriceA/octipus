@@ -1,4 +1,5 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
+import { importModuleAt } from '@/utils/import-module';
 import { homedir } from 'node:os';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import type { GatewayEventBus } from '@/core/gateway/event-bus';
@@ -109,15 +110,13 @@ export async function loadExtension(
     // mtime/now-stamped query. If this still doesn't bust the cache, the
     // restart is still needed — but for the common case it gives users the
     // hot-reload they expect.
-    const cacheBuster = `?v=${Date.now()}`;
-    const importTarget = `${entry.entryPath}${cacheBuster}`;
     let mod: unknown;
     try {
-      mod = await import(importTarget);
+      mod = await importModuleAt(entry.entryPath, `v=${Date.now()}`);
     } catch {
       // Fall back to the bare path — some loaders reject query strings on
-      // local paths even though Bun usually tolerates them.
-      mod = await import(entry.entryPath);
+      // local paths.
+      mod = await importModuleAt(entry.entryPath);
     }
     const factory = ((mod as { default?: unknown }).default ?? mod) as ExtensionFactory;
     if (typeof factory !== 'function') {

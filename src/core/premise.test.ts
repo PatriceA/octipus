@@ -102,6 +102,16 @@ describe('nothing outside the workspace is ever stat\'d', () => {
     expect(r.missing).toEqual([]);
   });
 
+  // A brief that embeds JSON or a code snippet contains escape sequences, and
+  // a backslash-n before a filename must not read as a directory separator:
+  // the note this produces is prompt-visible and tells the agent to stop.
+  test('an escape sequence in prose is not a path', () => {
+    const backslash = String.fromCharCode(92);
+    const r = checkNamedPaths(`the payload is "a${backslash}nconfig.json" here`, [root]);
+    expect(r.missing).toEqual([]);
+    expect(r.present).toEqual([]);
+  });
+
   test('an absolute token inside a root still resolves', () => {
     const r = checkNamedPaths(`open ${root}/qa-loop.py`, [root]);
     expect(r.present).toEqual([`${root}/qa-loop.py`]);
