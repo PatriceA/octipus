@@ -151,6 +151,11 @@ export class CustomAnthropicCompatProvider extends BaseCustomProvider implements
     if (!('anthropic-version' in headers)) {
       headers['anthropic-version'] = CustomAnthropicCompatProvider.DEFAULT_VERSION;
     }
+    // The Messages API authenticates with `x-api-key`; a bearer token alone is
+    // rejected as an authentication_error. Added as a fallback so the default
+    // auth type ('bearer') still reaches an Anthropic-compatible gateway —
+    // an explicit `auth.headerName: x-api-key` config is left untouched.
+    if (!('x-api-key' in headers)) headers['x-api-key'] = cfg.apiKey;
     const url = this.appendQuery(`${cfg.baseUrl}${path}`, queryParams);
 
     return { url, body, headers };

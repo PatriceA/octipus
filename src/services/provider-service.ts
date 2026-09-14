@@ -553,11 +553,37 @@ export async function discoverCustomModels(input: DiscoverCustomInput) {
   const headers: Record<string, string> = { Accept: 'application/json' };
   const queryParams: Record<string, string> = {};
   const apiKey = await resolveCustomApiKey(input.apiKeyRef, input.userId);
+  // A ref that resolves to nothing used to fall through to an unauthenticated
+  // request, and the gateway's own 401 was then reported as if the key were
+  // wrong. Say which it is: the two have completely different fixes.
+  if (input.apiKeyRef && !apiKey) {
+    return {
+      configured: false,
+      error: `Could not resolve API key (apiKeyRef='${input.apiKeyRef}'). Store it on the Secrets page under that exact name, or use 'env:VAR_NAME'.`,
+      models: [],
+    };
+  }
   if (apiKey) {
     const authType = input.authType || 'bearer';
     if (authType === 'bearer') headers.Authorization = `Bearer ${apiKey}`;
     else if (authType === 'header' && input.headerName) headers[input.headerName] = apiKey;
     else if (authType === 'query' && input.paramName) queryParams[input.paramName] = apiKey;
+    // An Anthropic-compatible gateway authenticates with `x-api-key`, not a
+    // bearer token: Anthropic's own API answers a Bearer-only request with a
+    // 401 authentication_error, and the proxies that mimic it do the same. The
+    // runtime provider gets this right (it reads `auth.headerName` off the
+    // saved model row), but discovery runs before that row exists, on the
+    // form's default auth type — so a perfectly good key looked invalid here
+    // while working everywhere else. Sent alongside the configured credential
+    // rather than instead of it, so a gateway that wants the bearer token
+    // still sees one.
+    if (input.provider === 'custom-anthropic' && !('x-api-key' in headers)) {
+      headers['x-api-key'] = apiKey;
+    }
+  }
+  // Required by the Messages API and by every gateway fronting it.
+  if (input.provider === 'custom-anthropic' && !('anthropic-version' in headers)) {
+    headers['anthropic-version'] = '2023-06-01';
   }
   const qs = Object.keys(queryParams).length
     ? (path.includes('?') ? '&' : '?') + new URLSearchParams(queryParams).toString()

@@ -161,6 +161,20 @@ export async function rotateVaultRowMasterKey(
 }
 
 
+/**
+ * Surrounding whitespace is never part of a credential.
+ *
+ * A key pasted out of a file or a terminal carries a trailing newline, and the
+ * stored value is then byte-for-byte wrong while looking identical in every UI
+ * that renders it. The failure it produces is the least informative one there
+ * is — the provider answers `401 Invalid API key` for a key the user can see
+ * working elsewhere. Inner newlines are preserved, so multi-line secrets (PEM
+ * blocks) are unaffected.
+ */
+function trimSecret(value: string): string {
+  return value.trim();
+}
+
 export class Vault {
   private get db() { return getDb(); }
 
@@ -193,7 +207,7 @@ export class Vault {
   ): Promise<VaultEntry> {
     const scope = options.scope ?? inferScope(userId);
     const dek = dekFor(scope, userId);
-    const encrypted = encrypt(value, dek);
+    const encrypted = encrypt(trimSecret(value), dek);
 
     const entry: NewVaultEntry = {
       userId,
@@ -445,7 +459,7 @@ export class Vault {
     if (updates.value) {
       const scope = inferScope(userId);
       const dek = dekFor(scope, userId);
-      const encrypted = encrypt(updates.value, dek);
+      const encrypted = encrypt(trimSecret(updates.value), dek);
       updateData.encryptedValue = encrypted.ciphertext;
       updateData.encryptionIv = encrypted.iv;
       updateData.encryptionAuthTag = encrypted.authTag;

@@ -117,7 +117,7 @@ export class VoyageProvider implements ModelProvider {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'voyage-3-lite',
+          model: 'voyage-4-lite',
           input: ['health check'],
           input_type: 'document',
         }),
@@ -139,17 +139,27 @@ export class VoyageProvider implements ModelProvider {
  * Voyage's embedding models are a static, published set — there is no `/models`
  * discovery endpoint. Kept here so the add-model picker can offer them.
  * https://docs.voyageai.com/docs/embeddings
+ *
+ * Current generation first, then the older ones Voyage still serves. The
+ * legacy entries stay listed because existing model rows point at them and a
+ * picker that cannot show a configured model is worse than a long list; they
+ * are labelled so nobody picks one for new work.
  */
 export const VOYAGE_EMBEDDING_MODELS: Array<{ id: string; label: string }> = [
-  { id: 'voyage-3.5', label: 'Voyage 3.5' },
-  { id: 'voyage-3.5-lite', label: 'Voyage 3.5 Lite' },
-  { id: 'voyage-3-large', label: 'Voyage 3 Large' },
-  { id: 'voyage-3', label: 'Voyage 3' },
-  { id: 'voyage-3-lite', label: 'Voyage 3 Lite' },
-  { id: 'voyage-code-3', label: 'Voyage Code 3' },
+  { id: 'voyage-4', label: 'Voyage 4' },
+  { id: 'voyage-4-large', label: 'Voyage 4 Large' },
+  { id: 'voyage-4-lite', label: 'Voyage 4 Lite' },
+  { id: 'voyage-4-nano', label: 'Voyage 4 Nano' },
+  { id: 'voyage-code-4', label: 'Voyage Code 4' },
   { id: 'voyage-finance-2', label: 'Voyage Finance 2' },
   { id: 'voyage-law-2', label: 'Voyage Law 2' },
-  { id: 'voyage-multilingual-2', label: 'Voyage Multilingual 2' },
+  { id: 'voyage-3.5', label: 'Voyage 3.5 (legacy)' },
+  { id: 'voyage-3.5-lite', label: 'Voyage 3.5 Lite (legacy)' },
+  { id: 'voyage-3-large', label: 'Voyage 3 Large (legacy)' },
+  { id: 'voyage-3', label: 'Voyage 3 (legacy)' },
+  { id: 'voyage-3-lite', label: 'Voyage 3 Lite (legacy)' },
+  { id: 'voyage-code-3', label: 'Voyage Code 3 (legacy)' },
+  { id: 'voyage-multilingual-2', label: 'Voyage Multilingual 2 (legacy)' },
 ];
 
 /** True if a Voyage key is available (env var or vault) — mirrors getApiKey(). */
