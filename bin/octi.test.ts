@@ -139,7 +139,10 @@ describe('launcher project configuration', () => {
     expect(plain(stdout)).toContain('http://localhost:49124');
   });
 
-  test('compiled dispatcher resolves a custom install through its executable symlink', async () => {
+  // Windows has no executable bit and will not run an extensionless file, so
+  // the symlink this asserts on is a POSIX-only shape. The dispatcher itself
+  // is covered on both platforms by the cases above.
+  test.skipIf(process.platform === 'win32')('compiled dispatcher resolves a custom install through its executable symlink', async () => {
     const root = mkdtempSync(join(tmpdir(), 'octi-cli-link-'));
     const app = join(root, 'custom-app');
     const dist = join(app, 'dist');

@@ -10,8 +10,8 @@
  * wants the output and the exit code.
  */
 import { spawn as nodeSpawn, type SpawnOptions } from 'node:child_process';
-import { accessSync, constants } from 'node:fs';
-import { delimiter, join } from 'node:path';
+import { accessSync, constants, existsSync } from 'node:fs';
+import { delimiter, isAbsolute, join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 
 export type StdioMode = 'pipe' | 'ignore' | 'inherit';
@@ -67,12 +67,21 @@ export interface ChildProcessHandle<_In = unknown, _Out = unknown, _Err = unknow
  * out of a path should pass an ABSOLUTE one, so it cannot be read as a flag.
  */
 const EXECUTABLE_NAME = /^[A-Za-z0-9_./\\:+-]+$/;
+/**
+ * The same, plus spaces. Windows installs Node at `C:\Program Files\nodejs\
+ * node.exe`, and `process.execPath` is how the setup wizard boots the backend.
+ * A space is inert without a shell, but it is only accepted for an absolute
+ * path that exists, so a command line like `sh -c id` stays refused.
+ */
+const EXECUTABLE_PATH = /^[A-Za-z0-9_./\\:+ -]+$/;
 
 function safeExecutable(command: string): string {
   if (command.startsWith('-')) {
     throw new Error(`spawnProcess: refusing a command that starts with "-": ${command}`);
   }
-  const match = EXECUTABLE_NAME.exec(command);
+  const match =
+    EXECUTABLE_NAME.exec(command) ??
+    (isAbsolute(command) && existsSync(command) ? EXECUTABLE_PATH.exec(command) : null);
   if (!match) {
     throw new Error(`spawnProcess: refusing a command with unexpected characters: ${command}`);
   }

@@ -81,7 +81,13 @@ function usesDatabase(file: string): boolean {
   return DATABASE_MARKERS.some((marker) => source.includes(marker));
 }
 
-const testFiles = ALL.flatMap((pattern) => globSync(pattern)).sort();
+// `globSync` returns platform separators, and these paths go back out as glob
+// patterns — where a backslash is an escape, not a separator. On Windows every
+// project's `include` then matched nothing and `vitest run <file>` reported
+// "No test files found". Posix separators work on both platforms.
+const testFiles = ALL.flatMap((pattern) => globSync(pattern))
+  .map((file) => file.replaceAll('\\', '/'))
+  .sort();
 const database = testFiles.filter(usesDatabase);
 const pure = testFiles.filter((f) => !database.includes(f));
 

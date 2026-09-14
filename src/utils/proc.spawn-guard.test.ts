@@ -20,6 +20,13 @@ describe('spawnProcess argv[0] guard', () => {
     }
   });
 
+  test('a command line with a space is refused', () => {
+    // A space alone must not turn a command line into a command — the positive
+    // case (an absolute path that has one) is covered below by
+    // `process.execPath`, which on Windows is `C:\Program Files\nodejs\node.exe`.
+    expect(() => spawnProcess({ command: 'sh -c id' })).toThrow(/unexpected characters/);
+  });
+
   test('an empty command is still refused', () => {
     expect(() => spawnProcess({ command: '' })).toThrow(/no command given/);
   });
@@ -27,7 +34,9 @@ describe('spawnProcess argv[0] guard', () => {
   test('ordinary commands and absolute paths still run', async () => {
     const plain = spawnProcess({ command: 'echo', args: ['hi'], stdout: 'ignore', stderr: 'ignore' });
     expect(await plain.exited).toBe(0);
-    const absolute = spawnProcess({ command: '/bin/echo', args: ['hi'], stdout: 'ignore', stderr: 'ignore' });
+    // `process.execPath` is the absolute path that exists on every platform;
+    // `/bin/echo` is not one of them.
+    const absolute = spawnProcess({ command: process.execPath, args: ['-e', ''], stdout: 'ignore', stderr: 'ignore' });
     expect(await absolute.exited).toBe(0);
   });
 
