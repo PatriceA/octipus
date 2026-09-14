@@ -163,13 +163,9 @@ export function PermissionProvider({ children }: { children: ReactNode }) {
                 action: r.action || r.toolName || '',
                 args: r.args || r.context,
               }));
-              // Union with what the chat socket already pushed: a snapshot
-              // built before that request became visible must not drop it.
-              setPermissions(prev => {
-                const seen = new Set(prev.map(p => p.requestId));
-                const fresh = reqs.filter(req => !seen.has(req.requestId) && !resolvedPermissions.current.has(req.requestId));
-                return fresh.length ? [...prev, ...fresh] : prev;
-              });
+              // The snapshot is authoritative: a reconnect must drop entries
+              // resolved while this socket was down.
+              setPermissions(reqs.filter(req => !resolvedPermissions.current.has(req.requestId)));
             } else if (data.type === 'permission_request') {
               // Live request emitted while we were already connected
               const req: PermissionRequest = {
