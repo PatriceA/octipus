@@ -11,10 +11,23 @@ const here = dirname(fileURLToPath(import.meta.url));
  * no dev-server proxy in front of it — it talks to a backend URL the user
  * chooses. The web build proxies same-origin instead.
  */
-const isDesktop = process.env.TAURI_BUILD === 'true';
+/**
+ * Desktop is selected by Vite's own `--mode desktop` rather than by an
+ * environment variable: `TAURI_BUILD=true vite` is sh syntax, and on Windows
+ * cmd.exe reads it as a command name — `octi desktop` died there with "Der
+ * Befehl TAURI_BUILD ist entweder falsch geschrieben oder konnte nicht
+ * gefunden werden". `TAURI_ENV_PLATFORM` is set by the Tauri CLI itself for
+ * the before*Command it spawns, so a build driven by `tauri build` is
+ * recognised without either. The old variable is still honoured for anyone
+ * with it in their shell.
+ */
 const apiTarget = process.env.INTERNAL_API_URL || `http://localhost:${process.env.API_PORT || 3005}`;
 
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+const isDesktop =
+  mode === 'desktop' || !!process.env.TAURI_ENV_PLATFORM || process.env.TAURI_BUILD === 'true';
+
+return {
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
@@ -50,4 +63,5 @@ export default defineConfig({
     emptyOutDir: true,
     sourcemap: true,
   },
+};
 });

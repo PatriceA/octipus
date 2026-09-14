@@ -8,9 +8,9 @@
     "start": "node serve.mjs",
     "lint": "eslint . --max-warnings 0",
     "tauri": "tauri",
-    "tauri:webdev": "TAURI_BUILD=true vite --port 3008",
-    "tauri:dev": "TAURI_BUILD=true tauri dev",
-    "tauri:build": "TAURI_BUILD=true tauri build",
+    "tauri:webdev": "vite --port 3008 --mode desktop",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
     "preview": "node serve.mjs"
   },
   "dependencies": {
