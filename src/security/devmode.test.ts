@@ -11,7 +11,7 @@
 import { describe, expect, test } from 'vitest';
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, parse } from 'path';
 import { checkProjectPath, devModeAllowed } from './devmode';
 
 describe('devModeAllowed', () => {
@@ -61,7 +61,12 @@ describe('checkProjectPath', () => {
     // checked against it alone is trivially bypassed by `ln -s /etc project`.
     const dir = mkdtempSync(join(tmpdir(), 'devmode-'));
     const link = join(dir, 'innocent-looking-project');
-    symlinkSync('/etc', link);
+    // A system directory that exists on THIS platform — `/etc` resolves to a
+    // nonexistent `C:\etc` on Windows, so the check would reject it for the
+    // wrong reason. 'junction' is the Windows link type an unprivileged
+    // process may create.
+    const systemDir = process.platform === 'win32' ? (process.env.SystemRoot ?? 'C:\\Windows') : '/etc';
+    symlinkSync(systemDir, link, process.platform === 'win32' ? 'junction' : 'dir');
     try {
       const res = checkProjectPath(link);
       expect(res.ok).toBe(false);
@@ -72,7 +77,21 @@ describe('checkProjectPath', () => {
   });
 
   test('rejects the filesystem root', () => {
-    expect(checkProjectPath('/').ok).toBe(false);
+    expect(checkProjectPath(parse(process.cwd()).root).ok).toBe(false);
+  });
+
+  // The Windows half of the denylist. Accepting an absolute Windows path at
+  // all is new; without these prefixes `C:\Windows\System32` would qualify as
+  // a project root, so the gate is asserted on the platform it now applies to.
+  test.skipIf(process.platform !== 'win32')('rejects Windows system directories, case-insensitively', () => {
+    const systemRoot = process.env.SystemRoot ?? 'C:\\Windows';
+    for (const p of [systemRoot, systemRoot.toUpperCase(), join(systemRoot, 'System32'), process.env.ProgramFiles ?? 'C:\\Program Files']) {
+      const res = checkProjectPath(p);
+      expect(res.ok, `${p} must be refused`).toBe(false);
+      expect(res.reason).toContain('system directory');
+    }
+    // …and an ordinary directory on the same drive is still accepted.
+    expect(checkProjectPath(process.cwd()).ok).toBe(true);
   });
 
   test('rejects a non-existent path', () => {
