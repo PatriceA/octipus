@@ -215,6 +215,7 @@ export class MCPProtocol extends EventEmitter {
    * Set request timeout
    */
   setRequestTimeout(ms: number): void {
+    if (!Number.isFinite(ms) || ms <= 0) throw new Error('MCP request timeout must be positive');
     this.requestTimeout = ms;
   }
 }

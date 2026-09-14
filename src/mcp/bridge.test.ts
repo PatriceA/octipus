@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from 'vitest';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { MCPBridge } from './bridge';
 import type { AgentContext } from '@/core/types';
 
@@ -155,5 +155,29 @@ describe('MCPBridge.getLazyToolHandlers', () => {
     // Lazy: always 2 meta-tools
     const lazy = bridge.getLazyToolHandlers();
     expect(lazy).toHaveLength(2);
+  });
+});
+
+describe('MCPBridge config persistence', () => {
+  test('rolls back an in-memory add when durable persistence fails', async () => {
+    const bridge = new MCPBridge();
+    (bridge as any).saveConfig = vi.fn().mockRejectedValue(new Error('database unavailable'));
+    await expect(bridge.addServer({ id: 'a', name: 'A', command: 'a', isEnabled: true }))
+      .rejects.toThrow('database unavailable');
+    expect(bridge.getServerConfigs()).toEqual([]);
+  });
+
+  test('serializes concurrent mutations so a rollback cannot erase a later update', async () => {
+    const bridge = new MCPBridge();
+    let calls = 0;
+    (bridge as any).saveConfig = vi.fn(async () => {
+      calls++;
+      if (calls === 1) throw new Error('first write failed');
+    });
+    const first = bridge.addServer({ id: 'a', name: 'A', command: 'a', isEnabled: true });
+    const second = bridge.addServer({ id: 'b', name: 'B', command: 'b', isEnabled: true });
+    await expect(first).rejects.toThrow('first write failed');
+    await expect(second).resolves.toBeUndefined();
+    expect(bridge.getServerConfigs().map((server) => server.id)).toEqual(['b']);
   });
 });

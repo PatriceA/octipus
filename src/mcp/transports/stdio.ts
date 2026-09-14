@@ -1,10 +1,13 @@
 import { type ChildProcess, spawn } from 'child_process';
+import { buildChildEnv } from '@/security/child-env';
 import type { CloseHandler, ErrorHandler, MCPTransport, MessageHandler } from './interface';
 
 export interface StdioTransportOptions {
   command: string;
   args?: string[];
   env?: Record<string, string>;
+  cwd?: string;
+  stderrAsError?: boolean;
 }
 
 /**
@@ -24,7 +27,8 @@ export class StdioTransport implements MCPTransport {
 
   async connect(): Promise<void> {
     this.process = spawn(this.options.command, this.options.args || [], {
-      env: { ...process.env, ...this.options.env },
+      cwd: this.options.cwd,
+      env: buildChildEnv(this.options.env),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
@@ -43,6 +47,7 @@ export class StdioTransport implements MCPTransport {
     });
 
     this.process.stderr!.on('data', (data: Buffer) => {
+      if (this.options.stderrAsError === false) return;
       for (const handler of this.errorHandlers) {
         handler(new Error(data.toString()));
       }

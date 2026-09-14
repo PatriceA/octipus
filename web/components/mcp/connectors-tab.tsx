@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2, Puzzle } from 'lucide-react';
 import { api } from '@/lib/api';
 import { ConnectorCard } from './connector-card';
+import { CocoIndexCard } from './cocoindex-card';
 
 interface ConnectorStatus {
   id: string;
@@ -17,15 +18,9 @@ interface ConnectorStatus {
 export function ConnectorsTab() {
   const queryClient = useQueryClient();
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['connectors'],
-    queryFn: async () => {
-      try {
-        return await api.get<{ connectors: ConnectorStatus[] }>('/connectors');
-      } catch {
-        return { connectors: [] };
-      }
-    },
+    queryFn: () => api.get<{ connectors: ConnectorStatus[] }>('/connectors'),
     refetchInterval: 30_000,
   });
 
@@ -38,7 +33,7 @@ export function ConnectorsTab() {
       <div>
         <h2 className="text-sm font-medium text-on-surface">Built-in Connectors</h2>
         <p className="text-xs text-on-surface-variant mt-0.5">
-          First-party integrations with OAuth — connect your account and agents can use these services directly.
+          Connect an account or install an optional local service for agents to use through MCP.
         </p>
       </div>
 
@@ -47,6 +42,8 @@ export function ConnectorsTab() {
           <Loader2 className="w-4 h-4 animate-spin" />
           Loading connectors...
         </div>
+      ) : error ? (
+        <p role="alert" className="text-sm text-error">Could not load account connectors: {error.message}</p>
       ) : connectors.length === 0 ? (
         <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-8 text-center">
           <Puzzle className="w-8 h-8 text-on-surface-variant mx-auto mb-2" />
@@ -68,6 +65,7 @@ export function ConnectorsTab() {
           ))}
         </div>
       )}
+      <CocoIndexCard />
     </div>
   );
 }

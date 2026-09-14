@@ -148,4 +148,40 @@ describe('StdioTransport', () => {
     await waitFor(() => (messages.length >= 1 ? messages : undefined));
     expect(messages).toEqual(['hello-env']);
   });
+
+  test('cwd option pins the MCP child to its configured project', async () => {
+    const t = makeTransport('pwd');
+    (t as any).options.cwd = '/tmp';
+    const messages: string[] = [];
+    t.onMessage((m) => messages.push(m));
+    await t.connect();
+    await waitFor(() => messages[0]);
+    expect(messages[0]).toBe('/tmp');
+  });
+
+  test('sensitive parent secrets are not inherited by MCP children', async () => {
+    const previous = process.env.MASTER_KEY;
+    process.env.MASTER_KEY = 'must-not-leak';
+    try {
+      const t = makeTransport('sh', ['-c', 'printf "%s\\n" "${MASTER_KEY:-missing}"']);
+      const messages: string[] = [];
+      t.onMessage((m) => messages.push(m));
+      await t.connect();
+      await waitFor(() => messages[0]);
+      expect(messages[0]).toBe('missing');
+    } finally {
+      if (previous === undefined) delete process.env.MASTER_KEY;
+      else process.env.MASTER_KEY = previous;
+    }
+  });
+
+  test('can treat routine stderr output as logs for noisy MCP servers', async () => {
+    const t = makeTransport('sh', ['-c', 'echo ready >&2; cat']);
+    (t as any).options.stderrAsError = false;
+    const errors: Error[] = [];
+    t.onError((error) => errors.push(error));
+    await t.connect();
+    await new Promise((done) => setTimeout(done, 30));
+    expect(errors).toEqual([]);
+  });
 });

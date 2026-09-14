@@ -58,6 +58,9 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
   const [transport, setTransport] = useState<TransportType>('streamable-http');
   const [command, setCommand] = useState('');
   const [args, setArgs] = useState('');
+  const [cwd, setCwd] = useState('');
+  const [requestTimeoutSeconds, setRequestTimeoutSeconds] = useState('30');
+  const [stderrAsError, setStderrAsError] = useState(true);
   const [serverUrl, setServerUrl] = useState('');
   const [authHeader, setAuthHeader] = useState('');
   const [showAuth, setShowAuth] = useState(false);
@@ -87,6 +90,15 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
         }
         body.command = command.trim();
         body.args = args.trim() ? args.trim().split(/\s+/) : [];
+        if (cwd.trim()) body.cwd = cwd.trim();
+        const timeout = Number(requestTimeoutSeconds);
+        if (!Number.isFinite(timeout) || timeout < 1 || timeout > 3600) {
+          setError('Request timeout must be between 1 and 3600 seconds');
+          setIsSubmitting(false);
+          return;
+        }
+        body.requestTimeoutMs = Math.round(timeout * 1000);
+        body.stderrAsError = stderrAsError;
 
         // Parse env vars (KEY=VALUE per line)
         if (envVars.trim()) {
@@ -128,6 +140,9 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
       setName('');
       setCommand('');
       setArgs('');
+      setCwd('');
+      setRequestTimeoutSeconds('30');
+      setStderrAsError(true);
       setServerUrl('');
       setAuthHeader('');
       setEnvVars('');
@@ -142,10 +157,10 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
   return (
     <Portal>
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-surface-container rounded-xl shadow-xl w-full max-w-lg mx-4 p-6">
+      <div role="dialog" aria-modal="true" aria-labelledby="add-mcp-server-title" className="bg-surface-container rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto mx-4 p-6">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-on-surface">Add MCP Server</h2>
-          <button onClick={onClose} className="p-1 text-on-surface-variant hover:text-on-surface cursor-pointer">
+          <h2 id="add-mcp-server-title" className="text-lg font-semibold text-on-surface">Add MCP Server</h2>
+          <button aria-label="Close add server" onClick={onClose} className="p-1 text-on-surface-variant hover:text-on-surface cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -158,7 +173,7 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
               {([
                 { value: 'streamable-http' as const, label: 'HTTP', desc: 'n8n, modern MCP' },
                 { value: 'sse' as const, label: 'SSE', desc: 'legacy remote' },
-                { value: 'stdio' as const, label: 'stdio', desc: 'npm packages' },
+                { value: 'stdio' as const, label: 'stdio', desc: 'local programs' },
               ] as const).map((t) => (
                 <button
                   key={t.value}
@@ -259,6 +274,25 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
                 />
                 <p className="mt-1 text-xs text-on-surface-variant">Space-separated arguments</p>
               </div>
+
+              <label className="block text-sm text-on-surface/80">
+                Working directory (optional)
+                <input value={cwd} onChange={event => setCwd(event.target.value)} placeholder="Absolute folder path on the backend" className="mt-1 w-full px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm text-on-surface" />
+              </label>
+              <details className="text-sm text-on-surface-variant">
+                <summary className="cursor-pointer">Process settings</summary>
+                <div className="space-y-3 mt-3">
+                  <label className="block">
+                    Request timeout (seconds)
+                    <input type="number" min="1" max="3600" value={requestTimeoutSeconds} onChange={event => setRequestTimeoutSeconds(event.target.value)} className="mt-1 w-full px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm text-on-surface" />
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" checked={stderrAsError} onChange={event => setStderrAsError(event.target.checked)} />
+                    Treat stderr output as an error
+                  </label>
+                  <p className="text-xs">Turn this off for servers such as CocoIndex that write ordinary progress logs to stderr. Process failures still report errors.</p>
+                </div>
+              </details>
 
               {/* Environment variables */}
               <div>
@@ -452,7 +486,7 @@ export default function MCPPage() {
     <div className="space-y-6">
       <PageHeader
         title="mcp"
-        description="Model Context Protocol server. Exposes all assistant capabilities as MCP tools for Claude Code, Antigravity, and other MCP clients."
+        description="Connect external tools and services for Octipus agents to use through MCP."
         actions={activeTab === 'servers' ? (
           <button
             onClick={() => setShowAdd(true)}

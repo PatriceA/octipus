@@ -259,3 +259,123 @@ curl -X POST -H "Authorization: Bearer $OCTIPUS_API_TOKEN" \
 ```
 
 Reset the breaker after you've fixed the underlying issue (restarted the server, fixed auth, etc.). The reset is not a workaround — if failures continue, the breaker will trip again.
+
+## Optional code search with CocoIndex Code
+
+The **MCP → Connectors** tab offers **CocoIndex Code** alongside the account
+connectors. It is optional: ordinary Octipus installation and filesystem search
+work without it. CocoIndex maintains its own code index; source chunks are not
+added to Octipus's general knowledge base.
+
+An administrator selects a folder **on the backend machine**, chooses a local
+embedding model, and clicks **Install and connect**. The card reports installation
+and connection progress and surfaces setup errors. A remote desktop or browser
+client cannot use a client-local folder unless the backend can also access it.
+
+The managed installer supports Linux and macOS backends. It needs Python 3.11
+or newer and `uv` or `pipx` available to the
+Octipus process, or an existing `ccc` installation with local embedding support
+(`cocoindex-code[full]`). The installer does not install
+Python or a Python package manager. In Docker, these prerequisites and the
+selected repository folder must be available inside the backend container.
+Windows users can configure CocoIndex manually through the generic MCP server
+settings; the managed installer does not support Windows executable discovery.
+
+This is an installation-wide MCP server, shared with agents on that Octipus
+server. The selected folder controls where CocoIndex searches; it is not a
+per-user access boundary. Choose only code suitable for that shared access.
+Local embeddings do not need a provider API key. Installation and initial model
+downloads require network access. The local embedding dependencies, including
+PyTorch, can occupy several GB of disk space.
+
+After connection, agents with MCP access discover CocoIndex through
+`mcp_list_tools` and call its search tool through `mcp_call_tool`. Existing MCP
+execution permissions still apply. Setup downloads the selected embedding model
+and builds the initial index before reporting connected. This may take time for
+large folders. Later searches refresh the index incrementally by default.
+Search results help locate relevant code; agents should inspect the current
+files before editing.
+
+**Apply and reconnect** updates the selected folder/model and refreshes its
+index. Changing models rebuilds the managed index. **Remove connector**
+disconnects and removes the managed MCP server configuration; installed packages
+and index files remain on disk. General knowledge search and built-in repository
+navigation are unaffected.
+
+This connector provides semantic code search, not a cross-repository call graph.
+See the [CocoIndex Code documentation](https://github.com/cocoindex-io/cocoindex-code)
+for upstream search and indexing behavior.
+
+### Windows manual CocoIndex setup
+
+Windows backends can use an individually configured stdio MCP server. The
+managed connector installer currently supports Linux/macOS only. The following
+steps use upstream Windows installation support; native Windows execution has
+not been validated by the Linux smoke test.
+
+Run PowerShell on the **backend machine**, under the Windows account that runs
+Octipus. Installing on a Windows desktop client does not install anything on a
+remote Linux/Docker backend.
+
+Install uv, following its [Windows installation instructions](https://docs.astral.sh/uv/getting-started/installation/#winget):
+
+```powershell
+winget install --id=astral-sh.uv -e
+```
+
+Open a new PowerShell window. Install CocoIndex and initialize the chosen
+repository (replace `C:\src\project` with your folder):
+
+```powershell
+uv tool install --upgrade 'cocoindex-code[full]'
+$cocoExe = Join-Path (uv tool dir --bin) 'ccc.exe'
+$env:COCOINDEX_CODE_DIR = Join-Path $env:LOCALAPPDATA 'Octipus\cocoindex-manual'
+Set-Location 'C:\src\project'
+& $cocoExe init
+& $cocoExe index
+& $cocoExe search 'session authentication'
+Write-Output $cocoExe
+Write-Output "COCOINDEX_CODE_DIR=$env:COCOINDEX_CODE_DIR"
+```
+
+During `init`, select **sentence-transformers** for local embeddings and choose
+a model. This uses separate manual-connector settings under LocalAppData.
+Wait for indexing to finish and confirm that a query relevant to your code
+returns results. Stop and resolve any command errors before adding the server.
+The package and model downloads can take time and use several GB of disk space.
+See [upstream CocoIndex setup](https://github.com/cocoindex-io/cocoindex-code).
+
+As an Octipus administrator, open **MCP → MCP Servers → Add Server**, choose
+**stdio**, and enter:
+
+| Field | Value |
+|---|---|
+| Name | `CocoIndex Windows` (keeps it distinct from the managed connector) |
+| Command | The full `ccc.exe` path printed above, without surrounding quotes |
+| Arguments | `mcp` |
+| Working directory | Your repository folder, for example `C:\src\project` |
+| Process settings → Request timeout | `1800` seconds |
+| Process settings → Treat stderr output as an error | Off; CocoIndex writes ordinary logs to stderr |
+| Environment Variables | The printed `COCOINDEX_CODE_DIR=…` line with its full absolute path |
+
+Save the server. Confirm that it becomes connected and that its tool list
+contains `search`. It uses the normal MCP execution permissions and is shared
+with agents on this server. Manage connection/removal in **MCP Servers**; the
+managed CocoIndex card does not track this manual installation.
+
+If startup fails:
+
+- **Executable not found:** check the full path from `uv tool dir --bin` and
+  that the backend account can execute it. Restart Octipus if its environment
+  predates installation. Full executable paths avoid relying on an updated PATH.
+- **Wrong repository or model:** verify the working directory and the exact
+  `COCOINDEX_CODE_DIR` environment value. Run the commands using that same account
+  and settings directory. Avoid inherited `COCOINDEX_CODE_HOST_CWD` or host-path
+  mappings from another CocoIndex installation.
+- **No search results:** run `ccc index` from the selected folder using the same
+  settings directory; inspect ignored files and reported indexing errors.
+- **Changed embedding model:** disconnect in Octipus, run `ccc daemon stop`,
+  `ccc reset --force`, then `ccc index` in the selected folder/settings context,
+  and reconnect. Reset removes the code index, not source files.
+
+Removing the MCP server does not uninstall CocoIndex or delete its local index.

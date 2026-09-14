@@ -32,6 +32,7 @@ export class MCPBridge extends EventEmitter {
   private reconnectAttempts: Map<string, number> = new Map();
   private reconnectTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private intentionalDisconnects: Set<string> = new Set();
+  private configMutation: Promise<void> = Promise.resolve();
   private static readonly MAX_RECONNECT_ATTEMPTS = 6;
   private static readonly RECONNECT_BASE_MS = 1_000;
   private static readonly RECONNECT_MAX_MS = 30_000;
@@ -93,6 +94,8 @@ export class MCPBridge extends EventEmitter {
       command: server.command,
       args: server.args,
       env: server.env,
+      cwd: server.cwd,
+      stderrAsError: server.stderrAsError,
     });
   }
 
@@ -202,6 +205,12 @@ export class MCPBridge extends EventEmitter {
       if (connection.capabilities.prompts) {
         const promptsResult = await protocol.sendRequest(send, MCPMethods.ListPrompts) as { prompts: MCPPrompt[] };
         connection.prompts = promptsResult.prompts || [];
+      }
+
+      // Keep startup failures bounded by the protocol default. A server may
+      // opt into a longer timeout for genuinely slow tools after handshaking.
+      if (server.requestTimeoutMs !== undefined) {
+        protocol.setRequestTimeout(server.requestTimeoutMs);
       }
 
       connection.status = 'connected';
@@ -475,50 +484,73 @@ export class MCPBridge extends EventEmitter {
    * Add a new MCP server config and persist to file
    */
   async addServer(server: MCPServer): Promise<void> {
-    // Avoid duplicates
-    const idx = this.serverConfigs.findIndex((s) => s.id === server.id);
-    if (idx >= 0) {
-      this.serverConfigs[idx] = server;
-    } else {
-      this.serverConfigs.push(server);
-    }
-
-    await this.saveConfig();
-    coreLogger.info({ serverId: server.id }, 'MCP server config added');
+    await this.withConfigMutation(async () => {
+      const previous = [...this.serverConfigs];
+      const idx = this.serverConfigs.findIndex((s) => s.id === server.id);
+      if (idx >= 0) this.serverConfigs[idx] = server;
+      else this.serverConfigs.push(server);
+      try {
+        await this.saveConfig();
+      } catch (error) {
+        this.serverConfigs = previous;
+        throw error;
+      }
+      coreLogger.info({ serverId: server.id }, 'MCP server config added');
+    });
   }
 
   /**
    * Remove an MCP server config and disconnect if running
    */
   async removeServer(serverId: string): Promise<boolean> {
-    const idx = this.serverConfigs.findIndex((s) => s.id === serverId);
-    if (idx < 0) return false;
+    return this.withConfigMutation(async () => {
+      const idx = this.serverConfigs.findIndex((s) => s.id === serverId);
+      if (idx < 0) return false;
+      const previous = [...this.serverConfigs];
+      await this.disconnect(serverId);
+      this.serverConfigs.splice(idx, 1);
+      try {
+        await this.saveConfig();
+      } catch (error) {
+        this.serverConfigs = previous;
+        throw error;
+      }
+      coreLogger.info({ serverId }, 'MCP server config removed');
+      return true;
+    });
+  }
 
-    await this.disconnect(serverId);
-    this.serverConfigs.splice(idx, 1);
-    await this.saveConfig();
-
-    coreLogger.info({ serverId }, 'MCP server config removed');
-    return true;
+  private async withConfigMutation<T>(mutation: () => Promise<T>): Promise<T> {
+    const previous = this.configMutation;
+    let release!: () => void;
+    this.configMutation = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try { return await mutation(); }
+    finally { release(); }
   }
 
   /**
    * Update server enabled state
    */
   async toggleServer(serverId: string, enabled: boolean): Promise<boolean> {
-    const server = this.serverConfigs.find((s) => s.id === serverId);
-    if (!server) return false;
-
-    server.isEnabled = enabled;
-    await this.saveConfig();
-
-    if (enabled) {
-      await this.connect(server).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in bridge'));
-    } else {
-      await this.disconnect(serverId);
-    }
-
-    return true;
+    return this.withConfigMutation(async () => {
+      const server = this.serverConfigs.find((s) => s.id === serverId);
+      if (!server) return false;
+      const previous = server.isEnabled;
+      server.isEnabled = enabled;
+      try {
+        await this.saveConfig();
+      } catch (error) {
+        server.isEnabled = previous;
+        throw error;
+      }
+      if (enabled) {
+        await this.connect(server).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in bridge'));
+      } else {
+        await this.disconnect(serverId);
+      }
+      return true;
+    });
   }
 
   /**
@@ -541,6 +573,7 @@ export class MCPBridge extends EventEmitter {
       coreLogger.debug({ count: this.serverConfigs.length }, 'MCP server configs saved to database');
     } catch (error) {
       coreLogger.error({ error }, 'Failed to save MCP server configs to database');
+      throw error;
     }
   }
 

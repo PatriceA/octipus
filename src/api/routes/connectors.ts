@@ -2,6 +2,8 @@ import { apiContext } from '@/api/context';
 import { Elysia, t } from '@/api/http';
 import { getConfig } from '@/config';
 import { ALL_CONNECTORS, findConnector } from '@/connectors/definitions';
+import { getCocoIndexService, redactCocoIndexStatus, resolveCocoIndexWorkspacePath } from '@/connectors/cocoindex';
+import { coreLogger } from '@/utils/logger';
 import {
   connectorVaultKeys,
   discoverAndRegisterConnector,
@@ -50,6 +52,66 @@ const CALLBACK_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 
 
 export const connectorRoutes = new Elysia({ prefix: '/connectors' })
   .use(apiContext)
+
+  .get('/cocoindex', async ({ user, set }) => {
+    if (!user) {
+      set.status = 401;
+      return { error: 'Not authenticated' };
+    }
+    try {
+      const status = await getCocoIndexService().getStatus();
+      return user.isAdmin ? status : redactCocoIndexStatus(status);
+    } catch (error) {
+      coreLogger.error({ err: error }, 'Could not inspect CocoIndex connector');
+      set.status = 503;
+      return { error: user.isAdmin && error instanceof Error ? error.message : 'Could not inspect CocoIndex connector' };
+    }
+  }, { detail: { tags: ['connectors'] } })
+
+  .post('/cocoindex/install', async ({ user, body, set }) => {
+    if (!user) {
+      set.status = 401;
+      return { error: 'Not authenticated' };
+    }
+    if (!user.isAdmin) {
+      set.status = 403;
+      return { error: 'Admin access required' };
+    }
+    try {
+      const path = await resolveCocoIndexWorkspacePath(body.workspacePath, user.id);
+      const status = await getCocoIndexService().install(path, body.embeddingModel);
+      set.status = 202;
+      return status;
+    } catch (error) {
+      coreLogger.warn({ err: error }, 'CocoIndex connector setup rejected');
+      set.status = 400;
+      return { error: error instanceof Error ? error.message : 'Could not start CocoIndex setup' };
+    }
+  }, {
+    body: t.Object({
+      workspacePath: t.String({ minLength: 1, maxLength: 4096 }),
+      embeddingModel: t.Optional(t.String({ minLength: 1, maxLength: 200 })),
+    }),
+    detail: { tags: ['connectors'] },
+  })
+
+  .delete('/cocoindex', async ({ user, set }) => {
+    if (!user) {
+      set.status = 401;
+      return { error: 'Not authenticated' };
+    }
+    if (!user.isAdmin) {
+      set.status = 403;
+      return { error: 'Admin access required' };
+    }
+    try {
+      return await getCocoIndexService().remove();
+    } catch (error) {
+      coreLogger.error({ err: error }, 'Could not remove CocoIndex connector');
+      set.status = 500;
+      return { error: error instanceof Error ? error.message : 'Could not remove CocoIndex connector' };
+    }
+  }, { detail: { tags: ['connectors'] } })
 
   // GET /connectors — list connectors with per-user connection status
   .get(
