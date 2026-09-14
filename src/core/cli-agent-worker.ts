@@ -821,7 +821,15 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
       if (this.aborted) { cleanupContextFiles(); reject(new Error('Agent was aborted before CLI spawn')); return; }
       this.processExited = false;
-      const proc = spawn(binary, args, {
+      // `shell: true` hands the command line to cmd.exe, and Node joins it with
+      // spaces without quoting anything. An unquoted `C:\Program Files\...`
+      // therefore reaches cmd.exe as the command `C:\Program` plus two stray
+      // arguments — which is how every CLI installed under Program Files (and
+      // `process.execPath` itself) failed with "Der Befehl ... ist entweder
+      // falsch geschrieben". cmd.exe's `/s` strips the outer pair Node adds, so
+      // the inner quotes survive to name the binary.
+      const spawnBinary = useShellForSpawn && /\s/.test(binary) ? `"${binary}"` : binary;
+      const proc = spawn(spawnBinary, args, {
         env,
         cwd: workspaceCwd,
         stdio: ['pipe', 'pipe', 'pipe'],

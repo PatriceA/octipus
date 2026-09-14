@@ -48,7 +48,7 @@
  */
 
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { build as esbuild } from 'esbuild';
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
@@ -334,7 +334,7 @@ export function collectRoutes(): { routes: Route[]; unmounted: string[]; unresol
     // Same reason as the server: a commented-out route is not a route, and a
     // path inside a doc comment is not a registration.
     const src = blankComments(raw);
-    const rel = relative(REPO_ROOT, file);
+    const rel = relative(REPO_ROOT, file).split(sep).join('/');
 
     // Every exported instance in this file, with the offset it starts at, so a
     // route can be attributed to the instance it hangs off. Several files
@@ -396,7 +396,10 @@ export function collectRoutes(): { routes: Route[]; unmounted: string[]; unresol
 
 /** Top-level `src/` module a file belongs to (`src/core/x/y.ts` → `core`). */
 export function moduleOf(file: string): string {
-  const rel = relative(SRC, file);
+  // `relative` hands back platform separators, and the catalog is written with
+  // posix ones — on Windows nothing split and every file landed in one invented
+  // module named after its whole path.
+  const rel = relative(SRC, file).split(sep).join('/');
   const top = rel.split('/')[0];
   return top.endsWith('.ts') || top.endsWith('.tsx') ? '(root)' : top;
 }
@@ -485,7 +488,10 @@ const TYPE_KEY_RE = /(?:^|[\s,{])type:\s*([^\n,]+)/;
 /** A same-file helper the `type:` value delegates to, e.g. `mapXType(event.type)`. */
 const HELPER_CALL_RE = /^(\w+)\(/;
 /** The declared union in `protocol.ts` — the contract both sides are held to. */
-const EVENT_TYPE_UNION_RE = /export type GatewayEventType =([\s\S]*?);\n/;
+// `\r?\n`, not `\n`: a CRLF working copy (git's Windows default before this
+// repo carried a `.gitattributes`) left the union unmatched, and the catalog
+// then claimed every published event was undeclared.
+const EVENT_TYPE_UNION_RE = /export type GatewayEventType =([\s\S]*?);\r?\n/;
 
 /** `eventBus.subscribe('pattern'` — not Redis pub/sub, not a UI store. */
 const SUBSCRIBE_RE = /\beventBus\.subscribe\(\s*(['"`])([^'"`]+)\1/g;
@@ -575,7 +581,7 @@ export function collectEvents(): {
     // comment in `root agent/service.ts` mentions `eventBus.subscribe(...)`
     // and was being counted as an unresolvable subscribe site.
     const src = blankComments(readFileSync(file, 'utf-8'));
-    const rel = relative(REPO_ROOT, file);
+    const rel = relative(REPO_ROOT, file).split(sep).join('/');
 
     PUBLISH_RE.lastIndex = 0;
     for (let m = PUBLISH_RE.exec(src); m; m = PUBLISH_RE.exec(src)) {

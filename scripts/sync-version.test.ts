@@ -1,3 +1,4 @@
+import { join, resolve, sep } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { isValidVersion, normalizeVersion, resolveTargetRoot, setVersion } from './sync-version';
 
@@ -66,7 +67,12 @@ describe('setVersion', () => {
 
 describe('resolveTargetRoot', () => {
   test('defaults to the repository above the helper and accepts a payload override', () => {
-    expect(resolveTargetRoot(undefined, '/tooling/scripts')).toBe('/tooling');
-    expect(resolveTargetRoot('/release/payload', '/tooling/scripts')).toBe('/release/payload');
+    // Built with `join`/`resolve` rather than written as posix literals: the
+    // helper uses `node:path`, so on Windows it answers `\tooling`, and a
+    // hard-coded `/tooling` only ever described one of the two platforms.
+    const scriptDir = join(sep, 'tooling', 'scripts');
+    expect(resolveTargetRoot(undefined, scriptDir)).toBe(join(sep, 'tooling'));
+    const override = join(sep, 'release', 'payload');
+    expect(resolveTargetRoot(override, scriptDir)).toBe(resolve(override));
   });
 });

@@ -1,6 +1,6 @@
 import { existsSync } from 'fs';
 import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'fs/promises';
-import { basename, dirname, extname, join, relative, resolve } from 'path';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'path';
 import { getConfig } from '@/config';
 import type { AgentContext, ToolManifest } from '@/core/types';
 import { WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
@@ -660,7 +660,11 @@ export class FilesystemTool extends BaseTool {
    */
   private sessionResolve(rawPath: string, fs: WorkspaceFS, sessionDir: string, preferExisting: boolean): string {
     const root = fs.root;
-    if (!rawPath.startsWith('/')) {
+    // `isAbsolute`, not `startsWith('/')`: on Windows an absolute path is
+    // `C:\…`, so the old test sent every one of them down the relative branch,
+    // where `resolve(sessionDir, 'C:\\…')` yields the bare path back and the
+    // session redirect never happened at all.
+    if (!isAbsolute(rawPath)) {
       if (this.isFirstSegmentProject(rawPath, root)) return resolve(root, rawPath);
       const inSession = resolve(sessionDir, rawPath);
       if (!preferExisting || existsSync(inSession)) return inSession;
@@ -669,9 +673,13 @@ export class FilesystemTool extends BaseTool {
     }
     const resolved = resolve(rawPath);
     const insideWorkspace = resolved.startsWith(root);
-    const inExcludedSubtree = resolved.includes('/sessions/')
-      || resolved.includes('/extensions/')
-      || resolved.includes('/.octipus/');
+    // Posix-normalised first: these markers are written with `/`, and on
+    // Windows `resolved` carries `\`, so none of them ever matched and an
+    // absolute path into `sessions/` was treated as an ordinary workspace path.
+    const posixResolved = resolved.split(sep).join('/');
+    const inExcludedSubtree = posixResolved.includes('/sessions/')
+      || posixResolved.includes('/extensions/')
+      || posixResolved.includes('/.octipus/');
     const projectRoot = insideWorkspace && !inExcludedSubtree
       ? findProjectRoot(resolved, root)
       : null;

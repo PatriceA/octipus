@@ -15,7 +15,12 @@ vi.mock('child_process', async importOriginal => {
   return { ...actual, spawn: (binary: string, args: string[], opts: object) => {
     if (process.env.OCTIPUS_LIVE_CLI) return actual.spawn(binary, args, opts);
     if (binary !== 'claude') throw new Error(`Unexpected paid CLI invocation: ${binary}`);
-    return actual.spawn(process.execPath, [fixture.script, ...args], opts);
+    // The worker spawns with `shell: true` on Windows, and cmd.exe splits an
+    // unquoted `C:\Program Files\nodejs\node.exe` at the space. Quote what we
+    // substitute, exactly as the worker quotes the real binary.
+    const shell = (opts as { shell?: boolean }).shell === true;
+    const quote = (p: string) => (shell && /\s/.test(p) ? `"${p}"` : p);
+    return actual.spawn(quote(process.execPath), [quote(fixture.script), ...args], opts);
   } };
 });
 vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => ({ getModel: async () => ({ metadata: {} }),

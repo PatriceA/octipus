@@ -126,7 +126,11 @@ export class VaultSync {
     const files = await collectMarkdown(dir);
     const result: VaultImportResult = { imported: 0, updated: 0, unchanged: 0, conflicts: [] };
     for (const abs of files) {
-      const rel = relative(dir, abs).replace(/\.md$/i, '');
+      // Posix separators, because the slug is one: `exportVault` writes
+      // `join(root, `${slug}.md`)`, so a nested note comes back as
+      // `projects\alpha` on Windows and `slugify` — which keeps `/` and drops
+      // everything else — turned that into `projectsalpha`, a different note.
+      const rel = relative(dir, abs).split(sep).join('/').replace(/\.md$/i, '');
       const content = await readFile(abs, 'utf8');
       const parsed = parseNoteFile(content, slugify(rel));
       const existing = await this.notes.getBySlug(userId, null, parsed.slug);

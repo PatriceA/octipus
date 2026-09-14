@@ -4,7 +4,9 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-test('Linux launcher and sized theme icons share the GTK application identity', () => {
+// XDG desktop entries are a Linux shape: there is no `~/.local/share/applications`
+// on Windows or macOS, and the launcher it asserts on is the bash `bin/octi`.
+test.skipIf(process.platform !== 'linux')('Linux launcher and sized theme icons share the GTK application identity', () => {
   const dataHome = mkdtempSync(join(tmpdir(), 'octipus-launcher-'));
   try {
     execFileSync(process.execPath, ['scripts/install-desktop-entry.mjs'], {
