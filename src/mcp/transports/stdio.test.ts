@@ -1,3 +1,6 @@
+import { mkdtempSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
 import { StdioTransport } from './stdio';
 
@@ -150,13 +153,18 @@ describe('StdioTransport', () => {
   });
 
   test('cwd option pins the MCP child to its configured project', async () => {
-    const t = makeTransport('pwd');
-    (t as any).options.cwd = '/tmp';
+    // Asked of the runtime rather than of `pwd`: there is no `pwd` on Windows,
+    // and Git Bash's answers in its own `/c/tmp` idiom — neither of which says
+    // anything about whether the transport honoured `cwd`. A real directory,
+    // realpath'd, because macOS resolves `/tmp` to `/private/tmp`.
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'stdio-cwd-')));
+    const t = makeTransport(process.execPath, ['-e', 'process.stdout.write(process.cwd() + String.fromCharCode(10))']);
+    (t as any).options.cwd = dir;
     const messages: string[] = [];
     t.onMessage((m) => messages.push(m));
     await t.connect();
     await waitFor(() => messages[0]);
-    expect(messages[0]).toBe('/tmp');
+    expect(messages[0]).toBe(dir);
   });
 
   test('sensitive parent secrets are not inherited by MCP children', async () => {

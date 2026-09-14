@@ -1,3 +1,4 @@
+import { join, sep } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
 import { type EmbeddingPurpose, sha256Hex } from '@/core/rag/embeddings';
 import { type IndexProductDocsDeps, indexProductDocs } from './seed-docs';
@@ -51,6 +52,9 @@ function makeFakeService(opts: { alreadyIndexed?: Set<string> } = {}) {
 }
 
 const DOCS_DIR = '/fake/docs';
+// The indexer's sourceId is `join(docsDir, rel)`, so it carries the platform's
+// separators — built the same way here rather than written as a posix literal.
+const docPath = (rel: string) => join(DOCS_DIR, rel);
 
 /** Files the fake glob/readFile will surface, keyed by path relative to docs dir. */
 const FILES: Record<string, string> = {
@@ -70,7 +74,9 @@ function makeDeps(over: Partial<IndexProductDocsDeps> = {}): IndexProductDocsDep
     isReady: () => true,
     listFiles: vi.fn(async () => Object.keys(FILES)),
     readFile: vi.fn(async (abs: string) => {
-      const rel = abs.slice(DOCS_DIR.length + 1);
+      // `join` used the platform separator to build this; the fixture is keyed
+      // by the posix-relative id the indexer works in, so map back.
+      const rel = abs.slice(DOCS_DIR.length + 1).split(sep).join('/');
       const content = FILES[rel];
       if (content == null) throw new Error(`unexpected read: ${abs}`);
       return content;
@@ -91,10 +97,10 @@ describe('indexProductDocs', () => {
 
     const sourceIds = indexCalls.map((c) => c.sourceId).sort();
     expect(sourceIds).toEqual([
-      `${DOCS_DIR}/CHANNELS.md`,
-      `${DOCS_DIR}/CONFIGURATION.md`,
-      `${DOCS_DIR}/architecture/gateway.md`,
-      `${DOCS_DIR}/guides/tui.md`,
+      docPath('CHANNELS.md'),
+      docPath('CONFIGURATION.md'),
+      docPath('architecture/gateway.md'),
+      docPath('guides/tui.md'),
     ]);
 
     for (const call of indexCalls) {
@@ -146,7 +152,9 @@ describe('indexProductDocs', () => {
     const deps = makeDeps({
       service,
       readFile: async (abs: string) => {
-        const rel = abs.slice(DOCS_DIR.length + 1);
+        // `join` used the platform separator to build this; the fixture is keyed
+      // by the posix-relative id the indexer works in, so map back.
+      const rel = abs.slice(DOCS_DIR.length + 1).split(sep).join('/');
         return changed[rel] ?? FILES[rel];
       },
     });
@@ -155,9 +163,9 @@ describe('indexProductDocs', () => {
     expect(res.filesIndexed).toBe(1);
     expect(res.filesSkipped).toBe(3);
     // Only the changed file is purged + re-indexed; the other three are skipped.
-    expect(deleteCalls).toEqual([`${DOCS_DIR}/CHANNELS.md`]);
+    expect(deleteCalls).toEqual([docPath('CHANNELS.md')]);
     expect(indexCalls.length).toBe(5); // 4 + 1 re-index
-    expect(indexCalls[4].sourceId).toBe(`${DOCS_DIR}/CHANNELS.md`);
+    expect(indexCalls[4].sourceId).toBe(docPath('CHANNELS.md'));
   });
 
   test('skips when the KB is not ready (no embedding model) and does not index', async () => {
@@ -189,7 +197,7 @@ describe('indexProductDocs', () => {
 
     expect(res.filesIndexed).toBe(1);
     expect(res.filesSkipped).toBe(1);
-    expect(indexCalls.map((c) => c.sourceId)).toEqual([`${DOCS_DIR}/CHANNELS.md`]);
+    expect(indexCalls.map((c) => c.sourceId)).toEqual([docPath('CHANNELS.md')]);
   });
 
   test('never throws — a failing dependency yields a non-fatal error result', async () => {

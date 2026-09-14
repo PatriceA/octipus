@@ -8,7 +8,7 @@
  */
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { glob, mkdir, open, readFile, unlink, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join, sep } from 'node:path';
 import { Readable } from 'node:stream';
 
 export interface FileHandle {
@@ -97,7 +97,14 @@ export async function* globFiles(
 ): AsyncGenerator<string> {
   for await (const entry of glob(pattern, { cwd: options.cwd })) {
     const rel = typeof entry === 'string' ? entry : String(entry);
-    if (options.absolute === false) yield rel;
+    // A RELATIVE result is an identifier as much as a path — it becomes the
+    // docs indexer's `sourceId` and is prefix-matched against `plans/` and
+    // friends — so it is normalised to posix here rather than at each caller.
+    // `glob` yields platform separators, and on Windows that both stored a
+    // different id for the same file and slipped every `startsWith('…/')`
+    // exclusion. Absolute results keep the platform's own separators, which is
+    // what `readFile` and friends want.
+    if (options.absolute === false) yield rel.split(sep).join('/');
     else yield isAbsolute(rel) ? rel : join(options.cwd, rel);
   }
 }

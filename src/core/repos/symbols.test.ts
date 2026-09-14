@@ -1,3 +1,4 @@
+import { pathToFileURL } from 'node:url';
 /**
  * Symbol extraction over real grammars (the WASM files in node_modules), one
  * small fixture per language, plus the index walk and the two readers.
@@ -285,7 +286,9 @@ test('production-style ESM bundle loads all shipped WASM grammars without a sour
   const { build } = await import('esbuild');
   const root = mkdtempSync(join(tmpdir(), 'octi-symbol-bundle-'));
   // Mirror the installed artifact's adjacent node_modules without copying it.
-  symlinkSync(resolve('node_modules'), join(root, 'node_modules'), 'dir');
+  // 'junction' on Windows: a directory symlink needs elevation there, a
+  // junction does not.
+  symlinkSync(resolve('node_modules'), join(root, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
   const output = join(root, 'symbols.mjs');
   await build({ entryPoints: [resolve('src/core/repos/symbols.ts')], outfile: output, bundle: true,
     platform: 'node', target: 'node24', format: 'esm', packages: 'external',
@@ -293,7 +296,9 @@ test('production-style ESM bundle loads all shipped WASM grammars without a sour
   const fixtures = { typescript: 'export function Typed() {}', tsx: 'export function TypedJsx() { return <div/> }',
     javascript: 'function Plain() {}', jsx: 'function PlainJsx() { return <div/> }', python: 'def Python(): pass',
     go: 'package main\nfunc Go() {}', rust: 'pub fn Rust() {}', java: 'class Java {}' };
-  const program = `const {extractSymbols} = await import(${JSON.stringify(output)}); const results = {}; for(const [lang, source] of Object.entries(${JSON.stringify(fixtures)})) results[lang] = (await extractSymbols(source,lang))?.map(s=>s.name); process.stdout.write(JSON.stringify(results));`;
+  // `import()` of a bare absolute path is a URL to the ESM loader, and on
+  // Windows `C:\…` parses as the scheme `c:` — ERR_UNSUPPORTED_ESM_URL_SCHEME.
+  const program = `const {extractSymbols} = await import(${JSON.stringify(pathToFileURL(output).href)}); const results = {}; for(const [lang, source] of Object.entries(${JSON.stringify(fixtures)})) results[lang] = (await extractSymbols(source,lang))?.map(s=>s.name); process.stdout.write(JSON.stringify(results));`;
   const result = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', program], { encoding: 'utf8', timeout: 10000 }));
   expect(result).toEqual({ typescript: ['Typed'], tsx: ['TypedJsx'], javascript: ['Plain'], jsx: ['PlainJsx'], python: ['Python'], go: ['Go'], rust: ['Rust'], java: ['Java'] });
 });

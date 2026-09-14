@@ -118,9 +118,17 @@ describe('CLIArgumentBuilder Mistral Vibe args', () => {
     withoutVibeHome();
     const out = builder.build('Mistral Vibe', 'do the thing', {}, []);
     expect(out.binary).toBe('vibe');
-    // Non-Windows: prompt is positional right after -p.
     expect(out.args[0]).toBe('-p');
-    expect(out.args[1]).toBe('do the thing');
+    // Where the prompt goes is the documented platform difference: Windows
+    // spawns with `shell: true`, which re-tokenizes argv and mangles a long or
+    // special-character prompt, so `-p` is left bare and the prompt is piped
+    // in. Everywhere else it is positional right after `-p`.
+    if (process.platform === 'win32') {
+      expect(out.args).not.toContain('do the thing');
+      expect(out.stdinPrompt).toBe('do the thing');
+    } else {
+      expect(out.args[1]).toBe('do the thing');
+    }
     expect(out.args).toContain('--output');
     expect(out.args).toContain('json');
     expect(out.args).toContain('--trust');

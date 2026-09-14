@@ -118,7 +118,9 @@ describe('parseSessionArg', () => {
     const { parseSessionArg } = await import('./index');
     expect(parseSessionArg(['--session', id])).toBe(id);
     expect(parseProjectArg(['--session', id])).toBeUndefined();
-    expect(parseProjectArg(['--session', id, '/tmp'])).toBe('/tmp');
+    // `parseProjectArg` resolves what it is given, and `resolve('/tmp')` is
+    // `C:\tmp` on Windows — compare against the same call, not a posix literal.
+    expect(parseProjectArg(['--session', id, '/tmp'])).toBe(resolve('/tmp'));
   });
   test('rejects a malformed id rather than resuming garbage', async () => {
     const { parseSessionArg } = await import('./index');

@@ -1,3 +1,4 @@
+import { isAbsolute, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   CLIOutputParser,
@@ -79,15 +80,19 @@ describe('CLIOutputParser — codex JSONL fixture', () => {
   it('emits file_change from structured file_change items + shell redirect, resolved absolute', () => {
     const changes = run().actions('file_change');
     const paths = changes.map((c) => c.path);
-    // structured apply_patch (2) + the `cat > notes.md` shell redirect (1)
-    expect(paths).toContain('/work/src/app.ts');
-    expect(paths).toContain('/work/src/new.ts');
-    expect(paths).toContain('/work/notes.md');
+    // structured apply_patch (2) + the `cat > notes.md` shell redirect (1).
+    // Compared through `resolve`, because the parser resolves against the run
+    // cwd and `resolve('/work', 'src/app.ts')` is `C:\work\src\app.ts` on
+    // Windows — a posix literal would only ever describe one platform.
+    const abs = (p: string) => resolve('/work', p);
+    expect(paths).toContain(abs('src/app.ts'));
+    expect(paths).toContain(abs('src/new.ts'));
+    expect(paths).toContain(abs('notes.md'));
     // every path is absolute
-    expect(changes.every((c) => c.path.startsWith('/'))).toBe(true);
-    const appChange = changes.find((c) => c.path === '/work/src/app.ts');
+    expect(changes.every((c) => isAbsolute(c.path))).toBe(true);
+    const appChange = changes.find((c) => c.path === abs('src/app.ts'));
     expect(appChange.action).toBe('edit');
-    const newChange = changes.find((c) => c.path === '/work/src/new.ts');
+    const newChange = changes.find((c) => c.path === abs('src/new.ts'));
     expect(newChange.action).toBe('write');
   });
 

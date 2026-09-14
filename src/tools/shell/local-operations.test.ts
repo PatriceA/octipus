@@ -153,7 +153,10 @@ describe('LocalShellOperations.exec — the deadline actually ends the call', ()
 
 
 describe('shell deadline after the direct child has exited', () => {
-  it('reaps descendants holding the pipes without reporting a finished command as killed', async () => {
+  // POSIX only, like the grandchild case above: `sh -c 'a & exit 0'` is shell
+  // job control, and the `unsafe` path spawns `sh`, which a plain Windows host
+  // does not have.
+  it.skipIf(process.platform === 'win32')('reaps descendants holding the pipes without reporting a finished command as killed', async () => {
     const result = await new LocalShellOperations().exec('sleep 2 & exit 0', process.cwd(), {
       unsafe: true, timeout: 100,
     });

@@ -33,8 +33,23 @@ const PATH_EXTENSIONS =
 /**
  * A path-ish token: an optional directory prefix plus a name with one of the
  * known extensions. Backticks/quotes around it are stripped by the capture.
+ *
+ * The separator set is the platform's. On Windows a path is `C:\src\app.ts`,
+ * and a pattern built from `/` alone matched no part of one — not even the
+ * tail, because the `\` before the filename is not an allowed leading
+ * character — so the whole premise check was inert there: a brief could name a
+ * file that does not exist and nothing said so. The drive prefix is admitted
+ * for the same reason. Both are Windows-only additions; the POSIX pattern is
+ * unchanged, so prose that happens to contain a backslash still reads the same
+ * way it did.
  */
-const PATH_TOKEN = new RegExp(String.raw`(?:^|[\s"'\`(\[<])([\w./-]*[\w-]+\.(?:${PATH_EXTENSIONS}))\b`, 'gi');
+const IS_WIN = process.platform === 'win32';
+const PATH_INNER = IS_WIN ? String.raw`[\w./\\-]` : String.raw`[\w./-]`;
+const DRIVE_PREFIX = IS_WIN ? String.raw`(?:[A-Za-z]:[\\/])?` : '';
+const PATH_TOKEN = new RegExp(
+  String.raw`(?:^|[\s"'\`(\[<])(${DRIVE_PREFIX}${PATH_INNER}*[\w-]+\.(?:${PATH_EXTENSIONS}))\b`,
+  'gi',
+);
 
 /**
  * Verbs that make a missing path expected rather than wrong.

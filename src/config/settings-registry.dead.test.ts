@@ -1,4 +1,5 @@
-import { execFileSync } from 'node:child_process';
+import { globSync, readFileSync } from 'node:fs';
+import { sep } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { SETTINGS_REGISTRY, settingKeyToConfigPath } from './settings-registry';
 
@@ -27,24 +28,38 @@ const DECLARATION_ONLY =
 
 const SEARCH_ROOTS = ['src', 'scripts', 'web/app', 'web/components', 'web/lib'];
 
+/**
+ * The corpus, read once.
+ *
+ * This used to shell out to `grep` up to three times per setting — a few
+ * hundred process spawns, which Unix absorbs and Windows does not: the suite
+ * took 48 seconds there and tripped its 30s timeout. It also made the check
+ * depend on a `grep` binary a Windows host need not have at all. Reading the
+ * files once and matching in-process is portable and faster on both.
+ *
+ * Paths are posix-normalised, because `DECLARATION_ONLY` and the section match
+ * below are written with `/`.
+ */
+const CORPUS: Array<{ file: string; lines: string[] }> = SEARCH_ROOTS.flatMap((root) =>
+  globSync(`${root}/**/*.{ts,tsx}`)
+    .map((file) => file.split(sep).join('/'))
+    .filter((file) => !file.includes('/node_modules/'))
+    .map((file) => ({ file, lines: readFileSync(file, 'utf8').split('\n') })),
+);
+
 /** Lines outside the config layer matching `pattern` (an extended regex). */
 function grepLines(pattern: string): string[] {
-  let out = '';
-  try {
-    out = execFileSync(
-      'grep',
-      ['-rnE', '--include=*.ts', '--include=*.tsx', pattern, ...SEARCH_ROOTS],
-      { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
-    );
-  } catch {
-    // grep exits 1 when nothing matches
-    return [];
+  const re = new RegExp(pattern);
+  const hits: string[] = [];
+  for (const { file, lines } of CORPUS) {
+    for (let i = 0; i < lines.length; i++) {
+      if (!re.test(lines[i])) continue;
+      const rendered = `${file}:${i + 1}:${lines[i]}`;
+      if (DECLARATION_ONLY.test(rendered)) continue;
+      hits.push(rendered);
+    }
   }
-  return out
-    .split('\n')
-    .filter(Boolean)
-    .filter((line) => !DECLARATION_ONLY.test(line))
-    .filter((line) => !line.includes('/node_modules/'));
+  return hits;
 }
 
 const esc = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
