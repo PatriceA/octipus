@@ -110,6 +110,61 @@ test('a shell timeout after a side effect remains uncertain and cannot silently 
   expect(readFileSync(file, 'utf8')).toBe('sent\n');
 });
 
+test('shell parser refusals and ordinary failed exits do not gate the next legitimate command', async () => {
+  const { LocalShellOperations } = await import('@/tools/shell/local-operations');
+  const ctx = context(); const repo = new ToolActionRepository(); const recovery = new ActionRecovery(repo);
+  const ops = new LocalShellOperations();
+  const manager = getPermissionManager();
+  const requests: string[] = [];
+  const unsubscribe = manager.onRequest(request => { requests.push(request.requestId); void manager.deny(request.requestId, userId); });
+  const execute = (command: string, unsafe = false) => recovery.run(ctx, 'shell', 'shell__run', { command },
+    () => ops.exec(command, directory, { unsafe, timeout: 1000 }));
+  try {
+    for (const command of ['echo one && echo two', 'echo one | cat']) {
+      await expect(execute(command)).rejects.toThrow('metacharacters');
+      expect(await repo.pending(userId, ctx.sessionId)).toEqual([]);
+      expect((await execute('echo legitimate')).stdout.trim()).toBe('legitimate');
+    }
+    expect((await execute('exit 1', true)).exitCode).toBe(1);
+    expect((await execute('exit 2', true)).exitCode).toBe(2);
+    expect((await execute('cd definitely-missing-recovery-directory', true)).exitCode).not.toBe(0);
+    expect((await execute('echo legitimate')).stdout.trim()).toBe('legitimate');
+    await expect(execute('definitely-not-an-installed-recovery-command')).rejects.toThrow();
+    await expect(execute('echo \u0000')).rejects.toThrow();
+    const controller = new AbortController(); controller.abort();
+    const cancelled = await recovery.run(ctx, 'shell', 'shell__run', {},
+      () => ops.exec('echo never-started', directory, { signal: controller.signal }));
+    expect(cancelled.aborted).toBe(true);
+    expect((await execute('echo after-preflight')).stdout.trim()).toBe('after-preflight');
+    expect(await repo.pending(userId, ctx.sessionId)).toEqual([]);
+    expect(requests).toEqual([]);
+  } finally { unsubscribe(); }
+});
+
+test('real ShellTool middleware preserves preflight and exit evidence through executor dispatch', async () => {
+  const { ShellTool } = await import('@/tools/shell');
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const tool = new ShellTool(); await getToolRegistry().register(tool);
+  const ctx = context(); const manager = getPermissionManager();
+  await sessionRepository.create({ id: ctx.sessionId, userId, channelType: 'webchat', channelId: 'shell-recovery' });
+  await manager.setPermission(userId, 'shell', 'execute', 'ALLOW');
+  const executor = new ToolExecutor(ctx, () => {}); executor.registerTools(tool.getToolHandlers());
+  const requests: string[] = [];
+  const unsubscribe = manager.onRequest(request => { requests.push(request.requestId); void manager.deny(request.requestId, userId); });
+  const dispatch = (command: string, useShell = false) => executor.handleToolCalls([{ id: randomUUID(), name: 'shell__run', arguments: { command, cwd: directory, useShell } }]);
+  try {
+    expect((await dispatch('echo invalid && echo syntax'))[0].content).toContain('metacharacters');
+    expect(await toolActionRepository.pending(userId, ctx.sessionId)).toEqual([]);
+    expect((await dispatch('echo allowed'))[0].content).toContain('allowed');
+    expect((await dispatch('exit 1', true))[0].content).toContain('"exitCode":1');
+    expect(await toolActionRepository.pending(userId, ctx.sessionId)).toEqual([]);
+    expect((await dispatch('echo \u0000'))[0].content).toContain('null bytes');
+    expect(await toolActionRepository.pending(userId, ctx.sessionId)).toEqual([]);
+    expect((await dispatch('echo still-allowed'))[0].content).toContain('still-allowed');
+    expect(requests).toEqual([]);
+  } finally { unsubscribe(); }
+});
+
 test('revoking normal tool permission during recovery consent still prevents the action', async () => {
   const tool = new FixtureTool(); await getToolRegistry().register(tool);
   const ctx = context(); const manager = getPermissionManager();

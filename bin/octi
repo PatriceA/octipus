@@ -929,6 +929,10 @@ cmd_desktop() {
     exec npm run tauri:build
   fi
 
+  if [[ "$OSTYPE" == linux* ]]; then
+    node "$PROJECT_DIR/scripts/install-desktop-entry.mjs" || { log_error "Could not register the Octipus desktop launcher"; return 1; }
+  fi
+
   log_step "Launching the Octipus desktop app…"
   log_hint "It connects to a backend (default http://localhost:$API_PORT) — change it in-app."
 

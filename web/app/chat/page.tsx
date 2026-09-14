@@ -19,10 +19,12 @@ import WorkPlanPanel from '@/components/chat/work-plan-panel';
 import { GlobalPermissionBanner } from '@/components/global-permission-banner';
 import type { SwarmTreeEvent } from '@/components/swarm-tree';
 import { useVoiceRealtime } from '@/hooks/useVoiceRealtime';
+import { fetchPersistedAgentEvents } from '@/hooks/useAgentEvents';
 import { api, createAuthenticatedWebSocket, getApiUrl } from '@/lib/api';
 import { usePermissions } from '@/lib/permission-context';
 import { useWorkspace } from '@/lib/workspace-context';
 import type { ToolInputPreview, ToolResultPreview } from '../../../src/shared/work-stream';
+import type { AgentCompletionReason } from '../../../src/shared/agent-completion';
 
 interface ToolCallInfo {
   id: string;
@@ -36,6 +38,12 @@ interface ToolCallInfo {
   title?: string;
   input?: ToolInputPreview;
   result?: ToolResultPreview;
+}
+
+interface AgentHistoryCache {
+  cursor: number;
+  toolCalls: ToolCallInfo[];
+  fileChanges: FileChange[];
 }
 
 export interface FileChange {
@@ -70,6 +78,30 @@ let wsInstance: WebSocket | null = null;
 function finalizePendingToolCalls(toolCalls: ToolCallInfo[]): ToolCallInfo[] {
   if (!toolCalls.some((tc) => !tc.status)) return toolCalls;
   return toolCalls.map((tc) => (tc.status ? tc : { ...tc, status: 'completed' }));
+}
+
+/** Merge an update without letting absent fields erase a richer prior record. */
+function mergeToolCallRecord(base: ToolCallInfo, update: ToolCallInfo): ToolCallInfo {
+  const definedUpdate = Object.fromEntries(
+    Object.entries(update).filter(([, value]) => value !== undefined),
+  ) as Partial<ToolCallInfo>;
+  return { ...base, ...definedUpdate, id: update.id || base.id };
+}
+
+function upsertToolCall(toolCalls: ToolCallInfo[], incoming: ToolCallInfo): void {
+  const index = toolCalls.findIndex((toolCall) => toolCall.id === incoming.id);
+  if (index < 0) toolCalls.push(incoming);
+  else toolCalls[index] = mergeToolCallRecord(toolCalls[index], incoming);
+}
+
+/** Durable history supplies coverage; live records supply the newest status. */
+function mergeHistoricalAndLiveToolCalls(
+  historical: ToolCallInfo[],
+  live: ToolCallInfo[],
+): ToolCallInfo[] {
+  const merged = historical.map((toolCall) => ({ ...toolCall }));
+  for (const toolCall of live) upsertToolCall(merged, toolCall);
+  return merged;
 }
 
 const STORAGE_KEY_ACTIVE = 'chat_active_session';
@@ -136,6 +168,9 @@ export default function ChatPage() {
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [showSidePanel, setShowSidePanel] = useState(true);
+  const [showCompactSessions, setShowCompactSessions] = useState(false);
+  const compactSessionButtonRef = useRef<HTMLButtonElement>(null);
+  const compactSessionDrawerRef = useRef<HTMLDivElement>(null);
   // In-chat file view (Thread 2): the path currently open in the FileViewer.
   const [openFilePath, setOpenFilePath] = useState<string | null>(null);
   // Edit-and-continue: files attached to the NEXT chat turn. The agent re-reads
@@ -175,6 +210,9 @@ export default function ChatPage() {
   // queue never loses events even under batching.
   const [swarmEvents, setSwarmEvents] = useState<SwarmTreeEvent[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
+  // Durable cursors avoid reloading every event for every agent on the 10s
+  // session poll. Parsed history stays here so each new DB page is applied once.
+  const agentHistoryCacheRef = useRef<Map<string, AgentHistoryCache>>(new Map());
 
   // Active session state
   const activeState = activeSessionId ? sessionStates.get(activeSessionId) : null;
@@ -278,25 +316,30 @@ export default function ChatPage() {
       const restoredAgents = new Map<string, TrackedAgent>();
       const restoredFileChanges: FileChange[] = [];
       try {
-        const agentData = await api.get<{ agents: Array<{ id: string; sessionId: string; role: string; root?: boolean; model: string; status: string; createdAt: string; completedAt?: string; durationMs?: number; iteration: number }> }>(`/agents?sessionId=${encodeURIComponent(sessionId)}`);
+        const agentData = await api.get<{ agents: Array<{ id: string; sessionId: string; role: string; root?: boolean; model: string; status: string; completionReason?: AgentCompletionReason; createdAt: string; completedAt?: string; durationMs?: number; iteration: number }> }>(`/agents?sessionId=${encodeURIComponent(sessionId)}`);
         const sessionAgents = agentData?.agents || [];
         for (const a of sessionAgents) {
-          const toolCalls: ToolCallInfo[] = [];
+          const cachedHistory = agentHistoryCacheRef.current.get(a.id);
+          const toolCalls: ToolCallInfo[] = cachedHistory?.toolCalls.map((toolCall) => ({ ...toolCall })) ?? [];
+          const agentFileChanges: FileChange[] = cachedHistory?.fileChanges.map((change) => ({ ...change })) ?? [];
           try {
-            const evData = await api.get<{ events: Array<{ type: string; data: any }> }>(`/agents/${a.id}/events`);
-            for (const ev of evData?.events || []) {
+            const evData = await fetchPersistedAgentEvents(a.id, cachedHistory?.cursor ?? 0);
+            for (const rawEvent of evData.events) {
+              const ev = { ...rawEvent, data: rawEvent.data as any };
               if (ev.type === 'action') {
                 // Standard agent tool calls (array format). Carries the rich
                 // work-stream fields (title/input) so a cold reload shows the
                 // same "Read poem.md" rows the live stream did (Thread 1).
                 if (ev.data?.toolCalls) {
-                  toolCalls.push(...ev.data.toolCalls.map((tc: any) => ({
-                    id: tc.id || Date.now().toString(),
-                    name: tc.name,
-                    argsSummary: tc.argsSummary,
-                    title: tc.title,
-                    input: tc.input,
-                  })));
+                  ev.data.toolCalls.forEach((tc: any, index: number) => {
+                    upsertToolCall(toolCalls, {
+                      id: String(tc.id || `event-${ev.seq}-tool-${index}`),
+                      name: String(tc.name || ''),
+                      argsSummary: tc.argsSummary,
+                      title: tc.title,
+                      input: tc.input,
+                    });
+                  });
                   // File changes come from explicit `file_change` events
                   // emitted by tool-executor.ts after a successful write — see
                   // the branch below. Don't try to parse paths out of
@@ -311,6 +354,7 @@ export default function ChatPage() {
                 // rich preview survives a page reload, not just the live stream.
                 else if (ev.data?.type === 'tool_call_complete' && ev.data?.toolCallId) {
                   const d = ev.data;
+                  const toolCallId = String(d.toolCallId);
                   const patch = {
                     status: typeof d.status === 'string' ? d.status : undefined,
                     durationMs: typeof d.durationMs === 'number' ? d.durationMs : undefined,
@@ -320,14 +364,14 @@ export default function ChatPage() {
                     input: d.input as ToolInputPreview | undefined,
                     result: d.result as ToolResultPreview | undefined,
                   };
-                  const idx = toolCalls.findIndex((tc) => tc.id === d.toolCallId);
-                  if (idx >= 0) toolCalls[idx] = { ...toolCalls[idx], ...patch };
-                  else toolCalls.push({ id: String(d.toolCallId), name: typeof d.name === 'string' ? d.name : '', ...patch });
+                  const idx = toolCalls.findIndex((tc) => tc.id === toolCallId);
+                  if (idx >= 0) toolCalls[idx] = mergeToolCallRecord(toolCalls[idx], { ...toolCalls[idx], ...patch });
+                  else upsertToolCall(toolCalls, { id: toolCallId, name: typeof d.name === 'string' ? d.name : '', ...patch });
                 }
                 // CLI agent tool use — restore with the adapter's real event id
                 // so the paired cli_tool_result below flips the same row.
                 else if (ev.data?.type === 'cli_tool_use' && ev.data?.toolName) {
-                  toolCalls.push({
+                  upsertToolCall(toolCalls, {
                     id: ev.data.id ? String(ev.data.id) : `cli-restore-${a.id}-${toolCalls.length}`,
                     name: String(ev.data.toolName),
                     title: typeof ev.data.title === 'string' ? ev.data.title : undefined,
@@ -349,7 +393,7 @@ export default function ChatPage() {
                 }
                 // File change events — restore for persistence across page loads
                 else if (ev.data?.type === 'file_change' && ev.data?.path) {
-                  restoredFileChanges.push({
+                  agentFileChanges.push({
                     path: String(ev.data.path),
                     action: String(ev.data.action || 'write'),
                     agentId: a.id,
@@ -361,7 +405,13 @@ export default function ChatPage() {
                 }
               }
             }
+            agentHistoryCacheRef.current.set(a.id, {
+              cursor: evData.nextCursor,
+              toolCalls,
+              fileChanges: agentFileChanges,
+            });
           } catch {}
+          restoredFileChanges.push(...agentFileChanges);
           const startTime = new Date(a.createdAt).getTime();
           const isFinished = a.status !== 'running' && a.status !== 'idle';
           const endTime = isFinished
@@ -375,6 +425,7 @@ export default function ChatPage() {
             root: a.root === true,
             model: a.model,
             status: (isFinished ? (a.status === 'failed' ? 'failed' : a.status === 'stopped' || a.status === 'paused' ? 'stopped' : 'completed') : 'running') as TrackedAgent['status'],
+            completionReason: a.completionReason,
             // A finished agent won't emit more results — clear any tool row that
             // was persisted without a result so it doesn't restore as a spinner.
             toolCalls: isFinished ? finalizePendingToolCalls(toolCalls) : toolCalls,
@@ -397,17 +448,9 @@ export default function ChatPage() {
         const restoredIds = new Set(msgs.map((m) => m.id));
         const mergedMessages = [...msgs, ...liveNarrations.filter((m) => !restoredIds.has(m.id))]
           .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-        // Merge restored agents with live-tracked agents, preserving live
-        // data. WebSocket events carry status streaming (Phase 5
-        // tool_call_complete: status, durationMs, resultPreview, error)
-        // that the REST `/agents/:id/events` endpoint does NOT replay, so
-        // blindly overwriting toolCalls on every 10s poll caused live
-        // entries to flicker — pop in from WS, get wiped by the next
-        // restore, come back on the next tool, vanish again.
-        //
-        // Rule: live toolCalls win whenever the live list is non-empty
-        // OR carries any streamed status field. REST is the cold-load
-        // fallback for sessions we don't have live data for yet.
+        // Merge by tool-call id. Durable history supplies the complete list;
+        // live records overwrite matching fields with the newest status while
+        // calls older than AgentManager's 200-event ring remain present.
         let mergedAgents = prev.trackedAgents;
         if (restoredAgents.size > 0) {
           mergedAgents = new Map(restoredAgents);
@@ -417,15 +460,9 @@ export default function ChatPage() {
               mergedAgents.set(id, liveAgent);
               return;
             }
-            const liveHasToolData =
-              liveAgent.toolCalls.length > 0 &&
-              (liveAgent.toolCalls.length >= restored.toolCalls.length ||
-                liveAgent.toolCalls.some(tc => tc.status || tc.durationMs != null || tc.resultPreview || tc.error));
             mergedAgents.set(id, {
               ...restored,
-              // Phase 5: keep live tool-call entries so the streamed
-              // status/duration/preview don't get wiped by the poll.
-              toolCalls: liveHasToolData ? liveAgent.toolCalls : restored.toolCalls,
+              toolCalls: mergeHistoricalAndLiveToolCalls(restored.toolCalls, liveAgent.toolCalls),
               // Anchor to the startTime the user already saw. The live value is
               // client-receipt time; `restored.startTime` is the DB createdAt
               // (different clock). Without this the card jumps position on the
@@ -1011,6 +1048,7 @@ export default function ChatPage() {
               durationMs: serverDuration ?? (Date.now() - existing.startTime),
               totalTokens: d.totalTokens,
               iterations: d.iterations,
+              completionReason: d.completionReason,
               error: d.error,
               toolCalls: finalizePendingToolCalls(existing.toolCalls),
             });
@@ -1034,6 +1072,7 @@ export default function ChatPage() {
               durationMs: d.durationMs ?? 0,
               totalTokens: d.totalTokens,
               iterations: d.iterations,
+              completionReason: d.completionReason,
               error: d.error,
             });
           }
@@ -1090,9 +1129,16 @@ export default function ChatPage() {
       if (data.event === 'complete' || status === 'completed' || status === 'failed' || status === 'stopped') {
         updateSessionState(sessionId, (prev) => {
           const existing = prev.trackedAgents.get(data.agentId);
-          if (!existing || !existing.toolCalls.some((tc) => !tc.status)) return prev;
+          if (!existing) return prev;
+          const completionReason = (data.data as { completionReason?: AgentCompletionReason } | undefined)?.completionReason;
+          const hasPendingTools = existing.toolCalls.some((tc) => !tc.status);
+          if (!hasPendingTools && !completionReason) return prev;
           const next = new Map(prev.trackedAgents);
-          next.set(data.agentId, { ...existing, toolCalls: finalizePendingToolCalls(existing.toolCalls) });
+          next.set(data.agentId, {
+            ...existing,
+            completionReason: completionReason ?? existing.completionReason,
+            toolCalls: hasPendingTools ? finalizePendingToolCalls(existing.toolCalls) : existing.toolCalls,
+          });
           return { ...prev, trackedAgents: next };
         });
       }
@@ -1635,12 +1681,57 @@ export default function ChatPage() {
     prevVoiceSessionRef.current = on ? activeSessionId : null;
   }, [realtimeMode, activeSessionId]);
 
+  const closeCompactSessions = useCallback(() => {
+    setShowCompactSessions(false);
+    requestAnimationFrame(() => compactSessionButtonRef.current?.focus());
+  }, []);
+
+  useEffect(() => {
+    if (!showCompactSessions) return;
+    const drawer = compactSessionDrawerRef.current;
+    if (!drawer) return;
+
+    const active = activeSessionId
+      ? drawer.querySelector<HTMLElement>(`[data-session-id="${CSS.escape(activeSessionId)}"]`)
+      : null;
+    const first = drawer.querySelector<HTMLElement>('button:not([disabled]), input:not([disabled])');
+    requestAnimationFrame(() => (active ?? first)?.focus());
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeCompactSessions();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = Array.from(drawer.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )).filter((element) => element.offsetParent !== null);
+      if (focusable.length === 0) return;
+      const firstFocusable = focusable[0];
+      const lastFocusable = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === firstFocusable) {
+        event.preventDefault();
+        lastFocusable.focus();
+      } else if (!event.shiftKey && document.activeElement === lastFocusable) {
+        event.preventDefault();
+        firstFocusable.focus();
+      }
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [activeSessionId, closeCompactSessions, showCompactSessions]);
+
+  const activeSessionTitle = activeSessionId
+    ? sessions.find((session) => session.id === activeSessionId)?.title || 'Untitled work'
+    : 'Choose a conversation';
+
   return (
     <div className="workspace-chat h-full flex relative">
       {sessionListError && <div role="status" className="absolute z-20 bottom-2 left-2 rounded border border-warning bg-surface p-3 text-sm">
         Sessions unavailable. {sessionListError} <button className="underline" onClick={() => void loadSessions()}>Retry sessions</button>
       </div>}
-      {activeSessionId && <SessionCost sessionId={activeSessionId} />}
       {activeSessionId && historyErrors[activeSessionId] && (
         <div role="status" className="absolute z-20 top-2 left-1/4 right-4 rounded border border-warning bg-surface p-3 text-sm">
           History unavailable. Previously loaded messages may be stale. {historyErrors[activeSessionId]}
@@ -1666,15 +1757,66 @@ export default function ChatPage() {
         />
       </div>
 
+      {showCompactSessions && (
+        <div className="compact-session-drawer fixed inset-0 z-50">
+          <button
+            type="button"
+            aria-label="Close conversations"
+            tabIndex={-1}
+            className="absolute inset-0 bg-black/60"
+            onClick={closeCompactSessions}
+          />
+          <div
+            ref={compactSessionDrawerRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Conversations"
+            className="relative h-full w-[min(20rem,85vw)] border-r border-outline-variant bg-surface-container-low shadow-2xl"
+          >
+            <SessionList
+              sessions={sessions}
+              activeSessionId={activeSessionId}
+              onSelect={(id) => {
+                selectSession(id);
+                closeCompactSessions();
+              }}
+              onCreate={() => {
+                closeCompactSessions();
+                createSession();
+              }}
+              onDelete={deleteSession}
+              onRename={renameSession}
+              onClose={closeCompactSessions}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Center — Messages + Input */}
       <div className="workspace-conversation flex-1 flex flex-col min-w-0 min-h-0">
         <div className="flex items-center gap-3 border-b border-outline-variant/50 px-4 py-3">
-          <select aria-label="Current conversation" className="min-w-0 flex-1 bg-transparent text-sm" value={activeSessionId || ''} onChange={e => selectSession(e.target.value)}>
-            <option value="" disabled>Choose a conversation</option>
-            {sessions.map(session => <option key={session.id} value={session.id}>{session.title || 'Untitled work'}</option>)}
-          </select>
+          <h1
+            className="desktop-session-title min-w-0 flex-1 truncate text-sm font-medium text-on-surface"
+            data-testid="current-session-title"
+            title={activeSessionTitle}
+          >
+            {activeSessionTitle}
+          </h1>
+          <button
+            ref={compactSessionButtonRef}
+            type="button"
+            className="compact-session-button min-w-0 flex-1 truncate text-left text-sm font-medium text-on-surface"
+            aria-label={`Switch conversation: ${activeSessionTitle}`}
+            aria-haspopup="dialog"
+            aria-expanded={showCompactSessions}
+            onClick={() => setShowCompactSessions(true)}
+          >
+            <span className="text-primary" aria-hidden>&gt; </span>
+            {activeSessionTitle}
+          </button>
           <button type="button" onClick={createSession} className="text-xs text-primary whitespace-nowrap">New work</button>
         </div>
+        {activeSessionId && <SessionCost sessionId={activeSessionId} />}
         {/* Message timeline */}
         <MessageTimeline
           messages={messages}

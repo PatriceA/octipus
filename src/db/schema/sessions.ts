@@ -92,8 +92,9 @@ export interface SessionContext {
    * the work. Every agent in the session inherits it, including spawned
    * children: a plan mode a delegated child can step outside of is not one.
    *
-   * Cleared by `exit_plan_mode`, which submits the plan for approval — the
-   * agent cannot simply decide it is done planning and start editing.
+   * `exit_plan_mode` saves the proposal and ends the planning turn without
+   * clearing this flag. Only an explicit user command changes tool access on
+   * a later turn, and changing the flag does not approve or start the plan.
    */
   planMode?: boolean;
   // Development Mode

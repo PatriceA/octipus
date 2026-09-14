@@ -10,6 +10,7 @@ export class ChatSessionPresenter {
   cumulative: CumulativeStats = { tokens: 0, cost: 0, turns: 0 };
   lastPlanSummary: string | null = null;
   private refreshingPlan = false;
+  private discoveredPlan = false;
   private connected = false;
   private planPoll: ReturnType<typeof setInterval> | null = null;
   private activeAgentRole: string | null = null;
@@ -25,6 +26,7 @@ export class ChatSessionPresenter {
   dispose(): void { if (this.planPoll) clearInterval(this.planPoll); this.planPoll = null; this.activity.dispose(); }
   reset(): void {
     this.refreshingPlan = false;
+    this.discoveredPlan = false;
     this.clearStream(); this.subagents.reset(); this.cumulative = { tokens: 0, cost: 0, turns: 0 };
     this.status.setStats(this.cumulative); this.status.setContext(null);
     this.lastPlanSummary = null; this.status.setPlan(null); this.status.setPlanDetails(null);
@@ -54,12 +56,22 @@ export class ChatSessionPresenter {
           const plan = event.error ? 'Unavailable' : summary || null;
           if (plan !== this.lastPlanSummary) {
             this.lastPlanSummary = plan; this.status.setPlan(plan);
-            if (this.status.isPlanExpanded()) { this.refreshingPlan = true; this.adapter.sendCommand('work-plan'); }
+            if (!event.error && summary && (!this.discoveredPlan || this.status.isPlanExpanded())) {
+              this.refreshingPlan = true;
+              if (!this.discoveredPlan) this.status.setPlanDetails('Loading plan…');
+              this.discoveredPlan = true;
+              this.adapter.sendCommand('work-plan');
+            }
             this.tui.requestRender();
           }
           return true;
         }
-        if (event.name === 'work-plan' && event.error) this.refreshingPlan = false;
+        if (event.name === 'work-plan' && event.error) {
+          if (this.refreshingPlan && !this.status.isPlanExpanded()) { this.refreshingPlan = false; return true; }
+          this.refreshingPlan = false;
+          this.status.setPlanDetails('Plan details unavailable. Use /work-plan to retry.');
+          this.tui.requestRender();
+        }
         if (event.name === 'work-plan' && !event.error && typeof event.result === 'string') {
           if (this.refreshingPlan && !this.status.isPlanExpanded()) { this.refreshingPlan = false; return true; }
           this.status.setPlanDetails(event.result);

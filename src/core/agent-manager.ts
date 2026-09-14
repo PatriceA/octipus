@@ -1,4 +1,5 @@
 import { getConfig } from '@/config';
+import { type AgentCompletionReason, readAgentCompletionReason } from '@/shared/agent-completion';
 import { agentEventRepository } from '@/db/repositories/agent-event-repository';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
@@ -44,6 +45,7 @@ export interface SpawnOptions {
 }
 
 export interface AgentInfo {
+  completionReason?: AgentCompletionReason;
   id: string;
   sessionId: string;
   userId: string;
@@ -563,6 +565,7 @@ export class AgentManager {
         durationMs,
         totalTokens: worker.getTotalTokens(),
         iteration: worker.getIteration(),
+        completionReason: readAgentCompletionReason(context.metadata),
       };
     }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }

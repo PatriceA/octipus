@@ -260,7 +260,20 @@ export default function SwarmTree({
             // Summing every node double-counts and inflates the metric.
             if (node.durationMs && node.kind === 'root') durationMs += node.durationMs;
           }
-          setNodes(next);
+          // Events may arrive while the REST snapshot is in flight. Retain
+          // their nodes and terminal updates instead of replacing the live map
+          // with an older snapshot (which made a newly spawned child vanish).
+          setNodes(current => {
+            const merged = new Map(next);
+            for (const [id, node] of current) {
+              const fetched = next.get(id);
+              // Keep the live node when the snapshot lacks it, or when a
+              // child finished while the fetch was in flight. Otherwise the
+              // DB row is the complete record and must win.
+              if (!fetched || (fetched.status === 'running' && node.status !== 'running')) merged.set(id, node);
+            }
+            return merged;
+          });
           onHydratedTotalsRef.current?.({ tokens, durationMs });
         }
       })

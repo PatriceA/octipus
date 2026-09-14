@@ -445,37 +445,41 @@ export function setupWebSocket(app: Elysia): void {
 
       wsData(ws).userId = session.userId;
 
-      // Send pending permission requests
       const permissionManager = getPermissionManager();
-      const pendingRequests = await permissionManager.getPendingRequests(session.userId);
-
-      ws.send(JSON.stringify({
-        type: 'pending_requests',
-        requests: pendingRequests,
-      }));
-
-      // Live forwarding: without this subscription, only requests that already
-      // existed at connect time reached this endpoint. New `permission_request`
-      // events fired during the session were dropped, so the global permission
-      // banner on non-chat pages never lit up.
-      const unsubscribe = permissionManager.onRequest?.((request: PermissionRequestEvent) => {
+      // Subscribe before the snapshot query. Replay transitions after the
+      // snapshot so a resolution during hydration cannot resurrect a request.
+      let hydrating = true;
+      const queued: { type: string; requestId?: string; [key: string]: unknown }[] = [];
+      const send = (payload: { type: string; requestId?: string; [key: string]: unknown }) => {
+        if (hydrating) { queued.push(payload); return; }
+        try { ws.send(JSON.stringify(payload)); } catch (err) { apiLogger.warn({ err }, 'Permission notification send failed'); }
+      };
+      const unsubscribe = permissionManager.onRequest((request: PermissionRequestEvent) => {
         if (request.userId !== session.userId) return;
-        try {
-          ws.send(JSON.stringify({
-            type: 'permission_request',
-            requestId: request.requestId,
-            toolId: request.toolId,
-            action: request.action,
-            toolName: request.toolName,
-            args: request.args,
-            agentId: request.agentId,
-            sessionId: request.sessionId,
-          }));
-        } catch (err) {
-          apiLogger.warn({ err }, 'permission live-forward send failed');
-        }
+        send({ type: 'permission_request', ...request });
       });
-      wsData(ws).unsubscribePermissions = unsubscribe;
+      const unsubscribeResolved = permissionManager.onResolved((event) => {
+        if (event.userId !== session.userId) return;
+        send({ type: 'response_recorded', requestId: event.requestId, status: event.status });
+      });
+      wsData(ws).unsubscribePermissions = () => { unsubscribe(); unsubscribeResolved(); };
+      try {
+        const requests = await permissionManager.getPendingRequests(session.userId);
+        ws.send(JSON.stringify({ type: 'pending_requests', requests }));
+        hydrating = false;
+        // A request created during hydration is already in the snapshot;
+        // replaying it would hand the client the same requestId twice.
+        const snapshot = new Set(requests.map(request => request.id));
+        for (const frame of queued) {
+          if (frame.type === 'permission_request' && frame.requestId && snapshot.has(frame.requestId)) continue;
+          ws.send(JSON.stringify(frame));
+        }
+      } catch (err) {
+        wsData(ws).unsubscribePermissions?.();
+        apiLogger.warn({ err }, 'Permission snapshot failed');
+        ws.close(1011, 'Permission snapshot unavailable');
+        return;
+      }
 
       apiLogger.info({ userId: session.userId }, 'Permission WS connected');
     },
@@ -494,17 +498,13 @@ export function setupWebSocket(app: Elysia): void {
         if (parsed.type === 'respond') {
           const permissionManager = getPermissionManager();
 
-          if (parsed.approved) {
-            await permissionManager.approve(parsed.requestId, userId, parsed.resolution);
-          } else {
-            await permissionManager.deny(parsed.requestId, userId, parsed.resolution);
+          const recorded = parsed.approved
+            ? await permissionManager.approve(parsed.requestId, userId, parsed.resolution)
+            : await permissionManager.deny(parsed.requestId, userId, parsed.resolution);
+          if (!recorded) {
+            // Another client may have answered first. Reconcile from owner-scoped state.
+            ws.send(JSON.stringify({ type: 'pending_requests', requests: await permissionManager.getPendingRequests(userId) }));
           }
-
-          ws.send(JSON.stringify({
-            type: 'response_recorded',
-            requestId: parsed.requestId,
-            approved: parsed.approved,
-          }));
         }
       } catch (error) {
         apiLogger.error({ error }, 'Permission WS message error');

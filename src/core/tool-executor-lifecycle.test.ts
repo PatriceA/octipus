@@ -96,7 +96,9 @@ test('a failed shell command is shown as failed and keeps its diagnostic output'
   const exec = new ToolExecutor(context(), (_, data) => events.push(data as Record<string, unknown>));
   exec.registerTool(tool('shell__run', async () => ({ outcome: 'error', exitCode: 2, stderr: 'build failed' }), 'shell'));
   const result = await exec.handleToolCalls([call('shell-fail', 'shell__run')]);
-  expect(events.find(e => e.type === 'tool_call_complete')?.status).toBe('error');
+  const completion = events.find(e => e.type === 'tool_call_complete');
+  expect(completion?.status).toBe('error');
+  expect(completion?.result).toMatchObject({ kind: 'exit', code: 2, tail: 'build failed', ok: false });
   expect(result[0].content).toContain('build failed');
   expect(exec.getSideEffectCounters().toolErrors).toBe(1);
 });

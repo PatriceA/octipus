@@ -1,7 +1,7 @@
 /**
  * A fan-out used to interleave every child's tool calls with the root agent's
  * in the transcript. These pin the fold: one line while collapsed, one row per
- * child when expanded, and finished children dropping off on their own.
+ * child when expanded, and completed children retained for inspection.
  */
 import { describe, expect, test } from 'vitest';
 import { SubagentPanel } from './subagent-panel';
@@ -65,10 +65,12 @@ describe('SubagentPanel', () => {
     expect(panel.has('ghost')).toBe(false);
   });
 
-  test('a finished child is marked done, then drops off on its own', () => {
+  test('a finished child remains inspectable after the old expiry window', () => {
     const clock = { now: 1_000_000 };
     const panel = panelAt(clock);
-    panel.start('a1', 'coding');
+    panel.start('a1', 'coding', 'model-a');
+    panel.iteration('a1', 4);
+    panel.tool('a1', { state: 'completed', name: 'shell', preview: 'tests passed' });
     clock.now += 5_000;
     panel.end('a1');
     panel.toggle();
@@ -76,9 +78,17 @@ describe('SubagentPanel', () => {
     expect(strip(panel.render(120))[1]).toContain('✓ coding');
     expect(strip(panel.render(120))[1]).toContain('5s');
 
-    clock.now += 9_000;
+    panel.toggle();
+    clock.now += 60 * 60_000;
+    expect(strip(panel.render(120))[0]).toContain('1 subagent finished');
+    panel.toggle();
+    const detail = strip(panel.render(120))[1];
+    expect(detail).toContain('iter 4');
+    expect(detail).toContain('model-a');
+    expect(detail).toContain('shell → tests passed');
+    expect(panel.size).toBe(1);
+    panel.reset();
     expect(panel.render(120)).toEqual([]);
-    expect(panel.size).toBe(0);
   });
 
   test('a failed child is marked as failed', () => {

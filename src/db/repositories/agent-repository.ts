@@ -1,4 +1,5 @@
-import { count, desc, eq, inArray, lt } from 'drizzle-orm';
+import { count, desc, eq, inArray, lt, sql } from 'drizzle-orm';
+import type { AgentCompletionReason } from '@/shared/agent-completion';
 import { getDb } from '../postgres';
 import { type AgentRecord, agents, type NewAgentRecord } from '../schema/agents';
 
@@ -19,6 +20,7 @@ export class AgentRepository {
       durationMs?: number;
       error?: string;
       toolCalls?: Array<{ name: string; count: number }>;
+      completionReason?: AgentCompletionReason;
     },
   ): Promise<void> {
     await this.db.update(agents).set({
@@ -28,6 +30,9 @@ export class AgentRepository {
       durationMs: update.durationMs,
       error: update.error,
       toolCalls: update.toolCalls,
+      metadata: update.completionReason
+        ? sql`coalesce(${agents.metadata}, '{}'::jsonb) || ${JSON.stringify({ completionReason: update.completionReason })}::jsonb`
+        : undefined,
       completedAt: new Date(),
     }).where(eq(agents.id, id));
   }

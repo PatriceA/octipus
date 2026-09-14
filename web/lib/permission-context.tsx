@@ -58,6 +58,15 @@ export function PermissionProvider({ children }: { children: ReactNode }) {
   const [permissions, setPermissions] = useState<PermissionRequest[]>([]);
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
 
+  // Requests arrive over two sockets. A late duplicate must not resurrect a
+  // decision already resolved on either surface. Retain across reconnects.
+  const resolvedPermissions = useRef(new Set<string>());
+  const rememberResolution = useCallback((requestId: string) => {
+    const resolved = resolvedPermissions.current;
+    resolved.add(requestId);
+    if (resolved.size > 2000) resolved.delete(resolved.values().next().value!);
+  }, []);
+
   // WebSocket ref for /ws/permissions
   const permWsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -73,7 +82,7 @@ export function PermissionProvider({ children }: { children: ReactNode }) {
         approved,
       }));
     }
-    setPermissions(prev => prev.filter(p => p.requestId !== requestId));
+    // The authoritative response_recorded broadcast removes the row.
   }, []);
 
   // Respond to an approval request via HTTP
@@ -108,7 +117,7 @@ export function PermissionProvider({ children }: { children: ReactNode }) {
 
   const pushPermission = useCallback((permission: PermissionRequest) => {
     setPermissions(prev => {
-      if (prev.some(p => p.requestId === permission.requestId)) return prev;
+      if (resolvedPermissions.current.has(permission.requestId) || prev.some(p => p.requestId === permission.requestId)) return prev;
       return [...prev, permission];
     });
   }, []);
@@ -117,16 +126,7 @@ export function PermissionProvider({ children }: { children: ReactNode }) {
   const pollApprovals = useCallback(async () => {
     try {
       const res = await api.get<{ approvals: ApprovalRequest[] }>('/chat/approvals/pending');
-      if (res?.approvals?.length) {
-        setApprovals(prev => {
-          const existingIds = new Set(prev.map(a => a.requestId));
-          const newApprovals = res.approvals.filter(a => !existingIds.has(a.requestId));
-          return newApprovals.length > 0 ? [...prev, ...newApprovals] : prev;
-        });
-      } else {
-        // No pending approvals on backend — clear any stale ones in state
-        setApprovals(prev => prev.length > 0 ? [] : prev);
-      }
+      setApprovals(res.approvals ?? []);
     } catch { /* ignore */ }
   }, []);
 
@@ -163,13 +163,13 @@ export function PermissionProvider({ children }: { children: ReactNode }) {
                 action: r.action || r.toolName || '',
                 args: r.args || r.context,
               }));
-              if (reqs.length > 0) {
-                setPermissions(prev => {
-                  const existingIds = new Set(prev.map(p => p.requestId));
-                  const newReqs = reqs.filter(r => !existingIds.has(r.requestId));
-                  return newReqs.length > 0 ? [...prev, ...newReqs] : prev;
-                });
-              }
+              // Union with what the chat socket already pushed: a snapshot
+              // built before that request became visible must not drop it.
+              setPermissions(prev => {
+                const seen = new Set(prev.map(p => p.requestId));
+                const fresh = reqs.filter(req => !seen.has(req.requestId) && !resolvedPermissions.current.has(req.requestId));
+                return fresh.length ? [...prev, ...fresh] : prev;
+              });
             } else if (data.type === 'permission_request') {
               // Live request emitted while we were already connected
               const req: PermissionRequest = {
@@ -180,12 +180,13 @@ export function PermissionProvider({ children }: { children: ReactNode }) {
               };
               if (req.requestId) {
                 setPermissions(prev => {
-                  if (prev.some(p => p.requestId === req.requestId)) return prev;
+                  if (resolvedPermissions.current.has(req.requestId) || prev.some(p => p.requestId === req.requestId)) return prev;
                   return [...prev, req];
                 });
               }
             } else if (data.type === 'response_recorded') {
-              // A response was recorded — remove from our list
+              // A response was recorded — remove from every local source.
+              rememberResolution(data.requestId);
               setPermissions(prev => prev.filter(p => p.requestId !== data.requestId));
             }
           } catch { /* ignore parse errors */ }
@@ -219,7 +220,7 @@ export function PermissionProvider({ children }: { children: ReactNode }) {
         permWsRef.current = null;
       }
     };
-  }, [isAuthenticated]);
+  }, [isAuthenticated, rememberResolution]);
 
   // Poll for approvals every 5s (fast enough for responsiveness, avoids /ws conflicts)
   useEffect(() => {

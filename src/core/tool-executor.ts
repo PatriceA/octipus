@@ -779,7 +779,7 @@ export class ToolExecutor {
         // Thread 1: carry the rendered title + structured result preview.
         const shellFailed = toolId === 'shell' && result !== null && typeof result === 'object'
           && 'outcome' in result && result.outcome === 'error';
-        const completedActivity = renderToolActivity(toolCall.name, toolCall.arguments, result, !shellFailed);
+        const completedActivity = renderToolActivity(toolCall.name, toolCall.arguments, result, true);
         this.emitFn('action', {
           type: 'tool_call_complete',
           toolCallId: toolCall.id,

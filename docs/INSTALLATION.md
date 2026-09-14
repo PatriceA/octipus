@@ -105,3 +105,19 @@ bash scripts/install-docker.sh
 This creates `.env.compose` with random secrets, builds/starts PostgreSQL and Octipus, waits for health, and runs terminal setup inside the container. Keep `.env.compose` with your backups. The defaults are web **3017**, API **3015**, and database **5442** on the host. Open `http://localhost:3017`. Use `docker compose --env-file .env.compose logs`, `stop`, or `up -d` to manage it. Do not replace existing deployment secrets with newly generated ones: for an existing stack, continue using its existing Compose environment file.
 
 Container tools and local model URLs refer to the container's environment: host CLI logins, host files, and `localhost` model servers are not automatically available. See [DOCKER.md](DOCKER.md).
+
+
+## Linux desktop identity
+
+`octi desktop` registers the checkout's launcher and Octipus icons under
+`$XDG_DATA_HOME` (normally `~/.local/share`). The native binary is `octipus`;
+the GTK ID, desktop filename and theme icon name use `cc.octipus.desktop`.
+This lets Linux taskbars group the window with its Octipus launcher rather
+than a generic application icon. Relaunch an older running desktop client
+once after upgrading. A launcher pinned before the upgrade may need to be
+unpinned and replaced with the Octipus entry from the application menu.
+
+To refresh the launcher without starting a window, run
+`node scripts/install-desktop-entry.mjs` from the checkout. This needs no sudo.
+The bundled desktop and window icons are generated from
+`web/public/app-icon.png`, the white octopus used by the website.

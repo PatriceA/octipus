@@ -260,9 +260,27 @@ describe('agent.blocked — a quiet worker says what it waits on', () => {
     if (root?.kind !== 'agent.start') throw new Error('wrong kind');
     expect(root.subagent).toBeUndefined();
   });
+
+  test.each(['root', 'rootAgent'])('does not announce a %s swarm node as a delegated agent', (kind) => {
+    for (const type of ['swarm.node_spawned', 'swarm.node_completed']) {
+      expect(decodeGatewayEvent({
+        type,
+        payload: { kind, depth: 0, nodeId: 'root-1', role: 'general', model: 'sample-model', usedTokens: 100 },
+      })).toEqual([]);
+    }
+  });
 });
 
 describe('decodeGatewayEvent — steering acknowledgement', () => {
+  test.each(['approved', 'denied', 'expired'])('decodes a permission resolved as %s', status => {
+    expect(decodeGatewayEvent({ type: 'permission.resolved', payload: { requestId: 'request-1', status } })).toEqual([
+      { kind: 'permission.resolved', requestId: 'request-1', status },
+    ]);
+  });
+  test('ignores an invalid permission resolution', () => {
+    expect(decodeGatewayEvent({ type: 'permission.resolved', payload: { requestId: 'request-1', status: 'pending' } })).toEqual([]);
+    expect(decodeGatewayEvent({ type: 'permission.resolved', payload: { status: 'approved' } })).toEqual([]);
+  });
   test('an injected chat.message says the running turn was steered', () => {
     const out = decodeGatewayEvent({ type: 'chat.message', payload: { role: 'user', content: 'also X', injected: true } });
     expect(out).toEqual([{ kind: 'message', role: 'system', content: 'Steering the running turn with your message.' }]);

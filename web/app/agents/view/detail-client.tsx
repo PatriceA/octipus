@@ -11,6 +11,7 @@ import { PipelineView } from '@/components/pipeline-view';
 import { VerificationEvidence } from '@/components/verification-evidence';
 import { useAgentEvents } from '@/hooks/useAgentEvents';
 import { api } from '@/lib/api';
+import { agentCompletionLabel, type AgentCompletionReason } from '../../../../src/shared/agent-completion';
 
 interface AgentDetail {
   id: string;
@@ -19,6 +20,7 @@ interface AgentDetail {
   topic: string;
   model: string;
   status: string;
+  completionReason?: AgentCompletionReason;
   iteration: number;
   createdAt: string;
   metadata: Record<string, unknown>;
@@ -57,7 +59,9 @@ export default function AgentDetailPage() {
   const router = useRouter();
   const agentId = useSearchParams().get('id') ?? '';
 
-  const { events } = useAgentEvents(agentId);
+  // Detail is an archive view. Ask for durable DB ids even while a completed
+  // worker remains in memory with only the last 200 events in its live ring.
+  const { events } = useAgentEvents(agentId, 'persisted');
 
   // Fetch agent details
   const { data: agent, isLoading } = useQuery({
@@ -157,6 +161,13 @@ export default function AgentDetailPage() {
   }
 
   const isRunning = agent.status === 'running';
+  const completionLabel = agent.status === 'completed'
+    ? agentCompletionLabel(agent.completionReason)
+    : undefined;
+  const completedToolCalls = events.filter((event) => {
+    if (event.type !== 'action' || !event.data || typeof event.data !== 'object') return false;
+    return (event.data as { type?: string }).type === 'tool_call_complete';
+  }).length;
 
   return (
     <div className="space-y-6">
@@ -204,10 +215,11 @@ export default function AgentDetailPage() {
             >
               {agent.status}
             </StatusBadge>
-            {events.length > 0 && (
-              <span className="text-on-surface-variant">
-                {events.length} events
-              </span>
+            <span className="text-on-surface-variant">{agent.iteration} model turns</span>
+            <span className="text-on-surface-variant">{events.length} recorded events</span>
+            <span className="text-on-surface-variant">{completedToolCalls} completed tool calls</span>
+            {completionLabel && (
+              <span className="text-warning" role="status">{completionLabel}</span>
             )}
           </div>
         </div>
@@ -292,9 +304,13 @@ export default function AgentDetailPage() {
           <h2 className="section-label">
             event timeline
             <span className="ml-2 normal-case tracking-normal font-normal">
-              {events.length} events
+              {events.length} recorded events
             </span>
           </h2>
+          <p className="mt-1 text-[11px] text-on-surface-variant">
+            Model turns are inference cycles reported by the agent. Recorded events also include
+            status changes, thoughts, permissions, tool calls, tool results, and completion.
+          </p>
         </div>
         <AgentTimeline events={events} className="p-4 max-h-[600px]" />
       </div>

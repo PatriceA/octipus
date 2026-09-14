@@ -508,7 +508,12 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
     if (!session || session.userId !== user.id) { set.status = 404; return { error: 'Session not found' }; }
     const { getCostTracker } = await import('@/models/cost-tracker');
     return { stats: await getCostTracker().getSessionStats(params.sessionId) };
-  }, { params: t.Object({ sessionId: t.String({ format: 'uuid' }) }), detail: { tags: ['models'] } })
+  }, {
+    // TypeBox's format registry does not register UUID by default. A pattern
+    // validates the path without rejecting every real session as unknown format.
+    params: t.Object({ sessionId: t.String({ pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' }) }),
+    detail: { tags: ['models'] },
+  })
 
   .get('/billing/report', async ({ user, query, set }) => {
     if (!user?.isAdmin) { set.status = 403; return { error: 'Admin access required' }; }

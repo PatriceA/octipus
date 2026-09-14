@@ -178,8 +178,8 @@ const renderShell: Renderer = (args, result, hasResult) => {
     const code = rec && typeof rec.exitCode === 'number' ? rec.exitCode : rec?.killed ? 137 : 0;
     const stdout = rec ? str(rec.stdout) : str(result);
     const stderr = rec ? str(rec.stderr) : '';
-    const ok = rec?.outcome ? rec.outcome === 'success' : code === 0;
-    const combined = (stdout || stderr).trimEnd();
+    const ok = rec?.outcome ? rec.outcome === 'success' || rec.outcome === 'expected_nonzero' : code === 0;
+    const combined = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join('\n');
     // Keep the *tail* — the end of a build/test log is what carries the verdict.
     const tail = combined.length > WORK_STREAM_PREVIEW_CAP
       ? '…' + combined.slice(combined.length - WORK_STREAM_PREVIEW_CAP + 1)

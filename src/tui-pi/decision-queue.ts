@@ -7,12 +7,28 @@ export class DecisionQueue {
   private pending: Decision[] = [];
   private handle: OverlayHandle | null = null;
   private disposed = false;
+  private readonly resolved = new Set<string>();
   constructor(private readonly overlays: OverlayController, private readonly adapter: GatewayAdapter,
     private readonly report: (text: string) => void, private readonly restoreFocus: () => void) {}
   push(event: Decision): void {
-    if (this.disposed || this.pending.some(item => item.requestId === event.requestId)) return;
+    if (this.disposed || this.resolved.has(event.requestId) || this.pending.some(item => item.requestId === event.requestId)) return;
     this.pending.push(event);
     if (!this.handle) this.show();
+  }
+  /** A decision recorded elsewhere closes its prompt without answering again. */
+  resolve(requestId: string, status: 'approved' | 'denied' | 'expired'): void {
+    if (this.disposed) return;
+    this.resolved.add(requestId);
+    // Retain a bounded replay guard, including resolutions received before
+    // the corresponding request in a reconnect or cross-client event burst.
+    if (this.resolved.size > 500) this.resolved.delete(this.resolved.values().next().value!);
+    const index = this.pending.findIndex(event => event.kind === 'permission' && event.requestId === requestId);
+    if (index < 0) return;
+    const [event] = this.pending.splice(index, 1);
+    this.report(`Permission ${status}: ${event.kind === 'permission' ? event.toolName : requestId}`);
+    if (index !== 0) return;
+    this.handle?.hide(); this.handle = null;
+    if (this.pending.length) this.show(); else this.restoreFocus();
   }
   private show(): void {
     const event = this.pending[0];

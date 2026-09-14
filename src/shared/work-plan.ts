@@ -9,8 +9,10 @@ export const planStepSchema = z.object({
 export const planUpdateSchema = z.object({
   revision: z.number().int().nonnegative(),
   newPlan: z.boolean().default(false),
+  kind: z.enum(['execution', 'proposal']).default('execution'),
   title: z.string().trim().min(1).max(240),
   goal: z.string().trim().min(1).max(2000),
+  details: z.string().trim().min(1).max(50_000).optional(),
   steps: z.array(planStepSchema).min(1).max(20),
   summary: z.string().trim().min(1).max(1000),
   feedbackResponses: z.array(z.object({
@@ -30,8 +32,11 @@ export interface PlanFeedback {
 export interface WorkPlan {
   id: string;
   revision: number;
+  kind: 'execution' | 'proposal';
   title: string;
   goal: string;
+  /** Complete submitted proposal. Structured steps remain the progress source. */
+  details?: string;
   steps: z.infer<typeof planStepSchema>[];
   updatedAt: string;
   feedback: PlanFeedback[];
@@ -43,7 +48,9 @@ export interface WorkPlanState {
   previous: WorkPlan[];
 }
 const storedPlanSchema = z.object({
-  id: z.string(), revision: z.number().int().nonnegative(), title: z.string(), goal: z.string(),
+  id: z.string(), revision: z.number().int().nonnegative(),
+  kind: z.enum(['execution', 'proposal']).default('execution'),
+  title: z.string(), goal: z.string(), details: z.string().max(50_000).optional(),
   steps: z.array(planStepSchema).max(20), updatedAt: z.string(),
   feedback: z.array(z.object({ id: z.string(), text: z.string(), createdAt: z.string(),
     status: z.enum(['pending', 'applied', 'needs_clarification']), response: z.string().optional() })).max(50),
@@ -80,7 +87,8 @@ export function reviseWorkPlan(state: WorkPlanState, input: PlanUpdate): WorkPla
     revision,
     previous: input.newPlan && state.current ? [...state.previous, state.current].slice(-20) : state.previous,
     current: {
-      id: old?.id ?? crypto.randomUUID(), revision, title: input.title, goal: input.goal,
+      id: old?.id ?? crypto.randomUUID(), revision, kind: input.kind,
+      title: input.title, goal: input.goal, details: input.details ?? old?.details,
       steps: input.steps, updatedAt: at, feedback,
       history: [...(old?.history ?? []), { revision, summary: input.summary, at }].slice(-100),
     },
@@ -106,11 +114,18 @@ export function formatWorkPlan(state: WorkPlanState, compact = false): string {
   const done = plan.steps.filter(s => s.status === 'done').length;
   const current = plan.steps.find(s => s.status === 'working' || s.status === 'blocked');
   const summary = `${done}/${plan.steps.length} steps done${current ? ` · ${current.status}: ${clean(current.title)}` : ''}`;
-  if (compact) return summary;
-  const lines = [`${clean(plan.title)} · revision ${state.revision}`, clean(plan.goal), summary, ''];
+  const label = plan.kind === 'proposal' ? 'Proposed' : 'Execution';
+  if (compact) return `${label} · ${clean(plan.title)} · revision ${state.revision} · ${summary}`;
+  const lines = [`${label} · ${clean(plan.title)} · revision ${state.revision}`, clean(plan.goal), summary, ''];
   for (const step of plan.steps) {
     const mark = step.status === 'done' ? '[x]' : step.status === 'working' ? '[>]' : step.status === 'blocked' ? '[!]' : step.status === 'skipped' ? '[-]' : '[ ]';
     lines.push(`${mark} ${clean(step.title)} (${step.status})`, `    ${clean(step.evidence) || 'No evidence or checks recorded yet.'}`);
+  }
+  if (plan.details) {
+    const cleanBlock = plan.details
+      .replace(/\r\n?/g, '\n')
+      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, ' ');
+    lines.push('', 'Detailed plan:', cleanBlock);
   }
   for (const f of plan.feedback) lines.push('', `Feedback (${f.status}): ${clean(f.text)}`, ...(f.response ? [clean(f.response)] : []));
   lines.push('', 'Steps report work progress, not independent verification.', '/plan-feedback <change> to give feedback. /plan on to explore before implementation.');

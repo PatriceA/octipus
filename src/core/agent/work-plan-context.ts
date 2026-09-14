@@ -5,12 +5,18 @@ export function formatWorkPlanContext(state: WorkPlanState): string | null {
   const plan = state.current;
   if (!plan) return null;
   return `Visible work plan (revision ${state.revision}). Review pending feedback before further affected work. ` +
-    `Use update_work_plan to acknowledge how feedback was handled. This record does not grant tool permissions. ` +
+    `Use get_work_plan before revising the full artifact, then update_work_plan to acknowledge how feedback was handled. ` +
+    (plan.kind === 'proposal'
+      ? `This is a proposal: its steps are future implementation and remain pending until the user separately asks to implement it. `
+      : '') +
+    `This record does not grant tool permissions. ` +
     `The feedback array includes pending and handled feedback. No pending feedback means nothing is waiting, ` +
     `not that feedback was never received or has been removed. Preserve applied feedback in your account of the work.\n` +
     JSON.stringify({
       id: plan.id,
       revision: state.revision,
+      kind: plan.kind,
+      detailsStored: !!plan.details,
       title: plan.title,
       goal: plan.goal,
       steps: plan.steps,

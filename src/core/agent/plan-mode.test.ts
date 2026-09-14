@@ -69,12 +69,19 @@ describe('what the instruction has to say', () => {
     expect(PLAN_MODE_DIRECTIVE).toMatch(/approves nothing|not.*approval/i);
   });
 
-  test('it names the only exit', () => {
+  test('it names the terminal submission without treating it as approval', () => {
     expect(PLAN_MODE_DIRECTIVE).toMatch(/exit_plan_mode/);
-    expect(PLAN_MODE_DIRECTIVE).toMatch(/ONLY way out/i);
+    expect(PLAN_MODE_DIRECTIVE).toMatch(/ONLY way to finish a planning turn/i);
+    expect(PLAN_MODE_DIRECTIVE).toMatch(/does not disable plan mode, approve the plan, or start implementation/i);
   });
 
   test('it tells the agent to explore before proposing', () => {
     expect(PLAN_MODE_DIRECTIVE).toMatch(/explore/i);
+  });
+
+  test('it separates planning activity from pending implementation', () => {
+    expect(PLAN_MODE_DIRECTIVE).toMatch(/future implementation/i);
+    expect(PLAN_MODE_DIRECTIVE).toMatch(/all with `pending` status/i);
+    expect(PLAN_MODE_DIRECTIVE).toMatch(/research notes/i);
   });
 });

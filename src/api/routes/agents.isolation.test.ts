@@ -62,9 +62,22 @@ beforeAll(async () => {
     id: bobAgentId, sessionId: bobSessionId, userId: bobId,
     topic: 'bob-topic', status: 'completed',
   });
+  const { agentRepository } = await import('@/db/repositories/agent-repository');
+  await agentRepository.updateStatus(aliceAgentId, { status: 'completed', completionReason: 'iteration_limit' });
   await seedAgentEvent({
     agentId: bobAgentId, sessionId: bobSessionId, type: 'thought', data: { secret: 'bob' },
   });
+  // More than one repository page, so the history route's durable cursor is
+  // exercised rather than accidentally passing with a single short result.
+  const { getDb } = await import('@/db/postgres');
+  const { agentEvents } = await import('@/db/schema/agent-events');
+  await getDb().insert(agentEvents).values(Array.from({ length: 243 }, (_, index) => ({
+    agentId: aliceAgentId,
+    sessionId: aliceSessionId,
+    userId: aliceId,
+    type: index % 5 === 0 ? 'action' : 'thought',
+    data: { index },
+  })));
 
   const { agentRoutes } = await import('./agents');
   const { principalFromUser } = await import('@/security/principal');
@@ -95,6 +108,8 @@ describe('GET /api/agents/:id cross-tenant', () => {
   test('alice cannot fetch bob’s agent — "Agent not found"', async () => {
     const own = await get(aliceApp, `/api/agents/${aliceAgentId}`);
     expect(own.body.id).toBe(aliceAgentId);
+    expect(own.body.completionReason).toBe('iteration_limit');
+    expect(own.body.status).toBe('completed');
 
     const cross = await get(aliceApp, `/api/agents/${bobAgentId}`);
     expect(cross.body).toEqual({ error: 'Agent not found' });
@@ -106,6 +121,7 @@ describe('GET /api/agents cross-tenant', () => {
     const r = await get(aliceApp, '/api/agents');
     expect(r.body.agents.find((a: any) => a.id === bobAgentId)).toBeUndefined();
     expect(r.body.agents.find((a: any) => a.id === aliceAgentId)).toBeDefined();
+    expect(r.body.agents.find((a: { id: string }) => a.id === aliceAgentId).completionReason).toBe('iteration_limit');
   });
 
   test('sessionId scoped to a foreign session returns []', async () => {
@@ -124,5 +140,23 @@ describe('GET /api/agents/:id/events cross-tenant', () => {
     const r = await get(bobApp, `/api/agents/${bobAgentId}/events`);
     expect(Array.isArray(r.body.events)).toBe(true);
     expect(r.body.events.find((e: any) => e.type === 'thought')).toBeDefined();
+  });
+
+  test('persisted source pages the complete durable history with DB-id cursors', async () => {
+    const first = await get(aliceApp, `/api/agents/${aliceAgentId}/events?source=persisted`);
+    expect(first.body.source).toBe('persisted');
+    expect(first.body.events).toHaveLength(200);
+    expect(first.body.hasMore).toBe(true);
+    expect(first.body.nextCursor).toBe(first.body.events[199].seq);
+    expect(first.body.events[0].data.index).toBe(0);
+
+    const second = await get(
+      aliceApp,
+      `/api/agents/${aliceAgentId}/events?source=persisted&after=${first.body.nextCursor}`,
+    );
+    expect(second.body.events).toHaveLength(43);
+    expect(second.body.hasMore).toBe(false);
+    expect(second.body.events[0].data.index).toBe(200);
+    expect(second.body.events[42].data.index).toBe(242);
   });
 });

@@ -9,16 +9,34 @@ interface Stats {
   cacheReadTokens?: number; cacheCreationTokens?: number;
 }
 export function SessionCost({ sessionId }: { sessionId: string }) {
-  const { data, isError } = useQuery({
+  const { data, isError, errorUpdatedAt, dataUpdatedAt, isFetching, refetch } = useQuery({
     queryKey: ['session-cost', sessionId],
-    queryFn: () => api.get<{ stats: Stats }>(`/models/usage/session/${encodeURIComponent(sessionId)}`),
+    queryFn: async () => {
+      const response = await api.get<{ stats: Stats }>(`/models/usage/session/${encodeURIComponent(sessionId)}`);
+      const stats = response?.stats;
+      if (!stats || ![stats.requestCount, stats.totalCost, stats.totalInputTokens, stats.totalOutputTokens].every(value => typeof value === 'number' && Number.isFinite(value))) {
+        throw new Error('Invalid session usage response');
+      }
+      return response;
+    },
     refetchInterval: 15000, retry: false,
   });
-  if (isError) return <p className="px-4 text-xs text-on-surface-variant">Session usage unavailable</p>;
   const s = data?.stats;
-  if (!s?.requestCount) return null;
-  return <details className="px-4 py-1 text-xs text-on-surface-variant font-mono">
-    <summary className="cursor-pointer">Session cost ${s.totalCost.toFixed(4)}{s.unknownCostRequests ? ' · incomplete' : (s.estimatedCost ?? 0) > 0 ? ' · includes estimates' : ''}</summary>
+  // React Query can return to pending during an initial-error retry. Keep the
+  // error visible until a successful response, and preserve cached totals.
+  const unavailable = isError || errorUpdatedAt > dataUpdatedAt;
+  const retry = <button type="button" className="ml-2 underline disabled:opacity-60" disabled={isFetching} onClick={() => void refetch()}>
+    {isFetching ? 'Retrying…' : 'Retry usage'}
+  </button>;
+  if (!s) return <div data-testid="session-usage" className="min-h-7 shrink-0 px-4 py-1 text-xs text-on-surface-variant">
+    {unavailable ? <>Session usage unavailable{retry}</> : 'Loading session usage…'}
+  </div>;
+  if (!s.requestCount) return <div data-testid="session-usage" className="min-h-7 shrink-0 px-4 py-1 text-xs text-on-surface-variant">
+    No session usage recorded{unavailable && <> · update unavailable{retry}</>}
+  </div>;
+  return <details data-testid="session-usage" className="min-h-7 shrink-0 px-4 py-1 text-xs text-on-surface-variant font-mono">
+    <summary className="cursor-pointer">Session cost ${s.totalCost.toFixed(4)}{s.unknownCostRequests ? ' · incomplete' : (s.estimatedCost ?? 0) > 0 ? ' · includes estimates' : ''}{unavailable && ' · update unavailable'}</summary>
+    {unavailable && <p>Showing the last recorded usage.{retry}</p>}
     <div className="flex flex-wrap gap-x-4 gap-y-1 py-2">
       <span>Reported ${(s.reportedCost ?? 0).toFixed(4)}</span><span>Estimated ${(s.estimatedCost ?? 0).toFixed(4)}</span>
       <span>Unknown cost: {s.unknownCostRequests ?? 0} requests</span>

@@ -42,6 +42,7 @@ export type AgentSessionEvent =
   | { kind: 'message';        role: Role; content: string }
   | { kind: 'delta';          delta: string; iteration: number }
   | { kind: 'permission';     requestId: string; toolName: string; detail: string }
+  | { kind: 'permission.resolved'; requestId: string; status: 'approved' | 'denied' | 'expired' }
   | { kind: 'approval';       requestId: string; summary: string; question: string; options: string[] }
   | { kind: 'agent.start';    role: string; model: string; nodeId?: string; subagent?: boolean }
   | { kind: 'agent.end';      stats: AgentEndStats; nodeId?: string; role?: string }
@@ -214,6 +215,14 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
   const out: AgentSessionEvent[] = [];
 
   switch (event.type) {
+    case 'permission.resolved': {
+      const requestId = pickString(payload, 'requestId');
+      const status = pickString(payload, 'status');
+      if (requestId && (status === 'approved' || status === 'denied' || status === 'expired')) {
+        out.push({ kind: 'permission.resolved', requestId, status });
+      }
+      return out;
+    }
     case 'permission.request': {
       const toolName = pickString(payload, 'toolName') ?? pickString(payload, 'action') ?? 'unknown';
       const requestId = pickString(payload, 'requestId') ?? '';
@@ -323,7 +332,7 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
       const kind = pickString(payload, 'kind') ?? 'agent';
       // Root agent already gets a separate agent.spawned event from the
       // worker spawner; skip the duplicate so we don't show it twice.
-      if (kind === 'rootAgent') return out;
+      if (kind === 'root' || kind === 'rootAgent') return out;
       const role = pickString(payload, 'role') ?? 'worker';
       const model = pickString(payload, 'model') ?? '';
       const nodeId = pickString(payload, 'nodeId');
@@ -339,7 +348,7 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
 
     case 'swarm.node_completed': {
       const kind = pickString(payload, 'kind') ?? 'agent';
-      if (kind === 'rootAgent') return out; // dedupe with agent.completed
+      if (kind === 'root' || kind === 'rootAgent') return out; // dedupe with agent.completed
       const role = pickString(payload, 'role') ?? 'worker';
       const tokens = pickNumber(payload, 'usedTokens') ?? 0;
       const durationMs = pickNumber(payload, 'durationMs');

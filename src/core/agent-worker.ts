@@ -1,4 +1,5 @@
 import { withProviderUsageContext } from '@/models/providers/instrumented';
+import type { AgentCompletionReason } from '@/shared/agent-completion';
 import { formatWorkPlanContext } from './agent/work-plan-context';
 import { workPlanRepository } from '@/db/repositories/work-plan-repository';
 import { mkdirSync, writeFileSync } from 'fs';
@@ -178,6 +179,7 @@ export class AgentWorker extends BaseAgentWorker {
   private sawNativeToolCall: boolean = false;
   /** Guards the terminal `complete` event so stop() and run() never double-fire it. */
   private terminalEmitted: boolean = false;
+  private completionReason?: AgentCompletionReason;
   /**
    * G1 escalation: set after a turn whose tool calls had to be recovered from
    * prose (text-parse/shim). Makes the NEXT model call request toolChoice
@@ -672,9 +674,10 @@ export class AgentWorker extends BaseAgentWorker {
       }
       this.context.status = 'completed';
       this.context.completedAt = new Date();
+      if (this.completionReason) this.context.metadata.completionReason = this.completionReason;
       this.terminalEmitted = true;
-      this.emit('status_change', { status: 'completed' });
-      this.emit('complete', { result: finalResult });
+      this.emit('status_change', { status: 'completed', completionReason: this.completionReason });
+      this.emit('complete', { result: finalResult, completionReason: this.completionReason });
 
       const durationMs = Date.now() - this.startTime;
       agentLogger.info({
@@ -694,6 +697,7 @@ export class AgentWorker extends BaseAgentWorker {
         iterations: this.iteration,
         totalTokens: this.totalTokensUsed,
         durationMs,
+        completionReason: this.completionReason,
       }).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Failed to persist agent completion'));
 
       // Record completion to task_state so siblings can discover it
@@ -1008,7 +1012,7 @@ export class AgentWorker extends BaseAgentWorker {
         // non-root worker) still throws ChildTimeoutError so its parent gets a
         // ChildResult status='timeout' and can synthesize partial results.
         if (isRootAgent(this.context)) {
-          return await this.finalizeGracefully('wall-clock budget reached');
+          return await this.finalizeGracefully('time_limit');
         }
         this.abortController.abort(`timeout:${this.elapsed()}ms`);
         throw new ChildTimeoutError({
@@ -1395,6 +1399,7 @@ export class AgentWorker extends BaseAgentWorker {
           );
         });
         this.messages.push(...toolMessages);
+        this.appendToolReportingReminder();
 
         // Drift nudge, queued before execution — appended now that the
         // tool_calls are properly closed out by their results.
@@ -1445,7 +1450,7 @@ export class AgentWorker extends BaseAgentWorker {
 
       // Some models (e.g. Gemma4 via LiteLLM) emit tool calls as JSON text instead of structured tool_calls.
       // Detect and parse these so they execute properly.
-      if (completion.content && !completion.toolCalls?.length) {
+      if (!this.toolExecutor.toolsDisabled && completion.content && !completion.toolCalls?.length) {
         const textToolCalls = this.parseTextToolCalls(completion.content);
         if (textToolCalls.length > 0) {
           await this.executeRecoveredToolCalls(textToolCalls, 'text output');
@@ -1508,8 +1513,9 @@ export class AgentWorker extends BaseAgentWorker {
           }, 'Thinking-only response (no content, no tool calls), nudging to continue');
           this.messages.push({
             role: 'user',
-            content:
-              'You stopped after thinking without producing a visible action. ' +
+            content: this.toolExecutor.toolsDisabled
+              ? 'Tool execution for this turn has ended. Write the final answer in plain text from the recorded results, including failures and unfinished work. Do not call tools or claim unexecuted actions occurred.'
+              : 'You stopped after thinking without producing a visible action. ' +
               'Continue the task now: call the next tool you need, or — if you already have enough information — write your final answer as plain text. ' +
               'Do not end your turn on thinking alone.',
             timestamp: new Date(),
@@ -1596,7 +1602,7 @@ export class AgentWorker extends BaseAgentWorker {
     // Phase 3.5 — iteration budget exhausted. Rather than ending on a bare
     // "Max iterations reached" error string, run one final no-tools turn so the
     // worker returns a summary of what it did and what remains (hermes pattern).
-    return await this.finalizeGracefully('iteration budget reached');
+    return await this.finalizeGracefully('iteration_limit');
   }
 
   /**
@@ -1606,7 +1612,9 @@ export class AgentWorker extends BaseAgentWorker {
    * Falls back to a deterministic recap of the last tool result if that call
    * fails, so this NEVER throws.
    */
-  private async finalizeGracefully(reason: string): Promise<string> {
+  private async finalizeGracefully(completionReason: AgentCompletionReason): Promise<string> {
+    this.completionReason = completionReason;
+    const reason = completionReason === 'iteration_limit' ? 'iteration budget reached' : 'wall-clock budget reached';
     agentLogger.warn(
       { agentId: this.context.id, role: this.context.role, reason, iteration: this.iteration },
       'Graceful exit — running final no-tools summary turn',
@@ -1955,6 +1963,20 @@ export class AgentWorker extends BaseAgentWorker {
     return result.content;
   }
 
+  /** Explain the reporting-only boundary after a final tool. */
+  private appendToolReportingReminder(): void {
+    if (this.toolExecutor.toolsDisabled) {
+      this.messages.push({
+        role: 'user',
+        content: '[SYSTEM] Tool execution for this turn has ended. Reply in plain text using the recorded tool results. ' +
+          'Do not attempt or describe additional tool calls as executed. A failed pipeline stage does not establish that ' +
+          'local files, other tools, workers, or the whole environment are unavailable. Report the specific failed stage ' +
+          'and error, what actually completed, and what remains unexecuted. Do not claim later stages started without evidence.',
+        timestamp: new Date(),
+      });
+    }
+  }
+
   /**
    * Execute tool calls recovered from text (parseTextToolCalls) or toolshim —
    * push the synthetic assistant message, emit the action, run the tools, and
@@ -1996,6 +2018,7 @@ export class AgentWorker extends BaseAgentWorker {
           : this.raceTimeout(withProviderUsageContext({ userId: this.context.userId, sessionId: this.context.sessionId, agentId: this.context.id }, () => this.toolExecutor.handleToolCalls(toolCalls)), 'handleToolCalls'),
     );
     this.messages.push(...toolMessages);
+    this.appendToolReportingReminder();
 
     this.drainSteeringQueue();
   }

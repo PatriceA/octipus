@@ -16,9 +16,9 @@
  *  2. The instruction, which covers what the filter cannot: `shell` still holds
  *     `>` and `tee`, exactly as the read-only role comment has always said.
  *     Defense in depth, not a boundary, and said out loud rather than implied.
- *  3. The exit. `exit_plan_mode` submits the plan and clears the flag. An agent
- *     that could clear it by deciding it had finished planning would be back to
- *     asking permission of itself.
+ *  3. The submission. `exit_plan_mode` durably saves the full proposal and
+ *     ends the planning turn while leaving the flag on. Tool availability only
+ *     changes through an explicit user command on a later turn.
  */
 
 import type { ToolHandler } from '@/core/agent-base';
@@ -42,10 +42,9 @@ export function stripMutatingTools(handlers: ToolHandler[]): ToolHandler[] {
  * when the obvious route is missing, and because a rule the model has to infer
  * is a rule it will infer differently under pressure.
  *
- * The last paragraph is the one that matters: agreement is not approval. A user
- * saying "yes, sounds good" mid-conversation is not the same as the plan having
- * been submitted and accepted, and an agent that treats it as such has left plan
- * mode without anyone deciding it should.
+ * The last paragraphs distinguish a proposal from the work used to create it,
+ * and submission from authorization. Both distinctions are needed for the
+ * durable work plan to represent what would be implemented next.
  */
 export const PLAN_MODE_DIRECTIVE = `
 
@@ -62,13 +61,22 @@ installs, no configuration changes. The file-writing tools have been withheld
 for this turn; the shell has not, so a redirect (\`>\`, \`tee\`), an \`-i\` flag or a
 commit would still work. Do not use them. That restraint is the mode.
 
+The visible work plan describes the FUTURE IMPLEMENTATION, not your planning
+activity. Before submitting, use \`get_work_plan\` then \`update_work_plan\` to
+publish the actual implementation steps, all with \`pending\` status. Reading the
+code, designing the architecture, and writing this proposal are research notes;
+do not turn them into completed checklist steps. Include the complete detailed
+proposal when you call \`exit_plan_mode\` so it is saved with those steps.
+
 When the plan is ready, call \`exit_plan_mode\` with the whole plan as markdown.
-That is the ONLY way out, and it is a submission for approval, not an
-announcement. Do not paste the plan as an ordinary reply and start work.
+That is the ONLY way to finish a planning turn. It submits the proposal and ends
+the turn. It does not disable plan mode, approve the plan, or start implementation.
+Do not paste the plan as an ordinary reply and begin work.
 
 Conversational agreement approves nothing. If the user says "yes" or "go ahead"
-mid-discussion, fold what they confirmed into the plan and submit it — the
-approval happens on the submission, not in the chat.`;
+mid-discussion, fold what they confirmed into the plan and submit it. The
+\`/plan off\` command only changes tool availability on later turns; it does not
+approve a proposal or begin work by itself.`;
 
 /** Does this session plan rather than act? */
 export function isPlanMode(sessionContext: { planMode?: boolean } | undefined): boolean {
@@ -97,8 +105,9 @@ export async function togglePlanMode(
     on,
     text: on
       ? 'Plan mode ON — I will explore and propose, and change nothing. The file-writing tools are ' +
-        'withheld until the plan is submitted with `exit_plan_mode`, and any specialist I delegate to ' +
-        'inherits the same restriction.'
-      : 'Plan mode OFF — I can make changes again.',
+        'withheld, and any specialist I delegate to inherits the same restriction. A submitted plan ' +
+        'is saved for review and does not turn this mode off.'
+      : 'Plan mode OFF — write tools are available on a future turn. This does not approve the ' +
+        'current plan or start implementation.',
   };
 }

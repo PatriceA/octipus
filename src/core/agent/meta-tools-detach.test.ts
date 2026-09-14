@@ -78,7 +78,7 @@ describe('createMetaTools — rootAgent swarm wiring', () => {
     // always falling into the auto-collect safety net. Pipeline/pii/reflect
     // stay dropped for the small-model tool surface.
     const names = tools.map((t) => t.name).sort();
-    expect(names).toEqual(['collect_children', 'get_work_plan', 'remember_this', 'spawn_child', 'update_work_plan']);
+    expect(names).toEqual(['collect_children', 'exit_plan_mode', 'get_work_plan', 'remember_this', 'spawn_child', 'update_work_plan']);
     // Flat lite schema: role + taskBrief only.
     const spawn = tools.find((t) => t.name === 'spawn_child');
     expect(spawn?.parameters.required).toEqual(['role', 'taskBrief']);

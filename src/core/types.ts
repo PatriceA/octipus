@@ -325,6 +325,12 @@ export interface MCPServer {
   command: string;
   args?: string[];
   env?: Record<string, string>;
+  /** Working directory for a local stdio server. */
+  cwd?: string;
+  /** Per-request timeout for slow local MCP tools, in milliseconds. */
+  requestTimeoutMs?: number;
+  /** Some stdio servers use stderr for routine logs rather than failures. */
+  stderrAsError?: boolean;
   isEnabled: boolean;
   transport?: 'stdio' | 'sse' | 'streamable-http';
   sseUrl?: string;

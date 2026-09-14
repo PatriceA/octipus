@@ -2,6 +2,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { type KeybindingsManager, ProcessTerminal, TUI } from '@mariozechner/pi-tui';
+import { setMouseCapture } from './terminal-actions';
 import { installOctipusKeybindings } from './keybindings';
 
 export interface RuntimeOptions {
@@ -41,7 +42,15 @@ export function createRuntime(options: RuntimeOptions = {}): Runtime {
   const port = getApiPort();
   const gatewayUrl = options.gatewayUrl || `ws://localhost:${port}/gateway`;
 
-  const terminal = new ProcessTerminal();
+  const terminal = new class extends ProcessTerminal {
+    // Mouse tracking stays off: any xterm tracking mode makes the terminal hand
+    // left-click drags to the app, which kills native select-and-copy. Wheel
+    // scrolling of the transcript is opt-in via /mouse on or Alt+M.
+    override stop(): void {
+      setMouseCapture(this, false);
+      super.stop();
+    }
+  }();
   const tui = new TUI(terminal, options.showHardwareCursor ?? false);
   const keybindings = installOctipusKeybindings();
 

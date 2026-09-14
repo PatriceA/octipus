@@ -23,10 +23,12 @@ test('gateway slash entries mirror the registry (names and aliases)', () => {
   for (const [name, aliases] of listed) expect({ name, aliases }).toEqual({ name, aliases: registered.get(name) });
 });
 
-test('TUI-local entries are exactly the cases of handleCommand in app.ts', () => {
+test('TUI-local entries match app command handlers and shared terminal actions', () => {
   const source = readFileSync(resolve(import.meta.dirname, 'app.ts'), 'utf8');
   const body = source.slice(source.indexOf('private handleCommand('));
-  const cases = [...body.matchAll(/^\s+case '([a-z-]+)':/gm)].map((m) => m[1]).sort();
+  const terminal = readFileSync(resolve(import.meta.dirname, 'terminal-actions.ts'), 'utf8');
+  const shared = [...terminal.matchAll(/name [!=]== '([a-z-]+)'/g)].map(m => m[1]);
+  const cases = [...body.matchAll(/^\s+case '([a-z-]+)':/gm)].map((m) => m[1]).concat(shared).sort();
   const local = OCTIPUS_SLASH_COMMANDS.filter((c) => c.source === 'tui').map((c) => c.name).sort();
   expect(cases.length).toBeGreaterThan(5);
   expect(local).toEqual(cases);

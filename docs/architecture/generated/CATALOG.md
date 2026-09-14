@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-395 mounted routes across 62 route files. The path is the full one, group prefix included — what a client actually calls.
+398 mounted routes across 62 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -105,6 +105,9 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | DELETE | `/api/connectors/:id` | `src/api/routes/connectors.ts` |
 | POST | `/api/connectors/:id/authorize` | `src/api/routes/connectors.ts` |
 | GET | `/api/connectors/:id/callback` | `src/api/routes/connectors.ts` |
+| DELETE | `/api/connectors/cocoindex` | `src/api/routes/connectors.ts` |
+| GET | `/api/connectors/cocoindex` | `src/api/routes/connectors.ts` |
+| POST | `/api/connectors/cocoindex/install` | `src/api/routes/connectors.ts` |
 | GET | `/api/devices` | `src/api/routes/devices.ts` |
 | DELETE | `/api/devices/:sessionId` | `src/api/routes/devices.ts` |
 | POST | `/api/devices/pair/generate` | `src/api/routes/devices.ts` |
@@ -429,8 +432,8 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `capabilities` | 2 |
 | `api` | `channels` | 7 |
 | `api` | `config` | 20 |
-| `api` | `connectors` | 1 |
-| `api` | `core` | 78 |
+| `api` | `connectors` | 2 |
+| `api` | `core` | 79 |
 | `api` | `db` | 96 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 5 |
@@ -439,10 +442,10 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `plugins` | 1 |
 | `api` | `security` | 71 |
 | `api` | `services` | 5 |
-| `api` | `shared` | 1 |
+| `api` | `shared` | 2 |
 | `api` | `skills` | 2 |
 | `api` | `tools` | 3 |
-| `api` | `utils` | 58 |
+| `api` | `utils` | 59 |
 | `api` | `voice` | 23 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 1 |
@@ -463,21 +466,23 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `config` | `security` | 3 |
 | `config` | `utils` | 5 |
 | `config` | `voice` | 1 |
-| `connectors` | `mcp` | 1 |
-| `connectors` | `security` | 1 |
-| `connectors` | `utils` | 1 |
+| `connectors` | `config` | 1 |
+| `connectors` | `mcp` | 2 |
+| `connectors` | `security` | 3 |
+| `connectors` | `shared` | 1 |
+| `connectors` | `utils` | 3 |
 | `core` | `capabilities` | 1 |
 | `core` | `channels` | 2 |
 | `core` | `config` | 31 |
 | `core` | `connectors` | 2 |
-| `core` | `db` | 179 |
+| `core` | `db` | 182 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 4 |
 | `core` | `mcp` | 5 |
 | `core` | `models` | 67 |
 | `core` | `security` | 49 |
 | `core` | `services` | 1 |
-| `core` | `shared` | 9 |
+| `core` | `shared` | 10 |
 | `core` | `skills` | 6 |
 | `core` | `tools` | 12 |
 | `core` | `utils` | 141 |
@@ -504,7 +509,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `hooks` | `tools` | 1 |
 | `hooks` | `utils` | 5 |
 | `mcp` | `config` | 2 |
-| `mcp` | `security` | 1 |
+| `mcp` | `security` | 2 |
 | `mcp` | `utils` | 3 |
 | `models` | `config` | 9 |
 | `models` | `core` | 24 |
@@ -521,7 +526,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `security` | `core` | 1 |
 | `security` | `db` | 48 |
 | `security` | `tools` | 1 |
-| `security` | `utils` | 21 |
+| `security` | `utils` | 20 |
 | `services` | `capabilities` | 5 |
 | `services` | `config` | 3 |
 | `services` | `core` | 2 |
@@ -543,8 +548,8 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `channels` | 1 |
 | `tools` | `config` | 4 |
 | `tools` | `connectors` | 2 |
-| `tools` | `core` | 62 |
-| `tools` | `db` | 30 |
+| `tools` | `core` | 65 |
+| `tools` | `db` | 29 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |
 | `tools` | `models` | 6 |
@@ -557,7 +562,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `visual` | 2 |
 | `tools` | `voice` | 3 |
 | `tui-editor` | `mcp` | 2 |
-| `tui-editor` | `tui-pi` | 28 |
+| `tui-editor` | `tui-pi` | 29 |
 | `tui-editor` | `utils` | 1 |
 | `tui-pi` | `config` | 1 |
 | `tui-pi` | `core` | 3 |
@@ -633,6 +638,7 @@ Every member of the `GatewayEventType` union in `src/core/gateway/protocol.ts`, 
 | `chat.response` | yes | `src/core/gateway/event-bridge.ts`, `src/core/gateway/message-handler.ts` | — |
 | `extension.notify` | yes | `src/extensions/api.ts` | — |
 | `permission.request` | yes | `src/core/gateway/event-bridge.ts` | — |
+| `permission.resolved` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `pipeline.event` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `rootAgent.status` | yes | `src/core/gateway/event-bridge.ts` | — |
 | `session.compaction_stalled` | yes | `src/core/agent/session-compaction.ts` | — |

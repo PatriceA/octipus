@@ -89,9 +89,8 @@ export default defineConfig({
   resolve: { tsconfigPaths: true },
   plugins: [markdownAsText()],
   test: {
-    // Once per run, after every file — not per file. Sweeping the shared
-    // `/tmp/octipus-*` scratch from a per-file hook deletes the live scratch of
-    // every worker still running.
+    // Own one exclusive root per invocation, shared with workers via provide.
+    // Teardown removes only that root after all projects finish.
     globalSetup: ['./src/test-helpers/tmp-cleanup.ts'],
     coverage: {
       provider: 'v8',

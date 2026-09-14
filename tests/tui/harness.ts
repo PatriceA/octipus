@@ -13,6 +13,7 @@ export class TuiHarness {
   readonly project = join(this.home, 'project');
   readonly screen: InstanceType<typeof Terminal>;
   readonly commands: any[] = [];
+  readonly clipboardRequests: string[] = [];
   readonly server: WebSocketServer;
   readonly proc: ChildProcessWithoutNullStreams;
   readonly exited: Promise<number | null>;
@@ -26,6 +27,7 @@ export class TuiHarness {
     mkdirSync(this.project);
     writeFileSync(join(this.project, 'example.ts'), 'const greeting = "hello";\n' + 'x'.repeat(120) + '\n');
     this.screen = new Terminal({ cols, rows, allowProposedApi: true, scrollback: 100 });
+    this.screen.parser.registerOscHandler(52, data => { this.clipboardRequests.push(data); return true; });
     const port = (server.address() as { port: number }).port;
     server.on('connection', socket => {
       this.sockets.add(socket);

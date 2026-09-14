@@ -252,8 +252,9 @@ function classifyMessageBase(message: string): MessageClassification {
   // Only treat as casual if the message is short — "hi" is casual,
   // "hi, give me my gmail messages" is a task with a greeting prefix.
   const wordCount = normalized.split(/\s+/).length;
+  const isAuthoringRequest = DOC_AUTHORING_RE.test(normalized);
   for (const pattern of CASUAL_PATTERNS) {
-    if (pattern.test(normalized)) {
+    if (!isAuthoringRequest && pattern.test(normalized)) {
       // Greeting-type patterns only casual if short; knowledge/follow-up patterns can be longer
       const isGreeting = /^(hi|hello|hey|thanks|bye|yes|no|ok|help)\b/i.test(normalized);
       if (!isGreeting || wordCount <= 5) {
@@ -266,7 +267,7 @@ function classifyMessageBase(message: string): MessageClassification {
   // Bumped from 3 → 6 words: covers things like "what is 2+2 one word",
   // "say the word ok", "tell me a joke" — all of which were previously
   // falling through to 'ambiguous' and getting routed to a coding agent.
-  if (normalized.split(/\s+/).length <= 6) {
+  if (!isAuthoringRequest && wordCount <= 6) {
     const hasTaskKeyword = Object.values(TASK_KEYWORDS)
       .flat()
       .some(kw => normalized.includes(kw));
@@ -330,7 +331,7 @@ function classifyMessageBase(message: string): MessageClassification {
   // Single keyword match — only classify as task if the message has enough context
   // (a lone word like "test" or "run" isn't a real task request)
   if (bestScore === 1 && bestCategory) {
-    if (wordCount <= 2) {
+    if (!isAuthoringRequest && wordCount <= 2) {
       return { type: 'casual', confidence: 0.8, complexity: 'simple' };
     }
     return {

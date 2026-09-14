@@ -155,3 +155,15 @@ describe('renderToolActivity — generic fallback', () => {
     }
   });
 });
+
+
+it('shell previews retain stderr diagnostics even when stdout is present', () => {
+  const activity = renderToolActivity('shell__run', { command: 'test' }, { stdout: 'Tests starting', stderr: 'Compile failed', exitCode: 1, outcome: 'error' }, true);
+  expect(activity.result).toMatchObject({ kind: 'exit', code: 1, tail: 'Tests starting\nCompile failed', ok: false });
+});
+
+
+it('expected nonzero shell exits remain successful observations in the preview', () => {
+  const activity = renderToolActivity('shell__run', { command: 'grep absent file' }, { stdout: '', stderr: '', exitCode: 1, outcome: 'expected_nonzero' }, true);
+  expect(activity.result).toMatchObject({ kind: 'exit', code: 1, ok: true });
+});

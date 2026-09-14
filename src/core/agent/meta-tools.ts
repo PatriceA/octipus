@@ -8,7 +8,7 @@ import {
 } from '@/core/swarm/types';
 import { coreLogger } from '@/utils/logger';
 import type { AgentService } from './service';
-import { createWorkPlanTools } from './work-plan-tools';
+import { createWorkPlanTools, submitWorkPlan } from './work-plan-tools';
 
 // Session-scoped idempotency for `remember_this`. A spinning root agent (esp.
 // a weak model idling while children run) can call it many times with the same
@@ -472,10 +472,11 @@ export function createMetaTools(
     {
       name: 'exit_plan_mode',
       description:
-        'Submit your finished plan for approval and leave plan mode. This is the ONLY way out of ' +
-        'plan mode, and it is a submission, not an announcement: do not paste the plan as an ordinary ' +
-        'reply and begin work. Call it once, as the last tool call of the turn, with the complete plan ' +
-        'as markdown starting with a # title.',
+        'Save and submit your finished proposal, then end the planning turn. First use ' +
+        'update_work_plan to publish the actual future implementation steps, all pending. Call this ' +
+        'once, as the last tool call of the turn, with the complete plan as markdown starting with a ' +
+        '# title. It saves that full document on the visible work plan. It does not disable plan mode, ' +
+        'approve the plan, or start implementation.',
       parameters: {
         type: 'object',
         properties: {
@@ -503,17 +504,21 @@ export function createMetaTools(
         if (!plan) {
           throw new Error('exit_plan_mode requires the plan itself — call it with the full markdown.');
         }
-        // The flag STAYS ON. Submitting a plan is not the same as it being
-        // approved, and the only party who can approve it is the user — who
-        // says so with `/plan off`.
-        coreLogger.info({ sessionId: context.sessionId, planChars: plan.length }, 'Plan submitted for approval');
+        const saved = await submitWorkPlan(context.sessionId, context.userId, plan);
+        // The flag STAYS ON. Submitting a proposal and changing the session's
+        // tool availability are separate operations, and neither starts work.
+        coreLogger.info(
+          { sessionId: context.sessionId, planChars: plan.length, ...saved },
+          'Plan saved and submitted for review',
+        );
         return {
           submitted: true,
+          ...saved,
           plan,
           note:
-            'Plan submitted. Present it to the user and STOP — you are still in plan mode and still ' +
-            'hold no file-writing tools. They approve it by running `/plan off`, and only then is ' +
-            'there anything to do.',
+            'Plan saved and submitted for review. Present it to the user and STOP. Plan mode remains ' +
+            'on. The user may request revisions or explicitly turn plan mode off later; `/plan off` ' +
+            'only changes tool availability and does not approve this plan or start implementation.',
         };
       },
     },
@@ -597,7 +602,7 @@ export function createMetaTools(
 
   if (lite) {
     return tools.filter(
-      (t) => t.name === 'spawn_child' || t.name === 'collect_children' || t.name === 'remember_this' || t.name === 'get_work_plan' || t.name === 'update_work_plan',
+      (t) => t.name === 'spawn_child' || t.name === 'collect_children' || t.name === 'remember_this' || t.name === 'get_work_plan' || t.name === 'update_work_plan' || t.name === 'exit_plan_mode',
     );
   }
   return tools;

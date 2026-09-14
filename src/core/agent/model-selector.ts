@@ -2,10 +2,30 @@ import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
 import { hasRecentShim } from './model-capability';
 import { getSessionModel } from './session-model-override';
+import type { MessageClassification } from './types';
 
 interface ModelRouting {
   model: string;
   reason: string;
+}
+
+interface GeneralExpertBinding {
+  modelPreference: string | null;
+  topic: string;
+}
+
+type GeneralExpertBindingLoader = () => Promise<GeneralExpertBinding | null>;
+
+async function loadGeneralExpertBinding(): Promise<GeneralExpertBinding | null> {
+  const { getDb } = await import('@/db/postgres');
+  const { experts } = await import('@/db/schema/experts');
+  const { and, eq } = await import('drizzle-orm');
+  const [expert] = await getDb()
+    .select({ modelPreference: experts.modelPreference, topic: experts.topic })
+    .from(experts)
+    .where(and(eq(experts.role, 'general'), eq(experts.isSystem, true)))
+    .limit(1);
+  return expert ?? null;
 }
 
 /**
@@ -53,10 +73,19 @@ export async function findToolCapableFallback(
  * Encapsulates model selection logic for the root agent and worker agents.
  */
 export class ModelSelector {
+  constructor(
+    private readonly generalExpertBindingLoader: GeneralExpertBindingLoader = loadGeneralExpertBinding,
+  ) {}
+
   /**
-   * Select a model suitable for orchestration (must support tools, no reasoning models).
+   * Select a model suitable for the root agent (must support tools, no reasoning models).
+   * Work turns, including ambiguous requests and approval follow-ups, use
+   * the General expert's model and assigned lane. Only casual turns use chat.
    */
-  async selectForRootAgent(sessionId?: string): Promise<string> {
+  async selectForRootAgent(
+    sessionId?: string,
+    turnType: MessageClassification['type'] = 'casual',
+  ): Promise<string> {
     const registry = getModelRegistry();
 
     // Per-session override (Phase 6) wins over the registry default,
@@ -77,14 +106,62 @@ export class ModelSelector {
         }
         coreLogger.warn(
           { sessionId, overrideId },
-          'Session model override points to an unregistered model — falling back to default',
+          'Session model override points to an unregistered model — falling back to configured routing',
         );
       }
     }
 
+    if (turnType !== 'casual') {
+      let binding: GeneralExpertBinding | null = null;
+      try {
+        binding = await this.generalExpertBindingLoader();
+      } catch (err) {
+        // Match worker auto-selection: a missing/unavailable expert row should
+        // not make the root unusable. The role's canonical default lane still
+        // gives the operator-controlled Agents binding a chance to resolve.
+        coreLogger.warn(
+          { err },
+          'General expert binding lookup failed — using the root default model',
+        );
+        const defaultModel = await registry.getDefaultModel();
+        if (!defaultModel) {
+          throw new Error('No default model configured. Set one in the Models page.');
+        }
+        return this.validateRootModel(defaultModel.modelId, defaultModel);
+      }
+
+      if (binding?.modelPreference) {
+        const pinnedModel = await registry.getModelByModelId(binding.modelPreference);
+        if (!pinnedModel) {
+          throw new Error(
+            `The General expert is pinned to unregistered model "${binding.modelPreference}". ` +
+            'Choose an enabled model in the Experts page.',
+          );
+        }
+        return this.validateRootModel(pinnedModel.modelId, pinnedModel);
+      }
+
+      const lane = binding?.topic || 'general';
+      const taskModel = await registry.getModelForTopic(lane);
+      if (!taskModel) {
+        const defaultModel = await registry.getDefaultModel();
+        if (!defaultModel) {
+          throw new Error(
+            `No model mapped for the General expert lane "${lane}" and no default model configured. ` +
+            'Bind a primary model to that lane or set a default in the Models page.',
+          );
+        }
+        coreLogger.info(
+          { lane, selectedModel: defaultModel.modelId },
+          'General expert lane is unbound — using the root default model',
+        );
+        return this.validateRootModel(defaultModel.modelId, defaultModel);
+      }
+      return this.validateRootModel(taskModel.modelId, taskModel);
+    }
+
     // The 'chat' lane binding, when set, is the explicit home for the
-    // root agent/conversation model (topic consolidation made this real —
-    // 'chat' previously had no consumer). Unbound ⇒ default model, as before.
+    // conversation model. Unbound means default model, as before.
     const chatModel = await registry.getModelForTopic('chat');
     if (chatModel) {
       return this.validateRootModel(chatModel.modelId, chatModel);

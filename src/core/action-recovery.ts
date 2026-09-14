@@ -6,6 +6,7 @@ import { routeApproval } from '@/security/approval-policy';
 import { coreLogger } from '@/utils/logger';
 import { assertExecutionActive, getExecutionSignal } from './execution-scope';
 import type { AgentContext } from './types';
+import { isToolNotExecutedResult, ToolNotExecutedError } from './tool-execution-error';
 
 export class RecoveryReviewRequiredError extends Error {
   readonly code = 'recovery_review_required';
@@ -24,7 +25,12 @@ export function isReadOnlyAction(action: string): boolean {
 }
 
 export function describeActions(rows: ToolAction[]): string {
-  return rows.slice(0, 20).map(row => `- ${row.toolName}: ${row.status === 'completed' ? 'returned previously' : 'outcome unknown'}; ${row.createdAt.toISOString()}; record ${row.id}`)
+  return rows.slice(0, 20).map(row => {
+    const outcome = row.status === 'completed' ? 'returned previously (finished attempt, not necessarily success)'
+      : row.status === 'started' ? 'outcome unknown: no durable completion was recorded; the run may have stopped or storage may have failed'
+      : 'outcome unknown: execution was interrupted or its result did not confirm what happened';
+    return `- ${row.toolName} at ${row.createdAt.toISOString()}: ${outcome}; record ${row.id}`;
+  })
     .join('\n') + (rows.length > 20 ? `\n… ${rows.length - 20} additional actions` : '');
 }
 
@@ -72,9 +78,9 @@ export class ActionRecovery {
         `Previous tool actions have uncertain outcomes. Check external state and obtain recovery approval before another mutation. ${describeActions(pending)}`);
       const manager = getPermissionManager();
       const id = await manager.requestApproval(context.userId, context.id, 'action_recovery', 'retry', {
-        warning: 'These actions may already have happened. Check their external state before approving. Approval permits continuing with mutations, which can repeat earlier actions.',
+        warning: `The earlier actions listed below have no confirmed outcome. This is separate from permission to run ${toolName}. Check their external state: changes may already exist. Approving permits further changes and may repeat earlier effects; rejecting leaves read-only checks available.`,
         previousActions: describeActions(pending), nextTool: toolName,
-      }, context.sessionId, 'Review uncertain actions before continuing', getExecutionSignal(context));
+      }, context.sessionId, `Check earlier ${pending[0].toolName} outcome before continuing`, getExecutionSignal(context));
       const approved = await manager.waitForApproval(id, { agentId: context.id });
       assertExecutionActive(context);
       if (!approved) throw new RecoveryReviewRequiredError('Recovery approval was not granted. Do not repeat the uncertain actions. Read-only checks remain available.');
@@ -107,15 +113,17 @@ export class ActionRecovery {
       entered = true;
       const result = await execute();
       const value = result as Record<string, unknown> | null;
-      // Uncertain means the effect may or may not have happened: the call was
-      // cut off (timeout, kill, abort). A structured failure the tool itself
-      // reported (`success: false`, `outcome: 'error'`, `isError`) is a KNOWN
-      // outcome — the tool ran to the end and said so — and must not gate the
-      // rest of the session behind a human review; agents mis-path files and
-      // fail builds all day.
+      // A normal shell exit is a completed attempt even when tests fail or a
+      // command exits nonzero. It is not success, nor proof that nothing changed.
+      // Generic tool error envelopes can hide transport failure after a remote
+      // side effect, so they do not provide the same definitive exit evidence.
+      const shellExited = toolId === 'shell' && value !== null && typeof value === 'object'
+        && Number.isInteger(value.exitCode) && value.signal == null;
       const uncertain = value !== null && typeof value === 'object' &&
-        (value.timedOut === true || value.killed === true || value.aborted === true);
-      try { await this.repository.finish(scope, uncertain ? 'uncertain' : 'completed'); }
+        (value.timedOut === true || value.killed === true || value.aborted === true ||
+          (!shellExited && (value.isError === true || value.success === false || value.outcome === 'error')) ||
+          (toolId === 'shell' && typeof value.signal === 'string'));
+      try { await this.repository.finish(scope, isToolNotExecutedResult(toolId, result) ? 'not_executed' : uncertain ? 'uncertain' : 'completed'); }
       catch (err) {
         // Preserve the known output. The durable started record remains and
         // gates the next mutation; a logging outage must not invite a retry.
@@ -123,7 +131,8 @@ export class ActionRecovery {
       }
       return result;
     } catch (error) {
-      try { await this.repository.finish(scope, entered ? 'uncertain' : 'not_executed'); }
+      const notExecuted = !entered || (error instanceof ToolNotExecutedError && error.toolId === toolId);
+      try { await this.repository.finish(scope, notExecuted ? 'not_executed' : 'uncertain'); }
       catch (err) { coreLogger.error({ err, actionId: id }, 'Could not record tool termination; action remains uncertain'); }
       throw error;
     } finally { this.active.delete(id); }

@@ -1,6 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentMessage } from '@/core/types';
-import { buildCachedSystem, toAnthropicMessages, toAnthropicTools } from './anthropic-compat-provider';
+import type { CompletionOptions } from '../../litellm-client';
+import {
+  buildCachedSystem,
+  CustomAnthropicCompatProvider,
+  toAnthropicMessages,
+  toAnthropicTools,
+} from './anthropic-compat-provider';
 
 type AnthropicBlockLike = { type: string; id?: string; tool_use_id?: string; [k: string]: unknown };
 
@@ -8,6 +14,8 @@ const ts = new Date();
 const userMsg = (content: string): AgentMessage => ({ role: 'user', content, timestamp: ts });
 const sysMsg = (content: string): AgentMessage => ({ role: 'system', content, timestamp: ts });
 const asstMsg = (content: string): AgentMessage => ({ role: 'assistant', content, timestamp: ts });
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe('buildCachedSystem (Phase 2b breakpoints)', () => {
   const bigStatic = 'S'.repeat(5000); // over the ~1024-token cache minimum
@@ -62,13 +70,19 @@ describe('toAnthropicMessages', () => {
       toolCalls: [{ id: 'c1', name: 'get_weather', arguments: { city: 'Berlin' } }],
       timestamp: ts,
     }]);
-    expect(messages).toEqual([{
-      role: 'assistant',
-      content: [
-        { type: 'text', text: 'let me check' },
-        { type: 'tool_use', id: 'c1', name: 'get_weather', input: { city: 'Berlin' } },
-      ],
-    }]);
+    expect(messages).toEqual([
+      {
+        role: 'user',
+        content: [{ type: 'text', text: '[Continue from the compacted conversation context.]' }],
+      },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'let me check' },
+          { type: 'tool_use', id: 'c1', name: 'get_weather', input: { city: 'Berlin' } },
+        ],
+      },
+    ]);
   });
 
   it('parses stringified tool-call arguments into an object', () => {
@@ -78,7 +92,7 @@ describe('toAnthropicMessages', () => {
       toolCalls: [{ id: 'c1', name: 'f', arguments: '{"a":1}' as unknown as Record<string, unknown> }],
       timestamp: ts,
     }]);
-    const blocks = messages[0].content as unknown as Array<Record<string, unknown>>;
+    const blocks = messages[1].content as unknown as Array<Record<string, unknown>>;
     expect(blocks[0]).toEqual({ type: 'tool_use', id: 'c1', name: 'f', input: { a: 1 } });
   });
 
@@ -119,9 +133,9 @@ describe('toAnthropicMessages', () => {
       { role: 'assistant', content: 'checking', toolCalls: [{ id: '', name: 'f', arguments: {} }], timestamp: ts },
       { role: 'tool', content: 'ok', name: 'f', toolCallId: '', timestamp: ts },
     ]);
-    const asstBlocks = messages[0].content as AnthropicBlockLike[];
+    const asstBlocks = messages[1].content as AnthropicBlockLike[];
     const toolUse = asstBlocks.find((b) => b.type === 'tool_use');
-    const userBlocks = messages[1].content as AnthropicBlockLike[];
+    const userBlocks = messages[2].content as AnthropicBlockLike[];
     expect(toolUse?.id).toBe('call_0');
     expect(userBlocks[0].tool_use_id).toBe('call_0');
   });
@@ -133,6 +147,82 @@ describe('toAnthropicMessages', () => {
       { role: 'assistant', content: [{ type: 'text', text: 'hello' }] },
     ]);
   });
+
+  it('anchors an already-sliced leading assistant tool call with a user turn', () => {
+    const { messages } = toAnthropicMessages([
+      sysMsg('Earlier turns were compacted.'),
+      {
+        role: 'assistant', content: '', timestamp: ts,
+        toolCalls: [{ id: 'c1', name: 'get_weather', arguments: { city: 'Berlin' } }],
+      },
+      { role: 'tool', content: '12C', name: 'get_weather', toolCallId: 'c1', timestamp: ts },
+    ]);
+    expect(messages.map(message => message.role)).toEqual(['user', 'assistant', 'user']);
+    expect(messages[0].content).toEqual([{
+      type: 'text', text: '[Continue from the compacted conversation context.]',
+    }]);
+    expect((messages[1].content as AnthropicBlockLike[])[0]).toMatchObject({
+      type: 'tool_use', id: 'c1', name: 'get_weather',
+    });
+    expect((messages[2].content as AnthropicBlockLike[])[0]).toMatchObject({
+      type: 'tool_result', tool_use_id: 'c1',
+    });
+  });
+});
+
+it('sends the repaired compacted history through complete and stream', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    if (bodies.length === 1) {
+      return Response.json({
+        id: 'complete-1', model: 'gemini-wire', stop_reason: 'end_turn',
+        content: [{ type: 'text', text: 'complete' }],
+        usage: { input_tokens: 3, output_tokens: 1 },
+      });
+    }
+    const events = [
+      { type: 'message_start', message: { id: 'stream-1', model: 'gemini-wire', usage: { input_tokens: 3 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'streamed' } },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1 } },
+    ];
+    return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+      headers: { 'content-type': 'text/event-stream' },
+    });
+  }));
+
+  const options: CompletionOptions = {
+    model: 'gemini-3.8-flash',
+    messages: [
+      sysMsg('Earlier turns were compacted.'),
+      {
+        role: 'assistant', content: '', timestamp: ts,
+        toolCalls: [{ id: 'c1', name: 'search', arguments: { q: 'recent' } }],
+      },
+      { role: 'tool', content: 'result', name: 'search', toolCallId: 'c1', timestamp: ts },
+    ],
+    tools: [{
+      type: 'function',
+      function: { name: 'search', description: 'Search', parameters: { type: 'object', properties: {} } },
+    }],
+    customProviderOverride: {
+      baseUrl: 'https://example.test', apiKey: 'test-key', modelId: 'gemini-wire',
+      custom: { auth: { type: 'bearer' } },
+    },
+  };
+  const provider = new CustomAnthropicCompatProvider();
+  await provider.complete(options);
+  const chunks = [];
+  for await (const chunk of provider.stream(options)) chunks.push(chunk);
+
+  expect(bodies).toHaveLength(2);
+  for (const body of bodies) {
+    expect((body.messages as Array<{ role: string }>).map(message => message.role))
+      .toEqual(['user', 'assistant', 'user']);
+  }
+  expect(bodies.map(body => body.stream)).toEqual([false, true]);
+  expect(chunks.some(chunk => chunk.content === 'streamed')).toBe(true);
 });
 
 describe('toAnthropicTools', () => {

@@ -55,3 +55,39 @@ it('automatic plan refresh repaints without duplicating transcript', async () =>
     expect(bar.render(120).join('\n')).toContain('Second');
   } finally { await app.stop(); }
 });
+
+
+it('opens a newly published plan automatically without flooding the transcript', async () => {
+  let root!: Container;
+  gateway.sendCommand.mockClear();
+  const tui = { addChild: (c: Container) => { root = c; }, setFocus: vi.fn(), addInputListener: vi.fn(), requestRender: vi.fn() } as unknown as TUI;
+  const app = new OctipusTuiApp(tui, {});
+  try {
+    const bar = root.children.find(c => c instanceof StatusBar)!;
+    gateway.listener({ kind: 'command.result', name: 'work-plan-status', result: 'Backend profiles · v2 · 0/5 steps done' });
+    expect(gateway.sendCommand).toHaveBeenCalledWith('work-plan');
+    expect(bar.isPlanExpanded()).toBe(true);
+    gateway.listener({ kind: 'command.result', name: 'work-plan', result: 'Backend profiles\n[ ] Implement profile storage\n[ ] Isolate network clients' });
+    expect(bar.render(120).join('\n')).toContain('Implement profile storage');
+    expect(root.children[0].render(120).join('\n')).not.toContain('Implement profile storage');
+    bar.setPlanDetails(null);
+    gateway.sendCommand.mockClear();
+    gateway.listener({ kind: 'command.result', name: 'work-plan-status', result: 'Backend profiles · v3 · 0/5 steps done' });
+    expect(bar.isPlanExpanded()).toBe(false);
+    expect(gateway.sendCommand).not.toHaveBeenCalledWith('work-plan');
+  } finally { await app.stop(); }
+});
+
+it('keeps a collapsed plan closed when an automatic detail request fails', async () => {
+  let root!: Container;
+  const tui = { addChild: (c: Container) => { root = c; }, setFocus: vi.fn(), addInputListener: vi.fn(), requestRender: vi.fn() } as unknown as TUI;
+  const app = new OctipusTuiApp(tui, {});
+  try {
+    const bar = root.children.find(c => c instanceof StatusBar)!;
+    gateway.listener({ kind: 'command.result', name: 'work-plan-status', result: 'Proposed · Profiles · revision 1 · 0/2 steps done' });
+    expect(bar.isPlanExpanded()).toBe(true);
+    bar.setPlanDetails(null);
+    gateway.listener({ kind: 'command.result', name: 'work-plan', result: null, error: 'Connection lost' });
+    expect(bar.isPlanExpanded()).toBe(false);
+  } finally { await app.stop(); }
+});

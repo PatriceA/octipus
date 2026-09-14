@@ -186,6 +186,7 @@ describe('AgentWorker child-aware timeout (2.2) + graceful exit (3.5)', () => {
     const result = await priv.loop();
     expect(result).toContain('Progress summary');
     expect(calls).toBe(1); // exactly one final no-tools turn
+    expect((orch as unknown as { completionReason: string }).completionReason).toBe('time_limit');
   });
 
   test('iteration-budget exhaustion runs one final no-tools summary turn (3.5)', async () => {
@@ -204,6 +205,28 @@ describe('AgentWorker child-aware timeout (2.2) + graceful exit (3.5)', () => {
     expect(calls).toBe(1);
     expect(result).toContain('SUMMARY');
     expect(priv.toolExecutor.toolsDisabled).toBe(true); // tools disabled for the summary turn
+    expect((worker as unknown as { completionReason: string }).completionReason).toBe('iteration_limit');
+  });
+
+  test('budget completion emits and persists the reason independent of summary wording', async () => {
+    const update = vi.spyOn(agentRepository, 'updateStatus').mockResolvedValue(undefined);
+    const audit = vi.spyOn(auditRepository, 'logAgentCompleted').mockResolvedValue(undefined as never);
+    try {
+      const worker = new AgentWorker(mkCtx(), cfg({ maxIterations: 2 }));
+      const priv = worker as unknown as { iteration: number; getCompletion: () => Promise<CompletionResult> };
+      priv.iteration = 2;
+      priv.getCompletion = async () => completion('Everything is finished.');
+      const events: AgentEvent[] = [];
+      worker.onEvent(event => events.push(event));
+      await worker.run();
+      expect(worker.getStatus()).toBe('completed');
+      expect(worker.getContext().metadata.completionReason).toBe('iteration_limit');
+      expect(events.find(event => event.type === 'complete')?.data).toMatchObject({ completionReason: 'iteration_limit' });
+      expect(update).toHaveBeenCalledWith('hw-1', expect.objectContaining({ status: 'completed', completionReason: 'iteration_limit' }));
+    } finally {
+      update.mockRestore();
+      audit.mockRestore();
+    }
   });
 
   test('a wedged summary turn is bounded and still yields a deterministic recap', async () => {
@@ -523,4 +546,50 @@ test('native completion releases its permission subscription', async () => {
     await worker.run();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   } finally { subscribe.mockRestore(); audit.mockRestore(); update.mockRestore(); }
+});
+
+test.each(['native', 'text'] as const)('%s final-tool reporting distinguishes a failed stage from unavailable tools', async (source) => {
+  const spies = [
+    vi.spyOn(auditRepository, 'logAgentCompleted').mockResolvedValue(undefined as never),
+    vi.spyOn(agentRepository, 'updateStatus').mockResolvedValue(undefined as never),
+    vi.spyOn(messageRepository, 'create').mockResolvedValue(undefined as never),
+    vi.spyOn(sessionRepository, 'incrementMessageCount').mockResolvedValue(undefined as never),
+  ];
+  try {
+  const worker = new AgentWorker(mkCtx({ role: 'general', root: true }), cfg());
+  const priv = worker as unknown as {
+    messages: import('@/core/types').AgentMessage[];
+    getCompletion: () => Promise<CompletionResult>;
+    toolExecutor: { disableTools: () => void; handleToolCalls: () => Promise<import('@/core/types').AgentMessage[]> };
+  };
+  worker.registerTools(['create_pipeline', 'filesystem__write_file'].map(name => ({
+    name, description: name, parameters: { type: 'object', properties: {} }, execute: async () => 'unused',
+  })));
+  let calls = 0;
+  let executions = 0;
+  priv.toolExecutor.handleToolCalls = async () => {
+    executions++;
+    priv.toolExecutor.disableTools();
+    return [{ role: 'tool', toolCallId: 'pipeline-call', content: 'Pipeline failed at research: INVALID_ARGUMENT', timestamp: new Date() }];
+  };
+  priv.getCompletion = async () => {
+    if (++calls === 1 && source === 'text') return completion('{"name":"create_pipeline","arguments":{}}');
+    if (calls === 1) return {
+      ...completion(''), toolCalls: [{ id: 'pipeline-call', name: 'create_pipeline', arguments: {} }],
+    };
+    if (calls === 3) {
+      expect(priv.messages.at(-1)?.content).toContain('Do not call tools');
+      return completion('Research failed; implementation has not started. {"name":"filesystem__write_file","arguments":{"path":"/tmp/not-executed","content":"no"}}');
+    }
+    const reportContext = priv.messages.at(-1)?.content;
+    expect(reportContext).toContain('Tool execution for this turn has ended');
+    expect(reportContext).toContain('Do not attempt or describe additional tool calls as executed');
+    expect(reportContext).toContain('what remains unexecuted');
+    expect(priv.messages.at(-2)?.content).toContain('INVALID_ARGUMENT');
+    return completion('');
+  };
+  expect(await worker.run('Implement the reviewed plan')).toContain('implementation has not started');
+  expect(calls).toBe(3);
+  expect(executions).toBe(1);
+  } finally { spies.forEach(spy => spy.mockRestore()); }
 });

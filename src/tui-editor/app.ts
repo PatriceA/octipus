@@ -1,3 +1,4 @@
+import { handleTerminalCommand } from '@/tui-pi/terminal-actions';
 import { UnsavedPrompt } from './components/unsaved-prompt';
 import { DecisionQueue } from '@/tui-pi/decision-queue';
 import { ChatSessionPresenter } from '@/tui-pi/chat-session-presenter';
@@ -145,7 +146,7 @@ export class OctipusEditorApp {
     this.session = new ChatSessionPresenter(tui, this.adapter, this.chat.messages, this.status, this.chat.activity, this.chat.subagents, (role, content) => this.pushMessage(role, content));
     this.chat.messages.push({
       role: 'system',
-      content: `Welcome to Octipus. Project: ${basenameOf(this.projectPath)}  Type a message or /help for commands.`,
+      content: `Welcome to Octipus. Project: ${basenameOf(this.projectPath)}  Type a message or /help. Drag to select · /copy last: copy reply.`,
       timestamp: new Date(),
     });
 
@@ -339,6 +340,7 @@ export class OctipusEditorApp {
   private handleEvent(event: AgentSessionEvent): void {
     if (this.session.handleEvent(event)) return;
     switch (event.kind) {
+      case 'permission.resolved': this.decisions.resolve(event.requestId, event.status); return;
       case 'permission': this.decisions.push(event); return;
       case 'approval': this.decisions.push(event); return;
       case 'agent.write': this.handleAgentWrite(event.path, event.newText); return;
@@ -417,6 +419,7 @@ export class OctipusEditorApp {
   // ── Submit / commands ──────────────────────────────────────────
 
   private handleChatSubmit(rawText: string): void {
+    if (rawText.trim().startsWith('/') && handleTerminalCommand(rawText, this.tui, this.chat.messages, this.status, text => this.pushMessage('system', text))) return;
     const text = rawText.trim();
     if (!text) return;
     this.chat.messages.push({ role: 'user', content: text, timestamp: new Date() });
@@ -456,14 +459,13 @@ export class OctipusEditorApp {
 
   private handleGlobalKey(data: string): { consume: true } | undefined {
     const kb = getKeybindings();
+    if (kb.matches(data, 'app.mouse.toggle')) { handleTerminalCommand('mouse', this.tui, this.chat.messages, this.status, text => this.pushMessage('system', text)); return { consume: true }; }
     if (this.tui.hasOverlay()) return undefined;
     if (kb.matches(data, 'app.subagents.scrollUp')) { if (this.chat.subagents.scroll(-1)) { this.tui.requestRender(); return { consume: true }; } }
     if (kb.matches(data, 'app.subagents.scrollDown')) { if (this.chat.subagents.scroll(1)) { this.tui.requestRender(); return { consume: true }; } }
     if (kb.matches(data, 'app.subagents.toggle')) { this.chat.subagents.toggle(); this.tui.requestRender(); return { consume: true }; }
     if (this.layout.get().focused === 'chat') {
-      if (matchesKey(data, 'pageUp')) { this.chat.messages.scrollUp(); this.tui.requestRender(); return { consume: true }; }
-      if (matchesKey(data, 'pageDown')) { this.chat.messages.scrollDown(); this.tui.requestRender(); return { consume: true }; }
-      if (matchesKey(data, 'end') && this.chat.messages.getScrollOffset() > 0) { this.chat.messages.scrollToBottom(); this.tui.requestRender(); return { consume: true }; }
+      if (this.chat.messages.handleScrollInput(data)) { this.tui.requestRender(); return { consume: true }; }
     }
     if (kb.matches(data, 'app.tree.toggle'))   { this.layout.toggleTree(); return { consume: true }; }
     if (kb.matches(data, 'app.chat.toggle'))   { this.layout.toggleChat(); return { consume: true }; }

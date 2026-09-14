@@ -1,0 +1,23 @@
+name: Plan request classification
+description: Plan authoring must not select the casual chat lane; model binding is covered by model-capability.test.ts.
+tests:
+  - id: write-this-as-plan
+    input: "write this as a plan"
+    assertions:
+      - type: classification
+        value: ambiguous
+  - id: short-plan-authoring
+    input: "draft plan"
+    assertions:
+      - type: classification
+        value: task
+  - id: approval-followup
+    input: "go ahead"
+    assertions:
+      - type: classification
+        value: approval
+  - id: greeting-still-casual
+    input: "hello"
+    assertions:
+      - type: classification
+        value: casual

@@ -1,6 +1,6 @@
 import type { TurnEvent } from '@/core/agent/service';
 import type { AgentEvent } from '@/core/agent-base';
-import type { PermissionRequestEvent } from '@/security/permissions';
+import type { PermissionRequestEvent, PermissionResolvedEvent } from '@/security/permissions';
 import { coreLogger } from '@/utils/logger';
 import type { GatewayHub } from './hub';
 
@@ -139,7 +139,14 @@ export function connectEventBridge(hub: GatewayHub): () => void {
       });
     });
 
-    cleanups.push(unsubPerm);
+    const unsubResolved = permissionManager.onResolved((event: PermissionResolvedEvent) => {
+      hub.publishEvent({
+        type: 'permission.resolved', source: `agent:${event.agentId}`,
+        userId: event.userId, sessionId: event.sessionId,
+        payload: { requestId: event.requestId, status: event.status },
+      });
+    });
+    cleanups.push(unsubPerm, unsubResolved);
     coreLogger.debug('Connected permission manager to gateway event bus');
   } catch {
     coreLogger.debug('Permission manager not available for event bridge');

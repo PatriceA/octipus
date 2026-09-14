@@ -47,6 +47,7 @@ declare module '@mariozechner/pi-tui' {
     // Chat surface (also valid in editor)
     'app.palette.open': true;
     'app.help.open': true;
+    'app.mouse.toggle': true;
     'app.quit': true;
     'app.voice.talk': true;
     'app.subagents.toggle': true;
@@ -74,6 +75,7 @@ export const OCTIPUS_APP_KEYBINDINGS = {
   'app.mcp.list':        { defaultKeys: 'ctrl+e',           description: 'MCP server list' },
   'app.palette.open':    { defaultKeys: ['ctrl+p', 'f4'],   description: 'Command palette' },
   'app.help.open':       { defaultKeys: 'f5',               description: 'Show hotkeys' },
+  'app.mouse.toggle':    { defaultKeys: 'alt+m',           description: 'Toggle mouse wheel capture (off = native text selection)' },
   'app.quit':            { defaultKeys: 'ctrl+q',           description: 'Quit' },
   'app.voice.talk':      { defaultKeys: ['alt+t', 'f8'],    description: 'Push-to-talk: start/stop voice input' },
   'app.subagents.toggle':{ defaultKeys: ['alt+s', 'f7'],    description: 'Expand/collapse the subagent panel' },

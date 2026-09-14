@@ -14,8 +14,6 @@ import { type Component, truncateToWidth } from '@mariozechner/pi-tui';
 import { chalk, getPalette } from '../theme/defaults';
 import type { ToolEventState } from '../gateway-adapter';
 
-/** How long a finished subagent stays on screen before it is dropped. */
-const DONE_LINGER_MS = 8000;
 /**
  * How long a *running* row may go without any event before it is dropped as
  * abandoned. A child killed as a cross-process zombie (backend restart, orphan
@@ -108,10 +106,9 @@ export class SubagentPanel implements Component {
     if (!entry) return;
     entry.endedAt = this.now();
     entry.failed = opts?.failed;
-    entry.tool = null;
   }
 
-  /** Forget everything (a `/clear`, or a new turn after all children finished). */
+  /** Forget the session's inspection history on an explicit reset. */
   reset(): void {
     this.agents.clear(); this.scrollOffset = 0;
   }
@@ -158,7 +155,9 @@ export class SubagentPanel implements Component {
       ? (entry.failed ? chalk.hex(palette.error)('✗') : chalk.hex(palette.ok)('✓'))
       : chalk.hex(palette.accent)('•');
     const parts = [chalk.hex(palette.statusFg)(entry.role)];
-    if (!done) parts.push(`iter ${entry.iteration}`);
+    parts.push(done ? (entry.failed ? 'failed' : 'finished') : 'running');
+    parts.push(`iter ${entry.iteration}`);
+    if (entry.model) parts.push(entry.model);
     if (entry.toolCount > 0) parts.push(`${entry.toolCount} tool${entry.toolCount === 1 ? '' : 's'}`);
     parts.push(formatElapsed((entry.endedAt ?? this.now()) - entry.startedAt));
     if (entry.tool) {
@@ -169,17 +168,13 @@ export class SubagentPanel implements Component {
   }
 
   /**
-   * Drop finished subagents once they have been on screen long enough to read,
-   * and running ones that stopped saying anything at all (their backend is
-   * gone — see STALE_RUNNING_MS).
+   * Drop abandoned running rows. Completed rows remain inspectable until reset.
    */
   private prune(): void {
-    const doneCutoff = this.now() - DONE_LINGER_MS;
     const staleCutoff = this.now() - STALE_RUNNING_MS;
     for (const [id, entry] of this.agents) {
-      const finished = entry.endedAt !== undefined && entry.endedAt < doneCutoff;
       const abandoned = entry.endedAt === undefined && entry.updatedAt < staleCutoff;
-      if (finished || abandoned) this.agents.delete(id);
+      if (abandoned) this.agents.delete(id);
     }
   }
 }

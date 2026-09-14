@@ -289,11 +289,29 @@ export function compactMessages(
     }
   }
 
-  const compactedMessages = [
-    ...systemMessages,
-    ...keptOlderMessages,
-    ...recentMessages,
-  ];
+  const retainedMessages = [...keptOlderMessages, ...recentMessages];
+
+  // A recent assistant/tool block can be atomic and still be an invalid start
+  // for the next provider request. Gemini's Anthropic-compatible endpoint, in
+  // particular, rejects a leading function-call turn unless it immediately
+  // follows a user turn or function response. Preserve the nearest preceding
+  // user message as a conversational anchor when the retained window would
+  // otherwise start with an assistant response. This keeps old tool cycles
+  // compactable without retaining the intervening assistant/tool cycles.
+  if (retainedMessages[0]?.role === 'assistant') {
+    const firstRetainedIndex = otherMessages.indexOf(retainedMessages[0]);
+    for (let i = firstRetainedIndex - 1; i >= 0; i--) {
+      if (otherMessages[i].role === 'user') {
+        const anchorTokens = calculateTotalTokens([otherMessages[i]]);
+        if (anchorTokens <= Math.max(0, remainingTokenBudget - usedTokens)) {
+          retainedMessages.unshift(otherMessages[i]);
+        }
+        break;
+      }
+    }
+  }
+
+  const compactedMessages = [...systemMessages, ...retainedMessages];
 
   return {
     messages: compactedMessages,
@@ -485,8 +503,19 @@ export async function compactMessagesWithSummary(
     return { messages: compactedMessages, removed };
   }
 
-  // Get the removed messages for summarization
-  const removedMessages = messages.slice(0, messages.length - compactedMessages.length);
+  // Get the exact removed messages for summarization. Preserved system turns
+  // and a retained user anchor mean the compacted history is not necessarily a
+  // suffix of the original history.
+  const retainedCounts = new Map<AgentMessage, number>();
+  for (const message of compactedMessages) {
+    retainedCounts.set(message, (retainedCounts.get(message) ?? 0) + 1);
+  }
+  const removedMessages = messages.filter((message) => {
+    const count = retainedCounts.get(message) ?? 0;
+    if (count === 0) return true;
+    retainedCounts.set(message, count - 1);
+    return false;
+  });
   const nonSystemRemoved = removedMessages.filter((m) => m.role !== 'system');
 
   if (nonSystemRemoved.length === 0) {

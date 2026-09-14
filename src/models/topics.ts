@@ -51,7 +51,7 @@ export const TOPICS: readonly TopicDef[] = [
   {
     value: 'chat',
     label: 'Chat',
-    description: 'Casual conversations and direct replies. Also preferred by the rootAgent when bound; unbound = rootAgent uses the default model.',
+    description: 'Casual conversations and direct replies. Conversational root-agent turns prefer this lane when bound; task turns use the General expert binding. Unbound root lanes use the default model.',
     kind: 'text',
   },
   {

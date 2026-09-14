@@ -62,3 +62,31 @@ test('errors have a text marker, and reset removes history and live text', () =>
   expect(strip(pane.render(40)).join('\n')).toContain('! Error · Save failed');
   pane.setLive('partial'); pane.reset(); expect(pane.render(40)).toEqual([]);
 });
+
+test('overflow advertises history controls and the wheel reaches rows beyond the initial viewport', () => {
+  const pane = new MessagesPane({ maxVisible: 6 });
+  push(pane, Array.from({ length: 80 }, (_, n) => `history ${n}`).join('\n'), 'assistant');
+  expect(strip(pane.render(80)).at(-1)).toContain('PgUp/PgDn: history');
+  pane.setMouseCaptured(true);
+  expect(strip(pane.render(80)).at(-1)).toContain('wheel: history');
+  for (let n = 0; n < 40; n++) pane.handleScrollInput('\x1b[<64;10;5M');
+  expect(strip(pane.render(80)).join('\n')).toContain('history 0');
+  expect(pane.handleScrollInput('\x1b[1;5F')).toBe(true); // Ctrl+End
+  expect(strip(pane.render(80)).join('\n')).toContain('history 79');
+  expect(pane.handleScrollInput('\x1b[F')).toBe(false); // live End belongs to composer
+});
+
+test('resizing reflows frozen history so the right edge stays reachable', () => {
+  const pane = new MessagesPane({ maxVisible: 6 });
+  push(pane, 'BEGIN one two three four five six seven eight nine RIGHTEDGE', 'assistant');
+  for (let n = 0; n < 15; n++) push(pane, `later ${n}`);
+  pane.render(90); pane.handleScrollInput('\x1b[1;5H'); // Ctrl+Home
+  pane.setHeight(12);
+  const resized = strip(pane.render(20)).join('\n');
+  expect(resized).toContain('BEGIN');
+  expect(resized).toContain('RIGHTEDGE');
+  push(pane, 'new incoming content');
+  expect(strip(pane.render(20)).slice(0, -1).join('\n')).not.toContain('new incoming');
+  pane.setHeight(6);
+  expect(strip(pane.render(90)).join('\n')).toContain('RIGHTEDGE');
+});

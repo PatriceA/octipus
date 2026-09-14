@@ -1,4 +1,5 @@
 import { getExecutionSignal } from '@/core/execution-scope';
+import { isToolNotExecutedResult, ToolNotExecutedError } from '@/core/tool-execution-error';
 import { resolve } from 'path';
 import { getConfig } from '@/config';
 import { WorkspaceFS } from '@/security/workspace-fs';
@@ -67,7 +68,7 @@ export class ShellTool extends BaseTool {
       }),
       async (args, context) => {
         if (typeof args.command !== 'string' || !args.command) {
-          throw new Error('Missing required parameter "command". The tool call arguments may have been truncated or malformed.');
+          throw new ToolNotExecutedError('shell', 'Missing required parameter "command". The tool call arguments may have been truncated or malformed.');
         }
         const command = args.command;
         const projectPath = (context?.metadata as Record<string, unknown>)?.projectPath as string | undefined;
@@ -90,7 +91,10 @@ export class ShellTool extends BaseTool {
 
         const result = await this.ops.exec(command, cwd, { timeout, env, unsafe, allowNetwork, signal: getExecutionSignal(context) });
 
-        if (result.aborted) throw new Error('Shell command cancelled');
+        if (result.aborted) {
+          if (isToolNotExecutedResult('shell', result)) throw new ToolNotExecutedError('shell', 'Shell command cancelled before execution');
+          throw new Error('Shell command cancelled');
+        }
 
         // Classify the exit code so the agent isn't misled by non-zero codes
         // that are semantically normal (grep=1 "no match", diff=1 "files differ").
@@ -247,7 +251,7 @@ export class ShellTool extends BaseTool {
     // Content policy lives in `./policy` so the `command_exit_zero` scorer
     // enforces the same denylist rather than a second copy of it.
     const violation = commandPolicyViolation(command);
-    if (violation) throw new Error(violation);
+    if (violation) throw new ToolNotExecutedError('shell', violation);
 
     const elevated = matchElevatedCommand(command);
     if (elevated) {

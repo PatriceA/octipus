@@ -1,3 +1,4 @@
+import { handleTerminalCommand } from '@/tui-pi/terminal-actions';
 import { renderChatFrame } from './components/chat-frame';
 import { DecisionQueue } from '@/tui-pi/decision-queue';
 /**
@@ -14,7 +15,7 @@ import { DecisionQueue } from '@/tui-pi/decision-queue';
  */
 import { ChatSessionPresenter } from './chat-session-presenter';
 import { randomUUID } from 'node:crypto';
-import { Container, getKeybindings, matchesKey, type OverlayHandle, Spacer, type TUI } from '@mariozechner/pi-tui';
+import { Container, getKeybindings, type OverlayHandle, Spacer, type TUI } from '@mariozechner/pi-tui';
 import { loginWithPassword } from '@/core/gateway/cli-login';
 import { clearCliSession, readCliSession } from '@/core/gateway/cli-session';
 import { formatChangesMessage } from './changes-render';
@@ -64,7 +65,7 @@ const isHistoryRow = (v: unknown): v is HistoryRow => {
   return !!r && (r.role === 'user' || r.role === 'assistant') && typeof r.content === 'string';
 };
 /** Keybindings the chat shell actually handles (the rest of `app.*` belongs to the editor). */
-const CHAT_HOTKEYS = ['app.palette.open', 'app.help.open', 'app.subagents.toggle', 'app.subagents.scrollUp', 'app.subagents.scrollDown', 'app.voice.talk', 'app.quit'] as const;
+const CHAT_HOTKEYS = ['app.mouse.toggle', 'app.palette.open', 'app.help.open', 'app.subagents.toggle', 'app.subagents.scrollUp', 'app.subagents.scrollDown', 'app.voice.talk', 'app.quit'] as const;
 
 export class OctipusTuiApp {
   readonly tui: TUI;
@@ -149,6 +150,7 @@ export class OctipusTuiApp {
     // installed by `createRuntime`. Users override via ~/.octipus/keybindings.json.
     tui.addInputListener((data) => {
       const kb = getKeybindings();
+      if (kb.matches(data, 'app.mouse.toggle')) { handleTerminalCommand('mouse', this.tui, this.messages, this.status, text => this.pushMessage('system', text)); return { consume: true }; }
       if (this.tui.hasOverlay?.()) return undefined;
       if (kb.matches(data, 'app.palette.open')) { this.openCommandPalette(); return { consume: true }; }
       if (kb.matches(data, 'app.help.open')) { this.pushMessage('system', this.hotkeysText()); return { consume: true }; }
@@ -161,13 +163,8 @@ export class OctipusTuiApp {
         this.tui.requestRender();
         return { consume: true };
       }
-      if (matchesKey(data, 'end') && this.messages.getScrollOffset() > 0) { this.messages.scrollToBottom(); this.tui.requestRender(); return { consume: true }; }
-      if (matchesKey(data, 'pageUp')) {
-        if (this.messages.scrollUp()) this.tui.requestRender();
-        return { consume: true };
-      }
-      if (matchesKey(data, 'pageDown')) {
-        if (this.messages.scrollDown()) this.tui.requestRender();
+      if (this.messages.handleScrollInput(data)) {
+        this.tui.requestRender();
         return { consume: true };
       }
       return undefined;
@@ -245,7 +242,7 @@ export class OctipusTuiApp {
     const greeting = projectName
       ? `Welcome to Octipus. Project: ${projectName}`
       : 'Welcome to Octipus.';
-    this.pushMessage('system', `${greeting}  Type a message or /help for commands.`);
+    this.pushMessage('system', `${greeting}  Type a message or /help. Drag to select · /copy last: copy reply.`);
   }
 
   private pushMessage(role: 'user' | 'assistant' | 'system', content: string): void {
@@ -278,6 +275,7 @@ export class OctipusTuiApp {
         if (event.status === 'connected' && this.resumePending) { this.resumePending = false; this.adapter.sendCommand('history'); }
         this.lastStatus = event.status;
         return;
+      case 'permission.resolved': this.decisions.resolve(event.requestId, event.status); return;
       case 'permission':
         this.decisions.push(event);
         return;
@@ -346,6 +344,7 @@ export class OctipusTuiApp {
   // ── Submit / commands ──────────────────────────────────────────
 
   private handleSubmit(rawText: string): void {
+    if (rawText.trim().startsWith('/') && handleTerminalCommand(rawText, this.tui, this.messages, this.status, text => this.pushMessage('system', text))) return;
     const text = rawText.trim();
     if (!text) return;
 

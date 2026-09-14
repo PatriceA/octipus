@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { compareTimelineEntries } from '../../../src/shared/timeline-order';
+import { agentCompletionLabel, type AgentCompletionReason } from '../../../src/shared/agent-completion';
 import type { ToolInputPreview, ToolResultPreview } from '../../../src/shared/work-stream';
 import DiffView from '@/components/chat/diff-view';
 import { Markdown } from '@/components/ui/markdown-renderer';
@@ -51,6 +52,7 @@ export interface TrackedAgent {
   root?: boolean;
   model: string;
   status: 'running' | 'completed' | 'failed' | 'stopped';
+  completionReason?: AgentCompletionReason;
   toolCalls: Array<{
     id: string;
     name: string;
@@ -426,6 +428,9 @@ function ToolCallRow({ tc, onOpenFile, terminal }: { tc: ToolCall; onOpenFile?: 
 
 function AgentActivityInline({ agent, onOpenFile }: { agent: TrackedAgent; onOpenFile?: (path: string) => void }) {
   const [toolsOpen, setToolsOpen] = useState(false);
+  const completionLabel = agent.status === 'completed'
+    ? agentCompletionLabel(agent.completionReason)
+    : undefined;
 
   const statusIcon =
     agent.status === 'running' ? (
@@ -469,13 +474,22 @@ function AgentActivityInline({ agent, onOpenFile }: { agent: TrackedAgent; onOpe
         )}
 
         {agent.iterations != null && (
-          <span className="text-on-surface-variant">{agent.iterations} iter</span>
+          <span
+            className="text-on-surface-variant"
+            title="Model inference cycles reported by this agent"
+          >
+            {agent.iterations} model turns
+          </span>
         )}
 
         {agent.error && (
           <span className="text-error truncate max-w-[300px]" title={agent.error}>
             {agent.error}
           </span>
+        )}
+
+        {completionLabel && (
+          <span className="text-warning" role="status">{completionLabel}</span>
         )}
 
         {agent.toolCalls.length > 0 && (

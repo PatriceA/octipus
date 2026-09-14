@@ -272,3 +272,40 @@ describe('CLI native permission identity compatibility', () => {
     expect(await pm.check(aliceId, 'other:Read', 'Read')).toMatchObject({ level: 'ASK' });
   });
 });
+
+
+describe('permission resolution notifications across clients', () => {
+  test.each(['approve', 'deny'] as const)('%s broadcasts once to both observers with the owner identity', async (action) => {
+    const { getPermissionManager } = await import('@/security/permissions');
+    const pm = getPermissionManager();
+    const first = vi.fn(); const second = vi.fn();
+    const unsubscribeFirst = pm.onResolved(first); const unsubscribeSecond = pm.onResolved(second);
+    try {
+      const requestId = await createPendingRequest(bobId);
+      expect(await pm[action](requestId, aliceId)).toBe(false);
+      expect(first).not.toHaveBeenCalled();
+      expect(await pm[action](requestId, bobId)).toBe(true);
+      const expected = { requestId, userId: bobId, status: action === 'approve' ? 'approved' : 'denied' };
+      expect(first).toHaveBeenCalledWith(expect.objectContaining(expected));
+      expect(second).toHaveBeenCalledWith(expect.objectContaining(expected));
+      expect(await pm[action](requestId, bobId)).toBe(false);
+      expect(first).toHaveBeenCalledTimes(1);
+      unsubscribeSecond();
+      const next = await createPendingRequest(bobId);
+      await pm[action](next, bobId);
+      expect(second).toHaveBeenCalledTimes(1);
+    } finally { unsubscribeFirst(); unsubscribeSecond(); }
+  });
+
+  test('agent cancellation broadcasts expiry after the row is persisted', async () => {
+    const { getPermissionManager } = await import('@/security/permissions');
+    const pm = getPermissionManager(); const seen = vi.fn();
+    const unsubscribe = pm.onResolved(seen);
+    try {
+      const requestId = await createPendingRequest(bobId);
+      pm.cancelWaits('agent-' + bobId.slice(0, 4));
+      await vi.waitFor(() => expect(seen).toHaveBeenCalledWith(expect.objectContaining({ requestId, userId: bobId, status: 'expired' })));
+      expect((await pm.getPendingRequests(bobId)).some(row => row.id === requestId)).toBe(false);
+    } finally { unsubscribe(); }
+  });
+});

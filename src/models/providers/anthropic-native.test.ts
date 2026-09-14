@@ -101,7 +101,8 @@ test('signed thinking and redacted content survive a tool conversation', () => {
   const result = parseAnthropicResponse({ content, usage: { input_tokens: 10, cache_read_input_tokens: 20, cache_creation_input_tokens: 5, output_tokens: 7 } }, 'claude', 1);
   expect(result.usage).toMatchObject({ inputTokens: 35, outputTokens: 7, cacheReadTokens: 20 });
   const out = toAnthropicMessages([{ role: 'assistant', content: result.content, toolCalls: result.toolCalls, providerRaw: result.providerRaw, timestamp: new Date() }]);
-  expect(out.messages[0].content).toEqual(content);
+  expect(out.messages.map(message => message.role)).toEqual(['user', 'assistant']);
+  expect(out.messages[1].content).toEqual(content);
 });
 test('native SSE preserves signed thinking and final cumulative usage', async () => {
   const events = [

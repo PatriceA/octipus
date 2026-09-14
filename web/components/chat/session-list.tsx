@@ -1,6 +1,6 @@
 'use client';
 
-import { Code2, Globe, Hash, MessageSquare, MoreHorizontal, Pencil, Plus, Search, Smartphone, Trash2 } from 'lucide-react';
+import { Code2, Globe, Hash, MessageSquare, MoreHorizontal, Pencil, Plus, Search, Smartphone, Trash2, X } from 'lucide-react';
 import { useEffect, useRef, useState, } from 'react';
 import { cn } from '@/lib/utils';
 
@@ -23,6 +23,7 @@ interface SessionListProps {
   onCreate: () => void;
   onDelete: (id: string) => void;
   onRename: (id: string, title: string) => void;
+  onClose?: () => void;
 }
 
 function getTimeGroup(dateStr: string): string {
@@ -68,6 +69,7 @@ export function SessionList({
   onCreate,
   onDelete,
   onRename,
+  onClose,
 }: SessionListProps) {
   const [search, setSearch] = useState('');
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
@@ -138,13 +140,25 @@ export function SessionList({
           <span aria-hidden className="text-primary font-bold">&gt;</span>
           sessions
         </h2>
-        <button
-          onClick={onCreate}
-          className="inline-flex items-center gap-1 rounded-xs px-2 py-0.5 text-[11px] border border-primary/60 bg-primary-container/40 text-primary hover:bg-primary-container transition-colors cursor-pointer"
-        >
-          <Plus className="h-3 w-3" />
-          new
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={onCreate}
+            className="inline-flex items-center gap-1 rounded-xs px-2 py-0.5 text-[11px] border border-primary/60 bg-primary-container/40 text-primary hover:bg-primary-container transition-colors cursor-pointer"
+          >
+            <Plus className="h-3 w-3" />
+            new
+          </button>
+          {onClose && (
+            <button
+              type="button"
+              aria-label="Close conversations"
+              onClick={onClose}
+              className="rounded-xs p-1 text-on-surface-variant hover:bg-surface-container hover:text-on-surface"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="px-2 py-2 border-b border-outline-variant/60">
@@ -189,14 +203,10 @@ export function SessionList({
                         ? 'border-l-primary bg-primary-container/30'
                         : 'border-l-transparent hover:border-l-outline-variant hover:bg-surface-container-low'
                     )}
-                    onClick={() => {
-                      if (!isRenaming) onSelect(session.id);
-                    }}
-                    onDoubleClick={() => handleStartRename(session)}
                   >
                     <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        {isRenaming ? (
+                      {isRenaming ? (
+                        <div className="min-w-0 flex-1">
                           <input
                             ref={renameInputRef}
                             type="text"
@@ -213,7 +223,17 @@ export function SessionList({
                             onClick={(e) => e.stopPropagation()}
                             className="w-full rounded-xs px-1.5 py-0.5 text-[13px] bg-surface-container-low border border-primary text-on-surface focus:outline-none"
                           />
-                        ) : (
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          data-session-id={session.id}
+                          aria-current={isActive ? 'page' : undefined}
+                          aria-label={`Open conversation ${session.title}`}
+                          onClick={() => onSelect(session.id)}
+                          onDoubleClick={() => handleStartRename(session)}
+                          className="min-w-0 flex-1 rounded-xs text-left focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+                        >
                           <p
                             className={cn(
                               'truncate text-[13px]',
@@ -222,9 +242,8 @@ export function SessionList({
                           >
                             {session.title}
                           </p>
-                        )}
 
-                        <div className="mt-0.5 flex items-center gap-2 text-[10px] text-outline">
+                          <div className="mt-0.5 flex items-center gap-2 text-[10px] text-outline">
                           {session.channelType && session.channelType !== 'webchat' && session.channelType !== 'api' && (
                             <span className="inline-flex items-center gap-0.5 text-primary" title={session.channelType}>
                               {session.channelType === 'telegram' ? <Smartphone className="h-2.5 w-2.5" /> :
@@ -244,8 +263,9 @@ export function SessionList({
                             {session.messageCount}
                           </span>
                           <span>· {timeAgo(session.updatedAt)}</span>
-                        </div>
-                      </div>
+                          </div>
+                        </button>
+                      )}
 
                       {!isRenaming && (
                         <button

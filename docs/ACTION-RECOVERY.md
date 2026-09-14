@@ -11,7 +11,7 @@ and subsequently times out has the same problem.
 
 ## What the user sees
 
-The normal approval interface shows **Review uncertain actions before
+The normal approval interface shows **Check earlier <tool> outcome before
 continuing**, with the previous tool names, timestamps, record IDs and the next
 tool being attempted. Check the task's tool output and the external service
 before deciding. Tell the agent which work already happened and which work it
@@ -57,12 +57,19 @@ timestamps, outcome and any recovery review ID. It does not store argument or
 result bodies. Session or user deletion removes the associated journal records.
 
 The execution boundary writes `started` before calling the tool. If that write
-fails, the tool does not execute. A return is recorded as `completed`,
-including a structured failure the tool reported itself (a non-zero exit, a
-`success: false` result): the tool ran to the end and its outcome is known.
-An exception, or a result flagged timed out, killed or aborted, is treated as
-`uncertain`, because partial side effects may have occurred. Cancellation or
-permission revocation before the body starts is `not_executed`.
+fails, the tool does not execute. A confirmed return is recorded as `completed`:
+this means a finished attempt, not necessarily success. A normal shell exit,
+including a failed test or an exit-code-2 directory lookup, is a completed attempt.
+A shell parser refusal, policy rejection or proven failure before process startup
+is `not_executed`; it does not require recovery approval before the next command.
+
+A timeout, kill, signal, post-start cancellation or missing completion evidence is
+`uncertain`, because partial effects may have occurred. Generic tool failures
+(`success: false`, MCP `isError`, or thrown transport errors) remain conservative:
+they can hide a remote action followed by a lost acknowledgement. Trusted
+preflight evidence is carried by an internal error/result identity, not a flag a
+model can supply. Permission revocation before the body starts is `not_executed`.
+Historical uncertain records are not automatically cleared by these rules.
 
 If the tool returns but its completion record cannot be saved, its known output
 is preserved and the persisted `started` record blocks later mutations pending
@@ -101,6 +108,8 @@ Regression tests cover:
 - A real side effect followed by completion-write failure, database close/reopen,
   and denied retry without repeating the effect.
 - A shell command that appends to a file and then times out.
+- Parser refusals and ordinary failed shell exits allowing the next command
+  without recovery approval, while interruption still requires review.
 - Intent-write failure blocking execution, and one journal entry through the
   combined executor/BaseTool path.
 - Read-only reconciliation, policy revocation during recovery approval, exact

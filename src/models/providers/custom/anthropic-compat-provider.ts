@@ -356,6 +356,21 @@ export function toAnthropicMessages(messages: AgentMessage[]): { system?: string
     pushMerged(msg.role === 'assistant' ? 'assistant' : 'user', [{ type: 'text', text: msg.content }]);
   }
 
+  // Histories can arrive already compacted or re-sliced by callers. If the
+  // retained window begins with an assistant tool call, Anthropic-to-Gemini
+  // gateways reject it because a function-call turn must immediately follow a
+  // user turn or function response. Prefer the compactor's preserved original
+  // user anchor, but repair arbitrary provider input here as a final boundary
+  // invariant so complete() and stream() send the same valid sequence.
+  const first = out[0];
+  const firstBlocks = first && Array.isArray(first.content) ? first.content : [];
+  if (first?.role === 'assistant' && firstBlocks.some((block) => block.type === 'tool_use')) {
+    out.unshift({
+      role: 'user',
+      content: [{ type: 'text', text: '[Continue from the compacted conversation context.]' }],
+    });
+  }
+
   return { system: systems.length ? systems.join('\n\n') : undefined, messages: out };
 }
 

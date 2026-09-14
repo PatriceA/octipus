@@ -1,5 +1,5 @@
 [package]
-name = "app"
+name = "octipus"
 version = "0.1.0"
 description = "Octipus desktop client"
 authors = ["Octipus"]

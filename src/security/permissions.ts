@@ -12,7 +12,7 @@ import {
   toolPermissions,
 } from '@/db/schema/permissions';
 import { getToolRegistry } from '@/tools/registry';
-import { generateId } from '@/utils/crypto';
+import { randomUUID } from 'node:crypto';
 import { coreLogger, securityLogger } from '@/utils/logger';
 import { safeRegExp } from '@/utils/sanitize';
 
@@ -50,6 +50,14 @@ export interface PermissionRequestEvent {
   sessionId?: string;
 }
 
+export interface PermissionResolvedEvent {
+  requestId: string;
+  userId: string;
+  agentId: string;
+  sessionId?: string;
+  status: 'approved' | 'denied' | 'expired';
+}
+
 export class PermissionManager {
   private get db() { return getDb(); }
   private preparedWaits = new Map<string, Promise<boolean>>();
@@ -58,6 +66,7 @@ export class PermissionManager {
   private waitsByAgent: Map<string, Set<string>> = new Map();
   /** Notified when an agent starts or stops waiting on a human. */
   private waitListeners: Set<(agentId: string, waiting: boolean) => void> = new Set();
+  private resolvedListeners = new Set<(event: PermissionResolvedEvent) => void>();
   private requestListeners: Set<(request: PermissionRequestEvent) => void> = new Set();
 
   /**
@@ -66,6 +75,20 @@ export class PermissionManager {
   onRequest(handler: (request: PermissionRequestEvent) => void): () => void {
     this.requestListeners.add(handler);
     return () => this.requestListeners.delete(handler);
+  }
+
+  /** Observe durable resolutions from every channel, including cancellation. */
+  onResolved(handler: (event: PermissionResolvedEvent) => void): () => void {
+    this.resolvedListeners.add(handler);
+    return () => this.resolvedListeners.delete(handler);
+  }
+
+  private emitResolved(request: PermissionRequest, status: PermissionResolvedEvent['status']): void {
+    const event = { requestId: request.id, userId: request.userId, agentId: request.agentId,
+      sessionId: request.sessionId ?? undefined, status };
+    for (const handler of this.resolvedListeners) {
+      try { handler(event); } catch (err) { coreLogger.warn({ err }, 'Permission resolution listener failed'); }
+    }
   }
 
   private emitRequest(request: PermissionRequestEvent): void {
@@ -301,7 +324,7 @@ export class PermissionManager {
     signal?: AbortSignal,
   ): Promise<string> {
     if (signal?.aborted) throw new Error('Agent stopped before approval request');
-    const requestId = generateId();
+    const requestId = randomUUID();
 
     const request: NewPermissionRequest = {
       id: requestId,
@@ -447,10 +470,12 @@ export class PermissionManager {
 
   /** Expire every pending request belonging to an agent. */
   private async expireRequestsForAgent(agentId: string): Promise<void> {
-    await this.db
+    const expired = await this.db
       .update(permissionRequests)
       .set({ status: 'expired' })
-      .where(and(eq(permissionRequests.agentId, agentId), eq(permissionRequests.status, 'pending')));
+      .where(and(eq(permissionRequests.agentId, agentId), eq(permissionRequests.status, 'pending')))
+      .returning();
+    for (const request of expired) this.emitResolved(request, 'expired');
   }
 
   /**
@@ -535,6 +560,7 @@ export class PermissionManager {
 
     if (result.length > 0) {
       const request = result[0];
+      this.emitResolved(request, 'approved');
 
       await auditRepository.log({
         userId: request.userId,
@@ -587,6 +613,7 @@ export class PermissionManager {
 
     if (result.length > 0) {
       const request = result[0];
+      this.emitResolved(request, 'denied');
 
       await auditRepository.log({
         userId: request.userId,
@@ -615,10 +642,12 @@ export class PermissionManager {
    * Expire a permission request
    */
   private async expireRequest(requestId: string): Promise<void> {
-    await this.db
+    const expired = await this.db
       .update(permissionRequests)
       .set({ status: 'expired' })
-      .where(and(eq(permissionRequests.id, requestId), eq(permissionRequests.status, 'pending')));
+      .where(and(eq(permissionRequests.id, requestId), eq(permissionRequests.status, 'pending')))
+      .returning();
+    for (const request of expired) this.emitResolved(request, 'expired');
 
     securityLogger.debug({ requestId }, 'Permission request expired');
   }
@@ -637,7 +666,8 @@ export class PermissionManager {
       .update(permissionRequests)
       .set({ status: 'expired' })
       .where(eq(permissionRequests.status, 'pending'))
-      .returning({ id: permissionRequests.id });
+      .returning();
+    for (const request of released) this.emitResolved(request, 'expired');
     if (released.length > 0) {
       securityLogger.info({ count: released.length }, 'Released permission requests orphaned by a restart');
     }

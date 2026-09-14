@@ -93,6 +93,7 @@ export type GatewayEventType =
   | 'agent.approval_required'
   | 'rootAgent.status'
   | 'permission.request'
+  | 'permission.resolved'
   // Session. `session.cleared` was declared here with no producer and no
   // consumer, and is retired for the same reason as `swarm.node_status` above.
   | 'session.compaction_stalled'

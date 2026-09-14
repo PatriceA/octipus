@@ -6,6 +6,15 @@
  * integration tests pointing at a real DB) take precedence.
  */
 import { randomBytes } from 'crypto';
+import { inject } from 'vitest';
+
+// Installed before test modules import code that calls os.tmpdir(). Child
+// processes inherit the same exclusive root. Set all platform aliases.
+const testTmpRoot = inject('testTmpRoot');
+if (!testTmpRoot) throw new Error('Test scratch root was not provided by global setup');
+process.env.TMPDIR = testTmpRoot;
+process.env.TMP = testTmpRoot;
+process.env.TEMP = testTmpRoot;
 
 const rand = (bytes: number) => randomBytes(bytes).toString('hex');
 

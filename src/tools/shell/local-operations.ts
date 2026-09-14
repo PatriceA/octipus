@@ -1,4 +1,5 @@
-import { spawn } from 'child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
+import { markToolNotExecuted, ToolNotExecutedError } from '@/core/tool-execution-error';
 import { buildChildEnv, isSensitiveEnvName } from '@/security/child-env';
 import { coreLogger } from '@/utils/logger';
 import { tokenizeSafe } from './policy';
@@ -90,7 +91,7 @@ export class LocalShellOperations implements ShellOperations {
       // changes how the command is spawned; it does not change which permission
       // the command answers to, so a destructive command is still a destructive
       // command either way.
-      throw new Error(
+      throw new ToolNotExecutedError('shell',
         `Shell command rejected — contains metacharacters (;, &, |, <, >, $(), \`, newline, brace expansion). ` +
           `Run the steps as separate calls, or set useShell:true if the command genuinely needs shell ` +
           `features. Refused command (truncated): ${command.slice(0, 80)}`,
@@ -114,10 +115,12 @@ export class LocalShellOperations implements ShellOperations {
       : [argv![0], ...argv!.slice(1)];
 
     const { wrapCommand } = await import('@/security/shell-sandbox');
-    const wrap = wrapCommand(baseArgv, {
-      workspaceRoot: cwd,
-      allowNetwork: resolveAllowNetwork(options),
-    });
+    let wrap: ReturnType<typeof wrapCommand>;
+    try {
+      wrap = wrapCommand(baseArgv, { workspaceRoot: cwd, allowNetwork: resolveAllowNetwork(options) });
+    } catch (error) {
+      throw new ToolNotExecutedError('shell', error instanceof Error ? error.message : String(error), { cause: error });
+    }
     const finalArgv = wrap.argv;
     if (wrap.wrapped) {
       coreLogger.debug(
@@ -128,7 +131,7 @@ export class LocalShellOperations implements ShellOperations {
 
     if (options.signal?.aborted) {
       wrap.cleanup();
-      return { stdout: '', stderr: '', exitCode: null, killed: true, timedOut: false, aborted: true, signal: null };
+      return markToolNotExecuted('shell', { stdout: '', stderr: '', exitCode: null, killed: true, timedOut: false, aborted: true, signal: null });
     }
 
     return new Promise((resolve, reject) => {
@@ -140,16 +143,23 @@ export class LocalShellOperations implements ShellOperations {
       // semgrep only reads the finding's own line and the one before it, so the
       // three comment lines that used to sit between them silently un-suppressed
       // the rule and turned the lane red.
-      // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn (no shell); this is the shell tool's own executor, argv already parsed/sandboxed upstream
-      const child = spawn(finalArgv[0], finalArgv.slice(1), {
-        cwd,
-        env: buildChildEnv(options.env),
-        // Its own process group, so a deadline can kill the whole tree. Killing
-        // the direct child alone leaves `sh -c "sleep 10 & sleep 10"` holding
-        // the stdio pipes, and `close` — which is what resolves this promise —
-        // waits for those: the call sat unresolved long past a 500ms timeout.
-        detached: true,
-      });
+      let child: ChildProcessWithoutNullStreams;
+      try {
+        // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn (no shell); this is the shell tool's own executor, argv already parsed/sandboxed upstream
+        child = spawn(finalArgv[0], finalArgv.slice(1), {
+          cwd,
+          env: buildChildEnv(options.env),
+          // Its own process group, so a deadline can kill the whole tree. Killing
+          // the direct child alone leaves `sh -c "sleep 10 & sleep 10"` holding
+          // the stdio pipes, and `close` — which is what resolves this promise —
+          // waits for those: the call sat unresolved long past a 500ms timeout.
+          detached: true,
+        });
+      } catch (error) {
+        wrap.cleanup();
+        reject(new ToolNotExecutedError('shell', error instanceof Error ? error.message : String(error), { cause: error }));
+        return;
+      }
 
       const untrack = trackGroup(child.pid);
       let stdout = '';
@@ -228,7 +238,8 @@ export class LocalShellOperations implements ShellOperations {
 
       child.on('error', (error) => {
         cleanup();
-        reject(error);
+        // No PID means spawn failed before any child existed (e.g. ENOENT).
+        reject(child.pid === undefined ? new ToolNotExecutedError('shell', error.message, { cause: error }) : error);
       });
     });
   }
@@ -241,7 +252,7 @@ export class LocalShellOperations implements ShellOperations {
     const argv = options.unsafe ? null : tokenizeSafe(command);
 
     if (!options.unsafe && argv === null) {
-      throw new Error(
+      throw new ToolNotExecutedError('shell',
         `Background command rejected — contains metacharacters (;, &, |, <, >, $(), \`, newline, brace expansion). ` +
           `Pass useShell: true to bypass and run via sh -c. Refused command (truncated): ${command.slice(0, 80)}`,
       );

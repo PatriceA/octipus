@@ -1,10 +1,17 @@
 # Visible work plans
 
-Octipus can attach a short, structured plan to substantial work in a conversation.
+Octipus can attach a structured plan to substantial work in a conversation.
 The root agent publishes and updates it through `get_work_plan` and
 `update_work_plan`. Simple questions and small edits may have no plan. Publishing
 and maintaining a plan depends on the model following these instructions; the UI
 does not invent steps from tool activity.
+
+A work plan has two kinds. An **execution** plan tracks work currently being
+performed. A **proposal** is the user's requested planning artifact: its
+structured checklist contains the future implementation steps, all pending, and
+its `details` field stores the complete Markdown proposal. Reading, research,
+architecture decisions, and writing the proposal are planning notes rather than
+completed implementation steps.
 
 ## Web workspace
 
@@ -26,18 +33,20 @@ request clarification. Existing tool calls may finish before that boundary.
 Feedback submitted after a turn finishes is retained for the next turn: send a
 message to continue. Saving feedback alone does not start execution.
 
-**Enable plan-first mode** uses the existing `/plan on` command. **Allow
-implementation** uses `/plan off`; send a subsequent message to start work.
-Neither command grants tool permissions. Plan mode filters known file-mutating
-tools and provides instructions; it is not a shell sandbox. Normal work does not
-require approval of every plan.
+**Enable plan-first mode** uses the existing `/plan on` command. Turning it off
+with `/plan off` makes write tools available on a subsequent turn. It does not
+approve the proposal or start implementation, and submitting a proposal does not
+turn plan mode off. Neither command grants external permissions. Plan mode filters
+known file-mutating tools and provides instructions; it is not a shell sandbox.
+Normal work does not require approval of every plan.
 
 ## Terminal workspace
 
 The pi TUI uses the same session plan and feedback records:
 
-- A progress line above the status bar shows the completed-step count and the
-  last reported working or blocked step. It is a plan summary, not proof that an
+- A progress line above the status bar shows whether the plan is proposed or in
+  execution, its title and revision, the completed-step count, and the last
+  reported working or blocked step. It is a plan summary, not proof that an
   external action is still running.
 - `/work-plan` displays the full current plan, evidence, and feedback in the
   conversation.

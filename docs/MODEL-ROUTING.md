@@ -16,8 +16,27 @@ Every topic (lane) can bind up to three models:
 | **Executor** | Topics page → `executorModel` (`topics_config` table) | Cheap model that runs pre-planned steps mechanically | Only when the spawning agent supplies a `plan` in `spawn_child` (planner→executor split, see below). On planned spawns, overrides expert `modelPreference` because a plan means the work is pre-decided and mechanical, not requiring expert judgment. |
 
 All three are optional. An unbound topic **fails loud** at spawn time — there
-is no silent default-model fallback for workers (only the root agent has a
-default via `selectForOrchestration()`).
+is no silent default-model fallback for workers. Conversational root turns use
+the default only when the Chat lane is unbound.
+
+## Root-turn resolution
+
+The root agent has two bindings because it handles both conversation and work:
+
+```
+1. session /model override       every root turn
+2. non-casual turn               General system expert modelPreference,
+                                 then that expert's assigned lane primary,
+                                 then the default model when the lane is unbound
+3. casual turn                  Chat lane primary, then default model
+4. capability gate              reject/reroute no-tools, reasoning, or
+                                 recently shim-dependent models
+```
+
+The General expert runs the root's task loop, so changing its model override or
+lane changes the model used for work, ambiguous requests, follow-ups, and unresolved approval
+replies. Only casual turns use the Chat lane. In particular, a plan request does
+not switch to Chat merely because the keyword classifier cannot assign a topic.
 
 ## Resolution order (per spawn)
 
@@ -134,5 +153,6 @@ gate provider availability but do not pick fallbacks.
 | Executor binding storage/cache | `src/models/topic-config.ts` (`topics_config`) |
 | Primary/backup topic bindings | `src/models/model-registry.ts` (`getModelForTopic`, `getBackupModelForTopic`) |
 | Tool-capability reroute | `src/core/agent/model-selector.ts` |
+| Root task vs conversation selection | `src/core/agent/model-selector.ts`, `src/core/agent/root-runner.ts` |
 | Spawn metrics | `src/core/telemetry.ts` (`recordSwarmSpawn`) |
 | Original design | `docs/plans/planner-executor-plan-split.md` |

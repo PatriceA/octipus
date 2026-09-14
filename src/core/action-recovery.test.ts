@@ -4,6 +4,7 @@ import { ToolActionRepository } from '@/db/repositories/tool-action-repository';
 import type { ToolAction, toolActions } from '@/db/schema/tool-actions';
 import * as permissions from '@/security/permissions';
 import type { AgentContext } from './types';
+import { markToolNotExecuted, ToolNotExecutedError } from './tool-execution-error';
 
 class MemoryJournal extends ToolActionRepository {
   rows: ToolAction[] = [];
@@ -55,6 +56,58 @@ describe('durable action recovery', () => {
     vi.spyOn(repo, 'start').mockRejectedValue(new Error('DB unavailable'));
     const execute = vi.fn(); await expect(run(execute)).rejects.toThrow('DB unavailable');
     expect(execute).not.toHaveBeenCalled();
+  });
+  test('only trusted preflight failures establish that execution never began', async () => {
+    await expect(run(async () => { throw new ToolNotExecutedError('mail', 'unsupported request'); })).rejects.toThrow('unsupported request');
+    expect(repo.rows[0].status).toBe('not_executed');
+    await run(async () => 'next legitimate action');
+    expect(request).not.toHaveBeenCalled();
+    await expect(run(async () => { throw Object.assign(new Error('unsupported shell syntax'), { name: 'ToolNotExecutedError' }); })).rejects.toThrow();
+    expect(repo.rows[2].status).toBe('uncertain');
+  });
+  test('a nested shell preflight error cannot declare an outer mutation unexecuted', async () => {
+    await expect(run(async () => { throw new ToolNotExecutedError('shell', 'parser rejected'); })).rejects.toThrow();
+    expect(repo.rows[0].status).toBe('uncertain');
+  });
+  test('only scoped runtime evidence can mark an aborted result unexecuted', async () => {
+    const result = markToolNotExecuted('shell', { aborted: true, killed: true });
+    await recovery.run(ctx(), 'shell', 'shell__run', {}, async () => result);
+    expect(repo.rows[0].status).toBe('not_executed');
+    await run(async () => 'next legitimate action');
+    expect(request).not.toHaveBeenCalled();
+    await run(async () => result);
+    expect(repo.rows[2].status).toBe('uncertain');
+    await recovery.run(ctx(), 'shell', 'shell__run', {}, async () => ({ ...result }));
+    expect(repo.rows[3].status).toBe('uncertain');
+  });
+  test.each([1, 2])('shell exit %i is a completed attempt, not an uncertain transport outcome', async exitCode => {
+    const result = { exitCode, signal: null, killed: false, timedOut: false, aborted: false, outcome: 'error', stderr: 'command failed' };
+    expect(await recovery.run(ctx(), 'shell', 'shell__run', {}, async () => result)).toBe(result);
+    expect(repo.rows[0].status).toBe('completed');
+    await run(async () => 'next legitimate action');
+    expect(request).not.toHaveBeenCalled();
+  });
+  test.each([{ exitCode: 1, signal: null, timedOut: true }, { exitCode: null, signal: 'SIGTERM' }, { killed: true }, { aborted: true }])('interrupted shell outcomes remain uncertain: %j', async result => {
+    await recovery.run(ctx(), 'shell', 'shell__run', {}, async () => result);
+    expect(repo.rows[0].status).toBe('uncertain');
+    wait.mockResolvedValue(false);
+    const execute = vi.fn(); await expect(run(execute)).rejects.toThrow('not granted');
+    expect(execute).not.toHaveBeenCalled();
+  });
+  test('an arbitrary remote error envelope is not proof of a definitive shell exit', async () => {
+    await run(async () => ({ isError: true, exitCode: 1, outcome: 'error', message: 'connection lost' }));
+    expect(repo.rows[0].status).toBe('uncertain');
+  });
+  test('recovery review identifies the earlier tool and explains missing completion evidence', async () => {
+    await uncertain();
+    repo.rows[0].status = 'started';
+    await run(async () => 'continued');
+    const details = request.mock.calls[0][4];
+    expect(details.previousActions).toContain('mail__send at ');
+    expect(details.previousActions).toContain(repo.rows[0].createdAt.toISOString());
+    expect(details.previousActions).toContain('no durable completion was recorded');
+    expect(details.warning).toContain('separate from permission');
+    expect(request.mock.calls[0][6]).toContain('Check earlier mail__send outcome');
   });
   test('an acknowledged side effect with a lost completion record preserves output and gates the next mutation', async () => {
     const save = vi.spyOn(repo, 'finish').mockRejectedValue(new Error('write lost'));

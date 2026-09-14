@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { ZodError } from 'zod';
 import { Check, Circle, Loader2, MessageSquare, RefreshCw } from 'lucide-react';
 import { api } from '@/lib/api';
+import { Markdown } from '@/components/ui/markdown-renderer';
 import { workPlanViewSchema, workPlanStateSchema, type WorkPlan, type WorkPlanState } from '../../../src/shared/work-plan';
 
 interface Props {
@@ -74,15 +75,17 @@ export default function WorkPlanPanel({ sessionId, running, files, onOpenFile, o
       <button type="button" className="flex gap-1 underline mt-2" onClick={() => setRefresh(n => n + 1)}><RefreshCw size={12} />Retry plan</button></div>}
     {open && <>
       {sessionId && state && <div className="rounded-lg bg-background/50 p-3 text-xs text-on-surface-variant">
-        <p>{state.planMode ? 'Plan first · implementation is waiting for your decision.' : 'Normal work · Octipus may proceed within your permissions.'}</p>
-        <button type="button" disabled={running || !!error || (requestedPlanMode !== null && requestedPlanMode !== !!state.planMode)} onClick={() => { setRequestedPlanMode(!state.planMode); onPlanMode(!state.planMode); }} className="mt-2 text-primary underline disabled:opacity-50">{state.planMode ? 'Allow implementation' : 'Enable plan-first mode'}</button>
-        {state.planMode && <p className="mt-2">After allowing implementation, send a message to start. Tool permissions still apply.</p>}
+        <p>{state.planMode ? 'Plan mode · propose implementation without making changes.' : 'Normal work · Octipus may proceed within your permissions.'}</p>
+        <button type="button" disabled={running || !!error || (requestedPlanMode !== null && requestedPlanMode !== !!state.planMode)} onClick={() => { setRequestedPlanMode(!state.planMode); onPlanMode(!state.planMode); }} className="mt-2 text-primary underline disabled:opacity-50">{state.planMode ? 'Leave plan mode' : 'Enable plan-first mode'}</button>
+        {state.planMode && <p className="mt-2">Leaving plan mode only enables change tools. Send a message to approve and start implementation; tool permissions still apply.</p>}
       </div>}
       {!sessionId ? <p className="text-sm text-on-surface-variant">Describe an outcome to start. Plans for substantial work will appear here.</p>
         : !state && !error ? <p className="text-sm text-on-surface-variant">Loading plan…</p>
         : !plan && !error ? <p className="text-sm text-on-surface-variant">No plan published yet. Simple requests may not need one.</p> : null}
       {plan && <>
         <div><h2 className="text-base font-semibold">{plan.title}</h2><p className="text-sm text-on-surface-variant mt-2">{plan.goal}</p></div>
+        {plan.kind === 'proposal' && <p className="text-xs text-primary">Proposed implementation · work has not started</p>}
+        <PlanDetails plan={plan} />
         <PlanSteps plan={plan} />
         {current?.status === 'working' && !running && <p className="text-xs text-warning">Last reported step is still open. This does not confirm execution is running.</p>}
         <p className="text-xs text-on-surface-variant">Steps report work progress. Expand a step for its evidence and checks.</p>
@@ -107,7 +110,7 @@ export default function WorkPlanPanel({ sessionId, running, files, onOpenFile, o
           {/delete/i.test(file.action) ? <span className="text-sm break-all">{file.path} · Deleted</span> : <button type="button" className="text-sm text-primary text-left break-all hover:underline" onClick={() => onOpenFile(file.path)}>{file.path}</button>}
         </div>)}
       </div>
-      {!!state?.previous.length && <details className="text-xs text-on-surface-variant"><summary className="cursor-pointer">Previous plans · {state.previous.length}</summary>{state.previous.slice().reverse().map(old => <details className="mt-3" key={old.id}><summary className="cursor-pointer">{old.title}</summary><div className="mt-2"><PlanSteps plan={old} /></div></details>)}</details>}
+      {!!state?.previous.length && <details className="text-xs text-on-surface-variant"><summary className="cursor-pointer">Previous plans · {state.previous.length}</summary>{state.previous.slice().reverse().map(old => <details className="mt-3" key={old.id}><summary className="cursor-pointer">{old.title}</summary><div className="mt-2"><PlanDetails plan={old} /><PlanSteps plan={old} /></div></details>)}</details>}
     </>}
   </section>;
 }
@@ -119,4 +122,12 @@ function PlanSteps({ plan }: { plan: WorkPlan }) {
       <span className="min-w-0 break-words"><span>{step.title}</span><span className="block text-xs text-on-surface-variant mt-1 capitalize">{step.status === 'done' ? 'Work completed' : step.status}</span></span>
     </span></summary><p className="text-xs text-on-surface-variant mt-3 whitespace-pre-wrap break-words">{step.evidence || 'No evidence or checks recorded yet.'}</p></details>
   </li>)}</ol>;
+}
+
+function PlanDetails({ plan }: { plan: WorkPlan }) {
+  if (!plan.details) return null;
+  return <details open className="min-w-0 rounded-lg border border-outline-variant p-3">
+    <summary className="cursor-pointer text-sm text-primary">Implementation plan</summary>
+    <div className="mt-3 min-w-0 break-words text-sm [&_pre]:max-w-full [&_pre]:overflow-x-auto"><Markdown content={plan.details} /></div>
+  </details>;
 }

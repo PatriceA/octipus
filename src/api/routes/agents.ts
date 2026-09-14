@@ -6,6 +6,7 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import { scopedRepos } from '@/db/repositories/scoped';
 import { isAuthenticated } from '@/security/principal';
 import { apiLogger } from '@/utils/logger';
+import { readAgentCompletionReason } from '@/shared/agent-completion';
 
 /**
  * Agents — Phase 1a multi-user conversion.
@@ -128,6 +129,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
             totalTokens: a.totalTokens,
             error: a.error,
             completedAt: a.completedAt,
+            completionReason: readAgentCompletionReason(a.metadata),
           }));
 
         // Live agents anchor the first page only; later pages are pure history.
@@ -190,6 +192,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
           durationMs,
           totalTokens: agent.getTotalTokens(),
           metadata: context.metadata,
+          completionReason: readAgentCompletionReason(context.metadata),
         };
       }
 
@@ -208,6 +211,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
         iteration: dbAgent.iterations || 0,
         createdAt: dbAgent.createdAt,
         metadata: dbAgent.metadata || {},
+        completionReason: readAgentCompletionReason(dbAgent.metadata),
         durationMs: dbAgent.durationMs,
         totalTokens: dbAgent.totalTokens,
         error: dbAgent.error,
@@ -400,18 +404,27 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
 
       const agentManager = getAgentManager();
       const agent = agentManager.get(params.id);
+      const persisted = query.source === 'persisted';
+      const parsedAfter = Number.parseInt(query.after ?? '', 10);
+      const after = Number.isSafeInteger(parsedAfter) && parsedAfter > 0 ? parsedAfter : 0;
 
-      // Try in-memory events first (live agents)
-      if (agent) {
+      // Existing polling clients use the low-latency in-memory ring for live
+      // activity. History clients opt into the durable stream: a completed
+      // worker can remain in AgentManager with only its last 200 buffered
+      // events, so preferring memory there silently truncates its history.
+      if (agent && !persisted) {
         const context = agent.getContext();
         if (!user.isAdmin && context.userId !== user.id) {
           return { error: 'Agent not found' };
         }
 
-        const afterSeq = query.after ? parseInt(query.after, 10) : 0;
-        const buffered = agentManager.getEvents(params.id, afterSeq);
+        const buffered = agentManager.getEvents(params.id, after);
+        const nextCursor = buffered.at(-1)?.seq ?? after;
 
         return {
+          source: 'live' as const,
+          nextCursor,
+          hasMore: false,
           events: buffered.map((b) => ({
             seq: b.seq,
             type: b.event.type,
@@ -430,10 +443,16 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
       }
 
       const { agentEventRepository } = await import('@/db/repositories/agent-event-repository');
-      const afterId = query.after ? parseInt(query.after, 10) : undefined;
-      const dbEvents = await agentEventRepository.findByAgent(params.id, afterId);
+      const dbEvents = await agentEventRepository.findByAgent(params.id, after || undefined);
+      const nextCursor = dbEvents.at(-1)?.id ?? after;
 
       return {
+        source: 'persisted' as const,
+        nextCursor,
+        // Repository pages are capped at 200. An exact 200-row final page may
+        // cause one empty follow-up request; that is preferable to dropping a
+        // 201st row, and the durable id cursor makes the request stable.
+        hasMore: dbEvents.length === 200,
         events: dbEvents.map((e) => ({
           seq: e.id,
           type: e.type,
@@ -445,7 +464,10 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
     },
     {
       params: t.Object({ id: t.String() }),
-      query: t.Object({ after: t.Optional(t.String()) }),
+      query: t.Object({
+        after: t.Optional(t.String()),
+        source: t.Optional(t.Union([t.Literal('live'), t.Literal('persisted')])),
+      }),
       detail: { tags: ['agents'] },
     }
   )

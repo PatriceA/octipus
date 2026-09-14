@@ -16,6 +16,11 @@ export function json(route: Route, status: number, body: unknown): Promise<void>
   });
 }
 
+/** Select a chat session through the same sidebar control a user clicks. */
+export async function selectChatSession(page: Page, sessionId: string): Promise<void> {
+  await page.locator(`[data-session-id="${sessionId}"]`).click();
+}
+
 export async function stubHealth(page: Page): Promise<void> {
   await page.route('**/api/health/**', (route) =>
     json(route, 200, { status: 'ok', timestamp: new Date().toISOString() }),

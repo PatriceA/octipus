@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import type { AgentMessage } from '@/core/types';
 import {
+  compactMessages,
+  calculateTotalTokens,
   CONTEXT_OVERFLOW_TRUNCATED_MARKER,
   DEFAULT_TOOL_OUTPUT_SOFT_CAP,
   truncateOldestToolOutputs,
@@ -99,5 +101,63 @@ describe('truncateOldestToolOutputs', () => {
     const originalFirst = messages[0].content;
     truncateOldestToolOutputs(messages, { softCap: 10 });
     expect(messages[0].content).toBe(originalFirst);
+  });
+});
+
+describe('compactMessages conversation boundary', () => {
+  test('retains the nearest user turn before a recent assistant tool call', () => {
+    const messages: AgentMessage[] = [
+      msg('user', 'Research the provider error'),
+      {
+        ...msg('assistant', ''),
+        toolCalls: [{ id: 'old-call', name: 'search', arguments: { q: 'old' } }],
+      },
+      { ...msg('tool', 'old result '.repeat(2000)), toolCallId: 'old-call', name: 'search' },
+      {
+        ...msg('assistant', ''),
+        toolCalls: [{ id: 'recent-call', name: 'search', arguments: { q: 'recent' } }],
+      },
+      { ...msg('tool', 'recent result'), toolCallId: 'recent-call', name: 'search' },
+      msg('assistant', 'Final synthesis'),
+    ];
+
+    const compacted = compactMessages(messages, {
+      maxMessages: 1,
+      maxTokens: 100,
+      preserveRecentCount: 3,
+    });
+
+    expect(compacted.removed).toBe(2);
+    expect(compacted.messages.map((message) => message.role)).toEqual([
+      'user', 'assistant', 'tool', 'assistant',
+    ]);
+    expect(compacted.messages[0].content).toBe('Research the provider error');
+    expect(compacted.messages[1].toolCalls?.[0].id).toBe('recent-call');
+    expect(compacted.messages[2].toolCallId).toBe('recent-call');
+  });
+
+  test('does not reinsert an oversized user anchor after applying the token budget', () => {
+    const oversized = 'large pasted document '.repeat(10_000);
+    const messages: AgentMessage[] = [
+      msg('user', oversized),
+      msg('assistant', 'I will inspect it.'),
+      {
+        ...msg('assistant', ''),
+        toolCalls: [{ id: 'recent-call', name: 'search', arguments: { q: 'recent' } }],
+      },
+      { ...msg('tool', 'recent result'), toolCallId: 'recent-call', name: 'search' },
+      msg('assistant', 'Final synthesis'),
+    ];
+
+    const compacted = compactMessages(messages, {
+      maxMessages: 1,
+      maxTokens: 2000,
+      preserveRecentCount: 3,
+    });
+
+    expect(compacted.removed).toBeGreaterThan(0);
+    expect(compacted.messages.some(message => message.content === oversized)).toBe(false);
+    expect(calculateTotalTokens(compacted.messages)).toBeLessThanOrEqual(2000);
+    expect(compacted.messages[0].role).toBe('assistant');
   });
 });

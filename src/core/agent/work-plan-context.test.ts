@@ -25,4 +25,22 @@ describe('work plan model context', () => {
     expect(formatWorkPlanContext(state)).toContain('"pendingFeedbackCount":1');
     expect(formatWorkPlanContext(state)).toContain('Include sources');
   });
+
+  it('keeps a durable proposal pending on later turns without inlining its full artifact', () => {
+    const initial = reviseWorkPlan(emptyWorkPlan(), planUpdateSchema.parse({
+      revision: 0,
+      kind: 'proposal',
+      title: 'Mobile architecture',
+      goal: 'Implement multiple backends',
+      details: '# Full plan\n\nA deliberately durable specification.',
+      summary: 'Published proposal',
+      steps: [{ id: 'storage', title: 'Implement storage', status: 'pending' }],
+    }));
+    const context = formatWorkPlanContext(initial)!;
+    expect(context).toContain('This is a proposal');
+    expect(context).toContain('remain pending until the user separately asks to implement it');
+    expect(context).toContain('"kind":"proposal"');
+    expect(context).toContain('"detailsStored":true');
+    expect(context).not.toContain('deliberately durable specification');
+  });
 });

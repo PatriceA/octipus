@@ -15,7 +15,7 @@ import { PermissionManager } from './permissions';
  * `approve` (update…where…returning).
  */
 function stubDb(manager: PermissionManager, onExpire: () => void) {
-  const row = { userId: 'u-1', sessionId: null, toolId: 'shell', action: 'run' };
+  const row = { id: 'req-test', agentId: 'a-1', userId: 'u-1', sessionId: null, toolId: 'shell', action: 'run' };
   Object.defineProperty(manager, 'db', {
     configurable: true,
     get: () => ({
@@ -153,7 +153,7 @@ describe('approval creation cancellation races', () => {
     let expired = false;
     Object.defineProperty(manager, 'db', { get: () => ({
       insert: () => ({ values: async () => { controller.abort(); } }),
-      update: () => ({ set: () => ({ where: async () => { expired = true; } }) }),
+      update: () => ({ set: () => ({ where: () => ({ returning: async () => { expired = true; return []; } }) }) }),
     }) });
     await expect(manager.requestApproval('u-1', 'a-1', 'shell', 'run', {}, undefined, undefined, controller.signal)).rejects.toThrow(/stopped/);
     expect(expired).toBe(true);
