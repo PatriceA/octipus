@@ -50,6 +50,13 @@ return {
   },
   server: {
     port: Number(process.env.WEB_PORT || 3007),
+    // Never watch the Rust side. `tauri dev` runs cargo and this dev server at
+    // the same time, and target/ is full of files cargo holds open while it
+    // links them — on Windows the watcher hits one mid-build and dies with
+    // EBUSY, taking the whole launch with it ("The beforeDevCommand terminated
+    // with a non-zero status code"). Nothing under src-tauri/ is part of the
+    // frontend bundle anyway.
+    watch: { ignored: ['**/src-tauri/**'] },
     // Same-origin proxying, so the session cookie is attached to API calls and
     // to the hosted artifact pages the dashboard embeds in iframes.
     proxy: isDesktop ? undefined : {
