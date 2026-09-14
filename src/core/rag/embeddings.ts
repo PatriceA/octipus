@@ -129,6 +129,11 @@ export interface SearchScope {
    * undefined = span all repos (no repo filter). See multi-repo-design.md.
    */
   repoIds?: string[];
+  /** Repository visibility boundary, independent of the optional search filter.
+   * Undefined preserves callers without repo visibility; [] permits only nonrepo
+   * rows. An explicit repoIds filter intersects this set, never expands it.
+   */
+  allowedRepoIds?: string[];
 }
 
 /**
@@ -145,10 +150,18 @@ function globalDocsScopeSql(scope?: SearchScope) {
  * SQL fragment restricting to a set of repo ids, or empty when not requested.
  * Shared by `ftsSearch`/`hybridSearch`.
  */
+function repoVisibilitySql(scope?: SearchScope) {
+  const allowed = scope?.allowedRepoIds;
+  if (allowed === undefined) return undefined;
+  return allowed.length === 0 ? sql`repo_id IS NULL`
+    : sql`(repo_id IS NULL OR repo_id IN (${sql.join(allowed.map(id => sql`${id}`), sql`, `)}))`;
+}
+
 function repoScopeSql(scope?: SearchScope) {
   const ids = scope?.repoIds;
-  if (!ids || ids.length === 0) return sql``;
-  return sql`AND repo_id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`;
+  const selected = ids?.length ? sql`AND repo_id IN (${sql.join(ids.map(id => sql`${id}`), sql`, `)})` : sql``;
+  const visible = repoVisibilitySql(scope);
+  return sql`${selected} ${visible ? sql`AND ${visible}` : sql``}`;
 }
 
 /**
@@ -614,6 +627,7 @@ export class EmbeddingService {
       purpose ? eq(embeddings.purpose, purpose) : undefined,
       userId ? eq(embeddings.userId, userId) : undefined,
       scope?.repoIds?.length ? inArray(embeddings.repoId, scope.repoIds) : undefined,
+      repoVisibilitySql(scope),
     ].filter(Boolean);
     const conditions = filters.length > 0 ? and(...filters) : undefined;
 

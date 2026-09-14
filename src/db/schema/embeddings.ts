@@ -126,8 +126,9 @@ export const embeddings = pgTable('embeddings', {
    * comes from a registered repository's generated/curated content (repo map,
    * AGENTS.md, …) this points at the `workspace_repos` row, so search can be
    * scoped to one repo, a subset, or span the suite. NULL for non-repo content.
-   * `set null` on delete: the embedding outlives a deregistered repo (it just
-   * loses its scope) rather than being cascade-deleted.
+   * The legacy FK uses SET NULL. Repository deletion explicitly removes its
+   * embeddings in the same transaction before deleting the registry row,
+   * preventing scoped artifacts from becoming unscoped knowledge.
    *
    * Note: raw source-code files are intentionally NEVER indexed (only
    * summaries/generated artifacts carry a repoId) — see `code-detection.ts`.

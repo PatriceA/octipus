@@ -312,9 +312,10 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
       set.status = 401;
       return { error: 'Authentication required' };
     }
-    const { repos, edges } = await loadRepoGraph(user.id);
+    const { repos, edges, ambiguousPackages } = await loadRepoGraph(user.id);
     return {
       repos: repos.map((r) => ({ ...toRepoSummary(r, edges), lastScannedAt: r.lastScannedAt })),
+      ambiguousPackages,
       edges: edges.map((e) => ({ from: e.from, to: e.to, via: e.via, version: e.version })),
     };
   }, { detail: { tags: ['workspace'] } })
@@ -333,16 +334,17 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
       set.status = 401;
       return { error: 'Authentication required' };
     }
-    const repo = await repoRegistryRepository.getById(user.id, params.id);
+    const { repos, edges, ambiguousPackages } = await loadRepoGraph(user.id);
+    const repo = repos.find(candidate => candidate.id === params.id);
     if (!repo) {
       set.status = 404;
       return { error: 'Repo not found' };
     }
-    const { repos, edges } = await loadRepoGraph(user.id);
     const nodes = repos.map(repoToGraphNode);
     // Hand-pick public fields — do not spread the row (avoids leaking userId/workspaceId).
     return {
       id: repo.id,
+      ambiguousPackages,
       name: repo.name,
       kind: repo.kind,
       path: repo.rootPath,
@@ -370,4 +372,3 @@ export const workspaceRoutes = new Elysia({ prefix: '/workspace' })
     }
     return { deleted: true };
   }, { detail: { tags: ['workspace'] } });
-

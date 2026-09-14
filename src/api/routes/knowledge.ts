@@ -1,3 +1,4 @@
+import { loadRepoGraph } from '@/core/repos/registry-service';
 import { withProviderUsageContext } from '@/models/providers/instrumented';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
@@ -117,8 +118,7 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
     const { query, mode = 'hybrid', limit = 10, purpose, minSimilarity, repoIds } = body;
     const purposeTyped = purpose as EmbeddingPurpose | undefined;
     const service = getEmbeddingService();
-    // Optional multi-repo scope (repoIds are workspace_repos.id values).
-    const scope = repoIds && repoIds.length > 0 ? { repoIds } : undefined;
+
     // Apply the same defaults as the MCP tool so REST callers get useful
     // results instead of "everything in the KB at ~0.01 similarity".
     const threshold = typeof minSimilarity === 'number'
@@ -126,6 +126,13 @@ export const knowledgeRoutes = new Elysia({ prefix: '/knowledge' })
       : mode === 'semantic' ? 0.35 : mode === 'keyword' ? 0 : 0.3;
 
     try {
+      const { repos } = await loadRepoGraph(user.id);
+      const allowedRepoIds = repos.map(repo => repo.id);
+      if (repoIds?.some((id: string) => !allowedRepoIds.includes(id))) {
+        set.status = 400;
+        return { error: 'Unknown or unavailable repository id' };
+      }
+      const scope = { allowedRepoIds, ...(repoIds?.length ? { repoIds } : {}) };
       let results;
       switch (mode) {
         case 'semantic':

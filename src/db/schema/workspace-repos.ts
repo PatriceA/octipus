@@ -24,7 +24,7 @@ export interface RepoDependency {
   name: string;
   /** Version constraint as written in the manifest (e.g. "^2.1.0"). */
   version: string;
-  /** Which manifest it came from: "package.json" | "Cargo.toml" | "go.mod" | "pyproject.toml". */
+  /** Which manifest it came from: "package.json" | "Cargo.toml" | "go.mod" | "pyproject.toml" | "pubspec.yaml" | "pom.xml" | "build.gradle" | "build.gradle.kts". */
   manifest: string;
 }
 
@@ -114,6 +114,12 @@ export interface RepoSymbolIndex {
   truncated: boolean;
   /** Files skipped because their grammar would not load. */
   skippedLanguages: string[];
+  /** Eligible source files omitted due to size, access, parser or grammar failure. */
+  skippedFiles?: number;
+  /** Encountered extensions without a supported symbol grammar (including non-code). */
+  unsupportedExtensions?: string[];
+  /** Partial-index/access/parse diagnostics; never source text. */
+  warnings?: string[];
 }
 
 export type WorkspaceRepo = typeof workspaceRepos.$inferSelect;

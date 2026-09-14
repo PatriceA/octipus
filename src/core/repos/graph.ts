@@ -28,28 +28,69 @@ export interface RepoEdge {
   version: string;
 }
 
+/** Package keys that cannot be linked because more than one repo provides them. */
+export function findAmbiguousPackages(nodes: RepoGraphNode[]): string[] {
+  const exact = new Map<string, Set<string>>();
+  const python = new Map<string, Set<string>>();
+  for (const node of nodes) {
+    if (!node.packageName) continue;
+    addProvider(exact, node.packageName, node.id);
+    addProvider(python, normalizePythonPackage(node.packageName), node.id);
+  }
+  const ambiguous = new Set<string>();
+  for (const [packageName, providers] of exact) {
+    if (providers.size > 1) ambiguous.add(packageName);
+  }
+  // A Python dependency can spell `foo_bar`, `foo-bar`, and `Foo.Bar`
+  // interchangeably, so collisions after PEP normalization are ambiguous too.
+  for (const [packageName, providers] of python) {
+    if (providers.size > 1) ambiguous.add(packageName);
+  }
+  return [...ambiguous].sort();
+}
+
 /** Build all in-registry dependency edges (consumer → provider). */
 export function buildRepoEdges(nodes: RepoGraphNode[]): RepoEdge[] {
-  // packageName → providing repo id. A package name should be unique across a
-  // suite; if two repos claim it, last-writer-wins (logged by the caller).
-  const byPackage = new Map<string, string>();
+  // Keep every claimant. Linking an ambiguous package to whichever row happened
+  // to be visited last produces a false graph, so ambiguous names stay unlinked.
+  const byPackage = new Map<string, Set<string>>();
+  const byPythonPackage = new Map<string, Set<string>>();
   for (const node of nodes) {
-    if (node.packageName) byPackage.set(node.packageName, node.id);
+    if (!node.packageName) continue;
+    addProvider(byPackage, node.packageName, node.id);
+    addProvider(byPythonPackage, normalizePythonPackage(node.packageName), node.id);
   }
   const edges: RepoEdge[] = [];
   for (const node of nodes) {
     const seen = new Set<string>();
     for (const dep of node.dependencies) {
-      const providerId = byPackage.get(dep.name);
+      const providerId = dep.manifest === 'pyproject.toml'
+        ? uniqueProvider(byPythonPackage.get(normalizePythonPackage(dep.name)))
+        : uniqueProvider(byPackage.get(dep.name));
       if (!providerId || providerId === node.id) continue;
-      // Collapse dependency + devDependency duplicates to one edge.
-      const key = `${providerId}:${dep.name}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+      // A graph edge is between repositories. Multiple declarations or aliases
+      // that resolve to the same provider remain one edge.
+      if (seen.has(providerId)) continue;
+      seen.add(providerId);
       edges.push({ from: node.id, to: providerId, via: dep.name, version: dep.version });
     }
   }
   return edges;
+}
+
+function addProvider(index: Map<string, Set<string>>, packageName: string, repoId: string): void {
+  const providers = index.get(packageName) ?? new Set<string>();
+  providers.add(repoId);
+  index.set(packageName, providers);
+}
+
+function uniqueProvider(providers: Set<string> | undefined): string | undefined {
+  return providers?.size === 1 ? providers.values().next().value : undefined;
+}
+
+/** PEP 503: Python project names are case-insensitive and `-_.` are equivalent. */
+function normalizePythonPackage(packageName: string): string {
+  return packageName.toLowerCase().replace(/[-_.]+/g, '-');
 }
 
 /** Repos that depend on `repoId` (reverse edges) — "what breaks if I change this". */

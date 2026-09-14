@@ -64,6 +64,7 @@
     "@simplewebauthn/server": "^14.0.1",
     "@sinclair/typebox": "0.34.52",
     "@slack/bolt": "^4.7.2",
+    "@xmldom/xmldom": "^0.8.15",
     "botbuilder": "^4.22.1",
     "drizzle-orm": "^0.45.2",
     "grammy": "^1.46.0",

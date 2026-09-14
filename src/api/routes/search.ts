@@ -2,6 +2,7 @@ import { ilike, or, } from 'drizzle-orm';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getEmbeddingService } from '@/core/rag/embeddings';
+import { loadRepoGraph } from '@/core/repos/registry-service';
 import { getDb } from '@/db/postgres';
 import { hooks } from '@/db/schema/hooks';
 import { modelConfig } from '@/db/schema/models';
@@ -79,7 +80,10 @@ export const searchRoutes = new Elysia({ prefix: '/search' })
         (async () => {
           try {
             const service = getEmbeddingService();
-            return await service.ftsSearch(searchTerm, limit);
+            // Repo-scoped knowledge (AGENTS.md, repo maps) is per user: same
+            // visibility gate as /api/knowledge and the knowledge tool.
+            const { repos } = await loadRepoGraph(user.id);
+            return await service.ftsSearch(searchTerm, limit, undefined, undefined, { allowedRepoIds: repos.map(repo => repo.id) });
           } catch {
             return [];
           }

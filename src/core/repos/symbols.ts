@@ -12,8 +12,10 @@
  * this altitude. Every cap below exists so a monorepo cannot turn a scan
  * into a minute of parsing or a row into megabytes.
  */
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { extname, join, relative } from 'node:path';
+import { closeSync, constants, fstatSync, lstatSync, mkdtempSync, openSync, readSync, realpathSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { CodeSymbol, FileSymbols, RepoSymbolIndex, SymbolKind } from '@db/schema/workspace-repos';
 import { createParser, type GrammarLanguage, type SyntaxNode } from '@/utils/tree-sitter-grammars';
 
@@ -26,9 +28,11 @@ export interface IndexOptions {
   maxFileBytes?: number;
   /** Keep at most this many symbols in the index. */
   maxSymbols?: number;
+  /** Bound candidate paths inspected, including unsupported files. */
+  maxEntries?: number;
 }
 
-const DEFAULTS: Required<IndexOptions> = { maxFiles: 2500, maxFileBytes: 400_000, maxSymbols: 20_000 };
+const DEFAULTS: Required<IndexOptions> = { maxFiles: 2500, maxFileBytes: 400_000, maxSymbols: 20_000, maxEntries: 100_000 };
 
 const SKIP_DIRS = new Set([
   'node_modules', '.git', 'dist', 'build', 'out', 'target', 'vendor', 'coverage', '.next', '.nuxt', '.turbo',
@@ -71,20 +75,35 @@ function members(out: CodeSymbol[], owner: string, body: SyntaxNode | null, memb
   for (const child of body.namedChildren) {
     if (!memberTypes.has(child.type)) continue;
     const name = nameOf(child) ?? (child.type === 'function_item' ? nameOf(child) : null);
-    push(out, sym(name ? `${owner}.${name}` : null, kind, child, exported));
+    const privateMember = name?.startsWith('#') || child.namedChildren.some(n => n.type === 'accessibility_modifier' && /^(private|protected)$/.test(n.text));
+    push(out, sym(name ? `${owner}.${name}` : null, kind, child, privateMember ? false : exported));
   }
 }
 
 const TS_MEMBERS = new Set(['method_definition', 'method_signature', 'abstract_method_signature']);
 
 function extractTs(root: SyntaxNode, out: CodeSymbol[]): void {
+  const namedExports = new Set<string>();
+  for (const node of root.namedChildren) {
+    if (node.type !== 'export_statement' || node.childForFieldName('source')) continue;
+    const clause = node.namedChildren.find(child => child.type === 'export_clause');
+    for (const spec of clause?.namedChildren ?? []) {
+      const name = nameOf(spec);
+      if (name) namedExports.add(name);
+    }
+  }
   const visit = (node: SyntaxNode, exported: boolean) => {
+    exported ||= namedExports.has(nameOf(node) ?? '');
     switch (node.type) {
       case 'export_statement': {
         const decl = node.childForFieldName('declaration');
         if (decl) visit(decl, true);
         return;
       }
+      case 'ambient_declaration':
+        for (const child of node.namedChildren) visit(child, exported);
+        return;
+      case 'function_signature':
       case 'function_declaration':
       case 'generator_function_declaration':
         push(out, sym(nameOf(node), 'function', node, exported));
@@ -99,6 +118,7 @@ function extractTs(root: SyntaxNode, out: CodeSymbol[]): void {
       case 'interface_declaration': {
         const name = nameOf(node);
         push(out, sym(name, 'interface', node, exported));
+        if (name) members(out, name, node.childForFieldName('body'), TS_MEMBERS, 'method', exported);
         return;
       }
       case 'type_alias_declaration':
@@ -113,7 +133,8 @@ function extractTs(root: SyntaxNode, out: CodeSymbol[]): void {
           if (decl.type !== 'variable_declarator') continue;
           const value = decl.childForFieldName('value');
           const isFn = value?.type === 'arrow_function' || value?.type === 'function_expression' || value?.type === 'function';
-          push(out, sym(nameOf(decl), isFn ? 'function' : 'constant', decl, exported));
+          const name = nameOf(decl);
+          push(out, sym(name, isFn ? 'function' : 'constant', decl, exported || namedExports.has(name ?? '')));
         }
         return;
       }
@@ -169,7 +190,7 @@ function extractGo(root: SyntaxNode, out: CodeSymbol[]): void {
       }
       case 'type_declaration': {
         for (const spec of node.namedChildren) {
-          if (spec.type !== 'type_spec') continue;
+          if (spec.type !== 'type_spec' && spec.type !== 'type_alias') continue;
           const name = nameOf(spec);
           const t = spec.childForFieldName('type')?.type;
           const kind: SymbolKind = t === 'struct_type' ? 'struct' : t === 'interface_type' ? 'interface' : 'type';
@@ -188,12 +209,12 @@ function rustPublic(node: SyntaxNode): boolean {
 }
 
 function extractRust(root: SyntaxNode, out: CodeSymbol[]): void {
-  const visit = (node: SyntaxNode, owner: string | null) => {
+  const visit = (node: SyntaxNode, owner: string | null, member = false) => {
     switch (node.type) {
       case 'function_item':
       case 'function_signature_item': {
         const name = nameOf(node);
-        push(out, sym(name ? (owner ? `${owner}.${name}` : name) : null, owner ? 'method' : 'function', node, rustPublic(node)));
+        push(out, sym(name ? (owner ? `${owner}.${name}` : name) : null, member ? 'method' : 'function', node, rustPublic(node)));
         break;
       }
       case 'struct_item':
@@ -209,13 +230,13 @@ function extractRust(root: SyntaxNode, out: CodeSymbol[]): void {
         const name = nameOf(node);
         push(out, sym(name, 'trait', node, rustPublic(node)));
         const body = node.childForFieldName('body');
-        if (name && body) for (const m of body.namedChildren) visit(m, name);
+        if (name && body) for (const m of body.namedChildren) visit(m, name, true);
         break;
       }
       case 'impl_item': {
         const typeName = node.childForFieldName('type')?.text ?? null;
         const body = node.childForFieldName('body');
-        if (typeName && body) for (const m of body.namedChildren) visit(m, typeName);
+        if (typeName && body) for (const m of body.namedChildren) visit(m, typeName, true);
         break;
       }
       case 'mod_item': {
@@ -238,23 +259,48 @@ function extractRust(root: SyntaxNode, out: CodeSymbol[]): void {
 
 const JAVA_TYPES = new Set(['class_declaration', 'interface_declaration', 'enum_declaration', 'record_declaration', 'annotation_type_declaration']);
 
-function javaPublic(node: SyntaxNode): boolean | undefined {
-  const mods = node.namedChildren.find((c) => c.type === 'modifiers');
-  return mods ? /\bpublic\b/.test(mods.text) : undefined;
+/** Read modifier tokens, never annotation arguments containing words like public. */
+function javaModifiers(node: SyntaxNode): Set<string> {
+  const modifiers = node.namedChildren.find(child => child.type === 'modifiers');
+  return new Set(Array.from({ length: modifiers?.childCount ?? 0 }, (_, i) => modifiers!.child(i)?.type ?? ''));
+}
+
+function javaPublic(node: SyntaxNode, implicit = false): boolean {
+  const modifiers = javaModifiers(node);
+  if (modifiers.has('private') || modifiers.has('protected')) return false;
+  return modifiers.has('public') || implicit;
 }
 
 function extractJava(root: SyntaxNode, out: CodeSymbol[]): void {
-  const visit = (node: SyntaxNode, owner: string | null) => {
+  const visit = (node: SyntaxNode, owner: string | null, ownerInterface = false) => {
     if (JAVA_TYPES.has(node.type)) {
       const name = nameOf(node);
-      const kind: SymbolKind = node.type === 'interface_declaration' ? 'interface' : node.type === 'enum_declaration' ? 'enum' : 'class';
+      const isInterface = node.type === 'interface_declaration' || node.type === 'annotation_type_declaration';
+      const kind: SymbolKind = isInterface ? 'interface' : node.type === 'enum_declaration' ? 'enum' : 'class';
       const full = name ? (owner ? `${owner}.${name}` : name) : null;
-      push(out, sym(full, kind, node, javaPublic(node)));
+      push(out, sym(full, kind, node, javaPublic(node, ownerInterface)));
       const body = node.childForFieldName('body');
-      if (full && body) for (const m of body.namedChildren) visit(m, full);
-    } else if ((node.type === 'method_declaration' || node.type === 'constructor_declaration') && owner) {
+      if (full && body) for (const member of body.namedChildren) visit(member, full, isInterface);
+    } else if (node.type === 'enum_body_declarations') {
+      // Enum members after the semicolon live in this extra grammar wrapper.
+      for (const member of node.namedChildren) visit(member, owner);
+    } else if (owner && ['method_declaration', 'constructor_declaration', 'compact_constructor_declaration', 'annotation_type_element_declaration'].includes(node.type)) {
       const name = nameOf(node);
-      push(out, sym(name ? `${owner}.${name}` : null, 'method', node, javaPublic(node)));
+      push(out, sym(name ? `${owner}.${name}` : null, 'method', node, javaPublic(node, ownerInterface)));
+    } else if (node.type === 'enum_constant' && owner) {
+      const name = nameOf(node);
+      const full = name ? `${owner}.${name}` : null;
+      push(out, sym(full, 'constant', node, true));
+      const body = node.childForFieldName('body');
+      if (full && body) for (const member of body.namedChildren) visit(member, full);
+    } else if (node.type === 'constant_declaration' && owner) {
+      // Interface/annotation fields are implicitly public static final.
+      for (const decl of node.namedChildren) {
+        if (decl.type === 'variable_declarator') {
+          const name = nameOf(decl);
+          push(out, sym(name ? `${owner}.${name}` : null, 'constant', decl, javaPublic(node, ownerInterface)));
+        }
+      }
     }
   };
   for (const child of root.namedChildren) visit(child, null);
@@ -264,9 +310,10 @@ function extractJava(root: SyntaxNode, out: CodeSymbol[]): void {
 export async function extractSymbols(source: string, lang: GrammarLanguage): Promise<CodeSymbol[] | null> {
   const parser = await createParser(lang);
   if (!parser) return null;
+  let tree: ReturnType<typeof parser.parse> = null;
   try {
-    const tree = parser.parse(source);
-    if (!tree) return [];
+    tree = parser.parse(source);
+    if (!tree) throw new Error('Parser returned no syntax tree');
     const out: CodeSymbol[] = [];
     switch (lang) {
       case 'typescript':
@@ -288,76 +335,118 @@ export async function extractSymbols(source: string, lang: GrammarLanguage): Pro
         extractJava(tree.rootNode, out);
         break;
     }
-    tree.delete?.();
     return out;
   } finally {
+    tree?.delete?.();
     parser.delete?.();
   }
 }
 
 // ── Walking a repo ───────────────────────────────────────────────
 
-function* walkSourceFiles(root: string): Generator<string> {
-  const stack = [root];
-  while (stack.length > 0) {
-    const dir = stack.pop()!;
-    let entries: string[];
-    try {
-      entries = readdirSync(dir).sort();
-    } catch {
-      continue;
+/** Git owns ignore semantics, including nested patterns, negations and tracked files.
+ * A temporary empty Git directory also supports manifest-only, non-Git projects
+ * without writing anything into their source tree. Never read a partial command
+ * result after timeout or maxBuffer: report an unavailable/partial index instead.
+ */
+function sourceCandidates(root: string): string[] {
+  const options = { cwd: root, encoding: 'utf8' as const, timeout: 5000, maxBuffer: 8 * 1024 * 1024,
+    env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined },
+    stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'] };
+  const config = ['-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false'];
+  let scratch: string | undefined;
+  try {
+    let gitArgs = config;
+    try { execFileSync('git', [...config, 'rev-parse', '--show-toplevel'], options); }
+    catch {
+      scratch = mkdtempSync(join(tmpdir(), 'octipus-symbol-git-'));
+      execFileSync('git', ['init', '--bare', '--quiet', scratch], options);
+      gitArgs = [...config, `--git-dir=${scratch}`, `--work-tree=${root}`];
     }
-    for (const entry of entries) {
-      if (entry.startsWith('.') || SKIP_DIRS.has(entry)) continue;
-      const full = join(dir, entry);
-      let st: ReturnType<typeof statSync>;
-      try {
-        st = statSync(full);
-      } catch {
-        continue;
-      }
-      if (st.isDirectory()) stack.push(full);
-      else if (st.isFile() && languageForFile(entry)) yield full;
-    }
-  }
+    return execFileSync('git', [...gitArgs, 'ls-files', '--cached', '--others', '--exclude-standard', '--deduplicate', '-z', '--', '.'], options)
+      .split('\0').filter(Boolean);
+  } finally { if (scratch) rmSync(scratch, { recursive: true, force: true }); }
 }
 
-/** Build the symbol index for a repository root. Never throws; caps make it bounded. */
+/** Build a bounded snapshot. Failure evidence is retained even for zero files. */
 export async function indexRepoSymbols(repoRoot: string, opts: IndexOptions = {}): Promise<RepoSymbolIndex> {
-  const o = { ...DEFAULTS, ...opts };
+  const o = Object.fromEntries(Object.entries(DEFAULTS).map(([key, fallback]) => {
+    const value = opts[key as keyof IndexOptions];
+    return [key, Number.isFinite(value) ? Math.max(0, Math.min(fallback, Math.floor(value!))) : fallback];
+  })) as Required<IndexOptions>;
   const files: FileSymbols[] = [];
   const skippedLanguages = new Set<string>();
+  const unsupportedExtensions = new Set<string>();
+  const warnings = new Set<string>();
   let fileCount = 0;
   let symbolCount = 0;
+  let skippedFiles = 0;
   let truncated = false;
-
-  for (const full of walkSourceFiles(repoRoot)) {
-    if (fileCount >= o.maxFiles || symbolCount >= o.maxSymbols) {
-      truncated = true;
-      break;
-    }
-    const lang = languageForFile(full)!;
-    if (skippedLanguages.has(lang)) continue;
+  let root: string;
+  let candidates: string[];
+  try {
+    root = realpathSync(repoRoot);
+    candidates = sourceCandidates(root);
+  } catch {
+    return { version: 1, indexedAt: new Date().toISOString(), files, fileCount, symbolCount, truncated: true,
+      skippedLanguages: [], skippedFiles: 0, unsupportedExtensions: [], warnings: ['Source enumeration unavailable: check repository access and Git installation; no complete index was produced.'] };
+  }
+  let inspected = 0;
+  for (const path of candidates) {
+    if (inspected++ >= o.maxEntries) { truncated = true; break; }
+    const parts = path.split('/');
+    if (isAbsolute(path) || parts.includes('..')) { skippedFiles++; warnings.add('Unsafe source paths were skipped.'); continue; }
+    if (parts.some(part => part.startsWith('.') || SKIP_DIRS.has(part))) continue;
+    const lang = languageForFile(path);
+    if (!lang) { const ext = extname(path).toLowerCase(); if (ext && unsupportedExtensions.size < 32) unsupportedExtensions.add(ext); continue; }
+    if (fileCount >= o.maxFiles || symbolCount >= o.maxSymbols) { truncated = true; break; }
+    if (skippedLanguages.has(lang)) { skippedFiles++; continue; }
+    const full = resolve(root, path);
+    let fd: number | undefined;
     let source: string;
     try {
-      if (statSync(full).size > o.maxFileBytes) continue;
-      source = readFileSync(full, 'utf-8');
+      // Git can list tracked files beneath replaced directories. Reject every
+      // symlink component, including ones pointing back inside the repository.
+      let component = root;
+      for (const part of parts) {
+        component = join(component, part);
+        if (lstatSync(component).isSymbolicLink()) throw new Error('symbolic link');
+      }
+      const rel = relative(root, realpathSync(full));
+      if (isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) throw new Error('outside repository');
+      fd = openSync(full, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      const st = fstatSync(fd);
+      if (!st.isFile()) throw new Error('not a regular file');
+      if (st.size > o.maxFileBytes) { truncated = true; skippedFiles++; continue; }
+      if (process.platform === 'linux') {
+        const opened = relative(root, realpathSync(`/proc/self/fd/${fd}`));
+        if (isAbsolute(opened) || opened === '..' || opened.startsWith(`..${sep}`)) throw new Error('opened outside repository');
+      }
+      const bytes = Buffer.alloc(o.maxFileBytes + 1);
+      let length = 0;
+      while (length < bytes.length) {
+        const read = readSync(fd, bytes, length, bytes.length - length, null);
+        if (!read) break;
+        length += read;
+      }
+      if (length > o.maxFileBytes) { truncated = true; skippedFiles++; continue; }
+      source = bytes.subarray(0, length).toString('utf8');
     } catch {
-      continue;
-    }
-    const symbols = await extractSymbols(source, lang);
-    if (symbols === null) {
-      skippedLanguages.add(lang);
-      continue;
-    }
-    fileCount += 1;
-    if (symbols.length === 0) continue;
+      skippedFiles++; warnings.add('Unreadable, missing, or symlink source files were skipped.'); continue;
+    } finally { if (fd !== undefined) closeSync(fd); }
+    let symbols: CodeSymbol[] | null;
+    try { symbols = await extractSymbols(source, lang); }
+    catch { skippedFiles++; warnings.add('Some source files could not be parsed.'); continue; }
+    if (symbols === null) { skippedLanguages.add(lang); skippedFiles++; continue; }
+    fileCount++;
+    if (!symbols.length) continue;
     const kept = symbols.slice(0, Math.max(0, o.maxSymbols - symbolCount));
+    if (kept.length < symbols.length) truncated = true;
     symbolCount += kept.length;
-    files.push({ path: relative(repoRoot, full).split('\\').join('/'), language: lang, symbols: kept });
+    files.push({ path: relative(root, full).split('\\').join('/'), language: lang, symbols: kept });
   }
-
-  return { version: 1, indexedAt: new Date().toISOString(), files, fileCount, symbolCount, truncated, skippedLanguages: [...skippedLanguages] };
+  return { version: 1, indexedAt: new Date().toISOString(), files, fileCount, symbolCount, truncated,
+    skippedLanguages: [...skippedLanguages], skippedFiles, unsupportedExtensions: [...unsupportedExtensions].sort(), warnings: [...warnings] };
 }
 
 // ── Reading the index ────────────────────────────────────────────
@@ -371,7 +460,7 @@ export function findSymbols(index: RepoSymbolIndex | null | undefined, query: st
   if (!index) return [];
   const q = query.trim().toLowerCase();
   if (!q) return [];
-  const limit = Math.max(1, Math.min(200, opts.limit ?? 50));
+  const limit = Number.isFinite(opts.limit) ? Math.max(1, Math.min(200, Math.floor(opts.limit!))) : 50;
   const hits: { hit: SymbolHit; rank: number }[] = [];
   for (const file of index.files) {
     for (const s of file.symbols) {

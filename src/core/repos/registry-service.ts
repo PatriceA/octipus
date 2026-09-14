@@ -1,12 +1,12 @@
 import type { WorkspaceRepo } from '@db/schema/workspace-repos';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, realpathSync, lstatSync } from 'fs';
 import { join, resolve } from 'path';
 import { getConfig } from '@/config';
 import { repoRegistryRepository } from '@/db/repositories/repo-registry-repository';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
-import { buildRepoEdges, type RepoEdge, type RepoGraphNode } from './graph';
-import { scanRoots } from './scanner';
+import { buildRepoEdges, findAmbiguousPackages, type RepoEdge, type RepoGraphNode } from './graph';
+import { findRepoRoots, scanRoots } from './scanner';
 import { indexRepoSymbols } from './symbols';
 
 /**
@@ -18,13 +18,13 @@ import { indexRepoSymbols } from './symbols';
 /** The workspace roots a user's repos can live under. */
 export function userScanRoots(userId: string): string[] {
   const fs = WorkspaceFS.forAgent({ userId });
-  fs.ensureRootSync();
   const additional = getConfig().workspace.additionalPaths?.map((p) => resolve(p)) ?? [];
   return [fs.root, ...additional];
 }
 
 /** Scan every repo under the user's workspace roots and upsert the registry. */
 export async function scanUserRepos(userId: string, workspaceId?: string | null): Promise<WorkspaceRepo[]> {
+  WorkspaceFS.forAgent({ userId }).ensureRootSync();
   const roots = userScanRoots(userId);
   const scanned = scanRoots(roots);
   for (const r of scanned) {
@@ -48,7 +48,7 @@ export async function scanUserRepos(userId: string, workspaceId?: string | null)
       packageName: r.packageName,
       dependencies: r.dependencies,
       repoMap: r.repoMap,
-      symbolIndex: symbolIndex && symbolIndex.fileCount > 0 ? symbolIndex : null,
+      symbolIndex,
       hasAgentsMd: r.hasAgentsMd,
       lastScannedAt: new Date(),
     });
@@ -60,7 +60,7 @@ export async function scanUserRepos(userId: string, workspaceId?: string | null)
     );
   }
   coreLogger.info({ userId, scanned: scanned.length, roots: roots.length }, 'repo registry scan complete');
-  return repoRegistryRepository.listByUser(userId);
+  return (await loadRepoGraph(userId)).repos;
 }
 
 /**
@@ -90,7 +90,7 @@ export async function indexRepoKnowledge(repo: WorkspaceRepo, userId: string): P
     });
   }
   const agentsPath = join(repo.rootPath, 'AGENTS.md');
-  if (existsSync(agentsPath)) {
+  if (existsSync(agentsPath) && lstatSync(agentsPath).isFile()) {
     const content = readFileSync(agentsPath, 'utf-8');
     if (content.trim()) {
       items.push({
@@ -100,6 +100,14 @@ export async function indexRepoKnowledge(repo: WorkspaceRepo, userId: string): P
         metadata: { source: 'repo-agents', title: `${repo.name} AGENTS.md`, filePath: agentsPath },
       });
     }
+  }
+
+  // A removed or emptied guide must not remain searchable after re-scanning.
+  for (const [purpose, sourceId] of [
+    ['knowledge_artifact', `repo:${repo.id}:map`],
+    ['document', `repo:${repo.id}:agents`],
+  ] as const) {
+    if (!items.some(item => item.sourceId === sourceId)) await service.deleteBySource(purpose, sourceId);
   }
 
   for (const item of items) {
@@ -156,8 +164,25 @@ export function repoToGraphNode(repo: WorkspaceRepo): RepoGraphNode {
 }
 
 /** Load the user's registry as graph nodes + derived edges. */
-export async function loadRepoGraph(userId: string): Promise<{ repos: WorkspaceRepo[]; nodes: RepoGraphNode[]; edges: RepoEdge[] }> {
-  const repos = await repoRegistryRepository.listByUser(userId);
+export async function loadRepoGraph(userId: string): Promise<{ repos: WorkspaceRepo[]; nodes: RepoGraphNode[]; edges: RepoEdge[]; ambiguousPackages: string[] }> {
+  // Stored snapshots do not grant filesystem access. Hide removed repositories
+  // and roots no longer exposed by configuration before returning maps/symbols.
+  const discoverable = new Set(findRepoRoots(userScanRoots(userId)));
+  const stored = await repoRegistryRepository.listByUser(userId);
+  const repos = stored.filter(repo => {
+    try { return discoverable.has(realpathSync(repo.rootPath)); }
+    catch { return false; }
+  });
   const nodes = repos.map(repoToGraphNode);
-  return { repos, nodes, edges: buildRepoEdges(nodes) };
+  return { repos, nodes, edges: buildRepoEdges(nodes), ambiguousPackages: findAmbiguousPackages(nodes) };
+}
+
+/** A duplicate display name requires an explicit id or absolute repository path. */
+export function resolveRepo(repos: WorkspaceRepo[], ref: string): WorkspaceRepo | undefined {
+  const value = ref.trim();
+  const byIdentity = repos.find(repo => repo.id === value || repo.rootPath === value);
+  if (byIdentity) return byIdentity;
+  const matches = repos.filter(repo => repo.name.toLowerCase() === value.toLowerCase());
+  if (matches.length > 1) throw new Error(`Repository name "${value}" is ambiguous. Use a repository id or absolute path from list_repos.`);
+  return matches[0];
 }

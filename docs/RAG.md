@@ -286,12 +286,15 @@ no configuration and no failure mode beyond "you get what you got before".
 
 ## Code-exclusion policy (raw code is never indexed)
 
-**Raw source-code files are never stored in the knowledge base.** Indexing whole
-code files bloats retrieval with low-signal chunks and crowds out the curated and
-generated content that actually helps — it was tried before and hurt result
-quality. Code is meant to be *navigated* (the `repo_registry` tool, `grep`, read
-on demand), not retrieved as fuzzy vector chunks. What the KB stores for a repo
-instead are **generated summaries** — repo-map digests and `AGENTS.md` (see
+**Raw source-code files are excluded from the general knowledge base.** Earlier
+whole-file indexing reduced retrieval quality by mixing code chunks with curated
+and generated knowledge. This policy does not prohibit dedicated code indexes:
+optional MCP code-search services can maintain separate, rebuildable indexes
+without adding source chunks to Octipus's document retrieval. Agents should use
+indexed results to locate code and verify the current files before editing.
+The built-in navigation tools (`repo_registry`, text search, and file reads)
+remain available without an external index. What the KB stores for a repo
+are **generated summaries** — repo-map digests and `AGENTS.md` (see
 [Repo-scoped knowledge](#repo-scoped-knowledge-multi-repo)).
 
 ### What counts as "code"
@@ -337,16 +340,25 @@ with its `repo_id` — and **never any raw code**:
 | Repo-map digest (top-level dirs, entry points, build/test/lint commands) | `knowledge_artifact` | `repo:<repoId>:map` |
 | Curated `AGENTS.md` (the project guide) | `document` | `repo:<repoId>:agents` |
 
-Re-scanning is cheap: each item is stamped with a `fileSha` and an unchanged
+Embedding work is incremental: each item is stamped with a `fileSha` and an unchanged
 repo-map/`AGENTS.md` is skipped (`isFileIndexed`), so a scan only re-embeds what
 actually changed.
+
+Missing or empty guides are removed from repo knowledge on rescan; symlinked
+`AGENTS.md` files are not indexed. Embedding failures do not prevent native
+registry and symbol navigation. Scanning does not automatically erase historical
+knowledge for repositories removed from disk; delete unwanted indexed content
+separately if needed.
 
 ### Scoping a search
 
 - **Agents** — `search_knowledge(query, …, repos: "core, web")`. `repos` is a
-  comma-separated list of repo **names or ids** (get them from the
+  comma-separated list of repo **unique names, ids, or absolute paths** (get them from the
   `repo_registry` tool); it resolves to registry ids and filters
-  `embeddings.repo_id`. Omit it to search everything (repo + non-repo content).
+  `embeddings.repo_id`. Omit it to search visible repo artifacts plus non-repo content. Agent searches
+  exclude artifacts belonging to other users’ registry entries or unavailable roots.
+  Explicit unknown, unavailable or ambiguous repository references fail with an
+  error; they never silently broaden an agent search to the whole knowledge base.
 - **REST** — `POST /api/knowledge/search` with `repoIds: ["<uuid>", …]`.
 - Every hit carries its `repoId`, so results are attributed to a source repo
   without parsing file paths.

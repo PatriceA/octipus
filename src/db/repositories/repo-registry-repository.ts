@@ -1,5 +1,6 @@
 import { and, desc, eq } from 'drizzle-orm';
 import { getDb } from '../postgres';
+import { embeddings } from '../schema/embeddings';
 import { type NewWorkspaceRepo, type WorkspaceRepo, workspaceRepos } from '../schema/workspace-repos';
 
 /**
@@ -61,11 +62,28 @@ export class RepoRegistryRepository {
   }
 
   async deleteById(userId: string, id: string): Promise<boolean> {
-    const result = await this.db
-      .delete(workspaceRepos)
-      .where(and(eq(workspaceRepos.userId, userId), eq(workspaceRepos.id, id)))
-      .returning();
-    return result.length > 0;
+    return this.db.transaction(async (tx) => {
+      // Lock the owner-scoped row so a concurrent delete cannot let the FK's
+      // SET NULL run before this cleanup and turn repo knowledge into global
+      // knowledge. New embedding inserts referencing the row also cannot
+      // commit across the registry deletion.
+      const owned = await tx
+        .select({ id: workspaceRepos.id })
+        .from(workspaceRepos)
+        .where(and(eq(workspaceRepos.userId, userId), eq(workspaceRepos.id, id)))
+        .limit(1)
+        .for('update');
+      if (!owned.length) return false;
+
+      // Delete every embedding attached to the verified owned repository,
+      // including legacy rows whose user_id is missing or inconsistent.
+      await tx.delete(embeddings).where(eq(embeddings.repoId, id));
+      const result = await tx
+        .delete(workspaceRepos)
+        .where(and(eq(workspaceRepos.userId, userId), eq(workspaceRepos.id, id)))
+        .returning({ id: workspaceRepos.id });
+      return result.length > 0;
+    });
   }
 }
 

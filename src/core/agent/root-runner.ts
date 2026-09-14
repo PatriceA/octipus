@@ -139,7 +139,7 @@ export async function runRootAgent(
 ): Promise<{ response: string; agentId: string; sources: string[] }> {
   const emit = deps.emit;
   const agentManager = getAgentManager();
-  const modelName = await deps.modelSelector.selectForRootAgent(sessionId);
+  const modelName = await deps.modelSelector.selectForRootAgent(sessionId, classification.type);
 
   // Resolve the root agent mode for THIS turn. 'auto' (default) re-derives
   // from the current default model's size every turn, so swapping to a
@@ -513,7 +513,7 @@ export async function runRootAgent(
     let injectedSuite = false;
     try {
       const { loadRepoGraph } = await import('@/core/repos/registry-service');
-      const { repos, edges } = await loadRepoGraph(userId);
+      const { repos, edges, ambiguousPackages } = await loadRepoGraph(userId);
       if (repos.length > 0) {
         const repoLines = repos.slice(0, 40).map((r) => {
           const deps = edges
@@ -528,9 +528,11 @@ export async function runRootAgent(
         // whole lines so no absolute path is severed. The trailing tool-usage
         // instructions are appended AFTER the budget so they always survive.
         const { lines: shown, truncated } = truncateLinesToTokens(repoLines, REPO_SUITE_TOKEN_BUDGET);
-        let suite = `\nWORKSPACE SUITE — ${repos.length} repos under ${wsRoot}:\n${shown.join('\n')}`;
-        if (truncated) suite += `\n  (…suite truncated — showing top ${shown.length} of ${repos.length} repos)`;
+        let suite = `\nWORKSPACE SUITE — ${repos.length} available repos across the workspace and configured additional paths:\n${shown.join('\n')}`;
+        if (truncated || shown.length < repos.length) suite += `\n  (…suite truncated — showing top ${shown.length} of ${repos.length} repos)`;
         suite += `\n\nUse the repo_registry tool (list_repos / get_repo / repo_dependents) to navigate this suite efficiently — read a repo's map before its files. Route each worker to a repo by its ABSOLUTE PATH and tell it to read that repo's AGENTS.md first. For a cross-repo change, call repo_dependents on a library before editing it and name every affected repo in the worker tasks.`;
+        suite += ` Dependencies are declared direct package relationships, not a complete impact analysis. Inspect API contracts and runtime connections separately. Repo maps and symbols are scan-time snapshots; refresh with scan_repos after code or manifest changes.`;
+        if (ambiguousPackages.length) suite += ` Multiple repositories publish the same package; dependency edges are incomplete for: ${ambiguousPackages.slice(0, 20).join(', ')}${ambiguousPackages.length > 20 ? ' (and more)' : ''}. Use explicit repository paths.`;
         staticParts.push(suite);
         injectedSuite = true;
       }

@@ -7,7 +7,7 @@ export const meta: RoleMeta = {
   // shell/terminal tool is mounted in this session" — true of the role, and
   // wrong about the product. Execution is still gated by the shell tool's own
   // permission + sandbox, which is where that decision belongs.
-  toolIds: ['filesystem', 'shell', 'browser-ext', 'websearch', 'messaging', 'knowledge', 'notes', 'tasks', 'task_state', 'scheduling', 'profiles', 'email-processor', 'artifacts', 'artifacts_toolbox', 'documents', 'skill-distill', 'mcp', 'mcp_admin'],
+  toolIds: ['filesystem', 'shell', 'repo_registry', 'browser-ext', 'websearch', 'messaging', 'knowledge', 'notes', 'tasks', 'task_state', 'scheduling', 'profiles', 'email-processor', 'artifacts', 'artifacts_toolbox', 'documents', 'skill-distill', 'mcp', 'mcp_admin'],
   // Lazy tool discovery (Ollama, non-small only): general is a catch-all with the
   // biggest payload (~53k). Core covers the prompt's explicitly-routed everyday
   // intents (filesystem, websearch, knowledge, messaging, notes, tasks); the
@@ -27,6 +27,6 @@ export const meta: RoleMeta = {
   // nothing. "Save this as a skill" names the capability as directly as "run
   // this command" does, and the whole toolbox is 181 tokens of schema — about
   // 2% of the core set — so the discovery round trip was never worth its price.
-  coreToolIds: ['filesystem', 'shell', 'websearch', 'knowledge', 'messaging', 'notes', 'tasks', 'skill-distill'],
+  coreToolIds: ['filesystem', 'shell', 'repo_registry', 'websearch', 'knowledge', 'messaging', 'notes', 'tasks', 'skill-distill'],
   defaultTopic: 'general',
 };

@@ -1,7 +1,7 @@
 import { type EntityRef, entityRefFromSourceId, getKnowledgeGraph, type TraversalDirection } from '@/core/knowledge/graph';
 import { slugify } from '@/core/knowledge/wikilink';
 import { CODE_NOT_INDEXED_MESSAGE, isCodeFile } from '@/core/rag/code-detection';
-import { type EmbeddingPurpose, getEmbeddingService } from '@/core/rag/embeddings';
+import { type EmbeddingPurpose, type SearchScope, getEmbeddingService } from '@/core/rag/embeddings';
 import { getFileIndexer } from '@/core/rag/indexer';
 import type { AgentContext, ToolManifest } from '@/core/types';
 import { getKnowledgeLinkRepository } from '@/db/repositories/knowledge-link-repository';
@@ -39,23 +39,24 @@ function resolveInWorkspace(fs: WorkspaceFS, path: string): string {
   }
 }
 
-/**
- * Resolve a comma-separated list of repo names or ids (the `repos` arg) to a
- * search scope of registry ids for the user. Returns undefined when nothing is
- * requested or nothing resolves (search then spans all content).
- */
-async function resolveRepoScope(
+/** Every knowledge search limits repo artifacts to currently visible repositories. */
+export async function resolveRepoScope(
   reposArg: string | undefined,
   userId: string | undefined,
-): Promise<{ repoIds: string[] } | undefined> {
-  const refs = (reposArg ?? '').split(',').map((s) => s.trim()).filter(Boolean);
-  if (refs.length === 0 || !userId) return undefined;
-  const { repoRegistryRepository } = await import('@/db/repositories/repo-registry-repository');
-  const repos = await repoRegistryRepository.listByUser(userId);
-  const ids = refs
-    .map((ref) => repos.find((r) => r.id === ref || r.name.toLowerCase() === ref.toLowerCase())?.id)
-    .filter((id): id is string => Boolean(id));
-  return ids.length > 0 ? { repoIds: ids } : undefined;
+): Promise<SearchScope> {
+  const refs = (reposArg ?? '').split(',').map(s => s.trim()).filter(Boolean);
+  if (!userId) {
+    if (refs.length) throw new Error('Repository-scoped search requires an authenticated user');
+    return { allowedRepoIds: [] };
+  }
+  const { loadRepoGraph, resolveRepo } = await import('@/core/repos/registry-service');
+  const { repos } = await loadRepoGraph(userId);
+  const ids = refs.map(ref => {
+    const repo = resolveRepo(repos, ref);
+    if (!repo) throw new Error(`Unknown or unavailable repository "${ref}". Call list_repos and use its id or path.`);
+    return repo.id;
+  });
+  return { allowedRepoIds: repos.map(repo => repo.id), ...(refs.length ? { repoIds: [...new Set(ids)] } : {}) };
 }
 
 export class KnowledgeTool extends BaseTool {

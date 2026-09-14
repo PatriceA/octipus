@@ -12,6 +12,12 @@ import {
 } from './roles';
 import { getToolRegistry } from '@/tools/registry';
 import type { AgentRole, RoleConfig } from './types';
+import { meta as generalMeta } from './roles/general/config';
+
+test('the root general role has native repository navigation without relying on MCP discovery', () => {
+  expect(generalMeta.toolIds).toContain('repo_registry');
+  expect(generalMeta.coreToolIds).toContain('repo_registry');
+});
 
 describe('SECURITY_PREAMBLE', () => {
   test('contains core jailbreak guards', () => {

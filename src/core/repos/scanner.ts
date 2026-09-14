@@ -1,7 +1,7 @@
 import type { RepoDependency, RepoKind } from '@db/schema/workspace-repos';
-import { execSync } from 'child_process';
-import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
-import { basename, join } from 'path';
+import { execFileSync } from 'child_process';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'fs';
+import { basename, isAbsolute, join, relative, sep } from 'path';
 import { coreLogger } from '@/utils/logger';
 import { MANIFEST_FILENAMES, type ParsedManifest, parseManifest } from './manifests';
 
@@ -28,7 +28,7 @@ export interface RepoScanResult {
 
 const APP_FRAMEWORKS = new Set([
   'next', 'react', 'react-dom', 'vue', 'svelte', '@angular/core',
-  'express', 'elysia', 'fastify', '@nestjs/core', 'koa',
+  'express', 'elysia', 'fastify', '@nestjs/core', 'koa', 'hono', 'flutter',
 ]);
 
 /**
@@ -40,13 +40,19 @@ const APP_FRAMEWORKS = new Set([
 const REPO_MARKER_FILES = [
   ...MANIFEST_FILENAMES,
   'pom.xml', 'build.gradle', 'build.gradle.kts', 'Gemfile',
-  'pubspec.yaml', 'composer.json', 'requirements.txt', 'setup.py',
+  'composer.json', 'requirements.txt', 'setup.py',
 ];
+
+/** Immediate children that are build/dependency outputs, never sibling repos. */
+const GENERATED_DIRS = new Set([
+  'node_modules', 'vendor', 'target', 'dist', 'build', 'out', 'coverage',
+  '__pycache__', 'site-packages', '.gradle',
+]);
 
 /** A directory is a repo if it carries a VCS or known project marker. */
 export function isRepoRoot(dir: string): boolean {
-  if (existsSync(join(dir, '.git'))) return true;
-  return REPO_MARKER_FILES.some((m) => existsSync(join(dir, m)));
+  if (isFileOrDirectory(join(dir, '.git'))) return true;
+  return REPO_MARKER_FILES.some((m) => isFile(join(dir, m)));
 }
 
 /**
@@ -59,11 +65,14 @@ export function inferRepoKind(
   topEntries: string[],
 ): RepoKind {
   const depNames = new Set(deps.map((d) => d.name));
-  if ([...APP_FRAMEWORKS].some((f) => depNames.has(f))) return 'product';
+  if ([...APP_FRAMEWORKS].some((f) => depNames.has(f))
+    || deps.some(dep => dep.name.startsWith('org.springframework.boot:spring-boot-starter')
+      || dep.name.startsWith('io.quarkus:quarkus-')
+      || dep.name.startsWith('io.micronaut:micronaut-'))) return 'product';
   const entries = new Set(topEntries);
   const infraMarkers = ['main.tf', 'terraform', 'Chart.yaml', 'helm', 'kustomization.yaml'];
-  const hasCodeManifest = parsed.length > 0;
-  if (infraMarkers.some((m) => entries.has(m)) || (!hasCodeManifest && entries.has('Dockerfile'))) {
+  const hasProjectMarker = parsed.length > 0 || REPO_MARKER_FILES.some((marker) => entries.has(marker));
+  if (infraMarkers.some((m) => entries.has(m)) || (!hasProjectMarker && entries.has('Dockerfile'))) {
     return 'infra';
   }
   if (parsed.some((p) => p.packageName)) return 'library';
@@ -91,52 +100,75 @@ export function buildRepoMapText(input: RepoMapInput): string {
 const ENTRY_CANDIDATES = [
   'src/index.ts', 'src/index.js', 'index.ts', 'index.js',
   'src/main.ts', 'src/main.rs', 'main.go', 'cmd', 'app', 'pages',
+  'src/main/java', 'src/test/java',
 ];
 
 const SCRIPT_KEYS = ['test', 'build', 'lint', 'dev', 'start', 'typecheck'];
 
 /** Scan a single repository root. Returns null when the dir is not a repo. */
 export function scanRepoAt(repoRoot: string, name?: string): RepoScanResult | null {
-  if (!isRepoRoot(repoRoot)) return null;
+  const canonicalRoot = canonicalDirectory(repoRoot);
+  if (!canonicalRoot || !isRepoRoot(canonicalRoot)) return null;
 
-  const topEntries = safeReaddir(repoRoot);
+  const topEntries = safeReaddir(canonicalRoot);
   const parsed: ParsedManifest[] = [];
+  const gradleOptions = () => ({
+    defaultProjectName: basename(canonicalRoot),
+    settingsContent: readBuildCompanion(canonicalRoot, 'settings.gradle')
+      ?? readBuildCompanion(canonicalRoot, 'settings.gradle.kts'),
+    gradleProperties: readBuildCompanion(canonicalRoot, 'gradle.properties'),
+  });
   for (const m of MANIFEST_FILENAMES) {
-    const p = join(repoRoot, m);
-    if (!existsSync(p)) continue;
+    const p = join(canonicalRoot, m);
+    if (!isFile(p)) continue;
     try {
-      const result = parseManifest(m, readFileSync(p, 'utf-8'));
+      const content = readBuildCompanion(canonicalRoot, m);
+      if (content === undefined) continue;
+      const result = parseManifest(m, content, m.startsWith('build.gradle') ? gradleOptions() : undefined);
       if (result) parsed.push(result);
+      else coreLogger.warn({ manifest: p }, 'repo scan: ignored malformed manifest');
     } catch (err) {
       // A single unreadable manifest shouldn't abort the whole scan — log and move on.
       coreLogger.warn({ err, manifest: p }, 'repo scan: failed to parse manifest');
     }
   }
 
-  const dependencies = parsed.flatMap((p) => p.dependencies);
+  const dependencies = dedupeDependencies(parsed.flatMap((p) => p.dependencies));
   const packageName = parsed.find((p) => p.packageName)?.packageName ?? null;
   const languages = [...new Set(parsed.map((p) => p.language))];
 
   // package.json scripts → commands surfaced in the repo map.
-  const commands = readPackageScripts(repoRoot);
+  const commands = readPackageScripts(canonicalRoot);
+  if (parsed.some(manifest => manifest.manifest === 'pom.xml')) {
+    const mvn = isFile(join(canonicalRoot, 'mvnw')) ? './mvnw' : 'mvn';
+    commands['maven:test'] = `${mvn} test`;
+    commands['maven:build'] = `${mvn} package`;
+  }
+  if (parsed.some(manifest => manifest.manifest.startsWith('build.gradle'))) {
+    const gradle = isFile(join(canonicalRoot, 'gradlew')) ? './gradlew' : 'gradle';
+    commands['gradle:test'] = `${gradle} test`;
+    commands['gradle:build'] = `${gradle} build`;
+  }
   const topDirs = topEntries
-    .filter((e) => !e.startsWith('.') && isDir(join(repoRoot, e)))
+    .filter((e) => !e.startsWith('.') && !GENERATED_DIRS.has(e) && isDir(join(canonicalRoot, e)))
     .slice(0, 20);
-  const entryPoints = ENTRY_CANDIDATES.filter((e) => existsSync(join(repoRoot, e)));
+  const entryPoints = ENTRY_CANDIDATES.filter((e) => existsSync(join(canonicalRoot, e)));
 
-  const repoMap = buildRepoMapText({ topDirs, entryPoints, commands, languages });
+  const warnings = [...new Set(parsed.flatMap(manifest => manifest.warnings ?? []))];
+  const repoMap = [buildRepoMapText({ topDirs, entryPoints, commands, languages }),
+    ...warnings.map(warning => `Dependency analysis: ${warning}`)].join('\n');
 
   return {
-    name: name ?? basename(repoRoot),
-    rootPath: repoRoot,
-    remoteUrl: gitRemote(repoRoot),
-    defaultBranch: gitDefaultBranch(repoRoot),
+    name: name ?? basename(canonicalRoot),
+    rootPath: canonicalRoot,
+    remoteUrl: gitRemote(canonicalRoot),
+    defaultBranch: gitDefaultBranch(canonicalRoot),
     kind: inferRepoKind(parsed, dependencies, topEntries),
     languages,
     packageName,
     dependencies,
     repoMap,
-    hasAgentsMd: existsSync(join(repoRoot, 'AGENTS.md')),
+    hasAgentsMd: isFile(join(canonicalRoot, 'AGENTS.md')),
   };
 }
 
@@ -147,16 +179,20 @@ export function scanRepoAt(repoRoot: string, name?: string): RepoScanResult | nu
  */
 export function findRepoRoots(roots: string[]): string[] {
   const found = new Set<string>();
-  for (const root of roots) {
-    if (!existsSync(root) || !isDir(root)) continue;
+  for (const configuredRoot of roots) {
+    const root = canonicalDirectory(configuredRoot);
+    if (!root) continue;
     if (isRepoRoot(root)) found.add(root);
     for (const child of safeReaddir(root)) {
-      if (child.startsWith('.')) continue;
-      const childPath = join(root, child);
-      if (isDir(childPath) && isRepoRoot(childPath)) found.add(childPath);
+      if (child.startsWith('.') || GENERATED_DIRS.has(child)) continue;
+      const childPath = canonicalDirectory(join(root, child));
+      // A linked child outside the configured root must be configured as its
+      // own workspace root before discovery may cross that boundary.
+      if (!childPath || !isWithin(root, childPath)) continue;
+      if (isRepoRoot(childPath)) found.add(childPath);
     }
   }
-  return [...found];
+  return [...found].sort();
 }
 
 /** Scan every repo under the given workspace roots. */
@@ -171,22 +207,80 @@ export function scanRoots(roots: string[]): RepoScanResult[] {
 
 // ── small fs/git helpers (best-effort; never throw out of a scan) ──
 
+/** Build settings are read as bounded text, never evaluated or followed through symlinks. */
+function readBuildCompanion(root: string, filename: string): string | undefined {
+  const path = join(root, filename);
+  if (!existsSync(path)) return undefined;
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.size > 400_000) {
+      coreLogger.warn({ path }, 'repo scan: skipped non-regular or oversized build settings');
+      return undefined;
+    }
+    return readFileSync(path, 'utf-8');
+  } catch (err) {
+    coreLogger.warn({ err, path }, 'repo scan: failed to read build settings');
+    return undefined;
+  }
+}
+
 function safeReaddir(dir: string): string[] {
-  try { return readdirSync(dir); } catch { return []; }
+  try { return readdirSync(dir).sort(); } catch { return []; }
 }
 
 function isDir(p: string): boolean {
   try { return statSync(p).isDirectory(); } catch { return false; }
 }
 
+function isFile(p: string): boolean {
+  try { return lstatSync(p).isFile(); } catch { return false; }
+}
+
+function isFileOrDirectory(p: string): boolean {
+  try {
+    const stat = lstatSync(p);
+    return stat.isFile() || stat.isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function canonicalDirectory(p: string): string | null {
+  try {
+    const canonical = realpathSync(p);
+    return statSync(canonical).isDirectory() ? canonical : null;
+  } catch {
+    return null;
+  }
+}
+
+function isWithin(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`));
+}
+
+function dedupeDependencies(dependencies: RepoDependency[]): RepoDependency[] {
+  const seen = new Set<string>();
+  return dependencies.filter((dependency) => {
+    const key = `${dependency.manifest}\0${dependency.name}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function readPackageScripts(repoRoot: string): Record<string, string> {
   const pkgPath = join(repoRoot, 'package.json');
-  if (!existsSync(pkgPath)) return {};
+  if (!isFile(pkgPath)) return {};
   try {
-    const json = JSON.parse(readFileSync(pkgPath, 'utf-8')) as { scripts?: Record<string, string> };
+    const json = JSON.parse(readFileSync(pkgPath, 'utf-8')) as unknown;
+    if (!json || typeof json !== 'object' || Array.isArray(json)) return {};
+    const scripts = 'scripts' in json ? json.scripts : undefined;
+    if (!scripts || typeof scripts !== 'object' || Array.isArray(scripts)) return {};
     const out: Record<string, string> = {};
     for (const key of SCRIPT_KEYS) {
-      if (json.scripts?.[key]) out[key] = json.scripts[key];
+      const value = key in scripts ? (scripts as Record<string, unknown>)[key] : undefined;
+      if (typeof value === 'string' && value.trim()) out[key] = value;
     }
     return out;
   } catch {
@@ -195,18 +289,24 @@ function readPackageScripts(repoRoot: string): Record<string, string> {
 }
 
 function gitRemote(repoRoot: string): string | null {
-  return git(repoRoot, 'git remote get-url origin');
+  return git(repoRoot, ['remote', 'get-url', 'origin']);
 }
 
 function gitDefaultBranch(repoRoot: string): string | null {
-  return git(repoRoot, 'git rev-parse --abbrev-ref HEAD');
+  const remoteHead = git(repoRoot, ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']);
+  if (remoteHead) return remoteHead.replace(/^origin\//, '');
+  return git(repoRoot, ['branch', '--show-current']);
 }
 
-function git(repoRoot: string, cmd: string): string | null {
-  if (!existsSync(join(repoRoot, '.git'))) return null;
+function git(repoRoot: string, args: string[]): string | null {
+  if (!isFileOrDirectory(join(repoRoot, '.git'))) return null;
   try {
-    // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- cmd is never user-supplied; both callers pass hardcoded git subcommands
-    const out = execSync(`${cmd} 2>/dev/null`, { cwd: repoRoot, timeout: 5_000, encoding: 'utf-8' }).trim();
+    const out = execFileSync('git', args, {
+      cwd: repoRoot,
+      timeout: 5_000,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
     return out || null;
   } catch {
     return null;
