@@ -5,7 +5,7 @@
  * back to the global config default:
  *
  *   - Concurrent agents — `agents WHERE user_id = … AND status='running'`
- *   - Daily token budget — sum of `totalTokens` across the user's
+ *   - Daily token budget — sum of `billableTokens` (the spend proxy) across
  *     agents created in the current UTC day
  *   - API requests per minute — count of `audit_log` rows with
  *     `action='api_request'` for the user in the last 60 seconds
@@ -117,11 +117,20 @@ export class QuotaManager {
       .from(agents)
       .where(and(eq(agents.userId, userId), eq(agents.status, 'running')));
 
-    // Tokens today: sum totalTokens across agents created since 00:00 UTC.
+    // Tokens today: sum the SPEND figure across agents created since 00:00 UTC.
+    //
+    // Not `total_tokens`: once prompt-cache counters were folded into
+    // `inputTokens`, that column became a grand total that re-counts the whole
+    // replayed context every turn — a 100k-context session costing ~2.5k/turn
+    // recorded ~102k/turn and hard-blocked a 500k/day cap after five turns,
+    // having spent ~5% of it. A daily cap is a cost control, so it sums
+    // `billable_tokens` (fresh input + output, cache reads excluded), the same
+    // figure the per-agent budget gate compares. Legacy rows predate the column
+    // and fall back to `total_tokens` rather than counting as free.
     const startOfDay = new Date();
     startOfDay.setUTCHours(0, 0, 0, 0);
     const tokenRows = await db
-      .select({ s: sql<number>`COALESCE(SUM(${agents.totalTokens}), 0)::int` })
+      .select({ s: sql<number>`COALESCE(SUM(COALESCE(${agents.billableTokens}, ${agents.totalTokens})), 0)::int` })
       .from(agents)
       .where(and(eq(agents.userId, userId), gte(agents.createdAt, startOfDay)));
 

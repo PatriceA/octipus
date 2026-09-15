@@ -150,8 +150,20 @@ export abstract class BaseAgentWorker {
     return this.iteration;
   }
 
+  /** Grand total through the context window, cache reads included. Display/meters. */
   getTotalTokens(): number {
     return 0;
+  }
+
+  /**
+   * Spend proxy: fresh input + output, cache reads and creation excluded.
+   * Every COST gate (per-agent budget, swarm pool, daily quota, session
+   * compaction trigger) compares this; only context-fill meters use
+   * `getTotalTokens`. Declared here so a caller can't silently fall back to
+   * the cache-inflated number — both real workers override it.
+   */
+  getBillableTokens(): number {
+    return this.getTotalTokens();
   }
 
   /**

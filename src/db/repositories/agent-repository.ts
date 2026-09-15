@@ -17,6 +17,8 @@ export class AgentRepository {
       status: 'completed' | 'failed' | 'stopped';
       iterations?: number;
       totalTokens?: number;
+      /** Spend proxy (fresh input + output) — what the daily quota sums. */
+      billableTokens?: number;
       durationMs?: number;
       error?: string;
       toolCalls?: Array<{ name: string; count: number }>;
@@ -27,6 +29,7 @@ export class AgentRepository {
       status: update.status,
       iterations: update.iterations,
       totalTokens: update.totalTokens,
+      billableTokens: update.billableTokens,
       durationMs: update.durationMs,
       error: update.error,
       toolCalls: update.toolCalls,

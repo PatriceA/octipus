@@ -68,6 +68,7 @@ import {
   InsufficientBudgetError,
   MIN_CHILD_TOKENS,
   MIN_RETRY_WALL_MS,
+  poolSpend,
   shouldWarnBudget,
   syncParentTokenUsage,
 } from './spawn-budget';
@@ -1301,7 +1302,7 @@ export class SwarmSpawner {
     const childId = worker.getContext().id;
     if (childNode) {
       childNode.signal = worker.getAbortSignal();
-      childNode.ownTokenUsage = () => worker.getTotalTokens();
+      childNode.ownTokenUsage = () => worker.getBillableTokens();
     }
 
     // Late-bind the worker ref onto the childNode. Native and CLI workers
@@ -1502,7 +1503,11 @@ export class SwarmSpawner {
     }
 
     const durationMs = Date.now() - startTime;
-    const usedTokens = worker.getTotalTokens();
+    // The swarm pool is a SPEND pool, not a context meter. This value flows
+    // straight into `parent.budget.childTokensUsed`, which `syncParentTokenUsage`
+    // sums with the parent's own billable term — so it goes through the pool's
+    // one unit definition rather than reading a worker accessor directly.
+    const usedTokens = poolSpend(worker);
 
     // ── Deterministic receipt ───────────────────────────────────────
     // Built from the worker's tool-execution counters, NOT from `output`

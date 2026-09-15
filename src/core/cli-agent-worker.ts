@@ -258,7 +258,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
   }
 
   /** Spend proxy: fresh input + output. Budget gates compare this, not `getTotalTokens`. */
-  getBillableTokens(): number {
+  override getBillableTokens(): number {
     return this.billableTokensUsed;
   }
 
@@ -457,6 +457,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
       agentRepository.updateStatus(this.context.id, {
         status: 'completed',
         iterations: this.iteration,
+        totalTokens: this.totalTokens,
+        billableTokens: this.billableTokensUsed,
         durationMs,
       }).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Failed to persist agent completion'));
 
@@ -496,6 +498,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
       ).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to audit CLI failure'));
       agentRepository.updateStatus(this.context.id, {
         status, iterations: this.iteration, durationMs, totalTokens: this.totalTokens,
+        billableTokens: this.billableTokensUsed,
         error: wasStopped ? undefined : (error as Error).message,
       }).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Failed to persist CLI terminal status'));
 

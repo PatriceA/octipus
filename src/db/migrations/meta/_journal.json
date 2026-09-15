@@ -708,6 +708,13 @@
       "when": 1789307551227,
       "tag": "0099_push_tokens",
       "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1789307551228,
+      "tag": "0100_agent_billable_tokens",
+      "breakpoints": true
     }
   ]
 }

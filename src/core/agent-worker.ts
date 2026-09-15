@@ -412,7 +412,7 @@ export class AgentWorker extends BaseAgentWorker {
   }
 
   /** Spend proxy: fresh input + output. Budget gates compare this, not `getTotalTokens`. */
-  getBillableTokens(): number {
+  override getBillableTokens(): number {
     return this.billableTokensUsed;
   }
 
@@ -466,6 +466,28 @@ export class AgentWorker extends BaseAgentWorker {
   private accountedTokens(completion: CompletionResult): number {
     return completion.usage.totalTokens > 0
       ? completion.usage.totalTokens
+      : this.estimateRequestTokens();
+  }
+
+  /**
+   * The same charge as `accountedTokens`, but as a SPEND figure: fresh input +
+   * output, cache reads and creation excluded.
+   *
+   * `sessions.token_count` is a monotonic, never-reset running total that
+   * decides when a session gets compacted (COMPACTION_TOKEN_THRESHOLD). Once
+   * prompt-cache counters were folded into `inputTokens`, crediting the grand
+   * total made a well-cached session cross that threshold several times faster
+   * than an uncached one doing the same work — and on Codex a compaction pass
+   * rotates the vendor thread, so cache-aware accounting was actively
+   * destroying session reuse. Credit what the turn actually consumed.
+   *
+   * Mirrors `billableTokensUsed`'s fallback: with no reported usage the
+   * char-based estimate has no cache breakdown to subtract, so the whole
+   * estimate is charged (never an undercount).
+   */
+  private accountedBillableTokens(completion: CompletionResult): number {
+    return completion.usage.totalTokens > 0
+      ? billableTokens(completion.usage)
       : this.estimateRequestTokens();
   }
 
@@ -704,6 +726,7 @@ export class AgentWorker extends BaseAgentWorker {
         status: 'completed',
         iterations: this.iteration,
         totalTokens: this.totalTokensUsed,
+        billableTokens: this.billableTokensUsed,
         durationMs,
         completionReason: this.completionReason,
       }).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Failed to persist agent completion'));
@@ -811,6 +834,7 @@ export class AgentWorker extends BaseAgentWorker {
         status: terminalStatus,
         iterations: this.iteration,
         totalTokens: this.totalTokensUsed,
+        billableTokens: this.billableTokensUsed,
         durationMs: failDurationMs,
         error: wasStopped ? undefined : (error as Error).message,
       }).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Failed to persist agent terminal status'));
@@ -1608,7 +1632,7 @@ export class AgentWorker extends BaseAgentWorker {
 
       // Track token usage for the root agent (response is saved by handleMessage with correct content)
       if (isRootAgent(this.context)) {
-        await sessionRepository.incrementMessageCount(this.context.sessionId, this.accountedTokens(completion));
+        await sessionRepository.incrementMessageCount(this.context.sessionId, this.accountedBillableTokens(completion));
       }
 
       return response;
@@ -1654,7 +1678,7 @@ export class AgentWorker extends BaseAgentWorker {
       );
       if (isRootAgent(this.context)) {
         await sessionRepository
-          .incrementMessageCount(this.context.sessionId, this.accountedTokens(completion))
+          .incrementMessageCount(this.context.sessionId, this.accountedBillableTokens(completion))
           .catch(() => { /* best-effort accounting */ });
       }
       const text = (completion.content || '').trim();

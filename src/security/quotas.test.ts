@@ -137,6 +137,40 @@ describe('getUsage', () => {
     expect(usage.tokensToday).toBe(1234 + 4321);
     expect(usage.apiCallsLastMinute).toBe(2);
   });
+
+  test('sums the billable figure, not the cache-inflated grand total', async () => {
+    // C1. Prompt-cache folding made `total_tokens` a grand total that re-counts
+    // the whole replayed context on every turn: a 100k-context session costing
+    // ~2.5k/turn records ~102k. A daily cap is a cost control, so it must sum
+    // the spend proxy — otherwise five cheap turns exhaust a 500k/day cap.
+    const { getDb } = await import('@/db/postgres');
+    const { agents } = await import('@/db/schema/agents');
+    const { seedSession } = await import('@/test-helpers/multiuser-fixtures');
+    const carolId = '33333333-3333-3333-3333-333333333333';
+    const { seedUsers } = await import('@/test-helpers/multiuser-fixtures');
+    await seedUsers([{ id: carolId, username: 'carol' }]);
+    const session = await seedSession({ userId: carolId, channelId: 'q-c-1' });
+
+    await getDb().insert(agents).values([
+      // Five well-cached turns: 102_500 tokens through the context each,
+      // 2_500 of them actually fresh.
+      ...[1, 2, 3, 4, 5].map((n) => ({
+        id: `qm-carol-cached-${n}`, sessionId: session.id, userId: carolId,
+        role: 'general', model: 'test', topic: 'test',
+        status: 'completed' as const, totalTokens: 102_500, billableTokens: 2_500,
+      })),
+      // A legacy row written before the column existed still has to count.
+      {
+        id: 'qm-carol-legacy', sessionId: session.id, userId: carolId,
+        role: 'general', model: 'test', topic: 'test',
+        status: 'completed' as const, totalTokens: 7_000,
+      },
+    ]);
+
+    const { getQuotaManager } = await import('@/security/quotas');
+    const usage = await getQuotaManager().getUsage(carolId);
+    expect(usage.tokensToday).toBe(5 * 2_500 + 7_000);
+  });
 });
 
 describe('willExceed', () => {

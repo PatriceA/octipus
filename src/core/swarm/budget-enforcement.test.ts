@@ -3,6 +3,8 @@ import { AgentWorker } from '@/core/agent-worker';
 import type { AgentContext } from '@/core/types';
 import type { CompletionResult } from '@/models/litellm-client';
 import { agentRepository } from '@/db/repositories/agent-repository';
+import { messageRepository } from '@/db/repositories/message-repository';
+import { sessionRepository } from '@/db/repositories/session-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import {
   BudgetExceededError,
@@ -243,6 +245,62 @@ describe('AgentWorker — hard budget enforcement (Phase 2)', () => {
     } finally {
       auditSpy.mockRestore();
       updateSpy.mockRestore();
+    }
+  });
+
+  test('C1/I2 — the persisted agent row and sessions.token_count both get the SPEND figure', async () => {
+    // C1: `agents.total_tokens` is what the per-user daily quota used to sum,
+    // and prompt-cache folding turned it into a grand total that re-counts the
+    // whole replayed context every turn. The row now carries both: the grand
+    // total for display, `billable_tokens` for the quota.
+    //
+    // I2: `sessions.token_count` is a monotonic, never-reset counter that trips
+    // compaction at COMPACTION_TOKEN_THRESHOLD — and on Codex a compaction pass
+    // ROTATES the vendor thread, destroying session reuse. Crediting the grand
+    // total made a well-cached session compact many times more often than an
+    // uncached one doing identical work.
+    const auditSpy = vi.spyOn(auditRepository, 'logAgentCompleted').mockResolvedValue(undefined as never);
+    const updateSpy = vi.spyOn(agentRepository, 'updateStatus').mockResolvedValue(undefined as never);
+    const incrSpy = vi.spyOn(sessionRepository, 'incrementMessageCount').mockResolvedValue(undefined as never);
+    const msgSpy = vi.spyOn(messageRepository, 'create').mockResolvedValue(undefined as never);
+    try {
+      const worker = new AgentWorker(mkCtx({ id: 'w-spend-row', root: true }), {
+        maxIterations: 10,
+        contextWindowSize: 100_000,
+        timeout: 60_000,
+        maxTokenBudget: 1_000_000,
+        toolOutputSoftCap: 1_000,
+      });
+      const priv = worker as unknown as { getCompletion: () => Promise<CompletionResult> };
+      // A resumed 100k-context turn: 97_500 of the input is a cache read,
+      // 2_000 is a cache write, 500 is fresh; 2_000 out. Spend = 2_500.
+      priv.getCompletion = async () => ({
+        content: 'done',
+        toolCalls: [],
+        finishReason: 'stop',
+        usage: {
+          inputTokens: 100_000, outputTokens: 2_000, totalTokens: 102_000,
+          cacheReadTokens: 97_500, cacheCreationTokens: 2_000,
+        },
+        model: 'test-model',
+        latencyMs: 1,
+      });
+
+      await worker.run('go');
+
+      // I2 — the session counter that drives compaction is credited spend.
+      const tokenDeltas = incrSpy.mock.calls.map(c => c[1]).filter((d): d is number => typeof d === 'number' && d > 0);
+      expect(tokenDeltas).toEqual([2_500]);
+
+      // C1 — the persisted row keeps the grand total AND records the spend.
+      const persisted = updateSpy.mock.calls.at(-1)?.[1] as { totalTokens?: number; billableTokens?: number };
+      expect(persisted.totalTokens).toBe(102_000);
+      expect(persisted.billableTokens).toBe(2_500);
+    } finally {
+      auditSpy.mockRestore();
+      updateSpy.mockRestore();
+      incrSpy.mockRestore();
+      msgSpy.mockRestore();
     }
   });
 

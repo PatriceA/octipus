@@ -55,6 +55,23 @@ export class InsufficientBudgetError extends Error {
  * nearly exhausted. Monotonic (never shrinks) and degrades gracefully: with no
  * `workerRef` the own-spend term is 0 and only accumulated child spend counts.
  */
+/**
+ * The swarm pool's UNIT, stated once.
+ *
+ * `budget.tokens` is a spend pool: the node's own term and every child term
+ * summed into `childTokensUsed` must mean the same thing. They briefly did not —
+ * the parent term moved to the billable figure while `spawner.ts` still recorded
+ * each child's cache-inflated `getTotalTokens()`, so a well-cached child charged
+ * the parent for a context it re-read at a tenth of the price. Both sides now go
+ * through here. Falls back to the grand total for a worker with no billable
+ * accounting (never an undercount).
+ */
+export function poolSpend(
+  worker: { getBillableTokens?: () => number; getTotalTokens?: () => number } | null | undefined,
+): number {
+  return worker?.getBillableTokens?.() ?? worker?.getTotalTokens?.() ?? 0;
+}
+
 export function syncParentTokenUsage(parent: AgentNode): void {
   const worker = (
     parent as unknown as {

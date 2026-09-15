@@ -18,7 +18,15 @@ export const agents = pgTable('agents', {
   topic: text('topic').notNull().default(''),
   status: agentStatusEnum('status').notNull().default('running'),
   iterations: integer('iterations').default(0),
+  /** Grand total, cache reads included — a context-volume figure, for display. */
   totalTokens: integer('total_tokens').default(0),
+  /**
+   * Spend proxy: fresh input + output (see `billableTokens()`). Quotas sum THIS,
+   * not `totalTokens`, which prompt-cache folding turned into a grand total that
+   * counts a replayed 100k context on every turn. NULL on rows written before
+   * the column existed, so readers COALESCE back to `totalTokens`.
+   */
+  billableTokens: integer('billable_tokens'),
   durationMs: integer('duration_ms'),
   error: text('error'),
   toolCalls: jsonb('tool_calls').$type<Array<{ name: string; count: number }>>().default([]),

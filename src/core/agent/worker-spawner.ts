@@ -1150,7 +1150,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   if (stageNode && overrides?.swarmParent) {
     stageNode.id = workerId;
     stageNode.signal = worker.getAbortSignal();
-    stageNode.ownTokenUsage = () => worker.getTotalTokens();
+    stageNode.ownTokenUsage = () => worker.getBillableTokens();
     const brief = `${task}\n${input}`.slice(0, 4000);
     const briefHash = taskFingerprint({
       originalUserRequest: task,
@@ -1285,7 +1285,8 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
     const result = await worker.run(workerMessage);
     const durationMs = Date.now() - startTime;
     overrides?.onCounters?.(await stageCounters(worker, overrides?.swarmParent ? workerId : null));
-    overrides?.onTokens?.(worker.getTotalTokens());
+    // Spend, not context volume — onTokens feeds pipeline budget pools.
+    overrides?.onTokens?.(worker.getBillableTokens());
 
     // A pipeline stage's report IS the next stage's input, so a fragment of a
     // cut-off turn cannot be allowed to stand in for one. Measured: a Testing
@@ -1481,11 +1482,14 @@ async function handleWorkerFailure(
   coreLogger.error({ error, workerId, role: agentRole }, 'Worker agent failed');
 
   const failedTokens = worker.getTotalTokens();
+  // Session token_count is a spend/compaction trigger, not a context meter —
+  // credit the billable figure (see AgentWorker.accountedBillableTokens).
+  const failedBillable = worker.getBillableTokens();
   // A run that failed still cost what it cost. Charging it is the difference
   // between a budget and a bill for successes only.
-  respawnCtx.onTokens?.(failedTokens);
-  if (failedTokens > 0) {
-    sessionRepository.incrementMessageCount(context.sessionId, failedTokens).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in worker-spawner'));
+  respawnCtx.onTokens?.(failedBillable);
+  if (failedBillable > 0) {
+    sessionRepository.incrementMessageCount(context.sessionId, failedBillable).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in worker-spawner'));
   }
 
   const errorMsg = error.message || '';
@@ -1571,7 +1575,7 @@ async function handleWorkerFailure(
     // so there are no children to fold in — its own counters are the whole
     // story. Routed through the same helper so both paths stay in step.
     respawnCtx.onCounters?.(await stageCounters(retryWorker, null));
-    respawnCtx.onTokens?.(retryWorker.getTotalTokens());
+    respawnCtx.onTokens?.(retryWorker.getBillableTokens());
     deps.emit({
       type: 'worker_completed',
       sessionId: context.sessionId,

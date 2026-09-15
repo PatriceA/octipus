@@ -719,7 +719,8 @@ export async function runRootAgent(
 
   const agentId = worker.getContext().id;
   parentNode.signal = worker.getAbortSignal();
-  parentNode.ownTokenUsage = () => worker.getTotalTokens();
+  // Spend proxy — the swarm pool this feeds is a cost pool (see spawn-budget.ts).
+  parentNode.ownTokenUsage = () => worker.getBillableTokens();
 
   // Wire detach refs: bind the worker's pending-child methods so
   // `spawn_child` (detach mode) and `collect_children` can reach them.
