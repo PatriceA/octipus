@@ -34,6 +34,16 @@ describe('claudeCodeConfig.parseOutput totalTokens (C18)', () => {
     expect(r.usage.totalTokens).toBe(38);
   });
 
+  it('treats an explicit top-level zero as a real value, not as absent', () => {
+    const stdout = JSON.stringify({
+      result: 'ok',
+      input_tokens: 0,
+      usage: { input_tokens: 100, output_tokens: 50 },
+    });
+    const r = claudeCodeConfig.parseOutput(stdout, Date.now());
+    expect(r.usage.inputTokens).toBe(0);
+  });
+
   it('falls back to plain text with zero usage', () => {
     const r = claudeCodeConfig.parseOutput('just text', Date.now());
     expect(r.content).toBe('just text');

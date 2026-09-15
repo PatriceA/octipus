@@ -354,8 +354,11 @@ function parseClaudeStyleOutput(modelLabel: string) {
     try {
       const data = JSON.parse(stdout);
       const content = typeof data === 'string' ? data : (data.result || data.content || JSON.stringify(data));
-      // Nested usage.* overlaid by top-level fields, so top-level still wins
-      // (matches the precedence the old `data.x || data.usage?.x` read had).
+      // Nested usage.* overlaid by top-level fields when present (`!= null`),
+      // so top-level wins even when it is an explicit 0 — a real zero, not
+      // absence. This deliberately differs from the old `data.x || data.usage?.x`
+      // read, which let `||` treat a genuine top-level 0 as missing and fall
+      // through to the nested value.
       const usageSource = {
         ...(data.usage ?? {}),
         ...(data.input_tokens != null ? { input_tokens: data.input_tokens } : {}),
