@@ -870,7 +870,7 @@ export class CLIOutputParser {
       if (subtype === 'init') {
         this.emit('thought', {
           status: 'running',
-          sessionId: event.session_id,
+          vendorSessionId: event.session_id,
         });
       }
       return null;
@@ -958,7 +958,7 @@ export class CLIOutputParser {
       if (typeof numTurns === 'number') this.callbacks.onTurnCount?.(numTurns);
       this.emit('thought', {
         status: isError ? 'failed' : 'completed',
-        sessionId: event.session_id,
+        vendorSessionId: event.session_id,
         stats: {
           totalTokens,
           inputTokens,
@@ -1115,7 +1115,7 @@ export class CLIOutputParser {
       this.callbacks.onVendorSession?.(event.thread_id as string);
       this.emit('thought', {
         status: 'running',
-        sessionId: event.thread_id,
+        vendorSessionId: event.thread_id,
       });
       return null;
     }

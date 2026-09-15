@@ -298,6 +298,15 @@ const pendingChannelPermissions = new Map<string, {
  * Check if a message is a yes/no reply to a pending permission request.
  * Returns true if the message was consumed as a permission response.
  */
+/**
+ * Octipus session id an agent event belongs to. `data.sessionId` is NOT used
+ * here — for CLI thought events that field is a vendor (Claude/Codex) session
+ * id, which would never match octipus's own resolved session id.
+ */
+export function eventSessionId(event: { sessionId?: string; data?: { context?: { sessionId?: string }; [key: string]: unknown } }): string | undefined {
+  return event.sessionId || event.data?.context?.sessionId;
+}
+
 async function tryResolvePermissionFromChannel(message: UnifiedMessage): Promise<boolean> {
   const pending = pendingChannelPermissions.get(message.userId);
   if (!pending) return false;
@@ -598,8 +607,7 @@ export async function initializeChannels(): Promise<void> {
             if (isTerminal) return;
             // Match events from agents in this session (check multiple possible locations)
             const data = event.data || {};
-            const eventSessionId = data.sessionId || event.sessionId || data.context?.sessionId;
-            if (eventSessionId !== resolvedSessionId) return;
+            if (eventSessionId(event) !== resolvedSessionId) return;
 
             if (event.type === 'action') {
               const actionType = data.type || '';
