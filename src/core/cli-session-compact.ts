@@ -12,7 +12,7 @@ import { dropCliSession } from './cli-session-store';
  *
  * Claude Code can be compacted non-interactively (`claude -p --resume <id>
  * "/compact <instructions>"` — user-invoked slash commands expand in print
- * mode). Codex cannot: `/compact` is interactive-only, so its thread is
+ * mode). Codex CLI cannot: `/compact` is interactive-only, so its thread is
  * rotated instead — dropping the stored id means the next turn starts cold,
  * and that cold prompt already carries octipus's own compaction summary
  * (Task 6's delta logic only omits history on a *resumed* run). Antigravity
@@ -34,17 +34,25 @@ export async function compactVendorSession(
   const rec = (session?.context as SessionContext | undefined)?.cliSessions?.[adapterKey];
   if (!rec) return 'skipped';
 
-  if (adapterKey !== 'Claude Code') {
+  if (adapterKey === 'Claude Code') {
+    const prompt = instructions ? `/compact ${instructions}` : '/compact';
+    const release = await acquireCliSlot();
+    try {
+      await execCli('claude', ['-p', '--resume', rec.id, prompt]);
+    } finally {
+      release();
+    }
+    return 'compacted';
+  }
+
+  if (adapterKey === 'Codex CLI') {
     await dropCliSession(sessionId, adapterKey);
     return 'rotated';
   }
 
-  const prompt = instructions ? `/compact ${instructions}` : '/compact';
-  const release = await acquireCliSlot();
-  try {
-    await execCli('claude', ['-p', '--resume', rec.id, prompt]);
-  } finally {
-    release();
-  }
-  return 'compacted';
+  // `canResume()` narrows the domain to CLI_RESUME's keys, currently exactly
+  // 'Claude Code' and 'Codex CLI'. A third resumable adapter must be taught
+  // explicitly whether it compacts or rotates — silently defaulting it to
+  // rotation would be a guess, not a decision.
+  throw new Error(`compactVendorSession: no compaction strategy for resumable adapter "${adapterKey}"`);
 }

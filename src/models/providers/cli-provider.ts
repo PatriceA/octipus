@@ -699,6 +699,39 @@ export class CLIProvider implements ModelProvider {
 }
 
 /**
+ * Windows `shell:true` command-line quoting for one argument, following the
+ * MSVCRT / CommandLineToArgvW convention every Windows CLI's argv parser
+ * expects: wrap in quotes when the value has whitespace or an embedded
+ * quote, escape embedded quotes, and double any run of backslashes that
+ * sits immediately before a quote (embedded or closing) — a lone trailing
+ * backslash before the closing quote would otherwise escape it instead of
+ * terminating the argument, e.g. a path like `C:\some path\`.
+ *
+ * Values with no whitespace or quote pass through unquoted — matches Node's
+ * own (unquoted) behavior for the common case and keeps diffs to existing
+ * commands minimal.
+ */
+export function windowsShellQuote(value: string): string {
+  if (!/[\s"]/.test(value)) return value;
+  let result = '"';
+  let backslashes = 0;
+  for (const ch of value) {
+    if (ch === '\\') {
+      backslashes++;
+      continue;
+    }
+    if (ch === '"') {
+      result += '\\'.repeat(backslashes * 2 + 1) + '"';
+    } else {
+      result += '\\'.repeat(backslashes) + ch;
+    }
+    backslashes = 0;
+  }
+  result += '\\'.repeat(backslashes * 2) + '"';
+  return result;
+}
+
+/**
  * The guarded CLI spawn: kill-tree timeout, bounded output buffers. Exported
  * (alongside {@link acquireCliSlot}) so any one-shot CLI invocation outside
  * `CLIProvider.complete` — e.g. `cli-session-compact.ts` pushing octipus's
@@ -719,8 +752,7 @@ export function execCli(binary: string, args: string[], opts?: { timeoutMs?: num
     // [binary, ...args] with plain spaces, quoting nothing — an unquoted
     // prompt with spaces (e.g. `/compact focus on the migration`) is
     // re-tokenized into separate argv. Same fix as cli-agent-worker's spawn.
-    const shellQuote = (value: string): string =>
-      useShell && /\s/.test(value) && !value.includes('"') ? `"${value}"` : value;
+    const shellQuote = (value: string): string => (useShell ? windowsShellQuote(value) : value);
     // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn (no shell interpolation); binary/args come from vetted provider config, not request input
     const proc = spawn(shellQuote(binary), args.map(shellQuote), {
       // Run in the workspace root, not wherever the server was launched — a
