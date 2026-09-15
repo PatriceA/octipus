@@ -44,9 +44,10 @@ export class InsufficientBudgetError extends Error {
 
 /**
  * Reconcile a parent node's `budget.tokens.used` with true pool consumption:
- * the node's own worker spend (`workerRef.current.getTotalTokens()`) plus the
- * cumulative spend of its children (`budget.childTokensUsed`, accumulated in
- * `spawnChild` as each child returns).
+ * the node's own worker spend (`workerRef.current.getBillableTokens()`, a
+ * spend proxy — falls back to `getTotalTokens()` for workers with no billable
+ * figure) plus the cumulative spend of its children (`budget.childTokensUsed`,
+ * accumulated in `spawnChild` as each child returns).
  *
  * Without this the `used` counter is never incremented, so the reserve math and
  * `InsufficientBudgetError` guard in `deriveChildBudget` always see `used = 0`
@@ -56,9 +57,15 @@ export class InsufficientBudgetError extends Error {
  */
 export function syncParentTokenUsage(parent: AgentNode): void {
   const worker = (
-    parent as unknown as { workerRef?: { current: { getTotalTokens?: () => number } | null } }
+    parent as unknown as {
+      workerRef?: { current: { getBillableTokens?: () => number; getTotalTokens?: () => number } | null };
+    }
   ).workerRef?.current;
-  const ownSpend = parent.ownTokenUsage?.() ?? worker?.getTotalTokens?.() ?? 0;
+  // Pool consumption is a spend proxy: prefer the worker's billable figure
+  // (fresh input + output) over the cache-inflated total. `ownTokenUsage` is a
+  // legacy callback that only ever wraps getTotalTokens(), so it's the last
+  // resort, not the first.
+  const ownSpend = worker?.getBillableTokens?.() ?? worker?.getTotalTokens?.() ?? parent.ownTokenUsage?.() ?? 0;
   // True pool consumption = the node's own worker spend + everything its
   // children have returned so far. Both terms are monotonic; guard against
   // shrinking `used` (a stale/lower reading must never lower the counter).

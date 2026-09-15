@@ -32,8 +32,10 @@ describe('AgentWorker — hard budget enforcement (Phase 2)', () => {
       timeout: 60_000,
       maxTokenBudget: 100,
     });
-    // Seed totalTokensUsed above cap so the pre-check fires immediately.
-    (worker as unknown as { totalTokensUsed: number }).totalTokensUsed = 200;
+    // Seed billableTokensUsed above cap so the pre-check fires immediately
+    // (the gate compares the spend proxy, not the cache-inflated total).
+    (worker as unknown as { totalTokensUsed: number; billableTokensUsed: number }).totalTokensUsed = 200;
+    (worker as unknown as { totalTokensUsed: number; billableTokensUsed: number }).billableTokensUsed = 200;
 
     // run() catches errors and persists DB rows — we want the underlying
     // BudgetExceededError to be rethrown.
@@ -115,12 +117,14 @@ describe('AgentWorker — hard budget enforcement (Phase 2)', () => {
     const priv = worker as unknown as {
       startTime: number;
       totalTokensUsed: number;
+      billableTokensUsed: number;
       messages: Array<{ role: string; content: unknown }>;
       loop: () => Promise<string>;
       getCompletion: () => Promise<never>;
     };
     priv.startTime = Date.now();
     priv.totalTokensUsed = 50; // below cap → loop-top gate passes
+    priv.billableTokensUsed = 50; // preflight projects off the spend proxy
     priv.messages = [{ role: 'user', content: 'x'.repeat(400) }]; // ceil(400/4)=100 est
     priv.getCompletion = async () => {
       throw new Error('getCompletion should not be reached');
@@ -159,6 +163,46 @@ describe('AgentWorker — hard budget enforcement (Phase 2)', () => {
 
     // ceiling <= 0 disables the backstop (returns the promise unraced).
     expect(await priv.raceAbsolute(Promise.resolve('x'), 'collect', 0)).toBe('x');
+  });
+
+  test('does not abort a run whose tokens are almost all cache reads', async () => {
+    const worker = new AgentWorker(mkCtx({ id: 'w-billable' }), {
+      maxIterations: 10,
+      contextWindowSize: 1_000_000,
+      timeout: 60_000,
+      maxTokenBudget: 100_000,
+    });
+    const priv = worker as unknown as {
+      totalTokensUsed: number;
+      billableTokensUsed: number;
+      startTime: number;
+      messages: Array<{ role: string; content: unknown }>;
+      loop: () => Promise<string>;
+      getCompletion: () => Promise<never>;
+    };
+    // 200k read from cache, 2k fresh: costs like 2.5k, must not trip a 100k budget.
+    priv.totalTokensUsed = 202_500;
+    priv.billableTokensUsed = 2_500;
+
+    expect(worker.getTotalTokens()).toBe(202_500); // context proxy unchanged
+    expect(worker.getBillableTokens()).toBe(2_500); // spend proxy
+
+    // Drive the loop directly (no live LLM in this test env): if the budget
+    // gates keyed off the cache-inflated total they'd throw BudgetExceededError
+    // before ever reaching getCompletion. Reaching our sentinel proves both
+    // gates passed on the billable figure instead.
+    priv.startTime = Date.now();
+    priv.messages = [{ role: 'user', content: 'hi' }];
+    const sentinel = new Error('reached getCompletion');
+    priv.getCompletion = async () => { throw sentinel; };
+
+    let thrown: unknown = null;
+    try {
+      await priv.loop();
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBe(sentinel);
   });
 
   test('estimateRequestTokens: text = chars/4; image part = fixed (not base64 length)', () => {

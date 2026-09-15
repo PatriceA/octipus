@@ -12,6 +12,7 @@ import { auditRepository } from '@/db/repositories/audit-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { type CompletionOptions, type CompletionResult, getLiteLLMClient } from '@/models/litellm-client';
+import { billableTokens } from '@/models/billable-tokens';
 import { collectStream } from '@/models/stream-collect';
 import { getModelRegistry } from '@/models/model-registry';
 import { type ToolShimSchema, proseShowsToolIntent, translateToToolCall } from '@/models/toolshim';
@@ -145,6 +146,8 @@ export class AgentWorker extends BaseAgentWorker {
   private toolExecutor: ToolExecutor;
   private abortController: AbortController;
   private totalTokensUsed: number = 0;
+  /** Spend proxy: fresh input + output, cache reads/creation excluded. See `getBillableTokens`. */
+  private billableTokensUsed: number = 0;
   private startTime: number = 0;
   /**
    * Heartbeat: wall-clock of the last loop iteration start. A healthy worker
@@ -406,6 +409,11 @@ export class AgentWorker extends BaseAgentWorker {
 
   override getTotalTokens(): number {
     return this.totalTokensUsed;
+  }
+
+  /** Spend proxy: fresh input + output. Budget gates compare this, not `getTotalTokens`. */
+  getBillableTokens(): number {
+    return this.billableTokensUsed;
   }
 
   /**
@@ -961,11 +969,12 @@ export class AgentWorker extends BaseAgentWorker {
 
       // ── Pre-LLM-call budget enforcement (Swarm Phase 2) ─────────────
       // Per design §Budget Envelope: hard cap, fires abort, status='budget'.
-      if (this.config.maxTokenBudget > 0 && this.totalTokensUsed >= this.config.maxTokenBudget) {
-        this.abortController.abort(`budget_exceeded:${this.totalTokensUsed}/${this.config.maxTokenBudget}`);
+      // Billable, not total: cache reads cost ~1/10th and must not trip this.
+      if (this.config.maxTokenBudget > 0 && this.billableTokensUsed >= this.config.maxTokenBudget) {
+        this.abortController.abort(`budget_exceeded:${this.billableTokensUsed}/${this.config.maxTokenBudget}`);
         throw new BudgetExceededError({
           agentId: this.context.id,
-          used: this.totalTokensUsed,
+          used: this.billableTokensUsed,
           cap: this.config.maxTokenBudget,
         });
       }
@@ -1088,7 +1097,7 @@ export class AgentWorker extends BaseAgentWorker {
       // iteration's check. Project this call's input (post-compaction) and abort
       // BEFORE spending it if it would cross the cap.
       if (this.config.maxTokenBudget > 0) {
-        const projected = this.totalTokensUsed + this.estimateRequestTokens();
+        const projected = this.billableTokensUsed + this.estimateRequestTokens();
         if (projected >= this.config.maxTokenBudget) {
           this.abortController.abort(`budget_exceeded_preflight:${projected}/${this.config.maxTokenBudget}`);
           throw new BudgetExceededError({
@@ -1196,7 +1205,13 @@ export class AgentWorker extends BaseAgentWorker {
       // usage (CLI providers, image-blind Ollama) falls back to an estimate so
       // the budget cap still binds instead of being a permanent no-op.
       const reportedTokens = completion.usage.totalTokens;
-      this.totalTokensUsed += this.accountedTokens(completion);
+      const accounted = this.accountedTokens(completion);
+      this.totalTokensUsed += accounted;
+      // Spend proxy: only when the provider actually reported usage (else the
+      // char-based estimate in `accounted` has no cache breakdown to exclude,
+      // and counting the whole estimate as billable is the safe fallback — it
+      // never turns a cost into an undercount).
+      this.billableTokensUsed += reportedTokens > 0 ? billableTokens(completion.usage) : accounted;
 
       agentLogger.info({
         agentId: this.context.id, sessionId: this.context.sessionId,
