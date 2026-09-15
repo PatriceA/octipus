@@ -53,8 +53,36 @@ describe('foldCacheCounters', () => {
   });
 
   it('reads cache creation under the Anthropic name on a compat body', () => {
+    // Both fields are Anthropic names, so both are exclusive; true input is 100 + 50 + 40 = 190.
     expect(foldCacheCounters({ prompt_tokens: 100, cache_creation_input_tokens: 40, cache_read_input_tokens: 50 }))
-      .toEqual({ inputTokens: 100, cacheReadTokens: 50, cacheCreationTokens: 40 });
+      .toEqual({ inputTokens: 190, cacheReadTokens: 50, cacheCreationTokens: 40 });
+  });
+
+  it('handles hybrid: OpenAI-shaped read + Anthropic-named write', () => {
+    // prompt_tokens_details.cached_tokens is already in 100; cache_creation_input_tokens is exclusive.
+    expect(foldCacheCounters({ prompt_tokens: 100, prompt_tokens_details: { cached_tokens: 50 }, cache_creation_input_tokens: 10 }))
+      .toEqual({ inputTokens: 110, cacheReadTokens: 50, cacheCreationTokens: 10 });
+  });
+
+  it('handles write-only Anthropic exclusivity', () => {
+    // No cache read; only cache write is exclusive.
+    expect(foldCacheCounters({ input_tokens: 10, cache_creation_input_tokens: 5 }))
+      .toEqual({ inputTokens: 15, cacheCreationTokens: 5 });
+  });
+
+  it('clamps if cache counters exceed the calculated input total', () => {
+    // OpenAI-shaped cache counters (already included) sum to 100, but reported is only 50.
+    const result = foldCacheCounters({ prompt_tokens: 50, prompt_tokens_details: { cached_tokens: 60, cache_write_tokens: 40 } });
+    expect(result).toEqual({ inputTokens: 100, cacheReadTokens: 60, cacheCreationTokens: 40 });
+    // Invariant: read + write <= inputTokens
+    expect(result.cacheReadTokens! + result.cacheCreationTokens).toBeLessThanOrEqual(result.inputTokens);
+  });
+
+  it('when both encodings present, OpenAI-shaped fields take precedence', () => {
+    // prompt_tokens_details.cached_tokens (OpenAI-shaped, 30, already in 100) wins over
+    // cache_read_input_tokens (Anthropic, 70, exclusive). Only OpenAI value is used.
+    expect(foldCacheCounters({ prompt_tokens: 100, prompt_tokens_details: { cached_tokens: 30 }, cache_read_input_tokens: 70 }))
+      .toEqual({ inputTokens: 100, cacheReadTokens: 30, cacheCreationTokens: 0 });
   });
 
   it('reports no counters when the provider sends none', () => {

@@ -26,16 +26,19 @@ export function extractCachedTokens(rawUsage: unknown): {
  * Reconcile prompt-cache counters into one convention: `inputTokens` is the
  * grand total and the two cache figures are subsets of it.
  *
- * Providers disagree on whether the counters are already included. Anthropic's
- * native endpoint reports `input_tokens` EXCLUSIVE of both cache figures;
- * OpenAI-compat bodies report `prompt_tokens` INCLUSIVE of
- * `prompt_tokens_details.cached_tokens`. Proxies (LiteLLM, OpenRouter) pass the
- * Anthropic names through on an otherwise OpenAI-shaped body, in either style.
+ * Providers disagree on whether counters are already included in the reported
+ * total. Use field-name convention to determine inclusion semantics:
  *
- * Rather than keying off the provider, detect it: counters that sum to more
- * than the reported input can only have been exclusive. That is the same
- * invariant `pricing.ts` refuses to cost, so folding here is what keeps cost
- * rows out of `unknown`.
+ * - OpenAI-shaped fields are ALREADY INCLUDED in reported total:
+ *   `prompt_tokens_details.cached_tokens`, `input_tokens_details.cached_tokens`,
+ *   `prompt_cache_hit_tokens`, `prompt_tokens_details.cache_write_tokens`,
+ *   `input_tokens_details.cache_write_tokens`.
+ * - Anthropic field names are EXCLUSIVE and must be added to the total:
+ *   `cache_read_input_tokens`, `cache_creation_input_tokens`.
+ *
+ * Post-condition clamp ensures the invariant `read + write <= inputTokens`
+ * holds: if counters sum beyond the calculated total, raise inputTokens to
+ * that sum.
  */
 export function foldCacheCounters(raw: unknown): {
   inputTokens: number;
@@ -45,16 +48,47 @@ export function foldCacheCounters(raw: unknown): {
   const count = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0);
   const u = raw as Record<string, any> | undefined;
 
+  // Base reported count
   const reported = count(u?.prompt_tokens ?? u?.input_tokens);
-  const read = extractCachedTokens(raw).cacheReadTokens ?? count(u?.cache_read_input_tokens);
-  const write = count(
-    u?.cache_creation_input_tokens
-      ?? u?.prompt_tokens_details?.cache_write_tokens
+
+  // Cache read: OpenAI-shaped (already included) takes precedence;
+  // fall back to Anthropic name (exclusive, will be added).
+  const readFromOpenAI = extractCachedTokens(raw).cacheReadTokens ?? 0;
+  const readFromAnthropic = count(u?.cache_read_input_tokens);
+  const cacheReadTokens = readFromOpenAI > 0 ? readFromOpenAI : readFromAnthropic;
+  const readIsExclusive = readFromOpenAI === 0 && readFromAnthropic > 0;
+
+  // Cache write: OpenAI-shaped (already included) takes precedence;
+  // fall back to Anthropic name (exclusive, will be added).
+  const writeFromOpenAI = count(
+    u?.prompt_tokens_details?.cache_write_tokens
       ?? u?.input_tokens_details?.cache_write_tokens,
   );
+  const writeFromAnthropic = count(u?.cache_creation_input_tokens);
+  const cacheCreationTokens = writeFromOpenAI > 0 ? writeFromOpenAI : writeFromAnthropic;
+  const writeIsExclusive = writeFromOpenAI === 0 && writeFromAnthropic > 0;
 
-  const inputTokens = read + write > reported ? reported + read + write : reported;
-  return { inputTokens, ...(read > 0 ? { cacheReadTokens: read } : {}), cacheCreationTokens: write };
+  // Start with reported (includes OpenAI-shaped counters).
+  // Add exclusive Anthropic counters.
+  let inputTokens = reported;
+  if (readIsExclusive) {
+    inputTokens += cacheReadTokens;
+  }
+  if (writeIsExclusive) {
+    inputTokens += cacheCreationTokens;
+  }
+
+  // Post-condition clamp: ensure invariant holds.
+  const totalCacheTokens = cacheReadTokens + cacheCreationTokens;
+  if (totalCacheTokens > inputTokens) {
+    inputTokens = totalCacheTokens;
+  }
+
+  return {
+    inputTokens,
+    ...(cacheReadTokens > 0 ? { cacheReadTokens } : {}),
+    cacheCreationTokens,
+  };
 }
 
 /**
