@@ -10,7 +10,7 @@ import {
 } from './cli-adapters';
 
 /** Collect every emitted event + callback invocation for assertions. */
-function makeParser(cwd = '/work') {
+function makeParser(cwd = '/work', seedReportedTokens = 0) {
   const events: Array<{ type: string; data: any }> = [];
   const turns: number[] = [];
   const toolCalls: number[] = [];
@@ -24,7 +24,7 @@ function makeParser(cwd = '/work') {
     onTurnCount: (n) => turnCounts.push(n),
     onRunError: (r) => runErrors.push(r),
   };
-  const parser = new CLIOutputParser('agent-1', 'cli/codex', (type, data) => events.push({ type, data }), cbs, cwd);
+  const parser = new CLIOutputParser('agent-1', 'cli/codex', (type, data) => events.push({ type, data }), cbs, cwd, { seedReportedTokens });
   const feed = (event: Record<string, unknown>, tool: string) => parser.parse(event, tool);
   const actions = (subtype: string) => events.filter((e) => e.type === 'action' && e.data?.type === subtype).map((e) => e.data);
   return { parser, events, feed, actions, turns, toolCalls, tokenReports, turnCounts, runErrors };
@@ -331,6 +331,28 @@ it('does not charge repeated Claude assistant fragments twice', () => {
   p.feed({ ...event, message: { ...event.message, usage: { input_tokens: 100, output_tokens: 9 } } }, 'Claude Code');
   expect(p.tokenReports.reduce((n, u) => n + u.total, 0)).toBe(109);
   expect(p.actions('cli_tool_use')).toHaveLength(1);
+});
+
+// Task 7: a resumed Claude session's `result` usage MAY be cumulative for the
+// whole vendor session (replays prior turns' tokens) or scoped to just this
+// process — unverified against a live vendor. Both worlds must reconcile
+// correctly against a seeded prior total.
+it('does not re-count usage a resumed session replays (session-cumulative world)', () => {
+  // Turn one already reported 310 tokens for this vendor session.
+  const p = makeParser('/work', 310);
+  // Turn two's result event reports the session-cumulative 450 (310 replayed
+  // as cache reads + 140 new).
+  p.feed({ type: 'result', usage: { input_tokens: 40, output_tokens: 100, cache_read_input_tokens: 310, cache_creation_input_tokens: 0 } }, 'Claude Code');
+  expect(p.tokenReports.map(t => t.total)).toEqual([140]); // 450 - 310, not 450
+});
+
+it('counts a resumed run\'s own usage in full (process-scoped world)', () => {
+  // Turn one already reported 310 tokens for this vendor session.
+  const p = makeParser('/work', 310);
+  // Turn two's result event reports only ITS OWN 90 tokens — below the seed,
+  // so this process cannot be replaying the session total.
+  p.feed({ type: 'result', usage: { input_tokens: 30, output_tokens: 60, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }, 'Claude Code');
+  expect(p.tokenReports.map(t => t.total)).toEqual([90]); // not 90 - 310 clamped to 0
 });
 
 it('reports the Codex thread id to the caller', () => {

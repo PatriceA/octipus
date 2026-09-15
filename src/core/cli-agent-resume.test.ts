@@ -293,6 +293,39 @@ describe('CLI session reuse', () => {
     expect(second.lastPrompt).not.toContain('old question');
   });
 
+  // Task 7: the vendor session's running total (seeding the NEXT resumed
+  // run's reconciliation) must compound correctly end-to-end through the
+  // worker's real close-handler write, not just in the parser unit tests.
+  it('compounds reportedTokens across turns for a resumed Claude session', async () => {
+    writeFileSync(fixture.script, `
+      import { writeFileSync } from 'node:fs';
+      import { join } from 'node:path';
+      const args = process.argv.slice(2);
+      const sessionIdx = args.indexOf('--session-id');
+      const resumeIdx = args.indexOf('--resume');
+      const idArg = sessionIdx >= 0 ? args[sessionIdx + 1] : resumeIdx >= 0 ? args[resumeIdx + 1] : null;
+      let stdinData = '';
+      process.stdin.on('data', c => { stdinData += c; });
+      process.stdin.on('end', () => { writeFileSync(join(process.cwd(), 'claude-last-stdin.txt'), stdinData); });
+      // Turn one reports 100 tokens of its own; the resumed turn two replays
+      // the session-cumulative 250 (100 of it as a cache read).
+      const usage = resumeIdx >= 0
+        ? { input_tokens: 50, output_tokens: 100, cache_read_input_tokens: 100, cache_creation_input_tokens: 0 }
+        : { input_tokens: 60, output_tokens: 40, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+      console.log(JSON.stringify({ type: 'result', subtype: 'success', result: 'answer for ' + idArg, num_turns: 1, usage }));
+    `);
+    const worker = makeClaudeWorker({ sessionId: 's1', reuseSessions: true });
+    await worker.run('first question');
+    const first = await loadCliSession('s1', 'Claude Code', worker.fingerprint);
+    expect(first!.reportedTokens).toBe(100); // 60 + 40, no seed yet
+
+    const second = makeClaudeWorker({ sessionId: 's1', reuseSessions: true });
+    await second.run('second question');
+    const stored = await loadCliSession('s1', 'Claude Code', second.fingerprint);
+    // 250 raw (the vendor's session-cumulative figure), not 100 + 250 = 350.
+    expect(stored!.reportedTokens).toBe(250);
+  });
+
   it('sends the full transcript on a cold run', async () => {
     const worker = makeClaudeWorker({ sessionId: 's1', reuseSessions: true, history: ['old question', 'old answer'] });
     await worker.run('first');

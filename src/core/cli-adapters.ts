@@ -729,6 +729,26 @@ export interface CLIParserCallbacks {
  */
 const CLI_COMMAND_TOOLS = new Set(['Bash', 'shell']);
 
+/**
+ * Task 7: a resumed vendor process's running figure (Claude `result.usage`
+ * totals, or `num_turns`) MAY be cumulative for the WHOLE vendor session —
+ * replaying every prior turn's count on top of its own — or it MAY be
+ * scoped to just THIS process's own turn. Nobody has verified which against
+ * a live vendor, and the two worlds need opposite handling, so this decides
+ * per call from the evidence in the number itself rather than assuming:
+ *   - `reported >= seed`: the figure is at least as large as everything
+ *     already known before this process started, i.e. it is (at minimum)
+ *     replaying that seed — treat it as the session-cumulative world and use
+ *     it as-is (the caller subtracts what it already counted).
+ *   - `reported < seed`: it cannot possibly be replaying the seed, so this
+ *     process can only be reporting its own scoped figure — treat it as the
+ *     process-scoped world and add it on top of the seed instead.
+ * Never double-counts, never goes negative in either world.
+ */
+export function reconcileSessionCount(reported: number, seed: number): number {
+  return reported >= seed ? reported : seed + reported;
+}
+
 export class CLIOutputParser {
   /** tool id → tool name, so results can carry the real name (C9). */
   private toolNamesById = new Map<string, string>();
@@ -736,8 +756,14 @@ export class CLIOutputParser {
   private startedItemIds = new Set<string>();
   /** Claude assistant message ids already counted as turns. */
   private seenClaudeMessageIds = new Set<string>();
-  /** Tokens already reported via onTokenUsage (for final reconciliation). */
+  /** Tokens already reported via onTokenUsage THIS process (for final reconciliation). */
   private reportedTokens = 0;
+  /**
+   * Tokens the vendor session already reported before THIS process started
+   * (from the prior run's `getReportedTokens()`) — 0 on a cold run. Never
+   * blindly added to `reportedTokens`; see `reconcileSessionCount`.
+   */
+  private readonly seedReportedTokens: number;
   /**
    * Deterministic side-effect tally for this CLI run. A CLI writes files in its
    * OWN process, so octipus never sees those writes through a `ToolExecutor` —
@@ -763,7 +789,23 @@ export class CLIOutputParser {
     private callbacks: CLIParserCallbacks,
     /** Agent working directory — file_change paths are resolved against it (P1.9). */
     private workspaceCwd: string = process.cwd(),
-  ) {}
+    opts?: { seedReportedTokens?: number },
+  ) {
+    this.seedReportedTokens = opts?.seedReportedTokens ?? 0;
+  }
+
+  /**
+   * Tokens reported for the whole vendor session so far (seed + this run) —
+   * persist this as the next run's `seedReportedTokens`. Always seed +
+   * in-process `reportedTokens`: in the session-cumulative world
+   * `reportedTokens` ends at `totalTokens - seed`, so this equals the raw
+   * vendor total; in the process-scoped world it ends at `totalTokens`
+   * itself, so this equals seed + this run's total. Either way it's the
+   * correct running total to hand back next time.
+   */
+  getReportedTokens(): number {
+    return this.seedReportedTokens + this.reportedTokens;
+  }
 
   /** Resolve a (possibly relative) path from CLI output against the agent cwd. */
   private absPath(p: string): string {
@@ -958,7 +1000,14 @@ export class CLIOutputParser {
       });
       // Final reconciliation: report only what per-message usage didn't
       // already account for, so the running total never double-counts.
-      const delta = Math.max(0, totalTokens - this.reportedTokens);
+      // Resolve the resumed-session ambiguity via `reconcileSessionCount`
+      // (see its doc comment): when `totalTokens` is read as replaying the
+      // seed (cumulative world), the seed is subtracted from the baseline
+      // exactly once; when it's read as this process's own figure
+      // (process-scoped world), the seed plays no part at all.
+      const cumulative = reconcileSessionCount(totalTokens, this.seedReportedTokens) === totalTokens;
+      const baseline = this.reportedTokens + (cumulative ? this.seedReportedTokens : 0);
+      const delta = Math.max(0, totalTokens - baseline);
       if (delta > 0) {
         this.reportedTokens += delta;
         this.callbacks.onTokenUsage?.({ input: inputTokens + cacheRead + cacheCreation, output: outputTokens, total: delta });
