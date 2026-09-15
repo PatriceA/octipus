@@ -332,3 +332,14 @@ it('does not charge repeated Claude assistant fragments twice', () => {
   expect(p.tokenReports.reduce((n, u) => n + u.total, 0)).toBe(109);
   expect(p.actions('cli_tool_use')).toHaveLength(1);
 });
+
+it('reports the Codex thread id to the caller', () => {
+  const seen: string[] = [];
+  const cbs: CLIParserCallbacks = {
+    onTurn: () => {},
+    onVendorSession: id => seen.push(id),
+  };
+  const parser = new CLIOutputParser('agent-1', 'cli/codex', () => {}, cbs, '/work');
+  parser.parse({ type: 'thread.started', thread_id: '0199a213-81c0-7800-8aa1-bbab2a035a53' }, 'Codex CLI');
+  expect(seen).toEqual(['0199a213-81c0-7800-8aa1-bbab2a035a53']);
+});

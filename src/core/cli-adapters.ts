@@ -702,6 +702,11 @@ export interface CLIParserCallbacks {
    * The worker must surface a failed status, never success (C3).
    */
   onRunError?: (reason: string) => void;
+  /**
+   * The vendor's session/thread id (Codex `thread.started.thread_id`).
+   * Invoked once per run with the vendor's id for resume support.
+   */
+  onVendorSession?: (id: string) => void;
 }
 
 /**
@@ -1051,6 +1056,7 @@ export class CLIOutputParser {
     const item = event.item as Record<string, unknown> | undefined;
 
     if (type === 'thread.started') {
+      this.callbacks.onVendorSession?.(event.thread_id as string);
       this.emit('thought', {
         status: 'running',
         sessionId: event.thread_id,
