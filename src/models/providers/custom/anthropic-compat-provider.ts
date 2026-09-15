@@ -140,6 +140,7 @@ export class CustomAnthropicCompatProvider extends BaseCustomProvider implements
       stream: streaming,
     };
     if (system) body.system = options.cachePolicy === 'off' ? system : buildCachedSystem(system, (body.model as string) || options.model);
+    if (options.cachePolicy !== 'off') markHistoryCacheBreakpoint(messages);
     if (options.temperature != null) body.temperature = clampAnthropicTemperature(options.temperature);
     if (options.topP != null) body.top_p = options.topP;
     if (options.stopSequences?.length) body.stop_sequences = options.stopSequences;
@@ -373,6 +374,24 @@ export function toAnthropicMessages(messages: AgentMessage[]): { system?: string
   }
 
   return { system: systems.length ? systems.join('\n\n') : undefined, messages: out };
+}
+
+/**
+ * Put a cache breakpoint at the end of the settled history, so an agent loop
+ * re-reads its accumulated tool results at cache rates instead of full price
+ * on every iteration. The newest turn is deliberately left outside the
+ * breakpoint: it is the only part that changed, and marking it would write a
+ * new cache entry per turn instead of reading the previous one.
+ *
+ * Anthropic allows four breakpoints; with the system split this is the second.
+ */
+export function markHistoryCacheBreakpoint(messages: AnthropicMessage[]): boolean {
+  if (messages.length < 2) return false;
+  const prev = messages[messages.length - 2];
+  if (!Array.isArray(prev.content) || prev.content.length === 0) return false;
+  const last = prev.content[prev.content.length - 1] as { cache_control?: { type: 'ephemeral' } };
+  last.cache_control = { type: 'ephemeral' };
+  return true;
 }
 
 /** Translate OpenAI tool schema → Anthropic tool schema (`input_schema`). */

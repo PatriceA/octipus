@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, describe, expect, it, test, vi } from 'vitest';
 import type { CompletionOptions } from '../litellm-client';
 import { AnthropicProvider } from './anthropic-provider';
 
@@ -95,7 +95,7 @@ test('native completion observes usage before malformed content parsing fails', 
   });
 });
 
-import { parseAnthropicResponse, parseAnthropicSseStream, toAnthropicMessages } from './custom/anthropic-compat-provider';
+import { markHistoryCacheBreakpoint, parseAnthropicResponse, parseAnthropicSseStream, toAnthropicMessages } from './custom/anthropic-compat-provider';
 test('signed thinking and redacted content survive a tool conversation', () => {
   const content = [{ type: 'thinking', thinking: 'summary', signature: 'signed' }, { type: 'redacted_thinking', data: 'opaque' }, { type: 'tool_use', id: 'call1', name: 'ping', input: {} }];
   const result = parseAnthropicResponse({ content, usage: { input_tokens: 10, cache_read_input_tokens: 20, cache_creation_input_tokens: 5, output_tokens: 7 } }, 'claude', 1);
@@ -120,4 +120,25 @@ test('native SSE preserves signed thinking and final cumulative usage', async ()
 test('native JSON schema mapping and cache suppression', () => {
   const body = buildBody({ model: 'claude-sonnet-4-6', messages: [], responseFormat: { type: 'json_schema', json_schema: { name: 'answer', schema: { type: 'object', properties: {} } } } }, false);
   expect(body.output_config).toMatchObject({ format: { type: 'json_schema' } });
+});
+
+describe('history cache breakpoint', () => {
+  it('marks the last block of the turn before the newest one', () => {
+    const { messages } = toAnthropicMessages([
+      { role: 'user', content: 'first', timestamp: new Date() },
+      { role: 'assistant', content: 'answer', timestamp: new Date() },
+      { role: 'user', content: 'second', timestamp: new Date() },
+    ]);
+    markHistoryCacheBreakpoint(messages);
+    const marked = messages.flatMap(m => (Array.isArray(m.content) ? m.content : [])).filter((b: any) => b.cache_control);
+    expect(marked).toHaveLength(1);
+    // The newest turn must stay uncached — it is what changed.
+    const newest = messages[messages.length - 1].content as any[];
+    expect(newest.some(b => b.cache_control)).toBe(false);
+  });
+
+  it('places no breakpoint when there is only the newest turn', () => {
+    const { messages } = toAnthropicMessages([{ role: 'user', content: 'only', timestamp: new Date() }]);
+    expect(markHistoryCacheBreakpoint(messages)).toBe(false);
+  });
 });
