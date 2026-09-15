@@ -35,13 +35,29 @@ provider family. Mark genuinely free inference explicitly, including local
 models where appropriate. A remotely hosted Ollama endpoint is not assumed free.
 Pricing source and the rate snapshot are retained with each estimate. An
 ambiguous model ID produces an unknown estimate instead of choosing an alias's
-prices arbitrarily.
+prices arbitrarily. If cache tokens arrive for a model whose row has no
+`cacheRead` or `cacheWrite` rate, `CostTracker.logUsageWithCost`
+(`src/models/cost-tracker.ts`) logs a WARN once per model and the entry's cost
+stays unknown — octipus never invents a cache discount.
 
 Cache savings are an estimate against the same request at uncached input rates,
 including configured write costs; they can be negative. Only entries with enough
 pricing information contribute. Historical records may contain older estimates.
 Token totals include reasoning when the upstream includes it in output counts;
 the reasoning breakdown is retained separately and never billed twice.
+
+Every provider boundary reconciles cache counters through one convention
+(`foldCacheCounters` in `src/models/providers/usage.ts`): `inputTokens` is the
+grand total, and `cacheReadTokens`/`cacheCreationTokens` are subsets of it —
+including on the CLI one-shot path (`claude --output-format json`), which
+previously dropped Anthropic's `cache_read_input_tokens`/
+`cache_creation_input_tokens` fields entirely and under-reported input on a
+heavily-cached run. That grand total is what session ledgers and
+`sessions.token_count` use. Budget and quota gates instead compare
+`billableTokens` (`src/models/billable-tokens.ts`): fresh input plus output,
+with cache reads and cache-creation excluded, since a cache read costs roughly
+a tenth of a fresh token. See CONFIGURATION.md's Swarm Config section for
+where that distinction is enforced.
 
 If a stream ends before final usage arrives, usage may be unavailable. Received
 usage is retained when supported response decoding subsequently fails. A ledger
@@ -77,7 +93,26 @@ editor does not assume that every compatible server implements vendor extras.
 ## Caching and native protocols
 
 **Anthropic:** native Messages is the default. Stable system-prompt prefixes use
-an explicit cache breakpoint. Signed thinking and redacted blocks survive tool
+an explicit cache breakpoint, and a second breakpoint marks the settled
+conversation history — the last non-system turn before the newest one — so an
+agent loop's accumulated tool results are re-read at cache rates instead of
+full price on iterations 2..N (`markHistoryCacheBreakpoint` in
+`src/models/providers/custom/anthropic-compat-provider.ts`). The newest turn is
+deliberately left outside both breakpoints. That's 2 of Anthropic's 4-breakpoint
+limit. The same split (`src/models/providers/prompt-cache.ts`,
+`applyAnthropicCacheControl`) also applies to the OpenAI-compat pass-through —
+LiteLLM and OpenRouter — restricted to Anthropic-family models
+(`isAnthropicFamily`: a `claude` id or an `anthropic/` path segment). Passing
+`cachePolicy: 'off'` on a completion call now genuinely disables both
+breakpoints on every path, including LiteLLM/OpenRouter, which previously had
+no such gate; a caller that leaves `cachePolicy` unset is unaffected. The
+static prefix only caches once it clears the model's minimum cacheable size
+(`minCacheableChars` in `prompt-cache.ts`): ~1024 tokens (4000 chars) for
+Sonnet-4.5-class and unrecognized/aliased models, ~2048 tokens (8192 chars) for
+Fable/Mythos 5, Sonnet-4.6 and Haiku-3.x, and ~4096 tokens (16384 chars) for
+Opus-4.x and Haiku-4.5 — below the floor Anthropic silently ignores the
+breakpoint (`cache_creation_input_tokens` stays 0), so it's a free no-op rather
+than a wasted write. Signed thinking and redacted blocks survive tool
 round trips, and native JSON Schema responses and strict tools are supported on
 recognized models. `ANTHROPIC_NATIVE_MESSAGES=0` restores the compatibility path;
 it has no prompt caching or enforced structured output, and those editor controls

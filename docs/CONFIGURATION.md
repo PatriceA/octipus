@@ -115,6 +115,8 @@ Bind models to topics via the web UI (**Settings → Models → Edit → Topics*
 
 Swarm level budgets are configurable under `swarm.levelDefaults.root`, `.agent`, and `.subagent` (`tokens`, `wallMs`, `fanOut`, `maxPendingDetached`). `getLevelDefault` in `src/core/swarm/types.ts` reads them, falling back to `LEVEL_DEFAULT`. These are execution bounds, not exact billing limits. `swarm.contractRetries` defaults to `1` (range 0–5) for retryable failed scorer gates.
 
+Both this `tokens` cap and `AGENT_MAX_TOKEN_BUDGET` (`agent.maxTokenBudget`, per-agent) are spend proxies, not context-fill meters: `checkSpawnBudget` (`src/core/swarm/spawn-budget.ts`) and `AgentWorker`'s own budget gate (`src/core/agent-worker.ts`) compare `getBillableTokens()` — fresh input plus output, cache reads and cache-creation excluded (`billableTokens` in `src/models/billable-tokens.ts`) — falling back to `getTotalTokens()` for workers that predate that method. `getTotalTokens()` itself, and `sessions.token_count`, stay on the grand total including cache reads; a well-cached run can show a large token count there while staying cheap and nowhere near its budget.
+
 ## Pipeline Config
 
 | Key | Default | Purpose |
