@@ -1,5 +1,6 @@
 import { recordProviderUsage } from '@/models/providers/instrumented';
 import { billableTokens } from '@/models/billable-tokens';
+import { windowsShellQuote } from '@/models/providers/cli-provider';
 import { randomUUID } from 'crypto';
 import { type ChildProcess, spawn } from 'child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
@@ -959,11 +960,11 @@ export class CLIAgentWorker extends BaseAgentWorker {
       // Arguments split the same way, and they are likelier to carry a space
       // than the binary is: `--add-dir C:\Users\John Doe\repo` is an ordinary
       // workspace. cmd.exe's `/s` strips only the outer pair Node adds, so the
-      // inner quotes survive on both. An argument that already carries a quote
-      // is left alone — it was quoted deliberately by the adapter that built
-      // it, and wrapping it again would nest.
-      const shellQuote = (value: string): string =>
-        useShellForSpawn && /\s/.test(value) && !value.includes('"') ? `"${value}"` : value;
+      // inner quotes survive on both. Shared with `execCli` (cli-provider.ts)
+      // — same shell:true quoting rule, one place: escapes embedded quotes
+      // and doubles a trailing backslash run before the closing quote rather
+      // than leaving a quote-bearing or backslash-terminated value unquoted.
+      const shellQuote = (value: string): string => (useShellForSpawn ? windowsShellQuote(value) : value);
       const proc = spawn(shellQuote(binary), args.map(shellQuote), {
         env,
         cwd: workspaceCwd,

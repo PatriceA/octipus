@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { windowsShellQuote } from './cli-provider';
 
 /**
- * `execCli` is the shared spawn path for every CLI completion AND
- * compaction (`cli-session-compact.ts`), so its Windows `shell:true`
- * quoting must not carry known-wrong inputs. Tests the quoting logic
- * directly — no real shell spawned — per MSVCRT/CommandLineToArgvW
- * convention: quote on whitespace/embedded-quote, escape embedded quotes,
- * double a run of trailing backslashes before the closing quote.
+ * `windowsShellQuote` is the single shared Windows `shell:true` quoting
+ * rule for every spawn call site: `execCli` (CLI completions + compaction,
+ * `cli-session-compact.ts`) and `CLIAgentWorker`'s own agent-process spawn
+ * (`cli-agent-worker.ts`). One implementation, one test — covers both
+ * consumers. Tests the quoting logic directly — no real shell spawned —
+ * per MSVCRT/CommandLineToArgvW convention: quote on whitespace/embedded-
+ * quote, escape embedded quotes, double a run of trailing backslashes
+ * before the closing quote.
  */
 describe('windowsShellQuote', () => {
   it('wraps a plain multi-word argument in quotes, unchanged inside', () => {
