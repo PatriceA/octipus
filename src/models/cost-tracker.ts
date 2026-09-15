@@ -5,6 +5,9 @@ import { Cache } from '@/db/cache';
 import { type CostLogEntry, costLog, modelConfig, type NewCostLogEntry } from '@/db/schema/models';
 import { modelLogger } from '@/utils/logger';
 
+// ponytail: track models we've already warned about to deduplicate warnings
+const warnedMissingCachePricing = new Set<string>();
+
 export interface UsageStats {
   totalInputTokens: number;
   totalOutputTokens: number;
@@ -120,6 +123,30 @@ export class CostTracker {
       inputTokens, outputTokens, cachedInputTokens, cacheCreationTokens);
     const uncachedCost = options?.usageAvailable === false ? null : estimateCost(pricingModel, inputTokens, outputTokens);
     const reportedCost = typeof options?.reportedCost === 'number' && Number.isFinite(options.reportedCost) && options.reportedCost >= 0 ? options.reportedCost : undefined;
+    const costSource = reportedCost != null ? 'reported' : estimatedCost != null ? 'estimated' : 'unknown';
+
+    // Warn once per model when cache tokens arrive but cost is unknown due to missing cache pricing
+    if (
+      costSource === 'unknown' &&
+      (cachedInputTokens > 0 || cacheCreationTokens > 0) &&
+      !warnedMissingCachePricing.has(modelName)
+    ) {
+      const pricing = pricingModel?.metadata?.pricing;
+      const missingRates: string[] = [];
+      if (cachedInputTokens > 0 && typeof pricing?.cacheRead !== 'number') missingRates.push('cacheRead');
+      if (cacheCreationTokens > 0 && typeof pricing?.cacheWrite !== 'number') missingRates.push('cacheWrite');
+
+      modelLogger.warn(
+        {
+          model: modelName,
+          cachedInputTokens,
+          cacheCreationTokens,
+          missingRates: missingRates.length > 0 ? missingRates : undefined,
+        },
+        `Model has cache tokens but no cache pricing (missing: ${missingRates.length > 0 ? missingRates.join(', ') : 'unknown'})`
+      );
+      warnedMissingCachePricing.add(modelName);
+    }
 
     return this.logUsage({
       userId,
@@ -136,7 +163,7 @@ export class CostTracker {
       requestType: options?.requestType,
       metadata: {
         ...options?.metadata,
-        costSource: reportedCost != null ? 'reported' : estimatedCost != null ? 'estimated' : 'unknown',
+        costSource,
         reportedCost,
         reportedCostSource: reportedCost != null ? 'provider response' : null,
         pricingSource: pricingModel ? pricingModel.metadata?.pricing?.source ?? 'model configuration' : null,

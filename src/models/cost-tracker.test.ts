@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, expect, test } from 'vitest';
+import { afterAll, beforeAll, expect, test, vi } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,6 +17,7 @@ beforeAll(async () => {
   await (await import('@/db/migrate')).runMigrations();
   const { modelConfig } = await import('@/db/schema/models');
   await getDb().insert(modelConfig).values({ name: 'priced', modelId: 'same', provider: 'openai', costPerInputToken: 10, costPerOutputToken: 30, metadata: { pricing: { cacheRead: 1, cacheWrite: 12.5, source: 'test contract' } } });
+  await getDb().insert(modelConfig).values({ name: 'model-without-cache-rates', modelId: 'no-cache', provider: 'openai', costPerInputToken: 5, costPerOutputToken: 15, metadata: { pricing: { source: 'test contract' } } });
   const { CostTracker } = await import('./cost-tracker');
   tracker = new CostTracker();
 });
@@ -46,4 +47,17 @@ test('ambiguous model IDs do not silently select a rate', async () => {
   await getDb().insert(modelConfig).values({ name: 'alias', modelId: 'same', provider: 'openai', costPerInputToken: 100, costPerOutputToken: 300 });
   expect(await tracker.calculateCost('same', 100, 10)).toBeNull();
   expect(await tracker.calculateCost('priced', 100, 10)).toBeCloseTo(0.0013);
+});
+
+test('warns when cache tokens appear on a model with no cache pricing', async () => {
+  const { modelLogger: logger } = await import('@/utils/logger');
+  const warn = vi.spyOn(logger, 'warn');
+  await tracker.logUsageWithCost(userId, 'model-without-cache-rates', 1000, 100, {
+    cachedInputTokens: 400,
+    cacheCreationTokens: 0
+  });
+  expect(warn).toHaveBeenCalledWith(
+    expect.objectContaining({ model: 'model-without-cache-rates' }),
+    expect.stringContaining('cache pricing'),
+  );
 });
