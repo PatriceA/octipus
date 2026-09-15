@@ -28,6 +28,7 @@ const fixture = vi.hoisted(() => ({
   cliAgent: {} as { model?: string; permissionMode?: string },
   spawnCount: 0,
   sessions: new Map<string, { id: string; userId: string; context: SessionContext }>(),
+  history: [] as string[],
 }));
 
 vi.mock('@/config', async importOriginal => {
@@ -79,7 +80,17 @@ vi.mock('@/db/repositories/session-repository', () => ({
   },
 }));
 vi.mock('@/db/repositories/work-plan-repository', () => ({ workPlanRepository: { read: async () => ({ current: null, revision: 0, previous: [] }) } }));
-vi.mock('@/db/repositories/message-repository', () => ({ messageRepository: { create: async () => ({}), findBySession: async () => [] } }));
+vi.mock('@/db/repositories/message-repository', () => ({
+  messageRepository: {
+    create: async () => ({}),
+    // Turn n's `history` fixture is that turn's view of everything said so
+    // far — alternating user/assistant, oldest first — matching what a real
+    // messageRepository row-per-turn history would look like.
+    findBySession: async () => fixture.history.map((content, i) => ({
+      role: i % 2 === 0 ? 'user' : 'assistant', content, createdAt: new Date(),
+    })),
+  },
+}));
 vi.mock('@/db/repositories/agent-repository', () => ({ agentRepository: { updateStatus: async () => {} } }));
 vi.mock('@/db/repositories/audit-repository', () => ({ auditRepository: new Proxy({}, { get: () => async () => {} }) }));
 vi.mock('@/db/repositories/tool-action-repository', () => ({ toolActionRepository: { pending: async () => [], start: async () => {}, finish: async () => {} } }));
@@ -93,9 +104,10 @@ function makeSession(sessionId: string, dir: string) {
   }
 }
 
-function makeWorker(model: string, opts: { sessionId: string; reuseSessions: boolean; model?: string; permissionMode?: string }) {
+function makeWorker(model: string, opts: { sessionId: string; reuseSessions: boolean; model?: string; permissionMode?: string; history?: string[] }) {
   fixture.reuseSessions = opts.reuseSessions;
   fixture.cliAgent = { model: opts.model, permissionMode: opts.permissionMode };
+  fixture.history = opts.history ?? [];
   makeSession(opts.sessionId, fixture.dir);
 
   const context: AgentContext = {
@@ -105,14 +117,26 @@ function makeWorker(model: string, opts: { sessionId: string; reuseSessions: boo
     createdAt: new Date(), updatedAt: new Date(), metadata: {},
   };
   const worker = new CLIAgentWorker(context, { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
+  const stdinFile = join(fixture.dir, 'claude-last-stdin.txt');
 
   return {
-    run: (message: string) => worker.run(message),
+    // Mirrors agent-manager.createAgent: loadHistory() runs once, before the
+    // turn's message is added and the worker is run.
+    run: async (message: string) => {
+      await worker.loadHistory();
+      return worker.run(message);
+    },
     fingerprint: fingerprintRun({ model: opts.model, permissionMode: opts.permissionMode, planMode: false, workingDirectory: fixture.dir }),
+    // What actually reached the vendor CLI over stdin (claude, with an
+    // active bridge, always sends the prompt as a stream-json 'user' message).
+    get lastPrompt(): string {
+      const raw = readFileSync(stdinFile, 'utf-8');
+      return (JSON.parse(raw) as { message: { content: string } }).message.content;
+    },
   };
 }
 
-const makeClaudeWorker = (opts: { sessionId: string; reuseSessions: boolean; model?: string; permissionMode?: string }) => makeWorker('cli/claude-code', opts);
+const makeClaudeWorker = (opts: { sessionId: string; reuseSessions: boolean; model?: string; permissionMode?: string; history?: string[] }) => makeWorker('cli/claude-code', opts);
 const makeCodexWorker = (opts: { sessionId: string; reuseSessions: boolean; model?: string; permissionMode?: string }) => makeWorker('cli/codex', opts);
 
 const failMarker = () => join(fixture.dir, 'fail-marker');
@@ -124,7 +148,7 @@ beforeEach(() => {
   fixture.sessions = new Map();
   fixture.spawnCount = 0;
   writeFileSync(fixture.script, `
-    import { readFileSync, existsSync, unlinkSync } from 'node:fs';
+    import { readFileSync, existsSync, unlinkSync, writeFileSync } from 'node:fs';
     import { join } from 'node:path';
     const args = process.argv.slice(2);
     const sessionIdx = args.indexOf('--session-id');
@@ -137,6 +161,12 @@ beforeEach(() => {
       process.stderr.write(text);
       process.exit(1);
     }
+    // Captures the real stream-json 'user' message written to stdin — the
+    // actual prompt sent to the vendor, not a value the worker hands the test
+    // directly — so the resume/cold assertions verify the real spawn seam.
+    let stdinData = '';
+    process.stdin.on('data', c => { stdinData += c; });
+    process.stdin.on('end', () => { writeFileSync(join(process.cwd(), 'claude-last-stdin.txt'), stdinData); });
     console.log(JSON.stringify({ type: 'result', subtype: 'success', result: 'answer for ' + idArg, num_turns: 1 }));
   `);
   // Codex mints its own thread id — it never appears as a CLI argument on a
@@ -249,5 +279,23 @@ describe('CLI session reuse', () => {
     // `exec resume <id>` rather than starting a fresh ephemeral thread.
     expect(stored!.id).toBe(first!.id);
     expect(answer).toContain(first!.id);
+  });
+
+  // Task 6: once the vendor holds a turn, octipus must stop re-sending it —
+  // paying for the same history twice (our prompt + the vendor's own replay)
+  // is what makes resume cost MORE than not reusing at all.
+  it('sends only the new turn once the vendor holds the history', async () => {
+    const worker = makeClaudeWorker({ sessionId: 's1', reuseSessions: true, history: ['old question', 'old answer'] });
+    await worker.run('first');
+    const second = makeClaudeWorker({ sessionId: 's1', reuseSessions: true, history: ['old question', 'old answer', 'first'] });
+    await second.run('second question');
+    expect(second.lastPrompt).toContain('second question');
+    expect(second.lastPrompt).not.toContain('old question');
+  });
+
+  it('sends the full transcript on a cold run', async () => {
+    const worker = makeClaudeWorker({ sessionId: 's1', reuseSessions: true, history: ['old question', 'old answer'] });
+    await worker.run('first');
+    expect(worker.lastPrompt).toContain('old question');
   });
 });

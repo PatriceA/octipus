@@ -17,7 +17,7 @@ import { agentLogger } from '@/utils/logger';
 import type { AgentWorkerConfig, ToolHandler } from './agent-base';
 import { BaseAgentWorker } from './agent-base';
 import { CLIArgumentBuilder, CLIOutputParser, discoverCodexMcpServers, resolveCliMcpEntry, sweepStaleFiles, type CliRunConnection } from './cli-adapters';
-import { dropCliSession, fingerprintRun, loadCliSession, saveCliSession } from './cli-session-store';
+import { dropCliSession, fingerprintRun, loadCliSession, saveCliSession, willResumeCliSession } from './cli-session-store';
 import { canResume, CLI_RESUME } from '@/shared/cli-capabilities';
 import { startCliToolBridge, type BridgeResult } from './cli-tool-bridge';
 import { ToolExecutor } from './tool-executor';
@@ -86,6 +86,21 @@ export class CLIAgentWorker extends BaseAgentWorker {
   }
   private bridgeErrors = new Map<string, boolean>();
   private steeringQueue: AgentMessage[] = [];
+  /**
+   * True once THIS run is confirmed to resume a vendor session (Task 6) — the
+   * vendor already holds every earlier turn, so buildPrompt() sends only the
+   * run-context block and the newest user turn instead of re-flattening
+   * `this.messages`.
+   */
+  private resuming = false;
+  /**
+   * True when loadHistory() guessed 'resuming' and skipped the DB fetch.
+   * executeCLI() re-checks with the authoritative resume/fingerprint
+   * computation before every attempt (including a forceCold retry, where
+   * reuse is off) and backfills history here if the guess turns out wrong —
+   * a dead-session retry must still carry the full transcript.
+   */
+  private historySkipped = false;
 
   /**
    * Detached subagents not yet collected — the same manager the native worker
@@ -281,13 +296,48 @@ export class CLIAgentWorker extends BaseAgentWorker {
     }
   }
 
-  async loadHistory(): Promise<void> {
+  private async fetchHistory(): Promise<AgentMessage[]> {
     const dbMessages = await messageRepository.findBySession(this.context.sessionId);
-    this.messages = dbMessages.map((msg) => ({
+    return dbMessages.map((msg) => ({
       role: msg.role as AgentMessage['role'],
       content: msg.content,
       timestamp: msg.createdAt,
     }));
+  }
+
+  /**
+   * Early, loadHistory-time guess at whether this run will resume a vendor
+   * session — same fingerprint shape executeCLI() computes, just ahead of
+   * knowing settings/cwd for certain. Used only to skip a DB fetch whose
+   * result buildPrompt() would discard anyway; executeCLI() re-verifies
+   * authoritatively before every attempt.
+   */
+  private async willResume(): Promise<boolean> {
+    if (getConfig().cli?.reuseSessions !== true) return false;
+    const toolConfig = getCLIToolConfig(this.context.model);
+    if (!toolConfig) return false;
+    const adapterKey = toolConfig.adapter ?? toolConfig.name;
+    if (!canResume(adapterKey)) return false;
+    const session = await sessionRepository.findById(this.context.sessionId);
+    if (!session) return false;
+    const settings = await this.getCLISettings();
+    const workspaceCwd = resolvePath(WorkspaceFS.forSession(session).root);
+    const fingerprint = fingerprintRun({
+      model: settings.model, permissionMode: settings.permissionMode,
+      planMode: isPlanMode(session.context as import('@/db/schema/sessions').SessionContext | undefined),
+      workingDirectory: workspaceCwd,
+    });
+    return willResumeCliSession(this.context.sessionId, adapterKey, fingerprint);
+  }
+
+  async loadHistory(): Promise<void> {
+    if (await this.willResume()) {
+      this.resuming = true;
+      this.historySkipped = true;
+      agentLogger.debug({ agentId: this.context.id }, 'CLI agent history skipped — vendor session will be resumed');
+      return;
+    }
+    this.messages = await this.fetchHistory();
     agentLogger.debug(
       { agentId: this.context.id, messageCount: this.messages.length },
       'CLI agent history loaded',
@@ -553,6 +603,15 @@ export class CLIAgentWorker extends BaseAgentWorker {
    * System messages are handled separately via buildSystemPrompt().
    */
   private buildPrompt(): string {
+    // The vendor session already holds every earlier turn. Re-sending them
+    // would pay for the same history twice — once in our prompt and again in
+    // the vendor's own replay — which is the whole cost this change removes.
+    if (this.resuming) {
+      const runContextBlock = this.messages.find(m => m.role === 'user' && m.content.startsWith('Octipus run context:'))?.content;
+      const currentUserMessage = [...this.messages].reverse().find(m => m.role === 'user' && !m.content.startsWith('Octipus run context:'))?.content;
+      return [runContextBlock, currentUserMessage].filter(Boolean).join('\n\n');
+    }
+
     const parts: string[] = [];
 
     for (const msg of this.messages) {
@@ -606,7 +665,6 @@ export class CLIAgentWorker extends BaseAgentWorker {
       throw new Error(`Quota exhausted for ${toolConfig.name}. Resets at ${quota.resetsAt?.toISOString() || 'unknown'}`);
     }
 
-    const prompt = this.buildPrompt();
     const systemPrompt = this.buildSystemPrompt();
     const settings = await this.getCLISettings();
     // Adapter family for arg-building + output parsing (defaults to name);
@@ -699,6 +757,22 @@ export class CLIAgentWorker extends BaseAgentWorker {
         resume = { id: existing?.id ?? '', isFirstRun: !existing };
       }
     }
+
+    // Authoritative resume determination for THIS attempt — overrides
+    // loadHistory()'s early guess. A forceCold retry always lands here as
+    // `false` (reuseSessions is off for it), so it never inherits a stale
+    // 'resuming' from the first, failed attempt.
+    this.resuming = !!resume && !resume.isFirstRun;
+    if (!this.resuming && this.historySkipped) {
+      // The early guess skipped loading history expecting a resume that did
+      // not happen (fingerprint changed, or this is a forceCold retry after
+      // the vendor session died) — backfill it now, ahead of whatever this
+      // run already pushed onto `this.messages`, so a cold/recovered turn
+      // still carries the full transcript.
+      this.messages = [...(await this.fetchHistory()), ...this.messages];
+      this.historySkipped = false;
+    }
+    const prompt = this.buildPrompt();
 
     this.launchCleanup?.();
     this.launchCleanup = undefined;

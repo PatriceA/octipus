@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
+import { getConfig } from '@/config';
 import { sessionRepository } from '@/db/repositories/session-repository';
+import { canResume } from '@/shared/cli-capabilities';
 import type { SessionContext } from '@/db/schema/sessions';
 
 export type CliSessionRecord = {
@@ -31,6 +33,18 @@ export async function loadCliSession(sessionId: string, adapterKey: string, fing
   if (!rec || rec.fingerprint !== fingerprint) return null;
   // Older stored records (pre token-reconciliation) may lack reportedTokens at runtime.
   return { ...rec, reportedTokens: rec.reportedTokens ?? 0 };
+}
+
+/**
+ * Whether a run with this fingerprint will resume a vendor session rather
+ * than start cold — the seam `root-runner` uses to decide, BEFORE it
+ * assembles the prompt, whether the history/summary blocks it would render
+ * are redundant (the vendor already holds them). Pure read: never creates or
+ * mutates a stored session.
+ */
+export async function willResumeCliSession(sessionId: string, adapterKey: string, fingerprint: string): Promise<boolean> {
+  if (getConfig().cli?.reuseSessions !== true || !canResume(adapterKey)) return false;
+  return (await loadCliSession(sessionId, adapterKey, fingerprint)) !== null;
 }
 
 export async function saveCliSession(sessionId: string, adapterKey: string, rec: CliSessionRecord): Promise<void> {

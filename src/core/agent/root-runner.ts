@@ -1,6 +1,8 @@
 import { resolve } from 'path';
 import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
+import { getCLIToolConfig } from '@/core/cli-agent-factory';
+import { fingerprintRun, willResumeCliSession } from '@/core/cli-session-store';
 import { humanizeProviderError } from '@/core/errors/humanize';
 import { isCancellationError } from '@/core/swarm/errors';
 import { swarmNodeRepository } from '@/core/swarm/node-repository';
@@ -11,6 +13,7 @@ import { type AgentNode, LEVEL_DEFAULT, type PendingChild } from '@/core/swarm/t
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
+import type { CLIAgentConfig } from '@/db/schema/models';
 import type { SessionContext } from '@/db/schema/sessions';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
@@ -395,14 +398,40 @@ export async function runRootAgent(
       sessionSummary = sessionCtxData?.compactedSummary;
     }
   }
+  // Task 6: once this turn is confirmed to resume a vendor CLI session, the
+  // vendor already holds every earlier turn — the compaction summary and the
+  // recent-history block below would just re-pay for it, on top of what the
+  // resumed worker itself no longer re-sends (see cli-agent-worker.ts
+  // buildPrompt()). Root-runner decides this itself, before either block is
+  // assembled, since it renders them into the system prompt the worker never
+  // gets to filter. Only CLI-backed models have a vendor session to resume;
+  // native models always fall through to the normal (non-resuming) path.
+  let resumingCliSession = false;
+  if (session) {
+    const cliToolConfig = getCLIToolConfig(modelName);
+    if (cliToolConfig) {
+      const adapterKey = cliToolConfig.adapter ?? cliToolConfig.name;
+      const cliSettings = modelMeta?.metadata?.cliAgent as CLIAgentConfig | undefined;
+      const fingerprint = fingerprintRun({
+        model: cliSettings?.model,
+        permissionMode: cliSettings?.permissionMode,
+        planMode: isPlanMode(planSessionCtx),
+        workingDirectory: resolve(WorkspaceFS.forSession(session).root),
+      });
+      resumingCliSession = await willResumeCliSession(sessionId, adapterKey, fingerprint);
+    }
+  }
+
   const sources: string[] = [];
-  if (sessionSummary) {
+  if (!resumingCliSession && sessionSummary) {
     volatileParts.push(`\n\nPrevious conversation summary:\n${sessionSummary}`);
     sources.push('session summary');
   }
 
   // Load recent conversation history so the root agent can reference prior messages
-  const recentHistory = await messageRepository.findRecentBySession(sessionId, 10, ['user', 'assistant'], clearedAt);
+  const recentHistory = resumingCliSession
+    ? []
+    : await messageRepository.findRecentBySession(sessionId, 10, ['user', 'assistant'], clearedAt);
   if (recentHistory.length > 0) {
     sources.push(`recent ${recentHistory.length} msg${recentHistory.length === 1 ? '' : 's'}`);
   }
