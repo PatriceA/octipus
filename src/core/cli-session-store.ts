@@ -8,7 +8,6 @@ export type CliSessionRecord = {
   lastUsedAt: string;
   /** Tokens the vendor CLI has reported so far for this session; seeds reconciliation. */
   reportedTokens: number;
-  mcpConfigPath?: string;
 };
 
 /**

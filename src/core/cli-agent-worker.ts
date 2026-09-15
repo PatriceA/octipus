@@ -18,7 +18,7 @@ import type { AgentWorkerConfig, ToolHandler } from './agent-base';
 import { BaseAgentWorker } from './agent-base';
 import { CLIArgumentBuilder, CLIOutputParser, discoverCodexMcpServers, resolveCliMcpEntry, sweepStaleFiles, type CliRunConnection } from './cli-adapters';
 import { dropCliSession, fingerprintRun, loadCliSession, saveCliSession } from './cli-session-store';
-import { canResume } from '@/shared/cli-capabilities';
+import { canResume, CLI_RESUME } from '@/shared/cli-capabilities';
 import { startCliToolBridge, type BridgeResult } from './cli-tool-bridge';
 import { ToolExecutor } from './tool-executor';
 import { answerCliPermissionRequest } from './cli-permissions';
@@ -683,14 +683,20 @@ export class CLIAgentWorker extends BaseAgentWorker {
     if (reuseSessions) {
       fingerprint = fingerprintRun({ model: settings.model, permissionMode: settings.permissionMode, planMode: this.connection?.planMode, workingDirectory: workspaceCwd });
       const existing = await loadCliSession(this.context.sessionId, adapterKey, fingerprint);
-      if (adapterKey === 'Claude Code') {
-        // Claude mints the id itself, so the first run declares it too — no
-        // window in which a resumable run has no id.
+      // Style comes from the shared table, never an adapter-name comparison —
+      // a future caller-minted adapter must fall into the minted branch
+      // automatically, not silently land in the captured one and never resume.
+      if (CLI_RESUME[adapterKey].style === 'caller-minted') {
+        // The caller mints the id itself, so the first run declares it too —
+        // no window in which a resumable run has no id.
         resume = { id: existing?.id ?? randomUUID(), isFirstRun: !existing };
-      } else if (existing) {
-        // Codex's id is captured from its own output (onVendorSession below);
-        // there is nothing to resume until a prior run has reported one.
-        resume = { id: existing.id, isFirstRun: false };
+      } else {
+        // Captured style: the id comes from the CLI's own output
+        // (onVendorSession below). The first run still participates in
+        // reuse — an empty id with isFirstRun=true tells the arg builder to
+        // drop --ephemeral so THIS run can be resumed later — it just has
+        // nothing to resume yet.
+        resume = { id: existing?.id ?? '', isFirstRun: !existing };
       }
     }
 
@@ -704,11 +710,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
       const configIndex = args.indexOf('--mcp-config');
       // Windows writes the system prompt to a temp file (command-line length cap).
       const sysFileIndex = args.indexOf('--append-system-prompt-file');
-      // A resumable run's MCP config path was just recorded on the stored CLI
-      // session (below) — leave that file for the 7-day stale-file sweep
-      // instead of unlinking it here, so the record never points at a file
-      // that vanished under it the moment the run ended.
-      const paths = [built.env?.VIBE_HOME, ...(this.connection && configIndex >= 0 && !resume ? [args[configIndex + 1]] : []), ...(sysFileIndex >= 0 ? [args[sysFileIndex + 1]] : [])];
+      const paths = [built.env?.VIBE_HOME, ...(this.connection && configIndex >= 0 ? [args[configIndex + 1]] : []), ...(sysFileIndex >= 0 ? [args[sysFileIndex + 1]] : [])];
       for (const path of paths) if (path) {
         try { rmSync(path, { recursive: true, force: true }); }
         catch (err) { agentLogger.warn({ err, path }, 'CLI temporary configuration cleanup failed'); }
@@ -900,16 +902,13 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
       this.process = proc;
 
-      // Claude's id is caller-minted (--session-id / --resume), so unlike
-      // Codex there is nothing to wait for — write it as soon as the process
-      // starts. One write per run, here and only here, together with the
-      // MCP config path this run used (kept alive by launchCleanup above so
-      // the record never dangles).
-      if (resume && adapterKey === 'Claude Code') {
-        const configIndex = args.indexOf('--mcp-config');
-        const mcpConfigPath = configIndex >= 0 ? args[configIndex + 1] : undefined;
+      // A caller-minted id (Claude: --session-id / --resume) is known before
+      // the process even starts, so unlike a captured id there is nothing to
+      // wait for — write it as soon as the process starts. One write per
+      // run, here and only here.
+      if (resume && CLI_RESUME[adapterKey]?.style === 'caller-minted') {
         void saveCliSession(this.context.sessionId, adapterKey, {
-          id: resume.id, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(), reportedTokens: 0, mcpConfigPath,
+          id: resume.id, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(), reportedTokens: 0,
         }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to store CLI session id'));
       }
 
