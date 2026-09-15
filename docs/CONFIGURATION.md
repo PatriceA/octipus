@@ -132,6 +132,12 @@ Both this `tokens` cap and `AGENT_MAX_TOKEN_BUDGET` (`agent.maxTokenBudget`, per
 | `compaction.growthMultiplier` | 2.0 | Trigger compaction when current context grows by this multiple relative to the last compaction baseline. |
 | `compaction.hardCeiling` | 1_000_000 | Hard ceiling in tokens — compaction always runs above this threshold regardless of other gates. |
 
+## CLI Config
+
+| Key | Default | Purpose |
+|---|---|---|
+| `cli.reuseSessions` | `false` | Continue the same vendor CLI session (Claude Code, Codex) across turns of one octipus session instead of re-running each turn from scratch. See "Session reuse" in `docs/CLI-AGENTS.md` for what invalidates a stored session and what it does and does not save. |
+
 ## Docker Services
 
 Embedded mode requires no external database service. For external mode, provide PostgreSQL with pgvector. The following is an example for operators who maintain a separate `~/docker-services` Compose project; that directory is not shipped by Octipus:

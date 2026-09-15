@@ -152,6 +152,75 @@ Build the bridge with `npm run build --prefix mcp-server` along with the backend
 Missing compiled bridge files fail at startup of the run. Capability details are
 shown in the model settings and `/work-plan` for a CLI root.
 
+## Session reuse
+
+By default every turn of a CLI-backed agent starts a fresh vendor process:
+Octipus re-sends the whole conversation as a new prompt each time. Setting
+`cli.reuseSessions: true` (default `false`) lets Octipus instead hand the
+vendor CLI its own session id back on the next turn, so the vendor continues
+the conversation it already holds.
+
+Only Claude Code and Codex CLI support this. Claude's id is minted by
+Octipus itself and passed on the first run (`--session-id`), so there is
+never a run with no id to resume later; Codex assigns its own id, which
+Octipus captures from `thread.started`. Antigravity and Mistral Vibe do not
+participate, for different reasons:
+
+- **Antigravity**: the installed build's print mode emits no conversation id
+  at all. Handing it a stale id does not error — it silently starts a brand
+  new conversation, which is worse than not reusing, so Octipus never tries.
+- **Mistral Vibe**: is not installed in this environment, and its resume
+  support depends on the vendor's own `log_interactions` config flag staying
+  enabled in the user's local configuration — something Octipus does not
+  control and cannot verify.
+
+### What invalidates a stored session
+
+A stored vendor session is scoped to a fingerprint over the run's model,
+permission mode, plan mode and working directory. If any of those change
+between turns, the fingerprint no longer matches and Octipus starts a new
+vendor session rather than resuming the stale one. Running `/clear` also
+drops every stored vendor session id for that octipus session outright.
+
+A new octipus session always starts a new vendor session — there is no
+cross-session reuse; the stored id lives on the octipus session's own
+record.
+
+### What resume actually saves
+
+Resume does **not** stop the vendor CLI from re-reading its own history —
+Claude Code and Codex CLI both resend their full stored conversation to the
+model on every request they serve, resumed or not, and that re-reading is
+billed by the vendor the same way either way. What Octipus saves by
+resuming is its own side of the exchange: it stops re-sending the transcript
+itself (only the new turn's prompt goes out), Claude's system-prompt
+snapshot is replayed by the vendor instead of being re-rendered by Octipus,
+and the vendor's own prompt cache stays warm across turns. Treat this as
+saved egress and rendering work, not as the vendor charging less for
+history.
+
+### Compaction
+
+When Octipus compacts a session's own context and a live vendor session is
+stored for it, Octipus pushes that compaction down into the vendor too, so
+the vendor is not left holding the full pre-compaction transcript. Claude
+Code can be compacted in place, non-interactively, on the resumed session
+(`claude -p --resume <id> "/compact"`). Codex CLI cannot be compacted
+non-interactively — `/compact` there is interactive-only — so Octipus
+rotates the thread instead: the stored id is dropped, and the next turn
+starts cold, carrying Octipus's own compaction summary rather than the
+vendor's. There is no database column for the outcome; it is recorded as a
+structured log line (session id, adapter, outcome — `compacted`, `rotated`,
+or `skipped` when there is no live vendor session to touch).
+
+### Cold fallback
+
+A resumed vendor session can go missing between turns (the id expired,
+or the vendor's state was lost). Octipus detects this from the vendor's own
+error output, drops the stale stored id, and retries that turn exactly once,
+cold, with the full prompt — so a turn is never simply lost because the
+vendor forgot its session.
+
 ## Validation scope
 
 Deterministic tests cover private capabilities, cross-run isolation, invalid
