@@ -17,6 +17,8 @@ import { agentLogger } from '@/utils/logger';
 import type { AgentWorkerConfig, ToolHandler } from './agent-base';
 import { BaseAgentWorker } from './agent-base';
 import { CLIArgumentBuilder, CLIOutputParser, discoverCodexMcpServers, resolveCliMcpEntry, sweepStaleFiles, type CliRunConnection } from './cli-adapters';
+import { dropCliSession, fingerprintRun, loadCliSession, saveCliSession } from './cli-session-store';
+import { canResume } from '@/shared/cli-capabilities';
 import { startCliToolBridge, type BridgeResult } from './cli-tool-bridge';
 import { ToolExecutor } from './tool-executor';
 import { answerCliPermissionRequest } from './cli-permissions';
@@ -591,7 +593,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
     return model?.metadata?.cliAgent || {};
   }
 
-  private async executeCLI(): Promise<string> {
+  private async executeCLI(opts?: { forceCold?: boolean }): Promise<string> {
     const toolConfig = getCLIToolConfig(this.context.model);
     if (!toolConfig) {
       throw new Error(`No CLI tool config found for model: ${this.context.model}`);
@@ -670,17 +672,43 @@ export class CLIAgentWorker extends BaseAgentWorker {
       }
     }
 
+    // Vendor CLI session reuse (off by default, gated on the shared
+    // capability table — never a hardcoded adapter check here). `forceCold`
+    // is the cold-retry's own flag: it skips this whole block so the retry
+    // can never itself trigger another retry (no `resume` => the close
+    // handler's dead-session branch below cannot fire for it).
+    const reuseSessions = getConfig().cli?.reuseSessions === true && canResume(adapterKey) && !opts?.forceCold;
+    let resume: { id: string; isFirstRun: boolean } | undefined;
+    let fingerprint: string | undefined;
+    if (reuseSessions) {
+      fingerprint = fingerprintRun({ model: settings.model, permissionMode: settings.permissionMode, planMode: this.connection?.planMode, workingDirectory: workspaceCwd });
+      const existing = await loadCliSession(this.context.sessionId, adapterKey, fingerprint);
+      if (adapterKey === 'Claude Code') {
+        // Claude mints the id itself, so the first run declares it too — no
+        // window in which a resumable run has no id.
+        resume = { id: existing?.id ?? randomUUID(), isFirstRun: !existing };
+      } else if (existing) {
+        // Codex's id is captured from its own output (onVendorSession below);
+        // there is nothing to resume until a prior run has reported one.
+        resume = { id: existing.id, isFirstRun: false };
+      }
+    }
+
     this.launchCleanup?.();
     this.launchCleanup = undefined;
     // Async vendor discovery stays out of the synchronous arg builder (event-loop safe).
     const codexMcpServers = this.connection && adapterKey === 'Codex CLI' ? await discoverCodexMcpServers(workspaceCwd) : undefined;
-    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, this.systemMessages, systemPrompt, Math.max(0, this.config.maxTokenBudget - this.totalTokens), this.context.id, this.connection ? { ...this.connection, workingDirectory: workspaceCwd, codexMcpServers, maxIterations: Math.max(1, this.config.maxIterations - this.iteration) } : undefined);
+    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, this.systemMessages, systemPrompt, Math.max(0, this.config.maxTokenBudget - this.totalTokens), this.context.id, this.connection ? { ...this.connection, workingDirectory: workspaceCwd, codexMcpServers, maxIterations: Math.max(1, this.config.maxIterations - this.iteration) } : undefined, resume);
     const { binary, args, stdinPrompt, useShell } = built;
     this.launchCleanup = () => {
       const configIndex = args.indexOf('--mcp-config');
       // Windows writes the system prompt to a temp file (command-line length cap).
       const sysFileIndex = args.indexOf('--append-system-prompt-file');
-      const paths = [built.env?.VIBE_HOME, ...(this.connection && configIndex >= 0 ? [args[configIndex + 1]] : []), ...(sysFileIndex >= 0 ? [args[sysFileIndex + 1]] : [])];
+      // A resumable run's MCP config path was just recorded on the stored CLI
+      // session (below) — leave that file for the 7-day stale-file sweep
+      // instead of unlinking it here, so the record never points at a file
+      // that vanished under it the moment the run ended.
+      const paths = [built.env?.VIBE_HOME, ...(this.connection && configIndex >= 0 && !resume ? [args[configIndex + 1]] : []), ...(sysFileIndex >= 0 ? [args[sysFileIndex + 1]] : [])];
       for (const path of paths) if (path) {
         try { rmSync(path, { recursive: true, force: true }); }
         catch (err) { agentLogger.warn({ err, path }, 'CLI temporary configuration cleanup failed'); }
@@ -747,6 +775,16 @@ export class CLIAgentWorker extends BaseAgentWorker {
           // Record the first CLI-reported failure; the close handler rejects
           // with it so the run surfaces as failed, not (no response) success.
           if (!this.runError) this.runError = reason;
+        },
+        // Codex assigns its own thread id (thread.started); this fires once
+        // per run, and is the single write point for the Codex side of
+        // session reuse (Claude's own write point is right after spawn,
+        // below — its id is caller-minted, so there is nothing to capture).
+        onVendorSession: (id) => {
+          if (!reuseSessions) return;
+          void saveCliSession(this.context.sessionId, adapterKey, {
+            id, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(), reportedTokens: 0,
+          }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to store CLI session id'));
         },
       },
       workspaceCwd,
@@ -861,6 +899,19 @@ export class CLIAgentWorker extends BaseAgentWorker {
       }
 
       this.process = proc;
+
+      // Claude's id is caller-minted (--session-id / --resume), so unlike
+      // Codex there is nothing to wait for — write it as soon as the process
+      // starts. One write per run, here and only here, together with the
+      // MCP config path this run used (kept alive by launchCleanup above so
+      // the record never dangles).
+      if (resume && adapterKey === 'Claude Code') {
+        const configIndex = args.indexOf('--mcp-config');
+        const mcpConfigPath = configIndex >= 0 ? args[configIndex + 1] : undefined;
+        void saveCliSession(this.context.sessionId, adapterKey, {
+          id: resume.id, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(), reportedTokens: 0, mcpConfigPath,
+        }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to store CLI session id'));
+      }
 
       // Single hard timeout: force-kill on overrun and stamp abortReason so
       // run() reports "timed out" instead of "aborted by user". timeout <= 0
@@ -1022,6 +1073,19 @@ export class CLIAgentWorker extends BaseAgentWorker {
           // codex turn.failed/error) — never resolve as success (C3).
           if (this.runError) {
             reject(new Error(this.runError));
+            return;
+          }
+
+          // A resumed vendor session can be gone (Claude: "No conversation
+          // found with session ID: <id>"; Codex resume errors out rather than
+          // silently starting a new thread) — drop the stale id and retry
+          // once, cold, with the full prompt, so the turn is not lost.
+          // `resume` is undefined on a forceCold retry (computed above), so
+          // this can never recurse.
+          if (code !== 0 && code !== null && resume && /no conversation found|session not found/i.test(stderr)) {
+            await dropCliSession(this.context.sessionId, adapterKey);
+            agentLogger.warn({ agentId: this.context.id, adapterKey, id: resume.id }, 'Vendor CLI session is gone — retrying cold with the full prompt');
+            resolve(this.executeCLI({ forceCold: true }));
             return;
           }
 
