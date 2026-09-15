@@ -104,7 +104,7 @@ function makeSession(sessionId: string, dir: string) {
   }
 }
 
-function makeWorker(model: string, opts: { sessionId: string; reuseSessions: boolean; model?: string; permissionMode?: string; history?: string[] }) {
+function makeWorker(model: string, opts: { sessionId: string; reuseSessions: boolean; model?: string; permissionMode?: string; history?: string[]; maxTokenBudget?: number }) {
   fixture.reuseSessions = opts.reuseSessions;
   fixture.cliAgent = { model: opts.model, permissionMode: opts.permissionMode };
   fixture.history = opts.history ?? [];
@@ -116,10 +116,11 @@ function makeWorker(model: string, opts: { sessionId: string; reuseSessions: boo
     model, role: 'general', topic: 'general', status: 'idle',
     createdAt: new Date(), updatedAt: new Date(), metadata: {},
   };
-  const worker = new CLIAgentWorker(context, { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
+  const worker = new CLIAgentWorker(context, { maxIterations: 5, maxTokenBudget: opts.maxTokenBudget ?? 10000, timeout: 10000, contextWindowSize: 10000 });
   const stdinFile = join(fixture.dir, 'claude-last-stdin.txt');
 
   return {
+    worker,
     // Mirrors agent-manager.createAgent: loadHistory() runs once, before the
     // turn's message is added and the worker is run.
     run: async (message: string) => {
@@ -136,7 +137,7 @@ function makeWorker(model: string, opts: { sessionId: string; reuseSessions: boo
   };
 }
 
-const makeClaudeWorker = (opts: { sessionId: string; reuseSessions: boolean; model?: string; permissionMode?: string; history?: string[] }) => makeWorker('cli/claude-code', opts);
+const makeClaudeWorker = (opts: { sessionId: string; reuseSessions: boolean; model?: string; permissionMode?: string; history?: string[]; maxTokenBudget?: number }) => makeWorker('cli/claude-code', opts);
 const makeCodexWorker = (opts: { sessionId: string; reuseSessions: boolean; model?: string; permissionMode?: string }) => makeWorker('cli/codex', opts);
 
 const failMarker = () => join(fixture.dir, 'fail-marker');
@@ -293,11 +294,16 @@ describe('CLI session reuse', () => {
     expect(second.lastPrompt).not.toContain('old question');
   });
 
-  // Task 7: the vendor session's running total (seeding the NEXT resumed
-  // run's reconciliation) must compound correctly end-to-end through the
-  // worker's real close-handler write, not just in the parser unit tests.
-  it('compounds reportedTokens across turns for a resumed Claude session', async () => {
-    writeFileSync(fixture.script, `
+  // Task 7 fix round 1: cross-process token subtraction was reverted (see
+  // task-7-report.md). The real defect was that CLIAgentWorker had no
+  // context-vs-spend split at all — the budget kill-switch compared the
+  // grand total, which would SIGKILL a well-cached resumed session that
+  // replays its whole history as cheap cache reads. These tests cover the
+  // fix: getTotalTokens() (context proxy) counts everything the model read,
+  // cache reads included; getBillableTokens() (spend proxy) counts only
+  // fresh input + output.
+  function usageScript(freshInputResumed: number, outputResumed: number, cacheReadResumed: number) {
+    return `
       import { writeFileSync } from 'node:fs';
       import { join } from 'node:path';
       const args = process.argv.slice(2);
@@ -307,23 +313,39 @@ describe('CLI session reuse', () => {
       let stdinData = '';
       process.stdin.on('data', c => { stdinData += c; });
       process.stdin.on('end', () => { writeFileSync(join(process.cwd(), 'claude-last-stdin.txt'), stdinData); });
-      // Turn one reports 100 tokens of its own; the resumed turn two replays
-      // the session-cumulative 250 (100 of it as a cache read).
       const usage = resumeIdx >= 0
-        ? { input_tokens: 50, output_tokens: 100, cache_read_input_tokens: 100, cache_creation_input_tokens: 0 }
+        ? { input_tokens: ${freshInputResumed}, output_tokens: ${outputResumed}, cache_read_input_tokens: ${cacheReadResumed}, cache_creation_input_tokens: 0 }
         : { input_tokens: 60, output_tokens: 40, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
       console.log(JSON.stringify({ type: 'result', subtype: 'success', result: 'answer for ' + idArg, num_turns: 1, usage }));
-    `);
+    `;
+  }
+
+  it('splits context (grand total) from spend (fresh + output) on a resumed run with heavy cache reads', async () => {
+    writeFileSync(fixture.script, usageScript(50, 100, 2000));
     const worker = makeClaudeWorker({ sessionId: 's1', reuseSessions: true });
-    await worker.run('first question');
-    const first = await loadCliSession('s1', 'Claude Code', worker.fingerprint);
-    expect(first!.reportedTokens).toBe(100); // 60 + 40, no seed yet
+    await worker.run('first question'); // cold: 60 + 40, no cache
+    expect(worker.worker.getTotalTokens()).toBe(100);
+    expect(worker.worker.getBillableTokens()).toBe(100);
 
     const second = makeClaudeWorker({ sessionId: 's1', reuseSessions: true });
-    await second.run('second question');
-    const stored = await loadCliSession('s1', 'Claude Code', second.fingerprint);
-    // 250 raw (the vendor's session-cumulative figure), not 100 + 250 = 350.
-    expect(stored!.reportedTokens).toBe(250);
+    await second.run('second question'); // resumed: 50 + 100 + 2000 cache read
+    expect(second.worker.getTotalTokens()).toBe(2150); // grand total, cache reads included
+    expect(second.worker.getBillableTokens()).toBe(150); // 50 + 100 only, cache read excluded
+  });
+
+  it('does not trip maxTokenBudget on a resumed run that is almost entirely cache reads', async () => {
+    // Fresh + output is 100 — nowhere near the 200 cap. Grand total is 5100,
+    // far past it. Without the getBillableTokens() override the kill-switch
+    // compared the grand total and would SIGKILL this run.
+    writeFileSync(fixture.script, usageScript(50, 50, 5000));
+    const worker = makeClaudeWorker({ sessionId: 's1', reuseSessions: true, maxTokenBudget: 200 });
+    await worker.run('first question');
+
+    const second = makeClaudeWorker({ sessionId: 's1', reuseSessions: true, maxTokenBudget: 200 });
+    const answer = await second.run('second question');
+    expect(answer).not.toBe('');
+    expect(second.worker.getTotalTokens()).toBe(5100);
+    expect(second.worker.getBillableTokens()).toBe(100);
   });
 
   it('sends the full transcript on a cold run', async () => {

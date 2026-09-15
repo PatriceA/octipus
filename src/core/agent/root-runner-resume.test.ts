@@ -79,7 +79,7 @@ function makeResumableSession(projectPath: string) {
   });
   fixture.session = {
     id: SESSION_ID, userId: 'u',
-    context: { devMode: true, projectPath, cliSessions: { [ADAPTER_KEY]: { id: 'vendor-1', fingerprint, lastUsedAt: new Date().toISOString(), reportedTokens: 0 } } } as SessionContext,
+    context: { devMode: true, projectPath, cliSessions: { [ADAPTER_KEY]: { id: 'vendor-1', fingerprint, lastUsedAt: new Date().toISOString() } } } as SessionContext,
   };
 }
 

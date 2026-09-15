@@ -1,4 +1,5 @@
 import { recordProviderUsage } from '@/models/providers/instrumented';
+import { billableTokens } from '@/models/billable-tokens';
 import { randomUUID } from 'crypto';
 import { type ChildProcess, spawn } from 'child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
@@ -15,7 +16,7 @@ import { getQuotaTracker } from '@/models/quota-tracker';
 import { agentLogger } from '@/utils/logger';
 import type { AgentWorkerConfig, ToolHandler } from './agent-base';
 import { BaseAgentWorker } from './agent-base';
-import { CLIArgumentBuilder, CLIOutputParser, discoverCodexMcpServers, reconcileSessionCount, resolveCliMcpEntry, sweepStaleFiles, type CliRunConnection } from './cli-adapters';
+import { CLIArgumentBuilder, CLIOutputParser, discoverCodexMcpServers, resolveCliMcpEntry, sweepStaleFiles, type CliRunConnection } from './cli-adapters';
 import { dropCliSession, fingerprintRun, loadCliSession, saveCliSession, willResumeCliSession } from './cli-session-store';
 import { canResume, CLI_RESUME } from '@/shared/cli-capabilities';
 import { startCliToolBridge, type BridgeResult } from './cli-tool-bridge';
@@ -178,6 +179,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
    * returns 0 for `getTotalTokens()`.
    */
   private totalTokens = 0;
+  /** Spend proxy: fresh input + output, cache reads/creation excluded. See `getBillableTokens`. */
+  private billableTokensUsed = 0;
   /**
    * Set by the token-usage callback when the CLI subprocess crosses its
    * `maxTokenBudget`. The base `AgentWorker` does this synchronously before
@@ -251,6 +254,11 @@ export class CLIAgentWorker extends BaseAgentWorker {
   /** Return the running token count reported by the underlying CLI provider. */
   override getTotalTokens(): number {
     return this.totalTokens;
+  }
+
+  /** Spend proxy: fresh input + output. Budget gates compare this, not `getTotalTokens`. */
+  getBillableTokens(): number {
+    return this.billableTokensUsed;
   }
 
   /**
@@ -734,13 +742,9 @@ export class CLIAgentWorker extends BaseAgentWorker {
     const reuseSessions = getConfig().cli?.reuseSessions === true && canResume(adapterKey) && !opts?.forceCold;
     let resume: { id: string; isFirstRun: boolean } | undefined;
     let fingerprint: string | undefined;
-    // Tokens the vendor session already reported before this process — 0 on
-    // a cold run. Seeds the parser's reconciliation (Task 7).
-    let seedReportedTokens = 0;
     if (reuseSessions) {
       fingerprint = fingerprintRun({ model: settings.model, permissionMode: settings.permissionMode, planMode: this.connection?.planMode, workingDirectory: workspaceCwd });
       const existing = await loadCliSession(this.context.sessionId, adapterKey, fingerprint);
-      seedReportedTokens = existing?.reportedTokens ?? 0;
       // Style comes from the shared table, never an adapter-name comparison —
       // a future caller-minted adapter must fall into the minted branch
       // automatically, not silently land in the captured one and never resume.
@@ -800,10 +804,6 @@ export class CLIAgentWorker extends BaseAgentWorker {
     const previousCounters = this.parser?.getSideEffectCounters();
     if (previousCounters) this.pastParserCounters = mergeCounters(this.pastParserCounters ?? emptyCounters(), previousCounters);
     const invocationStartIteration = this.iteration;
-    // Captured-style (Codex) vendor session id, set by onVendorSession below
-    // once the CLI reports it. Caller-minted (Claude) already has its id in
-    // `resume.id`. Either way, written once at close (Task 7 — see there).
-    let capturedVendorSessionId: string | undefined;
     let invocationUsage: import('@/models/litellm-client').CompletionResult['usage'] = { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false };
     const parser = this.parser = new CLIOutputParser(
       this.context.id,
@@ -832,12 +832,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
         },
         onTurnCount: (turns) => {
           // Authoritative final count (Claude num_turns) — never regress.
-          // Same resumed-session ambiguity as tokens (Task 7, unverified
-          // against a live vendor): `turns` may be cumulative for the whole
-          // vendor session or scoped to just this process's own turns.
-          // `reconcileSessionCount` picks per-call from the evidence — see
-          // its doc comment in cli-adapters.ts.
-          const totalTurns = reconcileSessionCount(turns, invocationStartIteration);
+          const totalTurns = invocationStartIteration + turns;
           if (totalTurns > this.iteration) {
             this.iteration = totalTurns;
             if (this.iteration > this.config.maxIterations) { this.abortReason = 'CLI agent exceeded its turn limit'; this.stop(); }
@@ -846,11 +841,21 @@ export class CLIAgentWorker extends BaseAgentWorker {
         },
         onTokenUsage: (tokens) => {
           this.totalTokens += tokens.total;
+          // Spend proxy: fresh input + output, cache reads/creation excluded
+          // (Plan 1's split, `billableTokens`) — a resumed session replaying
+          // its whole context as cache reads must not look expensive, and a
+          // well-cached session must not SIGKILL against a budget its fresh
+          // tokens are nowhere near.
+          this.billableTokensUsed += billableTokens({
+            inputTokens: tokens.input, outputTokens: tokens.output, totalTokens: tokens.total,
+            cacheReadTokens: tokens.cacheRead ?? 0, cacheCreationTokens: tokens.cacheCreation ?? 0,
+            available: true,
+          });
           const cap = this.config.maxTokenBudget;
-          if (!this.budgetExceeded && cap > 0 && this.totalTokens >= cap) {
+          if (!this.budgetExceeded && cap > 0 && this.billableTokensUsed >= cap) {
             this.budgetExceeded = true;
             agentLogger.warn(
-              { agentId: this.context.id, used: this.totalTokens, cap },
+              { agentId: this.context.id, used: this.billableTokensUsed, cap },
               'CLI sub-agent exceeded token budget — killing subprocess',
             );
             this.stop();
@@ -861,17 +866,18 @@ export class CLIAgentWorker extends BaseAgentWorker {
           // with it so the run surfaces as failed, not (no response) success.
           if (!this.runError) this.runError = reason;
         },
-        // Codex assigns its own thread id (thread.started) mid-stream — captured
-        // here, written once at close alongside the run's final reportedTokens
-        // (Task 7 needs the parser's final total, only known once the run
-        // ends, so the single write point moved from spawn-time to close for
-        // both styles — see the close handler below).
+        // Codex assigns its own thread id (thread.started); this fires once
+        // per run, and is the single write point for the Codex side of
+        // session reuse (Claude's own write point is right after spawn,
+        // below — its id is caller-minted, so there is nothing to capture).
         onVendorSession: (id) => {
-          if (reuseSessions) capturedVendorSessionId = id;
+          if (!reuseSessions) return;
+          void saveCliSession(this.context.sessionId, adapterKey, {
+            id, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(),
+          }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to store CLI session id'));
         },
       },
       workspaceCwd,
-      { seedReportedTokens },
     );
 
     agentLogger.info(
@@ -985,12 +991,14 @@ export class CLIAgentWorker extends BaseAgentWorker {
       this.process = proc;
 
       // A caller-minted id (Claude: --session-id / --resume) is known before
-      // the process even starts. Task 7 moved the write itself to close
-      // (below) — the record's `reportedTokens` isn't known until the parser
-      // has reconciled the run's final usage, and writing it twice (once
-      // here with a placeholder, once at close with the real figure) would
-      // reintroduce the double-write Task 5 deliberately avoided.
-      if (resume && CLI_RESUME[adapterKey]?.style === 'caller-minted') capturedVendorSessionId = resume.id;
+      // the process even starts, so unlike a captured id there is nothing to
+      // wait for — write it as soon as the process starts. One write per
+      // run, here and only here.
+      if (resume && CLI_RESUME[adapterKey]?.style === 'caller-minted') {
+        void saveCliSession(this.context.sessionId, adapterKey, {
+          id: resume.id, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(),
+        }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to store CLI session id'));
+      }
 
       // Single hard timeout: force-kill on overrun and stamp abortReason so
       // run() reports "timed out" instead of "aborted by user". timeout <= 0
@@ -1090,6 +1098,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
               invocationUsage = parsed.usage;
               if (parsed.usage.totalTokens > 0) {
                 this.totalTokens += parsed.usage.totalTokens;
+                // No cache breakdown from buffer-at-end tools — billable = total.
+                this.billableTokensUsed += billableTokens(parsed.usage);
               }
             } catch (err) {
               agentLogger.warn({ err, agentId: this.context.id, tool: toolConfig.name }, 'Buffer-mode parseOutput failed; falling back to raw stdout');
@@ -1114,20 +1124,6 @@ export class CLIAgentWorker extends BaseAgentWorker {
             }
           }
 
-          // Task 5's single-write-per-run invariant, relocated: the id is
-          // known early (caller-minted) or mid-stream (captured), but
-          // `reportedTokens` — the vendor session's running total, seeding
-          // the NEXT run's reconciliation — is only final once the parser
-          // has processed this run's last event, which by 'close' it has.
-          // Harmless on the dead-session retry path below: that branch drops
-          // the record outright right after, so this write is simply undone.
-          if (reuseSessions && capturedVendorSessionId) {
-            void saveCliSession(this.context.sessionId, adapterKey, {
-              id: capturedVendorSessionId, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(),
-              reportedTokens: parser.getReportedTokens(),
-            }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to store CLI session id'));
-          }
-
           if (!invocationUsage.available) {
             // Buffered adapters (Vibe, Antigravity) report no usage. Estimate
             // from characters so token budgets and pipeline pools stop treating
@@ -1137,6 +1133,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
             const outputTokens = est(accumulatedText);
             invocationUsage = { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, available: true, estimated: true };
             this.totalTokens += invocationUsage.totalTokens;
+            this.billableTokensUsed += billableTokens(invocationUsage);
           }
           await recordProviderUsage({ model: this.context.model, modelConfigName: this.accountingModelName, messages: [], userId: this.context.userId, sessionId: this.context.sessionId, agentId: this.context.id, requestType: 'cli' }, 'cli', { model: this.context.model, usage: invocationUsage }, code !== 0 || this.aborted || !!this.runError);
 

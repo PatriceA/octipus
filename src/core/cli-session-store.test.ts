@@ -48,24 +48,24 @@ describe('cli session store', () => {
   });
 
   it('returns null when the stored fingerprint does not match', async () => {
-    await saveCliSession('s1', 'Claude Code', { id: 'u1', fingerprint: 'fp-a', lastUsedAt: new Date().toISOString(), reportedTokens: 0 });
+    await saveCliSession('s1', 'Claude Code', { id: 'u1', fingerprint: 'fp-a', lastUsedAt: new Date().toISOString() });
     expect(await loadCliSession('s1', 'Claude Code', 'fp-b')).toBeNull();
   });
 
   it('round-trips a matching record', async () => {
-    const rec = { id: 'u1', fingerprint: 'fp-a', lastUsedAt: new Date().toISOString(), reportedTokens: 0 };
+    const rec = { id: 'u1', fingerprint: 'fp-a', lastUsedAt: new Date().toISOString() };
     await saveCliSession('s1', 'Claude Code', rec);
     expect(await loadCliSession('s1', 'Claude Code', 'fp-a')).toMatchObject({ id: 'u1' });
   });
 
   it('forgets a dropped session', async () => {
-    await saveCliSession('s1', 'Claude Code', { id: 'u1', fingerprint: 'fp-a', lastUsedAt: new Date().toISOString(), reportedTokens: 0 });
+    await saveCliSession('s1', 'Claude Code', { id: 'u1', fingerprint: 'fp-a', lastUsedAt: new Date().toISOString() });
     await dropCliSession('s1', 'Claude Code');
     expect(await loadCliSession('s1', 'Claude Code', 'fp-a')).toBeNull();
   });
 
   it('never returns another octipus session’s vendor session', async () => {
-    await saveCliSession('s1', 'Claude Code', { id: 'u1', fingerprint: 'fp-a', lastUsedAt: new Date().toISOString(), reportedTokens: 0 });
+    await saveCliSession('s1', 'Claude Code', { id: 'u1', fingerprint: 'fp-a', lastUsedAt: new Date().toISOString() });
     expect(await loadCliSession('s2', 'Claude Code', 'fp-a')).toBeNull();
   });
 });

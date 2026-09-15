@@ -8,8 +8,6 @@ export type CliSessionRecord = {
   id: string;
   fingerprint: string;
   lastUsedAt: string;
-  /** Tokens the vendor CLI has reported so far for this session; seeds reconciliation. */
-  reportedTokens: number;
 };
 
 /**
@@ -31,8 +29,7 @@ export async function loadCliSession(sessionId: string, adapterKey: string, fing
   const session = await sessionRepository.findById(sessionId);
   const rec = (session?.context as SessionContext | undefined)?.cliSessions?.[adapterKey];
   if (!rec || rec.fingerprint !== fingerprint) return null;
-  // Older stored records (pre token-reconciliation) may lack reportedTokens at runtime.
-  return { ...rec, reportedTokens: rec.reportedTokens ?? 0 };
+  return rec;
 }
 
 /**

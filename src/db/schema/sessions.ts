@@ -112,7 +112,7 @@ export interface SessionContext {
    * Scoped to the octipus session on purpose: a new octipus session finds an
    * empty map and therefore starts a new vendor session, which is the rule.
    */
-  cliSessions?: Record<string, { id: string; fingerprint: string; lastUsedAt: string; reportedTokens: number }>;
+  cliSessions?: Record<string, { id: string; fingerprint: string; lastUsedAt: string }>;
 }
 
 export type Session = typeof sessions.$inferSelect;
