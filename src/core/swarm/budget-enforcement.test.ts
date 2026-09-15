@@ -1,6 +1,9 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { AgentWorker } from '@/core/agent-worker';
 import type { AgentContext } from '@/core/types';
+import type { CompletionResult } from '@/models/litellm-client';
+import { agentRepository } from '@/db/repositories/agent-repository';
+import { auditRepository } from '@/db/repositories/audit-repository';
 import {
   BudgetExceededError,
   CascadedCancellationError,
@@ -203,6 +206,44 @@ describe('AgentWorker — hard budget enforcement (Phase 2)', () => {
       thrown = err;
     }
     expect(thrown).toBe(sentinel);
+  });
+
+  test('a real completion with cache reads grows getTotalTokens by the grand total and getBillableTokens by fresh+output only', async () => {
+    // Drives the production accounting line in agent-worker.ts (the
+    // `reportedTokens > 0 ? billableTokens(completion.usage) : accounted`
+    // branch) through a full worker.run() turn — not via the private-field
+    // cast the other tests in this file use to seed *Used directly.
+    const auditSpy = vi.spyOn(auditRepository, 'logAgentCompleted').mockResolvedValue(undefined as never);
+    const updateSpy = vi.spyOn(agentRepository, 'updateStatus').mockResolvedValue(undefined as never);
+    try {
+      const worker = new AgentWorker(mkCtx({ id: 'w-usage-glue' }), {
+        maxIterations: 10,
+        contextWindowSize: 100_000,
+        timeout: 60_000,
+        maxTokenBudget: 1_000_000,
+        // Keeps the loop's compaction path from falling through to getConfig()
+        // (unavailable in this unit test), same as agent-worker.hardening.test.ts.
+        toolOutputSoftCap: 1_000,
+      });
+      const priv = worker as unknown as { getCompletion: () => Promise<CompletionResult> };
+      // 1000 input of which 900 cache read + 20 cache creation -> 80 fresh + 50 out = 130 billable.
+      priv.getCompletion = async () => ({
+        content: 'done',
+        toolCalls: [],
+        finishReason: 'stop',
+        usage: { inputTokens: 1_000, outputTokens: 50, totalTokens: 1_050, cacheReadTokens: 900, cacheCreationTokens: 20 },
+        model: 'test-model',
+        latencyMs: 1,
+      });
+
+      await worker.run('go');
+
+      expect(worker.getTotalTokens()).toBe(1_050); // grand total, cache included
+      expect(worker.getBillableTokens()).toBe(130); // fresh input + output only
+    } finally {
+      auditSpy.mockRestore();
+      updateSpy.mockRestore();
+    }
   });
 
   test('estimateRequestTokens: text = chars/4; image part = fixed (not base64 length)', () => {
