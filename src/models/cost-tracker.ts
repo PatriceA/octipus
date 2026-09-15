@@ -5,8 +5,13 @@ import { Cache } from '@/db/cache';
 import { type CostLogEntry, costLog, modelConfig, type NewCostLogEntry } from '@/db/schema/models';
 import { modelLogger } from '@/utils/logger';
 
-// ponytail: track models we've already warned about to deduplicate warnings
+// ponytail: track models we've already warned about to deduplicate warnings.
+// Key space is bounded by model-config rows (small); unbounded growth acceptable.
 const warnedMissingCachePricing = new Set<string>();
+
+export function __resetCachePricingWarnings() {
+  warnedMissingCachePricing.clear();
+}
 
 export interface UsageStats {
   totalInputTokens: number;
@@ -125,27 +130,30 @@ export class CostTracker {
     const reportedCost = typeof options?.reportedCost === 'number' && Number.isFinite(options.reportedCost) && options.reportedCost >= 0 ? options.reportedCost : undefined;
     const costSource = reportedCost != null ? 'reported' : estimatedCost != null ? 'estimated' : 'unknown';
 
-    // Warn once per model when cache tokens arrive but cost is unknown due to missing cache pricing
-    if (
-      costSource === 'unknown' &&
-      (cachedInputTokens > 0 || cacheCreationTokens > 0) &&
-      !warnedMissingCachePricing.has(modelName)
-    ) {
+    // Warn once per model when cache tokens arrive but cost is unknown due to missing cache pricing.
+    // Guard: missing rates must actually exist (not just cost is unknown for another reason).
+    if (cachedInputTokens > 0 || cacheCreationTokens > 0) {
       const pricing = pricingModel?.metadata?.pricing;
       const missingRates: string[] = [];
       if (cachedInputTokens > 0 && typeof pricing?.cacheRead !== 'number') missingRates.push('cacheRead');
       if (cacheCreationTokens > 0 && typeof pricing?.cacheWrite !== 'number') missingRates.push('cacheWrite');
 
-      modelLogger.warn(
-        {
-          model: modelName,
-          cachedInputTokens,
-          cacheCreationTokens,
-          missingRates: missingRates.length > 0 ? missingRates : undefined,
-        },
-        `Model has cache tokens but no cache pricing (missing: ${missingRates.length > 0 ? missingRates.join(', ') : 'unknown'})`
-      );
-      warnedMissingCachePricing.add(modelName);
+      if (
+        missingRates.length > 0 &&
+        costSource === 'unknown' &&
+        !warnedMissingCachePricing.has(modelName)
+      ) {
+        modelLogger.warn(
+          {
+            model: modelName,
+            cachedInputTokens,
+            cacheCreationTokens,
+            missingRates,
+          },
+          `Model has cache tokens but no cache pricing (missing: ${missingRates.join(', ')})`
+        );
+        warnedMissingCachePricing.add(modelName);
+      }
     }
 
     return this.logUsage({

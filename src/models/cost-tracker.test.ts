@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, expect, test, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, test, vi } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -20,6 +20,10 @@ beforeAll(async () => {
   await getDb().insert(modelConfig).values({ name: 'model-without-cache-rates', modelId: 'no-cache', provider: 'openai', costPerInputToken: 5, costPerOutputToken: 15, metadata: { pricing: { source: 'test contract' } } });
   const { CostTracker } = await import('./cost-tracker');
   tracker = new CostTracker();
+});
+beforeEach(async () => {
+  const { __resetCachePricingWarnings } = await import('./cost-tracker');
+  __resetCachePricingWarnings();
 });
 afterAll(async () => { await (await import('@/db/postgres')).closeDb(); });
 test('persists reported zero, estimates and unknowns distinctly and aggregates a session', async () => {
@@ -57,7 +61,35 @@ test('warns when cache tokens appear on a model with no cache pricing', async ()
     cacheCreationTokens: 0
   });
   expect(warn).toHaveBeenCalledWith(
-    expect.objectContaining({ model: 'model-without-cache-rates' }),
+    expect.objectContaining({ model: 'model-without-cache-rates', cachedInputTokens: 400, cacheCreationTokens: 0, missingRates: ['cacheRead'] }),
     expect.stringContaining('cache pricing'),
   );
+});
+
+test('does not warn when cost is unknown for an unrelated reason (usageAvailable: false)', async () => {
+  const { modelLogger: logger } = await import('@/utils/logger');
+  const warn = vi.spyOn(logger, 'warn');
+  await tracker.logUsageWithCost(userId, 'priced', 1000, 100, {
+    cachedInputTokens: 400,
+    cacheCreationTokens: 0,
+    usageAvailable: false
+  });
+  expect(warn).not.toHaveBeenCalled();
+});
+
+test('deduplicates warnings by model id', async () => {
+  const { modelLogger: logger } = await import('@/utils/logger');
+  const warn = vi.spyOn(logger, 'warn');
+  // First call should warn
+  await tracker.logUsageWithCost(userId, 'model-without-cache-rates', 1000, 100, {
+    cachedInputTokens: 400,
+    cacheCreationTokens: 0
+  });
+  expect(warn).toHaveBeenCalledTimes(1);
+  // Second call with same model should not warn again
+  await tracker.logUsageWithCost(userId, 'model-without-cache-rates', 2000, 200, {
+    cachedInputTokens: 600,
+    cacheCreationTokens: 0
+  });
+  expect(warn).toHaveBeenCalledTimes(1);
 });
