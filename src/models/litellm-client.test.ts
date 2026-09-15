@@ -11,6 +11,7 @@ const inIntegration = process.env.INTEGRATION === '1';
 const describeUnit = inIntegration ? describe.skip : describe;
 import { ClassifiedError } from '@/core/errors/classification';
 import type { AgentMessage } from '@/core/types';
+import { modelLogger } from '@/utils/logger';
 
 // Bun's mock.module is process-global. To avoid polluting unrelated suites
 // in the same `npm test` run, every mock here is built as a SPREAD of the
@@ -148,7 +149,12 @@ function chatCompletion(opts: {
   content?: string;
   finishReason?: string;
   toolCalls?: Array<{ id: string; name: string; arguments: string; type?: string }>;
-  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
+  };
   model?: string;
   noChoices?: boolean;
 }) {
@@ -176,6 +182,7 @@ function chatCompletion(opts: {
       prompt_tokens: opts.usage?.prompt_tokens ?? 1,
       completion_tokens: opts.usage?.completion_tokens ?? 1,
       total_tokens: opts.usage?.total_tokens ?? 2,
+      ...(opts.usage?.prompt_tokens_details ? { prompt_tokens_details: opts.usage.prompt_tokens_details } : {}),
     },
   };
 }
@@ -528,6 +535,51 @@ describeUnit('LiteLLMClient — complete routing', () => {
     const res = await client.complete({ model: 'llama3', messages: [userMsg('hi')] });
     expect(res.content).toBe('from-ollama');
     expect(received.model).toBe('llama3');
+  });
+
+  test('LLM completion log (direct provider path) carries cacheReadTokens/cacheCreationTokens', async () => {
+    const fakeProvider: FakeProvider = {
+      name: 'ollama',
+      complete: async (opts) => ({
+        content: 'from-ollama',
+        finishReason: 'stop',
+        usage: { inputTokens: 100, outputTokens: 10, totalTokens: 110, cacheReadTokens: 42, cacheCreationTokens: 7 },
+        model: opts.model,
+        latencyMs: 1,
+      }),
+    };
+    routerState.resolveProvider = fakeProvider;
+    const infoSpy = vi.spyOn(modelLogger, 'info');
+
+    const client = new LiteLLMClient();
+    await client.complete({ model: 'llama3', messages: [userMsg('hi')] });
+
+    const completionCall = infoSpy.mock.calls.find((args: unknown[]) => args[1] === 'LLM completion');
+    expect(completionCall).toBeDefined();
+    expect(completionCall![0]).toMatchObject({ cacheReadTokens: 42, cacheCreationTokens: 7 });
+    infoSpy.mockRestore();
+  });
+
+  test('LLM completion log (proxy path) carries cacheReadTokens/cacheCreationTokens', async () => {
+    routerState.resolveProvider = { name: 'litellm' };
+    chatCreateImpl.current = () => Promise.resolve(chatCompletion({
+      content: 'ok',
+      usage: {
+        prompt_tokens: 150,
+        completion_tokens: 10,
+        total_tokens: 160,
+        prompt_tokens_details: { cached_tokens: 42, cache_write_tokens: 7 },
+      },
+    }));
+    const infoSpy = vi.spyOn(modelLogger, 'info');
+
+    const client = new LiteLLMClient();
+    await client.complete({ model: 'gpt-4', messages: [userMsg('hi')] });
+
+    const completionCall = infoSpy.mock.calls.find((args: unknown[]) => args[1] === 'LLM completion');
+    expect(completionCall).toBeDefined();
+    expect(completionCall![0]).toMatchObject({ cacheReadTokens: 42, cacheCreationTokens: 7 });
+    infoSpy.mockRestore();
   });
 
   test('applyModelOverrides merges endpoint from registry when apiKeyRef is unset', async () => {
