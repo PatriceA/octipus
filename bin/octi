@@ -583,15 +583,15 @@ preflight_checks() {
 # the previous checkout. It reports itself healthy and the only symptom is that
 # a change simply is not there.
 ensure_backend_build() {
-  local entry="$PROJECT_DIR/dist/index.js"
-  if [[ -f "$entry" ]]     && [[ -z "$(find "$PROJECT_DIR/src" "$PROJECT_DIR/package.json" -newer "$entry" -print -quit 2>/dev/null)" ]]; then
-    return 0
-  fi
+  # Staleness is answered by scripts/needs-build.mjs, shared with the Windows
+  # CLI: exit 0 current, exit 1 rebuild.
+  node "$PROJECT_DIR/scripts/needs-build.mjs" && return 0
   log_step "Rebuilding the backend (sources changed since the last build)..."
   (cd "$PROJECT_DIR" && npm run build > "$LOG_FILE.build" 2>&1) || {
     log_error "Backend build failed — see $LOG_FILE.build"
     return 1
   }
+  log_info "Backend rebuilt"
 }
 
 # Spawn the backend and block until it answers /api/health. Non-zero on failure,
