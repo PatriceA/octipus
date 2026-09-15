@@ -25,6 +25,33 @@ export interface MCPServerConnection {
   error?: string;
 }
 
+/** Hard stop so a server that keeps handing back cursors can't loop forever. */
+const MAX_LIST_PAGES = 50;
+
+/**
+ * Read every page of a paginated MCP list result. Servers may return a
+ * `nextCursor`; a client that ignores it sees only the first page.
+ */
+export async function drainPages<T>(
+  send: (message: string) => void,
+  protocol: MCPProtocol,
+  method: string,
+  key: 'tools' | 'resources' | 'prompts',
+): Promise<T[]> {
+  const items: T[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < MAX_LIST_PAGES; page++) {
+    const result = await protocol.sendRequest(send, method, cursor ? { cursor } : undefined) as
+      { [k: string]: T[] | string | undefined; nextCursor?: string };
+    const batch = result?.[key];
+    if (Array.isArray(batch)) items.push(...batch);
+    cursor = result?.nextCursor;
+    if (!cursor) return items;
+  }
+  coreLogger.warn({ method, pages: MAX_LIST_PAGES, items: items.length }, 'MCP list pagination hit the page cap — results may be truncated');
+  return items;
+}
+
 export class MCPBridge extends EventEmitter {
   private connections: Map<string, MCPServerConnection> = new Map();
   private serverConfigs: MCPServer[] = [];
@@ -189,22 +216,22 @@ export class MCPBridge extends EventEmitter {
       // Send initialized notification
       protocol.sendNotification(send, MCPMethods.Initialized);
 
-      // Fetch available tools
+      // Fetch available tools. `list` results are PAGINATED — a server with
+      // more entries than its page size returns a `nextCursor`, and reading
+      // only the first page silently hides the rest (a 55-tool server showed
+      // up as 26). Follow the cursor to the end.
       if (connection.capabilities.tools) {
-        const toolsResult = await protocol.sendRequest(send, MCPMethods.ListTools) as { tools: MCPToolDefinition[] };
-        connection.tools = toolsResult.tools || [];
+        connection.tools = await drainPages<MCPToolDefinition>(send, protocol, MCPMethods.ListTools, 'tools');
       }
 
       // Fetch available resources
       if (connection.capabilities.resources) {
-        const resourcesResult = await protocol.sendRequest(send, MCPMethods.ListResources) as { resources: MCPResource[] };
-        connection.resources = resourcesResult.resources || [];
+        connection.resources = await drainPages<MCPResource>(send, protocol, MCPMethods.ListResources, 'resources');
       }
 
       // Fetch available prompts
       if (connection.capabilities.prompts) {
-        const promptsResult = await protocol.sendRequest(send, MCPMethods.ListPrompts) as { prompts: MCPPrompt[] };
-        connection.prompts = promptsResult.prompts || [];
+        connection.prompts = await drainPages<MCPPrompt>(send, protocol, MCPMethods.ListPrompts, 'prompts');
       }
 
       // Keep startup failures bounded by the protocol default. A server may
