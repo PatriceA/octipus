@@ -80,6 +80,44 @@ export class SessionRepository {
     return result[0] ?? null;
   }
 
+  /**
+   * Set (or, with `undefined`, delete) ONE key inside `context`, in the
+   * database, without reading the row first.
+   *
+   * `update()` takes a whole `context` object, so every caller that wanted to
+   * change one key did read-spread-write — and any concurrent change to a
+   * DIFFERENT key was silently reverted to whatever the reader had seen. A
+   * `/clear` landing during an in-flight turn was undone wholesale (its
+   * `clearedAt` and its summary reset, the cleared conversation resumed on the
+   * next turn) by a fire-and-forget `saveCliSession` that only ever meant to
+   * touch `cliSessions`. No overlapping turns required.
+   *
+   * `path` addresses nested keys (`['cliSessions', 'Claude Code']`); missing
+   * intermediate objects are created, and sibling keys at every level survive.
+   */
+  async setContextKey(id: string, path: [string, ...string[]], value: unknown): Promise<void> {
+    // jsonb_set can't create missing intermediate objects, so build the nested
+    // merge explicitly: at each level, `existing || {new key}` — which keeps
+    // every sibling and replaces only the addressed branch.
+    const ctx = sql`coalesce(${sessions.context}, '{}'::jsonb)`;
+    let expr;
+    if (value === undefined) {
+      expr = sql`${ctx} #- ${`{${path.join(',')}}`}::text[]`;
+    } else {
+      // Innermost first, wrapping outwards.
+      let inner = sql`jsonb_build_object(${path[path.length - 1]}::text, ${JSON.stringify(value)}::jsonb)`;
+      for (let i = path.length - 2; i >= 0; i--) {
+        const prefix = `{${path.slice(0, i + 1).join(',')}}`;
+        inner = sql`jsonb_build_object(${path[i]}::text, coalesce(${ctx} #> ${prefix}::text[], '{}'::jsonb) || ${inner})`;
+      }
+      expr = sql`${ctx} || ${inner}`;
+    }
+    await this.db
+      .update(sessions)
+      .set({ context: expr as never, updatedAt: new Date() })
+      .where(eq(sessions.id, id));
+  }
+
   async incrementMessageCount(id: string, tokenDelta: number = 0): Promise<void> {
     await this.db
       .update(sessions)

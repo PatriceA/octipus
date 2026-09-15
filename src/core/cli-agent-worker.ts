@@ -1163,23 +1163,36 @@ export class CLIAgentWorker extends BaseAgentWorker {
             return;
           }
 
-          // CLI reported its own failure (Claude error_max_turns/is_error,
-          // codex turn.failed/error) — never resolve as success (C3).
-          if (this.runError) {
-            reject(new Error(this.runError));
-            return;
-          }
-
           // A resumed vendor session can be gone (Claude: "No conversation
           // found with session ID: <id>"; Codex resume errors out rather than
           // silently starting a new thread) — drop the stale id and retry
           // once, cold, with the full prompt, so the turn is not lost.
           // `resume` is undefined on a forceCold retry (computed above), so
           // this can never recurse.
-          if (code !== 0 && code !== null && resume && /no conversation found|session not found/i.test(stderr)) {
+          //
+          // This MUST come before the `runError` rejection below. Claude handed
+          // a stale id emits a `result` with `is_error: true` AND exits
+          // non-zero, so `runError` is set — rejecting on it first made the
+          // recovery unreachable, the stale id was never dropped, and every
+          // later turn failed identically. Permanent, not a one-off. The vendor
+          // says so on both channels, so match both.
+          const deadSessionEvidence = `${stderr}\n${this.runError ?? ''}`;
+          if (resume && (this.runError || (code !== 0 && code !== null)) && /no conversation found|session not found/i.test(deadSessionEvidence)) {
             await dropCliSession(this.context.sessionId, adapterKey);
             agentLogger.warn({ agentId: this.context.id, adapterKey, id: resume.id }, 'Vendor CLI session is gone — retrying cold with the full prompt');
+            // The dead attempt's error must not outlive it: `runError` is a
+            // worker field, and a leftover value makes the cold retry reject on
+            // the failure it was spawned to recover from — and marks a
+            // successful retry 'failed' in the terminal bookkeeping.
+            this.runError = null;
             resolve(this.executeCLI({ forceCold: true }));
+            return;
+          }
+
+          // CLI reported its own failure (Claude error_max_turns/is_error,
+          // codex turn.failed/error) — never resolve as success (C3).
+          if (this.runError) {
+            reject(new Error(this.runError));
             return;
           }
 

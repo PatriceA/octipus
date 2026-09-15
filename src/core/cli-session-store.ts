@@ -44,19 +44,17 @@ export async function willResumeCliSession(sessionId: string, adapterKey: string
   return (await loadCliSession(sessionId, adapterKey, fingerprint)) !== null;
 }
 
+/**
+ * Both writers patch ONE key. They used to read the whole `context`, spread it
+ * and write it back — and both are called fire-and-forget from the middle of a
+ * turn (`cli-agent-worker.ts`), so a `/clear` that landed in between was
+ * restored wholesale: its `clearedAt` and summary reset, and the cleared
+ * conversation resumed on the next turn. No overlapping turns required.
+ */
 export async function saveCliSession(sessionId: string, adapterKey: string, rec: CliSessionRecord): Promise<void> {
-  const session = await sessionRepository.findById(sessionId);
-  const context = (session?.context as SessionContext | undefined) ?? {};
-  await sessionRepository.update(sessionId, {
-    context: { ...context, cliSessions: { ...context.cliSessions, [adapterKey]: rec } },
-  });
+  await sessionRepository.setContextKey(sessionId, ['cliSessions', adapterKey], rec);
 }
 
 export async function dropCliSession(sessionId: string, adapterKey: string): Promise<void> {
-  const session = await sessionRepository.findById(sessionId);
-  const context = (session?.context as SessionContext | undefined) ?? {};
-  if (!context.cliSessions?.[adapterKey]) return;
-  const cliSessions = { ...context.cliSessions };
-  delete cliSessions[adapterKey];
-  await sessionRepository.update(sessionId, { context: { ...context, cliSessions } });
+  await sessionRepository.setContextKey(sessionId, ['cliSessions', adapterKey], undefined);
 }

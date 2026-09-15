@@ -41,6 +41,19 @@ describe('cli session store', () => {
       store.set(id, { context });
       return { id, context } as unknown as Session;
     });
+    // Mirrors the real jsonb patch (`setContextKey`): one key, siblings intact.
+    vi.spyOn(sessionRepository, 'setContextKey').mockImplementation(async (id: string, path: string[], value: unknown) => {
+      const row = store.get(id) ?? { context: {} as SessionContext };
+      let node = row.context as Record<string, unknown>;
+      for (const seg of path.slice(0, -1)) {
+        if (typeof node[seg] !== 'object' || node[seg] === null) node[seg] = {};
+        node = node[seg] as Record<string, unknown>;
+      }
+      const leaf = path[path.length - 1];
+      if (value === undefined) delete node[leaf];
+      else node[leaf] = value;
+      store.set(id, row);
+    });
   });
 
   afterEach(() => {

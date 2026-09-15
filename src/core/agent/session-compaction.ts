@@ -205,12 +205,11 @@ async function compactSessionContext(
   // from the latest compaction_entries row (see service.ts /
   // direct-response.ts). We stop writing to compactedSummary here —
   // commands/clear.ts still nulls it for the old-data case.
-  await sessionRepository.update(sessionId, {
-    context: {
-      ...existingContext,
-      compactionState: nextState,
-    },
-  });
+  // Patch the single key. `existingContext` was read before the summarizer LLM
+  // call, which takes seconds — spreading it back would revert anything written
+  // to `context` in the meantime (a `/clear`, a vendor session id). Same race
+  // as `saveCliSession`'s.
+  await sessionRepository.setContextKey(sessionId, ['compactionState'], nextState);
 
   // Persist a structured CompactionEntry when the summarizer produced one.
   // The structured-result variant of `compactMessagesWithSummary` only

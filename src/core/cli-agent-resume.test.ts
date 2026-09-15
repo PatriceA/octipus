@@ -76,6 +76,19 @@ vi.mock('@/db/repositories/session-repository', () => ({
       if (data.context !== undefined) row.context = data.context;
       return { ...row };
     },
+    // Mirrors the real jsonb patch: touch one key, leave every sibling alone.
+    setContextKey: async (id: string, path: string[], value: unknown) => {
+      const row = fixture.sessions.get(id);
+      if (!row) return;
+      let node = row.context as Record<string, unknown>;
+      for (const seg of path.slice(0, -1)) {
+        if (typeof node[seg] !== 'object' || node[seg] === null) node[seg] = {};
+        node = node[seg] as Record<string, unknown>;
+      }
+      const leaf = path[path.length - 1];
+      if (value === undefined) delete node[leaf];
+      else node[leaf] = value;
+    },
     incrementMessageCount: async () => {},
   },
 }));
@@ -159,7 +172,14 @@ beforeEach(() => {
     if (existsSync(marker)) {
       const text = readFileSync(marker, 'utf-8');
       unlinkSync(marker);
-      process.stderr.write(text);
+      // Real Claude handed a stale session id reports it on BOTH channels: a
+      // stream-json result with is_error (which sets the worker's runError)
+      // AND a non-zero exit with the message on stderr. The fake used to write
+      // only stderr, which is why the dead-session recovery looked reachable.
+      if (!text.startsWith('STDERR-ONLY:')) {
+        console.log(JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, result: text }));
+      }
+      process.stderr.write(text.replace('STDERR-ONLY:', ''));
       process.exit(1);
     }
     // Captures the real stream-json 'user' message written to stdin — the
@@ -225,6 +245,25 @@ describe('CLI session reuse', () => {
     expect(answer).not.toBe('');
     expect(fixture.spawnCount - before).toBe(2); // cold retry happened
     expect(await loadCliSession('s1', 'Claude Code', worker.fingerprint)).toBeNull();
+  });
+
+  it('I6 — recovers even when the vendor reports the dead session only as a structured error', async () => {
+    // The `runError` rejection used to run BEFORE the dead-session branch, so a
+    // vendor that reports the stale id through its own result stream never
+    // reached recovery: the id was never dropped and every later turn failed
+    // identically — permanent, not a one-off.
+    const worker = makeClaudeWorker({ sessionId: 's1', reuseSessions: true });
+    await worker.run('first question');
+    expect(await loadCliSession('s1', 'Claude Code', worker.fingerprint)).not.toBeNull();
+
+    writeFileSync(failMarker(), 'No conversation found with session ID: dead', 'utf-8');
+    const second = makeClaudeWorker({ sessionId: 's1', reuseSessions: true });
+    const before = fixture.spawnCount;
+    const answer = await second.run('second question');
+
+    expect(answer).not.toBe('');
+    expect(fixture.spawnCount - before).toBe(2); // cold retry happened
+    expect(await loadCliSession('s1', 'Claude Code', second.fingerprint)).toBeNull();
   });
 
   it('does not resume when the model changed', async () => {

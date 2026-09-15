@@ -13,9 +13,9 @@
  * assert on the real args `execCli` built (not a value handed to the test
  * directly).
  */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionContext } from '@/db/schema/sessions';
 
@@ -55,6 +55,18 @@ vi.mock('@/db/repositories/session-repository', () => ({
       const row = fixture.sessions.get(id);
       return row ? { ...row } : undefined;
     },
+    setContextKey: async (id: string, path: string[], value: unknown) => {
+      const row = fixture.sessions.get(id);
+      if (!row) return;
+      let node = row.context as Record<string, unknown>;
+      for (const seg of path.slice(0, -1)) {
+        if (typeof node[seg] !== 'object' || node[seg] === null) node[seg] = {};
+        node = node[seg] as Record<string, unknown>;
+      }
+      const leaf = path[path.length - 1];
+      if (value === undefined) delete node[leaf];
+      else node[leaf] = value;
+    },
     update: async (id: string, data: { context?: SessionContext }) => {
       const row = fixture.sessions.get(id);
       if (!row) return null;
@@ -73,7 +85,8 @@ function makeSession(sessionId: string) {
 
 // What actually reached `claude` — the real argv `execCli` built, dumped by
 // the fake binary, not a value the test handed itself.
-const lastArgs = (): string[] => JSON.parse(readFileSync(join(fixture.dir, 'claude-last-args.json'), 'utf-8'));
+const lastRun = (): { args: string[]; cwd: string } => JSON.parse(readFileSync(join(fixture.dir, 'claude-last-args.json'), 'utf-8'));
+const lastArgs = (): string[] => lastRun().args;
 
 beforeEach(() => {
   fixture.dir = mkdtempSync(join(tmpdir(), 'octipus-cli-compact-'));
@@ -83,7 +96,7 @@ beforeEach(() => {
   writeFileSync(fixture.script, `
     import { writeFileSync } from 'node:fs';
     const args = process.argv.slice(2);
-    writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(args));
+    writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify({ args, cwd: process.cwd() }));
     console.log(JSON.stringify({ type: 'result', subtype: 'success', result: 'compacted' }));
   `);
 });
@@ -101,6 +114,23 @@ describe('compactVendorSession', () => {
     const args = lastArgs();
     expect(args).toContain('--resume');
     expect(args[args.length - 1]).toBe('/compact focus on the migration');
+  });
+
+  it('I5 — resumes from the session workspace, where Claude indexed the session', async () => {
+    // Claude indexes sessions BY PROJECT DIRECTORY. `execCli` hardcoded
+    // `resolveWorkspaceRoot()`, while the agent that created the session ran
+    // with `resolve(WorkspaceFS.forSession(session).root)` — so the resume
+    // found no such session, the error was swallowed as non-fatal, and the log
+    // claimed the compaction pass had run.
+    makeSession('s1');
+    await saveCliSession('s1', 'Claude Code', { id: 'u1', fingerprint: 'fp', lastUsedAt: new Date().toISOString() });
+
+    const { WorkspaceFS } = await import('@/security/workspace-fs');
+    const expected = resolve(WorkspaceFS.forSession(fixture.sessions.get('s1')!).root);
+    mkdirSync(expected, { recursive: true });
+
+    expect(await compactVendorSession('s1', 'Claude Code')).toBe('compacted');
+    expect(resolve(lastRun().cwd)).toBe(expected);
   });
 
   it('rotates a Codex thread, which cannot be compacted non-interactively', async () => {

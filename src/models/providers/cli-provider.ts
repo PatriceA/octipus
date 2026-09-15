@@ -745,7 +745,7 @@ export function windowsShellQuote(value: string): string {
  * compaction into a live vendor session — goes through the same guard rails
  * as a normal completion instead of spawning unbounded.
  */
-export function execCli(binary: string, args: string[], opts?: { timeoutMs?: number; env?: Record<string, string> }): Promise<string> {
+export function execCli(binary: string, args: string[], opts?: { timeoutMs?: number; env?: Record<string, string>; cwd?: string }): Promise<string> {
   return new Promise((resolve, reject) => {
     // Fixed generous default, not a maxTokens*100ms heuristic (which could
     // arm a sub-second timeout for a small budget or a 3h one for a big
@@ -763,8 +763,11 @@ export function execCli(binary: string, args: string[], opts?: { timeoutMs?: num
     // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn (no shell interpolation); binary/args come from vetted provider config, not request input
     const proc = spawn(shellQuote(binary), args.map(shellQuote), {
       // Run in the workspace root, not wherever the server was launched — a
-      // CLI completion must not read/write the octipus repo by default.
-      cwd: resolveWorkspaceRoot(),
+      // CLI completion must not read/write the octipus repo by default. A
+      // caller that owns a specific session's workspace passes it explicitly:
+      // Claude indexes its sessions BY PROJECT DIRECTORY, so `--resume <id>`
+      // from the wrong cwd finds nothing at all.
+      cwd: opts?.cwd ?? resolveWorkspaceRoot(),
       env: opts?.env ?? { ...process.env },
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: useShell,

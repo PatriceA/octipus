@@ -1,4 +1,6 @@
+import { resolve } from 'node:path';
 import { sessionRepository } from '@/db/repositories/session-repository';
+import { WorkspaceFS } from '@/security/workspace-fs';
 import type { SessionContext } from '@/db/schema/sessions';
 import { acquireCliSlot, execCli } from '@/models/providers/cli-provider';
 import { canResume } from '@/shared/cli-capabilities';
@@ -36,9 +38,16 @@ export async function compactVendorSession(
 
   if (adapterKey === 'Claude Code') {
     const prompt = instructions ? `/compact ${instructions}` : '/compact';
+    // Claude indexes sessions by project directory, so the resume has to run
+    // from the same cwd the agent that created the session used
+    // (cli-agent-worker.ts: `resolve(WorkspaceFS.forSession(session).root)`).
+    // `execCli` otherwise defaults to the global workspace root, where the
+    // resume finds no such session — and the failure is swallowed as non-fatal,
+    // so the log claimed the compaction pass had run when it never did.
+    const cwd = resolve(WorkspaceFS.forSession(session!).root);
     const release = await acquireCliSlot();
     try {
-      await execCli('claude', ['-p', '--resume', rec.id, prompt]);
+      await execCli('claude', ['-p', '--resume', rec.id, prompt], { cwd });
     } finally {
       release();
     }
