@@ -11,7 +11,7 @@ import { coerceDeepseekToolChoice, DEEPSEEK_TEMPLATE_LEAK, parseDsmlToolCalls } 
 import { transformMessagesForProvider } from '@/models/message-transform';
 import { parseToolCallArguments } from '@/models/tool-call-args';
 import { normalizeUsage } from '@/models/providers/usage';
-import { applyAnthropicCacheControl, isAnthropicFamily } from '@/models/providers/prompt-cache';
+import { applyAnthropicCacheControl, isAnthropicFamily, logMissedCacheSplit } from '@/models/providers/prompt-cache';
 import { modelLogger } from '@/utils/logger';
 
 export interface CompletionOptions {
@@ -468,7 +468,10 @@ export class LiteLLMClient {
 
     // Anthropic prompt caching (Phase A1): the proxy forwards `cache_control`
     // content blocks to Anthropic upstreams, so cache the static prefix.
-    if (options.cachePolicy !== 'off' && isAnthropicFamily(params.model || '')) applyAnthropicCacheControl(params.messages, params.model);
+    if (options.cachePolicy !== 'off' && isAnthropicFamily(params.model || '')) {
+      const cached = applyAnthropicCacheControl(params.messages, params.model);
+      if (!cached) logMissedCacheSplit(params.model || '');
+    }
 
     if (options.tools?.length) {
       params.tools = options.tools;
@@ -656,7 +659,10 @@ export class LiteLLMClient {
       stream_options: { include_usage: true },
     };
 
-    if (options.cachePolicy !== 'off' && isAnthropicFamily(params.model || '')) applyAnthropicCacheControl(params.messages, params.model);
+    if (options.cachePolicy !== 'off' && isAnthropicFamily(params.model || '')) {
+      const cached = applyAnthropicCacheControl(params.messages, params.model);
+      if (!cached) logMissedCacheSplit(params.model || '');
+    }
 
     if (options.tools?.length) {
       params.tools = options.tools;

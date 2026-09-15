@@ -1,6 +1,13 @@
-import { describe, expect, it, test } from 'vitest';
+import { beforeEach, describe, expect, it, test, vi } from 'vitest';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
-import { applyAnthropicCacheControl, isAnthropicFamily, splitVolatileSystem } from './prompt-cache';
+import {
+  __resetMissedCacheSplitLogs,
+  applyAnthropicCacheControl,
+  isAnthropicFamily,
+  logMissedCacheSplit,
+  splitVolatileSystem,
+} from './prompt-cache';
+import { modelLogger } from '@/utils/logger';
 
 const VOLATILE = '\n\nCURRENT DATE & TIME: 2026-07-15';
 
@@ -94,5 +101,25 @@ describe('applyAnthropicCacheControl — settled history', () => {
     const marked = messages.filter(m => Array.isArray(m.content) && m.content.some((b: any) => b.cache_control));
     expect(marked).toHaveLength(2);                      // system + settled history
     expect(messages[messages.length - 1].content).toBe('second'); // newest turn untouched
+  });
+});
+
+describe('logMissedCacheSplit', () => {
+  beforeEach(() => __resetMissedCacheSplitLogs());
+
+  it('logs at debug level once per model, not once per call', () => {
+    const debugSpy = vi.spyOn(modelLogger, 'debug').mockImplementation(() => modelLogger as never);
+    logMissedCacheSplit('claude-sonnet-4-5');
+    logMissedCacheSplit('claude-sonnet-4-5');
+    logMissedCacheSplit('claude-opus-4-1');
+    expect(debugSpy).toHaveBeenCalledTimes(2);
+    debugSpy.mockRestore();
+  });
+
+  it('never logs at warn level — a missed split is not necessarily a defect', () => {
+    const warnSpy = vi.spyOn(modelLogger, 'warn').mockImplementation(() => modelLogger as never);
+    logMissedCacheSplit('claude-sonnet-4-5');
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });

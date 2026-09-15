@@ -1,4 +1,25 @@
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
+import { modelLogger } from '@/utils/logger';
+
+// ponytail: dedupe "missed a cache split" debug logs per model, same pattern as
+// cost-tracker.ts's warnedMissingCachePricing. Key space bounded by distinct
+// model ids seen — small, unbounded growth acceptable.
+const loggedMissedSplit = new Set<string>();
+
+export function __resetMissedCacheSplitLogs() {
+  loggedMissedSplit.clear();
+}
+
+/**
+ * Log (once per model, DEBUG) that applyAnthropicCacheControl placed no
+ * breakpoint. Not a WARN: a short prompt legitimately falls under
+ * minCacheableChars(model) and this is expected, not a defect.
+ */
+export function logMissedCacheSplit(model: string): void {
+  if (loggedMissedSplit.has(model)) return;
+  loggedMissedSplit.add(model);
+  modelLogger.debug({ model }, 'Anthropic cache split missed — no breakpoint placed');
+}
 
 /**
  * Shared Anthropic prompt-caching split. The native custom-anthropic provider

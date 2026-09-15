@@ -271,6 +271,8 @@ export class ProviderRouter {
             inputTokens: result.usage.inputTokens,
             outputTokens: result.usage.outputTokens,
             totalTokens: result.usage.totalTokens,
+            cacheReadTokens: result.usage.cacheReadTokens ?? 0,
+            cacheCreationTokens: result.usage.cacheCreationTokens ?? 0,
             latencyMs: result.latencyMs ?? latencyMs,
             hasToolCalls: !!result.toolCalls?.length,
             finishReason: result.finishReason,
