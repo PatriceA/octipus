@@ -2292,7 +2292,7 @@ export function composeChildMessage(
   // (worker-spawner.ts / direct-response.ts), but swarm children spawned here
   // were not — this closes that gap using the shared single-clock format.
   parts.push(
-    `CURRENT DATE/TIME: ${formatDateTimeContext(new Date())}. Treat any ` +
+    `\n\nCURRENT DATE/TIME: ${formatDateTimeContext(new Date())}. Treat any ` +
       `time-relative phrasing ("today", "yesterday", "this week", "latest", ` +
       `"current") as relative to this — do not assume events are in the future ` +
       `based on your training data.`,

@@ -12,6 +12,32 @@ import { SECURITY_PREAMBLE } from './roles';
 import { appendSources, type ResponseMetadata } from './types';
 
 /**
+ * Assemble a direct-response system prompt from its components.
+ * Exported for testing the prompt caching split.
+ */
+export function buildDirectResponseSystem(args: {
+  persona: string;
+  dateContext: string;
+  summary?: string;
+  devHint?: string;
+  guardFlags?: string;
+  userProfile?: string;
+  extraSystemContext?: string;
+}): string {
+  const devHint = args.devHint ?? '';
+  let basePrompt = SECURITY_PREAMBLE + args.persona + devHint + '\n\n' + args.dateContext;
+  if (args.guardFlags) {
+    basePrompt += args.guardFlags;
+  }
+  if (args.userProfile) {
+    basePrompt += args.userProfile;
+  }
+  const summary = args.summary;
+  const extraSystemContext = args.extraSystemContext ?? '';
+  return (summary ? `${basePrompt}\n\nPrevious conversation summary:\n${summary}` : basePrompt) + extraSystemContext;
+}
+
+/**
  * Generate a direct LLM response for casual messages (no root agent/worker needed).
  */
 export async function directResponse(
@@ -86,7 +112,7 @@ export async function directResponse(
         summary = (session?.context as SessionContext)?.compactedSummary;
       }
     }
-    const dateContext = `\nCURRENT DATE/TIME: ${formatDateTimeContext(new Date())}`;
+    const dateContext = `CURRENT DATE/TIME: ${formatDateTimeContext(new Date())}`;
     // Persona block — resolved from the user's assistant profile (or
     // the base octipus persona if no profile exists yet). Casual
     // replies go through this path, so the dry octopus-machine voice
@@ -113,10 +139,7 @@ export async function directResponse(
     const devHint = isDevSession
       ? '\n\nNOTE: This session is pinned to a project workspace. Casual replies stay brief.'
       : '';
-    let basePrompt = SECURITY_PREAMBLE + personaBlock + devHint + dateContext;
-    if (guardFlags.length > 0) {
-      basePrompt += buildSecurityReminder(guardFlags);
-    }
+    const guardFlagsStr = guardFlags.length > 0 ? buildSecurityReminder(guardFlags) : '';
 
     const sources: string[] = [];
     if (recentMessages.length > 0) {
@@ -125,6 +148,7 @@ export async function directResponse(
     if (summary) sources.push('session summary');
 
     // Inject user profile context for personalized responses
+    let userProfileStr = '';
     if (userId) {
       try {
         const { ProfileRepository } = await import('@/db/repositories/profile-repository');
@@ -132,18 +156,24 @@ export async function directResponse(
         const userProfile = await profileRepo.findUserProfile(userId);
         if (userProfile && (userProfile.facts as import('@/db/schema/profiles').ProfileFact[])?.length > 0) {
           const facts = (userProfile.facts as import('@/db/schema/profiles').ProfileFact[]).map(f => `- ${f.key}: ${f.value}`).join('\n');
-          basePrompt += `\n\nUSER CONTEXT:\nName: ${userProfile.name}\n${facts}`;
+          userProfileStr = `\n\nUSER CONTEXT:\nName: ${userProfile.name}\n${facts}`;
           sources.push(`profile(${userProfile.name}, ${(userProfile.facts as import('@/db/schema/profiles').ProfileFact[]).length} facts)`);
         } else if (userProfile) {
-          basePrompt += `\n\nUSER CONTEXT:\nName: ${userProfile.name}`;
+          userProfileStr = `\n\nUSER CONTEXT:\nName: ${userProfile.name}`;
           sources.push(`profile(${userProfile.name})`);
         }
       } catch (err) { coreLogger.error({ err }, 'silent failure in direct-response'); }
     }
 
-    const systemContent =
-      (summary ? `${basePrompt}\n\nPrevious conversation summary:\n${summary}` : basePrompt) +
-      extraSystemContext;
+    const systemContent = buildDirectResponseSystem({
+      persona: personaBlock,
+      dateContext: dateContext,
+      summary: summary,
+      devHint: devHint,
+      guardFlags: guardFlagsStr,
+      userProfile: userProfileStr,
+      extraSystemContext: extraSystemContext,
+    });
 
     const registry = getModelRegistry();
     const resolvedModel = await registry.getModelByModelId(modelName);

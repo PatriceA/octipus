@@ -33,7 +33,7 @@ describe('composeChildMessage — date grounding', () => {
       availableToolNames: ['websearch__search'],
       canSpawnChildren: false,
     });
-    expect(msg.startsWith('CURRENT DATE/TIME: ')).toBe(true);
+    expect(msg.startsWith('\n\nCURRENT DATE/TIME: ')).toBe(true);
     // Current year must be present so time-relative requests resolve to "now".
     expect(msg).toContain(String(new Date().getFullYear()));
     // Date and time are formatted from the same (local) clock — no UTC suffix

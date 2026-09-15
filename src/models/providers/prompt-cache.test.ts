@@ -70,3 +70,14 @@ describe('applyAnthropicCacheControl', () => {
     expect(messages[1].content).toBe(big); // second left as-is → single breakpoint
   });
 });
+
+describe('every prompt-assembly site is splittable', () => {
+  test('splits the direct-response system prompt', async () => {
+    const { buildDirectResponseSystem } = await import('@/core/agent/direct-response');
+    const system = buildDirectResponseSystem({
+      persona: 'x'.repeat(5000),      // over the 4000-char floor
+      dateContext: 'CURRENT DATE/TIME: 2026-09-15T10:00:00Z',
+    });
+    expect(splitVolatileSystem(system)).not.toBeNull();
+  });
+});
