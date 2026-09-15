@@ -923,6 +923,22 @@ cmd_desktop() {
 
   cd "$PROJECT_DIR/web" || { log_error "web/ directory not found at $PROJECT_DIR/web"; return 1; }
 
+  # ── Self-healing preflight ─────────────────────────────────────────────────
+  # Both failures below are fixable without asking, and left alone they surface
+  # as a Vite or cargo stack trace that says nothing about the cause.
+
+  # web/ is not a root workspace, so a fresh clone gets here with no deps and
+  # `npm run tauri:dev` dies on a missing vite.
+  if [[ ! -d node_modules ]]; then
+    log_step "Installing web dependencies (first run)…"
+    npm install --silent || { log_error "npm install failed in web/ — cannot launch the desktop app."; return 1; }
+  fi
+
+  # Tauri loads the window from a fixed devUrl, so a stale listener on the dev
+  # port means Vite quietly moves elsewhere and the window opens blank.
+  # No-op when the port is free, so it is simply always run.
+  kill_port_users "$DESKTOP_DEV_PORT"
+
   if $build_mode; then
     log_step "Building the desktop app bundle (can take a few minutes)…"
     log_hint "Output: web/src-tauri/target/release/bundle/"

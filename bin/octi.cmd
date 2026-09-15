@@ -639,7 +639,42 @@ if errorlevel 1 (
     echo     %DIM%or point the app at a remote backend from its connection screen.%NC%
 )
 
+:: ── Self-healing preflight ─────────────────────────────────────────────────
+:: A desktop launch fails for the same three reasons every time, and all three
+:: are fixable without asking. Done here rather than left to `tauri dev`,
+:: because its failures surface as a Vite or cargo stack trace that says
+:: nothing about the actual cause.
 cd /d "%PROJECT_DIR%\web"
+
+:: 1. Frontend deps. web/ is not part of the root workspace, so a fresh clone
+::    reaches this point with no node_modules and `npm run tauri:dev` dies on a
+::    missing vite.
+if not exist "%PROJECT_DIR%\web\node_modules" (
+    echo   %BLUE%-%NC% Installing web dependencies %DIM%(first run^)%NC%...
+    call npm install --silent
+    if errorlevel 1 (
+        echo   %RED%x%NC% npm install failed in web\ — cannot launch the desktop app.
+        exit /b 1
+    )
+)
+
+:: 2. A desktop app left over from an earlier run keeps its own executable
+::    open, and cargo then cannot link the new one ("Access is denied").
+tasklist /FI "IMAGENAME eq Octipus.exe" 2>nul | findstr /i "Octipus.exe" >nul 2>&1
+if not errorlevel 1 (
+    echo   %BLUE%-%NC% Closing a desktop app left over from an earlier run...
+    taskkill /F /IM "Octipus.exe" /T >nul 2>&1
+)
+
+:: 3. The dev server port. Tauri loads the window from a fixed devUrl, so a
+::    stale listener on it means Vite silently moves to another port and the
+::    window opens blank.
+call :check_port %DESKTOP_DEV_PORT%
+if not errorlevel 1 (
+    echo   %BLUE%-%NC% Freeing port %DESKTOP_DEV_PORT% %DIM%(stale dev server^)%NC%...
+    call :kill_port %DESKTOP_DEV_PORT%
+)
+
 if "!DT_BUILD!"=="true" (
     echo   %BLUE%-%NC% Building the desktop app bundle %DIM%(can take a few minutes^)%NC%...
     echo     %DIM%Output: web\src-tauri\target\release\bundle\%NC%
