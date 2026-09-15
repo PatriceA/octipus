@@ -2291,6 +2291,15 @@ export function composeChildMessage(
   // hasn't happened yet). The root agent grounds its own system prompt
   // (worker-spawner.ts / direct-response.ts), but swarm children spawned here
   // were not — this closes that gap using the shared single-clock format.
+  //
+  // Format note: This date block carries a leading `\n\n` for consistency with
+  // the system-prompt assemblers (direct-response.ts, worker-spawner.ts).
+  // HOWEVER: this string becomes a USER-role child brief (see line 1472),
+  // never a role:'system' message. Prompt caching only applies to system messages
+  // (prompt-cache.ts:98-101 skips non-system). This block is NOT a split site,
+  // and would not split even at position 0 (below all minCacheableChars floors).
+  // The leading `\n\n` is format discipline only. This would change only if the
+  // string transitioned to role:'system'.
   parts.push(
     `\n\nCURRENT DATE/TIME: ${formatDateTimeContext(new Date())}. Treat any ` +
       `time-relative phrasing ("today", "yesterday", "this week", "latest", ` +

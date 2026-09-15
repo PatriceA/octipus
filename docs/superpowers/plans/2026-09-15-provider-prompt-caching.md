@@ -25,7 +25,7 @@
 
 ### Task 1: Fix the two prompt sites whose date header never matches the marker
 
-`VOLATILE_MARKER` is `/\n\nCURRENT DATE ?&? ?\/?\s?TIME/` (`prompt-cache.ts:16`) and needs a blank line before it. `direct-response.ts:89` emits a single `\n`; `swarm/spawner.ts:2295` emits none because the block is `parts[0]`. Both prompts are therefore never split and never cached, silently.
+`VOLATILE_MARKER` is `/\n\nCURRENT DATE ?&? ?\/?\s?TIME/` (`prompt-cache.ts:16`) and needs a blank line before it. `direct-response.ts:89` is a real system prompt that emits a single `\n` and is therefore never split or cached, silently. `swarm/spawner.ts:2295` is a user-turn brief (not a system prompt), so it was never a caching candidate; the format change adds consistency only.
 
 **Files:**
 - Modify: `src/core/agent/direct-response.ts:89`
