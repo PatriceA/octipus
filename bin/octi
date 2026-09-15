@@ -576,6 +576,24 @@ preflight_checks() {
   fi
 }
 
+# Rebuild dist/ when it is missing or older than the sources.
+#
+# `npm run start` runs `node dist/index.js`, which is a build artifact, and
+# nothing rebuilt it — so after a `git pull` the backend silently kept serving
+# the previous checkout. It reports itself healthy and the only symptom is that
+# a change simply is not there.
+ensure_backend_build() {
+  local entry="$PROJECT_DIR/dist/index.js"
+  if [[ -f "$entry" ]]     && [[ -z "$(find "$PROJECT_DIR/src" "$PROJECT_DIR/package.json" -newer "$entry" -print -quit 2>/dev/null)" ]]; then
+    return 0
+  fi
+  log_step "Rebuilding the backend (sources changed since the last build)..."
+  (cd "$PROJECT_DIR" && npm run build > "$LOG_FILE.build" 2>&1) || {
+    log_error "Backend build failed — see $LOG_FILE.build"
+    return 1
+  }
+}
+
 # Spawn the backend and block until it answers /api/health. Non-zero on failure,
 # having already killed the process and printed a diagnosis.
 start_backend() {
@@ -584,6 +602,7 @@ start_backend() {
     log_step "Starting backend (dev mode with hot reload)..."
     nohup npm run dev > "$LOG_FILE" 2>&1 &
   else
+    ensure_backend_build || return 1
     log_step "Starting backend..."
     nohup npm run start > "$LOG_FILE" 2>&1 &
   fi

@@ -128,6 +128,32 @@ set "_CP=%~1"
 powershell -NoProfile -Command "try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('localhost', %_CP%); $c.Close(); exit 0 } catch { exit 1 }" >nul 2>&1
 exit /b %errorlevel%
 
+:ensure_backend_build
+:: Rebuild dist/ when it is missing or older than the sources.
+::
+:: `octi start` runs `node dist/index.js`, which is a build artifact, and
+:: nothing rebuilt it — so after a `git pull` the backend silently kept serving
+:: the previous checkout. It reports itself healthy, the version endpoint looks
+:: right, and the only symptom is that a change simply is not there.
+set "_NEEDS_BUILD="
+if not exist "%PROJECT_DIR%\dist\index.js" set "_NEEDS_BUILD=1"
+if not defined _NEEDS_BUILD (
+    for /f %%s in ('powershell -NoProfile -Command "$d=(Get-Item '%PROJECT_DIR%\dist\index.js').LastWriteTimeUtc; $n=Get-ChildItem -Path '%PROJECT_DIR%\src','%PROJECT_DIR%\package.json' -Recurse -File -ErrorAction SilentlyContinue ^| Where-Object { $_.LastWriteTimeUtc -gt $d } ^| Select-Object -First 1; if ($n) { 1 } else { 0 }" 2^>nul') do set "_NEEDS_BUILD=%%s"
+    if "!_NEEDS_BUILD!"=="0" set "_NEEDS_BUILD="
+)
+if defined _NEEDS_BUILD (
+    echo   %BLUE%-%NC% Rebuilding the backend %DIM%(sources changed since the last build^)%NC%...
+    pushd "%PROJECT_DIR%"
+    call npm run build >"%LOG_FILE%.build" 2>&1
+    if errorlevel 1 (
+        echo   %RED%x%NC% Backend build failed — see %LOG_FILE%.build
+        popd
+        exit /b 1
+    )
+    popd
+)
+exit /b 0
+
 :kill_all_octipus
 :: Kill tracked processes and free ports
 call :kill_port %API_PORT%
@@ -186,6 +212,10 @@ if "!STORAGE_MODE!"=="external" (
 )
 
 :: Start backend
+if not "!DEV_MODE!"=="true" (
+    call :ensure_backend_build
+    if errorlevel 1 exit /b 1
+)
 if "!DEV_MODE!"=="true" (
     echo   %BLUE%-%NC% Starting backend %DIM%(dev mode with hot reload^)%NC%...
     call :start_hidden "backend" "%PROJECT_DIR%" "npm run dev" "%LOG_FILE%"
@@ -368,6 +398,10 @@ if "!STORAGE_MODE!"=="external" (
 )
 
 :: Start backend
+if not "!DEV_MODE!"=="true" (
+    call :ensure_backend_build
+    if errorlevel 1 exit /b 1
+)
 if "!DEV_MODE!"=="true" (
     echo   %BLUE%-%NC% Starting backend %DIM%(dev mode with hot reload^)%NC%...
     call :start_hidden "backend" "%PROJECT_DIR%" "npm run dev" "%LOG_FILE%"
