@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'vitest';
-import { cacheAffinityKey, extractCachedTokens } from './usage';
+import { describe, expect, test, it } from 'vitest';
+import { cacheAffinityKey, extractCachedTokens, foldCacheCounters, normalizeUsage } from './usage';
 
 describe('cacheAffinityKey', () => {
   test('undefined session ⇒ undefined (no key sent)', () => {
@@ -39,7 +39,40 @@ describe('extractCachedTokens', () => {
   });
 });
 
-import { normalizeUsage } from './usage';
+describe('foldCacheCounters', () => {
+  it('folds Anthropic-native exclusive counters into inputTokens', () => {
+    // Native /v1/messages: input_tokens excludes both cache counters.
+    expect(foldCacheCounters({ input_tokens: 10, cache_read_input_tokens: 20, cache_creation_input_tokens: 5 }))
+      .toEqual({ inputTokens: 35, cacheReadTokens: 20, cacheCreationTokens: 5 });
+  });
+
+  it('leaves OpenAI-compat inclusive counters alone', () => {
+    // prompt_tokens already includes cached_tokens.
+    expect(foldCacheCounters({ prompt_tokens: 100, prompt_tokens_details: { cached_tokens: 60 } }))
+      .toEqual({ inputTokens: 100, cacheReadTokens: 60, cacheCreationTokens: 0 });
+  });
+
+  it('reads cache creation under the Anthropic name on a compat body', () => {
+    expect(foldCacheCounters({ prompt_tokens: 100, cache_creation_input_tokens: 40, cache_read_input_tokens: 50 }))
+      .toEqual({ inputTokens: 100, cacheReadTokens: 50, cacheCreationTokens: 40 });
+  });
+
+  it('reports no counters when the provider sends none', () => {
+    expect(foldCacheCounters({ prompt_tokens: 7 })).toEqual({ inputTokens: 7, cacheCreationTokens: 0 });
+  });
+});
+
+describe('normalizeUsage cache fields', () => {
+  it('surfaces Anthropic cache creation through the shared fold', () => {
+    const u = normalizeUsage({ input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 20, cache_creation_input_tokens: 5 });
+    expect(u.inputTokens).toBe(35);
+    expect(u.cacheReadTokens).toBe(20);
+    expect(u.cacheCreationTokens).toBe(5);
+    // pricing.ts refuses to cost a row where read + write > input.
+    expect((u.cacheReadTokens ?? 0) + (u.cacheCreationTokens ?? 0)).toBeLessThanOrEqual(u.inputTokens);
+  });
+});
+
 test('normalizes reported cost, cache writes and reasoning details', () => {
   expect(normalizeUsage({ prompt_tokens: 100, completion_tokens: 20, cost: 0,
     prompt_tokens_details: { cached_tokens: 50, cache_write_tokens: 10 },
