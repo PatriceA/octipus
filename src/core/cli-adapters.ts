@@ -393,17 +393,18 @@ export class CLIArgumentBuilder {
     maxTokenBudget?: number,
     agentId?: string,
     connection?: CliRunConnection,
+    resume?: { id: string; isFirstRun: boolean },
   ): { binary: string; args: string[]; stdinPrompt?: string; keepStdinOpen?: boolean; useShell?: boolean; env?: Record<string, string> } {
     if (connection) validateScopedExtraArgs(toolName, settings.extraArgs ?? []);
     // `toolName` is the CLIToolConfig.adapter key (defaults to name). Vendors
     // that reuse the Claude binary (z.ai GLM, Moonshot Kimi) pass 'Claude Code'.
     switch (toolName) {
       case 'Claude Code':
-        return this.buildClaudeArgs(prompt, settings, systemMessages, agentId, connection);
+        return this.buildClaudeArgs(prompt, settings, systemMessages, agentId, connection, resume);
       case 'Antigravity':
         return this.buildAntigravityArgs(prompt, settings, systemPrompt, connection);
       case 'Codex CLI':
-        return this.buildCodexArgs(prompt, systemPrompt, settings, connection);
+        return this.buildCodexArgs(prompt, systemPrompt, settings, connection, resume);
       case 'Mistral Vibe':
         return this.buildVibeArgs(prompt, settings, maxTokenBudget, connection);
       default:
@@ -476,6 +477,7 @@ export class CLIArgumentBuilder {
     systemMessages: string[],
     agentId?: string,
     connection?: CliRunConnection,
+    resume?: { id: string; isFirstRun: boolean },
   ): { binary: string; args: string[]; stdinPrompt?: string; keepStdinOpen?: boolean; env?: Record<string, string> } {
     // Claude Code: -p is a boolean flag (print mode), prompt is positional
     // On Windows: pipe prompt via stdin to avoid shell mangling
@@ -485,6 +487,13 @@ export class CLIArgumentBuilder {
       args.push('-p', '--verbose', '--output-format', 'stream-json');
     } else {
       args.push('-p', prompt, '--verbose', '--output-format', 'stream-json');
+    }
+
+    // Claude is the only CLI that lets the caller mint the id, so the first
+    // run declares it and every later run resumes it. Nothing has to be
+    // scraped, and there is no window in which a run has no id.
+    if (resume) {
+      args.push(resume.isFirstRun ? '--session-id' : '--resume', resume.id);
     }
 
     // Note: do NOT pass --bare. It explicitly disables OAuth and keychain
@@ -505,7 +514,10 @@ export class CLIArgumentBuilder {
       args.push('--model', claudeModel);
     }
 
-    if (systemMessages.length > 0) {
+    // Claude records the system prompt on the first request and replays it
+    // verbatim on every resume (--system-prompt-snapshot on, the default);
+    // re-appending it on a resume would stack a second copy.
+    if (systemMessages.length > 0 && (!resume || resume.isFirstRun)) {
       const sysPrompt = systemMessages.join('\n');
       if (IS_WIN) {
         // Write to temp file to avoid Windows command-line length limit (~8191 chars)
@@ -598,6 +610,7 @@ export class CLIArgumentBuilder {
     systemPrompt?: string | null,
     settings?: CLIAgentConfig,
     connection?: CliRunConnection,
+    resume?: { id: string; isFirstRun: boolean },
   ): { binary: string; args: string[]; stdinPrompt?: string } {
     // Codex: positional prompt or '-' to read from stdin.
     // Multi-line prompts or oversized args break the positional path —
@@ -625,13 +638,14 @@ export class CLIArgumentBuilder {
     // adapters above for the write-enabled equivalents. Operators can
     // dial back per-model via `permissionMode` on the model row.
     const codexPermMode = connection?.planMode ? 'read-only' : resolveCodexSandboxMode(settings?.permissionMode);
-    const baseArgs = [
-      'exec',
-      '--skip-git-repo-check',
-      '--json',
-      '--ephemeral',
-      '--sandbox', codexPermMode,
-    ];
+    // resume.id present with isFirstRun false: continue that thread via
+    // `codex exec resume <id>`. Otherwise (including the first run, which has
+    // no id yet) --ephemeral is dropped whenever `resume` participates in
+    // reuse, since an ephemeral run can never be resumed later.
+    const baseArgs = resume && !resume.isFirstRun ? ['exec', 'resume', resume.id] : ['exec'];
+    baseArgs.push('--skip-git-repo-check', '--json');
+    if (!resume) baseArgs.push('--ephemeral');
+    baseArgs.push('--sandbox', codexPermMode);
     if (connection) {
       // Codex merges -c tables, so never overlay a host HTTP/stdio entry.
       // Ask Codex to resolve every config layer, including trusted project

@@ -350,3 +350,58 @@ describe('Claude permission default', () => {
     expect(resolveClaudePermissionMode('safe')).toBe('default');
   });
 });
+
+describe('resume arguments', () => {
+  // Adapted from the task brief: the real build() signature is
+  // (toolName, prompt, settings, systemMessages, systemPrompt, maxTokenBudget,
+  // agentId, connection, resume) — the brief's snippet used a different,
+  // fictional argument order and 'Codex' instead of the real adapter key
+  // 'Codex CLI'.
+  const connection = { url: 'http://127.0.0.1:43123', key: 'test-capability', planMode: false, maxIterations: 7, workingDirectory: '/session/project', codexMcpServers: [] as Array<{ name: string }> };
+
+  it('mints the session id on the first Claude run', () => {
+    const { args } = builder.build('Claude Code', 'hello', {}, [], null, 100, 'agent-1', connection, { id: 'a3f1-uuid', isFirstRun: true });
+    expect(args).toContain('--session-id');
+    expect(args[args.indexOf('--session-id') + 1]).toBe('a3f1-uuid');
+    expect(args).not.toContain('--resume');
+  });
+
+  it('resumes that id on later Claude runs', () => {
+    const { args } = builder.build('Claude Code', 'hello', {}, [], null, 100, 'agent-1', connection, { id: 'a3f1-uuid', isFirstRun: false });
+    expect(args).toContain('--resume');
+    expect(args[args.indexOf('--resume') + 1]).toBe('a3f1-uuid');
+    expect(args).not.toContain('--session-id');
+  });
+
+  it('still passes --mcp-config on a resumed Claude run', () => {
+    // Claude does not restore --mcp-config across resume.
+    const { args } = builder.build('Claude Code', 'hello', {}, [], null, 100, 'agent-1', connection, { id: 'a3f1-uuid', isFirstRun: false });
+    expect(args).toContain('--mcp-config');
+  });
+
+  it('does not repeat --append-system-prompt-file on a resumed Claude run', () => {
+    const first = builder.build('Claude Code', 'hello', {}, ['be nice'], null, 100, 'agent-1', connection, { id: 'a3f1-uuid', isFirstRun: true });
+    expect(first.args).toContain('--append-system-prompt-file');
+    const resumed = builder.build('Claude Code', 'hello', {}, ['be nice'], null, 100, 'agent-1', connection, { id: 'a3f1-uuid', isFirstRun: false });
+    expect(resumed.args).not.toContain('--append-system-prompt-file');
+    expect(resumed.args).not.toContain('--append-system-prompt');
+  });
+
+  it('resumes a Codex thread and drops --ephemeral', () => {
+    const { args } = builder.build('Codex CLI', 'hello', {}, [], null, 100, 'agent-1', connection, { id: 'thread-9', isFirstRun: false });
+    expect(args.slice(0, 3)).toEqual(['exec', 'resume', 'thread-9']);
+    expect(args).not.toContain('--ephemeral');
+  });
+
+  it('leaves a first Codex run ephemeral-free so it can be resumed later', () => {
+    const { args } = builder.build('Codex CLI', 'hello', {}, [], null, 100, 'agent-1', connection, { id: '', isFirstRun: true });
+    expect(args).not.toContain('--ephemeral');
+    expect(args.slice(0, 2)).toEqual(['exec', '--skip-git-repo-check']);
+  });
+
+  it('ignores resume for adapters that cannot do it', () => {
+    const withoutResume = builder.build('Antigravity', 'hello', {}, [], null, 100, 'agent-1', connection);
+    const withResume = builder.build('Antigravity', 'hello', {}, [], null, 100, 'agent-1', connection, { id: 'x', isFirstRun: false });
+    expect(withResume.args).toEqual(withoutResume.args);
+  });
+});
