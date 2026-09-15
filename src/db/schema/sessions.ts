@@ -107,6 +107,12 @@ export interface SessionContext {
    * See `.octipus/multi-repo-design.md`.
    */
   repoIds?: string[];
+  /**
+   * Vendor CLI sessions this octipus session is continuing, keyed by adapter.
+   * Scoped to the octipus session on purpose: a new octipus session finds an
+   * empty map and therefore starts a new vendor session, which is the rule.
+   */
+  cliSessions?: Record<string, { id: string; fingerprint: string; lastUsedAt: string; reportedTokens: number; mcpConfigPath?: string }>;
 }
 
 export type Session = typeof sessions.$inferSelect;

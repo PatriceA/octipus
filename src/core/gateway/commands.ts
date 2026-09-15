@@ -382,6 +382,8 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
             ...existingCtx,
             clearedAt: new Date().toISOString(),
             compactedSummary: undefined,
+            // A cleared conversation must not continue in the vendor CLI.
+            cliSessions: undefined,
           },
         });
 
