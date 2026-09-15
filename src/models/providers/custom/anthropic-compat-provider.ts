@@ -8,6 +8,7 @@ import { createIdleAbort, fetchWithRetryAfter, withTimeoutSignal } from '../http
 import type { ModelProvider, ProviderHealthStatus } from '../interface';
 import { buildCachedBlocks, splitVolatileSystem } from '../prompt-cache';
 import { BaseCustomProvider, type ResolvedCustomConfig } from './base-custom-provider';
+import { foldCacheCounters } from '../usage';
 
 /**
  * Custom Anthropic-compatible provider.
@@ -212,13 +213,8 @@ export function anthropicAccountingResponse(
   data: AnthropicResponse,
   modelId: string,
 ): Pick<CompletionResult, 'usage' | 'model' | 'requestId'> {
-  const cacheRead = data.usage?.cache_read_input_tokens;
-  const cacheCreate = data.usage?.cache_creation_input_tokens;
-  // Anthropic reports input_tokens EXCLUSIVE of cache reads/creation. Fold
-  // them in so inputTokens is the grand total (OpenAI convention) and the
-  // cache counters remain subsets for pricing and telemetry.
-  const freshInput = data.usage?.input_tokens || 0;
-  const inputTokens = freshInput + (cacheRead || 0) + (cacheCreate || 0);
+  // One convention, one implementation: see foldCacheCounters in usage.ts.
+  const { inputTokens, cacheReadTokens, cacheCreationTokens } = foldCacheCounters(data.usage);
   const outputTokens = data.usage?.output_tokens || 0;
   return {
     usage: {
@@ -227,8 +223,8 @@ export function anthropicAccountingResponse(
       reasoningTokens: data.usage?.output_tokens_details?.thinking_tokens,
       outputTokens,
       totalTokens: inputTokens + outputTokens,
-      ...(cacheRead != null ? { cacheReadTokens: cacheRead } : {}),
-      ...(cacheCreate != null ? { cacheCreationTokens: cacheCreate } : {}),
+      ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
+      cacheCreationTokens,
     },
     model: data.model || modelId,
     requestId: data.id,
