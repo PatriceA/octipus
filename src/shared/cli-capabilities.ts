@@ -29,6 +29,29 @@ export const SCOPED_EXTRA_ARGS: Record<string, { flags: readonly string[]; value
   Antigravity: { flags: ['--disable-slash-commands'], values: { '--effort': ['low', 'medium', 'high'] } },
 };
 
+/**
+ * Which CLIs can continue a previous session, and how the id is obtained.
+ *
+ * `caller-minted` means we generate the id and pass it on the first run
+ * (Claude's `--session-id <uuid>`), so there is nothing to scrape and no
+ * window where a run has no id. `captured` means the CLI assigns the id and
+ * we read it out of its machine output (Codex `thread.started.thread_id`).
+ *
+ * Antigravity is deliberately absent: the installed 1.1.5 print mode emits no
+ * conversation id at all, and handing it a stale id starts a fresh
+ * conversation SILENTLY, which is worse than not reusing. Vibe is absent
+ * because its resume depends on `log_interactions` staying enabled in the
+ * user's own config, which we do not control.
+ */
+export const CLI_RESUME: Record<string, { style: 'caller-minted' | 'captured'; flag: string }> = {
+  'Claude Code': { style: 'caller-minted', flag: '--resume' },
+  Codex: { style: 'captured', flag: 'resume' },
+};
+
+export function canResume(adapterKey: string): boolean {
+  return adapterKey in CLI_RESUME;
+}
+
 /** Only additive options may accompany the managed run's security and IO flags. Throws with a safe message. */
 export function validateScopedExtraArgs(adapter: string, args: readonly string[]): void {
   const policy = SCOPED_EXTRA_ARGS[adapter];
