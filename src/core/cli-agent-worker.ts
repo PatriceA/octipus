@@ -11,7 +11,6 @@ import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import type { CLIAgentConfig } from '@/db/schema/models';
-import { getModelRegistry } from '@/models/model-registry';
 import { getQuotaTracker } from '@/models/quota-tracker';
 import { agentLogger } from '@/utils/logger';
 import type { AgentWorkerConfig, ToolHandler } from './agent-base';
@@ -32,7 +31,7 @@ import { DetachedChildManager } from './agent-worker/detached-child-manager';
 import { formatCollectedResults } from './swarm/collect-tool';
 import { swarmNodeRepository } from './swarm/node-repository';
 import type { ChildResult, PendingChild } from './swarm/types';
-import { getCLIToolConfig } from './cli-agent-factory';
+import { getCLIToolConfig, resolveCliModelEntry } from './cli-agent-factory';
 import { buildChildEnv } from './cli-child-env';
 import { getConfig } from '@/config';
 import { isRootAgent } from './types';
@@ -644,10 +643,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
   }
 
   private async getCLISettings(): Promise<CLIAgentConfig> {
-    const registry = getModelRegistry();
-    const model =
-      (await registry.getModel(this.context.model)) ||
-      (await registry.getModelByModelId(this.context.model));
+    const model = await resolveCliModelEntry(this.context.model);
     this.accountingModelName = model?.name;
     return model?.metadata?.cliAgent || {};
   }
