@@ -387,6 +387,38 @@ describe('resume arguments', () => {
     expect(resumed.args).not.toContain('--append-system-prompt');
   });
 
+  it('I3 — carries the volatile system tier in on the delta message of a resumed run', () => {
+    // root-runner's volatile tier: date stamp first (the VOLATILE_MARKER the
+    // prompt-cache split cuts on), then per-turn blocks including the security
+    // reminder a turn-7 injection raises. Claude replays only its turn-1
+    // snapshot, so without this the model never sees either.
+    const systemMessages = [
+      'STATIC PREAMBLE — role, skills, guidance.',
+      `
+
+CURRENT DATE & TIME: Mon, 15 Sep 2026 12:00:00 GMT (ISO 2026-09-15T12:00:00.000Z).`,
+      `
+
+SECURITY NOTICE: guard flags raised — sql-injection-attempt.`,
+    ];
+    const resumed = builder.build('Claude Code', 'the new question', {}, systemMessages, null, 100, 'agent-1', connection, { id: 'a3f1-uuid', isFirstRun: false });
+    const delta = resumed.stdinPrompt ?? '';
+    expect(delta).toContain('CURRENT DATE & TIME: Mon, 15 Sep 2026');
+    expect(delta).toContain('sql-injection-attempt');
+    expect(delta).toContain('the new question');
+    // The cacheable static prefix is what the vendor snapshot already holds —
+    // re-sending it every turn is the cost this whole change removes.
+    expect(delta).not.toContain('STATIC PREAMBLE');
+  });
+
+  it('I3 — a first run still gets the whole system prompt as a system prompt', () => {
+    const first = builder.build('Claude Code', 'hi', {}, ['STATIC PREAMBLE', `
+
+CURRENT DATE & TIME: now`], null, 100, 'agent-1', connection, { id: 'a3f1-uuid', isFirstRun: true });
+    expect(first.args).toContain('--append-system-prompt-file');
+    expect(first.stdinPrompt ?? '').not.toContain('CURRENT DATE & TIME');
+  });
+
   it('resumes a Codex thread and drops --ephemeral', () => {
     const { args } = builder.build('Codex CLI', 'hello', {}, [], null, 100, 'agent-1', connection, { id: 'thread-9', isFirstRun: false });
     expect(args.slice(0, 3)).toEqual(['exec', 'resume', 'thread-9']);

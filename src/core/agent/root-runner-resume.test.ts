@@ -101,6 +101,25 @@ describe('runRootAgent volatile-prompt assembly — CLI resume gate', () => {
     expect(prompt).not.toContain('Previous conversation summary');
     expect(prompt).not.toContain('Recent conversation history');
     expect(prompt).not.toContain('old question');
+
+    // I3 — surviving the assembler is not the same as reaching the model.
+    // `buildClaudeArgs` used to drop --append-system-prompt entirely on every
+    // turn after the first, trusting Claude's snapshot replay — which holds
+    // only turn 1's system prompt. So a security reminder raised on turn 7 by
+    // injected content, and the wall-clock date, were assembled here and then
+    // thrown away. Carry the assertion all the way to the argv/stdin the
+    // subprocess actually receives.
+    const { CLIArgumentBuilder } = await import('@/core/cli-adapters');
+    const built = new CLIArgumentBuilder().build(
+      ADAPTER_KEY, 'the turn-7 question', {}, [prompt], null, 100_000, 'agent-1',
+      { url: 'http://127.0.0.1:1', key: 'k', planMode: false, maxIterations: 4, workingDirectory: '/w', codexMcpServers: [] },
+      { id: 'vendor-1', isFirstRun: false },
+    );
+    const delivered = `${built.args.join(' ')}
+${built.stdinPrompt ?? ''}`;
+    expect(delivered).toContain('CURRENT DATE & TIME');
+    expect(delivered).toContain('sql-injection-attempt');
+    expect(delivered).toContain('the turn-7 question');
   });
 
   it('keeps the summary/history blocks (plus date/memory/security) on a cold run', async () => {

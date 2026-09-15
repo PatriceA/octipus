@@ -7,6 +7,8 @@ import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import type { CLIAgentConfig } from '@/db/schema/models';
 import { computeLineDiff } from '@/shared/diff';
 import { validateScopedExtraArgs } from '@/shared/cli-capabilities';
+import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
+import { foldCacheCounters } from '@/models/providers/usage';
 import { coreLogger } from '@/utils/logger';
 import type { AgentEvent } from './agent-base';
 import { emptyCounters, type SideEffectCounters } from './swarm/receipt';
@@ -482,6 +484,26 @@ export class CLIArgumentBuilder {
     // Claude Code: -p is a boolean flag (print mode), prompt is positional
     // On Windows: pipe prompt via stdin to avoid shell mangling
     const args: string[] = [];
+
+    // A resumed run drops --append-system-prompt (Claude replays its own
+    // snapshot of the first turn's system prompt), but `systemMessages` is NOT
+    // static: its tail is root-runner's VOLATILE tier — the wall-clock date
+    // stamp, this turn's memory and attached-file blocks, the tool-budget
+    // notice, the bridge instructions, and `buildSecurityReminder(guardFlags)`.
+    // Relying on the snapshot froze the date at turn 1 and threw away a
+    // security reminder raised by content that arrived on turn 7. Ride the
+    // volatile tier in on the delta user message instead, which is the only
+    // channel a resumed turn still has. `VOLATILE_MARKER` is the same boundary
+    // the prompt-cache split cuts on, so the two can't drift.
+    if (resume && !resume.isFirstRun && systemMessages.length > 0) {
+      const joined = systemMessages.join('\n');
+      const marker = joined.match(VOLATILE_MARKER);
+      // No marker: not a root-runner prompt (sub-worker, pipeline stage). Those
+      // build a fresh system prompt per turn with nothing snapshot-stable to
+      // rely on, so send all of it rather than guess where the boundary is.
+      const volatile = (marker?.index !== undefined ? joined.slice(marker.index) : joined).trim();
+      if (volatile) prompt = `${volatile}\n\n---\n\n${prompt}`;
+    }
 
     if (IS_WIN || connection) {
       args.push('-p', '--verbose', '--output-format', 'stream-json');
@@ -1223,8 +1245,27 @@ export class CLIOutputParser {
     if (type === 'turn.completed') {
       const usage = event.usage as Record<string, unknown> | undefined;
       if (usage) {
-        const inputTokens = (usage.input_tokens || 0) as number;
-        const cachedTokens = (usage.cached_input_tokens || 0) as number;
+        // Codex reports the OpenAI Responses shape: `cached_input_tokens` is a
+        // SUBSET of `input_tokens`, not an extra charge on top. That convention
+        // is what `foldCacheCounters` exists to settle, so route through it
+        // rather than hand-adding — the emitted fields then satisfy
+        // `input + output === total` and `cacheRead <= input`, which the two
+        // consumers in cli-agent-worker.ts (the context proxy and
+        // `billableTokens`) both assume. Adding `cached` onto `input` while
+        // leaving `total` alone broke both: `billableTokens` saw the entire
+        // replayed context as fresh spend and the budget kill-switch SIGKILLed
+        // a well-cached resumed thread — the failure already fixed for Claude.
+        //
+        // The fold is also safe if Codex ever reports the counters exclusively:
+        // its post-condition clamp raises `inputTokens` to the cache sum rather
+        // than letting `cacheRead > input` through.
+        const folded = foldCacheCounters({
+          input_tokens: usage.input_tokens,
+          input_tokens_details: { cached_tokens: usage.cached_input_tokens },
+          output_tokens: usage.output_tokens,
+        });
+        const inputTokens = folded.inputTokens;
+        const cachedTokens = folded.cacheReadTokens ?? 0;
         const outputTokens = (usage.output_tokens || 0) as number;
         const totalTokens = inputTokens + outputTokens;
         this.emit('thought', {
@@ -1237,7 +1278,7 @@ export class CLIOutputParser {
           },
         });
         this.reportedTokens += totalTokens;
-        this.callbacks.onTokenUsage?.({ input: inputTokens + cachedTokens, output: outputTokens, total: totalTokens, cacheRead: cachedTokens });
+        this.callbacks.onTokenUsage?.({ input: inputTokens, output: outputTokens, total: totalTokens, cacheRead: cachedTokens });
       }
       return null;
     }

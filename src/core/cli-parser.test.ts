@@ -104,12 +104,31 @@ describe('CLIOutputParser — codex JSONL fixture', () => {
     expect(mcpResult.toolName).toBe('octipus.search');
   });
 
-  it('reports per-turn token usage totalling input+output', () => {
+  it('I4 — reports internally consistent per-turn token usage', () => {
+    // Codex reports the OpenAI Responses shape: `cached_input_tokens` is a
+    // SUBSET of `input_tokens`. The callback used to add the two together while
+    // leaving `total` at input+output, so `input + output !== total` whenever
+    // anything was cached — and `billableTokens` (input - cacheRead - cacheWrite
+    // + output) then treated the whole replayed context as fresh spend, which is
+    // what SIGKILLs a well-cached resumed thread against its budget.
     const h = run();
     expect(h.tokenReports.length).toBe(1);
-    expect(h.tokenReports[0].total).toBe(150);
-    expect(h.tokenReports[0].input).toBe(120); // 100 + 20 cached
-    expect(h.tokenReports[0].output).toBe(50);
+    const t = h.tokenReports[0];
+    expect(t.input).toBe(100);
+    expect(t.output).toBe(50);
+    expect(t.cacheRead).toBe(20);
+    expect(t.total).toBe(150);
+    expect(t.input + t.output).toBe(t.total);
+    expect(t.cacheRead!).toBeLessThanOrEqual(t.input);
+  });
+
+  it('I4 — a heavily cached resumed turn is cheap, not a budget kill', () => {
+    const h = makeParser('/work');
+    // 98k of a 100k replayed context served from cache, 2k output.
+    h.feed({ type: 'turn.completed', usage: { input_tokens: 100_000, cached_input_tokens: 98_000, output_tokens: 2_000 } }, 'Codex CLI');
+    const t = h.tokenReports[0];
+    const spend = Math.max(0, t.input - (t.cacheRead ?? 0) - (t.cacheCreation ?? 0)) + t.output;
+    expect(spend).toBe(4_000);
   });
 
   it('counts a turn per turn.started, not per tool call', () => {
