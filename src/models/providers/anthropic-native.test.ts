@@ -137,6 +137,31 @@ describe('history cache breakpoint', () => {
     expect(newest.some(b => b.cache_control)).toBe(false);
   });
 
+  it('M3 — never marks a thinking block, which Anthropic 400s on', () => {
+    const messages = [
+      { role: 'assistant', content: [
+        { type: 'thinking', thinking: 'reasoning...', signature: 'sig' },
+        { type: 'text', text: 'answer' },
+        { type: 'redacted_thinking', data: 'blob' },
+      ] },
+      { role: 'user', content: [{ type: 'text', text: 'newest' }] },
+    ] as any[];
+    expect(markHistoryCacheBreakpoint(messages)).toBe(true);
+    const blocks = messages[0].content;
+    expect(blocks[1].cache_control).toEqual({ type: 'ephemeral' }); // the text block
+    expect(blocks[0].cache_control).toBeUndefined();
+    expect(blocks[2].cache_control).toBeUndefined();
+  });
+
+  it('M3 — places no breakpoint on a turn that is nothing but thinking', () => {
+    const messages = [
+      { role: 'assistant', content: [{ type: 'thinking', thinking: 'only reasoning', signature: 'sig' }] },
+      { role: 'user', content: [{ type: 'text', text: 'newest' }] },
+    ] as any[];
+    expect(markHistoryCacheBreakpoint(messages)).toBe(false);
+    expect(messages[0].content[0].cache_control).toBeUndefined();
+  });
+
   it('places no breakpoint when there is only the newest turn', () => {
     const { messages } = toAnthropicMessages([{ role: 'user', content: 'only', timestamp: new Date() }]);
     expect(markHistoryCacheBreakpoint(messages)).toBe(false);

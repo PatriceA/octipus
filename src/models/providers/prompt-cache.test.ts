@@ -47,7 +47,7 @@ describe('applyAnthropicCacheControl', () => {
       { role: 'system', content: staticPart + VOLATILE },
       { role: 'user', content: 'hi' },
     ];
-    expect(applyAnthropicCacheControl(messages)).toBe(true);
+    expect(applyAnthropicCacheControl(messages).system).toBe(true);
 
     const blocks = messages[0].content as unknown as Array<{ type: string; text: string; cache_control?: unknown }>;
     expect(Array.isArray(blocks)).toBe(true);
@@ -62,7 +62,7 @@ describe('applyAnthropicCacheControl', () => {
 
   test('no-op (leaves plain string) when nothing is cacheable', () => {
     const messages: ChatCompletionMessageParam[] = [{ role: 'system', content: 'short' + VOLATILE }];
-    expect(applyAnthropicCacheControl(messages)).toBe(false);
+    expect(applyAnthropicCacheControl(messages).system).toBe(false);
     expect(messages[0].content).toBe('short' + VOLATILE);
   });
 
@@ -72,7 +72,7 @@ describe('applyAnthropicCacheControl', () => {
       { role: 'system', content: big },
       { role: 'system', content: big },
     ];
-    expect(applyAnthropicCacheControl(messages)).toBe(true);
+    expect(applyAnthropicCacheControl(messages).system).toBe(true);
     expect(Array.isArray(messages[0].content)).toBe(true); // first rewritten
     expect(messages[1].content).toBe(big); // second left as-is → single breakpoint
   });
@@ -97,10 +97,50 @@ describe('applyAnthropicCacheControl — settled history', () => {
       { role: 'assistant', content: 'answer' },
       { role: 'user', content: 'second' },
     ] as any[];
-    expect(applyAnthropicCacheControl(messages, 'claude-sonnet-4-5')).toBe(true);
+    expect(applyAnthropicCacheControl(messages, 'claude-sonnet-4-5')).toEqual({ system: true, history: true });
     const marked = messages.filter(m => Array.isArray(m.content) && m.content.some((b: any) => b.cache_control));
     expect(marked).toHaveLength(2);                      // system + settled history
     expect(messages[messages.length - 1].content).toBe('second'); // newest turn untouched
+  });
+});
+
+describe('applyAnthropicCacheControl — breakpoint outcomes', () => {
+  it('M1 — places the history breakpoint past an assistant turn that is only tool_calls', () => {
+    // The agent tool loop's shape: the second-to-last message is an assistant
+    // turn with `tool_calls` and `content: null`. The walk used to `break` on a
+    // non-string content, so no history breakpoint was placed in exactly the
+    // case it was built for. (The native path never had this bug.)
+    const messages = [
+      { role: 'system', content: `${'x'.repeat(5000)}
+
+CURRENT DATE/TIME: now` },
+      { role: 'user', content: 'do the thing' },
+      { role: 'assistant', content: null, tool_calls: [{ id: 't1', type: 'function', function: { name: 'read', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 't1', content: 'a big tool result' },
+      { role: 'assistant', content: null, tool_calls: [{ id: 't2', type: 'function', function: { name: 'read', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 't2', content: 'the newest tool result' },
+    ] as any[];
+
+    expect(applyAnthropicCacheControl(messages, 'claude-sonnet-4-5')).toEqual({ system: true, history: true });
+    // Marked the last markable message before the newest turn — the tool
+    // result at index 3, not nothing at all.
+    expect(messages[3].content).toEqual([{ type: 'text', text: 'a big tool result', cache_control: { type: 'ephemeral' } }]);
+    expect(messages[5].content).toBe('the newest tool result'); // newest untouched
+  });
+
+  it('M4 — reports the two breakpoints separately so a system miss is visible', () => {
+    // A short system prompt (below the cache floor) with a normal history: the
+    // history breakpoint lands, the system one does not. A combined flag made
+    // this read as "cached" and masked the miss anyone actually wants logged.
+    const messages = [
+      { role: 'system', content: `short
+
+CURRENT DATE/TIME: now` },
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'answer' },
+      { role: 'user', content: 'second' },
+    ] as any[];
+    expect(applyAnthropicCacheControl(messages, 'claude-sonnet-4-5')).toEqual({ system: false, history: true });
   });
 });
 

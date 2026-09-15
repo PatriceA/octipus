@@ -389,7 +389,15 @@ export function markHistoryCacheBreakpoint(messages: AnthropicMessage[]): boolea
   if (messages.length < 2) return false;
   const prev = messages[messages.length - 2];
   if (!Array.isArray(prev.content) || prev.content.length === 0) return false;
-  const last = prev.content[prev.content.length - 1] as { cache_control?: { type: 'ephemeral' } };
+  // `cache_control` on a `thinking` / `redacted_thinking` block is a 400, so
+  // mark the last block that can carry one. A turn that is nothing but
+  // thinking gets no breakpoint rather than a rejected request.
+  const last = [...prev.content]
+    .reverse()
+    .find((b) => b.type !== 'thinking' && b.type !== 'redacted_thinking') as
+      | { cache_control?: { type: 'ephemeral' } }
+      | undefined;
+  if (!last) return false;
   last.cache_control = { type: 'ephemeral' };
   return true;
 }

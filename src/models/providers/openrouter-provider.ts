@@ -55,7 +55,7 @@ export class OpenRouterProvider implements ModelProvider {
     // content blocks to Anthropic upstreams, so cache the static prefix.
     if (options.cachePolicy !== 'off' && isAnthropicFamily(options.model)) {
       const cached = applyAnthropicCacheControl(params.messages, options.model);
-      if (!cached) logMissedCacheSplit(options.model);
+      if (!cached.system) logMissedCacheSplit(options.model);
     }
 
     if (options.tools?.length) {
@@ -157,7 +157,7 @@ export class OpenRouterProvider implements ModelProvider {
 
     if (options.cachePolicy !== 'off' && isAnthropicFamily(options.model)) {
       const cached = applyAnthropicCacheControl(params.messages, options.model);
-      if (!cached) logMissedCacheSplit(options.model);
+      if (!cached.system) logMissedCacheSplit(options.model);
     }
 
     if (options.tools?.length) {

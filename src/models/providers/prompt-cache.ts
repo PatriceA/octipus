@@ -11,9 +11,14 @@ export function __resetMissedCacheSplitLogs() {
 }
 
 /**
- * Log (once per model, DEBUG) that applyAnthropicCacheControl placed no
+ * Log (once per model, DEBUG) that applyAnthropicCacheControl placed no SYSTEM
  * breakpoint. Not a WARN: a short prompt legitimately falls under
  * minCacheableChars(model) and this is expected, not a defect.
+ *
+ * Callers pass the system outcome specifically. A combined "either breakpoint
+ * landed" flag made this almost never fire — the history breakpoint lands on
+ * nearly every agent turn — and masked the system-prefix miss, which is the
+ * diagnostic anyone actually wants.
  */
 export function logMissedCacheSplit(model: string): void {
   if (loggedMissedSplit.has(model)) return;
@@ -116,14 +121,17 @@ export function isAnthropicFamily(model: string): boolean {
  * reject the field. Returns true if a breakpoint was applied (used by tests;
  * callers may log it).
  */
-export function applyAnthropicCacheControl(messages: ChatCompletionMessageParam[], model?: string): boolean {
-  let placed = false;
+export function applyAnthropicCacheControl(
+  messages: ChatCompletionMessageParam[],
+  model?: string,
+): { system: boolean; history: boolean } {
+  let system = false;
   for (const msg of messages) {
     if (msg.role !== 'system' || typeof msg.content !== 'string') continue;
     const split = splitVolatileSystem(msg.content, model);
     if (!split) continue;
     (msg as { content: unknown }).content = buildCachedBlocks(split);
-    placed = true;
+    system = true;
     break;
   }
 
@@ -132,14 +140,28 @@ export function applyAnthropicCacheControl(messages: ChatCompletionMessageParam[
   // markHistoryCacheBreakpoint (custom/anthropic-compat-provider.ts) — an
   // agent loop re-reads this at cache rates instead of full price on every
   // iteration. The newest turn is left untouched since it's what changed.
+  let history = false;
   for (let i = messages.length - 2; i >= 0; i--) {
     const msg = messages[i];
     if (msg.role === 'system') continue;
-    if (typeof msg.content !== 'string') break; // already blocks/non-text — leave as-is
-    (msg as { content: unknown }).content = [{ type: 'text', text: msg.content, cache_control: { type: 'ephemeral' } }];
-    placed = true;
-    break;
+    if (typeof msg.content === 'string') {
+      (msg as { content: unknown }).content = [{ type: 'text', text: msg.content, cache_control: { type: 'ephemeral' } }];
+      history = true;
+      break;
+    }
+    if (Array.isArray(msg.content) && msg.content.length > 0) {
+      // Already content blocks (multimodal turn) — mark the last one, same as
+      // the native path does.
+      (msg.content[msg.content.length - 1] as { cache_control?: { type: 'ephemeral' } }).cache_control = { type: 'ephemeral' };
+      history = true;
+      break;
+    }
+    // `content: null` — an assistant turn that is nothing but `tool_calls`.
+    // This used to `break`, and in an agent tool loop the second-to-last
+    // message is exactly that, so the history breakpoint was never placed in
+    // the one case it was built for. Keep walking back instead. (The native
+    // path never had this bug.)
   }
 
-  return placed;
+  return { system, history };
 }

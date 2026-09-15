@@ -472,7 +472,7 @@ export class LiteLLMClient {
     // content blocks to Anthropic upstreams, so cache the static prefix.
     if (options.cachePolicy !== 'off' && isAnthropicFamily(params.model || '')) {
       const cached = applyAnthropicCacheControl(params.messages, params.model);
-      if (!cached) logMissedCacheSplit(params.model || '');
+      if (!cached.system) logMissedCacheSplit(params.model || '');
     }
 
     if (options.tools?.length) {
@@ -665,7 +665,7 @@ export class LiteLLMClient {
 
     if (options.cachePolicy !== 'off' && isAnthropicFamily(params.model || '')) {
       const cached = applyAnthropicCacheControl(params.messages, params.model);
-      if (!cached) logMissedCacheSplit(params.model || '');
+      if (!cached.system) logMissedCacheSplit(params.model || '');
     }
 
     if (options.tools?.length) {

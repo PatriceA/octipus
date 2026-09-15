@@ -777,7 +777,13 @@ export class CLIAgentWorker extends BaseAgentWorker {
       // the vendor session died) — backfill it now, ahead of whatever this
       // run already pushed onto `this.messages`, so a cold/recovered turn
       // still carries the full transcript.
-      this.messages = [...(await this.fetchHistory()), ...this.messages];
+      // `addUserMessage` has ALREADY pushed this turn's message onto
+      // `this.messages` and (for a root agent) persisted it, so the DB fetch
+      // returns it too — prepending the fetch verbatim put the user's question
+      // in the recovered prompt twice. Backfill only what isn't here yet.
+      const have = new Set(this.messages.map(m => `${m.role}::${m.content}`));
+      const backfill = (await this.fetchHistory()).filter(m => !have.has(`${m.role}::${m.content}`));
+      this.messages = [...backfill, ...this.messages];
       this.historySkipped = false;
     }
     const prompt = this.buildPrompt();
@@ -786,7 +792,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
     this.launchCleanup = undefined;
     // Async vendor discovery stays out of the synchronous arg builder (event-loop safe).
     const codexMcpServers = this.connection && adapterKey === 'Codex CLI' ? await discoverCodexMcpServers(workspaceCwd) : undefined;
-    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, this.systemMessages, systemPrompt, Math.max(0, this.config.maxTokenBudget - this.totalTokens), this.context.id, this.connection ? { ...this.connection, workingDirectory: workspaceCwd, codexMcpServers, maxIterations: Math.max(1, this.config.maxIterations - this.iteration) } : undefined, resume);
+    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, this.systemMessages, systemPrompt, Math.max(0, this.config.maxTokenBudget - this.billableTokensUsed), this.context.id, this.connection ? { ...this.connection, workingDirectory: workspaceCwd, codexMcpServers, maxIterations: Math.max(1, this.config.maxIterations - this.iteration) } : undefined, resume);
     const { binary, args, stdinPrompt, useShell } = built;
     this.launchCleanup = () => {
       const configIndex = args.indexOf('--mcp-config');
@@ -1144,7 +1150,10 @@ export class CLIAgentWorker extends BaseAgentWorker {
           if (this.budgetExceeded) {
             reject(new BudgetExceededError({
               agentId: this.context.id,
-              used: this.totalTokens,
+              // The gate that set `budgetExceeded` compared the billable
+              // figure; reporting the grand total made the error say a number
+              // that was never checked against the cap.
+              used: this.billableTokensUsed,
               cap: this.config.maxTokenBudget,
             }));
             return;
