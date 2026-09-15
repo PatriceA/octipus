@@ -7,6 +7,7 @@ import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import { getQuotaTracker } from '../quota-tracker';
 import type { ModelProvider, ProviderHealthStatus, QuotaStatus } from './interface';
+import { foldCacheCounters } from './usage';
 
 /**
  * Global cap on concurrently running CLI child processes.
@@ -353,12 +354,26 @@ function parseClaudeStyleOutput(modelLabel: string) {
     try {
       const data = JSON.parse(stdout);
       const content = typeof data === 'string' ? data : (data.result || data.content || JSON.stringify(data));
-      const inputTokens = data.input_tokens || data.usage?.input_tokens || 0;
-      const outputTokens = data.output_tokens || data.usage?.output_tokens || 0;
+      // Nested usage.* overlaid by top-level fields, so top-level still wins
+      // (matches the precedence the old `data.x || data.usage?.x` read had).
+      const usageSource = {
+        ...(data.usage ?? {}),
+        ...(data.input_tokens != null ? { input_tokens: data.input_tokens } : {}),
+        ...(data.output_tokens != null ? { output_tokens: data.output_tokens } : {}),
+      };
+      const { inputTokens, cacheReadTokens, cacheCreationTokens } = foldCacheCounters(usageSource);
+      const outputTokens = usageSource.output_tokens || 0;
       return {
         content,
         finishReason: 'stop',
-        usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, available: data.input_tokens != null || data.usage?.input_tokens != null },
+        usage: {
+          inputTokens,
+          outputTokens,
+          totalTokens: inputTokens + outputTokens,
+          available: data.input_tokens != null || data.usage?.input_tokens != null,
+          ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
+          cacheCreationTokens,
+        },
         model: modelLabel,
         latencyMs: Date.now() - startTime,
       };

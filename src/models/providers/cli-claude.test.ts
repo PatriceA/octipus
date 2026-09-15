@@ -22,6 +22,18 @@ describe('claudeCodeConfig.parseOutput totalTokens (C18)', () => {
     expect(r.usage.totalTokens).toBe(30);
   });
 
+  it('counts cache reads and cache creation from nested usage', () => {
+    const stdout = JSON.stringify({
+      result: 'ok',
+      usage: { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 20, cache_creation_input_tokens: 5 },
+    });
+    const r = claudeCodeConfig.parseOutput(stdout, Date.now());
+    expect(r.usage.inputTokens).toBe(35);
+    expect(r.usage.cacheReadTokens).toBe(20);
+    expect(r.usage.cacheCreationTokens).toBe(5);
+    expect(r.usage.totalTokens).toBe(38);
+  });
+
   it('falls back to plain text with zero usage', () => {
     const r = claudeCodeConfig.parseOutput('just text', Date.now());
     expect(r.content).toBe('just text');
