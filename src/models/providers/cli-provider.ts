@@ -9,6 +9,37 @@ import { getQuotaTracker } from '../quota-tracker';
 import type { ModelProvider, ProviderHealthStatus, QuotaStatus } from './interface';
 
 /**
+ * Global cap on concurrently running CLI child processes.
+ *
+ * Every CLI completion spawns a full agent process (`claude`, `codex`, ...)
+ * that can run for minutes. Nothing upstream bounds how many completions are
+ * in flight — a background fan-out (doc indexing generating one abstract per
+ * chunk) once spawned 40+ `claude` processes in parallel and wedged the host.
+ * Cap it here, at the one place every CLI spawn passes through, instead of in
+ * every caller.
+ *
+ * ponytail: single global gate; per-tool gates only if mixing CLIs matters.
+ */
+const MAX_CONCURRENT_CLI = Math.max(1, Number(process.env.OCTIPUS_CLI_MAX_CONCURRENT ?? 2));
+let activeCliRuns = 0;
+const cliWaiters: Array<() => void> = [];
+
+export async function acquireCliSlot(): Promise<() => void> {
+  if (activeCliRuns >= MAX_CONCURRENT_CLI) {
+    modelLogger.debug({ active: activeCliRuns, max: MAX_CONCURRENT_CLI }, 'CLI slot exhausted — queueing');
+    await new Promise<void>((resolve) => cliWaiters.push(resolve));
+  }
+  activeCliRuns++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    activeCliRuns--;
+    cliWaiters.shift()?.();
+  };
+}
+
+/**
  * Vendor-managed billing info for a CLI tool.
  * Plan tiers, quotas, and what counts toward subscription vs. metered API
  * billing are vendor-controlled and change. We only carry pointers and a
@@ -501,7 +532,13 @@ export class CLIProvider implements ModelProvider {
       const row = await getModelRegistry().getModel(options.model).catch(() => null)
         ?? await getModelRegistry().getModelByModelId(options.model).catch(() => null);
       const inheritApiKeys = row?.metadata?.cliAgent?.inheritApiKeys === true;
-      const stdout = await this.execCli(tool.binaryPath, args, { env: buildChildEnv(tool, env, inheritApiKeys) });
+      const release = await acquireCliSlot();
+      let stdout: string;
+      try {
+        stdout = await this.execCli(tool.binaryPath, args, { env: buildChildEnv(tool, env, inheritApiKeys) });
+      } finally {
+        release();
+      }
       const result = tool.parseOutput(stdout, startTime);
 
       // Track usage
@@ -647,9 +684,28 @@ export class CLIProvider implements ModelProvider {
         cwd: resolveWorkspaceRoot(),
         env: opts?.env ?? { ...process.env },
         stdio: ['ignore', 'pipe', 'pipe'],
-        timeout,
         shell: process.platform === 'win32' && !noShell,
       });
+
+      // NOT spawn's own `timeout`: with shell:true (Windows) that kills the
+      // cmd.exe wrapper and leaves the real CLI running as an orphan — the
+      // observed failure mode where dead completions kept `claude` processes
+      // alive. Kill the whole process tree instead.
+      let timedOut = false;
+      const killTree = () => {
+        if (proc.pid == null) return;
+        if (process.platform === 'win32') {
+          spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { stdio: 'ignore' }).on('error', () => proc.kill('SIGKILL'));
+        } else {
+          proc.kill('SIGKILL');
+        }
+      };
+      const timer = setTimeout(() => {
+        timedOut = true;
+        modelLogger.warn({ binary, timeout }, 'CLI tool timed out — killing process tree');
+        killTree();
+      }, timeout);
+      timer.unref?.();
 
       // Bound output buffers so a runaway CLI can't exhaust memory.
       const MAX_BUF = 4 * 1024 * 1024;
@@ -665,7 +721,10 @@ export class CLIProvider implements ModelProvider {
       });
 
       proc.on('close', (code) => {
-        if (code === 0) {
+        clearTimeout(timer);
+        if (timedOut) {
+          reject(new Error(`CLI ${binary} timed out after ${timeout}ms`));
+        } else if (code === 0) {
           resolve(stdout);
         } else {
           reject(new Error(`CLI ${binary} exited with code ${code}: ${stderr || stdout}`));
@@ -673,6 +732,7 @@ export class CLIProvider implements ModelProvider {
       });
 
       proc.on('error', (err) => {
+        clearTimeout(timer);
         reject(new Error(`Failed to spawn ${binary}: ${err.message}`));
       });
     });

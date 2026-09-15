@@ -972,6 +972,17 @@ export class EmbeddingService {
       );
       return;
     }
+    // A CLI-backed model spawns a whole agent process per completion (minutes
+    // each). One abstract per chunk against it means hundreds of parallel CLI
+    // processes for a single doc import — that is what wedged the host. Local/
+    // hosted models are fine; CLI ones are simply not a summarization backend.
+    if (summarizer.provider === 'cli') {
+      coreLogger.warn(
+        { count: ids.length, model: summarizer.modelId },
+        'Abstract generation skipped — topic "background" is bound to a CLI model (one process per chunk). Bind a local or hosted model.',
+      );
+      return;
+    }
     const modelName = summarizer.modelId;
 
     for (let i = 0; i < ids.length; i++) {
