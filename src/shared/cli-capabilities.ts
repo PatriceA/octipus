@@ -45,7 +45,7 @@ export const SCOPED_EXTRA_ARGS: Record<string, { flags: readonly string[]; value
  */
 export const CLI_RESUME: Record<string, { style: 'caller-minted' | 'captured'; flag: string }> = {
   'Claude Code': { style: 'caller-minted', flag: '--resume' },
-  Codex: { style: 'captured', flag: 'resume' },
+  'Codex CLI': { style: 'captured', flag: 'resume' },
 };
 
 export function canResume(adapterKey: string): boolean {
