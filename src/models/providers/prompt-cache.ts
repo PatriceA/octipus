@@ -96,12 +96,29 @@ export function isAnthropicFamily(model: string): boolean {
  * callers may log it).
  */
 export function applyAnthropicCacheControl(messages: ChatCompletionMessageParam[], model?: string): boolean {
+  let placed = false;
   for (const msg of messages) {
     if (msg.role !== 'system' || typeof msg.content !== 'string') continue;
     const split = splitVolatileSystem(msg.content, model);
     if (!split) continue;
     (msg as { content: unknown }).content = buildCachedBlocks(split);
-    return true;
+    placed = true;
+    break;
   }
-  return false;
+
+  // Second breakpoint: the settled history, i.e. the last non-system message
+  // before the newest turn. Same rationale as the native path's
+  // markHistoryCacheBreakpoint (custom/anthropic-compat-provider.ts) — an
+  // agent loop re-reads this at cache rates instead of full price on every
+  // iteration. The newest turn is left untouched since it's what changed.
+  for (let i = messages.length - 2; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role === 'system') continue;
+    if (typeof msg.content !== 'string') break; // already blocks/non-text — leave as-is
+    (msg as { content: unknown }).content = [{ type: 'text', text: msg.content, cache_control: { type: 'ephemeral' } }];
+    placed = true;
+    break;
+  }
+
+  return placed;
 }

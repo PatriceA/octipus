@@ -317,6 +317,30 @@ describeUnit('LiteLLMClient — sanitizeToolMessages (via completeViaProxy)', ()
   });
 });
 
+describeUnit('LiteLLMClient — cachePolicy off disables cache_control', () => {
+  test('sends plain string content, no cache_control blocks, for an Anthropic model', async () => {
+    let captured: any;
+    chatCreateImpl.current = (params: any) => {
+      captured = params;
+      return Promise.resolve(chatCompletion({ content: 'ok' }));
+    };
+
+    const client = new LiteLLMClient();
+    await client.completeViaProxy({
+      model: 'claude-sonnet-4-6',
+      cachePolicy: 'off',
+      messages: [
+        { role: 'system', content: `${'x'.repeat(5000)}\n\nCURRENT DATE/TIME: now`, timestamp: ts() },
+        userMsg('first'),
+        { role: 'assistant', content: 'answer', timestamp: ts() },
+        userMsg('second'),
+      ],
+    });
+
+    for (const m of captured.messages) expect(typeof m.content).toBe('string');
+  });
+});
+
 describeUnit('LiteLLMClient — formatMessages', () => {
   test('serializes assistant tool_calls arguments as JSON string', async () => {
     let captured: any;

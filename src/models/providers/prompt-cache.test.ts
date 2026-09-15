@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, it, test } from 'vitest';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 import { applyAnthropicCacheControl, isAnthropicFamily, splitVolatileSystem } from './prompt-cache';
 
@@ -79,5 +79,20 @@ describe('every prompt-assembly site is splittable', () => {
       dateContext: 'CURRENT DATE/TIME: 2026-09-15T10:00:00Z',
     });
     expect(splitVolatileSystem(system)).not.toBeNull();
+  });
+});
+
+describe('applyAnthropicCacheControl — settled history', () => {
+  it('marks the settled history as well as the system prefix', () => {
+    const messages = [
+      { role: 'system', content: `${'x'.repeat(5000)}\n\nCURRENT DATE/TIME: now` },
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'answer' },
+      { role: 'user', content: 'second' },
+    ] as any[];
+    expect(applyAnthropicCacheControl(messages, 'claude-sonnet-4-5')).toBe(true);
+    const marked = messages.filter(m => Array.isArray(m.content) && m.content.some((b: any) => b.cache_control));
+    expect(marked).toHaveLength(2);                      // system + settled history
+    expect(messages[messages.length - 1].content).toBe('second'); // newest turn untouched
   });
 });

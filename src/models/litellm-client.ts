@@ -468,7 +468,7 @@ export class LiteLLMClient {
 
     // Anthropic prompt caching (Phase A1): the proxy forwards `cache_control`
     // content blocks to Anthropic upstreams, so cache the static prefix.
-    if (isAnthropicFamily(params.model || '')) applyAnthropicCacheControl(params.messages, params.model);
+    if (options.cachePolicy !== 'off' && isAnthropicFamily(params.model || '')) applyAnthropicCacheControl(params.messages, params.model);
 
     if (options.tools?.length) {
       params.tools = options.tools;
@@ -656,7 +656,7 @@ export class LiteLLMClient {
       stream_options: { include_usage: true },
     };
 
-    if (isAnthropicFamily(params.model || '')) applyAnthropicCacheControl(params.messages, params.model);
+    if (options.cachePolicy !== 'off' && isAnthropicFamily(params.model || '')) applyAnthropicCacheControl(params.messages, params.model);
 
     if (options.tools?.length) {
       params.tools = options.tools;
