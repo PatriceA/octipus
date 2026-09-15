@@ -739,6 +739,20 @@ export class CLIOutputParser {
   /** Tokens already reported via onTokenUsage (for final reconciliation). */
   private reportedTokens = 0;
   /**
+   * Per-field running totals already reported via onTokenUsage — mirrors
+   * `reportedTokens` but broken out by field, so the `result`-event fallback
+   * below can emit a DELTA for every field it carries, not just `total`.
+   * Updated by both `reportClaudeUsage` (per-message) and the `result`
+   * fallback itself, so whichever fires first is accounted for by the next.
+   * `input` here is the raw combined figure (fresh + cache read + cache
+   * creation), matching what the `input` field on the callback has always
+   * meant.
+   */
+  private reportedInput = 0;
+  private reportedOutput = 0;
+  private reportedCacheRead = 0;
+  private reportedCacheCreation = 0;
+  /**
    * Deterministic side-effect tally for this CLI run. A CLI writes files in its
    * OWN process, so octipus never sees those writes through a `ToolExecutor` —
    * the stream is the only ground truth we have. Counted from the events we
@@ -966,7 +980,22 @@ export class CLIOutputParser {
       const delta = Math.max(0, totalTokens - this.reportedTokens);
       if (delta > 0) {
         this.reportedTokens += delta;
-        this.callbacks.onTokenUsage?.({ input: inputTokens + cacheRead + cacheCreation, output: outputTokens, total: delta, cacheRead, cacheCreation });
+        // Task 7 fix round 2: every field on this callback must mean the
+        // same thing — a delta — or a consumer that bills off input/output/
+        // cacheRead (billableTokens) double-charges the whole run whenever
+        // this fallback fires. `input` is the raw combined figure (fresh +
+        // cache read + cache creation), matching what per-message tracking
+        // (`reportClaudeUsage`) has always emitted for that field.
+        const rawInput = inputTokens + cacheRead + cacheCreation;
+        const inputDelta = Math.max(0, rawInput - this.reportedInput);
+        const outputDelta = Math.max(0, outputTokens - this.reportedOutput);
+        const cacheReadDelta = Math.max(0, cacheRead - this.reportedCacheRead);
+        const cacheCreationDelta = Math.max(0, cacheCreation - this.reportedCacheCreation);
+        this.reportedInput += inputDelta;
+        this.reportedOutput += outputDelta;
+        this.reportedCacheRead += cacheReadDelta;
+        this.reportedCacheCreation += cacheCreationDelta;
+        this.callbacks.onTokenUsage?.({ input: inputDelta, output: outputDelta, total: delta, cacheRead: cacheReadDelta, cacheCreation: cacheCreationDelta });
       }
 
       if (isError) {
@@ -1057,6 +1086,13 @@ export class CLIOutputParser {
     const total = inputDelta + outputDelta;
     if (total <= 0) return;
     this.reportedTokens += total;
+    // Keep the per-field trackers in step with `reportedTokens` so the
+    // `result`-event fallback (above) sees exactly what per-message
+    // tracking has already reported, however far it got before that fires.
+    this.reportedInput += inputDelta;
+    this.reportedOutput += outputDelta;
+    this.reportedCacheRead += cacheReadDelta;
+    this.reportedCacheCreation += cacheCreationDelta;
     this.callbacks.onTokenUsage?.({ input: inputDelta, output: outputDelta, total, cacheRead: cacheReadDelta, cacheCreation: cacheCreationDelta });
   }
 

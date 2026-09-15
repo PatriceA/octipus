@@ -348,6 +348,38 @@ describe('CLI session reuse', () => {
     expect(second.worker.getBillableTokens()).toBe(100);
   });
 
+  // Task 7 fix round 2: the `result`-event fallback used to emit RAW
+  // full-run input/output/cacheRead alongside a delta-scoped `total` — so
+  // whenever per-message tracking under-reported and the fallback bridged
+  // the gap, getBillableTokens() was bumped by roughly the WHOLE run's
+  // fresh+output a second time, on top of what per-message tracking had
+  // already billed. Fails against the code from fix round 1: it would
+  // assert 270 (120 already billed + 150 raw-fallback bill) instead of 150.
+  it('bills only the shortfall when the result event bridges an under-report', async () => {
+    writeFileSync(fixture.script, `
+      import { writeFileSync } from 'node:fs';
+      import { join } from 'node:path';
+      let stdinData = '';
+      process.stdin.on('data', c => { stdinData += c; });
+      process.stdin.on('end', () => { writeFileSync(join(process.cwd(), 'claude-last-stdin.txt'), stdinData); });
+      // Per-message tracking reports 100 fresh input + 20 output for this turn.
+      console.log(JSON.stringify({ type: 'assistant', message: { id: 'm1', content: [], usage: { input_tokens: 100, output_tokens: 20 } } }));
+      // The result event reports the whole run: same 100 fresh input, 900 NEW
+      // cache-read tokens, and 30 more output than per-message tracking saw
+      // (50 total vs 20 already reported) — a genuine under-report.
+      console.log(JSON.stringify({ type: 'result', subtype: 'success', result: 'answer', num_turns: 1, usage: { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 900, cache_creation_input_tokens: 0 } }));
+    `);
+    const worker = makeClaudeWorker({ sessionId: 's1', reuseSessions: false });
+    await worker.run('question');
+    // Grand total: 100 fresh + 50 output + 900 cache read = 1050.
+    expect(worker.worker.getTotalTokens()).toBe(1050);
+    // Billable: 100 fresh + 50 output = 150 for the whole run — the
+    // shortfall the fallback bridges (0 new fresh, 30 new output, 900 cache
+    // read excluded) added to what per-message tracking already billed
+    // (100 fresh + 20 output = 120), not 120 + (1000 - 900) fresh again.
+    expect(worker.worker.getBillableTokens()).toBe(150);
+  });
+
   it('sends the full transcript on a cold run', async () => {
     const worker = makeClaudeWorker({ sessionId: 's1', reuseSessions: true, history: ['old question', 'old answer'] });
     await worker.run('first');

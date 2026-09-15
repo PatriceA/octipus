@@ -347,6 +347,29 @@ it('bills a resumed run\'s own reported usage in full, with no cross-process see
   expect(p.tokenReports[0].cacheRead).toBe(310);
 });
 
+// Task 7 fix round 2: the `result`-event fallback used to emit a delta-scoped
+// `total` alongside RAW full-run `input`/`output`/`cacheRead`/`cacheCreation`
+// — a mixed shape that was harmless while only `total` was consumed, but
+// double-billed the whole run's fresh+output once the worker started feeding
+// these fields into `billableTokens()`. Every field must be a delta.
+it('emits per-field deltas from the result fallback, not raw full-run figures', () => {
+  const p = makeParser();
+  // Per-message tracking reports 100 fresh input + 20 output for this turn.
+  p.feed({ type: 'assistant', message: { id: 'm1', content: [], usage: { input_tokens: 100, output_tokens: 20 } } }, 'Claude Code');
+  expect(p.tokenReports).toEqual([{ input: 100, output: 20, total: 120, cacheRead: 0, cacheCreation: 0 }]);
+
+  // The result event reports the whole run's totals: same 100 fresh input
+  // (unchanged), 900 NEW cache-read tokens, and 30 more output than the
+  // per-message tracking saw (50 total vs 20 already reported) — a genuine
+  // under-report the fallback exists to catch.
+  p.feed({ type: 'result', usage: { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 900, cache_creation_input_tokens: 0 } }, 'Claude Code');
+
+  expect(p.tokenReports).toHaveLength(2);
+  // Not the raw { input: 1000, output: 50, cacheRead: 900 } — every field is
+  // the SHORTFALL only: 0 new fresh input, 30 new output, 900 new cache read.
+  expect(p.tokenReports[1]).toEqual({ input: 900, output: 30, total: 930, cacheRead: 900, cacheCreation: 0 });
+});
+
 it('reports the Codex thread id to the caller', () => {
   const seen: string[] = [];
   const cbs: CLIParserCallbacks = {
