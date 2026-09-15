@@ -553,7 +553,7 @@ export class CLIProvider implements ModelProvider {
       const release = await acquireCliSlot();
       let stdout: string;
       try {
-        stdout = await this.execCli(tool.binaryPath, args, { env: buildChildEnv(tool, env, inheritApiKeys) });
+        stdout = await execCli(tool.binaryPath, args, { env: buildChildEnv(tool, env, inheritApiKeys) });
       } finally {
         release();
       }
@@ -686,84 +686,98 @@ export class CLIProvider implements ModelProvider {
     return parts.join('\n\n');
   }
 
-  private execCli(binary: string, args: string[], opts?: { timeoutMs?: number; env?: Record<string, string> }): Promise<string> {
-    return new Promise((resolve, reject) => {
-      // Fixed generous default, not a maxTokens*100ms heuristic (which could
-      // arm a sub-second timeout for a small budget or a 3h one for a big
-      // batch). CLI subscription tools are slow; 10 min is a safe ceiling.
-      const timeout = opts?.timeoutMs ?? 600_000;
-      // agy is a native binary — shell:true on Windows would re-tokenize its
-      // argv (breaking the prompt); only .cmd wrappers need the shell.
-      const noShell = binary === 'agy';
-      // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn (no shell interpolation); binary/args come from vetted provider config, not request input
-      const proc = spawn(binary, args, {
-        // Run in the workspace root, not wherever the server was launched — a
-        // CLI completion must not read/write the octipus repo by default.
-        cwd: resolveWorkspaceRoot(),
-        env: opts?.env ?? { ...process.env },
-        stdio: ['ignore', 'pipe', 'pipe'],
-        shell: process.platform === 'win32' && !noShell,
-      });
-
-      // NOT spawn's own `timeout`: with shell:true (Windows) that kills the
-      // cmd.exe wrapper and leaves the real CLI running as an orphan — the
-      // observed failure mode where dead completions kept `claude` processes
-      // alive. Kill the whole process tree instead.
-      let timedOut = false;
-      const killTree = () => {
-        if (proc.pid == null) return;
-        if (process.platform === 'win32') {
-          spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { stdio: 'ignore' }).on('error', () => proc.kill('SIGKILL'));
-        } else {
-          proc.kill('SIGKILL');
-        }
-      };
-      const timer = setTimeout(() => {
-        timedOut = true;
-        modelLogger.warn({ binary, timeout }, 'CLI tool timed out — killing process tree');
-        killTree();
-      }, timeout);
-      timer.unref?.();
-
-      // Bound output buffers so a runaway CLI can't exhaust memory.
-      const MAX_BUF = 4 * 1024 * 1024;
-      let stdout = '';
-      let stderr = '';
-
-      proc.stdout.on('data', (data: Buffer) => {
-        if (stdout.length < MAX_BUF) stdout += data.toString();
-      });
-
-      proc.stderr.on('data', (data: Buffer) => {
-        if (stderr.length < MAX_BUF) stderr += data.toString();
-      });
-
-      proc.on('close', (code) => {
-        clearTimeout(timer);
-        if (timedOut) {
-          reject(new Error(`CLI ${binary} timed out after ${timeout}ms`));
-        } else if (code === 0) {
-          resolve(stdout);
-        } else {
-          reject(new Error(`CLI ${binary} exited with code ${code}: ${stderr || stdout}`));
-        }
-      });
-
-      proc.on('error', (err) => {
-        clearTimeout(timer);
-        reject(new Error(`Failed to spawn ${binary}: ${err.message}`));
-      });
-    });
-  }
-
   private async checkToolAvailable(tool: CLIToolConfig): Promise<boolean> {
     const cmd = process.platform === 'win32' ? 'where' : 'which';
     try {
-      await this.execCli(cmd, [tool.binaryPath], { timeoutMs: 5_000 });
+      await execCli(cmd, [tool.binaryPath], { timeoutMs: 5_000 });
       return true;
     } catch {
       // Recoverable: binary not found → tool simply marked unavailable
       return false;
     }
   }
+}
+
+/**
+ * The guarded CLI spawn: kill-tree timeout, bounded output buffers. Exported
+ * (alongside {@link acquireCliSlot}) so any one-shot CLI invocation outside
+ * `CLIProvider.complete` — e.g. `cli-session-compact.ts` pushing octipus's
+ * compaction into a live vendor session — goes through the same guard rails
+ * as a normal completion instead of spawning unbounded.
+ */
+export function execCli(binary: string, args: string[], opts?: { timeoutMs?: number; env?: Record<string, string> }): Promise<string> {
+  return new Promise((resolve, reject) => {
+    // Fixed generous default, not a maxTokens*100ms heuristic (which could
+    // arm a sub-second timeout for a small budget or a 3h one for a big
+    // batch). CLI subscription tools are slow; 10 min is a safe ceiling.
+    const timeout = opts?.timeoutMs ?? 600_000;
+    // agy is a native binary — shell:true on Windows would re-tokenize its
+    // argv (breaking the prompt); only .cmd wrappers need the shell.
+    const noShell = binary === 'agy';
+    const useShell = process.platform === 'win32' && !noShell;
+    // shell:true hands the command line to cmd.exe, and Node joins
+    // [binary, ...args] with plain spaces, quoting nothing — an unquoted
+    // prompt with spaces (e.g. `/compact focus on the migration`) is
+    // re-tokenized into separate argv. Same fix as cli-agent-worker's spawn.
+    const shellQuote = (value: string): string =>
+      useShell && /\s/.test(value) && !value.includes('"') ? `"${value}"` : value;
+    // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn (no shell interpolation); binary/args come from vetted provider config, not request input
+    const proc = spawn(shellQuote(binary), args.map(shellQuote), {
+      // Run in the workspace root, not wherever the server was launched — a
+      // CLI completion must not read/write the octipus repo by default.
+      cwd: resolveWorkspaceRoot(),
+      env: opts?.env ?? { ...process.env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: useShell,
+    });
+
+    // NOT spawn's own `timeout`: with shell:true (Windows) that kills the
+    // cmd.exe wrapper and leaves the real CLI running as an orphan — the
+    // observed failure mode where dead completions kept `claude` processes
+    // alive. Kill the whole process tree instead.
+    let timedOut = false;
+    const killTree = () => {
+      if (proc.pid == null) return;
+      if (process.platform === 'win32') {
+        spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { stdio: 'ignore' }).on('error', () => proc.kill('SIGKILL'));
+      } else {
+        proc.kill('SIGKILL');
+      }
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      modelLogger.warn({ binary, timeout }, 'CLI tool timed out — killing process tree');
+      killTree();
+    }, timeout);
+    timer.unref?.();
+
+    // Bound output buffers so a runaway CLI can't exhaust memory.
+    const MAX_BUF = 4 * 1024 * 1024;
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', (data: Buffer) => {
+      if (stdout.length < MAX_BUF) stdout += data.toString();
+    });
+
+    proc.stderr.on('data', (data: Buffer) => {
+      if (stderr.length < MAX_BUF) stderr += data.toString();
+    });
+
+    proc.on('close', (code) => {
+      clearTimeout(timer);
+      if (timedOut) {
+        reject(new Error(`CLI ${binary} timed out after ${timeout}ms`));
+      } else if (code === 0) {
+        resolve(stdout);
+      } else {
+        reject(new Error(`CLI ${binary} exited with code ${code}: ${stderr || stdout}`));
+      }
+    });
+
+    proc.on('error', (err) => {
+      clearTimeout(timer);
+      reject(new Error(`Failed to spawn ${binary}: ${err.message}`));
+    });
+  });
 }

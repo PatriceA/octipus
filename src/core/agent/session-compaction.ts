@@ -1,4 +1,5 @@
 import { getConfig } from '@/config';
+import { compactVendorSession } from '@/core/cli-session-compact';
 import { getGatewayHub } from '@/core/gateway/hub';
 import type { AgentMessage } from '@/core/types';
 import { compactionEntryRepository } from '@/db/repositories/compaction-entry-repository';
@@ -236,6 +237,22 @@ async function compactSessionContext(
       });
     } catch (err) {
       coreLogger.warn({ err, sessionId }, 'Failed to persist compaction entry (non-fatal)');
+    }
+  }
+
+  // Task 8: push this compaction down into any live vendor CLI session, so
+  // the vendor isn't left holding the full pre-compaction transcript while
+  // octipus believes it just summarized it. Only adapters with a stored
+  // session are touched (compactVendorSession returns 'skipped' otherwise).
+  // No `compaction_entries.metadata` column exists to record the outcome
+  // on the row itself, so it's logged instead — non-fatal, exactly like the
+  // entry-write failure above: never let this break the turn.
+  for (const vendorAdapterKey of Object.keys(existingContext.cliSessions ?? {})) {
+    try {
+      const outcome = await compactVendorSession(sessionId, vendorAdapterKey, userInstructions);
+      coreLogger.info({ sessionId, adapterKey: vendorAdapterKey, outcome }, 'Vendor CLI session compaction outcome');
+    } catch (err) {
+      coreLogger.warn({ err, sessionId, adapterKey: vendorAdapterKey }, 'Vendor CLI session compaction failed (non-fatal)');
     }
   }
 
