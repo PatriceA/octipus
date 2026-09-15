@@ -553,7 +553,7 @@ export class CLIProvider implements ModelProvider {
       const release = await acquireCliSlot();
       let stdout: string;
       try {
-        stdout = await execCli(tool.binaryPath, args, { env: buildChildEnv(tool, env, inheritApiKeys) });
+        stdout = await this.execCli(tool.binaryPath, args, { env: buildChildEnv(tool, env, inheritApiKeys) });
       } finally {
         release();
       }
@@ -670,6 +670,13 @@ export class CLIProvider implements ModelProvider {
       });
     }
     return results;
+  }
+
+  // Overridable seam: delegates to module-level execCli so tests can stub
+  // `(provider as any).execCli` to force a classified error without
+  // spawning a real subprocess.
+  private execCli(binary: string, args: string[], opts?: { timeoutMs?: number; env?: Record<string, string> }): Promise<string> {
+    return execCli(binary, args, opts);
   }
 
   private buildPrompt(options: CompletionOptions): string {
