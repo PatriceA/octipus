@@ -12,9 +12,14 @@ registerCommand({
       await sessionRepository.update(ctx.sessionId, {
         context: {
           ...existing,
+          clearedAt: new Date().toISOString(),
           compactedSummary: undefined,
           activeCommand: undefined,
           planningState: undefined,
+          // A cleared conversation must not continue in the vendor CLI —
+          // resuming it would hand the vendor back the whole pre-clear
+          // conversation (matches src/core/gateway/commands.ts's /clear).
+          cliSessions: undefined,
         },
       });
     }

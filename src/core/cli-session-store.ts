@@ -26,8 +26,18 @@ export function fingerprintRun(run: { model?: string; permissionMode?: string; p
  */
 export async function loadCliSession(sessionId: string, adapterKey: string, fingerprint: string): Promise<CliSessionRecord | null> {
   const session = await sessionRepository.findById(sessionId);
-  const rec = (session?.context as SessionContext | undefined)?.cliSessions?.[adapterKey];
+  const ctx = session?.context as SessionContext | undefined;
+  const rec = ctx?.cliSessions?.[adapterKey];
   if (!rec || rec.fingerprint !== fingerprint) return null;
+  // Defence in depth: a /clear sets `clearedAt` and is supposed to drop
+  // `cliSessions` at the write (both command paths do this), but a stored
+  // record that somehow survives a clear (a write path that misses it, a
+  // fire-and-forget save racing in from a turn started before the clear)
+  // must still never be resumed — that would hand the vendor CLI back a
+  // conversation the user explicitly cleared. A record saved AFTER the
+  // clear (lastUsedAt > clearedAt) is a legitimate post-clear session and is
+  // still resumable.
+  if (ctx?.clearedAt && rec.lastUsedAt <= ctx.clearedAt) return null;
   return rec;
 }
 

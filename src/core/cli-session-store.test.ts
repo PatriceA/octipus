@@ -81,4 +81,23 @@ describe('cli session store', () => {
     await saveCliSession('s1', 'Claude Code', { id: 'u1', fingerprint: 'fp-a', lastUsedAt: new Date().toISOString() });
     expect(await loadCliSession('s2', 'Claude Code', 'fp-a')).toBeNull();
   });
+
+  // Defence in depth (Task 3): a /clear sets `clearedAt` AND drops
+  // `cliSessions` at the write, but a stored record that somehow survives a
+  // clear (a future write path that forgets to drop it, exactly like the
+  // chat-text /clear bug this guards against) must still not be resumable —
+  // it would hand the vendor CLI the whole pre-clear conversation back.
+  it('refuses a stored record that predates the session’s clearedAt', async () => {
+    await saveCliSession('s1', 'Claude Code', { id: 'u1', fingerprint: 'fp-a', lastUsedAt: '2026-01-01T00:00:00.000Z' });
+    const row = store.get('s1')!;
+    row.context = { ...row.context, clearedAt: '2026-01-02T00:00:00.000Z' };
+    expect(await loadCliSession('s1', 'Claude Code', 'fp-a')).toBeNull();
+  });
+
+  it('still resumes a record saved after the session’s clearedAt', async () => {
+    const row0 = { context: { clearedAt: '2026-01-01T00:00:00.000Z' } as SessionContext };
+    store.set('s1', row0);
+    await saveCliSession('s1', 'Claude Code', { id: 'u1', fingerprint: 'fp-a', lastUsedAt: '2026-01-02T00:00:00.000Z' });
+    expect(await loadCliSession('s1', 'Claude Code', 'fp-a')).toMatchObject({ id: 'u1' });
+  });
 });
