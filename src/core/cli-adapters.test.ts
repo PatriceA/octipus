@@ -323,6 +323,34 @@ describe('run-scoped CLI configuration', () => {
   });
 });
 
+describe('unconditional isolation without a bridge (Hole 2)', () => {
+  // No `connection` argument passed at all — simulates a failed/absent tool
+  // bridge. Must still never reach the host's own MCP servers.
+  it('Claude Code: --strict-mcp-config is present even without a connection', () => {
+    const out = builder.build('Claude Code', 'hi', {}, []);
+    expect(out.args).toContain('--strict-mcp-config');
+    expect(out.args).toContain('--mcp-config');
+  });
+
+  it('Claude Code: an explicit settings.mcpConfigPath is still honored, but strictly', () => {
+    const out = builder.build('Claude Code', 'hi', { mcpConfigPath: '/custom/mcp.json' }, []);
+    expect(out.args).toContain('--strict-mcp-config');
+    expect(out.args[out.args.indexOf('--mcp-config') + 1]).toBe('/custom/mcp.json');
+  });
+
+  it('Codex CLI: falls back to --ignore-user-config so config.toml MCP servers never load', () => {
+    const out = builder.build('Codex CLI', 'hi', {}, []);
+    expect(out.args).toContain('--ignore-user-config');
+    expect(out.args.some(a => a.startsWith('mcp_servers='))).toBe(false);
+  });
+
+  it('Codex CLI: a connected run never carries --ignore-user-config', () => {
+    const connection = { url: 'http://127.0.0.1:1', key: 'k', planMode: false, maxIterations: 1, codexMcpServers: [] as Array<{ name: string }> };
+    const out = builder.build('Codex CLI', 'hi', {}, [], null, 100, 'agent-1', connection);
+    expect(out.args).not.toContain('--ignore-user-config');
+  });
+});
+
 it('preserves legacy permission aliases', () => {
   expect(resolveCodexSandboxMode('auto')).toBe('workspace-write');
   expect(resolveVibeMode('yolo')).toBe('auto-approve');

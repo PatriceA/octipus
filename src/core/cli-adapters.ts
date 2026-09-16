@@ -169,6 +169,65 @@ function getOrCreateMcpConfig(agentId?: string, connection?: CliRunConnection): 
   return configPath;
 }
 
+/** Cached path — content is fixed (`{"mcpServers":{}}`), so write it once and reuse. */
+let emptyMcpConfigPath: string | null = null;
+
+/**
+ * Absolute path to a constant `{"mcpServers":{}}` file, paired with
+ * `--strict-mcp-config` to isolate a Claude-binary CLI run that has no
+ * Octipus MCP server to inject: a one-shot text completion
+ * (`src/models/providers/cli-provider.ts`, never needs tools) or an agent
+ * run whose tool bridge failed to start (`connection` undefined, so there is
+ * no scoped `octipus` server to register). Lazily created once per process —
+ * unlike the per-agent config (which carries a rotating token), this file's
+ * content never changes.
+ */
+export function getEmptyMcpConfigPath(): string {
+  if (emptyMcpConfigPath && existsSync(emptyMcpConfigPath)) return emptyMcpConfigPath;
+  const dir = join(tmpdir(), 'octipus-cli');
+  mkdirSync(dir, { recursive: true });
+  const configPath = join(dir, 'mcp-config-empty.json');
+  writeFileSync(configPath, JSON.stringify({ mcpServers: {} }), { mode: 0o600 });
+  emptyMcpConfigPath = configPath;
+  return configPath;
+}
+
+/** Cached path — reseeded only if the dir has gone missing. */
+let emptyVibeHomeDir: string | null = null;
+
+/**
+ * Ephemeral `VIBE_HOME` with `mcp_servers = []`, for a one-shot vibe
+ * completion (`cli-provider.ts`): no bridge, no tools needed, so vibe should
+ * see none of the host's configured MCP servers either. vibe has no
+ * `--mcp-config` flag, so an isolated `VIBE_HOME` is the only lever. Cached
+ * for the process lifetime (mirrors {@link getEmptyMcpConfigPath}): the
+ * seeded auth/trust files don't change turn to turn. Returns null when vibe
+ * was never set up (no `config.toml`) — the caller then spawns vibe with its
+ * own defaults.
+ */
+export function getEmptyVibeHome(): string | null {
+  if (emptyVibeHomeDir && existsSync(join(emptyVibeHomeDir, 'config.toml'))) return emptyVibeHomeDir;
+  const realHome = process.env.VIBE_HOME || join(homedir(), '.vibe');
+  const realConfig = join(realHome, 'config.toml');
+  if (!existsSync(realConfig)) return null;
+  const dir = join(tmpdir(), 'octipus-cli', 'vibe-home-empty');
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const realEnv = join(realHome, '.env');
+    if (existsSync(realEnv)) copyFileSync(realEnv, join(dir, '.env'));
+    const realTrust = join(realHome, 'trusted_folders.toml');
+    if (existsSync(realTrust)) copyFileSync(realTrust, join(dir, 'trusted_folders.toml'));
+    const parsed = parseToml(readFileSync(realConfig, 'utf-8'));
+    parsed.mcp_servers = [];
+    writeFileSync(join(dir, 'config.toml'), stringifyToml(parsed), { mode: 0o600 });
+    emptyVibeHomeDir = dir;
+    return dir;
+  } catch (err) {
+    coreLogger.warn({ err }, 'Failed to seed empty VIBE_HOME for one-shot isolation — vibe will run with host MCP config');
+    return null;
+  }
+}
+
 /**
  * Inject (or replace) a top-level `mcp_servers` assignment in a vibe
  * `config.toml` with one that registers the Octipus MCP server. vibe's schema
@@ -550,10 +609,18 @@ export class CLIArgumentBuilder {
       }
     }
 
-    // MCP config: prefer explicit setting, otherwise auto-generate
-    const mcpConfig = connection ? getOrCreateMcpConfig(agentId, connection) : settings.mcpConfigPath || getOrCreateMcpConfig(agentId);
+    // MCP config: a live bridge registers the scoped octipus server;
+    // otherwise an explicit operator setting, or — with neither — an empty
+    // config, since there is no bridge to point `octipus` at (zero MCP
+    // servers, not the host's ~/.claude.json set). --strict-mcp-config is
+    // unconditional so a failed/absent bridge can never fall through to the
+    // host's own MCP config.
+    const mcpConfig = connection
+      ? getOrCreateMcpConfig(agentId, connection)
+      : (settings.mcpConfigPath || getEmptyMcpConfigPath());
+    args.push('--strict-mcp-config');
     if (connection) {
-      args.push('--strict-mcp-config', '--max-turns', String(connection.maxIterations), '--input-format', 'stream-json', '--permission-prompt-tool', 'stdio');
+      args.push('--max-turns', String(connection.maxIterations), '--input-format', 'stream-json', '--permission-prompt-tool', 'stdio');
     }
     if (mcpConfig) {
       args.push('--mcp-config', mcpConfig);
@@ -692,6 +759,19 @@ export class CLIArgumentBuilder {
       // executor remains responsible for every tool's actual authorization.
       const server = `{ command = ${JSON.stringify(process.execPath)}, args = [${JSON.stringify(entry)}], env_vars = ["OCTIPUS_AGENT_URL", "OCTIPUS_AGENT_KEY"], default_tools_approval_mode = "approve", tool_timeout_sec = ${CLI_BRIDGE_TOOL_TIMEOUT_SECONDS} }`;
       baseArgs.push('-c', `mcp_servers={${[...disabled, `octipus_run_${randomBytes(6).toString('hex')}=${server}`].join(',')}}`);
+    } else {
+      // No bridge (never started, or failed) — no discovered server list to
+      // disable by name, and `-c mcp_servers={}` alone does NOT disable
+      // configured servers (verified live 2026-09-16: codex MERGES -c
+      // tables into config.toml rather than replacing them, same reason the
+      // connected branch above enumerates every server instead of just
+      // overlaying the octipus entry). `--ignore-user-config` skips
+      // config.toml entirely (auth still resolves via CODEX_HOME), which is
+      // the only way to reach zero MCP servers without a discovered list.
+      // Trade-off: an implicit default model set only in config.toml (no
+      // CODEX_MODEL/settings.model override) is lost for this run — an
+      // acceptable cost for a run with no working tool bridge anyway.
+      baseArgs.push('--ignore-user-config');
     }
     if (modelOverride) baseArgs.push('-c', `model="${modelOverride}"`);
     if (settings?.extraArgs?.length) baseArgs.push(...settings.extraArgs);
