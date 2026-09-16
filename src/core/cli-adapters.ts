@@ -664,10 +664,21 @@ export class CLIArgumentBuilder {
     // `codex exec resume <id>`. Otherwise (including the first run, which has
     // no id yet) --ephemeral is dropped whenever `resume` participates in
     // reuse, since an ephemeral run can never be resumed later.
-    const baseArgs = resume && !resume.isFirstRun ? ['exec', 'resume', resume.id] : ['exec'];
+    const isResumedRun = !!resume && !resume.isFirstRun;
+    const baseArgs = isResumedRun ? ['exec', 'resume', resume.id] : ['exec'];
     baseArgs.push('--skip-git-repo-check', '--json');
     if (!resume) baseArgs.push('--ephemeral');
-    baseArgs.push('--sandbox', codexPermMode);
+    // `codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]` (v0.154.0) does NOT
+    // accept --sandbox — verified live 2026-09-16: `error: unexpected
+    // argument '--sandbox' found`, usage line confirms its only options are
+    // -c/--config, --last, --all, --enable, --disable, -i/--image,
+    // --strict-config (plus --skip-git-repo-check/--json handled above).
+    // `-c sandbox_mode="<mode>"` is accepted on resume (config-override
+    // escape hatch) and was confirmed working by hand:
+    // `codex exec resume <id> --skip-git-repo-check --json -c sandbox_mode="read-only" "..."`.
+    // A first/non-resumed `exec` run still takes --sandbox directly.
+    if (isResumedRun) baseArgs.push('-c', `sandbox_mode="${codexPermMode}"`);
+    else baseArgs.push('--sandbox', codexPermMode);
     if (connection) {
       // Codex merges -c tables, so never overlay a host HTTP/stdio entry.
       // Ask Codex to resolve every config layer, including trusted project
@@ -1246,19 +1257,32 @@ export class CLIOutputParser {
       const usage = event.usage as Record<string, unknown> | undefined;
       if (usage) {
         // Codex reports the OpenAI Responses shape: `cached_input_tokens` is a
-        // SUBSET of `input_tokens`, not an extra charge on top. That convention
-        // is what `foldCacheCounters` exists to settle, so route through it
-        // rather than hand-adding — the emitted fields then satisfy
-        // `input + output === total` and `cacheRead <= input`, which the two
-        // consumers in cli-agent-worker.ts (the context proxy and
-        // `billableTokens`) both assume. Adding `cached` onto `input` while
-        // leaving `total` alone broke both: `billableTokens` saw the entire
-        // replayed context as fresh spend and the budget kill-switch SIGKILLed
-        // a well-cached resumed thread — the failure already fixed for Claude.
+        // SUBSET of `input_tokens`, not an extra charge on top — VERIFIED
+        // live against codex CLI v0.154.0 on 2026-09-16, not assumed. Two
+        // `codex exec --json` turns in one resumed thread:
+        //   turn 1 (fresh):   input_tokens=15839, cached_input_tokens=8192
+        //   turn 2 (resumed): input_tokens=31694, cached_input_tokens=23808
+        // If cached were exclusive (added on top of input), turn 2's prompt
+        // would have been 31694+23808=55502 tokens for a two-line
+        // conversation — impossible. `input_tokens` also already covers the
+        // WHOLE prompt for that turn (not a session-cumulative figure), so
+        // no cross-turn subtraction is needed here; that matches the
+        // existing per-process reconciliation design below and this file
+        // leaves that design unchanged.
         //
-        // The fold is also safe if Codex ever reports the counters exclusively:
-        // its post-condition clamp raises `inputTokens` to the cache sum rather
-        // than letting `cacheRead > input` through.
+        // `foldCacheCounters` is what settles the "subset, not addend"
+        // convention, so route through it rather than hand-adding — the
+        // emitted fields then satisfy `input + output === total` and
+        // `cacheRead <= input`, which the two consumers in
+        // cli-agent-worker.ts (the context proxy and `billableTokens`) both
+        // assume. Adding `cached` onto `input` while leaving `total` alone
+        // broke both: `billableTokens` saw the entire replayed context as
+        // fresh spend and the budget kill-switch SIGKILLed a well-cached
+        // resumed thread — the failure already fixed for Claude.
+        //
+        // The fold is also safe if Codex ever reports the counters
+        // exclusively: its post-condition clamp raises `inputTokens` to the
+        // cache sum rather than letting `cacheRead > input` through.
         const folded = foldCacheCounters({
           input_tokens: usage.input_tokens,
           input_tokens_details: { cached_tokens: usage.cached_input_tokens },

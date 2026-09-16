@@ -436,4 +436,35 @@ CURRENT DATE & TIME: now`], null, 100, 'agent-1', connection, { id: 'a3f1-uuid',
     const withResume = builder.build('Antigravity', 'hello', {}, [], null, 100, 'agent-1', connection, { id: 'x', isFirstRun: false });
     expect(withResume.args).toEqual(withoutResume.args);
   });
+
+  // `codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]` (codex v0.154.0) only
+  // accepts -c/--config, --last, --all, --enable, --disable, -i/--image,
+  // --strict-config, --skip-git-repo-check, --json. Live run 2026-09-16
+  // confirmed `--sandbox` is NOT among them (exit code 2, "unexpected
+  // argument '--sandbox' found"). Assert against the explicit allowlist, not
+  // just the absence of --sandbox, so a future flag added to buildCodexArgs
+  // that resume also rejects still fails this test.
+  it('a resumed Codex run carries only flags codex exec resume accepts', () => {
+    const RESUME_ACCEPTED_FLAGS = new Set(['-c', '--config', '--last', '--all', '--enable', '--disable', '-i', '--image', '--strict-config', '--skip-git-repo-check', '--json']);
+    const { args } = builder.build('Codex CLI', 'hello', {}, [], null, 100, 'agent-1', connection, { id: 'thread-9', isFirstRun: false });
+    // First three are positional (exec resume <id>); walk the rest and reject
+    // anything that looks like a flag but isn't accepted by `resume`. A bare
+    // "-" is the PROMPT positional (stdin sentinel on Windows), not a flag.
+    for (const arg of args.slice(3)) {
+      if (arg !== '-' && arg.startsWith('-')) expect(RESUME_ACCEPTED_FLAGS.has(arg)).toBe(true);
+    }
+    expect(args).not.toContain('--sandbox');
+  });
+
+  it('expresses the sandbox mode via -c sandbox_mode on a resumed Codex run', () => {
+    const { args } = builder.build('Codex CLI', 'hello', { permissionMode: 'full' }, [], null, 100, 'agent-1', connection, { id: 'thread-9', isFirstRun: false });
+    const idx = args.indexOf('-c');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args).toContain('sandbox_mode="danger-full-access"');
+  });
+
+  it('keeps --sandbox on a non-resumed Codex exec run', () => {
+    const { args } = builder.build('Codex CLI', 'hello', {}, [], null, 100, 'agent-1', connection, { id: '', isFirstRun: true });
+    expect(args).toContain('--sandbox');
+  });
 });
