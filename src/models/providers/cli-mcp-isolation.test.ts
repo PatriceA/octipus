@@ -59,12 +59,13 @@ describe('one-shot CLI provider — MCP isolation (Hole 1)', () => {
     expect(args).toEqual(['exec', '--json', 'hi']);
   });
 
-  it('Codex CLI: buildArgsAsync fails closed if the effective config cannot be inspected', async () => {
+  it('Codex CLI: buildArgsAsync falls back to --ignore-user-config when discovery cannot run (does not fail the completion)', async () => {
     vi.mocked(execFile).mockImplementation(((_cmd: string, _args: string[], _opts: unknown, cb: ExecCb) => {
       cb(new Error('boom'), '', '');
       return undefined as never;
     }) as never);
-    await expect(codexCliConfig.buildArgsAsync!('hi', '/some/cwd')).rejects.toThrow('refusing to launch an unscoped CLI run');
+    const args = await codexCliConfig.buildArgsAsync!('hi', '/some/cwd');
+    expect(args).toEqual(['exec', '--json', '--ignore-user-config', 'hi']);
   });
 
   it('Mistral Vibe: buildEnv points VIBE_HOME at an ephemeral home (or is absent when vibe is unset up)', async () => {

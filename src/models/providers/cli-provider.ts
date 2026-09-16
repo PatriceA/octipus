@@ -208,10 +208,26 @@ const codexCliConfig: CLIToolConfig = {
   // replace them). Discover the effective set and disable each by name,
   // same technique the connected agent path already uses.
   buildArgsAsync: async (prompt: string, cwd: string) => {
-    const servers = await discoverCodexMcpServers(cwd);
-    const disabled = servers.map(s => `${JSON.stringify(s.name)}={enabled=false}`);
     const args = ['exec', '--json'];
-    if (disabled.length) args.push('-c', `mcp_servers={${disabled.join(',')}}`);
+    try {
+      const servers = await discoverCodexMcpServers(cwd);
+      const disabled = servers.map(s => `${JSON.stringify(s.name)}={enabled=false}`);
+      if (disabled.length) args.push('-c', `mcp_servers={${disabled.join(',')}}`);
+    } catch (err) {
+      // Discovery failed (codex missing, `mcp list` errored, etc). This is a
+      // plain text completion, not an agent run — failing it outright over an
+      // inability to enumerate host MCP servers is wrong. Fall back to
+      // `--ignore-user-config`, which skips config.toml entirely (auth still
+      // resolves via CODEX_HOME) so the completion still runs isolated.
+      // Trade-off: this also discards the user's configured default model
+      // (only settable in config.toml) — accepted cost for a run that would
+      // otherwise not happen at all.
+      modelLogger.warn(
+        { err: (err as Error).message },
+        'Codex MCP discovery failed for one-shot completion — falling back to --ignore-user-config',
+      );
+      args.push('--ignore-user-config');
+    }
     args.push(prompt);
     return args;
   },
@@ -563,6 +579,18 @@ export class CLIProvider implements ModelProvider {
     const tool = this.getToolConfig(options.model);
     if (!tool) {
       throw classifyError(new Error(`No CLI tool found for model: ${options.model}`), 'cli');
+    }
+
+    // CLIProvider.complete() is a plain text completion — it never reads
+    // options.tools, so a caller that passes tools would silently get a
+    // confident tool-less answer instead of an error. Fail loudly instead:
+    // no completion caller passes tools on this path today, so this guards
+    // against a future wiring mistake, not a live bug.
+    if (options.tools && options.tools.length > 0) {
+      throw classifyError(
+        new Error(`CLI-provider model '${options.model}' cannot execute tools on the completion path (${tool.name} runs as a one-shot text completion, not an agent).`),
+        'cli',
+      );
     }
 
     // Check quota before executing

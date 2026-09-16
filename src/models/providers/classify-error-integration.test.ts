@@ -272,4 +272,46 @@ describe('CLIProvider classified errors', () => {
       tracker.markExhausted = origMark;
     }
   });
+
+  test('complete() throws ClassifiedError naming the model when options.tools is non-empty (CLI cannot execute tools)', async () => {
+    const p = new CLIProvider();
+    const { getQuotaTracker } = await import('../quota-tracker');
+    const tracker = getQuotaTracker();
+    const origGet = tracker.getStatus.bind(tracker);
+    tracker.getStatus = vi.fn(async () => ({ provider: 'claude-code', hasQuota: true, exhausted: false })) as any;
+
+    try {
+      let thrown: unknown;
+      try {
+        await p.complete({ ...baseOptions('cli/claude'), tools: [{ type: 'function', function: { name: 'search', parameters: {} } }] } as any);
+      } catch (e) { thrown = e; }
+      expect(thrown).toBeInstanceOf(ClassifiedError);
+      expect((thrown as ClassifiedError).providerHint).toBe('cli');
+      expect((thrown as Error).message).toContain('cli/claude');
+      expect((thrown as Error).message).toMatch(/tool/i);
+    } finally {
+      tracker.getStatus = origGet;
+    }
+  });
+
+  test('complete() does NOT throw the tools guard when options.tools is empty/absent', async () => {
+    const p = new CLIProvider();
+    (p as any).execCli = async () => JSON.stringify({ result: 'ok', usage: { input_tokens: 1, output_tokens: 1 } });
+    const { getQuotaTracker } = await import('../quota-tracker');
+    const tracker = getQuotaTracker();
+    const origGet = tracker.getStatus.bind(tracker);
+    const origTrack = tracker.trackUsage.bind(tracker);
+    tracker.getStatus = vi.fn(async () => ({ provider: 'claude-code', hasQuota: true, exhausted: false })) as any;
+    tracker.trackUsage = vi.fn(async () => {}) as any;
+
+    try {
+      const r1 = await p.complete({ ...baseOptions('cli/claude'), tools: [] } as any);
+      expect(r1.content).toBe('ok');
+      const r2 = await p.complete(baseOptions('cli/claude'));
+      expect(r2.content).toBe('ok');
+    } finally {
+      tracker.getStatus = origGet;
+      tracker.trackUsage = origTrack;
+    }
+  });
 });
