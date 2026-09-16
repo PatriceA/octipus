@@ -177,6 +177,18 @@ export class ProviderRouter {
     return this.providers.find(p => p.name === name);
   }
 
+  /**
+   * Names of providers that can generate embeddings — `embed` implemented, or
+   * `litellm` (routed to `embedViaProxy`, not the direct `provider.embed`
+   * path — see litellm-client.ts). Same notion litellm-client.ts:792 uses to
+   * decide at call time; topics.ts (Guard 1) reuses it to refuse an
+   * embedding-topic binding at bind time instead of failing later at index
+   * time.
+   */
+  getEmbedCapableProviderNames(): string[] {
+    return this.providers.filter(p => p.name === 'litellm' || !!p.embed).map(p => p.name);
+  }
+
   /** Resolve provider: check DB config first (handles models like "deepseek-ocr" on Ollama), fall back to name heuristic */
   async resolveProvider(modelName: string): Promise<ModelProvider> {
     try {

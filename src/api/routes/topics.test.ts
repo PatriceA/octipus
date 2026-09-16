@@ -27,6 +27,8 @@ describe.skipIf(!isIntegration)('Topics API (Integration)', () => {
     const reg = getModelRegistry();
     await reg.registerModel({ name: 'model-a', provider: 'ollama', modelId: 'a', isEnabled: true } as any);
     await reg.registerModel({ name: 'model-b', provider: 'ollama', modelId: 'b', isEnabled: true } as any);
+    // A CLI-provider model — no CLI can ever produce embeddings (Guard 1).
+    await reg.registerModel({ name: 'model-cli', provider: 'cli', modelId: 'cli/claude', isEnabled: true } as any);
 
     const { loadTopicConfigs } = await import('@/models/topic-config');
     await loadTopicConfigs();
@@ -144,5 +146,32 @@ describe.skipIf(!isIntegration)('Topics API (Integration)', () => {
   test('non-admin cannot PUT binding', async () => {
     const r = await send(userApp, 'PUT', '/api/topics/agents/binding', { primaryModel: 'model-a' });
     expect(r.status).toBe(403);
+  });
+
+  test('PUT binding a CLI-provider model as embedding primary → 400, names model + qualifying providers', async () => {
+    const r = await send(adminApp, 'PUT', '/api/topics/embedding/binding', { primaryModel: 'model-cli' });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toContain('model-cli');
+    expect(r.body.error).toMatch(/embed/i);
+    expect(r.body.error).toMatch(/ollama/i);
+  });
+
+  test('PUT binding a CLI-provider model as embedding backup → 400', async () => {
+    const r = await send(adminApp, 'PUT', '/api/topics/embedding/binding', { primaryModel: 'model-a', backupModel: 'model-cli' });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toContain('model-cli');
+  });
+
+  test('PUT binding an embed-capable model to embedding topic succeeds', async () => {
+    const r = await send(adminApp, 'PUT', '/api/topics/embedding/binding', { primaryModel: 'model-a' });
+    expect(r.status).toBe(200);
+    const list = await get(adminApp, '/api/topics');
+    const embedding = list.body.topics.find((t: any) => t.value === 'embedding');
+    expect(embedding.primaryModel).toBe('model-a');
+  });
+
+  test('PUT binding a CLI-provider model to a non-embedding topic is unaffected', async () => {
+    const r = await send(adminApp, 'PUT', '/api/topics/agents/binding', { primaryModel: 'model-cli' });
+    expect(r.status).toBe(200);
   });
 });

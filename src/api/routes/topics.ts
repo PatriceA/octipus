@@ -1,6 +1,7 @@
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getModelRegistry } from '@/models/model-registry';
+import { getProviderRouter } from '@/models/providers';
 import { SINGLE_MODEL_CHAT_TOPICS } from '@/models/single-model-binding';
 import { getTopicConfig, setTopicConfig } from '@/models/topic-config';
 import { TOPICS } from '@/models/topics';
@@ -121,6 +122,28 @@ export const topicRoutes = new Elysia({ prefix: '/topics' })
       if (body.primaryModel && body.backupModel && body.primaryModel === body.backupModel) {
         set.status = 400;
         return { error: 'primaryModel and backupModel must differ' };
+      }
+
+      // No CLI can ever produce embeddings — refuse at bind time rather than
+      // failing later at index time (litellm-client.ts:792 makes the same
+      // call at call time; reuse its notion instead of hardcoding provider
+      // names). Only the 'embedding' topic is special-cased — embedding is
+      // the only model class the caller foresees needing this.
+      if (topic === 'embedding') {
+        const router = getProviderRouter();
+        for (const name of [body.primaryModel, body.backupModel]) {
+          if (!name) continue;
+          const model = byName.get(name)!;
+          const provider = router.getProviderByName(model.provider);
+          const canEmbed = !!provider && (provider.name === 'litellm' || !!provider.embed);
+          if (!canEmbed) {
+            set.status = 400;
+            return {
+              error: `Model "${name}" cannot be bound to the embedding topic — its provider ('${model.provider}') does not implement embeddings. ` +
+                `Use a model from a provider that does: ${router.getEmbedCapableProviderNames().join(', ')}.`,
+            };
+          }
+        }
       }
 
       // Compute each model's new role for this topic, then write only the rows
