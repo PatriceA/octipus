@@ -3,8 +3,8 @@ import { windowsShellQuote } from './cli-provider';
 
 /**
  * `windowsShellQuote` is the single shared Windows `shell:true` quoting
- * rule for every spawn call site: `execCli` (CLI completions + compaction,
- * `cli-session-compact.ts`) and `CLIAgentWorker`'s own agent-process spawn
+ * rule for every spawn call site: `execCli` (one-shot CLI completions) and
+ * `CLIAgentWorker`'s own agent-process spawn
  * (`cli-agent-worker.ts`). One implementation, one test — covers both
  * consumers. Tests the quoting logic directly — no real shell spawned —
  * per MSVCRT/CommandLineToArgvW convention: quote on whitespace/embedded-

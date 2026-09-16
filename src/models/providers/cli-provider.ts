@@ -82,6 +82,16 @@ export interface CLIToolConfig {
   /** Build command args for a non-interactive prompt */
   buildArgs: (prompt: string) => string[];
   /**
+   * How the prompt reaches the CLI. 'stdin' is correct for every tool that
+   * supports it: a prompt containing a newline cannot be passed as argv on
+   * Windows (execCli spawns with shell:true and cmd.exe drops it), and the
+   * failure is silent — the CLI answers from its working directory, exit 0.
+   * `buildArgs` receives an empty prompt in stdin mode and must not place a
+   * prompt placeholder in argv. 'argv' (the default) is only safe for a
+   * single-line prompt, and execCli rejects a multi-line one outright.
+   */
+  promptVia?: 'argv' | 'stdin';
+  /**
    * Async isolation-aware variant of `buildArgs`, for a tool whose isolation
    * needs a subprocess call before argv is known (codex: discover the host's
    * effective MCP servers and disable each by name — `-c mcp_servers={}`
@@ -129,7 +139,8 @@ const claudeCodeConfig: CLIToolConfig = {
   // completion used as a model, not an agent — it needs zero tools, and
   // without this it silently loads the host's entire ~/.claude.json MCP
   // config (measured 2k+ tokens of tool schemas on top of the real prompt).
-  buildArgs: (prompt: string) => ['-p', prompt, '--output-format', 'json', '--strict-mcp-config', '--mcp-config', getEmptyMcpConfigPath()],
+  buildArgs: () => ['-p', '--output-format', 'json', '--strict-mcp-config', '--mcp-config', getEmptyMcpConfigPath()],
+  promptVia: 'stdin',
   // claude --output-format json returns { result, usage: {...} }; the shared
   // parser sums the SAME resolved input/output values (C18) and falls back to
   // plain text when the payload isn't JSON.
@@ -200,7 +211,8 @@ const codexCliConfig: CLIToolConfig = {
   // Unscoped fallback — kept for type-completeness, never actually reached:
   // CLIProvider.complete() prefers buildArgsAsync below, which is the only
   // way to isolate codex (see its doc comment).
-  buildArgs: (prompt: string) => ['exec', '--json', prompt],
+  buildArgs: () => ['exec', '--json', '-'],
+  promptVia: 'stdin',
   // Plain text completion, zero tools needed. `-c mcp_servers={}` alone does
   // NOT disable configured servers (verified live 2026-09-16 against a real
   // host MCP server: `codex mcp list --json` still showed it enabled after
@@ -228,7 +240,9 @@ const codexCliConfig: CLIToolConfig = {
       );
       args.push('--ignore-user-config');
     }
-    args.push(prompt);
+    // `-` reads the prompt from stdin (promptVia: 'stdin'). Never positional:
+    // a multi-line prompt in argv does not survive cmd.exe.
+    args.push('-');
     return args;
   },
   parseOutput: (stdout: string, startTime: number): CompletionResult => {
@@ -478,7 +492,8 @@ function makeAnthropicCompatCliConfig(spec: AnthropicCompatCliSpec): CLIToolConf
     modelPatterns: spec.modelPatterns,
     binaryPath: 'claude',
     adapter: 'Claude Code',
-    buildArgs: (prompt: string) => ['-p', prompt, '--output-format', 'json', '--strict-mcp-config', '--mcp-config', getEmptyMcpConfigPath()],
+    buildArgs: () => ['-p', '--output-format', 'json', '--strict-mcp-config', '--mcp-config', getEmptyMcpConfigPath()],
+    promptVia: 'stdin',
     parseOutput: parseClaudeStyleOutput(spec.modelLabel),
     buildEnv: async () => {
       const token = await resolveCliVendorKey(spec.keyEnv, spec.keyVault);
@@ -602,7 +617,11 @@ export class CLIProvider implements ModelProvider {
 
     // Build prompt from messages (combine system + user messages)
     const prompt = this.buildPrompt(options);
-    const args = tool.buildArgsAsync ? await tool.buildArgsAsync(prompt, resolveWorkspaceRoot()) : tool.buildArgs(prompt);
+    // In stdin mode the prompt must not reach argv at all — the builders take
+    // an empty string and place `-` (or nothing) instead.
+    const viaStdin = tool.promptVia === 'stdin';
+    const argvPrompt = viaStdin ? '' : prompt;
+    const args = tool.buildArgsAsync ? await tool.buildArgsAsync(argvPrompt, resolveWorkspaceRoot()) : tool.buildArgs(argvPrompt);
     const env = tool.buildEnv ? await tool.buildEnv() : undefined;
     const startTime = Date.now();
 
@@ -620,7 +639,7 @@ export class CLIProvider implements ModelProvider {
       const release = await acquireCliSlot();
       let stdout: string;
       try {
-        stdout = await this.execCli(tool.binaryPath, args, { env: buildChildEnv(tool, env, inheritApiKeys) });
+        stdout = await this.execCli(tool.binaryPath, args, { env: buildChildEnv(tool, env, inheritApiKeys), ...(viaStdin ? { stdin: prompt } : {}) });
       } finally {
         release();
       }
@@ -742,7 +761,7 @@ export class CLIProvider implements ModelProvider {
   // Overridable seam: delegates to module-level execCli so tests can stub
   // `(provider as any).execCli` to force a classified error without
   // spawning a real subprocess.
-  private execCli(binary: string, args: string[], opts?: { timeoutMs?: number; env?: Record<string, string> }): Promise<string> {
+  private execCli(binary: string, args: string[], opts?: { timeoutMs?: number; env?: Record<string, string>; stdin?: string }): Promise<string> {
     return execCli(binary, args, opts);
   }
 
@@ -808,12 +827,25 @@ export function windowsShellQuote(value: string): string {
 /**
  * The guarded CLI spawn: kill-tree timeout, bounded output buffers. Exported
  * (alongside {@link acquireCliSlot}) so any one-shot CLI invocation outside
- * `CLIProvider.complete` — e.g. `cli-session-compact.ts` pushing octipus's
- * compaction into a live vendor session — goes through the same guard rails
- * as a normal completion instead of spawning unbounded.
+ * `CLIProvider.complete` goes through the same guard rails as a normal
+ * completion instead of spawning unbounded.
  */
-export function execCli(binary: string, args: string[], opts?: { timeoutMs?: number; env?: Record<string, string>; cwd?: string }): Promise<string> {
+export function execCli(binary: string, args: string[], opts?: { timeoutMs?: number; env?: Record<string, string>; cwd?: string; stdin?: string }): Promise<string> {
   return new Promise((resolve, reject) => {
+    // A newline inside a positional argv does not survive cmd.exe. The CLI
+    // then runs with NO prompt at all, answers from its working directory,
+    // and exits 0 — a confident hallucination with nothing to distinguish it
+    // from a real answer. Measured live 2026-09-16: a multi-line summarizer
+    // prompt came back as "No conversation yet" plus a description of the
+    // repo the process happened to be sitting in. Multi-line prompts go on
+    // stdin (`CLIToolConfig.promptVia: 'stdin'`); anything else fails loudly.
+    const newlineArg = args.find(arg => /[\r\n]/.test(arg));
+    if (newlineArg !== undefined) {
+      reject(classifyError(new Error(
+        `CLI argv for '${binary}' contains a newline, which is silently lost on Windows — pass the prompt on stdin (promptVia: 'stdin') instead. Offending argument starts: ${JSON.stringify(newlineArg.slice(0, 80))}`,
+      ), 'cli'));
+      return;
+    }
     // Fixed generous default, not a maxTokens*100ms heuristic (which could
     // arm a sub-second timeout for a small budget or a 3h one for a big
     // batch). CLI subscription tools are slow; 10 min is a safe ceiling.
@@ -836,9 +868,14 @@ export function execCli(binary: string, args: string[], opts?: { timeoutMs?: num
       // from the wrong cwd finds nothing at all.
       cwd: opts?.cwd ?? resolveWorkspaceRoot(),
       env: opts?.env ?? { ...process.env },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [opts?.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       shell: useShell,
     });
+
+    if (opts?.stdin !== undefined) {
+      proc.stdin?.on('error', () => { /* the child can exit before we finish writing */ });
+      proc.stdin?.end(opts.stdin);
+    }
 
     // NOT spawn's own `timeout`: with shell:true (Windows) that kills the
     // cmd.exe wrapper and leaves the real CLI running as an orphan — the
@@ -865,11 +902,11 @@ export function execCli(binary: string, args: string[], opts?: { timeoutMs?: num
     let stdout = '';
     let stderr = '';
 
-    proc.stdout.on('data', (data: Buffer) => {
+    proc.stdout?.on('data', (data: Buffer) => {
       if (stdout.length < MAX_BUF) stdout += data.toString();
     });
 
-    proc.stderr.on('data', (data: Buffer) => {
+    proc.stderr?.on('data', (data: Buffer) => {
       if (stderr.length < MAX_BUF) stderr += data.toString();
     });
 

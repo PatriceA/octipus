@@ -43,20 +43,20 @@ describe('one-shot CLI provider — MCP isolation (Hole 1)', () => {
     // `-c mcp_servers={}` does NOT disable configured servers (verified live
     // 2026-09-16: it merges into config.toml rather than replacing it), so
     // there is no safe sync argv for codex — buildArgsAsync is required.
-    expect(codexCliConfig.buildArgs('hi')).toEqual(['exec', '--json', 'hi']);
+    expect(codexCliConfig.buildArgs('')).toEqual(['exec', '--json', '-']);
     expect(codexCliConfig.buildArgsAsync).toBeTypeOf('function');
   });
 
   it('Codex CLI: buildArgsAsync discovers the effective MCP servers and disables each by name', async () => {
     mockCodexList(JSON.stringify([{ name: 'fintus', enabled: true }, { name: 'other' }]));
-    const args = await codexCliConfig.buildArgsAsync!('hi', '/some/cwd');
-    expect(args).toEqual(['exec', '--json', '-c', 'mcp_servers={"fintus"={enabled=false},"other"={enabled=false}}', 'hi']);
+    const args = await codexCliConfig.buildArgsAsync!('', '/some/cwd');
+    expect(args).toEqual(['exec', '--json', '-c', 'mcp_servers={"fintus"={enabled=false},"other"={enabled=false}}', '-']);
   });
 
   it('Codex CLI: buildArgsAsync omits the -c override entirely when nothing is configured', async () => {
     mockCodexList('[]');
-    const args = await codexCliConfig.buildArgsAsync!('hi', '/some/cwd');
-    expect(args).toEqual(['exec', '--json', 'hi']);
+    const args = await codexCliConfig.buildArgsAsync!('', '/some/cwd');
+    expect(args).toEqual(['exec', '--json', '-']);
   });
 
   it('Codex CLI: buildArgsAsync falls back to --ignore-user-config when discovery cannot run (does not fail the completion)', async () => {
@@ -64,8 +64,8 @@ describe('one-shot CLI provider — MCP isolation (Hole 1)', () => {
       cb(new Error('boom'), '', '');
       return undefined as never;
     }) as never);
-    const args = await codexCliConfig.buildArgsAsync!('hi', '/some/cwd');
-    expect(args).toEqual(['exec', '--json', '--ignore-user-config', 'hi']);
+    const args = await codexCliConfig.buildArgsAsync!('', '/some/cwd');
+    expect(args).toEqual(['exec', '--json', '--ignore-user-config', '-']);
   });
 
   it('Mistral Vibe: buildEnv points VIBE_HOME at an ephemeral home (or is absent when vibe is unset up)', async () => {
