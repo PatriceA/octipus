@@ -11,6 +11,13 @@ const mockCodexList = (stdout: string | Error) => vi.mocked(execFile).mockImplem
 }) as never);
 
 const builder = new CLIArgumentBuilder();
+/**
+ * How Claude receives the system prompt on THIS platform. Windows spills it to
+ * a file because the command line caps around 8191 chars; everywhere else it
+ * goes inline. Asserting the Windows flag unconditionally passes locally on
+ * Windows and fails on Linux CI, which is exactly what happened.
+ */
+const SYSTEM_PROMPT_FLAG = process.platform === 'win32' ? '--append-system-prompt-file' : '--append-system-prompt';
 
 const originalEnv = { ...process.env };
 afterEach(() => {
@@ -407,9 +414,13 @@ describe('resume arguments', () => {
     expect(args).toContain('--mcp-config');
   });
 
-  it('does not repeat --append-system-prompt-file on a resumed Claude run', () => {
+  it('does not repeat the system prompt on a resumed Claude run', () => {
     const first = builder.build('Claude Code', 'hello', {}, ['be nice'], null, 100, 'agent-1', connection, { id: 'a3f1-uuid', isFirstRun: true });
-    expect(first.args).toContain('--append-system-prompt-file');
+    // Same documented platform split as the vibe prompt above: Windows spills
+    // the system prompt to a file (command-line length cap), everywhere else
+    // it rides inline. Assert whichever flag THIS platform uses — pinning the
+    // Windows one made the suite green on Windows and red on Linux CI.
+    expect(first.args).toContain(SYSTEM_PROMPT_FLAG);
     const resumed = builder.build('Claude Code', 'hello', {}, ['be nice'], null, 100, 'agent-1', connection, { id: 'a3f1-uuid', isFirstRun: false });
     expect(resumed.args).not.toContain('--append-system-prompt-file');
     expect(resumed.args).not.toContain('--append-system-prompt');
@@ -443,7 +454,7 @@ SECURITY NOTICE: guard flags raised — sql-injection-attempt.`,
     const first = builder.build('Claude Code', 'hi', {}, ['STATIC PREAMBLE', `
 
 CURRENT DATE & TIME: now`], null, 100, 'agent-1', connection, { id: 'a3f1-uuid', isFirstRun: true });
-    expect(first.args).toContain('--append-system-prompt-file');
+    expect(first.args).toContain(SYSTEM_PROMPT_FLAG);
     expect(first.stdinPrompt ?? '').not.toContain('CURRENT DATE & TIME');
   });
 
