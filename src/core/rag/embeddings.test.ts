@@ -81,6 +81,34 @@ describe.skipIf(!isIntegration)('EmbeddingService — fail-loud indexing', () =>
     expect(buildEmbeddingVersion('text-embedding-3-large', 3072)).toBe('text-embedding-3-large/3072');
   });
 
+  test('generateAbstracts skips (never calls complete) when "background" resolves to a CLI provider (Guard 3, pins embeddings.ts:979)', async () => {
+    // A CLI-backed model spawns a whole agent process per completion; one
+    // abstract per indexed chunk against it is what wedged the host before
+    // this guard existed. Message wording mirrors Guard 1's bind-time error
+    // ("provider does not implement embeddings" / here: not a summarization
+    // backend) so a user who sees one recognizes the other.
+    const service = new EmbeddingService('test-embed-model');
+
+    const modelRegistryModule = await import('@/models/model-registry');
+    const registrySpy = vi.spyOn(modelRegistryModule, 'getModelRegistry').mockReturnValue({
+      getModelForTopic: async (topic: string) =>
+        topic === 'background' ? { provider: 'cli', modelId: 'cli/claude' } : null,
+    } as unknown as ReturnType<typeof modelRegistryModule.getModelRegistry>);
+
+    const { getLiteLLMClient } = await import('@/models/litellm-client');
+    const client = getLiteLLMClient();
+    const completeSpy = vi.spyOn(client, 'complete');
+
+    try {
+      await (service as unknown as { generateAbstracts: (ids: string[], contents: string[]) => Promise<void> })
+        .generateAbstracts(['id-1'], ['some chunk content long enough to matter']);
+      expect(completeSpy).not.toHaveBeenCalled();
+    } finally {
+      registrySpy.mockRestore();
+      completeSpy.mockRestore();
+    }
+  });
+
   test('generateEmbedding rejects empty-vector responses loud (not silent)', async () => {
     const service = new EmbeddingService('test-embed-model');
 

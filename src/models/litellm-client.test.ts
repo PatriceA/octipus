@@ -785,10 +785,18 @@ describeUnit('LiteLLMClient — embed', () => {
     expect(captured.input).toEqual(['a', 'b']);
   });
 
-  test('throws when bound provider lacks embed support', async () => {
+  test('throws when bound provider lacks embed support (Guard 3, pins litellm-client.ts:792)', async () => {
+    // Message wording ("does not implement embeddings") mirrors the bind-time
+    // 400 topics.ts (Guard 1) now returns, so a user who sees one recognizes
+    // the other.
     routerState.resolveProvider = { name: 'anthropic' /* no embed fn */ };
     const client = new LiteLLMClient();
-    await expect(client.embed('hi', 'claude-3-opus')).rejects.toBeInstanceOf(ClassifiedError);
+    let thrown: unknown;
+    try { await client.embed('hi', 'claude-3-opus'); } catch (e) { thrown = e; }
+    expect(thrown).toBeInstanceOf(ClassifiedError);
+    expect((thrown as Error).message).toContain('does not implement embeddings');
+    expect((thrown as Error).message).toContain('anthropic');
+    expect((thrown as Error).message).toContain('claude-3-opus');
   });
 
   test('routes to direct provider.embed when not litellm', async () => {
