@@ -238,7 +238,7 @@ export class AnthropicProvider implements ModelProvider {
       stream,
     };
     if (system) body.system = options.cachePolicy === 'off' ? system : buildCachedSystem(system, options.model);
-    if (options.cachePolicy !== 'off') markHistoryCacheBreakpoint(messages);
+    if (options.cachePolicy !== 'off') markHistoryCacheBreakpoint(messages, Boolean(options.cacheScope));
     if (options.temperature != null) body.temperature = clampAnthropicTemperature(options.temperature);
     if (options.topP != null) body.top_p = options.topP;
     if (options.stopSequences?.length) body.stop_sequences = options.stopSequences;

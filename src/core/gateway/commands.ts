@@ -376,16 +376,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
         const session = await sessionRepository.findById(ctx.sessionId);
         if (!session) return { text: 'Session not found.' };
 
-        const existingCtx = (session.context as Record<string, unknown>) || {};
-        await sessionRepository.update(ctx.sessionId, {
-          context: {
-            ...existingCtx,
-            clearedAt: new Date().toISOString(),
-            compactedSummary: undefined,
-            // A cleared conversation must not continue in the vendor CLI.
-            cliSessions: undefined,
-          },
-        });
+        await sessionRepository.clearContext(ctx.sessionId);
 
         // Channels with ephemeral transcripts (webchat, tui) wipe the UI too.
         // Persistent-transcript channels (telegram, slack, …) keep history visible

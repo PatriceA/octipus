@@ -44,7 +44,9 @@ export function serializeConversation(messages: AgentMessage[]): string {
     const content = typeof m.content === 'string'
       ? m.content
       : JSON.stringify(m.content);
-    return `[${role}]: ${content}`;
+    const calls = m.toolCalls?.length ? `\nTool calls: ${JSON.stringify(m.toolCalls)}` : '';
+    const tool = m.role === 'tool' ? ` (${m.name ?? m.toolCallId ?? 'result'})` : '';
+    return `[${role}${tool}]: ${content}${calls}`;
   }).join('\n\n');
 }
 

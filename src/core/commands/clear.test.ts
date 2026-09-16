@@ -21,6 +21,10 @@ describe('/clear command (chat-text)', () => {
       const row = store.get(id);
       return row ? ({ id, context: row.context } as unknown as Session) : null;
     });
+    vi.spyOn(sessionRepository, 'clearContext').mockImplementation(async id => {
+      const row = store.get(id)!;
+      row.context = { ...row.context, clearedAt: new Date().toISOString(), cliSessions: undefined, compactedSummary: undefined, checkpoint: undefined };
+    });
     vi.spyOn(sessionRepository, 'update').mockImplementation(async (id: string, data: { context?: unknown }) => {
       const existing = store.get(id) ?? { context: {} as SessionContext };
       const context = (data.context ?? existing.context) as SessionContext;

@@ -7,6 +7,8 @@ import type { ChatCompletionTool } from 'openai/resources/chat/completions';
 import { homedir } from 'os';
 import { join as joinPath } from 'path';
 import { recordAgentCompletion } from '@/core/agent-task-recorder';
+import { capNativeSnapshot, readSessionHistory, toContextMessage, withSessionConversation } from './session-history';
+import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
 import { agentRepository } from '@/db/repositories/agent-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
@@ -146,7 +148,7 @@ export class AgentWorker extends BaseAgentWorker {
   private toolExecutor: ToolExecutor;
   private abortController: AbortController;
   private totalTokensUsed: number = 0;
-  /** Spend proxy: fresh input + output, cache reads/creation excluded. See `getBillableTokens`. */
+  /** Spend proxy: fresh input + paid cache writes + output; cache reads excluded. See `getBillableTokens`. */
   private billableTokensUsed: number = 0;
   private startTime: number = 0;
   /**
@@ -411,7 +413,7 @@ export class AgentWorker extends BaseAgentWorker {
     return this.totalTokensUsed;
   }
 
-  /** Spend proxy: fresh input + output. Budget gates compare this, not `getTotalTokens`. */
+  /** Spend proxy: fresh input + paid cache writes + output. Budget gates compare this, not `getTotalTokens`. */
   override getBillableTokens(): number {
     return this.billableTokensUsed;
   }
@@ -515,44 +517,65 @@ export class AgentWorker extends BaseAgentWorker {
   }
 
   async loadHistory(): Promise<void> {
-    // Root agents and task-specific workers are ephemeral — they receive their
-    // task via run() and don't need session history.
-    if (this.context.role !== 'general') {
+    // Only the root owns the session transcript; children receive a scoped task.
+    if (!isRootAgent(this.context)) {
       agentLogger.debug({ agentId: this.context.id, role: this.context.role }, 'Skipping history for non-general agent');
       return;
     }
 
-    const dbMessages = await messageRepository.findBySession(this.context.sessionId);
-
-    // Only load user and assistant text messages — tool messages are internal
-    this.messages = dbMessages
-      .filter((msg) => msg.role === 'user' || msg.role === 'assistant' || msg.role === 'system')
-      .filter((msg) => !msg.toolCalls && !msg.toolCallId)
-      .map((msg) => ({
-        role: msg.role as AgentMessage['role'],
-        content: msg.content,
-        timestamp: msg.createdAt,
-      }));
+    const history = await readSessionHistory(this.context.sessionId);
+    this.messages = history.messages;
+    this.cacheGeneration = history.generation;
+    this.checkpointId = history.checkpoint?.entryId;
+    const saved = history.session?.context?.nativeConversation;
+    if (saved && saved.generation === history.generation && saved.checkpointId === this.checkpointId) {
+      const unseen = await messageRepository.findContextMessages(this.context.sessionId, history.session?.context?.clearedAt, saved.acknowledged, history.generation);
+      this.messages = [...saved.messages.map(m => ({ ...m, providerRaw: saved.model === this.context.model ? m.providerRaw : undefined, timestamp: new Date(m.timestamp) })), ...unseen.map(toContextMessage)];
+    }
 
     agentLogger.debug({ agentId: this.context.id, messageCount: this.messages.length }, 'History loaded');
   }
 
+  private pendingPromptContext = '';
+  private cacheGeneration = '';
+  private checkpointId?: string;
+  private userCursor?: { id: string; createdAt: string };
   addSystemMessage(content: string): void {
-    this.messages.push({ role: 'system', content, timestamp: new Date() });
+    if (this.context.status === 'running') {
+      // Mid-run injection (detached-child results, collect_children reminders).
+      // It lands as an appended turn rather than a new system message, because
+      // inserting into the system prefix mid-loop invalidates the cached
+      // prefix for every remaining iteration. Tagged so the model still reads
+      // it as a directive and not as the user talking.
+      this.messages.push({ role: 'user', content: content.startsWith('SYSTEM:') ? content : `SYSTEM: ${content}`, timestamp: new Date() });
+      return;
+    }
+    const boundary = content.match(VOLATILE_MARKER)?.index;
+    if (boundary !== undefined) {
+      this.pendingPromptContext += content.slice(boundary);
+      content = content.slice(0, boundary);
+    }
+    const index = this.messages.findIndex(m => m.role !== 'system');
+    this.messages.splice(index < 0 ? this.messages.length : index, 0, { role: 'system', content, timestamp: new Date() });
   }
 
   async addUserMessage(content: string): Promise<void> {
-    const message: AgentMessage = { role: 'user', content, timestamp: new Date() };
+    const promptContext = this.pendingPromptContext.trim();
+    this.pendingPromptContext = '';
+    const message: AgentMessage = { role: 'user', content: [promptContext, content].filter(Boolean).join('\n\n'), timestamp: new Date() };
     this.messages.push(message);
 
     // Only persist for the root agent
     if (isRootAgent(this.context)) {
-      await messageRepository.create({
+      const row = await messageRepository.create({
         sessionId: this.context.sessionId,
         role: 'user',
         content,
         agentId: this.context.id,
-      });
+        metadata: promptContext ? { promptContext } : undefined,
+      }, this.cacheGeneration);
+      message.sourceMessageId = row.id;
+      this.userCursor = row.id ? { id: row.id, createdAt: row.createdAt.toISOString() } : undefined;
       await sessionRepository.incrementMessageCount(this.context.sessionId);
     }
   }
@@ -565,7 +588,12 @@ export class AgentWorker extends BaseAgentWorker {
     this.activeRuns++;
     this.subscribePermissionWait();
     try {
-      return await this.runInternal(userMessage);
+      return await (isRootAgent(this.context) ? withSessionConversation(this.context.sessionId, async () => {
+        const system = this.messages.filter(m => m.role === 'system');
+        await this.loadHistory();
+        this.messages = [...system, ...this.messages];
+        return this.runInternal(userMessage);
+      }) : this.runInternal(userMessage));
     } finally {
       this.activeRuns--;
       this.permissionWaitCleanup?.();
@@ -703,6 +731,16 @@ export class AgentWorker extends BaseAgentWorker {
         throw new CascadedCancellationError({ agentId: this.context.id, reason: String(this.abortController.signal.reason) });
       }
       this.context.status = 'completed';
+      if (isRootAgent(this.context) && this.userCursor) {
+        const last = this.messages.at(-1);
+        if (last?.role === 'assistant' && !last.toolCalls?.length) last.content = finalResult;
+        else this.messages.push({ role: 'assistant', content: finalResult, timestamp: new Date() });
+        await sessionRepository.patchContextIfGeneration(this.context.sessionId, this.cacheGeneration, {
+          nativeConversation: { generation: this.cacheGeneration, model: this.context.model,
+            ownerAgentId: this.context.id, checkpointId: this.checkpointId, acknowledged: this.userCursor,
+            messages: capNativeSnapshot(this.messages.filter(m => m.role !== 'system' || m.content.startsWith('[Context Summary')).map(m => ({ ...m, role: m.role === 'system' ? 'user' : m.role, timestamp: m.timestamp.toISOString() }))) },
+        });
+      }
       this.context.completedAt = new Date();
       if (this.completionReason) this.context.metadata.completionReason = this.completionReason;
       this.terminalEmitted = true;
@@ -1080,7 +1118,7 @@ export class AgentWorker extends BaseAgentWorker {
       // Proactive compaction: when cumulative input tokens exceed threshold, compact aggressively
       // This prevents context window overflow before it happens (inspired by claw-code-parity's 100K threshold)
       const AUTO_COMPACT_THRESHOLD = 100_000;
-      if (this.totalTokensUsed > AUTO_COMPACT_THRESHOLD && this.messages.length > 10) {
+      if (this.estimateRequestTokens() > Math.min(AUTO_COMPACT_THRESHOLD, this.config.contextWindowSize * 0.8) && this.messages.length > 10) {
         const { messages: proactiveCompacted, removed: proactiveRemoved } = await compactMessagesWithSummary(this.messages, {
           maxTokens: Math.floor(this.config.contextWindowSize * 0.6),
           preserveSystemMessages: true,
@@ -1099,7 +1137,7 @@ export class AgentWorker extends BaseAgentWorker {
 
       // Regular compaction: compact if messages approach context window limit
       const { messages: compactedMessages, removed } = await compactMessagesWithSummary(this.messages, {
-        maxTokens: this.config.contextWindowSize,
+        maxTokens: Math.floor(this.config.contextWindowSize * 0.8),
         preserveSystemMessages: true,
         preserveRecentCount: 20,
         summaryModel: this.context.model,
@@ -2150,6 +2188,7 @@ export class AgentWorker extends BaseAgentWorker {
       {
         model: litellmModel,
         messages: this.messages,
+        cacheScope: isRootAgent(this.context) ? `root:${this.cacheGeneration}` : this.context.id,
         tools: tools.length > 0 ? tools : declareToolsOnly ? declarableTools : undefined,
         ...(declareToolsOnly ? { toolChoice: 'none' as const } : {}),
         // G6: nullish coalescing — a configured temperature of 0 must survive

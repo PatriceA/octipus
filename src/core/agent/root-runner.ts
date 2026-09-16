@@ -1,8 +1,6 @@
 import { resolve } from 'path';
 import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
-import { getCLIToolConfig, resolveCliModelEntry } from '@/core/cli-agent-factory';
-import { fingerprintRun, willResumeCliSession } from '@/core/cli-session-store';
 import { humanizeProviderError } from '@/core/errors/humanize';
 import { isCancellationError } from '@/core/swarm/errors';
 import { swarmNodeRepository } from '@/core/swarm/node-repository';
@@ -11,10 +9,7 @@ import type { AgentWorker } from '@/core/agent-worker';
 import type { ToolHandler } from '@/core/agent-base';
 import { type AgentNode, LEVEL_DEFAULT, type PendingChild } from '@/core/swarm/types';
 import { WorkspaceFS } from '@/security/workspace-fs';
-import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
-import type { CLIAgentConfig } from '@/db/schema/models';
-import type { SessionContext } from '@/db/schema/sessions';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
 import { truncateLinesToTokens } from '@/utils/token-count';
@@ -119,14 +114,7 @@ export function assembleSystemPrompt(staticParts: string[], volatileParts: strin
   return [...staticParts, ...volatileParts].filter(Boolean).join('');
 }
 
-/**
- * The volatile blocks that never depend on vendor CLI resume state: the date
- * stamp (always present) and whatever memory/attached-files and security
- * reminder blocks this turn produced. Split out from
- * `buildHistoryVolatileParts` below purely so a test can prove the resume
- * gate leaves THESE untouched while it strips the history-shaped blocks —
- * this half has nothing for the gate to touch in the first place.
- */
+/** Per-turn date, memory, attachments and security guidance, outside stable instructions. */
 export function buildPreHookVolatileParts(extraSystemContext: string, guardFlags: string[]): string[] {
   const nowStamp = new Date();
   const parts: string[] = [
@@ -135,99 +123,6 @@ export function buildPreHookVolatileParts(extraSystemContext: string, guardFlags
   if (extraSystemContext) parts.push(extraSystemContext);
   if (guardFlags.length > 0) parts.push(buildSecurityReminder(guardFlags));
   return parts;
-}
-
-/**
- * Task 6: the compaction-summary and recent-history volatile blocks, gated
- * on whether THIS turn will resume a vendor CLI session — computed with the
- * real `willResumeCliSession`/`resolveCliModelEntry`/`fingerprintRun` calls,
- * the same ones cli-agent-worker.ts uses to decide whether IT will resume,
- * so the two decisions can't silently diverge. When resuming, the vendor
- * already holds every earlier turn; re-rendering it here just pays for it
- * twice, on top of what the resumed worker itself no longer re-sends (see
- * cli-agent-worker.ts `buildPrompt()`).
- *
- * Exported so the gate can be driven directly in a test — real DB-repository
- * and cli-session-store calls, not a hand-rolled stand-in — without needing
- * `runRootAgent`'s full tool/hook/spawn fixture.
- */
-export async function buildHistoryVolatileParts(params: {
-  sessionId: string;
-  modelName: string;
-  session: { userId?: string | null; context?: unknown } | null | undefined;
-  isLite: boolean;
-  classificationTopic?: string;
-}): Promise<{ parts: string[]; sources: string[]; resumingCliSession: boolean }> {
-  const { sessionId, modelName, session, isLite, classificationTopic } = params;
-  const sessionCtxData = session?.context as SessionContext | undefined;
-  const clearedAt = sessionCtxData?.clearedAt ? new Date(sessionCtxData.clearedAt) : undefined;
-
-  // Pull session summary from the append-only `compaction_entries` log
-  // (newest row). Falls back to the legacy `context.compactedSummary` for
-  // sessions compacted before the dual-write removal so old data doesn't
-  // lose its summary mid-rollout.
-  let sessionSummary: string | undefined;
-  if (!clearedAt) {
-    try {
-      const { compactionEntryRepository } = await import('@/db/repositories/compaction-entry-repository');
-      const latest = await compactionEntryRepository.findLatest(sessionId);
-      sessionSummary = latest?.summary ?? sessionCtxData?.compactedSummary;
-    } catch (err) {
-      coreLogger.debug({ err, sessionId }, 'compaction-entry lookup failed — falling back to legacy context');
-      sessionSummary = sessionCtxData?.compactedSummary;
-    }
-  }
-
-  // Only CLI-backed models have a vendor session to resume; native models
-  // always fall through to the normal (non-resuming) path.
-  let resumingCliSession = false;
-  if (session) {
-    const cliToolConfig = getCLIToolConfig(modelName);
-    if (cliToolConfig) {
-      const adapterKey = cliToolConfig.adapter ?? cliToolConfig.name;
-      // Same lookup cli-agent-worker.ts's getCLISettings() uses
-      // (getModel(id) || getModelByModelId(id)) — sharing it means the two
-      // fingerprints can never silently resolve to different model rows.
-      const cliModelEntry = await resolveCliModelEntry(modelName);
-      const cliSettings = cliModelEntry?.metadata?.cliAgent as CLIAgentConfig | undefined;
-      const fingerprint = fingerprintRun({
-        model: cliSettings?.model,
-        permissionMode: cliSettings?.permissionMode,
-        planMode: isPlanMode(sessionCtxData),
-        workingDirectory: resolve(WorkspaceFS.forSession(session).root),
-      });
-      resumingCliSession = await willResumeCliSession(sessionId, adapterKey, fingerprint);
-    }
-  }
-
-  const parts: string[] = [];
-  const sources: string[] = [];
-  if (!resumingCliSession && sessionSummary) {
-    parts.push(`\n\nPrevious conversation summary:\n${sessionSummary}`);
-    sources.push('session summary');
-  }
-
-  // Load recent conversation history so the root agent can reference prior messages
-  const recentHistory = resumingCliSession
-    ? []
-    : await messageRepository.findRecentBySession(sessionId, 10, ['user', 'assistant'], clearedAt);
-  if (recentHistory.length > 0) {
-    sources.push(`recent ${recentHistory.length} msg${recentHistory.length === 1 ? '' : 's'}`);
-  }
-  // Only claimed as a source where it is actually consumed. Full mode no
-  // longer routes on it (see the delegation policy below), so listing it
-  // there would tell the user a decision was made that was not.
-  if (isLite && classificationTopic) {
-    sources.push(`classifier(${classificationTopic})`);
-  }
-  if (recentHistory.length > 0) {
-    const historyLines = recentHistory.map(m =>
-      `[${m.role}]: ${m.content.length > 500 ? m.content.slice(0, 500) + '...' : m.content}`
-    );
-    parts.push(`\n\nRecent conversation history (last ${recentHistory.length} messages):\n${historyLines.join('\n\n')}`);
-  }
-
-  return { parts, sources, resumingCliSession };
 }
 
 export async function runRootAgent(
@@ -483,16 +378,18 @@ export async function runRootAgent(
   // ~8.4k tokens for a one-line question — never did.
   const staticParts: string[] = [systemPrompt];
 
-  // Task 6: the compaction-summary and recent-history volatile blocks, gated
-  // on whether this turn will resume a vendor CLI session — see
-  // buildHistoryVolatileParts() above for why (the vendor already holding
-  // that history is exactly the case cli-agent-worker.ts's own buildPrompt()
-  // stops re-sending it for).
-  const historySection = await buildHistoryVolatileParts({
-    sessionId, modelName, session, isLite, classificationTopic: classification.topic,
-  });
-  volatileParts.push(...historySection.parts);
-  const sources: string[] = historySection.sources;
+  // Workers load the canonical checkpoint and transcript under the session
+  // lock, so the root no longer renders either — but the user-visible
+  // "_Sources:_" line still has to say what the turn was answered from, so
+  // report what the session context proves is in play without re-reading the
+  // transcript here.
+  const sources: string[] = [];
+  const ctxForSources = session?.context as import('@/db/schema/sessions').SessionContext | undefined;
+  if (ctxForSources?.checkpoint) sources.push('session summary');
+  // Only claimed where it is actually consumed: full mode no longer routes on
+  // the classifier topic, so listing it there would report a decision that was
+  // never made.
+  if (isLite && classification.topic) sources.push(`classifier(${classification.topic})`);
 
   // The cap drops whole tool groups the role prompt still advertises by name
   // ("who is my wife → search_profiles"), so a capped model would call a tool

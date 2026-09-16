@@ -72,3 +72,21 @@ it('answers unqueued read-only tools while a queued call still blocks the worker
   expect((await queuedWrite).status).toBe(200);
   expect(order).toEqual(['get_context', 'slow_delegation', 'write']);
 });
+
+it('advertises only core schemas while discovered calls retain exact membership checks', async () => {
+  const tools = ['core', 'long_tail'].map(name => ({ name, description: '', parameters: { type: 'object' }, execute: async () => null }));
+  let disabled = false;
+  const bridge = await startCliToolBridge({ active: () => true, tools: () => disabled ? [] : tools,
+    advertisedTools: () => disabled ? [] : tools.slice(0, 1),
+    execute: async (name, args) => ({ content: [{ type: 'text', text: JSON.stringify({ name, args }) }] }) });
+  bridges.push(bridge);
+  const headers = { Authorization: `Bearer ${bridge.key}`, 'Content-Type': 'application/json' };
+  const list = await (await fetch(`${bridge.url}/tools`, { headers })).json() as any;
+  expect(list.tools.map((t: any) => t.name)).toEqual(['core', 'call_discovered_tool']);
+  const dispatch = (name: string) => fetch(`${bridge.url}/call`, { method: 'POST', headers,
+    body: JSON.stringify({ name: 'call_discovered_tool', arguments: { name, arguments: { value: 1 } } }) });
+  expect((await dispatch('long_tail')).status).toBe(200);
+  expect((await dispatch('long_tai')).status).toBe(400);
+  disabled = true;
+  expect((await dispatch('long_tail')).status).toBe(400);
+});

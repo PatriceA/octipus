@@ -30,17 +30,19 @@ async function condenseForSummary(
   serialized: string,
   summaryModel: string,
   userId: string | undefined,
+  requireSuccess = false,
 ): Promise<string> {
   // Single-pass zone: a history at most ~2× the single-pass size loses little
   // to a plain head-slice, and map-reduce (N map calls + reduce) isn't worth
   // its 3–9× cost/latency. Only genuinely long histories pay for chunking.
-  if (serialized.length <= 2 * SUMMARY_INPUT_CHARS) {
+  if (serialized.length <= (requireSuccess ? 1 : 2) * SUMMARY_INPUT_CHARS) {
     return serialized.slice(0, SUMMARY_INPUT_CHARS);
   }
 
+  if (requireSuccess && serialized.length > 128 * SUMMARY_INPUT_CHARS) throw new Error('Checkpoint input exceeds safe summarization capacity; conversation retained');
   const client = getLiteLLMClient();
   const chunks: string[] = [];
-  for (let i = 0; i < serialized.length && chunks.length < MAX_MAP_CHUNKS; i += SUMMARY_INPUT_CHARS) {
+  for (let i = 0; i < serialized.length && chunks.length < (requireSuccess ? 128 : MAX_MAP_CHUNKS); i += SUMMARY_INPUT_CHARS) {
     chunks.push(serialized.slice(i, i + SUMMARY_INPUT_CHARS));
   }
   const covered = chunks.length * SUMMARY_INPUT_CHARS;
@@ -71,9 +73,13 @@ async function condenseForSummary(
   // allSettled, not all: one transient map-call failure must NOT discard the
   // other (paid-for) partial summaries and collapse the whole compaction to the
   // keyword fallback. Keep whatever succeeded, in order.
-  const settled = await Promise.allSettled(
-    chunks.map((chunk) => client.complete(mapOpts(chunk))),
-  );
+  const settled: PromiseSettledResult<Awaited<ReturnType<typeof client.complete>>>[] = [];
+  for (let i = 0; i < chunks.length; i += 4) {
+    settled.push(...await Promise.allSettled(chunks.slice(i, i + 4).map(chunk => client.complete(mapOpts(chunk)))));
+  }
+  if (requireSuccess && settled.some(s => s.status === 'rejected' || !s.value.content.trim() || s.value.finishReason === 'length')) {
+    throw new Error('Checkpoint summarization did not cover every chunk; conversation retained');
+  }
   const partials = settled
     .map((s, idx) => (s.status === 'fulfilled' ? `[Part ${idx + 1}] ${s.value.content}` : null))
     .filter((p): p is string => p !== null);
@@ -88,7 +94,12 @@ async function condenseForSummary(
   // Every chunk failed — fall back to the plain head-slice so the reduce pass
   // still produces a real summary rather than throwing.
   if (partials.length === 0) return serialized.slice(0, SUMMARY_INPUT_CHARS);
-  return partials.join('\n\n');
+  const reduced = partials.join('\n\n');
+  if (requireSuccess && reduced.length > SUMMARY_INPUT_CHARS) {
+    if (reduced.length >= serialized.length) throw new Error('Checkpoint reduction made no progress');
+    return condenseForSummary(reduced, summaryModel, userId, true);
+  }
+  return reduced;
 }
 
 export type { CompactionResult } from '@/core/context-compaction';
@@ -370,6 +381,8 @@ export function slidingWindowCompact(
 }
 
 export interface CreateLLMSummaryOptions {
+  /** Durable checkpoint callers must not publish a lossy fallback after failure. */
+  requireSuccess?: boolean;
   /** Previous compaction's summary, threaded in for iterative chaining. */
   previousSummary?: string;
   /** Previous compaction's cumulative file operations — merged with current pass's. */
@@ -422,7 +435,7 @@ export async function createLLMSummary(
     const serialized = serializeConversation(removedMessages);
     // Map-reduce condense so long histories keep fidelity instead of losing
     // everything past the first ~8 KB to a silent slice.
-    const condensed = await condenseForSummary(serialized, summaryModel, options?.userId);
+    const condensed = await condenseForSummary(serialized, summaryModel, options?.userId, options?.requireSuccess);
     const prompt = buildSummarizationPrompt(condensed, fileOps, {
       previousSummary: options?.previousSummary,
       userInstructions: options?.userInstructions,
@@ -449,6 +462,7 @@ export async function createLLMSummary(
       maxTokens: 500,
     });
 
+    if (options?.requireSuccess && (!result.content.trim() || result.finishReason === 'length')) throw new Error('Checkpoint summary was empty or truncated');
     const fileOpsSection = [
       fileOps.read.length > 0 ? `Files read: ${fileOps.read.join(', ')}` : null,
       fileOps.written.length > 0 ? `Files written: ${fileOps.written.join(', ')}` : null,
@@ -465,8 +479,9 @@ export async function createLLMSummary(
       return { message, summaryText: result.content, fileOps };
     }
     return message;
-  } catch {
+  } catch (error) {
     // Fall back to keyword-based summary
+    if (options?.requireSuccess) throw error;
     const fallback = createSummaryMessage(removedMessages);
     if (options) {
       const merged = options.previousFileOps

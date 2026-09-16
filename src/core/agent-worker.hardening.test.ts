@@ -26,6 +26,12 @@ import type { CompletionResult } from '@/models/litellm-client';
 import { CascadedCancellationError, ChildTimeoutError, DriftDetectedError, classifyChildError } from './swarm/errors';
 import type { ChildResult, PendingChild } from './swarm/types';
 
+beforeEach(() => {
+  vi.spyOn(sessionRepository, 'findById').mockResolvedValue(null);
+  vi.spyOn(sessionRepository, 'patchContextIfGeneration').mockResolvedValue(true);
+  vi.spyOn(messageRepository, 'findContextMessages').mockResolvedValue([]);
+});
+
 const mkCtx = (over: Partial<AgentContext> = {}): AgentContext => ({
   id: 'hw-1',
   sessionId: '00000000-0000-0000-0000-000000000000',
@@ -144,7 +150,7 @@ describe('AgentWorker auto-collect relay fidelity (P1.2 / P1.3)', () => {
 
     // And the auto-collect summary handed to the model carried the full content,
     // not a 500-char stub — the per-child budget fix.
-    const autoMsg = priv.messages.find((m) => m.role === 'system' && m.content.includes('detached subagent'));
+    const autoMsg = priv.messages.find((m) => m.role === 'user' && m.content.includes('detached subagent'));
     expect(autoMsg).toBeDefined();
     expect(autoMsg!.content).toContain(childA.slice(0, 4500));
     expect(autoMsg!.content).toContain(childB.slice(0, 4500));
@@ -266,7 +272,7 @@ describe('AgentWorker task-drift detection (T2.2)', () => {
   beforeEach(() => {
     auditSpy = vi.spyOn(auditRepository, 'logAgentCompleted').mockResolvedValue(undefined as never);
     updateSpy = vi.spyOn(agentRepository, 'updateStatus').mockResolvedValue(undefined as never);
-    msgSpy = vi.spyOn(messageRepository, 'create').mockResolvedValue(undefined as never);
+    msgSpy = vi.spyOn(messageRepository, 'create').mockResolvedValue({ id: 'message', createdAt: new Date() } as never);
     sessSpy = vi.spyOn(sessionRepository, 'incrementMessageCount').mockResolvedValue(undefined as never);
   });
   afterEach(() => {
@@ -552,7 +558,7 @@ test.each(['native', 'text'] as const)('%s final-tool reporting distinguishes a 
   const spies = [
     vi.spyOn(auditRepository, 'logAgentCompleted').mockResolvedValue(undefined as never),
     vi.spyOn(agentRepository, 'updateStatus').mockResolvedValue(undefined as never),
-    vi.spyOn(messageRepository, 'create').mockResolvedValue(undefined as never),
+    vi.spyOn(messageRepository, 'create').mockResolvedValue({ id: 'message', createdAt: new Date() } as never),
     vi.spyOn(sessionRepository, 'incrementMessageCount').mockResolvedValue(undefined as never),
   ];
   try {

@@ -1,3 +1,4 @@
+import { sessionGeneration } from '@/db/schema/sessions';
 import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
 import { handleCommand } from '@/core/commands';
@@ -568,6 +569,7 @@ export class AgentService {
       }
 
       const startTime = Date.now();
+      const turnGeneration = sessionGeneration((await sessionRepository.findById(resolvedSessionId))?.context);
       const { response, agentId, sources } = await this.runRootAgent(
         resolvedSessionId, userId, message, classification, inputGuard.flags, channel,
         turnContext,
@@ -585,12 +587,22 @@ export class AgentService {
       finalResponse = stripSwarmScaffolding(finalResponse);
 
       const activeSession = await sessionRepository.findById(resolvedSessionId);
+      if (sessionGeneration(activeSession?.context) !== turnGeneration) {
+        return { response: 'Conversation was cleared while this turn was running.', sessionId: resolvedSessionId, classification };
+      }
       const showSources = (activeSession?.metadata as Record<string, unknown> | undefined)?.showSources !== false;
       if (showSources) {
         finalResponse = appendSources(finalResponse, sources);
       }
 
-      await messageRepository.create({ sessionId: resolvedSessionId, role: 'assistant', content: finalResponse });
+      const persistedAnswer = await messageRepository.createForGeneration({ sessionId: resolvedSessionId, role: 'assistant', content: finalResponse, agentId }, turnGeneration);
+      if (!persistedAnswer) return { response: 'Conversation was cleared while this turn was running.', sessionId: resolvedSessionId, classification };
+      // If the output guard replaced the answer, the vendor must receive the
+      // corrected Octipus text on its next turn rather than acknowledging it.
+      if (outputCheck.action !== 'replace') {
+        const { acknowledgeProviderTurn } = await import('@/core/cli-session-store');
+        await acknowledgeProviderTurn(resolvedSessionId, agentId, persistedAnswer);
+      }
       await sessionRepository.incrementMessageCount(resolvedSessionId);
 
       maybeCompactSession(resolvedSessionId).catch(err =>

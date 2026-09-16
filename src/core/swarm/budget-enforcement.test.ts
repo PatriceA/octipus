@@ -241,7 +241,7 @@ describe('AgentWorker — hard budget enforcement (Phase 2)', () => {
       await worker.run('go');
 
       expect(worker.getTotalTokens()).toBe(1_050); // grand total, cache included
-      expect(worker.getBillableTokens()).toBe(130); // fresh input + output only
+      expect(worker.getBillableTokens()).toBe(150); // fresh input + output only
     } finally {
       auditSpy.mockRestore();
       updateSpy.mockRestore();
@@ -262,7 +262,10 @@ describe('AgentWorker — hard budget enforcement (Phase 2)', () => {
     const auditSpy = vi.spyOn(auditRepository, 'logAgentCompleted').mockResolvedValue(undefined as never);
     const updateSpy = vi.spyOn(agentRepository, 'updateStatus').mockResolvedValue(undefined as never);
     const incrSpy = vi.spyOn(sessionRepository, 'incrementMessageCount').mockResolvedValue(undefined as never);
-    const msgSpy = vi.spyOn(messageRepository, 'create').mockResolvedValue(undefined as never);
+    const msgSpy = vi.spyOn(messageRepository, 'create').mockResolvedValue({ id: 'message', createdAt: new Date() } as never);
+    const historySpy = vi.spyOn(messageRepository, 'findContextMessages').mockResolvedValue([]);
+    const sessionSpy = vi.spyOn(sessionRepository, 'findById').mockResolvedValue(null);
+    const patchSpy = vi.spyOn(sessionRepository, 'patchContextIfGeneration').mockResolvedValue(true);
     try {
       const worker = new AgentWorker(mkCtx({ id: 'w-spend-row', root: true }), {
         maxIterations: 10,
@@ -290,17 +293,17 @@ describe('AgentWorker — hard budget enforcement (Phase 2)', () => {
 
       // I2 — the session counter that drives compaction is credited spend.
       const tokenDeltas = incrSpy.mock.calls.map(c => c[1]).filter((d): d is number => typeof d === 'number' && d > 0);
-      expect(tokenDeltas).toEqual([2_500]);
+      expect(tokenDeltas).toEqual([4_500]);
 
       // C1 — the persisted row keeps the grand total AND records the spend.
       const persisted = updateSpy.mock.calls.at(-1)?.[1] as { totalTokens?: number; billableTokens?: number };
       expect(persisted.totalTokens).toBe(102_000);
-      expect(persisted.billableTokens).toBe(2_500);
+      expect(persisted.billableTokens).toBe(4_500);
     } finally {
       auditSpy.mockRestore();
       updateSpy.mockRestore();
       incrSpy.mockRestore();
-      msgSpy.mockRestore();
+      msgSpy.mockRestore(); historySpy.mockRestore(); sessionSpy.mockRestore(); patchSpy.mockRestore();
     }
   });
 

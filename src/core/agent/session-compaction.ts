@@ -1,24 +1,15 @@
 import { getConfig } from '@/config';
-import { compactVendorSession } from '@/core/cli-session-compact';
+import { capNativeSnapshot, readSessionHistory, toContextMessage, withSessionConversation } from '@/core/session-history';
+import { getModelRegistry } from '@/models/model-registry';
 import { getGatewayHub } from '@/core/gateway/hub';
-import type { AgentMessage } from '@/core/types';
 import { compactionEntryRepository } from '@/db/repositories/compaction-entry-repository';
-import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
-import type { CompactionFileOps } from '@/db/schema/compaction-entries';
-import type { CompactionState, SessionContext } from '@/db/schema/sessions';
-import { calculateTotalTokens, compactMessagesWithSummary } from '@/utils/context-compaction';
+import type { CompactionState, } from '@/db/schema/sessions';
+import { calculateTotalTokens, createLLMSummary } from '@/utils/context-compaction';
 import { coreLogger } from '@/utils/logger';
 
 const COMPACTION_MESSAGE_THRESHOLD = 20;
 const COMPACTION_TOKEN_THRESHOLD = 8000;
-
-/**
- * Savings ratio at/above which we clear a previously-set stall flag.
- * Intentionally higher than `minSavingsRatio` to require a clearly effective
- * pass before we re-enable continuous compaction.
- */
-const STALL_RECOVERY_RATIO = 0.15;
 
 /**
  * Inputs required by {@link decideCompaction}. Extracted so the decision can
@@ -90,240 +81,107 @@ export interface MaybeCompactSessionOptions {
  * skip further passes until the session has grown by `growthMultiplier` ×
  * the previous pre-compact size, or the token count hits the hard ceiling.
  */
-export async function maybeCompactSession(
-  sessionId: string,
-  options: MaybeCompactSessionOptions = {},
-): Promise<void> {
-  const session = await sessionRepository.findById(sessionId);
-  if (!session) return;
-
-  const userTriggered = Boolean(options.userInstructions || options.force);
-
-  if (!userTriggered) {
-    const messageThresholdHit = session.messageCount >= COMPACTION_MESSAGE_THRESHOLD;
-    const tokenThresholdHit = session.tokenCount >= COMPACTION_TOKEN_THRESHOLD;
-    if (!messageThresholdHit && !tokenThresholdHit) return;
-  }
-
-  const { compaction: cfg } = getConfig();
-  const context = (session.context as SessionContext) || {};
-  const state = context.compactionState;
-
-  const decision = decideCompaction({
-    currentTokens: session.tokenCount,
-    state,
-    config: cfg,
-  });
-
-  if (!decision.allow && !options.force) {
-    coreLogger.debug(
-      {
-        sessionId,
-        currentTokens: session.tokenCount,
-        nextEligibleTokens: decision.nextEligibleTokens,
-        ineffectivePasses: state?.ineffectivePasses,
-      },
-      'Skipping compaction — stalled awaiting session growth',
-    );
-    return;
-  }
-
-  const triggerReason = decision.allow ? decision.reason : 'force';
-  await compactSessionContext(sessionId, triggerReason, options.userInstructions, session.userId);
-}
-
-/**
- * Compact a session's message history into a summary stored in session
- * context. Records savings ratio, tracks ineffective passes, and emits a
- * `session.compaction_stalled` gateway event when a pass fails to free
- * enough tokens.
- *
- * Iterative chaining: when a previous `compaction_entries` row exists for
- * this session, its summary + cumulative file ops are threaded into the
- * new pass and a fresh structured row is appended.
- */
-async function compactSessionContext(
-  sessionId: string,
-  allowReason: Exclude<CompactionDecision, { allow: false }>['reason'] | 'force',
-  userInstructions?: string,
-  userId?: string,
-): Promise<void> {
-  const messages = await messageRepository.findBySession(sessionId, 200, 0, ['user', 'assistant']);
-  if (messages.length < 10) return;
-
-  const agentMessages: AgentMessage[] = messages.map(m => ({
-    role: m.role as 'user' | 'assistant' | 'system',
-    content: m.content,
-    timestamp: m.createdAt,
-  }));
-
-  const tokensBefore = calculateTotalTokens(agentMessages);
-
-  // Pull the most recent structured entry to chain summaries iteratively.
-  const previousEntry = await compactionEntryRepository.findLatest(sessionId).catch(() => undefined);
-
-  const result = await compactMessagesWithSummary(agentMessages, {
-    maxTokens: 4000,
-    preserveRecentCount: 6,
-    previousSummary: previousEntry?.summary,
-    previousFileOps: previousEntry?.fileOps as CompactionFileOps | undefined,
-    userInstructions,
-    userId,
-  });
-
-  const tokensAfter = calculateTotalTokens(result.messages);
-  const savingsRatio = tokensBefore > 0 ? (tokensBefore - tokensAfter) / tokensBefore : 0;
-
-  const { compaction: cfg } = getConfig();
-  const session = await sessionRepository.findById(sessionId);
-  const existingContext = (session?.context as SessionContext) || {};
-  const prevState: CompactionState = existingContext.compactionState || {};
-
-  const ineffective = savingsRatio < cfg.minSavingsRatio;
-  const recovered = savingsRatio >= STALL_RECOVERY_RATIO;
-
-  const nextState: CompactionState = {
-    lastCompactedAt: new Date().toISOString(),
-    lastSavingsRatio: savingsRatio,
-    lastCompactTokens: tokensBefore,
-    ineffectivePasses: ineffective ? (prevState.ineffectivePasses || 0) + 1 : 0,
-    // A clearly-effective pass clears the stall flag; a marginally-effective
-    // pass (between minSavingsRatio and STALL_RECOVERY_RATIO) leaves the flag
-    // in its prior state — it's neither bad enough to stall nor good enough
-    // to trust fully.
-    compactionIneffective: ineffective
-      ? true
-      : recovered
-        ? false
-        : prevState.compactionIneffective,
-  };
-
-  const summaryMsg = result.messages.find(m => m.role === 'system' && m.content.startsWith('Summary'));
-
-  // Context.compactedSummary is the legacy single-string field;
-  // compaction_entries is the new append-only log. Readers should pull
-  // from the latest compaction_entries row (see service.ts /
-  // direct-response.ts). We stop writing to compactedSummary here —
-  // commands/clear.ts still nulls it for the old-data case.
-  // Patch the single key. `existingContext` was read before the summarizer LLM
-  // call, which takes seconds — spreading it back would revert anything written
-  // to `context` in the meantime (a `/clear`, a vendor session id). Same race
-  // as `saveCliSession`'s.
-  await sessionRepository.setContextKey(sessionId, ['compactionState'], nextState);
-
-  // Persist a structured CompactionEntry when the summarizer produced one.
-  // The structured-result variant of `compactMessagesWithSummary` only
-  // populates `summaryText`/`fileOps` when chaining/instructions were used,
-  // so we synthesize from `summaryMsg` for the first-pass case.
-  const structuredSummary = result.summaryText
-    ?? (summaryMsg?.content && summaryMsg.content.replace(/^\[Context Summary[^\]]*\]\s*/, '').split('\n\nFiles ')[0])
-    ?? '';
-  const structuredFileOps = result.fileOps ?? { read: [], written: [], edited: [] };
-
-  if (structuredSummary.trim().length > 0) {
-    try {
-      await compactionEntryRepository.insert({
-        sessionId,
-        parentEntryId: previousEntry?.id ?? null,
-        summary: structuredSummary,
-        fileOps: structuredFileOps,
-        userInstructions: userInstructions ?? null,
-        tokensBefore,
-        tokensAfter,
-        savingsRatio,
-        messagesSummarized: result.removed,
-        triggerReason: allowReason,
-      });
-    } catch (err) {
-      coreLogger.warn({ err, sessionId }, 'Failed to persist compaction entry (non-fatal)');
-    }
-  }
-
-  // Task 8: push this compaction down into any live vendor CLI session, so
-  // the vendor isn't left holding the full pre-compaction transcript while
-  // octipus believes it just summarized it. Only adapters with a stored
-  // session are touched (compactVendorSession returns 'skipped' otherwise).
-  // No `compaction_entries.metadata` column exists to record the outcome
-  // on the row itself, so it's logged instead — non-fatal, exactly like the
-  // entry-write failure above: never let this break the turn.
-  for (const vendorAdapterKey of Object.keys(existingContext.cliSessions ?? {})) {
-    try {
-      const outcome = await compactVendorSession(sessionId, vendorAdapterKey, userInstructions);
-      coreLogger.info({ sessionId, adapterKey: vendorAdapterKey, outcome }, 'Vendor CLI session compaction outcome');
-    } catch (err) {
-      coreLogger.warn({ err, sessionId, adapterKey: vendorAdapterKey }, 'Vendor CLI session compaction failed (non-fatal)');
-    }
-  }
-
-  coreLogger.info(
-    {
-      sessionId,
-      removed: result.removed,
-      tokensBefore,
-      tokensAfter,
-      savingsRatio,
-      ineffectivePasses: nextState.ineffectivePasses,
-      allowReason,
-    },
-    'Session context compacted',
-  );
-
-  // On-compaction memory extraction: feed the structured summary
-  // through the memory pipeline so durable facts get captured even
-  // when the root agent's per-turn extraction is disabled. The
-  // summary is third-person and condensed, which is actually closer
-  // to the extractor's preferred input than raw user turns.
-  const cadence = getConfig().memory?.extractionCadence ?? 'per_turn';
-  if (cadence === 'on_compaction' && structuredSummary.trim().length > 0) {
-    const sessionRow = await sessionRepository.findById(sessionId).catch(() => null);
-    const userId = sessionRow?.userId;
-    if (userId) {
-      try {
-        const { updateMemoriesAfterTurn } = await import('@/core/memory');
-        updateMemoriesAfterTurn({
-          userId,
-          workspaceId: null,
-          agentScope: null,
-          userMessage: structuredSummary,
-        }).catch((err) =>
-          coreLogger.warn({ err, sessionId }, 'on-compaction memory update failed (non-fatal)'),
-        );
-      } catch (err) {
-        coreLogger.debug({ err, sessionId }, 'on-compaction memory extraction module load failed');
+export async function maybeCompactSession(sessionId: string, options: MaybeCompactSessionOptions = {}): Promise<void> {
+  await withSessionConversation(sessionId, async () => {
+    const history = await readSessionHistory(sessionId);
+    if (!history.session || history.rows.length < 2) return;
+    const savedNative = history.session.context?.nativeConversation;
+    const acknowledgedIndex = savedNative ? history.rows.findIndex(row => row.id === savedNative.acknowledged.id) : -1;
+    const activeMessages = savedNative?.generation === history.generation && savedNative.checkpointId === history.checkpoint?.entryId
+      ? [...savedNative.messages.map(m => ({ ...m, timestamp: new Date(m.timestamp) })), ...history.rows.slice(acknowledgedIndex + 1).map(toContextMessage)]
+      : history.messages;
+    const tokensBefore = calculateTotalTokens(activeMessages);
+    const manual = Boolean(options.force || options.userInstructions);
+    if (!manual && history.rows.length < COMPACTION_MESSAGE_THRESHOLD && tokensBefore < COMPACTION_TOKEN_THRESHOLD) return;
+    const cfg = getConfig().compaction;
+    const state = history.session.context?.compactionState;
+    const decision = decideCompaction({ currentTokens: tokensBefore, state, config: cfg });
+    if (!manual && !decision.allow) return;
+    // Summarize a contiguous prefix. Retain its exact suffix, never an unrelated
+    // original-user anchor that makes coverage ambiguous.
+    // Retain complete user/answer pairs so native tool sequences are not split.
+    let boundary = Math.max(1, history.rows.length - 6);
+    while (boundary < history.rows.length && history.rows[boundary].role !== 'user') boundary++;
+    if (boundary === history.rows.length) return;
+    const keep = history.rows.length - boundary;
+    const prefix = history.rows.slice(0, boundary);
+    if (!prefix.length) return;
+    const model = await getModelRegistry().getDefaultModel();
+    if (!model) throw new Error('No model configured for session compaction');
+    let summaryInput = prefix.map(toContextMessage);
+    let nativeTail: NonNullable<typeof savedNative>['messages'] | undefined;
+    const native = history.session.context?.nativeConversation;
+    if (native?.generation === history.generation && native.checkpointId === history.checkpoint?.entryId) {
+      const nativeBoundary = native.messages.findIndex(m => m.sourceMessageId === history.rows[boundary].id);
+      if (nativeBoundary > 0) {
+        nativeTail = native.messages.slice(nativeBoundary);
+        summaryInput = native.messages.slice(0, nativeBoundary)
+          .filter(m => !m.content.startsWith('[Conversation checkpoint]'))
+          .map(m => ({ ...m, timestamp: new Date(m.timestamp) }));
+      } else {
+        const acknowledgedIndex = prefix.findIndex(row => row.id === native.acknowledged.id);
+        if (acknowledgedIndex >= 0) summaryInput = [
+          ...native.messages.filter(m => !m.content.startsWith('[Conversation checkpoint]')).map(m => ({ ...m, timestamp: new Date(m.timestamp) })),
+          ...prefix.slice(acknowledgedIndex + 1).map(toContextMessage),
+        ];
       }
     }
-  }
-
-  if (ineffective) {
-    const nextEligibleTokens = Math.ceil(tokensBefore * cfg.growthMultiplier);
-    coreLogger.warn(
-      {
-        sessionId,
-        savingsRatio,
-        ineffectivePasses: nextState.ineffectivePasses,
-        nextEligibleTokens,
-      },
-      'Compaction pass ineffective — stalling further passes until session grows',
-    );
-
-    try {
-      const hub = getGatewayHub();
-      hub.publishEvent({
-        type: 'session.compaction_stalled',
-        source: 'session-compaction',
-        sessionId,
-        userId: session?.userId,
-        payload: {
-          sessionId,
-          ratio: savingsRatio,
-          ineffectivePasses: nextState.ineffectivePasses,
-          nextEligibleTokens,
-        },
+    const result = await createLLMSummary(summaryInput, model.modelId, {
+      previousSummary: history.checkpoint?.summary,
+      previousFileOps: history.checkpoint?.fileOps,
+      userInstructions: options.userInstructions,
+      userId: history.session.userId,
+      requireSuccess: true,
+    });
+    if (!result.summaryText.trim()) return;
+    const summary = result.message.content;
+    const tokensAfter = calculateTotalTokens([
+      { role: 'user', content: summary, timestamp: new Date() },
+      ...(nativeTail ? nativeTail.map(m => ({ ...m, timestamp: new Date(m.timestamp) })) : history.rows.slice(-keep).map(toContextMessage)),
+    ]);
+    const savingsRatio = tokensBefore > 0 ? (tokensBefore - tokensAfter) / tokensBefore : 0;
+    if (savingsRatio < cfg.minSavingsRatio && !manual) {
+      const stalled = await sessionRepository.patchContextIfGeneration(sessionId, history.generation, {
+        compactionState: { lastCompactedAt: new Date().toISOString(), lastCompactTokens: tokensBefore,
+          lastSavingsRatio: savingsRatio, compactionIneffective: true,
+          ineffectivePasses: (state?.ineffectivePasses ?? 0) + 1 },
       });
-    } catch (err) {
-      // Gateway may not be running in tests or during shutdown — don't let
-      // that block the compaction state from being persisted.
-      coreLogger.debug({ err, sessionId }, 'Failed to emit session.compaction_stalled event');
+      if (stalled) {
+        try {
+          getGatewayHub().publishEvent({ type: 'session.compaction_stalled', source: 'session-compaction',
+            sessionId, userId: history.session.userId, payload: { sessionId, ratio: savingsRatio,
+              ineffectivePasses: (state?.ineffectivePasses ?? 0) + 1,
+              nextEligibleTokens: Math.ceil(tokensBefore * cfg.growthMultiplier) } });
+        } catch (err) { coreLogger.debug({ err, sessionId }, 'Could not publish compaction stall event'); }
+      }
+      return;
     }
-  }
+    const last = prefix[prefix.length - 1];
+    // Persist the audit entry before publishing its checkpoint. A failed insert
+    // cannot invalidate a vendor thread. A clear invalidates the CAS below.
+    const entry = await compactionEntryRepository.insert({
+      sessionId, parentEntryId: history.checkpoint?.entryId ?? null,
+      summary: result.summaryText, fileOps: result.fileOps,
+      userInstructions: options.userInstructions ?? null,
+      tokensBefore, tokensAfter, savingsRatio, messagesSummarized: prefix.length,
+      triggerReason: manual ? 'force' : decision.allow ? decision.reason : 'force',
+    });
+    const published = await sessionRepository.patchContextIfGeneration(sessionId, history.generation, {
+      checkpoint: { generation: history.generation, through: { id: last.id, createdAt: last.createdAt.toISOString() },
+        summary, fileOps: result.fileOps, entryId: entry.id },
+      compactionState: { lastCompactedAt: new Date().toISOString(), lastCompactTokens: tokensBefore,
+        lastSavingsRatio: savingsRatio, ineffectivePasses: 0, compactionIneffective: false },
+      // Both vendors restart from this durable checkpoint. No unscoped vendor
+      // maintenance subprocess, extra hidden bill, or concurrent /compact.
+      cliSessions: {},
+      nativeConversation: native && nativeTail ? { ...native, checkpointId: entry.id,
+        messages: capNativeSnapshot([{ role: 'user', content: `[Conversation checkpoint]\n${summary}`, timestamp: last.createdAt.toISOString() }, ...nativeTail]) } : null,
+    });
+    if (published && getConfig().memory?.extractionCadence === 'on_compaction') {
+      const { updateMemoriesAfterTurn } = await import('@/core/memory');
+      void updateMemoriesAfterTurn({ userId: history.session.userId, workspaceId: null, agentScope: null, userMessage: result.summaryText })
+        .catch(err => coreLogger.warn({ err, sessionId }, 'on-compaction memory update failed'));
+    }
+    if (published) coreLogger.info({ sessionId, tokensBefore, tokensAfter, savingsRatio }, 'Session checkpoint committed; vendor conversations rotated');
+  });
 }

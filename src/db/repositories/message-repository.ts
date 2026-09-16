@@ -1,10 +1,38 @@
 import { and, asc, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import { dbLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
+import { sessions, sessionGeneration } from '../schema/sessions';
 import { type Message, messages, type NewMessage } from '../schema/messages';
+
+/**
+ * Backstop for {@link MessageRepository.findContextMessages}. High enough that
+ * a healthy session hits its compaction checkpoint long before this, low enough
+ * that a session whose compaction is broken still produces a finite prompt.
+ */
+export const CONTEXT_MESSAGE_CAP = 400;
 
 export class MessageRepository {
   private get db() { return getDb(); }
+
+  /**
+   * Canonical text transcript after a clear/checkpoint. The checkpoint is what
+   * normally bounds this; CONTEXT_MESSAGE_CAP is the backstop for when it
+   * can't — no summarizer model, a summary that keeps failing, or a stalled
+   * ineffective pass — so a session that never compacts degrades to its newest
+   * turns instead of replaying an unbounded transcript into every cold prompt.
+   * Selected newest-first and reversed, so the cap drops the OLDEST rows.
+   */
+  async findContextMessages(sessionId: string, since?: string, after?: { id: string; createdAt: string }, generation?: string, limit = CONTEXT_MESSAGE_CAP): Promise<Message[]> {
+    const filters = [eq(messages.sessionId, sessionId), inArray(messages.role, ['user', 'assistant'])];
+    if (generation !== undefined) {
+      const legacy = since ? sql`${messages.createdAt} > ${since}::timestamptz` : sql`true`;
+      filters.push(sql`(${messages.metadata}->>'sessionGeneration' = ${generation} OR (${messages.metadata}->>'sessionGeneration' IS NULL AND ${legacy}))`);
+    } else if (since) filters.push(gte(messages.createdAt, new Date(since)));
+    if (after) filters.push(sql`(${messages.createdAt}, ${messages.id}) > (${after.createdAt}::timestamptz, ${after.id}::uuid)`);
+    const newestFirst = await this.db.select().from(messages).where(and(...filters))
+      .orderBy(desc(messages.createdAt), desc(messages.id)).limit(limit);
+    return newestFirst.reverse();
+  }
 
   async findById(id: string): Promise<Message | null> {
     const result = await this.db.select().from(messages).where(eq(messages.id, id)).limit(1);
@@ -99,7 +127,23 @@ export class MessageRepository {
       .limit(limit);
   }
 
-  async create(data: NewMessage): Promise<Message> {
+  /** Insert a completed turn only if no clear invalidated the originating run. */
+  async createForGeneration(data: NewMessage, generation: string): Promise<Message | null> {
+    return this.db.transaction(async tx => {
+      const [session] = await tx.select({ context: sessions.context }).from(sessions)
+        .where(eq(sessions.id, data.sessionId)).for('update');
+      if (!session || sessionGeneration(session.context) !== generation) return null;
+      const [row] = await tx.insert(messages).values({ ...data, metadata: { ...data.metadata, sessionGeneration: generation }, createdAt: data.createdAt ?? new Date() }).returning();
+      return row;
+    });
+  }
+
+  async create(data: NewMessage, generation?: string): Promise<Message> {
+    if (generation !== undefined) {
+      const row = await this.createForGeneration(data, generation);
+      if (!row) throw new Error('Conversation was cleared before the turn could start');
+      return row;
+    }
     // Default createdAt from the JS clock so it agrees with other JS-clock
     // timestamps in the same request (e.g. agent context.createdAt). The
     // Postgres NOW() default would otherwise come from the DB-server clock,

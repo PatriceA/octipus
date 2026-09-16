@@ -17,6 +17,8 @@ import { modelLogger } from '@/utils/logger';
 export interface CompletionOptions {
   model: string;
   cachePolicy?: 'default' | 'off' | 'session';
+  /** Logical agent conversation and clear generation, for provider affinity. */
+  cacheScope?: string;
   agentId?: string;
   requestType?: string;
   accountingMetadata?: Record<string, unknown>;
@@ -471,7 +473,7 @@ export class LiteLLMClient {
     // Anthropic prompt caching (Phase A1): the proxy forwards `cache_control`
     // content blocks to Anthropic upstreams, so cache the static prefix.
     if (options.cachePolicy !== 'off' && isAnthropicFamily(params.model || '')) {
-      const cached = applyAnthropicCacheControl(params.messages, params.model);
+      const cached = applyAnthropicCacheControl(params.messages, params.model, { conversation: Boolean(options.cacheScope) });
       if (!cached.system) logMissedCacheSplit(params.model || '');
     }
 
@@ -664,7 +666,7 @@ export class LiteLLMClient {
     };
 
     if (options.cachePolicy !== 'off' && isAnthropicFamily(params.model || '')) {
-      const cached = applyAnthropicCacheControl(params.messages, params.model);
+      const cached = applyAnthropicCacheControl(params.messages, params.model, { conversation: Boolean(options.cacheScope) });
       if (!cached.system) logMissedCacheSplit(params.model || '');
     }
 

@@ -24,7 +24,7 @@ function grokReqOpts(
 ): { signal?: AbortSignal; headers?: Record<string, string> } {
   const reqOpts: { signal?: AbortSignal; headers?: Record<string, string> } = {};
   if (options.signal) reqOpts.signal = options.signal;
-  const convId = options.cachePolicy === 'off' ? undefined : cacheAffinityKey(options.sessionId, options.userId);
+  const convId = options.cachePolicy === 'off' ? undefined : cacheAffinityKey(options.sessionId, options.userId, options.cacheScope);
   if (convId) reqOpts.headers = { 'x-grok-conv-id': convId };
   return reqOpts;
 }

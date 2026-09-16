@@ -101,10 +101,11 @@ export function foldCacheCounters(raw: unknown): {
  */
 export function cacheAffinityKey(
   sessionId: string | undefined,
-  userId?: string
+  userId?: string,
+  scope?: string,
 ): string | undefined {
   if (!sessionId) return undefined;
-  const digest = createHash('sha256').update(`${userId ?? ''}:${sessionId}`).digest('hex');
+  const digest = createHash('sha256').update(`${userId ?? ''}:${sessionId}${scope ? `:${scope}` : ''}`).digest('hex');
   return `octi-${digest.slice(0, 32)}`;
 }
 

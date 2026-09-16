@@ -10,16 +10,7 @@ export function __resetMissedCacheSplitLogs() {
   loggedMissedSplit.clear();
 }
 
-/**
- * Log (once per model, DEBUG) that applyAnthropicCacheControl placed no SYSTEM
- * breakpoint. Not a WARN: a short prompt legitimately falls under
- * minCacheableChars(model) and this is expected, not a defect.
- *
- * Callers pass the system outcome specifically. A combined "either breakpoint
- * landed" flag made this almost never fire — the history breakpoint lands on
- * nearly every agent turn — and masked the system-prefix miss, which is the
- * diagnostic anyone actually wants.
- */
+/** Log missing system breakpoints once per model. Usage determines actual hits. */
 export function logMissedCacheSplit(model: string): void {
   if (loggedMissedSplit.has(model)) return;
   loggedMissedSplit.add(model);
@@ -40,43 +31,11 @@ export function logMissedCacheSplit(model: string): void {
 // block first into the volatile tier (Phase 2a), so the static/cacheable prefix
 // is everything before this marker.
 export const VOLATILE_MARKER = /\n\nCURRENT DATE ?&? ?\/?\s?TIME/;
-// Default floor ≈ 1024 tokens at ~4 chars/token; below the per-model minimum a
-// breakpoint is a silent no-op (cache_creation_input_tokens stays 0), so don't
-// bother marking one. Kept exported for tests/back-compat; prefer
-// minCacheableChars(model) which knows the per-model minimums.
-export const MIN_CACHEABLE_CHARS = 4000;
-
-/**
- * Anthropic's minimum cacheable prefix is MODEL-dependent (per current docs):
- * Opus 4.x + Haiku 4.5 need 4096 tokens, Fable/Mythos 5 + Sonnet 4.6 + Haiku 3.x
- * need 2048, Sonnet 4.5-class models 1024. Below the minimum the breakpoint is
- * silently ignored, so marking one only spends the cache-write premium chance
- * for nothing. Chars ≈ tokens × 4 (repo-wide heuristic).
- */
-export function minCacheableChars(model?: string): number {
-  const m = (model || '').toLowerCase();
-  if (/opus-4|haiku-4/.test(m)) return 16_384; // 4096 tok
-  // Haiku 3.x ids are `claude-3-haiku-*` / `claude-3-5-haiku-*` (family digit
-  // BEFORE the name), so match both orderings.
-  if (/fable|mythos|sonnet-4-6|haiku-3|3(-5)?-haiku/.test(m)) return 8_192; // 2048 tok
-  // 1024 tok — Sonnet 4.5-class, and the deliberate fall-through for unknown
-  // or aliased ids (custom endpoints, LiteLLM aliases, future models): a
-  // breakpoint below a model's real minimum is a free no-op (Anthropic just
-  // ignores it — no write premium is charged unless it actually caches),
-  // whereas defaulting HIGH would forfeit real caching on every 1024-tok
-  // model. Lowest floor is the safe default.
-  return MIN_CACHEABLE_CHARS;
-}
-
-/**
- * Split an assembled system prompt at the volatile marker. Returns null when
- * there's no marker or the static prefix is too small to be worth caching — the
- * caller then sends the prompt unsplit. Pass the model id so the per-model
- * cache minimum applies; without it the (lowest) default floor is used.
- */
-export function splitVolatileSystem(system: string, model?: string): { staticPart: string; volatilePart: string } | null {
+/** Split stable instructions from turn context. Provider eligibility includes tools. */
+export function splitVolatileSystem(system: string, _model?: string): { staticPart: string; volatilePart: string } | null {
   const m = system.match(VOLATILE_MARKER);
-  if (!m || m.index === undefined || m.index < minCacheableChars(model)) return null;
+  if (!m || m.index === undefined) return system.trim() ? { staticPart: system, volatilePart: '' } : null;
+  if (m.index === 0) return null;
   return { staticPart: system.slice(0, m.index), volatilePart: system.slice(m.index) };
 }
 
@@ -124,6 +83,7 @@ export function isAnthropicFamily(model: string): boolean {
 export function applyAnthropicCacheControl(
   messages: ChatCompletionMessageParam[],
   model?: string,
+  opts?: { conversation?: boolean },
 ): { system: boolean; history: boolean } {
   let system = false;
   for (const msg of messages) {
@@ -135,13 +95,17 @@ export function applyAnthropicCacheControl(
     break;
   }
 
-  // Second breakpoint: the settled history, i.e. the last non-system message
-  // before the newest turn. Same rationale as the native path's
-  // markHistoryCacheBreakpoint (custom/anthropic-compat-provider.ts) — an
-  // agent loop re-reads this at cache rates instead of full price on every
-  // iteration. The newest turn is left untouched since it's what changed.
+  // Write through the latest eligible input so the next request can reuse it.
+  // The new suffix is charged on a miss; matching earlier prefixes can still hit.
+  //
+  // Only for a request that belongs to an ongoing conversation (`conversation`
+  // — an agent turn or tool loop). A cache WRITE costs 1.25x base input, so
+  // marking the newest turn is a surcharge unless a later request reads it
+  // back. A one-shot utility completion has no later request, so it stops at
+  // the settled history the way this did before — which for a 1-message
+  // one-shot means no second breakpoint at all.
   let history = false;
-  for (let i = messages.length - 2; i >= 0; i--) {
+  for (let i = messages.length - (opts?.conversation ? 1 : 2); i >= 0; i--) {
     const msg = messages[i];
     if (msg.role === 'system') continue;
     if (typeof msg.content === 'string') {
@@ -152,7 +116,9 @@ export function applyAnthropicCacheControl(
     if (Array.isArray(msg.content) && msg.content.length > 0) {
       // Already content blocks (multimodal turn) — mark the last one, same as
       // the native path does.
-      (msg.content[msg.content.length - 1] as { cache_control?: { type: 'ephemeral' } }).cache_control = { type: 'ephemeral' };
+      const lastIndex = msg.content.length - 1;
+      (msg as { content: unknown }).content = msg.content.map((block, index) => index === lastIndex
+        ? { ...block, cache_control: { type: 'ephemeral' } } : block);
       history = true;
       break;
     }

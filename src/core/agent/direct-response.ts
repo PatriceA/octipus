@@ -1,3 +1,5 @@
+import { readSessionHistory, withSessionConversation } from '@/core/session-history';
+import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
 import { getResponseCache } from '@/core/response-cache';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
@@ -40,7 +42,7 @@ export function buildDirectResponseSystem(args: {
 /**
  * Generate a direct LLM response for casual messages (no root agent/worker needed).
  */
-export async function directResponse(
+async function directResponseInternal(
   message: string,
   sessionId: string,
   userId: string,
@@ -64,54 +66,20 @@ export async function directResponse(
   const client = getLiteLLMClient();
   const modelName = modelOverride || (await modelSelector.selectByComplexity(complexity));
 
-  await messageRepository.create({ sessionId, role: 'user', content: message });
-  await sessionRepository.incrementMessageCount(sessionId);
-
-  // Check response cache
+  const history = await readSessionHistory(sessionId);
+  const sessionForBoundary = history.session;
+  const session = history.session;
   const cache = getResponseCache();
-  const sessionForBoundary = await sessionRepository.findById(sessionId);
-  const clearedAt = (sessionForBoundary?.context as SessionContext)?.clearedAt
-    ? new Date((sessionForBoundary!.context as SessionContext).clearedAt!)
-    : undefined;
-  const recentMessages = await messageRepository.findRecentBySession(sessionId, 6, ['user', 'assistant'], clearedAt);
-  const recentContext = recentMessages.slice(0, 2).map(m => m.content).join('|');
-
-  const cached = await cache.get(sessionId, message, recentContext);
-  if (cached) {
-    await messageRepository.create({ sessionId, role: 'assistant', content: cached.response });
+  const recentMessages = history.rows;
+  const historyMessages = history.messages;
+  const summary = history.checkpoint?.summary;
+  const persistAnswer = async (content: string) => {
+    const row = await messageRepository.createForGeneration({ sessionId, role: 'assistant', content }, history.generation);
+    if (!row) return false;
     await sessionRepository.incrementMessageCount(sessionId);
-    return {
-      response: cached.response,
-      metadata: {
-        model: cached.model,
-        tokens: cached.tokens,
-        latencyMs: Date.now() - startTime,
-        cached: true,
-      },
-    };
-  }
-
+    return true;
+  };
   try {
-    const historyMessages = recentMessages.map(m => ({
-      role: m.role as 'system' | 'user' | 'assistant',
-      content: m.content,
-      timestamp: m.createdAt,
-    }));
-
-    const session = sessionForBoundary ?? await sessionRepository.findById(sessionId);
-    // Read session summary from compaction_entries (newest row), with
-    // a fallback to legacy `context.compactedSummary` for sessions
-    // compacted before the dual-write removal.
-    let summary: string | undefined;
-    if (!clearedAt) {
-      try {
-        const { compactionEntryRepository } = await import('@/db/repositories/compaction-entry-repository');
-        const latest = await compactionEntryRepository.findLatest(sessionId);
-        summary = latest?.summary ?? (session?.context as SessionContext)?.compactedSummary;
-      } catch {
-        summary = (session?.context as SessionContext)?.compactedSummary;
-      }
-    }
     const dateContext = `CURRENT DATE/TIME: ${formatDateTimeContext(new Date())}`;
     // Persona block — resolved from the user's assistant profile (or
     // the base octipus persona if no profile exists yet). Casual
@@ -168,12 +136,26 @@ export async function directResponse(
     const systemContent = buildDirectResponseSystem({
       persona: personaBlock,
       dateContext: dateContext,
-      summary: summary,
+
       devHint: devHint,
       guardFlags: guardFlagsStr,
       userProfile: userProfileStr,
       extraSystemContext: extraSystemContext,
     });
+
+    const boundary = systemContent.match(VOLATILE_MARKER)?.index ?? systemContent.length;
+    const stableSystem = systemContent.slice(0, boundary);
+    const promptContext = systemContent.slice(boundary).trim();
+    const userRow = await messageRepository.createForGeneration({ sessionId, role: 'user', content: message,
+      metadata: { promptContext } }, history.generation);
+    if (!userRow) return { response: 'Conversation was cleared while this turn was running.', metadata: { model: modelName } };
+    await sessionRepository.incrementMessageCount(sessionId);
+    historyMessages.push({ role: 'user', content: [promptContext, message].filter(Boolean).join('\n\n'), timestamp: userRow.createdAt });
+    // Response reuse requires the whole effective context, model and clear generation.
+    const recentContext = JSON.stringify([history.generation, modelName, stableSystem, historyMessages.map(m => [m.role, m.content])]);
+    const cached = await cache.get(sessionId, message, recentContext);
+    if (cached && await persistAnswer(cached.response)) return { response: cached.response,
+      metadata: { model: cached.model, tokens: 0, latencyMs: Date.now() - startTime, cached: true } };
 
     const registry = getModelRegistry();
     const resolvedModel = await registry.getModelByModelId(modelName);
@@ -189,7 +171,7 @@ export async function directResponse(
       model: modelName,
       modelConfigName: resolvedModel?.name,
       messages: [
-        { role: 'system', content: systemContent, timestamp: new Date() },
+        { role: 'system', content: stableSystem, timestamp: new Date() },
         ...historyMessages,
       ],
       temperature: 0.7,
@@ -197,6 +179,7 @@ export async function directResponse(
       extraBody: modelMeta?.extraBody,
       userId,
       sessionId,
+      cacheScope: `root:${history.generation}`,
     });
 
     const tokens = result.usage?.totalTokens || 0;
@@ -204,8 +187,7 @@ export async function directResponse(
     const showSources = (session?.metadata as Record<string, unknown> | undefined)?.showSources !== false;
     const finalContent = showSources ? appendSources(result.content, sources) : result.content;
 
-    await messageRepository.create({ sessionId, role: 'assistant', content: finalContent });
-    await sessionRepository.incrementMessageCount(sessionId);
+    if (!await persistAnswer(finalContent)) return { response: 'Conversation was cleared while this turn was running.', metadata: { model: modelName, tokens } };
 
     await cache.set(sessionId, message, recentContext, {
       response: finalContent,
@@ -237,11 +219,15 @@ export async function directResponse(
       'Direct response failed',
     );
     const errorMsg = `Sorry, I'm having trouble connecting to the language model (${modelName}). Please check that the model provider is running and configured correctly.`;
-    await messageRepository.create({ sessionId, role: 'assistant', content: errorMsg });
-    await sessionRepository.incrementMessageCount(sessionId);
+    await persistAnswer(errorMsg);
     return {
       response: errorMsg,
       metadata: { model: modelName, latencyMs: Date.now() - startTime },
     };
   }
+}
+
+/** Casual turns share the same serialization boundary as root workers and compaction. */
+export function directResponse(...args: Parameters<typeof directResponseInternal>): ReturnType<typeof directResponseInternal> {
+  return withSessionConversation(args[1], () => directResponseInternal(...args));
 }

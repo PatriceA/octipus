@@ -123,18 +123,18 @@ test('native JSON schema mapping and cache suppression', () => {
 });
 
 describe('history cache breakpoint', () => {
-  it('marks the last block of the turn before the newest one', () => {
+  it('marks the latest eligible input for reuse on the next request', () => {
     const { messages } = toAnthropicMessages([
       { role: 'user', content: 'first', timestamp: new Date() },
       { role: 'assistant', content: 'answer', timestamp: new Date() },
       { role: 'user', content: 'second', timestamp: new Date() },
     ]);
-    markHistoryCacheBreakpoint(messages);
+    markHistoryCacheBreakpoint(messages, true);
     const marked = messages.flatMap(m => (Array.isArray(m.content) ? m.content : [])).filter((b: any) => b.cache_control);
     expect(marked).toHaveLength(1);
     // The newest turn must stay uncached — it is what changed.
     const newest = messages[messages.length - 1].content as any[];
-    expect(newest.some(b => b.cache_control)).toBe(false);
+    expect(newest.some(b => b.cache_control)).toBe(true);
   });
 
   it('M3 — never marks a thinking block, which Anthropic 400s on', () => {
@@ -144,9 +144,8 @@ describe('history cache breakpoint', () => {
         { type: 'text', text: 'answer' },
         { type: 'redacted_thinking', data: 'blob' },
       ] },
-      { role: 'user', content: [{ type: 'text', text: 'newest' }] },
     ] as any[];
-    expect(markHistoryCacheBreakpoint(messages)).toBe(true);
+    expect(markHistoryCacheBreakpoint(messages, true)).toBe(true);
     const blocks = messages[0].content;
     expect(blocks[1].cache_control).toEqual({ type: 'ephemeral' }); // the text block
     expect(blocks[0].cache_control).toBeUndefined();
@@ -156,14 +155,20 @@ describe('history cache breakpoint', () => {
   it('M3 — places no breakpoint on a turn that is nothing but thinking', () => {
     const messages = [
       { role: 'assistant', content: [{ type: 'thinking', thinking: 'only reasoning', signature: 'sig' }] },
-      { role: 'user', content: [{ type: 'text', text: 'newest' }] },
     ] as any[];
-    expect(markHistoryCacheBreakpoint(messages)).toBe(false);
+    expect(markHistoryCacheBreakpoint(messages, true)).toBe(false);
     expect(messages[0].content[0].cache_control).toBeUndefined();
   });
 
-  it('places no breakpoint when there is only the newest turn', () => {
+  it('marks the first input to warm the next request', () => {
     const { messages } = toAnthropicMessages([{ role: 'user', content: 'only', timestamp: new Date() }]);
-    expect(markHistoryCacheBreakpoint(messages)).toBe(false);
+    expect(markHistoryCacheBreakpoint(messages, true)).toBe(true);
   });
+});
+
+test('cache placement never mutates the saved provider-native blocks', () => {
+  const raw = [{ type: 'text', text: 'answer' }];
+  const history = [{ role: 'assistant' as const, content: 'answer', timestamp: new Date(), providerRaw: { anthropicContent: raw } }];
+  const first = toAnthropicMessages(history); markHistoryCacheBreakpoint(first.messages);
+  expect(raw).toEqual([{ type: 'text', text: 'answer' }]);
 });

@@ -1,0 +1,19 @@
+{
+  "date": "2026-09-16",
+  "branch": "session-prompt-strategy",
+  "method": "Union of focused suites; newest rerun replaces earlier result for each test. Not a full repository test run.",
+  "tests": {
+    "passed": 557,
+    "skipped": 1
+  },
+  "files": 58,
+  "typecheck": "passed",
+  "build": "passed",
+  "lintChangedProductionFiles": "passed",
+  "diffCheck": "passed",
+  "windowsTestPath": [
+    "C:/Program Files/Git/usr/bin",
+    "C:/Program Files/Git/bin"
+  ],
+  "liveProviderRequests": 0
+}

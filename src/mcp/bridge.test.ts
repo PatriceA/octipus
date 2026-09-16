@@ -20,7 +20,7 @@ describe('MCPBridge.getLazyToolHandlers', () => {
     expect(handlers).toEqual([]);
   });
 
-  test('returns exactly 2 meta-tools when servers are connected', async () => {
+  test('returns discovery, dispatch, resource and prompt meta-tools when servers are connected', async () => {
     // Simulate a connected server by reaching into the private connections map
     const connections = (bridge as any).connections as Map<string, any>;
     connections.set('test-server', {
@@ -34,9 +34,8 @@ describe('MCPBridge.getLazyToolHandlers', () => {
     });
 
     const handlers = bridge.getLazyToolHandlers();
-    expect(handlers).toHaveLength(2);
-    expect(handlers[0].name).toBe('mcp_list_tools');
-    expect(handlers[1].name).toBe('mcp_call_tool');
+    expect(handlers).toHaveLength(5);
+    expect(handlers.map(h => h.name)).toEqual(expect.arrayContaining(['mcp_list_tools', 'mcp_call_tool', 'mcp_list_resources', 'mcp_read_resource', 'mcp_get_prompt']));
     expect(handlers[0].toolId).toBe('mcp');
     expect(handlers[1].toolId).toBe('mcp');
   });
@@ -154,7 +153,7 @@ describe('MCPBridge.getLazyToolHandlers', () => {
 
     // Lazy: always 2 meta-tools
     const lazy = bridge.getLazyToolHandlers();
-    expect(lazy).toHaveLength(2);
+    expect(lazy).toHaveLength(5);
   });
 });
 
@@ -180,4 +179,21 @@ describe('MCPBridge config persistence', () => {
     await expect(second).resolves.toBeUndefined();
     expect(bridge.getServerConfigs().map((server) => server.id)).toEqual(['b']);
   });
+});
+
+test('MCP discovery bounds schemas and retrieves an exact tool only on demand', async () => {
+  const bridge = new MCPBridge();
+  (bridge as any).connections.set('server', { id: 'server', server: { name: 'Server' }, status: 'connected',
+    tools: Array.from({ length: 100 }, (_, i) => ({ name: `tool_${String(i).padStart(3, '0')}`, description: 'd'.repeat(1000),
+      inputSchema: { type: 'object', properties: { payload: { type: 'string' } } } })) });
+  const list = bridge.getLazyToolHandlers().find(h => h.name === 'mcp_list_tools')!;
+  const first = await list.execute({}, dummyContext) as any[];
+  expect(first[0].tools).toHaveLength(15);
+  expect(first[0].tools[0].description).toHaveLength(240);
+  expect(first[0].tools[0].parameters).toBeUndefined();
+  const next = await list.execute({ offset: 15 }, dummyContext) as any[];
+  expect(next[0].tools[0].name).toBe('tool_015');
+  const exact = await list.execute({ server_id: 'server', tool_name: 'tool_099' }, dummyContext) as any[];
+  expect(exact[0].tools).toHaveLength(1);
+  expect(exact[0].tools[0].parameters.properties.payload.type).toBe('string');
 });

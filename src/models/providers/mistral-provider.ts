@@ -20,7 +20,7 @@ const MISTRAL_BASE_URL = 'https://api.mistral.ai/v1';
 // Set Mistral's explicit prompt-cache opt-in key on a request body, shared by
 // complete() and stream() (Phase 2c). No-op when there's no session.
 function setMistralCacheKey(params: ChatCompletionCreateParams, options: CompletionOptions): void {
-  const cacheKey = options.cachePolicy === 'off' ? undefined : cacheAffinityKey(options.sessionId, options.userId);
+  const cacheKey = options.cachePolicy === 'off' ? undefined : cacheAffinityKey(options.sessionId, options.userId, options.cacheScope);
   if (cacheKey) (params as unknown as Record<string, unknown>).prompt_cache_key = cacheKey;
 }
 

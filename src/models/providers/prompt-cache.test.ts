@@ -31,12 +31,12 @@ describe('splitVolatileSystem', () => {
     expect(split!.volatilePart.startsWith('\n\nCURRENT DATE')).toBe(true);
   });
 
-  test('returns null when the static prefix is below the cache minimum', () => {
-    expect(splitVolatileSystem('short' + VOLATILE)).toBeNull();
+  test('marks short prefixes because eligibility includes tool tokens', () => {
+    expect(splitVolatileSystem('short' + VOLATILE)?.staticPart).toBe('short');
   });
 
-  test('returns null when there is no volatile marker', () => {
-    expect(splitVolatileSystem('S'.repeat(5000))).toBeNull();
+  test('caches an entirely stable system without a volatile marker', () => {
+    expect(splitVolatileSystem('S'.repeat(5000))).toEqual({ staticPart: 'S'.repeat(5000), volatilePart: '' });
   });
 });
 
@@ -56,14 +56,15 @@ describe('applyAnthropicCacheControl', () => {
     expect(blocks[1].cache_control).toBeUndefined();
     // Static prefix cached, volatile suffix not — reassembling is lossless.
     expect(blocks[0].text + blocks[1].text).toBe(staticPart + VOLATILE);
-    // Non-system messages untouched.
+    // One-shot (no `conversation`): nothing later will read a write of the
+    // newest turn back, so it stays a plain string and pays no write premium.
     expect(messages[1].content).toBe('hi');
   });
 
-  test('no-op (leaves plain string) when nothing is cacheable', () => {
-    const messages: ChatCompletionMessageParam[] = [{ role: 'system', content: 'short' + VOLATILE }];
+  test('leaves an empty prompt unchanged', () => {
+    const messages: ChatCompletionMessageParam[] = [{ role: 'system', content: '' }];
     expect(applyAnthropicCacheControl(messages).system).toBe(false);
-    expect(messages[0].content).toBe('short' + VOLATILE);
+    expect(messages[0].content).toBe('');
   });
 
   test('marks only the FIRST splittable system message (stays under the 4-breakpoint cap)', () => {
@@ -97,10 +98,10 @@ describe('applyAnthropicCacheControl — settled history', () => {
       { role: 'assistant', content: 'answer' },
       { role: 'user', content: 'second' },
     ] as any[];
-    expect(applyAnthropicCacheControl(messages, 'claude-sonnet-4-5')).toEqual({ system: true, history: true });
+    expect(applyAnthropicCacheControl(messages, 'claude-sonnet-4-5', { conversation: true })).toEqual({ system: true, history: true });
     const marked = messages.filter(m => Array.isArray(m.content) && m.content.some((b: any) => b.cache_control));
     expect(marked).toHaveLength(2);                      // system + settled history
-    expect(messages[messages.length - 1].content).toBe('second'); // newest turn untouched
+    expect(messages[messages.length - 1].content).toEqual([{ type: 'text', text: 'second', cache_control: { type: 'ephemeral' } }]); // newest turn untouched
   });
 });
 
@@ -121,11 +122,11 @@ CURRENT DATE/TIME: now` },
       { role: 'tool', tool_call_id: 't2', content: 'the newest tool result' },
     ] as any[];
 
-    expect(applyAnthropicCacheControl(messages, 'claude-sonnet-4-5')).toEqual({ system: true, history: true });
+    expect(applyAnthropicCacheControl(messages, 'claude-sonnet-4-5', { conversation: true })).toEqual({ system: true, history: true });
     // Marked the last markable message before the newest turn — the tool
     // result at index 3, not nothing at all.
-    expect(messages[3].content).toEqual([{ type: 'text', text: 'a big tool result', cache_control: { type: 'ephemeral' } }]);
-    expect(messages[5].content).toBe('the newest tool result'); // newest untouched
+    expect(messages[3].content).toBe('a big tool result');
+    expect(messages[5].content).toEqual([{ type: 'text', text: 'the newest tool result', cache_control: { type: 'ephemeral' } }]); // newest untouched
   });
 
   it('M4 — reports the two breakpoints separately so a system miss is visible', () => {
@@ -140,7 +141,7 @@ CURRENT DATE/TIME: now` },
       { role: 'assistant', content: 'answer' },
       { role: 'user', content: 'second' },
     ] as any[];
-    expect(applyAnthropicCacheControl(messages, 'claude-sonnet-4-5')).toEqual({ system: false, history: true });
+    expect(applyAnthropicCacheControl(messages, 'claude-sonnet-4-5', { conversation: true })).toEqual({ system: true, history: true });
   });
 });
 

@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { resourceHandlers } from './resource-tools';
 import { getConfig } from '@/config';
 import { getSettingsService } from '@/config/settings-service';
 import type { ToolHandler } from '@/core/agent-worker';
@@ -20,6 +21,7 @@ export interface MCPServerConnection {
   capabilities: MCPCapabilities;
   tools: MCPToolDefinition[];
   resources: MCPResource[];
+  templates?: Array<{ uriTemplate: string; name: string; description?: string }>;
   prompts: MCPPrompt[];
   status: 'connecting' | 'connected' | 'disconnected' | 'error';
   error?: string;
@@ -36,7 +38,7 @@ export async function drainPages<T>(
   send: (message: string) => void,
   protocol: MCPProtocol,
   method: string,
-  key: 'tools' | 'resources' | 'prompts',
+  key: 'tools' | 'resources' | 'prompts' | 'resourceTemplates',
 ): Promise<T[]> {
   const items: T[] = [];
   let cursor: string | undefined;
@@ -227,6 +229,7 @@ export class MCPBridge extends EventEmitter {
       // Fetch available resources
       if (connection.capabilities.resources) {
         connection.resources = await drainPages<MCPResource>(send, protocol, MCPMethods.ListResources, 'resources');
+        connection.templates = await drainPages<NonNullable<MCPServerConnection['templates']>[number]>(send, protocol, 'resources/templates/list', 'resourceTemplates').catch(() => []);
       }
 
       // Fetch available prompts
@@ -241,6 +244,20 @@ export class MCPBridge extends EventEmitter {
       }
 
       connection.status = 'connected';
+      let refreshing = Promise.resolve();
+      protocol.on('request', message => {
+        if (message.id !== undefined) return;
+        const refresh = async () => {
+          if (connection.status !== 'connected') return;
+          if (message.method === MCPMethods.ToolListChanged) connection.tools = await drainPages<MCPToolDefinition>(send, protocol, MCPMethods.ListTools, 'tools');
+          if (message.method === MCPMethods.PromptListChanged) connection.prompts = await drainPages<MCPPrompt>(send, protocol, MCPMethods.ListPrompts, 'prompts');
+          if (message.method === 'notifications/resources/list_changed') {
+            connection.resources = await drainPages<MCPResource>(send, protocol, MCPMethods.ListResources, 'resources');
+            connection.templates = await drainPages<{ uriTemplate: string; name: string; description?: string }>(send, protocol, 'resources/templates/list', 'resourceTemplates').catch(() => []);
+          }
+        };
+        refreshing = refreshing.then(refresh).catch(err => coreLogger.warn({ err, serverId: server.id }, 'MCP catalog refresh failed'));
+      });
       this.reconnectAttempts.delete(server.id);
       this.connections.set(server.id, connection);
 
@@ -648,15 +665,20 @@ export class MCPBridge extends EventEmitter {
     if (!hasConnected) return [];
 
     return [
+      ...resourceHandlers(bridge),
       {
         name: 'mcp_list_tools',
         description:
           'List available tools from connected MCP (Model Context Protocol) servers. ' +
           'Call this to discover what external tools are available before calling mcp_call_tool. ' +
-          'Returns server names and their tools with descriptions and parameter schemas.',
+          'Returns bounded tool summaries. Use query to search, offset to paginate, and tool_name to retrieve one exact parameter schema.',
         parameters: {
           type: 'object',
           properties: {
+            query: { type: 'string', description: 'Search tool names and descriptions.' },
+            tool_name: { type: 'string', description: 'Return the schema for this exact tool (with server_id).' },
+            limit: { type: 'integer', minimum: 1, maximum: 30, default: 15 },
+            offset: { type: 'integer', minimum: 0, default: 0 },
             server_id: {
               type: 'string',
               description: 'Optional: filter by a specific server ID. Omit to list all servers and tools.',
@@ -666,25 +688,38 @@ export class MCPBridge extends EventEmitter {
         toolId: 'mcp',
         execute: async (args) => {
           const serverId = args.server_id as string | undefined;
+          const query = typeof args.query === 'string' ? args.query.toLowerCase().split(/\s+/).filter(Boolean) : [];
+          const exact = typeof args.tool_name === 'string' ? args.tool_name : undefined;
+          if (exact && !serverId) throw new Error('server_id is required for an exact tool schema');
+          const limit = typeof args.limit === 'number' && Number.isFinite(args.limit) ? Math.max(1, Math.min(30, Math.floor(args.limit))) : 15;
+          let offset = typeof args.offset === 'number' && Number.isFinite(args.offset) ? Math.max(0, Math.floor(args.offset)) : 0;
+          let remaining = limit;
           const result: Array<{
             server_id: string;
             server_name: string;
             tools: Array<{ name: string; description: string; parameters?: unknown }>;
           }> = [];
 
-          for (const connection of bridge.connections.values()) {
+          for (const connection of [...bridge.connections.values()].sort((a, b) => a.id.localeCompare(b.id))) {
             if (connection.status !== 'connected') continue;
             if (serverId && connection.id !== serverId) continue;
 
+            const matched = connection.tools.filter(t => exact ? t.name === exact : query.every(q => `${t.name} ${t.description}`.toLowerCase().includes(q)))
+              .sort((a, b) => a.name.localeCompare(b.name));
+            const selected = matched.slice(offset, offset + remaining);
+            offset = Math.max(0, offset - matched.length);
+            remaining -= selected.length;
+            if (!selected.length && connection.tools.length) continue;
             result.push({
               server_id: connection.id,
               server_name: connection.server.name,
-              tools: connection.tools.map(t => ({
+              tools: selected.map(t => ({
                 name: t.name,
-                description: t.description,
-                parameters: t.inputSchema,
+                description: exact ? t.description : t.description.slice(0, 240),
+                ...(exact ? { parameters: t.inputSchema, outputSchema: t.outputSchema, annotations: t.annotations } : {}),
               })),
             });
+            if (remaining === 0) break;
           }
 
           if (result.length === 0) {

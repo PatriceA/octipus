@@ -53,7 +53,7 @@ export function applyProviderSettings(options: CompletionOptions, provider: stri
     extra.thinking = { type: 'enabled', budget_tokens: settings.thinkingBudget };
   }
   if (provider === 'openai' && settings?.cachePolicy === 'session') {
-    const key = cacheAffinityKey(options.sessionId, options.userId);
+    const key = cacheAffinityKey(options.sessionId, options.userId, options.cacheScope);
     if (key) extra.prompt_cache_key = key;
   }
   // Cache suppression is only an Octipus explicit-cache control. Upstream

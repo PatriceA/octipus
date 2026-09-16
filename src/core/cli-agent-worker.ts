@@ -18,7 +18,7 @@ import { agentLogger } from '@/utils/logger';
 import type { AgentWorkerConfig, ToolHandler } from './agent-base';
 import { BaseAgentWorker } from './agent-base';
 import { CLIArgumentBuilder, CLIOutputParser, discoverCodexMcpServers, resolveCliMcpEntry, sweepStaleFiles, type CliRunConnection } from './cli-adapters';
-import { dropCliSession, fingerprintRun, loadCliSession, saveCliSession, willResumeCliSession } from './cli-session-store';
+import { dropCliSession, fingerprintRun, loadCliSession, saveCliSession } from './cli-session-store';
 import { canResume, CLI_RESUME } from '@/shared/cli-capabilities';
 import { startCliToolBridge, type BridgeResult } from './cli-tool-bridge';
 import { ToolExecutor } from './tool-executor';
@@ -38,6 +38,9 @@ import { buildChildEnv } from './cli-child-env';
 import { getConfig } from '@/config';
 import { isRootAgent } from './types';
 import type { AgentContext, AgentMessage } from './types';
+import { readSessionHistory, toContextMessage, withSessionConversation } from './session-history';
+import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
+import { isLongTailHandler } from './agent/tool-split';
 
 /**
  * Whether this session's cwd is a directory someone ELSE owns — a dev-mode
@@ -94,15 +97,10 @@ export class CLIAgentWorker extends BaseAgentWorker {
    * `this.messages`.
    */
   private resuming = false;
-  /**
-   * True when loadHistory() guessed 'resuming' and skipped the DB fetch.
-   * executeCLI() re-checks with the authoritative resume/fingerprint
-   * computation before every attempt (including a forceCold retry, where
-   * reuse is off) and backfills history here if the guess turns out wrong —
-   * a dead-session retry must still carry the full transcript.
-   */
-  private historySkipped = false;
-
+  private generation = '';
+  private clearedAt?: string;
+  private userCursor?: { id: string; createdAt: string };
+  private resumeDelta: string[] = [];
   /**
    * Detached subagents not yet collected — the same manager the native worker
    * uses, so `spawn_child` can detach and `collect_children` works for a CLI.
@@ -180,7 +178,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
    * returns 0 for `getTotalTokens()`.
    */
   private totalTokens = 0;
-  /** Spend proxy: fresh input + output, cache reads/creation excluded. See `getBillableTokens`. */
+  /** Spend proxy: fresh input + paid cache writes + output; cache reads excluded. See `getBillableTokens`. */
   private billableTokensUsed = 0;
   /**
    * Set by the token-usage callback when the CLI subprocess crosses its
@@ -257,7 +255,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
     return this.totalTokens;
   }
 
-  /** Spend proxy: fresh input + output. Budget gates compare this, not `getTotalTokens`. */
+  /** Spend proxy: fresh input + paid cache writes + output. Budget gates compare this, not `getTotalTokens`. */
   override getBillableTokens(): number {
     return this.billableTokensUsed;
   }
@@ -294,56 +292,26 @@ export class CLIAgentWorker extends BaseAgentWorker {
     this.messages.push({ role: 'user', content, timestamp: new Date() });
     // Only persist for the root agent — sub-workers use handleMessage for persistence
     if (isRootAgent(this.context)) {
-      await messageRepository.create({
+      const row = await messageRepository.create({
         sessionId: this.context.sessionId,
         role: 'user',
         content,
         agentId: this.context.id,
-      });
+      }, this.generation);
+      this.userCursor = row.id ? { id: row.id, createdAt: row.createdAt.toISOString() } : undefined;
       await sessionRepository.incrementMessageCount(this.context.sessionId);
     }
   }
 
   private async fetchHistory(): Promise<AgentMessage[]> {
-    const dbMessages = await messageRepository.findBySession(this.context.sessionId);
-    return dbMessages.map((msg) => ({
-      role: msg.role as AgentMessage['role'],
-      content: msg.content,
-      timestamp: msg.createdAt,
-    }));
-  }
-
-  /**
-   * Early, loadHistory-time guess at whether this run will resume a vendor
-   * session — same fingerprint shape executeCLI() computes, just ahead of
-   * knowing settings/cwd for certain. Used only to skip a DB fetch whose
-   * result buildPrompt() would discard anyway; executeCLI() re-verifies
-   * authoritatively before every attempt.
-   */
-  private async willResume(): Promise<boolean> {
-    const toolConfig = getCLIToolConfig(this.context.model);
-    if (!toolConfig) return false;
-    const adapterKey = toolConfig.adapter ?? toolConfig.name;
-    if (!canResume(adapterKey)) return false;
-    const session = await sessionRepository.findById(this.context.sessionId);
-    if (!session) return false;
-    const settings = await this.getCLISettings();
-    const workspaceCwd = resolvePath(WorkspaceFS.forSession(session).root);
-    const fingerprint = fingerprintRun({
-      model: settings.model, permissionMode: settings.permissionMode,
-      planMode: isPlanMode(session.context as import('@/db/schema/sessions').SessionContext | undefined),
-      workingDirectory: workspaceCwd,
-    });
-    return willResumeCliSession(this.context.sessionId, adapterKey, fingerprint);
+    if (!isRootAgent(this.context)) return [];
+    const history = await readSessionHistory(this.context.sessionId);
+    this.generation = history.generation;
+    this.clearedAt = history.session?.context?.clearedAt;
+    return history.messages;
   }
 
   async loadHistory(): Promise<void> {
-    if (await this.willResume()) {
-      this.resuming = true;
-      this.historySkipped = true;
-      agentLogger.debug({ agentId: this.context.id }, 'CLI agent history skipped — vendor session will be resumed');
-      return;
-    }
     this.messages = await this.fetchHistory();
     agentLogger.debug(
       { agentId: this.context.id, messageCount: this.messages.length },
@@ -358,7 +326,13 @@ export class CLIAgentWorker extends BaseAgentWorker {
   async run(userMessage?: string): Promise<string> {
     this.activeRuns++;
     try {
-      return await this.runInternal(userMessage);
+      return await (isRootAgent(this.context)
+        ? withSessionConversation(this.context.sessionId, async () => {
+          const system = this.messages.filter(m => m.role === 'system');
+          this.messages = [...await this.fetchHistory(), ...system];
+          return this.runInternal(userMessage);
+        })
+        : this.runInternal(userMessage));
     } finally {
       this.activeRuns--;
     }
@@ -385,12 +359,19 @@ export class CLIAgentWorker extends BaseAgentWorker {
       if (!session || session.userId !== this.context.userId) throw new Error('CLI session ownership mismatch');
       this.bridge = await startCliToolBridge({
         tools: () => this.toolExecutor.toolsDisabled ? [] : [...this.toolExecutor.getTools().values()],
+        advertisedTools: () => {
+          if (this.toolExecutor.toolsDisabled) return [];
+          const tools = [...this.toolExecutor.getTools().values()];
+          const advertisement = this.config.toolAdvertisement;
+          return advertisement?.mode === 'lazy' ? tools.filter(t => !isLongTailHandler(t, advertisement.coreToolIds)) : tools;
+        },
         active: () => this.context.status === 'running' && !this.aborted,
         execute: (name, args) => this.executeBridgedTool(name, args),
         unqueued: new Set(['get_cli_run_context', 'get_work_plan']),
       });
       if (this.aborted) throw new Error('Agent was aborted during bridge startup');
       this.connection = { url: this.bridge.url, key: this.bridge.key,
+        conversationId: isRootAgent(this.context) ? this.context.sessionId : this.context.id,
         planMode: isPlanMode(session.context as { planMode?: boolean }), maxIterations: this.config.maxIterations };
       const helper = resolveCliMcpEntry().replace(/index\.js$/, 'agent-bridge-client.js');
       const quote = (value: string) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
@@ -400,7 +381,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
 ` +
         `If your CLI cannot load this MCP server, use its terminal tool to run the bridge helper: ${quote(process.execPath)} ${quote(helper)} tools; or ${quote(process.execPath)} ${quote(helper)} call <tool-name> '<JSON arguments>'. Quote arguments safely. Credentials are supplied by the parent environment; never print them.
 ` +
-        `Tool names: ${[...this.toolExecutor.getTools().keys()].join(', ')}.`);
+        `Use list_tools and describe_tool to discover additional tools, then call_discovered_tool with their name and arguments.`);
       this.messages.push({ role: 'user', content: `Octipus run context: ${await this.controlContext()}`, timestamp: new Date() });
       let result = await this.executeCLI();
       const checkLateFeedback = async () => {
@@ -619,7 +600,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
     if (this.resuming) {
       const runContextBlock = this.messages.find(m => m.role === 'user' && m.content.startsWith('Octipus run context:'))?.content;
       const currentUserMessage = [...this.messages].reverse().find(m => m.role === 'user' && !m.content.startsWith('Octipus run context:'))?.content;
-      return [runContextBlock, currentUserMessage].filter(Boolean).join('\n\n');
+      return [...this.resumeDelta, runContextBlock, currentUserMessage].filter(Boolean).join('\n\n');
     }
 
     const parts: string[] = [];
@@ -743,12 +724,22 @@ export class CLIAgentWorker extends BaseAgentWorker {
     // block so the retry can never itself trigger another retry (no
     // `resume` => the close handler's dead-session branch below cannot fire
     // for it).
-    const reuseSessions = canResume(adapterKey) && !opts?.forceCold;
+    const providerEnv = await toolConfig.buildEnv?.();
+    const reuseSessions = isRootAgent(this.context) && canResume(adapterKey);
     let resume: { id: string; isFirstRun: boolean } | undefined;
     let fingerprint: string | undefined;
     if (reuseSessions) {
-      fingerprint = fingerprintRun({ model: settings.model, permissionMode: settings.permissionMode, planMode: this.connection?.planMode, workingDirectory: workspaceCwd });
-      const existing = await loadCliSession(this.context.sessionId, adapterKey, fingerprint);
+      const instructions = this.systemMessages.map(part => part.split(VOLATILE_MARKER)[0]).join('\n\n');
+      const toolSchema = [...this.toolExecutor.getTools().values()].map(tool => [tool.name, tool.description, tool.parameters]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+      fingerprint = fingerprintRun({ model: (adapterKey === 'Claude Code' ? process.env.CLAUDE_MODEL : adapterKey === 'Codex CLI' ? process.env.CODEX_MODEL : undefined) || settings.model,
+        permissionMode: settings.permissionMode, planMode: this.connection?.planMode, workingDirectory: workspaceCwd,
+        providerIdentity: JSON.stringify([this.context.model, toolConfig.name, settings.extraArgs, providerEnv, toolSchema]), instructions });
+      const existing = opts?.forceCold ? null : await loadCliSession(this.context.sessionId, adapterKey, fingerprint);
+      this.resumeDelta = existing?.acknowledged
+        ? (await messageRepository.findContextMessages(this.context.sessionId, this.clearedAt, existing.acknowledged, this.generation))
+          .filter(row => row.id !== this.userCursor?.id)
+          .map(row => `[${row.role}] ${toContextMessage(row).content}`)
+        : [];
       // Style comes from the shared table, never an adapter-name comparison —
       // a future caller-minted adapter must fall into the minted branch
       // automatically, not silently land in the captured one and never resume.
@@ -766,26 +757,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
       }
     }
 
-    // Authoritative resume determination for THIS attempt — overrides
-    // loadHistory()'s early guess. A forceCold retry always lands here as
-    // `false` (reuseSessions is off for it), so it never inherits a stale
-    // 'resuming' from the first, failed attempt.
+    // Recovery opens a new persistent conversation and cannot retry recursively.
     this.resuming = !!resume && !resume.isFirstRun;
-    if (!this.resuming && this.historySkipped) {
-      // The early guess skipped loading history expecting a resume that did
-      // not happen (fingerprint changed, or this is a forceCold retry after
-      // the vendor session died) — backfill it now, ahead of whatever this
-      // run already pushed onto `this.messages`, so a cold/recovered turn
-      // still carries the full transcript.
-      // `addUserMessage` has ALREADY pushed this turn's message onto
-      // `this.messages` and (for a root agent) persisted it, so the DB fetch
-      // returns it too — prepending the fetch verbatim put the user's question
-      // in the recovered prompt twice. Backfill only what isn't here yet.
-      const have = new Set(this.messages.map(m => `${m.role}::${m.content}`));
-      const backfill = (await this.fetchHistory()).filter(m => !have.has(`${m.role}::${m.content}`));
-      this.messages = [...backfill, ...this.messages];
-      this.historySkipped = false;
-    }
     const prompt = this.buildPrompt();
 
     this.launchCleanup?.();
@@ -806,15 +779,14 @@ export class CLIAgentWorker extends BaseAgentWorker {
     };
     // Vendor CLIs that reuse the `claude` binary (z.ai GLM / Moonshot Kimi) inject
     // ANTHROPIC_BASE_URL + auth token via buildEnv — merge it over the adapter's env.
-    const toolEnv = toolConfig.buildEnv
-      ? { ...(built.env || {}), ...(await toolConfig.buildEnv()) }
-      : built.env;
+    const toolEnv = { ...built.env, ...providerEnv };
 
 
     const previousCounters = this.parser?.getSideEffectCounters();
     if (previousCounters) this.pastParserCounters = mergeCounters(this.pastParserCounters ?? emptyCounters(), previousCounters);
     const invocationStartIteration = this.iteration;
     let invocationUsage: import('@/models/litellm-client').CompletionResult['usage'] = { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false };
+    let capturedVendorId: string | undefined;
     const parser = this.parser = new CLIOutputParser(
       this.context.id,
       this.context.model,
@@ -851,7 +823,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
         },
         onTokenUsage: (tokens) => {
           this.totalTokens += tokens.total;
-          // Spend proxy: fresh input + output, cache reads/creation excluded
+          // Spend proxy: fresh input + paid cache writes + output; cache reads excluded
           // (Plan 1's split, `billableTokens`) — a resumed session replaying
           // its whole context as cache reads must not look expensive, and a
           // well-cached session must not SIGKILL against a budget its fresh
@@ -881,9 +853,18 @@ export class CLIAgentWorker extends BaseAgentWorker {
         // session reuse (Claude's own write point is right after spawn,
         // below — its id is caller-minted, so there is nothing to capture).
         onVendorSession: (id) => {
+          capturedVendorId = id;
+          // Write it as soon as the vendor announces it, not only on a clean
+          // close. A timeout, a kill or a crash after this point would
+          // otherwise orphan the vendor thread — it exists on disk, we just
+          // forgot its id, and the next turn pays a cold launch for nothing.
+          // The close handler rewrites the record with the acknowledged
+          // cursor; this early row carries no cursor, so a resume off it
+          // re-sends the turn rather than skipping it.
           if (!reuseSessions) return;
           void saveCliSession(this.context.sessionId, adapterKey, {
             id, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(),
+            generation: this.generation, ownerAgentId: this.context.id,
           }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to store CLI session id'));
         },
       },
@@ -1004,11 +985,6 @@ export class CLIAgentWorker extends BaseAgentWorker {
       // the process even starts, so unlike a captured id there is nothing to
       // wait for — write it as soon as the process starts. One write per
       // run, here and only here.
-      if (resume && CLI_RESUME[adapterKey]?.style === 'caller-minted') {
-        void saveCliSession(this.context.sessionId, adapterKey, {
-          id: resume.id, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(),
-        }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to store CLI session id'));
-      }
 
       // Single hard timeout: force-kill on overrun and stamp abortReason so
       // run() reports "timed out" instead of "aborted by user". timeout <= 0
@@ -1186,7 +1162,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
           // later turn failed identically. Permanent, not a one-off. The vendor
           // says so on both channels, so match both.
           const deadSessionEvidence = `${stderr}\n${this.runError ?? ''}`;
-          if (resume && (this.runError || (code !== 0 && code !== null)) && /no conversation found|session not found/i.test(deadSessionEvidence)) {
+          if (!opts?.forceCold && resume && (this.runError || (code !== 0 && code !== null)) && /no conversation found|session not found/i.test(deadSessionEvidence)) {
             await dropCliSession(this.context.sessionId, adapterKey);
             agentLogger.warn({ agentId: this.context.id, adapterKey, id: resume.id }, 'Vendor CLI session is gone — retrying cold with the full prompt');
             // The dead attempt's error must not outlive it: `runError` is a
@@ -1222,6 +1198,11 @@ export class CLIAgentWorker extends BaseAgentWorker {
             'CLI sub-agent completed',
           );
 
+          const vendorId = capturedVendorId || resume?.id;
+          if (reuseSessions && vendorId) await saveCliSession(this.context.sessionId, adapterKey, {
+            id: vendorId, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(),
+            generation: this.generation, ownerAgentId: this.context.id, acknowledged: this.userCursor,
+          });
           resolve(accumulatedText || '(no response)');
         } catch (err) {
           reject(err instanceof Error ? err : new Error(String(err)));

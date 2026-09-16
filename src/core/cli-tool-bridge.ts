@@ -9,6 +9,7 @@ export interface BridgeResult { content: Array<{ type: 'text'; text: string }>; 
 /** A run-local capability, never an API/admin credential. No caller-supplied identity. */
 export async function startCliToolBridge(options: {
   tools: () => ToolHandler[];
+  advertisedTools?: () => ToolHandler[];
   execute: (name: string, args: Record<string, unknown>) => Promise<BridgeResult>;
   active: () => boolean;
   /** Read-only tools that bypass the per-worker queue (safe to answer while a delegation blocks it). */
@@ -32,7 +33,11 @@ export async function startCliToolBridge(options: {
     }
     if (closed || !options.active()) { reply(410, { error: 'Agent run is no longer active' }); return; }
       if (req.method === 'GET' && req.url === '/tools') {
-        reply(200, { tools: options.tools().map(t => ({ name: t.name, description: t.description, inputSchema: t.parameters })) });
+        const tools = (options.advertisedTools?.() ?? options.tools()).map(t => ({ name: t.name, description: t.description, inputSchema: t.parameters }));
+        if (options.advertisedTools && options.tools().length) tools.push({ name: 'call_discovered_tool',
+          description: 'Call an Octipus tool discovered through list_tools/describe_tool using its exact name and arguments.',
+          inputSchema: { type: 'object', properties: { name: { type: 'string' }, arguments: { type: 'object' } }, required: ['name'] } });
+        reply(200, { tools });
         return;
       }
       if (req.method !== 'POST' || req.url !== '/call') { reply(404, { error: 'Not found' }); return; }
@@ -44,6 +49,11 @@ export async function startCliToolBridge(options: {
         chunks.push(Buffer.from(chunk));
       }
       const input = callSchema.parse(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      if (input.name === 'call_discovered_tool' && options.advertisedTools) {
+        const target = callSchema.parse(input.arguments);
+        input.name = target.name;
+        input.arguments = target.arguments;
+      }
       const run = async () => {
         if (closed || !options.active()) throw new Error('Agent run is no longer active');
         // Exact membership check before ToolExecutor's fuzzy name recovery.

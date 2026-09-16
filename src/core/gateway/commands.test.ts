@@ -12,17 +12,21 @@ describe('CommandRegistry', () => {
   // canAccessRootSession would always reject under that mock).
   const findByIdSpy = vi.spyOn(sessionRepository, 'findById');
   const updateSpy = vi.spyOn(sessionRepository, 'update');
+  const clearSpy = vi.spyOn(sessionRepository, 'clearContext');
 
   beforeEach(() => {
     registry = new CommandRegistry();
     registerBuiltinCommands(registry);
     findByIdSpy.mockReset();
     updateSpy.mockReset();
+    clearSpy.mockReset();
+    clearSpy.mockResolvedValue(undefined as never);
   });
 
   afterEach(() => {
     findByIdSpy.mockReset();
     updateSpy.mockReset();
+    clearSpy.mockReset();
   });
 
   test('executes /help command', async () => {
@@ -134,16 +138,12 @@ describe('CommandRegistry', () => {
     });
 
     expect(result!.text).toBe('[clear]');
-    expect(updateSpy).toHaveBeenCalledTimes(1);
-    const updateCall = updateSpy.mock.calls[0] as unknown as [string, { context: Record<string, unknown> }];
-    expect(updateCall[0]).toBe('sess-1');
-    expect(typeof updateCall[1].context.clearedAt).toBe('string');
-    // ISO-8601 round-trip — invalid string would NaN on Date parse.
-    expect(Number.isNaN(new Date(updateCall[1].context.clearedAt as string).getTime())).toBe(false);
-    // Pre-existing context survives (we merge, not replace).
-    expect(updateCall[1].context.lastTopic).toBe('coding');
-    // Compacted summary is wiped so the root agent doesn't pull stale context.
-    expect(updateCall[1].context.compactedSummary).toBeUndefined();
+    // The clear is one atomic repository statement now: it stamps clearedAt and
+    // a fresh generation, drops the checkpoint/summary/vendor-session keys and
+    // keeps everything else — all in SQL, so there is no context object to
+    // assert on here. session-context-patch.test.ts proves it at the SQL level.
+    expect(clearSpy).toHaveBeenCalledTimes(1);
+    expect(clearSpy).toHaveBeenCalledWith('sess-1');
   });
 
   test('/clear preserves transcript on persistent channels (telegram/slack/etc)', async () => {

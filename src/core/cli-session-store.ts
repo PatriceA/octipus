@@ -1,12 +1,17 @@
+import { sessionGeneration } from '@/db/schema/sessions';
 import { createHash } from 'node:crypto';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { canResume } from '@/shared/cli-capabilities';
 import type { SessionContext } from '@/db/schema/sessions';
+import { withSessionConversation } from './session-history';
 
 export type CliSessionRecord = {
   id: string;
   fingerprint: string;
   lastUsedAt: string;
+  generation?: string;
+  ownerAgentId?: string;
+  acknowledged?: { id: string; createdAt: string };
 };
 
 /**
@@ -14,8 +19,8 @@ export type CliSessionRecord = {
  * vendor session means. Not reversible, just needs to detect change — a
  * SHA-256 over the fields, hex-truncated.
  */
-export function fingerprintRun(run: { model?: string; permissionMode?: string; planMode?: boolean; workingDirectory?: string }): string {
-  const material = JSON.stringify([run.model ?? '', run.permissionMode ?? '', run.planMode ?? false, run.workingDirectory ?? '']);
+export function fingerprintRun(run: { model?: string; permissionMode?: string; planMode?: boolean; workingDirectory?: string; providerIdentity?: string; instructions?: string }): string {
+  const material = JSON.stringify([run.model ?? '', run.permissionMode ?? '', run.planMode ?? false, run.workingDirectory ?? '', run.providerIdentity ?? '', run.instructions ?? '']);
   return createHash('sha256').update(material).digest('hex').slice(0, 16);
 }
 
@@ -29,6 +34,7 @@ export async function loadCliSession(sessionId: string, adapterKey: string, fing
   const ctx = session?.context as SessionContext | undefined;
   const rec = ctx?.cliSessions?.[adapterKey];
   if (!rec || rec.fingerprint !== fingerprint) return null;
+  if (rec.generation !== sessionGeneration(ctx)) return null;
   // Defence in depth: a /clear sets `clearedAt` and is supposed to drop
   // `cliSessions` at the write (both command paths do this), but a stored
   // record that somehow survives a clear (a write path that misses it, a
@@ -53,17 +59,32 @@ export async function willResumeCliSession(sessionId: string, adapterKey: string
   return (await loadCliSession(sessionId, adapterKey, fingerprint)) !== null;
 }
 
-/**
- * Both writers patch ONE key. They used to read the whole `context`, spread it
- * and write it back — and both are called fire-and-forget from the middle of a
- * turn (`cli-agent-worker.ts`), so a `/clear` that landed in between was
- * restored wholesale: its `clearedAt` and summary reset, and the cleared
- * conversation resumed on the next turn. No overlapping turns required.
- */
+/** Awaited publication under the root conversation lock; rejects stale generations. */
 export async function saveCliSession(sessionId: string, adapterKey: string, rec: CliSessionRecord): Promise<void> {
-  await sessionRepository.setContextKey(sessionId, ['cliSessions', adapterKey], rec);
+  const session = await sessionRepository.findById(sessionId);
+  const generation = rec.generation ?? '';
+  if (sessionGeneration(session?.context) !== generation) return;
+  await sessionRepository.patchContextIfGeneration(sessionId, generation, {
+    cliSessions: { ...session?.context?.cliSessions, [adapterKey]: { ...rec, generation } },
+  });
 }
 
 export async function dropCliSession(sessionId: string, adapterKey: string): Promise<void> {
   await sessionRepository.setContextKey(sessionId, ['cliSessions', adapterKey], undefined);
+}
+
+/** The final persisted Octipus answer is now part of this vendor turn. */
+export async function acknowledgeProviderTurn(sessionId: string, agentId: string, cursor: { id: string; createdAt: Date }): Promise<void> {
+  await withSessionConversation(sessionId, async () => {
+  const session = await sessionRepository.findById(sessionId);
+  for (const [key, rec] of Object.entries(session?.context?.cliSessions ?? {})) {
+    if (rec.ownerAgentId === agentId) await saveCliSession(sessionId, key, {
+      ...rec, acknowledged: { id: cursor.id, createdAt: cursor.createdAt.toISOString() },
+    });
+  }
+  const native = session?.context?.nativeConversation;
+  if (native?.ownerAgentId === agentId) await sessionRepository.patchContextIfGeneration(sessionId, native.generation, {
+    nativeConversation: { ...native, acknowledged: { id: cursor.id, createdAt: cursor.createdAt.toISOString() } },
+  });
+  });
 }

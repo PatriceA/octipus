@@ -3,8 +3,8 @@ import { billableTokens } from './billable-tokens';
 
 describe('billableTokens', () => {
   it('excludes cache reads from the billable figure', () => {
-    // 35 input of which 20 were cache reads and 5 cache creation -> 10 fresh.
-    expect(billableTokens({ inputTokens: 35, outputTokens: 3, totalTokens: 38, cacheReadTokens: 20, cacheCreationTokens: 5 })).toBe(13);
+    // 35 input of which 20 were cache reads and 5 cache creation -> 10 fresh + 5 paid writes.
+    expect(billableTokens({ inputTokens: 35, outputTokens: 3, totalTokens: 38, cacheReadTokens: 20, cacheCreationTokens: 5 })).toBe(18);
   });
 
   it('equals input + output when nothing was cached', () => {

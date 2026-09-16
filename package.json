@@ -49,6 +49,7 @@
     "eval:quality": "tsx --import ./scripts/md-loader.mjs src/eval/cli.ts --suite quality",
     "catalog": "tsx --import ./scripts/md-loader.mjs scripts/gen-catalog.ts",
     "catalog:check": "tsx --import ./scripts/md-loader.mjs scripts/gen-catalog.ts --check",
+    "benchmark:sessions:openrouter": "tsx --import ./scripts/md-loader.mjs scripts/benchmark-openrouter-sessions.ts",
     "root-agent-cost": "tsx --import ./scripts/md-loader.mjs scripts/root-agent-cost.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome lint",

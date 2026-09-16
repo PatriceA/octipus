@@ -175,42 +175,30 @@ participate, for different reasons:
 
 ### What invalidates a stored session
 
-A stored vendor session is scoped to a fingerprint over the run's model,
-permission mode, plan mode and working directory. If any of those change
-between turns, the fingerprint no longer matches and Octipus starts a new
-vendor session rather than resuming the stale one. Running `/clear` also
-drops every stored vendor session id for that octipus session outright.
-
-A new octipus session always starts a new vendor session — there is no
-cross-session reuse; the stored id lives on the octipus session's own
-record.
+Vendor reuse belongs to the root conversation. Children have isolated vendor
+conversations and bridge namespaces. A fingerprint covers model, configured
+provider identity, permissions, plan mode, workspace, stable instructions and
+tool schemas. A changed fingerprint starts a new persistent vendor conversation.
+Each record also tracks a clear generation and an acknowledged transcript cursor.
+`/clear` invalidates old state even if an old turn finishes afterward.
 
 ### What resume actually saves
 
-Resume does **not** stop the vendor CLI from re-reading its own history —
-Claude Code and Codex CLI both resend their full stored conversation to the
-model on every request they serve, resumed or not, and that re-reading is
-billed by the vendor the same way either way. What Octipus saves by
-resuming is its own side of the exchange: it stops re-sending the transcript
-itself (only the new turn's prompt goes out), Claude's system-prompt
-snapshot is replayed by the vendor instead of being re-rendered by Octipus,
-and the vendor's own prompt cache stays warm across turns. Treat this as
-saved egress and rendering work, not as the vendor charging less for
-history.
+The next launch sends current guidance and messages the vendor has not yet seen.
+This includes intervening answers or corrections from another provider. The
+vendor may still process its stored history; actual cached-token usage and cost,
+not stdin size, determine savings. Codex's Octipus MCP namespace stays stable
+across root turns while bridge endpoints and credentials remain per-run.
 
 ### Compaction
 
-When Octipus compacts a session's own context and a live vendor session is
-stored for it, Octipus pushes that compaction down into the vendor too, so
-the vendor is not left holding the full pre-compaction transcript. Claude
-Code can be compacted in place, non-interactively, on the resumed session
-(`claude -p --resume <id> "/compact"`). Codex CLI cannot be compacted
-non-interactively — `/compact` there is interactive-only — so Octipus
-rotates the thread instead: the stored id is dropped, and the next turn
-starts cold, carrying Octipus's own compaction summary rather than the
-vendor's. There is no database column for the outcome; it is recorded as a
-structured log line (session id, adapter, outcome — `compacted`, `rotated`,
-or `skipped` when there is no live vendor session to touch).
+Octipus summarizes a contiguous prefix, retains recent turns, and publishes a
+checkpoint with exact message coverage. Both Claude and Codex vendor records
+rotate only after successful checkpoint publication. The next launch carries
+that checkpoint plus its suffix. There is no separate credential-bearing CLI
+maintenance subprocess. A failed, incomplete or ineffective automatic summary
+does not rotate the vendor conversation. Turn execution and maintenance are
+serialized within one server process.
 
 ### Cold fallback
 
@@ -218,7 +206,8 @@ A resumed vendor session can go missing between turns (the id expired,
 or the vendor's state was lost). Octipus detects this from the vendor's own
 error output, drops the stale stored id, and retries that turn exactly once,
 cold, with the full prompt — so a turn is never simply lost because the
-vendor forgot its session.
+vendor forgot its session. The replacement ID is persisted, so the following
+turn resumes normally.
 
 ## Validation scope
 
@@ -236,3 +225,12 @@ personal connectors or modify project files, but consumes vendor usage.
 
 Approximately 90% coverage of useful everyday workflows is the implementation
 target, not a measured compatibility percentage or a promise of feature parity.
+
+### Lazy discovery
+
+CLI workers advertise the same core tool schemas as direct workers when lazy
+mode is enabled. `list_tools`/`describe_tool` discover long-tail tools, and
+`call_discovered_tool` dispatches through the original exact-membership and
+permission checks. MCP discovery returns bounded summaries; exact tool schemas,
+resources, URI templates and prompts are retrieved on demand. Catalog change
+notifications refresh metadata without preloading resource contents.

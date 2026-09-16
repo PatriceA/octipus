@@ -35,6 +35,11 @@ describe('cli session store', () => {
       if (!row) return null;
       return { id, context: row.context } as unknown as Session;
     });
+    vi.spyOn(sessionRepository, 'patchContextIfGeneration').mockImplementation(async (id, generation, patch) => {
+      const row = store.get(id) ?? { context: {} as SessionContext };
+      if ((row.context.clearedAt ?? '') !== generation) return false;
+      Object.assign(row.context, patch); store.set(id, row); return true;
+    });
     vi.spyOn(sessionRepository, 'update').mockImplementation(async (id: string, data: { context?: unknown }) => {
       const existing = store.get(id) ?? { context: {} };
       const context = (data.context ?? existing.context) as SessionContext;
@@ -97,7 +102,7 @@ describe('cli session store', () => {
   it('still resumes a record saved after the session’s clearedAt', async () => {
     const row0 = { context: { clearedAt: '2026-01-01T00:00:00.000Z' } as SessionContext };
     store.set('s1', row0);
-    await saveCliSession('s1', 'Claude Code', { id: 'u1', fingerprint: 'fp-a', lastUsedAt: '2026-01-02T00:00:00.000Z' });
+    await saveCliSession('s1', 'Claude Code', { id: 'u1', fingerprint: 'fp-a', generation: '2026-01-01T00:00:00.000Z', lastUsedAt: '2026-01-02T00:00:00.000Z' });
     expect(await loadCliSession('s1', 'Claude Code', 'fp-a')).toMatchObject({ id: 'u1' });
   });
 });

@@ -63,6 +63,22 @@ export interface CompactionState {
 }
 
 export interface SessionContext {
+  /** Unique clear generation; timestamps alone can collide within one millisecond. */
+  conversationGeneration?: string;
+  /** Last direct-provider conversation, including tool results and signed blocks. */
+  nativeConversation?: {
+    generation: string; model: string; ownerAgentId: string; checkpointId?: string;
+    acknowledged: { id: string; createdAt: string };
+    messages: Array<Omit<import('@/core/types').AgentMessage, 'timestamp'> & { timestamp: string }>;
+  };
+  /** Durable summary coverage; generation is the clear boundary at creation. */
+  checkpoint?: {
+    generation: string;
+    through: { id: string; createdAt: string };
+    summary: string;
+    fileOps: { read: string[]; written: string[]; edited: string[] };
+    entryId?: string;
+  };
   workspaceId?: string;
   currentTopic?: string;
   activeAgentId?: string;
@@ -112,8 +128,16 @@ export interface SessionContext {
    * Scoped to the octipus session on purpose: a new octipus session finds an
    * empty map and therefore starts a new vendor session, which is the rule.
    */
-  cliSessions?: Record<string, { id: string; fingerprint: string; lastUsedAt: string }>;
+  cliSessions?: Record<string, {
+    id: string; fingerprint: string; lastUsedAt: string;
+    generation?: string; ownerAgentId?: string;
+    acknowledged?: { id: string; createdAt: string };
+  }>;
 }
 
 export type Session = typeof sessions.$inferSelect;
 export type NewSession = typeof sessions.$inferInsert;
+
+export function sessionGeneration(context?: SessionContext | null): string {
+  return context?.conversationGeneration ?? context?.clearedAt ?? '';
+}

@@ -85,13 +85,25 @@ vi.mock('@/db/repositories/session-repository', () => ({
       if (value === undefined) delete node[leaf];
       else node[leaf] = value;
     },
+    patchContextIfGeneration: async (id: string, generation: string, patch: Record<string, unknown>) => {
+      const row = fixture.sessions.get(id);
+      if (!row || (row.context.clearedAt ?? '') !== generation) return false;
+      Object.assign(row.context, patch); return true;
+    },
     incrementMessageCount: async () => {},
   },
 }));
 vi.mock('@/db/repositories/work-plan-repository', () => ({ workPlanRepository: { read: async () => ({ current: null, revision: 0, previous: [] }) } }));
 vi.mock('@/db/repositories/message-repository', () => ({
   messageRepository: {
-    create: async () => ({}),
+    create: async (data: { content: string }) => {
+      fixture.history.push(data.content);
+      const index = fixture.history.length - 1;
+      return { id: `message-${index}`, createdAt: new Date(1700000000000 + index * 1000) };
+    },
+    findContextMessages: async (_id: string, since?: string, after?: { createdAt: string }) => fixture.history.map((content, i) => ({
+      id: `message-${i}`, role: i % 2 === 0 ? 'user' : 'assistant', content, createdAt: new Date(1700000000000 + i * 1000),
+    })).filter(m => (!since || m.createdAt >= new Date(since)) && (!after || m.createdAt > new Date(after.createdAt))),
     // Turn n's `history` fixture is that turn's view of everything said so
     // far — alternating user/assistant, oldest first — matching what a real
     // messageRepository row-per-turn history would look like.
@@ -135,7 +147,7 @@ function makeWorker(model: string, opts: { sessionId: string; model?: string; pe
       await worker.loadHistory();
       return worker.run(message);
     },
-    fingerprint: fingerprintRun({ model: opts.model, permissionMode: opts.permissionMode, planMode: false, workingDirectory: fixture.dir }),
+    get fingerprint() { return fixture.sessions.get(opts.sessionId)?.context.cliSessions?.[model.includes('codex') ? 'Codex CLI' : 'Claude Code']?.fingerprint ?? ''; },
     // What actually reached the vendor CLI over stdin (claude, with an
     // active bridge, always sends the prompt as a stream-json 'user' message).
     get lastPrompt(): string {
@@ -239,7 +251,7 @@ describe('CLI session reuse', () => {
     const answer = await worker.run('question');
     expect(answer).not.toBe('');
     expect(fixture.spawnCount - before).toBe(2); // cold retry happened
-    expect(await loadCliSession('s1', 'Claude Code', worker.fingerprint)).toBeNull();
+    expect(await loadCliSession('s1', 'Claude Code', worker.fingerprint)).not.toBeNull();
   });
 
   it('I6 — recovers even when the vendor reports the dead session only as a structured error', async () => {
@@ -258,7 +270,7 @@ describe('CLI session reuse', () => {
 
     expect(answer).not.toBe('');
     expect(fixture.spawnCount - before).toBe(2); // cold retry happened
-    expect(await loadCliSession('s1', 'Claude Code', second.fingerprint)).toBeNull();
+    expect(await loadCliSession('s1', 'Claude Code', second.fingerprint)).not.toBeNull();
   });
 
   it('does not resume when the model changed', async () => {
@@ -409,5 +421,34 @@ describe('CLI session reuse', () => {
     const worker = makeClaudeWorker({ sessionId: 's1', history: ['old question', 'old answer'] });
     await worker.run('first');
     expect(worker.lastPrompt).toContain('old question');
+  });
+});
+
+
+describe('session boundary regressions', () => {
+  it('does not replay pre-clear text on a cold launch', async () => {
+    const w = makeClaudeWorker({ sessionId: 'clear', history: ['CLEARED SECRET', 'old answer'] });
+    fixture.sessions.get('clear')!.context.clearedAt = '2026-01-01T00:00:00.000Z';
+    await w.run('new question');
+    expect(w.lastPrompt).not.toContain('CLEARED SECRET');
+  });
+  it('keeps a specialist out of the root vendor conversation', async () => {
+    const root = makeClaudeWorker({ sessionId: 'child' });
+    await root.run('root question');
+    const first = await loadCliSession('child', 'Claude Code', root.fingerprint);
+    const child = makeClaudeWorker({ sessionId: 'child' });
+    Object.assign(child.worker.getContext(), { root: false, role: 'coding', parentAgentId: root.worker.getContext().id });
+    const result = await child.run('specialist task');
+    expect(result).not.toContain(first!.id);
+    expect((await loadCliSession('child', 'Claude Code', root.fingerprint))!.id).toBe(first!.id);
+  });
+  it('sends intervening messages that another provider handled', async () => {
+    const first = makeClaudeWorker({ sessionId: 'switch' });
+    await first.run('first question');
+    const next = makeClaudeWorker({ sessionId: 'switch', history: ['first question', 'answer', 'NEW CORRECTION', 'other provider answer'] });
+    await next.run('continue');
+    expect(next.lastPrompt).toContain('NEW CORRECTION');
+    expect(next.lastPrompt).toContain('other provider answer');
+    expect(next.lastPrompt).not.toContain('first question');
   });
 });

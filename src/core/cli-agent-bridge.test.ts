@@ -30,6 +30,7 @@ vi.mock('@/core/agent-task-recorder', () => ({ recordAgentCompletion: async () =
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: {
   findById: async () => ({ id: 's', userId: 'u', context: { devMode: true, projectPath: fixture.dir, planMode: false } }),
   incrementMessageCount: async () => {},
+  patchContextIfGeneration: async () => true,
 } }));
 vi.mock('@/db/repositories/work-plan-repository', () => ({ workPlanRepository: {
   read: async (sessionId: string, userId: string) => {
@@ -42,7 +43,7 @@ vi.mock('@/db/repositories/work-plan-repository', () => ({ workPlanRepository: {
     fixture.plan = structuredClone(next);
   },
 } }));
-vi.mock('@/db/repositories/message-repository', () => ({ messageRepository: { create: async () => ({}), findBySession: async () => [] } }));
+vi.mock('@/db/repositories/message-repository', () => ({ messageRepository: { create: async () => ({}), findBySession: async () => [], findContextMessages: async () => [] } }));
 vi.mock('@/db/repositories/agent-repository', () => ({ agentRepository: { updateStatus: fixture.status } }));
 vi.mock('@/db/repositories/audit-repository', () => ({ auditRepository: new Proxy({}, { get: (_target, property) => property === 'logAgentCompleted' ? fixture.audit : async () => {} }) }));
 vi.mock('@/security/permissions', () => ({ getPermissionManager: () => ({ check: fixture.check, cancelWaits: fixture.cancel,

@@ -36,13 +36,13 @@ describe('buildCachedSystem (Phase 2b breakpoints)', () => {
     expect(Array.isArray(out)).toBe(true);
   });
 
-  it('returns a plain string when there is no volatile marker', () => {
-    expect(buildCachedSystem(bigStatic)).toBe(bigStatic);
+  it('caches an entirely stable system', () => {
+    expect(buildCachedSystem(bigStatic)).toEqual([{ type: 'text', text: bigStatic, cache_control: { type: 'ephemeral' } }]);
   });
 
-  it('does not mark a breakpoint when the static prefix is too small', () => {
+  it('delegates full-prefix token eligibility to the provider', () => {
     const sys = `tiny static\n\nCURRENT DATE/TIME: Tue`;
-    expect(typeof buildCachedSystem(sys)).toBe('string');
+    expect(Array.isArray(buildCachedSystem(sys))).toBe(true);
   });
 });
 

@@ -45,6 +45,8 @@ export function isRootAgent(context: { root?: boolean }): boolean {
 }
 
 export interface AgentMessage {
+  /** Canonical transcript boundary, retained in native conversation snapshots. */
+  sourceMessageId?: string;
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
   toolCalls?: ToolCall[];

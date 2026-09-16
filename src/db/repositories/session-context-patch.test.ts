@@ -103,3 +103,59 @@ describe('sessionRepository.setContextKey', () => {
     expect(ctx.cliSessions['Codex CLI']).toBeUndefined();
   });
 });
+
+describe('generation and checkpoint persistence', () => {
+  test('clear rejects stale checkpoint publication and completed answers', async () => {
+    const { sessionRepository } = await import('./session-repository');
+    const { messageRepository } = await import('./message-repository');
+    const session = await freshSession('generation-clear');
+    await sessionRepository.setContextKey(session.id, ['devMode'], true);
+    await sessionRepository.clearContext(session.id);
+    expect(await sessionRepository.patchContextIfGeneration(session.id, '', { cliSessions: { old: { id: 'old' } } })).toBe(false);
+    expect(await messageRepository.createForGeneration({ sessionId: session.id, role: 'assistant', content: 'stale' }, '')).toBeNull();
+    const current = (await sessionRepository.findById(session.id))!;
+    expect(current.context?.devMode).toBe(true);
+    expect(current.context?.cliSessions).toBeUndefined();
+    expect(await messageRepository.createForGeneration({ sessionId: session.id, role: 'user', content: 'fresh' }, current.context!.conversationGeneration!)).not.toBeNull();
+  });
+  test('history uses the full suffix and exact timestamp/id checkpoint boundary', async () => {
+    const { sessionRepository } = await import('./session-repository');
+    const { messageRepository } = await import('./message-repository');
+    const { readSessionHistory } = await import('@/core/session-history');
+    const session = await freshSession('checkpoint-suffix');
+    const time = new Date('2026-09-16T01:00:00Z');
+    const rows = await messageRepository.createMany(Array.from({ length: 250 }, (_, i) => ({
+      id: `00000000-0000-0000-0000-${String(i + 1).padStart(12, '0')}`, sessionId: session.id,
+      role: i % 2 ? 'assistant' as const : 'user' as const, content: `message ${i}`, createdAt: time,
+    })));
+    const all = await readSessionHistory(session.id);
+    expect(all.rows).toHaveLength(250);
+    const cursor = rows[219];
+    await sessionRepository.patchContextIfGeneration(session.id, '', { checkpoint: { generation: '',
+      through: { id: cursor.id, createdAt: time.toISOString() }, summary: 'covered 220', fileOps: { read: [], written: [], edited: [] } } });
+    const history = await readSessionHistory(session.id);
+    expect(history.rows).toHaveLength(30);
+    expect(history.rows[0].content).toBe('message 220');
+    expect(history.messages[0].content).toContain('covered 220');
+    expect(history.messages.at(-1)?.content).toBe('message 249');
+    await sessionRepository.clearContext(session.id);
+    expect((await readSessionHistory(session.id)).messages).toEqual([]);
+  });
+});
+
+test('a clear distinguishes new and old rows created in the same millisecond', async () => {
+  const { sessionRepository } = await import('./session-repository');
+  const { messageRepository } = await import('./message-repository');
+  const { readSessionHistory } = await import('@/core/session-history');
+  const session = await freshSession('same-millisecond-clear');
+  await sessionRepository.clearContext(session.id);
+  const context = (await sessionRepository.findById(session.id))!.context!;
+  const time = new Date(context.clearedAt!);
+  await messageRepository.create({ sessionId: session.id, role: 'user', content: 'legacy before clear', createdAt: time });
+  await messageRepository.createForGeneration({ sessionId: session.id, role: 'user', content: 'new turn', createdAt: time }, context.conversationGeneration!);
+  expect((await readSessionHistory(session.id)).rows.map(r => r.content)).toEqual(['new turn']);
+  await sessionRepository.clearContext(session.id);
+  const next = (await sessionRepository.findById(session.id))!.context!;
+  expect(next.conversationGeneration).not.toBe(context.conversationGeneration);
+  expect(await sessionRepository.patchContextIfGeneration(session.id, context.conversationGeneration!, { nativeConversation: {} })).toBe(false);
+});

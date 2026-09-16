@@ -54,9 +54,9 @@ previously dropped Anthropic's `cache_read_input_tokens`/
 `cache_creation_input_tokens` fields entirely and under-reported input on a
 heavily-cached run. That grand total is what session ledgers and
 `sessions.token_count` use. Budget and quota gates instead compare
-`billableTokens` (`src/models/billable-tokens.ts`): fresh input plus output,
-with cache reads and cache-creation excluded, since a cache read costs roughly
-a tenth of a fresh token. See CONFIGURATION.md's Swarm Config section for
+`billableTokens` (`src/models/billable-tokens.ts`): fresh input plus cache writes plus output. Cache reads are excluded from this
+token proxy, but are still charged by the monetary ledger at configured rates.
+Cache writes are paid work, including any provider write premium in the cost ledger. See CONFIGURATION.md's Swarm Config section for
 where that distinction is enforced.
 
 If a stream ends before final usage arrives, usage may be unavailable. Received
@@ -170,3 +170,60 @@ live cache-hit rates, subscription eligibility or invoice parity.
 - [Claude thinking modes](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
 - [Gemini compatibility controls](https://ai.google.dev/gemini-api/docs/openai)
 - [Claude usage and cost API](https://platform.claude.com/docs/en/manage-claude/usage-cost-api)
+
+## Conversation continuity and OpenRouter
+
+Root direct-provider turns retain a native message snapshot: tool calls, tool
+results and provider reasoning data survive the creation of a new worker. Each
+snapshot records the clear generation, model, checkpoint and acknowledged
+transcript cursor. New messages from another execution path are appended. A model
+switch retains ordinary tool history and discards incompatible provider-native
+reasoning fields. Children do not load or overwrite the root conversation.
+
+Stable instructions precede history. Dates, memory and live guidance are attached
+to their user turn and persisted with that turn, rather than rewritten ahead of
+all prior messages. This still sends a full request on stateless APIs: provider
+prompt caching determines how much is reused and charged at a discount.
+
+Compaction uses current context size, a covered message cursor and a retained
+recent suffix. It publishes the checkpoint only after successful complete
+summarization and audit persistence. Native recent tool sequences survive;
+resumable CLIs rotate to the checkpoint. Local locks serialize root turns and
+maintenance within one server process. Horizontal deployments need a distributed
+lease before multiple processes can execute the same session concurrently.
+
+OpenRouter sends an opaque `session_id` scoped by user, session and conversation
+generation. OpenRouter documents that this enables sticky provider routing;
+explicit `provider.order` overrides it and fallback/expiry can still move a
+request. Tool and structured-output requests default to
+`provider.require_parameters: true`, preserving explicit routing overrides.
+Streaming and non-streaming requests use the same parameters. Structured
+`reasoning_details` (including signatures/encrypted blocks) are echoed back only
+to the originating model; plain reasoning is retained when structured data is
+absent. Usage reads the final SSE usage block, including cache writes and
+OpenRouter's reported charge; no deprecated `usage.include` request is needed.
+
+Anthropic cache controls mark the stable system prefix and latest eligible input
+block. Eligibility is decided by the provider over the full prefix, including
+tools. An explicit breakpoint is not a cache hit. Automatic top-level Anthropic
+cache control is not forced through OpenRouter because endpoint support differs.
+Responses API state, managed Gemini explicit-cache objects, and model-specific
+reasoning/context modes remain optional future work, not prerequisites for
+correct stateless continuity.
+
+Sources: [OpenRouter prompt caching](https://openrouter.ai/docs/guides/best-practices/prompt-caching),
+[provider routing](https://openrouter.ai/docs/guides/routing/provider-selection),
+[reasoning preservation](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens),
+[usage accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting).
+
+Run the deterministic lifecycle benchmark with `npx vitest run src/core/session-turns.test.ts`.
+Set `SESSION_BENCHMARK_REPORT` to write its structural metrics. It covers 40 turns,
+three compactions, a clear, tool evidence, and synthetic recall. These are not
+measured provider cache hits or dollar savings.
+
+For actual OpenRouter cache/cost/latency counters, set `OPENROUTER_API_KEY` and
+`OPENROUTER_BENCHMARK_MODEL`, then run `npm run benchmark:sessions:openrouter`.
+This opt-in paid benchmark uses only synthetic conversations, alternates streaming
+and non-streaming, and defaults to 20 turns (2–50 via `SESSION_BENCHMARK_TURNS`).
+It tests the provider wire path; it does not measure live Octipus compaction or CLI
+performance. The output defaults to `openrouter-session-benchmark.json`.

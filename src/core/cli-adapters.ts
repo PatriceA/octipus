@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { homedir, tmpdir, } from 'os';
 import { dirname, isAbsolute, join, resolve } from 'path';
@@ -34,6 +34,7 @@ interface OctipusMcpLaunch {
  * runtime/entry/port/token resolution lives in exactly one place.
  */
 export interface CliRunConnection {
+  conversationId?: string;
   url: string;
   key: string;
   planMode: boolean;
@@ -758,7 +759,9 @@ export class CLIArgumentBuilder {
       // Only this private server is auto-approved by Codex: Octipus's native
       // executor remains responsible for every tool's actual authorization.
       const server = `{ command = ${JSON.stringify(process.execPath)}, args = [${JSON.stringify(entry)}], env_vars = ["OCTIPUS_AGENT_URL", "OCTIPUS_AGENT_KEY"], default_tools_approval_mode = "approve", tool_timeout_sec = ${CLI_BRIDGE_TOOL_TIMEOUT_SECONDS} }`;
-      baseArgs.push('-c', `mcp_servers={${[...disabled, `octipus_run_${randomBytes(6).toString('hex')}=${server}`].join(',')}}`);
+      const namespace = `octipus_run_${createHash('sha256').update(connection.conversationId ?? connection.url).digest('hex').slice(0, 16)}`;
+      if (configured.some(s => s.name === namespace)) throw new Error('Octipus MCP namespace conflicts with host configuration');
+      baseArgs.push('-c', `mcp_servers={${[...disabled, `${namespace}=${server}`].join(',')}}`);
     } else {
       // No bridge (never started, or failed) — no discovered server list to
       // disable by name, and `-c mcp_servers={}` alone does NOT disable
@@ -777,7 +780,9 @@ export class CLIArgumentBuilder {
     if (settings?.extraArgs?.length) baseArgs.push(...settings.extraArgs);
 
     if (systemPrompt) {
-      const combined = `${systemPrompt}\n\n---\n\n${prompt}`;
+      const boundary = systemPrompt.match(VOLATILE_MARKER)?.index;
+      const instructions = isResumedRun && boundary !== undefined ? systemPrompt.slice(boundary) : isResumedRun ? '' : systemPrompt;
+      const combined = [instructions, prompt].filter(Boolean).join('\n\n---\n\n');
       return { binary: 'codex', args: [...baseArgs, '-'], stdinPrompt: combined };
     }
 

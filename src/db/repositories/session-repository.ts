@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { and, desc, eq, lt, sql, } from 'drizzle-orm';
 import { dbLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
@@ -127,6 +128,23 @@ export class SessionRepository {
         updatedAt: new Date(),
       })
       .where(eq(sessions.id, id));
+  }
+
+  /** Atomically publish a checkpoint/session update only in its original generation. */
+  async patchContextIfGeneration(id: string, generation: string, patch: Record<string, unknown>): Promise<boolean> {
+    const result = await this.db.update(sessions).set({
+      context: sql`coalesce(${sessions.context}, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb`,
+      updatedAt: new Date(),
+    }).where(and(eq(sessions.id, id), sql`coalesce(${sessions.context}->>'conversationGeneration', ${sessions.context}->>'clearedAt', '') = ${generation}`))
+      .returning({ id: sessions.id });
+    return result.length > 0;
+  }
+
+  async clearContext(id: string): Promise<void> {
+    await this.db.update(sessions).set({
+      context: sql`(coalesce(${sessions.context}, '{}'::jsonb) - ARRAY['checkpoint','compactionState','compactedSummary','cliSessions','nativeConversation','activeCommand','planningState']) || jsonb_build_object('clearedAt', ${new Date().toISOString()}::text, 'conversationGeneration', ${randomUUID()}::text)`,
+      updatedAt: new Date(),
+    }).where(eq(sessions.id, id));
   }
 
   async complete(id: string): Promise<Session | null> {

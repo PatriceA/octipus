@@ -140,7 +140,7 @@ export class CustomAnthropicCompatProvider extends BaseCustomProvider implements
       stream: streaming,
     };
     if (system) body.system = options.cachePolicy === 'off' ? system : buildCachedSystem(system, (body.model as string) || options.model);
-    if (options.cachePolicy !== 'off') markHistoryCacheBreakpoint(messages);
+    if (options.cachePolicy !== 'off') markHistoryCacheBreakpoint(messages, Boolean(options.cacheScope));
     if (options.temperature != null) body.temperature = clampAnthropicTemperature(options.temperature);
     if (options.topP != null) body.top_p = options.topP;
     if (options.stopSequences?.length) body.stop_sequences = options.stopSequences;
@@ -329,7 +329,7 @@ export function toAnthropicMessages(messages: AgentMessage[]): { system?: string
       // only tool IDs to the IDs carried by our paired tool-result messages.
       let toolIndex = 0;
       const blocks = (msg.providerRaw.anthropicContent as AnthropicBlock[]).map(block =>
-        block.type === 'tool_use' ? { ...block, id: msg.toolCalls?.[toolIndex++]?.id ?? block.id } : block);
+        block.type === 'tool_use' ? { ...block, id: msg.toolCalls?.[toolIndex++]?.id ?? block.id } : { ...block });
       pushMerged('assistant', blocks);
       continue;
     }
@@ -385,9 +385,14 @@ export function toAnthropicMessages(messages: AgentMessage[]): { system?: string
  *
  * Anthropic allows four breakpoints; with the system split this is the second.
  */
-export function markHistoryCacheBreakpoint(messages: AnthropicMessage[]): boolean {
-  if (messages.length < 2) return false;
-  const prev = messages[messages.length - 2];
+export function markHistoryCacheBreakpoint(messages: AnthropicMessage[], conversation?: boolean): boolean {
+  // The newest turn is only worth a cache WRITE (1.25x base input) when a later
+  // request in the same conversation will read it back. A one-shot completion
+  // stops at the settled history instead. Same rule as the OpenAI-compat path
+  // in prompt-cache.ts — the two shapes stay in lockstep.
+  const offset = conversation ? 1 : 2;
+  if (messages.length < offset) return false;
+  const prev = messages[messages.length - offset];
   if (!Array.isArray(prev.content) || prev.content.length === 0) return false;
   // `cache_control` on a `thinking` / `redacted_thinking` block is a 400, so
   // mark the last block that can carry one. A turn that is nothing but

@@ -1,0 +1,213 @@
+{
+  "kind": "deterministic structural benchmark; no live provider calls",
+  "turns": 40,
+  "checkpoints": 3,
+  "clears": 1,
+  "inputTokens": 71715,
+  "potentialReusablePrefixTokens": 61859,
+  "potentialPrefixReuseRatio": 0.8625671059053197,
+  "measuredProviderCost": null,
+  "measuredCacheHits": null,
+  "samples": [
+    {
+      "turn": 1,
+      "inputTokens": 785,
+      "potentialReusablePrefixTokens": 0
+    },
+    {
+      "turn": 2,
+      "inputTokens": 968,
+      "potentialReusablePrefixTokens": 785
+    },
+    {
+      "turn": 3,
+      "inputTokens": 1151,
+      "potentialReusablePrefixTokens": 968
+    },
+    {
+      "turn": 4,
+      "inputTokens": 1334,
+      "potentialReusablePrefixTokens": 1151
+    },
+    {
+      "turn": 5,
+      "inputTokens": 1517,
+      "potentialReusablePrefixTokens": 1334
+    },
+    {
+      "turn": 6,
+      "inputTokens": 1700,
+      "potentialReusablePrefixTokens": 1517
+    },
+    {
+      "turn": 7,
+      "inputTokens": 1883,
+      "potentialReusablePrefixTokens": 1700
+    },
+    {
+      "turn": 8,
+      "inputTokens": 2066,
+      "potentialReusablePrefixTokens": 1883
+    },
+    {
+      "turn": 9,
+      "inputTokens": 2249,
+      "potentialReusablePrefixTokens": 2066
+    },
+    {
+      "turn": 10,
+      "inputTokens": 2432,
+      "potentialReusablePrefixTokens": 2249
+    },
+    {
+      "turn": 11,
+      "inputTokens": 1375,
+      "potentialReusablePrefixTokens": 758
+    },
+    {
+      "turn": 12,
+      "inputTokens": 1558,
+      "potentialReusablePrefixTokens": 1375
+    },
+    {
+      "turn": 13,
+      "inputTokens": 1741,
+      "potentialReusablePrefixTokens": 1558
+    },
+    {
+      "turn": 14,
+      "inputTokens": 1924,
+      "potentialReusablePrefixTokens": 1741
+    },
+    {
+      "turn": 15,
+      "inputTokens": 2107,
+      "potentialReusablePrefixTokens": 1924
+    },
+    {
+      "turn": 16,
+      "inputTokens": 2290,
+      "potentialReusablePrefixTokens": 2107
+    },
+    {
+      "turn": 17,
+      "inputTokens": 2473,
+      "potentialReusablePrefixTokens": 2290
+    },
+    {
+      "turn": 18,
+      "inputTokens": 2656,
+      "potentialReusablePrefixTokens": 2473
+    },
+    {
+      "turn": 19,
+      "inputTokens": 2839,
+      "potentialReusablePrefixTokens": 2656
+    },
+    {
+      "turn": 20,
+      "inputTokens": 3022,
+      "potentialReusablePrefixTokens": 2839
+    },
+    {
+      "turn": 21,
+      "inputTokens": 1405,
+      "potentialReusablePrefixTokens": 758
+    },
+    {
+      "turn": 22,
+      "inputTokens": 1588,
+      "potentialReusablePrefixTokens": 1405
+    },
+    {
+      "turn": 23,
+      "inputTokens": 1771,
+      "potentialReusablePrefixTokens": 1588
+    },
+    {
+      "turn": 24,
+      "inputTokens": 1954,
+      "potentialReusablePrefixTokens": 1771
+    },
+    {
+      "turn": 25,
+      "inputTokens": 2137,
+      "potentialReusablePrefixTokens": 1954
+    },
+    {
+      "turn": 26,
+      "inputTokens": 785,
+      "potentialReusablePrefixTokens": 0
+    },
+    {
+      "turn": 27,
+      "inputTokens": 968,
+      "potentialReusablePrefixTokens": 785
+    },
+    {
+      "turn": 28,
+      "inputTokens": 1151,
+      "potentialReusablePrefixTokens": 968
+    },
+    {
+      "turn": 29,
+      "inputTokens": 1334,
+      "potentialReusablePrefixTokens": 1151
+    },
+    {
+      "turn": 30,
+      "inputTokens": 1517,
+      "potentialReusablePrefixTokens": 1334
+    },
+    {
+      "turn": 31,
+      "inputTokens": 1700,
+      "potentialReusablePrefixTokens": 1517
+    },
+    {
+      "turn": 32,
+      "inputTokens": 1883,
+      "potentialReusablePrefixTokens": 1700
+    },
+    {
+      "turn": 33,
+      "inputTokens": 2066,
+      "potentialReusablePrefixTokens": 1883
+    },
+    {
+      "turn": 34,
+      "inputTokens": 2249,
+      "potentialReusablePrefixTokens": 2066
+    },
+    {
+      "turn": 35,
+      "inputTokens": 2432,
+      "potentialReusablePrefixTokens": 2249
+    },
+    {
+      "turn": 36,
+      "inputTokens": 1375,
+      "potentialReusablePrefixTokens": 758
+    },
+    {
+      "turn": 37,
+      "inputTokens": 1558,
+      "potentialReusablePrefixTokens": 1375
+    },
+    {
+      "turn": 38,
+      "inputTokens": 1741,
+      "potentialReusablePrefixTokens": 1558
+    },
+    {
+      "turn": 39,
+      "inputTokens": 1924,
+      "potentialReusablePrefixTokens": 1741
+    },
+    {
+      "turn": 40,
+      "inputTokens": 2107,
+      "potentialReusablePrefixTokens": 1924
+    }
+  ]
+}
