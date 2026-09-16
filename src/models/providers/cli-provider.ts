@@ -1,5 +1,6 @@
 import { describeCliCapabilities } from '@/shared/cli-capabilities';
 import { buildChildEnv } from '@/core/cli-child-env';
+import { discoverCodexMcpServers, getEmptyMcpConfigPath, getEmptyVibeHome } from '@/core/cli-adapters';
 import { spawn } from 'child_process';
 import { getConfig } from '@/config';
 import { classifyError } from '@/core/errors/classification';
@@ -80,6 +81,15 @@ export interface CLIToolConfig {
   adapter?: string;
   /** Build command args for a non-interactive prompt */
   buildArgs: (prompt: string) => string[];
+  /**
+   * Async isolation-aware variant of `buildArgs`, for a tool whose isolation
+   * needs a subprocess call before argv is known (codex: discover the host's
+   * effective MCP servers and disable each by name — `-c mcp_servers={}`
+   * alone does NOT disable already-configured servers, verified live
+   * 2026-09-16: codex MERGES -c tables into config.toml rather than
+   * replacing them). Preferred over `buildArgs` when present.
+   */
+  buildArgsAsync?: (prompt: string, cwd: string) => Promise<string[]>;
   /** Parse JSON output into CompletionResult */
   parseOutput: (stdout: string, startTime: number) => CompletionResult;
   /** Detect quota exhaustion from stderr/stdout */
@@ -115,7 +125,11 @@ const claudeCodeConfig: CLIToolConfig = {
   name: 'Claude Code',
   modelPatterns: ['cli/claude', 'cli/claude-code'],
   binaryPath: 'claude',
-  buildArgs: (prompt: string) => ['-p', prompt, '--output-format', 'json'],
+  // --strict-mcp-config + an empty --mcp-config file: this is a plain text
+  // completion used as a model, not an agent — it needs zero tools, and
+  // without this it silently loads the host's entire ~/.claude.json MCP
+  // config (measured 2k+ tokens of tool schemas on top of the real prompt).
+  buildArgs: (prompt: string) => ['-p', prompt, '--output-format', 'json', '--strict-mcp-config', '--mcp-config', getEmptyMcpConfigPath()],
   // claude --output-format json returns { result, usage: {...} }; the shared
   // parser sums the SAME resolved input/output values (C18) and falls back to
   // plain text when the payload isn't JSON.
@@ -183,7 +197,24 @@ const codexCliConfig: CLIToolConfig = {
   name: 'Codex CLI',
   modelPatterns: ['cli/codex', 'cli/codex-cli'],
   binaryPath: 'codex',
+  // Unscoped fallback — kept for type-completeness, never actually reached:
+  // CLIProvider.complete() prefers buildArgsAsync below, which is the only
+  // way to isolate codex (see its doc comment).
   buildArgs: (prompt: string) => ['exec', '--json', prompt],
+  // Plain text completion, zero tools needed. `-c mcp_servers={}` alone does
+  // NOT disable configured servers (verified live 2026-09-16 against a real
+  // host MCP server: `codex mcp list --json` still showed it enabled after
+  // that override — codex merges -c tables into config.toml, it doesn't
+  // replace them). Discover the effective set and disable each by name,
+  // same technique the connected agent path already uses.
+  buildArgsAsync: async (prompt: string, cwd: string) => {
+    const servers = await discoverCodexMcpServers(cwd);
+    const disabled = servers.map(s => `${JSON.stringify(s.name)}={enabled=false}`);
+    const args = ['exec', '--json'];
+    if (disabled.length) args.push('-c', `mcp_servers={${disabled.join(',')}}`);
+    args.push(prompt);
+    return args;
+  },
   parseOutput: (stdout: string, startTime: number): CompletionResult => {
     try {
       // Codex outputs JSONL events. Pull text from item.completed/agent_message
@@ -262,6 +293,14 @@ const vibeCliConfig: CLIToolConfig = {
   // tool calls without blocking. Model is selected via vibe's own config
   // (active_model), not a flag — see modelFlag below.
   buildArgs: (prompt: string) => ['-p', prompt, '--output', 'json', '--trust', '--auto-approve'],
+  // Plain text completion, zero tools needed. vibe has no --mcp-config flag,
+  // so isolation is an ephemeral VIBE_HOME with `mcp_servers = []` instead
+  // (see getEmptyVibeHome) — the same lever the agent path uses to register
+  // the octipus server, pointed at nothing here.
+  buildEnv: async () => {
+    const dir = getEmptyVibeHome();
+    return dir ? { VIBE_HOME: dir } : ({} as Record<string, string>);
+  },
   parseOutput: (stdout: string, startTime: number): CompletionResult => {
     try {
       // vibe --output json is a JSON array of all messages. The answer is the
@@ -423,7 +462,7 @@ function makeAnthropicCompatCliConfig(spec: AnthropicCompatCliSpec): CLIToolConf
     modelPatterns: spec.modelPatterns,
     binaryPath: 'claude',
     adapter: 'Claude Code',
-    buildArgs: (prompt: string) => ['-p', prompt, '--output-format', 'json'],
+    buildArgs: (prompt: string) => ['-p', prompt, '--output-format', 'json', '--strict-mcp-config', '--mcp-config', getEmptyMcpConfigPath()],
     parseOutput: parseClaudeStyleOutput(spec.modelLabel),
     buildEnv: async () => {
       const token = await resolveCliVendorKey(spec.keyEnv, spec.keyVault);
@@ -535,7 +574,7 @@ export class CLIProvider implements ModelProvider {
 
     // Build prompt from messages (combine system + user messages)
     const prompt = this.buildPrompt(options);
-    const args = tool.buildArgs(prompt);
+    const args = tool.buildArgsAsync ? await tool.buildArgsAsync(prompt, resolveWorkspaceRoot()) : tool.buildArgs(prompt);
     const env = tool.buildEnv ? await tool.buildEnv() : undefined;
     const startTime = Date.now();
 
