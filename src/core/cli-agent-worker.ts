@@ -321,7 +321,6 @@ export class CLIAgentWorker extends BaseAgentWorker {
    * authoritatively before every attempt.
    */
   private async willResume(): Promise<boolean> {
-    if (getConfig().cli?.reuseSessions !== true) return false;
     const toolConfig = getCLIToolConfig(this.context.model);
     if (!toolConfig) return false;
     const adapterKey = toolConfig.adapter ?? toolConfig.name;
@@ -738,12 +737,13 @@ export class CLIAgentWorker extends BaseAgentWorker {
       }
     }
 
-    // Vendor CLI session reuse (off by default, gated on the shared
-    // capability table — never a hardcoded adapter check here). `forceCold`
-    // is the cold-retry's own flag: it skips this whole block so the retry
-    // can never itself trigger another retry (no `resume` => the close
-    // handler's dead-session branch below cannot fire for it).
-    const reuseSessions = getConfig().cli?.reuseSessions === true && canResume(adapterKey) && !opts?.forceCold;
+    // Vendor CLI session reuse — always on for adapters the shared
+    // capability table marks resumable (never a hardcoded adapter check
+    // here). `forceCold` is the cold-retry's own flag: it skips this whole
+    // block so the retry can never itself trigger another retry (no
+    // `resume` => the close handler's dead-session branch below cannot fire
+    // for it).
+    const reuseSessions = canResume(adapterKey) && !opts?.forceCold;
     let resume: { id: string; isFirstRun: boolean } | undefined;
     let fingerprint: string | undefined;
     if (reuseSessions) {

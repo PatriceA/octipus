@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { getConfig } from '@/config';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { canResume } from '@/shared/cli-capabilities';
 import type { SessionContext } from '@/db/schema/sessions';
@@ -40,7 +39,7 @@ export async function loadCliSession(sessionId: string, adapterKey: string, fing
  * mutates a stored session.
  */
 export async function willResumeCliSession(sessionId: string, adapterKey: string, fingerprint: string): Promise<boolean> {
-  if (getConfig().cli?.reuseSessions !== true || !canResume(adapterKey)) return false;
+  if (!canResume(adapterKey)) return false;
   return (await loadCliSession(sessionId, adapterKey, fingerprint)) !== null;
 }
 

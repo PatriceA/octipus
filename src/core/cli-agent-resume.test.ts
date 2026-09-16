@@ -1,7 +1,8 @@
 /**
  * Task 5: the worker resumes the vendor CLI session across turns of one
- * octipus session when cli.reuseSessions is on, with a cold fallback when
- * the vendor reports the stored session is gone.
+ * octipus session for every adapter the capability table marks resumable
+ * (always on — no setting gates it), with a cold fallback when the vendor
+ * reports the stored session is gone.
  *
  * Spawn-stubbing pattern lifted from cli-agent-bridge.test.ts: `spawn` is
  * mocked to launch a small Node script standing in for the real `claude`
@@ -24,17 +25,12 @@ const fixture = vi.hoisted(() => ({
   script: '',
   codexScript: '',
   dir: '',
-  reuseSessions: false,
   cliAgent: {} as { model?: string; permissionMode?: string },
   spawnCount: 0,
   sessions: new Map<string, { id: string; userId: string; context: SessionContext }>(),
   history: [] as string[],
 }));
 
-vi.mock('@/config', async importOriginal => {
-  const actual = await importOriginal<typeof import('@/config')>();
-  return { ...actual, getConfig: () => ({ ...actual.getConfig(), cli: { reuseSessions: fixture.reuseSessions } }) };
-});
 function mockChildProcess(actual: typeof import('child_process')) {
   return {
     ...actual,
@@ -117,8 +113,7 @@ function makeSession(sessionId: string, dir: string) {
   }
 }
 
-function makeWorker(model: string, opts: { sessionId: string; reuseSessions: boolean; model?: string; permissionMode?: string; history?: string[]; maxTokenBudget?: number }) {
-  fixture.reuseSessions = opts.reuseSessions;
+function makeWorker(model: string, opts: { sessionId: string; model?: string; permissionMode?: string; history?: string[]; maxTokenBudget?: number }) {
   fixture.cliAgent = { model: opts.model, permissionMode: opts.permissionMode };
   fixture.history = opts.history ?? [];
   makeSession(opts.sessionId, fixture.dir);
@@ -150,8 +145,8 @@ function makeWorker(model: string, opts: { sessionId: string; reuseSessions: boo
   };
 }
 
-const makeClaudeWorker = (opts: { sessionId: string; reuseSessions: boolean; model?: string; permissionMode?: string; history?: string[]; maxTokenBudget?: number }) => makeWorker('cli/claude-code', opts);
-const makeCodexWorker = (opts: { sessionId: string; reuseSessions: boolean; model?: string; permissionMode?: string }) => makeWorker('cli/codex', opts);
+const makeClaudeWorker = (opts: { sessionId: string; model?: string; permissionMode?: string; history?: string[]; maxTokenBudget?: number }) => makeWorker('cli/claude-code', opts);
+const makeCodexWorker = (opts: { sessionId: string; model?: string; permissionMode?: string }) => makeWorker('cli/codex', opts);
 
 const failMarker = () => join(fixture.dir, 'fail-marker');
 
@@ -214,18 +209,18 @@ afterEach(() => { try { unlinkSync(failMarker()); } catch { /* not there */ } rm
 
 describe('CLI session reuse', () => {
   it('starts fresh and stores the id on the first turn', async () => {
-    const worker = makeClaudeWorker({ sessionId: 's1', reuseSessions: true });
+    const worker = makeClaudeWorker({ sessionId: 's1' });
     await worker.run('first question');
     const stored = await loadCliSession('s1', 'Claude Code', worker.fingerprint);
     expect(stored).toMatchObject({ id: expect.any(String) });
   });
 
   it('resumes the stored id on the second turn', async () => {
-    const worker = makeClaudeWorker({ sessionId: 's1', reuseSessions: true });
+    const worker = makeClaudeWorker({ sessionId: 's1' });
     await worker.run('first question');
     const first = await loadCliSession('s1', 'Claude Code', worker.fingerprint);
 
-    const second = makeClaudeWorker({ sessionId: 's1', reuseSessions: true });
+    const second = makeClaudeWorker({ sessionId: 's1' });
     const answer = await second.run('second question');
     const stored = await loadCliSession('s1', 'Claude Code', second.fingerprint);
 
@@ -239,7 +234,7 @@ describe('CLI session reuse', () => {
 
   it('falls back to a cold run and forgets the id when the session is gone', async () => {
     writeFileSync(failMarker(), 'No conversation found with session ID: dead', 'utf-8');
-    const worker = makeClaudeWorker({ sessionId: 's1', reuseSessions: true });
+    const worker = makeClaudeWorker({ sessionId: 's1' });
     const before = fixture.spawnCount;
     const answer = await worker.run('question');
     expect(answer).not.toBe('');
@@ -252,12 +247,12 @@ describe('CLI session reuse', () => {
     // vendor that reports the stale id through its own result stream never
     // reached recovery: the id was never dropped and every later turn failed
     // identically — permanent, not a one-off.
-    const worker = makeClaudeWorker({ sessionId: 's1', reuseSessions: true });
+    const worker = makeClaudeWorker({ sessionId: 's1' });
     await worker.run('first question');
     expect(await loadCliSession('s1', 'Claude Code', worker.fingerprint)).not.toBeNull();
 
     writeFileSync(failMarker(), 'No conversation found with session ID: dead', 'utf-8');
-    const second = makeClaudeWorker({ sessionId: 's1', reuseSessions: true });
+    const second = makeClaudeWorker({ sessionId: 's1' });
     const before = fixture.spawnCount;
     const answer = await second.run('second question');
 
@@ -267,26 +262,17 @@ describe('CLI session reuse', () => {
   });
 
   it('does not resume when the model changed', async () => {
-    const worker = makeClaudeWorker({ sessionId: 's1', reuseSessions: true, model: 'sonnet' });
+    const worker = makeClaudeWorker({ sessionId: 's1', model: 'sonnet' });
     await worker.run('first');
     const sonnetRecord = await loadCliSession('s1', 'Claude Code', worker.fingerprint);
 
-    const other = makeClaudeWorker({ sessionId: 's1', reuseSessions: true, model: 'opus' });
+    const other = makeClaudeWorker({ sessionId: 's1', model: 'opus' });
     const answer = await other.run('second');
     const opusRecord = await loadCliSession('s1', 'Claude Code', other.fingerprint);
 
     // Different fingerprint => no record yet => a freshly minted id, not a resume.
     expect(opusRecord!.id).not.toBe(sonnetRecord!.id);
     expect(answer).toContain(opusRecord!.id);
-  });
-
-  it('does not resume when the setting is off', async () => {
-    const worker = makeClaudeWorker({ sessionId: 's1', reuseSessions: false });
-    await worker.run('first');
-    expect(await loadCliSession('s1', 'Claude Code', worker.fingerprint)).toBeNull();
-    const second = makeClaudeWorker({ sessionId: 's1', reuseSessions: false });
-    await second.run('second');
-    expect(await loadCliSession('s1', 'Claude Code', second.fingerprint)).toBeNull();
   });
 
   // Codex is 'captured' style (CLI_RESUME): the worker never mints an id for
@@ -296,7 +282,7 @@ describe('CLI session reuse', () => {
   const lastCodexArgs = (): string[] => JSON.parse(readFileSync(join(fixture.dir, 'codex-last-args.json'), 'utf-8'));
 
   it('leaves a first Codex run resumable (no --ephemeral) and stores the captured thread id', async () => {
-    const worker = makeCodexWorker({ sessionId: 's1', reuseSessions: true });
+    const worker = makeCodexWorker({ sessionId: 's1' });
     await worker.run('first question');
     expect(lastCodexArgs()).not.toContain('--ephemeral');
     const stored = await loadCliSession('s1', 'Codex CLI', worker.fingerprint);
@@ -305,11 +291,11 @@ describe('CLI session reuse', () => {
   });
 
   it('resumes the captured Codex thread on the second turn', async () => {
-    const worker = makeCodexWorker({ sessionId: 's1', reuseSessions: true });
+    const worker = makeCodexWorker({ sessionId: 's1' });
     await worker.run('first question');
     const first = await loadCliSession('s1', 'Codex CLI', worker.fingerprint);
 
-    const second = makeCodexWorker({ sessionId: 's1', reuseSessions: true });
+    const second = makeCodexWorker({ sessionId: 's1' });
     const answer = await second.run('second question');
     const stored = await loadCliSession('s1', 'Codex CLI', second.fingerprint);
 
@@ -325,9 +311,9 @@ describe('CLI session reuse', () => {
   // paying for the same history twice (our prompt + the vendor's own replay)
   // is what makes resume cost MORE than not reusing at all.
   it('sends only the new turn once the vendor holds the history', async () => {
-    const worker = makeClaudeWorker({ sessionId: 's1', reuseSessions: true, history: ['old question', 'old answer'] });
+    const worker = makeClaudeWorker({ sessionId: 's1', history: ['old question', 'old answer'] });
     await worker.run('first');
-    const second = makeClaudeWorker({ sessionId: 's1', reuseSessions: true, history: ['old question', 'old answer', 'first'] });
+    const second = makeClaudeWorker({ sessionId: 's1', history: ['old question', 'old answer', 'first'] });
     await second.run('second question');
     expect(second.lastPrompt).toContain('second question');
     expect(second.lastPrompt).not.toContain('old question');
@@ -361,12 +347,12 @@ describe('CLI session reuse', () => {
 
   it('splits context (grand total) from spend (fresh + output) on a resumed run with heavy cache reads', async () => {
     writeFileSync(fixture.script, usageScript(50, 100, 2000));
-    const worker = makeClaudeWorker({ sessionId: 's1', reuseSessions: true });
+    const worker = makeClaudeWorker({ sessionId: 's1' });
     await worker.run('first question'); // cold: 60 + 40, no cache
     expect(worker.worker.getTotalTokens()).toBe(100);
     expect(worker.worker.getBillableTokens()).toBe(100);
 
-    const second = makeClaudeWorker({ sessionId: 's1', reuseSessions: true });
+    const second = makeClaudeWorker({ sessionId: 's1' });
     await second.run('second question'); // resumed: 50 + 100 + 2000 cache read
     expect(second.worker.getTotalTokens()).toBe(2150); // grand total, cache reads included
     expect(second.worker.getBillableTokens()).toBe(150); // 50 + 100 only, cache read excluded
@@ -377,10 +363,10 @@ describe('CLI session reuse', () => {
     // far past it. Without the getBillableTokens() override the kill-switch
     // compared the grand total and would SIGKILL this run.
     writeFileSync(fixture.script, usageScript(50, 50, 5000));
-    const worker = makeClaudeWorker({ sessionId: 's1', reuseSessions: true, maxTokenBudget: 200 });
+    const worker = makeClaudeWorker({ sessionId: 's1', maxTokenBudget: 200 });
     await worker.run('first question');
 
-    const second = makeClaudeWorker({ sessionId: 's1', reuseSessions: true, maxTokenBudget: 200 });
+    const second = makeClaudeWorker({ sessionId: 's1', maxTokenBudget: 200 });
     const answer = await second.run('second question');
     expect(answer).not.toBe('');
     expect(second.worker.getTotalTokens()).toBe(5100);
@@ -408,7 +394,7 @@ describe('CLI session reuse', () => {
       // (50 total vs 20 already reported) — a genuine under-report.
       console.log(JSON.stringify({ type: 'result', subtype: 'success', result: 'answer', num_turns: 1, usage: { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 900, cache_creation_input_tokens: 0 } }));
     `);
-    const worker = makeClaudeWorker({ sessionId: 's1', reuseSessions: false });
+    const worker = makeClaudeWorker({ sessionId: 's1' });
     await worker.run('question');
     // Grand total: 100 fresh + 50 output + 900 cache read = 1050.
     expect(worker.worker.getTotalTokens()).toBe(1050);
@@ -420,7 +406,7 @@ describe('CLI session reuse', () => {
   });
 
   it('sends the full transcript on a cold run', async () => {
-    const worker = makeClaudeWorker({ sessionId: 's1', reuseSessions: true, history: ['old question', 'old answer'] });
+    const worker = makeClaudeWorker({ sessionId: 's1', history: ['old question', 'old answer'] });
     await worker.run('first');
     expect(worker.lastPrompt).toContain('old question');
   });

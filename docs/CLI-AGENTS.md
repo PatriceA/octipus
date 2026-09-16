@@ -154,11 +154,10 @@ shown in the model settings and `/work-plan` for a CLI root.
 
 ## Session reuse
 
-By default every turn of a CLI-backed agent starts a fresh vendor process:
-Octipus re-sends the whole conversation as a new prompt each time. Setting
-`cli.reuseSessions: true` (default `false`) lets Octipus instead hand the
-vendor CLI its own session id back on the next turn, so the vendor continues
-the conversation it already holds.
+Octipus hands the vendor CLI its own session id back on the next turn (for
+adapters that support it), so the vendor continues the conversation it
+already holds instead of Octipus re-sending the whole conversation as a new
+prompt each time.
 
 Only Claude Code and Codex CLI support this. Claude's id is minted by
 Octipus itself and passed on the first run (`--session-id`), so there is

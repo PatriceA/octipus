@@ -568,10 +568,6 @@ export const configSchema = z.object({
   n8n: n8nConfigSchema.optional(),
   logging: loggingConfigSchema,
   agent: agentConfigSchema,
-  cli: z.object({
-    /** Continue the same vendor CLI session across turns of one octipus session (Claude Code, Codex). Off re-runs each turn from scratch. */
-    reuseSessions: z.boolean().default(false),
-  }).prefault({}),
   cliModels: cliModelsConfigSchema.prefault({}),
   workspace: workspaceConfigSchema.prefault({}),
   vaultSync: vaultSyncConfigSchema.prefault({}),

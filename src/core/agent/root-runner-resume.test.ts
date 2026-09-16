@@ -25,17 +25,12 @@ import { WorkspaceFS } from '@/security/workspace-fs';
 import type { SessionContext } from '@/db/schema/sessions';
 
 const fixture = vi.hoisted(() => ({
-  reuseSessions: false,
   session: undefined as { id: string; userId: string; context: SessionContext } | undefined,
   cliAgent: {} as { model?: string; permissionMode?: string },
   recentHistory: [] as { role: string; content: string }[],
   compactionSummary: undefined as string | undefined,
 }));
 
-vi.mock('@/config', async importOriginal => {
-  const actual = await importOriginal<typeof import('@/config')>();
-  return { ...actual, getConfig: () => ({ ...actual.getConfig(), cli: { reuseSessions: fixture.reuseSessions } }) };
-});
 vi.mock('@/db/repositories/session-repository', () => ({
   sessionRepository: { findById: async (id: string) => (fixture.session?.id === id ? { ...fixture.session } : undefined) },
 }));
@@ -57,7 +52,6 @@ const MODEL_NAME = 'cli/claude-code';
 const ADAPTER_KEY = 'Claude Code';
 
 beforeEach(() => {
-  fixture.reuseSessions = false;
   fixture.session = undefined;
   fixture.cliAgent = {};
   fixture.recentHistory = [{ role: 'user', content: 'old question' }, { role: 'assistant', content: 'old answer' }];
@@ -85,7 +79,6 @@ function makeResumableSession(projectPath: string) {
 
 describe('runRootAgent volatile-prompt assembly — CLI resume gate', () => {
   it('drops the summary/history blocks but keeps date/memory/security when the turn will resume', async () => {
-    fixture.reuseSessions = true;
     makeResumableSession('/tmp/octipus-resume-fixture');
 
     const pre = buildPreHookVolatileParts('MEMORY-BLOCK-MARKER', ['sql-injection-attempt']);
@@ -123,9 +116,8 @@ ${built.stdinPrompt ?? ''}`;
   });
 
   it('keeps the summary/history blocks (plus date/memory/security) on a cold run', async () => {
-    fixture.reuseSessions = true;
     // No stored cliSessions record for this session — loadCliSession finds
-    // nothing, so willResumeCliSession is false regardless of reuseSessions.
+    // nothing, so willResumeCliSession is false.
     fixture.session = { id: SESSION_ID, userId: 'u', context: { devMode: true, projectPath: '/tmp/octipus-cold-fixture' } as SessionContext };
 
     const pre = buildPreHookVolatileParts('MEMORY-BLOCK-MARKER', ['sql-injection-attempt']);
@@ -144,10 +136,9 @@ ${built.stdinPrompt ?? ''}`;
     expect(prompt).toContain('old question');
   });
 
-  it('also resumes when reuse is on but the setting check alone would allow it — still requires a matching stored fingerprint', async () => {
-    // reuseSessions on, but no stored session at all (e.g. first-ever turn):
-    // must NOT resume, so history renders.
-    fixture.reuseSessions = true;
+  it('does not resume without a matching stored fingerprint', async () => {
+    // No stored session at all (e.g. first-ever turn): must NOT resume, so
+    // history renders.
     fixture.session = { id: SESSION_ID, userId: 'u', context: {} as SessionContext };
 
     const history = await buildHistoryVolatileParts({

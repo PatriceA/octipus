@@ -93,17 +93,6 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
     envVar: 'LITELLM_TIMEOUT',
   },
-  // ── CLI ──
-  {
-    key: 'cli.reuseSessions',
-    category: 'cli',
-    valueType: 'boolean',
-    defaultValue: false,
-    description: 'Continue the same vendor CLI session across turns of one octipus session (Claude Code, Codex). Off re-runs each turn from scratch.',
-    isSecret: false,
-    envVar: 'CLI_REUSE_SESSIONS',
-  },
-
   {
     key: 'litellm.maxRetries',
     category: 'litellm',
