@@ -1,7 +1,17 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { z } from 'zod';
+import { agentLogger } from '@/utils/logger';
 import type { ToolHandler } from './agent-base';
+
+/**
+ * A refusal the calling CLI agent is meant to read and act on ("that tool is
+ * not yours", "this run is over"). Anything else reaching the catch below is
+ * an unexpected fault, and its message can carry stack/internal detail — that
+ * goes to the log, and the caller gets a flat failure instead (CodeQL
+ * js/stack-trace-exposure).
+ */
+class BridgeError extends Error {}
 
 const callSchema = z.object({ name: z.string().min(1), arguments: z.record(z.string(), z.unknown()).default({}) }).strict();
 export interface BridgeResult { content: Array<{ type: 'text'; text: string }>; isError?: boolean }
@@ -55,9 +65,9 @@ export async function startCliToolBridge(options: {
         input.arguments = target.arguments;
       }
       const run = async () => {
-        if (closed || !options.active()) throw new Error('Agent run is no longer active');
+        if (closed || !options.active()) throw new BridgeError('Agent run is no longer active');
         // Exact membership check before ToolExecutor's fuzzy name recovery.
-        if (!options.tools().some(t => t.name === input.name)) throw new Error('Tool is not available to this agent');
+        if (!options.tools().some(t => t.name === input.name)) throw new BridgeError('Tool is not available to this agent');
         return options.execute(input.name, input.arguments);
       };
       // ponytail: one queue per worker; unqueued read-only tools keep context reads
@@ -68,7 +78,14 @@ export async function startCliToolBridge(options: {
       else { operation = queue.then(run); queue = operation.then(() => undefined, () => undefined); }
       reply(200, await operation);
     } catch (err) {
-      reply(400, { error: err instanceof Error ? err.message : String(err) });
+      // A deliberate refusal is the agent's to read; a malformed call gets the
+      // schema complaint, which is about ITS request, not our internals.
+      if (err instanceof BridgeError || err instanceof z.ZodError) {
+        reply(400, { error: err instanceof z.ZodError ? `Invalid tool call: ${err.issues.map(i => i.message).join('; ')}` : err.message });
+        return;
+      }
+      agentLogger.error({ err }, 'CLI tool bridge request failed');
+      reply(500, { error: 'Tool call failed' });
     }
   });
   server.requestTimeout = 30_000;

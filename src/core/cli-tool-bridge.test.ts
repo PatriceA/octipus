@@ -90,3 +90,42 @@ it('advertises only core schemas while discovered calls retain exact membership 
   disabled = true;
   expect((await dispatch('long_tail')).status).toBe(400);
 });
+
+describe('error replies never leak internals (CodeQL js/stack-trace-exposure)', () => {
+  it('an unexpected fault answers 500 with a flat message, not the thrown detail', async () => {
+    const bridge = await startCliToolBridge({
+      tools: () => [{ name: 'boom', description: '', parameters: {}, execute: async () => ({ content: [] }) } as never],
+      active: () => true,
+      execute: async () => { throw new Error('ENOENT: /srv/secret/path/internal-module.ts line 42'); },
+    });
+    try {
+      const res = await fetch(`${bridge.url}/call`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${bridge.key}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'boom', arguments: {} }),
+      });
+      expect(res.status).toBe(500);
+      const body = await res.json() as { error: string };
+      expect(body.error).toBe('Tool call failed');
+      expect(body.error).not.toContain('/srv/secret');
+      expect(body.error).not.toContain('ENOENT');
+    } finally { await bridge.close(); }
+  });
+
+  it('a deliberate refusal is still readable by the agent', async () => {
+    const bridge = await startCliToolBridge({
+      tools: () => [],
+      active: () => true,
+      execute: async () => ({ content: [] }),
+    });
+    try {
+      const res = await fetch(`${bridge.url}/call`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${bridge.key}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'not_mine', arguments: {} }),
+      });
+      expect(res.status).toBe(400);
+      expect((await res.json() as { error: string }).error).toBe('Tool is not available to this agent');
+    } finally { await bridge.close(); }
+  });
+});
