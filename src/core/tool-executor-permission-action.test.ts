@@ -108,4 +108,15 @@ describe('the agent loop resolves a tool call to its declared permission action'
 
     expect(check.mock.calls[0]?.[2]).toBe('do_thing');
   });
+
+  test('a handler that declares itself read-only defaults to ALLOW; anything else leaves the default alone', async () => {
+    // An ad-hoc handler has no manifest, so without this the discovery
+    // meta-tools (`list_tools`, `capabilities`, `mcp_list_tools`) fell to ASK
+    // and an unattended channel refused them outright.
+    await run({ ...base, toolId: 'custom', name: 'list_things', replaySafety: 'read_only' });
+    expect(check.mock.calls[0]?.[5]).toEqual({ defaultLevel: 'ALLOW' });
+
+    await run({ ...base, toolId: 'custom', name: 'do_thing' });
+    expect(check.mock.calls[1]?.[5]).toEqual({ defaultLevel: undefined });
+  });
 });

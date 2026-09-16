@@ -517,7 +517,19 @@ export class FilesystemTool extends BaseTool {
         const fs = this.workspaceFor(context);
         const dirPath = this.resolveSessionAware((args.path as string) || '.', context, fs);
 
-        const pattern = safeRegExp(args.pattern as string);
+        // The parameter promises "glob or regex", but `*.csv` is not a valid
+        // regex ("nothing to repeat") and `daily*.log` is one that means
+        // something else — measured 2026-09-16: an agent burned eight calls on
+        // `*.csv`, `*.log`, `**/daily*` and got nothing back. A pattern with a
+        // bare `*`/`?` and no regex syntax is a glob. Names are matched per
+        // entry, so a glob's directory part is dropped.
+        // ponytail: `*`/`?` only; anything with `( [ ^ $ | + \` or the `.*`/`.?`
+        // idiom is regex as written.
+        const raw = args.pattern as string;
+        const isGlob = /[*?]/.test(raw) && !/[()[\]^$|+\\]|\.[*?]/.test(raw);
+        const pattern = safeRegExp(isGlob
+          ? '^' + raw.replace(/^.*\//, '').replace(/[.{}]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$'
+          : raw);
         if (!pattern) {
           return { pattern: args.pattern, results: [], error: 'Invalid or too complex regex pattern' };
         }

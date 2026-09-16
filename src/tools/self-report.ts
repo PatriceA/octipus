@@ -130,6 +130,7 @@ export function buildCapabilitiesHandler(ctx: SelfReportContext): ToolHandler {
       },
     },
     toolId: SELF_REPORT_TOOL_ID,
+    replaySafety: 'read_only',
     previewParam: 'section',
     execute: async (args) => {
       const raw = typeof args?.section === 'string' ? args.section : 'all';

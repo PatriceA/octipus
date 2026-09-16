@@ -628,6 +628,14 @@ export class ToolExecutor {
         toolId === 'mcp' && bareName === 'mcp_call_tool'
           ? (toolCall.arguments.arguments as Record<string, unknown> | undefined) ?? {} : toolCall.arguments,
         this.context,
+        // An ad-hoc handler has no manifest to say its default level, so it
+        // fell through to ASK — which an unattended channel turns into a hard
+        // block. Measured 2026-09-16 on the API channel: `list_tools`,
+        // `describe_tool`, `capabilities` and `mcp_list_tools` were all refused
+        // as "approval required", so the lazy-advertised long tail and every
+        // MCP tool were unreachable. A handler that declares itself read-only
+        // gets the same default a read-only manifest action would.
+        { defaultLevel: tool.replaySafety === 'read_only' ? 'ALLOW' : undefined },
       );
 
       // ONE policy decision, shared with `base-tool.ts` — see

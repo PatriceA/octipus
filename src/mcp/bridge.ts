@@ -686,6 +686,7 @@ export class MCPBridge extends EventEmitter {
           },
         },
         toolId: 'mcp',
+        replaySafety: 'read_only',
         execute: async (args) => {
           const serverId = args.server_id as string | undefined;
           const query = typeof args.query === 'string' ? args.query.toLowerCase().split(/\s+/).filter(Boolean) : [];

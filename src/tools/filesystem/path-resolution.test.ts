@@ -214,6 +214,21 @@ describe('real users — nested per-user root', () => {
       ctx(),
     )) as { results: string[] };
     expect(found.results.length).toBeGreaterThan(0);
+
+    // The parameter says "glob or regex": a bare `*`/`?` with no regex syntax
+    // is a glob (`no*.md` must not read as regex "n, o-repeated, any, md"); a
+    // leading directory part is dropped (names are matched per entry); a
+    // non-glob invalid regex still errors.
+    for (const pattern of ['*.md', '**/*.md', 'n?te.md', 'no*.md', 'src/n*', '.*note.*', 'no.*']) {
+      const glob = (await tool.handler('search_files').execute({ pattern }, ctx())) as { results: string[] };
+      expect(glob.results.some((r) => r.endsWith('note.md'))).toBe(true);
+    }
+    for (const pattern of ['*.py', 'ote*']) {
+      const miss = (await tool.handler('search_files').execute({ pattern }, ctx())) as { results: string[] };
+      expect(miss.results).toEqual([]);
+    }
+    const bad = (await tool.handler('search_files').execute({ pattern: '(' }, ctx())) as { error?: string };
+    expect(bad.error).toBeDefined();
   });
 
   test('write by a workspace-ABSOLUTE path then read it back round-trips (session redirect)', async () => {
