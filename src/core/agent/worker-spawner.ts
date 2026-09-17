@@ -2,6 +2,7 @@ import { channelCanPrompt } from '@/security/approval-policy';
 import { resolve } from 'path';
 import { getConfig } from '@/config';
 import { shouldUseLazyDiscovery } from './lazy-tools';
+import { selectCoreToolIds } from './tool-intent';
 import { isPlanMode, stripMutatingTools } from './plan-mode';
 import { getAgentManager } from '@/core/agent-manager';
 import { getGatewayHub } from '@/core/gateway/hub';
@@ -1083,6 +1084,13 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   // Smallness is judged on finalModel (line 932) only — gating on the topic
   // model here as well skipped lazy discovery for a big Ollama worker whose
   // topic tier happened to be small, handing it the full ~12k schema.
+  // Same per-message selection the root does, against the child's brief: a qa
+  // child sent to check one file has no more use for the notes toolbox than the
+  // root did. Shrinks the role's list only, fails open, and everything dropped
+  // stays registered and discoverable. See tool-intent.ts.
+  const workerCoreToolIds = roleConfig.coreToolIds === undefined
+    ? undefined
+    : selectCoreToolIds(task, roleConfig.coreToolIds);
   if (roleConfig.coreToolIds !== undefined) {
     try {
       // finalIsSmall / finalModelEntry hoisted above (re-derived against the
@@ -1097,13 +1105,13 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
       ) {
         const { splitRoleTools } = await import('./tool-split');
         const { buildToolDiscoveryHandlers } = await import('@/tools/tool-discovery');
-        const { longTail } = splitRoleTools(roleTools, roleConfig.coreToolIds);
+        const { longTail } = splitRoleTools(roleTools, workerCoreToolIds ?? roleConfig.coreToolIds);
         const discoveryHandlers = buildToolDiscoveryHandlers(longTail);
         if (discoveryHandlers.length > 0) {
           // Register ALL role tools + the discovery meta-tools (dispatch must
           // keep working); only advertisement shrinks (filtered in agent-worker).
           workerTools = [...roleTools, ...discoveryHandlers];
-          toolAdvertisement = { mode: 'lazy', coreToolIds: roleConfig.coreToolIds };
+          toolAdvertisement = { mode: 'lazy', coreToolIds: workerCoreToolIds ?? roleConfig.coreToolIds };
           // Keep the meta-tools grantable to any children this stage spawns
           // (child tools = parent.allowedToolIds ∩ childRoleTools).
           stageNode?.allowedToolIds.add('tool_discovery');
@@ -1113,6 +1121,8 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
               model: finalModel,
               coreCount: roleTools.length - longTail.length,
               longTailCount: longTail.length,
+              coreToolIds: workerCoreToolIds,
+              roleCoreToolIds: roleConfig.coreToolIds,
             },
             'Lazy tool discovery enabled for worker',
           );

@@ -18,6 +18,7 @@ import { estimateToolSchemaTokens, logPromptComposition, recordContextFill } fro
 import { buildSecurityReminder } from './input-guard';
 import { createMetaTools } from './meta-tools';
 import { shouldUseLazyDiscovery } from './lazy-tools';
+import { selectCoreToolIds } from './tool-intent';
 import { isPlanMode, PLAN_MODE_DIRECTIVE, stripMutatingTools } from './plan-mode';
 import { isLongTailHandler } from './tool-split';
 import { buildCapabilitiesHandler } from '@/tools/self-report';
@@ -295,7 +296,13 @@ export async function runRootAgent(
   // and a small model keeps the capped full schema above, because it chains
   // multi-step discovery badly.
   let toolAdvertisement: import('@/core/agent-base').ToolAdvertisement = { mode: 'full' };
-  const rootCoreToolIds = rootRoleConfig.coreToolIds;
+  // The core set is picked for THIS MESSAGE, not for the role. It can only
+  // shrink the role's own list and it fails open on an unknown group; what it
+  // drops stays registered, stays named in the prompt's TOOLS section, and
+  // stays reachable through `list_tools`. See tool-intent.ts.
+  const rootCoreToolIds = rootRoleConfig.coreToolIds === undefined
+    ? undefined
+    : selectCoreToolIds(message, rootRoleConfig.coreToolIds);
   if (
     rootCoreToolIds !== undefined &&
     shouldUseLazyDiscovery({
@@ -324,7 +331,13 @@ export async function runRootAgent(
         };
         rootAllowedToolIds.add('tool_discovery');
         coreLogger.info(
-          { role: ROOT_ROLE, model: modelName, longTailCount: longTail.length },
+          {
+            role: ROOT_ROLE, model: modelName, longTailCount: longTail.length,
+            // Which groups the message kept, and which the role holds — a
+            // capability the user thinks is missing is answered from here.
+            coreToolIds: rootCoreToolIds,
+            roleCoreToolIds: rootRoleConfig.coreToolIds,
+          },
           'Lazy tool discovery enabled for the rootAgent',
         );
       }
