@@ -425,6 +425,58 @@ describe('createSpawnChildTool', () => {
     expect(String(result)).toContain('spawn_child:');
   });
 
+  test('the first spawn after the parent has read files is a question, the second starts the child', async () => {
+    const parent = makeParent();
+    let spawned = 0;
+    const spawner = {
+      spawnChild: async () => { spawned += 1; return { status: 'completed', output: 'ok', nodeId: 'n1' }; },
+    } as unknown as SwarmSpawner;
+    let challengeSpent = false;
+    const hooks = {
+      registerPending: () => {},
+      pendingCount: () => 0,
+      maxPendingDetached: () => 0,
+      filesReadThisTurn: () => 3,
+      takeSpawnChallenge: () => { if (challengeSpent) return false; challengeSpent = true; return true; },
+    };
+    const tool = createSpawnChildTool(parent, spawner, hooks);
+    const args = {
+      role: 'research', topic: 'research', subtopic: 'x',
+      taskBrief: 'look into the thing', expectedOutput: 'a note', handoff,
+    };
+    const ctx = { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general' as const, status: 'running' as const, createdAt: new Date(), updatedAt: new Date(), metadata: {} };
+
+    const first = await tool.execute(args, ctx);
+    expect(String(first)).toContain('one check before a child starts');
+    expect(spawned).toBe(0);
+
+    await tool.execute(args, ctx);
+    expect(spawned).toBe(1);
+  });
+
+  test('a specialist task delegated before any read is never challenged', async () => {
+    const parent = makeParent();
+    let spawned = 0;
+    const spawner = {
+      spawnChild: async () => { spawned += 1; return { status: 'completed', output: 'ok', nodeId: 'n1' }; },
+    } as unknown as SwarmSpawner;
+    let challenges = 0;
+    const hooks = {
+      registerPending: () => {},
+      pendingCount: () => 0,
+      maxPendingDetached: () => 0,
+      filesReadThisTurn: () => 0,
+      takeSpawnChallenge: () => { challenges += 1; return true; },
+    };
+    const tool = createSpawnChildTool(parent, spawner, hooks);
+    await tool.execute(
+      { role: 'research', topic: 'research', subtopic: 'x', taskBrief: 'look into the thing', expectedOutput: 'a note' },
+      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+    );
+    expect(spawned).toBe(1);
+    expect(challenges).toBe(0); // the check is not even claimed
+  });
+
   // Reachability, not behaviour. The role-fit rewrite is a LITE-root agent
   // workaround, and it can only fire if the resolved tier actually arrives at
   // the spawner. A first attempt gated it on the ROUTER threshold, which made
@@ -523,10 +575,20 @@ describe('createSpawnChildTool', () => {
     );
     expect(String(out)).toMatch(/refused.*3 file/);
     expect(called).toBe(false);
-    // A non-coding child, or a parent that has read nothing, is unaffected.
+    // Every role, not just coding: a research or qa child spawned after the same
+    // reads starts just as blind, and the "do not repeat broad discovery" line
+    // it is given rides on the handoff.
     const research = await createSpawnChildTool(makeParent(), { spawnChild: async () => { throw new Error('reached'); } } as unknown as SwarmSpawner, hooks)
       .execute({ role: 'research', topic: 'research', subtopic: 'x', taskBrief: 'Look up X.', expectedOutput: { shape: 'summary' } }, ctx);
-    expect(String(research)).not.toMatch(/refused/);
+    expect(String(research)).toMatch(/refused.*3 file/);
+
+    // A parent that has read nothing delegates freely, any role.
+    const freshHooks = { registerPending: () => {}, pendingCount: () => 0, maxPendingDetached: () => 0, filesReadThisTurn: () => 0 };
+    let reached = false;
+    const fresh = await createSpawnChildTool(makeParent(), { spawnChild: async () => { reached = true; return { nodeId: 'c', kind: 'agent', status: 'ok', output: 'done', usedTokens: 0, durationMs: 0, spawnedChildren: [] }; } } as unknown as SwarmSpawner, freshHooks)
+      .execute({ role: 'research', topic: 'research', subtopic: 'x', taskBrief: 'Look up X.', expectedOutput: { shape: 'summary' } }, ctx);
+    expect(String(fresh)).not.toMatch(/refused/);
+    expect(reached).toBe(true);
   });
 
   test.each([false, true])('coding handoff reaches the child after reads (lite=%s)', async lite => {
@@ -540,8 +602,11 @@ describe('createSpawnChildTool', () => {
     );
     const tool = createSpawnChildTool(makeParent(), spawner, hooks, { lite });
     expect(tool.parameters.properties).toHaveProperty('handoff');
-    const out = await tool.execute({ role: 'coding', taskBrief: 'Complete only the parser fix.', handoff },
-      { id: 'ctx', sessionId: 's1', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} });
+    const spawnCtx = { id: 'ctx', sessionId: 's1', userId: 'u', model: '', topic: '', role: 'general' as const, status: 'running' as const, createdAt: new Date(), updatedAt: new Date(), metadata: {} };
+    // One second thought per turn: the first call after reads asks, the retry starts the child.
+    expect(String(await tool.execute({ role: 'coding', taskBrief: 'Complete only the parser fix.', handoff }, spawnCtx)))
+      .toContain('one check before a child starts');
+    const out = await tool.execute({ role: 'coding', taskBrief: 'Complete only the parser fix.', handoff }, spawnCtx);
     expect(String(out)).toContain('Parser fixed');
     expect(received).toHaveLength(1);
     expect(received[0].taskBrief).toContain(handoff.completedWork);
@@ -564,6 +629,9 @@ describe('createSpawnChildTool', () => {
     const args = { role: 'architecture', taskBrief: 'implement the feature and fix the bug in the backend code' };
     const ctx = { id: 'ctx', sessionId: 's1', userId: 'u', model: '', topic: '', role: 'general', status: 'running' as const, createdAt: new Date(), updatedAt: new Date(), metadata: {} };
     expect(String(await tool.execute(args, ctx))).toContain('provide handoff');
+    expect(called).toBe(false);
+    // Past the handoff guard the second thought is still owed once.
+    expect(String(await tool.execute({ ...args, handoff }, ctx))).toContain('one check before a child starts');
     expect(called).toBe(false);
     expect(String(await tool.execute({ ...args, handoff }, ctx))).toContain('status="ok"');
     expect(called).toBe(true);

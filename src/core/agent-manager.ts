@@ -6,6 +6,7 @@ import { auditRepository } from '@/db/repositories/audit-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { getModelRegistry } from '@/models/model-registry';
 import { generateId } from '@/utils/crypto';
+import { usableContextWindow } from '@/utils/context-compaction';
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { type AgentEvent, AgentWorker, type AgentWorkerConfig, type ToolHandler } from './agent-worker';
 import { getCLIToolConfig, isCLIProvider } from './cli-agent-factory';
@@ -174,17 +175,24 @@ export class AgentManager {
       metadata: { ...(options.contextMetadata ?? {}) },
     };
 
+    // Determine if this is a CLI model (autonomous sub-agent)
+    const registry = getModelRegistry();
+    const modelEntry = await registry.getModelByModelId(routedModel);
+
+    // The window belongs to the MODEL, not to the install. `agent.contextWindowSize`
+    // is one number for every agent (32k by default), and every compaction
+    // threshold is a fraction of it: on a model with a 1M window the aggressive
+    // path started rewriting history at 25.6k tokens — 2% of the room it had —
+    // and a rewritten history is a lost prompt-cache prefix. Use what the model
+    // declares, and keep the setting as the floor for a model that declares
+    // nothing (an unregistered CLI tool, a row written before the column).
     const workerConfig: AgentWorkerConfig = {
       maxIterations: options.maxIterations ?? config.agent.maxIterations,
-      contextWindowSize: config.agent.contextWindowSize,
+      contextWindowSize: usableContextWindow(modelEntry?.contextWindow, config.agent.contextWindowSize),
       timeout: options.timeout ?? config.agent.defaultTimeout,
       maxTokenBudget: options.maxTokenBudget ?? config.agent.maxTokenBudget,
       toolAdvertisement: options.toolAdvertisement,
     };
-
-    // Determine if this is a CLI model (autonomous sub-agent)
-    const registry = getModelRegistry();
-    const modelEntry = await registry.getModelByModelId(routedModel);
     // A `cli/...` model without a registry row used to fall through to the
     // native worker and hit the provider router with a nonsense model name.
     const isCLI = modelEntry ? isCLIProvider(modelEntry.provider) : !!getCLIToolConfig(routedModel);

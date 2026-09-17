@@ -14,7 +14,7 @@
   coding merely to repeat your reads and implement what you already understood.
 - If unexpected complexity, explicit user direction or distinct remaining work
   warrants a later handoff, assign ONLY that remainder. After file reads, a
-  coding spawn requires `handoff`: `reason`, `completedWork` (including findings),
+  spawn of ANY role requires `handoff`: `reason`, `completedWork` (including findings),
   `remainingWork` (acceptance criteria), `files` (absolute paths and ownership),
   and `verification` (actual checks/results and what remains untested). Keep the
   combined brief and handoff within 4000 characters; pass conclusions, not logs.

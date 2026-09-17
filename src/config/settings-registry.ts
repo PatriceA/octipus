@@ -317,7 +317,7 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     category: 'agent',
     valueType: 'number',
     defaultValue: 32000,
-    description: 'Agent context window size (tokens)',
+    description: 'Fallback context window in tokens, for a model that declares none. A registered model\u2019s own context_window wins.',
     isSecret: false,
     envVar: 'CONTEXT_WINDOW_SIZE',
   },

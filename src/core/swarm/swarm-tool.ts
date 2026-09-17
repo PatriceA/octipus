@@ -25,6 +25,12 @@ export interface SpawnChildHooks {
   maxPendingDetached: () => number;
   /** Files this parent has already read this turn (0 when unknown). */
   filesReadThisTurn?: () => number;
+  /**
+   * Claim this turn's one second thought. True the first time it is called,
+   * false afterwards — so the question is asked once and the retry goes
+   * through. Absent for callers that build hooks without a per-turn scope.
+   */
+  takeSpawnChallenge?: () => boolean;
 }
 
 /**
@@ -43,11 +49,19 @@ export function createLateBoundSpawnChildHooks(
   },
   configuredCap: () => number,
 ): SpawnChildHooks {
+  // Per-turn: these hooks are rebuilt with the tool set on every turn, so the
+  // flag resets with the turn rather than living for the session.
+  let challengeSpent = false;
   return {
     registerPending: (pc) => ref.current?.registerPendingChild(pc),
     pendingCount: () => ref.current?.pendingDetachedCount() ?? 0,
     maxPendingDetached: () => ref.current ? configuredCap() : 0,
     filesReadThisTurn: () => ref.current?.getSideEffectCounters?.().byName['filesystem__read_file'] ?? 0,
+    takeSpawnChallenge: () => {
+      if (challengeSpent) return false;
+      challengeSpent = true;
+      return true;
+    },
   };
 }
 
@@ -284,7 +298,7 @@ const HANDOFF_FIELDS = {
 } as const;
 const HANDOFF_SCHEMA = {
   type: 'object',
-  description: 'Required for coding delegation after reading files. Transfer findings instead of restarting investigation. Combined taskBrief and rendered handoff must fit 4000 characters. Not an execution plan or permission grant.',
+  description: 'Required for any delegation after reading files. Transfer findings instead of restarting investigation. Combined taskBrief and rendered handoff must fit 4000 characters. Not an execution plan or permission grant.',
   properties: Object.fromEntries(Object.entries(HANDOFF_FIELDS).map(([name, description]) => [name, { type: 'string', minLength: 1, maxLength: 2000, description }])),
   required: Object.keys(HANDOFF_FIELDS),
   additionalProperties: false,
@@ -334,12 +348,34 @@ export function createSpawnChildTool(
     // an expensive fresh investigation or forbidding every useful handoff.
     const filesRead = hooks?.filesReadThisTurn?.() ?? 0;
     const effectiveRole = applyRoleFit(params.role!, params.taskBrief, internal.rootIsLite).role;
-    if (effectiveRole === 'coding' && filesRead > 0 && args.handoff === undefined) {
+    // Every role, not just coding. A qa or research child spawned after the
+    // parent has read files starts just as blind and re-reads just as much —
+    // one such child cost 217k tokens on the arena's module build — and the
+    // "use these findings, do not repeat broad discovery" line the child is
+    // given rides on the handoff, so a child without one is never told.
+    if (filesRead > 0 && args.handoff === undefined) {
       return `spawn_child refused: you have already read ${filesRead} file(s). Finish bounded work yourself; ` +
         'do not delegate the same investigation again. If a specialist is needed for remaining work, ' +
         'provide handoff with reason, completedWork, remainingWork, files (ownership), and verification. ' +
         'Pass the findings and actual checks already performed; assign only the remaining scope. ' +
         'For a clear specialist task, delegate before reading implementation files.';
+    }
+
+    // One second thought per turn, and only once the parent has done work of its
+    // own: a child starts with none of that context, pays a fresh system prompt
+    // and re-reads what the parent already read. Measured on the arena's module
+    // build, the runs that delegated took 118-276 s against a 64-87 s field and
+    // cost up to five times the median — and a child was dearer than the root
+    // that spawned it. This does not forbid the child, it costs one call to ask
+    // for it: call again and it goes through. Delegating a clear specialist task
+    // BEFORE reading anything is never challenged.
+    if (filesRead > 0 && hooks?.takeSpawnChallenge?.()) {
+      return `spawn_child — one check before a child starts: you have already read ${filesRead} file(s) this turn. ` +
+        'A child inherits none of that. It pays a fresh system prompt and re-reads what you have read, and on a ' +
+        'bounded job that costs more than finishing it. If you can do this yourself with edit_file and shell, do ' +
+        'that now and do not call spawn_child again. If a child really is the cheaper path — separate scope, work ' +
+        'you cannot verify yourself, or more than one file of genuinely independent work — call spawn_child again ' +
+        'with the same arguments and it will start.';
     }
 
     const cap = hooks?.maxPendingDetached() ?? 0;

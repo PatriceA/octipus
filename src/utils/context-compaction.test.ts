@@ -5,7 +5,9 @@ import {
   calculateTotalTokens,
   CONTEXT_OVERFLOW_TRUNCATED_MARKER,
   DEFAULT_TOOL_OUTPUT_SOFT_CAP,
+  shouldCompactToolOutputs,
   truncateOldestToolOutputs,
+  usableContextWindow,
 } from './context-compaction';
 import { estimateTokens } from './context-compaction';
 
@@ -159,5 +161,36 @@ describe('compactMessages conversation boundary', () => {
     expect(compacted.messages.some(message => message.content === oversized)).toBe(false);
     expect(calculateTotalTokens(compacted.messages)).toBeLessThanOrEqual(2000);
     expect(compacted.messages[0].role).toBe('assistant');
+  });
+});
+
+describe('shouldCompactToolOutputs', () => {
+  test('leaves history alone while the window has room', () => {
+    // The arena module run: 30k tokens into a 1M window, eleven tool results.
+    expect(shouldCompactToolOutputs(30_000, 1_048_576)).toBe(false);
+  });
+
+  test('compacts once the request is past half the window', () => {
+    expect(shouldCompactToolOutputs(20_000, 32_768)).toBe(true);
+  });
+
+  test('an unknown window keeps the count-only behaviour', () => {
+    expect(shouldCompactToolOutputs(1_000, 0)).toBe(true);
+  });
+});
+
+describe('usableContextWindow', () => {
+  test('the model\'s own window wins', () => {
+    expect(usableContextWindow(1_048_576, 32_000)).toBe(1_048_576);
+  });
+
+  test('a zero or missing window falls back to the setting', () => {
+    // Reachable: POST/PATCH /models accept contextWindow with no minimum, and
+    // every compaction threshold is a fraction of this number.
+    expect(usableContextWindow(0, 32_000)).toBe(32_000);
+    expect(usableContextWindow(-1, 32_000)).toBe(32_000);
+    expect(usableContextWindow(null, 32_000)).toBe(32_000);
+    expect(usableContextWindow(undefined, 32_000)).toBe(32_000);
+    expect(usableContextWindow(999, 32_000)).toBe(32_000);
   });
 });
