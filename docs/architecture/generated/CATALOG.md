@@ -530,7 +530,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `services` | `capabilities` | 5 |
 | `services` | `config` | 3 |
 | `services` | `core` | 2 |
-| `services` | `db` | 6 |
+| `services` | `db` | 7 |
 | `services` | `models` | 15 |
 | `services` | `security` | 3 |
 | `services` | `setup` | 1 |
