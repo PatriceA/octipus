@@ -29,6 +29,7 @@ export class ChatSessionPresenter {
     this.discoveredPlan = false;
     this.clearStream(); this.subagents.reset(); this.cumulative = { tokens: 0, cost: 0, turns: 0 };
     this.status.setStats(this.cumulative); this.status.setContext(null);
+    this.activeAgentModel = undefined; this.status.setModel(null);
     this.lastPlanSummary = null; this.status.setPlan(null); this.status.setPlanDetails(null);
   }
   handleEvent(event: AgentSessionEvent): boolean {
@@ -112,6 +113,7 @@ export class ChatSessionPresenter {
         // iteration_update at the TOP of each loop iteration).
         this.activeAgentRole = event.role;
         this.activeAgentModel = event.model || undefined;
+        if (this.activeAgentModel) this.status.setModel(this.activeAgentModel);
         this.clearStream(); // a new turn: whatever a failed one left half-streamed is not history
         this.activity.setThinking({ role: event.role, iter: 0, model: this.activeAgentModel });
         return true;

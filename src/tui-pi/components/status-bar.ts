@@ -24,6 +24,7 @@ export class StatusBar implements Component {
   private mcp: McpSummary | null = null;
   private context: ContextFill | null = null;
   private user: string | null = null;
+  private model: string | null = null;
   private mode: string | null = null;
   private plan: string | null = null;
   private planDetails: string | null = null;
@@ -39,6 +40,10 @@ export class StatusBar implements Component {
   setContext(fill: ContextFill | null): void { this.context = fill; }
   /** Signed-in username, or null while running as the local machine account. */
   setUser(user: string | null): void { this.user = user; }
+  /** Model of the current or last root turn. Kept after the turn ends: the
+   *  activity line that used to carry it disappears with the turn, so which
+   *  model answered was only visible while it was still answering. */
+  setModel(model: string | null): void { this.model = model; }
   /** Free-form status segment; null hides it. Not wired to anything today —
    *  the run-mode badge it used to carry named a routing hop that no longer
    *  exists, and derived the prompt tier from a second, divergent threshold. */
@@ -87,6 +92,9 @@ export class StatusBar implements Component {
         parts.push(chalk.hex(palette.statusFg)(`ctx ${formatTokens(this.context.used)}`));
       }
     }
+    // Last on the line on purpose: a narrow terminal truncates from the right,
+    // and a long slug must not push the context-fill warning off the edge.
+    if (this.model) parts.push(chalk.hex(palette.dim)(this.model));
     const planLine = this.plan ? [truncateToWidth(chalk.hex(palette.accent)(`Plan · ${this.plan}`), width)] : [];
     if (this.planDetails) {
       const source = this.planDetails.split('\n');

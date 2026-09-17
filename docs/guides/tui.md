@@ -22,7 +22,7 @@ User turns have a **You** heading and a vertical rail on every wrapped line. Rep
 - In the editor, transcript scrolling applies when the chat pane has focus.
 - Resizing while reading history reflows the retained messages and keeps the reading position within the same message.
 
-The activity line shows thinking, elapsed time, model and current tool activity. `Alt+S` / `F7` expands the subagent panel in either surface; `Alt+Up` / `Alt+Down` scroll its entries when expanded. Completed children remain available for inspection until the session is cleared or reset, including their model, iteration count and last tool activity.
+The activity line shows thinking, elapsed time, model and current tool activity; it disappears when the turn ends, so the status bar keeps the model of the current or last turn at the end of its line, and drops it on `/resume`. `Alt+S` / `F7` expands the subagent panel in either surface; `Alt+Up` / `Alt+Down` scroll its entries when expanded. Completed children remain available for inspection until the session is cleared or reset, including their model, iteration count and last tool activity.
 
 The terminal's native scrollbar contains previously painted terminal output, not the full chat history. Use the keyboard controls or mouse wheel for the transcript. Resizing reflows history without dropping text beyond the right edge.
 
