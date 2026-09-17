@@ -480,7 +480,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `hooks` | 4 |
 | `core` | `mcp` | 5 |
 | `core` | `models` | 76 |
-| `core` | `security` | 49 |
+| `core` | `security` | 50 |
 | `core` | `services` | 1 |
 | `core` | `shared` | 12 |
 | `core` | `skills` | 6 |
@@ -548,7 +548,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `channels` | 1 |
 | `tools` | `config` | 4 |
 | `tools` | `connectors` | 2 |
-| `tools` | `core` | 65 |
+| `tools` | `core` | 66 |
 | `tools` | `db` | 29 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |

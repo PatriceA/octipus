@@ -15,7 +15,7 @@ Both surfaces use pi-tui for terminal rendering, overlays and the chat composer.
 
 User turns have a **You** heading and a vertical rail on every wrapped line. Replies have an **Octipus** heading and render Markdown when complete. Streaming text remains plain until completion. System notices use a muted dot; errors have a visible `! Error` marker as well as an error colour.
 
-- `PageUp` and `PageDown` scroll by screen rows, including within one long answer. After `/mouse on` (or **Alt+M**) the mouse wheel scrolls the same transcript while the composer and status stay fixed.
+- `PageUp` and `PageDown` scroll by screen rows, including within one long answer. The mouse wheel always scrolls the same transcript while the composer and status stay fixed.
 - `Ctrl+Home` jumps to the oldest retained output; `Ctrl+End` jumps to the latest. History controls appear when output exceeds the viewport.
 - While reading history, new messages and streaming text do not move the rows being read.
 - `End` returns to the latest output when scrolled back. Otherwise it retains its normal composer behaviour.
@@ -24,19 +24,19 @@ User turns have a **You** heading and a vertical rail on every wrapped line. Rep
 
 The activity line shows thinking, elapsed time, model and current tool activity. `Alt+S` / `F7` expands the subagent panel in either surface; `Alt+Up` / `Alt+Down` scroll its entries when expanded. Completed children remain available for inspection until the session is cleared or reset, including their model, iteration count and last tool activity.
 
-The terminal's native scrollbar contains previously painted terminal output, not the full chat history. Use the keyboard controls, or capture the wheel with `/mouse on`, for the transcript. Resizing reflows history without dropping text beyond the right edge.
+The terminal's native scrollbar contains previously painted terminal output, not the full chat history. Use the keyboard controls or mouse wheel for the transcript. Resizing reflows history without dropping text beyond the right edge.
 
 Both surfaces display streamed responses, identity, backend session usage, permission prompts and agent questions. Questions are queued: answering one reveals the next. Escape explicitly declines an agent question; it does not silently dismiss it and leave the agent waiting.
 
 ## Selecting and copying text
 
-Text selection is native and always on: drag with the left mouse button to select visible text, then use your terminal's Copy command (usually **Ctrl+Shift+C** on Linux). Octipus does not enable terminal mouse tracking by default, because every tracking mode makes the terminal send clicks to the application instead of selecting text. **Ctrl+C** remains the app's quit/cancel key.
+Mouse-wheel scrolling and native text selection are available together, without a mode switch. Hold **Shift** while dragging with the left mouse button to select visible text, then use your terminal's Copy command (usually **Ctrl+Shift+C** on Linux). **Ctrl+C** remains the app's quit/cancel key. Alt+M and `/mouse` have been removed.
 
-Press **Alt+M** or enter **`/mouse on`** if you prefer the wheel to scroll the transcript. While captured, a persistent **wheel captured** badge is shown and selecting text needs Shift+drag (terminal dependent). Press Alt+M again or enter `/mouse off` to return the mouse to the terminal. PageUp/PageDown and Ctrl+Home/Ctrl+End navigate chat in either mode; focus chat first in the editor.
+Shift+drag is the native selection override in xterm and many compatible terminals ([xterm mouse documentation](https://invisible-island.net/xterm/manpage/xterm.html)). Terminal key mappings can differ; configure the terminal's selection override if needed. In the editor, focus chat to scroll its transcript. Selection itself works across the visible terminal, including the editor pane.
 
 `/copy` or `/copy last` requests a copy of the latest assistant response, including text outside the viewport. `/copy transcript` requests all currently loaded user, assistant and system messages. Both preserve raw Markdown and Unicode; during streaming they copy the text received so far. These commands work in both chat composers and do not send a gateway request.
 
-Clipboard requests use OSC 52 without installing dependencies. Your terminal must allow OSC 52 clipboard writes; Octipus reports that it sent a request because terminals do not confirm success. If pasting produces nothing, select the text with the mouse instead. Requests over 75,000 UTF-8 bytes are refused without truncating; copy an individual response or select sections instead.
+Clipboard requests use OSC 52 without installing dependencies. Your terminal must allow OSC 52 clipboard writes; Octipus reports that it sent a request because terminals do not confirm success. If pasting produces nothing, use Shift+drag and your terminal’s Copy command instead. Requests over 75,000 UTF-8 bytes are refused without truncating; copy an individual response or select sections instead.
 
 ## Plans and feedback
 
@@ -58,7 +58,6 @@ The compact details show steps near the active step. The full transcript entry r
 | `Ctrl+P` / `F4` | Command palette |
 | `F5` | Show shortcuts |
 | `Ctrl+Q` | Quit |
-| `Alt+M` | Toggle mouse wheel capture (off by default; on needs Shift+drag to select) |
 | `Up` / `Down` in composer | Input history |
 | `Tab` | Completion |
 | `\` then `Enter` | Newline when the terminal does not support Shift+Enter |
