@@ -1,7 +1,15 @@
 import { describe, expect, test } from 'vitest';
 import { applyRoleFit, validateSpawnChildArgs, formatChildResult, createLateBoundSpawnChildHooks, createSpawnChildTool, buildSpawnRoleCatalog, buildDelegationGuidance, parsePlan, MAX_PLAN_STEPS, SPAWN_CHILD_ROLES } from './swarm-tool';
-import { LEVEL_DEFAULT, type AgentNode, type ChildResult, type PendingChild } from './types';
+import { LEVEL_DEFAULT, type AgentNode, type ChildResult, type PendingChild, type SpawnChildParams } from './types';
 import { SwarmSpawner } from './spawner';
+
+const handoff = {
+  reason: 'The inspected bug spans a separate parser package requiring specialist work.',
+  completedWork: 'Located the caller and reproduced the failure; no code changed.',
+  remainingWork: 'Fix parser empty input handling and add a regression test.',
+  files: '/workspace/parser/src/index.ts and parser tests only; caller belongs to parent.',
+  verification: 'npm test -- parser failed on empty input; rerun after fix.',
+};
 
 // ── buildSpawnRoleCatalog (depth-1 subagent discoverability) ─────────
 
@@ -521,6 +529,60 @@ describe('createSpawnChildTool', () => {
     expect(String(research)).not.toMatch(/refused/);
   });
 
+  test.each([false, true])('coding handoff reaches the child after reads (lite=%s)', async lite => {
+    const received: SpawnChildParams[] = [];
+    const spawner = { spawnChild: async (_parent: AgentNode, params: SpawnChildParams): Promise<ChildResult> => {
+      received.push(params);
+      return { nodeId: 'child', kind: 'agent', status: 'ok', output: 'Parser fixed', usedTokens: 0, durationMs: 0, spawnedChildren: [] };
+    } } as unknown as SwarmSpawner;
+    const hooks = createLateBoundSpawnChildHooks(
+      { current: { registerPendingChild: () => {}, pendingDetachedCount: () => 0, getSideEffectCounters: () => ({ byName: { filesystem__read_file: 3 } }) } }, () => 0,
+    );
+    const tool = createSpawnChildTool(makeParent(), spawner, hooks, { lite });
+    expect(tool.parameters.properties).toHaveProperty('handoff');
+    const out = await tool.execute({ role: 'coding', taskBrief: 'Complete only the parser fix.', handoff },
+      { id: 'ctx', sessionId: 's1', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} });
+    expect(String(out)).toContain('Parser fixed');
+    expect(received).toHaveLength(1);
+    expect(received[0].taskBrief).toContain(handoff.completedWork);
+    expect(received[0].taskBrief).toContain(handoff.files);
+    expect(received[0].taskBrief).toContain(handoff.verification);
+    expect(received[0].taskBrief).toContain('Existing permissions still apply');
+    expect(received[0].plan).toBeUndefined(); // Handoff does not select a mechanical executor.
+  });
+
+  test.each([{ lite: true }, { weakModel: true }])('role rewriting cannot bypass a post-read handoff: %j', async opts => {
+    let called = false;
+    const spawner = { spawnChild: async (): Promise<ChildResult> => {
+      called = true;
+      return { nodeId: 'child', kind: 'agent', status: 'ok', output: 'done', usedTokens: 0, durationMs: 0, spawnedChildren: [] };
+    } } as unknown as SwarmSpawner;
+    const hooks = createLateBoundSpawnChildHooks(
+      { current: { registerPendingChild: () => {}, pendingDetachedCount: () => 0, getSideEffectCounters: () => ({ byName: { filesystem__read_file: 1 } }) } }, () => 0,
+    );
+    const tool = createSpawnChildTool(makeParent(), spawner, hooks, opts);
+    const args = { role: 'architecture', taskBrief: 'implement the feature and fix the bug in the backend code' };
+    const ctx = { id: 'ctx', sessionId: 's1', userId: 'u', model: '', topic: '', role: 'general', status: 'running' as const, createdAt: new Date(), updatedAt: new Date(), metadata: {} };
+    expect(String(await tool.execute(args, ctx))).toContain('provide handoff');
+    expect(called).toBe(false);
+    expect(String(await tool.execute({ ...args, handoff }, ctx))).toContain('status="ok"');
+    expect(called).toBe(true);
+  });
+
+  test('clear coding task delegates before any file read without handoff', async () => {
+    let called = false;
+    const spawner = { spawnChild: async (): Promise<ChildResult> => {
+      called = true;
+      return { nodeId: 'child', kind: 'agent', status: 'ok', output: 'done', usedTokens: 0, durationMs: 0, spawnedChildren: [] };
+    } } as unknown as SwarmSpawner;
+    const hooks = createLateBoundSpawnChildHooks(
+      { current: { registerPendingChild: () => {}, pendingDetachedCount: () => 0, getSideEffectCounters: () => ({ byName: {} }) } }, () => 0,
+    );
+    await createSpawnChildTool(makeParent(), spawner, hooks).execute({ role: 'coding', taskBrief: 'Implement the parser.' },
+      { id: 'ctx', sessionId: 's1', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} });
+    expect(called).toBe(true);
+  });
+
   test('spawn_child is NOT final — allows multiple calls per turn', () => {
     const parent = makeParent();
     const tool = createSpawnChildTool(parent);
@@ -863,5 +925,16 @@ describe('validateSpawnChildArgs plan handling', () => {
   test('rejects a malformed plan loud', () => {
     const r = validateSpawnChildArgs({ ...valid, plan: [{ tool: 'grep' }] });
     expect('error' in r && r.error).toContain('invalid plan');
+  });
+});
+
+
+describe('bounded delegation handoff validation', () => {
+  test.each([null, [], 'already looked', {}, { ...handoff, reason: ' ' }, { ...handoff, verification: 3 }, { ...handoff, files: 'x'.repeat(2001) }, { ...handoff, extra: 'ignored?' }])('rejects malformed handoff: %j', value => {
+    expect(validateSpawnChildArgs({ role: 'coding', taskBrief: 'Fix parser.', handoff: value })).toHaveProperty('error');
+  });
+  test('enforces the combined brief limit without truncating findings', () => {
+    const result = validateSpawnChildArgs({ role: 'coding', taskBrief: 'x'.repeat(3500), handoff });
+    expect(result).toHaveProperty('error', expect.stringContaining('plus handoff exceeds'));
   });
 });

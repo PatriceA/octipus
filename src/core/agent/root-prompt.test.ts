@@ -52,6 +52,16 @@ describe('buildDelegationPolicy', () => {
     }
   });
 
+  test('both tiers prevent duplicate investigation but permit a bounded remaining-work handoff', () => {
+    for (const tier of [true, false]) {
+      const policy = buildDelegationPolicy(tier);
+      expect(policy).toContain('before reading implementation files');
+      expect(policy).toContain('do not restart completed investigation');
+      expect(policy).toContain('completedWork, remainingWork, files');
+      expect(policy).toContain('Independent review');
+    }
+  });
+
   test('full keeps the multi-spawn and pipeline surface lite must not see', () => {
     const full = buildDelegationPolicy(false);
     expect(full).toContain('parallel');

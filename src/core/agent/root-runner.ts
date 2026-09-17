@@ -74,9 +74,10 @@ export interface RootRunnerDeps {
  * `create_pipeline`, which the lite spawn schema does not expose.
  */
 export function buildDelegationPolicy(isLite: boolean): string {
-  return isLite
-    ? `\n\nYou hold real tools — use them. Answer the request yourself whenever your own tools reach it. Call spawn_child EXACTLY ONCE, and only when the task needs a specialist you are not: security review, devops, deep multi-source research, or code work too large to do in place with your own filesystem and shell tools. Then relay the child's result. Never tell the user a capability is missing: either call a tool or spawn the specialist that holds it.`
-    : `\n\nYou are the agent the user is talking to, and you hold the general toolset — files, the web, the knowledge base, notes, tasks, profiles, messaging, scheduling, artifacts. Doing the work yourself is the normal path: read the file, run the search, store the note, and answer. That includes code: you hold filesystem and shell, so a fix, a small feature or a small package that lives in a few files and is proved by one command (a test suite, a build) is yours to do in place — edit, run the command, report. Measured on one such fix: 47 s done in place, 92 s briefed to a coding child. Call spawn_child when the task needs a toolset or judgement you do not have — git or GitHub work, design work, security review, devops, QA, deep multi-source research — or when it is development work too large for one head (several independent items, or an implementer plus a separate reviewer), or when independent parts of the request can genuinely run in parallel. Use create_pipeline only when the user explicitly asks for a multi-stage workflow with handover (e.g. "research then implement then review"). Delegating a one-tool question you could answer yourself costs the user a whole extra agent for nothing. Never tell the user a capability is missing: call the tool, or spawn the specialist that holds it — saying the knowledge base, the web or a repository is unreachable because you did not try is a wrong answer about the product. If the user explicitly tells you to delegate or use spawn_child, always do so.`;
+  const policy = `\n\nYou hold real tools: finish bounded tasks yourself when your own tools suffice and you can verify the outcome. For a clear specialist task or an explicit delegation request, call spawn_child before reading implementation files: do not investigate the whole task and pay a child to investigate it again. If scope is unclear, resolve only the specific uncertainty. Once you start a bounded task, finish it instead of delegating the same work. If unexpected complexity or distinct remaining work warrants a later coding handoff, provide handoff with reason, completedWork, remainingWork, files (ownership), and verification. Transfer findings and actual check results; do not restart completed investigation. Independent review may deliberately re-read to verify. Never assume a capability is missing without checking available tools or the specialist catalog; report actual unavailability or denial honestly. Existing permissions still apply.`;
+  return policy + (isLite
+    ? ' If delegation is needed, call spawn_child EXACTLY ONCE, then assess its result and answer; otherwise work directly.'
+    : ' Use specialists for sustained domain judgment, independent verification or useful parallel work. Use create_pipeline for ordered stages whose handoffs and verification justify the coordination cost, or an explicitly requested multi-stage workflow. You remain responsible for checking and synthesizing the result.');
 }
 
 /**
@@ -418,7 +419,7 @@ export async function runRootAgent(
   if (!isLite) staticParts.push(`\n\n${delegationPrompt}`);
   volatileParts.push(buildTopicHint(isLite, classification));
   if (classification.type === 'ambiguous') {
-    volatileParts.push(`\n\nThe user's message could not be confidently classified. If it is plainly small-talk or a one-shot factual question, answer directly. Otherwise prefer spawn_child to a fitting specialist — when in doubt, delegate. If the user explicitly tells you to delegate, always do so.`);
+    volatileParts.push(`\n\nThe user's message could not be confidently classified. If it is plainly small-talk or a one-shot factual question, answer directly. Otherwise resolve only the uncertainty needed to choose direct work or a specialist; do not start a broad investigation just to route the task. If the user explicitly tells you to delegate, always do so.`);
   }
 
   // Expert index — the live list of experts (system + this user's custom
@@ -468,7 +469,7 @@ export async function runRootAgent(
     } catch (err) { coreLogger.error({ err }, 'silent failure in service'); }
 
     wsContext += `\n\nAll worker tasks MUST target this project. Always include the full path "${projectPath}" in every worker task description. The user does not need to specify the project — it is implicit.`;
-    wsContext += `\n\nFor complex implementation tasks in this project, PREFER using the "Full Development Cycle" pipeline (via create_pipeline) to ensure thorough research, architecture planning, and testing.`;
+    wsContext += `\n\nUse create_pipeline when ordered implementation and verification stages justify their cost, or the user requests that workflow; do not add research stages that repeat completed investigation.`;
     staticParts.push(wsContext);
   } else {
     // Normal mode: generic workspace awareness.

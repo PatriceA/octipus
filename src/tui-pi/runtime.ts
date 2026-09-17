@@ -43,9 +43,11 @@ export function createRuntime(options: RuntimeOptions = {}): Runtime {
   const gatewayUrl = options.gatewayUrl || `ws://localhost:${port}/gateway`;
 
   const terminal = new class extends ProcessTerminal {
-    // Mouse tracking stays off: any xterm tracking mode makes the terminal hand
-    // left-click drags to the app, which kills native select-and-copy. Wheel
-    // scrolling of the transcript is opt-in via /mouse on or Alt+M.
+    // Keep wheel events available. Shift+drag remains native terminal selection.
+    override start(...args: Parameters<ProcessTerminal['start']>): void {
+      super.start(...args);
+      setMouseCapture(this, true);
+    }
     override stop(): void {
       setMouseCapture(this, false);
       super.stop();

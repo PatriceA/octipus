@@ -57,6 +57,8 @@ describe('listAllKeybindings', () => {
     const all = listAllKeybindings(manager);
     const ids = all.map((b) => b.id);
     expect(ids).toContain('app.palette.open');
+    expect(ids).not.toContain('app.mouse.toggle');
+    expect(all.some(binding => binding.keys.includes('alt+m'))).toBe(false);
     expect(ids).toContain('tui.editor.cursorUp');
     // Sorted check
     const sorted = [...ids].sort();

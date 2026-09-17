@@ -15,8 +15,6 @@ export interface ContextFill { used: number; window?: number }
 export interface McpSummary { connected: number; total: number }
 
 export class StatusBar implements Component {
-  private mouseCaptured = false;
-  setMouseCaptured(enabled: boolean): void { this.mouseCaptured = enabled; }
   private maxRows = 12;
   setMaxRows(rows: number): void { this.maxRows = Math.max(1, rows); }
   private status: ConnectionStatus = 'disconnected';
@@ -57,7 +55,6 @@ export class StatusBar implements Component {
         : chalk.hex(palette.error)('●');
     const title = chalk.bold.hex(palette.accent)('Octipus');
     const parts: string[] = [`${dot} ${title}`, chalk.hex(palette.dim)(this.status)];
-    if (this.mouseCaptured) parts.unshift(chalk.hex(palette.accent)('[wheel captured · Alt+M to select]'));
     if (this.mode) parts.push(chalk.hex(palette.accent)(`[${this.mode}]`));
     // Whose account this terminal is acting as. `local` is not a user: it
     // reaches no personal memories, vault secrets or account settings, so the

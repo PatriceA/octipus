@@ -14,8 +14,11 @@ describe('visible work plans', () => {
   it('preserves completed work and recorded evidence', () => {
     const v = input(); v.steps[0].status = 'done'; v.steps[0].evidence = 'Read retry.ts';
     const state = reviseWorkPlan(emptyWorkPlan(), v);
-    expect(() => reviseWorkPlan(state, { ...v, revision: 1, steps: [{ ...v.steps[0], status: 'pending' }] })).toThrow('Keep completed');
-    expect(() => reviseWorkPlan(state, { ...v, revision: 1, steps: [{ ...v.steps[0], evidence: 'Tests passed' }] })).toThrow('Keep completed');
+    expect(() => reviseWorkPlan(state, { ...v, revision: 1, steps: [{ ...v.steps[0], status: 'pending' }] })).toThrow('must stay in the plan as done');
+    expect(() => reviseWorkPlan(state, { ...v, revision: 1, steps: [] })).toThrow('"inspect" is completed');
+    // A paraphrased resend is accepted; the recorded title and evidence win.
+    const next = reviseWorkPlan(state, { ...v, revision: 1, steps: [{ ...v.steps[0], title: 'Inspected the code', evidence: 'Tests passed' }] });
+    expect(next.current!.steps[0]).toMatchObject({ title: 'Inspect code', evidence: 'Read retry.ts', status: 'done' });
   });
   it('requires explicit responses and keeps unresolved feedback on the current plan', () => {
     const state = reviseWorkPlan(emptyWorkPlan(), input());

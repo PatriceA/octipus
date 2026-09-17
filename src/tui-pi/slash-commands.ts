@@ -26,7 +26,6 @@ const gw = (entry: Omit<OctipusSlashCommand, 'source'>): OctipusSlashCommand => 
 
 export const OCTIPUS_SLASH_COMMANDS: OctipusSlashCommand[] = [
   // ── TUI-local ───────────────────────────────────────────────────
-  tui({ name: 'mouse', description: 'Capture the mouse wheel for chat scrolling (off by default so text selection works)', argumentHint: '[on|off]' }),
   tui({ name: 'copy', description: 'Request terminal clipboard copy of response or loaded transcript', argumentHint: '[last|transcript]' }),
   tui({ name: 'exit',     description: 'Quit the TUI' }),
   tui({ name: 'quit',     description: 'Quit the TUI' }),

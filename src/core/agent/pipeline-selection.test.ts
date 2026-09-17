@@ -89,7 +89,8 @@ describe('the delegation prompt and the spawn surfaces agree', () => {
     // sees is a twice-observed failure rather than an untried one. Without that
     // sentence the root reads "checks trigger a retry" next to "never respawn"
     // and has to guess which governs.
-    expect(delegationPrompt).toMatch(/No respawn/i);
+    expect(delegationPrompt).toMatch(/Do not blindly respawn/i);
+    expect(delegationPrompt).toMatch(/Do not duplicate a retry already performed/i);
     expect(delegationPrompt).toMatch(/already been re-dispatched/i);
   });
 

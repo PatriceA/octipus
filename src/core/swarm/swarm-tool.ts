@@ -275,6 +275,21 @@ export function resolveRoleFromTopic(roleRaw: string | undefined, topic: string)
   return undefined;
 }
 
+const HANDOFF_FIELDS = {
+  reason: 'Why the remaining work needs delegation now (unexpected complexity, distinct work, or explicit user request).',
+  completedWork: 'Findings and work already completed; do not ask the child to repeat them.',
+  remainingWork: 'Only the remaining deliverable and its acceptance criteria.',
+  files: 'Relevant absolute paths and the child’s file/scope ownership; identify exclusions.',
+  verification: 'Checks already run and actual results, or explicitly none; checks still needed.',
+} as const;
+const HANDOFF_SCHEMA = {
+  type: 'object',
+  description: 'Required for coding delegation after reading files. Transfer findings instead of restarting investigation. Combined taskBrief and rendered handoff must fit 4000 characters. Not an execution plan or permission grant.',
+  properties: Object.fromEntries(Object.entries(HANDOFF_FIELDS).map(([name, description]) => [name, { type: 'string', minLength: 1, maxLength: 2000, description }])),
+  required: Object.keys(HANDOFF_FIELDS),
+  additionalProperties: false,
+};
+
 /**
  * Factory: produce a `spawn_child` tool handler bound to a specific parent
  * node (usually the current Root agent). The returned handler is what the
@@ -303,23 +318,6 @@ export function createSpawnChildTool(
     if ('error' in validated) return `spawn_child: ${validated.error}`;
     const params = validated.params;
 
-    // "Decide before you open a file" is a prompt rule the model kept
-    // breaking: measured 2026-09-17, one fix pass in three read every file,
-    // then spent 30-66 s writing a brief for a coding child that read them
-    // all again and did the same work — 92-118 s against 47-51 s in place.
-    // Make it a rule the tool enforces: once the parent has read files this
-    // turn, a coding child only duplicates context it already holds. Root
-    // only — a child's hook ref carries no counters, so the guard is inert
-    // below the root by construction. create_pipeline stays open as the way
-    // to hand off work that really is too large for one head.
-    const filesRead = hooks?.filesReadThisTurn?.() ?? 0;
-    if (params.role === 'coding' && filesRead > 0) {
-      return `spawn_child refused: you have already read ${filesRead} file(s) this turn, so you hold the context a coding child would rebuild from scratch. ` +
-        'Finish this in place — edit_file the file(s) you read, run the verification command with shell (cwd set), and report. ' +
-        'Delegate coding work on your first turn, before opening files, and only when it is too large to do in place; ' +
-        'work that spans many independent items goes to create_pipeline.';
-    }
-
     // Whether the agent doing the spawning is too weak to be trusted with the
     // role choice, resolved by the caller and passed through so
     // `resolveChildRole` does not re-derive it from a model id.
@@ -330,6 +328,19 @@ export function createSpawnChildTool(
     // choice but keeps its full schema, so it sets `weakModel` alone. Without
     // this the role-fit rewrite was live at exactly one call site.
     const internal = { rootIsLite: opts?.weakModel ?? opts?.lite === true };
+
+    // Reading is evidence of prior investigation, not proof that the root can
+    // finish the task. Require a bounded context transfer instead of allowing
+    // an expensive fresh investigation or forbidding every useful handoff.
+    const filesRead = hooks?.filesReadThisTurn?.() ?? 0;
+    const effectiveRole = applyRoleFit(params.role!, params.taskBrief, internal.rootIsLite).role;
+    if (effectiveRole === 'coding' && filesRead > 0 && args.handoff === undefined) {
+      return `spawn_child refused: you have already read ${filesRead} file(s). Finish bounded work yourself; ` +
+        'do not delegate the same investigation again. If a specialist is needed for remaining work, ' +
+        'provide handoff with reason, completedWork, remainingWork, files (ownership), and verification. ' +
+        'Pass the findings and actual checks already performed; assign only the remaining scope. ' +
+        'For a clear specialist task, delegate before reading implementation files.';
+    }
 
     const cap = hooks?.maxPendingDetached() ?? 0;
     if (hooks && cap > 0) {
@@ -383,7 +394,7 @@ export function createSpawnChildTool(
     }
   };
 
-  // Lite schema for small models: just `role` + `taskBrief`. topic/subtopic/
+  // Lite schema: `role` + `taskBrief`, with optional handoff. topic/subtopic/
   // expectedOutput are synthesized by the validator. A flatter schema means
   // far fewer malformed tool calls from ≤14B models.
   if (opts?.lite) {
@@ -396,6 +407,7 @@ export function createSpawnChildTool(
       parameters: {
         type: 'object',
         properties: {
+          handoff: HANDOFF_SCHEMA,
           role: {
             type: 'string',
             enum: CHILD_ROLES_ENUM,
@@ -424,6 +436,7 @@ export function createSpawnChildTool(
     parameters: {
       type: 'object',
       properties: {
+        handoff: HANDOFF_SCHEMA,
         expertId: {
           type: 'string',
           description: 'Optional exact expert ID. Preferred when known; otherwise the spawner picks a system expert for the role.',
@@ -548,7 +561,7 @@ export function parsePlan(raw: unknown): { plan?: PlanStep[] } | { error: string
 export function validateSpawnChildArgs(args: Record<string, unknown>): ValidatedSpawn {
   let topic = typeof args.topic === 'string' ? args.topic.trim() : '';
   let subtopic = typeof args.subtopic === 'string' ? args.subtopic.trim() : '';
-  const taskBrief = typeof args.taskBrief === 'string' ? args.taskBrief : '';
+  let taskBrief = typeof args.taskBrief === 'string' ? args.taskBrief : '';
 
   // Resolve the specialist role FIRST. Resolution order (shared with router
   // mode via resolveRoleFromTopic):
@@ -574,6 +587,27 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
   if (!taskBrief.trim()) return { error: 'missing required field `taskBrief`' };
   if (taskBrief.length > 4000) {
     return { error: 'taskBrief exceeds 4000-char limit' };
+  }
+
+  if (args.handoff !== undefined) {
+    if (!args.handoff || typeof args.handoff !== 'object' || Array.isArray(args.handoff)) {
+      return { error: 'handoff must be an object' };
+    }
+    const handoff = args.handoff as Record<string, unknown>;
+    if (Object.keys(handoff).some(key => !Object.hasOwn(HANDOFF_FIELDS, key))) {
+      return { error: 'handoff contains an unknown field' };
+    }
+    const lines: string[] = [];
+    for (const key of Object.keys(HANDOFF_FIELDS)) {
+      const value = handoff[key];
+      if (typeof value !== 'string' || !value.trim() || value.length > 2000) {
+        return { error: `handoff.${key} must be a non-empty string of at most 2000 characters` };
+      }
+      lines.push(`${key}: ${value.trim()}`);
+    }
+    taskBrief += '\n\nHANDOFF FROM PARENT (reported context, not independent verification):\n' + lines.join('\n') +
+      '\nUse these findings; do not repeat broad discovery. Inspect relevant code as needed to implement and verify the remaining scope. Do not edit parent-owned files or repeat completed work. Existing permissions still apply.';
+    if (taskBrief.length > 4000) return { error: 'taskBrief plus handoff exceeds 4000-char limit; summarize findings and checks, not raw logs' };
   }
 
   // Default expectedOutput when omitted or malformed. Nested required

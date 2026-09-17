@@ -120,10 +120,9 @@ export function createMetaTools(
       name: 'create_pipeline',
       final: true,
       description:
-        'Run work through a verified build loop. A pipeline plans the work into items, then runs implement -> test -> review -> QA ONCE PER ITEM, and a failing QA verdict sends that item back to the implementer with the verdict attached (up to 3 times) before asking you. It is the only delegation primitive that checks a deliverable and re-does it when the check fails. ' +
-        'PREFER IT over spawn_child for development work: whenever the user asks you to build, implement, fix, refactor, migrate or ship something and "done" can be settled by running something — a test suite, a build, a type-check. "Implement the open points in the plan", "fix these five failing tests", "add the endpoint and prove it works", "refactor this module" are all pipelines. The user does not have to say "staged" or "pipeline" for this to be the right call. A single spawn_child for that work skips the verification loop and leaves you trusting the child\'s own word that it worked. ' +
-        'DO NOT use it for a question, a lookup, an explanation, a piece of writing, or a read-only analysis/audit/review — those have nothing to re-run, so the loop costs stages and buys nothing. Use spawn_child (several calls per turn allowed) for all of them. ' +
-        'DO NOT use it merely to seem thorough on a task that is really one job. ' +
+        'Run ordered development stages with explicit handoffs and verification. A pipeline plans work into items, then runs implement -> test -> review -> QA ONCE PER ITEM; a failing QA verdict sends the item back to the implementer with its evidence (up to 3 times) before asking you. ' +
+        'Use this when dependent implementation and verification stages justify the coordination cost, or the user requests that workflow. Done should be checkable with a test suite, build or type-check. For independent specialist tasks use spawn_child; for a bounded fix you can implement and verify with your own tools, work directly. Child scorers also support verification and bounded retry. ' +
+        'DO NOT use a pipeline for a question, lookup, explanation, writing task or read-only analysis/audit/review. Answer directly when your tools suffice, otherwise use a focused specialist. Do not use a pipeline to restart investigation or implementation already completed by General or another child. ' +
         'create_pipeline may only be invoked ONCE per request. ' +
         'IMPORTANT: You MUST call list_pipeline_templates first to get valid template names. Do NOT invent template names.',
       parameters: {

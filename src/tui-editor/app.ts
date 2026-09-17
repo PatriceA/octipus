@@ -146,7 +146,7 @@ export class OctipusEditorApp {
     this.session = new ChatSessionPresenter(tui, this.adapter, this.chat.messages, this.status, this.chat.activity, this.chat.subagents, (role, content) => this.pushMessage(role, content));
     this.chat.messages.push({
       role: 'system',
-      content: `Welcome to Octipus. Project: ${basenameOf(this.projectPath)}  Type a message or /help. Drag to select · /copy last: copy reply.`,
+      content: `Welcome to Octipus. Project: ${basenameOf(this.projectPath)}  Type a message or /help. Wheel: scroll · Shift+drag: select · /copy last: copy reply.`,
       timestamp: new Date(),
     });
 
@@ -419,7 +419,7 @@ export class OctipusEditorApp {
   // ── Submit / commands ──────────────────────────────────────────
 
   private handleChatSubmit(rawText: string): void {
-    if (rawText.trim().startsWith('/') && handleTerminalCommand(rawText, this.tui, this.chat.messages, this.status, text => this.pushMessage('system', text))) return;
+    if (rawText.trim().startsWith('/') && handleTerminalCommand(rawText, this.tui, this.chat.messages, text => this.pushMessage('system', text))) return;
     const text = rawText.trim();
     if (!text) return;
     this.chat.messages.push({ role: 'user', content: text, timestamp: new Date() });
@@ -459,7 +459,6 @@ export class OctipusEditorApp {
 
   private handleGlobalKey(data: string): { consume: true } | undefined {
     const kb = getKeybindings();
-    if (kb.matches(data, 'app.mouse.toggle')) { handleTerminalCommand('mouse', this.tui, this.chat.messages, this.status, text => this.pushMessage('system', text)); return { consume: true }; }
     if (this.tui.hasOverlay()) return undefined;
     if (kb.matches(data, 'app.subagents.scrollUp')) { if (this.chat.subagents.scroll(-1)) { this.tui.requestRender(); return { consume: true }; } }
     if (kb.matches(data, 'app.subagents.scrollDown')) { if (this.chat.subagents.scroll(1)) { this.tui.requestRender(); return { consume: true }; } }
