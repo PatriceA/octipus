@@ -1,6 +1,11 @@
 import { boolean, index, integer, jsonb, pgTable, real, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { organizations } from './organizations';
 
+/** Output-token default for both the ceiling and the per-request limit. They are
+ *  validated against each other, so they move together: 0101 raised one and left
+ *  the other, and every row created after it failed its own validator. */
+export const DEFAULT_MAX_OUTPUT_TOKENS = 16384;
+
 export const modelConfig = pgTable('model_config', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull().unique(),
@@ -11,7 +16,7 @@ export const modelConfig = pgTable('model_config', {
   /** Org-shared registry. NULL = system-wide. Members of the org see this row in their list. */
   orgId: uuid('org_id').references(() => organizations.id, { onDelete: 'cascade' }),
   // Capabilities
-  maxTokens: integer('max_tokens').default(4096).notNull(),
+  maxTokens: integer('max_tokens').default(DEFAULT_MAX_OUTPUT_TOKENS).notNull(),
   contextWindow: integer('context_window').default(128000).notNull(),
   supportsVision: boolean('supports_vision').default(false).notNull(),
   supportsTools: boolean('supports_tools').default(true).notNull(),
@@ -22,7 +27,7 @@ export const modelConfig = pgTable('model_config', {
   // 16384, not 4096: reasoning tokens count against max_tokens, and a model that
   // thinks for 2k tokens then writes a 4k-token file was cut off mid tool call
   // (measured 2026-09-17: two truncated write_file calls in one run).
-  defaultMaxTokens: integer('default_max_tokens').default(16384),
+  defaultMaxTokens: integer('default_max_tokens').default(DEFAULT_MAX_OUTPUT_TOKENS),
   // Routing
   topics: text('topics').array().default([]), // coding, research, chat, etc.
   priority: integer('priority').default(0).notNull(), // Higher = preferred (deprecated, use topicRoles)

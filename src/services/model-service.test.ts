@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { listModels, registerModel, updateModel } from './model-service';
+import { modelConfig } from '@/db/schema/models';
 
 const registry = vi.hoisted(() => ({
   getModel: vi.fn(),
@@ -142,8 +143,24 @@ describe('direct provider settings validation', () => {
     expect(await registerModel({ name: 'bad-limits', modelId: 'gpt-5', provider: 'openai', ...limits })).toMatchObject({ error: expect.stringContaining(message) });
     expect(registry.registerModel).not.toHaveBeenCalled();
   });
-  it('uses the DB default of 4096 when validating an omitted create default', async () => {
+  it('uses the stored column default when validating an omitted create default', async () => {
     expect(await registerModel({ name: 'small-max', modelId: 'gpt-5', provider: 'openai', maxTokens: 2048 })).toMatchObject({ error: expect.stringContaining('must not exceed') });
+  });
+  it('stores column defaults that satisfy the limits validator', async () => {
+    // The two limits are validated against each other, so a migration that
+    // raises one and leaves the other makes every row it creates fail its own
+    // validator — the next PATCH is rejected over fields the caller never sent.
+    // CI caught exactly that on the acceptance fixture; the guard is that the
+    // defaults themselves are checked, not that today's two numbers are equal.
+    const ceiling = modelConfig.maxTokens.default as number;
+    const perRequest = modelConfig.defaultMaxTokens.default as number;
+    expect(perRequest).toBeLessThanOrEqual(ceiling);
+    registry.getModel.mockResolvedValue({
+      name: 'defaults', modelId: 'gpt-5', provider: 'openai',
+      maxTokens: ceiling, defaultMaxTokens: perRequest,
+    });
+    registry.updateModel.mockResolvedValue({ name: 'defaults' });
+    expect(await updateModel('defaults', { supportsTools: true })).not.toMatchObject({ status: 400 });
   });
   it('validates output limits against the effective update', async () => {
     registry.getModel.mockResolvedValue(row);

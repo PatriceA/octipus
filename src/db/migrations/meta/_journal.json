@@ -722,6 +722,13 @@
       "when": 1789601114549,
       "tag": "0101_default_max_tokens",
       "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1789601114550,
+      "tag": "0102_max_tokens_ceiling",
+      "breakpoints": true
     }
   ]
 }

@@ -14,7 +14,7 @@
 import { z } from 'zod';
 import { getConfig } from '@/config';
 import { getCLIToolConfig } from '@/core/cli-agent-factory';
-import type { NewModelConfigEntry } from '@/db/schema/models';
+import { DEFAULT_MAX_OUTPUT_TOKENS, type NewModelConfigEntry } from '@/db/schema/models';
 import { getCapabilitiesForModel } from '@/models/capabilities';
 import { checkModelCapabilities } from '@/models/capability-gate';
 import { getCostTracker } from '@/models/cost-tracker';
@@ -64,8 +64,11 @@ export async function listModels(userId: string, isAdmin: boolean) {
 }
 
 function validateOutputLimits(maxTokens: unknown, defaultMaxTokens: unknown): string | null {
-  const maximum = maxTokens === undefined ? 4096 : maxTokens;
-  const perRequest = defaultMaxTokens === undefined ? 4096 : defaultMaxTokens;
+  // Absent means "the column default will be stored", so that is what gets
+  // checked. A literal here is how a create could pass validation and produce a
+  // row the next update rejects.
+  const maximum = maxTokens === undefined ? DEFAULT_MAX_OUTPUT_TOKENS : maxTokens;
+  const perRequest = defaultMaxTokens === undefined ? DEFAULT_MAX_OUTPUT_TOKENS : defaultMaxTokens;
   if (typeof maximum !== 'number' || !Number.isInteger(maximum) || maximum <= 0) return 'maxTokens must be a positive integer.';
   if (typeof perRequest !== 'number' || !Number.isInteger(perRequest) || perRequest <= 0) return 'defaultMaxTokens must be a positive integer.';
   if (perRequest > maximum) return 'defaultMaxTokens must not exceed maxTokens.';
@@ -146,7 +149,7 @@ export async function registerModel(body: Record<string, unknown>) {
   const validationError = validateCliMetadata(modelId, body.metadata);
   if (validationError) return { error: validationError };
 
-  const settingsError = validateProviderSettings(provider, modelId, (body.metadata as import('@/db/schema/models').ModelMetadata | undefined)?.providerSettings, (body.defaultMaxTokens ?? 4096) as number, anthropicNativeMessagesEnabled(process.env.ANTHROPIC_NATIVE_MESSAGES));
+  const settingsError = validateProviderSettings(provider, modelId, (body.metadata as import('@/db/schema/models').ModelMetadata | undefined)?.providerSettings, (body.defaultMaxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS) as number, anthropicNativeMessagesEnabled(process.env.ANTHROPIC_NATIVE_MESSAGES));
   if (settingsError) return { error: settingsError };
 
   const registry = getModelRegistry();
@@ -207,7 +210,7 @@ export async function updateModel(name: string, body: Record<string, unknown>) {
     const effective = { ...existing, ...safeUpdate } as NewModelConfigEntry;
     const outputLimitError = validateOutputLimits(effective.maxTokens, effective.defaultMaxTokens);
     if (outputLimitError) return { status: 400 as const, error: outputLimitError };
-    const settingsError = validateProviderSettings(effective.provider, effective.modelId, effective.metadata?.providerSettings, effective.defaultMaxTokens ?? 4096, anthropicNativeMessagesEnabled(process.env.ANTHROPIC_NATIVE_MESSAGES));
+    const settingsError = validateProviderSettings(effective.provider, effective.modelId, effective.metadata?.providerSettings, effective.defaultMaxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS, anthropicNativeMessagesEnabled(process.env.ANTHROPIC_NATIVE_MESSAGES));
     if (settingsError) return { status: 400 as const, error: settingsError };
     const model = await registry.updateModel(name, safeUpdate as Partial<NewModelConfigEntry>);
     if (!model) {
