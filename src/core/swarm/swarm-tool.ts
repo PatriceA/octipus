@@ -347,7 +347,6 @@ export function createSpawnChildTool(
     // finish the task. Require a bounded context transfer instead of allowing
     // an expensive fresh investigation or forbidding every useful handoff.
     const filesRead = hooks?.filesReadThisTurn?.() ?? 0;
-    const effectiveRole = applyRoleFit(params.role!, params.taskBrief, internal.rootIsLite).role;
     // Every role, not just coding. A qa or research child spawned after the
     // parent has read files starts just as blind and re-reads just as much —
     // one such child cost 217k tokens on the arena's module build — and the
