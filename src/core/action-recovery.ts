@@ -7,6 +7,7 @@ import { coreLogger } from '@/utils/logger';
 import { assertExecutionActive, getExecutionSignal } from './execution-scope';
 import type { AgentContext } from './types';
 import { isToolNotExecutedResult, ToolNotExecutedError } from './tool-execution-error';
+import { WorkspaceFsError } from '@/security/workspace-fs';
 
 export class RecoveryReviewRequiredError extends Error {
   readonly code = 'recovery_review_required';
@@ -131,7 +132,10 @@ export class ActionRecovery {
       }
       return result;
     } catch (error) {
-      const notExecuted = !entered || (error instanceof ToolNotExecutedError && error.toolId === toolId);
+      // A path the sandbox refused never reached the disk: that is a definite
+      // no-op, not an uncertain mutation (measured 2026-09-17: one refused
+      // `/tmp` write gated the rest of the run behind a review nobody could give).
+      const notExecuted = !entered || (error instanceof ToolNotExecutedError && error.toolId === toolId) || error instanceof WorkspaceFsError;
       try { await this.repository.finish(scope, notExecuted ? 'not_executed' : 'uncertain'); }
       catch (err) { coreLogger.error({ err, actionId: id }, 'Could not record tool termination; action remains uncertain'); }
       throw error;

@@ -29,6 +29,7 @@ const previewHints = new Map<string, string>([
   ['read_file', 'path'],
   ['write', 'path'],
   ['write_file', 'path'],
+  ['edit_file', 'path'],
   ['edit', 'path'],
   ['filesystem__read', 'path'],
   ['filesystem__write', 'path'],

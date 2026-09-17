@@ -16,6 +16,21 @@ describe('LocalShellOperations.spawnBackground', () => {
     ).rejects.toThrow(/metacharacters/i);
   });
 
+  it('runs `cd <dir> && <cmd>` as cwd + cmd, quoted or not, without a shell', async () => {
+    const dir = process.cwd();
+    for (const cmd of [`cd "${dir}" && pwd`, `cd '${dir}' && pwd`, `cd ${dir} && pwd`]) {
+      const r = await ops.exec(cmd, '/', { timeout: 5000 });
+      expect(r.stdout.trim()).toBe(dir);
+    }
+    // Only ONE && and nothing after it that needs a shell.
+    await expect(ops.exec('cd /tmp && echo a | cat', '/')).rejects.toThrow(/metacharacters/i);
+    await expect(ops.exec('cd /tmp && echo a && echo b', '/')).rejects.toThrow(/metacharacters/i);
+    // Quoted payloads keep their metacharacters; a trailing 2>&1 is simply dropped.
+    const py = await ops.exec(`cd ${dir} && python3 -c "import os; print(os.getcwd())" 2>&1`, '/', { timeout: 5000 });
+    expect(py.stdout.trim()).toBe(dir);
+    await expect(ops.exec('echo a 2>&1 | cat', '/')).rejects.toThrow(/metacharacters/i);
+  });
+
   it('spawns a simple tokenized command and returns a pid', async () => {
     const { pid } = await ops.spawnBackground('true', process.cwd());
     expect(typeof pid).toBe('number');

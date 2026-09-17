@@ -19,7 +19,10 @@ export const modelConfig = pgTable('model_config', {
   // Default parameters
   defaultTemperature: real('default_temperature').default(0.7),
   defaultTopP: real('default_top_p').default(1.0),
-  defaultMaxTokens: integer('default_max_tokens').default(4096),
+  // 16384, not 4096: reasoning tokens count against max_tokens, and a model that
+  // thinks for 2k tokens then writes a 4k-token file was cut off mid tool call
+  // (measured 2026-09-17: two truncated write_file calls in one run).
+  defaultMaxTokens: integer('default_max_tokens').default(16384),
   // Routing
   topics: text('topics').array().default([]), // coding, research, chat, etc.
   priority: integer('priority').default(0).notNull(), // Higher = preferred (deprecated, use topicRoles)

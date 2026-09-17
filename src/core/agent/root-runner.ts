@@ -75,8 +75,8 @@ export interface RootRunnerDeps {
  */
 export function buildDelegationPolicy(isLite: boolean): string {
   return isLite
-    ? `\n\nYou hold real tools — use them. Answer the request yourself whenever your own tools reach it. Call spawn_child EXACTLY ONCE, and only when the task needs a specialist you are not: writing or refactoring code, security review, devops, or deep multi-source research. Then relay the child's result. Never tell the user a capability is missing: either call a tool or spawn the specialist that holds it.`
-    : `\n\nYou are the agent the user is talking to, and you hold the general toolset — files, the web, the knowledge base, notes, tasks, profiles, messaging, scheduling, artifacts. Doing the work yourself is the normal path: read the file, run the search, store the note, and answer. Call spawn_child when the task needs a toolset or judgement you do not have — writing or refactoring code, design work, security review, devops, QA, deep multi-source research — or when independent parts of the request can genuinely run in parallel. Use create_pipeline only when the user explicitly asks for a multi-stage workflow with handover (e.g. "research then implement then review"). Delegating a one-tool question you could answer yourself costs the user a whole extra agent for nothing. Never tell the user a capability is missing: call the tool, or spawn the specialist that holds it — saying the knowledge base, the web or a repository is unreachable because you did not try is a wrong answer about the product. If the user explicitly tells you to delegate or use spawn_child, always do so.`;
+    ? `\n\nYou hold real tools — use them. Answer the request yourself whenever your own tools reach it. Call spawn_child EXACTLY ONCE, and only when the task needs a specialist you are not: security review, devops, deep multi-source research, or code work too large to do in place with your own filesystem and shell tools. Then relay the child's result. Never tell the user a capability is missing: either call a tool or spawn the specialist that holds it.`
+    : `\n\nYou are the agent the user is talking to, and you hold the general toolset — files, the web, the knowledge base, notes, tasks, profiles, messaging, scheduling, artifacts. Doing the work yourself is the normal path: read the file, run the search, store the note, and answer. That includes code: you hold filesystem and shell, so a fix, a small feature or a small package that lives in a few files and is proved by one command (a test suite, a build) is yours to do in place — edit, run the command, report. Measured on one such fix: 47 s done in place, 92 s briefed to a coding child. Call spawn_child when the task needs a toolset or judgement you do not have — git or GitHub work, design work, security review, devops, QA, deep multi-source research — or when it is development work too large for one head (several independent items, or an implementer plus a separate reviewer), or when independent parts of the request can genuinely run in parallel. Use create_pipeline only when the user explicitly asks for a multi-stage workflow with handover (e.g. "research then implement then review"). Delegating a one-tool question you could answer yourself costs the user a whole extra agent for nothing. Never tell the user a capability is missing: call the tool, or spawn the specialist that holds it — saying the knowledge base, the web or a repository is unreachable because you did not try is a wrong answer about the product. If the user explicitly tells you to delegate or use spawn_child, always do so.`;
 }
 
 /**
@@ -227,6 +227,7 @@ export async function runRootAgent(
     current: {
       registerPendingChild: (pc: PendingChild) => void;
       pendingDetachedCount: () => number;
+      getSideEffectCounters?: () => { byName: Record<string, number> };
     } | null;
   } = { current: null };
   const rootWorkerRef: { current: AgentWorker | null } = { current: null };
@@ -627,6 +628,7 @@ export async function runRootAgent(
   const maybeWorker = worker as unknown as {
     registerPendingChild?: (pc: PendingChild) => void;
     pendingDetachedCount?: () => number;
+    getSideEffectCounters?: () => { byName: Record<string, number> };
   };
   if (
     typeof maybeWorker.registerPendingChild === 'function' &&
@@ -635,6 +637,9 @@ export async function runRootAgent(
     rootDetachHookRef.current = {
       registerPendingChild: maybeWorker.registerPendingChild.bind(worker),
       pendingDetachedCount: maybeWorker.pendingDetachedCount.bind(worker),
+      // Lets spawn_child see what this turn has already read (native workers only).
+      ...(typeof maybeWorker.getSideEffectCounters === 'function'
+        ? { getSideEffectCounters: maybeWorker.getSideEffectCounters.bind(worker) } : {}),
     };
     // CLI workers implement only the detach subset of AgentWorker; consumers of
     // this ref must feature-detect anything else before calling it.

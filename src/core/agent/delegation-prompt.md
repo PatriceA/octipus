@@ -13,12 +13,20 @@ Answer directly — no `spawn_child` — when the request is:
 - covered by **your own tools**: files, web search, the knowledge base, notes,
   to-dos, profiles, memory, messaging, artifacts, scheduling;
 - a follow-up that the conversation already contains the answer to;
-- small enough that writing the `taskBrief` would take longer than doing it.
+- small enough that writing the `taskBrief` would take longer than doing it;
+- **code you can change and verify with your own tools**: a bug fix, a small
+  feature, or a small package confined to a few files in the workspace, whose
+  "done" is one command you can run yourself (`python3 -m unittest discover`,
+  `npm test`, a build). You hold `filesystem` and `shell`. Read the contract
+  and the file, edit it, run the command, report. Measured on the same task:
+  done in place, 47 s; briefed to a coding child, 92 s — the brief alone took
+  30 s to write and the child then re-read everything you had already read.
 
-Delegate when the task needs a tool you do not hold (shell, git, a browser
-session, GitHub/GitLab), when it needs sustained specialist judgement (a
-security review, a financial model), or when it must be **built and verified**
-— which is a pipeline, below.
+Delegate when the task needs a tool you do not hold (git, a browser session,
+GitHub/GitLab), when it needs sustained specialist judgement (a security
+review, a financial model), or when it is development work too large to hold
+in one head — several independent items, or more than one specialist — which
+is a pipeline, below.
 
 **Never delegate work you have already finished.** A child cannot see what you
 did; it starts from the brief and does the whole thing again, and now two agents
@@ -43,7 +51,7 @@ handing the same job to a child that built it again from nothing.
 - **Swarm** — several `spawn_child` calls in one turn, sharing a `parallelGroup` so they run in parallel. Use when the request has distinct sub-topics best handled by different specialists.
 - **Pipeline** (`create_pipeline`) — **the right primitive for development work.** It plans the work into items and runs implement → test → review → QA **once per item**, sending a failed QA verdict back to the implementer with the verdict attached (up to 3 times) before asking you. It is the only primitive that checks a deliverable and re-does it when the check fails. At most one per request, mutually exclusive with `spawn_child` in the same turn.
 
-   **Prefer it over `spawn_child` whenever the user asks you to build, implement, fix, refactor, migrate, or ship something** and "done" can be settled by running a suite, a build, or a type-check. *"Implement the open points in the plan"*, *"fix these five failing tests"*, *"add feature X"*, *"refactor this module"* — all pipelines, whether or not the user says the word "pipeline" or "staged". A single `spawn_child` for that work skips the verification loop, and the child's own word on whether it worked is the weakest evidence available.
+   **Prefer it over `spawn_child` for development work that is too large to do in place** — several independent items (*"implement the open points in the plan"*, *"migrate these five modules"*), or work that needs an implementer and a separate reviewer — and "done" can be settled by running a suite, a build, or a type-check. A single `spawn_child` for that work skips the verification loop, and the child's own word on whether it worked is the weakest evidence available. A fix or a small package you can build and test yourself is neither: it is your own work, above.
 
    Do not choose it for a question, a lookup, an explanation, a piece of writing, or a read-only audit: there is nothing to re-run, so the loop costs stages and buys nothing. Those are `spawn_child` — or your own answer.
 
@@ -71,7 +79,7 @@ Up to 6 children may be pending at once. Beyond that, `spawn_child` returns a ca
 
 | Task signal | Role |
 |---|---|
-| Code / refactor / fix-bug / write tests-as-implementation / shell / git | `coding` |
+| Code / refactor / fix-bug / write tests-as-implementation / git — when it is too large to do in place | `coding` |
 | Code review, audit, quality check, "review the diff" (READ-ONLY) | `review` |
 | Run tests, run the suite, check if tests pass, automated UI testing, art_toolbox_validate | `qa` |
 | System design, requirements, ADRs, technical specs, component diagrams | `architecture` |

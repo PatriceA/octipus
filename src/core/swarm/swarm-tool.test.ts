@@ -502,6 +502,25 @@ describe('createSpawnChildTool', () => {
     expect(String(out)).toContain('<output>ok done</output>');
   });
 
+  test('a coding child is refused once the parent has read files this turn', async () => {
+    let called = false;
+    const spawner = { spawnChild: async () => { called = true; throw new Error('should not be called'); } } as unknown as SwarmSpawner;
+    const hooks = createLateBoundSpawnChildHooks(
+      { current: { registerPendingChild: () => {}, pendingDetachedCount: () => 0, getSideEffectCounters: () => ({ byName: { filesystem__read_file: 3 } }) } },
+      () => 6,
+    );
+    const ctx = { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} } as any;
+    const out = await createSpawnChildTool(makeParent(), spawner, hooks).execute(
+      { role: 'coding', topic: 'coding', subtopic: 'fix', taskBrief: 'Fix ledger.py.', expectedOutput: { shape: 'summary' } }, ctx,
+    );
+    expect(String(out)).toMatch(/refused.*3 file/);
+    expect(called).toBe(false);
+    // A non-coding child, or a parent that has read nothing, is unaffected.
+    const research = await createSpawnChildTool(makeParent(), { spawnChild: async () => { throw new Error('reached'); } } as unknown as SwarmSpawner, hooks)
+      .execute({ role: 'research', topic: 'research', subtopic: 'x', taskBrief: 'Look up X.', expectedOutput: { shape: 'summary' } }, ctx);
+    expect(String(research)).not.toMatch(/refused/);
+  });
+
   test('spawn_child is NOT final — allows multiple calls per turn', () => {
     const parent = makeParent();
     const tool = createSpawnChildTool(parent);

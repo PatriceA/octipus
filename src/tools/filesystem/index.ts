@@ -10,6 +10,7 @@ import { withFileMutationQueue } from '@/utils/file-mutation-queue';
 import { coreLogger } from '@/utils/logger';
 import { safeRegExp } from '@/utils/sanitize';
 import { BaseTool, createParameterSchema } from '../base-tool';
+import { ToolNotExecutedError } from '@/core/tool-execution-error';
 
 /**
  * Cap on the file size we read back to build a work-stream diff. Past this we
@@ -203,6 +204,16 @@ export class FilesystemTool extends BaseTool {
           returns: 'Success status',
         },
         {
+          name: 'edit_file',
+          description: 'Replace one exact text span in an existing file',
+          parameters: {
+            path: { type: 'string', description: 'File path', required: true },
+            old_string: { type: 'string', description: 'Exact text to replace', required: true },
+            new_string: { type: 'string', description: 'Replacement', required: true },
+          },
+          returns: 'Success status',
+        },
+        {
           name: 'list_directory',
           description: 'List directory contents',
           parameters: {
@@ -335,6 +346,76 @@ export class FilesystemTool extends BaseTool {
           // UI-only diff for the work stream / file view — stripped before the
           // model sees the result (it already has the inputs it acted on).
           if (before !== null && content.length <= DIFF_SOURCE_MAX_BYTES) {
+            const d = computeLineDiff(before, content);
+            result[WORK_STREAM_META_KEY] = { diff: { patch: d.patch, added: d.added, removed: d.removed } };
+          }
+          return result;
+        });
+      },
+      { permissionAction: 'write' }
+    );
+
+    // A targeted edit instead of a full rewrite. Measured 2026-09-16 on the
+    // harness arena: rewriting a 2 KB file through write_file was the single
+    // longest call of a fix (1,400-2,200 completion tokens, 26-37 s); the same
+    // change as an old/new pair is a few hundred tokens.
+    this.registerTool(
+      'edit_file',
+      'Replace one exact text span in an existing file. Prefer this over write_file for changes to a file you have read: send only the old text and its replacement. old_string must match exactly once (include enough surrounding lines to make it unique) unless replace_all is true.',
+      createParameterSchema({
+        path: { type: 'string', description: 'Relative or absolute path to an existing file', required: true },
+        old_string: { type: 'string', description: 'Exact text to replace (whitespace and indentation included)', required: true },
+        new_string: { type: 'string', description: 'Replacement text', required: true },
+        replace_all: { type: 'boolean', description: 'Replace every occurrence instead of requiring a unique match', default: false },
+      }),
+      async (args, context) => {
+        const fs = this.workspaceFor(context);
+        const filePath = this.resolveSessionAware(this.requireString(args, 'path'), context, fs);
+        const oldString = this.requireString(args, 'old_string');
+        const newString = typeof args.new_string === 'string' ? args.new_string : '';
+        // Validation failures are definite no-ops: say so with ToolNotExecutedError,
+        // or the action journal records an "uncertain outcome" and blocks every
+        // later mutation in the session behind a recovery review nobody can
+        // answer on an unattended channel (measured 2026-09-17: one missed
+        // old_string cost the rest of the run).
+        const refuse = (msg: string) => new ToolNotExecutedError(this.id, msg);
+        if (oldString === newString) throw refuse('old_string and new_string are identical — nothing to change.');
+
+        return withFileMutationQueue(filePath, async () => {
+          const before = await readFile(filePath, 'utf-8');
+          const count = before.split(oldString).length - 1;
+          if (count === 0) {
+            // Point at the nearest region so the retry can copy it verbatim
+            // instead of re-reading the whole file and guessing again
+            // (measured: three misses in a row on one method body).
+            const wanted = oldString.split('\n').map((l) => l.trim()).filter(Boolean);
+            const have = before.split('\n');
+            const hit = wanted.length ? have.findIndex((l) => l.trim() === wanted[0]) : -1;
+            const near = hit >= 0
+              ? `\nNearest match, lines ${hit + 1}-${Math.min(have.length, hit + wanted.length + 1)} as they are now:\n` +
+                have.slice(hit, hit + wanted.length + 1).map((l, i) => `${hit + i + 1}: ${l}`).join('\n')
+              : '';
+            throw refuse(`old_string was not found in ${filePath} (nothing was changed). Copy the text exactly as it is now, whitespace included.${near}`);
+          }
+          if (count > 1 && args.replace_all !== true) {
+            throw refuse(`old_string matches ${count} places in ${filePath} (nothing was changed). Include more surrounding lines so it is unique, or set replace_all: true.`);
+          }
+          const content = args.replace_all === true ? before.split(oldString).join(newString) : before.replace(oldString, () => newString);
+          await writeFile(filePath, content, 'utf-8');
+          autoIndexFile(filePath);
+          // Show the edited region back so the model need not re-read the file
+          // to trust the edit (measured: it re-read after every edit_file).
+          // Anchor on where old_string WAS: the prefix before it is identical
+          // in `before` and `content`, whereas searching for new_string finds
+          // the wrong place for a deletion ('' is at 0) or duplicated text.
+          const at = before.indexOf(oldString);
+          const lines = content.split('\n');
+          const line = content.slice(0, at).split('\n').length - 1;
+          const from = Math.max(0, line - 2);
+          const to = Math.min(lines.length, line + newString.split('\n').length + 2);
+          const snippet = lines.slice(from, to).map((l, i) => `${from + i + 1}: ${l}`).join('\n');
+          const result: Record<string, unknown> = { success: true, path: filePath, replacements: args.replace_all === true ? count : 1, snippet };
+          if (content.length <= DIFF_SOURCE_MAX_BYTES) {
             const d = computeLineDiff(before, content);
             result[WORK_STREAM_META_KEY] = { diff: { patch: d.patch, added: d.added, removed: d.removed } };
           }
@@ -562,7 +643,8 @@ export class FilesystemTool extends BaseTool {
   private requireString(args: Record<string, unknown>, key: string): string {
     const value = args[key];
     if (typeof value !== 'string' || value.length === 0) {
-      throw new Error(`Missing required parameter "${key}". The tool call arguments may have been truncated or malformed.`);
+      // Nothing ran: keep the action journal from treating a malformed call as an uncertain mutation.
+      throw new ToolNotExecutedError(this.id, `Missing required parameter "${key}". The tool call arguments may have been truncated or malformed.`);
     }
     return value;
   }
@@ -617,7 +699,9 @@ export class FilesystemTool extends BaseTool {
       return fs.resolve(path);
     } catch (err) {
       if (err instanceof WorkspaceFsError) {
-        throw new Error(`Path '${path}' is outside allowed workspace directories`);
+        // Refused before anything touched the disk: a definite no-op for the
+        // action journal, not an uncertain mutation.
+        throw new ToolNotExecutedError(this.id, `Path '${path}' is outside allowed workspace directories`);
       }
       throw err;
     }

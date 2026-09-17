@@ -715,6 +715,13 @@
       "when": 1789307551228,
       "tag": "0100_agent_billable_tokens",
       "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1789601114549,
+      "tag": "0101_default_max_tokens",
+      "breakpoints": true
     }
   ]
 }

@@ -23,6 +23,8 @@ export interface SpawnChildHooks {
   pendingCount: () => number;
   /** Cap from config (typically `swarm.levelDefaults.agent.maxPendingDetached`). */
   maxPendingDetached: () => number;
+  /** Files this parent has already read this turn (0 when unknown). */
+  filesReadThisTurn?: () => number;
 }
 
 /**
@@ -36,6 +38,7 @@ export function createLateBoundSpawnChildHooks(
     current: {
       registerPendingChild: (pc: PendingChild) => void;
       pendingDetachedCount: () => number;
+      getSideEffectCounters?: () => { byName: Record<string, number> };
     } | null;
   },
   configuredCap: () => number,
@@ -44,6 +47,7 @@ export function createLateBoundSpawnChildHooks(
     registerPending: (pc) => ref.current?.registerPendingChild(pc),
     pendingCount: () => ref.current?.pendingDetachedCount() ?? 0,
     maxPendingDetached: () => ref.current ? configuredCap() : 0,
+    filesReadThisTurn: () => ref.current?.getSideEffectCounters?.().byName['filesystem__read_file'] ?? 0,
   };
 }
 
@@ -298,6 +302,23 @@ export function createSpawnChildTool(
     const validated = validateSpawnChildArgs(args);
     if ('error' in validated) return `spawn_child: ${validated.error}`;
     const params = validated.params;
+
+    // "Decide before you open a file" is a prompt rule the model kept
+    // breaking: measured 2026-09-17, one fix pass in three read every file,
+    // then spent 30-66 s writing a brief for a coding child that read them
+    // all again and did the same work — 92-118 s against 47-51 s in place.
+    // Make it a rule the tool enforces: once the parent has read files this
+    // turn, a coding child only duplicates context it already holds. Root
+    // only — a child's hook ref carries no counters, so the guard is inert
+    // below the root by construction. create_pipeline stays open as the way
+    // to hand off work that really is too large for one head.
+    const filesRead = hooks?.filesReadThisTurn?.() ?? 0;
+    if (params.role === 'coding' && filesRead > 0) {
+      return `spawn_child refused: you have already read ${filesRead} file(s) this turn, so you hold the context a coding child would rebuild from scratch. ` +
+        'Finish this in place — edit_file the file(s) you read, run the verification command with shell (cwd set), and report. ' +
+        'Delegate coding work on your first turn, before opening files, and only when it is too large to do in place; ' +
+        'work that spans many independent items goes to create_pipeline.';
+    }
 
     // Whether the agent doing the spawning is too weak to be trusted with the
     // role choice, resolved by the caller and passed through so

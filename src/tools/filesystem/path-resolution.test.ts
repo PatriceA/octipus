@@ -231,6 +231,36 @@ describe('real users — nested per-user root', () => {
     expect(bad.error).toBeDefined();
   });
 
+  test('edit_file replaces one exact span in place and refuses ambiguous or missing matches', async () => {
+    const tool = await makeTool();
+    await tool.handler('write_file').execute({ path: 'ed.py', content: 'a = 1\nb = 1\nreturn float(a)\n' }, ctx());
+    const ok = (await tool.handler('edit_file').execute(
+      { path: 'ed.py', old_string: 'return float(a)', new_string: 'return a' }, ctx(),
+    )) as { success: boolean; replacements: number };
+    expect(ok).toMatchObject({ success: true, replacements: 1 });
+    const read = (await tool.handler('read_file').execute({ path: 'ed.py' }, ctx())) as { content: string };
+    expect(read.content).toBe('a = 1\nb = 1\nreturn a\n');
+    await expect(tool.handler('edit_file').execute({ path: 'ed.py', old_string: '= 1', new_string: '= 2' }, ctx()))
+      .rejects.toThrow(/matches 2 places/);
+    await expect(tool.handler('edit_file').execute({ path: 'ed.py', old_string: 'nope', new_string: 'x' }, ctx()))
+      .rejects.toThrow(/not found/);
+    // A near miss (wrong indentation) names the lines as they really are.
+    await expect(tool.handler('edit_file').execute({ path: 'ed.py', old_string: '  b = 1\n    return a', new_string: 'x' }, ctx()))
+      .rejects.toThrow(/Nearest match, lines 2-4[\s\S]*2: b = 1\n3: return a/);
+    const all = (await tool.handler('edit_file').execute({ path: 'ed.py', old_string: '= 1', new_string: '= 2', replace_all: true }, ctx())) as { replacements: number };
+    expect(all.replacements).toBe(2);
+    // The snippet shows the edited region: a deletion low in the file must not
+    // echo lines 1-3, and replacing text with something that already occurs
+    // earlier must point at the edit, not the earlier occurrence.
+    await tool.handler('write_file').execute({ path: 'sn.py', content: 'x = 1\ny = 2\nz = 3\nw = 4\nv = 5\nu = 6\nreturn z\n' }, ctx());
+    const del = (await tool.handler('edit_file').execute({ path: 'sn.py', old_string: 'return z\n', new_string: '' }, ctx())) as { snippet: string };
+    expect(del.snippet).toContain('6: u = 6');
+    expect(del.snippet).not.toContain('1: x = 1');
+    const dup = (await tool.handler('edit_file').execute({ path: 'sn.py', old_string: 'u = 6', new_string: 'x = 1' }, ctx())) as { snippet: string };
+    expect(dup.snippet).toContain('6: x = 1');
+    expect(dup.snippet).not.toContain('1: x = 1');
+  });
+
   test('write by a workspace-ABSOLUTE path then read it back round-trips (session redirect)', async () => {
     // write_file redirects an absolute path inside the workspace root into the
     // session dir; a read of that SAME absolute path must follow the redirect,

@@ -49,6 +49,7 @@ function boundedLevenshtein(a: string, b: string, max: number): number {
  */
 export const FILE_CHANGE_TOOLS = new Set([
   'filesystem__write_file',
+  'filesystem__edit_file',
   'filesystem__append_file',
   'filesystem__delete_file',
   'filesystem__copy_file',
