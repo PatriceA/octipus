@@ -80,6 +80,7 @@ import {
   checkSameRole,
   denialResult as denialResultFn,
 } from './spawn-validator';
+import type { ToolAdvertisement } from '@/core/agent-base';
 import { applyRoleFit, buildDelegationGuidance } from './swarm-tool';
 import {
   type AgentNode,
@@ -584,6 +585,46 @@ export class SwarmSpawner {
     const { buildSkillLoaderHandlers } = await import('@/tools/skill-loader');
     childTools.push(...buildSkillLoaderHandlers());
 
+    // Lazy tool discovery for a swarm child. The root agent has had it since the
+    // gate moved off `provider === 'ollama'`, and the pipeline-stage path has it
+    // in worker-spawner — `spawn_child` never did, so a child carried its role's
+    // entire JSON schema on every call it made. Measured on the arena's model, a
+    // root turn dropped from 20,951 to 5,572 prompt tokens on the same split; a
+    // child pays the same bill per call and makes more of them.
+    //
+    // The core set comes from the BRIEF, the same per-message rule the root uses:
+    // shrink-only (never grants what `resolveChildTools` did not already allow)
+    // and fail-open (a group with no pattern is kept). What is dropped stays
+    // registered and reachable through `list_tools`/`describe_tool`.
+    //
+    // `supportsTools` is not checked here, unlike the other two call sites: a
+    // model that cannot call tools gets nothing from either advertisement, so the
+    // check would only decide which useless block it carries.
+    let childToolAdvertisement: ToolAdvertisement = { mode: 'full' };
+    const childCoreToolIds = getRoleConfig(childRole).coreToolIds;
+    if (childCoreToolIds !== undefined && getConfig().agent.lazyToolDiscovery && !isSmall) {
+      try {
+        const { splitRoleTools } = await import('@/core/agent/tool-split');
+        const { selectCoreToolIds } = await import('@/core/agent/tool-intent');
+        const { buildToolDiscoveryHandlers } = await import('@/tools/tool-discovery');
+        const selected = selectCoreToolIds(brief.taskBrief, childCoreToolIds);
+        const { longTail } = splitRoleTools(childTools, selected);
+        const discoveryHandlers = buildToolDiscoveryHandlers(longTail);
+        if (discoveryHandlers.length > 0) {
+          childTools.push(...discoveryHandlers);
+          childToolAdvertisement = { mode: 'lazy', coreToolIds: selected };
+          coreLogger.info(
+            { childRole, model: childModel, coreToolIds: selected, roleCoreToolIds: childCoreToolIds,
+              longTailCount: longTail.length },
+            'Lazy tool discovery enabled for swarm child',
+          );
+        }
+      } catch (err) {
+        // A child that advertises everything is the old behaviour, not a failure.
+        coreLogger.error({ err, childRole }, 'Lazy tool discovery skipped for swarm child');
+      }
+    }
+
     // Logged here, after the cap and the loader push, so `childToolCount` is
     // the surface the child ACTUALLY gets — a diagnostic that reports a
     // different number than the child sees is worse than none.
@@ -731,6 +772,7 @@ export class SwarmSpawner {
       childModel,
       childLane,
       childTools,
+      childToolAdvertisement,
       systemPrompt: childSystemPrompt,
       expertId,
       budget,
@@ -805,6 +847,8 @@ export class SwarmSpawner {
     /** Resolved model lane (expert topic or role default) — the backup binding is keyed on this, not the raw role. */
     childLane: string;
     childTools: ToolHandler[];
+    /** What the child ADVERTISES; `childTools` stays the registered set. */
+    childToolAdvertisement?: ToolAdvertisement;
     systemPrompt?: string;
     expertId?: string;
     budget: NodeBudget;
@@ -1261,6 +1305,7 @@ export class SwarmSpawner {
         role: opts.childRole,
         systemPrompt: opts.systemPrompt,
         tools,
+        toolAdvertisement: opts.childToolAdvertisement,
         maxTokenBudget: opts.budget.tokens.cap,
         timeout: opts.budget.wallClockMs.cap,
         parentAgentId: opts.parent.id,

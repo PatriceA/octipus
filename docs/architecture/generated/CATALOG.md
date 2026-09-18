@@ -484,7 +484,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `services` | 1 |
 | `core` | `shared` | 12 |
 | `core` | `skills` | 6 |
-| `core` | `tools` | 12 |
+| `core` | `tools` | 13 |
 | `core` | `utils` | 146 |
 | `db` | `config` | 3 |
 | `db` | `core` | 5 |
