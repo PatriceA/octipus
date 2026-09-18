@@ -736,6 +736,13 @@
       "when": 1789601114551,
       "tag": "0103_build_everyday_lanes",
       "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1789601114552,
+      "tag": "0104_verify_lane",
+      "breakpoints": true
     }
   ]
 }

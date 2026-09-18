@@ -484,7 +484,11 @@ export function createSpawnChildTool(
         },
         topic: {
           type: 'string',
-          description: 'High-level topic area (e.g. "security", "research", "coding").',
+          description:
+            'Model lane for the child, when it should NOT run on the same model as you. '
+            + '"verify" for review or QA — a second opinion from the model that wrote the code is not a second opinion; '
+            + '"everyday" for bulk or mechanical work; "research" for wide investigation; "build" for implementation. '
+            + 'Omit to take the lane the child\'s role already resolves to.',
         },
         subtopic: {
           type: 'string',

@@ -44,6 +44,12 @@ export const TOPICS: readonly TopicDef[] = [
     kind: 'text',
   },
   {
+    value: 'verify',
+    label: 'Verify',
+    description: 'Review and QA — the one lane whose point is to be a DIFFERENT model from the one that did the work. A second opinion from the same model is not a second opinion: it shares the blind spot that produced the code. Cheaper or dearer than `build` is the operator\'s call; different is the requirement. Unbound, review falls back to whatever `build` runs.',
+    kind: 'text',
+  },
+  {
     value: 'research',
     label: 'Research',
     description: 'Investigation and deep research — the highest-token work in the system: a researcher fans out into children that each re-send a growing context, so a single question can cost more than a day of chat. Its own lane so it can be pinned to a local or cheap model without dragging Writing down with it. Unbound = research fails loud.',
@@ -96,13 +102,15 @@ export const RETIRED_TOPIC_ALIASES: Readonly<Record<string, string>> = {
   // produces an answer you can check at a glance fails down into `everyday`.
   coding: 'build',
   architecture: 'build',
-  review: 'build',
   design: 'build',
   devops: 'build',
   security: 'build',
   data: 'build',
   ai: 'build',
-  qa: 'build',
+  // Review and QA want a different model from the one under review, not a
+  // dearer one — see the `verify` lane.
+  review: 'verify',
+  qa: 'verify',
   finance: 'build',
   automation: 'build',
   general: 'everyday',

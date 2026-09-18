@@ -43,7 +43,7 @@ describe('canonical topic registry', () => {
     // it. `agents` held the coder and the weather question at once, which is
     // exactly why neither could be priced properly.
     const text = TOPICS.filter((t) => t.kind === 'text').map((t) => t.value);
-    expect(text).toEqual(['build', 'everyday', 'research']);
+    expect(text).toEqual(['build', 'everyday', 'verify', 'research']);
     for (const gone of ['agents', 'writing', 'chat', 'voice']) {
       expect(ALL_TOPIC_VALUES).not.toContain(gone);
     }
@@ -52,10 +52,20 @@ describe('canonical topic registry', () => {
   test('artefact work fails up into build', () => {
     // A weak model here does not stall, it ships junior output that looks
     // finished — so the ambiguous cases go to the expensive lane on purpose.
-    for (const role of ['agents', 'coding', 'architecture', 'review', 'design',
-      'devops', 'security', 'data', 'ai', 'qa', 'finance', 'automation']) {
+    for (const role of ['agents', 'coding', 'architecture', 'design',
+      'devops', 'security', 'data', 'ai', 'finance', 'automation']) {
       expect(canonicalTopic(role)).toBe('build');
     }
+  });
+
+  test('review and qa get their own lane so they can run on a different model', () => {
+    // The point of `verify` is not that review is a different subject — that is
+    // how this registry once had twenty-seven topics — but that a second opinion
+    // from the model that wrote the code is not a second opinion.
+    for (const role of ['review', 'qa']) {
+      expect(canonicalTopic(role)).toBe('verify');
+    }
+    expect(TOPICS.find((t) => t.value === 'verify')?.kind).toBe('text');
   });
 
   test('checkable work falls to everyday', () => {
