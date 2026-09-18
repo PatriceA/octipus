@@ -27,7 +27,7 @@ const TASK_KEYWORDS: Record<string, string[]> = {
   // this string straight into the root agent's spawn_child role hint, so a
   // non-role topic (the old 'development') would be rejected and waste a turn.
   coding: [
-    'implement', 'write code', 'develop', 'program',
+    'implement', 'implementation', 'write code', 'develop', 'program',
     'refactor', 'fix bug', 'fix the bug', 'debug', 'add feature',
     'api endpoint', 'frontend', 'backend', 'component',
     'function', 'class', 'module', 'unit test', 'test suite',

@@ -150,7 +150,7 @@ export async function runRootAgent(
 ): Promise<{ response: string; agentId: string; sources: string[] }> {
   const emit = deps.emit;
   const agentManager = getAgentManager();
-  const modelName = await deps.modelSelector.selectForRootAgent(sessionId, classification.type);
+  const modelName = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification });
 
   // Resolve the root agent mode for THIS turn. 'auto' (default) re-derives
   // from the current default model's size every turn, so swapping to a
@@ -325,17 +325,19 @@ export async function runRootAgent(
         // advertised shrinks. The meta-tools are never in the long tail — the
         // root's ability to delegate must not need a discovery round-trip.
         const lazyCore = [...rootTools, ...discoveryHandlers, ...metaTools];
+        const lazyCoreToolIds = [
+          ...rootCoreToolIds,
+          ...metaTools.filter((t) => !t.discoverOnly).map((t) => t.toolId ?? t.name),
+          'self_report',
+        ];
         // `capabilities` is core on the lazy path too — the one question it
         // answers is the one a shrunken advertisement makes hardest to answer.
-        turnTools = [...lazyCore, selfReport(lazyCore)];
-        toolAdvertisement = {
-          mode: 'lazy',
-          coreToolIds: [
-            ...rootCoreToolIds,
-            ...metaTools.filter((t) => !t.discoverOnly).map((t) => t.toolId ?? t.name),
-            'self_report',
-          ],
-        };
+        // It is handed the set that is actually ADVERTISED, by the same
+        // predicate the provider payload uses: given the whole registered list
+        // it reported tools the model could not see, and over-counted by one
+        // for every discoverOnly handler.
+        turnTools = [...lazyCore, selfReport(lazyCore.filter((t) => !isLongTailHandler(t, lazyCoreToolIds)))];
+        toolAdvertisement = { mode: 'lazy', coreToolIds: lazyCoreToolIds };
         rootAllowedToolIds.add('tool_discovery');
         coreLogger.info(
           {

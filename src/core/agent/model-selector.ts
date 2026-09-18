@@ -1,5 +1,6 @@
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
+import { selectLane } from './lane-intent';
 import { hasRecentShim } from './model-capability';
 import { getSessionModel } from './session-model-override';
 import type { MessageClassification } from './types';
@@ -79,12 +80,22 @@ export class ModelSelector {
 
   /**
    * Select a model suitable for the root agent (must support tools, no reasoning models).
-   * Work turns, including ambiguous requests and approval follow-ups, use
-   * the General expert's model and assigned lane. Only casual turns use chat.
+   *
+   * Order, and the order is the design:
+   *   1. the session's model override — the user said which model, explicitly
+   *   2. a pinned General expert model — the operator said which model
+   *   3. the lane this REQUEST routes to (see lane-intent.ts)
+   *   4. the General expert's assigned lane, then the default model
+   *
+   * An explicit choice always beats a classification. Everything below it is
+   * routed per message rather than per install, because `agents` split into
+   * `build` and `everyday` precisely so the two would stop sharing a binding.
    */
   async selectForRootAgent(
     sessionId?: string,
     turnType: MessageClassification['type'] = 'casual',
+    /** The request being routed, and its classification. Absent ⇒ no routing. */
+    routing?: { message: string; classification?: MessageClassification },
   ): Promise<string> {
     const registry = getModelRegistry();
 
@@ -141,6 +152,22 @@ export class ModelSelector {
         return this.validateRootModel(pinnedModel.modelId, pinnedModel);
       }
 
+      const routed = routing ? selectLane(routing.message, routing.classification) : null;
+      if (routed) {
+        const routedModel = await registry.getModelForTopic(routed.lane);
+        if (routedModel) {
+          coreLogger.info(
+            { lane: routed.lane, reason: routed.reason, model: routedModel.modelId, turnType },
+            'Request routed to a model lane',
+          );
+          return this.validateRootModel(routedModel.modelId, routedModel);
+        }
+        // An unbound lane is not a failure here: fall through to the binding
+        // the install already had, which is what an operator who never split
+        // their lanes still has.
+        coreLogger.info({ lane: routed.lane }, 'Routed lane is unbound — falling back to the configured binding');
+      }
+
       const lane = binding?.topic || 'general';
       const taskModel = await registry.getModelForTopic(lane);
       if (!taskModel) {
@@ -160,11 +187,12 @@ export class ModelSelector {
       return this.validateRootModel(taskModel.modelId, taskModel);
     }
 
-    // The 'everyday' lane binding, when set, is the explicit home for the
-    // conversation model — chat folded into it when `agents` split, because a
-    // lookup and a chat turn want the same fast, cheap model. Unbound means
-    // default model, as before.
-    const chatModel = await registry.getModelForTopic('everyday');
+    // A casual turn routes by the same rule as any other — it simply lands on
+    // `everyday` almost every time, because that is what a casual message is.
+    // Almost: "can you look at main.py?" is casual in shape and artefact work in
+    // substance, and routing beats the turn-type label there.
+    const casualLane = routing ? selectLane(routing.message, routing.classification).lane : 'everyday';
+    const chatModel = await registry.getModelForTopic(casualLane);
     if (chatModel) {
       return this.validateRootModel(chatModel.modelId, chatModel);
     }
