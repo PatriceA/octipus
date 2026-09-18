@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-398 mounted routes across 62 route files. The path is the full one, group prefix included — what a client actually calls.
+393 mounted routes across 61 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -146,11 +146,6 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/evaluations/eval/runs/:id` | `src/api/routes/evaluations.ts` |
 | GET | `/api/evaluations/eval/summary` | `src/api/routes/evaluations.ts` |
 | GET | `/api/evaluations/status` | `src/api/routes/evaluations.ts` |
-| GET | `/api/experts` | `src/api/routes/experts.ts` |
-| POST | `/api/experts` | `src/api/routes/experts.ts` |
-| DELETE | `/api/experts/:id` | `src/api/routes/experts.ts` |
-| GET | `/api/experts/:id` | `src/api/routes/experts.ts` |
-| PATCH | `/api/experts/:id` | `src/api/routes/experts.ts` |
 | GET | `/api/gateway/adapters` | `src/api/routes/gateway.ts` |
 | GET | `/api/gateway/connections` | `src/api/routes/gateway.ts` |
 | GET | `/api/gateway/events/stats` | `src/api/routes/gateway.ts` |
@@ -420,7 +415,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `channels` | 1 |
 | `(root)` | `config` | 4 |
 | `(root)` | `core` | 20 |
-| `(root)` | `db` | 12 |
+| `(root)` | `db` | 11 |
 | `(root)` | `extensions` | 2 |
 | `(root)` | `hooks` | 1 |
 | `(root)` | `mcp` | 1 |
@@ -434,11 +429,11 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `config` | 20 |
 | `api` | `connectors` | 2 |
 | `api` | `core` | 80 |
-| `api` | `db` | 94 |
+| `api` | `db` | 92 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 5 |
 | `api` | `mcp` | 3 |
-| `api` | `models` | 31 |
+| `api` | `models` | 30 |
 | `api` | `plugins` | 1 |
 | `api` | `security` | 71 |
 | `api` | `services` | 5 |
@@ -475,15 +470,15 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `channels` | 2 |
 | `core` | `config` | 31 |
 | `core` | `connectors` | 2 |
-| `core` | `db` | 178 |
+| `core` | `db` | 165 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 4 |
 | `core` | `mcp` | 5 |
 | `core` | `models` | 78 |
-| `core` | `security` | 50 |
+| `core` | `security` | 49 |
 | `core` | `services` | 1 |
 | `core` | `shared` | 12 |
-| `core` | `skills` | 6 |
+| `core` | `skills` | 4 |
 | `core` | `tools` | 13 |
 | `core` | `utils` | 144 |
 | `db` | `config` | 3 |
@@ -492,7 +487,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `db` | `security` | 2 |
 | `db` | `services` | 1 |
 | `db` | `shared` | 1 |
-| `db` | `utils` | 19 |
+| `db` | `utils` | 18 |
 | `eval` | `config` | 3 |
 | `eval` | `core` | 6 |
 | `eval` | `db` | 8 |
@@ -530,7 +525,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `services` | `capabilities` | 5 |
 | `services` | `config` | 3 |
 | `services` | `core` | 2 |
-| `services` | `db` | 7 |
+| `services` | `db` | 6 |
 | `services` | `models` | 15 |
 | `services` | `security` | 3 |
 | `services` | `setup` | 1 |
@@ -549,7 +544,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `config` | 4 |
 | `tools` | `connectors` | 2 |
 | `tools` | `core` | 66 |
-| `tools` | `db` | 29 |
+| `tools` | `db` | 27 |
 | `tools` | `hooks` | 1 |
 | `tools` | `mcp` | 2 |
 | `tools` | `models` | 6 |

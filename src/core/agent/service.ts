@@ -26,7 +26,7 @@ import { filterPII } from './pii-filter';
 import { maybeCompactSession } from './session-compaction';
 import { resolveSession } from './session-resolver';
 import { appendSources, type MessageClassification, type ResponseMetadata } from './types';
-import { handleExpertMessage, spawnWorker } from './worker-spawner';
+import { spawnWorker } from './worker-spawner';
 
 /**
  * System directive for a spoken planning turn: describe the approach briefly and
@@ -130,14 +130,13 @@ export class AgentService {
     userId: string,
     message: string,
     channel?: string,
-    expertId?: string,
     attachedFiles: AttachedFileRef[] = [],
     forcedOutputMode?: 'inline' | 'file',
   ): Promise<{ response: string; sessionId?: string; agentId?: string; classification: MessageClassification; metadata?: ResponseMetadata }> {
     const runId = generateRunId();
     return runWithContext(
       { runId, sessionId, userId, channel: channel ?? 'api', origin: channel ?? 'api' },
-      () => this.handleMessageInner(sessionId, userId, message, channel, expertId, attachedFiles, forcedOutputMode),
+      () => this.handleMessageInner(sessionId, userId, message, channel, attachedFiles, forcedOutputMode),
     );
   }
 
@@ -146,7 +145,6 @@ export class AgentService {
     userId: string,
     message: string,
     channel?: string,
-    expertId?: string,
     /**
      * Session files the user attached to this turn (edit-and-continue). Their
      * *current* contents are re-read here and injected into the turn's context
@@ -219,7 +217,6 @@ export class AgentService {
         userId,
         userMessage: message,
         channel,
-        expertId,
       });
 
       // Auto-title sessions with generic names
@@ -403,23 +400,6 @@ export class AgentService {
         }
       }
 
-      // Expert bypass
-      if (expertId) {
-        // Chat/work split (Thread 3): preset turns honor the toggle too — the
-        // forced mode wins, else the classifier heuristic for this message.
-        const expertMode = forcedOutputMode ?? classifyMessage(message).outputMode ?? 'inline';
-        const expertResult = await handleExpertMessage(
-          expertId, message, resolvedSessionId, userId, this.deps, inputGuard.flags, workspaceId, attachedFilesBlock,
-          { mode: expertMode, forced: forcedOutputMode !== undefined },
-        );
-        const outputCheck = guardOutput(expertResult.response, inputGuard.flags);
-        if (outputCheck.action === 'replace') {
-          coreLogger.warn({ flags: outputCheck.flags, sessionId }, 'Output guard replaced expert response');
-          return { ...expertResult, response: outputCheck.response };
-        }
-        return expertResult;
-      }
-
       const classification = classifyMessage(message);
       recordClassification(classification.topic ?? classification.type, 'deterministic');
       // Chat/work split (Thread 3): resolve the effective deliverable mode (the
@@ -456,7 +436,7 @@ export class AgentService {
           // once here — cosmetic transcript dup. Thread a skip-persist flag through
           // runRootAgent if it ever bloats context enough to matter.
           return this.handleMessageInner(
-            resolvedSessionId, userId, action.workMessage, channel, expertId, action.attachedFiles, forcedOutputMode, true,
+            resolvedSessionId, userId, action.workMessage, channel, action.attachedFiles, forcedOutputMode, true,
           );
         }
         if (action.kind === 'propose') {
@@ -610,7 +590,7 @@ export class AgentService {
       );
 
       if (trajectory) {
-        trajectory.setClassification(classification, expertId);
+        trajectory.setClassification(classification);
         trajectory.finalize({ finalResponse, outcome: 'success' }).catch(err =>
           coreLogger.error({ err }, 'Trajectory finalize failed'),
         );

@@ -1924,27 +1924,27 @@ export class SwarmSpawner {
     // gets the lite template. Everything gathered above (expert prompt, critical
     // rules, skill fragments) is held until then.
 
-    // Model selection — in order of preference:
-    //   1. lane executorModel (W9 planner→executor split) — ONLY when the
-    //      parent supplied a `plan` (hasPlan). A plan is the parent saying "I've
-    //      done the thinking; run these steps mechanically", so it binds to the
-    //      lane's cheap executor. This outranks modelPreference *on a planned
-    //      spawn only*: the preference picks a model to think with, and the
-    //      plan is what removes the thinking. A plan-less child skips this
-    //      branch entirely → expert preference, then primary.
-    //   2. expert.modelPreference (specialist's explicit choice) — authoritative
-    //      for every plan-less (recon/judgment) delegation.
-    //   3. lane→model mapping (topic primary binding)
-    //   4. fail loud — do NOT inherit parent model. The parent's model is
-    //      whatever the root agent happened to pick; it has no claim to
-    //      being right for the child's topic. Inheriting hides routing bugs.
+    // Where a child's model comes from, in order:
+    //   1. the lane's `executorModel`, but ONLY when the parent supplied a plan.
+    //      A plan is the parent saying "I have done the thinking; run these
+    //      steps mechanically", and mechanical steps are what a cheap executor
+    //      is for. A plan-less child skips this and uses the lane's primary.
+    //   2. the lane's primary binding.
+    //   3. fail loud — do NOT inherit the parent's model. The parent's model is
+    //      whatever its own routing picked; it has no claim to being right for
+    //      the child's lane, and inheriting hides routing bugs.
+    //
+    // There used to be a step between 1 and 2: the expert row's
+    // `modelPreference`, and a block deciding which of it and the plan won.
+    // With the expert layer retired there is no preference to weigh, so the
+    // precedence question it answered no longer exists.
     //
     // The lane is what the PARENT asked for when it named a real one, else the
-    // expert's assigned topic, else the child role — which canonicalizes via
-    // RETIRED_TOPIC_ALIASES (`coding` → build, `review`/`qa` → verify, and the
-    // conversational roles → everyday). The parent's request comes first
-    // because it is the only way to say "not on my model": a review child that
-    // runs on the model that wrote the code is not a second opinion.
+    // child role — which canonicalizes via RETIRED_TOPIC_ALIASES (`coding` →
+    // build, `review`/`qa` → verify, the conversational roles → everyday). The
+    // parent's request comes first because it is the only way to say "not on my
+    // model": a review child that runs on the model that wrote the code is not
+    // a second opinion.
     const laneRequested = asLane(requestedLane);
     if (requestedLane && !laneRequested) {
       coreLogger.info(
@@ -1953,37 +1953,11 @@ export class SwarmSpawner {
       );
     }
     const lane = laneRequested || childRole;
-    // No expert model to start from: a child's model is its LANE's, and the
-    // only thing that moves it is a plan, which routes to the lane's executor.
     let candidate: string | undefined;
     // One lookup for the whole routing block — getTopicConfig is an in-memory
     // cache, but the branches below reference the executor binding repeatedly
     // and must all agree on the same value.
     const laneExecutor = getTopicConfig(lane).executorModel;
-    if (candidate && hasPlan && laneExecutor) {
-      // A plan says the parent has already done the judgment and wants the
-      // steps run mechanically. `modelPreference` answers a different question
-      // — which model this specialist should THINK with — and that question is
-      // moot once a checklist replaces the thinking. So on a planned spawn the
-      // lane's executor wins; the expert still contributes its prompt, skills
-      // and tools, only the model changes.
-      //
-      // This used to go the other way, which made the saving unreachable in
-      // practice: on this install 9 of 16 experts carry a modelPreference and
-      // ALL of them sit on the `agents` lane, the alias target for every
-      // hands-on role (general, coding, review, devops, qa, …). A measured
-      // planned run spent 101,546 tokens, 100% of them on the full-price
-      // planner, with the configured executor untouched.
-      //
-      // The escape hatch is per-lane and deliberate: a lane whose work needs a
-      // capable model regardless simply leaves `executorModel` empty, which
-      // skips this branch entirely (planner == executor).
-      coreLogger.info(
-        { lane, childRole, expertModel: candidate, executorModel: laneExecutor },
-        'Planned child: lane executorModel overrides expert modelPreference (mechanical execution)',
-      );
-      candidate = undefined;
-    }
     if (!candidate && hasPlan) {
       // No plan ⇒ this whole block is skipped and the child resolves to the
       // lane's primary (recon/judgment). Empty executorModel ⇒ also skipped
@@ -2023,9 +1997,8 @@ export class SwarmSpawner {
     }
     if (!candidate) {
       throw new Error(
-        `No model bound to topic '${lane}'. ` +
-          `Map a model to this topic in the Models page (Topics section), ` +
-          `or give the '${childRole}' expert an explicit modelPreference.`,
+        `No model bound to the '${lane}' lane, which is where a '${childRole}' child runs. ` +
+          'Bind one on the Topics page.',
       );
     }
 

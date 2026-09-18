@@ -6,7 +6,7 @@
  * lazy path — `provider === 'ollama'` — so on every remote provider the root
  * agent was handed a tool list it had no way to enumerate. And nothing at all,
  * on any path, let it see the mounted MCP servers, the loadable skills, the
- * experts it can delegate to, or the pipeline recipes it can run. Asked in
+ * or the pipeline recipes it can run. Asked in
  * chat, it answered from whatever happened to be in its advertised schema:
  * partial when it was lucky, invented when it was not.
  *
@@ -21,7 +21,7 @@ import { toolLogger } from '@/utils/logger';
 const SELF_REPORT_TOOL_ID = 'self_report';
 
 /** Sections a caller can ask for. `all` is the default. */
-const SECTIONS = ['all', 'tools', 'mcp', 'skills', 'experts', 'pipelines'] as const;
+const SECTIONS = ['all', 'tools', 'mcp', 'skills', 'pipelines'] as const;
 type Section = (typeof SECTIONS)[number];
 
 export interface SelfReportContext {
@@ -29,7 +29,7 @@ export interface SelfReportContext {
   advertised: ToolHandler[];
   /** Handlers registered in the executor — callable by name whether advertised or not. */
   registered: ToolHandler[];
-  /** Owner of the turn; scopes skills, experts and recipes. */
+  /** Owner of the turn; scopes skills and recipes. */
   userId?: string;
   /** The model actually serving this turn, and the role it is serving as. */
   model?: string;
@@ -79,7 +79,7 @@ async function mcpSection() {
 }
 
 async function skillsSection(userId?: string) {
-  // Fails CLOSED, like the experts and pipeline sections beside it. The
+  // Fails CLOSED, like the pipeline section beside it. The
   // underlying store returns every user's rows when handed no id, so an absent
   // userId here would list another tenant's skill names.
   if (!userId) return [];
@@ -94,16 +94,6 @@ async function skillsSection(userId?: string) {
   return (await getSkillRegistry().getAll(userId)).map((s) => s.name);
 }
 
-async function expertsSection(userId?: string) {
-  const { eq, isNull, or } = await import('drizzle-orm');
-  const { getDb } = await import('@/db/postgres');
-  const { experts } = await import('@/db/schema/experts');
-  const rows = await getDb()
-    .select()
-    .from(experts)
-    .where(userId ? or(eq(experts.userId, userId), isNull(experts.userId)) : isNull(experts.userId));
-  return rows.map((e) => ({ name: e.name, lane: e.topic }));
-}
 
 async function pipelinesSection(userId?: string) {
   const { listAvailableTemplates } = await import('@/core/agent/templates');
@@ -115,7 +105,7 @@ export function buildCapabilitiesHandler(ctx: SelfReportContext): ToolHandler {
     name: 'capabilities',
     description:
       'Report what you can actually do right now: your tools grouped by toolbox, the MCP ' +
-      'servers mounted and whether they are connected, the skills you can load, the experts ' +
+      'servers mounted and whether they are connected, the skills you can load ' +
       'you can delegate to, and the pipeline recipes you can run. Call this before answering ' +
       'any question about your own abilities — do not answer from memory, and never guess a ' +
       'tool exists. Pass `section` to fetch one part instead of the whole inventory.',
@@ -151,7 +141,6 @@ export function buildCapabilitiesHandler(ctx: SelfReportContext): ToolHandler {
       }
       if (want('mcp')) report.mcpServers = await safely('mcp', mcpSection);
       if (want('skills')) report.skills = await safely('skills', () => skillsSection(ctx.userId));
-      if (want('experts')) report.experts = await safely('experts', () => expertsSection(ctx.userId));
       if (want('pipelines')) report.pipelines = await safely('pipelines', () => pipelinesSection(ctx.userId));
 
       return report;

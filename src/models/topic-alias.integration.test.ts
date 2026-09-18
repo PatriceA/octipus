@@ -2,7 +2,7 @@
  * Topic consolidation — end-to-end aliasing against a real (embedded PGlite)
  * DB: retired topic names ('coding', 'memory_extraction', …) must resolve the
  * canonical lane's binding in the model registry AND land on the lane's row in
- * topics_config; the experts.topic column must default to 'agents'.
+ * topics_config.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { randomBytes } from 'node:crypto';
@@ -18,7 +18,6 @@ process.env.SESSION_SECRET ??= `test-session-${rand(24)}`;
 process.env.LOG_LEVEL ??= 'error';
 
 import { getDb } from '@/db/postgres';
-import { experts } from '@/db/schema/experts';
 import { getModelRegistry } from '@/models/model-registry';
 import { getTopicConfig, loadTopicConfigs, setTopicConfig } from '@/models/topic-config';
 
@@ -109,13 +108,4 @@ describe.skipIf(!isIntegration)('Topic consolidation (Integration)', () => {
     });
   });
 
-  describe('experts.topic column', () => {
-    test("defaults to the 'agents' lane", async () => {
-      const db = getDb();
-      const [row] = await db.insert(experts).values({
-        name: `lane-default-${rand(4)}`, role: 'coding', isSystem: false,
-      }).returning({ topic: experts.topic });
-      expect(row.topic).toBe('agents');
-    });
-  });
 });

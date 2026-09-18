@@ -313,7 +313,6 @@ export function setupWebSocket(app: Elysia): void {
                 userId,
                 content,
                 'webchat',
-                parsed.expertId,
                 fileRefs,
                 outputMode,
               );

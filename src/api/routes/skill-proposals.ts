@@ -33,18 +33,18 @@ export const skillProposalRoutes = new Elysia({ prefix: '/skills/proposals' })
         userId: ownerFilter(user),
         name: body?.name,
         systemPrompt: body?.systemPrompt,
-        role: body?.role,
       });
       if (!result) { set.status = 404; return { error: 'proposal not found or not pending' }; }
-      // `skill` / `expert` are the keys this route has always returned; an
-      // out-of-repo client (the mobile app) reads them. `kind`/`id`/`name` are
-      // additive so a client doesn't have to know which key to look under.
+      // `skill` is the key this route has always returned for a skill, and an
+      // out-of-repo client (the mobile app) reads it. The sibling `expert` key
+      // is gone with the layer; `kind` stays 'skill' so a client that switches
+      // on it keeps working.
       return {
         promoted: true,
         kind: result.promoted,
         id: result.id,
         name: result.name,
-        ...(result.promoted === 'skill' ? { skill: result.record } : { expert: result.record }),
+        skill: result.record,
       };
     } catch (err) {
       coreLogger.error({ err }, 'Skill proposal approve failed');
@@ -54,7 +54,6 @@ export const skillProposalRoutes = new Elysia({ prefix: '/skills/proposals' })
   }, {
     body: t.Optional(t.Object({
       name: t.Optional(t.String()),
-      role: t.Optional(t.String()),
       systemPrompt: t.Optional(t.String()),
     })),
   })

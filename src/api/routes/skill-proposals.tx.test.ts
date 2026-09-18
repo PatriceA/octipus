@@ -49,50 +49,50 @@ async function seedProposal(): Promise<string> {
 describe('skill-proposal approve atomicity (M14)', () => {
   beforeEach(async () => {
     const { getDb } = await import('@/db/postgres');
-    const { experts } = await import('@/db/schema/experts');
+    const { skills } = await import('@/db/schema/skills');
     const { skillProposals } = await import('@/db/schema/skill-proposals');
     const db = getDb();
-    await db.delete(experts);
+    await db.delete(skills);
     await db.delete(skillProposals);
   });
 
-  test('happy path: both the expert insert and the proposal update commit', async () => {
+  test('happy path: both the skill insert and the proposal update commit', async () => {
     const { getDb } = await import('@/db/postgres');
     const { eq } = await import('drizzle-orm');
-    const { experts } = await import('@/db/schema/experts');
+    const { skills } = await import('@/db/schema/skills');
     const { skillProposals } = await import('@/db/schema/skill-proposals');
     const db = getDb();
     const id = await seedProposal();
 
     const created = await db.transaction(async (tx) => {
-      const [expert] = await tx.insert(experts).values({
-        userId, name: 'cloud-infra', description: 'x', role: 'general',
-        systemPrompt: 'p', isSystem: false,
+      const [skill] = await tx.insert(skills).values({
+        id: randomUUID(), userId, name: 'cloud-infra', description: 'x', content: 'p',
+        category: 'general', isSystem: false,
       }).returning();
       await tx.update(skillProposals).set({ status: 'promoted' }).where(eq(skillProposals.id, id));
-      return expert;
+      return skill;
     });
 
     expect(created?.id).toBeDefined();
     const [proposal] = await db.select().from(skillProposals).where(eq(skillProposals.id, id));
     expect(proposal.status).toBe('promoted');
-    const allExperts = await db.select().from(experts);
-    expect(allExperts.length).toBe(1);
+    const allSkills = await db.select().from(skills);
+    expect(allSkills.length).toBe(1);
   });
 
-  test('rollback: a failure after the expert insert leaves no expert and the proposal pending', async () => {
+  test('rollback: a failure after the skill insert leaves no skill and the proposal pending', async () => {
     const { getDb } = await import('@/db/postgres');
     const { eq } = await import('drizzle-orm');
-    const { experts } = await import('@/db/schema/experts');
+    const { skills } = await import('@/db/schema/skills');
     const { skillProposals } = await import('@/db/schema/skill-proposals');
     const db = getDb();
     const id = await seedProposal();
 
     await expect(
       db.transaction(async (tx) => {
-        await tx.insert(experts).values({
-          userId, name: 'cloud-infra', description: 'x', role: 'general',
-          systemPrompt: 'p', isSystem: false,
+        await tx.insert(skills).values({
+          id: randomUUID(), userId, name: 'cloud-infra', description: 'x', content: 'p',
+          category: 'general', isSystem: false,
         }).returning();
         // Simulate the status-update failing mid-transaction (before the
         // second write lands), exercising the rollback path.
@@ -101,8 +101,8 @@ describe('skill-proposal approve atomicity (M14)', () => {
     ).rejects.toThrow(/boom/);
 
     // Both writes must have rolled back.
-    const allExperts = await db.select().from(experts);
-    expect(allExperts.length).toBe(0);
+    const allSkills = await db.select().from(skills);
+    expect(allSkills.length).toBe(0);
     const [proposal] = await db.select().from(skillProposals).where(eq(skillProposals.id, id));
     expect(proposal.status).toBe('pending');
   });

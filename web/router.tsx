@@ -30,7 +30,6 @@ const EvalPage = lazy(() => import('./app/eval/page'));
 const EvalComparePage = lazy(() => import('./app/eval/compare/page'));
 const EvalRedTeamPage = lazy(() => import('./app/eval/red-team/page'));
 const EvalViewPage = lazy(() => import('./app/eval/view/page'));
-const ExpertsPage = lazy(() => import('./app/experts/page'));
 const GraphPage = lazy(() => import('./app/graph/page'));
 const HooksPage = lazy(() => import('./app/hooks/page'));
 const KnowledgePage = lazy(() => import('./app/knowledge/page'));
@@ -105,7 +104,6 @@ const router = createBrowserRouter([
       { path: 'eval/compare', element: <EvalComparePage /> },
       { path: 'eval/red-team', element: <EvalRedTeamPage /> },
       { path: 'eval/view', element: <EvalViewPage /> },
-      { path: 'experts', element: <ExpertsPage /> },
       { path: 'graph', element: <GraphPage /> },
       { path: 'hooks', element: <HooksPage /> },
       { path: 'knowledge', element: <KnowledgePage /> },

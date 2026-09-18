@@ -1,12 +1,9 @@
-import { channelCanPrompt } from '@/security/approval-policy';
 import { resolve } from 'path';
 import { getConfig } from '@/config';
-import { shouldUseLazyDiscovery } from './lazy-tools';
-import { selectCoreToolIds } from './tool-intent';
-import { isPlanMode, stripMutatingTools } from './plan-mode';
 import { getAgentManager } from '@/core/agent-manager';
 import { getGatewayHub } from '@/core/gateway/hub';
 import { getNotificationService } from '@/core/notification-service';
+import { premiseNoteFor } from '@/core/premise';
 import { getSwarmLedger } from '@/core/swarm/ledger';
 import { swarmNodeRepository } from '@/core/swarm/node-repository';
 import { mergeCounters, type SideEffectCounters } from '@/core/swarm/receipt';
@@ -14,28 +11,26 @@ import { taskFingerprint } from '@/core/swarm/spawner';
 import { createSpawnChildTool } from '@/core/swarm/swarm-tool';
 import { type AgentNode, getLevelDefault } from '@/core/swarm/types';
 import type { AgentContext } from '@/core/types';
-import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import type { ProfileFact } from '@/db/schema/profiles';
 import { getModelRegistry } from '@/models/model-registry';
 import { QuotaExceededError } from '@/security/quota-error';
-import { premiseNoteFor } from '@/core/premise';
 import { WorkspaceFS } from '@/security/workspace-fs';
+import { getToolRegistry } from '@/tools/registry';
+import { formatDateTimeContext } from '@/utils/date-context';
 import { coreLogger } from '@/utils/logger';
 import { truncateToTokens } from '@/utils/token-count';
 import { loadAgentsMd } from './agents-md';
-import { buildSecurityReminder } from './input-guard';
+import { shouldUseLazyDiscovery } from './lazy-tools';
 import type { ModelSelector } from './model-selector';
-import { buildOutputDirective } from './output-directive';
-import { getToolRegistry } from '@/tools/registry';
-import { formatCriticalRules, getBoundConnectorIds, getRoleConfig, getToolsForRole, SECURITY_PREAMBLE, stripSecurityPreamble } from './roles';
+import { isPlanMode, stripMutatingTools } from './plan-mode';
 import { estimateToolSchemaTokens, logPromptComposition } from './prompt-budget';
 import { type DeclaredPurpose, toolsetGaps } from './role-contract';
-import { applyToolCap, isSmallModel } from './small-model';
+import { formatCriticalRules, getBoundConnectorIds, getRoleConfig, getToolsForRole, SECURITY_PREAMBLE } from './roles';
 import type { TurnEvent } from './service';
-import { appendSources } from './types';
+import { applyToolCap, isSmallModel } from './small-model';
+import { selectCoreToolIds } from './tool-intent';
 import type { AgentRole, WorkerResult } from './types';
-import { formatDateTimeContext } from '@/utils/date-context';
 
 // Per-section token budget for the injected AGENTS.md guide (Phase 5 item 2).
 // ≈ the existing 8000-char cap in loadAgentsMd, so a normal guide isn't trimmed
@@ -89,228 +84,6 @@ export interface WorkerSpawnerDeps {
   setLastWorkerResult: (result: string | null) => void;
 }
 
-/**
- * Spawn an expert-based worker directly (skip classification + root agent).
- */
-export async function handleExpertMessage(
-  expertId: string,
-  message: string,
-  sessionId: string,
-  userId: string,
-  deps: WorkerSpawnerDeps,
-  guardFlags: string[] = [],
-  workspaceId: string | null = null,
-  /**
-   * Pre-rendered edit-and-continue context (current contents of files the user
-   * attached to this turn), appended to the expert's system prompt so a
-   * preset-selected turn still operates on the live file — design Thread 2.
-   */
-  attachedFilesBlock = '',
-  /** Chat/work split (Thread 3): inline vs file deliverable directive. */
-  outputDirective: { mode: 'inline' | 'file'; forced: boolean } = { mode: 'inline', forced: false },
-): Promise<{ response: string; sessionId: string; classification: import('./types').MessageClassification; metadata?: import('./types').ResponseMetadata }> {
-  const { getDb } = await import('@/db/postgres');
-  const db = getDb();
-  const { experts } = await import('@/db/schema/experts');
-  const { eq } = await import('drizzle-orm');
-
-  const [expert] = await db.select().from(experts).where(eq(experts.id, expertId)).limit(1);
-  if (!expert) {
-    return {
-      response: `Expert not found: ${expertId}`,
-      sessionId,
-      classification: { type: 'task', confidence: 1, complexity: 'simple' },
-    };
-  }
-
-  const startTime = Date.now();
-  const agentRole = expert.role as AgentRole;
-  const roleConfig = getRoleConfig(agentRole);
-  // Model lane: the expert's assigned topic (see experts.topic), falling back
-  // to the role default for pre-consolidation rows.
-  const expertLane = expert.topic || roleConfig.defaultTopic;
-  const originSession = await sessionRepository.findById(sessionId);
-  const context: AgentContext = {
-    attended: channelCanPrompt(originSession?.channelType),
-    id: `expert-${Date.now()}`,
-    sessionId,
-    userId,
-    workspaceId,
-    model: expert.modelPreference || '',
-    topic: expertLane,
-    role: agentRole,
-    status: 'running',
-    createdAt: new Date(),
-    updatedAt: new Date(),
-    metadata: { expertId, isExpert: true },
-  };
-
-  await messageRepository.create({ sessionId, role: 'user', content: message });
-  await sessionRepository.incrementMessageCount(sessionId);
-
-  // Small-model tier for this expert's worker. spawnWorker handles the tool cap
-  // and MCP-guidance skip for any worker, but the deliverable/metrics/response
-  // scaffold below is assembled here and passed as a systemPrompt override, so
-  // it must be trimmed here too. Tier is the expert's modelPreference if set,
-  // else the role's topic model — matching what spawnWorker will actually run.
-  const agentCfg = getConfig().agent;
-  let isSmall = false;
-  try {
-    const registry = getModelRegistry();
-    const tierModel = expert.modelPreference
-      ? await registry.getModelByModelId(expert.modelPreference)
-      : await registry.getModelForTopic(expertLane);
-    if (tierModel) {
-      isSmall = isSmallModel({ modelId: tierModel.modelId, metadata: tierModel.metadata }, agentCfg.smallModelMaxParams);
-    }
-  } catch (err) {
-    coreLogger.debug({ err, expertId, role: agentRole }, 'expert small-model tier check skipped (non-fatal)');
-  }
-
-  try {
-    // Build expert identity prompt — role config as base, then expert-specific overrides
-    let expertPrompt = SECURITY_PREAMBLE;
-
-    // Expert identity: name, description, and role-specific system prompt.
-    // Strip a leading SECURITY_PREAMBLE from the concatenated body — both
-    // `expert.systemPrompt` (legacy expert rows seeded with the preamble
-    // baked in) and `roleConfig.systemPromptTemplate` (always prepended by
-    // getRoleConfig) can carry it, which would duplicate the block above.
-    expertPrompt += `\nYou are **${expert.name}**${expert.description ? ` — ${expert.description}` : ''}.\n\n`;
-    // Small models get the dense lite role prompt when one exists (Phase C);
-    // a custom expert's own systemPrompt still wins over the role default.
-    const roleTemplate = (isSmall && roleConfig.liteSystemPromptTemplate) || roleConfig.systemPromptTemplate;
-    expertPrompt += stripSecurityPreamble(expert.systemPrompt || roleTemplate);
-
-    // Critical rules come from the ROLE, not the expert row. The two carried
-    // identical text — the expert seed was generated from the same literals —
-    // but only one of them is guaranteed to exist: a seed that never ran, or a
-    // row someone deleted, produced a specialist with no standing rules and
-    // nothing said so.
-    expertPrompt += formatCriticalRules(roleConfig.criticalRules ?? []);
-
-    // Deliverable template + success metrics: quality scaffolding for larger
-    // models, prompt bloat that weak models follow poorly. Skip in the small tier.
-    if (expert.deliverableTemplate && !isSmall) {
-      expertPrompt += '\n\n# Deliverable Template\nStructure your output as follows:\n' + expert.deliverableTemplate;
-    }
-
-    const successMetrics = (expert.successMetrics as string[]) || [];
-    if (successMetrics.length > 0 && !isSmall) {
-      expertPrompt += '\n\n# Success Metrics\nYour output will be evaluated against these criteria:\n' +
-        successMetrics.map((m, i) => `${i + 1}. ${m}`).join('\n');
-    }
-
-    // Expert-specific tool guidance — prevents looping and over-engineering.
-    // Small models get a compact version (the long form's nuances are lost on
-    // them and cost ~180 tokens better spent on the task).
-    if (isSmall) {
-      expertPrompt += '\n\n# Response Guidelines\n'
-        + '- Greetings / "what can you do": reply in plain text, no tools.\n'
-        + '- Use a tool only when the task needs external data, files, or actions; otherwise answer directly.\n'
-        + '- Never repeat a tool call with identical arguments. After at most 5 tool calls, stop and answer.';
-    } else {
-      expertPrompt += '\n\n# Response Guidelines\n'
-        + '- For conversational messages (greetings, "what can you do", introductions): respond directly with text. Do NOT call any tools.\n'
-        + '- Only use tools when the task genuinely requires external data, file operations, or actions.\n'
-        + '- Think step-by-step before deciding whether to use a tool. If you can answer from your domain knowledge, do so directly.\n'
-        + '- Never call the same tool twice with identical arguments.\n'
-        + '- After at most 5 tool calls, synthesize your findings and respond.\n'
-        + '- PREFER built-in tools over writing code/scripts. For recurring tasks use the scheduling tool (create_hook). For notifications use the messaging tool (send_message). Do NOT create standalone scripts, plugins, or services when a built-in tool exists.';
-    }
-
-    if (guardFlags.length > 0) {
-      expertPrompt += buildSecurityReminder(guardFlags);
-    }
-
-    // Edit-and-continue: live contents of files attached to this turn.
-    if (attachedFilesBlock) {
-      expertPrompt += attachedFilesBlock;
-    }
-
-    // Chat/work split (Thread 3): deliver inline vs as a file. A read-only role
-    // gets the hand-it-back variant — it has no write handlers to obey the
-    // standard instruction with.
-    expertPrompt += buildOutputDirective(outputDirective.mode, outputDirective.forced, roleConfig.readOnly);
-
-    // Domain knowledge from skills
-    const skillIds = (expert.skillIds as string[]) || [];
-    if (skillIds.length > 0) {
-      const { getSkillRegistry } = await import('@/skills/registry');
-      const skillReg = getSkillRegistry();
-      const found = await skillReg.getByIds(skillIds);
-      if (found.length < skillIds.length) {
-        const foundSet = new Set(found.map((s) => s.id));
-        const missing = skillIds.filter((id) => !foundSet.has(id));
-        coreLogger.error(
-          { expertId, expertName: expert.name, expectedSkillIds: skillIds, missing },
-          'Expert lists skillIds missing from registry — expert worker runs with partial domain knowledge',
-        );
-      }
-      // Small tier: inject the index (name + 1-line description) instead of the
-      // full skill bodies — multi-skill experts otherwise dump tens of k tokens
-      // a small model can't use. Larger models get the full fragment here: a
-      // direct `/expert` invocation is an explicit, focused request, so we keep
-      // full fidelity (unlike auto-spawned experts in spawnWorker, which always
-      // use the index because the root agent may fan out to several).
-      if (isSmall) {
-        const summary = await skillReg.buildPromptSummary(skillIds);
-        if (summary) expertPrompt += `\n\n# Domain Knowledge (index)\n${summary}`;
-      } else {
-        const fragment = await skillReg.buildPromptFragment(skillIds);
-        if (fragment) expertPrompt += `\n\n# Domain Knowledge\n${fragment}`;
-      }
-    }
-
-    const result = await spawnWorker(agentRole, message, '', context, deps, {
-      systemPrompt: expertPrompt,
-      model: expert.modelPreference || undefined,
-      topic: expertLane,
-    });
-
-    // Source attribution: which expert ran, which role, which skills were
-    // injected. Mirrors the directResponse / root agent footer so the
-    // user sees consistent provenance no matter which path served them.
-    const sources: string[] = [`expert(${expert.name})`, `role(${agentRole})`];
-    if (skillIds.length > 0) sources.push(`skills(${skillIds.length})`);
-    if (guardFlags.length > 0) sources.push(`guard(${guardFlags.join(',')})`);
-
-    const session = await sessionRepository.findById(sessionId);
-    const showSources = (session?.metadata as Record<string, unknown> | undefined)?.showSources !== false;
-    const response = showSources ? appendSources(String(result), sources) : String(result);
-
-    await messageRepository.create({ sessionId, role: 'assistant', content: response });
-    await sessionRepository.incrementMessageCount(sessionId);
-
-    return {
-      response,
-      sessionId,
-      classification: { type: 'task', confidence: 1, complexity: 'moderate', topic: expert.role },
-      metadata: { latencyMs: Date.now() - startTime, sources },
-    };
-  } catch (error) {
-    const errMsg = (error as Error).message || '';
-    coreLogger.error({ error, expertId, role: agentRole }, 'Expert worker failed');
-
-    // Permission denial or user abort → friendly message, let user decide next step
-    if (errMsg.includes('Permission denied') || errMsg.includes('stopped by user') || errMsg.includes('aborted')) {
-      const response = `The agent was stopped because a required action was denied.\n\nOriginal request: "${message.slice(0, 200)}"\n\nWould you like me to try a different approach, or is there something else I can help with?`;
-      await messageRepository.create({ sessionId, role: 'assistant', content: response });
-      return {
-        response,
-        sessionId,
-        classification: { type: 'task', confidence: 1, topic: expert.role },
-        metadata: { latencyMs: Date.now() - startTime },
-      };
-    }
-
-    return {
-      response: `Expert worker failed: ${errMsg}`,
-      sessionId,
-      classification: { type: 'task', confidence: 1 },
-    };
-  }
-}
 
 /**
  * What a pipeline STAGE did — the worker's own tool counters folded together
@@ -541,29 +314,11 @@ export async function spawnWorker(
     );
   }
 
-  // Auto-select the role's system expert ROW first — its assigned model lane
-  // (`experts.topic`) decides which topic binding resolves the model, so it
-  // must be known before routing. Prompt assembly from the row happens further
-  // down, once the model tier (isSmall) is known.
-  let matchingExpert: import('@/db/schema/experts').Expert | null = null;
-  if (!overrides?.systemPrompt) {
-    try {
-      const { getDb } = await import('@/db/postgres');
-      const { experts } = await import('@/db/schema/experts');
-      const { eq, and } = await import('drizzle-orm');
-      const db = getDb();
-      const [row] = await db.select().from(experts)
-        .where(and(eq(experts.role, agentRole), eq(experts.isSystem, true)))
-        .limit(1);
-      matchingExpert = row ?? null;
-    } catch (err) {
-      coreLogger.debug({ err, role: agentRole }, 'Expert auto-selection skipped');
-    }
-  }
-
-  // Model lane: explicit override (expert direct-invocation path) > the
-  // auto-selected expert's lane > the role default (canonicalizes to 'agents').
-  const lane = overrides?.topic || matchingExpert?.topic || roleConfig.defaultTopic;
+  // Model lane: an explicit override (a pipeline stage naming one) beats the
+  // role's own default. There used to be a step between: the role's system
+  // expert row, whose `topic` column decided the lane. The row is gone and the
+  // role canonicalizes to a lane by itself.
+  const lane = overrides?.topic || roleConfig.defaultTopic;
 
   // Resolve the worker's model up front so we know whether it's in the small
   // (router) tier before assembling the prompt. The root agent already
@@ -591,71 +346,13 @@ export async function spawnWorker(
     coreLogger.info({ role: agentRole, model: routing.model }, 'Worker model is small-tier — trimming prompt + tools');
   }
 
-  // Assemble the auto-selected expert's prompt scaffold (row fetched above,
-  // before routing, so the expert's lane could steer model resolution).
-  let expertPrompt: string | undefined;
-  let expertModel: string | undefined;
-  // Hoisted so the topic-skill dedupe below can read whichever skillIds
-  // the matched expert advertised. Closed over by the topic-skill block.
-  let expertSkillIdsOuter: string[] = [];
-  {
-    try {
-      if (matchingExpert) {
-        expertPrompt = matchingExpert.systemPrompt || undefined;
-        expertModel = matchingExpert.modelPreference || undefined;
-
-        expertPrompt = (expertPrompt || '') + formatCriticalRules(roleConfig.criticalRules ?? []);
-
-        // Deliverable template + success metrics are quality scaffolding that
-        // helps larger models structure output but bloats the prompt for small
-        // ones (and weak models follow them poorly anyway). Skip both in the
-        // small tier; critical rules stay because they're short and behavioral.
-        const deliverableTemplate = matchingExpert.deliverableTemplate;
-        if (deliverableTemplate && !isSmall) {
-          expertPrompt = (expertPrompt || '') + '\n\n# Deliverable Template\nStructure your output as follows:\n' + deliverableTemplate;
-        }
-
-        const successMetrics = (matchingExpert.successMetrics as string[]) || [];
-        if (successMetrics.length > 0 && !isSmall) {
-          expertPrompt = (expertPrompt || '') + '\n\n# Success Metrics\nYour output will be evaluated against these criteria:\n' +
-            successMetrics.map((m, i) => `${i + 1}. ${m}`).join('\n');
-        }
-
-        const skillIds = (matchingExpert.skillIds as string[]) || [];
-        expertSkillIdsOuter = skillIds;
-        if (skillIds.length > 0) {
-          const { getSkillRegistry } = await import('@/skills/registry');
-          const skillReg = getSkillRegistry();
-          const found = await skillReg.getByIds(skillIds);
-          if (found.length < skillIds.length) {
-            const foundSet = new Set(found.map((s) => s.id));
-            const missing = skillIds.filter((id) => !foundSet.has(id));
-            coreLogger.error(
-              { role: agentRole, expert: matchingExpert.name, expectedSkillIds: skillIds, missing },
-              'Expert lists skillIds missing from registry — worker runs with partial domain knowledge',
-            );
-          }
-          // Index-only mode: dump skill name + 1-line description, not
-          // the whole body. The agent loads specific skill content via
-          // the built-in `get_skill` tool when it needs to. A typical
-          // role with 30+ skills was previously dumping ~50–80k tokens
-          // of skill bodies into every worker prompt; now it's a few
-          // hundred and the agent pays only for what it pulls.
-          const summary = await skillReg.buildPromptSummary(skillIds);
-          if (summary) {
-            expertPrompt = `${expertPrompt || ''}\n\n# Domain Knowledge (index)\n${summary}`;
-          }
-        }
-
-        coreLogger.info(
-          { role: agentRole, expert: matchingExpert.name, lane, hasSkills: (matchingExpert.skillIds as string[] || []).length > 0 },
-          'Auto-selected expert for worker role',
-        );
-      }
-    } catch (err) {
-      coreLogger.debug({ err, role: agentRole }, 'Expert prompt assembly skipped');
-    }
-  }
+  // The role's critical rules. This used to be a block assembling an expert
+  // row's prompt, deliverable template, success metrics and skill list; only
+  // the rules survived the layer — they belong to the role now — so what is
+  // left of it is one line and no database read.
+  const expertPrompt = formatCriticalRules(roleConfig.criticalRules ?? []) || undefined;
+  const expertModel: string | undefined = undefined;
+  const expertSkillIdsOuter: string[] = [];
 
   // ── Inject topic-assigned active skills (hybrid discovery) ──
   // Same index-only treatment as expert skills above. Dedupe against

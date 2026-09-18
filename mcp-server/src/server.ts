@@ -10,7 +10,6 @@ import { registerSessionTools } from './tools/sessions.js';
 import { registerModelTools } from './tools/models.js';
 import { registerChatTools } from './tools/chat.js';
 import { registerToolModuleTools } from './tools/tool-modules.js';
-import { registerExpertTools } from './tools/experts.js';
 import { registerRecurringTaskTools } from './tools/recurring-tasks.js';
 import { registerKnowledgeTools } from './tools/knowledge.js';
 import { registerMessagingTools } from './tools/messaging.js';
@@ -46,7 +45,6 @@ export function createServer(octiUrl: string): McpServer {
   registerModelTools(server, client);
   registerChatTools(server, client);
   registerToolModuleTools(server, client);
-  registerExpertTools(server, client);
   registerRecurringTaskTools(server, client);
   registerKnowledgeTools(server, client);
   registerMessagingTools(server, client);

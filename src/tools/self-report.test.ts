@@ -8,7 +8,7 @@ import { buildCapabilitiesHandler } from './self-report';
  * Asked "what can you do?", an agent with no way to enumerate its own surface
  * answers from whatever happens to be in its advertised schema — which on the
  * lazy path is a fraction of what it can call, and which says nothing at all
- * about MCP servers, skills, experts or recipes. This tool is the answer, so
+ * about MCP servers, skills or recipes. This tool is the answer, so
  * the things worth pinning are: it reports BOTH numbers when they differ, and
  * one dead subsystem does not take the whole report down with it.
  */
@@ -81,7 +81,7 @@ describe('asking for one part', () => {
 
   test('an unknown section falls back to the whole report rather than erroring', async () => {
     const out = await run(buildCapabilitiesHandler(ctx()), { section: 'nonsense' });
-    for (const key of ['tools', 'mcpServers', 'skills', 'experts', 'pipelines']) {
+    for (const key of ['tools', 'mcpServers', 'skills', 'pipelines']) {
       expect(out).toHaveProperty(key);
     }
   });
@@ -95,12 +95,12 @@ describe('asking for one part', () => {
 
 describe('when a subsystem is down', () => {
   test('the section says so and the rest of the report still arrives', async () => {
-    // Nothing is stubbed here: with no DB connection the skills/experts/pipeline
+    // Nothing is stubbed here: with no DB connection the skills/pipeline
     // sections genuinely fail, which is the condition being asserted.
     const out = await run(buildCapabilitiesHandler(ctx({ registered: [handler('read_file', 'filesystem')] })));
 
     expect(out.tools).toMatchObject({ callable: 1 });
-    for (const key of ['skills', 'experts', 'pipelines']) {
+    for (const key of ['skills', 'pipelines']) {
       const section = out[key] as { unavailable?: string };
       expect(
         section && (Array.isArray(section) || typeof section.unavailable === 'string'),
@@ -118,7 +118,7 @@ describe('when a subsystem is down', () => {
 describe('what it must not hand out', () => {
   test('no userId means no skills, not everyone\'s skills', async () => {
     // `skillRepository.findAll(undefined)` returns every user's rows unfiltered.
-    // The experts and pipeline sections beside it already fail closed; this one
+    // The pipeline section beside it already fails closed; this one
     // failed open, guarded only by every caller happening to pass a userId.
     const out = await run(buildCapabilitiesHandler(ctx({ userId: undefined })), { section: 'skills' });
     expect(out.skills).toEqual([]);
@@ -132,8 +132,8 @@ describe('what it must not hand out', () => {
   test('a failing section reports a capped reason, not a raw driver error', async () => {
     // Driver errors carry connection strings; a tool result is the one place
     // they would be echoed straight back into a transcript.
-    const out = await run(buildCapabilitiesHandler(ctx({ userId: 'u1' })), { section: 'experts' });
-    const section = out.experts as { unavailable?: string } | unknown[];
+    const out = await run(buildCapabilitiesHandler(ctx({ userId: 'u1' })), { section: 'skills' });
+    const section = out.skills as { unavailable?: string } | unknown[];
     if (!Array.isArray(section) && section.unavailable !== undefined) {
       expect(section.unavailable.length).toBeLessThanOrEqual(120);
     }

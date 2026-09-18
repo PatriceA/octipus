@@ -40,7 +40,7 @@ describe('findSlashCommand', () => {
     expect(findSlashCommand('?')?.name).toBe('help');
     expect(findSlashCommand('cls')?.name).toBe('clear');
     expect(findSlashCommand('reload')?.name).toBe('reload-extensions');
-    expect(findSlashCommand('e')?.name).toBe('expert');
+    expect(findSlashCommand('s')?.name).toBe('status');
   });
 
   test('case-insensitive lookup', () => {

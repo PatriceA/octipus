@@ -358,7 +358,7 @@ export class OctipusTuiApp {
       this.handleCommand(text.slice(1));
       return;
     }
-    this.adapter.sendChat(this.sessionId, text, undefined, this.projectPath);
+    this.adapter.sendChat(this.sessionId, text, this.projectPath);
   }
 
   // ── Voice (push-to-talk) ───────────────────────────────────────

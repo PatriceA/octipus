@@ -30,7 +30,6 @@ import { documentRoutes } from './routes/documents';
 import { emailRoutes } from './routes/email';
 import { evalRoutes } from './routes/eval';
 import { evaluationRoutes } from './routes/evaluations';
-import { expertRoutes } from './routes/experts';
 import { gatewayRoutes } from './routes/gateway';
 import { healthRoutes } from './routes/health';
 import { hookRoutes } from './routes/hooks';
@@ -353,7 +352,6 @@ export function createServer() {
         .use(oauthRoutes)
         .use(settingsRoutes)
         .use(capabilitiesRoutes)
-        .use(expertRoutes)
         .use(skillTopicAssignmentRoutes)
         .use(skillRoutes)
         .use(artifactRoutes)

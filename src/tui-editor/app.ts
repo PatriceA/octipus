@@ -452,7 +452,7 @@ export class OctipusEditorApp {
       this.adapter.sendCommand(name, value ? { value } : undefined);
       return;
     }
-    this.adapter.sendChat(this.sessionId, text, undefined, this.projectPath);
+    this.adapter.sendChat(this.sessionId, text, this.projectPath);
   }
 
   // ── Hotkeys ────────────────────────────────────────────────────

@@ -17,7 +17,6 @@ export * from './compaction-entries';
 export * from './documents';
 export * from './embeddings';
 export * from './evaluations';
-export * from './experts';
 export * from './hook-executions';
 export * from './hooks';
 export * from './impersonation-sessions';

@@ -73,15 +73,6 @@ export interface ChatResponse {
   };
 }
 
-export interface Expert {
-  id: string;
-  name: string;
-  description?: string;
-  icon?: string;
-  role: string;
-  isSystem: boolean;
-  modelPreference?: string;
-}
 
 export interface ToolInfo {
   id: string;
@@ -159,10 +150,6 @@ export class OctiClient {
     });
   }
 
-  async chatWithExpert(message: string, expertId: string, sessionId?: string): Promise<ChatResponse> {
-    return this.chat(message, sessionId, expertId);
-  }
-
   async createSession(opts: { channelType?: string; title?: string; context?: Record<string, unknown> }): Promise<{ id: string }> {
     return this.request<{ id: string }>('/api/sessions', {
       method: 'POST',
@@ -173,17 +160,6 @@ export class OctiClient {
         context: opts.context,
       }),
     });
-  }
-
-  // ─── Experts ───
-
-  async listExperts(): Promise<Expert[]> {
-    const res = await this.request<{ experts: Expert[] }>('/api/experts');
-    return res.experts || [];
-  }
-
-  async getExpert(id: string): Promise<Expert> {
-    return this.request<Expert>(`/api/experts/${id}`);
   }
 
   // ─── Search ───

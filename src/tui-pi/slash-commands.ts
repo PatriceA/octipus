@@ -42,9 +42,7 @@ export const OCTIPUS_SLASH_COMMANDS: OctipusSlashCommand[] = [
 
   // ── Gateway built-ins (src/core/gateway/commands.ts) ───────────
   gw({ name: 'help',      description: 'List available commands',                            aliases: ['h', '?'] }),
-  gw({ name: 'status',    description: 'Show current session status, agents, and expert',   aliases: ['s'] }),
-  gw({ name: 'expert',    description: 'Switch expert or list available experts',
-       argumentHint: '<name|reset>',                                                         aliases: ['e'] }),
+  gw({ name: 'status',    description: 'Show current session status and agents',            aliases: ['s'] }),
   gw({ name: 'abort',     description: 'Cancel running agents',                              aliases: ['stop', 'cancel'] }),
   { name: 'plan-hide', description: 'Collapse the expanded plan', source: 'tui' },
   gw({ name: 'work-plan', description: 'Show the current work plan, evidence, and feedback' }),

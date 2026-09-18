@@ -90,7 +90,7 @@ test('a refused /resume rolls the session back so the next message does not go a
   expect(gateway.getSessionId()).toBe(before);
   expect(t.text()).toContain('Could not open session 11111111: Session not found');
   t.submit('hello again');
-  expect(gateway.sendChat).toHaveBeenCalledWith(before, 'hello again', undefined, undefined);
+  expect(gateway.sendChat).toHaveBeenCalledWith(before, 'hello again', undefined);
   await t.app.stop();
 });
 

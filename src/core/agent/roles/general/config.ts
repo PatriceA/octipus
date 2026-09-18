@@ -33,7 +33,7 @@ export const meta: RoleMeta = {
     "Provide sources or reasoning for factual claims",
     "Clearly state when you are uncertain or speculating",
     "Keep responses focused and proportional to the question complexity",
-    "Respect the user\\'s stated preferences and context",
+    "Respect the user\'s stated preferences and context",
   ],
   defaultTopic: 'general',
 };

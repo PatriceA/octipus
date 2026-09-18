@@ -9,7 +9,6 @@ import { getGateway } from '@/core/gateway';
 import { connectEventBridge } from '@/core/gateway/event-bridge';
 import { getGatewayHub } from '@/core/gateway/hub';
 import { wireMessageHandler } from '@/core/gateway/message-handler';
-import { seedExperts } from '@/db/seed-experts';
 import { seedPresetTemplates } from '@/db/seed-presets';
 import { loadRolesFromDb, seedRoles } from '@/db/seed-roles';
 import { seedSkillTopicAssignments } from '@/db/seed-skill-topic-assignments';
@@ -57,7 +56,6 @@ async function main() {
     };
     await seedStep('preset-templates', seedPresetTemplates);
     await seedStep('skills', seedSkills);
-    await seedStep('experts', seedExperts);
     await seedStep('skill-topic-assignments', seedSkillTopicAssignments);
     await seedStep('roles', seedRoles);
     await loadRolesFromDb();

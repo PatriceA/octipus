@@ -168,7 +168,6 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
           user.id,
           message,
           channel,
-          body.expertId,
           body.fileRefs,
           body.outputMode,
         );
@@ -203,7 +202,6 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
          */
         routedRoles: t.Optional(t.Boolean()),
         channel: t.Optional(t.String()),
-        expertId: t.Optional(t.String()),
         devMode: t.Optional(t.Boolean()),
         projectPath: t.Optional(t.String()),
         // Edit-and-continue: session files to inline (current version) into
