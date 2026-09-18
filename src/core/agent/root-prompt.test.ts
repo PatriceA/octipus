@@ -62,10 +62,21 @@ describe('buildDelegationPolicy', () => {
     }
   });
 
-  test('full keeps the multi-spawn and pipeline surface lite must not see', () => {
+  test('full keeps the multi-spawn surface lite must not see', () => {
     const full = buildDelegationPolicy(false);
     expect(full).toContain('parallel');
-    expect(full).toContain('create_pipeline');
+  });
+
+  test('neither tier offers a pipeline as a choice the model makes', () => {
+    // A pipeline is the user's workflow in the user's order. The tool stays
+    // registered and `discoverOnly`, so the policy points at list_tools instead
+    // of describing stages the model might pick on its own.
+    for (const tier of [true, false]) {
+      const policy = buildDelegationPolicy(tier);
+      expect(policy).not.toMatch(/use create_pipeline/i);
+    }
+    expect(buildDelegationPolicy(false)).toMatch(/pipelines are the user's to direct/i);
+    expect(buildDelegationPolicy(false)).toMatch(/list_tools/);
   });
 });
 

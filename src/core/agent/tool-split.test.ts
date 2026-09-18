@@ -94,3 +94,22 @@ describe('isLongTailHandler', () => {
     expect(isLongTailHandler(handler('x'), ['websearch'])).toBe(false);
   });
 });
+
+describe('discoverOnly', () => {
+  const hidden = (name: string): ToolHandler => ({
+    name, description: `desc ${name}`, parameters: { type: 'object', properties: {} },
+    discoverOnly: true, execute: async () => null,
+  });
+
+  test('puts a discoverOnly handler in the tail even with no toolId', () => {
+    // A meta-tool has no toolId, so without the flag it stays core forever.
+    const { core, longTail } = splitRoleTools([handler('spawn_child'), hidden('create_pipeline')], ['filesystem']);
+    expect(core.map((t) => t.name)).toEqual(['spawn_child']);
+    expect(longTail.map((t) => t.name)).toEqual(['create_pipeline']);
+  });
+
+  test('keeps it in the tail even when its name is in the core set', () => {
+    // The advertisement list must not be able to drag it back into view.
+    expect(isLongTailHandler(hidden('create_pipeline'), ['create_pipeline'])).toBe(true);
+  });
+});

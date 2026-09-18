@@ -86,6 +86,18 @@ export interface ToolHandler {
   previewParam?: string;
   /** Custom preview renderer (overrides `previewParam`). Truncated to 80 chars. */
   previewFn?: (params: Record<string, unknown>) => string;
+  /**
+   * Registered and callable, but never advertised up front — the model reaches
+   * it through `list_tools`/`describe_tool` after the user asks for it by name.
+   *
+   * For a capability the model should NOT choose on its own. A pipeline is the
+   * case this exists for: it is the user's workflow, in the user's order, and
+   * offering it on every turn cost ~1.6k tokens of schema for a branch taken
+   * zero times across a full arena round. The flag is read by
+   * `isLongTailHandler`, so it only bites in lazy mode — in full-schema mode
+   * there is no discovery tool to reach it with, and hiding it would orphan it.
+   */
+  discoverOnly?: boolean;
   execute: (args: Record<string, unknown>, context: AgentContext) => Promise<unknown>;
 }
 

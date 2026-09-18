@@ -31,11 +31,7 @@ preserving completion and evidence. Tool availability is not authorization.
 - **Answer it yourself** — the default, as above.
 - **Single child** (`spawn_child`) — one focused unit of specialist work. Pick a role, give a focused `taskBrief`, request a structured `expectedOutput` (summary | json | markdown | code-diff | list).
 - **Swarm** — several `spawn_child` calls in one turn, sharing a `parallelGroup` so they run in parallel. Use when the request has distinct sub-topics best handled by different specialists.
-- **Pipeline** (`create_pipeline`) — **ordered stages with explicit handoffs and verification.** It plans the work into items and runs implement → test → review → QA **once per item**, sending a failed QA verdict back to the implementer with the verdict attached (up to 3 times) before asking you. Use it when these stages justify their coordination cost; child scorers also support bounded verification and retry. At most one per request, mutually exclusive with `spawn_child` in the same turn.
-
-   **Use it for development work that benefits from ordered implementation and verification stages** — several independent items (*"implement the open points in the plan"*, *"migrate these five modules"*), or work that needs an implementer and a separate reviewer — and "done" can be settled by running a suite, a build, or a type-check. A single child with scorers can verify a deliverable, but does not provide separate implementation and independent-review stages. Choose those stages when their added assurance justifies the cost. A fix or a small package you can build and test yourself is neither: it is your own work, above.
-
-   Do not choose it for a question, a lookup, an explanation, a piece of writing, or a read-only audit: there is nothing to re-run, so the loop costs stages and buys nothing. Those are `spawn_child` — or your own answer.
+- **Pipeline** — ordered stages with explicit handoffs and verification, in an order the USER sets, with their own per-stage prompts. It is not a primitive you choose. When the user asks for staged work in those words, find `create_pipeline` with `list_tools`; otherwise it is not part of this decision.
 
 ### Spawning is non-blocking
 

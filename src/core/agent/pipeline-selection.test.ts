@@ -10,6 +10,14 @@
  * which is exactly the 2026-08-01 run that reported seven green stages over an
  * empty workspace.
  *
+ * 2026-09-18 reversed the first half: the model no longer picks a pipeline at
+ * all. It is the user's workflow in the user's order, so the delegation prompt
+ * stopped describing it and the tool became `discoverOnly` — registered on every
+ * root turn, advertised on none, reached through `list_tools` when the user asks
+ * for staged work by name. What is asserted below is therefore the DESCRIPTION,
+ * which is the rail the model reads after discovering it, and the prompt's
+ * silence.
+ *
  * The second half of this file is the more important half. `spawn_child`'s
  * schema told the parent a failed scorer meant "retry or correct" while the
  * delegation prompt told it never to respawn; the two shipped contradicting
@@ -41,7 +49,7 @@ function pipelineToolDescription(): string {
   return tool!.description ?? '';
 }
 
-describe('create_pipeline — chosen by what the work is, not by what the user called it', () => {
+describe('create_pipeline — the user chooses it, the description keeps it honest', () => {
   test('states the two conditions that make a pipeline right', () => {
     const d = pipelineToolDescription();
     // (a) several items that must be built, (b) done is settled by running.
@@ -66,7 +74,30 @@ describe('create_pipeline — chosen by what the work is, not by what the user c
     expect(d).toMatch(/question|lookup|explanation/i);
     expect(d).toMatch(/read-only|audit/i);
     expect(d).toMatch(/ONCE per request/i);
-    expect(delegationPrompt).toMatch(/read-only audit/i);
+  });
+
+  test('the prompt hands the choice to the user and points at discovery', () => {
+    // 2026-09-18: the model no longer picks a pipeline. It is the user's
+    // workflow in the user's order, so the delegation prompt stopped describing
+    // stages to choose between and names the way to find the tool instead. The
+    // tool's own description is unchanged — it is the rail the model reads
+    // AFTER the user has asked for one, which is when those exclusions matter.
+    expect(delegationPrompt).toMatch(/order the USER sets/i);
+    expect(delegationPrompt).toMatch(/list_tools/);
+    expect(delegationPrompt).not.toMatch(/Use it when these stages justify/i);
+  });
+
+  test('the pipeline family is registered but never advertised', () => {
+    const node = { id: 'root', rootSessionId: 's1', depth: 0,
+      budget: { tokens: { cap: 1, used: 0 }, wallClockMs: { cap: 1, startedAt: 0 },
+        fanOut: { cap: 1, used: 0 }, depth: 0 },
+      allowedToolIds: new Set<string>() } as unknown as AgentNode;
+    const tools = createMetaTools({} as never, { parentNode: node });
+    for (const name of ['create_pipeline', 'list_pipeline_templates', 'list_recipes', 'invoke_recipe']) {
+      const tool = tools.find((t) => t.name === name);
+      expect(tool, `${name} must stay registered`).toBeDefined();
+      expect(tool?.discoverOnly, `${name} must not be advertised up front`).toBe(true);
+    }
   });
 
   test('says what the loop actually does, so the choice is informed', () => {

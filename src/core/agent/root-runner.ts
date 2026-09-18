@@ -78,7 +78,7 @@ export function buildDelegationPolicy(isLite: boolean): string {
   const policy = `\n\nYou hold real tools: finish bounded tasks yourself when your own tools suffice and you can verify the outcome. For a clear specialist task or an explicit delegation request, call spawn_child before reading implementation files: do not investigate the whole task and pay a child to investigate it again. If scope is unclear, resolve only the specific uncertainty. Once you start a bounded task, finish it instead of delegating the same work. If unexpected complexity or distinct remaining work warrants a later coding handoff, provide handoff with reason, completedWork, remainingWork, files (ownership), and verification. Transfer findings and actual check results; do not restart completed investigation. Independent review may deliberately re-read to verify. Never assume a capability is missing without checking available tools or the specialist catalog; report actual unavailability or denial honestly. Existing permissions still apply.`;
   return policy + (isLite
     ? ' If delegation is needed, call spawn_child EXACTLY ONCE, then assess its result and answer; otherwise work directly.'
-    : ' Use specialists for sustained domain judgment, independent verification or useful parallel work. Use create_pipeline for ordered stages whose handoffs and verification justify the coordination cost, or an explicitly requested multi-stage workflow. You remain responsible for checking and synthesizing the result.');
+    : ' Use specialists for sustained domain judgment, independent verification or useful parallel work. Staged pipelines are the user\'s to direct, not yours to choose: if they ask for one in those words, look it up with list_tools. You remain responsible for checking and synthesizing the result.');
 }
 
 /**
@@ -315,7 +315,10 @@ export async function runRootAgent(
     try {
       const { splitRoleTools } = await import('./tool-split');
       const { buildToolDiscoveryHandlers } = await import('@/tools/tool-discovery');
-      const { longTail } = splitRoleTools(rootTools, rootCoreToolIds);
+      // Meta-tools go through the split too, so a `discoverOnly` one (the
+      // pipeline family) lands in the tail and `list_tools` can find it. The
+      // rest have no toolId and no flag, so they stay core exactly as before.
+      const { longTail } = splitRoleTools([...rootTools, ...metaTools], rootCoreToolIds);
       const discoveryHandlers = buildToolDiscoveryHandlers(longTail);
       if (discoveryHandlers.length > 0) {
         // Everything stays REGISTERED (dispatch must keep working); only what is
@@ -327,7 +330,11 @@ export async function runRootAgent(
         turnTools = [...lazyCore, selfReport(lazyCore)];
         toolAdvertisement = {
           mode: 'lazy',
-          coreToolIds: [...rootCoreToolIds, ...metaTools.map((t) => t.toolId ?? t.name), 'self_report'],
+          coreToolIds: [
+            ...rootCoreToolIds,
+            ...metaTools.filter((t) => !t.discoverOnly).map((t) => t.toolId ?? t.name),
+            'self_report',
+          ],
         };
         rootAllowedToolIds.add('tool_discovery');
         coreLogger.info(

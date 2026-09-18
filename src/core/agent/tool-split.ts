@@ -26,6 +26,9 @@ const ALWAYS_CORE_TOOL_IDS: ReadonlySet<string> = new Set(['mcp', 'tool_discover
  * core — we only ever hide a handler when we're sure it's a non-core built-in.
  */
 export function isLongTailHandler(handler: ToolHandler, coreToolIds: string[]): boolean {
+  // Checked before the toolId rules: a meta-tool has no toolId, so without this
+  // it would be core forever no matter what the core set says.
+  if (handler.discoverOnly === true) return true;
   const id = handler.toolId;
   if (id === undefined) return false;
   if (ALWAYS_CORE_TOOL_IDS.has(id)) return false;

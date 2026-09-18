@@ -58,10 +58,13 @@ export interface RootSwarmRefs {
  * Instead of filesystem/shell/git, these control the orchestration flow.
  *
  * `spawn_child` is the general delegation mechanism (see swarm-design.md).
- * `create_pipeline` is NOT a last resort — it is the preferred primitive for
- * development work, because it is the only one that verifies a deliverable and
- * re-does it when the check fails. Pipelines are single-shot — once one is
- * created, no further delegation is allowed in this turn.
+ * `create_pipeline` is the USER's workflow primitive, not the model's: their
+ * order, their per-stage prompts, and it is reached through `list_tools` when
+ * they ask for staged work by name. It is registered on every root turn and
+ * advertised on none (`discoverOnly`) — offering it up front cost ~1.6k tokens
+ * of schema per call for a branch taken zero times in a full arena round.
+ * Pipelines are single-shot — once one is created, no further delegation is
+ * allowed in this turn.
  */
 export function createMetaTools(
   rootAgent: AgentService,
@@ -118,6 +121,10 @@ export function createMetaTools(
   tools.push(
     {
       name: 'create_pipeline',
+      // User-directed, not model-chosen: a pipeline is the user's workflow in the
+      // user's order, so it is reached through `list_tools` when they ask for
+      // one by name. See ToolHandler.discoverOnly.
+      discoverOnly: true,
       final: true,
       description:
         'Run ordered development stages with explicit handoffs and verification. A pipeline plans work into items, then runs implement -> test -> review -> QA ONCE PER ITEM; a failing QA verdict sends the item back to the implementer with its evidence (up to 3 times) before asking you. ' +
@@ -206,6 +213,10 @@ export function createMetaTools(
     },
     {
       name: 'list_recipes',
+      // User-directed, not model-chosen: a pipeline is the user's workflow in the
+      // user's order, so it is reached through `list_tools` when they ask for
+      // one by name. See ToolHandler.discoverOnly.
+      discoverOnly: true,
       description:
         'List available recipes (parameterized pipeline templates) with their typed parameters. ' +
         'Call before invoke_recipe / create_pipeline with params so you supply the right inputs.',
@@ -229,6 +240,10 @@ export function createMetaTools(
     },
     {
       name: 'invoke_recipe',
+      // User-directed, not model-chosen: a pipeline is the user's workflow in the
+      // user's order, so it is reached through `list_tools` when they ask for
+      // one by name. See ToolHandler.discoverOnly.
+      discoverOnly: true,
       final: true,
       description:
         'Run a recipe (parameterized pipeline template) by name with parameter values. ' +
@@ -273,6 +288,10 @@ export function createMetaTools(
     },
     {
       name: 'list_pipeline_templates',
+      // User-directed, not model-chosen: a pipeline is the user's workflow in the
+      // user's order, so it is reached through `list_tools` when they ask for
+      // one by name. See ToolHandler.discoverOnly.
+      discoverOnly: true,
       description:
         'List available pipeline templates that can be used with create_pipeline. ' +
         'Returns template names, descriptions, and stage counts.',
