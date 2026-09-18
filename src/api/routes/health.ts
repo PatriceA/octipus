@@ -3,6 +3,7 @@ import { getUMI } from '@/channels/interface';
 import { getGateway } from '@/core/gateway';
 import { checkDbHealth } from '@/db/postgres';
 import { checkCacheHealth } from '@/db/cache';
+import { getAppVersion } from '@/utils/version';
 import { getHealthChecker } from '@/models/health-checker';
 import { getModelRegistry } from '@/models/model-registry';
 import { getProviderRouter } from '@/models/providers';
@@ -149,6 +150,10 @@ export const healthRoutes = new Elysia({ prefix: '/health' })
 
       return {
         status: status.state === 'running' ? 'ok' : 'degraded',
+        // Which build is actually answering. An operator comparing a bug report
+        // against a release had no way to ask, and "the version in the repo I
+        // deployed from" is a guess, not a reading.
+        version: getAppVersion(),
         state: status.state,
         uptime: status.uptime,
         startedAt: status.startedAt,

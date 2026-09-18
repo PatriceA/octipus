@@ -607,15 +607,8 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     description: 'Show Octipus version and build info',
     minTrustLevel: 'user',
     handler: async () => {
-      try {
-        const { readFileSync } = await import('fs');
-        const { resolve } = await import('path');
-        const pkgPath = resolve(process.cwd(), 'package.json');
-        const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
-        return { text: `Octipus v${pkg.version || '0.0.0'} (Node ${process.versions.node})` };
-      } catch {
-        return { text: `Octipus (Node ${process.versions.node})` };
-      }
+      const { getAppVersion } = await import('@/utils/version');
+      return { text: `Octipus v${getAppVersion()} (Node ${process.versions.node})` };
     },
   });
 

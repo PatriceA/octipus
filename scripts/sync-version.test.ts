@@ -1,6 +1,6 @@
 import { join, resolve, sep } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { isValidVersion, normalizeVersion, resolveTargetRoot, setVersion } from './sync-version';
+import { isValidVersion, normalizeVersion, resolveTargetRoot, setCargoVersion, setVersion } from './sync-version';
 
 describe('normalizeVersion', () => {
   test('strips a leading v', () => {
@@ -74,5 +74,36 @@ describe('resolveTargetRoot', () => {
     expect(resolveTargetRoot(undefined, scriptDir)).toBe(join(sep, 'tooling'));
     const override = join(sep, 'release', 'payload');
     expect(resolveTargetRoot(override, scriptDir)).toBe(resolve(override));
+  });
+});
+
+describe('setCargoVersion', () => {
+  const manifest = [
+    '[package]',
+    'name = "octipus-desktop"',
+    'version = "0.1.0"',
+    'edition = "2021"',
+    '',
+    '[dependencies]',
+    'serde = { version = "1.0", features = ["derive"] }',
+    'tauri = { version = "2.11.3" }',
+    '',
+  ].join('\n');
+
+  test('rewrites the [package] version', () => {
+    expect(setCargoVersion(manifest, '0.5.0')).toContain('version = "0.5.0"');
+  });
+
+  test('leaves every dependency version alone', () => {
+    // The reason this is not a bare regex: each dependency below carries a
+    // `version` too, and rewriting those pins the whole tree to the release.
+    const out = setCargoVersion(manifest, '0.5.0');
+    expect(out).toContain('serde = { version = "1.0", features = ["derive"] }');
+    expect(out).toContain('tauri = { version = "2.11.3" }');
+    expect(out.match(/0\.5\.0/g)).toHaveLength(1);
+  });
+
+  test('throws when there is no [package] table', () => {
+    expect(() => setCargoVersion('[dependencies]\nserde = "1"\n', '0.5.0')).toThrow();
   });
 });

@@ -6,7 +6,7 @@
 
 A self-hosted AI workspace for projects, knowledge, and connected tools.
 
-> **v0.4 · alpha · building in public.** A working, opinionated platform — not a finished product. Breaking changes happen; migration notes ship with them. Treat it as a foundation to build on.
+> **v0.5 · alpha · building in public.** A working, opinionated platform — not a finished product. Breaking changes happen; migration notes ship with them. Treat it as a foundation to build on.
 
 **Website:** [https://octipus.cc](https://octipus.cc)
 
@@ -88,11 +88,20 @@ Channels → Gateway (WebSocket, typed Zod protocol)
                   → Postgres + pgvector (or embedded PGlite)
 ```
 
-**Hierarchy:** Tools (executable capabilities) → Skills (domain knowledge) → Experts (pre-configured personas) → Agents (runtime workers, 3-level Swarm via `spawn_child`) → Pipelines (sequential handover with approval gates).
+**Hierarchy:** Tools (executable capabilities) → Skills (domain knowledge) → Roles (a tool set, a permission boundary and a prompt, editable from the Topics page) → Lanes (which model serves a kind of work) → Agents (runtime workers, 3-level Swarm via `spawn_child`) → Pipelines (sequential handover with approval gates).
 
 Deep dive: [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md) · [.octipus/swarm-design.md](.octipus/swarm-design.md).
 
-## Key points covered in v0.4
+## Key points covered in v0.5
+
+- **One model per kind of work** — a request is routed to a lane (`build`, `everyday`, `verify`, `research`, `background`) before the turn starts, and each lane binds its own model on the Topics page. `verify` exists to be a *different* model from the one that wrote the code. Retired topic names still resolve, so existing bindings keep working.
+- **Roles replace experts, and you can write your own** — the expert layer is gone; a role carries the tools, the permission boundary, the prompt and the standing rules. Roles are editable data now: add, edit or delete one from the Topics page and it is spawnable immediately, no restart.
+- **The tool list is chosen for the message, not the role** — the advertised core shrinks to what the turn actually needs (never grows, always fails open). The standing prompt fell from 20,951 tokens a call to 12,357, and the same work measures 15–31% cheaper per run than v0.4.
+- **Vendor CLI sessions survive the turn** — Claude Code and Codex runs resume across turns with only the new turn sent and Octipus's compaction piped through, both CLI paths isolated from the host's MCP config.
+- **Honest token accounting** — a billable-token figure that excludes cache reads, read by every cost gate and budget; cache counters recognised across Anthropic, OpenAI-compatible and LiteLLM; prompts splittable at a volatile marker so the static tier sits ahead of the cache breakpoint.
+- **Windows, desktop and phones** — a real Windows portability pass, a self-healing desktop preflight, and push notifications to paired phones for approvals and permission requests.
+
+## Earlier: key points covered in v0.4
 
 - **Install and setup** — `--quick` route (embedded storage, five prompts, ends with the web UI open), locked `npm ci` installs with every surface built before the first start, a Docker one-command installer, Node 24.19 floor, and a Windows installer with its own CI job. The wizard binds the chosen model to every text topic, verifies provider settings actually saved, and logs in on rerun instead of re-registering.
 - **Honest diagnostics** — `octi doctor` reads the checkout's `.env`, asks the running backend for provider status, and no longer reports a wrong API key as "not configured".

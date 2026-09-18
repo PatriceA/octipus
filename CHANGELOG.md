@@ -7,6 +7,193 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+## v0.5 — One model per kind of work (2026-09-18)
+
+114 commits since v0.4. The theme is that Octipus stopped asking one model to do
+everything: a request is now routed to a *lane* before the turn starts, each lane
+carries its own model binding, and the layer that used to sit between a request
+and its model — the expert — is gone. Alongside that, a conversation with a
+vendor CLI survives the turn that started it, and the token ledger finally tells
+the truth about what a cached prompt costs.
+
+Measured against the same four-task harness the previous release was measured on
+(one model, one endpoint, ten harnesses — <https://harness-arena.net>), the same
+work is 15–31% cheaper per run than v0.4 and the standing prompt fell from 20,951
+tokens a call to 12,357.
+
+### Lanes: the model is chosen per request, not per install
+
+`agents` — the one lane that served every worker — is split, and two more lanes
+join it. The full set is now `build`, `everyday`, `verify`, `research` and
+`background`, and each binds its own primary, backup and executor model on the
+Topics page.
+
+- **`build`** takes implementation, debugging, architecture and anything that
+  leaves an artefact someone later depends on. This is where a stronger model
+  changes the quality of the answer rather than whether one arrives.
+- **`everyday`** takes chat, lookups, classification, summaries and drafting —
+  high volume, low stakes, wrong answers visible immediately.
+- **`verify`** takes review and QA, and exists to be a *different* model from the
+  one that did the work: a second opinion from the model that wrote the code
+  shares the blind spot that produced it.
+- **`research`** keeps its own binding because it is the highest-token work in
+  the system and should be pinnable somewhere cheap on its own.
+- **`background`** takes memory extraction, summarisation and LLM-as-judge.
+
+Routing happens *before* the turn, in `src/core/agent/lane-intent.ts`, and the
+rule is the cost of being wrong. A model sent to the wrong tool notices and calls
+`list_tools`; a model sent to the wrong lane notices nothing — a weak model does
+not stall on hard work, it produces something plausible and finishes. So work
+that names a file, a stack trace or a diff fails *up* into `build`, and
+everything else falls to `everyday`.
+
+Every retired topic name still resolves (`coding`, `qa`, `writing`, `chat`,
+`voice` and the rest alias to their lane), so existing bindings, scripts and
+plugins keep working.
+
+`spawn_child`'s `topic` argument now actually selects the child's lane instead of
+only labelling the topic path, and `escalate_to_expert` becomes
+`escalate_to_other_lane` — it refuses when the lane named resolves to the model
+the parent is already on, before the escalation budget is spent.
+
+### Roles replace experts, and you can write your own
+
+The `presets` table and the whole expert layer are gone (migration
+`0105_drop_experts`). An expert was a row that paired a role with tools, a
+prompt, critical rules and a model preference — and every one of those parts
+already had a better home:
+
+| was on the expert | lives now |
+|---|---|
+| role + tools | the role itself |
+| critical rules | `RoleMeta.criticalRules`, appended to the role prompt |
+| skills | skill↔role assignments, keyed by role name |
+| deliverable template | the role's `prompt.md` OUTPUT section |
+| model preference | the lane the role resolves to |
+
+The practical failure it removes: standing instructions used to be a *database*
+lookup, so a seed that had not run — or a row an operator deleted — silently
+produced a specialist with no rules, and nothing said so. They are behaviour for
+a kind of work, so they now belong to the role that does it.
+
+Roles themselves became editable data rather than sixteen folders in the source
+tree. The Topics page lists each lane's roles underneath it; an admin can add a
+role with a name, a one-line description, a prompt and a tool list, edit any
+shipped role, and delete one they created. A created role joins the live registry
+immediately — no restart — and becomes spawnable at once.
+
+How a role gets *used* is worth stating plainly, because the grouping does not
+say it: nothing selects a role out of a lane. The arrow runs role → lane. A role
+is chosen by an agent naming it in `spawn_child`, off its one-line description,
+which is why the description is a required field rather than a comment — a role
+with a blank one is a bare name in the delegation menu that nobody picks.
+
+### The advertised tool list is chosen for the message
+
+Lazy tool discovery already split a role's tools into an advertised core and a
+long tail reachable through `list_tools`. That split was per role — identical on
+every turn — so a coding turn that only touches files and a shell still paid for
+the user's notes, to-do list, knowledge base, chat channels, repo registry and
+web search on every single call.
+
+The core set is now a property of the **message**. Two rules keep it survivable:
+it can only ever *shrink* a role's own list, so nothing new is granted and the
+role's `toolIds` remains the permission boundary; and it fails open, so a tool
+group with no entry in the intent table is always kept and shipping a new tool
+cannot silently lose it. Swarm children get the same treatment as the root.
+
+Measured on the arena's model: 20,951 tokens a call → 12,357.
+
+### A vendor CLI conversation survives the turn
+
+Claude Code and Codex runs are resumed across turns instead of starting cold
+every time: the vendor session id is stored on the Octipus session, only the new
+turn is sent, and Octipus's own compaction is piped through to the vendor
+session. A resume that fails falls back to a cold run rather than failing the
+turn. `cli.reuseSessions` is **removed** — reuse is always on, and an adapter
+declares whether it can resume at all.
+
+Two isolation holes closed along the way: the one-shot CLI provider path and the
+agent CLI path both now load an isolated MCP configuration unconditionally,
+rather than inheriting whatever MCP servers the host user happens to have
+configured. CLI prompts are sent on stdin, because a multi-line argv is silently
+truncated on Windows, and the tool bridge no longer returns fault detail to its
+caller. Runaway completions have a cap and a kill.
+
+### The token ledger tells the truth about caching
+
+- A **billable-token** figure that excludes cache reads, and every cost gate,
+  budget comparison and spawn decision now reads *that* rather than the grand
+  total. A cached prompt was previously charged against budgets at full price.
+- Anthropic, OpenAI-compatible and LiteLLM cache counters are recognised and
+  logged, including the cache-write/cache-read split, with a warning when cache
+  tokens arrive on a model that has no cache pricing configured.
+- Every assembled system prompt is splittable at a volatile marker, so the
+  static tier can sit ahead of a provider's cache breakpoint instead of being
+  invalidated by a per-turn block.
+- An OpenRouter conversation is kept on one endpoint, because a provider switch
+  mid-conversation throws the prompt cache away.
+- An Octipus session is one coherent conversation *across* providers.
+
+### Windows
+
+A batch of real portability work: the premise check and the docs index key paths
+the same way, shell commands keep their paths and a deadline actually kills the
+process, `devMode` accepts a Windows project path (and refuses Windows system
+directories), owner-only files are owner-only there too, CocoIndex installs, the
+real `node.exe` is spawned, CRLF is out of the tree, and Vitest can see its own
+test files.
+
+### Desktop, mobile and connectors
+
+- The desktop app runs a self-healing preflight before launch, rebuilds the
+  backend when `dist/` is older than the sources, selects its mode through Vite
+  rather than an `sh` env prefix, and stops watching the Rust build directory.
+- Paired phones get push notifications for approvals and permission requests, a
+  30-day session lifetime, and never get advertised a LAN URL they cannot reach.
+- A native multi-repo registry with Java support, ownership scoping and hardened
+  discovery; a CocoIndex Code connector; MCP stdio child-environment hardening.
+- Mutating tool calls are journalled so an uncertain outcome can be reviewed
+  after a crash or a cancellation, with cancellation plumbed through.
+- An MCP server's tool list is read to the last page, not just the first.
+
+### Operator-facing changes
+
+- **New lanes need binding.** `build`, `everyday`, `verify`, `research` and
+  `background` each take their own model on the Topics page. Retired names still
+  resolve, so nothing breaks unbound — but until you bind them, routing changes
+  the log line and nothing else.
+- **`cli.reuseSessions` is removed.** Vendor CLI session reuse is always on.
+- **The `presets` table is dropped.** If you customised an expert's prompt, copy
+  it into a skill before taking migration `0105` — that is the replacement, and
+  the reason skill proposals now promote to skills rather than to experts.
+- **`GET|POST|PATCH|DELETE /api/experts` are gone**, replaced by `/api/roles`,
+  which now also creates and deletes. `GET /api/roles` returns a role's prompt
+  and critical rules to admins only.
+- **`GET /api/health/detailed` reports the running version**, so "which build is
+  answering" is a reading rather than a guess.
+- **The version is now declared in one place.** `package.json` is the source;
+  `scripts/sync-version.ts` rewrites the web app, the plugin SDK, the MCP package
+  and the Tauri bundle from it on a release tag. Those four had said `0.1.0`
+  since the first release because they were never in the list.
+
+### Fixed
+
+- `/clear` leaked cleared conversations into resumed CLI sessions.
+- A vendor CLI session id was mistaken for an Octipus session id.
+- `codex exec resume` rejected `--sandbox`.
+- Binding a model with no embedding capability to the `embedding` topic is
+  refused at the API rather than failing at first use.
+- OpenRouter model discovery no longer sorts by price; read-only meta-tools
+  default to ALLOW; `search_files` accepts globs.
+- `defaultMaxTokens` could exceed `maxTokens` after a migration raised only one
+  of the two defaults.
+- Custom Anthropic endpoint discovery, vault secrets with surrounding
+  whitespace, and the Voyage model list.
+
+
+## Earlier — notes accumulated before v0.5
+
 ### The orchestrator hop is gone — one agent loop per turn (2026-08-23)
 
 Phase 9 of [`docs/plans/rebuild-execution-plan.md`](docs/plans/rebuild-execution-plan.md),
