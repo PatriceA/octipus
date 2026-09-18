@@ -49,10 +49,19 @@ export function extractSection(changelog: string, version: string): string {
     return lines.slice(start, end).join('\n').trim();
   };
 
-  // Prefer a heading that mentions the version.
-  const versionIdx = sections.findIndex((s) =>
-    s.heading.toLowerCase().replace(/^v/i, '').includes(wanted),
-  );
+  // Prefer the heading whose version IS the wanted one. Substring matching was
+  // wrong the moment a patch release existed: `0.5` is a substring of `0.5.1`,
+  // so re-running the v0.5 release would have published v0.5.1's notes. Compare
+  // the heading's first version-like token instead — `2026-05` has no dot and
+  // cannot be mistaken for one.
+  // Anchored at the start: a section heading NAMES its release, it does not
+  // mention one. "Earlier — everything before v0.9" is not the v0.9 section,
+  // and CONTRIBUTING documents the shape this expects — `## v<x.y> — <title>`.
+  const headingVersion = (heading: string): string | null => {
+    const m = /^v?(\d+(?:\.\d+)+)\b/i.exec(heading.trim());
+    return m ? m[1] : null;
+  };
+  const versionIdx = sections.findIndex((s) => headingVersion(s.heading) === wanted);
   if (versionIdx !== -1) return bodyOf(versionIdx);
 
   // Fall back to Unreleased.

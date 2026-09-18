@@ -7,6 +7,52 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+## v0.5.1 — The MCP server, on npm (2026-09-18)
+
+`octipus-mcp-server` is published to npm, so an MCP client — Claude Desktop,
+Claude Code, anything that speaks the protocol — can reach an Octipus instance
+without checking the repository out:
+
+```json
+{ "mcpServers": { "octipus": {
+    "command": "npx", "args": ["-y", "octipus-mcp-server"],
+    "env": { "OCTIPUS_URL": "http://localhost:3005", "OCTIPUS_API_KEY": "octi_…" } } } }
+```
+
+The package was ready to publish four releases ago and never was, which left a
+few things to fix on the way out — each of them the kind that is free to change
+now and breaking afterwards.
+
+- **The installed command was `assistant-mcp`**, named after what this project
+  was called before the rebrand. It is `octipus-mcp` now. Nothing referenced the
+  old name; every install after a publish would have.
+- **The server reported version `1.0.0` in the MCP handshake** — hardcoded, and
+  wrong in every build ever shipped. It reads its own package version now.
+- **`octipus_chat` advertised an `expert_id`** it was sending to an API that
+  stopped reading it when the expert layer was retired.
+- **The docs listed `octipus_list_experts` and `octipus_chat_with_expert`**,
+  which the server no longer registers, and claimed 88 tools across 26 groups
+  where it advertises 86 across 25 — counted by asking a running server rather
+  than by reading the source.
+- **The package now carries a LICENSE**, a homepage, an issues link and
+  keywords; npm only packs files inside the package directory, so the repo-root
+  licence never reached it.
+
+**Release process.** The gate now runs the tests of the package it publishes —
+the MCP server has its own suite that `npm test` at the root does not touch,
+which is how the expert removal broke it unnoticed. It also fails when the
+committed version does not match the tag: `sync-version` rewrites the runner's
+copy so the artifact is right, but it never wrote back to the repository, which
+is why `package.json` sat at `0.1.0` while the tags climbed to v0.4. And the
+process itself is written down in CONTRIBUTING.md rather than living in a
+workflow comment.
+
+**Topics API.** `PUT /api/topics/agents/binding` and
+`PATCH /api/topics/coding/config` write through to the lane a retired name
+resolves to instead of returning 404. The model registry and the topic-config
+store always resolved those names; only the API rejected them, which made the
+v0.5 compatibility promise false exactly where a script would lean on it.
+
 ## v0.5 — One model per kind of work (2026-09-18)
 
 114 commits since v0.4. The theme is that Octipus stopped asking one model to do
@@ -199,7 +245,7 @@ test files.
   whitespace, and the Voyage model list.
 
 
-## Earlier — notes accumulated before v0.5
+## Earlier — the backlog these releases drew from (2026-05 – 2026-08)
 
 ### The orchestrator hop is gone — one agent loop per turn (2026-08-23)
 
