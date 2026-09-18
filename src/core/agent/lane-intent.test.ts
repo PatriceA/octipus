@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { classifyMessage } from './classifier';
-import { LANE_CONFIDENCE_FLOOR, selectLane } from './lane-intent';
+import { asLane, LANE_CONFIDENCE_FLOOR, selectLane } from './lane-intent';
 
 /** Route a message the way the runtime does: classify it, then pick the lane. */
 const route = (message: string) => selectLane(message, classifyMessage(message));
@@ -87,5 +87,35 @@ describe('the four arena tasks land where they should', () => {
     // and only the mention of ledger.py kept it out of the cheap lane, which is
     // a brief one rename away from breaking.
     expect(route(PROMPTS.fix).reason).toMatch(/classified "coding"/);
+  });
+});
+
+describe('asLane — what a parent may send a child to', () => {
+  test('canonical lanes pass', () => {
+    for (const l of ['build', 'verify', 'everyday', 'research']) {
+      expect(asLane(l)).toBe(l);
+    }
+  });
+
+  test('a retired name resolves to its lane', () => {
+    expect(asLane('coding')).toBe('build');
+    expect(asLane('qa')).toBe('verify');
+    expect(asLane('chat')).toBe('everyday');
+  });
+
+  test('free text is a label, not a routing instruction', () => {
+    // `topic` on the spawn schema has always also carried things like
+    // "oauth/pkce" for the topic path; handed to the registry as a lane it
+    // resolves to nothing and fails the spawn.
+    for (const junk of ['oauth/pkce', 'benchmark results', '', undefined, null]) {
+      expect(asLane(junk)).toBeUndefined();
+    }
+  });
+
+  test('background is not somewhere a parent may send a child', () => {
+    // It is the lane for memory extraction and summarisation, bound to the
+    // cheapest thing on the box, and nothing asks it to do a task.
+    expect(asLane('background')).toBeUndefined();
+    expect(asLane('memory_extraction')).toBeUndefined();
   });
 });

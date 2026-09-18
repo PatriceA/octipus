@@ -87,3 +87,20 @@ export function selectLane(message: string, classification?: MessageClassificati
   }
   return { lane: 'everyday', reason: 'no signal for anything dearer' };
 }
+
+/**
+ * The lane a caller named, or undefined when the string is not one.
+ *
+ * `spawn_child`'s `topic` is free text and has always also carried things like
+ * "oauth/pkce" for the topic path. Handing one of those to the model registry
+ * as a lane resolves to nothing and fails the spawn, so a name that is not a
+ * lane is not a routing instruction — it is a label.
+ *
+ * `background` is deliberately not routable here: it is the lane for memory
+ * extraction and summarisation, not somewhere a parent may send its child.
+ */
+export function asLane(requested: string | undefined | null): Lane | undefined {
+  if (!requested) return undefined;
+  const canonical = canonicalTopic(requested);
+  return LANES.includes(canonical) ? (canonical as Lane) : undefined;
+}

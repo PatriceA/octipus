@@ -80,6 +80,7 @@ import {
   checkSameRole,
   denialResult as denialResultFn,
 } from './spawn-validator';
+import { asLane } from '@/core/agent/lane-intent';
 import type { ToolAdvertisement } from '@/core/agent-base';
 import { applyRoleFit, buildDelegationGuidance } from './swarm-tool';
 import {
@@ -560,6 +561,7 @@ export class SwarmSpawner {
         internal.excludeExpertId,
         childTools.length > 0,
         !!brief.plan?.length,
+        params.topic,
       ));
 
     // Small-tier child: cap the tool surface, mirroring the worker path. Role
@@ -1844,6 +1846,15 @@ export class SwarmSpawner {
      * executor); a plan-less child uses its own judgment on the primary model.
      */
     hasPlan = false,
+    /**
+     * The lane the PARENT asked for, when it wants the child on a different
+     * model than its own — `verify` for a second opinion, `everyday` for bulk
+     * work. Honoured only when it names a real text lane: `topic` is free text
+     * on the spawn schema and has always also carried things like
+     * "oauth/pkce", and handing one of those to the registry as a lane resolves
+     * to nothing and fails the spawn.
+     */
+    requestedLane?: string,
   ): Promise<{ model: string; lane: string; expertId?: string; systemPrompt?: string; isSmall: boolean }> {
     const registry = getModelRegistry();
 
@@ -1971,11 +1982,20 @@ export class SwarmSpawner {
     //      whatever the root agent happened to pick; it has no claim to
     //      being right for the child's topic. Inheriting hides routing bugs.
     //
-    // The lane is the expert's assigned topic (experts.topic) when an expert
-    // matched, else the child role — which canonicalizes via RETIRED_TOPIC_ALIASES
-    // to the 'agents' lane ('writing' for the long-form text roles:
-    // communication/pm/writing; 'research' is its own lane).
-    const lane = expertLane || childRole;
+    // The lane is what the PARENT asked for when it named a real one, else the
+    // expert's assigned topic, else the child role — which canonicalizes via
+    // RETIRED_TOPIC_ALIASES (`coding` → build, `review`/`qa` → verify, and the
+    // conversational roles → everyday). The parent's request comes first
+    // because it is the only way to say "not on my model": a review child that
+    // runs on the model that wrote the code is not a second opinion.
+    const laneRequested = asLane(requestedLane);
+    if (requestedLane && !laneRequested) {
+      coreLogger.info(
+        { childRole, requestedLane },
+        'Spawn topic is not a model lane — using it for the topic path only',
+      );
+    }
+    const lane = laneRequested || expertLane || childRole;
     let candidate = expertModel;
     // One lookup for the whole routing block — getTopicConfig is an in-memory
     // cache, but the branches below reference the executor binding repeatedly
