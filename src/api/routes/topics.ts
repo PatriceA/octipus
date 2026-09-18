@@ -4,7 +4,7 @@ import { getModelRegistry } from '@/models/model-registry';
 import { getProviderRouter } from '@/models/providers';
 import { SINGLE_MODEL_CHAT_TOPICS } from '@/models/single-model-binding';
 import { getTopicConfig, setTopicConfig } from '@/models/topic-config';
-import { TOPICS } from '@/models/topics';
+import { canonicalTopic, TOPICS } from '@/models/topics';
 import { apiLogger } from '@/utils/logger';
 
 /**
@@ -66,20 +66,26 @@ export const topicRoutes = new Elysia({ prefix: '/topics' })
         set.status = 403;
         return { error: 'Admin access required' };
       }
-      if (!TOPICS.some((t) => t.value === params.topic)) {
+      // A retired name resolves to its lane here for the same reason it does in
+      // the model registry and the topic-config store: `agents`, `coding` and
+      // `chat` are still in operators' scripts and plugins. 404-ing a name the
+      // rest of the system happily resolves makes the compatibility promise
+      // false exactly where it is easiest to depend on.
+      const topic = canonicalTopic(params.topic);
+      if (!TOPICS.some((t) => t.value === topic)) {
         set.status = 404;
         return { error: `Unknown topic: ${params.topic}` };
       }
       // True PATCH semantics: only fields present in the body change; omitted
       // fields keep their current value (a present `null` clears the field).
-      const current = getTopicConfig(params.topic);
-      const resolved = await setTopicConfig(params.topic, {
+      const current = getTopicConfig(topic);
+      const resolved = await setTopicConfig(topic, {
         executorModel: body.executorModel !== undefined ? body.executorModel : current.executorModel,
         temperature: body.temperature !== undefined ? body.temperature : current.temperature,
         maxTokens: body.maxTokens !== undefined ? body.maxTokens : current.maxTokens,
       });
-      apiLogger.info({ topic: params.topic, by: user.id }, 'Topic config updated');
-      return { topic: params.topic, ...resolved };
+      apiLogger.info({ topic, requested: params.topic, by: user.id }, 'Topic config updated');
+      return { topic, ...resolved };
     },
     {
       params: t.Object({ topic: t.String() }),
@@ -101,10 +107,11 @@ export const topicRoutes = new Elysia({ prefix: '/topics' })
         set.status = 403;
         return { error: 'Admin access required' };
       }
-      const topic = params.topic;
+      // See the PATCH above: a retired name is canonicalized, not rejected.
+      const topic = canonicalTopic(params.topic);
       if (!TOPICS.some((t) => t.value === topic)) {
         set.status = 404;
-        return { error: `Unknown topic: ${topic}` };
+        return { error: `Unknown topic: ${params.topic}` };
       }
 
       const registry = getModelRegistry();

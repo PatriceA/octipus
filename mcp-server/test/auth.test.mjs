@@ -137,13 +137,13 @@ test('OctiClient retries one 401 after refreshing a credential session', async (
       const loginNumber = calls.filter((call) => call.url.endsWith('/login-mobile')).length;
       return loginResponse(`session-${loginNumber}`);
     }
-    const apiNumber = calls.filter((call) => call.url.endsWith('/api/experts')).length;
+    const apiNumber = calls.filter((call) => call.url.endsWith('/api/models')).length;
     return apiNumber === 1
       ? new Response('expired', { status: 401 })
-      : new Response(JSON.stringify({ experts: [] }), { status: 200 });
+      : new Response(JSON.stringify({ models: [] }), { status: 200 });
   };
 
-  assert.deepEqual(await new OctiClient('http://octipus.test').listExperts(), []);
+  assert.deepEqual(await new OctiClient('http://octipus.test').listModels(), []);
   assert.deepEqual(calls.map((call) => call.authorization), [
     undefined,
     'Bearer session-1',
@@ -166,7 +166,7 @@ test('OctiClient stops after one credential retry when the second response is 40
   };
 
   await assert.rejects(
-    new OctiClient('http://octipus.test').listExperts(),
+    new OctiClient('http://octipus.test').listModels(),
     /failed: 401 still unauthorized/,
   );
   assert.equal(loginCalls, 2);
@@ -191,11 +191,11 @@ test('concurrent 401 responses share one refresh and keep the newer token', asyn
       return new Response('expired', { status: 401 });
     }
     assert.equal(init.headers?.Authorization, 'Bearer session-2');
-    return new Response(JSON.stringify({ experts: [] }), { status: 200 });
+    return new Response(JSON.stringify({ models: [] }), { status: 200 });
   };
   const client = new OctiClient('http://octipus.test');
 
-  assert.deepEqual(await Promise.all([client.listExperts(), client.listExperts()]), [[], []]);
+  assert.deepEqual(await Promise.all([client.listModels(), client.listModels()]), [[], []]);
   assert.equal(loginCalls, 2);
   assert.equal(oldTokenCalls, 2);
 });
@@ -209,7 +209,7 @@ test('OctiClient does not retry a rejected API key', async () => {
   };
 
   await assert.rejects(
-    new OctiClient('http://octipus.test').listExperts(),
+    new OctiClient('http://octipus.test').listModels(),
     /failed: 401 unauthorized/,
   );
   assert.equal(calls, 1);

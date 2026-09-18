@@ -138,13 +138,14 @@ export class OctiClient {
 
   // ─── Chat ───
 
-  async chat(message: string, sessionId?: string, expertId?: string): Promise<ChatResponse> {
+  async chat(message: string, sessionId?: string): Promise<ChatResponse> {
+    // No `expertId`: the expert layer is gone. A request is routed to a model
+    // lane by what it asks for, and a specialist is a ROLE the agent spawns.
     return this.request<ChatResponse>('/api/chat', {
       method: 'POST',
       body: JSON.stringify({
         message,
         sessionId,
-        expertId,
         channel: 'mcp',
       }),
     });

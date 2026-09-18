@@ -163,6 +163,11 @@ test files.
   `background` each take their own model on the Topics page. Retired names still
   resolve, so nothing breaks unbound — but until you bind them, routing changes
   the log line and nothing else.
+- **The topics API accepts retired names.** `PUT /api/topics/agents/binding`
+  and `PATCH /api/topics/coding/config` write through to the lane the name
+  resolves to instead of returning 404, so an existing script keeps working; the
+  response reports the canonical topic it landed on. A name that is not a topic
+  at all is still a 404.
 - **`cli.reuseSessions` is removed.** Vendor CLI session reuse is always on.
 - **The `presets` table is dropped.** If you customised an expert's prompt, copy
   it into a skill before taking migration `0105` — that is the replacement, and
@@ -170,6 +175,8 @@ test files.
 - **`GET|POST|PATCH|DELETE /api/experts` are gone**, replaced by `/api/roles`,
   which now also creates and deletes. `GET /api/roles` returns a role's prompt
   and critical rules to admins only.
+- **The MCP server's `octipus_chat` drops its `expert_id` parameter**, which had
+  been sent to an API that no longer reads it.
 - **`GET /api/health/detailed` reports the running version**, so "which build is
   answering" is a reading rather than a guess.
 - **The version is now declared in one place.** `package.json` is the source;
