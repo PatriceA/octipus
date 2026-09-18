@@ -139,7 +139,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
   private async executeBridgedTool(name: string, args: Record<string, unknown>): Promise<BridgeResult> {
     const id = randomUUID();
-    const delegation = name === 'spawn_child' || name === 'escalate_to_different_expert' || name === 'collect_children' || this.toolExecutor.getTools().get(name)?.final === true;
+    const delegation = name === 'spawn_child' || name === 'escalate_to_other_lane' || name === 'collect_children' || this.toolExecutor.getTools().get(name)?.final === true;
     if (delegation) this.setPause('delegation', true);
     try {
       let messages: AgentMessage[];

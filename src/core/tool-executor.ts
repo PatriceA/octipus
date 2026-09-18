@@ -116,7 +116,7 @@ export function resolvedFileChangePath(result: unknown): string | undefined {
 
 /** Tools whose wall-clock duration is *paused* out of the calling agent's
  * timer — the agent is blocked waiting on the child, not doing work. */
-const DELEGATION_TOOLS = new Set(['spawn_child', 'escalate_to_different_expert']);
+const DELEGATION_TOOLS = new Set(['spawn_child', 'escalate_to_other_lane']);
 
 /**
  * Tools that run a shell command — counted as `commandsRun` in the receipt.

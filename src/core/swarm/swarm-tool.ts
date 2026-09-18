@@ -472,10 +472,6 @@ export function createSpawnChildTool(
       type: 'object',
       properties: {
         handoff: HANDOFF_SCHEMA,
-        expertId: {
-          type: 'string',
-          description: 'Optional exact expert ID. Preferred when known; otherwise the spawner picks a system expert for the role.',
-        },
         role: {
           type: 'string',
           enum: CHILD_ROLES_ENUM,
@@ -689,7 +685,6 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
   // depth has a detach budget, else awaits. The execute path sets params.mode
   // to reflect what actually happened (for spawn_node bookkeeping).
   const params: SpawnChildParams = {
-    expertId: typeof args.expertId === 'string' ? args.expertId : undefined,
     role,
     topic,
     subtopic,

@@ -109,7 +109,7 @@ export const TASK_BRIEF_PREVIEW_MAX = 4000;
 
 /** Options accepted by spawnChild internally — extends the tool params. */
 export interface SpawnChildInternalOpts {
-  /** Used by `escalate_to_different_expert` to pick a different expert. */
+  /** Used by `escalate_to_other_lane` to pick a different expert. */
   excludeExpertId?: string;
   /** Tag logged on spawn — distinguishes normal spawns from escalation. */
   reason?: 'normal' | 'escalation' | 'retry';
@@ -551,14 +551,12 @@ export class SwarmSpawner {
     // post-spawn). The swarm tools close over that node by reference so the
     // placeholder id is mutated to the real one before any tool can fire.
 
-    // ── Model + expert resolution (topic binding is authoritative) ──
-    const { model: childModel, lane: childLane, expertId, systemPrompt, isSmall } = await releaseOnThrow(() =>
-      this.resolveChildModelAndExpert(
+    // ── Model resolution: the lane is authoritative ──
+    const { model: childModel, lane: childLane, systemPrompt, isSmall } = await releaseOnThrow(() =>
+      this.resolveChildModel(
         parent.model,
         childRole,
         brief.taskBrief,
-        params.expertId,
-        internal.excludeExpertId,
         childTools.length > 0,
         !!brief.plan?.length,
         params.topic,
@@ -776,7 +774,6 @@ export class SwarmSpawner {
       childTools,
       childToolAdvertisement,
       systemPrompt: childSystemPrompt,
-      expertId,
       budget,
       topicPath,
       subtopic: params.subtopic,
@@ -1217,7 +1214,7 @@ export class SwarmSpawner {
     let worker: AnyAgentWorker;
 
     // Phase 2: for Agents (depth 1), build the child's AgentNode up front
-    // so we can register `spawn_child` + `escalate_to_different_expert`
+    // so we can register `spawn_child` + `escalate_to_other_lane`
     // alongside the role tools on the *first* spawn call. `id` is a
     // placeholder overwritten after spawn returns; the swarm tools close
     // over `childNode` by reference so the mutation is observed.
@@ -1246,7 +1243,7 @@ export class SwarmSpawner {
       };
       // Mutable: childNode.allowedToolIds will include the meta-tool names.
       childNode.allowedToolIds.add('spawn_child');
-      childNode.allowedToolIds.add('escalate_to_different_expert');
+      childNode.allowedToolIds.add('escalate_to_other_lane');
 
       // Late-bound worker reference — the AgentWorker is created by
       // `agentManager.spawn(...)` below, but spawn_child / collect_children
@@ -1832,12 +1829,10 @@ export class SwarmSpawner {
    * Pick a model + expert for the child, respecting the parent-tier clamp
    * and the `excludeExpertId` filter (for escalation).
    */
-  private async resolveChildModelAndExpert(
+  private async resolveChildModel(
     parentModel: string,
     childRole: AgentRole,
     childMessage: string,
-    preferredExpertId?: string,
-    excludeExpertId?: string,
     /** Whether this child is equipped with tools — gates the tool-support reroute. */
     childUsesTools = false,
     /**
@@ -1855,52 +1850,17 @@ export class SwarmSpawner {
      * to nothing and fails the spawn.
      */
     requestedLane?: string,
-  ): Promise<{ model: string; lane: string; expertId?: string; systemPrompt?: string; isSmall: boolean }> {
+  ): Promise<{ model: string; lane: string; systemPrompt?: string; isSmall: boolean }> {
     const registry = getModelRegistry();
 
-    let expertModel: string | undefined;
-    let expertId: string | undefined;
-    /** The expert's assigned model lane (experts.topic) — overrides childRole for model resolution. */
-    let expertLane: string | undefined;
+    // No expert lookup: the row it read carried a model, a lane, a prompt and a
+    // skill list, and every one of those now has a better home. The model and
+    // the lane come from the request or the role (see below). The prompt is the
+    // role's. Skills are assigned per role-topic and loaded by the block under
+    // this one. What the expert added was a database round trip between an
+    // agent and its own configuration.
     let systemPrompt: string | undefined;
-    let expertSkillIds: string[] = [];
-    try {
-      const { getDb } = await import('@/db/postgres');
-      const { experts } = await import('@/db/schema/experts');
-      const { eq, and, ne } = await import('drizzle-orm');
-      const db = getDb();
-
-      let rows: Array<{
-        id: string;
-        name: string;
-        topic: string | null;
-        modelPreference: string | null;
-        systemPrompt: string | null;
-        skillIds: unknown;
-      }> = [];
-      if (preferredExpertId) {
-        rows = (await db.select().from(experts).where(eq(experts.id, preferredExpertId)).limit(1)) as typeof rows;
-      } else {
-        const where = excludeExpertId
-          ? and(eq(experts.role, childRole), eq(experts.isSystem, true), ne(experts.id, excludeExpertId))
-          : and(eq(experts.role, childRole), eq(experts.isSystem, true));
-        rows = (await db.select().from(experts).where(where).limit(1)) as typeof rows;
-      }
-
-      const expert = rows[0];
-      if (expert) {
-        expertId = expert.id;
-        expertModel = expert.modelPreference || undefined;
-        expertLane = expert.topic || undefined;
-        systemPrompt = expert.systemPrompt || undefined;
-        expertSkillIds = Array.isArray(expert.skillIds) ? (expert.skillIds as string[]) : [];
-      }
-    } catch (err) {
-      // Expert lookup failure is recoverable (falls back to role defaults)
-      // but NOT silent — log so operators see why a child didn't get the
-      // expert's prompt/skills.
-      coreLogger.warn({ err, childRole }, 'Expert lookup failed in SwarmSpawner — falling back to role defaults');
-    }
+    const expertSkillIds: string[] = [];
 
     // ── Skill injection (fail-loud on missing expected skills) ──────
     const skillFragments: string[] = [];
@@ -1915,7 +1875,7 @@ export class SwarmSpawner {
           const foundIds = new Set(found.map((s) => s.id));
           const missing = expertSkillIds.filter((id) => !foundIds.has(id));
           coreLogger.error(
-            { childRole, expertId, expectedSkillIds: expertSkillIds, missing },
+            { childRole, expectedSkillIds: expertSkillIds, missing },
             'Expert lists skillIds that are missing from skill registry — child will run with partial domain knowledge',
           );
         }
@@ -1949,12 +1909,12 @@ export class SwarmSpawner {
         : '';
       if (topicFragment) skillFragments.push(`# Domain Knowledge (topic index)\n${topicFragment}`);
       coreLogger.debug(
-        { childRole, expertId, discoveredSkillCount: discoveredIds.length },
+        { childRole, discoveredSkillCount: discoveredIds.length },
         'Swarm child topic-skill discovery complete',
       );
     } catch (err) {
       coreLogger.error(
-        { err, childRole, expertId },
+        { err, childRole },
         'Skill injection failed — child will run WITHOUT domain knowledge',
       );
     }
@@ -1992,8 +1952,10 @@ export class SwarmSpawner {
         'Spawn topic is not a model lane — using it for the topic path only',
       );
     }
-    const lane = laneRequested || expertLane || childRole;
-    let candidate = expertModel;
+    const lane = laneRequested || childRole;
+    // No expert model to start from: a child's model is its LANE's, and the
+    // only thing that moves it is a plan, which routes to the lane's executor.
+    let candidate: string | undefined;
     // One lookup for the whole routing block — getTopicConfig is an in-memory
     // cache, but the branches below reference the executor binding repeatedly
     // and must all agree on the same value.
@@ -2149,7 +2111,7 @@ export class SwarmSpawner {
       systemPrompt = `${systemPrompt}\n\n${skillFragments.join('\n\n')}`.trim();
     }
 
-    return { model: candidate, lane, expertId, systemPrompt, isSmall };
+    return { model: candidate, lane, systemPrompt, isSmall };
   }
 
   private emitNodeSpawned(parent: AgentNode, payload: Record<string, unknown>): void {
