@@ -64,7 +64,7 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 |-----|----------------|
 | [AGENT-ARCHITECTURE.md](AGENT-ARCHITECTURE.md) | The root agent → agent → subagent swarm model and how a message becomes work. |
 | [SWARM-RELIABILITY.md](SWARM-RELIABILITY.md) | Swarm receipts, scorer gates, and the crash-resume ledger. |
-| [EXPERT-TOPIC-SKILL-ROUTING.md](EXPERT-TOPIC-SKILL-ROUTING.md) | How experts, topics, and skills are selected for a request. |
+| [LANE-ROLE-SKILL-ROUTING.md](LANE-ROLE-SKILL-ROUTING.md) | How a request picks a role, a model lane, and its skills. |
 | [TOOL-ROUTING.md](TOOL-ROUTING.md) | How tools and experts are routed to agents. |
 | [MULTI-REPO.md](MULTI-REPO.md) | Working across a suite of repos: the repo registry, dependency graph, and how agents navigate it. |
 | [API.md](API.md) | REST + WebSocket API reference, and how to get an API token. |

@@ -1,9 +1,14 @@
 # Model Routing — Topic Primary, Backup & Executor
 
-How a spawned agent ends up on a specific model, and what the three per-topic
-model bindings (**primary**, **backup**, **executor**) each do. Companion to
-[EXPERT-TOPIC-SKILL-ROUTING.md](EXPERT-TOPIC-SKILL-ROUTING.md) (which covers
-how a request picks a role/topic/expert in the first place).
+How a turn ends up on a specific model, and what the three per-lane bindings
+(**primary**, **backup**, **executor**) each do. Companion to
+[LANE-ROLE-SKILL-ROUTING.md](LANE-ROLE-SKILL-ROUTING.md) (which covers how a
+request picks a role and a lane in the first place).
+
+The lanes are `build`, `verify`, `everyday`, `research` and `background`, plus
+the `ocr` / `vision` / `embedding` model classes. A lane exists if and only if
+you would plausibly bind a DIFFERENT model to it — not because the subject is
+different.
 
 ## The three bindings per topic
 
@@ -13,46 +18,62 @@ Every topic (lane) can bind up to three models:
 |---|---|---|---|
 | **Primary** | Models page → topic assignment (`topicRoles` = `primary`) | The full-capability specialist model for this topic | Default for every agent spawned into the topic |
 | **Backup** | Models page → topic assignment (`topicRoles` = `backup`) | Failure fallback | Only after the primary FAILS (provider/tool error) — one retry. Never chosen for cost or capability reasons |
-| **Executor** | Topics page → `executorModel` (`topics_config` table) | Cheap model that runs pre-planned steps mechanically | Only when the spawning agent supplies a `plan` in `spawn_child` (planner→executor split, see below). On planned spawns, overrides expert `modelPreference` because a plan means the work is pre-decided and mechanical, not requiring expert judgment. |
+| **Executor** | Topics page → `executorModel` (`topics_config` table) | Cheap model that runs pre-planned steps mechanically | Only when the spawning agent supplies a `plan` in `spawn_child` (planner→executor split, see below). A plan means the thinking is already done, so the steps do not need the lane's primary. |
 
-All three are optional. An unbound topic **fails loud** at spawn time — there
-is no silent default-model fallback for workers. Conversational root turns use
-the default only when the Chat lane is unbound.
+All three are optional. An unbound lane **fails loud** at spawn time — there is
+no silent default-model fallback for workers. A root turn is gentler: it falls
+through to the default model rather than failing, so an install that never split
+its lanes keeps working.
 
 ## Root-turn resolution
 
-The root agent has two bindings because it handles both conversation and work:
+There is no single "the model that answers you". The request is classified to a
+lane BEFORE the turn starts, so a coding brief and a lookup are answered by
+different models on purpose:
 
 ```
-1. session /model override       every root turn
-2. non-casual turn               General system expert modelPreference,
-                                 then that expert's assigned lane primary,
-                                 then the default model when the lane is unbound
-3. casual turn                  Chat lane primary, then default model
-4. capability gate              reject/reroute no-tools, reasoning, or
+1. session /model override       an explicit choice by the user — always wins
+2. the routed lane's primary     selectLane(message) → getModelForTopic(lane)
+3. the default model             when that lane is unbound
+4. capability gate               reject/reroute no-tools, reasoning, or
                                  recently shim-dependent models
 ```
 
-The General expert runs the root's task loop, so changing its model override or
-lane changes the model used for work, ambiguous requests, follow-ups, and unresolved approval
-replies. Only casual turns use the Chat lane. In particular, a plan request does
-not switch to Chat merely because the keyword classifier cannot assign a topic.
+`selectLane` (`src/core/agent/lane-intent.ts`) takes the keyword classifier's
+category when it has one and maps it through the lane aliases; failing that, a
+message naming a file, a stack trace or a diff routes to `build`, and everything
+else falls to `everyday`.
+
+Routing happens before the turn on purpose. A model sent to the wrong TOOL
+notices and calls `list_tools`; a model sent to the wrong LANE notices nothing —
+a weak model does not stall on hard work, it produces something plausible and
+finishes. Escalation catches a stall, not mediocrity, so the choice cannot be
+deferred to the model that would be its victim.
 
 ## Resolution order (per spawn)
 
 Both spawn paths — direct workers (`worker-spawner.ts`) and swarm children
-(`swarm/spawner.ts` → `resolveChildModelAndExpert`) — resolve in this order:
+(`swarm/spawner.ts` → `resolveChildModel`) — resolve in this order:
 
 ```
 1. explicit override            (caller-pinned model, e.g. session override)
 2. lane executorModel           ONLY if the spawn carried a `plan` AND the lane
-                                 has an executor configured (overrides expert
-                                 preference for planned/mechanical spawns)
-3. expert.modelPreference       (the matched expert's explicit choice —
-                                 authoritative for plan-less delegations)
-4. lane primary                 getModelForTopic(lane)
-5. fail loud                    no inheritance of the parent's model
+                                 has an executor configured — a plan is the
+                                 parent saying "the thinking is done, run these
+                                 steps", and mechanical steps are what a cheap
+                                 executor is for
+3. lane primary                 getModelForTopic(lane)
+4. fail loud                    no inheritance of the parent's model. The
+                                 parent's model is whatever its own routing
+                                 picked; inheriting hides routing bugs
 ```
+
+The child's lane is the one the PARENT named in `spawn_child`'s `topic` when it
+named a real one, else the child role's own (`coding` → build, `review`/`qa` →
+verify, the conversational roles → everyday). The parent's request comes first
+because it is the only way to say "not on my model" — a review child running on
+the model that wrote the code is not a second opinion, which is the whole reason
+the `verify` lane exists.
 
 Two follow-up gates run after selection:
 
@@ -72,15 +93,14 @@ Two follow-up gates run after selection:
 routes the child to the topic's cheap `executorModel`. A plan-less child is a
 judgment delegation and runs on the topic **primary**.
 
-**Who plans: the specialist agent, not the root agent.** The root agent
-routes requests to experts by topic, exactly as before — it does not know or
-care about executors. The planner is the **topic/expert-bound agent** (depth
-1): it has the domain context to break its own sub-work into mechanical steps
-and hand them to `spawn_child` as a plan. Concretely:
+**Who plans: the specialist agent, not the root agent.** The root routes the
+request to a lane — it does not know or care about executors. The planner is the
+**depth-1 agent**: it has the domain context to break its own sub-work into
+mechanical steps and hand them to `spawn_child` as a plan. Concretely:
 
 ```
-Root agent          — routes by topic. No plans, no executor awareness.
-   └─ Agent (expert)  — the PLANNER. For mechanical, fully-specified sub-work
+Root agent          — routes the request to a lane. No plans, no executor awareness.
+   └─ Agent          — the PLANNER. For mechanical, fully-specified sub-work
       (depth 1)         (run these searches, fetch these pages, apply these
                          edits) it passes a `plan`; the sub-task then runs on
                          the lane's cheap executor. Plan-less spawns are for
@@ -100,13 +120,10 @@ The agent learns this from two prompt surfaces (both depth-1 only):
 
 Notes and edge cases:
 
-- **Executor overrides expert `modelPreference` on planned spawns.** When a plan is
-  supplied and the lane has an executor configured, the cheap executor model runs
-  the planned steps, even if the matched expert has a `modelPreference`. A plan
-  signals that the thinking is done and only mechanical execution remains, so the
-  executor's cost savings apply. If an expert must run on a specific model even
-  for planned work, either leave the lane's `executorModel` empty (planner == executor)
-  and bind the required model as the topic primary or expert preference.
+- **The split is only valid when the plan is genuinely mechanical.** If executing
+  the plan still needs judgement, routing it to the cheap executor moves the
+  thinking to the wrong model. A lane whose work always needs the capable model
+  simply leaves `executorModel` empty — then planner and executor are the same.
 - **Executor bound but never used** means agents aren't sending plans. This is
   now observable (below) instead of silent.
 - **Unregistered executor name** fails loud — but only when a plan actually
@@ -139,7 +156,6 @@ gate provider availability but do not pick fallbacks.
   - `Planned child routed to the lane executorModel (cheap executor path)`
   - `Plan-less child: skipping configured executorModel, resolving topic
     primary (recon path)`
-  - `Planned child: lane executorModel overrides expert modelPreference (mechanical execution)`
 - Per-model cost attribution in `cost_log` (`models/cost-tracker.ts`) shows
   the spend shift once planned children start landing on the executor.
 
@@ -147,7 +163,7 @@ gate provider availability but do not pick fallbacks.
 
 | Concern | File |
 |---|---|
-| Child model resolution (planned executor → expert preference → primary) | `src/core/swarm/spawner.ts` (`resolveChildModelAndExpert`) |
+| Child model resolution (planned executor → lane primary) | `src/core/swarm/spawner.ts` (`resolveChildModel`) |
 | Worker model resolution | `src/core/agent/worker-spawner.ts` |
 | `plan` schema + validation + delegation guidance | `src/core/swarm/swarm-tool.ts` |
 | Executor binding storage/cache | `src/models/topic-config.ts` (`topics_config`) |
