@@ -54,7 +54,7 @@ const emptyForm: ExpertFormValues = {
   name: '',
   description: '',
   role: 'general',
-  topic: 'agents',
+  topic: 'everyday',
   modelPreference: '',
   systemPrompt: '',
 };
@@ -71,6 +71,12 @@ const inputCls =
  */
 function RoutingLine({ expert, topics }: { expert: Expert; topics: TopicRow[] }) {
   const lane = topics.find((t) => t.value === expert.topic);
+  // A row can hold a RETIRED lane name — `agents` is still the column default —
+  // which the backend resolves through its alias table and this page cannot see.
+  // Not finding the lane therefore means "cannot say", not "unbound", and
+  // claiming the latter told users their workers would fail to spawn when the
+  // binding was fine.
+  const laneKnown = lane !== undefined;
   const laneModel = lane?.primaryModel ?? null;
   return (
     <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-on-surface-variant mt-1.5">
@@ -86,9 +92,13 @@ function RoutingLine({ expert, topics }: { expert: Expert; topics: TopicRow[] })
           <ArrowRight className="w-3 h-3 shrink-0" />
           {laneModel ? (
             <span className="font-mono text-primary">{laneModel}</span>
-          ) : (
+          ) : laneKnown ? (
             <span className="text-error" title="No primary model bound to this lane — workers for this expert fail to spawn. Bind one on the Topics page.">
               ⚠ lane unbound
+            </span>
+          ) : (
+            <span title="This expert holds a retired lane name; the backend maps it to a current lane. Re-save the expert to store the current name.">
+              resolved by alias
             </span>
           )}
           {lane?.executorModel && (
@@ -331,7 +341,7 @@ function ExpertCard({
             name: expert.name,
             description: expert.description ?? '',
             role: expert.role,
-            topic: expert.topic || 'agents',
+            topic: expert.topic || 'everyday',
             modelPreference: expert.modelPreference ?? '',
             systemPrompt: expert.systemPrompt ?? '',
           }}

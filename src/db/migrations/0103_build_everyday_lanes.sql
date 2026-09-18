@@ -11,16 +11,25 @@
 -- `everyday` (voice retires with the telephony module), and the old keys are
 -- dropped so what is stored matches the registry rather than relying on the
 -- alias table forever.
+--
+-- The role is picked by STRENGTH, not by column order: a row that was primary
+-- for `writing` and backup for `chat` must arrive in `everyday` as primary. A
+-- COALESCE down a fixed column list reads the first key present instead, which
+-- quietly demotes that model and can leave the lane with no primary at all.
 UPDATE model_config
    SET topic_roles = (topic_roles - 'agents' - 'writing' - 'chat' - 'voice')
      || jsonb_build_object('build', topic_roles->>'agents')
-     || jsonb_build_object('everyday', COALESCE(topic_roles->>'agents', topic_roles->>'chat', topic_roles->>'writing', topic_roles->>'voice'))
+     || jsonb_build_object('everyday', CASE WHEN 'primary' IN (
+            topic_roles->>'agents', topic_roles->>'chat', topic_roles->>'writing', topic_roles->>'voice')
+          THEN 'primary' ELSE 'backup' END)
  WHERE topic_roles ? 'agents';
 --> statement-breakpoint
 -- Rows bound to one of the folded lanes but never to `agents`: everyday only.
 UPDATE model_config
    SET topic_roles = (topic_roles - 'writing' - 'chat' - 'voice')
-     || jsonb_build_object('everyday', COALESCE(topic_roles->>'chat', topic_roles->>'writing', topic_roles->>'voice'))
+     || jsonb_build_object('everyday', CASE WHEN 'primary' IN (
+            topic_roles->>'chat', topic_roles->>'writing', topic_roles->>'voice')
+          THEN 'primary' ELSE 'backup' END)
  WHERE NOT (topic_roles ? 'agents')
    AND (topic_roles ? 'writing' OR topic_roles ? 'chat' OR topic_roles ? 'voice');
 --> statement-breakpoint

@@ -62,12 +62,14 @@ export const TOPICS: readonly TopicDef[] = [
 ] as const;
 
 /**
- * Retired topic values → their canonical lane. The worker-role topics collapse
- * into `agents` (docs/plans/topic-consolidation.md Phase 3) — except the four
- * long-form text roles (communication/pm/writing) which route to the
- * `writing` lane. `research` is its own lane — see TOPICS. The 5 per-feature
- * background topics collapse into `background`; `simple` and `local` had no runtime consumer and fold into
- * `chat`.
+ * Retired topic values → their canonical lane.
+ *
+ * The worker-role topics collapse into the two lanes `agents` split into, on
+ * the cost of being wrong: work that leaves an ARTEFACT goes to `build`, work
+ * whose answer is checkable at a glance goes to `everyday`. `research` keeps
+ * its own lane — it is the highest-token work in the system, and an alias once
+ * made its binding unreachable. The six per-feature background topics collapse
+ * into `background`.
  *
  * Aliasing (not hard removal) keeps every existing caller working: role
  * configs still carry role-named `defaultTopic`s (which double as the key for

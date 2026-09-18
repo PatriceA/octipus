@@ -21,7 +21,7 @@ import type { EmailMessage, EmailProvider, EmailTriage, InboxItem } from './type
 
 async function generalModelId(): Promise<string> {
   const model = await getModelRegistry().getModelForTopic('everyday');
-  if (!model) throw new Error('No model is bound to the "general" topic — bind one in the Models page.');
+  if (!model) throw new Error('No model is bound to the "everyday" lane — bind one in the Models page.');
   return model.modelId;
 }
 
