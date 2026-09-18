@@ -444,22 +444,6 @@ export async function runRootAgent(
     volatileParts.push(`\n\nThe user's message could not be confidently classified. If it is plainly small-talk or a one-shot factual question, answer directly. Otherwise resolve only the uncertainty needed to choose direct work or a specialist; do not start a broad investigation just to route the task. If the user explicitly tells you to delegate, always do so.`);
   }
 
-  // Expert index — the live list of experts (system + this user's custom
-  // ones) the root agent can route to via spawn_child's `expertId`. Read
-  // from the DB each turn so newly created experts become routable without a
-  // prompt edit or restart. Skipped in lite mode: the lite spawn_child schema
-  // is deliberately role+taskBrief only, and small models handle the extra
-  // routing surface poorly.
-  if (!isLite) {
-    try {
-      const { buildExpertIndexBlock } = await import('./expert-index');
-      const expertBlock = await buildExpertIndexBlock(userId);
-      if (expertBlock) staticParts.push(expertBlock);
-    } catch (err) {
-      coreLogger.warn({ err, sessionId }, 'Expert index injection skipped — rootAgent routes by role only');
-    }
-  }
-
   // Chat/work split (Thread 3): tell the root agent whether to deliver in
   // chat or as a file. Empty for the default-inline case, so unchanged.
   volatileParts.push(buildOutputDirective(outputDirective.mode, outputDirective.forced));
