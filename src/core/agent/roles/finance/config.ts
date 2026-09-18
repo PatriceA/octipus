@@ -1,6 +1,7 @@
 import type { RoleMeta } from '../types';
 export const meta: RoleMeta = {
   role: 'finance',
+  description: 'markets, financial modelling',
   toolIds: ['browser', 'websearch', 'filesystem'],
   criticalRules: [
     "Always disclose assumptions underlying financial projections",

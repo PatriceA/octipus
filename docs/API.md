@@ -92,8 +92,16 @@ curl -H "Authorization: Bearer $OCTIPUS_API_TOKEN" http://localhost:3005/api/aut
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/roles` | List all roles with current tool bindings |
-| PATCH | `/api/roles/:role` | Update role's tool allowlist (admin) |
+| GET | `/api/roles` | List all roles: tools, lane, description, prompt, critical rules, read-only flag |
+| POST | `/api/roles` | Create a role (admin). Body: `{ role, systemPromptTemplate, toolIds, description?, coreToolIds?, criticalRules?, defaultTopic?, readOnly? }` |
+| PATCH | `/api/roles/:role` | Update a role (admin). Every field optional; absent = unchanged |
+| DELETE | `/api/roles/:role` | Delete a user-created role (admin). A role that ships with Octipus returns 400 |
+
+A role's LANE is its `defaultTopic` resolved through `canonicalTopic` — the
+model binding it runs on. Nothing selects a role out of a lane; a role is chosen
+by an agent naming it in `spawn_child`, off its one-line `description`.
+
+
 
 ## Topics
 
@@ -152,16 +160,6 @@ curl -H "Authorization: Bearer $OCTIPUS_API_TOKEN" http://localhost:3005/api/aut
 |--------|----------|-------------|
 | GET | `/api/runs/:sessionId/events` | The run log — one ordered stream of node, plan and tool events |
 | GET | `/api/runs/:sessionId/trace` | The same log folded into spans, with per-span duration and cost |
-
-## Experts
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/experts` | List experts |
-| GET | `/api/experts/:id` | Get expert details |
-| POST | `/api/experts` | Create custom expert |
-| PATCH | `/api/experts/:id` | Update expert |
-| DELETE | `/api/experts/:id` | Delete custom expert |
 
 ## Skills
 
@@ -347,7 +345,7 @@ inert and stays in the array.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/skills/proposals` | List pending skill proposals (detector-auto-generated). |
-| POST | `/api/skills/proposals/:id/approve` | Promote a proposal to a custom expert. Body: `{ name?, role?, systemPrompt? }`. |
+| POST | `/api/skills/proposals/:id/approve` | Promote a proposal to a skill. Body: `{ name?, role?, systemPrompt? }`. |
 | POST | `/api/skills/proposals/:id/reject` | Reject and suppress for 90 days. |
 
 ## Knowledge
@@ -660,7 +658,6 @@ Available via `{ "type": "command", "name": "<cmd>" }`:
 |---------|-------------|
 | `/help` | List available commands |
 | `/status` | Session status and running agents |
-| `/expert [name]` | Switch expert or list available |
 | `/abort` | Cancel all running agents |
 | `/clear` | Clear conversation |
 | `/compact` | Compact session context |

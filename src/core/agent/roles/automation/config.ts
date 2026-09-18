@@ -1,6 +1,7 @@
 import type { RoleMeta } from '../types';
 export const meta: RoleMeta = {
   role: 'automation',
+  description: 'scheduling, recurring tasks, reminders',
   toolIds: ['shell', 'docker', 'filesystem', 'scheduling', 'mcp'],
   criticalRules: [
     "ALWAYS use the built-in scheduling tool (create_hook) for recurring tasks — NEVER write standalone scripts, cron files, systemd services, or plugins",

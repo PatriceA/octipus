@@ -1,6 +1,7 @@
 import type { RoleMeta } from '../types';
 export const meta: RoleMeta = {
   role: 'review',
+  description: 'read-only code review / audit',
   toolIds: ['filesystem', 'shell', 'git', 'github', 'knowledge', 'task_state', 'repo_registry', 'visual'],
   // Not opted into lazy tool discovery: review's tools are nearly all hot-path
   // (filesystem/shell/git/github read code+diffs every turn, and the prompt

@@ -1,6 +1,7 @@
 import type { RoleMeta } from '../types';
 export const meta: RoleMeta = {
   role: 'general',
+  description: 'people/orgs, generic tasks, real-browser work',
   // `shell` is here because `general` is what the ROOT agent runs since Phase 9
   // deleted the routing hop. Before that, "run this command" was delegated to
   // `coding`/`devops`, which carry it; afterwards the root answered "no

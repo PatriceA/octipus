@@ -1,6 +1,7 @@
 import type { RoleMeta } from '../types';
 export const meta: RoleMeta = {
   role: 'security',
+  description: 'security review, vuln scan',
   toolIds: ['shell', 'filesystem', 'browser', 'browser-ext', 'websearch', 'knowledge', 'task_state', 'mcp'],
   // Lazy tool discovery (Ollama, non-small only): hot path is shell + filesystem
   // + websearch + knowledge (the prompt mandates search_knowledge as step 1).

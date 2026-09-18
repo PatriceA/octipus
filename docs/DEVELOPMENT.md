@@ -84,8 +84,11 @@ npm run test:e2e                      # E2E (requires running server)
 ### New Skill
 Create via the API (`POST /api/skills`) or add to `src/db/seed-skills.ts` for system skills.
 
-### New Expert
-Add entry to `SYSTEM_EXPERTS` in `src/db/seed-experts.ts`, or create via API (`POST /api/experts`).
+### New Role
+Add it on the Topics page, under the lane it should run on — name, one-line
+description, prompt, tool list. For a role that ships with Octipus, add a folder
+under `src/core/agent/roles/<name>/` and its three static imports in
+`roles/index.ts`. (Experts are gone; a role carries what they used to.)
 
 ## Tech Stack
 

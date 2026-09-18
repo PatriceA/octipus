@@ -1,6 +1,7 @@
 import type { RoleMeta } from '../types';
 export const meta: RoleMeta = {
   role: 'coding',
+  description: 'write / refactor / fix code, shell, git',
   toolIds: ['filesystem', 'shell', 'git', 'github', 'knowledge', 'task_state', 'repo_registry', 'skill-distill', 'mcp'],
   // Writing code needs the files, a shell and git. GitHub (open the PR the
   // change was asked for, read the issue it closes), the knowledge base,

@@ -1,6 +1,7 @@
 import type { RoleMeta } from '../types';
 export const meta: RoleMeta = {
   role: 'writing',
+  description: 'docs, README, guides',
   toolIds: ['filesystem', 'browser', 'websearch', 'knowledge', 'task_state', 'messaging', 'documents'],
   criticalRules: [
     "Write for the target audience — adjust terminology and detail level accordingly",

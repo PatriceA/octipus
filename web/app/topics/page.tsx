@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Layers, Loader2, Save, Tags } from 'lucide-react';
 import { useState } from 'react';
 import { RootModelNote } from '@/components/models/root-model-note';
+import { LaneRoles, type RoleRow, type ToolOption } from '@/components/topics/lane-roles';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -43,11 +44,18 @@ function numOrNull(v: string): number | null {
 function TopicCard({
   topic,
   models,
+  roles,
+  lanes,
+  tools,
   canEdit,
   onSaved,
 }: {
   topic: TopicRow;
   models: ModelOption[];
+  /** The roles whose work runs on this lane — see `LaneRoles`. */
+  roles: RoleRow[];
+  lanes: { value: string; label: string }[];
+  tools: ToolOption[];
   canEdit: boolean;
   onSaved: () => void;
 }) {
@@ -180,6 +188,10 @@ function TopicCard({
       {saveError && (
         <p className="mt-2 text-xs text-error bg-error/10 px-2 py-1 rounded">{saveError}</p>
       )}
+
+      {topic.kind === 'text' && (
+        <LaneRoles lane={topic.value} roles={roles} lanes={lanes} tools={tools} canEdit={canEdit} />
+      )}
     </div>
   );
 }
@@ -251,6 +263,16 @@ export default function TopicsPage() {
     queryFn: () => api.get<{ topics: TopicRow[] }>('/topics'),
   });
 
+  const { data: rolesData } = useQuery({
+    queryKey: ['roles-config'],
+    queryFn: () => api.get<{ roles: RoleRow[] }>('/roles'),
+  });
+
+  const { data: toolsData } = useQuery({
+    queryKey: ['tool-modules'],
+    queryFn: () => api.get<{ tools: ToolOption[] }>('/tools'),
+  });
+
   const { data: modelsData } = useQuery({
     queryKey: ['models'],
     // Don't swallow: let react-query record the error (and apply its retry)
@@ -261,6 +283,10 @@ export default function TopicsPage() {
 
   const topics = topicsData?.topics || [];
   const models = (modelsData?.models || []).filter((m) => m.isEnabled);
+  const allRoles = rolesData?.roles || [];
+  const tools = toolsData?.tools || [];
+  // Only text lanes run agents; OCR/vision/embedding are model classes.
+  const lanes = topics.filter((tp) => tp.kind === 'text').map((tp) => ({ value: tp.value, label: tp.label }));
   const onSaved = () => queryClient.invalidateQueries({ queryKey: ['topics-config'] });
   // Assign-all touches bindings across every model, so refresh both queries.
   const onAssignedAll = () => {
@@ -273,7 +299,7 @@ export default function TopicsPage() {
       <PageHeader
         title="topics"
         badge={<Tags className="w-5 h-5 text-on-surface-variant" />}
-        description="Topics bind kinds of work to models. Start with one text model for all text topics; override a topic when a specialist needs a different model. Embedding and vision capabilities need compatible models."
+        description="A topic binds a kind of work to a model, and every role listed under it runs on that binding. Start with one text model everywhere; override a lane when it needs a different one. Embedding, OCR and vision need compatible models."
       />
       {!canEdit && (
         <p className="text-sm text-warning">Read-only — admin access is required to change topic configuration.</p>
@@ -307,6 +333,9 @@ export default function TopicsPage() {
               key={`${topic.value}:${topic.primaryModel}:${topic.backupModel}:${topic.executorModel}:${topic.temperature}:${topic.maxTokens}`}
               topic={topic}
               models={models}
+              roles={allRoles.filter((r) => r.lane === topic.value)}
+              lanes={lanes}
+              tools={tools}
               canEdit={canEdit}
               onSaved={onSaved}
             />

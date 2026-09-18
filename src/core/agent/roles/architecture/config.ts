@@ -1,6 +1,7 @@
 import type { RoleMeta } from '../types';
 export const meta: RoleMeta = {
   role: 'architecture',
+  description: 'system design, specs',
   toolIds: ['filesystem', 'shell', 'knowledge', 'task_state', 'websearch', 'repo_registry', 'mcp'],
   criticalRules: [
     "Start from requirements and constraints — never design in a vacuum",

@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { classifyMessage } from '@/core/agent/classifier';
+import { ROLE_CONFIGS } from '@/core/agent/roles';
 import type { AgentRole } from '@/core/agent/types';
 import type { ToolHandler } from '@/core/agent-worker';
 import { coreLogger } from '@/utils/logger';
@@ -65,7 +66,7 @@ export function createLateBoundSpawnChildHooks(
   };
 }
 
-const CHILD_ROLES_ENUM: AgentRole[] = [
+const BUILT_IN_CHILD_ROLES: AgentRole[] = [
   'research',
   'coding',
   'review',
@@ -85,42 +86,31 @@ const CHILD_ROLES_ENUM: AgentRole[] = [
 ];
 
 /**
- * One-line capability blurb per spawnable role. Single source for the depth-1
- * "roles you can spawn" menu (see `buildSpawnRoleCatalog`) — a depth-1 agent's
- * system prompt is its own role prompt, which never lists the other roles, so
- * without this the `role` enum is just 16 bare names and cross-specialist
- * fan-out is undiscoverable. The `Record<AgentRole, string>` type forces a
- * blurb whenever a role is added to `AgentRole`.
+ * The roles a parent may spawn: the built-ins in their curated order, then any
+ * role the user added, in name order.
  *
- * The root agent (depth-0) keeps its own routing table in
- * `root agent/delegation-prompt.md` — kept in sync manually with this map for
- * now; a later change could generate that from here.
+ * Read from the registry per call rather than frozen at import, because that is
+ * the only thing that makes a user-created role reachable. Nothing picks a role
+ * out of a lane — a role resolves TO a lane — so a new role is chosen exactly
+ * one way: the model reads it in this menu and names it. A role absent here is
+ * a role that exists and can never be used.
+ *
+ * `as AgentRole` is the one cast: the union is kept closed so a missing built-in
+ * is still a compile error, and a user's role is a string it cannot name.
  */
-const CHILD_ROLE_BLURBS: Record<AgentRole, string> = {
-  research: 'web search, investigate, synthesize sources',
-  coding: 'write / refactor / fix code, shell, git',
-  review: 'read-only code review / audit',
-  qa: 'run tests, UI testing',
-  communication: 'email, calendar, contacts, messaging',
-  design: 'UI/UX, layout, accessibility',
-  devops: 'CI/CD, docker, infra',
-  security: 'security review, vuln scan',
-  data: 'databases, ETL, dashboards, charts',
-  ai: 'ML/AI/RAG/prompt engineering',
-  finance: 'markets, financial modelling',
-  automation: 'scheduling, recurring tasks, reminders',
-  pm: 'planning, status, milestones',
-  writing: 'docs, README, guides',
-  general: 'people/orgs, generic tasks, real-browser work',
-  architecture: 'system design, specs',
-};
+export function childRoles(): AgentRole[] {
+  const extra = Object.keys(ROLE_CONFIGS)
+    .filter((r) => !BUILT_IN_CHILD_ROLES.includes(r as AgentRole))
+    .sort();
+  return [...BUILT_IN_CHILD_ROLES, ...(extra as AgentRole[])];
+}
 
 /**
  * Render the spawnable-role menu for injection into a depth-1 agent's task
  * brief. One `- role — blurb` line per role, in enum order.
  */
 export function buildSpawnRoleCatalog(): string {
-  return CHILD_ROLES_ENUM.map((r) => `- ${r} — ${CHILD_ROLE_BLURBS[r as AgentRole]}`).join('\n');
+  return childRoles().map((r) => `- ${r} — ${ROLE_CONFIGS[r]?.description || 'user-defined role'}`).join('\n');
 }
 
 /**
@@ -222,7 +212,7 @@ const TOPIC_TO_ROLE_ALIAS: Record<string, AgentRole> = {
 };
 
 /** The set of valid specialist roles, exported for router/lite reuse. */
-export const SPAWN_CHILD_ROLES: readonly AgentRole[] = CHILD_ROLES_ENUM;
+export const SPAWN_CHILD_ROLES: readonly AgentRole[] = BUILT_IN_CHILD_ROLES;
 
 /**
  * Advisory roles that read/plan/review but must NOT silently absorb hands-on
@@ -282,8 +272,9 @@ export function applyRoleFit(
  * routing and LLM-driven spawning never diverge.
  */
 export function resolveRoleFromTopic(roleRaw: string | undefined, topic: string): AgentRole | undefined {
-  if (roleRaw && CHILD_ROLES_ENUM.includes(roleRaw as AgentRole)) return roleRaw as AgentRole;
-  if (CHILD_ROLES_ENUM.includes(topic as AgentRole)) return topic as AgentRole;
+  const spawnable = childRoles();
+  if (roleRaw && spawnable.includes(roleRaw as AgentRole)) return roleRaw as AgentRole;
+  if (spawnable.includes(topic as AgentRole)) return topic as AgentRole;
   if (roleRaw && TOPIC_TO_ROLE_ALIAS[roleRaw.toLowerCase()]) return TOPIC_TO_ROLE_ALIAS[roleRaw.toLowerCase()];
   if (TOPIC_TO_ROLE_ALIAS[topic.toLowerCase()]) return TOPIC_TO_ROLE_ALIAS[topic.toLowerCase()];
   return undefined;
@@ -445,7 +436,7 @@ export function createSpawnChildTool(
           handoff: HANDOFF_SCHEMA,
           role: {
             type: 'string',
-            enum: CHILD_ROLES_ENUM,
+            enum: childRoles(),
             description: 'Specialist role for the child.',
           },
           taskBrief: {
@@ -474,7 +465,7 @@ export function createSpawnChildTool(
         handoff: HANDOFF_SCHEMA,
         role: {
           type: 'string',
-          enum: CHILD_ROLES_ENUM,
+          enum: childRoles(),
           description:
             'Specialist role for the child. Determines the available tool set (permission-intersected with yours).',
         },
@@ -612,7 +603,7 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
     return {
       error:
         `missing or invalid 'role' (got '${roleRaw ?? 'undefined'}', topic '${topic}'). ` +
-        `Must be one of: ${CHILD_ROLES_ENUM.join(', ')}. ` +
+        `Must be one of: ${childRoles().join(', ')}. ` +
         `Pick the specialist role that fits the subtopic — don't fall back to 'general' unless the task is genuinely generic.`,
     };
   }

@@ -1,6 +1,7 @@
 import type { RoleMeta } from '../types';
 export const meta: RoleMeta = {
   role: 'data',
+  description: 'databases, ETL, dashboards, charts',
   toolIds: ['data', 'shell', 'filesystem', 'knowledge', 'task_state', 'artifacts', 'artifacts_toolbox', 'documents', 'mcp'],
   // Lazy tool discovery (Ollama, non-small only): hot path is data + shell +
   // filesystem + knowledge. artifacts (~12k) + artifacts_toolbox + task_state become the

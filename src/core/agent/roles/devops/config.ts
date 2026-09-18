@@ -1,6 +1,7 @@
 import type { RoleMeta } from '../types';
 export const meta: RoleMeta = {
   role: 'devops',
+  description: 'CI/CD, docker, infra',
   toolIds: ['shell', 'docker', 'git', 'filesystem', 'mcp'],
   coreToolIds: ['shell', 'filesystem'],
   criticalRules: [

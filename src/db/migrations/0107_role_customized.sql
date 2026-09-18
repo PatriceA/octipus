@@ -1,0 +1,11 @@
+-- `tool_ids_customized` guards more than tool ids now.
+--
+-- It was the flag that stopped the boot seed re-merging code-level tool ids
+-- over a user's removals. Roles are editable data now — prompt, description,
+-- critical rules, core tool set, read-only — and every one of those fields had
+-- the same problem the flag was invented for: the seeder filled it from the
+-- role's folder on every boot, so an edit made in the UI survived until the
+-- next restart and no further.
+--
+-- One flag covers all of them: set by any edit, checked before any resync.
+ALTER TABLE roles RENAME COLUMN tool_ids_customized TO customized;

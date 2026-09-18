@@ -123,6 +123,7 @@ export function loadRoles(): Record<AgentRole, RoleConfig> {
       role: meta.role,
       toolIds: meta.toolIds,
       defaultTopic: meta.defaultTopic,
+      description: meta.description,
       systemPromptTemplate: prompt,
       // A blank lite variant is treated as absent so it cannot replace the role
       // prompt with a bare preamble.

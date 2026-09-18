@@ -289,6 +289,18 @@ function TemplateEditor({
   const [view, setView] = useState<'list' | 'graph'>('list');
   const [errors, setErrors] = useState<string[]>([]);
 
+  // Live, because roles are now user-definable (Topics page): a role someone
+  // created is exactly the one they want in a pipeline, and a hardcoded list
+  // cannot show it. WORKER_ROLES stays the fallback for a failed fetch, so the
+  // step editor never renders an empty dropdown.
+  const { data: rolesData } = useQuery({
+    queryKey: ['roles-config'],
+    queryFn: () => api.get<{ roles: Array<{ role: string }> }>('/roles'),
+  });
+  const roleOptions = rolesData?.roles?.length
+    ? rolesData.roles.map((r) => ({ value: r.role, label: r.role }))
+    : WORKER_ROLES;
+
   const addStep = () => {
     setSteps(prev => [
       ...prev,
@@ -555,7 +567,7 @@ function TemplateEditor({
                               onChange={e => updateStep(i, { topic: e.target.value })}
                               className="w-full px-2.5 py-1.5 bg-surface-container-high border border-outline-variant/10 rounded text-sm text-on-surface"
                             >
-                              {WORKER_ROLES.map(t => (
+                              {roleOptions.map(t => (
                                 <option key={t.value} value={t.value}>{t.label}</option>
                               ))}
                             </select>

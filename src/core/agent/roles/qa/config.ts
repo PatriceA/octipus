@@ -1,6 +1,7 @@
 import type { RoleMeta } from '../types';
 export const meta: RoleMeta = {
   role: 'qa',
+  description: 'run tests, UI testing',
   toolIds: ['browser', 'browser-ext', 'shell', 'docker', 'filesystem', 'knowledge', 'task_state', 'visual', 'artifacts', 'artifacts_toolbox'],
   // Lazy tool discovery (Ollama, non-small only): the common QA path is test-suite
   // work (shell + filesystem + task_state). artifacts (~12k, the artifact-

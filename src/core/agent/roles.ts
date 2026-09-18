@@ -148,9 +148,70 @@ export function getBoundConnectorIds(role: AgentRole): string[] {
  * this mutation IS the cache invalidation. No-op for unknown roles.
  */
 export function setRoleToolIdsInMemory(role: AgentRole, toolIds: string[]): void {
-  if (ROLE_CONFIGS[role]) {
-    ROLE_CONFIGS[role] = { ...ROLE_CONFIGS[role], toolIds };
+  setRoleInMemory(role, { toolIds });
+}
+
+/**
+ * Apply a patch to a role in the live registry, or register a new one.
+ *
+ * `getToolsForRole` and the worker spawner read ROLE_CONFIGS synchronously, so
+ * this mutation IS the cache invalidation: without it an edit made in the UI
+ * takes effect at the next restart rather than the next spawn. Undefined fields
+ * are dropped so a partial patch cannot blank a field it never mentioned.
+ */
+export function setRoleInMemory(role: AgentRole, patch: Partial<RoleConfig>): void {
+  const defined = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
+  const existing = ROLE_CONFIGS[role];
+  if (existing) {
+    const merged = { ...existing, ...defined } as RoleConfig;
+    // A key PRESENT with an undefined value means "clear this field" — spreading
+    // it would have been a no-op, so a PATCH that emptied a role's criticalRules
+    // (or coreToolIds, or description) wrote the empty value to the database and
+    // left the old one in the registry until the next restart. A key that is
+    // simply absent still means "unchanged"; `in` is what separates the two.
+    for (const key of Object.keys(patch)) {
+      if (patch[key as keyof RoleConfig] === undefined) delete merged[key as keyof RoleConfig];
+    }
+    ROLE_CONFIGS[role] = merged;
+    return;
   }
+  // A role the user just created: no folder, so the patch is all there is.
+  if (!patch.systemPromptTemplate || !patch.toolIds?.length) {
+    logger.warn({ role }, 'Ignoring new in-memory role with no prompt or no tools');
+    return;
+  }
+  ROLE_CONFIGS[role] = { ...defined, role } as RoleConfig;
+}
+
+/** Drop a deleted role from the live registry so nothing can spawn it again. */
+export function removeRoleInMemory(role: AgentRole): void {
+  delete ROLE_CONFIGS[role];
+}
+
+/**
+ * The tool ids in `toolIds` that nothing registers.
+ *
+ * Checked against the REGISTERED manifests, not the available ones: a tool can
+ * be registered and unavailable on this machine (no docker, no Twilio
+ * credentials) and still be the right thing to put on a role. A typo, though,
+ * creates a role that passes every other check and then spawns a worker with no
+ * tools at all — `getToolsForRole` below drops unknown ids with a warn-log and
+ * continues, so the failure surfaces as an agent that can do nothing rather
+ * than as an error on the write that caused it.
+ *
+ * Fails open on an empty registry, the same way the capability gate treats a
+ * cold `getAvailableSync()`: before discovery has run there is nothing to check
+ * against, and refusing every write would be worse than allowing a typo.
+ *
+ * Connector bindings are resolved per user at spawn time and MCP is bridged
+ * rather than registered, so neither appears in the manifests.
+ */
+export function unknownToolIds(toolIds: string[]): string[] {
+  const known = new Set(getToolRegistry().getManifests().map((m) => m.id));
+  if (known.size === 0) return [];
+  return toolIds.filter(
+    (id) => !known.has(id) && id !== 'mcp' && !id.startsWith(CONNECTOR_TOOL_PREFIX),
+  );
 }
 
 export function getToolsForRole(role: AgentRole): ToolHandler[] {
