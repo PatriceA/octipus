@@ -536,6 +536,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `skills` | `config` | 1 |
 | `skills` | `core` | 1 |
 | `skills` | `db` | 7 |
+| `skills` | `models` | 1 |
 | `skills` | `utils` | 6 |
 | `test-helpers` | `config` | 1 |
 | `test-helpers` | `db` | 9 |

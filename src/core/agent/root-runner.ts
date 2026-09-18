@@ -18,6 +18,7 @@ import { estimateToolSchemaTokens, logPromptComposition, recordContextFill } fro
 import { buildSecurityReminder } from './input-guard';
 import { createMetaTools } from './meta-tools';
 import { shouldUseLazyDiscovery } from './lazy-tools';
+import { selectLane } from './lane-intent';
 import { selectCoreToolIds } from './tool-intent';
 import { isPlanMode, PLAN_MODE_DIRECTIVE, stripMutatingTools } from './plan-mode';
 import { isLongTailHandler } from './tool-split';
@@ -150,6 +151,12 @@ export async function runRootAgent(
 ): Promise<{ response: string; agentId: string; sources: string[] }> {
   const emit = deps.emit;
   const agentManager = getAgentManager();
+  // One routing decision, used twice: the model comes from the lane, and so do
+  // the lane's temperature and token limit. Computed here rather than inside the
+  // selector so the worker cannot be spawned under a different lane than the one
+  // that chose its model — which is what happened while the root always spawned
+  // under `general` (→ everyday) no matter where the request was routed.
+  const routedLane = selectLane(message, classification).lane;
   const modelName = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification });
 
   // Resolve the root agent mode for THIS turn. 'auto' (default) re-derives
@@ -591,7 +598,7 @@ export async function runRootAgent(
     sessionId,
     userId,
     workspaceId,
-    topic: rootRoleConfig.defaultTopic,
+    topic: routedLane,
     model: modelName,
     role: ROOT_ROLE,
     root: true,

@@ -350,7 +350,6 @@ export async function spawnWorker(
   // row's prompt, deliverable template, success metrics and skill list; only
   // the rules survived the layer — they belong to the role now — so what is
   // left of it is one line and no database read.
-  const expertPrompt = formatCriticalRules(roleConfig.criticalRules ?? []) || undefined;
   const expertModel: string | undefined = undefined;
   const expertSkillIdsOuter: string[] = [];
 
@@ -449,9 +448,18 @@ export async function spawnWorker(
   // cache breakpoint (security rule 4).
   // Small models get the dense lite role prompt when one exists (Phase C),
   // keyed off finalModel (the model that actually runs), not the topic model.
-  // A custom expert's own prompt (expertPrompt) or an explicit override wins.
+  // An explicit override (a pipeline stage's own prompt) wins.
+  //
+  // The role's critical rules are APPENDED, never substituted. They used to sit
+  // in the same slot as the expert row's prompt, which was null on every
+  // install here — so the slot was empty and the role template won. Moving the
+  // rules into that slot made them always truthy and they replaced the template
+  // outright: a pipeline-stage worker got its five rules as its ENTIRE system
+  // prompt, losing the role instructions and, because the template is what
+  // carries it, the SECURITY_PREAMBLE with them. The swarm path always appended;
+  // these two now agree.
   const roleTemplate = (finalIsSmall && roleConfig.liteSystemPromptTemplate) || roleConfig.systemPromptTemplate;
-  let base = overrides?.systemPrompt || expertPrompt || roleTemplate;
+  let base = (overrides?.systemPrompt || roleTemplate) + formatCriticalRules(roleConfig.criticalRules ?? []);
 
   // ── Per-arm persona shadowing (wave 4) ──────────────────────────
   // The host persona has always been root agent-only. An arm the user has
