@@ -8,9 +8,10 @@
  * import from the bootstrap layer.
  *
  * Topics are MODEL LANES, not domains (docs/plans/topic-consolidation.md).
- * Domain expertise lives on experts (many, user-extensible, each assigned to a
- * lane via `experts.topic`); tool bundles live on roles. A topic answers one
- * question: "which class/cost of model serves this work?"
+ * Tool bundles and permissions live on roles; procedure lives in skills. A lane
+ * answers one question and only one: "which class/cost of model serves this
+ * work?" A lane therefore exists if and only if you would plausibly bind a
+ * DIFFERENT model to it — not because the subject is different.
  *
  * `kind` partitions topics by model class:
  *   - `text`      chat-capable lanes — any general chat model can serve them.
@@ -31,33 +32,21 @@ export interface TopicDef {
 
 export const TOPICS: readonly TopicDef[] = [
   {
-    value: 'agents',
-    label: 'Agents',
-    description: 'All expert/worker agents — the main text lane. Every specialist (Coder, Researcher, custom experts, …) resolves its model here unless the expert pins its own model or lane.',
+    value: 'build',
+    label: 'Build',
+    description: 'Implementation, architecture, debugging and code review — the work where a stronger model changes the QUALITY of the answer rather than whether one arrives. A weak model here does not stall, it ships junior work that looks finished, so nothing downstream catches it. Bind the best model you are willing to pay for, and put the mechanical steps on its executorModel.',
     kind: 'text',
   },
   {
-    value: 'writing',
-    label: 'Writing',
-    description: 'Long-form text roles — Writer, Project Manager, Communication. Split out from Agents so this class of work can run on a cheaper/faster (e.g. flash) model while Agents keeps a stronger model for coding and precision work. Unbound = these roles fall back to nothing (fail loud); bind a model here or leave them on Agents.',
+    value: 'everyday',
+    label: 'Everyday',
+    description: 'Chat, lookups, classification, summaries, drafting, email triage — high volume, low stakes, and wrong answers are visible immediately. Bind something fast and cheap. Split out of the old `agents` lane, which served the coder and the weather question from one binding and so could never be upgraded for one without paying for both.',
     kind: 'text',
   },
   {
     value: 'research',
     label: 'Research',
     description: 'Investigation and deep research — the highest-token work in the system: a researcher fans out into children that each re-send a growing context, so a single question can cost more than a day of chat. Its own lane so it can be pinned to a local or cheap model without dragging Writing down with it. Unbound = research fails loud.',
-    kind: 'text',
-  },
-  {
-    value: 'chat',
-    label: 'Chat',
-    description: 'Casual conversations and direct replies. Conversational root-agent turns prefer this lane when bound; task turns use the General expert binding. Unbound root lanes use the default model.',
-    kind: 'text',
-  },
-  {
-    value: 'voice',
-    label: 'Voice',
-    description: 'Phone call conversations (Twilio/Telnyx/Plivo) — bind a fast model for low latency. Unbound = falls back to the default model.',
     kind: 'text',
   },
   {
@@ -88,30 +77,38 @@ export const TOPICS: readonly TopicDef[] = [
  * lane's binding.
  */
 export const RETIRED_TOPIC_ALIASES: Readonly<Record<string, string>> = {
-  // worker role topics → the one agents lane …
-  general: 'agents',
-  coding: 'agents',
-  architecture: 'agents',
-  review: 'agents',
-  design: 'agents',
-  devops: 'agents',
-  security: 'agents',
-  data: 'agents',
-  ai: 'agents',
-  qa: 'agents',
-  finance: 'agents',
-  automation: 'agents',
-  // … except the long-form text roles, which route to the `writing` lane so
-  // they can run on a cheaper/faster model. (`writing` itself is a canonical
-  // lane now, so it is intentionally absent here — it resolves to itself.
-  // `research` left too: it is the highest-token role in the system, and the
-  // alias made its own binding unreachable — a model bound to `research` was
-  // never consulted by anything.)
-  communication: 'writing',
-  pm: 'writing',
+  // The lanes this split replaced. `agents` held the coder and everything else,
+  // which is exactly why a strong model could not be bound to coding without
+  // paying for "what's the weather" as well.
+  agents: 'build',
+  writing: 'everyday',
+  chat: 'everyday',
+  // Telephony is alive and works; `voice` was a LATENCY hint, not a feature
+  // flag — "bind a fast model so a caller is not left listening to silence".
+  // `everyday` is already the fast, cheap lane, so a second binding that says
+  // the same thing only adds a way for the two to disagree.
+  voice: 'everyday',
+  // Worker role topics. The rule is the cost of being wrong: work that leaves an
+  // ARTEFACT someone later depends on fails up into `build`, because a weak
+  // model there ships something plausible and nothing notices. Work that
+  // produces an answer you can check at a glance fails down into `everyday`.
+  coding: 'build',
+  architecture: 'build',
+  review: 'build',
+  design: 'build',
+  devops: 'build',
+  security: 'build',
+  data: 'build',
+  ai: 'build',
+  qa: 'build',
+  finance: 'build',
+  automation: 'build',
+  general: 'everyday',
+  communication: 'everyday',
+  pm: 'everyday',
   // root agent-direct text topics with no distinct lane
-  simple: 'chat',
-  local: 'chat',
+  simple: 'everyday',
+  local: 'everyday',
   // per-feature background topics → the one background lane
   memory_extraction: 'background',
   knowledge_review: 'background',

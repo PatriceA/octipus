@@ -32,25 +32,36 @@ describe('canonical topic registry', () => {
   });
 
   test('the canonical lanes are present with the right kinds', () => {
-    for (const lane of ['agents', 'writing', 'chat', 'voice']) {
+    for (const lane of ['build', 'everyday', 'research']) {
       expect(TOPICS.find((t) => t.value === lane)?.kind).toBe('text');
     }
     expect(TOPICS.find((t) => t.value === 'background')?.kind).toBe('background');
   });
 
-  test('most retired worker-role topics canonicalize to the agents lane', () => {
-    for (const role of ['general', 'coding', 'architecture', 'review',
-      'design', 'devops', 'security', 'data', 'ai', 'qa', 'finance', 'automation']) {
-      expect(canonicalTopic(role)).toBe('agents');
+  test('the lanes `agents` split into are the only text lanes left beside research', () => {
+    // A lane exists if and only if you would plausibly bind a DIFFERENT model to
+    // it. `agents` held the coder and the weather question at once, which is
+    // exactly why neither could be priced properly.
+    const text = TOPICS.filter((t) => t.kind === 'text').map((t) => t.value);
+    expect(text).toEqual(['build', 'everyday', 'research']);
+    for (const gone of ['agents', 'writing', 'chat', 'voice']) {
+      expect(ALL_TOPIC_VALUES).not.toContain(gone);
     }
   });
 
-  test('the long-form text roles canonicalize to the writing lane', () => {
-    for (const role of ['communication', 'pm']) {
-      expect(canonicalTopic(role)).toBe('writing');
+  test('artefact work fails up into build', () => {
+    // A weak model here does not stall, it ships junior output that looks
+    // finished — so the ambiguous cases go to the expensive lane on purpose.
+    for (const role of ['agents', 'coding', 'architecture', 'review', 'design',
+      'devops', 'security', 'data', 'ai', 'qa', 'finance', 'automation']) {
+      expect(canonicalTopic(role)).toBe('build');
     }
-    // `writing` is its own canonical lane now — passes through unchanged.
-    expect(canonicalTopic('writing')).toBe('writing');
+  });
+
+  test('checkable work falls to everyday', () => {
+    for (const role of ['general', 'communication', 'pm', 'writing', 'chat', 'voice', 'simple', 'local']) {
+      expect(canonicalTopic(role)).toBe('everyday');
+    }
   });
 
   test('research is its own lane, so a model bound to it is actually used', () => {

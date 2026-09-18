@@ -160,9 +160,11 @@ export class ModelSelector {
       return this.validateRootModel(taskModel.modelId, taskModel);
     }
 
-    // The 'chat' lane binding, when set, is the explicit home for the
-    // conversation model. Unbound means default model, as before.
-    const chatModel = await registry.getModelForTopic('chat');
+    // The 'everyday' lane binding, when set, is the explicit home for the
+    // conversation model — chat folded into it when `agents` split, because a
+    // lookup and a chat turn want the same fast, cheap model. Unbound means
+    // default model, as before.
+    const chatModel = await registry.getModelForTopic('everyday');
     if (chatModel) {
       return this.validateRootModel(chatModel.modelId, chatModel);
     }

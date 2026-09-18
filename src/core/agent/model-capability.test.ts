@@ -84,7 +84,7 @@ describe('root model binding selection', () => {
     const models = [chatModel, generalLaneModel, pinnedGeneralModel, sessionModel, defaultModel];
     return vi.spyOn(modelRegistry, 'getModelRegistry').mockReturnValue({
       getModelForTopic: async (topic: string) => {
-        if (topic === 'chat') return chatModel;
+        if (topic === 'everyday') return chatModel;
         if (topic === 'agents') return generalLaneModel;
         return null;
       },
@@ -138,7 +138,7 @@ describe('root model binding selection', () => {
     );
   });
 
-  test('casual turn continues to use the chat lane', async () => {
+  test('casual turn continues to use the conversation lane (chat folded into everyday)', async () => {
     installRegistry();
     const selector = new ModelSelector(async () => ({
       modelPreference: pinnedGeneralModel.modelId,
