@@ -181,6 +181,58 @@ The server's `inventory` auto-discovers all tool modules at startup.
 
 ---
 
+## Cutting a release
+
+A release is a `v*` tag. `.github/workflows/release.yml` does the rest: it runs
+the gate (typecheck, lint, the backend suite, and the MCP server's own suite),
+creates the GitHub Release with notes pulled from `CHANGELOG.md`, attaches the
+packed `mcp-server` tarball, and publishes that package to npm when `NPM_TOKEN`
+is configured.
+
+Three things happen *before* the tag, in this order:
+
+1. **Write the notes.** Add a `## v<x.y> — <title> (<date>)` section at the top
+   of `CHANGELOG.md`. `scripts/changelog-extract.ts` publishes the first `##`
+   section whose heading contains the version — and falls back to `##
+   Unreleased` when none does, which is how v0.4 shipped 1,175 lines of
+   accumulated history as its release notes. A section that names the version is
+   what stops that.
+2. **Bump the version.** One command rewrites all six files that declare it:
+
+   ```sh
+   npx tsx scripts/sync-version.ts v0.5
+   npm install --package-lock-only          # and the same in mcp-server/ and web/
+   (cd web/src-tauri && cargo update -p octipus)
+   ```
+
+   The release gate fails if the committed version does not match the tag. It
+   rewrites the runner's copy so the published artifact is right, but it has
+   never written back to the repository — which is why the committed version sat
+   at `0.1.0` through four releases while nothing complained.
+3. **Commit, push, and let CI go green on `main`.** The tag's gate is a subset
+   of what `main` runs; the integration suite and the web E2E job are not in it.
+
+Then:
+
+```sh
+git tag -a v0.5 -m "v0.5 — <title>"
+git push origin v0.5
+```
+
+To re-run a release for an existing tag without moving it — a workflow fix, a
+token that was missing the first time — use the `workflow_dispatch` input rather
+than deleting and re-pushing the tag.
+
+Two suites are **not** in `npm test` and are the ones that break after a
+refactor lands:
+
+```sh
+npm run test:integration        # DB-backed; brings up Postgres and tears it down
+(cd mcp-server && npm test)     # the published package's own suite
+```
+
+---
+
 ## Lint policy
 
 `npm run lint` (Biome) is the gate. The advisory rules deliberately disabled:

@@ -70,6 +70,14 @@ jobs:
       - name: Build CLI tool bridge (spawned CLI runs resolve mcp-server/dist)
         run: npm ci && npm run build
         working-directory: mcp-server
+      # The package this workflow PUBLISHES has its own suite, and the release
+      # gate ran everything except that. It caught a real break on 18 Sep — the
+      # expert layer was deleted out from under its auth tests — from the CI
+      # workflow, after the code was already on main. A release must not be able
+      # to publish a package whose own tests fail.
+      - name: Test the package being published
+        run: npm test
+        working-directory: mcp-server
       - name: Test
         run: npm run test
         env:
@@ -91,6 +99,22 @@ jobs:
           sparse-checkout: scripts/sync-version.ts
           sparse-checkout-cone-mode: false
           persist-credentials: false
+
+      # The tag and the checkout must already agree. `sync-version` below rewrites
+      # the RUNNER's copy so the published artifact carries the tag's version —
+      # it has never written back to the repository, so for four releases the
+      # committed version stayed at 0.1.0 while the tags climbed to v0.4 and
+      # nothing said so. Bumping is a commit you make before tagging; this step
+      # is what notices when you did not.
+      - name: Check the committed version matches the tag
+        run: |
+          want="$(npx tsx .release-tooling/scripts/sync-version.ts --print "$RELEASE_TAG")"
+          have="$(node -p 'require("./package.json").version')"
+          if [ "$want" != "$have" ]; then
+            echo "::error::package.json is $have but the tag is $want. Run 'npx tsx scripts/sync-version.ts $RELEASE_TAG', refresh the lockfiles, commit, then move the tag."
+            exit 1
+          fi
+          echo "package.json $have matches $RELEASE_TAG"
 
       - name: Sync package versions to the tag
         run: npx tsx .release-tooling/scripts/sync-version.ts "$RELEASE_TAG" "$GITHUB_WORKSPACE"

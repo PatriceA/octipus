@@ -93,15 +93,24 @@ const CARGO_TARGETS = [join('web', 'src-tauri', 'Cargo.toml')];
 // release does not need them.
 
 if (import.meta.main) {
-  const arg = process.argv[2];
+  // `--print <tag>` emits the normalized version and writes nothing. The release
+  // workflow compares it against the committed one, so the comparison and the
+  // rewrite cannot disagree about what `v0.5` means.
+  const printOnly = process.argv[2] === '--print';
+  const arg = printOnly ? process.argv[3] : process.argv[2];
   if (!arg) {
-    console.error('Usage: npx tsx scripts/sync-version.ts <version> [target-repo-root]');
+    console.error('Usage: npx tsx scripts/sync-version.ts [--print] <version> [target-repo-root]');
     process.exit(2);
   }
   const version = normalizeVersion(arg);
   if (!isValidVersion(version)) {
     console.error(`Invalid version "${version}" (expected e.g. 1.2.3).`);
     process.exit(2);
+  }
+
+  if (printOnly) {
+    console.log(version);
+    process.exit(0);
   }
 
   const repoRoot = resolveTargetRoot(process.argv[3]);
