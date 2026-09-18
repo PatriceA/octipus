@@ -9,5 +9,12 @@ export const meta: RoleMeta = {
   // machines where browser tools aren't installed (capability gating already
   // drops those). See docs/OLLAMA.md.
   coreToolIds: ['shell', 'filesystem', 'websearch', 'knowledge'],
+  criticalRules: [
+    "Always include fallback behavior when model responses are unexpected or malformed",
+    "Set explicit token limits and timeouts for all LLM calls",
+    "Validate and sanitize all inputs before passing to models to prevent prompt injection",
+    "Log model inputs and outputs for debugging and evaluation",
+    "Never assume model outputs are deterministic — design for variability",
+  ],
   defaultTopic: 'ai',
 };

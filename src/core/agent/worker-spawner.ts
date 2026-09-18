@@ -182,8 +182,12 @@ export async function handleExpertMessage(
     const roleTemplate = (isSmall && roleConfig.liteSystemPromptTemplate) || roleConfig.systemPromptTemplate;
     expertPrompt += stripSecurityPreamble(expert.systemPrompt || roleTemplate);
 
-    // Critical rules
-    expertPrompt += formatCriticalRules((expert.criticalRules as string[]) || []);
+    // Critical rules come from the ROLE, not the expert row. The two carried
+    // identical text — the expert seed was generated from the same literals —
+    // but only one of them is guaranteed to exist: a seed that never ran, or a
+    // row someone deleted, produced a specialist with no standing rules and
+    // nothing said so.
+    expertPrompt += formatCriticalRules(roleConfig.criticalRules ?? []);
 
     // Deliverable template + success metrics: quality scaffolding for larger
     // models, prompt bloat that weak models follow poorly. Skip in the small tier.
@@ -600,7 +604,7 @@ export async function spawnWorker(
         expertPrompt = matchingExpert.systemPrompt || undefined;
         expertModel = matchingExpert.modelPreference || undefined;
 
-        expertPrompt = (expertPrompt || '') + formatCriticalRules((matchingExpert.criticalRules as string[]) || []);
+        expertPrompt = (expertPrompt || '') + formatCriticalRules(roleConfig.criticalRules ?? []);
 
         // Deliverable template + success metrics are quality scaffolding that
         // helps larger models structure output but bloats the prompt for small

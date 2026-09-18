@@ -1864,7 +1864,6 @@ export class SwarmSpawner {
     let expertLane: string | undefined;
     let systemPrompt: string | undefined;
     let expertSkillIds: string[] = [];
-    let expertCriticalRules: string[] = [];
     try {
       const { getDb } = await import('@/db/postgres');
       const { experts } = await import('@/db/schema/experts');
@@ -1878,7 +1877,6 @@ export class SwarmSpawner {
         modelPreference: string | null;
         systemPrompt: string | null;
         skillIds: unknown;
-        criticalRules: unknown;
       }> = [];
       if (preferredExpertId) {
         rows = (await db.select().from(experts).where(eq(experts.id, preferredExpertId)).limit(1)) as typeof rows;
@@ -1896,7 +1894,6 @@ export class SwarmSpawner {
         expertLane = expert.topic || undefined;
         systemPrompt = expert.systemPrompt || undefined;
         expertSkillIds = Array.isArray(expert.skillIds) ? (expert.skillIds as string[]) : [];
-        expertCriticalRules = Array.isArray(expert.criticalRules) ? (expert.criticalRules as string[]) : [];
       }
     } catch (err) {
       // Expert lookup failure is recoverable (falls back to role defaults)
@@ -2144,7 +2141,9 @@ export class SwarmSpawner {
     // Expert critical rules — injected on the worker path but previously dropped
     // on the swarm path (the Researcher expert's "always cite / distinguish fact
     // from speculation" rules never reached the child).
-    systemPrompt += formatCriticalRules(expertCriticalRules);
+    // From the ROLE. The expert row carried the same text — same seed literals
+    // — but the role is the copy that cannot be missing.
+    systemPrompt += formatCriticalRules(getRoleConfig(childRole).criticalRules ?? []);
 
     if (skillFragments.length > 0) {
       systemPrompt = `${systemPrompt}\n\n${skillFragments.join('\n\n')}`.trim();

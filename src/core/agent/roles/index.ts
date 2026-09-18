@@ -128,6 +128,7 @@ export function loadRoles(): Record<AgentRole, RoleConfig> {
       // prompt with a bare preamble.
       liteSystemPromptTemplate: litePrompt.trim() ? litePrompt : undefined,
       coreToolIds: meta.coreToolIds,
+      criticalRules: meta.criticalRules,
       readOnly: meta.readOnly,
     };
   }

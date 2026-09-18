@@ -9,6 +9,13 @@ export const meta: RoleMeta = {
   // tail. No effect on remote providers/small models, or machines without those
   // tools installed (capability gating already drops them). See docs/OLLAMA.md.
   coreToolIds: ['shell', 'filesystem', 'task_state'],
+  criticalRules: [
+    "Cover happy path, error cases, and edge cases in every test plan",
+    "Tests must be deterministic — no flaky tests that pass intermittently",
+    "Always test boundary conditions and invalid inputs",
+    "Include performance benchmarks for critical user flows",
+    "Test data must be isolated — tests should not depend on shared mutable state",
+  ],
   defaultTopic: 'qa',
   // Read-only: the file-mutating filesystem handlers are stripped from this
   // role's surface (see RoleMeta.readOnly). Its deliverable is returned in the

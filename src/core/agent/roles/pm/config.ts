@@ -6,5 +6,12 @@ export const meta: RoleMeta = {
   // prior plans / status reports / ADRs, and `github` is where issues and
   // pull requests live when the project is on GitHub.
   toolIds: ['filesystem', 'messaging', 'tasks', 'knowledge', 'github', 'atlassian', 'skill-distill'],
+  criticalRules: [
+    "Break all work into estimable tasks of 4 hours or less",
+    "Identify and document blockers, dependencies, and risks upfront",
+    "Include buffer time (15-25%) for unknowns in all estimates",
+    "Define clear acceptance criteria for every deliverable",
+    "Prioritize tasks using impact vs. effort analysis",
+  ],
   defaultTopic: 'pm',
 };

@@ -10,25 +10,6 @@ interface ModelRouting {
   reason: string;
 }
 
-interface GeneralExpertBinding {
-  modelPreference: string | null;
-  topic: string;
-}
-
-type GeneralExpertBindingLoader = () => Promise<GeneralExpertBinding | null>;
-
-async function loadGeneralExpertBinding(): Promise<GeneralExpertBinding | null> {
-  const { getDb } = await import('@/db/postgres');
-  const { experts } = await import('@/db/schema/experts');
-  const { and, eq } = await import('drizzle-orm');
-  const [expert] = await getDb()
-    .select({ modelPreference: experts.modelPreference, topic: experts.topic })
-    .from(experts)
-    .where(and(eq(experts.role, 'general'), eq(experts.isSystem, true)))
-    .limit(1);
-  return expert ?? null;
-}
-
 /**
  * If `modelId` can't do tool-calling, find a local model that can. Returns the
  * replacement (+reason) or null when no swap is needed or possible. Shared by
@@ -75,7 +56,6 @@ export async function findToolCapableFallback(
  */
 export class ModelSelector {
   constructor(
-    private readonly generalExpertBindingLoader: GeneralExpertBindingLoader = loadGeneralExpertBinding,
   ) {}
 
   /**
@@ -83,13 +63,14 @@ export class ModelSelector {
    *
    * Order, and the order is the design:
    *   1. the session's model override — the user said which model, explicitly
-   *   2. a pinned General expert model — the operator said which model
-   *   3. the lane this REQUEST routes to (see lane-intent.ts)
-   *   4. the General expert's assigned lane, then the default model
+   *   2. the lane this REQUEST routes to (see lane-intent.ts)
+   *   3. the default model
    *
-   * An explicit choice always beats a classification. Everything below it is
-   * routed per message rather than per install, because `agents` split into
-   * `build` and `everyday` precisely so the two would stop sharing a binding.
+   * An explicit choice always beats a classification; everything below it is
+   * routed per message rather than per install. There used to be a step
+   * between: the General expert's pinned model, then its assigned lane. That
+   * row answered "which model runs a task turn" for every task turn alike,
+   * which is the indirection the lane split exists to remove.
    */
   async selectForRootAgent(
     sessionId?: string,
@@ -122,79 +103,25 @@ export class ModelSelector {
       }
     }
 
-    if (turnType !== 'casual') {
-      let binding: GeneralExpertBinding | null = null;
-      try {
-        binding = await this.generalExpertBindingLoader();
-      } catch (err) {
-        // Match worker auto-selection: a missing/unavailable expert row should
-        // not make the root unusable. The role's canonical default lane still
-        // gives the operator-controlled Agents binding a chance to resolve.
-        coreLogger.warn(
-          { err },
-          'General expert binding lookup failed — using the root default model',
-        );
-        const defaultModel = await registry.getDefaultModel();
-        if (!defaultModel) {
-          throw new Error('No default model configured. Set one in the Models page.');
-        }
-        return this.validateRootModel(defaultModel.modelId, defaultModel);
-      }
-
-      if (binding?.modelPreference) {
-        const pinnedModel = await registry.getModelByModelId(binding.modelPreference);
-        if (!pinnedModel) {
-          throw new Error(
-            `The General expert is pinned to unregistered model "${binding.modelPreference}". ` +
-            'Choose an enabled model in the Experts page.',
-          );
-        }
-        return this.validateRootModel(pinnedModel.modelId, pinnedModel);
-      }
-
-      const routed = routing ? selectLane(routing.message, routing.classification) : null;
-      if (routed) {
-        const routedModel = await registry.getModelForTopic(routed.lane);
-        if (routedModel) {
-          coreLogger.info(
-            { lane: routed.lane, reason: routed.reason, model: routedModel.modelId, turnType },
-            'Request routed to a model lane',
-          );
-          return this.validateRootModel(routedModel.modelId, routedModel);
-        }
-        // An unbound lane is not a failure here: fall through to the binding
-        // the install already had, which is what an operator who never split
-        // their lanes still has.
-        coreLogger.info({ lane: routed.lane }, 'Routed lane is unbound — falling back to the configured binding');
-      }
-
-      const lane = binding?.topic || 'general';
-      const taskModel = await registry.getModelForTopic(lane);
-      if (!taskModel) {
-        const defaultModel = await registry.getDefaultModel();
-        if (!defaultModel) {
-          throw new Error(
-            `No model mapped for the General expert lane "${lane}" and no default model configured. ` +
-            'Bind a primary model to that lane or set a default in the Models page.',
-          );
-        }
+    // Where the model comes from now: the request. The General expert row used
+    // to answer this — its `modelPreference`, else its assigned lane — which
+    // meant one binding served a coding brief and "what's the weather" alike.
+    // A lane is the same answer without the indirection, and it is chosen per
+    // message rather than per install.
+    const routed = routing ? selectLane(routing.message, routing.classification) : null;
+    if (routed) {
+      const routedModel = await registry.getModelForTopic(routed.lane);
+      if (routedModel) {
         coreLogger.info(
-          { lane, selectedModel: defaultModel.modelId },
-          'General expert lane is unbound — using the root default model',
+          { lane: routed.lane, reason: routed.reason, model: routedModel.modelId, turnType },
+          'Request routed to a model lane',
         );
-        return this.validateRootModel(defaultModel.modelId, defaultModel);
+        return this.validateRootModel(routedModel.modelId, routedModel);
       }
-      return this.validateRootModel(taskModel.modelId, taskModel);
-    }
-
-    // A casual turn routes by the same rule as any other — it simply lands on
-    // `everyday` almost every time, because that is what a casual message is.
-    // Almost: "can you look at main.py?" is casual in shape and artefact work in
-    // substance, and routing beats the turn-type label there.
-    const casualLane = routing ? selectLane(routing.message, routing.classification).lane : 'everyday';
-    const chatModel = await registry.getModelForTopic(casualLane);
-    if (chatModel) {
-      return this.validateRootModel(chatModel.modelId, chatModel);
+      coreLogger.info(
+        { lane: routed.lane },
+        'Routed lane is unbound — falling back to the default model',
+      );
     }
 
     const defaultModel = await registry.getDefaultModel();

@@ -8,5 +8,12 @@ export const meta: RoleMeta = {
   // list_tools/describe_tool. No effect on remote providers/small models, or
   // machines without browser tools installed. See docs/OLLAMA.md.
   coreToolIds: ['shell', 'filesystem', 'websearch', 'knowledge'],
+  criticalRules: [
+    "Always assess against OWASP Top 10 and CWE/SANS Top 25",
+    "Never suggest security-through-obscurity as a primary defense",
+    "Rate all vulnerabilities using CVSS or equivalent severity scoring",
+    "Provide remediation steps for every identified vulnerability",
+    "Consider the full attack surface including dependencies and supply chain",
+  ],
   defaultTopic: 'security',
 };

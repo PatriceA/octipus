@@ -28,5 +28,12 @@ export const meta: RoleMeta = {
   // this command" does, and the whole toolbox is 181 tokens of schema — about
   // 2% of the core set — so the discovery round trip was never worth its price.
   coreToolIds: ['filesystem', 'shell', 'repo_registry', 'websearch', 'knowledge', 'messaging', 'notes', 'tasks', 'skill-distill'],
+  criticalRules: [
+    "Ask clarifying questions when the request is ambiguous rather than guessing",
+    "Provide sources or reasoning for factual claims",
+    "Clearly state when you are uncertain or speculating",
+    "Keep responses focused and proportional to the question complexity",
+    "Respect the user\\'s stated preferences and context",
+  ],
   defaultTopic: 'general',
 };

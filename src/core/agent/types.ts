@@ -99,6 +99,8 @@ export interface RoleConfig {
   liteSystemPromptTemplate?: string;
   /** Lazy-discovery core set; see `RoleMeta.coreToolIds`. */
   coreToolIds?: string[];
+  /** Standing behaviour for this role; see `RoleMeta.criticalRules`. */
+  criticalRules?: string[];
   /** Strip file-mutating handlers from this role; see `RoleMeta.readOnly`. */
   readOnly?: boolean;
 }
