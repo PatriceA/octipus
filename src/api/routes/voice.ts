@@ -201,19 +201,6 @@ async function handleVoiceWebhook(provider: string, body: Record<string, unknown
       // Expert prompt: per-call override → expert assigned to "voice" topic → default
       let expertPrompt = session.metadata.expertPrompt as string | undefined;
       if (!expertPrompt) {
-        try {
-          const { getDb } = await import('@/db/postgres');
-          const { experts } = await import('@/db/schema/experts');
-          const { eq } = await import('drizzle-orm');
-          const db = getDb();
-          // Find expert with role matching communication (which has the voice tool)
-          const [voiceExpert] = await db.select().from(experts)
-            .where(eq(experts.role, 'communication'))
-            .limit(1);
-          if (voiceExpert?.systemPrompt) {
-            expertPrompt = voiceExpert.systemPrompt + '\n\nIMPORTANT: You are on a live phone call. Keep responses short (1-3 sentences), natural, conversational. No markdown, no lists, no code.';
-          }
-        } catch { /* use default */ }
       }
       if (!expertPrompt) {
         expertPrompt = 'You are a helpful voice assistant on a phone call. Keep responses short (1-3 sentences), natural, and conversational. No markdown, no lists, no code blocks.';
