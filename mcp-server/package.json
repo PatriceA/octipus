@@ -1,7 +1,7 @@
 {
   "name": "octipus-mcp-server",
   "version": "0.5.1",
-  "description": "MCP server bridge for Octipus \u2014 exposes skills, agents, search, and chat as MCP tools",
+  "description": "MCP server bridge for Octipus — exposes skills, agents, search, and chat as MCP tools",
   "keywords": [
     "mcp",
     "model-context-protocol",
@@ -20,7 +20,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/PatriceA/octipus.git",
+    "url": "git+https://github.com/PatriceA/octipus.git",
     "directory": "mcp-server"
   },
   "main": "dist/index.js",
