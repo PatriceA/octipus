@@ -195,7 +195,6 @@ describe('CommandRegistry', () => {
     const allNames = userCmds.map(c => c.name);
     expect(allNames).toContain('help');
     expect(allNames).toContain('status');
-    expect(allNames).toContain('expert');
   });
 
   test('custom command registration', async () => {

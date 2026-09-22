@@ -22,7 +22,7 @@ import { applyTopicParamOverrides, getTopicConfig } from '@/models/topic-config'
 import { getConfig } from '@/config';
 import { sweepStaleFiles } from './cli-adapters';
 import type { ModelConfigEntry } from '@/db/schema/models';
-import { compactMessagesWithSummary, CONTEXT_OVERFLOW_TRUNCATED_MARKER, DEFAULT_TOOL_OUTPUT_SOFT_CAP, truncateOldestToolOutputs } from '@/utils/context-compaction';
+import { compactMessagesWithSummary, CONTEXT_OVERFLOW_TRUNCATED_MARKER, DEFAULT_TOOL_OUTPUT_SOFT_CAP, shouldCompactToolOutputs, truncateOldestToolOutputs } from '@/utils/context-compaction';
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { BaseAgentWorker } from './agent-base';
 import type { ToolHandler } from './agent-base';
@@ -434,10 +434,34 @@ export class AgentWorker extends BaseAgentWorker {
    *
    * Deliberately a slight over-estimate otherwise: a budget cap must fail safe
    * toward stopping, never toward running forever.
+   *
+   * The advertised tool schema is counted too. It never enters `this.messages`
+   * — it rides on the request as its own field — but the provider bills it on
+   * every call, and for the general role it is ~12k tokens against ~900 of
+   * prose. Leaving it out did not make the estimate slightly low, it left out
+   * most of the request, and the thresholds compared against it are fractions
+   * of the context window.
    */
+  /** Serialized size of the tools advertised on every request. Memoized on the
+   *  handler count — the set only changes when lazy discovery promotes one. */
+  private toolCharsCache: { count: number; chars: number } | null = null;
+  private advertisedToolChars(): number {
+    if (this.toolExecutor.toolsDisabled) return 0;
+    const handlers = this.getAdvertisedToolHandlers();
+    if (this.toolCharsCache?.count !== handlers.length) {
+      this.toolCharsCache = {
+        count: handlers.length,
+        chars: handlers.reduce((n, t) => n + JSON.stringify({
+          name: t.name, description: t.description, parameters: t.parameters,
+        }).length, 0),
+      };
+    }
+    return this.toolCharsCache.chars;
+  }
+
   private estimateRequestTokens(): number {
     const IMAGE_TOKENS = 1_500; // rough fixed cost of one image to a vision model
-    let chars = 0;
+    let chars = this.advertisedToolChars();
     let imageTokens = 0;
     for (const m of this.messages) {
       const c = (m as { content?: unknown }).content;
@@ -1103,10 +1127,17 @@ export class AgentWorker extends BaseAgentWorker {
       // soft cap tunable via config without editing agent construction sites.
       const effectiveSoftCap =
         this.config.toolOutputSoftCap ?? getConfig().agent?.toolOutputSoftCap ?? DEFAULT_TOOL_OUTPUT_SOFT_CAP;
-      const { messages: toolCompacted, truncated: toolOutputsTruncated } = truncateOldestToolOutputs(
-        this.messages,
-        { softCap: effectiveSoftCap },
-      );
+      // Counting tool results says nothing about how much room the model has.
+      // On a 1M-token window this rewrote history at the eleventh tool result,
+      // 30k tokens in — 3% full — and rewriting history is what costs the
+      // provider's prompt cache: the call after it paid 8,323 tokens fresh
+      // instead of reading them back at a fiftieth of the price, every run.
+      // Truncate only once the request is actually approaching the window,
+      // which is still ahead of the aggressive path below.
+      const { messages: toolCompacted, truncated: toolOutputsTruncated } =
+        shouldCompactToolOutputs(this.estimateRequestTokens(), this.config.contextWindowSize)
+          ? truncateOldestToolOutputs(this.messages, { softCap: effectiveSoftCap })
+          : { messages: this.messages, truncated: 0 };
       if (toolOutputsTruncated > 0) {
         this.messages = toolCompacted;
         agentLogger.info({

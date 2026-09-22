@@ -41,15 +41,11 @@ describe.skipIf(process.platform === 'win32')('chat in a real POSIX terminal', (
     expect(tui.commands).toContainEqual(expect.objectContaining({ type: 'approval.respond', requestId: 'b', approved: false }));
   });
 
-  test('opt-in wheel and resize reach old history while composer and status stay fixed', async () => {
+  test('always-on wheel and resize reach old history while composer and status stay fixed', async () => {
     tui = await TuiHarness.start('src/tui-pi/index.ts', 90, 24);
     await tui.waitFor('connected');
     tui.event('chat.response', { response: Array.from({ length: 100 }, (_, n) => `History line ${n}`).join('\n') });
     await tui.waitFor('History line 99');
-    expect(tui.screen.modes.mouseTrackingMode).toBe('none');
-    expect(await tui.text()).not.toContain('wheel: history');
-    tui.send('/mouse on\r');
-    await tui.waitFor('[wheel captured');
     await tui.waitFor('wheel: history');
     expect(tui.screen.modes.mouseTrackingMode).toBe('vt200');
     tui.send('unsent composer text');
@@ -65,12 +61,9 @@ describe.skipIf(process.platform === 'win32')('chat in a real POSIX terminal', (
     await tui.waitFor('unsent composer text');
     tui.send('\x1b[1;5F'); // Ctrl+End
     await tui.waitFor('History line 99');
-    // At narrow widths the capture badge can truncate the connection word.
     expect((await tui.text()).split('\n').at(-1)).toContain('Octipus');
-    expect(tui.screen.modes.mouseTrackingMode).toBe('vt200');
-    tui.send('\x1bm'); await tui.waitFor('[wheel captured', true);
     await tui.waitFor('connected');
-    expect(tui.screen.modes.mouseTrackingMode).toBe('none');
+    expect(tui.screen.modes.mouseTrackingMode).toBe('vt200');
     expect(await tui.text()).toContain('unsent composer text');
     expect(tui.commands.some(command => command.type === 'chat.send')).toBe(false);
   });

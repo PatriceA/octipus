@@ -20,8 +20,9 @@
  *     discoverSkillIds returns all active assignments for the topic.
  *   - any other value / unset → hybrid (the algorithm above).
  */
-import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
+import { canonicalTopic } from '@/models/topics';
 import { cosineSimilarity } from '@/db/schema/embeddings';
 import { skillTopicAssignments } from '@/db/schema/skill-topic-assignments';
 import { skills } from '@/db/schema/skills';
@@ -69,14 +70,26 @@ function isNoEmbeddingModelError(err: unknown): boolean {
 }
 
 /** Active topic-assignment ids for a topic. */
+/**
+ * Assignments for a role, and for the LANE that role resolves to.
+ *
+ * Skills are keyed by role on purpose — a lane is a cost class, and `build`
+ * covers coding, devops, data, security and architecture at once, so keying
+ * skills to it would inject a financial-analysis skill into a devops worker.
+ * But the assignment UI lists whatever `GET /topics` returns, which is lanes,
+ * so an assignment made there was written under a name no worker ever looks up.
+ * Both names are matched, which keeps existing lane assignments working without
+ * making a lane the unit of expertise.
+ */
 async function fetchActiveSkillIdsForTopic(topic: string): Promise<string[]> {
   const db = getDb();
+  const names = [...new Set([topic, canonicalTopic(topic)])];
   const rows = await db
     .select({ skillId: skillTopicAssignments.skillId })
     .from(skillTopicAssignments)
     .where(
       and(
-        eq(skillTopicAssignments.topic, topic),
+        inArray(skillTopicAssignments.topic, names),
         eq(skillTopicAssignments.isActive, true),
       ),
     );

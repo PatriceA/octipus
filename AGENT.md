@@ -188,12 +188,17 @@ think you need to break one, open an issue first.
 
 ## Adding things (cheat sheet)
 
-- **Role** → `src/core/agent/roles/<name>/` (existing roles: ai,
-  architecture, automation, coding, communication, data, design, devops,
-  finance, general, pm, qa, research, review, security, writing). `general` is
-  also what the ROOT agent of a turn runs as. Registered by three lines in
-  `roles/index.ts` (static imports — a folder scan breaks in the bundle). Add classifier
-  keywords in `src/core/agent/classifier.ts` if it has a distinct topic.
+- **Role** → the Topics page, under the lane it should run on: name, one-line
+  description, prompt and tool list, no restart. Rows with `is_system = false`
+  join the registry at boot via `loadRolesFromDb`. In CODE →
+  `src/core/agent/roles/<name>/` (shipped roles: ai, architecture, automation,
+  coding, communication, data, design, devops, finance, general, pm, qa,
+  research, review, security, writing). `general` is also what the ROOT agent of
+  a turn runs as. Registered by three lines in `roles/index.ts` (static imports —
+  a folder scan breaks in the bundle). Nothing picks a role out of a lane: the
+  arrow runs role → lane (`defaultTopic` through `canonicalTopic`), and a role is
+  CHOSEN by an agent naming it in `spawn_child` off its `description` — so a role
+  with a blank description is one nobody delegates to.
 - **Skill** → system skills are seeded in `src/db/seed-skills.ts` (DB-backed,
   with embeddings). Filesystem skills follow the agentskills.io spec: a
   `SKILL.md` (or flat `*.md`) under `.octipus/skills/`, `~/.octipus/agent/skills/`,
@@ -212,8 +217,8 @@ think you need to break one, open an issue first.
 - **Connector** → `src/connectors/<name>/definition.ts`, register in the
   connector registry. OAuth via `oauth-http-transport.ts`.
 - **Hook** → wire triggers/actions in `src/hooks/` (`triggers.ts`, `actions.ts`).
-- **Expert / Profile** → seed in `src/db/seed-experts.ts` / `seed-presets.ts`,
-  or POST via API.
+- **Profile** → seed in `src/db/seed-presets.ts`, or POST via API. (Experts are
+  gone — a role now carries the tools, rules and prompt an expert used to.)
 - **DB schema change** → edit Drizzle schema in `src/db/schema/`, then
   `npm run db:generate` to produce a migration, then `npm run db:migrate`.
 

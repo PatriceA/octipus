@@ -64,9 +64,6 @@ interface SidePanelProps {
   selectedModel: string;
   models: Array<{ name: string; isDefault: boolean }>;
   onModelChange: (model: string) => void;
-  selectedPresetId: string | null;
-  presets: Array<{ id: string; name: string; description?: string; role: string }>;
-  onPresetChange: (presetId: string | null) => void;
   /** Swarm tree lives under Session Stats as the third section. */
   swarmSessionId: string | null;
   /** Append-only queue of swarm events. SwarmTree tracks its own consumed
@@ -149,9 +146,6 @@ export default function SidePanel({
   selectedModel,
   models,
   onModelChange,
-  selectedPresetId,
-  presets,
-  onPresetChange,
   swarmSessionId,
   swarmEvents,
   swarmDurationMs = 0,
@@ -217,42 +211,6 @@ export default function SidePanel({
             </div>
           </div>
 
-          <div>
-            <label className="mb-1 block text-[10px] uppercase tracking-wider text-outline-variant">
-              expert
-            </label>
-            <p className="text-[10px] text-outline mb-1.5">chat directly with an expert.</p>
-            <div className="flex flex-wrap gap-1">
-              <button
-                type="button"
-                onClick={() => onPresetChange(null)}
-                className={cn(
-                  'rounded-xs border px-2 py-0.5 text-[10px] transition-colors cursor-pointer',
-                  selectedPresetId === null
-                    ? 'bg-primary-container/40 border-primary text-primary'
-                    : 'border-outline-variant/60 text-on-surface-variant hover:border-outline hover:text-on-surface',
-                )}
-              >
-                none
-              </button>
-              {presets.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => onPresetChange(p.id)}
-                  title={p.description}
-                  className={cn(
-                    'rounded-xs border px-2 py-0.5 text-[10px] transition-colors cursor-pointer',
-                    selectedPresetId === p.id
-                      ? 'bg-primary-container/40 border-primary text-primary'
-                      : 'border-outline-variant/60 text-on-surface-variant hover:border-outline hover:text-on-surface',
-                  )}
-                >
-                  {p.name}
-                </button>
-              ))}
-            </div>
-          </div>
         </div>
       </CollapsibleSection>
 

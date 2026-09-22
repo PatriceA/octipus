@@ -715,6 +715,55 @@
       "when": 1789307551228,
       "tag": "0100_agent_billable_tokens",
       "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1789601114549,
+      "tag": "0101_default_max_tokens",
+      "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1789601114550,
+      "tag": "0102_max_tokens_ceiling",
+      "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1789601114551,
+      "tag": "0103_build_everyday_lanes",
+      "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1789601114552,
+      "tag": "0104_verify_lane",
+      "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1789601114553,
+      "tag": "0105_drop_experts",
+      "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1789601114554,
+      "tag": "0106_user_roles",
+      "breakpoints": true
+    },
+    {
+      "idx": 108,
+      "version": "7",
+      "when": 1789601114555,
+      "tag": "0107_role_customized",
+      "breakpoints": true
     }
   ]
 }

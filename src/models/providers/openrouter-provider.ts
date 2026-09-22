@@ -80,11 +80,15 @@ export class OpenRouterProvider implements ModelProvider {
     const key = cacheAffinityKey(options.sessionId, options.userId, options.cacheScope ?? 'root');
     if (key && body.user === undefined) body.user = key;
 
-    // Routing policy: cheapest endpoint that can serve the request, then STAY
-    // there for the rest of the conversation (see `stickyProviders`). The pin
-    // keeps `allow_fallbacks`, so an endpoint going down costs a cache miss,
-    // not a failed turn — and the reply's own `provider` re-pins to whoever
-    // actually served it. `require_parameters` is kept where tools or a
+    // Routing policy: let OpenRouter pick the endpoint for turn 1 (its default
+    // ranking), then STAY there for the rest of the conversation (see
+    // `stickyProviders`). NOT `sort: 'price'`: measured 2026-09-16 in the
+    // harness arena, price-first pinned deepseek-v4-flash to a $0.05/M endpoint
+    // on which the model lost tool results mid-turn (fix task 3/3 -> 1/3,
+    // module task timed out); default routing passed 3/3 on the same build.
+    // The pin keeps `allow_fallbacks`, so an endpoint going down costs a cache
+    // miss, not a failed turn — and the reply's own `provider` re-pins to
+    // whoever actually served it. `require_parameters` is kept where tools or a
     // response format are in play: an endpoint that would silently drop them
     // is not cheaper, it is wrong.
     //
@@ -93,9 +97,10 @@ export class OpenRouterProvider implements ModelProvider {
     const explicit = body.provider && typeof body.provider === 'object' ? body.provider as Record<string, unknown> : undefined;
     const pinned = OpenRouterProvider.stickyProviders.get(this.stickyKey(options));
     const requireParameters = params.tools?.length || params.response_format ? { require_parameters: true } : {};
-    body.provider = explicit
+    const routing = explicit
       ? { ...requireParameters, ...explicit }
-      : { sort: 'price', ...(pinned ? { order: [pinned], allow_fallbacks: true } : {}), ...requireParameters };
+      : { ...(pinned ? { order: [pinned], allow_fallbacks: true } : {}), ...requireParameters };
+    if (Object.keys(routing).length) body.provider = routing; else delete body.provider;
     if (options.cachePolicy !== 'off' && isAnthropicFamily(String(body.model))) {
       const cached = applyAnthropicCacheControl(params.messages, String(body.model), { conversation: Boolean(options.cacheScope) });
       if (!cached.system) logMissedCacheSplit(String(body.model));

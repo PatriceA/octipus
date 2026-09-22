@@ -139,7 +139,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
   private async executeBridgedTool(name: string, args: Record<string, unknown>): Promise<BridgeResult> {
     const id = randomUUID();
-    const delegation = name === 'spawn_child' || name === 'escalate_to_different_expert' || name === 'collect_children' || this.toolExecutor.getTools().get(name)?.final === true;
+    const delegation = name === 'spawn_child' || name === 'escalate_to_other_lane' || name === 'collect_children' || this.toolExecutor.getTools().get(name)?.final === true;
     if (delegation) this.setPause('delegation', true);
     try {
       let messages: AgentMessage[];
@@ -1024,7 +1024,9 @@ export class CLIAgentWorker extends BaseAgentWorker {
           try {
             const event = JSON.parse(line);
             if (built.keepStdinOpen && event.type === 'control_request') {
-              void answerCliPermissionRequest(event, this.context, (type, data) => this.emit(type, data), this.abortController.signal).then(response => {
+              void answerCliPermissionRequest(event, this.context, (type, data) => this.emit(type, data), this.abortController.signal,
+                this.bridge ? () => this.toolExecutor.toolsDisabled ? [] : [...this.toolExecutor.getTools().values()] : undefined,
+              ).then(response => {
                 if (!this.aborted && proc.stdin?.writable) proc.stdin.write(JSON.stringify(response) + '\n');
               }).catch((err: unknown) => {
                 if (this.aborted || this.abortController.signal.aborted) return;

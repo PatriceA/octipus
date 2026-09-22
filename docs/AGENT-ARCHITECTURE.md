@@ -20,24 +20,23 @@ Domain knowledge sets that provide expertise to agents via system prompt injecti
 
 **Location:** DB table `skills`, seeded from `src/db/seed-skills.ts`, managed via `SkillRegistry` and `/api/skills` CRUD
 
-### Experts
-Pre-configured agent personas that combine a role, tools, skills, and system prompt. Experts bypass the root agent for direct, focused task execution.
+### Experts (removed)
 
-**Examples:** Coder (coding role + architecture/data-structures skills), DevOps Engineer (devops role + CI/CD/containers skills), Security Analyst (security role + OWASP/networking skills)
+Experts were pre-configured personas pairing a role with tools, skills, a
+prompt, critical rules, a deliverable template and success metrics. They are
+gone: every one of them named a role that already carried the same tools, so the
+expert row was a second, database-resident copy of the role — and a seed that
+had not run produced a specialist with no rules while nothing said so.
 
-**Location:** DB table `presets`, seeded from `src/db/seed-experts.ts`
+Where each part went:
 
-#### Structured Expert Prompts
-
-Every system expert includes three structured prompt sections that are automatically injected into the agent's system prompt:
-
-| Field | Schema Column | Purpose |
-|-------|--------------|---------|
-| **Critical Rules** | `criticalRules` (string[]) | Prompt guidance (e.g., "Never commit directly to main", "Always validate user input"); execution policy must enforce hard constraints separately |
-| **Deliverable Template** | `deliverableTemplate` (text) | Expected output format — defines the structure of the agent's final response (e.g., code review format with sections for issues, suggestions, summary) |
-| **Success Metrics** | `successMetrics` (string[]) | Evaluation criteria for the agent's output (e.g., "All tests pass", "No security vulnerabilities introduced") |
-
-These fields are defined on the `presets` table and populated for all 16 system experts. Custom experts can also define them via the API or web UI.
+| Was on the expert | Lives now |
+|---|---|
+| role + tools | the role itself (`roles/<name>/config.ts`, or a row on the Topics page) |
+| critical rules | `RoleMeta.criticalRules`, appended to the role prompt |
+| skills | skill↔role assignments (`skill_topic_assignments`, keyed by role name) |
+| deliverable template | the role's `prompt.md` OUTPUT section |
+| model preference | the LANE the role resolves to (`defaultTopic` → `canonicalTopic`) |
 
 ### Agents (Workers)
 Runtime instances that execute tasks using an LLM tool loop. Each agent has a context (session, user, model, role) and iterates: call LLM → parse tool calls → execute tools → repeat.
@@ -329,14 +328,23 @@ Tools auto-discover via `discovery.ts` from `src/tools/` folders. No manual regi
 ### New Skill
 Create via the API (`POST /api/skills`) or add to `SYSTEM_SKILLS` in `src/db/seed-skills.ts` for system skills.
 
-### New Expert
-Add entry to `SYSTEM_EXPERTS` in `src/db/seed-experts.ts` with role, skills, prompt, rules, and metrics.
-
 ### New Role
+From the UI: the Topics page lists roles under the lane they run on — add one
+there with a name, a one-line description, a prompt and a tool list. It is
+stored in `roles` with `is_system = false` and joins the registry at boot
+(`loadRolesFromDb`); the create call also registers it immediately, so it is
+spawnable without a restart.
+
+In code, for a role that ships with Octipus:
 1. Create folder `src/core/agent/roles/<name>/`
-2. Add `config.ts` with `RoleMeta` (role, toolIds, defaultTopic)
+2. Add `config.ts` with `RoleMeta` (role, description, toolIds, defaultTopic)
 3. Add `prompt.md` (role system prompt)
-4. Roles auto-discover from folders; no manual registration needed
+4. Add the three static imports in `roles/index.ts` — a folder scan breaks in
+   the bundle
+
+Either way the role is CHOSEN by an agent naming it in `spawn_child`, off the
+one-line `description` rendered into the delegation menu. Nothing selects a role
+out of a lane; the arrow runs role → lane, via `defaultTopic` → `canonicalTopic`.
 
 ## Knowledge Base (RAG)
 

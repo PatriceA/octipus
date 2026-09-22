@@ -141,6 +141,37 @@ export function calculateTotalTokens(messages: AgentMessage[]): number {
 /** Default soft cap on full tool-result messages kept in context. */
 export const DEFAULT_TOOL_OUTPUT_SOFT_CAP = 10;
 
+/**
+ * Share of the context window that must be in use before the soft cap is worth
+ * applying. Counting tool results says nothing about how much room the model
+ * has: on a 1M-token window the count-only cap rewrote history at the eleventh
+ * tool result, 30k tokens in, and a rewritten history is a lost prompt-cache
+ * prefix — the next call paid 8,323 tokens fresh instead of reading them back
+ * at a fiftieth of the price.
+ */
+export const TOOL_OUTPUT_COMPACTION_FILL = 0.5;
+
+/**
+ * The window to run an agent against. A registered model's own `context_window`
+ * wins, but it comes from a DB column an admin can set to anything — and every
+ * compaction threshold is a fraction of this number, so a 0 turns each of them
+ * into 0 and the agent rewrites its whole history every turn. Anything below
+ * the floor the setting itself is validated against falls back to the setting.
+ */
+export function usableContextWindow(modelWindow: number | null | undefined, fallback: number): number {
+  return typeof modelWindow === 'number' && modelWindow >= MIN_USABLE_CONTEXT_WINDOW ? modelWindow : fallback;
+}
+
+/** Same floor `agent.contextWindowSize` is validated against in the config schema. */
+export const MIN_USABLE_CONTEXT_WINDOW = 1_000;
+
+/** True when the request is close enough to the window that dropping the oldest
+ *  tool outputs buys more than the cache write it costs. */
+export function shouldCompactToolOutputs(estimatedTokens: number, contextWindowSize: number): boolean {
+  if (!(contextWindowSize > 0)) return true; // unknown window: keep the old behaviour
+  return estimatedTokens > contextWindowSize * TOOL_OUTPUT_COMPACTION_FILL;
+}
+
 /** Max chars retained per truncated tool output (mirrors the reactive-overflow idiom). */
 const TOOL_OUTPUT_TRUNCATE_CHARS = 2000;
 

@@ -280,3 +280,37 @@ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('cancelling during vendor approval cre
   expect(fixture.status).toHaveBeenCalledWith('a', expect.objectContaining({ status: 'stopped' }));
   expect(fixture.status.mock.calls.some(([, update]) => update.status === 'failed')).toBe(false);
 });
+
+it.skipIf(!!process.env.OCTIPUS_LIVE_CLI).each(['ALLOW', 'DENY', 'ASK'] as const)(
+  'MCP control relay enforces profiles.manage through the real executor: %s', async level => {
+    writeFileSync(fixture.script, `
+      import { createInterface } from 'node:readline';
+      const lines = createInterface({ input: process.stdin });
+      const permission = new Promise(resolve => lines.on('line', line => {
+        const value = JSON.parse(line);
+        if (value.type === 'control_response') resolve(value.response.response);
+      }));
+      console.log(JSON.stringify({type:'control_request',request_id:'profiles',request:{subtype:'can_use_tool',tool_name:'mcp__octipus__profiles__search_profiles',input:{query:'wife'},tool_use_id:'profile-call'}}));
+      const grant = await permission;
+      if (grant.behavior !== 'allow') throw new Error('Transport was blocked');
+      const r = await fetch(process.env.OCTIPUS_AGENT_URL + '/call', {method:'POST', headers:{Authorization:'Bearer '+process.env.OCTIPUS_AGENT_KEY},body:JSON.stringify({name:'profiles__search_profiles',arguments:{query:'wife'}})});
+      const result = await r.json();
+      console.log(JSON.stringify({type:'result',subtype:'success',result:JSON.stringify(result),num_turns:1}));
+      lines.close();
+    `);
+    fixture.check.mockImplementation(async (_user: string, toolId: string) => ({ level: toolId === 'profiles' ? level : 'ASK' }));
+    const worker = sampleWorker();
+    worker.getContext().attended = true;
+    worker.registerTool({ name: 'profiles__search_profiles', toolId: 'profiles', permissionAction: 'manage',
+      description: '', parameters: { type: 'object' }, execute: fixture.execute });
+    if (level === 'ASK') {
+      await expect(worker.run('Find a profile')).rejects.toThrow('approval was not granted');
+      expect(fixture.requestApproval).toHaveBeenCalledTimes(1);
+      expect(fixture.requestApproval.mock.calls[0].slice(0, 5)).toEqual(['u', 'a', 'profiles', 'manage', { query: 'wife' }]);
+    } else {
+      await worker.run('Find a profile');
+      expect(fixture.requestApproval).not.toHaveBeenCalled();
+    }
+    expect(fixture.check).toHaveBeenCalledWith('u', 'profiles', 'manage', { query: 'wife' }, expect.objectContaining({ sessionId: 's' }), expect.anything());
+    expect(fixture.execute).toHaveBeenCalledTimes(level === 'ALLOW' ? 1 : 0);
+  });

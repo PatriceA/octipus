@@ -18,6 +18,8 @@ import { estimateToolSchemaTokens, logPromptComposition, recordContextFill } fro
 import { buildSecurityReminder } from './input-guard';
 import { createMetaTools } from './meta-tools';
 import { shouldUseLazyDiscovery } from './lazy-tools';
+import { selectLane } from './lane-intent';
+import { selectCoreToolIds } from './tool-intent';
 import { isPlanMode, PLAN_MODE_DIRECTIVE, stripMutatingTools } from './plan-mode';
 import { isLongTailHandler } from './tool-split';
 import { buildCapabilitiesHandler } from '@/tools/self-report';
@@ -74,9 +76,10 @@ export interface RootRunnerDeps {
  * `create_pipeline`, which the lite spawn schema does not expose.
  */
 export function buildDelegationPolicy(isLite: boolean): string {
-  return isLite
-    ? `\n\nYou hold real tools — use them. Answer the request yourself whenever your own tools reach it. Call spawn_child EXACTLY ONCE, and only when the task needs a specialist you are not: writing or refactoring code, security review, devops, or deep multi-source research. Then relay the child's result. Never tell the user a capability is missing: either call a tool or spawn the specialist that holds it.`
-    : `\n\nYou are the agent the user is talking to, and you hold the general toolset — files, the web, the knowledge base, notes, tasks, profiles, messaging, scheduling, artifacts. Doing the work yourself is the normal path: read the file, run the search, store the note, and answer. Call spawn_child when the task needs a toolset or judgement you do not have — writing or refactoring code, design work, security review, devops, QA, deep multi-source research — or when independent parts of the request can genuinely run in parallel. Use create_pipeline only when the user explicitly asks for a multi-stage workflow with handover (e.g. "research then implement then review"). Delegating a one-tool question you could answer yourself costs the user a whole extra agent for nothing. Never tell the user a capability is missing: call the tool, or spawn the specialist that holds it — saying the knowledge base, the web or a repository is unreachable because you did not try is a wrong answer about the product. If the user explicitly tells you to delegate or use spawn_child, always do so.`;
+  const policy = `\n\nYou hold real tools: finish bounded tasks yourself when your own tools suffice and you can verify the outcome. For a clear specialist task or an explicit delegation request, call spawn_child before reading implementation files: do not investigate the whole task and pay a child to investigate it again. If scope is unclear, resolve only the specific uncertainty. Once you start a bounded task, finish it instead of delegating the same work. If unexpected complexity or distinct remaining work warrants a later coding handoff, provide handoff with reason, completedWork, remainingWork, files (ownership), and verification. Transfer findings and actual check results; do not restart completed investigation. Independent review may deliberately re-read to verify. Never assume a capability is missing without checking available tools or the specialist catalog; report actual unavailability or denial honestly. Existing permissions still apply. For current or time-sensitive facts (latest, most recent, last winner, current officeholder, prices or news), verify with live web tools or a research child before answering; do not offer stale memory and ask permission for a read-only lookup. An explicit request to look something up online must execute that lookup, including follow-ups referring to the conversation. If verification fails, report the failure and uncertainty. Never claim work or a child has started without actually invoking the corresponding tool.`;
+  return policy + (isLite
+    ? ' If delegation is needed, call spawn_child EXACTLY ONCE, then assess its result and answer; otherwise work directly.'
+    : ' Use specialists for sustained domain judgment, independent verification or useful parallel work. Staged pipelines are the user\'s to direct, not yours to choose: if they ask for one in those words, look it up with list_tools. You remain responsible for checking and synthesizing the result.');
 }
 
 /**
@@ -148,7 +151,13 @@ export async function runRootAgent(
 ): Promise<{ response: string; agentId: string; sources: string[] }> {
   const emit = deps.emit;
   const agentManager = getAgentManager();
-  const modelName = await deps.modelSelector.selectForRootAgent(sessionId, classification.type);
+  // One routing decision, used twice: the model comes from the lane, and so do
+  // the lane's temperature and token limit. Computed here rather than inside the
+  // selector so the worker cannot be spawned under a different lane than the one
+  // that chose its model — which is what happened while the root always spawned
+  // under `general` (→ everyday) no matter where the request was routed.
+  const routedLane = selectLane(message, classification).lane;
+  const modelName = await deps.modelSelector.selectForRootAgent(sessionId, classification.type, { message, classification });
 
   // Resolve the root agent mode for THIS turn. 'auto' (default) re-derives
   // from the current default model's size every turn, so swapping to a
@@ -227,6 +236,7 @@ export async function runRootAgent(
     current: {
       registerPendingChild: (pc: PendingChild) => void;
       pendingDetachedCount: () => number;
+      getSideEffectCounters?: () => { byName: Record<string, number> };
     } | null;
   } = { current: null };
   const rootWorkerRef: { current: AgentWorker | null } = { current: null };
@@ -293,7 +303,13 @@ export async function runRootAgent(
   // and a small model keeps the capped full schema above, because it chains
   // multi-step discovery badly.
   let toolAdvertisement: import('@/core/agent-base').ToolAdvertisement = { mode: 'full' };
-  const rootCoreToolIds = rootRoleConfig.coreToolIds;
+  // The core set is picked for THIS MESSAGE, not for the role. It can only
+  // shrink the role's own list and it fails open on an unknown group; what it
+  // drops stays registered, stays named in the prompt's TOOLS section, and
+  // stays reachable through `list_tools`. See tool-intent.ts.
+  const rootCoreToolIds = rootRoleConfig.coreToolIds === undefined
+    ? undefined
+    : selectCoreToolIds(message, rootRoleConfig.coreToolIds);
   if (
     rootCoreToolIds !== undefined &&
     shouldUseLazyDiscovery({
@@ -306,23 +322,38 @@ export async function runRootAgent(
     try {
       const { splitRoleTools } = await import('./tool-split');
       const { buildToolDiscoveryHandlers } = await import('@/tools/tool-discovery');
-      const { longTail } = splitRoleTools(rootTools, rootCoreToolIds);
+      // Meta-tools go through the split too, so a `discoverOnly` one (the
+      // pipeline family) lands in the tail and `list_tools` can find it. The
+      // rest have no toolId and no flag, so they stay core exactly as before.
+      const { longTail } = splitRoleTools([...rootTools, ...metaTools], rootCoreToolIds);
       const discoveryHandlers = buildToolDiscoveryHandlers(longTail);
       if (discoveryHandlers.length > 0) {
         // Everything stays REGISTERED (dispatch must keep working); only what is
         // advertised shrinks. The meta-tools are never in the long tail — the
         // root's ability to delegate must not need a discovery round-trip.
         const lazyCore = [...rootTools, ...discoveryHandlers, ...metaTools];
+        const lazyCoreToolIds = [
+          ...rootCoreToolIds,
+          ...metaTools.filter((t) => !t.discoverOnly).map((t) => t.toolId ?? t.name),
+          'self_report',
+        ];
         // `capabilities` is core on the lazy path too — the one question it
         // answers is the one a shrunken advertisement makes hardest to answer.
-        turnTools = [...lazyCore, selfReport(lazyCore)];
-        toolAdvertisement = {
-          mode: 'lazy',
-          coreToolIds: [...rootCoreToolIds, ...metaTools.map((t) => t.toolId ?? t.name), 'self_report'],
-        };
+        // It is handed the set that is actually ADVERTISED, by the same
+        // predicate the provider payload uses: given the whole registered list
+        // it reported tools the model could not see, and over-counted by one
+        // for every discoverOnly handler.
+        turnTools = [...lazyCore, selfReport(lazyCore.filter((t) => !isLongTailHandler(t, lazyCoreToolIds)))];
+        toolAdvertisement = { mode: 'lazy', coreToolIds: lazyCoreToolIds };
         rootAllowedToolIds.add('tool_discovery');
         coreLogger.info(
-          { role: ROOT_ROLE, model: modelName, longTailCount: longTail.length },
+          {
+            role: ROOT_ROLE, model: modelName, longTailCount: longTail.length,
+            // Which groups the message kept, and which the role holds — a
+            // capability the user thinks is missing is answered from here.
+            coreToolIds: rootCoreToolIds,
+            roleCoreToolIds: rootRoleConfig.coreToolIds,
+          },
           'Lazy tool discovery enabled for the rootAgent',
         );
       }
@@ -417,23 +448,7 @@ export async function runRootAgent(
   if (!isLite) staticParts.push(`\n\n${delegationPrompt}`);
   volatileParts.push(buildTopicHint(isLite, classification));
   if (classification.type === 'ambiguous') {
-    volatileParts.push(`\n\nThe user's message could not be confidently classified. If it is plainly small-talk or a one-shot factual question, answer directly. Otherwise prefer spawn_child to a fitting specialist — when in doubt, delegate. If the user explicitly tells you to delegate, always do so.`);
-  }
-
-  // Expert index — the live list of experts (system + this user's custom
-  // ones) the root agent can route to via spawn_child's `expertId`. Read
-  // from the DB each turn so newly created experts become routable without a
-  // prompt edit or restart. Skipped in lite mode: the lite spawn_child schema
-  // is deliberately role+taskBrief only, and small models handle the extra
-  // routing surface poorly.
-  if (!isLite) {
-    try {
-      const { buildExpertIndexBlock } = await import('./expert-index');
-      const expertBlock = await buildExpertIndexBlock(userId);
-      if (expertBlock) staticParts.push(expertBlock);
-    } catch (err) {
-      coreLogger.warn({ err, sessionId }, 'Expert index injection skipped — rootAgent routes by role only');
-    }
+    volatileParts.push(`\n\nThe user's message could not be confidently classified. If it is plainly small-talk or a one-shot factual question, answer directly. Otherwise resolve only the uncertainty needed to choose direct work or a specialist; do not start a broad investigation just to route the task. If the user explicitly tells you to delegate, always do so.`);
   }
 
   // Chat/work split (Thread 3): tell the root agent whether to deliver in
@@ -467,7 +482,7 @@ export async function runRootAgent(
     } catch (err) { coreLogger.error({ err }, 'silent failure in service'); }
 
     wsContext += `\n\nAll worker tasks MUST target this project. Always include the full path "${projectPath}" in every worker task description. The user does not need to specify the project — it is implicit.`;
-    wsContext += `\n\nFor complex implementation tasks in this project, PREFER using the "Full Development Cycle" pipeline (via create_pipeline) to ensure thorough research, architecture planning, and testing.`;
+    wsContext += `\n\nUse create_pipeline when ordered implementation and verification stages justify their cost, or the user requests that workflow; do not add research stages that repeat completed investigation.`;
     staticParts.push(wsContext);
   } else {
     // Normal mode: generic workspace awareness.
@@ -583,7 +598,7 @@ export async function runRootAgent(
     sessionId,
     userId,
     workspaceId,
-    topic: rootRoleConfig.defaultTopic,
+    topic: routedLane,
     model: modelName,
     role: ROOT_ROLE,
     root: true,
@@ -627,6 +642,7 @@ export async function runRootAgent(
   const maybeWorker = worker as unknown as {
     registerPendingChild?: (pc: PendingChild) => void;
     pendingDetachedCount?: () => number;
+    getSideEffectCounters?: () => { byName: Record<string, number> };
   };
   if (
     typeof maybeWorker.registerPendingChild === 'function' &&
@@ -635,6 +651,9 @@ export async function runRootAgent(
     rootDetachHookRef.current = {
       registerPendingChild: maybeWorker.registerPendingChild.bind(worker),
       pendingDetachedCount: maybeWorker.pendingDetachedCount.bind(worker),
+      // Lets spawn_child see what this turn has already read (native workers only).
+      ...(typeof maybeWorker.getSideEffectCounters === 'function'
+        ? { getSideEffectCounters: maybeWorker.getSideEffectCounters.bind(worker) } : {}),
     };
     // CLI workers implement only the detach subset of AgentWorker; consumers of
     // this ref must feature-detect anything else before calling it.

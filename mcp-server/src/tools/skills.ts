@@ -42,7 +42,7 @@ export function registerSkillTools(server: McpServer, client: OctiClient): void 
 
   server.tool(
     'octipus_list_skills',
-    'List all domain knowledge skills available to experts. Skills contain principles, best practices, and anti-patterns for domains like architecture, testing, security, etc.',
+    'List all domain knowledge skills available to agents. Skills contain principles, best practices, and anti-patterns for domains like architecture, testing, security, etc.',
     {},
     listSkills,
   );

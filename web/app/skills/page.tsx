@@ -66,27 +66,27 @@ interface TopicOption {
 }
 
 /**
- * Canonical topic list from the backend (`GET /topics` → src/models/topics.ts) —
- * the SAME source the Topics page reads. Using it here means the skill↔topic
- * assignment UI can never drift from the real topic set: the old hardcoded
- * 16-item CATEGORIES subset silently omitted ~10 topics (memory_extraction,
- * summarization, knowledge_review, evaluation, tool_translation, vision, ocr,
- * embedding, chat, simple, local, voice), so skills could never be assigned to
- * them from the UI. Returns [] while loading or on error (fail-soft for a
- * read-only selector — the page still renders).
+ * The list a skill can be assigned to: ROLES, from `GET /roles`.
+ *
+ * It used to read `GET /topics`, which is the model-LANE list. A lane is a cost
+ * class — `build` covers coding, devops, data, security and architecture at once
+ * — and both spawn paths look a worker's skills up by its ROLE, so every
+ * assignment made here was written under a name no worker ever queried. The
+ * backend still matches a lane name as well, so assignments made before this
+ * keep working; new ones are made against the thing that actually selects them.
  */
 function useTopicOptions(): TopicOption[] {
-  const { data } = useQuery<{ topics: TopicOption[] }>({
-    queryKey: ['topics'],
+  const { data } = useQuery<{ roles: Array<{ role: string }> }>({
+    queryKey: ['roles'],
     queryFn: async () => {
       try {
-        return await api.get<{ topics: TopicOption[] }>('/topics');
+        return await api.get<{ roles: Array<{ role: string }> }>('/roles');
       } catch {
-        return { topics: [] };
+        return { roles: [] };
       }
     },
   });
-  return data?.topics ?? [];
+  return (data?.roles ?? []).map((r) => ({ value: r.role, label: r.role }));
 }
 
 const CATEGORY_COLORS: Record<string, string> = {

@@ -109,3 +109,21 @@ describe('VoicePlanGate', () => {
     expect(isCancellation('abort')).toBe(true);
   });
 });
+
+
+describe('German mobile voice confirmations', () => {
+  test.each(['ja', 'Ja, bitte!', 'mach das', 'leg los', 'bitte starten'])('confirms only an explicit go: %s', text => {
+    const gate = new VoicePlanGate();
+    gate.recordProposal(S, 'Erstelle eine Notiz', []);
+    expect(gate.decide(S, text, false).kind).toBe('execute');
+  });
+  test.each(['nein', 'Nein, lass es', 'abbrechen', 'stopp', 'warte bitte'])('cancels: %s', text => {
+    const gate = new VoicePlanGate();
+    gate.recordProposal(S, 'Erstelle eine Notiz', []);
+    expect(gate.decide(S, text, false).kind).toBe('passthrough');
+    expect(gate.decide(S, 'ja', false).kind).toBe('passthrough');
+  });
+  test.each(['ja aber erst morgen', 'ja bitte nicht', 'mach das nicht', 'ja und lösche alles'])('does not treat refinements as approval: %s', text => {
+    expect(isAffirmation(text)).toBe(false);
+  });
+});

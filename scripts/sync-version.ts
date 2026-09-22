@@ -41,17 +41,65 @@ export function setVersion(pkgJson: string, version: string): string {
   return pkgJson.replace(re, `$1${version}$2`);
 }
 
+/**
+ * The same, for a Cargo manifest: the `version = "…"` of the `[package]` table.
+ *
+ * Only the first one, and only before the next table header — every dependency
+ * below carries a `version` too, and rewriting those would pin the whole tree
+ * to the app's release number.
+ */
+export function setCargoVersion(cargoToml: string, version: string): string {
+  const pkg = cargoToml.indexOf('[package]');
+  if (pkg === -1) throw new Error('no [package] table found');
+  const nextTable = cargoToml.indexOf('\n[', pkg + 1);
+  const end = nextTable === -1 ? cargoToml.length : nextTable;
+  const head = cargoToml.slice(pkg, end);
+  const re = /^(version\s*=\s*")[^"]*(")/m;
+  if (!re.test(head)) throw new Error('no version field in [package]');
+  return cargoToml.slice(0, pkg) + head.replace(re, `$1${version}$2`) + cargoToml.slice(end);
+}
+
 /** Resolve the payload checkout independently from this helper's location. */
 export function resolveTargetRoot(override?: string, scriptDir = import.meta.dirname): string {
   return override ? resolve(override) : join(scriptDir, '..');
 }
 
-const TARGETS = ['package.json', join('mcp-server', 'package.json')];
+/**
+ * Every file in the repo that declares the product version.
+ *
+ * It was `package.json` and the published npm package, which is why the web
+ * app, the plugin SDK and the desktop bundle all still said 0.1.0 four releases
+ * in: nothing was wrong with the release, the files were simply never in the
+ * list. A version that appears in six places and is maintained in two is a
+ * version nobody can trust.
+ */
+const TARGETS = [
+  'package.json',
+  join('mcp-server', 'package.json'),
+  join('web', 'package.json'),
+  join('plugin-sdk', 'package.json'),
+  join('web', 'src-tauri', 'tauri.conf.json'),
+];
+
+/** Cargo manifests need their own rewrite; see `setCargoVersion`. */
+const CARGO_TARGETS = [join('web', 'src-tauri', 'Cargo.toml')];
+
+// Lockfiles carry the version too (`package-lock.json` in three places,
+// `Cargo.lock` in one) and are NOT rewritten here: they are generated files,
+// and the tools that own them do it correctly —
+//   npm install --package-lock-only        (root, mcp-server, web)
+//   cargo update -p octipus                (web/src-tauri)
+// Run those when bumping the repo; nothing publishes a lockfile version, so a
+// release does not need them.
 
 if (import.meta.main) {
-  const arg = process.argv[2];
+  // `--print <tag>` emits the normalized version and writes nothing. The release
+  // workflow compares it against the committed one, so the comparison and the
+  // rewrite cannot disagree about what `v0.5` means.
+  const printOnly = process.argv[2] === '--print';
+  const arg = printOnly ? process.argv[3] : process.argv[2];
   if (!arg) {
-    console.error('Usage: npx tsx scripts/sync-version.ts <version> [target-repo-root]');
+    console.error('Usage: npx tsx scripts/sync-version.ts [--print] <version> [target-repo-root]');
     process.exit(2);
   }
   const version = normalizeVersion(arg);
@@ -60,16 +108,33 @@ if (import.meta.main) {
     process.exit(2);
   }
 
+  if (printOnly) {
+    console.log(version);
+    process.exit(0);
+  }
+
   const repoRoot = resolveTargetRoot(process.argv[3]);
-  for (const rel of TARGETS) {
+  const rewrite = (rel: string, fn: (text: string, v: string) => string) => {
     const path = join(repoRoot, rel);
-    const before = readFileSync(path, 'utf8');
-    const after = setVersion(before, version);
+    let before: string;
+    try {
+      before = readFileSync(path, 'utf8');
+    } catch {
+      // A target that is not in this checkout is not an error: the release
+      // workflow runs against a sparse payload, and a missing optional
+      // component must not fail the release of everything else.
+      console.log(`- ${rel} not present, skipped`);
+      return;
+    }
+    const after = fn(before, version);
     if (after !== before) {
       writeFileSync(path, after);
       console.log(`✓ ${rel} → ${version}`);
     } else {
       console.log(`= ${rel} already at ${version}`);
     }
-  }
+  };
+
+  for (const rel of TARGETS) rewrite(rel, setVersion);
+  for (const rel of CARGO_TARGETS) rewrite(rel, setCargoVersion);
 }

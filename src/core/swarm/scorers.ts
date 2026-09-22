@@ -198,7 +198,7 @@ export function renderContractFeedback(
  * Delegation/meta tools. They move work rather than produce evidence, so they
  * do not count as "a tool that worked" for the outage gate.
  */
-const META_TOOLS = new Set(['spawn_child', 'collect_children', 'escalate_to_different_expert']);
+const META_TOOLS = new Set(['spawn_child', 'collect_children', 'escalate_to_other_lane']);
 
 /**
  * Shells, which take a command STRING rather than arguments. Refused as the

@@ -260,6 +260,7 @@ function genericRender(toolName: string, args: Args, result: unknown, hasResult:
 const REGISTRY: Record<string, Renderer> = {
   filesystem__read_file: renderRead,
   filesystem__write_file: fileWriteRenderer('Wrote'),
+  filesystem__edit_file: fileWriteRenderer('Edited'),
   filesystem__append_file: fileWriteRenderer('Appended to'),
   filesystem__list_directory: renderList,
   filesystem__file_info: fsMutationRenderer('Inspected'),

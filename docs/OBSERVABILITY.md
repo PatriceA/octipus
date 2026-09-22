@@ -129,4 +129,4 @@ example per run (a `user → assistant` pair plus outcome/topic/tokens metadata)
 inline scrub), and prints a `scanned / exported / filtered / malformed` summary
 to stderr — no silent truncation. Without `--out` it writes JSONL to stdout.
 The same records feed the learning loop via `skill_distill source=trajectory`
-(see [Skill lifecycle](EXPERT-TOPIC-SKILL-ROUTING.md)).
+(see [Skill lifecycle](LANE-ROLE-SKILL-ROUTING.md)).

@@ -8,6 +8,7 @@ import {
   SECURITY_PREAMBLE,
   getRoleConfig,
   setRoleToolIdsInMemory,
+  unknownToolIds,
   stripSecurityPreamble,
 } from './roles';
 import { getToolRegistry } from '@/tools/registry';
@@ -163,6 +164,16 @@ describe('role↔tool binding (W7)', () => {
     // The global registry is empty in a unit-test process, so stand up a
     // stub `filesystem` tool — otherwise every assertion below passes
     // vacuously against an empty handler list.
+    test('unknownToolIds names the ids nothing registers', () => {
+      // `filesystem` is registered by this block's beforeAll. A typo here
+      // creates a role that passes every other check and then spawns a worker
+      // with no tools, because getToolsForRole drops unknown ids and continues.
+      expect(unknownToolIds(['filesystem', 'flesystem'])).toEqual(['flesystem']);
+      // Connector bindings resolve per user at spawn time and MCP is bridged,
+      // so neither is in the manifests and neither is "unknown".
+      expect(unknownToolIds(['mcp', `${CONNECTOR_TOOL_PREFIX}gmail`])).toEqual([]);
+    });
+
     beforeAll(async () => {
       const handlers = [...READING, ...MUTATING].map((name) => ({
         name,

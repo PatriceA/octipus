@@ -148,8 +148,8 @@ export class GatewayAdapter {
 
   // ── Outgoing messages ───────────────────────────────────────────
 
-  sendChat(sessionId: string, content: string, expertId?: string, projectPath?: string): void {
-    this.client.sendChat(sessionId, content, expertId, projectPath);
+  sendChat(sessionId: string, content: string, projectPath?: string): void {
+    this.client.sendChat(sessionId, content, projectPath);
   }
 
   sendCommand(name: string, args?: Record<string, string>): void {

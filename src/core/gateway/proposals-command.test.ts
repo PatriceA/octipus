@@ -42,10 +42,10 @@ describe('/proposals', () => {
   });
 
   test('approve <n> promotes the nth row of that same list', async () => {
-    approveSpy.mockResolvedValue({ promoted: 'expert', id: 'e-9', name: 'k8s-triage', record: {} });
+    approveSpy.mockResolvedValue({ promoted: 'skill', id: 'e-9', name: 'k8s-triage', record: {} });
     const result = await registry.execute('/proposals approve 2', ctx);
     expect(approveSpy).toHaveBeenCalledWith('p-2', { userId: undefined });
-    expect(result!.text).toContain('is now an expert');
+    expect(result!.text).toContain('is now a skill');
   });
 
   test('reject <n> reports the suppression date', async () => {

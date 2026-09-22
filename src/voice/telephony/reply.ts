@@ -28,21 +28,12 @@ const END_CALL_INSTRUCTION =
  * the Gather webhook uses) + phone-style + end-call marker, falling back to a
  * generic voice assistant. Cached per process — the expert rarely changes.
  */
-let cachedExpertPrompt: string | null | undefined; // undefined = not looked up yet
 async function resolvePhonePrompt(): Promise<string> {
-  if (cachedExpertPrompt === undefined) {
-    cachedExpertPrompt = null;
-    try {
-      const { getDb } = await import('../../db/postgres');
-      const { experts } = await import('../../db/schema/experts');
-      const { eq } = await import('drizzle-orm');
-      const [expert] = await getDb().select().from(experts).where(eq(experts.role, 'communication')).limit(1);
-      if (expert?.systemPrompt) cachedExpertPrompt = expert.systemPrompt;
-    } catch {
-      /* fall back to default */
-    }
-  }
-  return (cachedExpertPrompt || DEFAULT_VOICE_PROMPT) + PHONE_STYLE + END_CALL_INSTRUCTION;
+  // The Communication expert's `systemPrompt` used to override this. No row
+  // ever carried one — the column was null on every seeded expert — so the
+  // lookup was a database round trip per phone turn to read a null and fall
+  // back here anyway.
+  return DEFAULT_VOICE_PROMPT + PHONE_STYLE + END_CALL_INSTRUCTION;
 }
 
 /** Generate a short spoken reply for a phone turn. Mutates `history` in place. */

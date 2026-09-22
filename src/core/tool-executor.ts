@@ -49,6 +49,7 @@ function boundedLevenshtein(a: string, b: string, max: number): number {
  */
 export const FILE_CHANGE_TOOLS = new Set([
   'filesystem__write_file',
+  'filesystem__edit_file',
   'filesystem__append_file',
   'filesystem__delete_file',
   'filesystem__copy_file',
@@ -115,7 +116,7 @@ export function resolvedFileChangePath(result: unknown): string | undefined {
 
 /** Tools whose wall-clock duration is *paused* out of the calling agent's
  * timer — the agent is blocked waiting on the child, not doing work. */
-const DELEGATION_TOOLS = new Set(['spawn_child', 'escalate_to_different_expert']);
+const DELEGATION_TOOLS = new Set(['spawn_child', 'escalate_to_other_lane']);
 
 /**
  * Tools that run a shell command — counted as `commandsRun` in the receipt.
@@ -628,6 +629,14 @@ export class ToolExecutor {
         toolId === 'mcp' && bareName === 'mcp_call_tool'
           ? (toolCall.arguments.arguments as Record<string, unknown> | undefined) ?? {} : toolCall.arguments,
         this.context,
+        // An ad-hoc handler has no manifest to say its default level, so it
+        // fell through to ASK — which an unattended channel turns into a hard
+        // block. Measured 2026-09-16 on the API channel: `list_tools`,
+        // `describe_tool`, `capabilities` and `mcp_list_tools` were all refused
+        // as "approval required", so the lazy-advertised long tail and every
+        // MCP tool were unreachable. A handler that declares itself read-only
+        // gets the same default a read-only manifest action would.
+        { defaultLevel: tool.replaySafety === 'read_only' ? 'ALLOW' : undefined },
       );
 
       // ONE policy decision, shared with `base-tool.ts` — see

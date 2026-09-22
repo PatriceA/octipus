@@ -1,7 +1,15 @@
 import { describe, expect, test } from 'vitest';
 import { applyRoleFit, validateSpawnChildArgs, formatChildResult, createLateBoundSpawnChildHooks, createSpawnChildTool, buildSpawnRoleCatalog, buildDelegationGuidance, parsePlan, MAX_PLAN_STEPS, SPAWN_CHILD_ROLES } from './swarm-tool';
-import { LEVEL_DEFAULT, type AgentNode, type ChildResult, type PendingChild } from './types';
+import { LEVEL_DEFAULT, type AgentNode, type ChildResult, type PendingChild, type SpawnChildParams } from './types';
 import { SwarmSpawner } from './spawner';
+
+const handoff = {
+  reason: 'The inspected bug spans a separate parser package requiring specialist work.',
+  completedWork: 'Located the caller and reproduced the failure; no code changed.',
+  remainingWork: 'Fix parser empty input handling and add a regression test.',
+  files: '/workspace/parser/src/index.ts and parser tests only; caller belongs to parent.',
+  verification: 'npm test -- parser failed on empty input; rerun after fix.',
+};
 
 // ── buildSpawnRoleCatalog (depth-1 subagent discoverability) ─────────
 
@@ -417,6 +425,58 @@ describe('createSpawnChildTool', () => {
     expect(String(result)).toContain('spawn_child:');
   });
 
+  test('the first spawn after the parent has read files is a question, the second starts the child', async () => {
+    const parent = makeParent();
+    let spawned = 0;
+    const spawner = {
+      spawnChild: async () => { spawned += 1; return { status: 'completed', output: 'ok', nodeId: 'n1' }; },
+    } as unknown as SwarmSpawner;
+    let challengeSpent = false;
+    const hooks = {
+      registerPending: () => {},
+      pendingCount: () => 0,
+      maxPendingDetached: () => 0,
+      filesReadThisTurn: () => 3,
+      takeSpawnChallenge: () => { if (challengeSpent) return false; challengeSpent = true; return true; },
+    };
+    const tool = createSpawnChildTool(parent, spawner, hooks);
+    const args = {
+      role: 'research', topic: 'research', subtopic: 'x',
+      taskBrief: 'look into the thing', expectedOutput: 'a note', handoff,
+    };
+    const ctx = { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general' as const, status: 'running' as const, createdAt: new Date(), updatedAt: new Date(), metadata: {} };
+
+    const first = await tool.execute(args, ctx);
+    expect(String(first)).toContain('one check before a child starts');
+    expect(spawned).toBe(0);
+
+    await tool.execute(args, ctx);
+    expect(spawned).toBe(1);
+  });
+
+  test('a specialist task delegated before any read is never challenged', async () => {
+    const parent = makeParent();
+    let spawned = 0;
+    const spawner = {
+      spawnChild: async () => { spawned += 1; return { status: 'completed', output: 'ok', nodeId: 'n1' }; },
+    } as unknown as SwarmSpawner;
+    let challenges = 0;
+    const hooks = {
+      registerPending: () => {},
+      pendingCount: () => 0,
+      maxPendingDetached: () => 0,
+      filesReadThisTurn: () => 0,
+      takeSpawnChallenge: () => { challenges += 1; return true; },
+    };
+    const tool = createSpawnChildTool(parent, spawner, hooks);
+    await tool.execute(
+      { role: 'research', topic: 'research', subtopic: 'x', taskBrief: 'look into the thing', expectedOutput: 'a note' },
+      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+    );
+    expect(spawned).toBe(1);
+    expect(challenges).toBe(0); // the check is not even claimed
+  });
+
   // Reachability, not behaviour. The role-fit rewrite is a LITE-root agent
   // workaround, and it can only fire if the resolved tier actually arrives at
   // the spawner. A first attempt gated it on the ROUTER threshold, which made
@@ -500,6 +560,95 @@ describe('createSpawnChildTool', () => {
     expect(String(out)).toContain('nodeId="child-1"');
     expect(String(out)).toContain('status="ok"');
     expect(String(out)).toContain('<output>ok done</output>');
+  });
+
+  test('a coding child is refused once the parent has read files this turn', async () => {
+    let called = false;
+    const spawner = { spawnChild: async () => { called = true; throw new Error('should not be called'); } } as unknown as SwarmSpawner;
+    const hooks = createLateBoundSpawnChildHooks(
+      { current: { registerPendingChild: () => {}, pendingDetachedCount: () => 0, getSideEffectCounters: () => ({ byName: { filesystem__read_file: 3 } }) } },
+      () => 6,
+    );
+    const ctx = { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} } as any;
+    const out = await createSpawnChildTool(makeParent(), spawner, hooks).execute(
+      { role: 'coding', topic: 'coding', subtopic: 'fix', taskBrief: 'Fix ledger.py.', expectedOutput: { shape: 'summary' } }, ctx,
+    );
+    expect(String(out)).toMatch(/refused.*3 file/);
+    expect(called).toBe(false);
+    // Every role, not just coding: a research or qa child spawned after the same
+    // reads starts just as blind, and the "do not repeat broad discovery" line
+    // it is given rides on the handoff.
+    const research = await createSpawnChildTool(makeParent(), { spawnChild: async () => { throw new Error('reached'); } } as unknown as SwarmSpawner, hooks)
+      .execute({ role: 'research', topic: 'research', subtopic: 'x', taskBrief: 'Look up X.', expectedOutput: { shape: 'summary' } }, ctx);
+    expect(String(research)).toMatch(/refused.*3 file/);
+
+    // A parent that has read nothing delegates freely, any role.
+    const freshHooks = { registerPending: () => {}, pendingCount: () => 0, maxPendingDetached: () => 0, filesReadThisTurn: () => 0 };
+    let reached = false;
+    const fresh = await createSpawnChildTool(makeParent(), { spawnChild: async () => { reached = true; return { nodeId: 'c', kind: 'agent', status: 'ok', output: 'done', usedTokens: 0, durationMs: 0, spawnedChildren: [] }; } } as unknown as SwarmSpawner, freshHooks)
+      .execute({ role: 'research', topic: 'research', subtopic: 'x', taskBrief: 'Look up X.', expectedOutput: { shape: 'summary' } }, ctx);
+    expect(String(fresh)).not.toMatch(/refused/);
+    expect(reached).toBe(true);
+  });
+
+  test.each([false, true])('coding handoff reaches the child after reads (lite=%s)', async lite => {
+    const received: SpawnChildParams[] = [];
+    const spawner = { spawnChild: async (_parent: AgentNode, params: SpawnChildParams): Promise<ChildResult> => {
+      received.push(params);
+      return { nodeId: 'child', kind: 'agent', status: 'ok', output: 'Parser fixed', usedTokens: 0, durationMs: 0, spawnedChildren: [] };
+    } } as unknown as SwarmSpawner;
+    const hooks = createLateBoundSpawnChildHooks(
+      { current: { registerPendingChild: () => {}, pendingDetachedCount: () => 0, getSideEffectCounters: () => ({ byName: { filesystem__read_file: 3 } }) } }, () => 0,
+    );
+    const tool = createSpawnChildTool(makeParent(), spawner, hooks, { lite });
+    expect(tool.parameters.properties).toHaveProperty('handoff');
+    const spawnCtx = { id: 'ctx', sessionId: 's1', userId: 'u', model: '', topic: '', role: 'general' as const, status: 'running' as const, createdAt: new Date(), updatedAt: new Date(), metadata: {} };
+    // One second thought per turn: the first call after reads asks, the retry starts the child.
+    expect(String(await tool.execute({ role: 'coding', taskBrief: 'Complete only the parser fix.', handoff }, spawnCtx)))
+      .toContain('one check before a child starts');
+    const out = await tool.execute({ role: 'coding', taskBrief: 'Complete only the parser fix.', handoff }, spawnCtx);
+    expect(String(out)).toContain('Parser fixed');
+    expect(received).toHaveLength(1);
+    expect(received[0].taskBrief).toContain(handoff.completedWork);
+    expect(received[0].taskBrief).toContain(handoff.files);
+    expect(received[0].taskBrief).toContain(handoff.verification);
+    expect(received[0].taskBrief).toContain('Existing permissions still apply');
+    expect(received[0].plan).toBeUndefined(); // Handoff does not select a mechanical executor.
+  });
+
+  test.each([{ lite: true }, { weakModel: true }])('role rewriting cannot bypass a post-read handoff: %j', async opts => {
+    let called = false;
+    const spawner = { spawnChild: async (): Promise<ChildResult> => {
+      called = true;
+      return { nodeId: 'child', kind: 'agent', status: 'ok', output: 'done', usedTokens: 0, durationMs: 0, spawnedChildren: [] };
+    } } as unknown as SwarmSpawner;
+    const hooks = createLateBoundSpawnChildHooks(
+      { current: { registerPendingChild: () => {}, pendingDetachedCount: () => 0, getSideEffectCounters: () => ({ byName: { filesystem__read_file: 1 } }) } }, () => 0,
+    );
+    const tool = createSpawnChildTool(makeParent(), spawner, hooks, opts);
+    const args = { role: 'architecture', taskBrief: 'implement the feature and fix the bug in the backend code' };
+    const ctx = { id: 'ctx', sessionId: 's1', userId: 'u', model: '', topic: '', role: 'general', status: 'running' as const, createdAt: new Date(), updatedAt: new Date(), metadata: {} };
+    expect(String(await tool.execute(args, ctx))).toContain('provide handoff');
+    expect(called).toBe(false);
+    // Past the handoff guard the second thought is still owed once.
+    expect(String(await tool.execute({ ...args, handoff }, ctx))).toContain('one check before a child starts');
+    expect(called).toBe(false);
+    expect(String(await tool.execute({ ...args, handoff }, ctx))).toContain('status="ok"');
+    expect(called).toBe(true);
+  });
+
+  test('clear coding task delegates before any file read without handoff', async () => {
+    let called = false;
+    const spawner = { spawnChild: async (): Promise<ChildResult> => {
+      called = true;
+      return { nodeId: 'child', kind: 'agent', status: 'ok', output: 'done', usedTokens: 0, durationMs: 0, spawnedChildren: [] };
+    } } as unknown as SwarmSpawner;
+    const hooks = createLateBoundSpawnChildHooks(
+      { current: { registerPendingChild: () => {}, pendingDetachedCount: () => 0, getSideEffectCounters: () => ({ byName: {} }) } }, () => 0,
+    );
+    await createSpawnChildTool(makeParent(), spawner, hooks).execute({ role: 'coding', taskBrief: 'Implement the parser.' },
+      { id: 'ctx', sessionId: 's1', userId: 'u', model: '', topic: '', role: 'general', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} });
+    expect(called).toBe(true);
   });
 
   test('spawn_child is NOT final — allows multiple calls per turn', () => {
@@ -844,5 +993,16 @@ describe('validateSpawnChildArgs plan handling', () => {
   test('rejects a malformed plan loud', () => {
     const r = validateSpawnChildArgs({ ...valid, plan: [{ tool: 'grep' }] });
     expect('error' in r && r.error).toContain('invalid plan');
+  });
+});
+
+
+describe('bounded delegation handoff validation', () => {
+  test.each([null, [], 'already looked', {}, { ...handoff, reason: ' ' }, { ...handoff, verification: 3 }, { ...handoff, files: 'x'.repeat(2001) }, { ...handoff, extra: 'ignored?' }])('rejects malformed handoff: %j', value => {
+    expect(validateSpawnChildArgs({ role: 'coding', taskBrief: 'Fix parser.', handoff: value })).toHaveProperty('error');
+  });
+  test('enforces the combined brief limit without truncating findings', () => {
+    const result = validateSpawnChildArgs({ role: 'coding', taskBrief: 'x'.repeat(3500), handoff });
+    expect(result).toHaveProperty('error', expect.stringContaining('plus handoff exceeds'));
   });
 });

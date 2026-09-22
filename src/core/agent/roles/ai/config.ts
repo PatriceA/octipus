@@ -1,6 +1,7 @@
 import type { RoleMeta } from '../types';
 export const meta: RoleMeta = {
   role: 'ai',
+  description: 'ML/AI/RAG/prompt engineering',
   toolIds: ['shell', 'filesystem', 'browser', 'browser-ext', 'websearch', 'knowledge', 'task_state', 'mcp'],
   // Lazy tool discovery (Ollama, non-small only): hot path is shell + filesystem
   // + websearch + knowledge (the prompt mandates search_knowledge as step 1).
@@ -9,5 +10,12 @@ export const meta: RoleMeta = {
   // machines where browser tools aren't installed (capability gating already
   // drops those). See docs/OLLAMA.md.
   coreToolIds: ['shell', 'filesystem', 'websearch', 'knowledge'],
+  criticalRules: [
+    "Always include fallback behavior when model responses are unexpected or malformed",
+    "Set explicit token limits and timeouts for all LLM calls",
+    "Validate and sanitize all inputs before passing to models to prevent prompt injection",
+    "Log model inputs and outputs for debugging and evaluation",
+    "Never assume model outputs are deterministic — design for variability",
+  ],
   defaultTopic: 'ai',
 };

@@ -127,19 +127,19 @@ describe('OpenRouter endpoint stickiness', () => {
     sessionId: 's1', userId: 'u1', cacheScope: `root:${Math.random()}`, ...overrides,
   }) as any;
 
-  test('asks for the cheapest endpoint, then pins the conversation to whoever served it', async () => {
+  test('lets OpenRouter pick turn 1, then pins the conversation to whoever served it', async () => {
     const provider = new OpenRouterProvider();
     const options = conversation();
 
     await provider.complete(options);
-    // Turn 1: no pin yet — cheapest-first, no order.
-    expect(captured.provider).toEqual({ sort: 'price' });
+    // Turn 1: no pin yet, no sort — OpenRouter's default ranking, no `provider` block at all.
+    expect(captured.provider).toBeUndefined();
 
     servedBy = 'SomeoneElse'; // must NOT change the pin mid-conversation
     await provider.complete(options);
     // Turn 2: pinned to turn 1's endpoint. Fallbacks stay on — an endpoint
     // going down costs a cache miss, not a failed turn.
-    expect(captured.provider).toEqual({ sort: 'price', order: ['CheapCo'], allow_fallbacks: true });
+    expect(captured.provider).toEqual({ order: ['CheapCo'], allow_fallbacks: true });
 
     // ...and the reply re-pins, so a real move is followed rather than fought.
     await provider.complete(options);
@@ -151,7 +151,7 @@ describe('OpenRouter endpoint stickiness', () => {
     await provider.complete(conversation());
     servedBy = 'OtherCo';
     await provider.complete(conversation());
-    expect(captured.provider.order).toBeUndefined(); // fresh conversation, no inherited pin
+    expect(captured.provider).toBeUndefined(); // fresh conversation, no inherited pin
   });
 
   test('an explicit operator routing policy wins outright', async () => {
@@ -167,7 +167,6 @@ describe('OpenRouter endpoint stickiness', () => {
     await new OpenRouterProvider().complete(conversation({
       tools: [{ type: 'function', function: { name: 'read', parameters: { type: 'object' } } }],
     }));
-    expect(captured.provider.require_parameters).toBe(true);
-    expect(captured.provider.sort).toBe('price');
+    expect(captured.provider).toEqual({ require_parameters: true });
   });
 });

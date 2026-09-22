@@ -1,21 +1,36 @@
 {
   "name": "octipus-mcp-server",
-  "version": "0.1.0",
+  "version": "0.5.1",
   "description": "MCP server bridge for Octipus — exposes skills, agents, search, and chat as MCP tools",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "octipus",
+    "ai-agents",
+    "llm",
+    "mcp-server",
+    "claude",
+    "tools"
+  ],
+  "homepage": "https://github.com/PatriceA/octipus/tree/main/mcp-server#readme",
+  "bugs": {
+    "url": "https://github.com/PatriceA/octipus/issues"
+  },
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/PatriceA/octipus.git",
+    "url": "git+https://github.com/PatriceA/octipus.git",
     "directory": "mcp-server"
   },
   "main": "dist/index.js",
   "bin": {
-    "assistant-mcp": "dist/index.js"
+    "octipus-mcp": "dist/index.js"
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc",

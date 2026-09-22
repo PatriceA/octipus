@@ -10,7 +10,6 @@
 import { randomUUID } from 'node:crypto';
 import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
-import { experts } from '@/db/schema/experts';
 import { type SkillProposalRecord, skillProposals } from '@/db/schema/skill-proposals';
 import { skills } from '@/db/schema/skills';
 import { normalizeSkillName } from '@/tools/skill-distill/distiller';
@@ -40,13 +39,10 @@ export interface ApproveOptions {
   /** Override the proposal's own name / prompt before promoting. */
   name?: string;
   systemPrompt?: string;
-  /** Role for an expert promotion. Ignored for a `skill` proposal. */
-  role?: string;
 }
 
 export type ApproveResult =
   | { promoted: 'skill'; id: string; name: string; record: unknown }
-  | { promoted: 'expert'; id: string; name: string; record: unknown }
   | null;
 
 /** A concurrent approval got there first. Reported as "no longer pending". */
@@ -72,9 +68,13 @@ async function promote(id: string, opts: ApproveOptions): Promise<ApproveResult>
   const [proposal] = await db.select().from(skillProposals).where(and(...filters)).limit(1);
   if (!proposal) return null;
 
-  // A distilled *procedure* promotes into a skill; a *specialist* into an
-  // expert (the default / legacy path).
-  if (proposal.kind === 'skill') {
+  // Every proposal promotes into a SKILL. A proposal used to be able to become
+  // an expert instead — a row carrying a prompt and a role — which is the layer
+  // that has been retired: a distilled procedure is a skill, and a skill is the
+  // thing an agent can actually load. `kind` is kept on the row because it
+  // records what the distiller thought it was proposing; it no longer decides
+  // where the proposal lands.
+  {
     let merged = false;
     const name = opts.name ?? proposal.name;
     const content = opts.systemPrompt ?? proposal.draftPromptTemplate;
@@ -150,26 +150,6 @@ async function promote(id: string, opts: ApproveOptions): Promise<ApproveResult>
     return { promoted: 'skill', id: skill.id, name: skill.name, record: skill };
   }
 
-  const expert = await db.transaction(async (tx) => {
-    const [created] = await tx.insert(experts).values({
-      userId: proposal.userId,
-      name: opts.name ?? proposal.name,
-      description: proposal.description,
-      role: opts.role ?? 'general',
-      systemPrompt: opts.systemPrompt ?? proposal.draftPromptTemplate,
-      isSystem: false,
-    }).returning();
-
-    const [flipped] = await tx.update(skillProposals)
-      .set({ status: 'promoted' })
-      .where(and(eq(skillProposals.id, id), eq(skillProposals.status, 'pending')))
-      .returning({ id: skillProposals.id });
-    if (!flipped) throw new AlreadyResolvedError();
-    return created;
-  });
-
-  coreLogger.info({ proposalId: id, expertId: expert?.id }, 'Skill proposal promoted to expert');
-  return { promoted: 'expert', id: expert.id, name: expert.name, record: expert };
 }
 
 /**

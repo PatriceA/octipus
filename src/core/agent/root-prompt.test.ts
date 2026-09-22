@@ -17,6 +17,13 @@ import { assembleSystemPrompt, buildDelegationPolicy, buildTopicHint } from './r
 import { splitVolatileSystem } from '@/models/providers/prompt-cache';
 
 describe('buildDelegationPolicy', () => {
+  test.each([true, false])('requires current facts and online follow-ups to be verified, tier %s', tier => {
+    const policy = buildDelegationPolicy(tier);
+    expect(policy).toContain('verify with live web tools or a research child before answering');
+    expect(policy).toContain('including follow-ups referring to the conversation');
+    expect(policy).toContain('Never claim work or a child has started without actually invoking');
+  });
+
   test('is emitted for both tiers, with no dependency on a classified topic', () => {
     expect(buildDelegationPolicy(false)).toContain('spawn_child');
     expect(buildDelegationPolicy(true)).toContain('spawn_child');
@@ -52,10 +59,31 @@ describe('buildDelegationPolicy', () => {
     }
   });
 
-  test('full keeps the multi-spawn and pipeline surface lite must not see', () => {
+  test('both tiers prevent duplicate investigation but permit a bounded remaining-work handoff', () => {
+    for (const tier of [true, false]) {
+      const policy = buildDelegationPolicy(tier);
+      expect(policy).toContain('before reading implementation files');
+      expect(policy).toContain('do not restart completed investigation');
+      expect(policy).toContain('completedWork, remainingWork, files');
+      expect(policy).toContain('Independent review');
+    }
+  });
+
+  test('full keeps the multi-spawn surface lite must not see', () => {
     const full = buildDelegationPolicy(false);
     expect(full).toContain('parallel');
-    expect(full).toContain('create_pipeline');
+  });
+
+  test('neither tier offers a pipeline as a choice the model makes', () => {
+    // A pipeline is the user's workflow in the user's order. The tool stays
+    // registered and `discoverOnly`, so the policy points at list_tools instead
+    // of describing stages the model might pick on its own.
+    for (const tier of [true, false]) {
+      const policy = buildDelegationPolicy(tier);
+      expect(policy).not.toMatch(/use create_pipeline/i);
+    }
+    expect(buildDelegationPolicy(false)).toMatch(/pipelines are the user's to direct/i);
+    expect(buildDelegationPolicy(false)).toMatch(/list_tools/);
   });
 });
 

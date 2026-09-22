@@ -3,6 +3,7 @@ import { markToolNotExecuted, ToolNotExecutedError } from '@/core/tool-execution
 import { buildChildEnv, isSensitiveEnvName } from '@/security/child-env';
 import { coreLogger } from '@/utils/logger';
 import { killProcessTree } from '@/utils/proc';
+import { resolve } from 'node:path';
 import { tokenizeSafe } from './policy';
 import type { ShellExecResult, ShellOperations } from './operations';
 
@@ -76,6 +77,20 @@ export class LocalShellOperations implements ShellOperations {
       allowNetwork?: boolean;
     } = {},
   ): Promise<ShellExecResult> {
+    // `cd <dir> && <cmd>` is the one metacharacter idiom models produce on
+    // nearly every test run, and refusing it costs two round trips (measured
+    // 2026-09-16: the retry then broke on an unquoted path with a space). It
+    // is exactly `cwd` + `<cmd>`, so run it that way — no shell involved.
+    if (!options.unsafe) {
+      // The unquoted form takes everything up to `&&`: a path with a space,
+      // typed unquoted, is what the model meant, not two arguments. What
+      // follows the `&&` still has to tokenize cleanly below.
+      const m = command.match(/^\s*cd\s+(?:"([^"]+)"|'([^']+)'|([^"'&]+?))\s*&&\s*(.+)$/s);
+      if (m) { cwd = resolve(cwd, m[1] ?? m[2] ?? m[3]); command = m[4].trim(); }
+      // A trailing `2>&1` asks for what the result already carries (both
+      // streams), so it is dropped rather than refused.
+      command = command.replace(/\s+2>&1\s*$/, '');
+    }
     const argv = options.unsafe ? null : tokenizeSafe(command);
 
     if (!options.unsafe && argv === null) {
@@ -88,8 +103,8 @@ export class LocalShellOperations implements ShellOperations {
       // command either way.
       throw new ToolNotExecutedError('shell',
         `Shell command rejected — contains metacharacters (;, &, |, <, >, $(), \`, newline, brace expansion). ` +
-          `Run the steps as separate calls, or set useShell:true if the command genuinely needs shell ` +
-          `features. Refused command (truncated): ${command.slice(0, 80)}`,
+          `Run the steps as separate calls (use the cwd parameter instead of cd), or set useShell:true if the ` +
+          `command genuinely needs shell features. Refused command (truncated): ${command.slice(0, 200)}`,
       );
     }
 
@@ -242,7 +257,7 @@ export class LocalShellOperations implements ShellOperations {
     if (!options.unsafe && argv === null) {
       throw new ToolNotExecutedError('shell',
         `Background command rejected — contains metacharacters (;, &, |, <, >, $(), \`, newline, brace expansion). ` +
-          `Pass useShell: true to bypass and run via sh -c. Refused command (truncated): ${command.slice(0, 80)}`,
+          `Pass useShell: true to bypass and run via sh -c. Refused command (truncated): ${command.slice(0, 200)}`,
       );
     }
 

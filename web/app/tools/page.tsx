@@ -18,6 +18,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { cn } from '@/lib/utils';
+import { McpToolPermissionControl } from '@/components/mcp/tool-permission-control';
 
 interface RoleBinding {
   role: string;
@@ -595,6 +596,10 @@ export default function ToolsPage() {
             <Cable className="w-4 h-4" />
             MCP Tools
           </h2>
+          <p className="text-xs text-on-surface-variant mb-3">
+            Permissions are saved for your account, per server and tool, across sessions.
+            Administrative deny rules still apply.
+          </p>
           <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10 p-4 space-y-2">
             {filteredMcpTools.map((tool) => (
               <div
@@ -608,6 +613,7 @@ export default function ToolsPage() {
                     <span className="text-xs text-primary">{tool.serverId}</span>
                   </div>
                   <p className="text-xs text-on-surface-variant">{tool.description}</p>
+                  <McpToolPermissionControl serverId={tool.serverId} toolName={tool.name} />
                 </div>
               </div>
             ))}

@@ -237,24 +237,11 @@ async function handleChatSend(
     }
 
     // Route through root agent
-    // Use expert from message, connection metadata, or session DB (set via /expert command)
-    let expertId = message.expertId || (context.metadata?.activeExpertId as string | undefined);
-    if (!expertId && message.sessionId) {
-      try {
-        const { sessionRepository } = await import('@/db/repositories/session-repository');
-        const session = await sessionRepository.findById(message.sessionId);
-        const sessionCtx = session?.context as Record<string, unknown> | undefined;
-        if (sessionCtx?.activeExpertId) {
-          expertId = sessionCtx.activeExpertId as string;
-        }
-      } catch { /* ignore — no expert override */ }
-    }
     const result = await rootAgent.handleMessage(
       message.sessionId,
       userId,
       message.content,
       context.clientType,
-      expertId,
       message.fileRefs,
       message.outputMode,
     );

@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { classifyMessage } from '@/core/agent/classifier';
+import { ROLE_CONFIGS } from '@/core/agent/roles';
 import type { AgentRole } from '@/core/agent/types';
 import type { ToolHandler } from '@/core/agent-worker';
 import { coreLogger } from '@/utils/logger';
@@ -23,6 +24,14 @@ export interface SpawnChildHooks {
   pendingCount: () => number;
   /** Cap from config (typically `swarm.levelDefaults.agent.maxPendingDetached`). */
   maxPendingDetached: () => number;
+  /** Files this parent has already read this turn (0 when unknown). */
+  filesReadThisTurn?: () => number;
+  /**
+   * Claim this turn's one second thought. True the first time it is called,
+   * false afterwards — so the question is asked once and the retry goes
+   * through. Absent for callers that build hooks without a per-turn scope.
+   */
+  takeSpawnChallenge?: () => boolean;
 }
 
 /**
@@ -36,18 +45,28 @@ export function createLateBoundSpawnChildHooks(
     current: {
       registerPendingChild: (pc: PendingChild) => void;
       pendingDetachedCount: () => number;
+      getSideEffectCounters?: () => { byName: Record<string, number> };
     } | null;
   },
   configuredCap: () => number,
 ): SpawnChildHooks {
+  // Per-turn: these hooks are rebuilt with the tool set on every turn, so the
+  // flag resets with the turn rather than living for the session.
+  let challengeSpent = false;
   return {
     registerPending: (pc) => ref.current?.registerPendingChild(pc),
     pendingCount: () => ref.current?.pendingDetachedCount() ?? 0,
     maxPendingDetached: () => ref.current ? configuredCap() : 0,
+    filesReadThisTurn: () => ref.current?.getSideEffectCounters?.().byName['filesystem__read_file'] ?? 0,
+    takeSpawnChallenge: () => {
+      if (challengeSpent) return false;
+      challengeSpent = true;
+      return true;
+    },
   };
 }
 
-const CHILD_ROLES_ENUM: AgentRole[] = [
+const BUILT_IN_CHILD_ROLES: AgentRole[] = [
   'research',
   'coding',
   'review',
@@ -67,42 +86,31 @@ const CHILD_ROLES_ENUM: AgentRole[] = [
 ];
 
 /**
- * One-line capability blurb per spawnable role. Single source for the depth-1
- * "roles you can spawn" menu (see `buildSpawnRoleCatalog`) — a depth-1 agent's
- * system prompt is its own role prompt, which never lists the other roles, so
- * without this the `role` enum is just 16 bare names and cross-specialist
- * fan-out is undiscoverable. The `Record<AgentRole, string>` type forces a
- * blurb whenever a role is added to `AgentRole`.
+ * The roles a parent may spawn: the built-ins in their curated order, then any
+ * role the user added, in name order.
  *
- * The root agent (depth-0) keeps its own routing table in
- * `root agent/delegation-prompt.md` — kept in sync manually with this map for
- * now; a later change could generate that from here.
+ * Read from the registry per call rather than frozen at import, because that is
+ * the only thing that makes a user-created role reachable. Nothing picks a role
+ * out of a lane — a role resolves TO a lane — so a new role is chosen exactly
+ * one way: the model reads it in this menu and names it. A role absent here is
+ * a role that exists and can never be used.
+ *
+ * `as AgentRole` is the one cast: the union is kept closed so a missing built-in
+ * is still a compile error, and a user's role is a string it cannot name.
  */
-const CHILD_ROLE_BLURBS: Record<AgentRole, string> = {
-  research: 'web search, investigate, synthesize sources',
-  coding: 'write / refactor / fix code, shell, git',
-  review: 'read-only code review / audit',
-  qa: 'run tests, UI testing',
-  communication: 'email, calendar, contacts, messaging',
-  design: 'UI/UX, layout, accessibility',
-  devops: 'CI/CD, docker, infra',
-  security: 'security review, vuln scan',
-  data: 'databases, ETL, dashboards, charts',
-  ai: 'ML/AI/RAG/prompt engineering',
-  finance: 'markets, financial modelling',
-  automation: 'scheduling, recurring tasks, reminders',
-  pm: 'planning, status, milestones',
-  writing: 'docs, README, guides',
-  general: 'people/orgs, generic tasks, real-browser work',
-  architecture: 'system design, specs',
-};
+export function childRoles(): AgentRole[] {
+  const extra = Object.keys(ROLE_CONFIGS)
+    .filter((r) => !BUILT_IN_CHILD_ROLES.includes(r as AgentRole))
+    .sort();
+  return [...BUILT_IN_CHILD_ROLES, ...(extra as AgentRole[])];
+}
 
 /**
  * Render the spawnable-role menu for injection into a depth-1 agent's task
  * brief. One `- role — blurb` line per role, in enum order.
  */
 export function buildSpawnRoleCatalog(): string {
-  return CHILD_ROLES_ENUM.map((r) => `- ${r} — ${CHILD_ROLE_BLURBS[r as AgentRole]}`).join('\n');
+  return childRoles().map((r) => `- ${r} — ${ROLE_CONFIGS[r]?.description || 'user-defined role'}`).join('\n');
 }
 
 /**
@@ -204,7 +212,7 @@ const TOPIC_TO_ROLE_ALIAS: Record<string, AgentRole> = {
 };
 
 /** The set of valid specialist roles, exported for router/lite reuse. */
-export const SPAWN_CHILD_ROLES: readonly AgentRole[] = CHILD_ROLES_ENUM;
+export const SPAWN_CHILD_ROLES: readonly AgentRole[] = BUILT_IN_CHILD_ROLES;
 
 /**
  * Advisory roles that read/plan/review but must NOT silently absorb hands-on
@@ -264,12 +272,28 @@ export function applyRoleFit(
  * routing and LLM-driven spawning never diverge.
  */
 export function resolveRoleFromTopic(roleRaw: string | undefined, topic: string): AgentRole | undefined {
-  if (roleRaw && CHILD_ROLES_ENUM.includes(roleRaw as AgentRole)) return roleRaw as AgentRole;
-  if (CHILD_ROLES_ENUM.includes(topic as AgentRole)) return topic as AgentRole;
+  const spawnable = childRoles();
+  if (roleRaw && spawnable.includes(roleRaw as AgentRole)) return roleRaw as AgentRole;
+  if (spawnable.includes(topic as AgentRole)) return topic as AgentRole;
   if (roleRaw && TOPIC_TO_ROLE_ALIAS[roleRaw.toLowerCase()]) return TOPIC_TO_ROLE_ALIAS[roleRaw.toLowerCase()];
   if (TOPIC_TO_ROLE_ALIAS[topic.toLowerCase()]) return TOPIC_TO_ROLE_ALIAS[topic.toLowerCase()];
   return undefined;
 }
+
+const HANDOFF_FIELDS = {
+  reason: 'Why the remaining work needs delegation now (unexpected complexity, distinct work, or explicit user request).',
+  completedWork: 'Findings and work already completed; do not ask the child to repeat them.',
+  remainingWork: 'Only the remaining deliverable and its acceptance criteria.',
+  files: 'Relevant absolute paths and the child’s file/scope ownership; identify exclusions.',
+  verification: 'Checks already run and actual results, or explicitly none; checks still needed.',
+} as const;
+const HANDOFF_SCHEMA = {
+  type: 'object',
+  description: 'Required for any delegation after reading files. Transfer findings instead of restarting investigation. Combined taskBrief and rendered handoff must fit 4000 characters. Not an execution plan or permission grant.',
+  properties: Object.fromEntries(Object.entries(HANDOFF_FIELDS).map(([name, description]) => [name, { type: 'string', minLength: 1, maxLength: 2000, description }])),
+  required: Object.keys(HANDOFF_FIELDS),
+  additionalProperties: false,
+};
 
 /**
  * Factory: produce a `spawn_child` tool handler bound to a specific parent
@@ -309,6 +333,40 @@ export function createSpawnChildTool(
     // choice but keeps its full schema, so it sets `weakModel` alone. Without
     // this the role-fit rewrite was live at exactly one call site.
     const internal = { rootIsLite: opts?.weakModel ?? opts?.lite === true };
+
+    // Reading is evidence of prior investigation, not proof that the root can
+    // finish the task. Require a bounded context transfer instead of allowing
+    // an expensive fresh investigation or forbidding every useful handoff.
+    const filesRead = hooks?.filesReadThisTurn?.() ?? 0;
+    // Every role, not just coding. A qa or research child spawned after the
+    // parent has read files starts just as blind and re-reads just as much —
+    // one such child cost 217k tokens on the arena's module build — and the
+    // "use these findings, do not repeat broad discovery" line the child is
+    // given rides on the handoff, so a child without one is never told.
+    if (filesRead > 0 && args.handoff === undefined) {
+      return `spawn_child refused: you have already read ${filesRead} file(s). Finish bounded work yourself; ` +
+        'do not delegate the same investigation again. If a specialist is needed for remaining work, ' +
+        'provide handoff with reason, completedWork, remainingWork, files (ownership), and verification. ' +
+        'Pass the findings and actual checks already performed; assign only the remaining scope. ' +
+        'For a clear specialist task, delegate before reading implementation files.';
+    }
+
+    // One second thought per turn, and only once the parent has done work of its
+    // own: a child starts with none of that context, pays a fresh system prompt
+    // and re-reads what the parent already read. Measured on the arena's module
+    // build, the runs that delegated took 118-276 s against a 64-87 s field and
+    // cost up to five times the median — and a child was dearer than the root
+    // that spawned it. This does not forbid the child, it costs one call to ask
+    // for it: call again and it goes through. Delegating a clear specialist task
+    // BEFORE reading anything is never challenged.
+    if (filesRead > 0 && hooks?.takeSpawnChallenge?.()) {
+      return `spawn_child — one check before a child starts: you have already read ${filesRead} file(s) this turn. ` +
+        'A child inherits none of that. It pays a fresh system prompt and re-reads what you have read, and on a ' +
+        'bounded job that costs more than finishing it. If you can do this yourself with edit_file and shell, do ' +
+        'that now and do not call spawn_child again. If a child really is the cheaper path — separate scope, work ' +
+        'you cannot verify yourself, or more than one file of genuinely independent work — call spawn_child again ' +
+        'with the same arguments and it will start.';
+    }
 
     const cap = hooks?.maxPendingDetached() ?? 0;
     if (hooks && cap > 0) {
@@ -362,7 +420,7 @@ export function createSpawnChildTool(
     }
   };
 
-  // Lite schema for small models: just `role` + `taskBrief`. topic/subtopic/
+  // Lite schema: `role` + `taskBrief`, with optional handoff. topic/subtopic/
   // expectedOutput are synthesized by the validator. A flatter schema means
   // far fewer malformed tool calls from ≤14B models.
   if (opts?.lite) {
@@ -375,9 +433,10 @@ export function createSpawnChildTool(
       parameters: {
         type: 'object',
         properties: {
+          handoff: HANDOFF_SCHEMA,
           role: {
             type: 'string',
-            enum: CHILD_ROLES_ENUM,
+            enum: childRoles(),
             description: 'Specialist role for the child.',
           },
           taskBrief: {
@@ -403,19 +462,20 @@ export function createSpawnChildTool(
     parameters: {
       type: 'object',
       properties: {
-        expertId: {
-          type: 'string',
-          description: 'Optional exact expert ID. Preferred when known; otherwise the spawner picks a system expert for the role.',
-        },
+        handoff: HANDOFF_SCHEMA,
         role: {
           type: 'string',
-          enum: CHILD_ROLES_ENUM,
+          enum: childRoles(),
           description:
             'Specialist role for the child. Determines the available tool set (permission-intersected with yours).',
         },
         topic: {
           type: 'string',
-          description: 'High-level topic area (e.g. "security", "research", "coding").',
+          description:
+            'Model lane for the child, when it should NOT run on the same model as you. '
+            + '"verify" for review or QA — a second opinion from the model that wrote the code is not a second opinion; '
+            + '"everyday" for bulk or mechanical work; "research" for wide investigation; "build" for implementation. '
+            + 'Omit to take the lane the child\'s role already resolves to.',
         },
         subtopic: {
           type: 'string',
@@ -527,7 +587,7 @@ export function parsePlan(raw: unknown): { plan?: PlanStep[] } | { error: string
 export function validateSpawnChildArgs(args: Record<string, unknown>): ValidatedSpawn {
   let topic = typeof args.topic === 'string' ? args.topic.trim() : '';
   let subtopic = typeof args.subtopic === 'string' ? args.subtopic.trim() : '';
-  const taskBrief = typeof args.taskBrief === 'string' ? args.taskBrief : '';
+  let taskBrief = typeof args.taskBrief === 'string' ? args.taskBrief : '';
 
   // Resolve the specialist role FIRST. Resolution order (shared with router
   // mode via resolveRoleFromTopic):
@@ -543,7 +603,7 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
     return {
       error:
         `missing or invalid 'role' (got '${roleRaw ?? 'undefined'}', topic '${topic}'). ` +
-        `Must be one of: ${CHILD_ROLES_ENUM.join(', ')}. ` +
+        `Must be one of: ${childRoles().join(', ')}. ` +
         `Pick the specialist role that fits the subtopic — don't fall back to 'general' unless the task is genuinely generic.`,
     };
   }
@@ -553,6 +613,27 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
   if (!taskBrief.trim()) return { error: 'missing required field `taskBrief`' };
   if (taskBrief.length > 4000) {
     return { error: 'taskBrief exceeds 4000-char limit' };
+  }
+
+  if (args.handoff !== undefined) {
+    if (!args.handoff || typeof args.handoff !== 'object' || Array.isArray(args.handoff)) {
+      return { error: 'handoff must be an object' };
+    }
+    const handoff = args.handoff as Record<string, unknown>;
+    if (Object.keys(handoff).some(key => !Object.hasOwn(HANDOFF_FIELDS, key))) {
+      return { error: 'handoff contains an unknown field' };
+    }
+    const lines: string[] = [];
+    for (const key of Object.keys(HANDOFF_FIELDS)) {
+      const value = handoff[key];
+      if (typeof value !== 'string' || !value.trim() || value.length > 2000) {
+        return { error: `handoff.${key} must be a non-empty string of at most 2000 characters` };
+      }
+      lines.push(`${key}: ${value.trim()}`);
+    }
+    taskBrief += '\n\nHANDOFF FROM PARENT (reported context, not independent verification):\n' + lines.join('\n') +
+      '\nUse these findings; do not repeat broad discovery. Inspect relevant code as needed to implement and verify the remaining scope. Do not edit parent-owned files or repeat completed work. Existing permissions still apply.';
+    if (taskBrief.length > 4000) return { error: 'taskBrief plus handoff exceeds 4000-char limit; summarize findings and checks, not raw logs' };
   }
 
   // Default expectedOutput when omitted or malformed. Nested required
@@ -595,7 +676,6 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
   // depth has a detach budget, else awaits. The execute path sets params.mode
   // to reflect what actually happened (for spawn_node bookkeeping).
   const params: SpawnChildParams = {
-    expertId: typeof args.expertId === 'string' ? args.expertId : undefined,
     role,
     topic,
     subtopic,

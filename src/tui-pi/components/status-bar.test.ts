@@ -24,6 +24,26 @@ describe('StatusBar', () => {
     expect(strip(bar.render(80)[0])).toContain('⟨security⟩');
   });
 
+  test('keeps the model visible after the turn that named it, and drops it on null', () => {
+    const bar = new StatusBar();
+    expect(strip(bar.render(120)[0])).not.toContain('deepseek');
+    bar.setModel('deepseek/deepseek-v4.1-flash');
+    expect(strip(bar.render(120)[0])).toContain('deepseek/deepseek-v4.1-flash');
+    bar.setModel(null);
+    expect(strip(bar.render(120)[0])).not.toContain('deepseek');
+  });
+
+  test('the model slug sits after the context fill, so truncation eats it first', () => {
+    const bar = new StatusBar();
+    bar.setProject('harness-arena');
+    bar.setStats({ tokens: 68_500, cost: 0.0151, turns: 1 });
+    bar.setContext({ used: 118_000, window: 128_000 });
+    bar.setModel('deepseek/deepseek-v4.1-flash');
+    const line = strip(bar.render(160)[0]);
+    expect(line.indexOf('ctx 92%')).toBeGreaterThan(0);
+    expect(line.indexOf('deepseek/deepseek-v4.1-flash')).toBeGreaterThan(line.indexOf('ctx 92%'));
+  });
+
   test('renders run-mode segment when set, hidden otherwise', () => {
     const bar = new StatusBar();
     expect(strip(bar.render(80)[0])).not.toContain('[Full]');

@@ -7,21 +7,17 @@ import { StatusBar } from './components/status-bar';
 function fixture() {
   const write = vi.fn(); const terminal = { write }; const tui = { terminal } as unknown as TUI;
   const messages = new MessagesPane({ maxVisible: 3 }); const status = new StatusBar(); const notify = vi.fn();
-  return { write, terminal, messages, status, notify, run: (command: string) => handleTerminalCommand(command, tui, messages, status, notify) };
+  return { write, terminal, messages, status, notify, run: (command: string) => handleTerminalCommand(command, tui, messages, notify) };
 }
 
-test('mouse is untracked by default; toggle captures the wheel and badges it until released', () => {
+test('wheel tracking is enabled and disabled only by terminal lifecycle', () => {
   const f = fixture();
-  expect(f.status.render(100).join('')).not.toContain('wheel captured');
-  f.run('/mouse');
+  setMouseCapture(f.terminal, true);
   expect(f.write).toHaveBeenLastCalledWith('\x1b[?1000h\x1b[?1006h');
-  expect(f.status.render(100).join('')).toContain('wheel captured');
-  expect(f.messages.render(80).join('')).not.toContain('or wheel');
-  f.run('/mouse off');
+  setMouseCapture(f.terminal, false);
   expect(f.write).toHaveBeenLastCalledWith('\x1b[?1000l\x1b[?1006l');
+  expect(f.run('/mouse')).toBe(false);
   expect(f.status.render(100).join('')).not.toContain('wheel captured');
-  f.run('/mouse invalid');
-  expect(f.write).toHaveBeenCalledTimes(2);
 });
 
 test('copy last preserves complete Unicode and Markdown, independent of viewport', () => {

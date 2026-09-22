@@ -1,14 +1,25 @@
 # Octipus MCP server
 
 This package exposes an Octipus backend as a Model Context Protocol server. It
-registers 88 tools across 26 groups for chat, search, agents, sessions, models,
+registers 86 tools across 25 groups for chat, search, agents, sessions, models,
 knowledge, documents, tasks, research, and administration. Tool availability
 and results still depend on the connected backend, the authenticated user, and
 that user's permissions.
 
-## Install and build
+## Install
 
-From the repository root:
+Published on npm, so nothing needs to be checked out to use it:
+
+```bash
+npx octipus-mcp-server            # run it without installing
+npm install -g octipus-mcp-server # or install, and get `octipus-mcp` on PATH
+```
+
+It is a bridge, not a backend: it needs a running Octipus instance to talk to,
+and the URL and credentials below are how it finds one.
+
+To build it from a checkout instead — when changing it, or to run an unreleased
+revision:
 
 ```bash
 cd mcp-server
@@ -45,14 +56,15 @@ backend calls require configured credentials. The transport key described below
 is separate from backend authentication.
 
 The default transport is stdio, so `npm start` and `npm run start:stdio` are
-equivalent. A typical MCP client configuration is:
+equivalent. A typical MCP client configuration — Claude Desktop, Claude Code,
+or anything else that speaks MCP over stdio — is:
 
 ```json
 {
   "mcpServers": {
     "octipus": {
-      "command": "node",
-      "args": ["/absolute/path/to/octipus/mcp-server/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "octipus-mcp-server"],
       "env": {
         "OCTIPUS_URL": "http://localhost:3005",
         "OCTIPUS_API_KEY": "octi_your_token"
@@ -61,6 +73,10 @@ equivalent. A typical MCP client configuration is:
   }
 }
 ```
+
+From a checkout, point the client at the built entry instead — `"command":
+"node"`, `"args": ["/absolute/path/to/octipus/mcp-server/dist/index.js"]` — so
+it runs the revision you are editing rather than the published one.
 
 ## HTTP/SSE transport
 

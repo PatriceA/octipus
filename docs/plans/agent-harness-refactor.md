@@ -37,7 +37,7 @@ The orchestrator's model comes from the **`chat` lane binding**, not from the de
 and not from the topic label:
 
 - `src/core/orchestrator/model-selector.ts:17-56` `selectForOrchestration`:
-  session `/model` override → **`getModelForTopic('chat')`** → `getDefaultModel()`.
+  session `/model` override → **`getModelForTopic('everyday')`** → `getDefaultModel()`.
   A bound `chat` lane short-circuits the default unconditionally.
 - The `topic general` shown in the agent header is a hardcoded role constant
   (`src/core/orchestrator/roles/orchestrator/config.ts:10` `defaultTopic: 'general'`)

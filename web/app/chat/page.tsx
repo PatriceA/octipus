@@ -136,12 +136,6 @@ function latestUserMessageTime(messages: ChatMessageData[]): number {
   return 0;
 }
 
-interface Preset {
-  id: string;
-  name: string;
-  description?: string;
-  role: string;
-}
 
 export default function ChatPage() {
   const { pushPermission, pushApproval } = usePermissions();
@@ -165,8 +159,6 @@ export default function ChatPage() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   /** Root reply text streamed so far for one session/iteration; superseded by chat_response. */
   const [streaming, setStreaming] = useState<{ sessionId: string; iteration: number; text: string } | null>(null);
-  const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
-  const [presets, setPresets] = useState<Preset[]>([]);
   const [showSidePanel, setShowSidePanel] = useState(true);
   const [showCompactSessions, setShowCompactSessions] = useState(false);
   const compactSessionButtonRef = useRef<HTMLButtonElement>(null);
@@ -509,10 +501,6 @@ export default function ChatPage() {
         }
       });
 
-      // Load experts
-      api.get<{ experts: Preset[] }>('/experts')
-        .then((data) => { if (data?.experts) setPresets(data.experts); })
-        .catch(() => {});
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mounted]);
@@ -1503,7 +1491,6 @@ export default function ChatPage() {
           type: 'chat',
           content: userInput,
           sessionId: sid,
-          expertId: selectedPresetId || undefined,
           fileRefs,
           outputMode: outputModeOverride,
         }));
@@ -1541,7 +1528,7 @@ export default function ChatPage() {
         agentId?: string;
         classification?: { type: string };
         metadata?: MessageMetadata;
-      }>('/chat', { message: userInput, sessionId: sid, expertId: selectedPresetId || undefined, fileRefs, outputMode: outputModeOverride });
+      }>('/chat', { message: userInput, sessionId: sid, fileRefs, outputMode: outputModeOverride });
       if (fileRefs) setAttachedFiles([]);
 
       const responseSid = result.sessionId || sid;
@@ -1932,9 +1919,6 @@ export default function ChatPage() {
             selectedModel={selectedModel}
             models={models}
             onModelChange={setSelectedModel}
-            selectedPresetId={selectedPresetId}
-            presets={presets}
-            onPresetChange={setSelectedPresetId}
             swarmSessionId={activeSessionId}
             swarmEvents={swarmEvents}
             swarmDurationMs={swarmDurationMs}

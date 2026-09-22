@@ -1,6 +1,7 @@
 import type { RoleMeta } from '../types';
 export const meta: RoleMeta = {
   role: 'qa',
+  description: 'run tests, UI testing',
   toolIds: ['browser', 'browser-ext', 'shell', 'docker', 'filesystem', 'knowledge', 'task_state', 'visual', 'artifacts', 'artifacts_toolbox'],
   // Lazy tool discovery (Ollama, non-small only): the common QA path is test-suite
   // work (shell + filesystem + task_state). artifacts (~12k, the artifact-
@@ -9,6 +10,13 @@ export const meta: RoleMeta = {
   // tail. No effect on remote providers/small models, or machines without those
   // tools installed (capability gating already drops them). See docs/OLLAMA.md.
   coreToolIds: ['shell', 'filesystem', 'task_state'],
+  criticalRules: [
+    "Cover happy path, error cases, and edge cases in every test plan",
+    "Tests must be deterministic — no flaky tests that pass intermittently",
+    "Always test boundary conditions and invalid inputs",
+    "Include performance benchmarks for critical user flows",
+    "Test data must be isolated — tests should not depend on shared mutable state",
+  ],
   defaultTopic: 'qa',
   // Read-only: the file-mutating filesystem handlers are stripped from this
   // role's surface (see RoleMeta.readOnly). Its deliverable is returned in the

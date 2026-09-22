@@ -53,6 +53,7 @@ export function buildToolDiscoveryHandlers(longTail: ToolHandler[]): ToolHandler
         },
       },
       toolId: TOOL_DISCOVERY_TOOL_ID,
+      replaySafety: 'read_only',
       execute: async (args) => {
         const all = Array.from(byName.values()).map((t) => ({
           name: t.name,
@@ -83,6 +84,7 @@ export function buildToolDiscoveryHandlers(longTail: ToolHandler[]): ToolHandler
         required: ['name'],
       },
       toolId: TOOL_DISCOVERY_TOOL_ID,
+      replaySafety: 'read_only',
       execute: async (args) => {
         const name = args.name;
         if (typeof name !== 'string') {

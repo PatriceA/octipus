@@ -31,12 +31,12 @@ function makeJob(bindTopics: ModelCatalogEntry['topics']): InstallJob {
 
 describe('buildModelEntry', () => {
   test('binds requested topics as primary topicRoles on the CANONICAL lanes', () => {
-    // Catalog names ('general') canonicalize to lanes ('agents') at bind time.
+    // Catalog names ('general'/'chat') canonicalize to lanes ('everyday') at bind time.
     const e = buildModelEntry(ENTRY, ['chat', 'general'], false);
     expect(e.provider).toBe('ollama');
     expect(e.modelId).toBe(ENTRY.id);
-    expect(e.topicRoles).toEqual({ chat: 'primary', agents: 'primary' });
-    expect(e.topics).toEqual(['chat', 'agents']);
+    expect(e.topicRoles).toEqual({ everyday: 'primary' });
+    expect(e.topics).toEqual(['everyday']);
     expect(e.isDefault).toBe(false);
   });
 
@@ -73,7 +73,7 @@ describe('runInstall', () => {
     expect(job.modelName).toBe(ENTRY.id);
     expect(registered).toHaveLength(1);
     expect(registered[0]?.isDefault).toBe(true);
-    expect(registered[0]?.topicRoles).toEqual({ chat: 'primary', agents: 'primary' });
+    expect(registered[0]?.topicRoles).toEqual({ everyday: 'primary' });
     progressSeen.length; // (progress wired via job)
     expect(job.statusText).toBe('success');
   });

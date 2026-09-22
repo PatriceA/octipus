@@ -1,0 +1,11 @@
+-- The expert layer is retired. Every model choice now comes from a lane, every
+-- standing rule from the role that does the work, every procedure from a skill,
+-- and every ordered workflow from a pipeline the user writes. What the `presets`
+-- table held besides those was a name and an icon.
+--
+-- On the install this was developed against all sixteen rows were system seeds
+-- with no custom prompt and no pinned model, so nothing an operator wrote is
+-- lost here. A deployment that DID customise an expert should copy its prompt
+-- into a skill before taking this migration — that is the replacement, and the
+-- reason skill proposals now promote to skills rather than to experts.
+DROP TABLE IF EXISTS presets;

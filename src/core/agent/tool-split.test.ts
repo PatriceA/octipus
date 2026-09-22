@@ -94,3 +94,32 @@ describe('isLongTailHandler', () => {
     expect(isLongTailHandler(handler('x'), ['websearch'])).toBe(false);
   });
 });
+
+describe('discoverOnly', () => {
+  const hidden = (name: string): ToolHandler => ({
+    name, description: `desc ${name}`, parameters: { type: 'object', properties: {} },
+    discoverOnly: true, execute: async () => null,
+  });
+
+  test('puts a discoverOnly handler in the tail even with no toolId', () => {
+    // A meta-tool has no toolId, so without the flag it stays core forever.
+    const { core, longTail } = splitRoleTools([handler('spawn_child'), hidden('create_pipeline')], ['filesystem']);
+    expect(core.map((t) => t.name)).toEqual(['spawn_child']);
+    expect(longTail.map((t) => t.name)).toEqual(['create_pipeline']);
+  });
+
+  test('full-schema mode still advertises it — there is nothing to discover with', () => {
+    // `discoverOnly` is only safe because a lazy turn ships list_tools. Without
+    // lazy mode there is no way back to a hidden tool, so the flag must not be
+    // consulted: `splitRoleTools(handlers, undefined)` is the full path, and it
+    // returns everything as core.
+    const { core, longTail } = splitRoleTools([handler('spawn_child'), hidden('create_pipeline')], undefined);
+    expect(core.map((t) => t.name)).toEqual(['spawn_child', 'create_pipeline']);
+    expect(longTail).toEqual([]);
+  });
+
+  test('keeps it in the tail even when its name is in the core set', () => {
+    // The advertisement list must not be able to drag it back into view.
+    expect(isLongTailHandler(hidden('create_pipeline'), ['create_pipeline'])).toBe(true);
+  });
+});

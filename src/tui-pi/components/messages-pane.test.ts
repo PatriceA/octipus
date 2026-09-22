@@ -66,8 +66,6 @@ test('errors have a text marker, and reset removes history and live text', () =>
 test('overflow advertises history controls and the wheel reaches rows beyond the initial viewport', () => {
   const pane = new MessagesPane({ maxVisible: 6 });
   push(pane, Array.from({ length: 80 }, (_, n) => `history ${n}`).join('\n'), 'assistant');
-  expect(strip(pane.render(80)).at(-1)).toContain('PgUp/PgDn: history');
-  pane.setMouseCaptured(true);
   expect(strip(pane.render(80)).at(-1)).toContain('wheel: history');
   for (let n = 0; n < 40; n++) pane.handleScrollInput('\x1b[<64;10;5M');
   expect(strip(pane.render(80)).join('\n')).toContain('history 0');

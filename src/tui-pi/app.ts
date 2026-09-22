@@ -65,7 +65,7 @@ const isHistoryRow = (v: unknown): v is HistoryRow => {
   return !!r && (r.role === 'user' || r.role === 'assistant') && typeof r.content === 'string';
 };
 /** Keybindings the chat shell actually handles (the rest of `app.*` belongs to the editor). */
-const CHAT_HOTKEYS = ['app.mouse.toggle', 'app.palette.open', 'app.help.open', 'app.subagents.toggle', 'app.subagents.scrollUp', 'app.subagents.scrollDown', 'app.voice.talk', 'app.quit'] as const;
+const CHAT_HOTKEYS = ['app.palette.open', 'app.help.open', 'app.subagents.toggle', 'app.subagents.scrollUp', 'app.subagents.scrollDown', 'app.voice.talk', 'app.quit'] as const;
 
 export class OctipusTuiApp {
   readonly tui: TUI;
@@ -150,7 +150,6 @@ export class OctipusTuiApp {
     // installed by `createRuntime`. Users override via ~/.octipus/keybindings.json.
     tui.addInputListener((data) => {
       const kb = getKeybindings();
-      if (kb.matches(data, 'app.mouse.toggle')) { handleTerminalCommand('mouse', this.tui, this.messages, this.status, text => this.pushMessage('system', text)); return { consume: true }; }
       if (this.tui.hasOverlay?.()) return undefined;
       if (kb.matches(data, 'app.palette.open')) { this.openCommandPalette(); return { consume: true }; }
       if (kb.matches(data, 'app.help.open')) { this.pushMessage('system', this.hotkeysText()); return { consume: true }; }
@@ -242,7 +241,7 @@ export class OctipusTuiApp {
     const greeting = projectName
       ? `Welcome to Octipus. Project: ${projectName}`
       : 'Welcome to Octipus.';
-    this.pushMessage('system', `${greeting}  Type a message or /help. Drag to select · /copy last: copy reply.`);
+    this.pushMessage('system', `${greeting}  Type a message or /help. Wheel: scroll · Shift+drag: select · /copy last: copy reply.`);
   }
 
   private pushMessage(role: 'user' | 'assistant' | 'system', content: string): void {
@@ -344,7 +343,7 @@ export class OctipusTuiApp {
   // ── Submit / commands ──────────────────────────────────────────
 
   private handleSubmit(rawText: string): void {
-    if (rawText.trim().startsWith('/') && handleTerminalCommand(rawText, this.tui, this.messages, this.status, text => this.pushMessage('system', text))) return;
+    if (rawText.trim().startsWith('/') && handleTerminalCommand(rawText, this.tui, this.messages, text => this.pushMessage('system', text))) return;
     const text = rawText.trim();
     if (!text) return;
 
@@ -359,7 +358,7 @@ export class OctipusTuiApp {
       this.handleCommand(text.slice(1));
       return;
     }
-    this.adapter.sendChat(this.sessionId, text, undefined, this.projectPath);
+    this.adapter.sendChat(this.sessionId, text, this.projectPath);
   }
 
   // ── Voice (push-to-talk) ───────────────────────────────────────

@@ -1476,7 +1476,7 @@ writes are **admin-only**.
 3. Verify persistence: `SELECT name, topic_roles FROM model_config WHERE
    name = '<modelA>'` → **expect** `{"agents":"primary"}` in `topic_roles`.
 4. Send a task message (any specialist); **expect** the worker resolves to
-   `<modelA>` (`getModelForTopic('agents')` — retired role topics like
+   `<modelA>` (`getModelForTopic('build')` — retired role topics like
    'coding' alias to the `agents` lane), visible in the run's model attribution.
 
 ### 10.2 Backup (fallback) model

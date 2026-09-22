@@ -62,11 +62,14 @@ describe('validateRootModel — capability floor reroute', () => {
     const spy = vi.spyOn(modelRegistry, 'getModelRegistry').mockReturnValue(fakeRegistry as never);
     try {
       resetModelCapabilityStats();
+      // Routed, so the lane answers rather than the default — otherwise this
+      // asserts the fallback and never exercises the floor at all.
+      const routing = { message: 'hello', classification: classifyMessage('hello') };
       // Clean model is kept…
-      expect(await new ModelSelector().selectForRootAgent()).toBe('flash-lite');
+      expect(await new ModelSelector().selectForRootAgent(undefined, 'casual', routing)).toBe('flash-lite');
       // …but once it needs the shim, the floor reroutes to the default.
       recordModelToolCall('flash-lite', true);
-      expect(await new ModelSelector().selectForRootAgent()).toBe('deepseek-default');
+      expect(await new ModelSelector().selectForRootAgent(undefined, 'casual', routing)).toBe('deepseek-default');
     } finally {
       spy.mockRestore();
     }
@@ -75,17 +78,17 @@ describe('validateRootModel — capability floor reroute', () => {
 
 describe('root model binding selection', () => {
   const chatModel = { modelId: 'deepseek-chat', supportsTools: true, provider: 'deepseek' };
-  const generalLaneModel = { modelId: 'gemini-general', supportsTools: true, provider: 'gemini' };
+  const buildLaneModel = { modelId: 'gemini-build', supportsTools: true, provider: 'gemini' };
   const pinnedGeneralModel = { modelId: 'gemini-pinned', supportsTools: true, provider: 'gemini' };
   const sessionModel = { modelId: 'claude-session', supportsTools: true, provider: 'anthropic' };
   const defaultModel = { modelId: 'default-model', supportsTools: true, provider: 'openai' };
 
   function installRegistry() {
-    const models = [chatModel, generalLaneModel, pinnedGeneralModel, sessionModel, defaultModel];
+    const models = [chatModel, buildLaneModel, pinnedGeneralModel, sessionModel, defaultModel];
     return vi.spyOn(modelRegistry, 'getModelRegistry').mockReturnValue({
       getModelForTopic: async (topic: string) => {
-        if (topic === 'chat') return chatModel;
-        if (topic === 'agents') return generalLaneModel;
+        if (topic === 'everyday') return chatModel;
+        if (topic === 'build') return buildLaneModel;
         return null;
       },
       getModelByModelId: async (modelId: string) => models.find((model) => model.modelId === modelId) ?? null,
@@ -94,68 +97,60 @@ describe('root model binding selection', () => {
     } as never);
   }
 
-  test('task turn honors the General expert model override instead of the chat lane', async () => {
+  test('a coding request routes to the build lane', async () => {
     installRegistry();
-    const selector = new ModelSelector(async () => ({
-      modelPreference: pinnedGeneralModel.modelId,
-      topic: 'agents',
-    }));
-
-    expect(await selector.selectForRootAgent(undefined, 'task')).toBe(pinnedGeneralModel.modelId);
+    const message = 'implement the retry logic in the client';
+    expect(await new ModelSelector().selectForRootAgent(undefined, 'task', {
+      message, classification: classifyMessage(message),
+    })).toBe(buildLaneModel.modelId);
   });
 
-  test.each(['task', 'ambiguous', 'approval'] as const)('%s turn uses the General expert assigned lane when it has no model override', async (turnType) => {
-    installRegistry();
-    const selector = new ModelSelector(async () => ({ modelPreference: null, topic: 'agents' }));
+  test.each(['write this as a plan', 'draft plan', 'generate plan', 'create docs', 'go ahead'])(
+    'a request with nothing dear about it stays on everyday: "%s"', async (message) => {
+      installRegistry();
+      const classification = classifyMessage(message);
+      expect(await new ModelSelector().selectForRootAgent(undefined, classification.type, {
+        message, classification,
+      })).toBe(chatModel.modelId);
+    });
 
-    expect(await selector.selectForRootAgent(undefined, turnType)).toBe(generalLaneModel.modelId);
+  test('an unbound lane falls through to the default model rather than failing', async () => {
+    // An operator who never split their lanes still has a working install.
+    vi.spyOn(modelRegistry, 'getModelRegistry').mockReturnValue({
+      getModelForTopic: async () => null,
+      getModelByModelId: async () => null,
+      getDefaultModel: async () => defaultModel,
+      getAllModels: async () => [defaultModel],
+    } as never);
+    const message = 'implement the retry logic';
+    expect(await new ModelSelector().selectForRootAgent(undefined, 'task', {
+      message, classification: classifyMessage(message),
+    })).toBe(defaultModel.modelId);
   });
 
-  test.each(['write this as a plan', 'draft plan', 'generate plan', 'create docs', 'go ahead'])('classifier-to-model routing keeps "%s" on General', async (message) => {
+  test('with no request to route, the default model answers', async () => {
     installRegistry();
-    const selector = new ModelSelector(async () => ({ modelPreference: null, topic: 'agents' }));
-    const classification = classifyMessage(message);
-    expect(classification.type).not.toBe('casual');
-    expect(await selector.selectForRootAgent(undefined, classification.type)).toBe(generalLaneModel.modelId);
+    expect(await new ModelSelector().selectForRootAgent(undefined, 'task')).toBe(defaultModel.modelId);
   });
 
-  test('task turn uses the root default when the General expert lane is unbound', async () => {
+  test('a casual turn lands on everyday, because that is what a casual message is', async () => {
     installRegistry();
-    const selector = new ModelSelector(async () => ({ modelPreference: null, topic: 'unbound-lane' }));
-
-    expect(await selector.selectForRootAgent(undefined, 'task')).toBe(defaultModel.modelId);
+    const message = 'hey, how are you?';
+    expect(await new ModelSelector().selectForRootAgent(undefined, 'casual', {
+      message, classification: classifyMessage(message),
+    })).toBe(chatModel.modelId);
   });
 
-  test('task turn fails loudly when the General expert pins an unregistered model', async () => {
-    installRegistry();
-    const selector = new ModelSelector(async () => ({
-      modelPreference: 'removed-model',
-      topic: 'agents',
-    }));
-
-    await expect(selector.selectForRootAgent(undefined, 'task')).rejects.toThrow(
-      'General expert is pinned to unregistered model "removed-model"',
-    );
-  });
-
-  test('casual turn continues to use the chat lane', async () => {
-    installRegistry();
-    const selector = new ModelSelector(async () => ({
-      modelPreference: pinnedGeneralModel.modelId,
-      topic: 'agents',
-    }));
-
-    expect(await selector.selectForRootAgent(undefined, 'casual')).toBe(chatModel.modelId);
-  });
-
-  test('session model override wins over the General expert on a task turn', async () => {
+  test('the session model override beats the routed lane', async () => {
+    // The one rule above routing: an explicit choice by the user wins. A
+    // classification is a guess and must never override a decision.
     installRegistry();
     setSessionModel('session-1', sessionModel.modelId);
-    const selector = new ModelSelector(async () => ({
-      modelPreference: pinnedGeneralModel.modelId,
-      topic: 'agents',
-    }));
+    const selector = new ModelSelector();
 
-    expect(await selector.selectForRootAgent('session-1', 'task')).toBe(sessionModel.modelId);
+    const message = 'implement the retry logic';
+    expect(await selector.selectForRootAgent('session-1', 'task', {
+      message, classification: classifyMessage(message),
+    })).toBe(sessionModel.modelId);
   });
 });

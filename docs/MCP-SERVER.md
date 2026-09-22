@@ -18,8 +18,6 @@ Standalone MCP server (`mcp-server/`) that exposes Octipus capabilities as MCP t
 | `octipus_list_models` | List available AI models |
 | `octipus_model_health` | Get model health status |
 | `octipus_chat` | Send a message through the root agent |
-| `octipus_chat_with_expert` | Chat using a specific expert |
-| `octipus_list_experts` | List available experts |
 | `octipus_list_tools` | List available tools |
 | `octipus_execute_tool` | Execute a registered tool subject to caller permissions |
 | `octipus_list_skills` | List domain knowledge skills |
@@ -34,13 +32,23 @@ Standalone MCP server (`mcp-server/`) that exposes Octipus capabilities as MCP t
 | `octipus_update_recurring_task` | Update a recurring task |
 | `octipus_delete_recurring_task` | Delete a recurring task |
 
-The table above shows commonly used tools. The server registers 88 tools in total — see `mcp-server/src/tools/` for the complete list.
+The table above shows commonly used tools. The server registers 86 tools across 25 groups — see `mcp-server/src/tools/` for the complete list, or ask the running server for `tools/list`.
 
 Direct execution runs unattended: ASK actions return an approval-required error.
 Configure reviewed permissions before automation; possession of an MCP/API token
 does not bypass the permission gate. See [Tools API](API.md#tools).
 
 ## Setup
+
+Published on npm, so an MCP client can reach an Octipus instance without a
+checkout:
+
+```bash
+npx octipus-mcp-server            # run it without installing
+npm install -g octipus-mcp-server # or install, and get `octipus-mcp` on PATH
+```
+
+From a checkout instead — when changing it, or to run an unreleased revision:
 
 ```bash
 cd mcp-server && npm install && npm run build

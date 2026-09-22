@@ -17,8 +17,6 @@ export interface MessagesPaneOptions {
 }
 
 export class MessagesPane implements Component {
-  private mouseCaptured = false;
-  setMouseCaptured(enabled: boolean): void { this.mouseCaptured = enabled; }
   private history: ChatMessage[] = [];
   private height: number;
   private width = 80;
@@ -163,7 +161,7 @@ export class MessagesPane implements Component {
     if (hint) {
       const label = truncateToWidth(this.offset > 0
       ? `End: latest · PgUp/PgDn · ↑ ${start} ↓ ${this.offset}${this.newer ? ` · ${this.newer} new` : ''}`
-      : `PgUp/PgDn${this.mouseCaptured ? ' or wheel' : ''}: history · Ctrl+Home: oldest · ↑ ${start} rows`, width, '');
+      : `PgUp/PgDn or wheel: history · Ctrl+Home: oldest · ↑ ${start} rows`, width, '');
       out.push(' '.repeat(Math.max(0, width - visibleWidth(label))) + chalk.hex(getPalette().dim)(label));
     }
     return out;

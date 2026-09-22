@@ -2,6 +2,9 @@
  * MCP Server setup — creates the McpServer instance and registers all tools.
  */
 
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { OctiClient } from './client.js';
 import { registerSearchTools } from './tools/search.js';
@@ -10,7 +13,6 @@ import { registerSessionTools } from './tools/sessions.js';
 import { registerModelTools } from './tools/models.js';
 import { registerChatTools } from './tools/chat.js';
 import { registerToolModuleTools } from './tools/tool-modules.js';
-import { registerExpertTools } from './tools/experts.js';
 import { registerRecurringTaskTools } from './tools/recurring-tasks.js';
 import { registerKnowledgeTools } from './tools/knowledge.js';
 import { registerMessagingTools } from './tools/messaging.js';
@@ -31,10 +33,28 @@ import { registerMemoryTools } from './tools/memory.js';
 import { registerResearchTools } from './tools/research.js';
 import { registerReaderTools } from './tools/reader.js';
 
+/**
+ * The version this server reports in the MCP handshake.
+ *
+ * Read from the package rather than written here: a client that asks which
+ * bridge it is talking to was told `1.0.0` by every build ever shipped, which
+ * is the same drift that left `package.json` at 0.1.0 for four releases. Falls
+ * back to `0.0.0` rather than throwing — a handshake is not worth failing over
+ * a manifest that could not be read.
+ */
+function packageVersion(): string {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    return JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8')).version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
 export function createServer(octiUrl: string): McpServer {
   const server = new McpServer({
     name: 'octipus',
-    version: '1.0.0',
+    version: packageVersion(),
   });
 
   const client = new OctiClient(octiUrl);
@@ -46,7 +66,6 @@ export function createServer(octiUrl: string): McpServer {
   registerModelTools(server, client);
   registerChatTools(server, client);
   registerToolModuleTools(server, client);
-  registerExpertTools(server, client);
   registerRecurringTaskTools(server, client);
   registerKnowledgeTools(server, client);
   registerMessagingTools(server, client);

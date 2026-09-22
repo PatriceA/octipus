@@ -80,6 +80,8 @@ import {
   checkSameRole,
   denialResult as denialResultFn,
 } from './spawn-validator';
+import { asLane } from '@/core/agent/lane-intent';
+import type { ToolAdvertisement } from '@/core/agent-base';
 import { applyRoleFit, buildDelegationGuidance } from './swarm-tool';
 import {
   type AgentNode,
@@ -107,7 +109,7 @@ export const TASK_BRIEF_PREVIEW_MAX = 4000;
 
 /** Options accepted by spawnChild internally — extends the tool params. */
 export interface SpawnChildInternalOpts {
-  /** Used by `escalate_to_different_expert` to pick a different expert. */
+  /** Used by `escalate_to_other_lane` to pick a different expert. */
   excludeExpertId?: string;
   /** Tag logged on spawn — distinguishes normal spawns from escalation. */
   reason?: 'normal' | 'escalation' | 'retry';
@@ -549,16 +551,15 @@ export class SwarmSpawner {
     // post-spawn). The swarm tools close over that node by reference so the
     // placeholder id is mutated to the real one before any tool can fire.
 
-    // ── Model + expert resolution (topic binding is authoritative) ──
-    const { model: childModel, lane: childLane, expertId, systemPrompt, isSmall } = await releaseOnThrow(() =>
-      this.resolveChildModelAndExpert(
+    // ── Model resolution: the lane is authoritative ──
+    const { model: childModel, lane: childLane, systemPrompt, isSmall } = await releaseOnThrow(() =>
+      this.resolveChildModel(
         parent.model,
         childRole,
         brief.taskBrief,
-        params.expertId,
-        internal.excludeExpertId,
         childTools.length > 0,
         !!brief.plan?.length,
+        params.topic,
       ));
 
     // Small-tier child: cap the tool surface, mirroring the worker path. Role
@@ -583,6 +584,46 @@ export class SwarmSpawner {
     // registerTool is keyed by name.
     const { buildSkillLoaderHandlers } = await import('@/tools/skill-loader');
     childTools.push(...buildSkillLoaderHandlers());
+
+    // Lazy tool discovery for a swarm child. The root agent has had it since the
+    // gate moved off `provider === 'ollama'`, and the pipeline-stage path has it
+    // in worker-spawner — `spawn_child` never did, so a child carried its role's
+    // entire JSON schema on every call it made. Measured on the arena's model, a
+    // root turn dropped from 20,951 to 5,572 prompt tokens on the same split; a
+    // child pays the same bill per call and makes more of them.
+    //
+    // The core set comes from the BRIEF, the same per-message rule the root uses:
+    // shrink-only (never grants what `resolveChildTools` did not already allow)
+    // and fail-open (a group with no pattern is kept). What is dropped stays
+    // registered and reachable through `list_tools`/`describe_tool`.
+    //
+    // `supportsTools` is not checked here, unlike the other two call sites: a
+    // model that cannot call tools gets nothing from either advertisement, so the
+    // check would only decide which useless block it carries.
+    let childToolAdvertisement: ToolAdvertisement = { mode: 'full' };
+    const childCoreToolIds = getRoleConfig(childRole).coreToolIds;
+    if (childCoreToolIds !== undefined && getConfig().agent.lazyToolDiscovery && !isSmall) {
+      try {
+        const { splitRoleTools } = await import('@/core/agent/tool-split');
+        const { selectCoreToolIds } = await import('@/core/agent/tool-intent');
+        const { buildToolDiscoveryHandlers } = await import('@/tools/tool-discovery');
+        const selected = selectCoreToolIds(brief.taskBrief, childCoreToolIds);
+        const { longTail } = splitRoleTools(childTools, selected);
+        const discoveryHandlers = buildToolDiscoveryHandlers(longTail);
+        if (discoveryHandlers.length > 0) {
+          childTools.push(...discoveryHandlers);
+          childToolAdvertisement = { mode: 'lazy', coreToolIds: selected };
+          coreLogger.info(
+            { childRole, model: childModel, coreToolIds: selected, roleCoreToolIds: childCoreToolIds,
+              longTailCount: longTail.length },
+            'Lazy tool discovery enabled for swarm child',
+          );
+        }
+      } catch (err) {
+        // A child that advertises everything is the old behaviour, not a failure.
+        coreLogger.error({ err, childRole }, 'Lazy tool discovery skipped for swarm child');
+      }
+    }
 
     // Logged here, after the cap and the loader push, so `childToolCount` is
     // the surface the child ACTUALLY gets — a diagnostic that reports a
@@ -731,8 +772,8 @@ export class SwarmSpawner {
       childModel,
       childLane,
       childTools,
+      childToolAdvertisement,
       systemPrompt: childSystemPrompt,
-      expertId,
       budget,
       topicPath,
       subtopic: params.subtopic,
@@ -805,6 +846,8 @@ export class SwarmSpawner {
     /** Resolved model lane (expert topic or role default) — the backup binding is keyed on this, not the raw role. */
     childLane: string;
     childTools: ToolHandler[];
+    /** What the child ADVERTISES; `childTools` stays the registered set. */
+    childToolAdvertisement?: ToolAdvertisement;
     systemPrompt?: string;
     expertId?: string;
     budget: NodeBudget;
@@ -1171,7 +1214,7 @@ export class SwarmSpawner {
     let worker: AnyAgentWorker;
 
     // Phase 2: for Agents (depth 1), build the child's AgentNode up front
-    // so we can register `spawn_child` + `escalate_to_different_expert`
+    // so we can register `spawn_child` + `escalate_to_other_lane`
     // alongside the role tools on the *first* spawn call. `id` is a
     // placeholder overwritten after spawn returns; the swarm tools close
     // over `childNode` by reference so the mutation is observed.
@@ -1200,7 +1243,7 @@ export class SwarmSpawner {
       };
       // Mutable: childNode.allowedToolIds will include the meta-tool names.
       childNode.allowedToolIds.add('spawn_child');
-      childNode.allowedToolIds.add('escalate_to_different_expert');
+      childNode.allowedToolIds.add('escalate_to_other_lane');
 
       // Late-bound worker reference — the AgentWorker is created by
       // `agentManager.spawn(...)` below, but spawn_child / collect_children
@@ -1261,6 +1304,7 @@ export class SwarmSpawner {
         role: opts.childRole,
         systemPrompt: opts.systemPrompt,
         tools,
+        toolAdvertisement: opts.childToolAdvertisement,
         maxTokenBudget: opts.budget.tokens.cap,
         timeout: opts.budget.wallClockMs.cap,
         parentAgentId: opts.parent.id,
@@ -1785,12 +1829,10 @@ export class SwarmSpawner {
    * Pick a model + expert for the child, respecting the parent-tier clamp
    * and the `excludeExpertId` filter (for escalation).
    */
-  private async resolveChildModelAndExpert(
+  private async resolveChildModel(
     parentModel: string,
     childRole: AgentRole,
     childMessage: string,
-    preferredExpertId?: string,
-    excludeExpertId?: string,
     /** Whether this child is equipped with tools — gates the tool-support reroute. */
     childUsesTools = false,
     /**
@@ -1799,55 +1841,26 @@ export class SwarmSpawner {
      * executor); a plan-less child uses its own judgment on the primary model.
      */
     hasPlan = false,
-  ): Promise<{ model: string; lane: string; expertId?: string; systemPrompt?: string; isSmall: boolean }> {
+    /**
+     * The lane the PARENT asked for, when it wants the child on a different
+     * model than its own — `verify` for a second opinion, `everyday` for bulk
+     * work. Honoured only when it names a real text lane: `topic` is free text
+     * on the spawn schema and has always also carried things like
+     * "oauth/pkce", and handing one of those to the registry as a lane resolves
+     * to nothing and fails the spawn.
+     */
+    requestedLane?: string,
+  ): Promise<{ model: string; lane: string; systemPrompt?: string; isSmall: boolean }> {
     const registry = getModelRegistry();
 
-    let expertModel: string | undefined;
-    let expertId: string | undefined;
-    /** The expert's assigned model lane (experts.topic) — overrides childRole for model resolution. */
-    let expertLane: string | undefined;
+    // No expert lookup: the row it read carried a model, a lane, a prompt and a
+    // skill list, and every one of those now has a better home. The model and
+    // the lane come from the request or the role (see below). The prompt is the
+    // role's. Skills are assigned per role-topic and loaded by the block under
+    // this one. What the expert added was a database round trip between an
+    // agent and its own configuration.
     let systemPrompt: string | undefined;
-    let expertSkillIds: string[] = [];
-    let expertCriticalRules: string[] = [];
-    try {
-      const { getDb } = await import('@/db/postgres');
-      const { experts } = await import('@/db/schema/experts');
-      const { eq, and, ne } = await import('drizzle-orm');
-      const db = getDb();
-
-      let rows: Array<{
-        id: string;
-        name: string;
-        topic: string | null;
-        modelPreference: string | null;
-        systemPrompt: string | null;
-        skillIds: unknown;
-        criticalRules: unknown;
-      }> = [];
-      if (preferredExpertId) {
-        rows = (await db.select().from(experts).where(eq(experts.id, preferredExpertId)).limit(1)) as typeof rows;
-      } else {
-        const where = excludeExpertId
-          ? and(eq(experts.role, childRole), eq(experts.isSystem, true), ne(experts.id, excludeExpertId))
-          : and(eq(experts.role, childRole), eq(experts.isSystem, true));
-        rows = (await db.select().from(experts).where(where).limit(1)) as typeof rows;
-      }
-
-      const expert = rows[0];
-      if (expert) {
-        expertId = expert.id;
-        expertModel = expert.modelPreference || undefined;
-        expertLane = expert.topic || undefined;
-        systemPrompt = expert.systemPrompt || undefined;
-        expertSkillIds = Array.isArray(expert.skillIds) ? (expert.skillIds as string[]) : [];
-        expertCriticalRules = Array.isArray(expert.criticalRules) ? (expert.criticalRules as string[]) : [];
-      }
-    } catch (err) {
-      // Expert lookup failure is recoverable (falls back to role defaults)
-      // but NOT silent — log so operators see why a child didn't get the
-      // expert's prompt/skills.
-      coreLogger.warn({ err, childRole }, 'Expert lookup failed in SwarmSpawner — falling back to role defaults');
-    }
+    const expertSkillIds: string[] = [];
 
     // ── Skill injection (fail-loud on missing expected skills) ──────
     const skillFragments: string[] = [];
@@ -1862,7 +1875,7 @@ export class SwarmSpawner {
           const foundIds = new Set(found.map((s) => s.id));
           const missing = expertSkillIds.filter((id) => !foundIds.has(id));
           coreLogger.error(
-            { childRole, expertId, expectedSkillIds: expertSkillIds, missing },
+            { childRole, expectedSkillIds: expertSkillIds, missing },
             'Expert lists skillIds that are missing from skill registry — child will run with partial domain knowledge',
           );
         }
@@ -1896,12 +1909,12 @@ export class SwarmSpawner {
         : '';
       if (topicFragment) skillFragments.push(`# Domain Knowledge (topic index)\n${topicFragment}`);
       coreLogger.debug(
-        { childRole, expertId, discoveredSkillCount: discoveredIds.length },
+        { childRole, discoveredSkillCount: discoveredIds.length },
         'Swarm child topic-skill discovery complete',
       );
     } catch (err) {
       coreLogger.error(
-        { err, childRole, expertId },
+        { err, childRole },
         'Skill injection failed — child will run WITHOUT domain knowledge',
       );
     }
@@ -1911,55 +1924,40 @@ export class SwarmSpawner {
     // gets the lite template. Everything gathered above (expert prompt, critical
     // rules, skill fragments) is held until then.
 
-    // Model selection — in order of preference:
-    //   1. lane executorModel (W9 planner→executor split) — ONLY when the
-    //      parent supplied a `plan` (hasPlan). A plan is the parent saying "I've
-    //      done the thinking; run these steps mechanically", so it binds to the
-    //      lane's cheap executor. This outranks modelPreference *on a planned
-    //      spawn only*: the preference picks a model to think with, and the
-    //      plan is what removes the thinking. A plan-less child skips this
-    //      branch entirely → expert preference, then primary.
-    //   2. expert.modelPreference (specialist's explicit choice) — authoritative
-    //      for every plan-less (recon/judgment) delegation.
-    //   3. lane→model mapping (topic primary binding)
-    //   4. fail loud — do NOT inherit parent model. The parent's model is
-    //      whatever the root agent happened to pick; it has no claim to
-    //      being right for the child's topic. Inheriting hides routing bugs.
+    // Where a child's model comes from, in order:
+    //   1. the lane's `executorModel`, but ONLY when the parent supplied a plan.
+    //      A plan is the parent saying "I have done the thinking; run these
+    //      steps mechanically", and mechanical steps are what a cheap executor
+    //      is for. A plan-less child skips this and uses the lane's primary.
+    //   2. the lane's primary binding.
+    //   3. fail loud — do NOT inherit the parent's model. The parent's model is
+    //      whatever its own routing picked; it has no claim to being right for
+    //      the child's lane, and inheriting hides routing bugs.
     //
-    // The lane is the expert's assigned topic (experts.topic) when an expert
-    // matched, else the child role — which canonicalizes via RETIRED_TOPIC_ALIASES
-    // to the 'agents' lane ('writing' for the long-form text roles:
-    // communication/pm/writing; 'research' is its own lane).
-    const lane = expertLane || childRole;
-    let candidate = expertModel;
+    // There used to be a step between 1 and 2: the expert row's
+    // `modelPreference`, and a block deciding which of it and the plan won.
+    // With the expert layer retired there is no preference to weigh, so the
+    // precedence question it answered no longer exists.
+    //
+    // The lane is what the PARENT asked for when it named a real one, else the
+    // child role — which canonicalizes via RETIRED_TOPIC_ALIASES (`coding` →
+    // build, `review`/`qa` → verify, the conversational roles → everyday). The
+    // parent's request comes first because it is the only way to say "not on my
+    // model": a review child that runs on the model that wrote the code is not
+    // a second opinion.
+    const laneRequested = asLane(requestedLane);
+    if (requestedLane && !laneRequested) {
+      coreLogger.info(
+        { childRole, requestedLane },
+        'Spawn topic is not a model lane — using it for the topic path only',
+      );
+    }
+    const lane = laneRequested || childRole;
+    let candidate: string | undefined;
     // One lookup for the whole routing block — getTopicConfig is an in-memory
     // cache, but the branches below reference the executor binding repeatedly
     // and must all agree on the same value.
     const laneExecutor = getTopicConfig(lane).executorModel;
-    if (candidate && hasPlan && laneExecutor) {
-      // A plan says the parent has already done the judgment and wants the
-      // steps run mechanically. `modelPreference` answers a different question
-      // — which model this specialist should THINK with — and that question is
-      // moot once a checklist replaces the thinking. So on a planned spawn the
-      // lane's executor wins; the expert still contributes its prompt, skills
-      // and tools, only the model changes.
-      //
-      // This used to go the other way, which made the saving unreachable in
-      // practice: on this install 9 of 16 experts carry a modelPreference and
-      // ALL of them sit on the `agents` lane, the alias target for every
-      // hands-on role (general, coding, review, devops, qa, …). A measured
-      // planned run spent 101,546 tokens, 100% of them on the full-price
-      // planner, with the configured executor untouched.
-      //
-      // The escape hatch is per-lane and deliberate: a lane whose work needs a
-      // capable model regardless simply leaves `executorModel` empty, which
-      // skips this branch entirely (planner == executor).
-      coreLogger.info(
-        { lane, childRole, expertModel: candidate, executorModel: laneExecutor },
-        'Planned child: lane executorModel overrides expert modelPreference (mechanical execution)',
-      );
-      candidate = undefined;
-    }
     if (!candidate && hasPlan) {
       // No plan ⇒ this whole block is skipped and the child resolves to the
       // lane's primary (recon/judgment). Empty executorModel ⇒ also skipped
@@ -1999,9 +1997,8 @@ export class SwarmSpawner {
     }
     if (!candidate) {
       throw new Error(
-        `No model bound to topic '${lane}'. ` +
-          `Map a model to this topic in the Models page (Topics section), ` +
-          `or give the '${childRole}' expert an explicit modelPreference.`,
+        `No model bound to the '${lane}' lane, which is where a '${childRole}' child runs. ` +
+          'Bind one on the Topics page.',
       );
     }
 
@@ -2079,13 +2076,15 @@ export class SwarmSpawner {
     // Expert critical rules — injected on the worker path but previously dropped
     // on the swarm path (the Researcher expert's "always cite / distinguish fact
     // from speculation" rules never reached the child).
-    systemPrompt += formatCriticalRules(expertCriticalRules);
+    // From the ROLE. The expert row carried the same text — same seed literals
+    // — but the role is the copy that cannot be missing.
+    systemPrompt += formatCriticalRules(getRoleConfig(childRole).criticalRules ?? []);
 
     if (skillFragments.length > 0) {
       systemPrompt = `${systemPrompt}\n\n${skillFragments.join('\n\n')}`.trim();
     }
 
-    return { model: candidate, lane, expertId, systemPrompt, isSmall };
+    return { model: candidate, lane, systemPrompt, isSmall };
   }
 
   private emitNodeSpawned(parent: AgentNode, payload: Record<string, unknown>): void {

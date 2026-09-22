@@ -411,31 +411,15 @@ export default function SwarmTree({
   // Expert-id → name lookup so nodes spawned with an expertId show WHO ran
   // (expert → topic → model routing visibility). One fetch per mount; a miss
   // (deleted expert, fetch failure) just leaves the badge off — non-fatal.
-  const [expertNames, setExpertNames] = useState<Map<string, string>>(new Map());
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .get<{ experts?: Array<{ id: string; name: string }> }>('/experts')
-      .then((d) => {
-        if (!cancelled && d?.experts) {
-          setExpertNames(new Map(d.experts.map((e) => [e.id, e.name])));
-        }
-      })
-      .catch(() => { /* badge-only enrichment — never block the tree */ });
-    return () => { cancelled = true; };
-  }, []);
-
   // Build parent-id index once per render. O(n) on nodes — fine for trees
   // of the target size (fan-out cap × depth ≤ 2 = O(100) max).
   const { roots, childrenOf } = useMemo(() => {
     const childrenOf = new Map<string | null, SwarmTreeNode[]>();
     const roots: SwarmTreeNode[] = [];
     for (const raw of nodes.values()) {
-      // Resolve the expert badge here (not in apiNodeToTreeNode) so it also
-      // covers nodes that arrived over the WS before the experts fetch landed.
-      const node = raw.expertId && !raw.expertName
-        ? { ...raw, expertName: expertNames.get(raw.expertId) }
-        : raw;
+      // The expert badge used to be resolved here from a /experts fetch. The
+      // layer is gone; historical rows keep whatever name they were stored with.
+      const node = raw;
       const key = node.parentNodeId;
       const list = childrenOf.get(key);
       if (list) list.push(node);
@@ -446,7 +430,7 @@ export default function SwarmTree({
     for (const list of childrenOf.values()) list.sort(sort);
     roots.sort(sort);
     return { roots, childrenOf };
-  }, [nodes, expertNames]);
+  }, [nodes]);
 
   const toggleCollapse = (nodeId: string) => {
     setCollapsed((prev) => {

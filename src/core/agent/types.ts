@@ -99,6 +99,10 @@ export interface RoleConfig {
   liteSystemPromptTemplate?: string;
   /** Lazy-discovery core set; see `RoleMeta.coreToolIds`. */
   coreToolIds?: string[];
+  /** Standing behaviour for this role; see `RoleMeta.criticalRules`. */
+  criticalRules?: string[];
+  /** The one line the model reads when choosing a role to spawn. */
+  description?: string;
   /** Strip file-mutating handlers from this role; see `RoleMeta.readOnly`. */
   readOnly?: boolean;
 }

@@ -18,6 +18,27 @@ export interface RoleMeta {
    * Ollama models — remote providers prefix-cache the tool block cheaply and
    * stay on full schema.
    */
+  /**
+   * Behaviour the role must follow, rendered as the numbered "# Critical Rules"
+   * block appended to its system prompt (`formatCriticalRules`).
+   *
+   * These lived on the expert row, which made a child's standing instructions a
+   * DATABASE lookup: a seed that had not run, or a row an operator deleted,
+   * silently produced a specialist with no rules and nothing said so. They are
+   * behaviour for a kind of work, so they belong to the role that does it.
+   */
+  criticalRules?: string[];
+  /**
+   * The one line the model reads when choosing a role to spawn, rendered into
+   * the delegation menu (`buildSpawnRoleCatalog`).
+   *
+   * Required, and that is the point: a depth-1 agent's system prompt is its own
+   * role prompt and never lists the others, so a role with no description is a
+   * bare name in the menu and nobody delegates to it. This used to be an
+   * exhaustive `Record<AgentRole, string>` living in the swarm tool — a second
+   * place to edit when adding a role, and the copy that went stale.
+   */
+  description: string;
   coreToolIds?: string[];
   /**
    * Strip the file-mutating filesystem handlers (write/append/delete/copy/move/

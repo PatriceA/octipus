@@ -2,7 +2,7 @@
  * Topic consolidation — end-to-end aliasing against a real (embedded PGlite)
  * DB: retired topic names ('coding', 'memory_extraction', …) must resolve the
  * canonical lane's binding in the model registry AND land on the lane's row in
- * topics_config; the experts.topic column must default to 'agents'.
+ * topics_config.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { randomBytes } from 'node:crypto';
@@ -18,7 +18,6 @@ process.env.SESSION_SECRET ??= `test-session-${rand(24)}`;
 process.env.LOG_LEVEL ??= 'error';
 
 import { getDb } from '@/db/postgres';
-import { experts } from '@/db/schema/experts';
 import { getModelRegistry } from '@/models/model-registry';
 import { getTopicConfig, loadTopicConfigs, setTopicConfig } from '@/models/topic-config';
 
@@ -44,14 +43,18 @@ describe.skipIf(!isIntegration)('Topic consolidation (Integration)', () => {
     const { runMigrations } = await import('@/db/migrate');
     await runMigrations();
 
+    // `agents` was the single worker lane these bindings used to sit on. It is
+    // split into `build` and `everyday`, with `verify` taking review and QA —
+    // so a retired name no longer resolves to ONE lane, and binding the old
+    // name here would test a lane nothing routes to.
     const registry = getModelRegistry();
     await registry.registerModel({
       name: 'lane-primary', provider: 'ollama', modelId: 'lane-primary-id', isEnabled: true,
-      topicRoles: { agents: 'primary', background: 'primary' },
+      topicRoles: { build: 'primary', background: 'primary' },
     } as never);
     await registry.registerModel({
       name: 'lane-backup', provider: 'ollama', modelId: 'lane-backup-id', isEnabled: true,
-      topicRoles: { agents: 'backup' },
+      topicRoles: { build: 'backup', verify: 'backup' },
     } as never);
   }, 30_000); // initializeDb + full migration run can exceed the default hook
               // timeout under a loaded CI runner.
@@ -67,7 +70,7 @@ describe.skipIf(!isIntegration)('Topic consolidation (Integration)', () => {
   });
 
   describe('model registry aliasing', () => {
-    test("retired role topic 'coding' resolves the agents-lane primary", async () => {
+    test("retired role topic 'coding' resolves the build-lane primary", async () => {
       const m = await getModelRegistry().getModelForTopic('coding');
       expect(m?.modelId).toBe('lane-primary-id');
     });
@@ -77,16 +80,20 @@ describe.skipIf(!isIntegration)('Topic consolidation (Integration)', () => {
       expect(m?.modelId).toBe('lane-primary-id');
     });
 
-    test("retired role topic 'review' resolves the agents-lane backup", async () => {
-      const m = await getModelRegistry().getBackupModelForTopic('review');
-      expect(m?.modelId).toBe('lane-backup-id');
+    test("retired role topic 'review' resolves the VERIFY lane, not build", async () => {
+      // The point of the verify lane is that review and QA can run on a
+      // different model from the one that wrote the code. An alias that sent
+      // `review` to `build` would quietly undo that.
+      expect((await getModelRegistry().getBackupModelForTopic('review'))?.modelId).toBe('lane-backup-id');
+      expect(await getModelRegistry().getModelForTopic('review')).toBeNull();
+      expect(await getModelRegistry().getModelForTopic('qa')).toBeNull();
     });
 
     test("'research' resolves its OWN lane, not writing and not agents", async () => {
       // The alias to `writing` made a model bound to `research` unreachable —
       // the highest-token role in the system could not be pinned to a cheap or
       // local model. This fixture binds neither research nor writing, so a
-      // null here proves it resolves research (fail loud), not the agents lane.
+      // null here proves it resolves research (fail loud), not a worker lane.
       const m = await getModelRegistry().getModelForTopic('research');
       expect(m).toBeNull();
     });
@@ -102,20 +109,11 @@ describe.skipIf(!isIntegration)('Topic consolidation (Integration)', () => {
       await setTopicConfig('coding', { executorModel: 'lane-primary', temperature: 0.3, maxTokens: null });
       // Reads via the retired name AND the lane both hit the same row.
       expect(getTopicConfig('coding').temperature).toBe(0.3);
-      expect(getTopicConfig('agents').temperature).toBe(0.3);
+      expect(getTopicConfig('build').temperature).toBe(0.3);
       // The persisted row is keyed canonically.
       await loadTopicConfigs();
-      expect(getTopicConfig('agents').executorModel).toBe('lane-primary');
+      expect(getTopicConfig('build').executorModel).toBe('lane-primary');
     });
   });
 
-  describe('experts.topic column', () => {
-    test("defaults to the 'agents' lane", async () => {
-      const db = getDb();
-      const [row] = await db.insert(experts).values({
-        name: `lane-default-${rand(4)}`, role: 'coding', isSystem: false,
-      }).returning({ topic: experts.topic });
-      expect(row.topic).toBe('agents');
-    });
-  });
 });

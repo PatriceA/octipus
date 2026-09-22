@@ -44,6 +44,33 @@ describe('extractSection', () => {
     expect(extractSection(SAMPLE, 'v0.2.0')).toContain('released 0.2.0');
   });
 
+  test('a patch release does not steal the minor release\'s notes', () => {
+    // `0.5` is a substring of `0.5.1`. With substring matching, re-running the
+    // v0.5 release once v0.5.1 existed published the wrong notes — and the
+    // release workflow re-runs a tag through workflow_dispatch by design.
+    const log = [
+      '# Changelog', '', '## Unreleased', '', '## v0.5.1 — patch', '', 'patch body', '',
+      '## v0.5 — minor', '', 'minor body', '',
+    ].join('\n');
+    expect(extractSection(log, 'v0.5')).toBe('minor body');
+    expect(extractSection(log, 'v0.5.1')).toBe('patch body');
+    expect(extractSection(log, '0.5')).toBe('minor body');
+  });
+
+  test('a heading that merely mentions a version is not that version', () => {
+    const log = [
+      '# Changelog', '', '## Earlier — everything before v0.9', '', 'backlog', '',
+      '## Unreleased', '', 'pending', '',
+    ].join('\n');
+    // No section IS v0.9, so the Unreleased fallback wins.
+    expect(extractSection(log, 'v0.9')).toBe('pending');
+  });
+
+  test('a dated heading is not mistaken for a version', () => {
+    const log = ['# Changelog', '', '## 2026-05 — Multi-user', '', 'dated body', ''].join('\n');
+    expect(extractSection(log, '2026.05')).toBe('');
+  });
+
   test('falls back to Unreleased when no version heading matches', () => {
     const body = extractSection(SAMPLE, '9.9.9');
     expect(body).toContain('### Feature A');

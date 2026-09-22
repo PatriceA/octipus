@@ -26,7 +26,6 @@ const gw = (entry: Omit<OctipusSlashCommand, 'source'>): OctipusSlashCommand => 
 
 export const OCTIPUS_SLASH_COMMANDS: OctipusSlashCommand[] = [
   // ── TUI-local ───────────────────────────────────────────────────
-  tui({ name: 'mouse', description: 'Capture the mouse wheel for chat scrolling (off by default so text selection works)', argumentHint: '[on|off]' }),
   tui({ name: 'copy', description: 'Request terminal clipboard copy of response or loaded transcript', argumentHint: '[last|transcript]' }),
   tui({ name: 'exit',     description: 'Quit the TUI' }),
   tui({ name: 'quit',     description: 'Quit the TUI' }),
@@ -43,9 +42,7 @@ export const OCTIPUS_SLASH_COMMANDS: OctipusSlashCommand[] = [
 
   // ── Gateway built-ins (src/core/gateway/commands.ts) ───────────
   gw({ name: 'help',      description: 'List available commands',                            aliases: ['h', '?'] }),
-  gw({ name: 'status',    description: 'Show current session status, agents, and expert',   aliases: ['s'] }),
-  gw({ name: 'expert',    description: 'Switch expert or list available experts',
-       argumentHint: '<name|reset>',                                                         aliases: ['e'] }),
+  gw({ name: 'status',    description: 'Show current session status and agents',            aliases: ['s'] }),
   gw({ name: 'abort',     description: 'Cancel running agents',                              aliases: ['stop', 'cancel'] }),
   { name: 'plan-hide', description: 'Collapse the expanded plan', source: 'tui' },
   gw({ name: 'work-plan', description: 'Show the current work plan, evidence, and feedback' }),

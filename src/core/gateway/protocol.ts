@@ -158,7 +158,6 @@ export const ChatSendSchema = z.object({
   type: z.literal('chat.send'),
   sessionId: z.string().uuid(),
   content: z.string().min(1).max(100_000),
-  expertId: z.string().optional(),
   projectPath: z.string().optional(),
   attachments: z.array(z.object({
     name: z.string(),

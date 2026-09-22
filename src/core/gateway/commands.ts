@@ -23,7 +23,7 @@ export interface CommandContext {
   trustLevel: TrustLevel;
   args: Record<string, string>;
   rawArgs: string;
-  /** Connection metadata — can be mutated by commands (e.g., /expert stores activeExpertId) */
+  /** Connection metadata — commands may mutate it. */
   metadata?: Record<string, unknown>;
 }
 
@@ -187,10 +187,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
         const agentManager = getAgentManager();
         const agents = agentManager.list();
         const running = agents.filter(a => a.status === 'running');
-        const expert = ctx.metadata?.activeExpertName as string | undefined;
-
         let text = `Session: ${ctx.sessionId?.slice(0, 8) || 'none'}`;
-        if (expert) text += `  |  Expert: ${expert}`;
         text += `\nAgents: ${running.length} running / ${agents.length} total`;
 
         if (running.length > 0) {
@@ -207,100 +204,6 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     },
   });
 
-  registry.register({
-    name: 'expert',
-    aliases: ['e'],
-    description: 'Switch expert or list available experts',
-    args: [{ name: 'name', required: false, description: 'Expert name or "reset"' }],
-    minTrustLevel: 'user',
-    handler: async (ctx) => {
-      try {
-        const { getDb } = await import('@/db/postgres');
-        const { experts: expertsTable } = await import('@/db/schema/experts');
-        const { or, eq, isNull, sql } = await import('drizzle-orm');
-        const db = getDb();
-
-        // Use rawArgs for the full expert name (e.g., "Data Analyst" not just "Data")
-        const expertName = ctx.rawArgs.trim();
-
-        if (!expertName) {
-          // List experts — only filter by userId if it's a valid UUID
-          const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ctx.userId);
-          const conditions = isUuid
-            ? or(eq(expertsTable.isSystem, true), eq(expertsTable.userId, ctx.userId), isNull(expertsTable.userId))
-            : or(eq(expertsTable.isSystem, true), isNull(expertsTable.userId));
-          const experts = await db.select({
-            name: expertsTable.name,
-            icon: expertsTable.icon,
-            description: expertsTable.description,
-            role: expertsTable.role,
-          }).from(expertsTable).where(conditions);
-          const iconToEmoji: Record<string, string> = {
-            'file-text': '\u25A0', 'bar-chart': '\u25B2', search: '\u25C6',
-            shield: '\u25C8', 'book-open': '\u25B6', bot: '\u25CF',
-            server: '\u25A1', database: '\u25A3', brain: '\u2605',
-            'check-circle': '\u2713', 'trending-up': '\u25B3', code: '\u2302',
-            mail: '\u2709', eye: '\u25CE', palette: '\u2740',
-            workflow: '\u21BB', clipboard: '\u2630',
-          };
-          const lines = experts.map(e => {
-            const emoji = iconToEmoji[e.icon || ''] || '\u25CF';
-            return `- ${emoji} **${e.name}** — ${e.description || e.role}`;
-          });
-          return { text: `**Available experts:**\n\n${lines.join('\n')}\n\nUse \`/expert <name>\` to switch, \`/expert reset\` to auto-route.` };
-        }
-
-        if (expertName.toLowerCase() === 'reset') {
-          if (ctx.metadata) {
-            delete ctx.metadata.activeExpertId;
-            delete ctx.metadata.activeExpertName;
-          }
-          // Also clear from session DB
-          if (ctx.sessionId) {
-            try {
-              const { sessionRepository } = await import('@/db/repositories/session-repository');
-              const session = await sessionRepository.findById(ctx.sessionId);
-              const sessionCtx = (session?.context as Record<string, unknown>) || {};
-              delete sessionCtx.activeExpertId;
-              delete sessionCtx.activeExpertName;
-              await sessionRepository.update(ctx.sessionId, { context: sessionCtx });
-            } catch { /* best-effort */ }
-          }
-          return { text: 'Expert reset to auto-routing. Next messages will be classified automatically.' };
-        }
-
-        // Verify the expert exists
-        const match = await db.select({ id: expertsTable.id, name: expertsTable.name })
-          .from(expertsTable)
-          .where(sql`LOWER(${expertsTable.name}) = LOWER(${expertName})`)
-          .limit(1);
-        if (match.length === 0) {
-          return { text: `Expert "${expertName}" not found. Use /expert to list available experts.` };
-        }
-
-        // Store active expert in connection metadata AND session DB
-        if (ctx.metadata) {
-          ctx.metadata.activeExpertId = match[0].id;
-          ctx.metadata.activeExpertName = match[0].name;
-        }
-        // Persist to session context so it survives reconnects
-        if (ctx.sessionId) {
-          try {
-            const { sessionRepository } = await import('@/db/repositories/session-repository');
-            const session = await sessionRepository.findById(ctx.sessionId);
-            const sessionCtx = (session?.context as Record<string, unknown>) || {};
-            sessionCtx.activeExpertId = match[0].id;
-            sessionCtx.activeExpertName = match[0].name;
-            await sessionRepository.update(ctx.sessionId, { context: sessionCtx });
-          } catch { /* session persistence is best-effort */ }
-        }
-
-        return { text: `Switched to expert: ${match[0].name}. Next messages will be handled by this expert.` };
-      } catch (err) {
-        return { text: `Error: ${(err as Error).message}` };
-      }
-    },
-  });
 
   registry.register({
     name: 'abort',
@@ -520,7 +423,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
       if (action === 'approve') {
         const result = await approveProposal(target.id, { userId: scope });
         return result
-          ? { text: `Approved: "${result.name}" is now a${result.promoted === 'expert' ? 'n' : ''} ${result.promoted}.` }
+          ? { text: `Approved: "${result.name}" is now a ${result.promoted}.` }
           : { text: 'That proposal is no longer pending.' };
       }
 
@@ -704,15 +607,8 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     description: 'Show Octipus version and build info',
     minTrustLevel: 'user',
     handler: async () => {
-      try {
-        const { readFileSync } = await import('fs');
-        const { resolve } = await import('path');
-        const pkgPath = resolve(process.cwd(), 'package.json');
-        const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
-        return { text: `Octipus v${pkg.version || '0.0.0'} (Node ${process.versions.node})` };
-      } catch {
-        return { text: `Octipus (Node ${process.versions.node})` };
-      }
+      const { getAppVersion } = await import('@/utils/version');
+      return { text: `Octipus v${getAppVersion()} (Node ${process.versions.node})` };
     },
   });
 

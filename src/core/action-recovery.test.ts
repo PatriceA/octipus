@@ -5,6 +5,7 @@ import type { ToolAction, toolActions } from '@/db/schema/tool-actions';
 import * as permissions from '@/security/permissions';
 import type { AgentContext } from './types';
 import { markToolNotExecuted, ToolNotExecutedError } from './tool-execution-error';
+import { WorkspaceFsError } from '@/security/workspace-fs';
 
 class MemoryJournal extends ToolActionRepository {
   rows: ToolAction[] = [];
@@ -64,6 +65,12 @@ describe('durable action recovery', () => {
     expect(request).not.toHaveBeenCalled();
     await expect(run(async () => { throw Object.assign(new Error('unsupported shell syntax'), { name: 'ToolNotExecutedError' }); })).rejects.toThrow();
     expect(repo.rows[2].status).toBe('uncertain');
+  });
+  test('a sandbox path refusal never touched the disk, so it is not_executed', async () => {
+    await expect(run(async () => { throw new WorkspaceFsError('OUTSIDE_ROOT', "Path '/tmp/x' is outside allowed workspace directories"); })).rejects.toThrow(/outside/);
+    expect(repo.rows[0].status).toBe('not_executed');
+    await run(async () => 'next legitimate action');
+    expect(request).not.toHaveBeenCalled();
   });
   test('a nested shell preflight error cannot declare an outer mutation unexecuted', async () => {
     await expect(run(async () => { throw new ToolNotExecutedError('shell', 'parser rejected'); })).rejects.toThrow();

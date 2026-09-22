@@ -73,15 +73,6 @@ export interface ChatResponse {
   };
 }
 
-export interface Expert {
-  id: string;
-  name: string;
-  description?: string;
-  icon?: string;
-  role: string;
-  isSystem: boolean;
-  modelPreference?: string;
-}
 
 export interface ToolInfo {
   id: string;
@@ -147,20 +138,17 @@ export class OctiClient {
 
   // ─── Chat ───
 
-  async chat(message: string, sessionId?: string, expertId?: string): Promise<ChatResponse> {
+  async chat(message: string, sessionId?: string): Promise<ChatResponse> {
+    // No `expertId`: the expert layer is gone. A request is routed to a model
+    // lane by what it asks for, and a specialist is a ROLE the agent spawns.
     return this.request<ChatResponse>('/api/chat', {
       method: 'POST',
       body: JSON.stringify({
         message,
         sessionId,
-        expertId,
         channel: 'mcp',
       }),
     });
-  }
-
-  async chatWithExpert(message: string, expertId: string, sessionId?: string): Promise<ChatResponse> {
-    return this.chat(message, sessionId, expertId);
   }
 
   async createSession(opts: { channelType?: string; title?: string; context?: Record<string, unknown> }): Promise<{ id: string }> {
@@ -173,17 +161,6 @@ export class OctiClient {
         context: opts.context,
       }),
     });
-  }
-
-  // ─── Experts ───
-
-  async listExperts(): Promise<Expert[]> {
-    const res = await this.request<{ experts: Expert[] }>('/api/experts');
-    return res.experts || [];
-  }
-
-  async getExpert(id: string): Promise<Expert> {
-    return this.request<Expert>(`/api/experts/${id}`);
   }
 
   // ─── Search ───

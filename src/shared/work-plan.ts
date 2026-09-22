@@ -70,10 +70,19 @@ export function reviseWorkPlan(state: WorkPlanState, input: PlanUpdate): WorkPla
   if (input.newPlan && state.current?.feedback.some(f => f.status === 'pending')) {
     throw new Error('Handle pending feedback before starting a new plan.');
   }
+  // A completed step is kept as recorded: it must still be present and still
+  // done, and its stored title and evidence win over the resend's wording. It
+  // used to require a byte-equal resend, and a model that paraphrased its own
+  // evidence was refused six times in one run (2026-09-17) while the plan
+  // never advanced.
+  const steps = input.steps.map(s => ({ ...s }));
   for (const step of old?.steps ?? []) {
-    if (step.status === 'done' && !input.steps.some(s => s.id === step.id && s.title === step.title && s.status === 'done' && s.evidence === step.evidence)) {
-      throw new Error('Keep completed steps and their evidence. Add a follow-up step for further work.');
+    if (step.status !== 'done') continue;
+    const sent = steps.find(s => s.id === step.id);
+    if (!sent || sent.status !== 'done') {
+      throw new Error(`Step "${step.id}" is completed and must stay in the plan as done, with its evidence. Add a follow-up step for further work instead.`);
     }
+    sent.title = step.title; sent.evidence = step.evidence;
   }
   const feedback = (old?.feedback ?? []).map(f => ({ ...f }));
   for (const reply of input.feedbackResponses) {
@@ -89,7 +98,7 @@ export function reviseWorkPlan(state: WorkPlanState, input: PlanUpdate): WorkPla
     current: {
       id: old?.id ?? crypto.randomUUID(), revision, kind: input.kind,
       title: input.title, goal: input.goal, details: input.details ?? old?.details,
-      steps: input.steps, updatedAt: at, feedback,
+      steps, updatedAt: at, feedback,
       history: [...(old?.history ?? []), { revision, summary: input.summary, at }].slice(-100),
     },
   };
