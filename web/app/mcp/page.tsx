@@ -23,6 +23,7 @@ import { cn } from '@/lib/utils';
 import { PageHeader } from '@/components/ui/page-header';
 import { Portal } from '@/components/ui/portal';
 import { ConnectorsTab } from '@/components/mcp/connectors-tab';
+import { McpToolPermissionControl } from '@/components/mcp/tool-permission-control';
 
 interface MCPServer {
   id: string;
@@ -363,12 +364,17 @@ function ServerToolList({ serverId }: { serverId: string }) {
       <p className="section-label mb-2">
         available tools ({tools.length})
       </p>
+      <p className="text-xs text-on-surface-variant mb-3">
+        Permissions are saved for your account, per server and tool, across sessions.
+        Allow skips confirmation; Ask requests it each time. Administrative deny rules still apply.
+      </p>
       {tools.map((tool) => (
         <div key={tool.name} className="flex items-start gap-2 px-2.5 py-1.5 bg-surface-container-low rounded-lg">
           <Wrench className="w-3.5 h-3.5 text-on-surface-variant mt-0.5 shrink-0" />
           <div>
             <p className="text-sm font-mono font-medium text-on-surface/80">{tool.name}</p>
             <p className="text-xs text-on-surface-variant leading-tight">{tool.description}</p>
+            <McpToolPermissionControl serverId={serverId} toolName={tool.name} />
           </div>
         </div>
       ))}
@@ -549,6 +555,8 @@ export default function MCPPage() {
                   <div className="flex items-center gap-3 min-w-0">
                     <button
                       onClick={() => toggleExpand(server.id)}
+                      aria-label={`Tools and permissions for ${server.name}`}
+                      aria-expanded={expanded.has(server.id)}
                       className="text-on-surface-variant hover:text-on-surface shrink-0"
                     >
                       {expanded.has(server.id) ? (

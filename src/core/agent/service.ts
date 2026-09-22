@@ -413,10 +413,12 @@ export class AgentService {
         'Message classified',
       );
 
-      // Voice "propose-then-confirm" gate: a spoken work turn describes its
-      // approach and waits for the user's go instead of spawning immediately.
-      // Typed turns skip this entirely — voiceSessions only holds mic-on sessions.
-      if (!bypassVoiceGate && this.voiceSessions.has(resolvedSessionId)) {
+      // Only the legacy web voice-mode toggle opts into spoken planning.
+      // Mobile voice is a complete user request, just like typed chat: it must
+      // reach the tool-capable root loop, including questions classified as
+      // ambiguous and follow-ups such as "Yes, look it up online". Tool-level
+      // approval policy still applies; the transport is not a planning mode.
+      if (!bypassVoiceGate && channel !== 'mobile-voice' && this.voiceSessions.has(resolvedSessionId)) {
         // Gate vague requests too, not just cleanly-scored 'task'. Spoken input is
         // usually under-specified → the classifier falls to 'ambiguous', which would
         // otherwise reach the raw root agent and get blind-dispatched or dryly told

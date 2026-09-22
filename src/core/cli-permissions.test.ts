@@ -40,3 +40,50 @@ it('passes cancellation to the approval insert', async () => {
   await expect(answerCliPermissionRequest(request, context(), vi.fn(), controller.signal)).rejects.toThrow(/stopped/);
   expect(mocks.waitForApproval).not.toHaveBeenCalled();
 });
+
+const profileTools = () => [{ name: 'profiles__search_profiles', toolId: 'profiles', permissionAction: 'manage', description: '', parameters: {}, execute: async () => null }];
+const mcpRequest = (name: string, input: Record<string, unknown> = { query: 'wife' }) => ({ ...request, request: { ...request.request, tool_name: name, input } });
+it('routes registered Octipus MCP calls to the canonical executor without synthetic approvals', async () => {
+  const result = await answerCliPermissionRequest(mcpRequest('mcp__octipus__profiles__search_profiles'), context(), vi.fn(), undefined, profileTools);
+  expect(result).toMatchObject({ response: { response: { behavior: 'allow', updatedInput: { query: 'wife' } } } });
+  expect(mocks.check).toHaveBeenCalledWith('u', 'cli-native:mcp__octipus__profiles__search_profiles', 'mcp__octipus__profiles__search_profiles', { query: 'wife' }, expect.anything(), { revalidate: true });
+  expect(mocks.requestApproval).not.toHaveBeenCalled();
+});
+it.each([
+  ['mcp__octipus__profiles__delete_profile', {}],
+  ['mcp__octipus__call_discovered_tool', { name: 'profiles__delete_profile' }],
+  ['mcp__octipus__call_discovered_tool', { name: 'profiles__search_profiles', arguments: 'invalid' }],
+])('rejects unavailable or malformed Octipus calls: %s', async (name, input) => {
+  const result = await answerCliPermissionRequest(mcpRequest(name, input), context(), vi.fn(), undefined, profileTools);
+  expect(result).toMatchObject({ response: { response: { behavior: 'deny' } } });
+  expect(mocks.requestApproval).not.toHaveBeenCalled();
+});
+it('unwraps discovered tools but preserves the vendor input envelope', async () => {
+  const input = { name: 'profiles__search_profiles', arguments: { query: 'wife' } };
+  const result = await answerCliPermissionRequest(mcpRequest('mcp__octipus__call_discovered_tool', input), context(), vi.fn(), undefined, profileTools);
+  expect(result).toMatchObject({ response: { response: { behavior: 'allow', updatedInput: input } } });
+});
+it('does not trust other MCP servers or an Octipus server outside the run bridge', async () => {
+  await answerCliPermissionRequest(mcpRequest('mcp__other__profiles__search_profiles'), context(), vi.fn(), undefined, profileTools);
+  expect(mocks.check.mock.calls[0][1]).toBe('cli-native:mcp__other__profiles__search_profiles');
+  mocks.check.mockClear();
+  await answerCliPermissionRequest(mcpRequest('mcp__octipus__profiles__search_profiles'), context(), vi.fn());
+  expect(mocks.check.mock.calls[0][1]).toBe('cli-native:mcp__octipus__profiles__search_profiles');
+});
+it('rechecks active tool membership and cancellation', async () => {
+  const call = mcpRequest('mcp__octipus__profiles__search_profiles');
+  for (const [ctx, tools, signal] of [
+    [context(), () => [], undefined],
+    [{ ...context(), status: 'stopped' }, profileTools, undefined],
+    [context(), profileTools, AbortSignal.abort()],
+  ] as const) {
+    expect(await answerCliPermissionRequest(call, ctx, vi.fn(), signal, tools)).toMatchObject({ response: { response: { behavior: 'deny' } } });
+  }
+});
+
+it('retains an explicit legacy CLI denial for an Octipus MCP call', async () => {
+  mocks.check.mockResolvedValue({ level: 'DENY' });
+  expect(await answerCliPermissionRequest(mcpRequest('mcp__octipus__profiles__search_profiles'), context(), vi.fn(), undefined, profileTools))
+    .toMatchObject({ response: { response: { behavior: 'deny' } } });
+  expect(mocks.requestApproval).not.toHaveBeenCalled();
+});

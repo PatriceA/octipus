@@ -81,3 +81,21 @@ PGlite could not create an already-existing internal directory in the knowledge
 graph fixture. All five tests in that suite passed on an isolated rerun. The
 compiled MCP suite passed all 19 tests. No production database was reset to
 obtain these results.
+
+## Octipus MCP permission identity
+
+The Claude stdio relay routes exact registered `mcp__octipus__…` calls through
+its active run bridge to the normal tool executor. For example,
+`mcp__octipus__profiles__search_profiles` uses `profiles / manage`, the permission
+shown in Tools. Dynamic `permissionAction` functions receive the actual arguments.
+The relay does not create an additional synthetic ASK for these calls: the
+executor owns the canonical ALLOW/ASK/DENY decision, including one approval when
+required. `call_discovered_tool` retains the same exact target membership checks.
+
+Unavailable tools, stopped runs and explicit legacy CLI denials remain blocked.
+Other MCP servers, unconnected CLI runs, and native tools such as Bash keep the
+CLI permission path. Existing policies are not rewritten or widened.
+
+Regression coverage includes the actual CLI subprocess/control-response/HTTP
+bridge path with profiles.manage set to ALLOW, DENY and ASK, plus discovery,
+cancellation, unknown targets and external MCP server isolation.

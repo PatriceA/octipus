@@ -443,7 +443,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `skills` | 2 |
 | `api` | `tools` | 3 |
 | `api` | `utils` | 60 |
-| `api` | `voice` | 23 |
+| `api` | `voice` | 24 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 1 |
 | `capabilities` | `setup` | 1 |
