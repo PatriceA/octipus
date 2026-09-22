@@ -226,6 +226,12 @@ export function NotesWorkspace() {
   return (
     <div className="h-full flex flex-col bg-background">
       {/* Top bar — prompt + view toggle */}
+      {(save.error || del.error || pin.error) && (
+        <div role="alert" className="shrink-0 border-b border-error/30 bg-error/10 px-4 py-3 text-sm text-error">
+          {(save.error || del.error || pin.error)?.message || 'Could not save changes. Please try again.'}
+          <button type="button" className="ml-3 underline" onClick={() => { save.reset(); del.reset(); pin.reset(); }}>Dismiss</button>
+        </div>
+      )}
       <div className="flex items-center gap-3 px-4 h-11 shrink-0 border-b border-outline-variant/40">
         <h1 className="text-[13px] font-semibold lowercase font-mono truncate">
           <span className="text-outline">octi:</span>

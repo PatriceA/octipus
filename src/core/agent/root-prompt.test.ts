@@ -17,6 +17,13 @@ import { assembleSystemPrompt, buildDelegationPolicy, buildTopicHint } from './r
 import { splitVolatileSystem } from '@/models/providers/prompt-cache';
 
 describe('buildDelegationPolicy', () => {
+  test.each([true, false])('requires current facts and online follow-ups to be verified, tier %s', tier => {
+    const policy = buildDelegationPolicy(tier);
+    expect(policy).toContain('verify with live web tools or a research child before answering');
+    expect(policy).toContain('including follow-ups referring to the conversation');
+    expect(policy).toContain('Never claim work or a child has started without actually invoking');
+  });
+
   test('is emitted for both tiers, with no dependency on a classified topic', () => {
     expect(buildDelegationPolicy(false)).toContain('spawn_child');
     expect(buildDelegationPolicy(true)).toContain('spawn_child');

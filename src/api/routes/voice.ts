@@ -441,6 +441,9 @@ export const voiceRoutes = new Elysia({ prefix: '/voice' })
       return {
         // Real availability — the binary actually runs / a cloud key exists —
         // not just a config flag. The web voice UI gates on sttAvailable.
+        // Native mobile STT/TTS can use the per-request voice gate without
+        // configuring a server audio engine. Clients check this contract.
+        mobileVoice: true,
         sttAvailable: availability.stt.available,
         sttReason: availability.stt.reason,
         sttLocal: availability.stt.local,

@@ -39,11 +39,16 @@ const AFFIRM_WORDS = new Set([
   'start', 'proceed', 'sounds', 'good', 'great', 'please', 'confirm', 'confirmed', 'absolutely',
   'correct', 'right', 'aye', 'now', 'then', 'for', 'on', "let's", 'lets', 'yea',
 ]);
+// Match complete German confirmations, never arbitrary bags of words.
+const GERMAN_CONFIRM = /^(ja|ja bitte|ja mach das|mach das|leg los|los gehts|los geht's|bitte starten|starte|starten|bestätigt|einverstanden|in ordnung|genau)$/i;
+
 // Cancellation — leading token is enough; extra words still mean cancel ("no,
 // leave it"). Mirrors the classifier's denial set (no/stop/cancel/abort/…).
-const CANCEL = /^\s*(no|nope|nah|cancel|stop|abort|reject|deny|never ?mind|forget it|don'?t|hold on|wait)\b/i;
+const CANCEL = /^\s*(no|nope|nah|cancel|stop|abort|reject|deny|never ?mind|forget it|don'?t|hold on|wait|nein|abbrechen|abbruch|stopp|warte|nicht machen|lass es)\b/i;
 
 export function isAffirmation(message: string): boolean {
+  const normalized = message.toLowerCase().replace(/[.!,?;:]/g, '').trim();
+  if (GERMAN_CONFIRM.test(normalized)) return true;
   const words = message.toLowerCase().replace(/[.!,?;:]/g, '').trim().split(/\s+/).filter(Boolean);
   return words.length > 0 && words.every((w) => AFFIRM_WORDS.has(w));
 }

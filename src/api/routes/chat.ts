@@ -8,6 +8,7 @@ import { API_SCOPES } from '@/security/scopes';
 import { swarmNodeRepository } from '@/core/swarm/node-repository';
 import { generateId } from '@/utils/crypto';
 import { apiLogger } from '@/utils/logger';
+import { stripSpeechSources } from '@/voice/speech-sources';
 
 /**
  * The specialist roles this turn actually delegated to.
@@ -173,7 +174,9 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
         );
 
         return {
-          response: result.response,
+          // History has already retained the complete reply. Strip citations
+          // at the transport boundary so older mobile clients cannot speak them.
+          response: channel === 'mobile-voice' ? stripSpeechSources(result.response) : result.response,
           sessionId: result.sessionId || sessionId,
           agentId: result.agentId,
           classification: result.classification,
