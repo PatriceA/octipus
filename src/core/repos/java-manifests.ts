@@ -1,5 +1,5 @@
 import type { RepoDependency } from '@db/schema/workspace-repos';
-import { DOMParser } from '@xmldom/xmldom';
+import { DOMParser, ParseError, type Document, type Element } from '@xmldom/xmldom';
 import type { ParsedManifest } from './manifests';
 
 const MAVEN_MANIFEST = 'pom.xml';
@@ -31,13 +31,16 @@ export function parseMavenPom(content: string): ParsedManifest | null {
   if (/<!\s*(?:DOCTYPE|ENTITY)\b/i.test(content)) return null;
 
   const errors: string[] = [];
-  const document = new DOMParser({
-    errorHandler: {
-      warning: (message: unknown) => errors.push(String(message)),
-      error: (message: unknown) => errors.push(String(message)),
-      fatalError: (message: unknown) => errors.push(String(message)),
-    },
-  }).parseFromString(content, 'application/xml');
+  let document: Document;
+  try {
+    document = new DOMParser({
+      onError: (_level, message) => { errors.push(message); },
+    }).parseFromString(content, 'application/xml');
+  } catch (error) {
+    // xmldom 0.9 throws for malformed XML even when onError records it.
+    if (error instanceof ParseError) return null;
+    throw error;
+  }
   if (errors.length || !document.documentElement || elementName(document.documentElement) !== 'project') return null;
 
   const project = document.documentElement;

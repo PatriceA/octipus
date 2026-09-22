@@ -122,7 +122,6 @@
     "ws": "$ws",
     "file-type": "^21.3.4",
     "follow-redirects": "^1.15.12",
-    "qs": "^6.16.0",
-    "@xmldom/xmldom": "$@xmldom/xmldom"
+    "qs": "^6.16.0"
   }
 }
