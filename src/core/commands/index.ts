@@ -11,5 +11,6 @@ import './eval';
 import './cost';
 import './capture';
 import './docs';
+import './skills';
 
 export { getAllCommands, getCommand, handleCommand } from './registry';

@@ -1,8 +1,8 @@
 'use client';
 
 import { Check, Copy } from 'lucide-react';
-import { useCallback, useState } from 'react';
-import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
+import { useCallback, useMemo, useState } from 'react';
+import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AuthedImage } from '@/components/ui/authed-image';
 import { remarkWikilink } from '@/lib/remark-wikilink';
@@ -67,16 +67,10 @@ export function Markdown({
   onTag?: (tag: string) => void;
 }) {
   const enableInline = !!(onWikilink || onTag);
-  return (
-    <div className={cn('space-y-2 text-sm leading-relaxed', className)}>
-      <ReactMarkdown
-        remarkPlugins={enableInline ? [remarkGfm, remarkWikilink] : [remarkGfm]}
-        urlTransform={
-          enableInline
-            ? (url) => (url.startsWith('wikilink:') || url.startsWith('tag:') ? url : defaultUrlTransform(url))
-            : undefined
-        }
-        components={{
+  // Component identity must survive polling and streaming renders. Defining
+  // these functions anew made React replace every paragraph/code DOM node,
+  // collapsing a user's multi-line selection while they were copying it.
+  const components = useMemo<Components>(() => ({
           code({ inline, className: codeClassName, children, ...props }: {
             inline?: boolean;
             className?: string;
@@ -197,7 +191,17 @@ export function Markdown({
           ol({ children }) {
             return <ol className="list-decimal pl-5 space-y-0.5">{children}</ol>;
           },
-        }}
+  }), [onWikilink, onTag]);
+  return (
+    <div className={cn('space-y-2 text-sm leading-relaxed', className)}>
+      <ReactMarkdown
+        remarkPlugins={enableInline ? [remarkGfm, remarkWikilink] : [remarkGfm]}
+        urlTransform={
+          enableInline
+            ? (url) => (url.startsWith('wikilink:') || url.startsWith('tag:') ? url : defaultUrlTransform(url))
+            : undefined
+        }
+        components={components}
       >
         {content}
       </ReactMarkdown>

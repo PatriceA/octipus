@@ -40,6 +40,12 @@ function mount() {
 }
 afterEach(async () => { await app?.stop(); });
 
+test('editor chat forwards skill selection to the shared gateway', () => {
+  const editor = mount();
+  (editor as unknown as { handleChatSubmit(text: string): void }).handleChatSubmit('/skills Technical Writing session');
+  expect(f.sendCommand).toHaveBeenCalledWith('skills', { value: 'Technical Writing session' });
+});
+
 test('dirty close can cancel, save failure keeps edits, successful save closes', () => {
   const app = mount(); const rec = app.buffers.openFile('/tmp/test.ts', 'draft'); app.buffers.markDirty(rec.id, true);
   key('\x17'); expect(text()).toContain('test.ts'); modalKey('\x1b'); expect(app.buffers.active()?.dirty).toBe(true);

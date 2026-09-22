@@ -2,6 +2,7 @@ import { beforeEach, expect, test, vi } from 'vitest';
 import type { Message } from '@/db/schema/messages';
 import type { SessionContext } from '@/db/schema/sessions';
 const fixture = vi.hoisted(() => ({ rows: [] as Message[], context: {} as SessionContext, requests: [] as any[], clearDuringCall: false }));
+vi.mock('@/skills/selection', () => ({ buildSelectedSkillPrompt: async () => '\n\nFULL SELECTED SKILL' }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: {
   findById: async () => ({ id: 's', userId: 'u', context: fixture.context, metadata: { showSources: false } }),
   incrementMessageCount: async () => {},
@@ -33,6 +34,7 @@ test('casual turns retain the full checkpoint suffix and append immutable live c
   await directResponse('first', 's', 'u', selector);
   await directResponse('second', 's', 'u', selector);
   const [first, second] = fixture.requests;
+  expect(first.messages[0].content).toContain('FULL SELECTED SKILL');
   expect(first.messages[0].content).not.toContain('CURRENT DATE');
   expect(first.messages[1].content).toContain('CHECKPOINT');
   expect(first.messages.some((m: any) => m.content === 'prior 2')).toBe(true);

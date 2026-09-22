@@ -120,6 +120,22 @@ export class CommandRegistry {
 // ── Built-in Commands ─────────────────────────────────────────────
 
 export function registerBuiltinCommands(registry: CommandRegistry): void {
+  registry.register({
+    name: 'skills', aliases: [], minTrustLevel: 'user',
+    description: 'List or select skills: /skills <id or name> always|session|auto [--global]',
+    handler: async ctx => {
+      const { resolveUserId } = await import('./resolve-user');
+      const { handleSkillSelectionCommand } = await import('@/skills/selection-command');
+      const userId = await resolveUserId(ctx.userId);
+      // The TUI allocates its UUID before the first message. Persist that session
+      // so a skill can be selected before any model starts working.
+      if (ctx.sessionId && /^[0-9a-f-]{36}$/i.test(ctx.sessionId)) {
+        const { resolveSession } = await import('@/core/agent/session-resolver');
+        await resolveSession(ctx.sessionId, userId, ctx.clientType);
+      }
+      return { text: await handleSkillSelectionCommand(userId, ctx.sessionId, ctx.rawArgs) };
+    },
+  });
   for (const name of ['work-plan', 'work-plan-status', 'plan-feedback']) {
     registry.register({
       name, aliases: [], minTrustLevel: 'user',

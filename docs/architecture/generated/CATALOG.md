@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-395 mounted routes across 61 route files. The path is the full one, group prefix included — what a client actually calls.
+397 mounted routes across 61 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -355,6 +355,8 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | DELETE | `/api/skills/topics/:id` | `src/api/routes/skill-topic-assignments.ts` |
 | PATCH | `/api/skills/topics/:id` | `src/api/routes/skill-topic-assignments.ts` |
 | PATCH | `/api/skills/topics/bulk/:skillId` | `src/api/routes/skill-topic-assignments.ts` |
+| GET | `/api/skills/usage` | `src/api/routes/skills.ts` |
+| PATCH | `/api/skills/usage` | `src/api/routes/skills.ts` |
 | GET | `/api/swarm/nodes` | `src/api/routes/swarm.ts` |
 | GET | `/api/swarm/nodes/:id` | `src/api/routes/swarm.ts` |
 | POST | `/api/swarm/nodes/:id/cancel` | `src/api/routes/swarm.ts` |
@@ -430,17 +432,17 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 7 |
 | `api` | `config` | 20 |
 | `api` | `connectors` | 2 |
-| `api` | `core` | 80 |
-| `api` | `db` | 92 |
+| `api` | `core` | 81 |
+| `api` | `db` | 94 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 5 |
 | `api` | `mcp` | 3 |
 | `api` | `models` | 31 |
 | `api` | `plugins` | 1 |
-| `api` | `security` | 71 |
+| `api` | `security` | 72 |
 | `api` | `services` | 5 |
 | `api` | `shared` | 2 |
-| `api` | `skills` | 2 |
+| `api` | `skills` | 3 |
 | `api` | `tools` | 3 |
 | `api` | `utils` | 60 |
 | `api` | `voice` | 24 |
@@ -480,7 +482,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `security` | 49 |
 | `core` | `services` | 1 |
 | `core` | `shared` | 12 |
-| `core` | `skills` | 4 |
+| `core` | `skills` | 8 |
 | `core` | `tools` | 13 |
 | `core` | `utils` | 145 |
 | `db` | `config` | 3 |
@@ -537,7 +539,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `setup` | `utils` | 1 |
 | `skills` | `config` | 1 |
 | `skills` | `core` | 1 |
-| `skills` | `db` | 7 |
+| `skills` | `db` | 10 |
 | `skills` | `models` | 1 |
 | `skills` | `utils` | 6 |
 | `test-helpers` | `config` | 1 |

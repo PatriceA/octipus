@@ -1,6 +1,7 @@
 'use client';
 
 import { SessionCost } from '@/components/chat/session-cost';
+import { SkillUsage } from '@/components/skills/skill-usage';
 
 import { PanelRight, PanelRightClose, Paperclip, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -1804,6 +1805,7 @@ export default function ChatPage() {
           <button type="button" onClick={createSession} className="text-xs text-primary whitespace-nowrap">New work</button>
         </div>
         {activeSessionId && <SessionCost sessionId={activeSessionId} />}
+        {activeSessionId && <SkillUsage key={activeSessionId} sessionId={activeSessionId} running={isLoading} />}
         {/* Message timeline */}
         <MessageTimeline
           messages={messages}

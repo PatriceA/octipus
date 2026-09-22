@@ -6,6 +6,11 @@ import { skillRepository, type SkillUpdate } from '@/db/repositories/skill-repos
 import { type Skill, skills } from '@/db/schema/skills';
 import { getUserOrgIds } from '@/services/org-membership';
 import { getSkillRegistry } from '@/skills/registry';
+import { getSkillModes } from '@/skills/selection';
+import { skillSelectionRepository } from '@/db/repositories/skill-selection-repository';
+import { scopedRepos } from '@/db/repositories/scoped';
+import { isAuthenticated } from '@/security/principal';
+import { resolveUserId } from '@/core/gateway/resolve-user';
 import {
   markdownToSkills,
   type PortableSkill,
@@ -16,6 +21,53 @@ import {
 
 export const skillRoutes = new Elysia({ prefix: '/skills' })
   .use(apiContext)
+
+  .get('/usage', async ({ user, principal, query, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    let ownerId = await resolveUserId(user.id);
+    if (query.sessionId) {
+      const session = await scopedRepos(principal).sessions.findById(query.sessionId);
+      if (!session) { set.status = 404; return { error: 'Session not found' }; }
+      ownerId = session.userId;
+    }
+    const [modes, available] = await Promise.all([
+      getSkillModes(ownerId, query.sessionId),
+      getSkillRegistry().getAll(ownerId === 'system' ? undefined : ownerId),
+    ]);
+    const skills = available.map(skill => ({ id: skill.id, name: skill.name, description: skill.description,
+      mode: modes.get(skill.id) ?? 'automatic', available: true }));
+    // Deleted or unmounted pins remain removable rather than silently disappearing.
+    const visible = new Set(available.map(skill => skill.id));
+    for (const [id, mode] of modes) if (!visible.has(id)) skills.push({ id, name: id,
+      description: 'This selected skill is unavailable. Choose Automatic to continue without it.', mode, available: false });
+    return { skills };
+  }, {
+    query: t.Object({ sessionId: t.Optional(t.String({ pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' })) }),
+    detail: { tags: ['skills'] },
+  })
+
+  .patch('/usage', async ({ user, principal, body, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    const ownerId = await resolveUserId(user.id);
+    if (body.sessionId) {
+      const session = await scopedRepos(principal).sessions.findById(body.sessionId);
+      if (!session) { set.status = 404; return { error: 'Session not found' }; }
+      // Admins may read another user's chat, but never change that user's skill defaults.
+      if (session.userId !== ownerId) { set.status = 403; return { error: 'Only the chat owner can change its skills' }; }
+    }
+    if (body.mode === 'session' && !body.sessionId) { set.status = 400; return { error: 'A session is required' }; }
+    if (body.mode !== 'automatic') {
+      const available = await getSkillRegistry().getAll(ownerId === 'system' ? undefined : ownerId);
+      if (!available.some(skill => skill.id === body.skillId)) { set.status = 404; return { error: 'Skill not found' }; }
+    }
+    await skillSelectionRepository.set(ownerId, body.skillId, body.mode, body.sessionId);
+    return { saved: true };
+  }, {
+    body: t.Object({ skillId: t.String({ minLength: 1, maxLength: 512 }),
+      mode: t.Union([t.Literal('automatic'), t.Literal('always'), t.Literal('session')]),
+      sessionId: t.Optional(t.String({ pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' })) }),
+    detail: { tags: ['skills'] },
+  })
 
   .get(
     '/',

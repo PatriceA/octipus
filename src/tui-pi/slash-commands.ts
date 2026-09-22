@@ -42,6 +42,8 @@ export const OCTIPUS_SLASH_COMMANDS: OctipusSlashCommand[] = [
 
   // ── Gateway built-ins (src/core/gateway/commands.ts) ───────────
   gw({ name: 'help',      description: 'List available commands',                            aliases: ['h', '?'] }),
+  gw({ name: 'skills', description: 'List skills or select Automatic, Always, or This session',
+       argumentHint: '[<id or name> always|session|auto] [--global]' }),
   gw({ name: 'status',    description: 'Show current session status and agents',            aliases: ['s'] }),
   gw({ name: 'abort',     description: 'Cancel running agents',                              aliases: ['stop', 'cancel'] }),
   { name: 'plan-hide', description: 'Collapse the expanded plan', source: 'tui' },

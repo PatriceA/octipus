@@ -1,4 +1,5 @@
 import { getConfig } from '@/config';
+import { buildSelectedSkillPrompt } from '@/skills/selection';
 import { type AgentCompletionReason, readAgentCompletionReason } from '@/shared/agent-completion';
 import { agentEventRepository } from '@/db/repositories/agent-event-repository';
 import { agentRepository } from '@/db/repositories/agent-repository';
@@ -144,6 +145,10 @@ export class AgentManager {
 
     const config = getConfig();
 
+    // Resolve before creating a worker: unavailable required skills must fail visibly.
+    // Every spawn path (root, worker, swarm, native and CLI) passes through here.
+    const selectedSkills = await buildSelectedSkillPrompt(options.userId, options.sessionId);
+
     // If both topic and model are already specified, skip re-routing
     // (the caller has already routed, e.g. SwarmSpawner or internal spawnWorker)
     let routedTopic = options.topic || 'general';
@@ -275,6 +280,7 @@ export class AgentManager {
     if (options.systemPrompt) {
       worker.addSystemMessage(options.systemPrompt);
     }
+    if (selectedSkills) worker.addSystemMessage(selectedSkills);
 
     // Store the worker
     this.agents.set(agentId, worker);

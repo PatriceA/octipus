@@ -55,6 +55,13 @@ test('unknown slash commands go to the gateway with their argument', async () =>
   await t.app.stop();
 });
 
+test('skill selection is forwarded without losing its name or scope', async () => {
+  const t = mount();
+  t.submit('/skills Technical Writing session');
+  expect(gateway.sendCommand).toHaveBeenCalledWith('skills', { value: 'Technical Writing session' });
+  await t.app.stop();
+});
+
 test('/help appends the TUI-local commands the gateway cannot know about', async () => {
   const t = mount();
   gateway.listener({ kind: 'command.result', name: 'h', result: 'Available commands:\n  /help — List' });

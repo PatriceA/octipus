@@ -1,5 +1,7 @@
 'use client';
 
+import { SkillUsage } from '@/components/skills/skill-usage';
+
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BookOpen,
@@ -1078,6 +1080,8 @@ export default function SkillsPage() {
           </>
         }
       />
+
+      <SkillUsage />
 
       {/* Search + Category filter */}
       <div className="flex gap-3">

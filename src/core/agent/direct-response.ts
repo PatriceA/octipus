@@ -1,4 +1,5 @@
 import { readSessionHistory, withSessionConversation } from '@/core/session-history';
+import { buildSelectedSkillPrompt } from '@/skills/selection';
 import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
 import { getResponseCache } from '@/core/response-cache';
 import { messageRepository } from '@/db/repositories/message-repository';
@@ -69,6 +70,7 @@ async function directResponseInternal(
   const history = await readSessionHistory(sessionId);
   const sessionForBoundary = history.session;
   const session = history.session;
+  const selectedSkills = await buildSelectedSkillPrompt(userId, sessionId);
   const cache = getResponseCache();
   const recentMessages = history.rows;
   const historyMessages = history.messages;
@@ -134,7 +136,7 @@ async function directResponseInternal(
     }
 
     const systemContent = buildDirectResponseSystem({
-      persona: personaBlock,
+      persona: personaBlock + selectedSkills,
       dateContext: dateContext,
 
       devHint: devHint,
