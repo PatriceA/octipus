@@ -122,15 +122,38 @@ function mapStrings(value: unknown, fn: (s: string) => string): unknown {
 }
 
 /**
+ * The registry does not cache a miss, and unbound is the normal state — so
+ * remember "nothing bound" briefly instead of two DB queries per call site hit.
+ * ponytail: a new binding is picked up within UNBOUND_TTL_MS; invalidate from
+ * the topic route if that lag ever matters.
+ */
+const UNBOUND_TTL_MS = 30_000;
+let unboundUntil = 0;
+
+/**
  * Ask the model bound to the `decision` topic. Returns null — and the caller
  * falls back to its LLM path — when nothing is bound, the privacy gate
  * refuses, the call fails, the answer is malformed, or any answer is below
- * `site.minConfidence`. Every non-trivial null is logged with its reason.
+ * `site.minConfidence`. Never throws: call sites must behave exactly as
+ * before when anything here goes wrong. Every non-trivial null is logged.
  */
 export async function decide(site: DecisionSite, state: unknown, questions: Record<string, DecisionQuestion>): Promise<DecisionAnswers | null> {
+  if (Date.now() < unboundUntil) return null;
+  try {
+    return await decideUnguarded(site, state, questions);
+  } catch (err) {
+    modelLogger.warn({ err, site: site.id }, 'Decision failed; falling back');
+    return null;
+  }
+}
+
+async function decideUnguarded(site: DecisionSite, state: unknown, questions: Record<string, DecisionQuestion>): Promise<DecisionAnswers | null> {
   const { getModelRegistry } = await import('@/models/model-registry');
   const model = await getModelRegistry().getModelForTopic('decision');
-  if (!model) return null; // optional feature: unbound is the normal case
+  if (!model) {
+    unboundUntil = Date.now() + UNBOUND_TTL_MS;
+    return null; // optional feature: unbound is the normal case
+  }
 
   const { getProviderRouter } = await import('@/models/providers');
   const provider = getProviderRouter().getProviderByName(model.provider);

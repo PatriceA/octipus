@@ -93,3 +93,20 @@ describe('TypeSafeProvider.decide wire shapes', () => {
     await expect(p.decide({ model: 'jev-1.13.0', state: 's', questions: {}, zeroDataRetention: true })).rejects.toThrow(/cannot enforce/);
   });
 });
+
+describe('decide() never throws and caches "unbound"', () => {
+  it('registry failure → null; unbound → one lookup per TTL', async () => {
+    const { vi } = await import('vitest');
+    const registry = await import('@/models/model-registry');
+    const { decide } = await import('./decision');
+    const site = { id: 't', sensitivity: 'public' as const, minConfidence: 0 };
+    const spy = vi.spyOn(registry, 'getModelRegistry').mockReturnValueOnce({ getModelForTopic: async () => { throw new Error('db down'); } } as never);
+    expect(await decide(site, 's', {})).toBeNull();
+    const lookup = vi.fn(async () => null);
+    spy.mockReturnValue({ getModelForTopic: lookup } as never);
+    await decide(site, 's', {});
+    await decide(site, 's', {});
+    expect(lookup).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+});

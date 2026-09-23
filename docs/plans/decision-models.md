@@ -1,10 +1,7 @@
 # Decision models (Jev-like "System One" models) as an optional lane
 
-> **Status (2026-09-23):** P0 is implemented, uncommitted, and has no call
-> sites yet. That covers `src/models/decision.ts` and
-> `src/models/providers/typesafe-provider.ts`, the `decision` topic, and the
-> `dataPolicy` metadata. P1 onwards is design only. Verify the file references
-> against current code before continuing.
+> **Status (2026-09-23):** see the phase table at the end for what is built.
+> Every site runs in shadow mode until someone flips its `*_LIVE` constant.
 
 ## Why
 
@@ -247,7 +244,7 @@ certain.
 | Phase | Content | Done when |
 |---|---|---|
 | P0 ✔ | `decision.ts` contract + validation + `decide()`, `TopicKind 'decision'`, TypeSafe provider (direct + gateway, keys in vault), `dataPolicy` + gate, UI registration (provider label, secrets, Topics kind), `decision.test.ts` | Unit tests green. **Still open:** a live smoke test against Jev (no key yet), and the LLM-backed `decide()` (deferred until a local site needs it) |
-| P1 | Sites 1 + 2 (email, documents) in shadow mode + eval suites | 2 weeks of shadow logs, eval green → switch to live |
+| P1 ✔ (shadow) | Site 1 (`email/service.ts` `TRIAGE_SITE`, one `decide()` per message, score→priority + choice→category) and site 2 (`documents/processor.ts` `DOC_CATEGORY_SITE`). Both log `decision shadow` lines with labels only, never content. `decide()` never throws and caches "unbound" for 30 s | Shadow logs show agreement; then set `TRIAGE_LIVE` / `DOC_CATEGORY_LIVE`. Labelled eval suite still open (no decision-model eval harness yet) |
 | P2 | Sites 3, 4, 5 (memory judge, link resolver, lane fallback) | Eval green, `eval:routing` unchanged or better |
 | P3 | Sites 7 + 8 (KB relevance filter, grounding check) | Measurably better retrieval precision on the product-docs corpus |
 | P4 | Sites 9 + 10 (gates, browser micro-decisions); only once a local decision model exists or with the gate set to `secret` → local | Agent browser task bench: fewer LLM steps, same success rate |

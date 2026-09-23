@@ -8,6 +8,7 @@ import { getEmbeddingService } from '@/core/rag/embeddings';
 import { type PdfTextItem, reconstructPageText } from './pdf-layout';
 import type { AgentMessage } from '@/core/types';
 import { documentRepository } from '@/db/repositories/document-repository';
+import { decide, type DecisionSite } from '@/models/decision';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
@@ -68,6 +69,25 @@ const CATEGORIES = [
   'invoices', 'contracts', 'reports', 'correspondence', 'technical',
   'receipts', 'legal', 'medical', 'financial', 'other',
 ] as const;
+
+/**
+ * Decision-model categorization (docs/plans/decision-models.md, site 2).
+ * Shadow mode until DOC_CATEGORY_LIVE: the LLM label is used, agreement logged.
+ */
+const DOC_CATEGORY_SITE: DecisionSite = { id: 'documents.categorize', sensitivity: 'personal', minConfidence: 0.8 };
+const DOC_CATEGORY_LIVE = false;
+const CATEGORY_CRITERIA: Record<typeof CATEGORIES[number], string> = {
+  invoices: 'a bill requesting payment',
+  contracts: 'an agreement between parties, signed or to be signed',
+  reports: 'a report, analysis or study',
+  correspondence: 'a letter or message addressed to someone',
+  technical: 'technical documentation, manuals, specifications, code',
+  receipts: 'proof of a payment already made',
+  legal: 'court, authority or legal documents that are not contracts',
+  medical: 'health records, prescriptions, medical findings',
+  financial: 'bank statements, tax documents, payslips, investments',
+  other: 'none of the above',
+};
 
 /**
  * Run ImageMagick safely across platforms.
@@ -785,6 +805,17 @@ export class DocumentProcessor {
    * Categorize document content using LLM.
    */
   private async categorize(text: string, filename: string, userId: string): Promise<string> {
+    const answer = await decide(DOC_CATEGORY_SITE, { filename, content: text.slice(0, 20_000) }, {
+      category: { type: 'choice', instructions: 'Which kind of document is this?', criteria: CATEGORY_CRITERIA },
+    });
+    const decided = answer?.category?.type === 'choice' ? answer.category.choice : null;
+    if (decided && DOC_CATEGORY_LIVE) return decided;
+    const llm = await this.llmCategorize(text, filename, userId);
+    if (decided) this.logger.info({ site: DOC_CATEGORY_SITE.id, agreed: decided === llm, decision: decided, llm }, 'decision shadow');
+    return llm;
+  }
+
+  private async llmCategorize(text: string, filename: string, userId: string): Promise<string> {
     try {
       const client = getLiteLLMClient();
       const model = await this.getModel();

@@ -5,6 +5,7 @@
  * never log bodies, and draft/summary text is redacted before it could reach
  * logs (M2). Send is never automatic — the route requires explicit confirmation.
  */
+import { decide, type DecisionQuestion, type DecisionSite } from '@/models/decision';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
@@ -277,12 +278,74 @@ export function triageEntries(parsed: unknown): Array<[string, Record<string, un
 }
 
 /**
- * Triage a batch of inbox items into priorities via the model. Opt-in (not on
- * every poll) per the design's cost note. The model sees only from/subject/
- * snippet, never full bodies.
+ * Decision-model triage (docs/plans/decision-models.md, site 1). `live: false`
+ * = shadow mode: the LLM result is returned and agreement is logged. Flip to
+ * live once shadow logs + a labelled check show the decision model is at least
+ * as good; then only the items it is unsure about go to the LLM.
+ */
+const TRIAGE_SITE: DecisionSite = { id: 'email.triage', sensitivity: 'personal', minConfidence: 0.8 };
+const TRIAGE_LIVE = false;
+const PRIORITIES = ['low', 'normal', 'high'] as const;
+const TRIAGE_QUESTIONS: Record<string, DecisionQuestion> = {
+  priority: {
+    type: 'score',
+    instructions: 'How soon does the recipient need to look at or act on this email?',
+    criteria: [
+      'low: newsletters, marketing, automated notifications, receipts, FYI mail with nothing to do',
+      'normal: mail from a person or a service the recipient uses that deserves a look or a reply, but not today',
+      'high: someone is waiting on the recipient, or something needs action today: deadlines, security alerts, failed payments, direct requests',
+    ],
+  },
+  category: {
+    type: 'choice',
+    instructions: 'What kind of email is this?',
+    criteria: {
+      personal: 'from friends or family',
+      work: 'about the recipient\'s job, colleagues, clients or projects',
+      finance: 'bills, invoices, bank, payments, receipts, taxes',
+      newsletter: 'subscribed newsletters and digests',
+      notification: 'automated notifications from services, apps and systems',
+      promotion: 'marketing, offers and advertising',
+      other: 'none of the above',
+    },
+  },
+};
+
+/** Per-message decision-model triage; items it is not confident about are absent. */
+async function decideTriage(items: InboxItem[]): Promise<Record<string, EmailTriage>> {
+  const out: Record<string, EmailTriage> = {};
+  await mapLimit(items, 8, async (it) => {
+    const a = await decide(TRIAGE_SITE, { from: it.from, subject: it.subject, snippet: it.snippet.slice(0, 500) }, TRIAGE_QUESTIONS);
+    if (a?.priority?.type === 'score' && a.category?.type === 'choice') {
+      out[it.id] = { priority: PRIORITIES[Math.round(a.priority.score)], category: a.category.choice };
+    }
+  });
+  return out;
+}
+
+/**
+ * Triage a batch of inbox items into priorities. Opt-in (not on every poll)
+ * per the design's cost note. Models see only from/subject/snippet, never full
+ * bodies. An optional decision model runs first (see TRIAGE_SITE).
  */
 export async function triageInbox(userId: string, items: InboxItem[]): Promise<Record<string, EmailTriage>> {
   if (items.length === 0) return {};
+  const decided = await decideTriage(items);
+  if (TRIAGE_LIVE) {
+    const rest = items.filter((it) => !decided[it.id]);
+    return { ...(rest.length ? await llmTriage(userId, rest) : {}), ...decided };
+  }
+  const llm = await llmTriage(userId, items);
+  const shadowed = Object.keys(decided).filter((id) => llm[id]);
+  if (shadowed.length) {
+    // ids + buckets only — never mail content.
+    const disagreements = shadowed.filter((id) => decided[id].priority !== llm[id].priority).map((id) => ({ id, decision: decided[id].priority, llm: llm[id].priority }));
+    coreLogger.info({ site: TRIAGE_SITE.id, compared: shadowed.length, agreed: shadowed.length - disagreements.length, disagreements }, 'decision shadow');
+  }
+  return llm;
+}
+
+async function llmTriage(userId: string, items: InboxItem[]): Promise<Record<string, EmailTriage>> {
   // Tab-delimited (not `|`, which can appear in subjects) and only id known to us.
   const ids = new Set(items.map((it) => it.id));
   const lines = items
