@@ -330,19 +330,21 @@ async function decideTriage(items: InboxItem[]): Promise<Record<string, EmailTri
  */
 export async function triageInbox(userId: string, items: InboxItem[]): Promise<Record<string, EmailTriage>> {
   if (items.length === 0) return {};
-  const decided = await decideTriage(items);
   if (TRIAGE_LIVE) {
+    const decided = await decideTriage(items);
     const rest = items.filter((it) => !decided[it.id]);
     return { ...(rest.length ? await llmTriage(userId, rest) : {}), ...decided };
   }
-  const llm = await llmTriage(userId, items);
-  const shadowed = Object.keys(decided).filter((id) => llm[id]);
-  if (shadowed.length) {
+  // Shadow: the user gets the LLM triage without waiting on the decision model.
+  const llmPending = llmTriage(userId, items);
+  void Promise.all([decideTriage(items), llmPending]).then(([decided, llm]) => {
+    const shadowed = Object.keys(decided).filter((id) => llm[id]);
+    if (!shadowed.length) return;
     // ids + buckets only — never mail content.
     const disagreements = shadowed.filter((id) => decided[id].priority !== llm[id].priority).map((id) => ({ id, decision: decided[id].priority, llm: llm[id].priority }));
     coreLogger.info({ site: TRIAGE_SITE.id, compared: shadowed.length, agreed: shadowed.length - disagreements.length, disagreements }, 'decision shadow');
-  }
-  return llm;
+  }, () => {}); // an LLM failure surfaces through llmPending below
+  return llmPending;
 }
 
 async function llmTriage(userId: string, items: InboxItem[]): Promise<Record<string, EmailTriage>> {

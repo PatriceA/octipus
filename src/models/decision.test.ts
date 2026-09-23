@@ -125,12 +125,64 @@ describe('preferDecision', () => {
     const { preferDecision } = await import('./decision');
     let calls = 0;
     const llm = async () => { calls++; return 'b'; };
-    expect(await preferDecision(site, true, 'a', llm)).toBe('a');
+    expect(await preferDecision(site, true, async () => 'a', llm)).toBe('a');
     expect(calls).toBe(0);
-    expect(await preferDecision(site, true, null, llm)).toBe('b');
+    expect(await preferDecision(site, true, async () => null, llm)).toBe('b');
   });
-  it('shadow: the LLM result is returned even when a decision exists', async () => {
+  it('shadow: returns the LLM result without waiting for a hung decision', async () => {
     const { preferDecision } = await import('./decision');
-    expect(await preferDecision(site, false, 'a', async () => 'b')).toBe('b');
+    const never = () => new Promise<string | null>(() => {});
+    expect(await preferDecision(site, false, never, async () => 'b')).toBe('b');
+  });
+});
+
+describe('decide() gate wiring', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = realFetch; });
+
+  const wire = async (row: Record<string, unknown>) => {
+    const { vi } = await import('vitest');
+    const registry = await import('@/models/model-registry');
+    const providers = await import('@/models/providers');
+    const sent = vi.fn(async (req: any) => Object.fromEntries(Object.keys(req.questions).map((k) => [k, { type: 'noul', p: 0.9, confidence: 0.9 }])));
+    const r = vi.spyOn(registry, 'getModelRegistry').mockReturnValue({ getModelForTopic: async () => ({ name: 'm', metadata: {}, endpoint: null, ...row }) } as never);
+    const p = vi.spyOn(providers, 'getProviderRouter').mockReturnValue({ getProviderByName: () => ({ decide: sent }) } as never);
+    // Step past any "unbound" cache an earlier test left behind.
+    const now = Date.now() + 3_600_000;
+    const d = vi.spyOn(Date, 'now').mockReturnValue(now);
+    return { sent, restore: () => { r.mockRestore(); p.mockRestore(); d.mockRestore(); } };
+  };
+  const q = { x: { type: 'noul' as const, instructions: 'x' } };
+
+  it('an Ollama cloud model behind localhost never gets secret data', async () => {
+    const { decide } = await import('./decision');
+    const byName = await wire({ provider: 'ollama', modelId: 'gpt-oss:120b-cloud', endpoint: 'http://localhost:11434' });
+    expect(await decide({ id: 's', sensitivity: 'secret', minConfidence: 0 }, 'k', q)).toBeNull();
+    expect(byName.sent).not.toHaveBeenCalled();
+    byName.restore();
+
+    // Renamed cloud model: only /api/show knows.
+    globalThis.fetch = (async () => new Response(JSON.stringify({ remote_host: 'https://ollama.com:443', remote_model: 'gpt-oss:120b' }))) as typeof fetch;
+    const renamed = await wire({ provider: 'ollama', modelId: 'mymodel:latest', endpoint: 'http://localhost:11434' });
+    expect(await decide({ id: 's', sensitivity: 'secret', minConfidence: 0 }, 'k', q)).toBeNull();
+    expect(renamed.sent).not.toHaveBeenCalled();
+    renamed.restore();
+
+    globalThis.fetch = (async () => new Response(JSON.stringify({ details: {} }))) as typeof fetch;
+    const local = await wire({ provider: 'ollama', modelId: 'qwen3:8b', endpoint: 'http://localhost:11434' });
+    expect(await decide({ id: 's', sensitivity: 'secret', minConfidence: 0 }, 'k', q)).not.toBeNull();
+    local.restore();
+  });
+
+  it('PII in question criteria is redacted before a remote call; option keys survive', async () => {
+    const { decide } = await import('./decision');
+    const w = await wire({ provider: 'typesafe', modelId: 'typesafe-ai/jev' });
+    await decide({ id: 'p', sensitivity: 'personal', minConfidence: 0 }, 'link text', {
+      m: { type: 'choice', instructions: 'pick', criteria: { '1': 'Notes for alice@example.com', none: 'none' } },
+    }).catch(() => null);
+    const sentQ = w.sent.mock.calls[0][0].questions.m;
+    expect(Object.keys(sentQ.criteria)).toEqual(['1', 'none']);
+    expect(sentQ.criteria['1']).not.toContain('alice@example.com');
+    w.restore();
   });
 });

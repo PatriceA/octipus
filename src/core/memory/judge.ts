@@ -113,13 +113,13 @@ const JUDGE_ACTIONS: Record<JudgeAction, string> = {
 async function decide(candidate: CandidateFact, closest: Memory | null, userId: string): Promise<JudgeAction> {
   // Empty list shortcut — no LLM call needed.
   if (!closest) return 'ADD';
-  const answer = await askDecisionModel(JUDGE_SITE, {
+  const decision = () => askDecisionModel(JUDGE_SITE, {
     candidate: { factType: candidate.factType, content: candidate.content },
     existing: { factType: closest.factType, content: closest.content },
   }, {
     action: { type: 'choice', instructions: 'A new candidate fact about the user arrived. What should happen to the stored existing fact?', criteria: JUDGE_ACTIONS },
-  });
-  return preferDecision(JUDGE_SITE, JUDGE_LIVE, choiceOf(answer, 'action') as JudgeAction | null, () => llmJudge(candidate, closest, userId));
+  }).then((a) => choiceOf(a, 'action') as JudgeAction | null);
+  return preferDecision(JUDGE_SITE, JUDGE_LIVE, decision, () => llmJudge(candidate, closest, userId));
 }
 
 async function llmJudge(candidate: CandidateFact, closest: Memory, userId: string): Promise<JudgeAction> {

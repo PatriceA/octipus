@@ -7,7 +7,8 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type { InboxItem } from './types';
 
 let decision: unknown = null;
-vi.mock('@/models/decision', () => ({ decide: vi.fn(async () => decision) }));
+let hang = false;
+vi.mock('@/models/decision', () => ({ decide: vi.fn(() => (hang ? new Promise(() => {}) : Promise.resolve(decision))) }));
 vi.mock('@/models/model-registry', async () => ({
   ...(await vi.importActual<typeof import('@/models/model-registry')>('@/models/model-registry')),
   getModelRegistry: () => ({ getModelForTopic: async () => ({ modelId: 'chat-model' }) }),
@@ -21,7 +22,12 @@ const { triageInbox } = await import('./service');
 const item: InboxItem = { id: 'm1', provider: 'google', from: { email: 'a@b.c' }, subject: 's', snippet: 'x', receivedAt: '', unread: true };
 
 describe('triageInbox with a decision model (shadow)', () => {
-  beforeEach(() => { decision = null; });
+  beforeEach(() => { decision = null; hang = false; });
+
+  test('a hung decision model does not delay the triage result (shadow)', async () => {
+    hang = true;
+    expect((await triageInbox('u', [item])).m1.priority).toBe('high');
+  });
 
   test('no decision model → LLM triage unchanged', async () => {
     expect(await triageInbox('u', [item])).toEqual({ m1: { priority: 'high', category: 'work', reason: 'r' } });

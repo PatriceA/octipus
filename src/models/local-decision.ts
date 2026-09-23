@@ -84,3 +84,27 @@ export async function ollamaDecide(endpoint: string, keepAlive: string | number,
   }
   return out;
 }
+
+/**
+ * Does Ollama run this model on its own hardware? Cloud models (`*-cloud`
+ * tags) are proxied to ollama.com even through localhost; /api/show marks them
+ * with `remote_host`/`remote_model`. Fails CLOSED: unknown → not local.
+ * Not cached: `ollama cp` can put a cloud model under any name, and /api/show
+ * is a local millisecond call.
+ */
+export async function ollamaRunsLocally(endpoint: string, model: string): Promise<boolean> {
+  if (/(^|[:-])cloud\b/i.test(model)) return false;
+  try {
+    const res = await fetch(`${endpoint}/api/show`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+      signal: withTimeoutSignal(5_000),
+    });
+    if (!res.ok) return false;
+    const show = await res.json() as { remote_host?: string; remote_model?: string };
+    return !show.remote_host && !show.remote_model;
+  } catch {
+    return false;
+  }
+}

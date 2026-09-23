@@ -805,10 +805,10 @@ export class DocumentProcessor {
    * Categorize document content using LLM.
    */
   private async categorize(text: string, filename: string, userId: string): Promise<string> {
-    const answer = await decide(DOC_CATEGORY_SITE, { filename, content: text.slice(0, 20_000) }, {
+    const decision = () => decide(DOC_CATEGORY_SITE, { filename, content: text.slice(0, 20_000) }, {
       category: { type: 'choice', instructions: 'Which kind of document is this?', criteria: CATEGORY_CRITERIA },
-    });
-    return preferDecision(DOC_CATEGORY_SITE, DOC_CATEGORY_LIVE, choiceOf(answer, 'category'), () => this.llmCategorize(text, filename, userId));
+    }).then((a) => choiceOf(a, 'category'));
+    return preferDecision(DOC_CATEGORY_SITE, DOC_CATEGORY_LIVE, decision, () => this.llmCategorize(text, filename, userId));
   }
 
   private async llmCategorize(text: string, filename: string, userId: string): Promise<string> {

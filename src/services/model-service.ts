@@ -396,13 +396,6 @@ export async function getInstallJobScoped(jobId: string, userId: string, isAdmin
 
 /** Known model ids for a provider (shortlist string[] from discovery cache). */
 export async function getKnownProviderModels(provider: string, userId: string) {
-  if (provider === 'typesafe') {
-    const { isTypeSafeConfigured, TYPESAFE_MODELS } = await import('@/models/providers/typesafe-provider');
-    return (await isTypeSafeConfigured())
-      ? { configured: true, models: TYPESAFE_MODELS, source: 'static' }
-      : { configured: false, error: 'Add typesafe_api_key (direct) or ai_gateway_api_key (Vercel AI Gateway) on the Secrets page.', models: [] };
-  }
-
   const { discover, getDiscoverableProviders } = await import('@/models/providers/discovery');
   if (!getDiscoverableProviders().includes(provider)) {
     return { models: [] };
@@ -432,6 +425,14 @@ export async function getAvailableProviderModels(
     return (await isVertexConfigured())
       ? { configured: true, models: [], source: 'manual' }
       : { configured: false, error: 'Vertex service account not configured. Add it on the Secrets page.', models: [] };
+  }
+
+  // TypeSafe Jev: static list, no discovery endpoint worth calling.
+  if (provider === 'typesafe') {
+    const { isTypeSafeConfigured, TYPESAFE_MODELS } = await import('@/models/providers/typesafe-provider');
+    return (await isTypeSafeConfigured())
+      ? { configured: true, models: TYPESAFE_MODELS, source: 'static' }
+      : { configured: false, error: 'Add typesafe_api_key (direct) or ai_gateway_api_key (Vercel AI Gateway) on the Secrets page.', models: [] };
   }
 
   // Voyage is embeddings-only with a static, published model set and no

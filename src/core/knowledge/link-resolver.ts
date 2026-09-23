@@ -232,10 +232,10 @@ export class LinkResolverService {
     // Pair resolution. Labels are 1-based candidate numbers or 'none'.
     const criteria: Record<string, string> = Object.fromEntries(candidates.map((c, i) => [String(i + 1), c.title]));
     criteria.none = 'none of these notes is the same thing as the link text (merely related or the broader parent subject does not count)';
-    const answer = await decide(RESOLVER_SITE, { linkText: target }, {
+    const decision = () => decide(RESOLVER_SITE, { linkText: target }, {
       match: { type: 'choice', instructions: 'Which existing note title names THE SAME THING as the wiki link text — a different wording, spelling or pluralisation of the same subject?', criteria },
-    });
-    const label = await preferDecision(RESOLVER_SITE, RESOLVER_LIVE, choiceOf(answer, 'match'), () => this.llmResolve(target, candidates, modelId, userId));
+    }).then((a) => choiceOf(a, 'match'));
+    const label = await preferDecision(RESOLVER_SITE, RESOLVER_LIVE, decision, () => this.llmResolve(target, candidates, modelId, userId));
     const match = label === 'none' ? null : Number(label);
     if (match === null) return null;
 

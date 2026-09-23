@@ -195,14 +195,26 @@ async function decideUnguarded(site: DecisionSite, state: unknown, questions: Re
   }
 
   const { getConfig } = await import('@/config');
-  const verdict = gateDecision(site.sensitivity, resolveDataPolicy(model, getConfig().ollama.url), model.metadata?.allowRetainedPersonalData);
+  const ollamaUrl = getConfig().ollama.url;
+  let policy = resolveDataPolicy(model, ollamaUrl);
+  // A private endpoint is not proof of local inference: Ollama forwards cloud
+  // models (`gpt-oss:120b-cloud`) through localhost. Ask it where the model runs.
+  if (model.provider === 'ollama' && policy.hosting === 'local') {
+    const { ollamaRunsLocally } = await import('./local-decision');
+    if (!(await ollamaRunsLocally(model.endpoint || ollamaUrl || '', model.modelId))) policy = { ...WORST_CASE, zdrRoute: false };
+  }
+  const verdict = gateDecision(site.sensitivity, policy, model.metadata?.allowRetainedPersonalData);
   if (!verdict.allowed) {
     modelLogger.info({ site: site.id, model: model.name, reason: verdict.reason }, 'Decision blocked by privacy gate; falling back');
     return null;
   }
   if (verdict.redactPII) {
+    // Questions carry user content too (link-resolver criteria are note titles).
+    // Only string VALUES are filtered: question ids and option keys stay intact.
     const { filterPII } = await import('@/core/agent/pii-filter');
-    state = mapStrings(state, (s) => filterPII(s).filtered);
+    const redact = (s: string) => filterPII(s).filtered;
+    state = mapStrings(state, redact);
+    questions = mapStrings(questions, redact) as Record<string, DecisionQuestion>;
   }
 
   const start = Date.now();
@@ -229,14 +241,19 @@ async function decideUnguarded(site: DecisionSite, state: unknown, questions: Re
 }
 
 /**
- * Shadow/live switch for a site whose answer is one label. Live: a decision
- * wins, the LLM only runs without one. Shadow: the LLM result is returned and
- * agreement is logged. Labels only — never pass content as T, it gets logged.
+ * Shadow/live switch for a site whose answer is one label. Live: the decision
+ * is awaited and wins; the LLM only runs without one. Shadow: the LLM result
+ * is returned WITHOUT waiting for the decision (a slow or hung decision
+ * endpoint must not delay anything), and agreement is logged when both are in.
+ * Labels only — never pass content as T, it gets logged.
  */
-export async function preferDecision<T extends string>(site: DecisionSite, live: boolean, decided: T | null, llm: () => Promise<T>): Promise<T> {
-  if (decided !== null && live) return decided;
+export async function preferDecision<T extends string>(site: DecisionSite, live: boolean, decision: () => Promise<T | null>, llm: () => Promise<T>): Promise<T> {
+  if (live) return (await decision()) ?? llm();
+  const pending = decision();
   const fromLlm = await llm();
-  if (decided !== null) modelLogger.info({ site: site.id, agreed: decided === fromLlm, decision: decided, llm: fromLlm }, 'decision shadow');
+  void pending.then((decided) => {
+    if (decided !== null) modelLogger.info({ site: site.id, agreed: decided === fromLlm, decision: decided, llm: fromLlm }, 'decision shadow');
+  }, () => {});
   return fromLlm;
 }
 
