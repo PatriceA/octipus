@@ -1,4 +1,3 @@
-import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
 
@@ -176,76 +175,6 @@ export class Router {
       confidence,
       reason: `Best model for topic: ${topic}`,
     };
-  }
-
-  /**
-   * Use LLM to classify complex messages
-   */
-  async classifyWithLLM(message: string): Promise<RoutingDecision> {
-    const client = getLiteLLMClient();
-    const registry = getModelRegistry();
-
-    // Use default model for classification
-    const defaultModel = await registry.getDefaultModel();
-    if (!defaultModel) {
-      return this.route(message);
-    }
-
-    try {
-      const result = await client.complete({
-        model: defaultModel.modelId,
-        messages: [
-          {
-            role: 'system',
-            content: `You are a message classifier. Classify the user's message into one of these topics:
-- coding: Programming, debugging, implementation
-- research: Code review, comparisons, analysis
-- architecture: System design, technical specs, architecture decisions
-- chat: General conversation, simple questions
-- embedding: Vector/semantic search
-- design: UI/UX, layout, styling
-- devops: Docker, CI/CD, infrastructure, deployment
-- security: Security analysis, vulnerabilities
-- data: Databases, SQL, data pipelines
-- ai: Machine learning, LLMs, RAG
-- qa: Testing, QA, bug reports
-- finance: Financial analysis, markets
-- automation: Workflows, scheduling
-- pm: Project management, planning
-- writing: Documentation, technical writing
-
-Respond with ONLY the topic name, nothing else.`,
-            timestamp: new Date(),
-          },
-          {
-            role: 'user',
-            content: message,
-            timestamp: new Date(),
-          },
-        ],
-        maxTokens: 10,
-        temperature: 0,
-      });
-
-      const topic = result.content.trim().toLowerCase();
-      const validTopics = ['coding', 'research', 'architecture', 'chat', 'embedding', 'design', 'devops', 'security', 'data', 'ai', 'qa', 'finance', 'automation', 'pm', 'writing'];
-
-      if (validTopics.includes(topic)) {
-        const model = await registry.getModelForTopic(topic);
-
-        return {
-          model: model?.modelId || defaultModel.modelId,
-          topic,
-          confidence: 0.9,
-          reason: 'LLM-classified topic',
-        };
-      }
-    } catch (error) {
-      coreLogger.warn({ error }, 'LLM classification failed, falling back to keyword matching');
-    }
-
-    // Fall back to keyword-based classification
-    return this.route(message);
   }
 
   /**
