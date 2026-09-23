@@ -96,6 +96,14 @@ export interface ModelMetadata {
    * rows are identifiable as stale and can be re-indexed.
    */
   embedPrefixes?: { document?: string; query?: string };
+  /**
+   * Where input goes and what the provider does with it. Consulted by the
+   * decision-model privacy gate (models/decision.ts); unset = derived from the
+   * provider, unknown remote = worst case.
+   */
+  dataPolicy?: { hosting: 'local' | 'remote'; retention: 'none' | 'provider'; trainsOnInput: boolean };
+  /** Owner opt-in: personal data may go to this model even though the provider retains input. */
+  allowRetainedPersonalData?: boolean;
   /** CLI sub-agent configuration (only for provider='cli') */
   cliAgent?: CLIAgentConfig;
   /** Custom provider configuration (only for provider='custom-openai', 'custom-anthropic', or 'custom-gemini') */

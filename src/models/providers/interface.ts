@@ -1,4 +1,5 @@
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
+import type { DecisionAnswers, DecisionRequest } from '../decision';
 
 /**
  * Unified model provider interface.
@@ -25,6 +26,12 @@ export interface ModelProvider {
    * endpoint). Providers without this are OCR'd page-by-page via a vision model.
    */
   ocr?(document: OcrDocument, model: string): Promise<OcrResult>;
+
+  /**
+   * Decision ("System One") models only: typed questions → calibrated answers.
+   * Called through `decide()` in models/decision.ts, never directly.
+   */
+  decide?(request: DecisionRequest): Promise<DecisionAnswers>;
 
   /** Check provider health */
   checkHealth(): Promise<ProviderHealthStatus>;

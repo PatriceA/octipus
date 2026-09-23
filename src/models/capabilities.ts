@@ -123,6 +123,16 @@ export const PROVIDER_CAPABILITY_DEFAULTS: Record<string, ModelCapabilities> = {
     embeddings: true,
     structuredOutput: false,
   },
+  typesafe: {
+    // Decision model (Jev): typed answers only — no chat, tools or embeddings.
+    multiturn: false,
+    media: false,
+    tools: false,
+    streaming: false,
+    systemRole: false,
+    embeddings: false,
+    structuredOutput: false,
+  },
   cli: {
     // CLI-delegated models (Claude Code, Gemini CLI, Codex CLI).
     // They support multi-turn and tools via the CLI protocol, but do not

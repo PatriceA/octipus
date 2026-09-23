@@ -14,7 +14,7 @@ interface TopicRow {
   value: string;
   label: string;
   description: string;
-  kind: 'text' | 'background' | 'vision' | 'ocr' | 'embedding';
+  kind: 'text' | 'background' | 'vision' | 'ocr' | 'embedding' | 'decision';
   primaryModel: string | null;
   backupModel: string | null;
   executorModel: string | null;
@@ -33,6 +33,7 @@ const KIND_LABELS: Record<TopicRow['kind'], string> = {
   vision: 'vision',
   ocr: 'ocr',
   embedding: 'embedding',
+  decision: 'decision',
 };
 
 function numOrNull(v: string): number | null {

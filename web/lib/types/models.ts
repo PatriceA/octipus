@@ -172,6 +172,7 @@ export const PROVIDER_LABELS: Record<string, string> = {
   moonshot: 'Moonshot (Kimi)',
   openrouter: 'OpenRouter',
   voyage: 'Voyage AI (Embeddings)',
+  typesafe: 'TypeSafe Jev (Decisions)',
   cli: 'CLI (Subscription)',
   litellm: 'LiteLLM Proxy',
   'custom-openai': 'Custom (OpenAI-compatible)',

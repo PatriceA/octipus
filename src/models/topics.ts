@@ -20,8 +20,10 @@
  *   - `vision` / `ocr` / `embedding` — different model classes; a chat model
  *                 bound to them produces garbage, so they're excluded from the
  *                 single-model chat set.
+ *   - `decision` — System One models (typed questions → probabilities, no text);
+ *                 optional, see docs/plans/decision-models.md.
  */
-export type TopicKind = 'text' | 'background' | 'vision' | 'ocr' | 'embedding';
+export type TopicKind = 'text' | 'background' | 'vision' | 'ocr' | 'embedding' | 'decision';
 
 export interface TopicDef {
   value: string;
@@ -65,6 +67,7 @@ export const TOPICS: readonly TopicDef[] = [
   { value: 'ocr', label: 'OCR', description: 'Text extraction from images and scanned documents', kind: 'ocr' },
   { value: 'vision', label: 'Vision', description: 'Image understanding, description, and analysis', kind: 'vision' },
   { value: 'embedding', label: 'Embedding', description: 'Vector embeddings', kind: 'embedding' },
+  { value: 'decision', label: 'Decision', description: 'Optional System One model (e.g. TypeSafe Jev): fixed call sites ask typed questions and get calibrated probabilities instead of an LLM call. Unbound = those sites keep using their LLM path. Personal data only reaches a remote model with zero data retention or your explicit opt-in.', kind: 'decision' },
 ] as const;
 
 /**
