@@ -110,3 +110,19 @@ describe('decide() never throws and caches "unbound"', () => {
     spy.mockRestore();
   });
 });
+
+describe('preferDecision', () => {
+  const site = { id: 't', sensitivity: 'public' as const, minConfidence: 0 };
+  it('live: decision wins and the LLM is not called; no decision → LLM', async () => {
+    const { preferDecision } = await import('./decision');
+    let calls = 0;
+    const llm = async () => { calls++; return 'b'; };
+    expect(await preferDecision(site, true, 'a', llm)).toBe('a');
+    expect(calls).toBe(0);
+    expect(await preferDecision(site, true, null, llm)).toBe('b');
+  });
+  it('shadow: the LLM result is returned even when a decision exists', async () => {
+    const { preferDecision } = await import('./decision');
+    expect(await preferDecision(site, false, 'a', async () => 'b')).toBe('b');
+  });
+});

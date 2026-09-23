@@ -8,7 +8,7 @@ import { getEmbeddingService } from '@/core/rag/embeddings';
 import { type PdfTextItem, reconstructPageText } from './pdf-layout';
 import type { AgentMessage } from '@/core/types';
 import { documentRepository } from '@/db/repositories/document-repository';
-import { decide, type DecisionSite } from '@/models/decision';
+import { choiceOf, decide, preferDecision, type DecisionSite } from '@/models/decision';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
@@ -808,11 +808,7 @@ export class DocumentProcessor {
     const answer = await decide(DOC_CATEGORY_SITE, { filename, content: text.slice(0, 20_000) }, {
       category: { type: 'choice', instructions: 'Which kind of document is this?', criteria: CATEGORY_CRITERIA },
     });
-    const decided = answer?.category?.type === 'choice' ? answer.category.choice : null;
-    if (decided && DOC_CATEGORY_LIVE) return decided;
-    const llm = await this.llmCategorize(text, filename, userId);
-    if (decided) this.logger.info({ site: DOC_CATEGORY_SITE.id, agreed: decided === llm, decision: decided, llm }, 'decision shadow');
-    return llm;
+    return preferDecision(DOC_CATEGORY_SITE, DOC_CATEGORY_LIVE, choiceOf(answer, 'category'), () => this.llmCategorize(text, filename, userId));
   }
 
   private async llmCategorize(text: string, filename: string, userId: string): Promise<string> {

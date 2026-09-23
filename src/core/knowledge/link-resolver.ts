@@ -2,6 +2,7 @@ import { getKnowledgeLinkRepository, type KnowledgeLinkRepository } from '@/db/r
 import { getNoteRepository, type NoteRepository } from '@/db/repositories/note-repository';
 import { type EmbeddingService, getEmbeddingService } from '@/core/rag/embeddings';
 import { SECURITY_PREAMBLE } from '@/core/agent/roles';
+import { choiceOf, decide, preferDecision, type DecisionSite } from '@/models/decision';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
@@ -66,6 +67,10 @@ const MAX_CANDIDATES = 3;
  * scores lower than prose similarity would.
  */
 const MIN_CANDIDATE_SIMILARITY = 0.35;
+
+/** Decision-model pair resolver (docs/plans/decision-models.md, site 4); shadow until RESOLVER_LIVE. */
+const RESOLVER_SITE: DecisionSite = { id: 'knowledge.link-resolver', sensitivity: 'personal', minConfidence: 0.85 };
+const RESOLVER_LIVE = false;
 
 const RESOLVER_SYSTEM_PROMPT = `${SECURITY_PREAMBLE}
 
@@ -224,20 +229,14 @@ export class LinkResolverService {
     const candidates = blocked.filter((c) => inScope.has(c.noteId));
     if (candidates.length === 0) return null;
 
-    // Pair resolution.
-    const list = candidates.map((c, i) => `${i + 1}. ${c.title}`).join('\n');
-    const result = await getLiteLLMClient().complete({
-      model: modelId,
-      messages: [
-        { role: 'system', content: RESOLVER_SYSTEM_PROMPT, timestamp: new Date() },
-        { role: 'user', content: `LINK TEXT:\n${target}\n\nCANDIDATES:\n${list}`, timestamp: new Date() },
-      ],
-      temperature: 0,
-      maxTokens: 50,
-      responseFormat: { type: 'json_object' },
-      userId,
+    // Pair resolution. Labels are 1-based candidate numbers or 'none'.
+    const criteria: Record<string, string> = Object.fromEntries(candidates.map((c, i) => [String(i + 1), c.title]));
+    criteria.none = 'none of these notes is the same thing as the link text (merely related or the broader parent subject does not count)';
+    const answer = await decide(RESOLVER_SITE, { linkText: target }, {
+      match: { type: 'choice', instructions: 'Which existing note title names THE SAME THING as the wiki link text — a different wording, spelling or pluralisation of the same subject?', criteria },
     });
-    const match = parseResolverMatch(result.content ?? '', candidates.length);
+    const label = await preferDecision(RESOLVER_SITE, RESOLVER_LIVE, choiceOf(answer, 'match'), () => this.llmResolve(target, candidates, modelId, userId));
+    const match = label === 'none' ? null : Number(label);
     if (match === null) return null;
 
     const chosen = candidates[match - 1];
@@ -257,6 +256,23 @@ export class LinkResolverService {
       'Bound ghost wikilink to an existing note by similarity',
     );
     return { ref, noteId: chosen.noteId, title: chosen.title, similarity: chosen.similarity, edges };
+  }
+
+  /** LLM pair resolver: a 1-based candidate number as a label, or 'none'. */
+  private async llmResolve(target: string, candidates: ResolverCandidate[], modelId: string, userId: string): Promise<string> {
+    const list = candidates.map((c, i) => `${i + 1}. ${c.title}`).join('\n');
+    const result = await getLiteLLMClient().complete({
+      model: modelId,
+      messages: [
+        { role: 'system', content: RESOLVER_SYSTEM_PROMPT, timestamp: new Date() },
+        { role: 'user', content: `LINK TEXT:\n${target}\n\nCANDIDATES:\n${list}`, timestamp: new Date() },
+      ],
+      temperature: 0,
+      maxTokens: 50,
+      responseFormat: { type: 'json_object' },
+      userId,
+    });
+    return String(parseResolverMatch(result.content ?? '', candidates.length) ?? 'none');
   }
 }
 

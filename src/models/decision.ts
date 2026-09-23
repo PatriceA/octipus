@@ -194,3 +194,21 @@ async function decideUnguarded(site: DecisionSite, state: unknown, questions: Re
   modelLogger.info({ site: site.id, model: model.name, latencyMs: Date.now() - start, minConfidence, confident, zdr: verdict.zeroDataRetention }, 'Decision');
   return confident ? answers : null;
 }
+
+/**
+ * Shadow/live switch for a site whose answer is one label. Live: a decision
+ * wins, the LLM only runs without one. Shadow: the LLM result is returned and
+ * agreement is logged. Labels only — never pass content as T, it gets logged.
+ */
+export async function preferDecision<T extends string>(site: DecisionSite, live: boolean, decided: T | null, llm: () => Promise<T>): Promise<T> {
+  if (decided !== null && live) return decided;
+  const fromLlm = await llm();
+  if (decided !== null) modelLogger.info({ site: site.id, agreed: decided === fromLlm, decision: decided, llm: fromLlm }, 'decision shadow');
+  return fromLlm;
+}
+
+/** The chosen label of a choice answer, or null. */
+export function choiceOf(answers: DecisionAnswers | null, key: string): string | null {
+  const a = answers?.[key];
+  return a?.type === 'choice' ? a.choice : null;
+}

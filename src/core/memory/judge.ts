@@ -17,6 +17,7 @@
  */
 
 import { buildEmbeddingVersion, embedPrefixTag, EmbeddingService } from '@/core/rag/embeddings';
+import { choiceOf, decide as askDecisionModel, preferDecision, type DecisionSite } from '@/models/decision';
 import { getLiteLLMClient } from '@/models/litellm-client';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
@@ -99,9 +100,29 @@ export function relevantClosest<T extends { similarity: number }>(nearest: T | n
   return nearest.similarity >= JUDGE_RELEVANCE_FLOOR ? nearest : null;
 }
 
+/** Decision-model judge (docs/plans/decision-models.md, site 3); shadow until JUDGE_LIVE. */
+const JUDGE_SITE: DecisionSite = { id: 'memory.judge', sensitivity: 'personal', minConfidence: 0.85 };
+const JUDGE_LIVE = false;
+const JUDGE_ACTIONS: Record<JudgeAction, string> = {
+  ADD: 'the candidate is new information, not redundant with the existing fact, or the existing fact is unrelated',
+  UPDATE: 'the candidate refines, contradicts or replaces the existing fact (a changed preference, a corrected location, a revised relationship)',
+  DELETE: 'the candidate explicitly negates the existing fact with no replacement, and the user wants it forgotten',
+  NOOP: 'the candidate restates the existing fact with no new information',
+};
+
 async function decide(candidate: CandidateFact, closest: Memory | null, userId: string): Promise<JudgeAction> {
   // Empty list shortcut — no LLM call needed.
   if (!closest) return 'ADD';
+  const answer = await askDecisionModel(JUDGE_SITE, {
+    candidate: { factType: candidate.factType, content: candidate.content },
+    existing: { factType: closest.factType, content: closest.content },
+  }, {
+    action: { type: 'choice', instructions: 'A new candidate fact about the user arrived. What should happen to the stored existing fact?', criteria: JUDGE_ACTIONS },
+  });
+  return preferDecision(JUDGE_SITE, JUDGE_LIVE, choiceOf(answer, 'action') as JudgeAction | null, () => llmJudge(candidate, closest, userId));
+}
+
+async function llmJudge(candidate: CandidateFact, closest: Memory, userId: string): Promise<JudgeAction> {
 
   const model = await getModelRegistry().getModelForTopic('background');
   if (!model) {
