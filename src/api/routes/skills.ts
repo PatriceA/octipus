@@ -1,10 +1,12 @@
-import { eq, inArray, or } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getDb } from '@/db/postgres';
 import { skillRepository, type SkillUpdate } from '@/db/repositories/skill-repository';
 import { type Skill, skills } from '@/db/schema/skills';
-import { getUserOrgIds } from '@/services/org-membership';
+import { hiddenSkillRepository } from '@/db/repositories/hidden-skill-repository';
+import { skillSelections } from '@/db/schema/skill-selections';
+import { isExternalSkillId } from '@/skills/external-loader';
 import { getSkillRegistry } from '@/skills/registry';
 import { getSkillModes } from '@/skills/selection';
 import { skillSelectionRepository } from '@/db/repositories/skill-selection-repository';
@@ -32,7 +34,7 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
     }
     const [modes, available] = await Promise.all([
       getSkillModes(ownerId, query.sessionId),
-      getSkillRegistry().getAll(ownerId === 'system' ? undefined : ownerId),
+      getSkillRegistry().getAll(ownerId),
     ]);
     const skills = available.map(skill => ({ id: skill.id, name: skill.name, description: skill.description,
       mode: modes.get(skill.id) ?? 'automatic', available: true }));
@@ -56,11 +58,13 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
       if (session.userId !== ownerId) { set.status = 403; return { error: 'Only the chat owner can change its skills' }; }
     }
     if (body.mode === 'session' && !body.sessionId) { set.status = 400; return { error: 'A session is required' }; }
+    const registry = getSkillRegistry();
+    const skillId = registry.canonicalId(body.skillId);
     if (body.mode !== 'automatic') {
-      const available = await getSkillRegistry().getAll(ownerId === 'system' ? undefined : ownerId);
-      if (!available.some(skill => skill.id === body.skillId)) { set.status = 404; return { error: 'Skill not found' }; }
+      const available = await registry.getAll(ownerId);
+      if (!available.some(skill => skill.id === skillId)) { set.status = 404; return { error: 'Skill not found' }; }
     }
-    await skillSelectionRepository.set(ownerId, body.skillId, body.mode, body.sessionId);
+    await skillSelectionRepository.set(ownerId, skillId, body.mode, body.sessionId, registry.sourceIds(skillId));
     return { saved: true };
   }, {
     body: t.Object({ skillId: t.String({ minLength: 1, maxLength: 512 }),
@@ -72,39 +76,14 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
   .get(
     '/',
     async ({ user }) => {
-      const db = getDb();
-
-      // Skills MOUNTED from the filesystem — `~/.claude/skills`,
-      // `~/.codex/skills`, `~/.agents/skills`, `~/.pi/agent/skills` and any
-      // configured directory — live in memory with `external:` ids and never
-      // reach this table. Listing the table alone reported 22 skills on a
-      // machine where the agent could load 40: everything the operator had
-      // already written for another harness was invisible in their own UI,
-      // while the agent quietly used it. They are read-only here (the write
-      // routes below still address DB rows only), and flagged so the UI can
-      // say where each one came from.
-      const mounted = getSkillRegistry()
-        .getExternalSkills()
-        .map((s) => ({ ...s, mounted: true }));
-
-      if (user) {
-        if (user.id === 'system') {
-          return { skills: [...(await db.select().from(skills)), ...mounted] };
-        }
-        const orgIds = await getUserOrgIds(user.id);
-        const clauses = [eq(skills.isSystem, true), eq(skills.userId, user.id)];
-        if (orgIds.length > 0) clauses.push(inArray(skills.orgId, orgIds));
-        return {
-          skills: [...(await db.select().from(skills).where(or(...clauses))), ...mounted],
-        };
-      }
-
-      return {
-        skills: [
-          ...(await db.select().from(skills).where(eq(skills.isSystem, true))),
-          ...mounted,
-        ],
-      };
+      const ownerId = user ? await resolveUserId(user.id) : undefined;
+      const found = await getSkillRegistry().getAll(ownerId);
+      return { skills: found.filter(skill => user || skill.isSystem).map(skill => ({ ...skill,
+        mounted: isExternalSkillId(skill.id),
+        canEdit: !!user && !isExternalSkillId(skill.id) && (skill.isSystem || user.isAdmin || skill.userId === ownerId),
+        canDelete: !!user && (skill.isSystem || user.isAdmin || skill.userId === ownerId || !!skill.orgId),
+        removeOnly: skill.isSystem || isExternalSkillId(skill.id) || (!!skill.orgId && skill.userId !== ownerId),
+      })) };
     },
     { detail: { tags: ['skills'] } }
   )
@@ -297,16 +276,9 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
 
   .get(
     '/:id',
-    async ({ user, params }) => {
-      const db = getDb();
-      const [skill] = await db.select().from(skills).where(eq(skills.id, params.id)).limit(1);
-
-      if (!skill) return { error: 'Skill not found' };
-
-      if (!skill.isSystem && user && !user.isAdmin && skill.userId !== user.id) {
-        return { error: 'Not authorized' };
-      }
-
+    async ({ user, params, set }) => {
+      const skill = await getSkillRegistry().get(params.id, user ? await resolveUserId(user.id) : undefined);
+      if (!skill || (!user && !skill.isSystem)) { set.status = 404; return { error: 'Skill not found' }; }
       return skill;
     },
     {
@@ -400,18 +372,23 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
 
   .delete(
     '/:id',
-    async ({ user, params }) => {
-      if (!user) return { error: 'Not authenticated' };
-
+    async ({ user, params, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      const ownerId = await resolveUserId(user.id);
+      const registry = getSkillRegistry();
+      const existing = await registry.get(params.id, ownerId);
+      if (!existing) { set.status = 404; return { error: 'Skill not found' }; }
+      if (existing.isSystem || isExternalSkillId(existing.id) || (existing.orgId && existing.userId !== ownerId)) {
+        await hiddenSkillRepository.hide(ownerId, registry.sourceIds(existing.id));
+        return { deleted: true, removal: 'personal' };
+      }
+      if (!user.isAdmin && existing.userId !== ownerId) { set.status = 403; return { error: 'Not authorized' }; }
       const db = getDb();
-      const [existing] = await db.select().from(skills).where(eq(skills.id, params.id)).limit(1);
-
-      if (!existing) return { error: 'Skill not found' };
-      if (existing.isSystem) return { error: 'Cannot delete system skills' };
-      if (!user.isAdmin && existing.userId !== user.id) return { error: 'Not authorized' };
-
-      const result = await db.delete(skills).where(eq(skills.id, params.id)).returning();
-      return { deleted: result.length > 0 };
+      return db.transaction(async tx => {
+        await tx.delete(skillSelections).where(eq(skillSelections.skillId, existing.id));
+        const result = await tx.delete(skills).where(eq(skills.id, existing.id)).returning();
+        return { deleted: result.length > 0, removal: 'deleted' };
+      });
     },
     {
       params: t.Object({ id: t.String() }),

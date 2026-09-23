@@ -43,6 +43,7 @@ export * from './skill-proposals';
 export * from './skill-topic-assignments';
 export * from './skills';
 export * from './skill-selections';
+export * from './hidden-skills';
 export * from './run-events';
 export * from './swarm-nodes';
 export * from './task-state';

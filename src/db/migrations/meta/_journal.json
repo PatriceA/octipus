@@ -771,6 +771,13 @@
       "when": 1789601114556,
       "tag": "0108_skill_selections",
       "breakpoints": true
+    },
+    {
+      "idx": 110,
+      "version": "7",
+      "when": 1789601114557,
+      "tag": "0109_hidden_skills",
+      "breakpoints": true
     }
   ]
 }

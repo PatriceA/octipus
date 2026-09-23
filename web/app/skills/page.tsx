@@ -36,6 +36,11 @@ interface Skill {
   antiPatterns: string[];
   frameworks: string[];
   isSystem: boolean;
+  mounted?: boolean;
+  canEdit?: boolean;
+  canDelete?: boolean;
+  removeOnly?: boolean;
+  sources?: Array<{ id: string; location: string; path: string }>;
 }
 
 // Skill *category* options — a single grouping per skill (the colored chip).
@@ -740,6 +745,7 @@ function EditSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => void
 // --- Delete Confirm Dialog ---
 function DeleteSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => void }) {
   const queryClient = useQueryClient();
+  const removeOnly = skill.removeOnly ?? (skill.isSystem || skill.mounted);
   const [error, setError] = useState('');
   const [deleting, setDeleting] = useState(false);
 
@@ -747,8 +753,11 @@ function DeleteSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => vo
     setError('');
     setDeleting(true);
     try {
-      await api.delete(`/skills/${skill.id}`);
+      const result = await api.delete<{ deleted?: boolean; error?: string }>(`/skills/${encodeURIComponent(skill.id)}`);
+      if (!result.deleted) throw new Error(result.error || 'Skill was not removed');
       queryClient.invalidateQueries({ queryKey: ['skills'] });
+      queryClient.invalidateQueries({ queryKey: ['skill-usage'] });
+      queryClient.invalidateQueries({ queryKey: ['skill-topic-assignments-all'] });
       onClose();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to delete skill');
@@ -765,7 +774,7 @@ function DeleteSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => vo
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 border-b border-outline-variant/10">
-          <h2 className="text-lg font-semibold text-on-surface">Delete Skill</h2>
+          <h2 className="text-lg font-semibold text-on-surface">{removeOnly ? 'Remove from Octipus' : 'Delete Skill'}</h2>
           <button onClick={onClose} className="text-on-surface-variant hover:text-on-surface cursor-pointer">
             <X className="w-5 h-5" />
           </button>
@@ -779,7 +788,8 @@ function DeleteSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => vo
           )}
 
           <p className="text-sm text-on-surface/80">
-            Are you sure you want to delete <strong>{skill.name}</strong>? This action cannot be undone.
+            {removeOnly ? <>Remove <strong>{skill.name}</strong> from your Octipus skills? It will no longer be suggested or loaded in new agents, and its saved selections will be removed. Shared source files and other users are unaffected.</>
+              : <>Are you sure you want to delete <strong>{skill.name}</strong>? This action cannot be undone.</>}
           </p>
 
           <div className="flex justify-end gap-2">
@@ -794,7 +804,7 @@ function DeleteSkillDialog({ skill, onClose }: { skill: Skill; onClose: () => vo
               disabled={deleting}
               className="px-4 py-2 text-sm border border-error/50 bg-error-container/60 text-error rounded-xs hover:bg-error-container disabled:opacity-50 cursor-pointer"
             >
-              {deleting ? 'Deleting...' : 'Delete'}
+              {deleting ? 'Removing...' : removeOnly ? 'Remove' : 'Delete'}
             </button>
           </div>
         </div>
@@ -821,11 +831,9 @@ function SkillCard({
 
   return (
     <div className="bg-surface-container rounded-xs ring-1 ring-outline-variant/10">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full p-4 flex items-center justify-between text-left cursor-pointer"
-      >
-        <div className="flex items-center gap-3">
+      <div className="w-full p-4 flex items-center justify-between gap-3">
+        <button type="button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}
+          className="flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer">
           <div className="text-on-surface-variant">
             {expanded ? <ChevronDown className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
           </div>
@@ -847,7 +855,7 @@ function SkillCard({
               </div>
             )}
           </div>
-        </div>
+        </button>
 
         <div className="flex items-center gap-2">
           <span className={cn('px-2 py-0.5 text-xs rounded-full font-medium', getCategoryColor(skill.category))}>
@@ -858,12 +866,12 @@ function SkillCard({
               md
             </span>
           )}
-          {skill.isSystem && (
+          {(skill.isSystem || skill.mounted) && (
             <span className="px-2 py-0.5 text-xs rounded-full bg-surface-container-high text-on-surface-variant">
-              system
+              {skill.mounted ? 'mounted' : 'system'}
             </span>
           )}
-          <button
+          {(skill.canEdit ?? !skill.mounted) && <button
             onClick={(e) => {
               e.stopPropagation();
               onEdit(skill);
@@ -872,8 +880,8 @@ function SkillCard({
             title="Edit skill"
           >
             <Pencil className="w-4 h-4" />
-          </button>
-          {!skill.isSystem && (
+          </button>}
+          {(skill.canDelete ?? true) && (
             <>
               <button
                 onClick={(e) => {
@@ -881,17 +889,22 @@ function SkillCard({
                   onDelete(skill);
                 }}
                 className="p-1 text-on-surface-variant hover:text-error cursor-pointer"
-                title="Delete skill"
+                title={(skill.removeOnly ?? (skill.isSystem || skill.mounted)) ? 'Remove from Octipus' : 'Delete skill'}
               >
                 <Trash2 className="w-4 h-4" />
               </button>
             </>
           )}
         </div>
-      </button>
+      </div>
 
       {expanded && (
         <div className="border-t border-outline-variant/10 p-4 space-y-4">
+          {!!skill.sources?.length && <div className="text-xs text-on-surface-variant space-y-1">
+            <h4 className="section-label">{skill.sources.length > 1 ? 'Sources (duplicates combined)' : 'Source'}</h4>
+            {skill.sources.map(source => <p key={source.id} className="break-all">{source.location}: {source.path}</p>)}
+            <p>Edit mounted skills in their source files.</p>
+          </div>}
           {skill.content?.trim() ? (
             <div>
               <h4 className="section-label mb-2">Markdown Content</h4>

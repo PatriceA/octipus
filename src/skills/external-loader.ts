@@ -1,6 +1,7 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
-import { join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { getConfig } from '@/config';
 import type { Skill } from '@/db/schema/skills';
 import { logger } from '@/utils/logger';
@@ -51,6 +52,10 @@ interface ScanLocation {
   /** Whether root-level *.md files are treated as flat skills */
   flatRootMd: boolean;
 }
+
+export type ExternalSkill = Skill & {
+  sources: Array<{ id: string; location: string; path: string }>;
+};
 
 function expandHome(p: string): string {
   if (p.startsWith('~/') || p === '~') return join(homedir(), p.slice(1));
@@ -215,7 +220,7 @@ export interface LoadExternalSkillsOptions {
  * Scan all configured + default locations and return the parsed skills.
  * Pure (no caching) — caller is responsible for caching the result.
  */
-export function loadExternalSkills(opts: LoadExternalSkillsOptions = {}): Skill[] {
+export function loadExternalSkills(opts: LoadExternalSkillsOptions = {}): ExternalSkill[] {
   let cfgEnabled = true;
   let cfgDirs: string[] = [];
   try {
@@ -234,17 +239,36 @@ export function loadExternalSkills(opts: LoadExternalSkillsOptions = {}): Skill[
   const dirs = opts.configuredDirs ?? cfgDirs;
 
   const locations = [...defaultLocations(cwd, home), ...configuredLocations(dirs, home)];
-  const seen = new Set<string>();
-  const out: Skill[] = [];
+  const seen = new Map<string, ExternalSkill>();
+  const out: ExternalSkill[] = [];
 
   for (const loc of locations) {
     const files = walk(loc.path, loc.flatRootMd);
     for (const f of files) {
       const skill = toSkill(loc, f);
       if (!skill) continue;
-      if (seen.has(skill.id)) continue;
-      seen.add(skill.id);
-      out.push(skill);
+      let physical: string;
+      try { physical = realpathSync(f.filePath); } catch { continue; }
+      if (process.platform === 'win32') physical = physical.toLowerCase();
+      // Identical standalone copies may be combined too. Skills with supporting
+      // files stay separate unless they resolve to the very same physical file:
+      // equal SKILL.md text does not prove that scripts/assets are equivalent.
+      let standalone = false;
+      try { standalone = !f.flat && readdirSync(dirname(f.filePath)).length === 1; } catch { /* keep separate */ }
+      const contentKey = standalone
+        ? 'content:' + createHash('sha256').update(readFileSync(f.filePath, 'utf8').replace(/\r\n/g, '\n').trim()).digest('hex')
+        : undefined;
+      const source = { id: skill.id, location: loc.key, path: resolve(f.filePath) };
+      const existing = seen.get(physical) ?? (contentKey ? seen.get(contentKey) : undefined);
+      if (existing) {
+        if (!existing.sources.some(item => item.id === source.id)) existing.sources.push(source);
+        seen.set(physical, existing);
+      } else {
+        const entry = { ...skill, sources: [source] };
+        seen.set(physical, entry);
+        if (contentKey) seen.set(contentKey, entry);
+        out.push(entry);
+      }
     }
   }
 

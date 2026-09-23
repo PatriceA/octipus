@@ -560,6 +560,7 @@ export class SwarmSpawner {
         childTools.length > 0,
         !!brief.plan?.length,
         params.topic,
+        parentContext.userId,
       ));
 
     // Small-tier child: cap the tool surface, mirroring the worker path. Role
@@ -1850,6 +1851,7 @@ export class SwarmSpawner {
      * to nothing and fails the spawn.
      */
     requestedLane?: string,
+    userId?: string,
   ): Promise<{ model: string; lane: string; systemPrompt?: string; isSmall: boolean }> {
     const registry = getModelRegistry();
 
@@ -1870,7 +1872,7 @@ export class SwarmSpawner {
 
       // Expert-declared skills: the expert named N skill IDs — all must exist.
       if (expertSkillIds.length > 0) {
-        const found = await skillReg.getByIds(expertSkillIds);
+        const found = await skillReg.getByIds(expertSkillIds, userId);
         if (found.length < expertSkillIds.length) {
           const foundIds = new Set(found.map((s) => s.id));
           const missing = expertSkillIds.filter((id) => !foundIds.has(id));
@@ -1885,7 +1887,7 @@ export class SwarmSpawner {
         // can't use, and which actively skews small models (see the 743d4b66
         // post-mortem). The child loads full content on demand via the global
         // `get_skill` tool registered on every worker.
-        const fragment = await skillReg.buildPromptSummary(expertSkillIds);
+        const fragment = await skillReg.buildPromptSummary(expertSkillIds, userId);
         if (fragment) skillFragments.push(`# Domain Knowledge (expert index)\n${fragment}`);
       }
 
@@ -1905,7 +1907,7 @@ export class SwarmSpawner {
       const expertSkillSet = new Set(expertSkillIds);
       const discoveredIds = discoveredRaw.filter((id) => !expertSkillSet.has(id));
       const topicFragment = discoveredIds.length > 0
-        ? await skillReg.buildPromptSummary(discoveredIds)
+        ? await skillReg.buildPromptSummary(discoveredIds, userId)
         : '';
       if (topicFragment) skillFragments.push(`# Domain Knowledge (topic index)\n${topicFragment}`);
       coreLogger.debug(

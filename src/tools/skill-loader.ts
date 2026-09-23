@@ -51,12 +51,12 @@ export function buildSkillLoaderHandlers(): ToolHandler[] {
         },
         required: ['skill_id'],
       },
-      execute: async (args) => {
+      execute: async (args, context) => {
         const skillId = args.skill_id;
         if (typeof skillId !== 'string') {
           throw new Error("get_skill: 'skill_id' must be a string.");
         }
-        const rendered = await getSkillRegistry().renderSkill(skillId);
+        const rendered = await getSkillRegistry().renderSkill(skillId, context.userId);
         if (rendered === null) {
           throw new Error(`Unknown skill '${skillId}'. Call list_skills to see available ids.`);
         }

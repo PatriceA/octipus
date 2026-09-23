@@ -372,7 +372,7 @@ export async function spawnWorker(
     const expertSkillIds = new Set<string>(expertSkillIdsOuter);
     const noveltopicIds = discoveredIds.filter((id) => !expertSkillIds.has(id));
     if (noveltopicIds.length > 0) {
-      topicSkillFragment = await getSkillRegistry().buildPromptSummary(noveltopicIds);
+      topicSkillFragment = await getSkillRegistry().buildPromptSummary(noveltopicIds, context.userId);
     }
     coreLogger.debug(
       {
@@ -1378,4 +1378,3 @@ async function handleWorkerFailure(
 
   throw new Error(`Worker "${agentRole}" failed: ${error.message}`);
 }
-

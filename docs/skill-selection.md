@@ -20,6 +20,10 @@ The same commands work in all three chat clients:
 
 Use the id shown by `/skills`, or an unambiguous skill name. `auto --global` removes the Always default; `auto` in a chat changes only that session. TUI clients can select skills before their first message.
 
-Changes apply to newly started turns and agents. Existing running agents keep their current instructions. Mounted SKILL.md files are selectable too. If a selected skill is removed or becomes inaccessible, the next agent fails visibly; choose Automatic to remove the unavailable selection.
+Changes apply to newly started turns and agents. Existing running agents keep their current instructions. Mounted SKILL.md files are selectable too. If a selected skill disappears from its source or becomes inaccessible, the next agent fails visibly; choose Automatic to remove the unavailable selection.
+
+On the Skills page, **Remove from Octipus** removes a mounted or shared skill from your personal catalog and clears its saved selections. The exclusion survives rescans and restarts; source files and other users' catalogs are unaffected. **Delete** permanently deletes your own database skill. Removed skills are excluded from discovery prompts and skill-loading tools for new agents.
+
+Multiple paths to the same physical SKILL.md (including junctions/symlinks) are combined, with all sources shown on the expanded card. Identical standalone copies are combined too. Same-name variants and separate directories with supporting assets remain distinct. Old source IDs remain aliases, so existing selections continue to work.
 
 The complete skill content is retained in system context across compaction. This guarantees loading, not perfect model compliance, and adds the full skill's token cost. Skill selection does not grant tool permissions.

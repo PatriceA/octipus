@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isExternalSkillId, loadExternalSkills } from './external-loader';
@@ -24,6 +24,34 @@ describe('External Skill Loader (filesystem, agentskills.io spec)', () => {
   test('returns empty when no skill dirs exist', () => {
     const skills = loadExternalSkills({ home, cwd, configuredDirs: [], enabled: true });
     expect(skills).toEqual([]);
+  });
+
+  test('combines a Claude junction and overlapping configured roots, retaining every old id', () => {
+    const source = join(home, '.agents', 'skills', 'shared');
+    const claude = join(home, '.claude', 'skills');
+    mkdirSync(source, { recursive: true }); mkdirSync(claude, { recursive: true });
+    writeFileSync(join(source, 'SKILL.md'), '---\nname: Shared\ndescription: One physical skill\n---\nFull content');
+    symlinkSync(source, join(claude, 'shared'), process.platform === 'win32' ? 'junction' : 'dir');
+    const found = loadExternalSkills({ home, cwd, configuredDirs: [join(home, '.agents', 'skills')], enabled: true });
+    expect(found).toHaveLength(1);
+    expect(found[0].sources.map(source => source.id)).toEqual([
+      'external:agents-user:shared:SKILL', 'external:claude-user:shared:SKILL', 'external:cfg-0:shared:SKILL',
+    ]);
+  });
+
+  test('combines identical standalone copies but keeps same-name variants and supporting assets separate', () => {
+    const content = '---\nname: Shared\ndescription: Same name\n---\nFull content';
+    for (const vendor of ['.claude', '.codex']) {
+      const dir = join(home, vendor, 'skills', 'shared');
+      mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, 'SKILL.md'), content);
+    }
+    const opts = { home, cwd, configuredDirs: [], enabled: true };
+    expect(loadExternalSkills(opts)).toHaveLength(1);
+    writeFileSync(join(home, '.codex', 'skills', 'shared', 'SKILL.md'), content + '\nDifferent instruction');
+    expect(loadExternalSkills(opts)).toHaveLength(2);
+    writeFileSync(join(home, '.codex', 'skills', 'shared', 'SKILL.md'), content);
+    writeFileSync(join(home, '.codex', 'skills', 'shared', 'script.sh'), 'different supporting behavior');
+    expect(loadExternalSkills(opts)).toHaveLength(2);
   });
 
   test('discovers a flat root *.md skill in ~/.octipus/agent/skills', () => {

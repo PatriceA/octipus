@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Elysia } from '@/api/http';
@@ -8,6 +8,7 @@ import { getDb, initializeDb, closeDb } from '@/db/postgres';
 import { runMigrations } from '@/db/migrate';
 import { skills } from '@/db/schema/skills';
 import { skillSelections } from '@/db/schema/skill-selections';
+import { hiddenSkills } from '@/db/schema/hidden-skills';
 import { skillSelectionRepository } from '@/db/repositories/skill-selection-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { buildSelectedSkillPrompt } from '@/skills/selection';
@@ -34,6 +35,7 @@ let sessionA: string;
 let sessionB: string;
 let otherSession: string;
 let mountedId: string;
+let mountedDir: string;
 let app: { handle(req: Request): Promise<Response> };
 
 beforeAll(async () => {
@@ -48,23 +50,65 @@ beforeAll(async () => {
     { id: 'private', name: 'Private', description: 'secret', content: 'BOB ONLY', userId: bob },
   ]);
   const dir = mkdtempSync(join(tmpdir(), 'octipus-mounted-skill-'));
+  mountedDir = dir;
   mkdirSync(join(dir, 'sample'));
   writeFileSync(join(dir, 'sample', 'SKILL.md'), '---\nname: Mounted test\ndescription: Mounted skill\n---\nMOUNTED FULL INSTRUCTIONS');
-  getSkillRegistry().loadExternal({ configuredDirs: [dir], home: dir, cwd: dir, enabled: true });
+  getSkillRegistry().loadExternal({ configuredDirs: [dir, dir], home: dir, cwd: dir, enabled: true });
   mountedId = getSkillRegistry().getExternalSkills().find(skill => skill.name === 'Mounted test')!.id;
   const user = { id: alice, username: 'alice', isAdmin: false };
   app = new Elysia().derive(() => ({ user, principal: principalFromUser(user) })).use(skillRoutes);
 }, 60000);
 
-beforeEach(async () => { await getDb().delete(skillSelections); });
+beforeEach(async () => { await getDb().delete(skillSelections); await getDb().delete(hiddenSkills); });
 afterAll(async () => { await flushSkillUsage(); await closeDb(); });
 
-async function request(method: 'GET' | 'PATCH', path: string, body?: unknown) {
+async function request(method: 'GET' | 'PATCH' | 'DELETE', path: string, body?: unknown) {
   const response = await app.handle(new Request(`http://localhost/skills/${path}`, {
     method, ...(body ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}),
   }));
   return { status: response.status, body: await response.json() as any };
 }
+
+test('duplicate source ids retain pins, resolve to one full skill and can be turned off', async () => {
+  const registry = getSkillRegistry();
+  const alias = registry.sourceIds(mountedId).find(id => id !== mountedId)!;
+  expect(alias).toBeTruthy();
+  await skillSelectionRepository.set(alice, alias, 'always');
+  expect(await registry.get(alias, alice)).toMatchObject({ id: mountedId });
+  const prompt = await buildSelectedSkillPrompt(alice, sessionA);
+  expect(prompt.match(/MOUNTED FULL INSTRUCTIONS/g)).toHaveLength(1);
+  await request('PATCH', 'usage', { skillId: mountedId, mode: 'automatic' });
+  expect(await buildSelectedSkillPrompt(alice, sessionA)).toBe('');
+});
+
+test('removing mounted skills survives rescan, preserves source files and clears all personal pins', async () => {
+  const registry = getSkillRegistry();
+  const alias = registry.sourceIds(mountedId).find(id => id !== mountedId)!;
+  await skillSelectionRepository.set(alice, alias, 'always');
+  await skillSelectionRepository.set(alice, mountedId, 'session', sessionB);
+  expect((await request('DELETE', encodeURIComponent(alias))).body).toMatchObject({ deleted: true, removal: 'personal' });
+  registry.loadExternal({ configuredDirs: [mountedDir, mountedDir], home: mountedDir, cwd: mountedDir, enabled: true });
+  expect(existsSync(join(mountedDir, 'sample', 'SKILL.md'))).toBe(true);
+  expect((await request('GET', '')).body.skills.some((skill: any) => skill.id === mountedId)).toBe(false);
+  expect((await request('GET', 'usage')).body.skills.some((skill: any) => skill.id === mountedId)).toBe(false);
+  expect(await registry.renderSkill(alias, alice)).toBeNull();
+  expect(await registry.buildPromptSummary([mountedId, alias], alice)).toBe('');
+  expect(await buildSelectedSkillPrompt(alice, sessionB)).toBe('');
+  expect(await registry.renderSkill(alias, bob)).toContain('MOUNTED FULL INSTRUCTIONS');
+});
+
+test('system skills can be personally removed; private owned skills are actually deleted', async () => {
+  expect((await request('DELETE', 'selected')).body).toMatchObject({ deleted: true, removal: 'personal' });
+  expect(await getSkillRegistry().renderSkill('selected', alice)).toBeNull();
+  expect(await getSkillRegistry().renderSkill('selected', bob)).toContain('COMPLETE INSTRUCTIONS');
+  await getDb().insert(skills).values({ id: 'owned', name: 'Owned', description: 'Own skill', userId: alice });
+  await skillSelectionRepository.set(alice, 'owned', 'always');
+  expect((await request('DELETE', 'owned')).body).toMatchObject({ deleted: true, removal: 'deleted' });
+  expect(await getSkillRegistry().get('owned')).toBeUndefined();
+  expect(await buildSelectedSkillPrompt(alice, sessionA)).toBe('');
+  expect((await request('DELETE', 'private')).status).toBe(404);
+  expect((await request('DELETE', 'missing')).status).toBe(404);
+});
 
 test('Always loads full content for this user across sessions; Automatic is a session override', async () => {
   expect((await request('PATCH', 'usage', { skillId: 'selected', mode: 'always' })).status).toBe(200);

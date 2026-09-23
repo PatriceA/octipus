@@ -20,7 +20,7 @@ export async function handleSkillSelectionCommand(userId: string, sessionId: str
     const session = await sessionRepository.findById(sessionId);
     if (!session || session.userId !== userId) return 'Session not found. Start or select a chat first.';
   }
-  const available = await getSkillRegistry().getAll(userId === 'system' ? undefined : userId);
+  const available = await getSkillRegistry().getAll(userId);
   const modes = await getSkillModes(userId, global ? undefined : sessionId);
   if (!match) {
     const rows = available.map(skill => `${skill.id} — ${skill.name} [${modes.get(skill.id) ?? 'automatic'}]`);
@@ -31,11 +31,11 @@ export async function handleSkillSelectionCommand(userId: string, sessionId: str
   const name = match[1].replace(/^['"]|['"]$/g, '');
   const mode: SkillMode = match[2].toLowerCase() === 'auto' ? 'automatic' : match[2].toLowerCase() as SkillMode;
   if (mode === 'session' && (global || !sessionId)) return 'This session requires an active chat and cannot use --global.';
-  const found = available.filter(skill => skill.id === name);
+  const found = available.filter(skill => skill.id === getSkillRegistry().canonicalId(name));
   if (!found.length) found.push(...available.filter(skill => skill.name.toLowerCase() === name.toLowerCase()));
   if (found.length > 1) return 'More than one skill has that name. Use the id from /skills.';
   const skillId = found[0]?.id ?? (mode === 'automatic' && modes.has(name) ? name : undefined);
   if (!skillId) return `Skill not found: ${name}. Use /skills to list available ids.`;
-  await skillSelectionRepository.set(userId, skillId, mode, global ? undefined : sessionId);
+  await skillSelectionRepository.set(userId, skillId, mode, global ? undefined : sessionId, getSkillRegistry().sourceIds(skillId));
   return `${found[0]?.name ?? skillId}: ${mode === 'always' ? 'Always (all your chats)' : mode === 'session' ? 'This session' : global || !sessionId ? 'Automatic (default)' : 'Automatic (this session)'}. Applies to new turns and agents.`;
 }

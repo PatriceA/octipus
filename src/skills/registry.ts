@@ -1,7 +1,8 @@
 import { skillRepository } from '@/db/repositories/skill-repository';
+import { hiddenSkillRepository } from '@/db/repositories/hidden-skill-repository';
 import type { Skill } from '@/db/schema/skills';
 import { logger } from '@/utils/logger';
-import { isExternalSkillId, loadExternalSkills, type LoadExternalSkillsOptions } from './external-loader';
+import { isExternalSkillId, loadExternalSkills, type LoadExternalSkillsOptions, type ExternalSkill } from './external-loader';
 import { recordSkillUsage } from './usage-tracker';
 
 function buildPromptFragment(skill: Skill): string {
@@ -57,7 +58,8 @@ function buildPromptSummary(skill: Skill): string {
  * the API; they reload from disk via `loadExternal()`.
  */
 export class SkillRegistry {
-  private external: Map<string, Skill> = new Map();
+  private external: Map<string, ExternalSkill> = new Map();
+  private aliases = new Map<string, string>();
   private externalLoaded = false;
 
   /**
@@ -68,6 +70,7 @@ export class SkillRegistry {
     try {
       const skills = loadExternalSkills(opts);
       this.external = new Map(skills.map(s => [s.id, s]));
+      this.aliases = new Map(skills.flatMap(skill => skill.sources.map(source => [source.id, skill.id] as const)));
       this.externalLoaded = true;
       if (skills.length > 0) {
         logger.info(`[skills] loaded ${skills.length} external skills from filesystem`);
@@ -75,6 +78,7 @@ export class SkillRegistry {
     } catch (err) {
       logger.warn(`[skills] external skill discovery failed: ${(err as Error).message}`);
       this.external = new Map();
+      this.aliases.clear();
       this.externalLoaded = true;
     }
   }
@@ -84,25 +88,41 @@ export class SkillRegistry {
   }
 
   /** Read-only view of cached external skills (test / debug helper). */
-  getExternalSkills(): Skill[] {
+  getExternalSkills(): ExternalSkill[] {
     this.ensureLoaded();
     return [...this.external.values()];
   }
 
-  async getAll(userId?: string): Promise<Skill[]> {
+  canonicalId(id: string): string {
     this.ensureLoaded();
-    const dbSkills = await skillRepository.findAll(userId);
-    return [...dbSkills, ...this.external.values()];
+    return this.aliases.get(id) ?? id;
   }
 
-  async get(skillId: string): Promise<Skill | undefined> {
+  sourceIds(id: string): string[] {
+    const canonical = this.canonicalId(id);
+    const skill = this.external.get(canonical);
+    return skill ? skill.sources.map(source => source.id) : [id];
+  }
+
+  async getAll(userId?: string): Promise<Skill[]> {
     this.ensureLoaded();
+    const dbSkills = await skillRepository.findAll(userId === 'system' ? undefined : userId);
+    const excluded = userId ? await hiddenSkillRepository.ids(userId) : new Set<string>();
+    return [...dbSkills, ...this.external.values()].filter(skill => !this.sourceIds(skill.id).some(id => excluded.has(id)));
+  }
+
+  async get(skillId: string, userId?: string): Promise<Skill | undefined> {
+    this.ensureLoaded();
+    skillId = this.canonicalId(skillId);
+    if (userId) return (await this.getAll(userId)).find(skill => skill.id === skillId);
     if (isExternalSkillId(skillId)) return this.external.get(skillId);
     return skillRepository.findById(skillId);
   }
 
-  async getByIds(skillIds: string[]): Promise<Skill[]> {
+  async getByIds(skillIds: string[], userId?: string): Promise<Skill[]> {
     this.ensureLoaded();
+    skillIds = [...new Set(skillIds.map(id => this.canonicalId(id)))];
+    if (userId) return (await this.getAll(userId)).filter(skill => skillIds.includes(skill.id));
     const externalIds = skillIds.filter(isExternalSkillId);
     const dbIds = skillIds.filter(id => !isExternalSkillId(id));
 
@@ -111,15 +131,15 @@ export class SkillRegistry {
       Promise.resolve(
         externalIds
           .map(id => this.external.get(id))
-          .filter((s): s is Skill => s !== undefined),
+          .filter((s): s is ExternalSkill => s !== undefined),
       ),
     ]);
 
     return [...dbRows, ...externalRows];
   }
 
-  async buildPromptFragment(skillIds: string[]): Promise<string> {
-    const found = await this.getByIds(skillIds);
+  async buildPromptFragment(skillIds: string[], userId?: string): Promise<string> {
+    const found = await this.getByIds(skillIds, userId);
     if (found.length === 0) return '';
     recordSkillUsage(found.filter((s) => !isExternalSkillId(s.id)).map((s) => s.id));
     return found.map(buildPromptFragment).join('\n\n');
@@ -132,9 +152,9 @@ export class SkillRegistry {
    * agent loads full content for a specific skill via the built-in
    * `get_skill` tool when it actually needs it.
    */
-  async buildPromptSummary(skillIds: string[]): Promise<string> {
+  async buildPromptSummary(skillIds: string[], userId?: string): Promise<string> {
     if (skillIds.length === 0) return '';
-    const found = await this.getByIds(skillIds);
+    const found = await this.getByIds(skillIds, userId);
     if (found.length === 0) return '';
     // Summary-only injection still counts as usage — the LLM saw the skill
     // exists and may load its full content via the MCP tool.
@@ -151,8 +171,8 @@ export class SkillRegistry {
    * `get_skill` tool). Returns null if the id is unknown. Counts as usage —
    * the agent asked for the body, not just the index.
    */
-  async renderSkill(skillId: string): Promise<string | null> {
-    const skill = await this.get(skillId);
+  async renderSkill(skillId: string, userId?: string): Promise<string | null> {
+    const skill = await this.get(skillId, userId);
     if (!skill) return null;
     if (!isExternalSkillId(skill.id)) recordSkillUsage([skill.id]);
     return buildPromptFragment(skill);

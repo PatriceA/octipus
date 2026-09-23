@@ -38,7 +38,7 @@ describe('buildSkillLoaderHandlers', () => {
     const reg = getSkillRegistry();
     const spy = vi.spyOn(reg, 'renderSkill').mockResolvedValue('## Alpha\n\nFULL BODY');
     const out = await tool('get_skill').execute({ skill_id: 'a' }, ctx);
-    expect(spy).toHaveBeenCalledWith('a');
+    expect(spy).toHaveBeenCalledWith('a', 'u1');
     expect(out).toBe('## Alpha\n\nFULL BODY');
     spy.mockRestore();
   });

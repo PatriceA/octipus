@@ -12,10 +12,13 @@ export const skillSelectionRepository = {
     ));
   },
 
-  async set(userId: string, skillId: string, mode: SkillMode, sessionId?: string) {
+  async set(userId: string, skillId: string, mode: SkillMode, sessionId?: string, aliases: string[] = [skillId]) {
     if (mode === 'session' && !sessionId) throw new Error('A session is required');
     await getDb().transaction(async tx => {
       const scope = mode === 'always' ? '' : sessionId ?? '';
+      const oldAliases = aliases.filter(id => id !== skillId);
+      if (oldAliases.length) await tx.delete(skillSelections).where(and(eq(skillSelections.userId, userId),
+        inArray(skillSelections.skillId, oldAliases), eq(skillSelections.scope, scope)));
       const where = and(eq(skillSelections.userId, userId), eq(skillSelections.skillId, skillId), eq(skillSelections.scope, scope));
       if (mode === 'automatic' && !sessionId) {
         await tx.delete(skillSelections).where(where);
@@ -25,7 +28,7 @@ export const skillSelectionRepository = {
       }
       // Choosing Always also clears this session's override.
       if (mode === 'always' && sessionId) {
-        await tx.delete(skillSelections).where(and(eq(skillSelections.userId, userId), eq(skillSelections.skillId, skillId), eq(skillSelections.scope, sessionId)));
+        await tx.delete(skillSelections).where(and(eq(skillSelections.userId, userId), inArray(skillSelections.skillId, aliases), eq(skillSelections.scope, sessionId)));
       }
     });
   },
