@@ -13,6 +13,8 @@ import { parseToolCallArguments } from '@/models/tool-call-args';
 import { modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import { fetchWithRetryAfter, withTimeoutSignal } from './http-retry';
+import { ollamaDecide } from '../local-decision';
+import type { DecisionAnswers, DecisionRequest } from '../decision';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
 
 /**
@@ -509,6 +511,11 @@ export class OllamaProvider implements ModelProvider {
 
     await recordProviderUsage({ model, messages: [], requestType: 'embedding' }, this.name, { model, usage: normalizeUsage(response.usage) });
     return response.data.map((d) => d.embedding);
+  }
+
+  /** Local decision-model stand-in: letter options + first-token logprobs (see local-decision.ts). */
+  async decide(req: DecisionRequest): Promise<DecisionAnswers> {
+    return ollamaDecide(req.endpoint || this.endpoint, getConfig().ollama.keepAlive, req);
   }
 
   async checkHealth(): Promise<ProviderHealthStatus> {

@@ -30,6 +30,8 @@ export interface DecisionRequest {
   questions: Record<string, DecisionQuestion>;
   /** Ask the route for zero data retention (only meaningful on a gateway that supports it). */
   zeroDataRetention: boolean;
+  /** The model row's endpoint override, when set (e.g. a second Ollama host). */
+  endpoint?: string;
 }
 
 export type Sensitivity = 'public' | 'personal' | 'secret';
@@ -52,15 +54,36 @@ export interface DataPolicy {
 const WORST_CASE: DataPolicy = { hosting: 'remote', retention: 'provider', trainsOnInput: true };
 
 /**
- * Effective data policy of a model row. An explicit `metadata.dataPolicy`
- * wins; ollama is local; anything else is treated as the worst case.
- * `zdrRoute` = the route can enforce ZDR per request (Vercel AI Gateway).
+ * Does this URL stay on the owner's own machine or network? Loopback, RFC 1918
+ * and link-local IPv4, IPv6 loopback/ULA, `.local`/`.lan`/`.internal`/`.home`
+ * names and single-label hosts (a compose service like `ollama`) count;
+ * anything else — including Ollama's own cloud — does not.
  */
-export function resolveDataPolicy(model: Pick<ModelConfigEntry, 'provider' | 'modelId' | 'metadata'>): DataPolicy & { zdrRoute: boolean } {
+export function isPrivateEndpoint(url: string | null | undefined): boolean {
+  if (!url) return false;
+  let host: string;
+  try { host = new URL(url).hostname.toLowerCase().replace(/^\[|\]$/g, ''); } catch { return false; }
+  if (host === 'localhost' || host === '::1' || /^f[cd][0-9a-f]{2}:/.test(host)) return true;
+  const ip = host.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
+  if (ip) {
+    const [a, b] = [Number(ip[1]), Number(ip[2])];
+    return a === 127 || a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) || (a === 169 && b === 254);
+  }
+  if (host.includes(':')) return false; // any other IPv6 literal is public
+  return !host.includes('.') || /\.(local|lan|internal|home)$/.test(host);
+}
+
+/**
+ * Effective data policy of a model row. An explicit `metadata.dataPolicy`
+ * wins; ollama on a private endpoint is local; anything else is treated as the
+ * worst case. `zdrRoute` = the route can enforce ZDR per request (Vercel AI
+ * Gateway). `ollamaUrl` = the configured default when the row has no endpoint.
+ */
+export function resolveDataPolicy(model: Pick<ModelConfigEntry, 'provider' | 'modelId' | 'metadata' | 'endpoint'>, ollamaUrl?: string): DataPolicy & { zdrRoute: boolean } {
   const zdrRoute = model.provider === 'typesafe' && isGatewayModelId(model.modelId);
   const explicit = model.metadata?.dataPolicy;
   if (explicit) return { ...explicit, zdrRoute };
-  if (model.provider === 'ollama') return { hosting: 'local', retention: 'none', trainsOnInput: false, zdrRoute };
+  if (model.provider === 'ollama' && isPrivateEndpoint(model.endpoint || ollamaUrl)) return { hosting: 'local', retention: 'none', trainsOnInput: false, zdrRoute };
   // TypeSafe's privacy policy: no training on input, retention "as long as reasonably necessary".
   if (model.provider === 'typesafe') return { hosting: 'remote', retention: 'provider', trainsOnInput: false, zdrRoute };
   return { ...WORST_CASE, zdrRoute };
@@ -162,7 +185,8 @@ async function decideUnguarded(site: DecisionSite, state: unknown, questions: Re
     return null;
   }
 
-  const verdict = gateDecision(site.sensitivity, resolveDataPolicy(model), model.metadata?.allowRetainedPersonalData);
+  const { getConfig } = await import('@/config');
+  const verdict = gateDecision(site.sensitivity, resolveDataPolicy(model, getConfig().ollama.url), model.metadata?.allowRetainedPersonalData);
   if (!verdict.allowed) {
     modelLogger.info({ site: site.id, model: model.name, reason: verdict.reason }, 'Decision blocked by privacy gate; falling back');
     return null;
@@ -177,7 +201,7 @@ async function decideUnguarded(site: DecisionSite, state: unknown, questions: Re
   try {
     const { withProviderUsageContext } = await import('@/models/providers/instrumented');
     answers = await withProviderUsageContext({ modelConfigName: model.name, accountingMetadata: { decisionSite: site.id } }, () =>
-      provider.decide!({ model: model.modelId, state, questions, zeroDataRetention: verdict.zeroDataRetention }));
+      provider.decide!({ model: model.modelId, state, questions, zeroDataRetention: verdict.zeroDataRetention, endpoint: model.endpoint ?? undefined }));
   } catch (err) {
     modelLogger.warn({ err, site: site.id, model: model.name }, 'Decision call failed; falling back');
     return null;

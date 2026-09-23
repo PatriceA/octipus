@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { gateDecision, resolveDataPolicy, validateAnswers, type DecisionQuestion } from './decision';
 import { TypeSafeProvider, normalizeAnswer } from './providers/typesafe-provider';
 
-const row = (provider: string, modelId: string, metadata = {}) => ({ provider, modelId, metadata });
+const row = (provider: string, modelId: string, metadata = {}, endpoint: string | null = null) => ({ provider, modelId, metadata, endpoint });
 
 describe('privacy gate', () => {
-  const local = resolveDataPolicy(row('ollama', 'qwen3:8b'));
+  const local = resolveDataPolicy(row('ollama', 'qwen3:8b'), 'http://localhost:11434');
   const direct = resolveDataPolicy(row('typesafe', 'jev-1.13.0'));
   const gateway = resolveDataPolicy(row('typesafe', 'typesafe-ai/jev'));
   const unknown = resolveDataPolicy(row('openrouter', 'x/y'));
@@ -13,6 +13,14 @@ describe('privacy gate', () => {
 
   it('local runs everything, unredacted', () => {
     for (const s of ['public', 'personal', 'secret'] as const) expect(gateDecision(s, local)).toEqual({ allowed: true, zeroDataRetention: false, redactPII: false });
+  });
+
+  it('ollama is local only on a private endpoint', () => {
+    for (const url of ['http://127.0.0.1:11434', 'http://ollama:11434', 'http://192.168.1.5:11434', 'http://gpu.lan:11434', 'http://[::1]:11434'])
+      expect(resolveDataPolicy(row('ollama', 'm'), url).hosting).toBe('local');
+    for (const url of ['https://ollama.com', 'http://8.8.8.8:11434', 'https://my.ollama.example.com', 'http://[2001:db8::1]:11434', 'http://localhost.evil.com', undefined])
+      expect(resolveDataPolicy(row('ollama', 'm'), url).hosting).toBe('remote');
+    expect(resolveDataPolicy(row('ollama', 'm', {}, 'https://ollama.com'), 'http://localhost:11434').hosting).toBe('remote'); // row endpoint wins
   });
 
   it('secret never leaves the machine', () => {
