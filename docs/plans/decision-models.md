@@ -235,9 +235,12 @@ certain.
 - A site switches from shadow to live only if accuracy is at least that of
   the LLM path and calibration is stable across the confidence bands used by
   the threshold.
-- The shadow-mode log (site, model, agree/disagree, confidence) is a log line
-  and is aggregated with `scripts/run-health.ts`. No new table until a log
-  line is shown to be insufficient.
+- Every site logs a `decision shadow` line containing labels, counts or
+  probabilities only, never content. `scripts/decision-shadow.ts` reads the
+  backend's raw JSON logs on stdin and reports agreement per site, for
+  example `docker logs octipus 2>&1 | npx tsx scripts/decision-shadow.ts`.
+  Logs go to stdout only, so no table is needed until a log pipe proves
+  insufficient.
 
 ## Phases
 
@@ -246,8 +249,8 @@ certain.
 | P0 ✔ | `decision.ts` contract + validation + `decide()`, `TopicKind 'decision'`, TypeSafe provider (direct + gateway, keys in vault), `dataPolicy` + gate, UI registration (provider label, secrets, Topics kind), `decision.test.ts` | Unit tests green. **Still open:** a live smoke test against Jev (no key yet), and the LLM-backed `decide()` (deferred until a local site needs it) |
 | P1 ✔ (shadow) | Site 1 (`email/service.ts` `TRIAGE_SITE`, one `decide()` per message, score→priority + choice→category) and site 2 (`documents/processor.ts` `DOC_CATEGORY_SITE`). Both log `decision shadow` lines with labels only, never content. `decide()` never throws and caches "unbound" for 30 s | Shadow logs show agreement; then set `TRIAGE_LIVE` / `DOC_CATEGORY_LIVE`. Labelled eval suite still open (no decision-model eval harness yet) |
 | P2 ✔ (shadow) | Site 3 memory judge (`JUDGE_SITE`), site 4 link resolver (`RESOLVER_SITE`, labels `1..n`/`none`), site 5 lane routing (`shadowLaneDecision`, fire-and-forget, only below the classifier floor; going live needs async lane selection at both callers). Shared `preferDecision()` helper. Site 6 (`router.ts classifyWithLLM`) is **dead code** (no callers), so it is not wired and is a deletion candidate | Shadow agreement, then flip `JUDGE_LIVE` / `RESOLVER_LIVE`; lanes only after `npm run eval:routing` |
-| P3 | Sites 7 + 8 (KB relevance filter, grounding check) | Measurably better retrieval precision on the product-docs corpus |
-| P4 | Sites 9 + 10 (gates, browser micro-decisions); only once a local decision model exists or with the gate set to `secret` → local | Agent browser task bench: fewer LLM steps, same success rate |
+| P3 ✔ site 7 (shadow), site 8 deferred | Site 7: `search_knowledge` (`src/tools/knowledge/index.ts`, `RELEVANCE_SITE`) asks one `noul` per hit, fire-and-forget, and logs `wouldDrop` counts. Site 8 (grounding check) is **deferred**: agent answers combine many tools, so there is no single "answer from the KB" point to check. It needs its own design, for example a post-answer hook that is given the retrieved passages | Go live on site 7 (await and drop `p < 0.2`) only if the shadow counts show it removes noise, not answers |
+| P4 ✔ (shadow) | Site 9: `gateQaVerdict` (`pipeline-manager.ts`, `QA_SITE`, sensitivity **secret**, so it runs on a local model only). It logs agreement with the parsed verdict, plus what it would read when nothing parsed. It must never decide a gate on its own; at most it may recover `parsed === null`. Site 10: browser `open`/`navigate` page-state hints (cookie banner, login wall, captcha; `BROWSER_SITE`). The page is snapshotted synchronously, decided in the background, and the snapshot is skipped when no decision model is bound (`decisionModelBound()`) | Shadow numbers first; site 10 goes live by setting `BROWSER_HINTS_LIVE` (adds `pageState` to the tool result) |
 | P5 ✔ | No open-weight System One model exists yet, so any **Ollama chat model** can serve the `decision` topic through a stand-in (`src/models/local-decision.ts`). It makes one call per question, labels options A–Z, predicts one token (`think:false`, `num_predict:1`) and normalizes the option letters' first-token logprobs; it refuses when less than 0.5 of the probability mass lands on an option. Measured on ornith:35b (warm): 3 questions in 3.5 s, with plausible probabilities. It is **uncalibrated** compared with Jev. Ollama counts as local only on a private endpoint (`isPrivateEndpoint`: loopback, RFC 1918, ULA, single-label or `.lan`-style hosts), never on ollama.com or a public IP | When a real local System One model ships, it only needs a `decide()` implementation |
 
 ## Open decisions for the owner

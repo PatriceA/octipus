@@ -21,6 +21,7 @@ import type {
   PlanItemRow,
 } from '@/db/schema/pipelines';
 import { pipelineNodes, pipelines } from '@/db/schema/pipelines';
+import { decide, type DecisionSite } from '@/models/decision';
 import { getModelRegistry, type ModelRegistry } from '@/models/model-registry';
 import { getTopicConfig } from '@/models/topic-config';
 import { WorkspaceFS } from '@/security/workspace-fs';
@@ -1996,6 +1997,7 @@ export class PipelineManager {
     evidence: { sessionId: string; pipelineId: string; stageName: string },
   ): Promise<QAValidationResult | null> {
     const parsed = this.parseQAResult(output);
+    shadowQaVerdict(output, parsed?.passed ?? null);
     if (!parsed) {
       // A `qa_validation` stage that emits nothing parseable used to mean "no QA
       // signal — skip the retry loop", which let an auditor opt itself out of
@@ -2864,4 +2866,30 @@ export function getPipelineManager(): PipelineManager {
     instance = new PipelineManager();
   }
   return instance;
+}
+
+/**
+ * Decision-model QA verdict (docs/plans/decision-models.md, site 9) — SHADOW
+ * ONLY, fire-and-forget. Audit reports describe the owner's code and workspace,
+ * so the site is `secret`: the privacy gate lets it run on a local model only.
+ * Logs agreement with the parsed verdict, and — when nothing parsed — what the
+ * decision model would have read, which is the data needed to decide whether
+ * it may ever recover a verdict the contract parser missed.
+ * ponytail: never promote this to deciding a gate on its own; at most a
+ * recovery path for `parsed === null`, and only after the shadow numbers say so.
+ */
+const QA_SITE: DecisionSite = { id: 'pipeline.qa-verdict', sensitivity: 'secret', minConfidence: 0.8 };
+
+function shadowQaVerdict(output: string, parsedPassed: boolean | null): void {
+  void decide(QA_SITE, { report: output.slice(-12_000) }, {
+    passed: {
+      type: 'noul',
+      instructions: 'The audit report concludes that the audited work passes: no blocking issue remains.',
+      criteria: { true: 'the report approves the work, at most with minor notes', false: 'the report names blocking issues, fails the work, or asks for changes' },
+    },
+  }).then((answers) => {
+    const a = answers?.passed;
+    if (a?.type !== 'noul') return;
+    coreLogger.info({ site: QA_SITE.id, parsed: parsedPassed, decision: a.p >= 0.5, p: Number(a.p.toFixed(3)), agreed: parsedPassed === null ? null : parsedPassed === (a.p >= 0.5) }, 'decision shadow');
+  });
 }

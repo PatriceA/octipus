@@ -1,5 +1,6 @@
 import type { Browser, BrowserContext, Page } from 'playwright';
 import type { ToolManifest } from '@/core/types';
+import { decide, decisionModelBound, type DecisionSite } from '@/models/decision';
 import { coreLogger, toolLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema, type ToolAvailability } from '../base-tool';
 
@@ -81,6 +82,7 @@ export class BrowserTool extends BaseTool {
           pageId,
           url: page.url(),
           title: await page.title(),
+          ...(await pageStateHints(page)),
         };
       },
       { permissionAction: 'navigate' }
@@ -113,6 +115,7 @@ export class BrowserTool extends BaseTool {
         return {
           url: page.url(),
           title: await page.title(),
+          ...(await pageStateHints(page)),
         };
       },
       { permissionAction: 'navigate' }
@@ -452,3 +455,39 @@ export class BrowserTool extends BaseTool {
 }
 
 export const browserTool = new BrowserTool();
+
+/**
+ * Decision-model page-state hints (docs/plans/decision-models.md, site 10):
+ * after a navigation, ask whether the page is blocked by a cookie banner, a
+ * login wall or a captcha, so the agent can deal with it instead of reading
+ * a blocked page. Shadow until BROWSER_HINTS_LIVE: fire-and-forget, logs
+ * which hints it would add (labels only), and returns nothing.
+ * Agent-driven pages can carry the owner's logged-in content → `personal`.
+ */
+const BROWSER_SITE: DecisionSite = { id: 'browser.page-state', sensitivity: 'personal', minConfidence: 0 };
+const BROWSER_HINTS_LIVE = false;
+const HINT_P = 0.8;
+const SNAPSHOT_TIMEOUT_MS = 1000;
+const PAGE_QUESTIONS = {
+  cookieBanner: { type: 'noul' as const, instructions: 'A cookie or consent banner or dialog is shown that must be accepted or dismissed.' },
+  loginWall: { type: 'noul' as const, instructions: 'The content is hidden behind a sign-in or registration requirement.' },
+  captcha: { type: 'noul' as const, instructions: 'The page shows a captcha or bot check instead of its content.' },
+};
+
+async function pageStateHints(page: Page): Promise<{ pageState?: string[] }> {
+  if (!(await decisionModelBound())) return {};
+  // Snapshot now: in shadow mode the agent may navigate on before the decision
+  // returns. Capped at SNAPSHOT_TIMEOUT_MS — Playwright's default action timeout
+  // is 30s, and a body that is not ready yet must not stall the tool reply.
+  const state = { url: page.url(), title: await page.title().catch(() => ''), text: (await page.innerText('body', { timeout: SNAPSHOT_TIMEOUT_MS }).catch(() => '')).slice(0, 6000) };
+  const ask = async () => {
+    const answers = await decide(BROWSER_SITE, state, PAGE_QUESTIONS);
+    return answers ? Object.entries(answers).filter(([, a]) => a.type === 'noul' && a.p >= HINT_P).map(([k]) => k) : null;
+  };
+  if (!BROWSER_HINTS_LIVE) {
+    void ask().then((hints) => { if (hints) coreLogger.info({ site: BROWSER_SITE.id, wouldAdd: hints }, 'decision shadow'); });
+    return {};
+  }
+  const hints = await ask();
+  return hints?.length ? { pageState: hints } : {};
+}

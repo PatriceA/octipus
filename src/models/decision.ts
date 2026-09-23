@@ -170,13 +170,22 @@ export async function decide(site: DecisionSite, state: unknown, questions: Reco
   }
 }
 
-async function decideUnguarded(site: DecisionSite, state: unknown, questions: Record<string, DecisionQuestion>): Promise<DecisionAnswers | null> {
+async function boundModel(): Promise<ModelConfigEntry | null> {
+  if (Date.now() < unboundUntil) return null;
   const { getModelRegistry } = await import('@/models/model-registry');
   const model = await getModelRegistry().getModelForTopic('decision');
-  if (!model) {
-    unboundUntil = Date.now() + UNBOUND_TTL_MS;
-    return null; // optional feature: unbound is the normal case
-  }
+  if (!model) unboundUntil = Date.now() + UNBOUND_TTL_MS; // optional feature: unbound is the normal case
+  return model;
+}
+
+/** Cheap pre-check for sites whose STATE is costly to build. Never throws. */
+export async function decisionModelBound(): Promise<boolean> {
+  return !!(await boundModel().catch(() => null));
+}
+
+async function decideUnguarded(site: DecisionSite, state: unknown, questions: Record<string, DecisionQuestion>): Promise<DecisionAnswers | null> {
+  const model = await boundModel();
+  if (!model) return null;
 
   const { getProviderRouter } = await import('@/models/providers');
   const provider = getProviderRouter().getProviderByName(model.provider);
