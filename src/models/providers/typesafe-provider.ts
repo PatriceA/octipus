@@ -62,7 +62,9 @@ export class TypeSafeProvider implements ModelProvider {
       model: req.model,
       state: req.state,
       questions,
-      ...(gateway && req.zeroDataRetention ? { providerOptions: { gateway: { zeroDataRetention: true, only: ['typesafe-ai'] } } } : {}),
+      // Always forbid training (free on every Vercel plan); ZDR only when the
+      // gate asks for it (Pro/Enterprise plans only).
+      ...(gateway ? { providerOptions: { gateway: { disallowPromptTraining: true, only: ['typesafe-ai'], ...(req.zeroDataRetention ? { zeroDataRetention: true } : {}) } } } : {}),
     };
 
     const response = await fetchWithRetryAfter(gateway ? GATEWAY_URL : TYPESAFE_URL, {

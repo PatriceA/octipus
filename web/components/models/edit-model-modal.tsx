@@ -83,6 +83,7 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
     supportsTools: model.supportsTools,
     supportsStreaming: model.supportsStreaming,
     disableThinking: model.metadata?.extraBody?.think === false,
+    allowRetainedPersonalData: model.metadata?.allowRetainedPersonalData === true,
     // Stored as a raw count; the field edits in billions for readability.
     paramCountB: model.metadata?.paramCount ? String(model.metadata.paramCount / 1_000_000_000) : '',
     costPerInputToken: model.costPerInputToken,
@@ -255,6 +256,15 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
         }
       }
 
+      // Decision-model privacy opt-in. Explicit false (not delete): the merge
+      // below spreads the stored metadata back in, which would resurrect `true`.
+      if (model.provider === 'typesafe') {
+        payload.metadata = {
+          ...((payload.metadata as Record<string, unknown>) || model.metadata || {}),
+          allowRetainedPersonalData: formData.allowRetainedPersonalData,
+        };
+      }
+
       if (!isCli) {
         const supportedSettings = { ...providerSettings };
         const controls = model.providerControls;
@@ -410,6 +420,24 @@ export function EditModelModal({ model, onClose, onSave, loading }: EditModelMod
               <span className="text-sm text-on-surface-variant">Disable Thinking</span>
             </label>
           </div>
+
+          {model.provider === 'typesafe' && (
+            <label className="flex items-start gap-2 cursor-pointer border border-outline-variant/20 rounded-lg p-3 bg-surface-container">
+              <input
+                type="checkbox"
+                checked={formData.allowRetainedPersonalData}
+                onChange={(e) => setFormData({ ...formData, allowRetainedPersonalData: e.target.checked })}
+                className="mt-0.5 w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary"
+              />
+              <span className="text-sm text-on-surface-variant">
+                <span className="font-medium text-on-surface">Allow personal data without zero data retention</span>
+                <br />
+                Emails, documents, memories and notes may be sent to this decision model even when the provider keeps inputs
+                (TypeSafe direct, or the Vercel gateway on a plan without zero data retention). PII is filtered first and prompt
+                training is disallowed, but inputs may be stored. Secret data (code, audits) never leaves the machine either way.
+              </span>
+            </label>
+          )}
 
           {/* Custom Provider Settings */}
           {isCustomProvider && (

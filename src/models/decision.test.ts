@@ -87,6 +87,7 @@ describe('TypeSafeProvider.decide wire shapes', () => {
     expect(calls[0].url).toBe('https://ai-gateway.vercel.sh/v1/evaluate');
     expect(calls[0].body.questions.u.type).toBe('boolean');
     expect(calls[0].body.providerOptions.gateway.zeroDataRetention).toBe(true);
+    expect(calls[0].body.providerOptions.gateway.disallowPromptTraining).toBe(true);
     expect(out.u).toEqual({ type: 'noul', p: 0.2, confidence: 0.8 });
   });
 

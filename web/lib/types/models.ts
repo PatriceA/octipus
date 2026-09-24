@@ -29,6 +29,8 @@ export interface Model {
      * carry no size tag — set it here so they don't dead-end at lite.
      */
     paramCount?: number;
+    /** Decision-model privacy opt-in (see src/models/decision.ts gateDecision). */
+    allowRetainedPersonalData?: boolean;
     extraBody?: Record<string, unknown>;
     cliAgent?: {
       /** Allow server-side provider API keys into the CLI process. Defaults to false. */
