@@ -235,6 +235,7 @@ export class GitLabTool extends BaseTool {
 
       child.stdout.on('data', (data: Buffer) => { stdout += data; });
       child.stderr.on('data', (data: Buffer) => { stderr += data; });
+      child.on('error', reject);
 
       child.on('close', (code) => {
         if (code === 0) {

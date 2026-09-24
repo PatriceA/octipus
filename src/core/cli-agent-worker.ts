@@ -1,7 +1,7 @@
 import { VAULT_USAGE_GUIDANCE } from '@/core/agent/vault-guidance';
 import { recordProviderUsage } from '@/models/providers/instrumented';
 import { billableTokens } from '@/models/billable-tokens';
-import { windowsShellQuote } from '@/models/providers/cli-provider';
+import { assertWindowsCmdLineFits, windowsShellQuote } from '@/models/providers/cli-provider';
 import { randomUUID } from 'crypto';
 import { type ChildProcess, spawn } from 'child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
@@ -16,6 +16,7 @@ import { WorkspaceFS } from '@/security/workspace-fs';
 import type { CLIAgentConfig } from '@/db/schema/models';
 import { getQuotaTracker } from '@/models/quota-tracker';
 import { agentLogger } from '@/utils/logger';
+import { killProcessTree } from '@/utils/proc';
 import type { AgentWorkerConfig, ToolHandler } from './agent-base';
 import { BaseAgentWorker } from './agent-base';
 import { CLIArgumentBuilder, CLIOutputParser, discoverCodexMcpServers, resolveCliMcpEntry, sweepStaleFiles, type CliRunConnection } from './cli-adapters';
@@ -360,6 +361,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
       if (!session || session.userId !== this.context.userId) throw new Error('CLI session ownership mismatch');
       this.bridge = await startCliToolBridge({
         tools: () => this.toolExecutor.toolsDisabled ? [] : [...this.toolExecutor.getTools().values()],
+        blocked: name => this.toolExecutor.isToolBlocked(name),
         advertisedTools: () => {
           if (this.toolExecutor.toolsDisabled) return [];
           const tools = [...this.toolExecutor.getTools().values()];
@@ -528,12 +530,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
       if (process.platform === 'win32' && pid) {
         // On Windows, SIGTERM doesn't work for shell:true processes (cmd.exe wraps child).
         // taskkill /F /T kills the entire process tree.
-        try {
-          const { execSync } = require('child_process');
-          execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore', timeout: 5000 });
-        } catch {
-          try { proc.kill('SIGKILL'); } catch { /* already dead */ }
-        }
+        killProcessTree(pid, proc);
       } else {
         proc.kill('SIGTERM');
         setTimeout(() => {
@@ -944,6 +941,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
       }, settings.inheritApiKeys === true);
 
       if (this.aborted) { cleanupContextFiles(); reject(new Error('Agent was aborted before CLI spawn')); return; }
+      try { assertWindowsCmdLineFits(binary, args, process.platform, useShellForSpawn); } catch (err) { cleanupContextFiles(); reject(err); return; }
       this.processExited = false;
       // `shell: true` hands the command line to cmd.exe, and Node joins
       // `[command, ...args]` with plain spaces, quoting nothing. An unquoted
@@ -968,6 +966,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
         // hardTimeout below, which stamps abortReason='timeout' so a timeout
         // always surfaces as a timeout, not "exited with code null" (C8).
         shell: useShellForSpawn,
+        windowsHide: true,
       });
       // 'exit' fires when the process terminates (before streams flush).
       proc.once('exit', () => { this.processExited = true; });

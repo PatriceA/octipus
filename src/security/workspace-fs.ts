@@ -44,10 +44,23 @@
  */
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, resolve as pathResolve, sep } from 'node:path';
+import { tmpdir } from 'node:os';
+import path, { basename, dirname, isAbsolute, join, resolve as pathResolve } from 'node:path';
 import { getConfig } from '@/config';
 import type { Principal } from './principal';
 import { ANONYMOUS_PRINCIPAL, isAuthenticated, principalFromUser } from './principal';
+
+/**
+ * Whether `child` is `parent` or inside it, by path segments (`/a/foo` is not
+ * under `/a/foobar`). `relative` rather than `startsWith`: win32 `relative`
+ * is case-insensitive, so `c:\users\me` counts as inside `C:\Users\me`, and
+ * a different drive yields an absolute result instead of a false match.
+ * `pathApi` exists so tests can pin win32 semantics on a posix host.
+ */
+export function isInside(parent: string, child: string, pathApi: typeof path.posix = path): boolean {
+  const r = pathApi.relative(pathApi.resolve(parent), pathApi.resolve(child));
+  return r === '' || (r !== '..' && !r.startsWith(`..${pathApi.sep}`) && !pathApi.isAbsolute(r));
+}
 
 export class WorkspaceFsError extends Error {
   readonly code: 'TRAVERSAL' | 'OUTSIDE_ROOT' | 'UNAUTHENTICATED' | 'INVALID_INPUT';
@@ -94,6 +107,8 @@ export class WorkspaceFS {
   /** Configured workspace id (defaults to "default"). */
   readonly workspaceId: string;
   private readonly extraAllowedPrefixes: readonly string[];
+  /** `root` with junctions/symlinks resolved; cached once the root exists. */
+  private realRootCache: string | undefined;
 
   private constructor(principal: Principal, root: string, options: WorkspaceFsOptions) {
     this.principal = principal;
@@ -168,6 +183,8 @@ export class WorkspaceFS {
     const extra = [
       ...additional,
       '/tmp/assistant-',
+      // `/tmp` never matches on Windows (and `$TMPDIR` may differ on posix).
+      join(tmpdir(), 'assistant-'),
       ...(options.extraAllowedPrefixes ?? []),
     ];
 
@@ -274,8 +291,11 @@ export class WorkspaceFS {
     // Real-path check (catches symlink escapes). Tolerate the common
     // case where the file doesn't exist yet by climbing to the nearest
     // existing parent.
+    // Compare against the REAL root: a junction/subst/redirected workspace
+    // canonicalizes every candidate to its target, which never sits under
+    // the lexical root.
     const real = this.realPathBestEffort(lexical);
-    if (!this.isUnder(real, this.root) && !this.isInExtraAllowed(real)) {
+    if (!this.isUnder(real, this.realRoot()) && !this.isInExtraAllowed(real)) {
       throw new WorkspaceFsError('TRAVERSAL',
         `path resolves to a target outside workspace via symlink: ${real}`);
     }
@@ -298,10 +318,15 @@ export class WorkspaceFS {
    * mistaken for being under `/a/foobar`.
    */
   isUnder(child: string, parent: string): boolean {
-    const c = pathResolve(child);
-    const p = pathResolve(parent);
-    if (c === p) return true;
-    return c.startsWith(p + sep);
+    return isInside(parent, child);
+  }
+
+  private realRoot(): string {
+    if (this.realRootCache) return this.realRootCache;
+    const real = this.realPathBestEffort(this.root);
+    // Don't cache before the root exists — it may be created as a junction.
+    if (existsSync(this.root)) this.realRootCache = real;
+    return real;
   }
 
   /**

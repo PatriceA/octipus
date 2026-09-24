@@ -1047,6 +1047,10 @@ describe('command_exit_zero — a shell is not a verification command', () => {
     'xargs sh -c "id"',
     '/usr/bin/env bash -c "id"',
     '"sh" -c "id"',
+    // Windows paths and suffixes name the same shell.
+    '"C:\\Program Files\\Git\\bin\\bash.exe" -c "id"',
+    'BASH.EXE -c "id"',
+    'env "C:\\Git\\bin\\sh.exe" -c "id"',
     // A shell reading a file is still a shell reading something we cannot see.
     'sh script.sh',
   ])('refuses %s', async (command) => {

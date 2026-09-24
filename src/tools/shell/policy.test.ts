@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { commandPolicyViolation, matchElevatedCommand, tokenizeSafe } from './policy';
+import { commandPolicyViolation, matchDestructiveCommand, matchElevatedCommand, tokenizeSafe } from './policy';
 
 /**
  * The content policy has to be true of the command that gets SPAWNED, not of
@@ -786,5 +786,41 @@ describe('a flag whose VALUE is a command line', () => {
   it('and does not turn an ordinary joined flag into a command', () => {
     expect(matchElevatedCommand('env --chdir=/tmp npm test')).toBeNull();
     expect(matchElevatedCommand('env --split-string="npm run kill"')).toBeNull();
+  });
+});
+
+describe('Windows command names', () => {
+  it('a full path, .exe suffix or upper case does not dodge the denylist', () => {
+    for (const cmd of ['shutdown.exe /s', 'SHUTDOWN /s', 'C:/Windows/System32/shutdown.exe /s']) {
+      expect(commandPolicyViolation(cmd)).toMatch(/Blocked command detected/);
+    }
+  });
+
+  it('taskkill and wmic are elevated', () => {
+    expect(matchElevatedCommand('taskkill /im node.exe /f')).toBe('taskkill');
+    expect(matchElevatedCommand('wmic process where name="node.exe" delete')).toBe('wmic');
+  });
+
+  it.each([
+    ['powershell -Command "Remove-Item -Recurse -Force x"', 'powershell inline code'],
+    ['pwsh -c "rm -r x"', 'pwsh inline code'],
+    ['powershell -EncodedCommand ZQBjAGgAbwA=', 'powershell encoded command'],
+    ['powershell -enc ZQBjAGgAbwA=', 'powershell encoded command'],
+    ['cmd /c rd /s /q x', 'cmd inline code'],
+    ['CMD /C del /s x', 'cmd inline code'],
+    ['cmd /k format d:', 'cmd inline code'],
+    ['rd /s /q build', 'rmdir /s'],
+    ['del /s /q *.obj', 'del /s'],
+  ])('%s is destructive', (cmd, label) => {
+    expect(matchDestructiveCommand(cmd)).toBe(label);
+  });
+
+  it.each([
+    'powershell -Command "Get-ChildItem | Format-Table"',
+    'cmd /c dir /s',
+    'cmd /c del notes.txt',
+    'python -c "print(\'{}\'.format(1))"',
+  ])('%s is not', (cmd) => {
+    expect(matchDestructiveCommand(cmd)).toBeNull();
   });
 });

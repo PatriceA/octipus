@@ -128,4 +128,21 @@ describe('error replies never leak internals (CodeQL js/stack-trace-exposure)', 
       expect((await res.json() as { error: string }).error).toBe('Tool is not available to this agent');
     } finally { await bridge.close(); }
   });
+
+  it('a blocked tool says why, since CLI agents never see the executor message', async () => {
+    const bridge = await startCliToolBridge({
+      tools: () => [],
+      blocked: name => name === 'shell__run',
+      active: () => true,
+      execute: async () => ({ content: [] }),
+    });
+    try {
+      const res = await fetch(`${bridge.url}/call`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${bridge.key}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'shell__run', arguments: {} }),
+      });
+      expect((await res.json() as { error: string }).error).toMatch(/blocked for this run/);
+    } finally { await bridge.close(); }
+  });
 });

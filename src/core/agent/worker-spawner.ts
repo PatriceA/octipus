@@ -540,10 +540,12 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
   const GIT_AWARE_ROLES = new Set(['coding', 'review', 'devops', 'security', 'qa']);
   if (GIT_AWARE_ROLES.has(agentRole)) {
     try {
-      const { execSync } = await import('child_process');
+      const { execFileSync } = await import('child_process');
       const gitCwd = devProjectPath || getConfig().workspace?.rootPath || process.cwd();
-      const gitStatus = execSync('git status --short 2>/dev/null | head -20', { cwd: gitCwd, timeout: 5_000, encoding: 'utf-8' }).trim();
-      const gitDiff = execSync('git diff --stat 2>/dev/null | tail -5', { cwd: gitCwd, timeout: 5_000, encoding: 'utf-8' }).trim();
+      // No shell: `2>/dev/null | head` does not exist in cmd.exe, so on Windows these threw and agents got no git context.
+      const runGit = (args: string[]) => execFileSync('git', args, { cwd: gitCwd, timeout: 5_000, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).trim().split(/\r?\n/);
+      const gitStatus = runGit(['status', '--short']).slice(0, 20).join('\n').trim();
+      const gitDiff = runGit(['diff', '--stat']).slice(-5).join('\n').trim();
       if (gitStatus || gitDiff) {
         let git = '\n\n--- Git Status ---';
         if (gitStatus) git += `\n${gitStatus}`;

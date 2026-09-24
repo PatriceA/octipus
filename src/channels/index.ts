@@ -17,6 +17,20 @@ import { channelLogger } from '@/utils/logger';
 import { processChannelAttachments } from './attachment-handler';
 import { getUMI } from './interface';
 import { fileAt, writeFileAt } from '@/utils/fs-file';
+import { whichSync } from '@/utils/proc';
+import { execFileSync } from 'node:child_process';
+import { rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+/**
+ * ImageMagick binary for vision-input conversion, or null. IM7 ships `magick`;
+ * bare `convert` is only trusted off Windows, where `convert` on PATH is
+ * System32's FAT-to-NTFS disk converter.
+ */
+export function imageConverter(platform = process.platform, find: (bin: string) => string | null = whichSync): string | null {
+  return find('magick') ?? (platform === 'win32' ? null : 'convert');
+}
 
 /**
  * Summarize a response for external channels (Telegram, Slack, etc.).
@@ -123,18 +137,22 @@ async function analyzeImageAttachments(
         let finalBuffer = imageBuffer;
         let finalMime = img.mimeType;
         if (!NATIVE_VISION_MIMES.has(img.mimeType)) {
+          const converter = imageConverter();
+          const tmpIn = join(tmpdir(), `vision-input-${Date.now()}`);
+          const tmpOut = join(tmpdir(), `vision-output-${Date.now()}.png`);
           try {
-            const { execSync } = await import('child_process');
-            const tmpIn = `/tmp/vision-input-${Date.now()}`;
-            const tmpOut = `/tmp/vision-output-${Date.now()}.png`;
+            if (!converter) throw new Error('ImageMagick not found (install it so `magick` is on PATH)');
             await writeFileAt(tmpIn, imageBuffer);
-            execSync(`convert "${tmpIn}" "${tmpOut}"`, { timeout: 10000 });
+            // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form, no shell; converter is magick/convert, args are our own temp paths
+            execFileSync(converter, [tmpIn, tmpOut], { timeout: 10000, windowsHide: true });
             const converted = fileAt(tmpOut);
             finalBuffer = Buffer.from(await converted.arrayBuffer());
             finalMime = 'image/png';
-            execSync(`rm -f "${tmpIn}" "${tmpOut}"`, { timeout: 5000 });
           } catch (convErr) {
             channelLogger.warn({ err: convErr, mimeType: img.mimeType }, 'Image conversion failed, sending original format');
+          } finally {
+            rmSync(tmpIn, { force: true });
+            rmSync(tmpOut, { force: true });
           }
         }
 

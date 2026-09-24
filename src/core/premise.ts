@@ -18,7 +18,8 @@
  * information in a prompt.
  */
 import { existsSync } from 'node:fs';
-import { isAbsolute, resolve, sep } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
+import { isInside } from '@/security/workspace-fs';
 
 /**
  * Extensions worth checking. An allowlist rather than "anything with a dot",
@@ -111,15 +112,6 @@ const MAX_TOKENS = 24;
  * root in turn — a hit under any root counts as present, because a worker may
  * legitimately be pointed at more than one directory.
  */
-/**
- * Does `candidate` sit inside `root`? Compared after resolution, so
- * `a/../../../etc/passwd` is rejected however it was spelled.
- */
-function isInside(root: string, candidate: string): boolean {
-  const base = resolve(root);
-  return candidate === base || candidate.startsWith(base + sep);
-}
-
 export function checkNamedPaths(text: string, roots: string[]): PremiseCheck {
   const present: string[] = [];
   const missing: string[] = [];

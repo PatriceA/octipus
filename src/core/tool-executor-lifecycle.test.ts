@@ -102,3 +102,33 @@ test('a failed shell command is shown as failed and keeps its diagnostic output'
   expect(result[0].content).toContain('build failed');
   expect(exec.getSideEffectCounters().toolErrors).toBe(1);
 });
+
+describe('consecutive failures block only the failing tool', () => {
+  test('three failed calls block that tool; others stay available', async () => {
+    const exec = new ToolExecutor(context(), () => {});
+    exec.registerTools([tool('shell__run', async () => { throw new Error('spawn npx ENOENT'); }), tool('git__diff', async () => 'diff')]);
+    for (const id of ['1', '2', '3']) await exec.handleToolCalls([call(id, 'shell__run')]);
+    expect(exec.toolsDisabled).toBe(false);
+    expect([...exec.getTools().keys()]).toEqual(['git__diff']);
+    const [blocked] = await exec.handleToolCalls([call('4', 'shell__run')]);
+    expect(String(blocked.content)).toMatch(/blocked for this run/);
+  });
+
+  test('a success resets the streak', async () => {
+    let fail = true;
+    const exec = new ToolExecutor(context(), () => {});
+    exec.registerTools([tool('flaky', async () => { if (fail) throw new Error('boom'); return 'ok'; })]);
+    await exec.handleToolCalls([call('1', 'flaky')]); await exec.handleToolCalls([call('2', 'flaky')]);
+    fail = false; await exec.handleToolCalls([call('3', 'flaky')]);
+    fail = true; await exec.handleToolCalls([call('4', 'flaky')]); await exec.handleToolCalls([call('5', 'flaky')]);
+    expect(exec.getTools().has('flaky')).toBe(true);
+  });
+
+  test('different refusals in a row are a model adapting, not a loop', async () => {
+    let n = 0;
+    const exec = new ToolExecutor(context(), () => {});
+    exec.registerTools([tool('shell__run', async () => { throw new Error(`rejected command ${++n}`); })]);
+    for (const id of ['1', '2', '3', '4']) await exec.handleToolCalls([call(id, 'shell__run')]);
+    expect(exec.isToolBlocked('shell__run')).toBe(false);
+  });
+});

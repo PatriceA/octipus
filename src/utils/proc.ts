@@ -11,7 +11,7 @@
  */
 import { spawn as nodeSpawn, spawnSync, type SpawnOptions } from 'node:child_process';
 import { accessSync, constants, existsSync } from 'node:fs';
-import { delimiter, isAbsolute, join } from 'node:path';
+import { delimiter, dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 
 export type StdioMode = 'pipe' | 'ignore' | 'inherit';
@@ -107,8 +107,10 @@ function safeExecutable(command: string): string {
 export function killProcessTree(pid: number | undefined, child?: { kill: (signal?: NodeJS.Signals) => boolean }): void {
   try {
     if (process.platform === 'win32') {
-      if (pid !== undefined) spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-      else child?.kill();
+      // Bounded: this is synchronous and runs on the event loop. A taskkill that
+      // fails (missing from the service PATH, access denied) still kills the child.
+      const r = pid !== undefined ? spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 5000 }) : null;
+      if (!r || r.error || r.status !== 0) child?.kill();
       return;
     }
     if (pid !== undefined) process.kill(-pid, 'SIGKILL');
@@ -130,23 +132,16 @@ export function spawnProcess(config: SpawnConfig): ChildProcessHandle {
     config.stdout ?? 'pipe',
     config.stderr ?? 'pipe',
   ];
-  // Windows: `npm`/`npx` resolve to `.cmd` shims, and Node refuses to spawn a
-  // batch file without a shell (EINVAL, the BatBadBut fix). Every capability
-  // installer hit this and setup reported "install failed" on Windows.
-  // Shell only for .cmd/.bat. Args then go through cmd.exe, so on that path
-  // every argument must be plain (no metacharacters, no spaces) — enforced
-  // here rather than trusted per caller.
-  const resolved = process.platform === 'win32' ? whichSync(command) : null;
-  const shell = !!resolved && /\.(cmd|bat)$/i.test(resolved);
-  if (shell) {
-    const bad = args.find((a) => !/^[A-Za-z0-9][A-Za-z0-9._:\\/@=+-]*$/.test(a));
-    if (bad !== undefined) throw new Error(`spawnProcess: refusing argument with shell-significant characters for ${command}: ${bad}`);
-  }
-  const child = nodeSpawn(command, args, {
+  // Every capability installer hit the .cmd problem (see windowsCmdShim) and
+  // setup reported "install failed" on Windows.
+  const run = windowsCmdShim([command, ...args], config.env ?? process.env, process.platform, config.cwd);
+  // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn; shell only for a Windows .cmd with every arg quoted and cmd-expanding chars refused (windowsCmdShim)
+  const child = nodeSpawn(run.argv[0], run.argv.slice(1), {
     cwd: config.cwd,
     env: config.env as NodeJS.ProcessEnv | undefined,
     stdio,
-    shell,
+    shell: run.shell,
+    windowsHide: true,
   });
 
   let settled: number | null = null;
@@ -197,12 +192,16 @@ export async function runCommand(config: SpawnConfig): Promise<CommandResult> {
  * A PATH walk is what `which` does, and doing it in-process keeps the
  * synchronous callers synchronous.
  */
-export function whichSync(bin: string): string | null {
-  const exts = process.platform === 'win32' ? (process.env.PATHEXT ?? '.EXE;.CMD;.BAT').split(';') : [''];
-  for (const dir of (process.env.PATH ?? '').split(delimiter)) {
-    if (!dir) continue;
+export function whichSync(bin: string, env: Record<string, string | undefined> = process.env, platform = process.platform, cwd?: string): string | null {
+  const win = platform === 'win32';
+  // A name that already has an extension (`npm.cmd`) is checked as given; one
+  // with a path is resolved against the CHILD's cwd, not this process's.
+  const exts = win && !extname(bin) ? (env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean) : [''];
+  const hasPath = /[\\/]/.test(bin);
+  const dirs = hasPath ? [resolve(cwd ?? '.')] : (env.PATH ?? env.Path ?? '').split(win ? ';' : delimiter).filter(Boolean);
+  for (const dir of dirs) {
     for (const ext of exts) {
-      const candidate = join(dir, bin + ext);
+      const candidate = hasPath ? resolve(dir, bin + ext) : join(dir, bin + ext);
       try {
         accessSync(candidate, constants.X_OK);
         return candidate;
@@ -217,7 +216,62 @@ export async function which(bin: string): Promise<string | null> {
   const finder = process.platform === 'win32' ? 'where' : 'which';
   const { exitCode, stdout } = await runCommand({ command: finder, args: [bin] });
   if (exitCode !== 0) return null;
-  return stdout.trim().split('\n')[0] || null;
+  return stdout.split(/\r?\n/).map((s) => s.trim()).find(Boolean) ?? null;
+}
+
+/**
+ * Windows: route a `.cmd`/`.bat` target (npm, npx, pnpm, yarn…) through cmd.exe.
+ *
+ * Node's shell-free spawn applies no PATHEXT, so `npx` is `spawn npx ENOENT`,
+ * and it refuses to launch a .cmd directly (EINVAL, CVE-2024-27980). Coder
+ * agents could not run tests. cmd.exe re-parses the line, so every argument is
+ * quoted (`&|<>^` inert) and `"`/`%`/`!` — which escape or expand inside
+ * quotes — are refused outright.
+ */
+export function windowsCmdShim(argv: string[], env: Record<string, string | undefined> = process.env, platform = process.platform, cwd?: string): { argv: string[]; shell: boolean } {
+  if (platform !== 'win32' || !argv.length) return { argv, shell: false };
+  const [cmd] = argv;
+  const target = /\.(cmd|bat)$/i.test(cmd) ? cmd : whichSync(cmd, env, platform, cwd);
+  if (!target || !/\.(cmd|bat)$/i.test(target)) return { argv, shell: false };
+  const bad = argv.find((a) => /["%!\r\n]/.test(a));
+  if (bad !== undefined) {
+    throw new Error(`Argument ${JSON.stringify(bad.slice(0, 80))} contains a character cmd.exe expands (" % !); ${cmd} is a .cmd script and runs through cmd.exe.`);
+  }
+  return { argv: argv.map((a) => `"${a.replace(/(\\+)$/, '$1$1')}"`), shell: true };
+}
+
+/**
+ * argv that runs `command` through a POSIX shell: `sh -c` everywhere but Windows.
+ *
+ * Windows has no `sh` on PATH, so every `useShell: true` command and every wake
+ * gate was `spawn sh ENOENT`. Git for Windows ships bash, found from git.exe
+ * (`<root>\cmd`, `<root>\bin` or `<root>\mingw64\bin`) because its bin dir is
+ * rarely on PATH itself. A `bash` on PATH is taken only outside System32 and
+ * WindowsApps: those are the WSL launcher, which fails with 0x80070569 when no
+ * distro is set up and otherwise runs the command in a different filesystem.
+ * cmd.exe is the last resort — not POSIX, but `a && b` and `x > f` still work.
+ */
+const shellCache = new Map<string, string[]>();
+
+export function posixShellArgv(command: string, env: Record<string, string | undefined> = process.env, platform = process.platform): string[] {
+  if (platform !== 'win32') return ['sh', '-c', command];
+  // Two PATH walks per call otherwise, on every useShell command and wake gate.
+  const key = `${env.PATH ?? env.Path}|${env.PATHEXT}|${env.SystemRoot}|${env.ComSpec}`;
+  let shell = shellCache.get(key);
+  if (!shell) shellCache.set(key, shell = resolvePosixShell(env, platform));
+  return [...shell, command];
+}
+
+function resolvePosixShell(env: Record<string, string | undefined>, platform: NodeJS.Platform): string[] {
+  const git = whichSync('git', env, platform);
+  const root = git && dirname(git).replace(/[\\/](mingw64[\\/]bin|cmd|bin)$/i, '');
+  const sys = join(env.SystemRoot ?? env.SYSTEMROOT ?? 'C:\\Windows', 'System32').toLowerCase();
+  const pathBash = whichSync('bash', env, platform);
+  const wslBash = pathBash && (pathBash.toLowerCase().startsWith(sys) || /[\\/]WindowsApps[\\/]/i.test(pathBash));
+  const bash = [root && join(root, 'bin', 'bash.exe'), wslBash ? null : pathBash].find((p) => p && existsSync(p));
+  // ponytail: Node quotes the cmd.exe arg with \" escapes cmd doesn't read, so a
+  // command with inner quotes breaks there; install Git for Windows if it matters.
+  return bash ? [bash, '-c'] : [env.ComSpec ?? env.COMSPEC ?? 'cmd.exe', '/d', '/s', '/c'];
 }
 
 export async function readAll(stream: ReadableStream<Uint8Array> | null): Promise<string> {

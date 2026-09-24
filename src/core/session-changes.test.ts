@@ -20,6 +20,9 @@ function initRepo(root: string): void {
   git(root, 'config', 'user.email', 'test@octipus.dev');
   git(root, 'config', 'user.name', 'Octipus Test');
   git(root, 'config', 'commit.gpgsign', 'false');
+  // Hermetic eol: a global autocrlf=true (Git for Windows default) would CRLF
+  // the HEAD side and break the LF literals below.
+  git(root, 'config', 'core.autocrlf', 'false');
 }
 
 describe('session-changes', () => {
@@ -182,5 +185,16 @@ describe('session-changes', () => {
     expect(diff.status).toBe('deleted');
     expect(diff.original).toBe('content\n');
     expect(diff.modified).toBe('');
+  });
+
+  test('autocrlf=true: CRLF working copy of an LF blob is not a whole-file diff', async () => {
+    initRepo(dir);
+    git(dir, 'config', 'core.autocrlf', 'true');
+    writeFileSync(join(dir, 'crlf.txt'), 'a\r\nb\r\n');
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-qm', 'init'); // blob stored as LF
+
+    const diff = await getWorkspaceChangeDiff(dir, join(dir, 'crlf.txt'));
+    expect(diff.original).toBe(diff.modified);
   });
 });

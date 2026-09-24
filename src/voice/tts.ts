@@ -1,6 +1,6 @@
 import { spawnProcess as spawn } from '@/utils/proc';
 import { EventEmitter } from 'events';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { logger } from '../utils/logger';
@@ -44,7 +44,7 @@ export class PiperEngine extends EventEmitter implements TTSEngine {
   }
 
   async synthesize(text: string): Promise<Buffer> {
-    const outputPath = `/tmp/piper-${crypto.randomUUID()}.wav`;
+    const outputPath = join(tmpdir(), `piper-${crypto.randomUUID()}.wav`);
 
     try {
       const args = [
@@ -147,8 +147,8 @@ export class KokoroEngine extends EventEmitter implements TTSEngine {
 
   async synthesize(text: string): Promise<Buffer> {
     const stamp = crypto.randomUUID();
-    const inputPath = `/tmp/kokoro-${stamp}.txt`;
-    const outputPath = `/tmp/kokoro-${stamp}.wav`;
+    const inputPath = join(tmpdir(), `kokoro-${stamp}.txt`);
+    const outputPath = join(tmpdir(), `kokoro-${stamp}.wav`);
 
     try {
       await writeFileAt(inputPath, text);

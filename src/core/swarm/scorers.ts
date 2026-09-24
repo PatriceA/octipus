@@ -21,7 +21,7 @@
 import { existsSync } from 'node:fs';
 import { isAbsolute, join, sep } from 'node:path';
 import { WorkspaceFS } from '@/security/workspace-fs';
-import { commandPolicyViolation, matchElevatedCommand, tokenizeSafe } from '@/tools/shell/policy';
+import { basename as programName, commandPolicyViolation, matchElevatedCommand, tokenizeSafe } from '@/tools/shell/policy';
 import { coreLogger } from '@/utils/logger';
 import type { SwarmReceipt } from './receipt';
 
@@ -273,7 +273,7 @@ export function commandScorerShapeError(command: string): string | null {
       'instead of prefixing a `cd`.'
     );
   }
-  const head = (argv[0] ?? '').split('/').pop() ?? '';
+  const head = programName(argv[0] ?? '');
   if (SHELL_BUILTINS.has(head)) {
     return (
       `starts with the shell builtin "${head}", which is not an executable and cannot be spawned. ` +
@@ -285,7 +285,7 @@ export function commandScorerShapeError(command: string): string | null {
 
 function namesShellWithCommandString(command: string): string | null {
   const argv = tokenizeSafe(command) ?? command.trim().split(/\s+/);
-  const nameOf = (t: string): string => t.slice(t.lastIndexOf('/') + 1);
+  const nameOf = programName;
 
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
@@ -322,7 +322,7 @@ function namesShellWithCommandString(command: string): string | null {
     // `pytest -k sh` / `pytest -k fish` pass one as a flag's value.
     const prev = argv[i - 1];
     const isFlagValue = !!prev && /^-{1,2}[a-z][a-z0-9-]*$/i.test(prev);
-    if (!token.includes('/') && !isFlagValue) return name;
+    if (!/[\\/]/.test(token) && !isFlagValue) return name;
   }
   return null;
 }

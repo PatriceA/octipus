@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { windowsShellQuote } from './cli-provider';
+import { assertWindowsCmdLineFits, windowsShellQuote } from './cli-provider';
 
 /**
  * `windowsShellQuote` is the single shared Windows `shell:true` quoting
@@ -34,5 +34,16 @@ describe('windowsShellQuote', () => {
 
   it('doubles two trailing backslashes (to four) before the closing quote', () => {
     expect(windowsShellQuote('C:\\Program Files\\\\')).toBe('"C:\\Program Files\\\\\\\\"');
+  });
+});
+
+describe('assertWindowsCmdLineFits', () => {
+  const huge = 'x'.repeat(33_000);
+  it('fails with an actionable error instead of ENAMETOOLONG on Windows', () => {
+    expect(() => assertWindowsCmdLineFits('agy', ['--print', huge], 'win32')).toThrow(/Windows limit of 32767/);
+  });
+  it('passes a normal command line, and anything off Windows', () => {
+    expect(() => assertWindowsCmdLineFits('agy', ['--print', 'hi'], 'win32')).not.toThrow();
+    expect(() => assertWindowsCmdLineFits('agy', ['--print', huge], 'linux')).not.toThrow();
   });
 });

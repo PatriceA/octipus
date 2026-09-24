@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { markToolNotExecuted, ToolNotExecutedError } from '@/core/tool-execution-error';
 import { buildChildEnv, isSensitiveEnvName } from '@/security/child-env';
 import { coreLogger } from '@/utils/logger';
-import { killProcessTree } from '@/utils/proc';
+import { killProcessTree, posixShellArgv, whichSync, windowsCmdShim } from '@/utils/proc';
 import { resolve } from 'node:path';
 import { tokenizeSafe } from './policy';
 import type { ShellExecResult, ShellOperations } from './operations';
@@ -40,13 +40,15 @@ function trackGroup(pid: number | undefined): () => void {
 }
 
 
+
 /**
  * Local shell operations using child_process.spawn.
  *
  * Safe by default: simple commands run via `spawn(argv[0], argv.slice(1))`
  * with no shell involvement. Commands containing shell metacharacters (pipes,
  * redirects, command substitution, …) are refused unless the caller passes
- * `unsafe: true`, in which case we fall back to `sh -c` and emit an audit log.
+ * `unsafe: true`, in which case we fall back to `sh -c` (Git Bash / cmd.exe on
+ * Windows, see posixShellArgv) and emit an audit log.
  */
 /**
  * Does this command get the network inside the sandbox?
@@ -111,7 +113,7 @@ export class LocalShellOperations implements ShellOperations {
     if (options.unsafe) {
       coreLogger.warn(
         { cmdPreview: command.slice(0, 120), cwd },
-        'shell.exec: unsafe sh -c invocation — caller opted in',
+        'shell.exec: unsafe shell -c invocation — caller opted in',
       );
     }
 
@@ -121,7 +123,7 @@ export class LocalShellOperations implements ShellOperations {
     // it throws if no runner is available; that surfaces here as a
     // rejected promise so the agent sees a clear error.
     const baseArgv: string[] = options.unsafe
-      ? ['sh', '-c', command]
+      ? posixShellArgv(command)
       : [argv![0], ...argv!.slice(1)];
 
     const { wrapCommand } = await import('@/security/shell-sandbox');
@@ -155,10 +157,14 @@ export class LocalShellOperations implements ShellOperations {
       // the rule and turned the lane red.
       let child: ChildProcessWithoutNullStreams;
       try {
-        // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn (no shell); this is the shell tool's own executor, argv already parsed/sandboxed upstream
-        child = spawn(finalArgv[0], finalArgv.slice(1), {
+        const env = buildChildEnv(options.env);
+        const run = windowsCmdShim(finalArgv, env, process.platform, cwd);
+        // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn; shell only for a Windows .cmd with every arg quoted and cmd-expanding chars refused (windowsCmdShim)
+        child = spawn(run.argv[0], run.argv.slice(1), {
           cwd,
-          env: buildChildEnv(options.env),
+          env,
+          shell: run.shell,
+          windowsHide: true,
           // Its own process group, so a deadline can kill the whole tree. Killing
           // the direct child alone leaves `sh -c "sleep 10 & sleep 10"` holding
           // the stdio pipes, and `close` — which is what resolves this promise —
@@ -264,12 +270,12 @@ export class LocalShellOperations implements ShellOperations {
     if (options.unsafe) {
       coreLogger.warn(
         { cmdPreview: command.slice(0, 120), cwd },
-        'shell.spawnBackground: unsafe sh -c invocation — caller opted in',
+        'shell.spawnBackground: unsafe shell -c invocation — caller opted in',
       );
     }
 
     const baseArgv: string[] = options.unsafe
-      ? ['sh', '-c', command]
+      ? posixShellArgv(command)
       : [argv![0], ...argv!.slice(1)];
 
     const { wrapCommand } = await import('@/security/shell-sandbox');
@@ -278,10 +284,15 @@ export class LocalShellOperations implements ShellOperations {
       allowNetwork: resolveAllowNetwork(options),
     });
 
-    // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn (no shell); this is the shell tool's own detached executor, argv already parsed/sandboxed upstream
-    const child = spawn(wrap.argv[0], wrap.argv.slice(1), {
+    const env = buildChildEnv(options.env);
+    let run: ReturnType<typeof windowsCmdShim>;
+    try { run = windowsCmdShim(wrap.argv, env, process.platform, cwd); } catch (error) { wrap.cleanup(); throw new ToolNotExecutedError('shell', (error as Error).message, { cause: error }); }
+    // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn; shell only for a Windows .cmd with every arg quoted and cmd-expanding chars refused (windowsCmdShim)
+    const child = spawn(run.argv[0], run.argv.slice(1), {
       cwd,
-      env: buildChildEnv(options.env),
+      env,
+      shell: run.shell,
+      windowsHide: true,
       detached: true,
       stdio: 'ignore',
     });
@@ -303,10 +314,9 @@ export class LocalShellOperations implements ShellOperations {
   async which(command: string): Promise<string | null> {
     // Reject anything that could break out of the single-arg invocation.
     if (!/^[a-zA-Z0-9_.\-/]+$/.test(command)) return null;
+    // No `which` binary on Windows; an in-process PATH walk works everywhere.
     try {
-      const result = await this.exec(`which ${command}`, process.cwd(), { timeout: 5000 });
-      const path = result.stdout.trim();
-      return path || null;
+      return whichSync(command);
     } catch {
       return null;
     }

@@ -172,7 +172,7 @@ async function main() {
     const backupFile = args[1];
 
     if (!backupFile) {
-      console.error('Usage: bun backup.ts restore <backup-file>');
+      console.error('Usage: npm run backup -- restore <backup-file>');
       process.exit(1);
     }
 
@@ -199,9 +199,9 @@ async function main() {
   } else {
     console.log(`
 Usage:
-  npx tsx scripts/backup.ts backup [--all|--database|--config|--vault]
-  bun backup.ts restore <backup-file>
-  bun backup.ts list
+  npm run backup -- backup [--all|--database|--config|--vault]
+  npm run backup -- restore <backup-file>
+  npm run backup -- list
 
 Options:
   --all       Backup everything (default)

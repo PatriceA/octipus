@@ -19,6 +19,8 @@ export interface BridgeResult { content: Array<{ type: 'text'; text: string }>; 
 /** A run-local capability, never an API/admin credential. No caller-supplied identity. */
 export async function startCliToolBridge(options: {
   tools: () => ToolHandler[];
+  /** Tools the executor blocked after repeated failures — named in the refusal. */
+  blocked?: (name: string) => boolean;
   advertisedTools?: () => ToolHandler[];
   execute: (name: string, args: Record<string, unknown>) => Promise<BridgeResult>;
   active: () => boolean;
@@ -67,7 +69,12 @@ export async function startCliToolBridge(options: {
       const run = async () => {
         if (closed || !options.active()) throw new BridgeError('Agent run is no longer active');
         // Exact membership check before ToolExecutor's fuzzy name recovery.
-        if (!options.tools().some(t => t.name === input.name)) throw new BridgeError('Tool is not available to this agent');
+        if (!options.tools().some(t => t.name === input.name)) {
+          // A CLI agent never sees the executor's system message, so say why here.
+          throw new BridgeError(options.blocked?.(input.name)
+            ? `Tool ${input.name} is blocked for this run after failing the same way repeatedly; use other tools and report the failure`
+            : 'Tool is not available to this agent');
+        }
         return options.execute(input.name, input.arguments);
       };
       // ponytail: one queue per worker; unqueued read-only tools keep context reads

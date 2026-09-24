@@ -3,7 +3,7 @@ import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'path';
 import { getConfig } from '@/config';
 import type { AgentContext, ToolManifest } from '@/core/types';
-import { WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
+import { isInside, WorkspaceFS, WorkspaceFsError } from '@/security/workspace-fs';
 import { computeLineDiff } from '@/shared/diff';
 import { WORK_STREAM_META_KEY } from '@/shared/work-stream';
 import { withFileMutationQueue } from '@/utils/file-mutation-queue';
@@ -73,7 +73,7 @@ function findProjectRoot(absPath: string, workspaceRoot: string): string | null 
   try {
     if (existsSync(dir) && !existsSync(join(dir, '.'))) dir = dirname(dir);
   } catch { /* ignore */ }
-  if (!dir.startsWith(workspaceRoot)) return null;
+  if (!isInside(workspaceRoot, dir)) return null;
 
   while (dir.length > workspaceRoot.length && dir !== workspaceRoot) {
     const cached = projectRootCache.get(dir);
@@ -286,13 +286,13 @@ export class FilesystemTool extends BaseTool {
           // canonicalized result against a fresh `resolve(root, rawPath)` would
           // report a redirect on every write whenever any ancestor is a symlink
           // (Docker bind mounts, macOS /tmp → /private/tmp).
-          const noRedirect = rawPath.startsWith('/') ? resolve(rawPath) : resolve(root, rawPath);
+          const noRedirect = isAbsolute(rawPath) ? resolve(rawPath) : resolve(root, rawPath);
           if (filePath !== noRedirect) redirectedFrom = noRedirect;
-        } else if (projectPath && !rawPath.startsWith('/')) {
+        } else if (projectPath && !isAbsolute(rawPath)) {
           // Project-scoped agent: relative paths resolve inside the project
           filePath = resolve(projectPath, rawPath);
         } else {
-          filePath = rawPath.startsWith('/') ? resolve(rawPath) : resolve(root, rawPath);
+          filePath = isAbsolute(rawPath) ? resolve(rawPath) : resolve(root, rawPath);
         }
         // Final sandbox gate — same `fs` that computed `root`, so resolution
         // and validation can't disagree. Reassign to the canonical
@@ -718,7 +718,7 @@ export class FilesystemTool extends BaseTool {
    */
   private resolveAndValidate(rawPath: string, context: AgentContext | undefined, fs: WorkspaceFS): string {
     let candidate: string;
-    if (rawPath.startsWith('/')) {
+    if (isAbsolute(rawPath)) {
       candidate = resolve(rawPath);
     } else {
       const projectPath = (context?.metadata as Record<string, unknown> | undefined)
@@ -768,12 +768,12 @@ export class FilesystemTool extends BaseTool {
       return existsSync(atRoot) ? atRoot : inSession;
     }
     const resolved = resolve(rawPath);
-    // Case-folded on Windows, where `C:\Users\me\ws` and `c:\users\me\ws` are
-    // the same directory and `resolve` preserves whatever case it was handed.
-    // A model writing the lower-case form read as OUTSIDE the workspace, which
-    // skipped both the project lookup and the session redirect.
-    const fold = (value: string): string => (process.platform === 'win32' ? value.toLowerCase() : value);
-    const insideWorkspace = fold(resolved).startsWith(fold(root));
+    // Case-insensitive on Windows (`isInside`), where `C:\Users\me\ws` and
+    // `c:\users\me\ws` are the same directory and `resolve` preserves whatever
+    // case it was handed. A model writing the lower-case form read as OUTSIDE
+    // the workspace, which skipped both the project lookup and the session
+    // redirect. Segment-bounded, so `C:\ws2` is not inside `C:\ws`.
+    const insideWorkspace = isInside(root, resolved);
     // Posix-normalised first: these markers are written with `/`, and on
     // Windows `resolved` carries `\`, so none of them ever matched and an
     // absolute path into `sessions/` was treated as an ordinary workspace path.
@@ -804,7 +804,7 @@ export class FilesystemTool extends BaseTool {
     const candidate = firstSegment ? resolve(root, firstSegment) : null;
     return Boolean(
       candidate
-        && candidate.startsWith(root)
+        && isInside(root, candidate)
         && existsSync(candidate)
         && findProjectRoot(candidate, root)
     );
@@ -825,7 +825,7 @@ export class FilesystemTool extends BaseTool {
   ): string {
     const projectPath = (context?.metadata as Record<string, unknown> | undefined)
       ?.projectPath as string | undefined;
-    if (rawPath.startsWith('/')) {
+    if (isAbsolute(rawPath)) {
       // Absolute paths only redirect into the session dir; project-scoped
       // agents and non-session agents take them verbatim (gate decides).
       const sessionDir = projectPath ? null : sessionDirPath(context, fs.root);

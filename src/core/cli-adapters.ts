@@ -354,7 +354,7 @@ export function titleFromCommand(command: string): string {
 /** Detect a more descriptive tool name from a shell command */
 export function detectToolFromCommand(command: string): string {
   const inner = unwrapShellCommand(command);
-  const cmd = inner.split(/\s+/)[0]?.replace(/^.*\//, '') || 'shell';
+  const cmd = inner.split(/\s+/)[0]?.replace(/^.*[\\/]/, '') || 'shell';
   const toolMap: Record<string, string> = {
     cat: 'read_file', find: 'find', ls: 'list', grep: 'search', rg: 'search',
     sed: 'edit_file', mkdir: 'create_dir', rm: 'delete', cp: 'copy', mv: 'move',
@@ -673,8 +673,10 @@ export class CLIArgumentBuilder {
       args.push(...settings.extraArgs);
     }
 
-    // agy has no --system-prompt flag. Prepend the expert system prompt to the
-    // user prompt; the worker also writes it to GEMINI.md (which agy reads).
+    // agy has no --system-prompt flag, and text-mode --print takes no stdin
+    // (only --input-format stream-json, which forces stream-json output).
+    // Prepend the expert system prompt to the user prompt; the spawn sites
+    // guard the Windows command-line cap (assertWindowsCmdLineFits).
     const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
     args.push('--print', fullPrompt);
 

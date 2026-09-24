@@ -11,11 +11,11 @@
  * `tmpdir`. No DB, no Docker.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import pathMod, { join } from 'node:path';
 import { ANONYMOUS_PRINCIPAL, principalFromUser } from './principal';
-import { WorkspaceFS, WorkspaceFsError } from './workspace-fs';
+import { isInside, WorkspaceFS, WorkspaceFsError } from './workspace-fs';
 
 let dataRoot: string;
 let aliceFs: WorkspaceFS;
@@ -267,5 +267,35 @@ describe('WorkspaceFS.forSession — read-back root matches the agent cwd (P1.8)
     );
     expect(fs.root)
       .toBe(join(dataRoot, 'users', 'alice-uuid', 'workspaces', 'default', 'files'));
+  });
+});
+
+describe('isInside', () => {
+  test('win32: case-insensitive, segment-bounded, cross-drive', () => {
+    const w = pathMod.win32;
+    expect(isInside('C:\\Users\\Me\\ws', 'c:\\users\\me\\ws\\a.txt', w)).toBe(true);
+    expect(isInside('C:\\ws', 'C:\\ws', w)).toBe(true);
+    expect(isInside('C:\\ws', 'C:\\ws2\\a.txt', w)).toBe(false);
+    expect(isInside('C:\\ws', 'C:\\ws\\..\\x', w)).toBe(false);
+    expect(isInside('C:\\ws', 'D:\\ws\\a.txt', w)).toBe(false);
+  });
+
+  test('a child dir literally named "..foo" is inside', () => {
+    expect(isInside('/a', '/a/..foo/b', pathMod.posix)).toBe(true);
+    expect(isInside('/a', '/b', pathMod.posix)).toBe(false);
+  });
+});
+
+describe('WorkspaceFS with a linked root', () => {
+  test('junction/symlinked root still resolves files inside it', () => {
+    const base = mkdtempSync(join(tmpdir(), 'octipus-wfs-link-'));
+    const target = join(base, 'real');
+    mkdirSync(target);
+    writeFileSync(join(target, 'a.txt'), 'x');
+    const link = join(base, 'link');
+    symlinkSync(target, link, 'junction'); // type ignored off Windows
+    const fs = WorkspaceFS.withRoot(link);
+    expect(fs.resolve('a.txt')).toBe(realpathSync(join(target, 'a.txt')));
+    expect(() => fs.resolve('new/b.txt')).not.toThrow();
   });
 });

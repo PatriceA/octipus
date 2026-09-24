@@ -12,6 +12,8 @@ export {
 } from './wake-word';
 
 import { type ChildProcessHandle as Subprocess, spawnProcess } from '@/utils/proc';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { logger } from '../utils/logger';
 import { SpeechToText, } from './stt';
 import { TextToSpeech, } from './tts';
@@ -201,7 +203,7 @@ export class VoiceService {
   startRecording(): void {
     if (!this.stt) throw new Error('Speech-to-text not configured');
     if (this.recordProc) return; // already recording — ignore double-press
-    this.recordPath = `/tmp/voice-ptt-${Date.now()}.wav`;
+    this.recordPath = join(tmpdir(), `voice-ptt-${Date.now()}.wav`);
     this.recordProc = spawnProcess({
       command: 'arecord',
       args: ['-f', 'S16_LE', '-r', '16000', '-c', '1', this.recordPath],
@@ -250,7 +252,7 @@ export class VoiceService {
    * Play audio buffer
    */
   private async playAudio(audio: Buffer): Promise<void> {
-    const tempPath = `/tmp/voice-play-${Date.now()}.wav`;
+    const tempPath = join(tmpdir(), `voice-play-${Date.now()}.wav`);
     await writeFileAt(tempPath, audio);
 
     try {

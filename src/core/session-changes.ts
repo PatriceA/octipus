@@ -198,7 +198,10 @@ export async function getWorkspaceChangeDiff(root: string, absPath: string): Pro
     const exists = await runGit(repoRoot, ['cat-file', '-e', `HEAD:${relPath}`]);
     inHead = exists.ok;
     if (inHead) {
-      const show = await runGit(repoRoot, ['show', `HEAD:${relPath}`]);
+      // `cat-file --filters`, not `show`: it applies the worktree eol/smudge
+      // conversion, so with core.autocrlf=true HEAD isn't LF against a CRLF
+      // working copy (every line diffed as changed).
+      const show = await runGit(repoRoot, ['cat-file', '--filters', `HEAD:${relPath}`]);
       if (show.ok) original = show.stdout;
       else showTruncated = true; // e.g. blob exceeds GIT_MAX_BUFFER
     }

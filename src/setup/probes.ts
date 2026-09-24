@@ -87,7 +87,8 @@ export async function commandExists(bin: string): Promise<string | null> {
     const exit = await proc.exited;
     if (exit !== 0) return null;
     const out = (await new Response(proc.stdout).text()).trim();
-    return out.split('\n')[0] ?? null;
+    // `where` prints CRLF; a trailing `\r` poisons the returned path.
+    return out.split(/\r?\n/)[0]?.trim() || null;
   } catch {
     return null;
   }

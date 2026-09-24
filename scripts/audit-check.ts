@@ -2,7 +2,7 @@
 /**
  * audit-check.ts — blocking dependency audit with a reviewable allowlist.
  *
- * Runs `bun audit --prod --json`, parses the result, and fails (exit 1) if any
+ * Runs `npm audit --omit=dev --json`, parses the result, and fails (exit 1) if any
  * advisory is NOT covered by an un-expired entry in `scripts/audit-allowlist.json`.
  * Also fails if any allowlist entry is itself expired, so stale exceptions get
  * noticed and cleaned up rather than silently lingering.
@@ -10,7 +10,7 @@
  * See `scripts/audit-allowlist.README.md` for the allowlist format.
  *
  * The pure decision logic lives in `evaluateAdvisories` so it can be unit-tested
- * without shelling out to `bun audit`; this file is the thin CLI wrapper.
+ * without shelling out to `npm audit`; this file is the thin CLI wrapper.
  */
 
 import { readFileSync } from 'fs';
@@ -28,7 +28,7 @@ export interface Advisory {
   ghsa?: string;
   severity?: string;
   title?: string;
-  /** Affected package name (bun keys advisories by package). */
+  /** Affected package name (audit output is keyed by package). */
   package?: string;
   /** Original advisory url, kept for reporting. */
   url?: string;
@@ -43,7 +43,7 @@ export interface AllowlistEntry {
 }
 
 export interface EvaluationResult {
-  /** Every advisory bun reported (normalized). */
+  /** Every advisory the audit reported (normalized). */
   found: Advisory[];
   /** Advisories matched to an un-expired allowlist entry. */
   allowlisted: Array<{ advisory: Advisory; entry: AllowlistEntry }>;
@@ -125,13 +125,13 @@ export function evaluateAdvisories(
 }
 
 // ---------------------------------------------------------------------------
-// Parsing bun's output (defensive)
+// Parsing audit output (defensive)
 // ---------------------------------------------------------------------------
 
 /**
- * Normalize the many shapes `bun audit --json` might emit into a flat list of
- * advisories. Observed shape (bun 1.3.x) is a map of `{ pkg: Advisory[] }`, but
- * we also tolerate `{ advisories: ... }` and a bare array to be future-proof.
+ * Normalize the shapes `npm audit --json` (and the legacy `bun audit --json`)
+ * emit into a flat list of advisories: npm's `{ vulnerabilities }` report, bun
+ * 1.3.x's `{ pkg: Advisory[] }` map, `{ advisories: ... }`, and a bare array.
  *
  * Throws if the input is a non-empty string that does not parse or does not
  * match any known shape — the caller prints the raw output and exits 1 rather
@@ -332,7 +332,7 @@ async function main(): Promise<void> {
   try {
     advisories = parseAuditOutput(stdout);
   } catch (err) {
-    console.error('Failed to parse `bun audit --prod --json` output:');
+    console.error('Failed to parse `npm audit --omit=dev --json` output:');
     console.error((err as Error).message);
     console.error('--- raw stdout ---');
     console.error(stdout);

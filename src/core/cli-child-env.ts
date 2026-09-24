@@ -15,6 +15,11 @@ export function buildChildEnv(tool: CLIToolConfig, toolEnv?: Record<string, stri
   for (const k of ['PATH', 'HOME', 'LANG', 'TERM', 'TZ', 'SHELL', 'USER', 'LOGNAME', 'TMPDIR', 'CODEX_HOME']) pass(k);
   // Windows equivalents.
   for (const k of ['SystemRoot', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'PATHEXT', 'ComSpec', 'TEMP', 'TMP']) pass(k);
+  // Non-secret Windows system vars vendor CLIs probe: Claude Code needs
+  // CLAUDE_CODE_GIT_BASH_PATH / ProgramFiles to find Git Bash, Node's
+  // os.homedir()/userInfo() fall back to HOMEDRIVE+HOMEPATH/USERNAME.
+  for (const k of ['CLAUDE_CODE_GIT_BASH_PATH', 'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432', 'ProgramData', 'CommonProgramFiles',
+    'HOMEDRIVE', 'HOMEPATH', 'USERNAME', 'USERDOMAIN', 'windir', 'PROCESSOR_ARCHITECTURE', 'NUMBER_OF_PROCESSORS', 'OS']) pass(k);
   // Locale (LC_ALL, LC_CTYPE, …).
   for (const k of Object.keys(process.env)) if (k.startsWith('LC_')) pass(k);
   // The CLI's own auth vars — scoped per provider so codex doesn't see the

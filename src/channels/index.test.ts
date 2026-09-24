@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { eventSessionId } from './index';
+import { eventSessionId, imageConverter } from './index';
 
 describe('eventSessionId', () => {
   it('does not drop a channel event because the CLI reported its own vendor session id', () => {
@@ -14,5 +14,13 @@ describe('eventSessionId', () => {
   it('falls back to data.context.sessionId when the event has no top-level sessionId', () => {
     const event = { data: { context: { sessionId: 'octipus-2' } } };
     expect(eventSessionId(event)).toBe('octipus-2');
+  });
+});
+
+describe('imageConverter', () => {
+  it('prefers magick, never System32 convert on Windows', () => {
+    expect(imageConverter('win32', () => 'C:/IM/magick.exe')).toBe('C:/IM/magick.exe');
+    expect(imageConverter('win32', () => null)).toBeNull();
+    expect(imageConverter('linux', () => null)).toBe('convert');
   });
 });

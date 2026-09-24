@@ -28,4 +28,14 @@ describe('buildChildEnv (shared by the agent worker and one-shot completions)', 
     expect(env).not.toHaveProperty('ANTHROPIC_API_KEY');
     expect(env.VIBE_HOME).toBe('/tmp/x');
   });
+
+  test('Windows system vars vendor CLIs probe pass through', () => {
+    process.env.CLAUDE_CODE_GIT_BASH_PATH = 'C:/Git/bin/bash.exe';
+    process.env['ProgramFiles(x86)'] = 'C:/PF86';
+    process.env.USERNAME = 'me';
+    const env = buildChildEnv(tool('anthropic'));
+    expect(env.CLAUDE_CODE_GIT_BASH_PATH).toBe('C:/Git/bin/bash.exe');
+    expect(env['ProgramFiles(x86)']).toBe('C:/PF86');
+    expect(env.USERNAME).toBe('me');
+  });
 });

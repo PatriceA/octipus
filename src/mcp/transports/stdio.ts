@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from 'child_process';
 import { buildChildEnv } from '@/security/child-env';
+import { killProcessTree, windowsCmdShim } from '@/utils/proc';
 import type { CloseHandler, ErrorHandler, MCPTransport, MessageHandler } from './interface';
 
 export interface StdioTransportOptions {
@@ -26,10 +27,15 @@ export class StdioTransport implements MCPTransport {
   }
 
   async connect(): Promise<void> {
-    this.process = spawn(this.options.command, this.options.args || [], {
+    const env = buildChildEnv(this.options.env);
+    const run = windowsCmdShim([this.options.command, ...(this.options.args || [])], env, process.platform, this.options.cwd);
+    // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- operator-configured MCP server; shell only for a Windows .cmd with every arg quoted (windowsCmdShim)
+    this.process = spawn(run.argv[0], run.argv.slice(1), {
       cwd: this.options.cwd,
-      env: buildChildEnv(this.options.env),
+      env,
       stdio: ['pipe', 'pipe', 'pipe'],
+      shell: run.shell,
+      windowsHide: true,
     });
 
     this.process.stdout!.on('data', (data: Buffer) => {
@@ -87,7 +93,11 @@ export class StdioTransport implements MCPTransport {
 
   close(): void {
     if (this.process) {
-      this.process.kill();
+      // Windows: taskkill /T, or the cmd.exe wrapper of an `npx` server dies
+      // and its node.exe lives on. Posix: this child is no group leader, so a
+      // group kill would miss it — signal it directly.
+      if (process.platform === 'win32') killProcessTree(this.process.pid, this.process);
+      else this.process.kill();
       this.process = null;
     }
   }

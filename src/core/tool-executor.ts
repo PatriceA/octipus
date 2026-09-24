@@ -150,7 +150,13 @@ function previewToolResult(result: unknown): string {
 
 export class ToolExecutor {
   private tools: Map<string, ToolHandler> = new Map();
-  private consecutiveToolErrors: number = 0;
+  /**
+   * Per tool: the last not-executed/thrown error and how many times in a row it
+   * repeated. The SAME error repeating is a loop (or a broken tool); a model
+   * that gets refused and changes its call has a different error each time.
+   */
+  private failStreaks = new Map<string, { error: string; n: number }>();
+  private blockedTools = new Set<string>();
   private _toolsDisabled: boolean = false;
 
   /**
@@ -263,7 +269,13 @@ export class ToolExecutor {
   }
 
   getTools(): Map<string, ToolHandler> {
-    return this.tools;
+    if (!this.blockedTools.size) return this.tools;
+    return new Map([...this.tools].filter(([name]) => !this.blockedTools.has(name)));
+  }
+
+  /** Blocked after repeating the same failure; see `failStreaks`. */
+  isToolBlocked(name: string): boolean {
+    return this.blockedTools.has(name);
   }
 
   getToolId(toolName: string): string | undefined {
@@ -494,6 +506,11 @@ export class ToolExecutor {
       if (parallelResults.has(toolCall.id)) {
         results.push(parallelResults.get(toolCall.id)!);
         this.recordExecuted(toolCall.name);
+        continue;
+      }
+      if (this.blockedTools.has(toolCall.name)) {
+        results.push({ toolCallId: toolCall.id, result: null,
+          error: `Tool ${toolCall.name} is blocked for this run after failing the same way ${MAX_CONSECUTIVE_TOOL_ERRORS} times in a row. Use other tools.` });
         continue;
       }
       const tool = this.tools.get(toolCall.name);
@@ -911,26 +928,30 @@ export class ToolExecutor {
 
     this.emitFn('observation', { results });
 
-    // Track consecutive tool failures
-    const allFailed = results.length > 0 && results.every(r => r.error);
+    // Per-tool failure streaks. Only calls that did not run count: a command
+    // that ran and exited non-zero (red tests) is a result, not a broken tool.
+    // Only an identical error extends a streak, so three different refusals
+    // (metacharacters, then a denied path, …) never block the shell.
+    // Blocks just the failing tool — one broken shell must not take git with it.
     const toolMessages: AgentMessage[] = [];
-
-    if (allFailed) {
-      this.consecutiveToolErrors++;
-      if (this.consecutiveToolErrors >= MAX_CONSECUTIVE_TOOL_ERRORS) {
-        agentLogger.warn(
-          { agentId: this.context.id, consecutiveErrors: this.consecutiveToolErrors },
-          'Too many consecutive tool failures — disabling tools'
-        );
-        this._toolsDisabled = true;
-        toolMessages.push({
-          role: 'system',
-          content: 'The tools have failed multiple times in a row and are now unavailable. Provide the best response you can with the information you already have. Explain to the user which tools failed and why.',
-          timestamp: new Date(),
-        });
-      }
-    } else {
-      this.consecutiveToolErrors = 0;
+    const nameOf = new Map(toolCalls.map(tc => [tc.id, tc.name]));
+    const newlyBlocked: string[] = [];
+    for (const r of results) {
+      const name = nameOf.get(r.toolCallId);
+      if (!name || !this.tools.has(name) || this.blockedTools.has(name)) continue;
+      if (!r.error || r.result != null) { this.failStreaks.delete(name); continue; }
+      const prev = this.failStreaks.get(name);
+      const n = prev?.error === r.error ? prev.n + 1 : 1;
+      this.failStreaks.set(name, { error: r.error, n });
+      if (n >= MAX_CONSECUTIVE_TOOL_ERRORS) { this.blockedTools.add(name); newlyBlocked.push(name); }
+    }
+    if (newlyBlocked.length) {
+      agentLogger.warn({ agentId: this.context.id, tools: newlyBlocked }, 'Too many consecutive failures — blocking tools');
+      toolMessages.push({
+        role: 'system',
+        content: `These tools failed the same way ${MAX_CONSECUTIVE_TOOL_ERRORS} times in a row and are now unavailable: ${newlyBlocked.join(', ')}. Continue with the remaining tools, and tell the user which tools failed and why.`,
+        timestamp: new Date(),
+      });
     }
 
     // Does the bound model actually understand images? Hoisted out of the loop —

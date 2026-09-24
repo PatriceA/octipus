@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { posixShellArgv, windowsCmdShim } from '@/utils/proc';
 import { LocalShellOperations } from './local-operations';
 
 describe('LocalShellOperations.spawnBackground', () => {
@@ -128,7 +132,7 @@ describe('LocalShellOperations.exec — why a command died', () => {
 
   it('a command that finishes in time reports neither', async () => {
     const res = await ops.exec('true', process.cwd(), { timeout: 5000 });
-    expect(res.exitCode).toBe(0);
+    expect(res.stderr.slice(0, 600) + res.exitCode).toBe("0");
     expect(res.killed).toBe(false);
     expect(res.timedOut).toBe(false);
     expect(res.signal).toBeNull();
@@ -181,5 +185,64 @@ describe('shell deadline after the direct child has exited', () => {
     expect(result.exitCode).toBe(0);
     expect(result.timedOut).toBe(false);
     expect(result.killed).toBe(false);
+  });
+});
+
+describe('windowsCmdShim — npm/npx are .cmd scripts on Windows', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cmdshim-'));
+  writeFileSync(join(dir, 'npx.cmd'), '');
+  writeFileSync(join(dir, 'tool.exe'), '');
+  const env = { PATH: dir, PATHEXT: '.EXE;.CMD' };
+
+  it('routes a PATHEXT-resolved .cmd through cmd.exe with every argument quoted', () => {
+    expect(windowsCmdShim(['npx', 'vitest', 'a&b', 'C:\\x y\\'], env, 'win32'))
+      .toEqual({ argv: ['"npx"', '"vitest"', '"a&b"', '"C:\\x y\\\\"'], shell: true });
+  });
+
+  it('resolves a relative script path against the child cwd, not the server cwd', () => {
+    expect(windowsCmdShim(['./npx', 'x'], env, 'win32', dir).shell).toBe(true);
+    expect(windowsCmdShim(['./npx', 'x'], env, 'win32', tmpdir()).shell).toBe(false);
+  });
+
+  it('leaves executables and other platforms shell-free', () => {
+    expect(windowsCmdShim(['tool', 'a&b'], env, 'win32')).toEqual({ argv: ['tool', 'a&b'], shell: false });
+    expect(windowsCmdShim(['npx', 'x'], env, 'linux')).toEqual({ argv: ['npx', 'x'], shell: false });
+  });
+
+  it('refuses characters cmd.exe expands inside quotes', () => {
+    for (const bad of ['%PATH%', 'a"&calc', 'x!y']) expect(() => windowsCmdShim(['npx', bad], env, 'win32')).toThrow(/cmd\.exe/);
+  });
+
+  it.runIf(process.platform === 'win32')('exec runs a .cmd end to end, `&` stays an argument', async () => {
+    writeFileSync(join(dir, 'say.cmd'), '@echo %1');
+    const res = await new LocalShellOperations().exec('say "a&b"', dir, { timeout: 30_000, env: { PATH: `${dir};${process.env.PATH}` } });
+    expect([res.exitCode, res.stdout.trim()]).toEqual([0, '"a&b"']);
+  });
+});
+
+describe('posixShellArgv — no `sh` on Windows', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'posixsh-'));
+  const touch = (...p: string[]) => { mkdirSync(join(dir, ...p.slice(0, -1)), { recursive: true }); writeFileSync(join(dir, ...p), '', { mode: 0o755 }); return join(dir, ...p); };
+  const gitBash = touch('Git', 'bin', 'bash.exe');
+  touch('Git', 'cmd', 'git.exe');
+  touch('Git', 'mingw64', 'bin', 'git.exe');
+  touch('Win', 'System32', 'bash.exe');
+  const msys = touch('msys', 'bash.exe');
+  const base = { PATHEXT: '.exe',SystemRoot: join(dir, 'Win'), ComSpec: 'C:\\Windows\\cmd.exe' };
+
+  it('is sh -c off Windows', () => {
+    expect(posixShellArgv('a && b', {}, 'linux')).toEqual(['sh', '-c', 'a && b']);
+  });
+
+  it('finds Git Bash from git.exe in cmd or mingw64\\bin', () => {
+    for (const p of [join(dir, 'Git', 'cmd'), join(dir, 'Git', 'mingw64', 'bin')]) {
+      expect(posixShellArgv('x', { ...base, PATH: p }, 'win32')).toEqual([gitBash, '-c', 'x']);
+    }
+  });
+
+  it('skips the System32 (WSL) bash, takes any other bash on PATH', () => {
+    expect(posixShellArgv('x', { ...base, PATH: join(dir, 'Win', 'System32') }, 'win32'))
+      .toEqual(['C:\\Windows\\cmd.exe', '/d', '/s', '/c', 'x']);
+    expect(posixShellArgv('x', { ...base, PATH: join(dir, 'msys') }, 'win32')).toEqual([msys, '-c', 'x']);
   });
 });

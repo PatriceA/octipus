@@ -2,6 +2,24 @@ import { spawn } from 'child_process';
 import { buildChildEnv } from '@/security/child-env';
 import type { ToolManifest } from '@/core/types';
 import { BaseTool, createParameterSchema } from '../base-tool';
+import { tokenizeSafe } from '../shell/policy';
+
+/**
+ * `git add`'s `files` → argv. Tokenized, not split on ' ': a path with a space
+ * ("My Docs/a.txt") must stay one entry. Arrays pass through for programmatic
+ * callers. Refuses rather than guesses on unbalanced quotes / metacharacters.
+ */
+export function parseAddFiles(files: unknown): string[] {
+  const list = Array.isArray(files)
+    ? files.map(String).filter(Boolean)
+    : tokenizeSafe(String(files ?? ''));
+  if (!list?.length) {
+    throw new Error('git add: `files` must be a non-empty list of paths (quote paths with spaces; no shell metacharacters)');
+  }
+  return list;
+}
+
+const ADD_FLAGS = new Set(['-A', '--all', '-u', '--update']);
 
 export class GitTool extends BaseTool {
   readonly id = 'git';
@@ -85,11 +103,14 @@ export class GitTool extends BaseTool {
       'Stage files for commit',
       createParameterSchema({
         path: { type: 'string', description: 'Repository path', default: '.' },
-        files: { type: 'string', description: 'Files to stage (space-separated or ".")', required: true },
+        files: { type: 'string', description: 'Files to stage: space-separated, or "." for all. Quote paths containing spaces ("my file.txt").', required: true },
       }),
       async (args) => {
-        const files = (args.files as string).split(' ').filter(Boolean);
-        await this.git(['add', ...files], args.path as string);
+        const files = parseAddFiles(args.files);
+        // `--` so a path starting with `-` is never read as an option; the
+        // stage-everything flags models habitually pass stay flags.
+        const flags = files.filter(f => ADD_FLAGS.has(f));
+        await this.git(['add', ...flags, '--', ...files.filter(f => !ADD_FLAGS.has(f))], args.path as string);
         return { staged: files };
       },
       { permissionAction: 'write' }
@@ -258,6 +279,7 @@ export class GitTool extends BaseTool {
 
       child.stdout.on('data', (data) => { stdout += data; });
       child.stderr.on('data', (data) => { stderr += data; });
+      child.on('error', reject);
 
       child.on('close', (code) => {
         if (code === 0) {

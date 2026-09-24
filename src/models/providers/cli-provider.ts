@@ -792,6 +792,22 @@ export class CLIProvider implements ModelProvider {
 }
 
 /**
+ * CreateProcess caps the whole Windows command line at 32767 chars, cmd.exe
+ * (shell:true) at 8191; past it spawn fails with a bare ENAMETOOLONG or "The
+ * command line is too long". agy has to carry system + user prompt in argv (no
+ * stdin in text print mode), so fail with an actionable message instead.
+ */
+export function assertWindowsCmdLineFits(binary: string, args: string[], platform = process.platform, shell = false): void {
+  if (platform !== 'win32') return;
+  const limit = shell ? 8191 : 32_767;
+  // Measured as quoted (escapes and doubled backslashes count), +1 separator each.
+  const length = [binary, ...args].reduce((n, arg) => n + windowsShellQuote(arg).length + 1, 0);
+  if (length > limit) {
+    throw new Error(`'${binary}' command line is ${length} chars, over the Windows limit of ${limit} — shorten the prompt/system prompt, or use a CLI that reads the prompt from stdin`);
+  }
+}
+
+/**
  * Windows `shell:true` command-line quoting for one argument, following the
  * MSVCRT / CommandLineToArgvW convention every Windows CLI's argv parser
  * expects: wrap in quotes when the value has whitespace or an embedded
@@ -846,6 +862,7 @@ export function execCli(binary: string, args: string[], opts?: { timeoutMs?: num
       ), 'cli'));
       return;
     }
+    try { assertWindowsCmdLineFits(binary, args); } catch (err) { reject(classifyError(err as Error, 'cli')); return; }
     // Fixed generous default, not a maxTokens*100ms heuristic (which could
     // arm a sub-second timeout for a small budget or a 3h one for a big
     // batch). CLI subscription tools are slow; 10 min is a safe ceiling.
@@ -870,6 +887,7 @@ export function execCli(binary: string, args: string[], opts?: { timeoutMs?: num
       env: opts?.env ?? { ...process.env },
       stdio: [opts?.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       shell: useShell,
+      windowsHide: true,
     });
 
     if (opts?.stdin !== undefined) {
@@ -885,7 +903,7 @@ export function execCli(binary: string, args: string[], opts?: { timeoutMs?: num
     const killTree = () => {
       if (proc.pid == null) return;
       if (process.platform === 'win32') {
-        spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { stdio: 'ignore' }).on('error', () => proc.kill('SIGKILL'));
+        spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).on('error', () => proc.kill('SIGKILL'));
       } else {
         proc.kill('SIGKILL');
       }

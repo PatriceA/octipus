@@ -132,6 +132,10 @@ export const ELEVATED_COMMANDS = [
   'pkill',
   'killall',
   'xkill',
+  // Windows: `taskkill` is its `kill`, and `wmic process … delete` / `wmic
+  // os … shutdown` reach the same place through WMI.
+  'taskkill',
+  'wmic',
 ];
 
 const INJECTION_PATTERNS = [
@@ -237,6 +241,16 @@ function destructiveForm(candidate: string): string | null {
       return 'truncate';
     case 'dd':
       return args.some((a) => a.startsWith('of=')) ? 'dd of=' : null;
+    // cmd.exe builtins: reachable bare, since `useShell` falls back to cmd.exe
+    // on a Windows host without Git Bash (posixShellArgv).
+    case 'rd':
+    case 'rmdir':
+      return has('/s') ? 'rmdir /s' : null;
+    case 'del':
+    case 'erase':
+      return has('/s') ? 'del /s' : null;
+    case 'format':
+      return args.some((a) => /^[a-z]:$/.test(a)) ? 'format' : null;
     case 'rsync':
       // `--delete` makes the destination match the source by removing whatever
       // is not in it — the standard "empty this directory" idiom in build
@@ -287,15 +301,41 @@ function inlineInterpreterDestruction(form: string): string | null {
   const tokens = form.split(/\s+/).filter(Boolean);
   const at = tokens.findIndex((t) => INTERPRETERS.has(basename(t)));
   if (at < 0) return null;
-  if (!tokens.slice(at + 1).some((t) => INLINE_CODE_FLAGS.has(t))) return null;
-  return DESTRUCTIVE_IN_CODE.test(form) ? `${basename(tokens[at] as string)} inline code` : null;
+  const flags = tokens.slice(at + 1).filter((t) => INLINE_CODE_FLAGS.has(t));
+  if (!flags.length) return null;
+  const name = basename(tokens[at] as string);
+  if (!WINDOWS_SHELLS.has(name)) return DESTRUCTIVE_IN_CODE.test(form) ? `${name} inline code` : null;
+  // Base64 source is unreadable to a keyword scan, and hiding what runs is the
+  // usual reason to encode it — so it goes to a human whatever it says.
+  if (name !== 'cmd' && flags.some((f) => ENCODED_FLAGS.has(f))) return `${name} encoded command`;
+  return DESTRUCTIVE_IN_WINDOWS_SHELL.test(form) ? `${name} inline code` : null;
 }
 
-/** Interpreters that will run source handed to them on the command line. */
-const INTERPRETERS = new Set(['python', 'python2', 'python3', 'node', 'nodejs', 'perl', 'ruby', 'php', 'deno', 'bun']);
+/**
+ * Windows shells. Scanned with their own pattern: `format` and `del` are
+ * ordinary words in Python or JS source (`"{}".format(x)`), not commands.
+ */
+const WINDOWS_SHELLS = new Set(['powershell', 'pwsh', 'cmd']);
 
-/** The flags that mean "the next argument is source, not a filename". */
-const INLINE_CODE_FLAGS = new Set(['-c', '-e', '--eval', '-E', '--exec']);
+/** Interpreters that will run source handed to them on the command line. */
+const INTERPRETERS = new Set(['python', 'python2', 'python3', 'node', 'nodejs', 'perl', 'ruby', 'php', 'deno', 'bun', ...WINDOWS_SHELLS]);
+
+/**
+ * The flags that mean "the next argument is source, not a filename". Lowercase:
+ * the forms are lowercased before this runs, and PowerShell and cmd.exe read
+ * their flags case-insensitively anyway.
+ */
+const INLINE_CODE_FLAGS = new Set(['-c', '-e', '--eval', '-E', '--exec', '-command', '/c', '/k', '-encodedcommand', '-enc', '-ec']);
+
+/** PowerShell's base64 forms (`-e` and `-ec` are accepted abbreviations). */
+const ENCODED_FLAGS = new Set(['-encodedcommand', '-enc', '-ec', '-e']);
+
+/**
+ * A recursive delete or a format, in PowerShell or cmd.exe: `Remove-Item
+ * -Recurse` (and its `ri`/`rm`/`del` aliases, `-r` abbreviated), `rd /s`,
+ * `del /s`, `format c:`, `Format-Volume`.
+ */
+const DESTRUCTIVE_IN_WINDOWS_SHELL = /\b(remove-item|ri|rm|rd|rmdir|del|erase)\s([^;&|\n]*\s)?(-r\w*|\/s)\b|\bformat(-volume\b|\s+[a-z]:)/i;
 
 /**
  * Destruction expressed in inline source. Deliberately a keyword scan rather
@@ -535,7 +575,13 @@ const MATCH_ANYWHERE = new Set([
  * A command's own name, without the path it was reached by. `/bin/rm` and `rm`
  * run the same program, so the check has to compare the same thing.
  */
-const basename = (token: string): string => token.slice(token.lastIndexOf('/') + 1);
+/**
+ * Windows spellings too, on every platform: `C:\Git\bin\bash.exe` and `BASH`
+ * are `bash`. Folding case and `.exe` off on posix only ever makes a denylist
+ * match MORE — the safe direction — and keeps one answer for policy and scorers.
+ */
+export const basename = (token: string): string =>
+  (token.split(/[\\/]/).pop() ?? '').toLowerCase().replace(/\.(exe|com|cmd|bat)$/, '');
 
 /**
  * A segment peeled down to what actually runs: leading `NAME=value`

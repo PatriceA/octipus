@@ -164,6 +164,10 @@ export class DockerTool extends BaseTool {
         // that kills the client and leaves the container running with nothing
         // holding a handle to it, which is worse than the timeout it replaced.
         // Escalate only if the client itself ignores the request.
+        // ponytail: on Windows SIGTERM is TerminateProcess, so nothing is
+        // proxied and a timed-out `exec` keeps running in the container. No
+        // `docker run` goes through here to `--name`/`docker kill`; killing the
+        // whole container for an exec timeout would be worse. Revisit if run lands.
         child.kill('SIGTERM');
         escalation = setTimeout(() => {
           if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');

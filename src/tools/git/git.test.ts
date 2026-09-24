@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
-import { gitTool } from './index';
+import { gitTool, parseAddFiles } from './index';
 
 // The stub lives in a hoisted block because `vi.mock` factories run before
 // ordinary top-level statements: a plain `const` here would not exist yet when
@@ -128,5 +128,18 @@ A  staged-file.txt
     expect(result.staged).toContain('staged-file.txt');
     expect(result.modified).toContain('modified-file.txt');
     expect(result.untracked).toContain('untracked-file.txt');
+  });
+});
+
+describe('parseAddFiles', () => {
+  test('keeps quoted paths with spaces as one entry', () => {
+    expect(parseAddFiles('a.txt "My Docs/b.txt"')).toEqual(['a.txt', 'My Docs/b.txt']);
+  });
+  test('passes arrays through', () => {
+    expect(parseAddFiles(['my file.txt', '.'])).toEqual(['my file.txt', '.']);
+  });
+  test('refuses empty input and shell metacharacters', () => {
+    expect(() => parseAddFiles('')).toThrow(/non-empty/);
+    expect(() => parseAddFiles('a.txt; rm -rf ~')).toThrow(/non-empty/);
   });
 });
