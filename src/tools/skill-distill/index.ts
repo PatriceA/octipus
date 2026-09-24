@@ -9,7 +9,7 @@ import { getModelRegistry } from '@/models/model-registry';
 import { toolLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema } from '../base-tool';
 import { type DedupHit, findExisting } from './dedup';
-import { parseDistilledSkill, skillFingerprint, SKILL_DISTILL_SYSTEM_PROMPT } from './distiller';
+import { interpretDistillOutput, skillFingerprint, SKILL_DISTILL_SYSTEM_PROMPT } from './distiller';
 import { readTrajectoryRecordLine, trajectoryToDistillMaterial } from './trajectory-source';
 
 /**
@@ -107,15 +107,28 @@ export class SkillDistillTool extends BaseTool {
             { role: 'user', content: material, timestamp: new Date() },
           ],
           temperature: 0.2,
-          maxTokens: 1500,
+          // A full procedure in markdown, JSON-escaped, overran 1500 tokens and
+          // the cut-off JSON was misreported as "nothing worth distilling".
+          maxTokens: 6000,
           responseFormat: { type: 'json_object' },
           userId: context.userId,
         });
 
-        const distilled = parseDistilledSkill(result.content ?? '');
-        if (!distilled) {
+        const outcome = interpretDistillOutput(result.content ?? '', result.finishReason);
+        if (outcome.kind === 'truncated') {
+          toolLogger.warn({ model: model.modelId, userId: context.userId }, 'Skill distillation truncated at token limit');
+          return {
+            error: 'Distiller output was truncated at the token limit (finishReason=length) — no proposal filed. Retry with shorter source material.',
+          };
+        }
+        if (outcome.kind === 'malformed') {
+          toolLogger.warn({ model: model.modelId, reason: outcome.reason }, 'Skill distillation returned a malformed response');
+          return { error: `Distiller returned a malformed response (${outcome.reason}) — no proposal filed.` };
+        }
+        if (outcome.kind === 'none') {
           return { distilled: false, message: 'Nothing worth distilling into a reusable skill.' };
         }
+        const distilled = outcome.skill;
 
         // 4. Dedup. Before this the only guard was an exact-name match against
         //    PENDING proposals, so the same procedure landed once per name the

@@ -39,29 +39,44 @@ function extractJsonObject(raw: string): string | null {
 }
 
 /**
- * Strictly parse the distiller's JSON into a DistilledSkill. Returns null when
- * the output is unparseable OR when the model signalled "nothing worth saving"
- * (all fields blank) — the caller then declines to create a proposal (fail
- * loud: never persist an empty skill).
+ * What the distiller's reply means. Only `none` is the model's deliberate
+ * "nothing worth saving"; `truncated` and `malformed` are failures the caller
+ * must surface instead of reporting them as an empty result.
  */
-export function parseDistilledSkill(raw: string): DistilledSkill | null {
+export type DistillOutcome =
+  | { kind: 'skill'; skill: DistilledSkill }
+  | { kind: 'none' }
+  | { kind: 'truncated' }
+  | { kind: 'malformed'; reason: string };
+
+/**
+ * Classify the distiller's reply. `finishReason` is the provider-normalized
+ * CompletionResult.finishReason — 'length' means the output hit the token cap,
+ * so the JSON is incomplete whatever it looks like.
+ */
+export function interpretDistillOutput(raw: string, finishReason?: string): DistillOutcome {
+  if (finishReason === 'length') return { kind: 'truncated' };
   const jsonText = extractJsonObject(raw);
-  if (!jsonText) return null;
+  if (!jsonText) return { kind: 'malformed', reason: 'no JSON object in the response' };
   let obj: unknown;
   try {
     obj = JSON.parse(jsonText);
   } catch {
-    return null;
+    // Fixed reason: JSON.parse messages quote the input, which then lands in logs/tool results.
+    return { kind: 'malformed', reason: 'invalid JSON' };
   }
-  if (!obj || typeof obj !== 'object') return null;
+  if (!obj || typeof obj !== 'object') return { kind: 'malformed', reason: 'response is not a JSON object' };
   const { name, description, content } = obj as Record<string, unknown>;
   if (typeof name !== 'string' || typeof description !== 'string' || typeof content !== 'string') {
-    return null;
+    return { kind: 'malformed', reason: 'name, description and content must all be strings' };
   }
   const trimmed = { name: name.trim(), description: description.trim(), content: content.trim() };
-  // The explicit "nothing to save" sentinel — or any blank required field.
-  if (!trimmed.name || !trimmed.description || !trimmed.content) return null;
-  return trimmed;
+  // The explicit "nothing to save" sentinel: every field blank.
+  if (!trimmed.name && !trimmed.description && !trimmed.content) return { kind: 'none' };
+  if (!trimmed.name || !trimmed.description || !trimmed.content) {
+    return { kind: 'malformed', reason: 'some but not all required fields are blank' };
+  }
+  return { kind: 'skill', skill: trimmed };
 }
 
 /**

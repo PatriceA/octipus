@@ -1,43 +1,57 @@
 import { describe, expect, test } from 'vitest';
-import { cosine, normalizeSkillName, parseDistilledSkill, skillFingerprint } from './distiller';
+import { cosine, interpretDistillOutput, normalizeSkillName, skillFingerprint } from './distiller';
 
-describe('parseDistilledSkill', () => {
+describe('interpretDistillOutput', () => {
   const good = JSON.stringify({ name: 'deploy-runbook', description: 'How to deploy', content: '1. build\n2. ship' });
 
   test('parses a clean JSON object', () => {
-    expect(parseDistilledSkill(good)).toEqual({
-      name: 'deploy-runbook',
-      description: 'How to deploy',
-      content: '1. build\n2. ship',
+    expect(interpretDistillOutput(good, 'stop')).toEqual({
+      kind: 'skill',
+      skill: { name: 'deploy-runbook', description: 'How to deploy', content: '1. build\n2. ship' },
     });
   });
 
   test('tolerates a ```json fence and surrounding prose', () => {
     const raw = 'Here you go:\n```json\n' + good + '\n```\nHope that helps.';
-    expect(parseDistilledSkill(raw)?.name).toBe('deploy-runbook');
+    expect(interpretDistillOutput(raw, 'stop')).toMatchObject({ kind: 'skill', skill: { name: 'deploy-runbook' } });
   });
 
   test('trims fields', () => {
     const raw = JSON.stringify({ name: '  x-y ', description: ' d ', content: ' c ' });
-    expect(parseDistilledSkill(raw)).toEqual({ name: 'x-y', description: 'd', content: 'c' });
+    expect(interpretDistillOutput(raw)).toEqual({ kind: 'skill', skill: { name: 'x-y', description: 'd', content: 'c' } });
   });
 
-  test('the blank sentinel (nothing worth saving) ⇒ null', () => {
-    expect(parseDistilledSkill(JSON.stringify({ name: '', description: '', content: '' }))).toBeNull();
+  test('the blank sentinel is the only "nothing worth saving"', () => {
+    expect(interpretDistillOutput(JSON.stringify({ name: '', description: '', content: '' }), 'stop')).toEqual({ kind: 'none' });
   });
 
-  test('any blank required field ⇒ null', () => {
-    expect(parseDistilledSkill(JSON.stringify({ name: 'x', description: '', content: 'c' }))).toBeNull();
+  // Regression: a 1500-token cap cut the JSON mid-string and the tool told the
+  // user there was "nothing worth distilling".
+  test("finishReason 'length' ⇒ truncated, never none", () => {
+    const cut = good.slice(0, 40);
+    expect(interpretDistillOutput(cut, 'length')).toEqual({ kind: 'truncated' });
+    expect(interpretDistillOutput(good, 'length')).toEqual({ kind: 'truncated' });
   });
 
-  test('missing / non-string field ⇒ null', () => {
-    expect(parseDistilledSkill(JSON.stringify({ name: 'x', description: 'd' }))).toBeNull();
-    expect(parseDistilledSkill(JSON.stringify({ name: 1, description: 'd', content: 'c' }))).toBeNull();
+  test('cut-off JSON without a length signal ⇒ malformed', () => {
+    expect(interpretDistillOutput(good.slice(0, 40), 'stop')).toMatchObject({ kind: 'malformed' });
   });
 
-  test('unparseable output ⇒ null', () => {
-    expect(parseDistilledSkill('not json at all')).toBeNull();
-    expect(parseDistilledSkill('')).toBeNull();
+  test('partially blank fields ⇒ malformed', () => {
+    expect(interpretDistillOutput(JSON.stringify({ name: 'x', description: '', content: 'c' }))).toMatchObject({ kind: 'malformed' });
+  });
+
+  test('missing / non-string field ⇒ malformed', () => {
+    expect(interpretDistillOutput(JSON.stringify({ name: 'x', description: 'd' }))).toMatchObject({ kind: 'malformed' });
+    expect(interpretDistillOutput(JSON.stringify({ name: 1, description: 'd', content: 'c' }))).toMatchObject({ kind: 'malformed' });
+  });
+
+  test('unparseable output ⇒ malformed with a reason', () => {
+    expect(interpretDistillOutput('not json at all')).toEqual({ kind: 'malformed', reason: 'no JSON object in the response' });
+    expect(interpretDistillOutput('')).toMatchObject({ kind: 'malformed' });
+    const bad = interpretDistillOutput('{"name": "ECHO_MARKER_7f3a",}');
+    expect(bad).toEqual({ kind: 'malformed', reason: 'invalid JSON' });
+    expect(JSON.stringify(bad)).not.toContain('ECHO_MARKER_7f3a');
   });
 });
 
