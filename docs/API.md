@@ -281,7 +281,9 @@ inert and stays in the array.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/email/send` | Send an email (gated) |
-| POST | `/api/email/triage` | Run email triage |
+| POST | `/api/email/triage` | Run email triage (`items`, `autoArchive`, `applyLabels` → Gmail label / Outlook category `Octipus/<category>`) |
+| GET | `/api/email/categories` | The user's triage categories and the presets |
+| PUT | `/api/email/categories` | Save the user's categories (`{categories: {name: description}}`, `null` resets) |
 
 ## Capabilities
 

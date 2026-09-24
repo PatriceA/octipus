@@ -1,8 +1,13 @@
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import {
+  applyCategoryLabels,
   archiveMessage,
   autoArchive,
+  DEFAULT_CATEGORIES,
+  getCategories,
+  setCategories,
+  validateCategories,
   unarchiveMessage,
   detectProvider,
   draftReply,
@@ -25,6 +30,22 @@ import { isAuthenticated } from '@/security/principal';
  */
 export const emailRoutes = new Elysia({ prefix: '/email' })
   .use(apiContext)
+
+  // Triage categories: the user's list (or the presets) and the presets for "reset".
+  .get('/categories', async ({ user, principal, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    return { categories: await getCategories(user.id), defaults: DEFAULT_CATEGORIES };
+  }, { detail: { tags: ['email'] } })
+
+  // Save the list; `categories: null` resets to the presets.
+  .put('/categories', async ({ user, principal, body, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    const raw = (body as { categories?: unknown } | undefined)?.categories;
+    if (raw === null) return { categories: await setCategories(user.id, null) };
+    const clean = validateCategories(raw);
+    if (typeof clean === 'string') { set.status = 400; return { error: clean }; }
+    return { categories: await setCategories(user.id, clean) };
+  }, { detail: { tags: ['email'] } })
 
   // Inbox list (read-only).
   .get(
@@ -230,13 +251,21 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
       try {
         const provider = await detectProvider(user.id);
         if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
-        const req = body as { items?: Array<Pick<InboxItem, 'id' | 'from' | 'subject' | 'snippet'>>; autoArchive?: boolean } | undefined;
+        const req = body as { items?: Array<Pick<InboxItem, 'id' | 'from' | 'subject' | 'snippet'>>; autoArchive?: boolean; applyLabels?: boolean } | undefined;
         const items: InboxItem[] = req?.items
           ? req.items.map((it) => ({ ...it, provider, receivedAt: '', unread: false }))
           : (await getInbox(user.id, 30)).items;
         const triage = await triageInbox(user.id, items);
+        // Label first: an archived mail still gets its category label. A label
+        // failure (e.g. a token without label scope) must not lose the triage.
+        let labeled = 0;
+        let labelError: string | undefined;
+        if (req?.applyLabels) {
+          try { labeled = await applyCategoryLabels(user.id, provider, triage); }
+          catch (err) { labelError = (err as Error).message; }
+        }
         const archived = req?.autoArchive ? await autoArchive(user.id, provider, triage) : [];
-        return { triage, archived };
+        return { triage, archived, labeled, ...(labelError ? { labelError } : {}) };
       } catch (err) {
         set.status = 400;
         return { error: (err as Error).message };
@@ -251,6 +280,7 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
           snippet: t.String({ maxLength: 2000 }),
         }), { maxItems: 500 })),
         autoArchive: t.Optional(t.Boolean()),
+        applyLabels: t.Optional(t.Boolean()),
       })),
       detail: { tags: ['email'] },
     }

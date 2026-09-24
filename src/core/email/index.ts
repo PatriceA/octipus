@@ -1,6 +1,11 @@
 export {
+  applyCategoryLabels,
   archiveMessage,
   autoArchive,
+  DEFAULT_CATEGORIES,
+  getCategories,
+  setCategories,
+  validateCategories,
   unarchiveMessage,
   draftReply,
   getInbox,

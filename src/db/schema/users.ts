@@ -44,6 +44,8 @@ export interface UserPreferences {
   notificationsEnabled?: boolean;
   defaultModel?: string;
   timezone?: string;
+  /** Email triage categories, name → description (src/core/email/service.ts). Unset = presets. */
+  emailCategories?: Record<string, string>;
 }
 
 export type User = typeof users.$inferSelect;

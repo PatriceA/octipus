@@ -50,6 +50,22 @@ describe('categories and auto-archive', () => {
     expect(coerceCategory('Spam')).toBe('spam');
     expect(coerceCategory('marketing')).toBe('promotion');
     expect(coerceCategory('shopping')).toBe('other');
+    expect(coerceCategory('travel', { travel: 'trips', other: 'x' })).toBe('travel');
+    expect(coerceCategory('marketing', { travel: 'trips', other: 'x' })).toBe('other'); // no promotion bucket to alias to
+  });
+  test('user category lists are validated at the boundary; other is always kept', async () => {
+    const { validateCategories } = await import('./service');
+    expect(validateCategories({ travel: ' trips\nand  bookings ' })).toEqual({ travel: 'trips and bookings', other: 'none of the above' });
+    expect(validateCategories({ 'Bad Name': 'x' })).toMatch(/invalid category name/);
+    expect(validateCategories({ ok: '' })).toMatch(/description/);
+    expect(validateCategories(['a'])).toMatch(/object/);
+    expect(Object.keys(validateCategories(Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`c${i}`, 'x']))))).toHaveLength(21); // 20 + other
+    expect(validateCategories(Object.fromEntries(Array.from({ length: 21 }, (_, i) => [`c${i}`, 'x'])))).toMatch(/at most 20/);
+  });
+  test('labels group ids by category', async () => {
+    const { idsByCategory } = await import('./service');
+    expect([...idsByCategory({ a: { priority: 'low', category: 'spam' }, b: { priority: 'high', category: 'work' }, c: { priority: 'low', category: 'spam' }, d: { priority: 'low' } })])
+      .toEqual([['spam', ['a', 'c']], ['work', ['b']]]);
   });
   test('only LOW-priority spam/promotion is auto-archived', async () => {
     const { autoArchiveIds } = await import('./service');

@@ -237,8 +237,12 @@ certain.
   the threshold.
 - Every site logs a `decision shadow` line containing labels, counts or
   probabilities only, never content. `scripts/decision-shadow.ts` reads the
-  backend's raw JSON logs on stdin and reports agreement per site, for
-  example `docker logs octipus 2>&1 | npx tsx scripts/decision-shadow.ts`.
+  backend log on stdin, either raw JSON or the pretty format that `octi`
+  writes, and reports agreement per site, for example
+  `npx tsx scripts/decision-shadow.ts < ~/.octipus/backend.log`. Email triage
+  reports priority and category agreement separately, and both paths now
+  share one priority rubric, so a disagreement is about the mail rather than
+  about two different definitions of "high".
   Logs go to stdout only, so no table is needed until a log pipe proves
   insufficient.
 

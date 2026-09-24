@@ -1,6 +1,6 @@
 'use client';
 
-import { Archive, FileText, ListPlus, Loader2, Mail, RefreshCw, Send, Sparkles, X } from 'lucide-react';
+import { Archive, FileText, ListPlus, Loader2, Mail, Plus, RefreshCw, Send, Sparkles, Tags, Trash2, X } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
@@ -50,7 +50,15 @@ export default function EmailPage() {
   // THEN a draft is generated — instead of the model assuming a stance.
   const [replyOpts, setReplyOpts] = useState<string[] | null>(null);
   // Inbox filter (client-side over the loaded page): all / unread / by priority.
-  const [filter, setFilter] = useState<'all' | 'unread' | 'high' | 'normal' | 'low'>('all');
+  // Category filters are `cat:<name>`.
+  const [filter, setFilter] = useState<string>('all');
+  // Put each triaged mail's category on it as a label (Gmail) / category (Outlook).
+  const [applyLabelsOn, setApplyLabelsOn] = useState(() => {
+    try { return localStorage.getItem('email.applyLabels') !== 'off'; } catch { return true; }
+  });
+  // Category editor: rows while editing, null when closed.
+  const [catRows, setCatRows] = useState<Array<{ name: string; description: string }> | null>(null);
+  const [catDefaults, setCatDefaults] = useState<Record<string, string>>({});
   // Auto-archive low-priority spam/marketing on triage. Per-browser preference;
   // archive is reversible (All Mail / Archive folder) and the last batch has Undo.
   const [autoArchiveOn, setAutoArchiveOn] = useState(() => {
@@ -181,6 +189,29 @@ export default function EmailPage() {
     } finally { setBusy(''); }
   };
 
+  const toggleApplyLabels = (on: boolean) => {
+    setApplyLabelsOn(on);
+    try { localStorage.setItem('email.applyLabels', on ? 'on' : 'off'); } catch { /* preference only */ }
+  };
+
+  const toRows = (c: Record<string, string>) => Object.entries(c).map(([name, description]) => ({ name, description }));
+  const openCategories = async () => {
+    try {
+      const res = await api.get<{ categories: Record<string, string>; defaults: Record<string, string> }>('/email/categories');
+      setCatDefaults(res.defaults);
+      setCatRows(toRows(res.categories));
+    } catch (err) { setError((err as Error).message); }
+  };
+  const saveCategories = async (reset = false) => {
+    if (!catRows) return;
+    setBusy('categories');
+    try {
+      const categories = reset ? null : Object.fromEntries(catRows.filter((r) => r.name.trim()).map((r) => [r.name.trim().toLowerCase(), r.description]));
+      await api.put('/email/categories', { categories });
+      setCatRows(null); setNotice('Categories saved. They apply from the next triage.');
+    } catch (err) { setError((err as Error).message); } finally { setBusy(''); }
+  };
+
   const toggleAutoArchive = (on: boolean) => {
     setAutoArchiveOn(on);
     try { localStorage.setItem('email.autoArchive', on ? 'on' : 'off'); } catch { /* preference only */ }
@@ -190,9 +221,10 @@ export default function EmailPage() {
     setTriaging(true); setNotice(''); setLastArchived([]);
     try {
       // Triage every loaded row, not just the first page the server would fetch.
-      const res = await api.post<{ triage?: Record<string, Triage>; archived?: string[]; error?: string }>('/email/triage', {
+      const res = await api.post<{ triage?: Record<string, Triage>; archived?: string[]; labeled?: number; labelError?: string; error?: string }>('/email/triage', {
         items: items.map(({ id, from, subject, snippet }) => ({ id, from, subject, snippet })),
         autoArchive: autoArchiveOn,
+        applyLabels: applyLabelsOn,
       });
       if (res.triage) {
         const t = res.triage;
@@ -207,6 +239,8 @@ export default function EmailPage() {
           {} as Record<string, number>,
         );
         setNotice(`Triaged ${Object.keys(t).length}: ${counts.high ?? 0} high · ${counts.normal ?? 0} normal · ${counts.low ?? 0} low.`
+          + (res.labeled ? ` Labelled ${res.labeled}.` : '')
+          + (res.labelError ? ` Labelling failed: ${res.labelError}` : '')
           + (gone.size ? ` Archived ${gone.size} low-priority spam/marketing.` : ''));
       } else if (res.error) setError(res.error);
     } finally { setTriaging(false); }
@@ -232,8 +266,13 @@ export default function EmailPage() {
   const visibleItems = items.filter((it) => {
     if (filter === 'all') return true;
     if (filter === 'unread') return it.unread;
+    if (filter.startsWith('cat:')) return it.triage?.category === filter.slice(4);
     return it.triage?.priority === filter;
   });
+  const categoryCounts = items.reduce((acc, it) => {
+    if (it.triage?.category) acc[it.triage.category] = (acc[it.triage.category] ?? 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
 
   return (
     <div className="space-y-6">
@@ -242,6 +281,13 @@ export default function EmailPage() {
         description="triage assistant — read, summarize, draft replies, archive. sends always ask first"
         actions={provider ? (
           <div className="flex items-center gap-3">
+          <label className="text-xs text-on-surface-variant inline-flex items-center gap-1.5 cursor-pointer" title="On triage, tag each mail with its category: a Gmail label or an Outlook category named Octipus/<category>. Mail is not moved.">
+            <input type="checkbox" checked={applyLabelsOn} onChange={(e) => toggleApplyLabels(e.target.checked)} className="w-3.5 h-3.5 rounded border-outline-variant text-primary" />
+            label by category
+          </label>
+          <button onClick={() => (catRows ? setCatRows(null) : openCategories())} title="Edit triage categories" className="px-3 py-2 text-sm border border-outline-variant/20 rounded-full hover:bg-surface-container-high inline-flex items-center gap-1.5 text-on-surface">
+            <Tags className="w-4 h-4" /> Categories
+          </button>
           <label className="text-xs text-on-surface-variant inline-flex items-center gap-1.5 cursor-pointer" title="On triage, archive mail rated low priority AND spam or marketing. Archived mail is not deleted — it stays in All Mail / Archive, and the last batch can be undone.">
             <input type="checkbox" checked={autoArchiveOn} onChange={(e) => toggleAutoArchive(e.target.checked)} className="w-3.5 h-3.5 rounded border-outline-variant text-primary" />
             auto-archive spam &amp; marketing
@@ -268,6 +314,27 @@ export default function EmailPage() {
             </button>
           )}
           <button onClick={() => setNotice('')} className="ml-2 underline">dismiss</button>
+        </div>
+      )}
+
+      {catRows && (
+        <div className="rounded-xs border border-outline-variant/10 bg-surface p-4 space-y-2">
+          <p className="text-sm text-on-surface">Triage categories</p>
+          <p className="text-xs text-on-surface-variant">The description tells the model what belongs in the category. Names: lowercase letters, digits, - and _. &quot;other&quot; is always kept as the fallback; auto-archive uses &quot;spam&quot; and &quot;promotion&quot;.</p>
+          {catRows.map((r, i) => (
+            <div key={i} className="flex flex-wrap gap-2 items-center">
+              <input aria-label="Category name" value={r.name} maxLength={32} onChange={(e) => setCatRows(catRows.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} className="w-40 rounded-xs border border-outline-variant/20 bg-surface px-2 py-1 text-sm text-on-surface" />
+              <input aria-label="Category description" value={r.description} maxLength={200} onChange={(e) => setCatRows(catRows.map((x, j) => (j === i ? { ...x, description: e.target.value } : x)))} className="flex-1 min-w-48 rounded-xs border border-outline-variant/20 bg-surface px-2 py-1 text-sm text-on-surface" />
+              <button aria-label={`Remove ${r.name}`} onClick={() => setCatRows(catRows.filter((_, j) => j !== i))} className="text-on-surface-variant hover:text-error"><Trash2 className="w-4 h-4" /></button>
+            </div>
+          ))}
+          <div className="flex flex-wrap gap-2 pt-1">
+            <button onClick={() => setCatRows([...catRows, { name: '', description: '' }])} disabled={catRows.length >= 20} className="px-2.5 py-1.5 text-sm border border-outline-variant/20 rounded-xs hover:bg-surface-container-high inline-flex items-center gap-1.5 text-on-surface disabled:opacity-50"><Plus className="w-3.5 h-3.5" /> Add</button>
+            <button onClick={() => saveCategories()} disabled={busy === 'categories'} className="px-3 py-1.5 text-sm bg-linear-to-r from-primary to-primary-container text-on-primary rounded-full hover:opacity-90 disabled:opacity-50">Save</button>
+            <button onClick={() => setCatRows(toRows(catDefaults))} className="px-3 py-1.5 text-sm text-on-surface-variant hover:text-on-surface" title="Load the presets into the editor; Save to keep them">Presets</button>
+            <button onClick={() => saveCategories(true)} disabled={busy === 'categories'} className="px-3 py-1.5 text-sm text-on-surface-variant hover:text-on-surface" title="Forget your list and follow the presets">Reset</button>
+            <button onClick={() => setCatRows(null)} className="px-3 py-1.5 text-sm text-on-surface-variant hover:text-on-surface">Cancel</button>
+          </div>
         </div>
       )}
 
@@ -302,6 +369,19 @@ export default function EmailPage() {
                   {label}
                 </button>
               ))}
+              {Object.entries(categoryCounts).sort(([a], [b]) => a.localeCompare(b)).map(([cat, n]) => (
+                <button
+                  key={cat}
+                  onClick={() => setFilter(`cat:${cat}`)}
+                  className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                    filter === `cat:${cat}`
+                      ? 'border-accent/40 bg-accent-container/30 text-on-surface'
+                      : 'border-outline-variant/20 text-on-surface-variant hover:bg-surface-container-high'
+                  }`}
+                >
+                  {cat} {n}
+                </button>
+              ))}
             </div>
             {items.length === 0 && (
               <div className="py-10 text-center font-mono">
@@ -321,6 +401,7 @@ export default function EmailPage() {
                 <div className="flex items-center gap-2">
                   {it.unread && <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />}
                   <span className={`text-sm truncate flex-1 ${it.unread ? 'font-semibold text-on-surface' : 'text-on-surface-variant'}`}>{it.from.name || it.from.email}</span>
+                  {it.triage?.category && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-accent-container/30 text-on-surface-variant">{it.triage.category}</span>}
                   {it.triage && <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${priorityBadge[it.triage.priority]}`}>{it.triage.priority}</span>}
                 </div>
                 <div className="text-sm text-on-surface truncate">{it.subject}</div>
