@@ -1142,16 +1142,17 @@ async function runApiPhase(baseUrl: string, _ctx: WizardCtx | null): Promise<voi
     // row needs no apiKeyRef; ollama/litellm carry their endpoint.
     const modelName = `${def.id} ${provider.model}`;
     try {
-      const res = await api.post<{ error?: string }>('/api/models', {
-        name: modelName,
-        provider: def.id,
-        modelId: provider.model,
-        ...(provider.baseUrl ? { endpoint: provider.baseUrl } : {}),
-      });
-      // POST returns 200 with {error} on duplicate — a rerun is fine, we still
-      // (re)assert the bindings below.
-      if (res?.error && !/already exists/i.test(res.error)) {
-        throw new Error(res.error);
+      try {
+        await api.post('/api/models', {
+          name: modelName,
+          provider: def.id,
+          modelId: provider.model,
+          ...(provider.baseUrl ? { endpoint: provider.baseUrl } : {}),
+        });
+      } catch (err) {
+        // A rerun hits the duplicate (400 "already exists") — fine, we still
+        // (re)assert the bindings below. Anything else is a real failure.
+        if (!(err instanceof ApiError && /already exists/i.test(err.serverMessage))) throw err;
       }
       const bound = await api.post<{ error?: string; topics?: string[] }>('/api/topics/assign-all', { model: modelName });
       if (bound.error) throw new Error(bound.error);

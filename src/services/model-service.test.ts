@@ -33,6 +33,13 @@ describe('registerModel — OpenRouter slash validation', () => {
   });
 });
 
+describe('registerModel — output limits', () => {
+  it('an explicit per-request default above the ceiling is still rejected', async () => {
+    const result = await registerModel({ provider: 'typesafe', modelId: 'typesafe-ai/jev', name: 'jev', maxTokens: 1024, defaultMaxTokens: 2048 });
+    expect(result).toEqual({ error: 'defaultMaxTokens must not exceed maxTokens.' });
+  });
+});
+
 describe('managed CLI model configuration validation', () => {
   const createBody = { name: 'cli-test', provider: 'cli', modelId: 'cli/claude-code' };
 
@@ -143,8 +150,11 @@ describe('direct provider settings validation', () => {
     expect(await registerModel({ name: 'bad-limits', modelId: 'gpt-5', provider: 'openai', ...limits })).toMatchObject({ error: expect.stringContaining(message) });
     expect(registry.registerModel).not.toHaveBeenCalled();
   });
-  it('uses the stored column default when validating an omitted create default', async () => {
-    expect(await registerModel({ name: 'small-max', modelId: 'gpt-5', provider: 'openai', maxTokens: 2048 })).toMatchObject({ error: expect.stringContaining('must not exceed') });
+  it('an omitted create default below the column default is stored as the ceiling, not rejected', async () => {
+    // Storing the column default (16384) would give a row its own validator
+    // rejects; rejecting the create instead broke every small-ceiling model the
+    // UI adds (it never sends defaultMaxTokens). The row must be coherent either way.
+    expect(await registerModel({ name: 'small-max', modelId: 'gpt-5', provider: 'openai', maxTokens: 2048 })).toMatchObject({ maxTokens: 2048, defaultMaxTokens: 2048 });
   });
   it('stores column defaults that satisfy the limits validator', async () => {
     // The two limits are validated against each other, so a migration that

@@ -132,6 +132,12 @@ function validateCliMetadata(modelId: string, metadata: unknown): string | null 
  * Returns the created model, or `{ error }` on a validation/DB failure.
  */
 export async function registerModel(body: Record<string, unknown>) {
+  // An omitted per-request default means "as much as this model allows", not the
+  // column default (16384): storing that for a model whose ceiling is lower
+  // produced a row its own validator rejects (Jev: maxTokens 1024).
+  if (body.defaultMaxTokens === undefined && typeof body.maxTokens === 'number' && body.maxTokens < DEFAULT_MAX_OUTPUT_TOKENS) {
+    body = { ...body, defaultMaxTokens: body.maxTokens };
+  }
   const provider = body.provider as string;
   const modelId = body.modelId as string;
   const name = body.name as string;

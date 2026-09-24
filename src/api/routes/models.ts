@@ -117,9 +117,16 @@ export const modelRoutes = new Elysia({ prefix: '/models' })
   // Register a new model (admin only)
   .post(
     '/',
-    async ({ user, body }) => {
-      if (!user?.isAdmin) return { error: 'Admin access required' };
-      return registerModel(body as Record<string, unknown>);
+    async ({ user, body, set }) => {
+      if (!user?.isAdmin) {
+        set.status = 403;
+        return { error: 'Admin access required' };
+      }
+      // A 200 carrying { error } looked like success to every client: the web
+      // modal closed and the model silently did not exist.
+      const result = await registerModel(body as Record<string, unknown>);
+      if ('error' in result) set.status = 400;
+      return result;
     },
     {
       body: t.Object({
