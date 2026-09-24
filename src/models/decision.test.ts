@@ -182,6 +182,19 @@ describe('decide() gate wiring', () => {
     w.restore();
   });
 
+  it('an account without ZDR is remembered: one rejected request, then personal sites fall back without calling', async () => {
+    const { decide, ZdrUnavailableError } = await import('./decision');
+    const w = await wire({ provider: 'typesafe', modelId: 'typesafe-ai/jev', name: 'jev-zdr' });
+    w.sent.mockRejectedValue(new ZdrUnavailableError('hobby'));
+    const personal = { id: 'z', sensitivity: 'personal' as const, minConfidence: 0 };
+    expect(await decide(personal, 's', q)).toBeNull();
+    expect(await decide(personal, 's', q)).toBeNull();
+    expect(w.sent).toHaveBeenCalledTimes(1);
+    expect(await decide({ ...personal, sensitivity: 'public' }, 's', q)).toBeNull(); // mock still rejects, but public needs no ZDR…
+    expect(w.sent).toHaveBeenCalledTimes(2); // …so it is still sent
+    w.restore();
+  });
+
   it('PII in question criteria is redacted before a remote call; option keys survive', async () => {
     const { decide } = await import('./decision');
     const w = await wire({ provider: 'typesafe', modelId: 'typesafe-ai/jev' });

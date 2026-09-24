@@ -5,7 +5,7 @@ import { coreLogger, modelLogger } from '@/utils/logger';
 import type { CompletionOptions, CompletionResult, StreamChunk } from '../litellm-client';
 import type { ModelProvider, ProviderHealthStatus } from './interface';
 import { fetchWithRetryAfter, withTimeoutSignal } from './http-retry';
-import { isGatewayModelId, type DecisionAnswer, type DecisionAnswers, type DecisionQuestion, type DecisionRequest } from '../decision';
+import { isGatewayModelId, ZdrUnavailableError, type DecisionAnswer, type DecisionAnswers, type DecisionQuestion, type DecisionRequest } from '../decision';
 
 const TYPESAFE_URL = 'https://api.typesafe.ai/v1/systemone';
 const GATEWAY_URL = 'https://ai-gateway.vercel.sh/v1/evaluate';
@@ -72,7 +72,11 @@ export class TypeSafeProvider implements ModelProvider {
       signal: withTimeoutSignal(10_000),
     }, this.name);
     if (!response.ok) {
-      throw classifyError({ status: response.status, message: await response.text() }, this.name);
+      const text = await response.text();
+      if (gateway && req.zeroDataRetention && response.status === 403 && /ZdrUnauthorized|Zero Data Retention/i.test(text)) {
+        throw new ZdrUnavailableError('the Vercel plan does not include zero data retention (Pro/Enterprise only)');
+      }
+      throw classifyError({ status: response.status, message: text }, this.name);
     }
 
     const raw = await response.json() as { model?: string; answers?: Record<string, any>; usage?: Record<string, number>; providerMetadata?: { gateway?: { cost?: string } } };

@@ -36,6 +36,9 @@ export interface DecisionRequest {
 
 export type Sensitivity = 'public' | 'personal' | 'secret';
 
+/** The route can do ZDR in principle, but this account may not (Vercel Hobby → 403). */
+export class ZdrUnavailableError extends Error {}
+
 export interface DecisionSite {
   /** Stable id for logs and evals, e.g. 'email.triage'. */
   id: string;
@@ -154,6 +157,22 @@ const UNBOUND_TTL_MS = 30_000;
 let unboundUntil = 0;
 
 /**
+ * Per model: when the account turned out not to have ZDR, stop asking for it
+ * for an hour. The gate then treats the route as retaining, so personal sites
+ * fall back without a request. Also rate-limits the repeating log lines — the
+ * sites run per email / per memory candidate / per turn.
+ */
+const REMEMBER_MS = 3_600_000;
+const zdrUnavailableUntil = new Map<string, number>();
+const lastLogged = new Map<string, number>();
+function firstThisHour(key: string): boolean {
+  const now = Date.now();
+  if ((lastLogged.get(key) ?? 0) > now) return false;
+  lastLogged.set(key, now + REMEMBER_MS);
+  return true;
+}
+
+/**
  * Ask the model bound to the `decision` topic. Returns null — and the caller
  * falls back to its LLM path — when nothing is bound, the privacy gate
  * refuses, the call fails, the answer is malformed, or any answer is below
@@ -197,6 +216,7 @@ async function decideUnguarded(site: DecisionSite, state: unknown, questions: Re
   const { getConfig } = await import('@/config');
   const ollamaUrl = getConfig().ollama.url;
   let policy = resolveDataPolicy(model, ollamaUrl);
+  if (policy.zdrRoute && (zdrUnavailableUntil.get(model.name) ?? 0) > Date.now()) policy = { ...policy, zdrRoute: false };
   // A private endpoint is not proof of local inference: Ollama forwards cloud
   // models (`gpt-oss:120b-cloud`) through localhost. Ask it where the model runs.
   if (model.provider === 'ollama' && policy.hosting === 'local') {
@@ -205,7 +225,7 @@ async function decideUnguarded(site: DecisionSite, state: unknown, questions: Re
   }
   const verdict = gateDecision(site.sensitivity, policy, model.metadata?.allowRetainedPersonalData);
   if (!verdict.allowed) {
-    modelLogger.info({ site: site.id, model: model.name, reason: verdict.reason }, 'Decision blocked by privacy gate; falling back');
+    if (firstThisHour(`gate|${site.id}|${verdict.reason}`)) modelLogger.info({ site: site.id, model: model.name, reason: verdict.reason }, 'Decision blocked by privacy gate; falling back (logged once per hour)');
     return null;
   }
   if (verdict.redactPII) {
@@ -233,6 +253,11 @@ async function decideUnguarded(site: DecisionSite, state: unknown, questions: Re
     answers = await withProviderUsageContext({ modelConfigName: model.name, accountingMetadata: { decisionSite: site.id } }, () =>
       provider.decide!({ model: model.modelId, state, questions, zeroDataRetention: verdict.zeroDataRetention, endpoint: model.endpoint ?? undefined }));
   } catch (err) {
+    if (err instanceof ZdrUnavailableError) {
+      zdrUnavailableUntil.set(model.name, Date.now() + REMEMBER_MS);
+      if (firstThisHour(`zdr|${model.name}`)) modelLogger.warn({ model: model.name, reason: err.message }, 'Zero data retention is not available on this account; personal decision sites stay on their LLM path (upgrade the plan, opt in per model, or bind a local decision model)');
+      return null;
+    }
     modelLogger.warn({ err, site: site.id, model: model.name }, 'Decision call failed; falling back');
     return null;
   }
