@@ -122,7 +122,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
     agent: {
       maxConcurrentAgents: parseInt(process.env.MAX_CONCURRENT_AGENTS || '10', 10),
       defaultTimeout: parseInt(process.env.AGENT_DEFAULT_TIMEOUT || '900000', 10),
-      maxIterations: parseInt(process.env.AGENT_MAX_ITERATIONS || '50', 10),
+      maxIterations: parseInt(process.env.AGENT_MAX_ITERATIONS || '0', 10),
       contextWindowSize: parseInt(process.env.CONTEXT_WINDOW_SIZE || '32000', 10),
       maxTokenBudget: parseInt(process.env.AGENT_MAX_TOKEN_BUDGET || '100000', 10),
       streaming: true, // no env form: the `agent.streaming` setting owns it

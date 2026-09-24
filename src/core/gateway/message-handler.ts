@@ -1,3 +1,4 @@
+import { isSessionControlMessage } from '@/core/session-controls';
 import { coreLogger } from '@/utils/logger';
 import { getCommandRegistry } from './commands';
 import type { GatewayHub } from './hub';
@@ -38,6 +39,7 @@ export async function sessionAccessError(sessionId: string, context: Pick<Connec
 
 /** Exported for unit tests. */
 export async function trySteerRunningRootAgent(sessionId: string, content: string): Promise<boolean> {
+  if (isSessionControlMessage(content)) return false;
   const { getAgentManager } = await import('@/core/agent-manager');
   const mgr = getAgentManager();
   const target = mgr

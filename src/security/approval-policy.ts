@@ -63,7 +63,7 @@ export function canPromptHuman(caller: { role?: string; root?: boolean; attended
  * `mobile`, `acp`, and the messaging adapters, which relay the prompt and read
  * the yes/no reply — all prompt.
  */
-const UNPROMPTABLE_CHANNELS = new Set(['api', 'hook', 'heartbeat', 'cron', 'agent', 'qa-demo']);
+const UNPROMPTABLE_CHANNELS = new Set(['api', 'hook', 'heartbeat', 'monitor', 'cron', 'agent', 'qa-demo']);
 
 /** Can an approval raised on this channel actually reach a person? */
 export function channelCanPrompt(channel: string | undefined): boolean {

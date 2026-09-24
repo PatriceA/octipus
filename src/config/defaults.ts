@@ -65,7 +65,7 @@ export const defaultConfig: Partial<Config> = {
   agent: {
     maxConcurrentAgents: 10,
     defaultTimeout: 900000,
-    maxIterations: 50,
+    maxIterations: 0,
     contextWindowSize: 32000,
     maxTokenBudget: 100000,
     streaming: true,

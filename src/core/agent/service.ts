@@ -1,3 +1,5 @@
+import { isSessionControlMessage } from '@/core/session-controls';
+import { withSessionTurn } from '@/core/session-turn-lock';
 import { sessionGeneration } from '@/db/schema/sessions';
 import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
@@ -50,6 +52,11 @@ export interface TurnEvent {
   userId?: string;
   data: unknown;
   timestamp: Date;
+}
+
+export type TurnOutcome = 'success' | 'failed' | 'cancelled';
+export interface TurnResult {
+  response: string; sessionId?: string; agentId?: string; classification: MessageClassification; metadata?: ResponseMetadata; outcome?: TurnOutcome;
 }
 
 export class AgentService {
@@ -132,12 +139,39 @@ export class AgentService {
     channel?: string,
     attachedFiles: AttachedFileRef[] = [],
     forcedOutputMode?: 'inline' | 'file',
-  ): Promise<{ response: string; sessionId?: string; agentId?: string; classification: MessageClassification; metadata?: ResponseMetadata }> {
-    const runId = generateRunId();
-    return runWithContext(
-      { runId, sessionId, userId, channel: channel ?? 'api', origin: channel ?? 'api' },
-      () => this.handleMessageInner(sessionId, userId, message, channel, attachedFiles, forcedOutputMode),
-    );
+    /** Durable background wake-ups claim delivery only after prior turns finish. */
+    beforeStart?: () => Promise<void>,
+  ): Promise<TurnResult> {
+    // Controls must reach a running turn; queuing /stop behind it defeats cancellation.
+    // Background wake-ups always take the normal queue and cannot invoke this path.
+    if (!beforeStart) {
+      const control = isSessionControlMessage(message);
+      const approvals = this.approvalManager.getPendingApprovals(userId);
+      if (control || approvals.length === 1) {
+        const resolvedId = await resolveSession(sessionId, userId, channel ?? 'api');
+        const session = await sessionRepository.findById(resolvedId);
+        if (!session || session.userId !== userId) throw new Error('Session not found');
+        if (control) {
+          const response = await handleCommand(message.trim(), resolvedId, userId);
+          if (response) return { response, sessionId: resolvedId, classification: { type: 'casual', confidence: 1 } };
+        } else if (approvals[0]?.sessionId === resolvedId && this.approvalManager.tryResolveFromMessage(message, userId)) {
+          return { response: 'Got it, continuing...', sessionId: resolvedId, classification: { type: 'approval', confidence: 1 } };
+        }
+      }
+    }
+    return withSessionTurn(sessionId, async () => {
+      await beforeStart?.();
+      const runId = generateRunId();
+      return runWithContext(
+        { runId, sessionId, userId, channel: channel ?? 'api', origin: channel ?? 'api' },
+        () => this.handleMessageInner(sessionId, userId, message, channel, attachedFiles, forcedOutputMode),
+      );
+    });
+  }
+
+  /** Publish a background reply through the same event stream as interactive replies. */
+  publishResponse(sessionId: string, userId: string, result: TurnResult): void {
+    this.emit({ type: 'chat_response', sessionId, userId, data: result, timestamp: new Date() });
   }
 
   private async handleMessageInner(
@@ -163,7 +197,7 @@ export class AgentService {
      * normal way instead of being re-proposed.
      */
     bypassVoiceGate = false,
-  ): Promise<{ response: string; sessionId?: string; agentId?: string; classification: MessageClassification; metadata?: ResponseMetadata }> {
+  ): Promise<TurnResult> {
     // Trajectory recorder — observes this run for later eval/fine-tuning.
     // Constructed early so the sessionId below can overwrite it.
     let trajectory: TrajectoryRecorder | null = null;
@@ -359,7 +393,7 @@ export class AgentService {
           coreLogger.warn({ err }, 'memory.retrieveForContext failed on plan path');
         }
 
-        const { response, agentId, sources: _planSources } = await this.runRootAgent(
+        const { response, agentId, sources: _planSources, outcome } = await this.runRootAgent(
           resolvedSessionId, userId, planMessage, classification, inputGuard.flags, channel,
           planMemoryBlock,
           workspaceId,
@@ -382,7 +416,7 @@ export class AgentService {
           userMessage: planState.brief,
         }).catch((err) => coreLogger.warn({ err }, 'memory.updateAfterTurn failed on plan path'));
 
-        return { response: finalResponse, sessionId: resolvedSessionId, agentId, classification };
+        return { response: finalResponse, sessionId: resolvedSessionId, agentId, classification, outcome };
       }
 
       // Edit-and-continue (design Thread 2): re-read any files the user
@@ -552,7 +586,7 @@ export class AgentService {
 
       const startTime = Date.now();
       const turnGeneration = sessionGeneration((await sessionRepository.findById(resolvedSessionId))?.context);
-      const { response, agentId, sources } = await this.runRootAgent(
+      const { response, agentId, sources, outcome } = await this.runRootAgent(
         resolvedSessionId, userId, message, classification, inputGuard.flags, channel,
         turnContext,
         workspaceId,
@@ -593,17 +627,18 @@ export class AgentService {
 
       if (trajectory) {
         trajectory.setClassification(classification);
-        trajectory.finalize({ finalResponse, outcome: 'success' }).catch(err =>
+        trajectory.finalize({ finalResponse, outcome: outcome === 'success' ? 'success' : 'failure' }).catch(err =>
           coreLogger.error({ err }, 'Trajectory finalize failed'),
         );
       }
 
       fireMemoryUpdate();
-      recordRootRun(channel, classification?.type, 'success');
+      recordRootRun(channel, classification?.type, outcome === 'success' ? 'success' : 'error');
       return {
         response: finalResponse,
         sessionId: resolvedSessionId,
         agentId,
+        outcome,
         classification,
         metadata: { latencyMs: Date.now() - startTime },
       };
@@ -656,7 +691,7 @@ export class AgentService {
     workspaceId: string | null = null,
     /** Chat/work split (Thread 3): inline vs file deliverable directive. */
     outputDirective: { mode: 'inline' | 'file'; forced: boolean } = { mode: 'inline', forced: false },
-  ): Promise<{ response: string; agentId: string; sources: string[] }> {
+  ): Promise<{ response: string; agentId: string; sources: string[]; outcome: TurnOutcome }> {
     return runRootAgent(
       this, this.deps,
       sessionId, userId, message, classification, guardFlags, channel,

@@ -1,3 +1,4 @@
+import { turnEventMessage } from './turn-event-message';
 import type { Elysia } from '@/api/http';
 import { webChatChannel } from '@/channels/webchat';
 import { getConfig } from '@/config';
@@ -109,13 +110,7 @@ export function setupWebSocket(app: Elysia): void {
       const unsubscribeRoot = rootAgent.onEvent((event) => {
         // Only send events belonging to this user
         if (event.userId && event.userId !== session.userId) return;
-        safeSend({
-          type: 'turn_event',
-          event: event.type,
-          sessionId: event.sessionId,
-          data: event.data,
-          timestamp: event.timestamp,
-        });
+        safeSend(turnEventMessage(event));
         // Narrate lifecycle to voice clients — decoupled from the slow reply path,
         // so long agent turns get acked/announced instead of read back stale.
         // Scoped to the voice-mode session so a user's OTHER sessions (2nd tab,

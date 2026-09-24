@@ -56,3 +56,11 @@ test('ordinary mobile text still executes without requiring voice confirmation',
   expect(fixture.direct).not.toHaveBeenCalled();
   expect(fixture.root).toHaveBeenCalledTimes(1);
 });
+
+// A worker identifier exists on failures too; callers must use the explicit outcome.
+test.each(['success', 'failed', 'cancelled'] as const)('preserves the root turn outcome: %s', async outcome => {
+  fixture.root.mockResolvedValueOnce({ response: 'Root result', agentId: 'agent', sources: [], outcome });
+  const result = await new AgentService().handleMessage('session', 'user', 'check the pipeline', 'monitor');
+  expect(result.agentId).toBe('agent');
+  expect(result.outcome).toBe(outcome);
+});

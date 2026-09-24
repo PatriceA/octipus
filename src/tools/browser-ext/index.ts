@@ -26,6 +26,8 @@ export async function closeAgentTabs(agentId: string): Promise<void> {
   const bridge = getBrowserBridge();
   for (const tabId of set) {
     try {
+      const { monitorRepository } = await import('@/db/repositories/monitor-repository');
+      if (await monitorRepository.retainedTab(tabId)) continue;
       await bridge.sendCommand('close_tab', { tabId });
     } catch (err) {
       toolLogger.debug({ err, agentId, tabId }, 'Failed to auto-close browser tab');
@@ -55,6 +57,7 @@ export class BrowserExtTool extends BaseTool {
         { action: 'tabs', description: 'Create, close, and switch browser tabs', defaultLevel: 'ASK' },
       ],
       tools: [
+        { name: 'observe', description: 'Read a pinned page status', parameters: {}, returns: 'URL and status text' },
         // Navigation & tabs
         { name: 'navigate', description: 'Navigate the active tab to a URL', parameters: { url: { type: 'string', description: 'URL', required: true } }, returns: 'Page URL and title' },
         { name: 'new_tab', description: 'Open a new browser tab', parameters: { url: { type: 'string', description: 'URL to open' } }, returns: 'New tab info' },
@@ -92,6 +95,12 @@ export class BrowserExtTool extends BaseTool {
 
   protected async registerTools(): Promise<void> {
     const bridge = getBrowserBridge();
+
+    this.registerTool('observe', 'Read a specific status element only if the tab still has the expected URL. Suitable for persistent monitors.', createParameterSchema({
+      tabId: { type: 'number', description: 'Exact browser tab ID', required: true },
+      url: { type: 'string', description: 'Exact expected page URL', required: true },
+      selector: { type: 'string', description: 'CSS selector for the status element', required: true },
+    }), async args => bridge.sendCommand('observe', args), { permissionAction: 'extract', readOnly: true, injectSecrets: false });
 
     // ── Navigation & Tabs ──
 

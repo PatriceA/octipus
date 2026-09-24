@@ -192,7 +192,7 @@ export class AgentManager {
     // declares, and keep the setting as the floor for a model that declares
     // nothing (an unregistered CLI tool, a row written before the column).
     const workerConfig: AgentWorkerConfig = {
-      maxIterations: options.maxIterations ?? config.agent.maxIterations,
+      maxIterations: (options.maxIterations ?? config.agent.maxIterations) || Infinity, // 0 = unlimited
       contextWindowSize: usableContextWindow(modelEntry?.contextWindow, config.agent.contextWindowSize),
       timeout: options.timeout ?? config.agent.defaultTimeout,
       maxTokenBudget: options.maxTokenBudget ?? config.agent.maxTokenBudget,

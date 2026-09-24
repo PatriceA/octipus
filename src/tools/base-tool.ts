@@ -18,6 +18,9 @@ export interface ToolContext extends AgentContext {
 
 export interface ToolExecutionOptions {
   requiresPermission?: boolean;
+  /** Observational tools may retain an existing permission action (e.g. extract)
+   * without creating mutation-recovery records. Does not bypass permissions. */
+  readOnly?: boolean;
   /**
    * Permission action to check. A string is resolved once at registration;
    * a function is resolved per call against the live args, which lets a tool
@@ -89,6 +92,7 @@ export abstract class BaseTool {
       // gets ZERO tools. Must be set.
       toolId: this.id,
       recordsActions: true,
+      replaySafety: options?.readOnly ? 'read_only' : undefined,
       // The agent loop checks permissions before it dispatches, and resolves
       // the action from the handler. Without this it looks up the namespaced
       // call name, matches no manifest permission, and falls back to ASK —
@@ -235,7 +239,7 @@ export abstract class BaseTool {
     let execResult: unknown;
     let execError: unknown;
     try {
-      const result = isReadOnlyAction(action)
+      const result = options?.readOnly || isReadOnlyAction(action)
         ? await execute(processedArgs, toolContext)
         : await actionRecovery.run(context, this.id, `${this.id}__${toolName}`, args, () => execute(processedArgs, toolContext), async () => {
           const current = await permissionManager.check(context.userId, this.id, action, args, context,

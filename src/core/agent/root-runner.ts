@@ -31,7 +31,7 @@ import delegationPrompt from './delegation-prompt.md';
 import { applyToolCap, isSmallModel } from './small-model';
 import { channelCanPrompt } from '@/security/approval-policy';
 import { ROOT_ROLE } from './types';
-import type { TurnEvent, AgentService } from './service';
+import type { TurnEvent, AgentService, TurnOutcome } from './service';
 import type { MessageClassification } from './types';
 
 // Token budget for the workspace-suite repo list (Phase 5 item 2 follow-up).
@@ -148,7 +148,7 @@ export async function runRootAgent(
   workspaceId: string | null = null,
   /** Chat/work split (Thread 3): inline vs file deliverable directive. */
   outputDirective: { mode: 'inline' | 'file'; forced: boolean } = { mode: 'inline', forced: false },
-): Promise<{ response: string; agentId: string; sources: string[] }> {
+): Promise<{ response: string; agentId: string; sources: string[]; outcome: TurnOutcome }> {
   const emit = deps.emit;
   const agentManager = getAgentManager();
   // One routing decision, used twice: the model comes from the lane, and so do
@@ -613,7 +613,8 @@ export async function runRootAgent(
     systemPrompt,
     tools: turnTools,
     toolAdvertisement,
-    maxIterations: isLite ? agentCfg.liteMaxIterations : 25,
+    // Full mode: agent.maxIterations (0 = unlimited) via agentManager.spawn.
+    maxIterations: isLite ? agentCfg.liteMaxIterations : undefined,
     timeout: turnTimeout,
     // Seed the user's raw request so the spawner can forward it verbatim
     // to every child. Without this, children only see the root agent's
@@ -808,7 +809,7 @@ export async function runRootAgent(
       coreLogger.debug({ err, agentId }, 'swarm root completion bookkeeping skipped');
     }
 
-    return { response: finalResponse, agentId, sources };
+    return { response: finalResponse, agentId, sources, outcome: 'success' };
   } catch (error) {
     deps.setLastWorkerResult(null);
 
@@ -875,6 +876,6 @@ export async function runRootAgent(
     const response = wasStopped
       ? 'Task was stopped. Would you like to adjust the request or start something new?'
       : `I encountered an error while processing your request: ${humanizeProviderError(errMsg)}`;
-    return { response, agentId, sources };
+    return { response, agentId, sources, outcome: wasStopped || isCancellationError(error) ? 'cancelled' : 'failed' };
   }
 }

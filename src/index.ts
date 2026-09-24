@@ -1,3 +1,4 @@
+import { startMonitors, stopMonitors } from '@/core/monitors/service';
 import { startServer, stopApiServer } from '@/api/server';
 import { initializeChannels } from '@/channels';
 import { loadRuntimeConfig } from '@/config';
@@ -361,6 +362,7 @@ async function main() {
 
     // Start recurring task scheduler
     startCronLoop();
+    startMonitors();
     logger.info('Cron scheduler started');
 
     // Start the task-queue worker loop. Without this, getScheduler().schedule()
@@ -441,6 +443,7 @@ async function main() {
       }
 
       stopCronLoop();
+      stopMonitors();
       try {
         const { getScheduler } = await import('@/core/scheduler');
         await getScheduler().stop();

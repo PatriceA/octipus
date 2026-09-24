@@ -206,7 +206,7 @@ export const loggingConfigSchema = z.object({
 export const agentConfigSchema = z.object({
   maxConcurrentAgents: z.number().min(1).max(100).default(10),
   defaultTimeout: z.number().min(0).default(900000), // 15 minutes
-  maxIterations: z.number().min(1).max(1000).default(50),
+  maxIterations: z.number().min(0).default(0), // 0 = unlimited (turn timeout + token budget still bound a run)
   contextWindowSize: z.number().min(1000).default(32000),
   maxTokenBudget: z.number().min(0).default(100000), // 0 = unlimited
   /** Stream the root agent's text to chat clients as it is produced. Off = whole reply at the end. */
@@ -227,8 +227,7 @@ export const agentConfigSchema = z.object({
    * Iteration cap for the lite root loop — the hard bound that replaced router
    * mode for small models. It was 3 when lite could only delegate once and
    * relay; the lite root now does the work itself, and 3 iterations is not
-   * enough to read a file, search, and answer (the full loop tops out at 25,
-   * so that stays the upper bound).
+   * enough to read a file, search, and answer.
    */
   liteMaxIterations: z.number().min(1).max(25).default(8),
   /** The "small model" threshold: trimmed prompts and tool sets below this. */

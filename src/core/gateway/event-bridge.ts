@@ -19,13 +19,7 @@ export function connectEventBridge(hub: GatewayHub): () => void {
     const rootAgent = getAgentService();
 
     const unsubOrch = rootAgent.onEvent((event: TurnEvent) => {
-      hub.publishEvent({
-        type: mapTurnEventType(event.type),
-        source: 'root',
-        userId: event.userId,
-        sessionId: event.sessionId,
-        payload: event.data,
-      });
+      hub.publishEvent(turnEventToGateway(event));
     });
 
     cleanups.push(unsubOrch);
@@ -174,4 +168,10 @@ function mapTurnEventType(type: string): import('./protocol').GatewayEventType {
     case 'team_completed': return 'team.completed';
     default: return 'agent.event';
   }
+}
+
+/** Keep background replies in the same wire shape as chat.send responses. */
+export function turnEventToGateway(event: TurnEvent): Omit<import('./protocol').GatewayEvent, 'id' | 'timestamp'> {
+  return { type: mapTurnEventType(event.type), source: 'root', userId: event.userId, sessionId: event.sessionId,
+    payload: event.type === 'chat_response' ? { response: event.data } : event.data };
 }

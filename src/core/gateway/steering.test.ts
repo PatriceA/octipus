@@ -51,6 +51,14 @@ describe('trySteerRunningRootAgent', () => {
     incSpy.mockReset();
   });
 
+  test.each(['/stop', '/clear', '/status'])('%s falls through to command dispatch without steering', async command => {
+    const onSteer = vi.fn();
+    getBySessionSpy.mockReturnValue([fakeWorker({ role: 'general', root: true, onSteer })] as never);
+    expect(await trySteerRunningRootAgent(sid, command)).toBe(false);
+    expect(onSteer).not.toHaveBeenCalled();
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
   test('no running rootAgent → false, no persist', async () => {
     getBySessionSpy.mockReturnValue([] as never);
     expect(await trySteerRunningRootAgent(sid, 'focus on auth')).toBe(false);

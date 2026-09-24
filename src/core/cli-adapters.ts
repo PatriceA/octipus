@@ -496,7 +496,7 @@ export class CLIArgumentBuilder {
 
     args.push('--output', 'json', '--trust');
     args.push('--agent', connection?.planMode ? 'plan' : resolveVibeMode(settings.permissionMode));
-    if (connection?.maxIterations) args.push('--max-turns', String(connection.maxIterations));
+    if (Number.isFinite(connection?.maxIterations)) args.push('--max-turns', String(connection!.maxIterations));
 
     // vibe reports no token/cost usage in its output, so the worker's
     // token-budget kill can't fire — let vibe self-limit via its caps instead.
@@ -621,7 +621,8 @@ export class CLIArgumentBuilder {
       : (settings.mcpConfigPath || getEmptyMcpConfigPath());
     args.push('--strict-mcp-config');
     if (connection) {
-      args.push('--max-turns', String(connection.maxIterations), '--input-format', 'stream-json', '--permission-prompt-tool', 'stdio');
+      if (Number.isFinite(connection.maxIterations)) args.push('--max-turns', String(connection.maxIterations));
+      args.push('--input-format', 'stream-json', '--permission-prompt-tool', 'stdio');
     }
     if (mcpConfig) {
       args.push('--mcp-config', mcpConfig);

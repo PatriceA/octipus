@@ -16,6 +16,7 @@ import { NewSessionDialog, type NewSessionOptions } from '@/components/chat/new-
 import PromptInput, { type Attachment } from '@/components/chat/prompt-input';
 import { type SessionInfo, SessionList } from '@/components/chat/session-list';
 import SidePanel from '@/components/chat/side-panel';
+import MonitorPanel from '@/components/chat/monitor-panel';
 import WorkPlanPanel from '@/components/chat/work-plan-panel';
 import { GlobalPermissionBanner } from '@/components/global-permission-banner';
 import type { SwarmTreeEvent } from '@/components/swarm-tree';
@@ -1908,6 +1909,7 @@ export default function ChatPage() {
           replaces it as the canonical live view. */}
       {(
         <div className="workspace-inspector w-80 border-l border-outline-variant/50 shrink-0 bg-surface-container-low flex flex-col overflow-y-auto">
+          <MonitorPanel key={`monitors-${activeSessionId ?? 'new'}`} sessionId={activeSessionId} />
           <WorkPlanPanel key={activeSessionId ?? 'new'} sessionId={activeSessionId} running={isLoading} files={activeState?.fileChanges ?? []} onOpenFile={setOpenFilePath} onPlanMode={enabled => { void sendMessage(enabled ? '/plan on' : '/plan off'); }} />
           {showSidePanel && <details open className="border-t border-outline-variant/50 p-4"><summary className="cursor-pointer text-sm text-on-surface-variant">Activity & settings</summary>
           <SidePanel

@@ -57,3 +57,4 @@ export * from './verification-evidence';
 export * from './workspace-repos';
 export * from './tool-actions';
 export * from './push-tokens';
+export * from './monitors';

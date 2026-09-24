@@ -778,6 +778,13 @@
       "when": 1789601114557,
       "tag": "0109_hidden_skills",
       "breakpoints": true
+    },
+    {
+      "idx": 111,
+      "version": "7",
+      "when": 1789601114558,
+      "tag": "0110_session_monitors",
+      "breakpoints": true
     }
   ]
 }

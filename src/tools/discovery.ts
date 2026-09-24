@@ -36,6 +36,7 @@ import * as KnowledgeModule from './knowledge';
 import * as McpAdminModule from './mcp-admin';
 import * as MessagingModule from './messaging';
 import * as Microsoft365Module from './microsoft365';
+import * as MonitorModule from './monitor';
 import * as NotesModule from './notes';
 import * as PlanModule from './plan';
 import * as ProfilesModule from './profiles';
@@ -69,6 +70,7 @@ const MODULES: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
   ['mcp-admin', McpAdminModule],
   ['messaging', MessagingModule],
   ['microsoft365', Microsoft365Module],
+  ['monitor', MonitorModule],
   ['notes', NotesModule],
   ['plan', PlanModule],
   ['profiles', ProfilesModule],

@@ -231,6 +231,12 @@ describe('run-scoped CLI configuration', () => {
     expect(agy.args).not.toContain('--dangerously-skip-permissions');
   });
 
+  it('an unlimited turn budget passes no --max-turns', () => {
+    const claude = builder.build('Claude Code', 'task', {}, [], null, 100, 'test', { ...connection, maxIterations: Infinity });
+    expect(claude.args).not.toContain('--max-turns');
+    expect(claude.args).toContain('--permission-prompt-tool');
+  });
+
   it('disables every effective MCP entry, including project servers and quoted names', () => {
     const codexMcpServers = [{ name: 'host' }, { name: 'project.server' }, { name: 'quoted"server' }];
     const out = builder.build('Codex CLI', 'task', {}, [], null, 100, 'test', { ...connection, codexMcpServers });

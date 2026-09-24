@@ -194,3 +194,24 @@ describe('GET/PUT /api/sessions/:id/files cross-tenant', () => {
     expect(r.status).toBe(400);
   });
 });
+
+async function post(app: ElysiaLike, path: string, body: unknown) {
+  const res = await app.handle(new Request(`http://localhost${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }));
+  return { status: res.status, body: await res.json() };
+}
+describe('session monitor routes', () => {
+  test('only the owner can list, signal, or cancel a monitor', async () => {
+    const { monitorRepository } = await import('@/db/repositories/monitor-repository');
+    const row = await monitorRepository.create({ userId: bobId, sessionId: bobSessionId, role: 'general', generation: '', name: 'Run 123', continuation: 'Collect results', source: { kind: 'event', type: 'ci.completed', condition: { path: 'payload.id', operator: 'equals', value: 123 } }, intervalSeconds: 30, deadline: new Date(Date.now() + 60_000) });
+    expect((await get(aliceApp, `/api/sessions/${bobSessionId}/monitors`)).status).toBe(404);
+    expect((await post(aliceApp, `/api/sessions/${bobSessionId}/monitors/events`, { type: 'ci.completed', payload: { id: 123 } })).status).toBe(404);
+    expect((await post(aliceApp, `/api/sessions/${bobSessionId}/monitors/${row.id}/control`, { action: 'cancel' })).status).toBe(404);
+    expect((await monitorRepository.get(row.id)).status).toBe('armed');
+    const own = await get(bobApp, `/api/sessions/${bobSessionId}/monitors`);
+    expect(own.body.monitors.some((m: { id: string }) => m.id === row.id)).toBe(true);
+    expect((await post(bobApp, `/api/sessions/${bobSessionId}/monitors/events`, { type: 'ci.completed', payload: { id: 123 } })).status).toBe(200);
+    expect((await monitorRepository.get(row.id)).status).toBe('ready');
+    expect((await post(bobApp, `/api/sessions/${bobSessionId}/monitors/${row.id}/control`, { action: 'cancel' })).status).toBe(200);
+    expect((await monitorRepository.get(row.id)).status).toBe('cancelled');
+  });
+});

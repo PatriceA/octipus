@@ -1,3 +1,5 @@
+import { monitorRepository } from '@/db/repositories/monitor-repository';
+import { monitorService } from '@/core/monitors/service';
 import { addPlanFeedback } from '@/shared/work-plan';
 import { workPlanRepository } from '@/db/repositories/work-plan-repository';
 import { Elysia, t } from '@/api/http';
@@ -29,6 +31,27 @@ import { WorkspaceFS } from '@/security/workspace-fs';
  */
 export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   .use(apiContext)
+  .post('/:id/monitors/events', async ({ user, principal, params, body, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    const session = await scopedRepos(principal).sessions.findById(params.id);
+    if (!session) { set.status = 404; return { error: 'Session not found' }; }
+    if (JSON.stringify(body.payload ?? null).length > 16_000) { set.status = 400; return { error: 'Event payload is too large' }; }
+    await monitorService.event(session.userId, body.type, { payload: body.payload, sessionId: session.id, source: 'api' }, session.id);
+    return { accepted: true };
+  }, { body: t.Object({ type: t.String({ minLength: 1, maxLength: 100 }), payload: t.Unknown() }) })
+  .get('/:id/monitors', async ({ user, principal, params, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    const session = await scopedRepos(principal).sessions.findById(params.id);
+    if (!session) { set.status = 404; return { error: 'Session not found' }; }
+    return { monitors: await monitorRepository.list(session.userId, session.id) };
+  })
+  .post('/:id/monitors/:monitorId/control', async ({ user, principal, params, body, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    const session = await scopedRepos(principal).sessions.findById(params.id);
+    if (!session) { set.status = 404; return { error: 'Session not found' }; }
+    try { return await monitorService.control(params.monitorId, session.userId, session.id, body.action); }
+    catch (err) { set.status = 409; return { error: (err as Error).message }; }
+  }, { body: t.Object({ action: t.Union([t.Literal('pause'), t.Literal('resume'), t.Literal('cancel')]) }) })
   // List sessions
   .get(
     '/',

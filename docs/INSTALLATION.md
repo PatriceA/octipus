@@ -75,7 +75,33 @@ Use `node bin/octi.mjs` instead of `octi` unless you install a PATH launcher. `n
 
 Review reported fixes in the affected package. Do not blindly use `npm audit fix --force`: it can downgrade or break tooling. The current backend audit includes a development-only esbuild advisory through drizzle-kit for which npm suggests a breaking downgrade. Web and MCP receive compatible lockfile fixes when available.
 
-Before updating, back up `.env` together with your database/data directory: `MASTER_KEY` is needed to decrypt the vault. Stop the running instance, then rerun the installer. It refuses a dirty checkout or a failed fast-forward update. Existing setup preserves storage, ports, and secrets; use the existing admin credentials. For an account using TOTP, supply `OCTIPUS_SETUP_TOTP` for that login. Remote setup is explicit: `octi setup --remote http://host:port`.
+The installer is also the update path for installations in `~/.octipus/app` (Windows: `%USERPROFILE%\.octipus\app`). There is currently no `octi update` command. On an existing checkout it fetches and fast-forwards the selected branch, reinstalls locked dependencies, and rebuilds the installed surfaces. It refuses local changes or a divergent branch rather than discarding them.
+
+Back up `.env` together with your configured database/data directory before updating: `MASTER_KEY` is needed to decrypt the vault. Stop the running instance before replacing dependencies. For a normal update, skip setup so your existing configuration and accounts remain in use:
+
+```bash
+octi stop
+curl -fsSL https://raw.githubusercontent.com/PatriceA/octipus/main/scripts/install.sh | bash -s -- --skip-setup
+# Run the next command only if installation succeeded:
+octi start web
+octi doctor
+```
+
+Windows PowerShell:
+
+```powershell
+octi stop
+& ([scriptblock]::Create((Invoke-RestMethod https://raw.githubusercontent.com/PatriceA/octipus/main/scripts/install.ps1))) -SkipSetup
+# Run the next command only if installation succeeded:
+octi start web
+octi doctor
+```
+
+Use the same `OCTIPUS_INSTALL_DIR`, `OCTIPUS_BIN_DIR`, and `OCTIPUS_BRANCH` overrides if you installed to a custom location or branch. Database migrations apply at normal backend startup; the installer does not reset the database. Reload the browser extension if its code changed. Desktop users should close the desktop client before updating and rebuild/relaunch it with `octi desktop` as appropriate.
+
+Updates fetch code available on the remote branch. Uncommitted or unpushed changes on another PC are not included. If updating fails, fix the reported error and rerun the installer before restarting; this is an in-place update, not an atomic release switch.
+
+To intentionally rerun setup, omit `--skip-setup`/`-SkipSetup`. Existing setup preserves storage, ports, and secrets; use the existing admin credentials. For an account using TOTP, supply `OCTIPUS_SETUP_TOTP` for that login. Remote setup is explicit: `octi setup --remote http://host:port`.
 
 ## Headless setup
 

@@ -177,6 +177,7 @@ async function executeCommand(command, params) {
     // ── Original commands ──
     case 'navigate':       return cmdNavigate(params);
     case 'screenshot':     return cmdScreenshot(params);
+    case 'observe':       return cmdObserve(params);
     case 'extract_content': return cmdExtractContent(params);
     case 'click':          return cmdClick(params);
     case 'fill':           return cmdFill(params);
@@ -1037,3 +1038,21 @@ loadSettings().then((data) => {
     updateBadge('!', '#FF0000');
   }
 });
+
+// Read-only monitor probe: navigation/login and missing elements are failures, not completion.
+async function cmdObserve({ tabId, url, selector }) {
+  if (!Number.isInteger(tabId) || !url || !selector) throw new Error('Monitor requires tabId, url and selector');
+  const tab = await chrome.tabs.get(tabId);
+  const results = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    func: (expectedUrl, css) => {
+      if (location.href !== expectedUrl) return { error: 'Monitored tab changed URL or requires login' };
+      const element = document.querySelector(css);
+      if (!element) return { error: 'Monitored status element is missing' };
+      return { url: location.href, text: (element.textContent || '').trim().slice(0, 8000) };
+    },
+    args: [url, selector],
+  });
+  if (!results?.[0]?.result) throw new Error('Monitor observation unavailable');
+  return results[0].result;
+}
