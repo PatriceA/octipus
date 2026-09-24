@@ -132,7 +132,7 @@ describe('LocalShellOperations.exec — why a command died', () => {
 
   it('a command that finishes in time reports neither', async () => {
     const res = await ops.exec('true', process.cwd(), { timeout: 5000 });
-    expect(res.stderr.slice(0, 600) + res.exitCode).toBe("0");
+    expect(res.exitCode).toBe(0);
     expect(res.killed).toBe(false);
     expect(res.timedOut).toBe(false);
     expect(res.signal).toBeNull();
@@ -192,7 +192,8 @@ describe('windowsCmdShim — npm/npx are .cmd scripts on Windows', () => {
   const dir = mkdtempSync(join(tmpdir(), 'cmdshim-'));
   writeFileSync(join(dir, 'npx.cmd'), '');
   writeFileSync(join(dir, 'tool.exe'), '');
-  const env = { PATH: dir, PATHEXT: '.EXE;.CMD' };
+  // Lower-case: Linux CI's filesystem is case-sensitive, Windows' is not.
+  const env = { PATH: dir, PATHEXT: '.exe;.cmd' };
 
   it('routes a PATHEXT-resolved .cmd through cmd.exe with every argument quoted', () => {
     expect(windowsCmdShim(['npx', 'vitest', 'a&b', 'C:\\x y\\'], env, 'win32'))
