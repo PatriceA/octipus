@@ -1,5 +1,7 @@
 export {
   archiveMessage,
+  autoArchive,
+  unarchiveMessage,
   draftReply,
   getInbox,
   getMessage,

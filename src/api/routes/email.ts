@@ -2,6 +2,8 @@ import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import {
   archiveMessage,
+  autoArchive,
+  unarchiveMessage,
   detectProvider,
   draftReply,
   getInbox,
@@ -11,6 +13,7 @@ import {
   sendReply,
   summarizeMessage,
   triageInbox,
+  type InboxItem,
 } from '@/core/email';
 import { createTasksFromSource, emailToTask } from '@/core/tasks/sourced';
 import { isAuthenticated } from '@/security/principal';
@@ -151,6 +154,23 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
     { params: t.Object({ id: t.String() }), detail: { tags: ['email'] } }
   )
 
+  // Undo an archive (the UI's Undo after auto-archive).
+  .post(
+    '/message/:id/unarchive',
+    async ({ user, principal, params, set }) => {
+      if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+      try {
+        const provider = await detectProvider(user.id);
+        if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
+        return await unarchiveMessage(user.id, provider, params.id);
+      } catch (err) {
+        set.status = 400;
+        return { error: (err as Error).message };
+      }
+    },
+    { params: t.Object({ id: t.String() }), detail: { tags: ['email'] } }
+  )
+
   // Archive a message (explicit).
   .post(
     '/message/:id/archive',
@@ -200,17 +220,38 @@ export const emailRoutes = new Elysia({ prefix: '/email' })
   )
 
   // Triage the inbox (opt-in — computes priorities via the model).
+  // `items` = the rows the client already shows (it has sender/subject/snippet),
+  // so a 120-mail list is triaged without refetching; absent = first 30 of the
+  // inbox (older clients). `autoArchive` archives low-priority spam/marketing.
   .post(
     '/triage',
-    async ({ user, principal, set }) => {
+    async ({ user, principal, body, set }) => {
       if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
       try {
-        const { items } = await getInbox(user.id, 30);
-        return { triage: await triageInbox(user.id, items) };
+        const provider = await detectProvider(user.id);
+        if (!provider) { set.status = 400; return { error: 'No mailbox connected' }; }
+        const req = body as { items?: Array<Pick<InboxItem, 'id' | 'from' | 'subject' | 'snippet'>>; autoArchive?: boolean } | undefined;
+        const items: InboxItem[] = req?.items
+          ? req.items.map((it) => ({ ...it, provider, receivedAt: '', unread: false }))
+          : (await getInbox(user.id, 30)).items;
+        const triage = await triageInbox(user.id, items);
+        const archived = req?.autoArchive ? await autoArchive(user.id, provider, triage) : [];
+        return { triage, archived };
       } catch (err) {
         set.status = 400;
         return { error: (err as Error).message };
       }
     },
-    { detail: { tags: ['email'] } }
+    {
+      body: t.Optional(t.Object({
+        items: t.Optional(t.Array(t.Object({
+          id: t.String({ minLength: 1, maxLength: 256 }),
+          from: t.Object({ email: t.String({ maxLength: 320 }), name: t.Optional(t.String({ maxLength: 320 })) }),
+          subject: t.String({ maxLength: 2000 }),
+          snippet: t.String({ maxLength: 2000 }),
+        }), { maxItems: 500 })),
+        autoArchive: t.Optional(t.Boolean()),
+      })),
+      detail: { tags: ['email'] },
+    }
   );

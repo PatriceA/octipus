@@ -8,6 +8,7 @@ import type { InboxItem } from './types';
 
 let decision: unknown = null;
 let hang = false;
+let llmCalls = 0;
 vi.mock('@/models/decision', () => ({ decide: vi.fn(() => (hang ? new Promise(() => {}) : Promise.resolve(decision))) }));
 vi.mock('@/models/model-registry', async () => ({
   ...(await vi.importActual<typeof import('@/models/model-registry')>('@/models/model-registry')),
@@ -15,14 +16,25 @@ vi.mock('@/models/model-registry', async () => ({
 }));
 vi.mock('@/models/litellm-client', async () => ({
   ...(await vi.importActual<typeof import('@/models/litellm-client')>('@/models/litellm-client')),
-  getLiteLLMClient: () => ({ complete: async () => ({ content: '{"m1":{"priority":"high","category":"work","reason":"r"}}' }) }),
+  getLiteLLMClient: () => ({ complete: async (opts: { messages: Array<{ content: string }> }) => {
+    llmCalls++;
+    const ids = [...opts.messages[1].content.matchAll(/^(m\d+)\t/gm)].map((m) => m[1]);
+    return { content: JSON.stringify(Object.fromEntries(ids.map((id) => [id, { priority: 'high', category: 'work', reason: 'r' }]))) };
+  } }),
 }));
 
 const { triageInbox } = await import('./service');
 const item: InboxItem = { id: 'm1', provider: 'google', from: { email: 'a@b.c' }, subject: 's', snippet: 'x', receivedAt: '', unread: true };
 
 describe('triageInbox with a decision model (shadow)', () => {
-  beforeEach(() => { decision = null; hang = false; });
+  beforeEach(() => { decision = null; hang = false; llmCalls = 0; });
+
+  test('120 mails are triaged in batches of 30, all of them', async () => {
+    const many = Array.from({ length: 120 }, (_, i) => ({ ...item, id: `m${i}` }));
+    const out = await triageInbox('u', many);
+    expect(Object.keys(out)).toHaveLength(120);
+    expect(llmCalls).toBe(4);
+  });
 
   test('a hung decision model does not delay the triage result (shadow)', async () => {
     hang = true;

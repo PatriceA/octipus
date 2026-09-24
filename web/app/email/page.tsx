@@ -51,6 +51,12 @@ export default function EmailPage() {
   const [replyOpts, setReplyOpts] = useState<string[] | null>(null);
   // Inbox filter (client-side over the loaded page): all / unread / by priority.
   const [filter, setFilter] = useState<'all' | 'unread' | 'high' | 'normal' | 'low'>('all');
+  // Auto-archive low-priority spam/marketing on triage. Per-browser preference;
+  // archive is reversible (All Mail / Archive folder) and the last batch has Undo.
+  const [autoArchiveOn, setAutoArchiveOn] = useState(() => {
+    try { return localStorage.getItem('email.autoArchive') !== 'off'; } catch { return true; }
+  });
+  const [lastArchived, setLastArchived] = useState<InboxItem[]>([]);
 
   const loadInbox = useCallback(async () => {
     setLoading(true);
@@ -175,20 +181,47 @@ export default function EmailPage() {
     } finally { setBusy(''); }
   };
 
+  const toggleAutoArchive = (on: boolean) => {
+    setAutoArchiveOn(on);
+    try { localStorage.setItem('email.autoArchive', on ? 'on' : 'off'); } catch { /* preference only */ }
+  };
+
   const triage = async () => {
-    setTriaging(true); setNotice('');
+    setTriaging(true); setNotice(''); setLastArchived([]);
     try {
-      const res = await api.post<{ triage?: Record<string, Triage>; error?: string }>('/email/triage', {});
+      // Triage every loaded row, not just the first page the server would fetch.
+      const res = await api.post<{ triage?: Record<string, Triage>; archived?: string[]; error?: string }>('/email/triage', {
+        items: items.map(({ id, from, subject, snippet }) => ({ id, from, subject, snippet })),
+        autoArchive: autoArchiveOn,
+      });
       if (res.triage) {
         const t = res.triage;
-        setItems((xs) => xs.map((x) => (t[x.id] ? { ...x, triage: t[x.id] } : x)));
+        const gone = new Set(res.archived ?? []);
+        const tag = (x: InboxItem) => (t[x.id] ? { ...x, triage: t[x.id] } : x);
+        setLastArchived(items.filter((x) => gone.has(x.id)).map(tag));
+        // Functional update: rows loaded while triage ran must survive.
+        setItems((xs) => xs.filter((x) => !gone.has(x.id)).map(tag));
+        if (openMsg && gone.has(openMsg.id)) setOpenMsg(null);
         const counts = Object.values(t).reduce(
           (acc, v) => { acc[v.priority] = (acc[v.priority] ?? 0) + 1; return acc; },
           {} as Record<string, number>,
         );
-        setNotice(`Triaged ${Object.keys(t).length}: ${counts.high ?? 0} high · ${counts.normal ?? 0} normal · ${counts.low ?? 0} low.`);
+        setNotice(`Triaged ${Object.keys(t).length}: ${counts.high ?? 0} high · ${counts.normal ?? 0} normal · ${counts.low ?? 0} low.`
+          + (gone.size ? ` Archived ${gone.size} low-priority spam/marketing.` : ''));
       } else if (res.error) setError(res.error);
     } finally { setTriaging(false); }
+  };
+
+  const undoArchive = async () => {
+    const batch = lastArchived;
+    setBusy('undo');
+    try {
+      const results = await Promise.allSettled(batch.map((x) => api.post(`/email/message/${x.id}/unarchive`, {})));
+      const restored = batch.filter((_, i) => results[i].status === 'fulfilled');
+      setItems((xs) => [...restored, ...xs].sort((a, b) => b.receivedAt.localeCompare(a.receivedAt)));
+      setLastArchived(batch.filter((_, i) => results[i].status !== 'fulfilled'));
+      setNotice(restored.length === batch.length ? `Restored ${restored.length} to the inbox.` : `Restored ${restored.length} of ${batch.length}; the rest failed — try Undo again.`);
+    } finally { setBusy(''); }
   };
 
   if (loading) {
@@ -208,6 +241,11 @@ export default function EmailPage() {
         title="email"
         description="triage assistant — read, summarize, draft replies, archive. sends always ask first"
         actions={provider ? (
+          <div className="flex items-center gap-3">
+          <label className="text-xs text-on-surface-variant inline-flex items-center gap-1.5 cursor-pointer" title="On triage, archive mail rated low priority AND spam or marketing. Archived mail is not deleted — it stays in All Mail / Archive, and the last batch can be undone.">
+            <input type="checkbox" checked={autoArchiveOn} onChange={(e) => toggleAutoArchive(e.target.checked)} className="w-3.5 h-3.5 rounded border-outline-variant text-primary" />
+            auto-archive spam &amp; marketing
+          </label>
           <button
             onClick={triage}
             disabled={triaging}
@@ -216,11 +254,22 @@ export default function EmailPage() {
           >
             {triaging ? <Loader2 className="w-4 h-4 animate-spin text-accent" /> : <Sparkles className="w-4 h-4 text-accent" />} Triage inbox
           </button>
+          </div>
         ) : undefined}
       />
 
       {error && <div className="bg-error/10 border border-error/20 rounded-xs px-4 py-3 text-error text-sm">{error}<button onClick={() => setError('')} className="ml-2 underline">dismiss</button></div>}
-      {notice && <div className="bg-primary/10 border border-primary/20 rounded-xs px-4 py-2 text-primary text-sm">{notice}<button onClick={() => setNotice('')} className="ml-2 underline">dismiss</button></div>}
+      {notice && (
+        <div className="bg-primary/10 border border-primary/20 rounded-xs px-4 py-2 text-primary text-sm">
+          {notice}
+          {lastArchived.length > 0 && (
+            <button onClick={undoArchive} disabled={busy === 'undo'} className="ml-2 underline disabled:opacity-50">
+              {busy === 'undo' ? 'restoring…' : 'undo archive'}
+            </button>
+          )}
+          <button onClick={() => setNotice('')} className="ml-2 underline">dismiss</button>
+        </div>
+      )}
 
       {!provider ? (
         <div className="text-center py-12 text-on-surface-variant">

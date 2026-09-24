@@ -43,3 +43,22 @@ describe('triageEntries', () => {
     expect(triageEntries('nope')).toEqual([]);
   });
 });
+
+describe('categories and auto-archive', () => {
+  test('categories coerce onto the fixed list', async () => {
+    const { coerceCategory } = await import('./service');
+    expect(coerceCategory('Spam')).toBe('spam');
+    expect(coerceCategory('marketing')).toBe('promotion');
+    expect(coerceCategory('shopping')).toBe('other');
+  });
+  test('only LOW-priority spam/promotion is auto-archived', async () => {
+    const { autoArchiveIds } = await import('./service');
+    expect(autoArchiveIds({
+      a: { priority: 'low', category: 'spam' },
+      b: { priority: 'low', category: 'promotion' },
+      c: { priority: 'normal', category: 'promotion' }, // a renewal deadline someone waits on
+      d: { priority: 'low', category: 'newsletter' },
+      e: { priority: 'high', category: 'spam' },
+    }).sort()).toEqual(['a', 'b']);
+  });
+});
