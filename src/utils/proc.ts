@@ -203,7 +203,8 @@ export function whichSync(bin: string, env: Record<string, string | undefined> =
     for (const ext of exts) {
       const candidate = hasPath ? resolve(dir, bin + ext) : join(dir, bin + ext);
       try {
-        accessSync(candidate, constants.X_OK);
+        // Windows has no exec bit; existence is what CreateProcess needs.
+        accessSync(candidate, win ? constants.F_OK : constants.X_OK);
         return candidate;
       } catch { /* not here */ }
     }
