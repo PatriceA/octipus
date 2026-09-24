@@ -1,3 +1,4 @@
+import { VAULT_USAGE_GUIDANCE } from '@/core/agent/vault-guidance';
 import { recordProviderUsage } from '@/models/providers/instrumented';
 import { billableTokens } from '@/models/billable-tokens';
 import { windowsShellQuote } from '@/models/providers/cli-provider';
@@ -375,6 +376,10 @@ export class CLIAgentWorker extends BaseAgentWorker {
         planMode: isPlanMode(session.context as { planMode?: boolean }), maxIterations: this.config.maxIterations };
       const helper = resolveCliMcpEntry().replace(/index\.js$/, 'agent-bridge-client.js');
       const quote = (value: string) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
+      // Custom CLI prompts may bypass role composition; give them the same vault workflow.
+      if (!this.systemMessages.some(message => message.includes(VAULT_USAGE_GUIDANCE))) {
+        this.addSystemMessage(VAULT_USAGE_GUIDANCE);
+      }
       this.addSystemMessage(`You are connected to your Octipus run through the octipus MCP server. Its tools are your actual registered Octipus tools, including skills, plans and delegation when allowed. Prefer these tools for Octipus work.
 ` +
         `Call get_cli_run_context before working and before the final answer. Every Octipus tool response also includes fresh plan feedback and queued user guidance. Respect permissions and do not bypass a refused Octipus tool through vendor tools.

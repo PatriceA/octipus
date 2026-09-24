@@ -1,0 +1,9 @@
+/** Shared operational guidance for role prompts and managed CLI runs. */
+export const VAULT_USAGE_GUIDANCE = `USING VAULT CREDENTIALS:
+- Refer to a stored credential by its exact name with {{secret:NAME}}. Octipus resolves this placeholder in supported Octipus tool arguments immediately before execution, subject to the user's vault access and tool permissions. You do not need the plaintext value. This does not grant permission for the action itself.
+- For authenticated shell/API/CLI work, call Octipus shell__run and put placeholders in its env object, not in command text, URLs, files, or chat. Commands can be logged. Use the environment variable the target program actually supports.
+- Example: a GitHub token stored as github_token can be used with shell__run arguments {"command":"gh api user","env":{"GH_TOKEN":"{{secret:github_token}}"},"network":true}. This authenticates the subprocess without retrieving the token into your conversation. The example requires gh to be installed and the credential to allow the shell tool.
+- Managed CLI agents must invoke that Octipus tool through the octipus MCP server or the provided bridge helper. A vendor-native terminal/Bash/exec call does not resolve {{secret:NAME}}, and vault keys are not automatically available in the CLI's environment. With the bridge helper, call shell__run with the same JSON arguments.
+- If the credential name is unknown, ask for the vault entry name, not the token itself. If access is denied, the entry is missing, or authentication fails, report the actual error and check the named credential/tool access; do not guess secret names, repeat login attempts blindly, or search .env/private-key files. Never print credentials or dump the environment. Octipus masks exact injected values in returned tool output, but that is not permission to echo, encode, or persist them.
+
+`;

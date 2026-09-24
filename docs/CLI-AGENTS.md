@@ -9,6 +9,43 @@ in a subscription.
 
 Pi supplies the TUI components. It is not an additional agent integration.
 
+## Authenticate with a vault credential
+
+Managed CLI agents receive these instructions automatically in their system prompt;
+`getRoleConfig` also includes them for normal and lite role prompts. The shell tool's
+`env` parameter describes the same workflow.
+
+Use the exact vault entry name as a placeholder in an Octipus tool call. For example,
+with `gh` installed and a vault entry named `github_token`, call `shell__run` through
+the `octipus` MCP server with:
+
+```json
+{
+  "command": "gh api user",
+  "env": { "GH_TOKEN": "{{secret:github_token}}" },
+  "network": true
+}
+```
+
+Octipus checks the tool's normal execution permissions and resolves the placeholder
+using the current user's vault access and the credential's tool allowlist. The
+subprocess receives `GH_TOKEN`; the agent does not need to fetch the plaintext token.
+Use the environment variable supported by the actual program/API client. The token
+is scoped to that invocation, not automatically installed into the vendor CLI's
+environment or a persistent login store.
+
+A vendor-native terminal/Bash/exec call does **not** resolve these placeholders.
+If MCP is unavailable, use the run's provided bridge helper to call `shell__run`
+with the same JSON arguments. Calling the target program directly through the
+native terminal would bypass Octipus's substitution.
+
+Put credentials in `env`, not the command string (which can be logged), a URL,
+a generated file, or a chat message. Exact injected values are masked in returned
+Octipus tool output; do not print, encode, or save credentials to test this.
+If the name is unknown, ask for the vault entry name, not the token. For missing
+entries, denied access, or authentication failures, report the error and verify the
+entry name/tool access rather than guessing names or trying repeated logins.
+
 ## How tools and context work
 
 Each managed CLI run receives a private loopback bridge, authenticated with a
