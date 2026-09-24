@@ -138,9 +138,17 @@ export async function isTypeSafeConfigured(): Promise<boolean> {
   return (await new TypeSafeProvider().checkHealth()).healthy;
 }
 
+/**
+ * Published Jev limits (docs.typesafe.ai/models, 2026-09): 64k tokens per
+ * request (state + all questions), 32k for state + the longest question.
+ * Output is typed answers only — a few tokens, billed at $0 — so the output
+ * budget is nominal. $0.042 per 1M input tokens on both routes.
+ */
+const JEV = { contextWindow: 64_000, maxOutputTokens: 1024, costPerInputToken: 0.042, costPerOutputToken: 0, supportsTools: false, supportsVision: false };
+
 /** Static list for the add-model picker — neither route has a discovery endpoint we need. */
-export const TYPESAFE_MODELS: Array<{ id: string; label: string }> = [
-  { id: 'typesafe-ai/jev', label: 'Jev via Vercel AI Gateway (zero data retention possible)' },
-  { id: 'jev-1.13.0', label: 'Jev 1.13.0, TypeSafe direct (input retained)' },
-  { id: 'jev-latest', label: 'Jev latest, TypeSafe direct (input retained)' },
+export const TYPESAFE_MODELS = [
+  { id: 'typesafe-ai/jev', label: 'Jev via Vercel AI Gateway (zero data retention possible)', ...JEV },
+  { id: 'jev-1.13.0', label: 'Jev 1.13.0, TypeSafe direct (input retained)', ...JEV },
+  { id: 'jev-latest', label: 'Jev latest, TypeSafe direct (input retained)', ...JEV },
 ];

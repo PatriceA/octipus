@@ -145,7 +145,7 @@ describe('decide() gate wiring', () => {
     const registry = await import('@/models/model-registry');
     const providers = await import('@/models/providers');
     const sent = vi.fn(async (req: any) => Object.fromEntries(Object.keys(req.questions).map((k) => [k, { type: 'noul', p: 0.9, confidence: 0.9 }])));
-    const r = vi.spyOn(registry, 'getModelRegistry').mockReturnValue({ getModelForTopic: async () => ({ name: 'm', metadata: {}, endpoint: null, ...row }) } as never);
+    const r = vi.spyOn(registry, 'getModelRegistry').mockReturnValue({ getModelForTopic: async () => ({ name: 'm', metadata: {}, endpoint: null, contextWindow: 64_000, ...row }) } as never);
     const p = vi.spyOn(providers, 'getProviderRouter').mockReturnValue({ getProviderByName: () => ({ decide: sent }) } as never);
     // Step past any "unbound" cache an earlier test left behind.
     const now = Date.now() + 3_600_000;
@@ -172,6 +172,14 @@ describe('decide() gate wiring', () => {
     const local = await wire({ provider: 'ollama', modelId: 'qwen3:8b', endpoint: 'http://localhost:11434' });
     expect(await decide({ id: 's', sensitivity: 'secret', minConfidence: 0 }, 'k', q)).not.toBeNull();
     local.restore();
+  });
+
+  it('a request larger than the model context window falls back without calling the model', async () => {
+    const { decide } = await import('./decision');
+    const w = await wire({ provider: 'typesafe', modelId: 'typesafe-ai/jev', contextWindow: 100 });
+    expect(await decide({ id: 'c', sensitivity: 'public', minConfidence: 0 }, 'x'.repeat(2000), q)).toBeNull();
+    expect(w.sent).not.toHaveBeenCalled();
+    w.restore();
   });
 
   it('PII in question criteria is redacted before a remote call; option keys survive', async () => {

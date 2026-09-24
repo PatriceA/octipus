@@ -217,6 +217,15 @@ async function decideUnguarded(site: DecisionSite, state: unknown, questions: Re
     questions = mapStrings(questions, redact) as Record<string, DecisionQuestion>;
   }
 
+  // The row's context window is the model's request limit (Jev: 64k; an Ollama
+  // stand-in: its num_ctx). ponytail: chars/4 estimate, generous margin; count
+  // real tokens if a site ever runs close to the limit.
+  const estTokens = Math.ceil(JSON.stringify({ state, questions }).length / 4);
+  if (estTokens > model.contextWindow * 0.9) {
+    modelLogger.warn({ site: site.id, model: model.name, estTokens, contextWindow: model.contextWindow }, 'Decision request exceeds the model context window; falling back');
+    return null;
+  }
+
   const start = Date.now();
   let answers: DecisionAnswers;
   try {
