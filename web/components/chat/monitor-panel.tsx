@@ -18,7 +18,7 @@ export default function MonitorPanel({ sessionId }: { sessionId: string | null }
     const read = async () => {
       try {
         const result = await api.get<{ monitors: Monitor[] }>(`/sessions/${sessionId}/monitors`);
-        if (!disposed) { setRows(result.monitors); setError(''); }
+        if (!disposed) { setRows(Array.isArray(result?.monitors) ? result.monitors : []); setError(''); }
       } catch (err) { if (!disposed) setError(err instanceof Error ? err.message : 'Could not load monitors'); }
       finally { if (!disposed) timer = setTimeout(read, 5000); }
     };
