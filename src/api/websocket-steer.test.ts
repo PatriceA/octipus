@@ -4,6 +4,7 @@ import type { WebSocketHandlers } from '@/api/http/app';
 
 const state = vi.hoisted(() => ({
   steer: vi.fn(),
+  rootSteer: vi.fn(),
   handleMessage: vi.fn(),
   owner: 'alice' as string | null,
 }));
@@ -11,7 +12,7 @@ vi.mock('@/security/auth/session', () => ({ getSessionManager: () => ({ validate
 vi.mock('@/security/permissions', () => ({ getPermissionManager: () => ({ onRequest: () => () => {} }) }));
 vi.mock('@/channels/webchat', () => ({ webChatChannel: { registerConnection: () => 'conn1', unregisterConnection: () => {} } }));
 vi.mock('@/core/agent-manager', () => ({ getAgentManager: () => ({ onEvent: () => () => {} }) }));
-vi.mock('@/core/agent', () => ({ getAgentService: () => ({ onEvent: () => () => {}, handleMessage: state.handleMessage }) }));
+vi.mock('@/core/agent', () => ({ getAgentService: () => ({ onEvent: () => () => {}, handleMessage: state.handleMessage, steer: state.rootSteer }) }));
 vi.mock('@/core/documents/queue', () => ({ getDocumentQueue: () => ({ on: () => {}, off: () => {} }) }));
 vi.mock('@/core/gateway/message-handler', () => ({ trySteerRunningRootAgent: state.steer }));
 vi.mock('@/db/repositories/session-repository', () => ({
@@ -62,4 +63,11 @@ test('attachments need a real turn, so they are not steered', async () => {
   await send({ type: 'chat', content: 'hi', sessionId: 's1', fileRefs: [{ path: 'a.md' }] });
   expect(state.steer).not.toHaveBeenCalled();
   expect(state.handleMessage).toHaveBeenCalledOnce();
+});
+
+test("a steer frame for another user's session is refused", async () => {
+  state.owner = 'bob';
+  expect(await send({ type: 'steer', content: 'hi', sessionId: 's1' }))
+    .toEqual([{ type: 'steer_error', error: 'Session not found', sessionId: 's1' }]);
+  expect(state.rootSteer).not.toHaveBeenCalled();
 });

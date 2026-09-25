@@ -372,6 +372,12 @@ export function setupWebSocket(app: Elysia): void {
               break;
             }
 
+            const { sessionRepository } = await import('@/db/repositories/session-repository');
+            if ((await sessionRepository.findById(sessionId))?.userId !== userId) {
+              ws.send(JSON.stringify({ type: 'steer_error', error: 'Session not found', sessionId }));
+              break;
+            }
+
             const rootAgent = getAgentService();
             const steered = rootAgent.steer(sessionId, {
               role: parsed.role || 'user',
