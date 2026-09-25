@@ -204,6 +204,8 @@ export default function ChatPage() {
   // queue never loses events even under batching.
   const [swarmEvents, setSwarmEvents] = useState<SwarmTreeEvent[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
+  /** isLoading before the last send: a steered message joins a run, it doesn't start one. */
+  const loadingBeforeSendRef = useRef(false);
   // Durable cursors avoid reloading every event for every agent on the 10s
   // session poll. Parsed history stays here so each new DB page is applied once.
   const agentHistoryCacheRef = useRef<Map<string, AgentHistoryCache>>(new Map());
@@ -784,6 +786,11 @@ export default function ChatPage() {
 
       case 'agent_event':
         handleAgentEvent(data, eventSessionId || activeSessionId);
+        break;
+
+      case 'steer_result':
+        // Delivered to the running turn as guidance; no reply of its own.
+        if (data.steered) setIsLoading(loadingBeforeSendRef.current);
         break;
 
       case 'permission_request':
@@ -1478,6 +1485,7 @@ export default function ChatPage() {
       // flicker when the 10s poll later re-hydrated them from the DB.
     }));
 
+    loadingBeforeSendRef.current = isLoading;
     setIsLoading(true);
 
     // WS is the primary transport. If it's OPEN → send.
@@ -1874,8 +1882,9 @@ export default function ChatPage() {
             onSend={sendMessage}
             /* The new-session dialog is a choice that is not yet made: a message
                sent while it is open auto-creates its own session, and confirming
-               the dialog then adds a second, empty one. */
-            disabled={isLoading || showNewSessionDialog}
+               the dialog then adds a second, empty one. A running turn does not
+               block: the server delivers the message to it as guidance. */
+            disabled={showNewSessionDialog}
             placeholder={showNewSessionDialog ? 'Choose a session type first...' : activeSessionId ? 'Send a message or change direction...' : 'Create a session to start chatting'}
             voiceError={realtime.error || voiceUnavailableReason}
             voiceAvailable={voiceAvailable !== false}

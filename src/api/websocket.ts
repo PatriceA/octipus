@@ -4,6 +4,7 @@ import { webChatChannel } from '@/channels/webchat';
 import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
 import { getDocumentQueue } from '@/core/documents/queue';
+import { trySteerRunningRootAgent } from '@/core/gateway/message-handler';
 import { FileRefSchema } from '@/core/gateway/protocol';
 import { getAgentService } from '@/core/agent';
 import { getApiTokenManager } from '@/security/api-tokens';
@@ -299,6 +300,19 @@ export function setupWebSocket(app: Elysia): void {
             }
             // Chat/work split: per-message deliverable override (inline | file).
             const outputMode = parsed.outputMode === 'inline' || parsed.outputMode === 'file' ? parsed.outputMode : undefined;
+
+            // A running root turn takes the message as guidance, as the gateway
+            // does. handleMessage would queue it behind that turn unpersisted:
+            // it vanished from the transcript and ran as a new turn afterwards.
+            // Attachments need a real turn, so they take the normal path.
+            if (content && !fileRefs && parsed.sessionId) {
+              const { sessionRepository } = await import('@/db/repositories/session-repository');
+              const owned = (await sessionRepository.findById(sessionId))?.userId === userId;
+              if (owned && await trySteerRunningRootAgent(sessionId, content)) {
+                ws.send(JSON.stringify({ type: 'steer_result', sessionId, steered: true }));
+                break;
+              }
+            }
 
             // Route through root agent (commands are handled inside handleMessage)
             const rootAgent = getAgentService();
