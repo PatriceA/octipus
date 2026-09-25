@@ -448,7 +448,7 @@ export class SwarmSpawner {
       }
     };
 
-    // ── Fan-out cap (Phase 2, per-turn = per-node lifetime) ─────────
+    // ── Fan-out cap: children of this node running at once ──────────
     const fanOutDenial = checkFanOut(parent, childKind);
     if (fanOutDenial) return denyAndRelease(fanOutDenial);
 
@@ -512,9 +512,6 @@ export class SwarmSpawner {
     // template — and nothing had ever published it, so that narration had never
     // once fired. Found by the generated event matrix.
     this.emitBudgetWarning(parent);
-
-    // Reserve fan-out slot only after budget passes.
-    parent.budget.fanOut.used++;
 
     // ── Permission intersection ─────────────────────────────────────
     const roleTools = getToolsForRole(childRole);
@@ -771,6 +768,11 @@ export class SwarmSpawner {
       .join('\n\n');
 
     // ── Attempt child spawn + run, with bounded retry per §Failure Modes ──
+    // The fan-out slot is held while the child runs and freed when it ends, so
+    // the cap bounds children running at once (as the delegation prompt says),
+    // not spawns per turn: a long turn could otherwise spawn only `cap` children
+    // in total, however many had finished.
+    parent.budget.fanOut.used++;
     const result = await releaseOnThrow(() => this.runChildWithRetry({
       parent,
       parentContext,
@@ -792,7 +794,9 @@ export class SwarmSpawner {
       spawnMode: params.mode ?? 'await',
       scorers: params.scorers,
       childIsSmall: isSmall,
-    }));
+    })).finally(() => {
+      parent.budget.fanOut.used = Math.max(0, parent.budget.fanOut.used - 1);
+    });
 
     // Feed the child's actual spend back into the parent's pool accounting so
     // later spawns (and the budget-cascade guard via `syncParentTokenUsage`)
@@ -1457,15 +1461,14 @@ export class SwarmSpawner {
       //    would otherwise sit `running` with no ledger event, visible only to
       //    the age-based reaper, which is the state this whole block prevents;
       //  - the call-graph fingerprint it owns, or the un-run brief stays
-      //    deduped for the rest of the session and the retry is swallowed;
-      //  - the fan-out slot reserved before the spawn.
+      //    deduped for the rest of the session and the retry is swallowed.
+      // (The fan-out slot is freed by spawnChildInner when this returns.)
       await swarmNodeRepository
         .cancelIfRunning(childId, 'spawn_not_recorded')
         .catch((cancelErr: unknown) =>
           coreLogger.error({ err: cancelErr, childId }, 'Failed to cancel the unrecorded child node row'),
         );
       graph.unregisterFingerprint(childId);
-      opts.parent.budget.fanOut.used = Math.max(0, opts.parent.budget.fanOut.used - 1);
       return {
         // Empty, like every other pre-run failure: a child that never ran must
         // not reach the `if (result.nodeId)` sibling-scope block with an empty

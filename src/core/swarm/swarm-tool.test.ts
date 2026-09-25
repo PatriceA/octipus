@@ -802,6 +802,26 @@ describe('createSpawnChildTool', () => {
     expect(String(out)).toContain('already at max pending detached (3)');
   });
 
+  test('detach mode: the fan-out cap refuses synchronously instead of returning pending', async () => {
+    const parent = makeParent();
+    parent.budget.fanOut.cap = 2;
+    let spawned = 0;
+    const spawner = { spawnChild: async () => { spawned++; throw new Error('should not be called'); } } as unknown as SwarmSpawner;
+    const tool = createSpawnChildTool(parent, spawner, {
+      registerPending: () => { throw new Error('should not register'); },
+      pendingCount: () => 2,
+      maxPendingDetached: () => 6,
+    });
+    const out = String(await tool.execute(
+      { topic: 'research', subtopic: 'page-3', taskBrief: 'Summarize source 3', expectedOutput: { shape: 'summary' } },
+      { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'research', status: 'running', createdAt: new Date(), updatedAt: new Date(), metadata: {} },
+    ));
+    expect(out).toContain('already at max pending detached (2)');
+    expect(out).toContain('not spawns per turn');
+    expect(out).not.toContain('status="pending"');
+    expect(spawned).toBe(0);
+  });
+
   test('detach mode: accepted at depth 0 (rootAgent can detach-spawn agents — phase 1 freedom)', async () => {
     const parent = makeParent(); // depth 0 (rootAgent)
     const seen: Array<{ id: string }> = [];

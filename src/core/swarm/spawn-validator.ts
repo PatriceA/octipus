@@ -62,7 +62,7 @@ export function checkSameRole(
   return null;
 }
 
-/** Per-node-lifetime fan-out cap enforced against `parent.budget.fanOut`. */
+/** Fan-out cap: children of `parent` running at once (`parent.budget.fanOut`). */
 export function checkFanOut(
   parent: AgentNode,
   childKind: 'agent' | 'subagent',
@@ -80,7 +80,7 @@ export function checkFanOut(
       usedTokens: 0,
       durationMs: 0,
       spawnedChildren: [],
-      notes: `fan-out cap (${parent.budget.fanOut.cap}) reached; synthesize with existing children or respawn next turn`,
+      notes: `fan-out cap (${parent.budget.fanOut.cap}) reached: that many children are running at once (not a per-turn limit); wait for one to finish or synthesize with existing results`,
     };
   }
   return null;

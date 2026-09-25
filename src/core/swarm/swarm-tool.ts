@@ -368,10 +368,17 @@ export function createSpawnChildTool(
         'with the same arguments and it will start.';
     }
 
-    const cap = hooks?.maxPendingDetached() ?? 0;
-    if (hooks && cap > 0) {
+    const pendingCap = hooks?.maxPendingDetached() ?? 0;
+    if (hooks && pendingCap > 0) {
+      // The spawner's fan-out cap counts running children, and every running
+      // detached child is pending, so checking it here too refuses the spawn
+      // synchronously; a refusal from inside the detached promise surfaced only
+      // at collect_children, after the parent was told the child had started.
+      const cap = Math.min(pendingCap, parent.budget.fanOut.cap);
       if (hooks.pendingCount() >= cap) {
-        return `spawn_child: already at max pending detached (${cap}). Call collect_children to pick up results before spawning more.`;
+        return `spawn_child: already at max pending detached (${cap}). The limit counts children pending at once ` +
+          '(running, or finished but not yet collected), not spawns per turn. ' +
+          'Call collect_children to pick up results before spawning more.';
       }
       params.mode = 'detach';
       const childHandle = randomUUID();

@@ -7,7 +7,7 @@ import { swarmNodeRepository } from '@/core/swarm/node-repository';
 import { taskFingerprint } from '@/core/swarm/spawner';
 import type { AgentWorker } from '@/core/agent-worker';
 import type { ToolHandler } from '@/core/agent-base';
-import { type AgentNode, LEVEL_DEFAULT, type PendingChild } from '@/core/swarm/types';
+import { type AgentNode, getLevelDefault, LEVEL_DEFAULT, type PendingChild } from '@/core/swarm/types';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { getModelRegistry } from '@/models/model-registry';
@@ -221,7 +221,8 @@ export async function runRootAgent(
     budget: {
       tokens: { cap: LEVEL_DEFAULT[0].tokens, used: 0 },
       wallClockMs: { cap: LEVEL_DEFAULT[0].wallMs, startedAt: Date.now() },
-      fanOut: { cap: LEVEL_DEFAULT[0].fanOut, used: 0 },
+      // Configured, like maxPendingDetached: the hardcoded 6 ignored the setting.
+      fanOut: { cap: getLevelDefault(0).fanOut, used: 0 },
       depth: 0,
     },
     allowedToolIds: rootAllowedToolIds,
