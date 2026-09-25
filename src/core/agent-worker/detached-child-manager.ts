@@ -19,6 +19,8 @@ import type { ChildResult, PendingChild } from '../swarm/types';
 export class DetachedChildManager {
   private pending: Map<string, PendingChild> = new Map();
   private collected: Map<string, ChildResult> = new Map();
+  /** Children the last collectAll settled and removed — restorable if its answer never arrived. */
+  private lastCollected: PendingChild[] = [];
 
   constructor(
     private readonly agentId: string,
@@ -133,6 +135,7 @@ export class DetachedChildManager {
   /** Collect every still-pending detached child. Used by collect_children and auto-collect. */
   async collectAll(timeoutMs: number): Promise<ChildResult[]> {
     const entries = [...this.pending.entries()];
+    this.lastCollected = [];
     if (entries.length === 0) return [];
     // Time spent BLOCKED waiting on detached children must not count against
     // the parent's own wall clock — this mirrors the await path's
@@ -149,6 +152,19 @@ export class DetachedChildManager {
       }),
     );
     this.addPausedMs(Date.now() - waitStart);
+    this.lastCollected = entries.filter(([childId]) => !this.pending.has(childId)).map(([, pc]) => pc);
     return results.filter((r): r is ChildResult => r !== null);
+  }
+
+  /**
+   * Put the last collectAll's settled children back in pending: its response
+   * never reached the caller. Their results stay in `collected`, so the next
+   * collect (explicit or auto) returns them instantly. Returns how many.
+   */
+  redeliverLast(): number {
+    const restored = this.lastCollected.filter((pc) => !this.pending.has(pc.childId));
+    for (const pc of restored) this.pending.set(pc.childId, pc);
+    this.lastCollected = [];
+    return restored.length;
   }
 }

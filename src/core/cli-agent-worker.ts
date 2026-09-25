@@ -371,6 +371,11 @@ export class CLIAgentWorker extends BaseAgentWorker {
         active: () => this.context.status === 'running' && !this.aborted,
         execute: (name, args) => this.executeBridgedTool(name, args),
         unqueued: new Set(['get_cli_run_context', 'get_work_plan']),
+        undelivered: name => {
+          if (name !== 'collect_children') return;
+          const restored = this.detached.redeliverLast();
+          if (restored) agentLogger.warn({ agentId: this.context.id, restored }, 'collect_children response undelivered; results kept for the next collect');
+        },
       });
       if (this.aborted) throw new Error('Agent was aborted during bridge startup');
       this.connection = { url: this.bridge.url, key: this.bridge.key,

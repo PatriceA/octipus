@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { startCliToolBridge } from './cli-tool-bridge';
 
 const bridges: Awaited<ReturnType<typeof startCliToolBridge>>[] = [];
@@ -145,4 +145,35 @@ describe('error replies never leak internals (CodeQL js/stack-trace-exposure)', 
       expect((await res.json() as { error: string }).error).toMatch(/blocked for this run/);
     } finally { await bridge.close(); }
   });
+});
+
+it('reports a result the caller dropped before it was sent, instead of writing it to nobody', async () => {
+  let release!: () => void;
+  const lost: string[] = [];
+  const bridge = await startCliToolBridge({
+    active: () => true,
+    tools: () => [{ name: 'collect_children', description: '', parameters: { type: 'object' }, execute: async () => '' }],
+    execute: () => new Promise(resolve => { release = () => resolve({ content: [{ type: 'text', text: 'results' }] }); }),
+    undelivered: name => { lost.push(name); },
+  });
+  bridges.push(bridge);
+  const abort = new AbortController();
+  const pending = fetch(`${bridge.url}/call`, { method: 'POST', signal: abort.signal,
+    headers: { Authorization: `Bearer ${bridge.key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'collect_children', arguments: {} }) }).catch(() => 'aborted');
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  abort.abort();
+  expect(await pending).toBe('aborted');
+  await new Promise(r => setTimeout(r, 50));
+  release();
+  await vi.waitFor(() => expect(lost).toEqual(['collect_children']));
+  // A delivered answer does not report.
+  const ok = fetch(`${bridge.url}/call`, { method: 'POST',
+    headers: { Authorization: `Bearer ${bridge.key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'collect_children', arguments: {} }) });
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  await new Promise(r => setTimeout(r, 50));
+  release();
+  expect((await ok).status).toBe(200);
+  expect(lost).toEqual(['collect_children']);
 });

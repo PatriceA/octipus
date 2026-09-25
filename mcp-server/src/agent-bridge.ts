@@ -1,3 +1,4 @@
+import { request } from 'node:http';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, ListToolsResultSchema, CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 
@@ -11,17 +12,32 @@ function readAgentBridgeConfig(): { url: URL; key: string } {
   return { url, key };
 }
 
-/** Forward only to the capability issued by this agent's parent process. */
-export async function agentBridgeRequest(path: '/tools' | '/call', body?: unknown): Promise<unknown> {
+/**
+ * Forward only to the capability issued by this agent's parent process.
+ * node:http, not fetch: undici's default 300 s headersTimeout cut off any tool
+ * call that waits longer (collect_children waits up to a child's 10 min wall)
+ * with "fetch failed". http.request has no response timeout; the CLI's own
+ * MCP tool timeout bounds the call, and its cancellation arrives as `signal`.
+ */
+export async function agentBridgeRequest(path: '/tools' | '/call', body?: unknown, signal?: AbortSignal): Promise<unknown> {
   const { url, key } = readAgentBridgeConfig();
-  const response = await fetch(new URL(path, url), {
-    method: body === undefined ? 'GET' : 'POST',
-    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    redirect: 'error',
+  const payload = body === undefined ? undefined : JSON.stringify(body);
+  const { status, text } = await new Promise<{ status: number; text: string }>((resolve, reject) => {
+    const req = request(new URL(path, url), {
+      method: payload === undefined ? 'GET' : 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      signal,
+    }, res => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk: Buffer) => chunks.push(chunk));
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, text: Buffer.concat(chunks).toString('utf8') }));
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+    req.end(payload);
   });
-  const result: unknown = await response.json();
-  if (!response.ok) throw new Error(`Agent bridge rejected request (${response.status}): ${JSON.stringify(result)}`);
+  const result: unknown = JSON.parse(text);
+  if (status < 200 || status >= 300) throw new Error(`Agent bridge rejected request (${status}): ${JSON.stringify(result)}`);
   return result;
 }
 
@@ -29,9 +45,10 @@ export function createAgentBridgeServer(): Server {
   readAgentBridgeConfig();
   const server = new Server({ name: 'octipus-agent', version: '1.0.0' }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => ListToolsResultSchema.parse(await agentBridgeRequest('/tools')));
-  server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
+  server.setRequestHandler(CallToolRequestSchema, async ({ params }, extra) => {
     try {
-      return CallToolResultSchema.parse(await agentBridgeRequest('/call', { name: params.name, arguments: params.arguments ?? {} }));
+      // Pass cancellation through so the backend sees the drop and keeps the result.
+      return CallToolResultSchema.parse(await agentBridgeRequest('/call', { name: params.name, arguments: params.arguments ?? {} }, extra.signal));
     } catch (error) {
       return { isError: true, content: [{ type: 'text', text: error instanceof Error ? error.message : String(error) }] };
     }

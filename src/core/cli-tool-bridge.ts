@@ -26,6 +26,8 @@ export async function startCliToolBridge(options: {
   active: () => boolean;
   /** Read-only tools that bypass the per-worker queue (safe to answer while a delegation blocks it). */
   unqueued?: ReadonlySet<string>;
+  /** The caller dropped the connection before this tool's result could be sent. */
+  undelivered?: (name: string) => void;
 }): Promise<{ url: string; key: string; close: () => Promise<void> }> {
   const key = randomBytes(32).toString('hex');
   let closed = false;
@@ -37,6 +39,7 @@ export async function startCliToolBridge(options: {
       res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify(value));
     };
+    const socket = req.socket;
     try {
     const supplied = Buffer.from(req.headers.authorization ?? '');
     const expected = Buffer.from(`Bearer ${key}`);
@@ -83,7 +86,11 @@ export async function startCliToolBridge(options: {
       let operation: Promise<BridgeResult>;
       if (options.unqueued?.has(input.name)) operation = run();
       else { operation = queue.then(run); queue = operation.then(() => undefined, () => undefined); }
-      reply(200, await operation);
+      const result = await operation;
+      // The caller gave up (transport timeout, cancel) while the tool ran; a
+      // write now goes nowhere, so let the owner keep what it would lose.
+      if (socket.destroyed) { options.undelivered?.(input.name); return; }
+      reply(200, result);
     } catch (err) {
       // A deliberate refusal is the agent's to read; a malformed call gets the
       // schema complaint, which is about ITS request, not our internals.
