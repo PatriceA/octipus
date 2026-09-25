@@ -104,6 +104,23 @@ test('a failed shell command is shown as failed and keeps its diagnostic output'
 });
 
 describe('consecutive failures block only the failing tool', () => {
+  test('a blocked spawn_child cannot execute through a parallel group', async () => {
+    const exec = new ToolExecutor(context(), () => {});
+    const execute = vi.fn(async () => { throw new Error('spawn unavailable'); });
+    exec.registerTools([tool('spawn_child', execute)]);
+    for (const id of ['1', '2', '3']) await exec.handleToolCalls([call(id, 'spawn_child')]);
+    expect(exec.isToolBlocked('spawn_child')).toBe(true);
+
+    const messages = await exec.handleToolCalls([
+      call('4', 'spawn_child', { parallelGroup: 'g' }),
+      call('5', 'spawn_child', { parallelGroup: 'g' }),
+    ]);
+    expect(execute).toHaveBeenCalledTimes(3);
+    const replies = messages.filter(m => m.role === 'tool');
+    expect(replies).toHaveLength(2);
+    for (const reply of replies) expect(String(reply.content)).toMatch(/blocked for this run/);
+  });
+
   test('three failed calls block that tool; others stay available', async () => {
     const exec = new ToolExecutor(context(), () => {});
     exec.registerTools([tool('shell__run', async () => { throw new Error('spawn npx ENOENT'); }), tool('git__diff', async () => 'diff')]);

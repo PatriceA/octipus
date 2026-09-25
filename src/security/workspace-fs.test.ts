@@ -297,5 +297,17 @@ describe('WorkspaceFS with a linked root', () => {
     const fs = WorkspaceFS.withRoot(link);
     expect(fs.resolve('a.txt')).toBe(realpathSync(join(target, 'a.txt')));
     expect(() => fs.resolve('new/b.txt')).not.toThrow();
+    // Paths returned by read/write tools must work as input to the next tool.
+    for (const input of ['a.txt', 'new/b.txt', '.']) {
+      const canonical = fs.resolve(input);
+      expect(fs.resolve(canonical)).toBe(canonical);
+    }
+
+    const outside = join(base, 'real-sibling');
+    mkdirSync(outside);
+    symlinkSync(outside, join(target, 'escape'), 'junction');
+    expect(() => fs.resolve(join(outside, 'a.txt'))).toThrow(/outside workspace/);
+    expect(() => fs.resolve('escape/a.txt')).toThrow(/outside workspace via symlink/);
+    expect(() => fs.resolve(join(realpathSync(target), 'escape/a.txt'))).toThrow(/outside workspace via symlink/);
   });
 });

@@ -283,7 +283,9 @@ export class WorkspaceFS {
     // absolute path wins.
     const lexical = isAbsolute(userPath) ? pathResolve(userPath) : pathResolve(this.root, userPath);
 
-    if (!this.isUnder(lexical, this.root) && !this.isInExtraAllowed(lexical)) {
+    // Accept our own canonical output too when the workspace root is linked.
+    // The real-path check below still rejects links that escape either spelling.
+    if (!this.isUnder(lexical, this.root) && !this.isUnder(lexical, this.realRoot()) && !this.isInExtraAllowed(lexical)) {
       throw new WorkspaceFsError('OUTSIDE_ROOT',
         `path resolves outside workspace: ${lexical}`);
     }

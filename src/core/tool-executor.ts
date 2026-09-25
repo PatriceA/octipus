@@ -375,7 +375,9 @@ export class ToolExecutor {
     // Bucket by parallelGroup.
     const groups = new Map<string, ToolCall[]>();
     for (const tc of toolCalls) {
-      if (tc.name !== 'spawn_child') continue;
+      // Blocked calls fall through to the sequential refusal below; never
+      // dispatch them through the parallel path before that check runs.
+      if (tc.name !== 'spawn_child' || this.blockedTools.has(tc.name)) continue;
       const pg = (tc.arguments as Record<string, unknown>).parallelGroup;
       if (typeof pg !== 'string' || !pg.trim()) continue;
       const key = pg.trim();
