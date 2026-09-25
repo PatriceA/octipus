@@ -388,7 +388,9 @@ export class CLIAgentWorker extends BaseAgentWorker {
 ` +
         `If your CLI cannot load this MCP server, use its terminal tool to run the bridge helper: ${quote(process.execPath)} ${quote(helper)} tools; or ${quote(process.execPath)} ${quote(helper)} call <tool-name> '<JSON arguments>'. Quote arguments safely. Credentials are supplied by the parent environment; never print them.
 ` +
-        `Use list_tools and describe_tool to discover additional tools, then call_discovered_tool with their name and arguments.`);
+        `Use list_tools and describe_tool to discover additional tools, then call_discovered_tool with their name and arguments.
+` +
+        `Delegate only through Octipus spawn_child and collect_children. Your CLI's native subagents are disabled: they live inside this CLI process, and background work is lost when the process exits.`);
       this.messages.push({ role: 'user', content: `Octipus run context: ${await this.controlContext()}`, timestamp: new Date() });
       let result = await this.executeCLI();
       const checkLateFeedback = async () => {
@@ -1114,6 +1116,16 @@ export class CLIAgentWorker extends BaseAgentWorker {
                 accumulatedText = lineBuffer.trim();
               }
             }
+          }
+
+          // Background work the CLI started and never reported finished died
+          // with the process. Nothing can keep it alive; say so loudly.
+          const lostBackground = parser.getOpenBackgroundTasks();
+          if (lostBackground.length) {
+            const note = `CLI exited with ${lostBackground.length} background task(s) still running: ${lostBackground.join('; ')} — their work was lost`;
+            agentLogger.warn({ agentId: this.context.id, lostBackground }, 'CLI exited with open background tasks');
+            this.emit('observation', { type: 'warning', message: note });
+            accumulatedText = `${accumulatedText}${accumulatedText ? '\n\n' : ''}⚠ ${note}`;
           }
 
           if (!invocationUsage.available) {

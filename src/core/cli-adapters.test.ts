@@ -513,3 +513,28 @@ CURRENT DATE & TIME: now`], null, 100, 'agent-1', connection, { id: 'a3f1-uuid',
     expect(args).toContain('--sandbox');
   });
 });
+
+describe('native subagents disabled (delegation via spawn_child only)', () => {
+  const disallowed = (args: string[]) => args.filter((_, i) => args[i - 1] === '--disallowedTools');
+
+  it('Claude Code: disallows Task and Agent in one flag', () => {
+    const out = builder.build('Claude Code', 'hi', {}, []);
+    expect(disallowed(out.args)).toEqual(['Task,Agent']);
+  });
+
+  it('Claude Code: merges operator disallows from extraArgs, every form', () => {
+    const out = builder.build('Claude Code', 'hi', { extraArgs: ['--disallowedTools', 'WebFetch', 'Bash(git *)', '--disallowed-tools=Edit,Task', '--verbose'] }, []);
+    expect(disallowed(out.args)).toEqual(['WebFetch,Bash(git *),Edit,Task,Agent']);
+    expect(out.args.filter(a => a.startsWith('--disallowed'))).toEqual(['--disallowedTools']);
+    expect(out.args.at(-1)).toBe('--verbose');
+  });
+
+  it('Codex CLI: disables multi_agent features on exec and exec resume', () => {
+    for (const resume of [undefined, { id: 'th-1', isFirstRun: false }]) {
+      const out = builder.build('Codex CLI', 'hi', {}, [], null, undefined, undefined, undefined, resume);
+      const features = out.args.filter((_, i) => out.args[i - 1] === '--disable');
+      expect(features).toEqual(['multi_agent', 'multi_agent_v2']);
+    }
+  });
+});
+

@@ -445,6 +445,23 @@ export function resolveVibeMode(mode?: string): string {
  * is required for .cmd wrappers but mangles long/special-char arguments.
  * When stdinPrompt is returned, the caller must write it to proc.stdin.
  */
+export const CLAUDE_NATIVE_SUBAGENT_TOOLS = ['Task', 'Agent'];
+export const CODEX_NATIVE_SUBAGENT_FEATURES = ['multi_agent', 'multi_agent_v2'];
+
+/** Pull `--disallowedTools`/`--disallowed-tools` (space, comma or `=` form) out of extraArgs so they can be merged into one flag. */
+export function splitClaudeDisallowedTools(extraArgs: readonly string[]): { disallowed: string[]; rest: string[] } {
+  const disallowed: string[] = [];
+  const rest: string[] = [];
+  const add = (v: string) => disallowed.push(...v.split(',').map(t => t.trim()).filter(Boolean));
+  for (let i = 0; i < extraArgs.length; i++) {
+    const [flag, inline] = extraArgs[i].split(/=(.*)/s);
+    if (flag !== '--disallowedTools' && flag !== '--disallowed-tools') { rest.push(extraArgs[i]); continue; }
+    if (inline !== undefined) { add(inline); continue; }
+    while (i + 1 < extraArgs.length && !extraArgs[i + 1].startsWith('-')) add(extraArgs[++i]);
+  }
+  return { disallowed, rest };
+}
+
 export class CLIArgumentBuilder {
   build(
     toolName: string,
@@ -636,8 +653,14 @@ export class CLIArgumentBuilder {
       args.push('--max-budget-usd', String(settings.maxBudgetUsd));
     }
 
-    if (settings.extraArgs?.length) {
-      args.push(...settings.extraArgs);
+    // Delegation goes through Octipus spawn_child only: native subagents
+    // (`Agent`, legacy name `Task`) live inside this process, so background
+    // ones die silently when it exits. One merged flag keeps operator disallows.
+    const { disallowed, rest } = splitClaudeDisallowedTools(settings.extraArgs ?? []);
+    args.push('--disallowedTools', [...new Set([...disallowed, ...CLAUDE_NATIVE_SUBAGENT_TOOLS])].join(','));
+
+    if (rest.length) {
+      args.push(...rest);
     }
 
     return { binary: 'claude', args, keepStdinOpen: !!connection,
@@ -750,6 +773,9 @@ export class CLIArgumentBuilder {
     // A first/non-resumed `exec` run still takes --sandbox directly.
     if (isResumedRun) baseArgs.push('-c', `sandbox_mode="${codexPermMode}"`);
     else baseArgs.push('--sandbox', codexPermMode);
+    // Delegation goes through Octipus spawn_child only. Accepted by both
+    // `exec` and `exec resume` (verified on 0.154.0, `codex features list`).
+    for (const feature of CODEX_NATIVE_SUBAGENT_FEATURES) baseArgs.push('--disable', feature);
     if (connection) {
       // Codex merges -c tables, so never overlay a host HTTP/stdio entry.
       // Ask Codex to resolve every config layer, including trusted project
@@ -849,6 +875,8 @@ export interface CLIParserCallbacks {
  * `commandsRun` ever gates anything (today only `filesChanged` does).
  */
 const CLI_COMMAND_TOOLS = new Set(['Bash', 'shell']);
+/** Claude tools whose `run_in_background` work outlives the tool_result and dies with the process. */
+const CLAUDE_BACKGROUND_TOOLS = new Set(['Agent', 'Task', 'Bash']);
 
 export class CLIOutputParser {
   /** tool id → tool name, so results can carry the real name (C9). */
@@ -890,6 +918,10 @@ export class CLIOutputParser {
    * actually succeeded.
    */
   private streamRecognized = false;
+  /** Claude background work (tool_use id → description) with no terminal task_notification yet. */
+  private openBackground = new Map<string, string>();
+  /** Claude task_id → tool_use_id, for notifications that omit tool_use_id. */
+  private backgroundTaskIds = new Map<string, string>();
 
   constructor(
     private agentId: string,
@@ -936,6 +968,11 @@ export class CLIOutputParser {
    * drift; `filesChanged` is counted directly from `file_change` emissions,
    * which BOTH vendors route through `emitFileChange`.
    */
+  /** Background tasks the CLI started and never reported finished; they die with the process. */
+  getOpenBackgroundTasks(): string[] {
+    return [...this.openBackground.values()];
+  }
+
   getSideEffectCounters(): SideEffectCounters | null {
     if (!this.streamRecognized) return null;
     const byName = { ...this.counters.byName };
@@ -994,6 +1031,16 @@ export class CLIOutputParser {
           vendorSessionId: event.session_id,
         });
       }
+      // Shapes read from the claude 2.1.280 binary: task_started carries
+      // task_id + tool_use_id, task_notification (terminal) carries task_id and
+      // usually tool_use_id.
+      if (subtype === 'task_started' && event.tool_use_id && event.task_id) {
+        this.backgroundTaskIds.set(event.task_id as string, event.tool_use_id as string);
+      }
+      if (subtype === 'task_notification') {
+        const toolUseId = (event.tool_use_id as string | undefined) ?? this.backgroundTaskIds.get(event.task_id as string);
+        if (toolUseId) this.openBackground.delete(toolUseId);
+      }
       return null;
     }
 
@@ -1019,6 +1066,9 @@ export class CLIOutputParser {
           this.callbacks.onToolCall?.();
           if (toolUseId) this.toolNamesById.set(toolUseId, toolName);
           const input = (block.input || {}) as Record<string, unknown>;
+          if (toolUseId && input.run_in_background === true && CLAUDE_BACKGROUND_TOOLS.has(toolName)) {
+            this.openBackground.set(toolUseId, `${toolName}: ${String(input.description || input.command || toolUseId).slice(0, 120)}`);
+          }
           this.emit('action', {
             type: 'cli_tool_use',
             id: toolUseId || undefined,
@@ -1049,6 +1099,8 @@ export class CLIOutputParser {
         if (block.type !== 'tool_result') continue;
         const toolUseId = (block.tool_use_id || '') as string;
         const isError = block.is_error === true;
+        // A background launch that errored never started.
+        if (isError) this.openBackground.delete(toolUseId);
         this.emit('action', {
           type: 'cli_tool_result',
           id: toolUseId || undefined,

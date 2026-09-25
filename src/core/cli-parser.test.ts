@@ -399,3 +399,31 @@ it('reports the Codex thread id to the caller', () => {
   parser.parse({ type: 'thread.started', thread_id: '0199a213-81c0-7800-8aa1-bbab2a035a53' }, 'Codex CLI');
   expect(seen).toEqual(['0199a213-81c0-7800-8aa1-bbab2a035a53']);
 });
+
+describe('CLIOutputParser — Claude background task tracking', () => {
+  const launch = (id: string, name: string, input: Record<string, unknown>) => ({ type: 'assistant', message: { id: `m-${id}`, content: [{ type: 'tool_use', id, name, input }] } });
+  const result = (id: string, isError = false) => ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'launched', is_error: isError }] } });
+
+  it('keeps background Agent/Bash open past their tool_result until a task_notification', () => {
+    const { parser, feed } = makeParser();
+    feed(launch('a', 'Agent', { description: 'audit', run_in_background: true }), 'Claude Code');
+    feed(launch('b', 'Bash', { command: 'npm test', run_in_background: true }), 'Claude Code');
+    feed(launch('c', 'Agent', { description: 'foreground' }), 'Claude Code');
+    feed(result('a'), 'Claude Code');
+    feed(result('b'), 'Claude Code');
+    expect(parser.getOpenBackgroundTasks()).toEqual(['Agent: audit', 'Bash: npm test']);
+    // task_notification without tool_use_id resolves through task_started's task_id.
+    feed({ type: 'system', subtype: 'task_started', task_id: 't-b', tool_use_id: 'b' }, 'Claude Code');
+    feed({ type: 'system', subtype: 'task_notification', task_id: 't-b', status: 'completed' }, 'Claude Code');
+    feed({ type: 'system', subtype: 'task_notification', task_id: 't-a', tool_use_id: 'a', status: 'failed' }, 'Claude Code');
+    expect(parser.getOpenBackgroundTasks()).toEqual([]);
+  });
+
+  it('drops a background launch whose tool_result is an error', () => {
+    const { parser, feed } = makeParser();
+    feed(launch('a', 'Task', { description: 'x', run_in_background: true }), 'Claude Code');
+    feed(result('a', true), 'Claude Code');
+    expect(parser.getOpenBackgroundTasks()).toEqual([]);
+  });
+});
+

@@ -195,6 +195,14 @@ beforeEach(() => {
     let stdinData = '';
     process.stdin.on('data', c => { stdinData += c; });
     process.stdin.on('end', () => { writeFileSync(join(process.cwd(), 'claude-last-stdin.txt'), stdinData); });
+    // bg-marker: launch a native background Agent; content 'done' also reports it finished.
+    const bgMarker = join(process.cwd(), 'bg-marker');
+    if (existsSync(bgMarker)) {
+      console.log(JSON.stringify({ type: 'assistant', message: { id: 'm-bg', content: [{ type: 'tool_use', id: 'tu-bg', name: 'Agent', input: { description: 'audit docs', prompt: 'x', run_in_background: true } }] } }));
+      console.log(JSON.stringify({ type: 'system', subtype: 'task_started', task_id: 'a1', tool_use_id: 'tu-bg', description: 'audit docs' }));
+      console.log(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tu-bg', content: 'Async agent launched' }] } }));
+      if (readFileSync(bgMarker, 'utf-8') === 'done') console.log(JSON.stringify({ type: 'system', subtype: 'task_notification', task_id: 'a1', status: 'completed' }));
+    }
     console.log(JSON.stringify({ type: 'result', subtype: 'success', result: 'answer for ' + idArg, num_turns: 1 }));
   `);
   // Codex mints its own thread id — it never appears as a CLI argument on a
@@ -450,5 +458,28 @@ describe('session boundary regressions', () => {
     expect(next.lastPrompt).toContain('NEW CORRECTION');
     expect(next.lastPrompt).toContain('other provider answer');
     expect(next.lastPrompt).not.toContain('first question');
+  });
+});
+
+describe('native background work lost at CLI exit', () => {
+  const runWithMarker = async (content: string) => {
+    writeFileSync(join(fixture.dir, 'bg-marker'), content, 'utf-8');
+    const worker = makeClaudeWorker({ sessionId: 'bg' });
+    const warnings: string[] = [];
+    worker.worker.onEvent(e => { if (e.type === 'observation') warnings.push((e.data as { message: string }).message); });
+    const answer = await worker.run('question');
+    return { answer, warnings: warnings.filter(w => w.includes('background task')) };
+  };
+
+  it('warns and notes the result when a background Agent never finished', async () => {
+    const { answer, warnings } = await runWithMarker('open');
+    expect(warnings).toEqual(['CLI exited with 1 background task(s) still running: Agent: audit docs — their work was lost']);
+    expect(answer).toContain('CLI exited with 1 background task(s) still running: Agent: audit docs — their work was lost');
+  });
+
+  it('stays quiet when the background Agent reported completion', async () => {
+    const { answer, warnings } = await runWithMarker('done');
+    expect(warnings).toEqual([]);
+    expect(answer).not.toContain('background task');
   });
 });
