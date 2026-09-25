@@ -143,6 +143,11 @@ export class CLIAgentWorker extends BaseAgentWorker {
     const id = randomUUID();
     const delegation = name === 'spawn_child' || name === 'escalate_to_other_lane' || name === 'collect_children' || this.toolExecutor.getTools().get(name)?.final === true;
     if (delegation) this.setPause('delegation', true);
+    // A collect answer can be lost without the bridge noticing: a CLI that
+    // timed the call out may drop it without closing the socket, so the write
+    // succeeds and `undelivered` never fires. With nothing pending, re-send the
+    // last settled batch once instead of reporting nothing to collect.
+    const resent = name === 'collect_children' && this.detached.count() === 0 ? this.detached.redeliverLast() : 0;
     try {
       let messages: AgentMessage[];
       try {
@@ -165,6 +170,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
       }
       return { content: [
         ...messages.map(m => ({ type: 'text' as const, text: m.content })),
+        ...(resent ? [{ type: 'text' as const, text: `[Octipus] Nothing was pending, so these ${resent} result(s) are from your previous collect_children call, re-sent in case its response did not reach you.` }] : []),
         { type: 'text', text: contextText },
       ], isError };
     } finally { this.bridgeErrors.delete(id); if (delegation) this.setPause('delegation', false); }

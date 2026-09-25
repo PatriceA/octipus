@@ -46,11 +46,22 @@ export function createAgentBridgeServer(): Server {
   const server = new Server({ name: 'octipus-agent', version: '1.0.0' }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => ListToolsResultSchema.parse(await agentBridgeRequest('/tools')));
   server.setRequestHandler(CallToolRequestSchema, async ({ params }, extra) => {
+    // Claude Code gives up on a call that sends no response or progress for
+    // 1800 s, and collect_children can wait a child's whole wall (1 h). A
+    // heartbeat keeps a long wait alive when the client asked for progress.
+    const progressToken = params._meta?.progressToken;
+    let progress = 0;
+    const heartbeat = progressToken === undefined ? undefined : setInterval(() => {
+      extra.sendNotification({ method: 'notifications/progress', params: { progressToken, progress: ++progress } })
+        .catch(() => { /* the response itself still reports the outcome */ });
+    }, 60_000);
     try {
       // Pass cancellation through so the backend sees the drop and keeps the result.
       return CallToolResultSchema.parse(await agentBridgeRequest('/call', { name: params.name, arguments: params.arguments ?? {} }, extra.signal));
     } catch (error) {
       return { isError: true, content: [{ type: 'text', text: error instanceof Error ? error.message : String(error) }] };
+    } finally {
+      clearInterval(heartbeat);
     }
   });
   return server;

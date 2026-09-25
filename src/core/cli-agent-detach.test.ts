@@ -36,6 +36,19 @@ describe('CLIAgentWorker detached children', () => {
     expect(ctx.detachedChildrenNote).toContain('collect_children');
   });
 
+  test('a collect with nothing pending re-sends the last batch, whose answer may have been lost', async () => {
+    const worker = new CLIAgentWorker(context(), config);
+    worker.registerPendingChild({ childId: 'c4', startedAt: Date.now(), taskBrief: 'x', topic: 'research', promise: Promise.resolve(result('c4')) });
+    await worker.collectAllDetached(1_000); // answered, but the CLI had already given up on the call
+    type Priv = { executeBridgedTool(name: string, args: Record<string, unknown>): Promise<{ content: Array<{ text: string }> }>; toolExecutor: { handleToolCalls: () => Promise<unknown> } };
+    const priv = worker as unknown as Priv;
+    vi.spyOn(priv.toolExecutor, 'handleToolCalls').mockImplementation(async () =>
+      [{ role: 'tool', content: (await worker.collectAllDetached(1_000)).map(r => r.output).join() }]);
+    const out = await priv.executeBridgedTool('collect_children', {});
+    expect(out.content[0].text).toBe('done c4');
+    expect(out.content[1].text).toContain('re-sent');
+  });
+
   test('stop() cancels children still pending', () => {
     const worker = new CLIAgentWorker(context(), config);
     worker.registerPendingChild({ childId: 'c3', startedAt: Date.now(), taskBrief: 'x', topic: 'qa', promise: new Promise(() => {}) });
