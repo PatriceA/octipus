@@ -117,7 +117,8 @@ export function SettingField({
   setting: SettingItem;
   value: unknown;
   onChange: (value: unknown) => void;
-  onSave: () => void;
+  /** Saves `value` when given, else the field's current local value. */
+  onSave: (value?: unknown) => void;
   onReset: () => void;
   isSaving: boolean;
   isSaved: boolean;
@@ -183,7 +184,13 @@ export function SettingField({
           </select>
         ) : setting.valueType === 'boolean' ? (
           <button
-            onClick={() => { onChange(!(value as boolean)); setTimeout(onSave, 0); }}
+            type="button"
+            role="switch"
+            aria-checked={!!value}
+            aria-label={shortKey}
+            // Save the flipped value itself: onSave() reads the group's local
+            // values from the render that made it, i.e. the value before the flip.
+            onClick={() => { const next = !value; onChange(next); onSave(next); }}
             className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
               value ? 'bg-primary' : 'bg-[#484847]'
             }`}
@@ -248,7 +255,7 @@ export function SettingField({
       <div className="flex items-center gap-1 pt-7 shrink-0">
         {setting.valueType !== 'boolean' && (
           <button
-            onClick={onSave}
+            onClick={() => onSave()}
             disabled={isSaving || !!validationError}
             className="p-1.5 text-on-surface-variant hover:text-primary disabled:opacity-50"
             title="Save"
@@ -317,7 +324,7 @@ export function SettingsGroup({
           setting={setting}
           value={getLocalValue(setting.key)}
           onChange={(val) => setLocalValue(setting.key, val)}
-          onSave={() => onSave(setting.key, localValues[setting.key])}
+          onSave={(val) => onSave(setting.key, val === undefined ? localValues[setting.key] : val)}
           onReset={() => onReset(setting.key)}
           isSaving={saving === setting.key}
           isSaved={saved === setting.key}

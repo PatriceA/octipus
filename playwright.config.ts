@@ -12,7 +12,9 @@ import { defineConfig, devices } from '@playwright/test';
  * The unit runner excludes tests/web (see vitest.config.ts); this config is the
  * only thing that runs these specs.
  */
-const PORT = 3007;
+// WEB_PORT is also what serve.mjs listens on. Override it when an installed
+// Octipus already owns 3007 — otherwise reuseExistingServer tests THAT bundle.
+const PORT = Number(process.env.WEB_PORT || 3007);
 const BASE_URL = `http://localhost:${PORT}`;
 
 export default defineConfig({
