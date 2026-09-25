@@ -205,7 +205,7 @@ export const loggingConfigSchema = z.object({
 // Agent configuration schema
 export const agentConfigSchema = z.object({
   maxConcurrentAgents: z.number().min(1).max(100).default(10),
-  defaultTimeout: z.number().min(0).default(900000), // 15 minutes
+  defaultTimeout: z.number().min(0).default(3_600_000), // 1 hour
   maxIterations: z.number().min(0).default(0), // 0 = unlimited (turn timeout + token budget still bound a run)
   contextWindowSize: z.number().min(1000).default(32000),
   maxTokenBudget: z.number().min(0).default(100000), // 0 = unlimited
@@ -244,9 +244,9 @@ export const agentConfigSchema = z.object({
   smallModelMaxTools: z.number().min(1).max(50).default(7),
   lazyToolDiscovery: z.boolean().default(true),
   /** Hard wall-clock for one root turn (ms). */
-  turnTimeoutMs: z.number().min(0).default(1800000), // 30 minutes
+  turnTimeoutMs: z.number().min(0).default(36_000_000), // 10 hours
   /** Root-turn wall-clock when the turn was triggered by a hook (ms). */
-  hookTurnTimeoutMs: z.number().min(0).default(2700000), // 45 minutes
+  hookTurnTimeoutMs: z.number().min(0).default(36_000_000), // 10 hours
   /**
    * Token pool for one pipeline RUN, summed over every node visit. 0 disables
    * the pool.
@@ -366,9 +366,9 @@ export const swarmConfigSchema = z.object({
    */
   contractRetries: z.number().min(0).max(5).default(1),
   levelDefaults: z.object({
-    root: swarmLevelSchema.default({ tokens: 200_000, wallMs: 600_000, fanOut: 6, maxPendingDetached: 6 }),
-    agent: swarmLevelSchema.default({ tokens: 80_000, wallMs: 600_000, fanOut: 4, maxPendingDetached: 3 }),
-    subagent: swarmLevelSchema.default({ tokens: 30_000, wallMs: 600_000, fanOut: 0, maxPendingDetached: 0 }),
+    root: swarmLevelSchema.default({ tokens: 200_000, wallMs: 36_000_000, fanOut: 6, maxPendingDetached: 6 }),
+    agent: swarmLevelSchema.default({ tokens: 80_000, wallMs: 3_600_000, fanOut: 4, maxPendingDetached: 3 }),
+    subagent: swarmLevelSchema.default({ tokens: 30_000, wallMs: 3_600_000, fanOut: 0, maxPendingDetached: 0 }),
   }).prefault({}),
 });
 

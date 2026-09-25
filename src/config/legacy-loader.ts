@@ -121,7 +121,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
     },
     agent: {
       maxConcurrentAgents: parseInt(process.env.MAX_CONCURRENT_AGENTS || '10', 10),
-      defaultTimeout: parseInt(process.env.AGENT_DEFAULT_TIMEOUT || '900000', 10),
+      defaultTimeout: parseInt(process.env.AGENT_DEFAULT_TIMEOUT || '3600000', 10),
       maxIterations: parseInt(process.env.AGENT_MAX_ITERATIONS || '0', 10),
       contextWindowSize: parseInt(process.env.CONTEXT_WINDOW_SIZE || '32000', 10),
       maxTokenBudget: parseInt(process.env.AGENT_MAX_TOKEN_BUDGET || '100000', 10),
@@ -137,8 +137,8 @@ export function loadFromEnvLegacy(): Partial<Config> {
       smallModelMaxTools: parseInt(env('AGENT_SMALL_MODEL_MAX_TOOLS', 'ORCHESTRATOR_SMALL_MODEL_MAX_TOOLS') || '7', 10),
       pipelineTokenBudget: parseInt(process.env.PIPELINE_TOKEN_BUDGET || '2000000', 10),
       lazyToolDiscovery: env('AGENT_LAZY_TOOLS', 'ORCHESTRATOR_LAZY_TOOLS') !== 'false',
-      turnTimeoutMs: parseInt(env('AGENT_TURN_TIMEOUT_MS', 'ORCHESTRATOR_TIMEOUT_MS') || '1800000', 10),
-      hookTurnTimeoutMs: parseInt(env('AGENT_HOOK_TURN_TIMEOUT_MS', 'ORCHESTRATOR_HOOK_TIMEOUT_MS') || '2700000', 10),
+      turnTimeoutMs: parseInt(env('AGENT_TURN_TIMEOUT_MS', 'ORCHESTRATOR_TIMEOUT_MS') || '36000000', 10),
+      hookTurnTimeoutMs: parseInt(env('AGENT_HOOK_TURN_TIMEOUT_MS', 'ORCHESTRATOR_HOOK_TIMEOUT_MS') || '36000000', 10),
     },
     multiuser: {
       // No `enabled` flag — Octipus is always multi-user. These sub-flags

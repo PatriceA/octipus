@@ -64,7 +64,7 @@ export const defaultConfig: Partial<Config> = {
   },
   agent: {
     maxConcurrentAgents: 10,
-    defaultTimeout: 900000,
+    defaultTimeout: 3_600_000,
     maxIterations: 0,
     contextWindowSize: 32000,
     maxTokenBudget: 100000,
@@ -81,10 +81,10 @@ export const defaultConfig: Partial<Config> = {
      * was tool JSON schema. Set false to put the full block back everywhere.
      */
     lazyToolDiscovery: true,
-    /** Root-turn timeout for interactive channels (30 min). */
-    turnTimeoutMs: 1800000,
-    /** Root-turn timeout for unattended hook-triggered runs (45 min). */
-    hookTurnTimeoutMs: 2700000,
+    /** Root-turn timeout for interactive channels (10 h). */
+    turnTimeoutMs: 36_000_000,
+    /** Root-turn timeout for unattended hook-triggered runs (10 h). */
+    hookTurnTimeoutMs: 36_000_000,
     /** Token pool for one pipeline run, summed over node visits. 0 = off. */
     pipelineTokenBudget: 2_000_000,
   },
@@ -127,9 +127,9 @@ export const defaultConfig: Partial<Config> = {
     orphanReaperIntervalMs: 600_000,
     contractRetries: 1,
     levelDefaults: {
-      root: { tokens: 200_000, wallMs: 600_000, fanOut: 6, maxPendingDetached: 6 },
-      agent: { tokens: 80_000, wallMs: 600_000, fanOut: 4, maxPendingDetached: 3 },
-      subagent: { tokens: 30_000, wallMs: 600_000, fanOut: 0, maxPendingDetached: 0 },
+      root: { tokens: 200_000, wallMs: 36_000_000, fanOut: 6, maxPendingDetached: 6 },
+      agent: { tokens: 80_000, wallMs: 3_600_000, fanOut: 4, maxPendingDetached: 3 },
+      subagent: { tokens: 30_000, wallMs: 3_600_000, fanOut: 0, maxPendingDetached: 0 },
     },
   },
 };

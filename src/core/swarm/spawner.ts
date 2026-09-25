@@ -26,17 +26,24 @@ import { WorkspaceFS } from '@/security/workspace-fs';
 /**
  * The directories a premise check may look in for a user's workspace.
  *
- * Same resolution the file-aware scorers use, so "the file is not there" means
- * the same directory the child will actually write to. Best-effort: a resolution
- * failure means no check, never a failed spawn.
+ * The dev-mode project comes first: it is where the child actually runs (its
+ * CLI cwd and `shell__run` both resolve there), so a brief naming
+ * `sidecar/tests/x.ts` relative to that project must be checked against it.
+ * Checking only the per-user sandbox told a QA child its real subject file was
+ * missing and to stop. Mirrors `premiseRoots` in `worker-spawner.ts`.
+ * Best-effort: a resolution failure means no check, never a failed spawn.
  */
-function premiseRootsFor(userId: string | undefined): string[] {
-  if (!userId) return [];
+export async function premiseRootsFor(userId: string | undefined, sessionId?: string): Promise<string[]> {
+  const roots: string[] = [];
+  const projectPath = await devProjectPathForSession(sessionId);
+  if (projectPath) roots.push(projectPath);
+  if (!userId) return roots;
   try {
-    return [WorkspaceFS.forAgent({ userId }).root];
+    roots.push(WorkspaceFS.forAgent({ userId }).root);
   } catch {
-    return [];
+    /* no sandbox root resolvable — the project path (if any) still counts */
   }
+  return roots;
 }
 import { formatDateTimeContext } from '@/utils/date-context';
 import { coreLogger } from '@/utils/logger';
@@ -692,7 +699,7 @@ export class SwarmSpawner {
     const childMessage = composeChildMessage(brief, {
       availableToolNames,
       canSpawnChildren,
-      workspaceRoots: premiseRootsFor(parentContext.userId),
+      workspaceRoots: await premiseRootsFor(parentContext.userId, parentContext.sessionId),
       // Tell the agent it has a cheap executor to plan for — only when its lane
       // actually binds one (getTopicConfig on the child's resolved lane).
       executorModel: canSpawnChildren ? getTopicConfig(childLane).executorModel ?? undefined : undefined,
@@ -1500,10 +1507,12 @@ export class SwarmSpawner {
     const wantsFileEvidence =
       opts.brief.expectedOutput?.shape === 'code-diff' ||
       (opts.scorers ?? []).some((s) => s.kind === 'side_effect' && s.minFilesChanged !== undefined);
-    // `forAgent`, matching the `file_exists` scorer's own resolution, so both
-    // file-aware scorers judge the same directory.
+    // The tree the child actually works in: the dev-mode project when the
+    // session has one, else the per-user sandbox — the `file_exists` scorer
+    // resolves the same way, so both file-aware scorers judge one directory.
     const scorerWorkspaceRoot = wantsFileEvidence
-      ? WorkspaceFS.forAgent({ userId: opts.parentContext.userId }).root
+      ? (await devProjectPathForSession(opts.parentContext.sessionId)) ??
+        WorkspaceFS.forAgent({ userId: opts.parentContext.userId }).root
       : null;
     const fsBefore = scorerWorkspaceRoot ? await snapshotWorkspace(scorerWorkspaceRoot) : null;
 

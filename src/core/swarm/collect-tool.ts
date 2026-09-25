@@ -67,7 +67,7 @@ export function createCollectChildrenTool(
       const wallCap = parent.budget.wallClockMs.cap;
       const remaining = Math.max(0, wallCap - (Date.now() - wallStarted));
       // A detached child can run up to its own wall budget
-      // (`getLevelDefault(1).wallMs` — 10 min by default). Waiting less than
+      // (`getLevelDefault(1).wallMs` — 1 h by default). Waiting less than
       // that — the old 120s clamp — reported a still-working child as
       // `timeout`/null and dropped its result. Wait up to the child wall
       // (+margin), bounded by the parent's own remaining wall so we don't

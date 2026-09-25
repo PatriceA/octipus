@@ -705,7 +705,11 @@ async function evaluate(
       // Resolve through the child's workspace sandbox — the same resolver the
       // filesystem tool uses — so the check respects per-user roots and path
       // relocation instead of guessing at an absolute path.
-      const fs = WorkspaceFS.forAgent({ userId: ctx.userId });
+      // A dev-mode child works in its project, not the sandbox (see
+      // `ScorerContext.projectPath`), so a relative path is its project's.
+      const fs = ctx.projectPath && existsSync(ctx.projectPath)
+        ? WorkspaceFS.withRoot(ctx.projectPath)
+        : WorkspaceFS.forAgent({ userId: ctx.userId });
       const resolved = fs.resolveOptional(scorer.path);
       if (!resolved) {
         return { scorer: 'file_exists', reason: `path "${truncate(scorer.path)}" is outside the workspace` };

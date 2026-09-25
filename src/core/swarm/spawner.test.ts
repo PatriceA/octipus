@@ -291,10 +291,10 @@ describe('deriveChildBudget', () => {
     };
     const child = deriveChildBudget(parent, 1);
     // Parent's 2 min remaining is IRRELEVANT — parent's timer pauses while
-    // awaiting this child. Child gets its full LEVEL_DEFAULT[1].wallMs = 10 min.
+    // awaiting this child. Child gets its full LEVEL_DEFAULT[1].wallMs = 1 h.
     // (Bumped from 4 min on 2026-05-15 — 240s wasn't enough for coding agents
-    // to finish a non-trivial repo analysis before hitting the wall.)
-    expect(child.wallClockMs.cap).toBe(10 * 60_000);
+    // to finish a non-trivial repo analysis before hitting the wall; 1 h since 2026-09-25.)
+    expect(child.wallClockMs.cap).toBe(60 * 60_000);
   });
 });
 
