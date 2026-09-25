@@ -238,7 +238,9 @@ export function windowsCmdShim(argv: string[], env: Record<string, string | unde
   if (bad !== undefined) {
     throw new Error(`Argument ${JSON.stringify(bad.slice(0, 80))} contains a character cmd.exe expands (" % !); ${cmd} is a .cmd script and runs through cmd.exe.`);
   }
-  return { argv: argv.map((a) => `"${a.replace(/(\\+)$/, '$1$1')}"`), shell: true };
+  // The resolved path, not the bare name: cmd.exe running a quoted bare `"npx"` hands the
+  // script the CWD as %~dp0, so npx.cmd looks for <cwd>\node_modules\npm and dies.
+  return { argv: [target, ...argv.slice(1)].map((a) => `"${a.replace(/(\\+)$/, '$1$1')}"`), shell: true };
 }
 
 /**

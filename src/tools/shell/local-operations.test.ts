@@ -197,7 +197,7 @@ describe('windowsCmdShim — npm/npx are .cmd scripts on Windows', () => {
 
   it('routes a PATHEXT-resolved .cmd through cmd.exe with every argument quoted', () => {
     expect(windowsCmdShim(['npx', 'vitest', 'a&b', 'C:\\x y\\'], env, 'win32'))
-      .toEqual({ argv: ['"npx"', '"vitest"', '"a&b"', '"C:\\x y\\\\"'], shell: true });
+      .toEqual({ argv: [`"${join(dir, 'npx.cmd')}"`,'"vitest"', '"a&b"', '"C:\\x y\\\\"'], shell: true });
   });
 
   it('resolves a relative script path against the child cwd, not the server cwd', () => {
@@ -212,6 +212,13 @@ describe('windowsCmdShim — npm/npx are .cmd scripts on Windows', () => {
 
   it('refuses characters cmd.exe expands inside quotes', () => {
     for (const bad of ['%PATH%', 'a"&calc', 'x!y']) expect(() => windowsCmdShim(['npx', bad], env, 'win32')).toThrow(/cmd\.exe/);
+  });
+
+  it.runIf(process.platform === 'win32')('a .cmd run from another cwd still gets its own folder as %~dp0', async () => {
+    const bin = mkdtempSync(join(tmpdir(), 'cmdshim-bin-'));
+    writeFileSync(join(bin, 'where-am-i.cmd'), '@echo %~dp0');
+    const res = await new LocalShellOperations().exec('where-am-i', tmpdir(), { timeout: 30_000, env: { PATH: `${bin};${process.env.PATH}` } });
+    expect([res.exitCode, res.stdout.trim().toLowerCase()]).toEqual([0, `${bin}\\`.toLowerCase()]);
   });
 
   it.runIf(process.platform === 'win32')('exec runs a .cmd end to end, `&` stays an argument', async () => {
