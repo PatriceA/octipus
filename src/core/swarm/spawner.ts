@@ -13,7 +13,7 @@ import { formatCriticalRules, getRoleConfig, getToolsForRole } from '@/core/agen
 import { applyToolCap, isSmallModel } from '@/core/agent/small-model';
 import type { AgentRole } from '@/core/agent/types';
 import { pipelineMetadata } from '@/core/agent/worker-spawner';
-import { countChangedFiles, snapshotWorkspace } from '@/core/agent/workspace-snapshot';
+import { countChangedFiles, snapshotWorkspace, type WorkspaceSnapshot } from '@/core/agent/workspace-snapshot';
 import { recordSwarmSpawn } from '@/core/telemetry';
 import type { AgentContext } from '@/core/types';
 import { agentRepository } from '@/db/repositories/agent-repository';
@@ -877,6 +877,12 @@ export class SwarmSpawner {
      * role-fit rewrite applies to the grandchildren it spawns.
      */
     childIsSmall?: boolean;
+    /**
+     * Workspace as it was before the FIRST attempt. Set by that attempt and
+     * carried by every retry (they all spread `opts`), so a retry's
+     * `minFilesChanged` sees the whole child's work, not just its own.
+     */
+    fsBaseline?: WorkspaceSnapshot | null;
   }): Promise<ChildResult> {
     // Retry policy (design §Failure Modes):
     //   provider_error → retry once on the SAME spawn attempt (same node).
@@ -1517,7 +1523,13 @@ export class SwarmSpawner {
       ? (await devProjectPathForSession(opts.parentContext.sessionId)) ??
         WorkspaceFS.forAgent({ userId: opts.parentContext.userId }).root
       : null;
-    const fsBefore = scorerWorkspaceRoot ? await snapshotWorkspace(scorerWorkspaceRoot) : null;
+    // Snapshotted once per child, before its first attempt. A retry re-snapshots
+    // AFTER the first attempt committed its work, then measures zero changes and
+    // fails `minFilesChanged` on every retry until the pool runs dry.
+    if (scorerWorkspaceRoot && opts.fsBaseline === undefined) {
+      opts.fsBaseline = await snapshotWorkspace(scorerWorkspaceRoot);
+    }
+    const fsBefore = scorerWorkspaceRoot ? opts.fsBaseline ?? null : null;
 
     // ── Run child (with provider_error single retry on same node) ──
     let status: ChildResultStatus = 'ok';

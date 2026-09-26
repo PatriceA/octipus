@@ -587,3 +587,56 @@ describe('applyScorerVerdict — the two outcomes are independent', () => {
     expect(v.notes).toBe('existing');
   });
 });
+
+describe('SwarmSpawner — contract retry keeps the first attempt\'s workspace baseline', () => {
+  beforeEach(() => {
+    resetConfig();
+    getConfig();
+  });
+  afterEach(() => resetConfig());
+
+  it('hands every retry the snapshot taken before attempt 1', async () => {
+    // Real incident: attempt 1 committed its work, the retry re-snapshotted
+    // AFTER that, measured 0 changed files and failed `minFilesChanged` on
+    // every retry until the quota ran out. The baseline must survive retries.
+    const spawner = new SwarmSpawner({} as never);
+    const seen: unknown[] = [];
+    const baseline = { files: new Map(), truncated: false };
+    let calls = 0;
+    (spawner as unknown as { singleSpawnAndRun: unknown }).singleSpawnAndRun = async (o: {
+      fsBaseline?: unknown;
+    }) => {
+      // Same contract as the real method: snapshot only when none is carried.
+      if (o.fsBaseline === undefined) o.fsBaseline = calls === 0 ? baseline : { fresh: true };
+      seen.push(o.fsBaseline);
+      calls++;
+      return calls === 1 ? gateFailed() : result();
+    };
+    await (spawner as unknown as { runChildWithRetry: (o: unknown) => Promise<ChildResult> }).runChildWithRetry({
+      parent: { id: 'parent-1', rootSessionId: 's1' },
+      parentContext: { userId: 'u1' },
+      childDepth: 1,
+      childKind: 'agent',
+      childRole: 'coding',
+      childModel: 'm1',
+      childLane: 'agents',
+      childTools: [],
+      budget: {
+        tokens: { cap: 80_000, used: 0 },
+        wallClockMs: { cap: 600_000, startedAt: Date.now() },
+        fanOut: { cap: 4, used: 0 },
+        depth: 1,
+      },
+      topicPath: 'coding',
+      subtopic: 'x',
+      brief: { taskBrief: 'write notes.md', topicPath: 'coding' },
+      briefHash: 'h1',
+      childMessage: 'ORIGINAL TASK BODY',
+      reason: 'normal',
+      spawnMode: 'await',
+    });
+    expect(calls).toBe(2);
+    expect(seen).toEqual([baseline, baseline]);
+    expect(seen[1]).toBe(baseline);
+  });
+});
