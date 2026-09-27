@@ -332,6 +332,9 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
   // DELETE /spend-budgets/:id         — drop a budget.
   // POST   /spend-budgets/:id/resume  — clear the pause.
   // Enforcement: src/security/spend-budgets.ts (checkSpend).
+  // scopeRef: role name (trimmed) or workspace id (UUID, lowercased). A
+  // workspace budget attributes spend via the agent's workspace, falling back
+  // to the session's; cost rows with neither count toward user budgets only.
   .get(
     '/spend-budgets',
     async (ctx) => {
@@ -366,9 +369,13 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
         set.status = 400;
         return { error: 'warnRatio must be in (0, 1]' };
       }
-      if (body.scopeKind !== 'user' && !body.scopeRef) {
+      if (body.scopeKind !== 'user' && !body.scopeRef?.trim()) {
         set.status = 400;
         return { error: `scopeRef is required for a ${body.scopeKind} budget` };
+      }
+      if (body.scopeKind === 'workspace' && !new RegExp(UUID_PATTERN).test(body.scopeRef?.trim() ?? '')) {
+        set.status = 400;
+        return { error: 'scopeRef must be a workspace id (UUID) for a workspace budget' };
       }
 
       const { upsertBudget } = await import('@/security/spend-budgets');

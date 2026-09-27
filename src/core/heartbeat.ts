@@ -300,6 +300,9 @@ export async function evaluateHeartbeatGate(
 
   // A paused dollar spend budget skips the tick (the check stamps the pause
   // and notifies once); any other failure of the check is not blocking.
+  // Only the user scope is checked: the tick runs an orchestrated turn whose
+  // role and workspace are resolved downstream, not here. Role and workspace
+  // budgets are enforced when that turn spawns its agents (agent-manager).
   try {
     const { checkSpend } = await import('@/security/spend-budgets');
     await checkSpend({ userId: hook.userId }, now);
