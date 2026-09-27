@@ -1,6 +1,26 @@
-import { describe, expect, test } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest';
+import { getConfig, refreshConfigKey, resetConfig } from '@/config';
 import { reapOrphanedSwarmNodes } from './orphan-reaper';
 import type { SwarmNodeRepository } from './node-repository';
+import { createWorktree, releaseWorktree } from './worktree';
+
+// No test here may touch the real ~/.octipus: every worktree sweep this file
+// triggers resolves its root to a throwaway directory.
+const prevWorktreesDir = process.env.OCTIPUS_WORKTREES_DIR;
+let scratch: string;
+beforeAll(() => {
+  scratch = realpathSync(mkdtempSync(join(tmpdir(), 'octipus-reaper-')));
+  process.env.OCTIPUS_WORKTREES_DIR = join(scratch, 'worktrees');
+});
+afterAll(() => {
+  if (prevWorktreesDir === undefined) delete process.env.OCTIPUS_WORKTREES_DIR;
+  else process.env.OCTIPUS_WORKTREES_DIR = prevWorktreesDir;
+  rmSync(scratch, { recursive: true, force: true });
+});
 
 /**
  * Orphan reaper unit tests — mock the repo + liveness so we don't need a live
@@ -169,5 +189,56 @@ describe('reapOrphanedSwarmNodes — liveness-gated age-based pass', () => {
     });
     expect(result.reaped).toBe(0);
     expect(result.uncollectedDetached).toBe(0);
+  });
+});
+
+describe('reapOrphanedSwarmNodes — stale worktree pass', () => {
+  let repo: string;
+  const root = () => join(scratch, 'worktrees');
+
+  beforeEach(async () => {
+    repo = join(scratch, `repo-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(repo);
+    const g = (...a: string[]) => execFileSync('git', a, { cwd: repo, stdio: 'pipe' });
+    g('init', '-q', '-b', 'main');
+    writeFileSync(join(repo, 'a.txt'), 'a\n');
+    g('add', '-A');
+    g('-c', 'user.name=T', '-c', 'user.email=t@e', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'init');
+    resetConfig();
+    getConfig();
+  });
+  afterEach(() => resetConfig());
+
+  const reap = () =>
+    reapOrphanedSwarmNodes({
+      repo: makeRepoMock([]).repo,
+      stopWorker: () => {},
+      getActivity: () => null,
+      worktrees: { root: root(), minAgeMs: 0 },
+    });
+
+  test('flag off: the sweep does not run, even over an abandoned merged worktree', async () => {
+    const id = `off${Date.now()}`;
+    const h = await createWorktree(repo, id, { root: root() });
+    releaseWorktree(id);
+    expect(getConfig().swarm.worktreeIsolation).toBe(false);
+
+    const result = await reap();
+
+    expect(result.staleWorktrees).toBeUndefined();
+    expect(existsSync(h.path)).toBe(true);
+    expect(execFileSync('git', ['branch', '--list', `octipus/${id}`], { cwd: repo, encoding: 'utf-8' }).trim()).not.toBe('');
+  });
+
+  test('flag on: an abandoned merged worktree is pruned', async () => {
+    refreshConfigKey('swarm.worktreeIsolation', true);
+    const id = `on${Date.now()}`;
+    const h = await createWorktree(repo, id, { root: root() });
+    releaseWorktree(id);
+
+    const result = await reap();
+
+    expect(result.staleWorktrees?.pruned).toContain(id);
+    expect(existsSync(h.path)).toBe(false);
   });
 });

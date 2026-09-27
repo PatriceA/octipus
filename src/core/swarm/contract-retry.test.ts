@@ -604,11 +604,13 @@ describe('SwarmSpawner — contract retry keeps the first attempt\'s workspace b
     const baseline = { files: new Map(), truncated: false };
     let calls = 0;
     (spawner as unknown as { singleSpawnAndRun: unknown }).singleSpawnAndRun = async (o: {
-      fsBaseline?: unknown;
+      fsBaselines?: Map<string, unknown>;
     }) => {
-      // Same contract as the real method: snapshot only when none is carried.
-      if (o.fsBaseline === undefined) o.fsBaseline = calls === 0 ? baseline : { fresh: true };
-      seen.push(o.fsBaseline);
+      // Same contract as the real method (`baselineFor`): snapshot a root only
+      // when the shared per-child map carries none for it.
+      const map = o.fsBaselines as Map<string, unknown>;
+      if (!map.has('/ws')) map.set('/ws', calls === 0 ? baseline : { fresh: true });
+      seen.push(map.get('/ws'));
       calls++;
       return calls === 1 ? gateFailed() : result();
     };

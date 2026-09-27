@@ -10,19 +10,29 @@
  *
  * Safety rules, each of which is load-bearing:
  *
- * - Every git call is an ARGUMENT VECTOR through `execFile`, never a shell
- *   string (same rule as `session-changes.ts#runGit`). The only caller-supplied
- *   value that reaches a path or ref name is the worktree id, and it is
- *   validated to `[A-Za-z0-9_-]` first.
- * - Server-initiated commits and merges run with hooks disabled and signing
- *   off: the server must not execute scripts the repo (or an agent) planted.
- * - A merge into the parent tree is attempted ONLY when that tree is on a
- *   branch, clean (tracked files) and not mid-merge. A conflict is aborted with
- *   `git merge --abort`; the branch is kept. Nothing is ever force-pushed, and
- *   a branch is deleted only with `git branch -d`, which git itself refuses for
- *   unmerged work.
- * - `git worktree remove --force` is used only by the server's own clean-up,
- *   and only after confirming the worktree has nothing uncommitted.
+ * - Every git call is an ARGUMENT VECTOR through `session-changes#runGit`,
+ *   never a shell string. The only caller-supplied value that reaches a path or
+ *   ref name is the worktree id, validated to `[A-Za-z0-9][A-Za-z0-9_-]*`.
+ * - EVERY server-side git call runs with hooks disabled (`core.hooksPath`),
+ *   fsmonitor off and signing off: the server must not execute anything the
+ *   repo (or an agent working in it) planted.
+ * - Commands that mutate a tree (worktree add, commit, merge, merge --abort)
+ *   get a long timeout: a kill mid-merge leaves the user's tree half-changed.
+ *   After any failed merge, a `MERGE_HEAD` is aborted.
+ * - A merge into the project is attempted ONLY when the project is on a
+ *   branch, has no tracked changes, is not mid-merge, and still contains the
+ *   commit the worktree was created from. A conflict is aborted and the branch
+ *   kept. Nothing is force-pushed; a branch is only ever deleted with
+ *   `git branch -d`, which git itself refuses for unmerged work.
+ * - A worktree is never removed while its HEAD commit is reachable from no
+ *   local branch: detached work is first fast-forwarded onto `octipus/<id>` or
+ *   pinned by a keep-ref `octipus/<id>-detached`. Nor while it has uncommitted
+ *   changes. `--force` is used only after both checks pass.
+ *
+ * Staleness: a worktree starts at the project's HEAD and does not see
+ * uncommitted edits in the shared tree. Rather than copy them, the spawner
+ * does not isolate a child when the project has tracked uncommitted changes —
+ * the merge would be skipped as dirty anyway.
  *
  * Dependencies: a fresh worktree has no `node_modules`. When the repo root has
  * one, `createWorktree` builds a `node_modules` DIRECTORY in the worktree whose
@@ -31,31 +41,57 @@
  * keeps it out of `git status`; if the repo does not ignore it at all, the shim
  * is removed again rather than risk committing it.
  */
-import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync, symlinkSync } from 'node:fs';
-import { realpath } from 'node:fs/promises';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { type GitResult, repoRootFor, runGit } from '@/core/session-changes';
 import { coreLogger } from '@/utils/logger';
 
 export const WORKTREE_BRANCH_PREFIX = 'octipus/';
 
-const GIT_TIMEOUT_MS = 30_000;
-const GIT_MAX_BUFFER = 8 * 1024 * 1024;
 // Leading alphanumeric so an id can never read as an option (`-f`).
 const VALID_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
+/** Read-only commands: short, a hang must not hold a child's completion. */
+const READ_TIMEOUT_MS = 30_000;
+/** Commands that write a tree: long, a kill mid-write is the worse outcome. */
+const MUTATE_TIMEOUT_MS = 15 * 60_000;
+
 /**
- * Identity and switches for every commit/merge the SERVER makes. `-c` rather
- * than repo config so nothing about the user's repo is changed, and so a repo
- * with no `user.name` configured still commits.
+ * Prepended to EVERY git call made here. `-c` rather than repo config so
+ * nothing about the user's repo changes, and a repo with no `user.name` still
+ * commits. `core.hooksPath=/dev/null` disables every hook (there is no file
+ * under /dev/null); `core.fsmonitor=false` stops a configured fsmonitor daemon
+ * command from being executed.
  */
-const SERVER_GIT_CONFIG = [
+export const SERVER_GIT_CONFIG = [
+  '-c', 'core.hooksPath=/dev/null',
+  '-c', 'core.fsmonitor=false',
+  '-c', 'commit.gpgsign=false',
   '-c', 'user.name=Octipus agent',
   '-c', 'user.email=octipus-agent@localhost',
-  '-c', 'core.hooksPath=/dev/null',
-  '-c', 'commit.gpgsign=false',
 ];
+
+function git(cwd: string, args: string[], mode: 'read' | 'mutate' = 'read'): Promise<GitResult> {
+  return runGit(cwd, [...SERVER_GIT_CONFIG, ...args], {
+    timeoutMs: mode === 'mutate' ? MUTATE_TIMEOUT_MS : READ_TIMEOUT_MS,
+  });
+}
+
+async function mustGit(cwd: string, args: string[], mode: 'read' | 'mutate' = 'read'): Promise<string> {
+  const r = await git(cwd, args, mode);
+  if (!r.ok) throw new Error(`git ${args.join(' ')} failed${r.timedOut ? ' (timed out)' : ''}: ${r.stderr.trim()}`);
+  return r.stdout;
+}
 
 /**
  * Where worktrees live: the app data dir, never inside the user's repo.
@@ -70,44 +106,35 @@ export function isValidWorktreeId(id: string): boolean {
   return typeof id === 'string' && VALID_ID.test(id);
 }
 
-interface GitResult {
-  ok: boolean;
-  stdout: string;
-  stderr: string;
-}
-
-function runGit(cwd: string, args: string[]): Promise<GitResult> {
-  return new Promise((done) => {
-    execFile(
-      'git',
-      args,
-      { cwd, timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER, encoding: 'utf-8' },
-      (err, stdout, stderr) => done({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' }),
-    );
-  });
-}
-
-async function mustGit(cwd: string, args: string[]): Promise<string> {
-  const r = await runGit(cwd, args);
-  if (!r.ok) throw new Error(`git ${args.join(' ')} failed: ${r.stderr.trim()}`);
-  return r.stdout;
-}
-
 /**
  * The canonical repo root when `dir` IS a git top level, else null. A directory
  * nested inside a larger repo does not qualify — isolating a sub-folder would
  * branch (and merge) the whole enclosing repo.
  */
-export async function gitTopLevelOf(dir: string): Promise<string | null> {
-  if (!dir || !existsSync(dir)) return null;
-  const r = await runGit(dir, ['rev-parse', '--show-toplevel']);
-  if (!r.ok) return null;
-  try {
-    const [top, self] = await Promise.all([realpath(r.stdout.trim()), realpath(dir)]);
-    return top === self ? top : null;
-  } catch {
-    return null;
-  }
+export function gitTopLevelOf(dir: string): Promise<string | null> {
+  if (!dir) return Promise.resolve(null);
+  return repoRootFor(dir, SERVER_GIT_CONFIG);
+}
+
+/** Tracked uncommitted changes (or a merge in progress) in `repo`. A failure reads as "yes". */
+export async function hasTrackedChanges(repo: string): Promise<boolean> {
+  if ((await git(repo, ['rev-parse', '-q', '--verify', 'MERGE_HEAD'])).ok) return true;
+  const r = await git(repo, ['status', '--porcelain', '--untracked-files=no']);
+  return !r.ok || r.stdout.trim().length > 0;
+}
+
+async function hasUncommitted(cwd: string): Promise<boolean> {
+  const r = await git(cwd, ['status', '--porcelain']);
+  return !r.ok || r.stdout.trim().length > 0;
+}
+
+async function isAncestor(repo: string, a: string, b: string): Promise<boolean> {
+  return (await git(repo, ['merge-base', '--is-ancestor', a, b])).ok;
+}
+
+async function revParse(cwd: string, rev: string): Promise<string | null> {
+  const r = await git(cwd, ['rev-parse', '-q', '--verify', `${rev}^{commit}`]);
+  return r.ok ? r.stdout.trim() || null : null;
 }
 
 export interface WorktreeHandle {
@@ -124,7 +151,9 @@ export type WorktreeMergeOutcome =
   | 'conflict'
   | 'skipped_dirty'
   | 'skipped_detached'
+  | 'skipped_moved'
   | 'skipped_status'
+  | 'skipped_other_attempt'
   | 'no_changes'
   | 'failed';
 
@@ -141,13 +170,57 @@ export interface WorktreeReport {
   mergeDetail?: string;
   /** Whether the branch still exists after clean-up (false only once merged and deleted). */
   branchKept: boolean;
+  /** A ref created or moved so detached work stays reachable after clean-up. */
+  keptRef?: string;
 }
 
-/** Worktree ids owned by a child that is still running in this process. */
-const live = new Set<string>();
+// ── Ownership ────────────────────────────────────────────────────────
+//
+// In-process: the set of ids whose child is still running here. Across
+// processes: an `<id>.pid` file beside the worktree, so a second server's
+// reaper never judges a worktree whose owner is alive.
+
+const live = new Map<string, string>(); // id -> worktrees root
+
+function pidFile(root: string, id: string): string {
+  return join(root, `${id}.pid`);
+}
+
+function ownedByLiveProcess(root: string, id: string): boolean {
+  if (live.has(id)) return true;
+  try {
+    const pid = Number.parseInt(readFileSync(pidFile(root, id), 'utf-8').trim(), 10);
+    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
+    process.kill(pid, 0); // throws when no such process
+    return true;
+  } catch (err) {
+    // EPERM: the process exists but is someone else's — still alive.
+    return (err as NodeJS.ErrnoException)?.code === 'EPERM';
+  }
+}
 
 export function isWorktreeLive(id: string): boolean {
   return live.has(id);
+}
+
+/** Stop owning a worktree without removing it (it is kept for a human or the reaper). */
+export function releaseWorktree(id: string): void {
+  const root = live.get(id);
+  live.delete(id);
+  if (root) rmSync(pidFile(root, id), { force: true });
+}
+
+// ── Which attempt produced a result ──────────────────────────────────
+
+const attemptTrees = new WeakMap<object, string>();
+
+/** Record that `result` came from an attempt that ran in the worktree at `path`. */
+export function recordAttemptTree(result: object, path: string): void {
+  attemptTrees.set(result, path);
+}
+
+export function attemptTreeOf(result: object | undefined): string | undefined {
+  return result ? attemptTrees.get(result) : undefined;
 }
 
 /** One merge at a time per repo: two children finishing together share one index. */
@@ -190,14 +263,16 @@ export async function createWorktree(
   mkdirSync(root, { recursive: true });
 
   const branch = `${WORKTREE_BRANCH_PREFIX}${id}`;
-  const baseSha = (await mustGit(top, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim();
-  // Registered BEFORE git creates it so the stale reaper can never see a
-  // half-born worktree as abandoned.
-  live.add(id);
+  const baseSha = await revParse(top, 'HEAD');
+  if (!baseSha) throw new Error(`repository has no HEAD commit: ${top}`);
+  // Owned BEFORE git creates it so no reaper can see a half-born worktree as
+  // abandoned.
+  live.set(id, root);
+  writeFileSync(pidFile(root, id), String(process.pid));
   try {
-    await mustGit(top, ['worktree', 'add', '-b', branch, path, baseSha]);
+    await mustGit(top, ['worktree', 'add', '-b', branch, path, baseSha], 'mutate');
   } catch (err) {
-    live.delete(id);
+    releaseWorktree(id);
     throw err;
   }
   linkNodeModules(top, path);
@@ -224,9 +299,8 @@ function linkNodeModules(repoRoot: string, wt: string): void {
 }
 
 async function dropShimIfNotIgnored(wt: string): Promise<void> {
-  const dest = join(wt, SHIM);
-  if (!existsSync(dest)) return;
-  const r = await runGit(wt, ['check-ignore', '-q', SHIM]);
+  if (!existsSync(join(wt, SHIM))) return;
+  const r = await git(wt, ['check-ignore', '-q', SHIM]);
   if (!r.ok) {
     coreLogger.warn({ wt }, 'Swarm worktree: node_modules is not git-ignored in this repo — shim removed');
     removeShim(wt);
@@ -248,21 +322,16 @@ function removeShim(wt: string): void {
   }
 }
 
-async function hasUncommitted(cwd: string): Promise<boolean> {
-  const r = await runGit(cwd, ['status', '--porcelain']);
-  return !r.ok || r.stdout.trim().length > 0;
-}
-
 /**
  * Collect what the child produced, and — when `merge` is set and it is safe —
- * merge its branch into the parent tree's current branch.
+ * merge its branch into the project's current branch.
  *
  * Uncommitted changes are committed on the child's branch first, so a child
  * that simply edited files (most CLI agents never commit) is captured too.
  */
 export async function finishWorktree(
   h: WorktreeHandle,
-  opts: { merge: boolean; label?: string },
+  opts: { merge: boolean; skipReason?: WorktreeMergeOutcome; label?: string },
 ): Promise<WorktreeReport> {
   const report: WorktreeReport = {
     branch: h.branch,
@@ -276,25 +345,30 @@ export async function finishWorktree(
   };
 
   // The child may have moved its worktree onto another ref. Its work is then
-  // not where the report and the merge would look, so say so and do nothing.
-  const onBranch = (await runGit(h.path, ['symbolic-ref', '-q', 'HEAD'])).stdout.trim();
+  // not where the report and the merge would look: say so, change nothing, and
+  // let `removeWorktree` pin that HEAD before any clean-up.
+  const onBranch = (await git(h.path, ['symbolic-ref', '-q', 'HEAD'])).stdout.trim();
   if (onBranch !== `refs/heads/${h.branch}`) {
+    report.headSha = (await revParse(h.path, 'HEAD')) ?? h.baseSha;
     report.merge = 'failed';
     report.mergeDetail = `worktree HEAD is no longer on ${h.branch} (${onBranch || 'detached'})`;
     return report;
   }
 
   if (await hasUncommitted(h.path)) {
-    await mustGit(h.path, ['add', '-A', '--', '.', `:(exclude)${SHIM}`]);
-    const staged = await runGit(h.path, ['diff', '--cached', '--quiet']);
+    await mustGit(h.path, ['add', '-A', '--', '.', `:(exclude)${SHIM}`], 'mutate');
+    const staged = await git(h.path, ['diff', '--cached', '--quiet']);
     if (!staged.ok) {
-      await mustGit(h.path, [
-        ...SERVER_GIT_CONFIG,
-        'commit',
-        '--no-verify',
-        '-m',
-        `octipus: uncommitted work from swarm child ${h.id}${opts.label ? `\n\n${opts.label}` : ''}`,
-      ]);
+      await mustGit(
+        h.path,
+        [
+          'commit',
+          '--no-verify',
+          '-m',
+          `octipus: uncommitted work from swarm child ${h.id}${opts.label ? `\n\n${opts.label}` : ''}`,
+        ],
+        'mutate',
+      );
     }
   }
 
@@ -307,7 +381,7 @@ export async function finishWorktree(
     .filter(Boolean).length;
 
   if (!opts.merge) {
-    report.merge = 'skipped_status';
+    report.merge = opts.skipReason ?? 'skipped_status';
     return report;
   }
   const merged = await withRepoLock(h.repoRoot, () => mergeInto(h));
@@ -316,68 +390,112 @@ export async function finishWorktree(
   return report;
 }
 
+async function abortIfMerging(repo: string): Promise<string | null> {
+  if (!(await git(repo, ['rev-parse', '-q', '--verify', 'MERGE_HEAD'])).ok) return null;
+  const abort = await git(repo, ['merge', '--abort'], 'mutate');
+  if (abort.ok) return 'aborted';
+  coreLogger.error({ repo, stderr: abort.stderr }, 'Swarm worktree: merge --abort failed');
+  return `abort FAILED: ${abort.stderr.trim()}`;
+}
+
 async function mergeInto(h: WorktreeHandle): Promise<{ outcome: WorktreeMergeOutcome; detail?: string }> {
   const repo = h.repoRoot;
-  const head = await runGit(repo, ['symbolic-ref', '-q', '--short', 'HEAD']);
-  if (!head.ok || !head.stdout.trim()) return { outcome: 'skipped_detached', detail: 'parent tree is not on a branch' };
-  if ((await runGit(repo, ['rev-parse', '-q', '--verify', 'MERGE_HEAD'])).ok) {
-    return { outcome: 'skipped_dirty', detail: 'parent tree has a merge in progress' };
+  const head = await git(repo, ['symbolic-ref', '-q', '--short', 'HEAD']);
+  const target = head.stdout.trim();
+  if (!head.ok || !target) return { outcome: 'skipped_detached', detail: 'project is not on a branch' };
+  if (await hasTrackedChanges(repo)) {
+    return { outcome: 'skipped_dirty', detail: 'project has uncommitted changes or a merge in progress' };
   }
-  const status = await runGit(repo, ['status', '--porcelain', '--untracked-files=no']);
-  if (!status.ok || status.stdout.trim()) {
-    return { outcome: 'skipped_dirty', detail: 'parent tree has uncommitted changes' };
+  // The project must still contain the commit the child started from. If the
+  // user reset or switched branches meanwhile, merging would drag the child's
+  // whole base history into a branch that deliberately dropped it.
+  if (!(await isAncestor(repo, h.baseSha, 'HEAD'))) {
+    return { outcome: 'skipped_moved', detail: `${target} no longer contains the base ${h.baseSha.slice(0, 12)}` };
   }
-  const r = await runGit(repo, [...SERVER_GIT_CONFIG, 'merge', '--no-ff', '--no-edit', h.branch]);
-  if (r.ok) return { outcome: 'merged', detail: head.stdout.trim() };
-  if ((await runGit(repo, ['rev-parse', '-q', '--verify', 'MERGE_HEAD'])).ok) {
-    const abort = await runGit(repo, ['merge', '--abort']);
-    if (!abort.ok) {
-      coreLogger.error({ repo, branch: h.branch, stderr: abort.stderr }, 'Swarm worktree: merge --abort failed');
-      return { outcome: 'conflict', detail: `merge conflict; abort FAILED: ${abort.stderr.trim()}` };
-    }
-    return { outcome: 'conflict', detail: `merge conflict into ${head.stdout.trim()}; aborted, branch kept` };
+  const r = await git(repo, ['merge', '--no-ff', '--no-edit', h.branch], 'mutate');
+  if (r.ok) return { outcome: 'merged', detail: target };
+  const aborted = await abortIfMerging(repo);
+  if (aborted) {
+    const why = r.timedOut ? 'merge timed out' : `merge conflict into ${target}`;
+    return { outcome: 'conflict', detail: `${why}; ${aborted}, branch kept` };
   }
   // Refused before starting (e.g. it would overwrite untracked files): nothing to abort.
-  return { outcome: 'failed', detail: (r.stderr || r.stdout).trim().slice(0, 500) };
+  return { outcome: 'failed', detail: (r.timedOut ? 'merge timed out' : (r.stderr || r.stdout).trim()).slice(0, 500) };
+}
+
+/**
+ * Make sure the worktree's HEAD commit outlives the worktree. Fine as-is when
+ * some local branch contains it; else fast-forward `octipus/<id>` onto it when
+ * that is a fast-forward; else pin it with `octipus/<id>-detached`.
+ */
+async function protectHead(
+  h: Pick<WorktreeHandle, 'repoRoot' | 'path' | 'branch'>,
+): Promise<{ ok: true; keptRef?: string } | { ok: false; reason: string }> {
+  const sha = await revParse(h.path, 'HEAD');
+  if (!sha) return { ok: false, reason: 'cannot read the worktree HEAD' };
+  const containing = await git(h.repoRoot, ['for-each-ref', '--contains', sha, '--format=%(refname)', 'refs/heads/']);
+  if (!containing.ok) return { ok: false, reason: 'cannot tell which branches contain the worktree HEAD' };
+  if (containing.stdout.trim()) return { ok: true };
+
+  const branchRef = `refs/heads/${h.branch}`;
+  const branchSha = await revParse(h.repoRoot, branchRef);
+  if (branchSha && (await isAncestor(h.repoRoot, branchSha, sha))) {
+    // Compare-and-set: moves the branch only if nobody moved it meanwhile.
+    if ((await git(h.repoRoot, ['update-ref', branchRef, sha, branchSha], 'mutate')).ok) {
+      return { ok: true, keptRef: h.branch };
+    }
+  }
+  const keep = `${h.branch}-detached`;
+  // Empty old value: create only if the ref does not exist yet.
+  if ((await git(h.repoRoot, ['update-ref', `refs/heads/${keep}`, sha, ''], 'mutate')).ok) {
+    return { ok: true, keptRef: keep };
+  }
+  if ((await revParse(h.repoRoot, `refs/heads/${keep}`)) === sha) return { ok: true, keptRef: keep };
+  return { ok: false, reason: `worktree HEAD ${sha.slice(0, 12)} is on no branch and could not be pinned` };
 }
 
 /**
  * Remove the worktree directory, and the branch only when it was merged.
- * `--force` only when the tree has nothing uncommitted (ignored files such as
- * build output are the usual reason a plain remove refuses).
+ * Refuses while the HEAD commit would become unreachable or anything is
+ * uncommitted; `--force` only after both checks pass (ignored build output is
+ * the usual reason a plain remove refuses).
  */
 export async function removeWorktree(
   h: Pick<WorktreeHandle, 'id' | 'repoRoot' | 'path' | 'branch'>,
   opts: { merged: boolean },
-): Promise<{ removed: boolean; branchDeleted: boolean }> {
-  let removed = false;
-  let branchDeleted = false;
-  try {
-    if (existsSync(h.path)) {
-      removeShim(h.path);
-      let r = await runGit(h.repoRoot, ['worktree', 'remove', h.path]);
-      if (!r.ok && !(await hasUncommitted(h.path))) {
-        r = await runGit(h.repoRoot, ['worktree', 'remove', '--force', h.path]);
-      }
-      removed = r.ok;
-      if (!r.ok) coreLogger.warn({ path: h.path, stderr: r.stderr }, 'Swarm worktree kept: not clean');
-    } else {
-      await runGit(h.repoRoot, ['worktree', 'prune']);
-      removed = true;
+): Promise<{ removed: boolean; branchDeleted: boolean; keptRef?: string; reason?: string }> {
+  let keptRef: string | undefined;
+  if (existsSync(h.path)) {
+    const protectedHead = await protectHead(h);
+    if (!protectedHead.ok) {
+      coreLogger.warn({ path: h.path, reason: protectedHead.reason }, 'Swarm worktree kept');
+      return { removed: false, branchDeleted: false, reason: protectedHead.reason };
     }
-    if (removed && opts.merged) {
-      // `-d`, never `-D`: git re-checks the branch is merged and refuses otherwise.
-      branchDeleted = (await runGit(h.repoRoot, ['branch', '-d', h.branch])).ok;
+    keptRef = protectedHead.keptRef;
+    if (await hasUncommitted(h.path)) {
+      coreLogger.warn({ path: h.path }, 'Swarm worktree kept: uncommitted changes');
+      return { removed: false, branchDeleted: false, keptRef, reason: 'uncommitted changes' };
     }
-  } finally {
-    if (removed) live.delete(h.id);
+    removeShim(h.path);
+    let r = await git(h.repoRoot, ['worktree', 'remove', h.path], 'mutate');
+    if (!r.ok && !(await hasUncommitted(h.path))) {
+      r = await git(h.repoRoot, ['worktree', 'remove', '--force', h.path], 'mutate');
+    }
+    if (!r.ok) {
+      coreLogger.warn({ path: h.path, stderr: r.stderr }, 'Swarm worktree kept: git refused to remove it');
+      return { removed: false, branchDeleted: false, keptRef, reason: r.stderr.trim() };
+    }
+  } else {
+    await git(h.repoRoot, ['worktree', 'prune'], 'mutate');
   }
-  return { removed, branchDeleted };
-}
-
-/** Stop treating a worktree as live without removing it (it is kept for a human). */
-export function releaseWorktree(id: string): void {
-  live.delete(id);
+  let branchDeleted = false;
+  // `-d`, never `-D`: git re-checks the branch is merged and refuses otherwise.
+  // Never when the branch itself was just moved to keep detached work.
+  if (opts.merged && keptRef !== h.branch) {
+    branchDeleted = (await git(h.repoRoot, ['branch', '-d', h.branch], 'mutate')).ok;
+  }
+  releaseWorktree(h.id);
+  return { removed: true, branchDeleted, keptRef };
 }
 
 /**
@@ -406,9 +524,10 @@ export interface StaleWorktreeResult {
 }
 
 /**
- * Orphan-reaper pass: worktrees under the data dir whose child is no longer
- * running in this process. Merged and clean → removed with their branch.
- * Anything else is REPORTED, never deleted: unmerged work is the user's.
+ * Orphan-reaper pass over worktrees whose owner is gone (not running in this
+ * process, no live owner pid). One is removed only when ALL hold: it is clean,
+ * its HEAD is contained in the project's HEAD, and its branch (if any) is
+ * merged there. Everything else is REPORTED, never deleted.
  */
 export async function reapStaleWorktrees(
   opts: { root?: string; minAgeMs?: number; now?: number } = {},
@@ -420,32 +539,37 @@ export async function reapStaleWorktrees(
   if (!existsSync(root)) return out;
 
   for (const ent of readdirSync(root, { withFileTypes: true })) {
-    if (!ent.isDirectory() || !isValidWorktreeId(ent.name) || live.has(ent.name)) continue;
+    if (!ent.isDirectory() || !isValidWorktreeId(ent.name)) continue;
+    if (ownedByLiveProcess(root, ent.name)) continue;
     const path = join(root, ent.name);
     const report = (reason: string) => out.reported.push({ id: ent.name, path, reason });
     try {
-      // Another process may own a young one; only old ones are ours to judge.
       if (now - statSync(path).mtimeMs < minAgeMs) continue;
-      const common = await runGit(path, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+      const common = await git(path, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
       if (!common.ok || basename(common.stdout.trim()) !== '.git') {
         report('not a git worktree of a non-bare repository');
         continue;
       }
       const repoRoot = dirname(common.stdout.trim());
       const branch = `${WORKTREE_BRANCH_PREFIX}${ent.name}`;
-      removeShim(path);
       if (await hasUncommitted(path)) {
         report('uncommitted changes');
         continue;
       }
-      const merged = await runGit(repoRoot, ['merge-base', '--is-ancestor', branch, 'HEAD']);
-      if (!merged.ok) {
+      const wtHead = await revParse(path, 'HEAD');
+      if (!wtHead || !(await isAncestor(repoRoot, wtHead, 'HEAD'))) {
+        report(`worktree HEAD ${wtHead?.slice(0, 12) ?? '?'} is not merged into ${repoRoot}`);
+        continue;
+      }
+      if ((await revParse(repoRoot, `refs/heads/${branch}`)) && !(await isAncestor(repoRoot, branch, 'HEAD'))) {
         report(`branch ${branch} is not merged into ${repoRoot}`);
         continue;
       }
       const r = await removeWorktree({ id: ent.name, repoRoot, path, branch }, { merged: true });
-      if (r.removed) out.pruned.push(ent.name);
-      else report('git worktree remove refused');
+      if (r.removed) {
+        rmSync(pidFile(root, ent.name), { force: true });
+        out.pruned.push(ent.name);
+      } else report(r.reason ?? 'git worktree remove refused');
     } catch (err) {
       report((err as Error).message);
     }

@@ -218,6 +218,96 @@ describe('finishWorktree', () => {
   });
 });
 
+describe('detached work survives clean-up', () => {
+  it('fast-forwards octipus/<id> onto a detached HEAD before removing the worktree', async () => {
+    const h = await createWorktree(repo, 'det1', { root });
+    git(h.path, 'checkout', '-q', '--detach');
+    writeFileSync(join(h.path, 'lost.txt'), 'would be lost\n');
+    commitAll(h.path, 'detached commit');
+    const detachedSha = head(h.path);
+
+    const report = await finishWorktree(h, { merge: true });
+    expect(report.merge).toBe('failed');
+    expect(report.headSha).toBe(detachedSha);
+
+    const cleaned = await removeWorktree(h, { merged: false });
+    expect(cleaned.removed).toBe(true);
+    expect(cleaned.keptRef).toBe('octipus/det1');
+    expect(git(repo, 'rev-parse', 'octipus/det1').trim()).toBe(detachedSha);
+    expect(git(repo, 'show', 'octipus/det1:lost.txt')).toBe('would be lost\n');
+  });
+
+  it('pins a detached HEAD that is not a fast-forward with a -detached keep-ref', async () => {
+    const h = await createWorktree(repo, 'det2', { root });
+    writeFileSync(join(h.path, 'on-branch.txt'), 'b\n');
+    commitAll(h.path, 'branch commit');
+    git(h.path, 'checkout', '-q', '--detach', h.baseSha);
+    writeFileSync(join(h.path, 'side.txt'), 's\n');
+    commitAll(h.path, 'side commit');
+    const sideSha = head(h.path);
+
+    const cleaned = await removeWorktree(h, { merged: true });
+    expect(cleaned.removed).toBe(true);
+    expect(cleaned.keptRef).toBe('octipus/det2-detached');
+    expect(git(repo, 'rev-parse', 'octipus/det2-detached').trim()).toBe(sideSha);
+    // The branch's own unmerged commit is kept too (`-d` refused it).
+    expect(git(repo, 'show', 'octipus/det2:on-branch.txt')).toBe('b\n');
+  });
+
+  it('never removes a worktree with uncommitted changes', async () => {
+    const h = await createWorktree(repo, 'wip', { root });
+    git(h.path, 'checkout', '-q', '--detach');
+    writeFileSync(join(h.path, 'README.md'), 'edited, not committed\n');
+    const report = await finishWorktree(h, { merge: true });
+    expect(report.merge).toBe('failed');
+    const cleaned = await removeWorktree(h, { merged: false });
+    expect(cleaned.removed).toBe(false);
+    expect(readFileSync(join(h.path, 'README.md'), 'utf-8')).toBe('edited, not committed\n');
+    releaseWorktree('wip');
+  });
+});
+
+describe('merge safety', () => {
+  it('skips the merge when the project no longer contains the base (skipped_moved)', async () => {
+    writeFileSync(join(repo, 'second.txt'), '2\n');
+    commitAll(repo, 'second');
+    const h = await createWorktree(repo, 'moved', { root });
+    writeFileSync(join(h.path, 'child.txt'), 'c\n');
+    // The user rewinds their branch past the commit the child started from.
+    git(repo, 'reset', '-q', '--hard', 'HEAD~1');
+    const before = head(repo);
+
+    const report = await finishWorktree(h, { merge: true });
+
+    expect(report.merge).toBe('skipped_moved');
+    expect(head(repo)).toBe(before);
+    expect(existsSync(join(repo, 'child.txt'))).toBe(false);
+    await removeWorktree(h, { merged: false });
+    expect(git(repo, 'show', 'octipus/moved:child.txt')).toBe('c\n');
+  });
+
+  it('runs no repository hook for any server-side git call', async () => {
+    const hooks = join(repo, '.git', 'hooks');
+    mkdirSync(hooks, { recursive: true });
+    for (const name of ['post-checkout', 'pre-commit', 'commit-msg', 'post-commit', 'post-merge', 'pre-merge-commit']) {
+      writeFileSync(join(hooks, name), `#!/bin/sh\necho ran >> "${join(base, `hook-${name}`)}"\n`, { mode: 0o755 });
+    }
+
+    const h = await createWorktree(repo, 'hooks', { root });
+    writeFileSync(join(h.path, 'f.txt'), 'f\n');
+    const report = await finishWorktree(h, { merge: true });
+    expect(report.merge).toBe('merged');
+    await removeWorktree(h, { merged: true });
+
+    for (const name of ['post-checkout', 'pre-commit', 'commit-msg', 'post-commit', 'post-merge', 'pre-merge-commit']) {
+      expect(existsSync(join(base, `hook-${name}`)), name).toBe(false);
+    }
+    // Control: the hooks are live for an ordinary git call, so the test proves something.
+    git(repo, 'checkout', '-q', '-b', 'control');
+    expect(existsSync(join(base, 'hook-post-checkout'))).toBe(true);
+  });
+});
+
 describe('reapStaleWorktrees', () => {
   it('prunes a merged, abandoned worktree and reports an unmerged one', async () => {
     const merged = await createWorktree(repo, 'gone1', { root });
@@ -240,6 +330,33 @@ describe('reapStaleWorktrees', () => {
     expect(branchExists('octipus/gone2')).toBe(true);
     expect(existsSync(live.path)).toBe(true);
     await removeWorktree(live, { merged: true });
+  });
+
+  it('leaves a worktree whose owner process is alive, however old', async () => {
+    const h = await createWorktree(repo, 'otherproc', { root });
+    releaseWorktree('otherproc');
+    // Another server process (here: our parent, which is certainly alive) owns it.
+    writeFileSync(join(root, 'otherproc.pid'), String(process.ppid));
+    const out = await reapStaleWorktrees({ root, minAgeMs: 0 });
+    expect(out.pruned).toEqual([]);
+    expect(existsSync(h.path)).toBe(true);
+  });
+
+  it('reports, never removes, an abandoned worktree with uncommitted or detached work', async () => {
+    const dirty = await createWorktree(repo, 'dirtyleft', { root });
+    writeFileSync(join(dirty.path, 'README.md'), 'uncommitted\n');
+    const det = await createWorktree(repo, 'detleft', { root });
+    git(det.path, 'checkout', '-q', '--detach');
+    writeFileSync(join(det.path, 'd.txt'), 'd\n');
+    commitAll(det.path, 'detached');
+    releaseWorktree('dirtyleft');
+    releaseWorktree('detleft');
+
+    const out = await reapStaleWorktrees({ root, minAgeMs: 0 });
+
+    expect(out.pruned).toEqual([]);
+    expect(out.reported.map((r) => r.id).sort()).toEqual(['detleft', 'dirtyleft']);
+    expect(existsSync(dirty.path) && existsSync(det.path)).toBe(true);
   });
 
   it('leaves a young worktree alone (another process may own it)', async () => {

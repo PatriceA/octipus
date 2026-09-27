@@ -14,12 +14,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getConfig, refreshConfigKey, resetConfig } from '@/config';
 
 let projectPath = '';
+let backupModelId: string | null = null;
+let devMode = true;
 
 vi.mock('@/models/model-registry', async (importOriginal) => {
   if (process.env.INTEGRATION === '1') return await importOriginal<object>();
   return {
     getModelRegistry: () => ({
-      getBackupModelForTopic: async () => null,
+      getBackupModelForTopic: async () => (backupModelId ? { modelId: backupModelId } : null),
       getModelForTopic: async () => null,
       getModel: async () => null,
       getModelByModelId: async () => null,
@@ -34,12 +36,13 @@ vi.mock('@/db/repositories/session-repository', async (importOriginal) => {
   return {
     ...real,
     sessionRepository: {
-      findById: async () => ({ context: { devMode: true, projectPath } }),
+      findById: async () => ({ context: devMode ? { devMode: true, projectPath } : {} }),
     },
   };
 });
 
 const { SwarmSpawner } = await import('./spawner');
+const { recordAttemptTree } = await import('./worktree');
 type ChildResult = import('./types').ChildResult;
 type Handle = import('./worktree').WorktreeHandle;
 
@@ -76,22 +79,36 @@ function ok(over: Partial<ChildResult> = {}): ChildResult {
   } as ChildResult;
 }
 
-/** Run `runChildWithRetry` with a scripted child; each attempt may write into its tree. */
+type AttemptOpts = { worktree?: Handle | null; childModel: string };
+type Step = (
+  wt: Handle | null | undefined,
+  o: AttemptOpts,
+  spawner: InstanceType<typeof SwarmSpawner>,
+) => ChildResult | Promise<ChildResult>;
+
+/**
+ * Run `runChildWithRetry` with a scripted child; each attempt may write into
+ * its tree. Mirrors the real `singleSpawnAndRun` contract: only a CLI attempt
+ * runs in the worktree, and its result is recorded as coming from it.
+ */
 async function run(
   childRole: string,
   childModel: string,
-  attempts: Array<(wt: Handle | null | undefined) => ChildResult>,
-): Promise<{ final: ChildResult; seen: Array<Handle | null | undefined> }> {
+  attempts: Step[],
+): Promise<{ final: ChildResult; seen: Array<Handle | null | undefined>; models: string[] }> {
   const spawner = new SwarmSpawner({} as never);
   const seen: Array<Handle | null | undefined> = [];
+  const models: string[] = [];
   let i = 0;
-  (spawner as unknown as { singleSpawnAndRun: unknown }).singleSpawnAndRun = async (o: {
-    worktree?: Handle | null;
-  }) => {
+  (spawner as unknown as { singleSpawnAndRun: unknown }).singleSpawnAndRun = async (o: AttemptOpts) => {
     seen.push(o.worktree);
-    const step = attempts[Math.min(i, attempts.length - 1)] as (wt: Handle | null | undefined) => ChildResult;
+    models.push(o.childModel);
+    const step = attempts[Math.min(i, attempts.length - 1)] as Step;
     i++;
-    return step(o.worktree);
+    const inTree = o.worktree && o.childModel.startsWith('cli/') ? o.worktree : undefined;
+    const r = await step(inTree, o, spawner);
+    if (inTree) recordAttemptTree(r, inTree.path);
+    return r;
   };
   const final = await (
     spawner as unknown as { runChildWithRetry: (o: unknown) => Promise<ChildResult> }
@@ -118,7 +135,7 @@ async function run(
     reason: 'normal',
     spawnMode: 'await',
   });
-  return { final, seen };
+  return { final, seen, models };
 }
 
 describe.skipIf(inIntegration)('SwarmSpawner — worktree isolation', () => {
@@ -134,6 +151,8 @@ describe.skipIf(inIntegration)('SwarmSpawner — worktree isolation', () => {
     writeFileSync(join(projectPath, 'README.md'), 'hi\n');
     git(projectPath, 'add', '-A');
     git(projectPath, '-c', 'user.name=T', '-c', 'user.email=t@e', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'init');
+    backupModelId = null;
+    devMode = true;
     resetConfig();
     getConfig();
   });
@@ -229,5 +248,78 @@ describe.skipIf(inIntegration)('SwarmSpawner — worktree isolation', () => {
     expect(seen).toEqual([null]);
     expect(final.status).toBe('ok');
     expect(final.worktree).toBeUndefined();
+  });
+
+  it('isolates dev-mode projects only, never the per-user sandbox', async () => {
+    refreshConfigKey('swarm.worktreeIsolation', true);
+    devMode = false;
+    const { seen } = await run('coding', 'cli/claude-code', [() => ok()]);
+    expect(seen).toEqual([null]);
+  });
+
+  it('does not isolate when the project has uncommitted tracked changes the worktree would not see', async () => {
+    refreshConfigKey('swarm.worktreeIsolation', true);
+    writeFileSync(join(projectPath, 'README.md'), 'user edit in progress\n');
+    const { final, seen } = await run('coding', 'cli/claude-code', [() => ok()]);
+    expect(seen).toEqual([null]);
+    expect(final.worktree).toBeUndefined();
+    expect(readFileSync(join(projectPath, 'README.md'), 'utf-8')).toBe('user edit in progress\n');
+    expect(existsSync(join(base, 'worktrees'))).toBe(false);
+  });
+
+  it('does not merge the worktree when the ok answer came from a native backup on the shared tree', async () => {
+    refreshConfigKey('swarm.worktreeIsolation', true);
+    backupModelId = 'native-backup';
+    const { final, seen, models } = await run('coding', 'cli/claude-code', [
+      (wt) => {
+        writeFileSync(join(wt!.path, 'half-done.ts'), 'partial\n');
+        return ok({ status: 'provider_error', notes: 'rate limited' });
+      },
+      () => ok(),
+    ]);
+    expect(models).toEqual(['cli/claude-code', 'native-backup']);
+    expect(final.status).toBe('ok');
+    expect(final.worktree?.merge).toBe('skipped_other_attempt');
+    expect(final.worktree?.branchKept).toBe(true);
+    expect(existsSync(join(projectPath, 'half-done.ts'))).toBe(false);
+    expect(git(projectPath, 'show', `${seen[0]!.branch}:half-done.ts`)).toBe('partial\n');
+  });
+
+  it('a contract retry after a native backup reuses that root’s first baseline', async () => {
+    refreshConfigKey('swarm.worktreeIsolation', true);
+    backupModelId = 'native-backup';
+    type Snap = unknown;
+    const baselineFor = (s: unknown, o: unknown, root: string): Promise<Snap> =>
+      (s as { baselineFor: (o: unknown, r: string) => Promise<Snap> }).baselineFor(o, root);
+    const taken: Array<{ root: string; snap: Snap }> = [];
+    const gateFailed = ok({
+      status: 'contract_failed',
+      scorerOutcome: { passed: false, ran: 1, failures: [{ scorer: 'file_exists', reason: 'file "x.ts" does not exist' }] },
+      notes: 'Scorer gate failed',
+    });
+    const { final, models } = await run('coding', 'cli/claude-code', [
+      async (wt, o, s) => {
+        taken.push({ root: wt!.path, snap: await baselineFor(s, o, wt!.path) });
+        writeFileSync(join(wt!.path, 'a.ts'), 'a\n');
+        return ok({ status: 'provider_error' });
+      },
+      async (_wt, o, s) => {
+        taken.push({ root: projectPath, snap: await baselineFor(s, o, projectPath) });
+        // The backup's own work on the shared tree: a re-snapshot would hide it.
+        writeFileSync(join(projectPath, 'b.ts'), 'b\n');
+        return gateFailed;
+      },
+      async (_wt, o, s) => {
+        taken.push({ root: projectPath, snap: await baselineFor(s, o, projectPath) });
+        return ok();
+      },
+    ]);
+    expect(models).toEqual(['cli/claude-code', 'native-backup', 'native-backup']);
+    expect(final.status).toBe('ok');
+    expect(taken).toHaveLength(3);
+    expect(taken[1]!.snap).not.toBe(taken[0]!.snap);
+    // Same object: taken once for the project, before the backup wrote b.ts.
+    expect(taken[2]!.snap).toBe(taken[1]!.snap);
+    expect(final.worktree?.merge).toBe('skipped_other_attempt');
   });
 });

@@ -202,10 +202,11 @@ export async function reapOrphanedSwarmNodes(
   }
 
   // Worktrees left behind by children that are gone (a crash mid-run, or a
-  // clean-up that git refused). Runs whether or not the flag is on now: it may
-  // have been on when they were made. Never deletes unmerged work.
+  // clean-up that git refused). Only while `swarm.worktreeIsolation` is on: an
+  // install that never opted in must not have git run against its projects by
+  // a background timer. Never deletes unmerged or uncommitted work.
   let staleWorktrees: StaleWorktreeResult | undefined;
-  if (opts.worktrees !== false) {
+  if (opts.worktrees !== false && cfg.swarm?.worktreeIsolation === true) {
     try {
       staleWorktrees = await reapStaleWorktrees(opts.worktrees ?? {});
     } catch (err) {
