@@ -349,6 +349,28 @@ describe('real users — nested per-user root', () => {
       tool.handler('read_file').execute({ path: join(projectPath, 'app.ts') }, ctx()),
     ).rejects.toThrow(/outside allowed workspace directories/);
   });
+
+  test('a native descendant of a worktree child writes into the worktree, not the user project', async () => {
+    // The metadata the spawner gives a native agent spawned by a worktree child.
+    const { inheritedTreeMetadata } = await import('@/core/swarm/worktree');
+    const worktree = mkdtempSync(join(tmpdir(), 'octipus-wt-'));
+    const userProject = mkdtempSync(join(tmpdir(), 'octipus-userproj-'));
+    const tool = await makeTool();
+    const context = ctx({ metadata: inheritedTreeMetadata(worktree, false) });
+
+    const res = (await tool.handler('write_file').execute(
+      { path: 'src/feature.ts', content: 'export const f = 1\n' },
+      context,
+    )) as { success: boolean; path: string };
+    expect(res.path).toBe(join(worktree, 'src', 'feature.ts'));
+    expect(existsSync(join(userProject, 'src', 'feature.ts'))).toBe(false);
+
+    // The user's real project is outside this agent's sandbox.
+    await expect(
+      tool.handler('write_file').execute({ path: join(userProject, 'x.ts'), content: 'x' }, context),
+    ).rejects.toThrow(/outside allowed workspace directories/);
+    expect(existsSync(join(userProject, 'x.ts'))).toBe(false);
+  });
 });
 
 describe('system jobs — flat workspace root (no per-user nesting)', () => {

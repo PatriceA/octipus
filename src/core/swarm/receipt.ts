@@ -15,6 +15,7 @@
  */
 
 import type { ChildResultStatus } from './types';
+import type { WorktreeReport } from './worktree';
 
 /**
  * Raw, deterministic side-effect counters accumulated by a worker's
@@ -125,6 +126,12 @@ export interface SwarmReceipt {
   unavailable: string[];
   /** Claim ceiling — what this receipt does not assert. */
   notCertified: readonly string[];
+  /**
+   * The git worktree the child ran in, when `swarm.worktreeIsolation` gave it
+   * one: branch, head, diff stat and merge outcome, all read from git after the
+   * run — never from the child's account of what it did.
+   */
+  worktree?: WorktreeReport;
 }
 
 /**
@@ -160,7 +167,18 @@ export function formatReceiptBlock(receipt: SwarmReceipt | undefined): string {
   const unavailable = receipt.unavailable.length
     ? ` unavailable="${receipt.unavailable.join('; ')}"`
     : '';
-  return `\n<receipt ${attrs}${unavailable}/>`;
+  return `\n<receipt ${attrs}${unavailable}/>${formatWorktreeBlock(receipt.worktree)}`;
+}
+
+/** The worktree line of a receipt, or '' when the child shared the tree. */
+export function formatWorktreeBlock(w: WorktreeReport | undefined): string {
+  if (!w) return '';
+  const esc = (v: string) => v.replace(/[&"<>]/g, (c) => ({ '&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;' })[c] as string);
+  const detail = w.mergeDetail ? ` detail="${esc(w.mergeDetail)}"` : '';
+  return (
+    `\n<worktree branch="${esc(w.branch)}" head="${w.headSha.slice(0, 12)}" merge="${w.merge}" ` +
+    `filesChanged="${w.filesChanged}" diffStat="${esc(w.diffStat)}" branchKept="${w.branchKept}"${detail}/>`
+  );
 }
 
 export function buildReceipt(opts: {
