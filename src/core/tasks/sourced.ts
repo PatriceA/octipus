@@ -150,15 +150,10 @@ export async function createTasksFromSource(
         principal.userId, principal.workspaceId ?? null, source, identity, title.toLowerCase(),
       ])).digest('hex');
       const id = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
-      // A retry returns the existing task: only a first ingestion is a create.
-      const prior = await repo.findById(id);
-      if (prior) {
-        created.push(prior);
-        continue;
-      }
-      const task = await repo.createOnce({ ...data, id });
-      created.push(task);
-      await auditSourcedCreate(principal, source, task.id, data);
+      // A retry returns the existing task: only the call that inserted audits.
+      const once = await repo.createOnce({ ...data, id });
+      created.push(once.task);
+      if (once.created) await auditSourcedCreate(principal, source, once.task.id, data);
     } else {
       const task = await repo.create(data);
       created.push(task);

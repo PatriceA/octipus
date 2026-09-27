@@ -24,6 +24,9 @@ let aliceApp: ElysiaLike;
 let bobApp: ElysiaLike;
 /** An admin (bob's id) impersonating alice. */
 let impersonatedApp: ElysiaLike;
+/** An admin acting as themselves, not impersonating anyone. */
+let adminApp: ElysiaLike;
+const adminId = '44444444-4444-4444-4444-444444444444';
 const aliceId = '11111111-1111-1111-1111-111111111111';
 const bobId = '22222222-2222-2222-2222-222222222222';
 let aliceTaskId: string;
@@ -72,6 +75,12 @@ beforeAll(async () => {
     .derive(() => {
       const u = { id: aliceId, username: 'alice', isAdmin: false };
       return { user: u, session: null, principal: { ...principalFromUser(u), actorUserId: bobId } };
+    })
+    .group('/api', (a) => a.use(taskRoutes)) as unknown as ElysiaLike;
+  adminApp = new Elysia()
+    .derive(() => {
+      const u = { id: adminId, username: 'admin', isAdmin: true };
+      return { user: u, session: null, principal: principalFromUser(u) };
     })
     .group('/api', (a) => a.use(taskRoutes)) as unknown as ElysiaLike;
 });
@@ -206,6 +215,21 @@ describe('own-task lifecycle', () => {
     const [latest] = await auditRepository.findByResource('task', id);
     expect(latest.userId).toBe(aliceId);
     expect(latest.details).toMatchObject({ op: 'update', change: ['priority'], actor: { kind: 'user', id: bobId, onBehalfOf: aliceId } });
+  });
+
+  test('an admin editing or deleting another user’s task is audited under the owner, on their behalf', async () => {
+    const { auditRepository } = await import('@/db/repositories/audit-repository');
+    const created = await postJson(aliceApp, '/api/tasks', { title: 'admin override' });
+    const id = created.body.id;
+    expect((await patchJson(adminApp, `/api/tasks/${id}`, { priority: 3 })).status).toBe(200);
+    expect((await del(adminApp, `/api/tasks/${id}`)).status).toBe(200);
+
+    const rows = await auditRepository.findByResource('task', id);
+    for (const op of ['update', 'delete']) {
+      const row = rows.find((r) => (r.details as Record<string, unknown>).op === op);
+      expect(row?.userId).toBe(aliceId);
+      expect(row?.details).toMatchObject({ actor: { kind: 'user', id: adminId, onBehalfOf: aliceId } });
+    }
   });
 
   test('a bare YYYY-MM-DD due date ends that day in the given zone', async () => {
