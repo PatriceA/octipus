@@ -15,6 +15,7 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import type { ProfileFact } from '@/db/schema/profiles';
 import { getModelRegistry } from '@/models/model-registry';
 import { QuotaExceededError } from '@/security/quota-error';
+import { SpendBudgetExceededError } from '@/security/spend-budget-error';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { getToolRegistry } from '@/tools/registry';
 import { formatDateTimeContext } from '@/utils/date-context';
@@ -1237,11 +1238,12 @@ async function handleWorkerFailure(
   // would have told them where to raise the cap is thrown away.
   //
   // `instanceof` is deliberate: the structured error exists precisely so callers
-  // do not re-parse the message (`security/quota-error.ts`).
-  if (error instanceof QuotaExceededError) {
+  // do not re-parse the message (`security/quota-error.ts`). A paused dollar
+  // spend budget (`security/spend-budget-error.ts`) is the same case.
+  if (error instanceof QuotaExceededError || error instanceof SpendBudgetExceededError) {
     coreLogger.warn(
       { workerId, role: agentRole, reason: error.reason },
-      'Worker hit the user token quota, not retrying',
+      'Worker hit a user quota or spend budget, not retrying',
     );
     deps.emit({
       type: 'worker_completed',

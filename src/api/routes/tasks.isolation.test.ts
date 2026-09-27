@@ -171,6 +171,26 @@ describe('DELETE /api/tasks/:id cross-tenant', () => {
   });
 });
 
+describe('board endpoints cross-tenant', () => {
+  test('alice cannot check out, release, comment on, or read the comments of bob’s task', async () => {
+    const checkout = await postJson(aliceApp, `/api/tasks/${bobTaskId}/checkout`);
+    expect(checkout).toEqual({ status: 404, body: { error: 'Task not found' } });
+    const release = await postJson(aliceApp, `/api/tasks/${bobTaskId}/release`, { force: true });
+    expect(release).toEqual({ status: 404, body: { error: 'Task not found' } });
+    const comment = await postJson(aliceApp, `/api/tasks/${bobTaskId}/comments`, { body: 'pwned' });
+    expect(comment).toEqual({ status: 404, body: { error: 'Task not found' } });
+
+    await postJson(bobApp, `/api/tasks/${bobTaskId}/comments`, { body: 'private note' });
+    const list = await get(aliceApp, `/api/tasks/${bobTaskId}/comments`);
+    expect(list.body).toEqual({ error: 'Task not found' });
+
+    const verify = await get(bobApp, `/api/tasks/${bobTaskId}`);
+    expect(verify.body).toMatchObject({ status: 'open', checkedOutBy: null });
+    const own = await get(bobApp, `/api/tasks/${bobTaskId}/comments`);
+    expect(own.body.comments.map((c: any) => c.body)).toEqual(['private note']);
+  });
+});
+
 describe('own-task lifecycle', () => {
   test('create → complete sets completedAt; reopen clears it', async () => {
     const created = await postJson(aliceApp, '/api/tasks', { title: 'ship it', priority: 3 });

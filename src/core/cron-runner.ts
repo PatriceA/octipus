@@ -280,11 +280,14 @@ async function processCronTick(): Promise<void> {
       }
 
       try {
-        // Execute directly via hookManager.trigger() — this handles action execution + logging
+        // Execute directly via hookManager.triggerHook() — this handles action execution + logging
         // Fire-and-forget for long-running actions (spawn_agent) to avoid blocking the cron loop
-        hookManager.trigger(
+        hookManager.triggerHook(
+          hook.id,
           { type: 'schedule', data: { hookId: hook.id }, timestamp: now },
           { schedule: { cronExpression, scheduledTime: now, hookName: hook.name } },
+          // The row this tick claimed (a one-shot is already disabled in the DB).
+          { claimedRow: hook },
         ).then(() => {
           db.update(hooks)
             .set({ lastError: null, updatedAt: new Date() })

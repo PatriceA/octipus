@@ -22,12 +22,20 @@ async function defaultWorkspaceId(userId: string): Promise<string | null> {
 /**
  * Resolve a session ID to an existing session or create a new one.
  * Handles both UUID-based and channel-based session identifiers.
+ *
+ * An existing UUID session owned by a different user is refused ("Session
+ * not found", the same answer as a missing row, so ownership is not
+ * disclosed): every caller passes the acting user, and sessions.user_id is
+ * NOT NULL, so there is no legitimate cross-user resolution.
  */
 export async function resolveSession(sessionId: string, userId: string, channel: string): Promise<string> {
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (uuidRegex.test(sessionId)) {
     const existing = await sessionRepository.findById(sessionId);
-    if (existing) return sessionId;
+    if (existing) {
+      if (existing.userId !== userId) throw new Error('Session not found');
+      return sessionId;
+    }
 
     const workspaceId = await defaultWorkspaceId(userId);
     const session = await sessionRepository.create({

@@ -233,21 +233,20 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
       }
 
       const rootAgent = getAgentService();
-      const approval = rootAgent.peekApproval(body.requestId);
-
-      // Collapse "doesn't exist" and "not yours" into the same response so
+      // Ownership is checked by the manager (admins may answer any request).
+      // "Doesn't exist" and "not yours" collapse into the same response so
       // attackers can't tell whether a requestId is currently pending.
-      if (!approval || (!user.isAdmin && approval.userId !== user.id)) {
-        return { error: 'Approval request not found or already resolved' };
-      }
-
-      const resolved = rootAgent.resolveApproval(
+      const outcome = await rootAgent.resolveApprovalDetailed(
         body.requestId,
         body.approved,
         body.response,
+        { forUserId: user.isAdmin ? undefined : user.id, resolvedBy: user.id },
       );
 
-      if (!resolved) {
+      if (outcome.status === 'orphaned' || outcome.status === 'timed_out') {
+        return { error: outcome.message };
+      }
+      if (outcome.status !== 'resolved') {
         return { error: 'Approval request not found or already resolved' };
       }
 
