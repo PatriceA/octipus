@@ -36,8 +36,10 @@
  * deployments.
  */
 
-import { and, asc, count, desc, eq, gte, inArray, ne, type SQL, sql } from 'drizzle-orm';
+import { and, arrayContains, asc, count, desc, eq, gte, inArray, ne, type SQL, sql } from 'drizzle-orm';
+import { ACTIVE_TASK_STATUSES, isActiveStatus } from '@/core/tasks/status';
 import { isAdmin, isAuthenticated, type Principal } from '@/security/principal';
+import { coreLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
 import { type AgentRecord, agents, type NewAgentRecord } from '../schema/agents';
 import { type BackgroundJob, backgroundJobs } from '../schema/background-jobs';
@@ -1015,12 +1017,25 @@ export class ScopedTaskRepo {
     return existing;
   }
 
-  /** Update only if owned. `completedAt` is managed by the route/tool. */
+  /**
+   * Update only if owned. `completedAt` is managed by the route/tool.
+   *
+   * This is the one place every close goes through (the PATCH route, the
+   * update/complete tools, anything else holding a scoped repo), so the
+   * dependency wakeups hang off it: when the write moves the task from an
+   * active status to a closed one, `core/tasks/wakeups` finds the tasks it
+   * unblocked and the parent it finished. A wakeup failure is logged and
+   * never fails the write.
+   */
   async update(id: string, patch: Partial<NewTask>): Promise<Task | null> {
     if (!isUuid(id)) return null;
     const { userId: _drop, ...safe } = patch;
     void _drop;
     if (safe.parentId !== undefined || safe.blockedBy !== undefined) await this.checkStructure(safe, id);
+    // Only a write that sets a closed status can be a close; read the prior
+    // status for those alone so ordinary edits cost nothing extra.
+    const closing = typeof safe.status === 'string' && !isActiveStatus(safe.status);
+    const before = closing ? await this.findById(id) : null;
     const filters: (SQL | undefined)[] = [eq(tasks.id, id)];
     if (!isAdmin(this.principal)) filters.push(eq(tasks.userId, this.principal.userId));
     filters.push(workspaceFilter(this.principal, tasks.workspaceId));
@@ -1029,7 +1044,51 @@ export class ScopedTaskRepo {
       .set({ ...safe, updatedAt: new Date() })
       .where(and(...filters.filter((f): f is SQL => f !== undefined)))
       .returning();
-    return result[0] ?? null;
+    const updated = result[0] ?? null;
+    if (updated && before && isActiveStatus(before.status) && !isActiveStatus(updated.status)) {
+      try {
+        // Dynamic: wakeups reads through this repo, so a static import would cycle.
+        const { onTaskClosed } = await import('@/core/tasks/wakeups');
+        await onTaskClosed(this.principal, updated);
+      } catch (err) {
+        coreLogger.error({ err, taskId: id }, 'Task wakeups failed');
+      }
+    }
+    return updated;
+  }
+
+  /**
+   * The rows needed to decide what closing `closed` woke, all inside the
+   * closed task's tenant (its owner, and the principal's workspace scope,
+   * as every other read here): active tasks whose `blockedBy` holds it,
+   * those tasks' other blockers, and its parent with all of the parent's
+   * children. Includes `closed` itself (with its new status).
+   */
+  async wakeupContext(closed: Task): Promise<Task[]> {
+    const scope = (...extra: (SQL | undefined)[]): SQL | undefined =>
+      and(...[eq(tasks.userId, closed.userId), workspaceFilter(this.principal, tasks.workspaceId), ...extra]
+        .filter((f): f is SQL => f !== undefined));
+    const byId = new Map<string, Task>([[closed.id, closed]]);
+    const dependents = await this.db
+      .select()
+      .from(tasks)
+      .where(scope(arrayContains(tasks.blockedBy, [closed.id]), inArray(tasks.status, [...ACTIVE_TASK_STATUSES])))
+      .limit(500);
+    for (const row of dependents) byId.set(row.id, row);
+    if (closed.parentId) {
+      const family = await this.db
+        .select()
+        .from(tasks)
+        .where(scope(sql`(${tasks.id} = ${closed.parentId} OR ${tasks.parentId} = ${closed.parentId})`))
+        .limit(1000);
+      for (const row of family) if (!byId.has(row.id)) byId.set(row.id, row);
+    }
+    const otherBlockers = [...new Set(dependents.flatMap((d) => d.blockedBy ?? []))].filter((b) => !byId.has(b) && isUuid(b));
+    if (otherBlockers.length > 0) {
+      const rows = await this.db.select().from(tasks).where(scope(inArray(tasks.id, otherBlockers)));
+      for (const row of rows) byId.set(row.id, row);
+    }
+    return [...byId.values()];
   }
 
   /** Delete only if owned. Returns false on miss / cross-tenant. */
