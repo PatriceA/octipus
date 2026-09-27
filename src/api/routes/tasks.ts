@@ -165,8 +165,12 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
   )
 
   // Update a task (title/notes/status/priority/due/category/estimate/parent/
-  // blockers/assignee; a null assigneeKind unassigns). Manages completedAt. A parent or blocker the caller cannot
-  // see, a self-link, or a parent loop is a 400 from the scoped repo.
+  // blockers/assignee; a null assigneeKind or assigneeRef unassigns). Manages
+  // completedAt. A parent or blocker the caller cannot see, a self-link, or a
+  // parent loop is a 400 from the scoped repo. The user is the boss here: a
+  // PATCH goes through even while an agent holds the checkout, and moving the
+  // task to open, done or archived ends that checkout (the tasks tool, by
+  // contrast, refuses an agent that is not the holder).
   .patch(
     '/:id',
     async ({ user, principal, params, body, set }) => {
@@ -295,7 +299,8 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
     }
   )
 
-  // A task's comment thread, oldest first.
+  // A task's comment thread: the newest 200, oldest first; `truncated` says
+  // older ones were left out.
   .get(
     '/:id/comments',
     async ({ user, principal, params, set }) => {
@@ -303,12 +308,12 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
-      const comments = await scopedRepos(principal).tasks.listComments(params.id);
-      if (!comments) {
+      const thread = await scopedRepos(principal).tasks.listComments(params.id);
+      if (!thread) {
         set.status = 404;
         return { error: 'Task not found' };
       }
-      return { comments };
+      return thread;
     },
     {
       params: t.Object({ id: t.String() }),

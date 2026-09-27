@@ -109,6 +109,35 @@ describe('POST /api/tasks/:id/checkout', () => {
     expect(late.body).toMatchObject({ reason: 'conflict', holder: null, status: 'done' });
   });
 
+  test('a done task is a status conflict even when it is also blocked', async () => {
+    const blocker = await create({ title: 'still open' });
+    const task = await create({ title: 'closed but blocked', blockedBy: [blocker.id] });
+    await send('PATCH', `/api/tasks/${task.id}`, { status: 'done' });
+    const r = await send('POST', `/api/tasks/${task.id}/checkout`, { actor: 'node-a' });
+    expect(r).toMatchObject({ status: 409, body: { reason: 'conflict', status: 'done', error: 'Task is done' } });
+  });
+
+  test('a lapsed lease is taken over atomically; a live one is not', async () => {
+    const task = await create({ title: 'abandoned' });
+    await send('POST', `/api/tasks/${task.id}/checkout`, { actor: 'node-dead' });
+    const live = await send('POST', `/api/tasks/${task.id}/checkout`, { actor: 'node-b' });
+    expect(live.status).toBe(409);
+    const { executeRaw } = await import('@/db/postgres');
+    await executeRaw(`UPDATE tasks SET checked_out_at = now() - interval '31 minutes' WHERE id = '${task.id}'`);
+    const takeover = await send('POST', `/api/tasks/${task.id}/checkout`, { actor: 'node-b', runId: 'run-b' });
+    expect(takeover.status).toBe(200);
+    expect(takeover.body).toMatchObject({ checkedOutBy: 'node-b', checkoutRunId: 'run-b' });
+  });
+
+  test('moving a task back to open ends the checkout; the user overrides a holder', async () => {
+    const task = await create({ title: 'reopen me' });
+    await send('POST', `/api/tasks/${task.id}/checkout`, { actor: 'node-a' });
+    const edited = await send('PATCH', `/api/tasks/${task.id}`, { title: 'renamed by the user' });
+    expect(edited.body).toMatchObject({ title: 'renamed by the user', checkedOutBy: 'node-a' });
+    const reopened = await send('PATCH', `/api/tasks/${task.id}`, { status: 'open' });
+    expect(reopened.body).toMatchObject({ status: 'open', checkedOutBy: null, checkedOutAt: null });
+  });
+
   test('unknown task is 404', async () => {
     const r = await send('POST', '/api/tasks/00000000-0000-0000-0000-000000000000/checkout');
     expect(r).toEqual({ status: 404, body: { error: 'Task not found' } });
@@ -128,6 +157,13 @@ describe('POST /api/tasks/:id/release', () => {
     const claim = await send('POST', `/api/tasks/${task.id}/checkout`, { actor: 'node-b' });
     expect(claim.status).toBe(200);
   });
+
+  test('releasing a task nobody holds writes nothing', async () => {
+    const task = await create({ title: 'unheld' });
+    const r = await send('POST', `/api/tasks/${task.id}/release`, { actor: 'node-a' });
+    expect(r.status).toBe(200);
+    expect(r.body.updatedAt).toBe(task.updatedAt);
+  });
 });
 
 describe('assignee', () => {
@@ -143,6 +179,14 @@ describe('assignee', () => {
     const cleared = await send('PATCH', `/api/tasks/${a.id}`, { assigneeKind: null });
     expect(cleared.body).toMatchObject({ assigneeKind: null, assigneeRef: null });
   });
+
+  test('a null ref on its own clears; a ref without a kind is a 400', async () => {
+    const a = await create({ title: 'for node', assigneeKind: 'node', assigneeRef: 'node-7' });
+    const refOnly = await send('PATCH', `/api/tasks/${a.id}`, { assigneeRef: 'node-8' });
+    expect(refOnly).toEqual({ status: 400, body: { error: 'assigneeKind is required with assigneeRef' } });
+    const cleared = await send('PATCH', `/api/tasks/${a.id}`, { assigneeRef: null });
+    expect(cleared.body).toMatchObject({ assigneeKind: null, assigneeRef: null });
+  });
 });
 
 describe('comments', () => {
@@ -152,8 +196,19 @@ describe('comments', () => {
     expect(first.body).toMatchObject({ taskId: task.id, authorKind: 'user', authorRef: aliceId, body: 'first' });
     await send('POST', `/api/tasks/${task.id}/comments`, { body: 'second' });
     const list = await send('GET', `/api/tasks/${task.id}/comments`);
+    expect(list.body).toMatchObject({ truncated: false });
     expect(list.body.comments.map((c: any) => c.body)).toEqual(['first', 'second']);
     const empty = await send('POST', `/api/tasks/${task.id}/comments`, { body: '' });
     expect(empty.status).toBe(422);
+  });
+
+  test('a long thread returns the newest comments, oldest first, and says it was truncated', async () => {
+    const task = await create({ title: 'chatty' });
+    for (const body of ['one', 'two', 'three']) await send('POST', `/api/tasks/${task.id}/comments`, { body });
+    const { scopedRepos } = await import('@/db/repositories/scoped');
+    const { principalFromUser } = await import('@/security/principal');
+    const thread = await scopedRepos(principalFromUser({ id: aliceId, username: 'alice', isAdmin: false })).tasks.listComments(task.id, 2);
+    expect(thread?.truncated).toBe(true);
+    expect(thread?.comments.map((c) => c.body)).toEqual(['two', 'three']);
   });
 });

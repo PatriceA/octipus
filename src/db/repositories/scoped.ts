@@ -36,9 +36,11 @@
  * deployments.
  */
 
-import { and, asc, count, desc, eq, gte, inArray, ne, type SQL, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, inArray, ne, notExists, type SQL, sql } from 'drizzle-orm';
+import { alias, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { isAdmin, isAuthenticated, type Principal } from '@/security/principal';
-import { ACTIVE_TASK_STATUSES } from '@/core/tasks/status';
+import { TASK_CHECKOUT_TTL_MS } from '@/core/tasks/checkout';
+import { ACTIVE_TASK_STATUSES, isActiveStatus } from '@/core/tasks/status';
 import { toLookup, type WaitingOn, waitingOn } from '@/core/tasks/structure';
 import { getDb } from '../postgres';
 import { type AgentRecord, agents, type NewAgentRecord } from '../schema/agents';
@@ -905,8 +907,8 @@ export type TaskReleaseResult =
   | { ok: false; reason: 'not_found' }
   | { ok: false; reason: 'conflict'; holder: string | null };
 
-/** Status values that end the work: the checkout goes with them. */
-const CLOSED_TASK_STATUSES = new Set(['done', 'archived']);
+/** The owner / workspace columns scoping reads, on `tasks` or an alias of it. */
+type TaskScopeColumns = { userId: AnyPgColumn; workspaceId: AnyPgColumn };
 
 export type CreatedTaskRow = Pick<Task, 'id' | 'title' | 'source' | 'createdAt'>;
 
@@ -920,13 +922,10 @@ export class ScopedTaskRepo {
   /** Returns the task only if the principal owns it (or is an admin). */
   async findById(id: string): Promise<Task | null> {
     if (!isUuid(id)) return null;
-    const filters: (SQL | undefined)[] = [eq(tasks.id, id)];
-    if (!isAdmin(this.principal)) filters.push(eq(tasks.userId, this.principal.userId));
-    filters.push(workspaceFilter(this.principal, tasks.workspaceId));
     const row = await this.db
       .select()
       .from(tasks)
-      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
+      .where(this.scopeWhere(id))
       .limit(1);
     return row[0] ?? null;
   }
@@ -976,13 +975,10 @@ export class ScopedTaskRepo {
   async ownedIds(ids: readonly string[]): Promise<Set<string>> {
     const valid = [...new Set(ids.filter(isUuid))];
     if (valid.length === 0) return new Set();
-    const filters: (SQL | undefined)[] = [inArray(tasks.id, valid)];
-    if (!isAdmin(this.principal)) filters.push(eq(tasks.userId, this.principal.userId));
-    filters.push(workspaceFilter(this.principal, tasks.workspaceId));
     const rows = await this.db
       .select({ id: tasks.id })
       .from(tasks)
-      .where(and(...filters.filter((f): f is SQL => f !== undefined)));
+      .where(and(inArray(tasks.id, valid), ...this.scope()));
     return new Set(rows.map((r) => r.id));
   }
 
@@ -1048,8 +1044,10 @@ export class ScopedTaskRepo {
     const { userId: _drop, ...safe } = patch;
     void _drop;
     if (safe.parentId !== undefined || safe.blockedBy !== undefined) await this.checkStructure(safe, id);
-    // Finishing or archiving ends the work, so it ends the checkout too.
-    const release = safe.status && CLOSED_TASK_STATUSES.has(safe.status)
+    // Leaving the active lanes (done, archived) or going back to open ends the
+    // work, so it ends the checkout too. The user's routes rely on this as
+    // their override; the tool refuses first when another agent holds it.
+    const release = safe.status !== undefined && (safe.status === 'open' || !isActiveStatus(safe.status))
       ? { checkedOutBy: null, checkedOutAt: null, checkoutRunId: null }
       : {};
     const result = await this.db
@@ -1060,12 +1058,21 @@ export class ScopedTaskRepo {
     return result[0] ?? null;
   }
 
-  /** `id` plus the owner / workspace filters every scoped task write uses. */
+  /**
+   * The owner / workspace filters on `t` (the tasks table or an alias of it).
+   * Every scoped task read and write by id goes through here, so tenant
+   * scoping lives in one place.
+   */
+  private scope(t: TaskScopeColumns = tasks): SQL[] {
+    const filters: (SQL | undefined)[] = [];
+    if (!isAdmin(this.principal)) filters.push(eq(t.userId, this.principal.userId));
+    filters.push(workspaceFilter(this.principal, t.workspaceId));
+    return filters.filter((f): f is SQL => f !== undefined);
+  }
+
+  /** `id` plus the scope filters, and any extra conditions. */
   private scopeWhere(id: string, ...extra: SQL[]): SQL | undefined {
-    const filters: (SQL | undefined)[] = [eq(tasks.id, id)];
-    if (!isAdmin(this.principal)) filters.push(eq(tasks.userId, this.principal.userId));
-    filters.push(workspaceFilter(this.principal, tasks.workspaceId));
-    return and(...filters.filter((f): f is SQL => f !== undefined), ...extra);
+    return and(eq(tasks.id, id), ...this.scope(), ...extra);
   }
 
   /**
@@ -1075,66 +1082,96 @@ export class ScopedTaskRepo {
   private async waitingOnFor(task: Task): Promise<WaitingOn> {
     const related: SQL[] = [eq(tasks.parentId, task.id)];
     if (task.blockedBy.length > 0) related.push(inArray(tasks.id, task.blockedBy));
-    const filters: (SQL | undefined)[] = [sql`(${sql.join(related, sql` OR `)})`, inArray(tasks.status, [...ACTIVE_TASK_STATUSES])];
-    if (!isAdmin(this.principal)) filters.push(eq(tasks.userId, this.principal.userId));
-    filters.push(workspaceFilter(this.principal, tasks.workspaceId));
     const rows = await this.db
       .select({ id: tasks.id, title: tasks.title, status: tasks.status, parentId: tasks.parentId, blockedBy: tasks.blockedBy })
       .from(tasks)
-      .where(and(...filters.filter((f): f is SQL => f !== undefined)));
+      .where(and(sql`(${sql.join(related, sql` OR `)})`, inArray(tasks.status, [...ACTIVE_TASK_STATUSES]), ...this.scope()));
     return waitingOn(task, toLookup(rows));
   }
 
   /**
+   * `waitingOnFor` as conditions on the row being updated: no active, visible
+   * blocker and no active, visible child. The outer row is written as
+   * "tasks" explicitly so the correlation cannot bind to the alias.
+   */
+  private notWaiting(): SQL[] {
+    const blocker = alias(tasks, 'task_blocker');
+    const child = alias(tasks, 'task_child');
+    const active = [...ACTIVE_TASK_STATUSES];
+    return [
+      notExists(this.db.select({ one: sql`1` }).from(blocker).where(and(
+        sql`${blocker.id} = ANY("tasks"."blocked_by")`,
+        sql`${blocker.id} <> "tasks"."id"`,
+        inArray(blocker.status, active),
+        ...this.scope(blocker),
+      ))),
+      notExists(this.db.select({ one: sql`1` }).from(child).where(and(
+        sql`${child.parentId} = "tasks"."id"`,
+        sql`${child.id} <> "tasks"."id"`,
+        inArray(child.status, active),
+        ...this.scope(child),
+      ))),
+    ];
+  }
+
+  /**
    * Claim a task for `actor` (work board, after Paperclip). The claim is one
-   * conditional UPDATE — active status and no other holder — so of two
-   * concurrent claimers exactly one gets the row back; the other sees a
-   * conflict naming the holder. Re-checkout by the holder is idempotent and
-   * refreshes `checkedOutAt`. A task still waiting on an open blocker or open
-   * sub-tasks is refused up front ('blocked'). Claiming moves it to in_progress.
+   * conditional UPDATE — active status, not waiting on an open blocker or open
+   * sub-tasks, and no live holder other than `actor` — so of two concurrent
+   * claimers exactly one gets the row back. A checkout is a lease
+   * (TASK_CHECKOUT_TTL_MS, core/tasks/checkout.ts): a claim not renewed within
+   * it can be taken over, which is how a crashed agent's claim clears.
+   * Re-checkout by the holder is idempotent and renews the lease. Claiming
+   * moves the task to in_progress. On a miss the task is re-read to say why:
+   * gone, closed, blocked (with what it waits on), or held by someone else.
    */
   async checkout(id: string, actor: string, runId: string | null = null): Promise<TaskCheckoutResult> {
     const existing = await this.findById(id);
     if (!existing) return { ok: false, reason: 'not_found' };
-    const waiting = await this.waitingOnFor(existing);
-    if (waiting.blockers.length > 0 || waiting.openChildren > 0) return { ok: false, reason: 'blocked', waiting };
+    if (!isActiveStatus(existing.status)) return { ok: false, reason: 'conflict', holder: existing.checkedOutBy, status: existing.status };
+    const leaseSeconds = Math.floor(TASK_CHECKOUT_TTL_MS / 1000);
     const [claimed] = await this.db
       .update(tasks)
       .set({ checkedOutBy: actor, checkedOutAt: new Date(), checkoutRunId: runId, status: 'in_progress', updatedAt: new Date() })
       .where(this.scopeWhere(
         id,
         inArray(tasks.status, [...ACTIVE_TASK_STATUSES]),
-        sql`(${tasks.checkedOutBy} IS NULL OR ${tasks.checkedOutBy} = ${actor})`,
+        sql`(${tasks.checkedOutBy} IS NULL OR ${tasks.checkedOutBy} = ${actor} OR ${tasks.checkedOutAt} < now() - ${sql.raw(`interval '${leaseSeconds} seconds'`)})`,
+        ...this.notWaiting(),
       ))
       .returning();
     if (claimed) return { ok: true, task: claimed };
     const current = await this.findById(id);
     if (!current) return { ok: false, reason: 'not_found' };
+    if (!isActiveStatus(current.status)) return { ok: false, reason: 'conflict', holder: current.checkedOutBy, status: current.status };
+    const waiting = await this.waitingOnFor(current);
+    if (waiting.blockers.length > 0 || waiting.openChildren > 0) return { ok: false, reason: 'blocked', waiting };
     return { ok: false, reason: 'conflict', holder: current.checkedOutBy, status: current.status };
   }
 
   /**
    * Give a checkout back. Only the holder may release unless `force` (the
    * owner clearing a dead agent's claim). A task that was being worked goes
-   * back to open; releasing a task nobody holds is a no-op success.
+   * back to open. Releasing a task nobody holds writes nothing and succeeds.
    */
   async release(id: string, actor: string, opts: { force?: boolean } = {}): Promise<TaskReleaseResult> {
     if (!isUuid(id)) return { ok: false, reason: 'not_found' };
-    const holderCheck = opts.force ? [] : [sql`(${tasks.checkedOutBy} IS NULL OR ${tasks.checkedOutBy} = ${actor})`];
+    const holderCheck = opts.force ? [] : [eq(tasks.checkedOutBy, actor)];
     const [released] = await this.db
       .update(tasks)
       .set({
-        status: sql`CASE WHEN ${tasks.checkedOutBy} IS NOT NULL AND ${tasks.status} = 'in_progress' THEN 'open' ELSE ${tasks.status} END`,
+        status: sql`CASE WHEN ${tasks.status} = 'in_progress' THEN 'open' ELSE ${tasks.status} END`,
         checkedOutBy: null,
         checkedOutAt: null,
         checkoutRunId: null,
         updatedAt: new Date(),
       })
-      .where(this.scopeWhere(id, ...holderCheck))
+      .where(this.scopeWhere(id, sql`${tasks.checkedOutBy} IS NOT NULL`, ...holderCheck))
       .returning();
     if (released) return { ok: true, task: released };
     const current = await this.findById(id);
     if (!current) return { ok: false, reason: 'not_found' };
+    if (!current.checkedOutBy) return { ok: true, task: current };
     return { ok: false, reason: 'conflict', holder: current.checkedOutBy };
   }
 
@@ -1149,16 +1186,20 @@ export class ScopedTaskRepo {
     return row;
   }
 
-  /** A task's comments, oldest first; null when the task is not visible. */
-  async listComments(taskId: string, limit = 200): Promise<TaskComment[] | null> {
+  /**
+   * The newest `limit` comments of a task, oldest first; `truncated` says
+   * older ones were left out. Null when the task is not visible.
+   */
+  async listComments(taskId: string, limit = 200): Promise<{ comments: TaskComment[]; truncated: boolean } | null> {
     const task = await this.findById(taskId);
     if (!task) return null;
-    return this.db
+    const newest = await this.db
       .select()
       .from(taskComments)
       .where(and(eq(taskComments.taskId, task.id), eq(taskComments.userId, task.userId)))
-      .orderBy(asc(taskComments.createdAt))
-      .limit(limit);
+      .orderBy(desc(taskComments.createdAt), desc(taskComments.id))
+      .limit(limit + 1);
+    return { comments: newest.slice(0, limit).reverse(), truncated: newest.length > limit };
   }
 
   /** Delete only if owned. Returns false on miss / cross-tenant. */

@@ -38,12 +38,15 @@ export function isTaskAssigneeKind(value: unknown): value is TaskAssigneeKind {
 
 /**
  * The assignee columns for a write. Absent both → no change; a null or empty
- * kind clears the assignee; otherwise kind and ref come together. Throws with
- * a message fit for the API's 400 / the tool's `error` field.
+ * kind, or a null or empty ref on its own, clears the assignee; otherwise kind
+ * and ref come together. A ref without a kind is refused rather than paired
+ * with the stored kind: "node-7" means something different under 'role'.
+ * Throws with a message fit for the API's 400 / the tool's `error` field.
  */
 export function assigneePatch(kind: unknown, ref: unknown): { assigneeKind?: TaskAssigneeKind | null; assigneeRef?: string | null } {
   if (kind === undefined && ref === undefined) return {};
-  if (kind === null || kind === '') return { assigneeKind: null, assigneeRef: null };
+  const empty = (v: unknown) => v === null || v === '';
+  if (empty(kind) || (kind === undefined && empty(ref))) return { assigneeKind: null, assigneeRef: null };
   if (kind === undefined) throw new Error('assigneeKind is required with assigneeRef');
   if (!isTaskAssigneeKind(kind)) throw new Error(`Invalid assigneeKind "${String(kind)}" — expected ${TASK_ASSIGNEE_KINDS.join(' | ')}`);
   const r = typeof ref === 'string' ? ref.trim().slice(0, 200) : '';

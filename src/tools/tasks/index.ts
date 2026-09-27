@@ -1,6 +1,7 @@
 import { addBacklog, parseBacklog } from '@/core/tasks/backlog';
 import { nextActions } from '@/core/tasks/next';
 import { dateOnlyToEndOfDay } from '@/core/tasks/rank';
+import { type CheckoutState, otherHolder } from '@/core/tasks/checkout';
 import { ACTIVE_TASK_STATUSES, assigneePatch, TASK_ASSIGNEE_KINDS, TASK_STATUSES } from '@/core/tasks/status';
 import { type Nested, nestTasks, normalizeEstimate, toLookup, waitingOn, waitingReason } from '@/core/tasks/structure';
 import { resolveUserTimezone } from '@/core/tasks/timezone';
@@ -180,6 +181,8 @@ export class TasksTool extends BaseTool {
         const repo = scopedRepos(principal).tasks;
         const existing = await repo.findById(args.id as string);
         if (!existing) return { error: 'Task not found' };
+        const held = heldElsewhere(existing, context);
+        if (held) return held;
         const status = args.status as string | undefined;
         try {
           const task = await repo.update(args.id as string, {
@@ -216,6 +219,8 @@ export class TasksTool extends BaseTool {
         const repo = scopedRepos(principal).tasks;
         const existing = await repo.findById(args.id as string);
         if (!existing) return { error: 'Task not found' };
+        const held = heldElsewhere(existing, context);
+        if (held) return held;
         // Idempotent: keep the original completedAt if already done.
         const task = await repo.update(args.id as string, {
           status: 'done',
@@ -229,7 +234,7 @@ export class TasksTool extends BaseTool {
 
     this.registerTool(
       'checkout_task',
-      'Claim a task before working on it so no other agent picks it up; it moves to in_progress. Fails with the current holder if another agent has it, or with what it waits on if it is blocked. Claiming a task you already hold is fine. complete_task ends the claim; release: true gives it back unfinished (the task returns to open).',
+      'Claim a task before working on it so no other agent picks it up; it moves to in_progress. Fails with the current holder if another agent has it, or with what it waits on if it is blocked. The claim lapses after 30 minutes unless renewed: claiming a task you already hold is fine and renews it, so check out again on long work. complete_task ends the claim; release: true gives it back unfinished (the task returns to open). While another agent holds a task, update_task and complete_task refuse it.',
       createParameterSchema({
         id: { type: 'string', description: 'Task id', required: true },
         release: { type: 'boolean', description: 'Give the claim back instead of taking it' },
@@ -243,7 +248,7 @@ export class TasksTool extends BaseTool {
           if (released.reason === 'not_found') return { error: 'Task not found' };
           return { error: `Task is checked out by ${released.holder}`, holder: released.holder };
         }
-        const result = await repo.checkout(args.id as string, actor, context.sessionId || null);
+        const result = await repo.checkout(args.id as string, actor, context.id || null);
         if (result.ok) return { checkedOut: true, task: summarize(result.task) };
         if (result.reason === 'not_found') return { error: 'Task not found' };
         if (result.reason === 'blocked') return { error: `Task is blocked: ${waitingReason(result.waiting)}`, blocked: true };
@@ -294,9 +299,31 @@ export class TasksTool extends BaseTool {
   }
 }
 
-/** Who the calling agent is on the board: its agent/node id, else 'agent'. */
+/**
+ * Who the calling agent is on the board — an identity that survives across
+ * turns, so the same logical agent can renew, release or finish its own claim
+ * later. `context.id` is not it: every spawned agent gets a fresh id. A
+ * pipeline stage is `pipeline:<pipelineId>/<nodeKey>` (both inherited by the
+ * stage worker and stable across resumes); anything else is
+ * `<role>@<sessionId>`, where `sessionId` is the ROOT session (workers inherit
+ * it, see worker-spawner). The run-specific `context.id` goes in
+ * `checkoutRunId` instead. Two parallel workers of one role in one session
+ * share an identity — the price of a stable one without a durable agent id.
+ */
 function agentActor(context: AgentContext): string {
-  return context.id || 'agent';
+  const { pipelineId, nodeKey } = (context.metadata ?? {}) as Record<string, unknown>;
+  if (typeof pipelineId === 'string' && typeof nodeKey === 'string') return `pipeline:${pipelineId}/${nodeKey}`;
+  if (context.sessionId) return `${context.role || 'agent'}@${context.sessionId}`;
+  return 'agent';
+}
+
+/**
+ * The refusal when another actor holds a live checkout on `task`, else null.
+ * Only the tool enforces this; the user's routes override (the user is the boss).
+ */
+function heldElsewhere(task: CheckoutState, context: AgentContext): { error: string; holder: string } | null {
+  const holder = otherHolder(task, agentActor(context));
+  return holder ? { error: `Task is checked out by ${holder}`, holder } : null;
 }
 
 function clampPriority(p: unknown): number {
