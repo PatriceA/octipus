@@ -2,9 +2,9 @@ import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { StructuredTask } from './structure';
-import { computeWakeups, onTaskWakeup, resetWakeupCoalescing, type TaskWakeupEvent } from './wakeups';
+import { computeWakeups, emitSafely, flushWakeups, onTaskWakeup, type TaskWakeupEvent } from './wakeups';
 
 const t = (id: string, status: string, extra: Partial<StructuredTask> = {}): StructuredTask => ({ id, title: id.toUpperCase(), status, ...extra });
 const ids = (rows: StructuredTask[]) => rows.map((r) => r.id);
@@ -31,7 +31,7 @@ describe('computeWakeups', () => {
 
   test('the last child closed wakes the parent; an open sibling holds it', () => {
     const rows = [t('p', 'open'), t('c1', 'done', { parentId: 'p' }), t('c2', 'open', { parentId: 'p' })];
-    expect(ids([computeWakeups(t('c2', 'done', { parentId: 'p' }), 'open', rows).childrenCompleted!])).toEqual(['p']);
+    expect(computeWakeups(t('c2', 'done', { parentId: 'p' }), 'open', rows).childrenCompleted?.id).toBe('p');
     const withOpenSibling = [...rows, t('c3', 'in_progress', { parentId: 'p' })];
     expect(computeWakeups(t('c2', 'done', { parentId: 'p' }), 'open', withOpenSibling).childrenCompleted).toBeNull();
   });
@@ -48,6 +48,18 @@ describe('computeWakeups', () => {
     expect(r.childrenCompleted?.id).toBe('p');
   });
 
+  test('an unknown (unreadable) blocker still blocks; a deleted one (absent) does not', () => {
+    const rows = [t('b', 'open', { blockedBy: ['a', 'foreign'] })];
+    expect(computeWakeups(t('a', 'done'), 'open', rows, ['foreign']).unblocked).toEqual([]);
+    expect(ids(computeWakeups(t('a', 'done'), 'open', rows).unblocked)).toEqual(['b']);
+  });
+
+  test('a deleted task (non-active status) wakes like a closed one', () => {
+    const r = computeWakeups(t('a', 'deleted', { parentId: 'p' }), 'in_progress', [t('b', 'open', { blockedBy: ['a'] }), t('p', 'open')]);
+    expect(ids(r.unblocked)).toEqual(['b']);
+    expect(r.childrenCompleted?.id).toBe('p');
+  });
+
   test('no double fire: a task already closed (or still active) wakes nobody', () => {
     const rows = [t('b', 'open', { blockedBy: ['a'] }), t('p', 'open')];
     const closed = t('a', 'archived', { parentId: 'p' });
@@ -56,14 +68,38 @@ describe('computeWakeups', () => {
   });
 });
 
-// ── Embedded PGlite: the PATCH route drives the wakeup end to end ─────────
+describe('emitSafely', () => {
+  test('a throwing or rejecting listener is logged and the others still run', async () => {
+    const seen: string[] = [];
+    const offs = [
+      onTaskWakeup(() => {
+        throw new Error('sync boom');
+      }),
+      onTaskWakeup(async () => {
+        throw new Error('async boom');
+      }),
+      onTaskWakeup((e) => {
+        seen.push(e.taskId);
+      }),
+    ];
+    const event: TaskWakeupEvent = { type: 'task.unblocked', userId: 'u', workspaceId: null, taskId: 't1', title: 'T', triggeredBy: 'x', cause: 'closed' };
+    expect(() => emitSafely(event)).not.toThrow();
+    await new Promise((r) => setTimeout(r, 0)); // an unhandled rejection would fail the run here
+    expect(seen).toEqual(['t1']);
+    for (const off of offs) off();
+  });
+});
+
+// ── Embedded PGlite: the task routes drive the wakeup end to end ─────────
 
 type ElysiaLike = { handle: (req: Request) => Promise<Response> };
 const rand = (n: number) => randomBytes(n).toString('hex');
 
-describe('wakeups via PATCH /api/tasks/:id (embedded PGlite)', () => {
+describe('wakeups via /api/tasks (embedded PGlite)', () => {
   const aliceId = '31111111-1111-1111-1111-111111111111';
   const bobId = '32222222-2222-2222-2222-222222222222';
+  const ws1 = '41111111-1111-1111-1111-111111111111';
+  const ws2 = '42222222-2222-2222-2222-222222222222';
   let aliceApp: ElysiaLike;
   let queryRaw: (sql: string) => Promise<{ rows: any[] }>;
   const events: TaskWakeupEvent[] = [];
@@ -86,6 +122,10 @@ describe('wakeups via PATCH /api/tasks/:id (embedded PGlite)', () => {
       `INSERT INTO users (id, username, is_admin) VALUES ('${aliceId}', 'alice-w', false), ('${bobId}', 'bob-w', false)
        ON CONFLICT DO NOTHING`,
     );
+    await db.executeRaw(
+      `INSERT INTO workspaces (id, user_id, slug, name) VALUES
+         ('${ws1}', '${aliceId}', 'one', 'One'), ('${ws2}', '${aliceId}', 'two', 'Two')`,
+    );
 
     const { taskRoutes } = await import('@/api/routes/tasks');
     const { Elysia } = await import('@/api/http');
@@ -94,18 +134,21 @@ describe('wakeups via PATCH /api/tasks/:id (embedded PGlite)', () => {
     aliceApp = new Elysia()
       .derive(() => ({ user: u, session: null, principal: principalFromUser(u) }))
       .group('/api', (a) => a.use(taskRoutes)) as unknown as ElysiaLike;
-    off = onTaskWakeup((e) => events.push(e));
+    off = onTaskWakeup((e) => {
+      events.push(e);
+    });
   });
 
   afterAll(async () => {
     off?.();
+    await flushWakeups();
     const { closeDb } = await import('@/db/postgres');
     await closeDb();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await flushWakeups();
     events.length = 0;
-    resetWakeupCoalescing();
   });
 
   async function insertTask(userId: string, title: string, extra = ''): Promise<string> {
@@ -114,12 +157,17 @@ describe('wakeups via PATCH /api/tasks/:id (embedded PGlite)', () => {
     const { rows } = await queryRaw(`INSERT INTO tasks (user_id, title${cols}) VALUES ('${userId}', '${title}'${vals}) RETURNING id`);
     return rows[0].id;
   }
-  async function patch(id: string, body: unknown) {
+  async function send(method: string, id: string, body?: unknown) {
     const res = await aliceApp.handle(new Request(`http://localhost/api/tasks/${id}`, {
-      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      method,
+      headers: body === undefined ? {} : { 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
     }));
-    return { status: res.status, body: await res.json() };
+    const out = { status: res.status, body: await res.json() };
+    await flushWakeups();
+    return out;
   }
+  const patch = (id: string, body: unknown) => send('PATCH', id, body);
   const notesFor = async (userId: string) =>
     (await queryRaw(`SELECT type, title, metadata FROM notifications WHERE user_id = '${userId}' ORDER BY created_at`)).rows;
 
@@ -132,7 +180,7 @@ describe('wakeups via PATCH /api/tasks/:id (embedded PGlite)', () => {
     const r = await patch(blocker, { status: 'done' });
     expect(r.status).toBe(200);
     expect(events).toEqual([
-      { type: 'task.unblocked', userId: aliceId, workspaceId: null, taskId: dependent, title: 'Build it', triggeredBy: blocker },
+      { type: 'task.unblocked', userId: aliceId, workspaceId: null, taskId: dependent, title: 'Build it', triggeredBy: blocker, cause: 'closed' },
     ]);
     expect(events.some((e) => e.taskId === bobTask)).toBe(false);
 
@@ -161,5 +209,70 @@ describe('wakeups via PATCH /api/tasks/:id (embedded PGlite)', () => {
     expect(events.map((e) => [e.type, e.taskId, e.triggeredBy])).toEqual([['task.children_completed', parent, c2]]);
     const notes = (await notesFor(aliceId)).filter((n: any) => n.metadata.taskId === parent);
     expect(notes.map((n: any) => n.title)).toEqual(['All sub-tasks of “Phase 1” are done']);
+  });
+
+  test('an open blocker outside the workspace scope, or another user’s, still blocks', async () => {
+    const { ScopedTaskRepo } = await import('@/db/repositories/scoped');
+    const { principalFromUser } = await import('@/security/principal');
+    const inWs1 = new ScopedTaskRepo({ ...principalFromUser({ id: aliceId, username: 'alice-w', isAdmin: false }), workspaceId: ws1 });
+    const a = await insertTask(aliceId, 'A in ws1', `workspace_id='${ws1}'`);
+    const other = await insertTask(aliceId, 'Other in ws2', `workspace_id='${ws2}'`);
+    const bobs = await insertTask(bobId, 'Bob open');
+    const d1 = await insertTask(aliceId, 'Needs A and ws2', `blocked_by=ARRAY['${a}','${other}']::uuid[]`);
+    const d2 = await insertTask(aliceId, 'Needs A and bob', `blocked_by=ARRAY['${a}','${bobs}']::uuid[]`);
+    const d3 = await insertTask(aliceId, 'Needs A only', `blocked_by=ARRAY['${a}']::uuid[]`);
+
+    expect((await inWs1.update(a, { status: 'done' }))?.status).toBe('done');
+    await flushWakeups();
+    expect(events.map((e) => e.taskId)).toEqual([d3]);
+    expect(events.some((e) => e.taskId === d1 || e.taskId === d2)).toBe(false);
+  });
+
+  test('deleting the last active blocker wakes the dependent', async () => {
+    const b1 = await insertTask(aliceId, 'Old blocker', `status='done'`);
+    const b2 = await insertTask(aliceId, 'Doomed blocker');
+    const dep = await insertTask(aliceId, 'Waiting on two', `blocked_by=ARRAY['${b1}','${b2}']::uuid[]`);
+    const r = await send('DELETE', b2);
+    expect(r.body).toEqual({ deleted: true });
+    expect(events.map((e) => [e.type, e.taskId, e.cause])).toEqual([['task.unblocked', dep, 'deleted']]);
+  });
+
+  test('an empty status is rejected, not treated as unchanged', async () => {
+    const id = await insertTask(aliceId, 'x');
+    const r = await patch(id, { status: '' });
+    expect(r.status).toBe(400);
+    expect(r.body).toEqual({ error: 'Invalid status ""' });
+  });
+
+  test('concurrent closes of one blocker fire once', async () => {
+    const blocker = await insertTask(aliceId, 'Raced', `status='in_progress'`);
+    const dep = await insertTask(aliceId, 'After race', `blocked_by=ARRAY['${blocker}']::uuid[]`);
+    const results = await Promise.all([
+      patch(blocker, { status: 'done' }),
+      patch(blocker, { status: 'done' }),
+      patch(blocker, { status: 'archived' }),
+    ]);
+    expect(results.every((r) => r.status === 200)).toBe(true);
+    expect(events.filter((e) => e.taskId === dep)).toHaveLength(1);
+    const notes = (await notesFor(aliceId)).filter((n: any) => n.metadata.taskId === dep);
+    expect(notes).toHaveLength(1);
+  });
+
+  test('an async listener rejection is caught and does not fail the close', async () => {
+    const rejecting = vi.fn(async () => {
+      throw new Error('listener down');
+    });
+    const stop = onTaskWakeup(rejecting);
+    try {
+      const blocker = await insertTask(aliceId, 'Blocker L');
+      const dep = await insertTask(aliceId, 'Dep L', `blocked_by=ARRAY['${blocker}']::uuid[]`);
+      const r = await patch(blocker, { status: 'done' });
+      expect(r.status).toBe(200);
+      expect(rejecting).toHaveBeenCalledTimes(1);
+      expect(events.map((e) => e.taskId)).toEqual([dep]);
+      await new Promise((res) => setTimeout(res, 0));
+    } finally {
+      stop();
+    }
   });
 });

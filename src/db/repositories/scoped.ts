@@ -36,10 +36,10 @@
  * deployments.
  */
 
-import { and, arrayContains, asc, count, desc, eq, gte, inArray, ne, type SQL, sql } from 'drizzle-orm';
-import { ACTIVE_TASK_STATUSES, isActiveStatus } from '@/core/tasks/status';
+import { and, arrayContains, asc, count, desc, eq, getTableColumns, gte, inArray, ne, type SQL, sql } from 'drizzle-orm';
+import { ACTIVE_TASK_STATUSES, isActiveStatus, isTaskStatus } from '@/core/tasks/status';
+import { dispatchWakeups, scheduleWakeup, type WakeupCause } from '@/core/tasks/wakeups';
 import { isAdmin, isAuthenticated, type Principal } from '@/security/principal';
-import { coreLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
 import { type AgentRecord, agents, type NewAgentRecord } from '../schema/agents';
 import { type BackgroundJob, backgroundJobs } from '../schema/background-jobs';
@@ -1017,90 +1017,117 @@ export class ScopedTaskRepo {
     return existing;
   }
 
+  /** Owner + workspace filters for a write on one task id. */
+  private writeFilters(id: string): SQL | undefined {
+    const filters: (SQL | undefined)[] = [eq(tasks.id, id)];
+    if (!isAdmin(this.principal)) filters.push(eq(tasks.userId, this.principal.userId));
+    filters.push(workspaceFilter(this.principal, tasks.workspaceId));
+    return and(...filters.filter((f): f is SQL => f !== undefined));
+  }
+
   /**
    * Update only if owned. `completedAt` is managed by the route/tool.
    *
-   * This is the one place every close goes through (the PATCH route, the
-   * update/complete tools, anything else holding a scoped repo), so the
-   * dependency wakeups hang off it: when the write moves the task from an
-   * active status to a closed one, `core/tasks/wakeups` finds the tasks it
-   * unblocked and the parent it finished. A wakeup failure is logged and
-   * never fails the write.
+   * This and `delete` are the only paths a task leaves the active set by
+   * (the PATCH/DELETE routes, the update/complete tools, anything else
+   * holding a scoped repo), so the dependency wakeups hang off them. A
+   * close (a status in TASK_STATUSES that is not active) first runs as a
+   * guarded UPDATE `… AND status IN (active)`: the row comes back only for
+   * a real active → closed transition, and concurrent closes of one task
+   * cannot both win it (the guard is re-checked under the row lock). The
+   * RETURNING subquery reads the pre-update status from the statement
+   * snapshot. When the guard misses (already closed, or not owned) the
+   * plain update runs and nothing fires. The wakeup itself is detached
+   * (`scheduleWakeup`): it never adds latency to, or fails, the write.
    */
   async update(id: string, patch: Partial<NewTask>): Promise<Task | null> {
     if (!isUuid(id)) return null;
     const { userId: _drop, ...safe } = patch;
     void _drop;
     if (safe.parentId !== undefined || safe.blockedBy !== undefined) await this.checkStructure(safe, id);
-    // Only a write that sets a closed status can be a close; read the prior
-    // status for those alone so ordinary edits cost nothing extra.
-    const closing = typeof safe.status === 'string' && !isActiveStatus(safe.status);
-    const before = closing ? await this.findById(id) : null;
-    const filters: (SQL | undefined)[] = [eq(tasks.id, id)];
-    if (!isAdmin(this.principal)) filters.push(eq(tasks.userId, this.principal.userId));
-    filters.push(workspaceFilter(this.principal, tasks.workspaceId));
-    const result = await this.db
-      .update(tasks)
-      .set({ ...safe, updatedAt: new Date() })
-      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
-      .returning();
-    const updated = result[0] ?? null;
-    if (updated && before && isActiveStatus(before.status) && !isActiveStatus(updated.status)) {
-      try {
-        // Dynamic: wakeups reads through this repo, so a static import would cycle.
-        const { onTaskClosed } = await import('@/core/tasks/wakeups');
-        await onTaskClosed(this.principal, updated);
-      } catch (err) {
-        coreLogger.error({ err, taskId: id }, 'Task wakeups failed');
+    const values = { ...safe, updatedAt: new Date() };
+    if (isTaskStatus(safe.status) && !isActiveStatus(safe.status)) {
+      const [won] = await this.db
+        .update(tasks)
+        .set(values)
+        .where(and(this.writeFilters(id), inArray(tasks.status, [...ACTIVE_TASK_STATUSES])))
+        .returning({
+          ...getTableColumns(tasks),
+          previousStatus: sql<string>`(SELECT p.status FROM tasks p WHERE p.id = tasks.id)`,
+        });
+      if (won) {
+        const { previousStatus, ...closed } = won;
+        this.wakeAfter(closed, previousStatus, 'closed');
+        return closed;
       }
     }
-    return updated;
+    const result = await this.db.update(tasks).set(values).where(this.writeFilters(id)).returning();
+    return result[0] ?? null;
+  }
+
+  /** Run the wakeups for a task that just left the active set, detached. */
+  private wakeAfter(closed: Task, previousStatus: string, cause: WakeupCause): void {
+    if (!isActiveStatus(previousStatus)) return;
+    scheduleWakeup(async () => {
+      const context = await this.wakeupContext(closed);
+      await dispatchWakeups({ closed, previousStatus, cause, ...context });
+    });
   }
 
   /**
-   * The rows needed to decide what closing `closed` woke, all inside the
-   * closed task's tenant (its owner, and the principal's workspace scope,
-   * as every other read here): active tasks whose `blockedBy` holds it,
-   * those tasks' other blockers, and its parent with all of the parent's
-   * children. Includes `closed` itself (with its new status).
+   * The rows needed to decide what closing `closed` woke. Tenancy is per
+   * user, so every read is the closed task's owner and nothing else (no
+   * workspace narrowing: a blocker in another of the owner's workspaces
+   * still blocks). Loads, uncapped: active tasks whose `blockedBy` holds it,
+   * every other blocker those tasks name, the parent, and the parent's
+   * active children. A named blocker the owner does not have is looked up
+   * by id alone: if the row exists (another user's, only reachable by raw
+   * SQL) it is `unknownIds` and counts as blocking; if it is gone it is a
+   * deleted blocker and inert.
    */
-  async wakeupContext(closed: Task): Promise<Task[]> {
-    const scope = (...extra: (SQL | undefined)[]): SQL | undefined =>
-      and(...[eq(tasks.userId, closed.userId), workspaceFilter(this.principal, tasks.workspaceId), ...extra]
-        .filter((f): f is SQL => f !== undefined));
-    const byId = new Map<string, Task>([[closed.id, closed]]);
+  async wakeupContext(closed: Task): Promise<{ rows: Task[]; unknownIds: string[] }> {
+    const owner = eq(tasks.userId, closed.userId);
+    const active = inArray(tasks.status, [...ACTIVE_TASK_STATUSES]);
+    const byId = new Map<string, Task>();
     const dependents = await this.db
       .select()
       .from(tasks)
-      .where(scope(arrayContains(tasks.blockedBy, [closed.id]), inArray(tasks.status, [...ACTIVE_TASK_STATUSES])))
-      .limit(500);
+      .where(and(owner, active, arrayContains(tasks.blockedBy, [closed.id])));
     for (const row of dependents) byId.set(row.id, row);
     if (closed.parentId) {
       const family = await this.db
         .select()
         .from(tasks)
-        .where(scope(sql`(${tasks.id} = ${closed.parentId} OR ${tasks.parentId} = ${closed.parentId})`))
-        .limit(1000);
-      for (const row of family) if (!byId.has(row.id)) byId.set(row.id, row);
+        .where(and(owner, sql`(${tasks.id} = ${closed.parentId} OR (${tasks.parentId} = ${closed.parentId} AND ${active}))`));
+      for (const row of family) byId.set(row.id, row);
     }
-    const otherBlockers = [...new Set(dependents.flatMap((d) => d.blockedBy ?? []))].filter((b) => !byId.has(b) && isUuid(b));
-    if (otherBlockers.length > 0) {
-      const rows = await this.db.select().from(tasks).where(scope(inArray(tasks.id, otherBlockers)));
-      for (const row of rows) byId.set(row.id, row);
+    const named = [...new Set(dependents.flatMap((d) => d.blockedBy ?? []))]
+      .filter((b) => b !== closed.id && !byId.has(b) && isUuid(b));
+    let unknownIds: string[] = [];
+    if (named.length > 0) {
+      const found = await this.db.select().from(tasks).where(and(owner, inArray(tasks.id, named)));
+      for (const row of found) byId.set(row.id, row);
+      const missing = named.filter((b) => !byId.has(b));
+      if (missing.length > 0) {
+        // Existence only (ids, never data): a foreign row is unknown, so conservatively blocking.
+        const foreign = await this.db.select({ id: tasks.id }).from(tasks).where(inArray(tasks.id, missing));
+        unknownIds = foreign.map((r) => r.id);
+      }
     }
-    return [...byId.values()];
+    byId.delete(closed.id);
+    return { rows: [...byId.values()], unknownIds };
   }
 
-  /** Delete only if owned. Returns false on miss / cross-tenant. */
+  /**
+   * Delete only if owned. Returns false on miss / cross-tenant. Deleting an
+   * active task can free its dependents or finish its parent just as
+   * closing it does; DELETE … RETURNING hands back the row atomically.
+   */
   async delete(id: string): Promise<boolean> {
     if (!isUuid(id)) return false;
-    const filters: (SQL | undefined)[] = [eq(tasks.id, id)];
-    if (!isAdmin(this.principal)) filters.push(eq(tasks.userId, this.principal.userId));
-    filters.push(workspaceFilter(this.principal, tasks.workspaceId));
-    const result = await this.db
-      .delete(tasks)
-      .where(and(...filters.filter((f): f is SQL => f !== undefined)))
-      .returning();
+    const result = await this.db.delete(tasks).where(this.writeFilters(id)).returning();
+    const gone = result[0];
+    if (gone) this.wakeAfter(gone, gone.status, 'deleted');
     return result.length > 0;
   }
 }
