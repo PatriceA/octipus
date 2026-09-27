@@ -230,3 +230,57 @@ describe('structure: add_tasks, nesting, waiting', () => {
     expect(next.tasks[0]).toMatchObject({ title: 'started thing', bucket: 'doing', reason: 'in progress' });
   });
 });
+
+describe('work board: checkout_task, add_task_comment, assignee', () => {
+  const callAs = (name: string, args: Record<string, unknown>, userId: string, agentId: string) =>
+    handlers.get(name)!.execute(args, { ...ctx(userId), id: agentId }) as Promise<any>;
+
+  test('checkout claims for the calling agent; a second agent is refused with the holder', async () => {
+    const t = await call('create_task', { title: 'claim me' }, aliceId);
+    const first = await callAs('checkout_task', { id: t.task.id }, aliceId, 'node-a');
+    expect(first.checkedOut).toBe(true);
+    expect(first.task).toMatchObject({ status: 'in_progress', checkedOutBy: 'node-a' });
+    const again = await callAs('checkout_task', { id: t.task.id }, aliceId, 'node-a');
+    expect(again.checkedOut).toBe(true);
+    const second = await callAs('checkout_task', { id: t.task.id }, aliceId, 'node-b');
+    expect(second).toEqual({ error: 'Task is checked out by node-a', holder: 'node-a' });
+
+    const released = await callAs('checkout_task', { id: t.task.id, release: true }, aliceId, 'node-a');
+    expect(released.task).toMatchObject({ status: 'open', checkedOutBy: null });
+    const reclaimed = await callAs('checkout_task', { id: t.task.id }, aliceId, 'node-b');
+    expect(reclaimed.checkedOut).toBe(true);
+    const completed = await call('complete_task', { id: t.task.id }, aliceId);
+    expect(completed.task.checkedOutBy).toBeNull();
+  });
+
+  test('a blocked task and another user\'s task cannot be checked out', async () => {
+    const blocker = await call('create_task', { title: 'blocker' }, aliceId);
+    const blocked = await call('create_task', { title: 'waits', blockedBy: [blocker.task.id] }, aliceId);
+    const r = await call('checkout_task', { id: blocked.task.id }, aliceId);
+    expect(r).toEqual({ error: 'Task is blocked: blocked by "blocker"', blocked: true });
+    expect(await call('checkout_task', { id: blocker.task.id }, bobId)).toEqual({ error: 'Task not found' });
+  });
+
+  test('add_task_comment records the agent as author; cross-tenant is not found', async () => {
+    const t = await call('create_task', { title: 'discuss' }, aliceId);
+    const c = await call('add_task_comment', { id: t.task.id, body: 'picked this up' }, aliceId);
+    expect(c.commented).toBe(true);
+    expect(await call('add_task_comment', { id: t.task.id, body: 'hi' }, bobId)).toEqual({ error: 'Task not found' });
+    expect(await call('add_task_comment', { id: t.task.id, body: '  ' }, aliceId)).toEqual({ error: 'Comment body is required' });
+    const { scopedRepos } = await import('@/db/repositories/scoped');
+    const { principalFromUser } = await import('@/security/principal');
+    const rows = await scopedRepos(principalFromUser({ id: aliceId, username: 'alice', isAdmin: false })).tasks.listComments(t.task.id);
+    expect(rows?.map((r) => [r.authorKind, r.authorRef, r.body])).toEqual([['agent', 'agent-1', 'picked this up']]);
+  });
+
+  test('assignee: create sets it, list filters by it, update clears it', async () => {
+    const t = await call('create_task', { title: 'for the pm', assigneeKind: 'role', assigneeRef: 'pm' }, aliceId);
+    expect(t.task).toMatchObject({ assigneeKind: 'role', assigneeRef: 'pm' });
+    const listed = await call('list_tasks', { assigneeKind: 'role', assigneeRef: 'pm' }, aliceId);
+    expect(listed.tasks.map((x: any) => x.title)).toEqual(['for the pm']);
+    const bad = await call('create_task', { title: 'x', assigneeKind: 'team', assigneeRef: 'a' }, aliceId);
+    expect(bad.error).toContain('Invalid assigneeKind');
+    const cleared = await call('update_task', { id: t.task.id, assigneeKind: '' }, aliceId);
+    expect(cleared.task).toMatchObject({ assigneeKind: null, assigneeRef: null });
+  });
+});

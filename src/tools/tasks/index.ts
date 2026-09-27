@@ -1,7 +1,7 @@
 import { addBacklog, parseBacklog } from '@/core/tasks/backlog';
 import { nextActions } from '@/core/tasks/next';
 import { dateOnlyToEndOfDay } from '@/core/tasks/rank';
-import { ACTIVE_TASK_STATUSES, TASK_STATUSES } from '@/core/tasks/status';
+import { ACTIVE_TASK_STATUSES, assigneePatch, TASK_ASSIGNEE_KINDS, TASK_STATUSES } from '@/core/tasks/status';
 import { type Nested, nestTasks, normalizeEstimate, toLookup, waitingOn, waitingReason } from '@/core/tasks/structure';
 import { resolveUserTimezone } from '@/core/tasks/timezone';
 import type { AgentContext, ToolManifest } from '@/core/types';
@@ -40,6 +40,8 @@ export class TasksTool extends BaseTool {
         { name: 'add_tasks', description: 'Add a whole backlog at once — phases, sub-tasks, estimates and dependencies', parameters: {}, returns: 'The created tasks' },
         { name: 'update_task', description: 'Update a task\'s fields', parameters: {}, returns: 'The updated task' },
         { name: 'complete_task', description: 'Mark a task as done', parameters: {}, returns: 'The completed task' },
+        { name: 'checkout_task', description: 'Claim a task so no other agent works it (or release the claim)', parameters: {}, returns: 'The claimed task, or who holds it' },
+        { name: 'add_task_comment', description: 'Leave a comment (progress, hand-off, question) on a task', parameters: {}, returns: 'The comment' },
       ],
     };
   }
@@ -53,6 +55,8 @@ export class TasksTool extends BaseTool {
         dueToday: { type: 'boolean', description: 'Only tasks due by end of today' },
         category: { type: 'string', description: 'Filter to a category/list (e.g. "Shopping"); "none" for uncategorized' },
         view: { type: 'string', description: '"next" = open tasks in next-action order with a reason each', enum: ['next'] },
+        assigneeKind: { type: 'string', description: 'Only tasks assigned to this kind of assignee', enum: [...TASK_ASSIGNEE_KINDS] },
+        assigneeRef: { type: 'string', description: 'Only tasks assigned to this user / role / node id' },
         limit: { type: 'number', description: 'Max tasks to return for view "next" (default 10)' },
       }),
       async (args, context) => {
@@ -75,6 +79,8 @@ export class TasksTool extends BaseTool {
             statuses: status ? undefined : [...ACTIVE_TASK_STATUSES],
             dueBefore,
             category: args.category as string | undefined,
+            assigneeKind: args.assigneeKind as string | undefined,
+            assigneeRef: args.assigneeRef as string | undefined,
           }),
           repo.listOwn({ statuses: [...ACTIVE_TASK_STATUSES], limit: 5000 }),
         ]);
@@ -96,6 +102,8 @@ export class TasksTool extends BaseTool {
         estimate: { type: 'string', description: 'Effort estimate in the user\'s unit, e.g. "S", "M", "L", "XL" or "3h"' },
         parentId: { type: 'string', description: 'Id of the task this is a sub-task of (a phase, an epic)' },
         blockedBy: { type: 'array', description: 'Ids of tasks that must be done before this one can start', items: { type: 'string' } },
+        assigneeKind: { type: 'string', description: 'Assign to a user, a role (any agent of it) or a swarm node', enum: [...TASK_ASSIGNEE_KINDS] },
+        assigneeRef: { type: 'string', description: 'The user / role / node id the task is assigned to (with assigneeKind)' },
         source: { type: 'string', description: 'Provenance', enum: ['user', 'agent', 'reader', 'research', 'email'], default: 'agent' },
       }),
       async (args, context) => {
@@ -110,6 +118,7 @@ export class TasksTool extends BaseTool {
             estimate: normalizeEstimate(args.estimate),
             parentId: idOrNull(args.parentId),
             blockedBy: idList(args.blockedBy),
+            ...assigneePatch(args.assigneeKind, args.assigneeRef),
             source: normalizeSource(args.source),
             sourceRef: context.sessionId ? { sessionId: context.sessionId } : undefined,
           });
@@ -151,7 +160,7 @@ export class TasksTool extends BaseTool {
 
     this.registerTool(
       'update_task',
-      'Update a task\'s title, notes, status, priority, category, due date, estimate, parent, or blockers. Set status "in_progress" when work on it starts.',
+      'Update a task\'s title, notes, status, priority, category, due date, estimate, parent, blockers, or assignee. Set status "in_progress" when work on it starts.',
       createParameterSchema({
         id: { type: 'string', description: 'Task id', required: true },
         title: { type: 'string', description: 'New title' },
@@ -163,6 +172,8 @@ export class TasksTool extends BaseTool {
         estimate: { type: 'string', description: 'Effort estimate; empty string clears it' },
         parentId: { type: 'string', description: 'Id of the parent task; empty string makes it top-level' },
         blockedBy: { type: 'array', description: 'Ids of tasks that block this one (replaces the list; empty clears it)', items: { type: 'string' } },
+        assigneeKind: { type: 'string', description: 'user|role|node; empty string unassigns', enum: [...TASK_ASSIGNEE_KINDS, ''] },
+        assigneeRef: { type: 'string', description: 'The user / role / node id (with assigneeKind)' },
       }),
       async (args, context) => {
         const principal = this.principalFor(context);
@@ -183,6 +194,7 @@ export class TasksTool extends BaseTool {
             estimate: args.estimate !== undefined ? normalizeEstimate(args.estimate) : undefined,
             parentId: args.parentId !== undefined ? idOrNull(args.parentId) : undefined,
             blockedBy: args.blockedBy !== undefined ? idList(args.blockedBy) : undefined,
+            ...assigneePatch(args.assigneeKind, args.assigneeRef),
             ...completionPatch(status, Boolean(existing.completedAt)),
           });
           return { updated: true, task: task ? summarize(task) : null };
@@ -214,6 +226,55 @@ export class TasksTool extends BaseTool {
       },
       { requiresPermission: true, permissionAction: 'write' },
     );
+
+    this.registerTool(
+      'checkout_task',
+      'Claim a task before working on it so no other agent picks it up; it moves to in_progress. Fails with the current holder if another agent has it, or with what it waits on if it is blocked. Claiming a task you already hold is fine. complete_task ends the claim; release: true gives it back unfinished (the task returns to open).',
+      createParameterSchema({
+        id: { type: 'string', description: 'Task id', required: true },
+        release: { type: 'boolean', description: 'Give the claim back instead of taking it' },
+      }),
+      async (args, context) => {
+        const repo = scopedRepos(this.principalFor(context)).tasks;
+        const actor = agentActor(context);
+        if (args.release) {
+          const released = await repo.release(args.id as string, actor);
+          if (released.ok) return { released: true, task: summarize(released.task) };
+          if (released.reason === 'not_found') return { error: 'Task not found' };
+          return { error: `Task is checked out by ${released.holder}`, holder: released.holder };
+        }
+        const result = await repo.checkout(args.id as string, actor, context.sessionId || null);
+        if (result.ok) return { checkedOut: true, task: summarize(result.task) };
+        if (result.reason === 'not_found') return { error: 'Task not found' };
+        if (result.reason === 'blocked') return { error: `Task is blocked: ${waitingReason(result.waiting)}`, blocked: true };
+        return {
+          error: result.holder ? `Task is checked out by ${result.holder}` : `Task is ${result.status}`,
+          holder: result.holder,
+        };
+      },
+      { requiresPermission: true, permissionAction: 'write' },
+    );
+
+    this.registerTool(
+      'add_task_comment',
+      'Comment on a task — progress, a hand-off note for the next agent, or a question for the user. Comments are kept on the task in order.',
+      createParameterSchema({
+        id: { type: 'string', description: 'Task id', required: true },
+        body: { type: 'string', description: 'The comment', required: true },
+      }),
+      async (args, context) => {
+        const body = typeof args.body === 'string' ? args.body.trim().slice(0, 10_000) : '';
+        if (!body) return { error: 'Comment body is required' };
+        const comment = await scopedRepos(this.principalFor(context)).tasks.addComment(args.id as string, {
+          authorKind: 'agent',
+          authorRef: agentActor(context),
+          body,
+        });
+        if (!comment) return { error: 'Task not found' };
+        return { commented: true, comment: { id: comment.id, body: comment.body, createdAt: comment.createdAt } };
+      },
+      { requiresPermission: true, permissionAction: 'write' },
+    );
   }
 
   /** Build a non-admin principal scoped to the calling user. Own tasks only. */
@@ -231,6 +292,11 @@ export class TasksTool extends BaseTool {
       workspaceId: context.workspaceId ?? null,
     };
   }
+}
+
+/** Who the calling agent is on the board: its agent/node id, else 'agent'. */
+function agentActor(context: AgentContext): string {
+  return context.id || 'agent';
 }
 
 function clampPriority(p: unknown): number {
@@ -285,6 +351,7 @@ interface SummarizableTask {
   id: string; title: string; status: string; priority: number;
   category: string | null; dueAt: Date | null; completedAt: Date | null; source: string; notes: string | null;
   estimate?: string | null; parentId?: string | null; blockedBy?: string[] | null;
+  assigneeKind?: string | null; assigneeRef?: string | null; checkedOutBy?: string | null;
 }
 
 function summarize(t: SummarizableTask) {
@@ -301,6 +368,9 @@ function summarize(t: SummarizableTask) {
     estimate: t.estimate ?? null,
     parentId: t.parentId ?? null,
     blockedBy: t.blockedBy ?? [],
+    assigneeKind: t.assigneeKind ?? null,
+    assigneeRef: t.assigneeRef ?? null,
+    checkedOutBy: t.checkedOutBy ?? null,
   };
 }
 

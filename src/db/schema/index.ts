@@ -48,6 +48,7 @@ export * from './run-events';
 export * from './swarm-nodes';
 export * from './task-state';
 export * from './tasks';
+export * from './task-comments';
 export * from './topics-config';
 export * from './trajectory-runs';
 export * from './user-quotas';
