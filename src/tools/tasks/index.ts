@@ -1,3 +1,4 @@
+import { auditTaskMutation, changedTaskFields, type TaskMutationOp } from '@/core/tasks/audit';
 import { addBacklog, parseBacklog } from '@/core/tasks/backlog';
 import { nextActions } from '@/core/tasks/next';
 import { dateOnlyToEndOfDay } from '@/core/tasks/rank';
@@ -101,7 +102,7 @@ export class TasksTool extends BaseTool {
       async (args, context) => {
         const principal = this.principalFor(context);
         try {
-          const task = await scopedRepos(principal).tasks.create({
+          const values = {
             title: args.title as string,
             notes: (args.notes as string | undefined) ?? null,
             priority: clampPriority(args.priority),
@@ -112,7 +113,9 @@ export class TasksTool extends BaseTool {
             blockedBy: idList(args.blockedBy),
             source: normalizeSource(args.source),
             sourceRef: context.sessionId ? { sessionId: context.sessionId } : undefined,
-          });
+          };
+          const task = await scopedRepos(principal).tasks.create(values);
+          await auditAgentTaskMutation(context, task.id, 'create', changedTaskFields(values));
           return { created: true, task: summarize(task) };
         } catch (err) {
           return { error: (err as Error).message };
@@ -141,6 +144,9 @@ export class TasksTool extends BaseTool {
             source: normalizeSource(args.source),
             sourceRef: context.sessionId ? { sessionId: context.sessionId } : undefined,
           });
+          for (const { task } of added) {
+            await auditAgentTaskMutation(context, task.id, 'create', changedTaskFields(task));
+          }
           return { added: added.length, tasks: added.map((a) => ({ index: a.index, ...summarize(a.task) })) };
         } catch (err) {
           return { error: (err as Error).message };
@@ -171,7 +177,7 @@ export class TasksTool extends BaseTool {
         if (!existing) return { error: 'Task not found' };
         const status = args.status as string | undefined;
         try {
-          const task = await repo.update(args.id as string, {
+          const patch = {
             title: args.title as string | undefined,
             notes: args.notes as string | undefined,
             status,
@@ -184,7 +190,12 @@ export class TasksTool extends BaseTool {
             parentId: args.parentId !== undefined ? idOrNull(args.parentId) : undefined,
             blockedBy: args.blockedBy !== undefined ? idList(args.blockedBy) : undefined,
             ...completionPatch(status, Boolean(existing.completedAt)),
-          });
+          };
+          const task = await repo.update(args.id as string, patch);
+          if (task) {
+            const op = status === 'done' && existing.status !== 'done' ? 'complete' : 'update';
+            await auditAgentTaskMutation(context, task.id, op, changedTaskFields(patch, existing));
+          }
           return { updated: true, task: task ? summarize(task) : null };
         } catch (err) {
           return { error: (err as Error).message };
@@ -205,11 +216,10 @@ export class TasksTool extends BaseTool {
         const existing = await repo.findById(args.id as string);
         if (!existing) return { error: 'Task not found' };
         // Idempotent: keep the original completedAt if already done.
-        const task = await repo.update(args.id as string, {
-          status: 'done',
-          ...completionPatch('done', Boolean(existing.completedAt)),
-        });
+        const patch = { status: 'done', ...completionPatch('done', Boolean(existing.completedAt)) };
+        const task = await repo.update(args.id as string, patch);
         if (!task) return { error: 'Task not found' };
+        await auditAgentTaskMutation(context, task.id, 'complete', changedTaskFields(patch, existing));
         return { completed: true, task: summarize(task) };
       },
       { requiresPermission: true, permissionAction: 'write' },
@@ -231,6 +241,21 @@ export class TasksTool extends BaseTool {
       workspaceId: context.workspaceId ?? null,
     };
   }
+}
+
+/**
+ * Audit a task mutation made by an agent. The run is the root session, the
+ * same id `run_events.run_id` carries for this agent's tool calls.
+ */
+function auditAgentTaskMutation(context: AgentContext, taskId: string, op: TaskMutationOp, change: string[]): Promise<void> {
+  return auditTaskMutation({
+    userId: context.userId,
+    taskId,
+    op,
+    change,
+    actor: { kind: 'agent', id: context.id },
+    runId: context.sessionId ?? null,
+  });
 }
 
 function clampPriority(p: unknown): number {

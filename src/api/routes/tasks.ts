@@ -1,5 +1,6 @@
 import { apiContext } from '@/api/context';
 import { Elysia, t } from '@/api/http';
+import { auditTaskMutation, changedTaskFields, type TaskMutationOp } from '@/core/tasks/audit';
 import { nextActions } from '@/core/tasks/next';
 import { dateOnlyToEndOfDay } from '@/core/tasks/rank';
 import { isTaskStatus, TASK_STATUSES } from '@/core/tasks/status';
@@ -29,6 +30,14 @@ async function parseDueAt(value: string, userId: string, tz: string | undefined)
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) throw new Error(`Invalid dueAt "${value}" — expected an ISO 8601 date`);
   return d;
+}
+
+/**
+ * Audit a task mutation made through the API. The actor is the signed-in user;
+ * there is no run (the HTTP stack assigns no request id), so `runId` is null.
+ */
+function auditUserTaskMutation(userId: string, taskId: string, op: TaskMutationOp, change: string[]): Promise<void> {
+  return auditTaskMutation({ userId, taskId, op, change, actor: { kind: 'user', id: userId }, runId: null });
 }
 
 /** De-duplicate an id list from the body; strings only. */
@@ -118,7 +127,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         return { error: 'Not authenticated' };
       }
       try {
-        const task = await scopedRepos(principal).tasks.create({
+        const values: Omit<NewTask, 'userId'> = {
           title: body.title,
           notes: body.notes ?? null,
           priority: body.priority ?? 0,
@@ -128,7 +137,9 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
           parentId: body.parentId || null,
           blockedBy: body.blockedBy ? idList(body.blockedBy) : [],
           source: 'user',
-        });
+        };
+        const task = await scopedRepos(principal).tasks.create(values);
+        await auditUserTaskMutation(user.id, task.id, 'create', changedTaskFields(values));
         return task;
       } catch (err) {
         set.status = 400;
@@ -173,7 +184,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         return { error: `Invalid status "${body.status}"` };
       }
       try {
-        const updated = await repo.update(params.id, {
+        const patch: Partial<NewTask> = {
           title: body.title,
           notes: body.notes,
           status: body.status,
@@ -184,11 +195,14 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
           parentId: body.parentId !== undefined ? body.parentId || null : undefined,
           blockedBy: body.blockedBy !== undefined ? idList(body.blockedBy ?? []) : undefined,
           ...completionPatch(body.status, Boolean(existing.completedAt)),
-        });
+        };
+        const updated = await repo.update(params.id, patch);
         if (!updated) {
           set.status = 404;
           return { error: 'Task not found' };
         }
+        const op = body.status === 'done' && existing.status !== 'done' ? 'complete' : 'update';
+        await auditUserTaskMutation(user.id, updated.id, op, changedTaskFields(patch, existing));
         return updated;
       } catch (err) {
         set.status = 400;
@@ -226,6 +240,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         set.status = 404;
         return { error: 'Task not found' };
       }
+      await auditUserTaskMutation(user.id, params.id, 'delete', []);
       return { deleted };
     },
     {

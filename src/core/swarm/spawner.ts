@@ -114,6 +114,27 @@ export const taskFingerprint = _taskFingerprint;
  */
 export const TASK_BRIEF_PREVIEW_MAX = 4000;
 
+/**
+ * Per-entry cap on `TaskBrief.ancestry`. The chain is at most a couple of
+ * levels deep (depth ≤ 2), so this keeps the "why" block a few lines long.
+ */
+export const ANCESTRY_ENTRY_MAX = 300;
+
+function clipAncestryEntry(entry: string): string {
+  const flat = entry.trim().replace(/\s+/g, ' ');
+  return flat.length > ANCESTRY_ENTRY_MAX ? `${flat.slice(0, ANCESTRY_ENTRY_MAX - 1)}…` : flat;
+}
+
+/**
+ * The ancestor task briefs a spawning agent carries in its context metadata
+ * (`taskAncestry`, root-most first). The root has none: its "brief" is the
+ * user request, which the child already sees verbatim.
+ */
+function readTaskAncestry(metadata: Record<string, unknown> | undefined): string[] {
+  const raw = metadata?.taskAncestry;
+  return Array.isArray(raw) ? raw.filter((e): e is string => typeof e === 'string') : [];
+}
+
 /** Options accepted by spawnChild internally — extends the tool params. */
 export interface SpawnChildInternalOpts {
   /** Used by `escalate_to_other_lane` to pick a different expert. */
@@ -367,6 +388,7 @@ export class SwarmSpawner {
         rawTaskBrief,
       topicPath,
       parentSummary: rawParentSummary,
+      ancestry: readTaskAncestry(parentContext.metadata as Record<string, unknown> | undefined),
       taskBrief: rawTaskBrief,
       constraints: params.constraints || [],
       inputArtifacts: [],
@@ -1342,6 +1364,9 @@ export class SwarmSpawner {
           originalRequest:
             ((opts.parentContext.metadata as Record<string, unknown>)?.originalRequest as string) ??
             opts.brief.originalUserRequest,
+          // The child's own ancestry, so its children can say why they exist:
+          // what its parent was asked to do, then what the child itself was.
+          taskAncestry: [...(opts.brief.ancestry ?? []), opts.brief.taskBrief].map(clipAncestryEntry),
           ...pipelineMetadata(opts.parentContext.metadata as Record<string, unknown> | undefined),
         },
       });
@@ -2345,6 +2370,17 @@ export function composeChildMessage(
   }
 
   parts.push(`Topic path: ${brief.topicPath}`);
+
+  // Paperclip-style goal ancestry: the briefs of the tasks above this one, so
+  // a grandchild knows what its parent's task was for, not just its own slice.
+  // Entries repeating the request or the parent summary add nothing: dropped.
+  const seen = new Set([brief.originalUserRequest, brief.parentSummary].map(clipAncestryEntry));
+  const ancestry = (brief.ancestry ?? [])
+    .map(clipAncestryEntry)
+    .filter((e) => e && !seen.has(e) && seen.add(e));
+  if (ancestry.length > 0) {
+    parts.push(`Why this task exists (the tasks above yours, top down):\n- ${ancestry.join('\n- ')}`);
+  }
 
   if (brief.parentSummary) {
     parts.push(`Context from parent:\n${brief.parentSummary}`);

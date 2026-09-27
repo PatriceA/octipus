@@ -169,6 +169,24 @@ describe('own-task lifecycle', () => {
     expect(reopened.body.completedAt).toBeNull();
   });
 
+  test('create and complete each leave a task_mutated audit row: actor, field names, no run', async () => {
+    const { auditRepository } = await import('@/db/repositories/audit-repository');
+    const created = await postJson(aliceApp, '/api/tasks', { title: 'audited', notes: 'secret notes' });
+    const id = created.body.id;
+    await patchJson(aliceApp, `/api/tasks/${id}`, { status: 'done', title: 'audited' });
+
+    const rows = (await auditRepository.findByResource('task', id)).reverse();
+    expect(rows.map((r) => r.action)).toEqual(['task_mutated', 'task_mutated']);
+    expect(rows.every((r) => r.userId === aliceId && r.sessionId === null)).toBe(true);
+    const [create, complete] = rows.map((r) => r.details as Record<string, unknown>);
+    expect(create).toMatchObject({ taskId: id, op: 'create', actor: { kind: 'user', id: aliceId }, runId: null });
+    expect(create.change).toEqual(expect.arrayContaining(['title', 'notes', 'source']));
+    // Names only: the notes' value never lands in the audit log.
+    expect(JSON.stringify(create)).not.toContain('secret notes');
+    // An unchanged title is not a change.
+    expect(complete).toMatchObject({ op: 'complete', change: ['status', 'completedAt'] });
+  });
+
   test('a bare YYYY-MM-DD due date ends that day in the given zone', async () => {
     const r = await postJson(aliceApp, '/api/tasks', { title: 'by friday', dueAt: '2026-09-11', tz: 'Europe/Berlin' });
     expect(r.status).toBe(200);

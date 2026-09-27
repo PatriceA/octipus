@@ -7,7 +7,7 @@
  * permission gate is skipped exactly as it is for root agent-spawned workers
  * in production — the realistic agent path.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -102,6 +102,44 @@ describe('scoped create / list / complete', () => {
     // Bob tries to complete alice's task → scoped repo returns null → "not found".
     const cross = await call('complete_task', { id: created.task.id }, bobId);
     expect(cross).toEqual({ error: 'Task not found' });
+  });
+
+  test('create and complete are audited with the agent as actor and the root session as run', async () => {
+    const runId = '33333333-3333-4333-8333-333333333333';
+    const agentCtx = { ...ctx(aliceId), id: 'agent-audit', sessionId: runId } as AgentContext;
+    const created = (await handlers.get('create_task')!.execute({ title: 'audited by agent' }, agentCtx)) as any;
+    await handlers.get('complete_task')!.execute({ id: created.task.id }, agentCtx);
+
+    const { auditRepository } = await import('@/db/repositories/audit-repository');
+    const rows = (await auditRepository.findByResource('task', created.task.id)).reverse();
+    expect(rows.map((r) => [r.action, (r.details as any).op])).toEqual([
+      ['task_mutated', 'create'],
+      ['task_mutated', 'complete'],
+    ]);
+    for (const row of rows) {
+      expect(row.sessionId).toBe(runId);
+      expect(row.details).toMatchObject({ taskId: created.task.id, actor: { kind: 'agent', id: 'agent-audit' }, runId });
+    }
+    expect((rows[1].details as any).change).toEqual(['status', 'completedAt']);
+  });
+
+  test('a failing audit write does not fail the mutation', async () => {
+    const { auditRepository } = await import('@/db/repositories/audit-repository');
+    const log = auditRepository.log.bind(auditRepository);
+    let failed = 0;
+    // Only the task audit fails; other audit writes (tool execution) go through.
+    const spy = vi.spyOn(auditRepository, 'log').mockImplementation(async (entry) => {
+      if (entry.action !== 'task_mutated') return log(entry);
+      failed++;
+      throw new Error('audit down');
+    });
+    try {
+      const created = await call('create_task', { title: 'survives audit outage' }, aliceId);
+      expect(created.created).toBe(true);
+      expect(failed).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   test('list dueToday filters by due date', async () => {
