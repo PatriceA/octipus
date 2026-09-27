@@ -359,16 +359,18 @@ export class SwarmSpawner {
     // ── Defense-in-depth: guard raw inputs BEFORE composition ───────
     // The composed child message is already guarded downstream, but
     // guarding the inputs here means an injection attempt in
-    // `taskBrief` or the inherited `parentSummary` is rejected at the
+    // `taskBrief`, the inherited `parentSummary` or an ancestry entry is rejected at the
     // boundary — closer to the source, with a more specific error,
     // and before any expensive composition work.
     const rawTaskBrief = params.taskBrief;
     const rawParentSummary =
       ((parentContext.metadata as Record<string, unknown>)?.parentSummary as string) || '';
+    const rawAncestry = readTaskAncestry(parentContext.metadata as Record<string, unknown> | undefined);
 
     for (const [field, value] of [
       ['taskBrief', rawTaskBrief] as const,
       ['parentSummary', rawParentSummary] as const,
+      ...rawAncestry.map((entry, i) => [`ancestry[${i}]`, entry] as const),
     ]) {
       if (!value) continue;
       const guard = guardInput(value);
@@ -388,7 +390,7 @@ export class SwarmSpawner {
         rawTaskBrief,
       topicPath,
       parentSummary: rawParentSummary,
-      ancestry: readTaskAncestry(parentContext.metadata as Record<string, unknown> | undefined),
+      ancestry: rawAncestry,
       taskBrief: rawTaskBrief,
       constraints: params.constraints || [],
       inputArtifacts: [],

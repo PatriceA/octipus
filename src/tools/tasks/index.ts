@@ -139,17 +139,20 @@ export class TasksTool extends BaseTool {
         const principal = this.principalFor(context);
         const parsed = parseBacklog(args.items);
         if (!parsed.ok) return { error: parsed.error };
+        // addBacklog writes as it goes, so a failure partway still leaves rows:
+        // collect every create as it lands and audit them all either way.
+        const created: Array<{ taskId: string; change: string[] }> = [];
         try {
           const added = await addBacklog(principal, parsed.items, {
             source: normalizeSource(args.source),
             sourceRef: context.sessionId ? { sessionId: context.sessionId } : undefined,
+            onCreated: (task, values) => created.push({ taskId: task.id, change: changedTaskFields(values) }),
           });
-          for (const { task } of added) {
-            await auditAgentTaskMutation(context, task.id, 'create', changedTaskFields(task));
-          }
           return { added: added.length, tasks: added.map((a) => ({ index: a.index, ...summarize(a.task) })) };
         } catch (err) {
           return { error: (err as Error).message };
+        } finally {
+          await Promise.all(created.map((c) => auditAgentTaskMutation(context, c.taskId, 'create', c.change)));
         }
       },
       { requiresPermission: true, permissionAction: 'write' },
@@ -192,9 +195,10 @@ export class TasksTool extends BaseTool {
             ...completionPatch(status, Boolean(existing.completedAt)),
           };
           const task = await repo.update(args.id as string, patch);
-          if (task) {
+          const change = changedTaskFields(patch, existing);
+          if (task && change.length > 0) {
             const op = status === 'done' && existing.status !== 'done' ? 'complete' : 'update';
-            await auditAgentTaskMutation(context, task.id, op, changedTaskFields(patch, existing));
+            await auditAgentTaskMutation(context, task.id, op, change);
           }
           return { updated: true, task: task ? summarize(task) : null };
         } catch (err) {
@@ -219,7 +223,10 @@ export class TasksTool extends BaseTool {
         const patch = { status: 'done', ...completionPatch('done', Boolean(existing.completedAt)) };
         const task = await repo.update(args.id as string, patch);
         if (!task) return { error: 'Task not found' };
-        await auditAgentTaskMutation(context, task.id, 'complete', changedTaskFields(patch, existing));
+        // Already done: nothing changed, nothing to audit (same rule as PATCH).
+        if (existing.status !== 'done') {
+          await auditAgentTaskMutation(context, task.id, 'complete', changedTaskFields(patch, existing));
+        }
         return { completed: true, task: summarize(task) };
       },
       { requiresPermission: true, permissionAction: 'write' },

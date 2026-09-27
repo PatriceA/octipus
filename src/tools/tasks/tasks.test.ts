@@ -186,6 +186,60 @@ describe('scoped create / list / complete', () => {
   });
 });
 
+describe('task audit trail', () => {
+  const taskAudits = async (taskId: string) => {
+    const { auditRepository } = await import('@/db/repositories/audit-repository');
+    return (await auditRepository.findByResource('task', taskId)).reverse();
+  };
+
+  test('completing an already-done task, or an update that changes nothing, writes no row', async () => {
+    const created = await call('create_task', { title: 'done twice', priority: 1 }, aliceId);
+    await call('complete_task', { id: created.task.id }, aliceId);
+    await call('complete_task', { id: created.task.id }, aliceId);
+    await call('update_task', { id: created.task.id, title: 'done twice', priority: 1 }, aliceId);
+    expect((await taskAudits(created.task.id)).map((r) => (r.details as any).op)).toEqual(['create', 'complete']);
+  });
+
+  test('add_tasks audits each created task from its input fields', async () => {
+    const r = await call('add_tasks', { items: [{ title: 'phase', estimate: 'L', children: ['step'] }] }, aliceId);
+    const [phase, step] = r.tasks;
+    const [row] = await taskAudits(phase.id);
+    expect((row.details as any).change).toEqual(expect.arrayContaining(['title', 'estimate', 'source']));
+    expect((row.details as any).change).not.toContain('status');
+    expect((await taskAudits(step.id))[0].details).toMatchObject({ op: 'create', change: expect.arrayContaining(['parentId']) });
+  });
+
+  test('add_tasks that fails partway still audits the rows it wrote', async () => {
+    const { ScopedTaskRepo } = await import('@/db/repositories/scoped');
+    const create = ScopedTaskRepo.prototype.create;
+    let calls = 0;
+    const spy = vi.spyOn(ScopedTaskRepo.prototype, 'create').mockImplementation(function (this: InstanceType<typeof ScopedTaskRepo>, data) {
+      if (++calls === 2) throw new Error('disk full');
+      return create.call(this, data);
+    });
+    try {
+      const r = await call('add_tasks', { items: ['partial one', 'partial two'] }, aliceId);
+      expect(r.error).toBe('disk full');
+    } finally {
+      spy.mockRestore();
+    }
+    const list = await call('list_tasks', {}, aliceId);
+    const written = list.tasks.find((t: any) => t.title === 'partial one');
+    expect((await taskAudits(written.id)).map((row) => (row.details as any).op)).toEqual(['create']);
+  });
+
+  test('source ingestion is audited once, with a system actor; a retry writes no second row', async () => {
+    const { createTasksFromSource, backgroundUserPrincipal } = await import('@/core/tasks/sourced');
+    const principal = backgroundUserPrincipal(aliceId);
+    const input = { title: 'reply to Sam', sourceRef: { messageId: 'msg-audit-1' } };
+    const [task] = await createTasksFromSource(principal, 'email', [input]);
+    await createTasksFromSource(principal, 'email', [input]);
+    const rows = await taskAudits(task.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].details).toMatchObject({ op: 'create', actor: { kind: 'system', id: 'email' }, runId: null });
+  });
+});
+
 describe('structure: add_tasks, nesting, waiting', () => {
   test('add_tasks writes a plan as phases with sub-tasks, estimates and dependencies', async () => {
     const r = await call(

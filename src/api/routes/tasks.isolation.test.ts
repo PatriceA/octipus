@@ -22,6 +22,8 @@ process.env.LOG_LEVEL ??= 'error';
 
 let aliceApp: ElysiaLike;
 let bobApp: ElysiaLike;
+/** An admin (bob's id) impersonating alice. */
+let impersonatedApp: ElysiaLike;
 const aliceId = '11111111-1111-1111-1111-111111111111';
 const bobId = '22222222-2222-2222-2222-222222222222';
 let aliceTaskId: string;
@@ -66,6 +68,12 @@ beforeAll(async () => {
 
   aliceApp = buildApp(aliceId);
   bobApp = buildApp(bobId);
+  impersonatedApp = new Elysia()
+    .derive(() => {
+      const u = { id: aliceId, username: 'alice', isAdmin: false };
+      return { user: u, session: null, principal: { ...principalFromUser(u), actorUserId: bobId } };
+    })
+    .group('/api', (a) => a.use(taskRoutes)) as unknown as ElysiaLike;
 });
 
 afterAll(async () => {
@@ -185,6 +193,19 @@ describe('own-task lifecycle', () => {
     expect(JSON.stringify(create)).not.toContain('secret notes');
     // An unchanged title is not a change.
     expect(complete).toMatchObject({ op: 'complete', change: ['status', 'completedAt'] });
+  });
+
+  test('a no-op update is not audited; an impersonated change names the admin and the target', async () => {
+    const { auditRepository } = await import('@/db/repositories/audit-repository');
+    const created = await postJson(aliceApp, '/api/tasks', { title: 'same' });
+    const id = created.body.id;
+    await patchJson(aliceApp, `/api/tasks/${id}`, { title: 'same', priority: 0 });
+    expect(await auditRepository.findByResource('task', id)).toHaveLength(1);
+
+    await patchJson(impersonatedApp, `/api/tasks/${id}`, { priority: 2 });
+    const [latest] = await auditRepository.findByResource('task', id);
+    expect(latest.userId).toBe(aliceId);
+    expect(latest.details).toMatchObject({ op: 'update', change: ['priority'], actor: { kind: 'user', id: bobId, onBehalfOf: aliceId } });
   });
 
   test('a bare YYYY-MM-DD due date ends that day in the given zone', async () => {

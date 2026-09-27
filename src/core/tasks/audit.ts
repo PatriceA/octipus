@@ -1,8 +1,18 @@
 /**
- * Audit trail for task mutations (Paperclip-style): every create / update /
- * complete / delete records WHO did it (a user through the API, or an agent
- * through the tasks tool), WHICH run it belonged to, and which fields moved.
- * Field names only, never values: task titles and notes are user content.
+ * Audit trail for task mutations (Paperclip-style): a mutation records WHO did
+ * it, WHICH run it belonged to, and which fields moved. Field names only,
+ * never values: task titles and notes are user content.
+ *
+ * Audited at the call sites, so only these paths write rows:
+ *  - the /tasks API routes (create / update / complete / delete; actor: user),
+ *  - the tasks tool: create_task, add_tasks, update_task, complete_task
+ *    (actor: agent),
+ *  - createTasksFromSource: reader / email / research ingestion (actor: system).
+ * Any other write through the tasks repo is not audited.
+ *
+ * The audit-shadow middleware also logs an `api_request` row for the HTTP
+ * call; `task_mutated` differs in carrying the field-level change and, for
+ * agents, the agent actor and run id.
  *
  * Best-effort by design: an audit write that fails is logged and swallowed,
  * so it can never fail the mutation it describes.
@@ -14,8 +24,11 @@ import { coreLogger } from '@/utils/logger';
 export type TaskMutationOp = 'create' | 'update' | 'complete' | 'delete';
 
 export interface TaskAuditActor {
-  kind: 'user' | 'agent';
+  /** `system` = an ingestion path; `id` is then the task source (e.g. "email"). */
+  kind: 'user' | 'agent' | 'system';
   id: string;
+  /** Set when an admin impersonates: `id` is the admin, this the target user. */
+  onBehalfOf?: string;
 }
 
 /** Row bookkeeping, not something a caller changes. */
