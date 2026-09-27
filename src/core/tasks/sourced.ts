@@ -11,6 +11,7 @@
  * of what lands on the to-do list is unit-testable without a database.
  */
 import { createHash } from 'node:crypto';
+import { auditTaskMutation, changedTaskFields } from '@/core/tasks/audit';
 import { scopedRepos } from '@/db/repositories/scoped';
 import type { Task, TaskSourceRef } from '@/db/schema/tasks';
 import type { Principal } from '@/security/principal';
@@ -149,8 +150,26 @@ export async function createTasksFromSource(
         principal.userId, principal.workspaceId ?? null, source, identity, title.toLowerCase(),
       ])).digest('hex');
       const id = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
-      created.push(await repo.createOnce({ ...data, id }));
-    } else created.push(await repo.create(data));
+      // A retry returns the existing task: only the call that inserted audits.
+      const once = await repo.createOnce({ ...data, id });
+      created.push(once.task);
+      if (once.created) await auditSourcedCreate(principal, source, once.task.id, data);
+    } else {
+      const task = await repo.create(data);
+      created.push(task);
+      await auditSourcedCreate(principal, source, task.id, data);
+    }
   }
   return created;
+}
+
+function auditSourcedCreate(principal: Principal, source: TaskSource, taskId: string, data: object): Promise<void> {
+  return auditTaskMutation({
+    userId: principal.userId,
+    taskId,
+    op: 'create',
+    change: changedTaskFields(data),
+    actor: { kind: 'system', id: source },
+    runId: null,
+  });
 }

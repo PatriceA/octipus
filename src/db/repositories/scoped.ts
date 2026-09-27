@@ -1026,16 +1026,20 @@ export class ScopedTaskRepo {
     return result[0];
   }
 
-  /** Idempotent source ingestion; a retry returns the existing owned task. */
-  async createOnce(data: Omit<NewTask, 'userId'> & { id: string }): Promise<Task> {
+  /**
+   * Idempotent source ingestion; a retry returns the existing owned task.
+   * `created` says whether this call inserted the row (false on a retry, and
+   * for the loser of a concurrent insert).
+   */
+  async createOnce(data: Omit<NewTask, 'userId'> & { id: string }): Promise<{ task: Task; created: boolean }> {
     await this.checkStructure(data);
     const [created] = await this.db.insert(tasks).values({ ...data,
       userId: this.principal.userId, workspaceId: this.principal.workspaceId ?? null,
     }).onConflictDoNothing({ target: tasks.id }).returning();
-    if (created) return created;
+    if (created) return { task: created, created: true };
     const existing = await this.findById(data.id);
     if (!existing) throw new Error('Source task conflicts with an inaccessible task');
-    return existing;
+    return { task: existing, created: false };
   }
 
   /**

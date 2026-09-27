@@ -1,5 +1,6 @@
 import { apiContext } from '@/api/context';
 import { Elysia, t } from '@/api/http';
+import { auditTaskMutation, changedTaskFields, type TaskMutationOp } from '@/core/tasks/audit';
 import { nextActions } from '@/core/tasks/next';
 import { dateOnlyToEndOfDay } from '@/core/tasks/rank';
 import { assigneePatch, isTaskStatus, TASK_ASSIGNEE_KINDS, TASK_STATUSES } from '@/core/tasks/status';
@@ -7,7 +8,7 @@ import { normalizeEstimate } from '@/core/tasks/structure';
 import { resolveUserTimezone } from '@/core/tasks/timezone';
 import { scopedRepos } from '@/db/repositories/scoped';
 import type { NewTask } from '@/db/schema/tasks';
-import { isAuthenticated } from '@/security/principal';
+import { isAuthenticated, type Principal } from '@/security/principal';
 
 const STATUSES = TASK_STATUSES;
 const ASSIGNEE_KIND = t.Union(TASK_ASSIGNEE_KINDS.map((k) => t.Literal(k)));
@@ -30,6 +31,26 @@ async function parseDueAt(value: string, userId: string, tz: string | undefined)
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) throw new Error(`Invalid dueAt "${value}" — expected an ISO 8601 date`);
   return d;
+}
+
+/**
+ * Audit a task mutation made through the API. The row is filed under the
+ * task's owner; the actor is whoever really acted (an impersonating admin, or
+ * an admin editing someone else's task), with `onBehalfOf` naming the owner
+ * whenever the two differ. There is no run (the HTTP stack assigns no request
+ * id), so `runId` is null.
+ */
+function auditUserTaskMutation(
+  principal: Principal,
+  task: { id: string; userId: string },
+  op: TaskMutationOp,
+  change: string[],
+): Promise<void> {
+  const actingUserId = principal.actorUserId ?? principal.userId;
+  const actor = actingUserId !== task.userId
+    ? { kind: 'user' as const, id: actingUserId, onBehalfOf: task.userId }
+    : { kind: 'user' as const, id: actingUserId };
+  return auditTaskMutation({ userId: task.userId, taskId: task.id, op, change, actor, runId: null });
 }
 
 /** De-duplicate an id list from the body; strings only. */
@@ -127,7 +148,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         return { error: 'Not authenticated' };
       }
       try {
-        const task = await scopedRepos(principal).tasks.create({
+        const values: Omit<NewTask, 'userId'> = {
           title: body.title,
           notes: body.notes ?? null,
           priority: body.priority ?? 0,
@@ -138,7 +159,9 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
           blockedBy: body.blockedBy ? idList(body.blockedBy) : [],
           ...assigneePatch(body.assigneeKind, body.assigneeRef),
           source: 'user',
-        });
+        };
+        const task = await scopedRepos(principal).tasks.create(values);
+        await auditUserTaskMutation(principal, task, 'create', changedTaskFields(values));
         return task;
       } catch (err) {
         set.status = 400;
@@ -189,7 +212,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         return { error: `Invalid status "${body.status}"` };
       }
       try {
-        const updated = await repo.update(params.id, {
+        const patch: Partial<NewTask> = {
           title: body.title,
           notes: body.notes,
           status: body.status,
@@ -201,10 +224,16 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
           blockedBy: body.blockedBy !== undefined ? idList(body.blockedBy ?? []) : undefined,
           ...assigneePatch(body.assigneeKind, body.assigneeRef),
           ...completionPatch(body.status, Boolean(existing.completedAt)),
-        });
+        };
+        const updated = await repo.update(params.id, patch);
         if (!updated) {
           set.status = 404;
           return { error: 'Task not found' };
+        }
+        const change = changedTaskFields(patch, existing);
+        if (change.length > 0) {
+          const op = body.status === 'done' && existing.status !== 'done' ? 'complete' : 'update';
+          await auditUserTaskMutation(principal, updated, op, change);
         }
         return updated;
       } catch (err) {
@@ -355,12 +384,15 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         set.status = 401;
         return { error: 'Not authenticated' };
       }
-      const deleted = await scopedRepos(principal).tasks.delete(params.id);
-      if (!deleted) {
+      const repo = scopedRepos(principal).tasks;
+      // Read first: the audit row is filed under the task's owner.
+      const existing = await repo.findById(params.id);
+      if (!existing || !(await repo.delete(params.id))) {
         set.status = 404;
         return { error: 'Task not found' };
       }
-      return { deleted };
+      await auditUserTaskMutation(principal, existing, 'delete', []);
+      return { deleted: true };
     },
     {
       params: t.Object({ id: t.String() }),
