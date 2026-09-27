@@ -438,8 +438,8 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 7 |
 | `api` | `config` | 20 |
 | `api` | `connectors` | 2 |
-| `api` | `core` | 82 |
-| `api` | `db` | 97 |
+| `api` | `core` | 83 |
+| `api` | `db` | 99 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 5 |
 | `api` | `mcp` | 3 |
