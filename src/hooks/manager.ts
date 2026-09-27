@@ -44,111 +44,158 @@ export class HookManager extends EventEmitter {
   }
 
   /**
-   * Trigger hooks for an event
+   * Trigger hooks for an event.
+   *
+   * The cache holds every user's enabled hooks, so this fans out across
+   * tenants. That is only correct for callers that either target one hook
+   * (`event.data.hookId`, as the cron-runner, heartbeat and incoming-webhook
+   * routes do) or carry no user identity at all. As defence in depth, when the
+   * context names a user (`context.message.userId` / `context.agent.userId`),
+   * hooks owned by anyone else are skipped (see {@link runHook}). There is no
+   * notion of global/admin hooks (`hooks.user_id` is NOT NULL), so no
+   * legitimate cross-user fan-out is lost.
+   *
+   * To fire one specific hook (e.g. a manual test), use {@link triggerHook}.
    */
   async trigger(event: TriggerEvent, context: TriggerContext): Promise<HookExecutionResult[]> {
     const relevantHooks = this.hookCache.get(event.type) || [];
     const results: HookExecutionResult[] = [];
 
     for (const hook of relevantHooks) {
-      const startTime = Date.now();
-
-      // Check if hook matches
-      if (!matchesTrigger(hook, event, context)) {
-        continue;
-      }
-
-      // Check conditions
-      if (!checkConditions(hook.conditions, context)) {
-        continue;
-      }
-
-      // Check cooldown
-      if (hook.cooldownMs && hook.lastExecutedAt) {
-        const elapsed = Date.now() - new Date(hook.lastExecutedAt).getTime();
-        if (elapsed < hook.cooldownMs) {
-          coreLogger.debug({ hookId: hook.id, cooldownRemaining: hook.cooldownMs - elapsed }, 'Hook in cooldown');
-          continue;
-        }
-      }
-
-      // Check max executions
-      if (hook.maxExecutions && hook.executionCount >= hook.maxExecutions) {
-        coreLogger.debug({ hookId: hook.id }, 'Hook max executions reached');
-        continue;
-      }
-
-      // Execute the action
-      try {
-        const result = await executeAction(hook, context);
-        const executionTime = Date.now() - startTime;
-
-        // Update execution stats
-        await this.db
-          .update(hooks)
-          .set({
-            executionCount: hook.executionCount + 1,
-            lastExecutedAt: new Date(),
-          })
-          .where(eq(hooks.id, hook.id));
-
-        // Log execution
-        await this.logExecution({
-          hookId: hook.id,
-          source: 'hook',
-          status: result.success ? 'success' : 'error',
-          triggerType: event.type,
-          actionType: hook.action,
-          result: result.data as Record<string, unknown> | undefined,
-          error: result.error || undefined,
-          durationMs: executionTime,
-          triggerContext: this.sanitizeContext(context),
-        });
-
-        results.push({
-          hookId: hook.id,
-          hookName: hook.name,
-          triggered: true,
-          result,
-          executionTime,
-        });
-
-        this.emit('executed', { hook, result, context });
-
-        coreLogger.info(
-          { hookId: hook.id, hookName: hook.name, success: result.success },
-          'Hook executed'
-        );
-      } catch (error) {
-        const executionTime = Date.now() - startTime;
-
-        // Log failed execution
-        await this.logExecution({
-          hookId: hook.id,
-          source: 'hook',
-          status: 'error',
-          triggerType: event.type,
-          actionType: hook.action,
-          error: (error as Error).message,
-          durationMs: executionTime,
-          triggerContext: this.sanitizeContext(context),
-        }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in manager')); // Don't fail the hook if logging fails
-
-        results.push({
-          hookId: hook.id,
-          hookName: hook.name,
-          triggered: true,
-          error: (error as Error).message,
-          executionTime,
-        });
-
-        this.emit('error', { hook, error, context });
-
-        coreLogger.error({ error, hookId: hook.id }, 'Hook execution failed');
-      }
+      const result = await this.runHook(hook, event, context);
+      if (result) results.push(result);
     }
 
     return results;
+  }
+
+  /**
+   * Fire exactly one hook, by id. Applies the same gates as {@link trigger}
+   * (trigger match, conditions, cooldown, max executions, owner check) but
+   * never evaluates any other hook. The hook is taken from the cache, falling
+   * back to the database; disabled or unknown hooks produce no result.
+   *
+   * Callers are responsible for authorising access to `hookId` (the test
+   * route loads it through `scopedRepos` first).
+   */
+  async triggerHook(hookId: string, event: TriggerEvent, context: TriggerContext): Promise<HookExecutionResult[]> {
+    const hook =
+      (this.hookCache.get(event.type) || []).find((h) => h.id === hookId) ?? (await this.getHook(hookId));
+    if (!hook || !hook.isEnabled) return [];
+    const result = await this.runHook(hook, event, context);
+    return result ? [result] : [];
+  }
+
+  /**
+   * Evaluate and, if it passes every gate, execute a single hook.
+   * Returns null when the hook was skipped.
+   */
+  private async runHook(
+    hook: Hook,
+    event: TriggerEvent,
+    context: TriggerContext,
+  ): Promise<HookExecutionResult | null> {
+    const startTime = Date.now();
+
+    // Tenancy guard: a context that names a user only ever runs that user's hooks.
+    const contextUserIds = [context.message?.userId, context.agent?.userId].filter(Boolean);
+    if (contextUserIds.some((uid) => uid !== hook.userId)) {
+      return null;
+    }
+
+    // Check if hook matches
+    if (!matchesTrigger(hook, event, context)) {
+      return null;
+    }
+
+    // Check conditions
+    if (!checkConditions(hook.conditions, context)) {
+      return null;
+    }
+
+    // Check cooldown
+    if (hook.cooldownMs && hook.lastExecutedAt) {
+      const elapsed = Date.now() - new Date(hook.lastExecutedAt).getTime();
+      if (elapsed < hook.cooldownMs) {
+        coreLogger.debug({ hookId: hook.id, cooldownRemaining: hook.cooldownMs - elapsed }, 'Hook in cooldown');
+        return null;
+      }
+    }
+
+    // Check max executions
+    if (hook.maxExecutions && hook.executionCount >= hook.maxExecutions) {
+      coreLogger.debug({ hookId: hook.id }, 'Hook max executions reached');
+      return null;
+    }
+
+    // Execute the action
+    try {
+      const result = await executeAction(hook, context);
+      const executionTime = Date.now() - startTime;
+
+      // Update execution stats
+      await this.db
+        .update(hooks)
+        .set({
+          executionCount: hook.executionCount + 1,
+          lastExecutedAt: new Date(),
+        })
+        .where(eq(hooks.id, hook.id));
+
+      // Log execution
+      await this.logExecution({
+        hookId: hook.id,
+        source: 'hook',
+        status: result.success ? 'success' : 'error',
+        triggerType: event.type,
+        actionType: hook.action,
+        result: result.data as Record<string, unknown> | undefined,
+        error: result.error || undefined,
+        durationMs: executionTime,
+        triggerContext: this.sanitizeContext(context),
+      });
+
+      this.emit('executed', { hook, result, context });
+
+      coreLogger.info(
+        { hookId: hook.id, hookName: hook.name, success: result.success },
+        'Hook executed'
+      );
+
+      return {
+        hookId: hook.id,
+        hookName: hook.name,
+        triggered: true,
+        result,
+        executionTime,
+      };
+    } catch (error) {
+      const executionTime = Date.now() - startTime;
+
+      // Log failed execution
+      await this.logExecution({
+        hookId: hook.id,
+        source: 'hook',
+        status: 'error',
+        triggerType: event.type,
+        actionType: hook.action,
+        error: (error as Error).message,
+        durationMs: executionTime,
+        triggerContext: this.sanitizeContext(context),
+      }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in manager')); // Don't fail the hook if logging fails
+
+      this.emit('error', { hook, error, context });
+
+      coreLogger.error({ error, hookId: hook.id }, 'Hook execution failed');
+
+      return {
+        hookId: hook.id,
+        hookName: hook.name,
+        triggered: true,
+        error: (error as Error).message,
+        executionTime,
+      };
+    }
   }
 
   /**
@@ -159,15 +206,23 @@ export class HookManager extends EventEmitter {
    * Inspired by claw-code-parity's hook system:
    * - Pre-tool hooks can block execution (action: 'deny')
    * - Post-tool hooks can log/notify
+   *
+   * Only hooks owned by `userId` (the user on whose behalf the tool runs) are
+   * evaluated: another tenant's hook must never see this user's tool args or
+   * be able to deny this user's tools. When no user is known (`userId` is
+   * empty — a system context), no user hooks run at all; there are no
+   * global hooks to apply instead.
    */
   async triggerToolHooks(
+    userId: string | null | undefined,
     phase: 'tool_pre' | 'tool_post',
     toolName: string,
     toolId: string,
     args: Record<string, unknown>,
     result?: { output?: unknown; error?: string },
   ): Promise<{ decision: 'allow' | 'deny'; message?: string }> {
-    const matchingHooks = this.hookCache.get(phase) || [];
+    if (!userId) return { decision: 'allow' };
+    const matchingHooks = (this.hookCache.get(phase) || []).filter((h) => h.userId === userId);
     if (matchingHooks.length === 0) return { decision: 'allow' };
 
     for (const hook of matchingHooks) {

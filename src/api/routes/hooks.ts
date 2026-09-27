@@ -319,7 +319,7 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
   // Test hook (trigger manually)
   .post(
     '/:id/test',
-    async ({ user, principal, params, body }) => {
+    async ({ user, principal, params, body, set }) => {
       if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
@@ -329,9 +329,18 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
         return { error: 'Hook not found' };
       }
 
+      // Heartbeat runs are gated by src/core/heartbeat.ts (active hours, daily
+      // cap, change detection); a manual fire would bypass that gate.
+      if (hook.trigger === 'heartbeat') {
+        set.status = 400;
+        return { error: "heartbeat hooks run on their schedule; they can't be test-fired" };
+      }
+
       const hookManager = getHookManager();
-      // Trigger the hook with test context
-      const results = await hookManager.trigger(
+      // Fire only this hook (ownership enforced by scopedRepos above). Using
+      // trigger() here would fan out to every user's hooks of the same type.
+      const results = await hookManager.triggerHook(
+        hook.id,
         { type: hook.trigger, data: body.data || {}, timestamp: new Date() },
         body.context || {}
       );
