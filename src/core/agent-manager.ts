@@ -6,6 +6,7 @@ import { agentRepository } from '@/db/repositories/agent-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { getModelRegistry } from '@/models/model-registry';
+import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
 import { generateId } from '@/utils/crypto';
 import { usableContextWindow } from '@/utils/context-compaction';
 import { agentLogger, coreLogger } from '@/utils/logger';
@@ -276,11 +277,15 @@ export class AgentManager {
     // (loadHistory replaces this.messages, so system prompt must come after)
     await worker.loadHistory();
 
-    // Add system prompt if provided
+    // Add system prompt if provided. A child whose prompt carries a volatile
+    // tail (a resumable swarm child) takes the session-selected skills into
+    // that tail: a resumed CLI run re-sends them, and a selection change does
+    // not change the stable part its vendor session is fingerprinted on.
+    const intoTail = !context.root && !!selectedSkills && !!options.systemPrompt && VOLATILE_MARKER.test(options.systemPrompt);
     if (options.systemPrompt) {
-      worker.addSystemMessage(options.systemPrompt);
+      worker.addSystemMessage(intoTail ? `${options.systemPrompt}${selectedSkills}` : options.systemPrompt);
     }
-    if (selectedSkills) worker.addSystemMessage(selectedSkills);
+    if (selectedSkills && !intoTail) worker.addSystemMessage(selectedSkills);
 
     // Store the worker
     this.agents.set(agentId, worker);

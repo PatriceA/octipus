@@ -68,24 +68,13 @@ export async function willResumeCliSession(sessionId: string, adapterKey: string
 export async function saveCliSession(sessionId: string, adapterKey: string, rec: CliSessionRecord): Promise<void> {
   const generation = rec.generation ?? '';
   const saved = await sessionRepository.setContextKeyIfGeneration(sessionId, generation, ['cliSessions', adapterKey], { ...rec, generation });
-  if (saved && isChildCliSessionKey(adapterKey)) await evictOldChildCliSessions(sessionId);
+  // Bound the child task sessions (least recently used go first) in one
+  // statement, atomic with concurrent saves; root adapter keys never count.
+  if (saved && isChildCliSessionKey(adapterKey)) await sessionRepository.trimCliSessions(sessionId, CHILD_CLI_SESSION_KEY_PREFIXES, MAX_CHILD_CLI_SESSIONS);
 }
 
-/** Most child task sessions kept per octipus session; the least recently used go first. */
+/** Most child task sessions kept per octipus session. */
 export const MAX_CHILD_CLI_SESSIONS = 50;
-
-/**
- * Cheap follow-up to a child save: over the bound, drop the oldest child keys
- * by `lastUsedAt`, one per-key delete each (a concurrent save of another key
- * is never rewritten). Root adapter keys are never evicted.
- */
-async function evictOldChildCliSessions(sessionId: string): Promise<void> {
-  const session = await sessionRepository.findById(sessionId);
-  const children = Object.entries(session?.context?.cliSessions ?? {}).filter(([key]) => isChildCliSessionKey(key));
-  if (children.length <= MAX_CHILD_CLI_SESSIONS) return;
-  children.sort(([, a], [, b]) => (a.lastUsedAt ?? '').localeCompare(b.lastUsedAt ?? ''));
-  for (const [key] of children.slice(0, children.length - MAX_CHILD_CLI_SESSIONS)) await dropCliSession(sessionId, key);
-}
 
 export async function dropCliSession(sessionId: string, adapterKey: string): Promise<void> {
   await sessionRepository.setContextKey(sessionId, ['cliSessions', adapterKey], undefined);

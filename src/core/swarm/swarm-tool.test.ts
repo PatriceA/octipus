@@ -1043,6 +1043,7 @@ describe('spawn_child resumeKey', () => {
     expect(validateSpawnChildArgs(base)).toMatchObject({ params: { resumeKey: undefined } });
     expect(validateSpawnChildArgs({ ...base, resumeKey: ' parser-fix ' })).toMatchObject({ params: { resumeKey: 'parser-fix' } });
     expect(validateSpawnChildArgs({ ...base, resumeKey: 'jira:PROJ-12.v2_a' })).toMatchObject({ params: { resumeKey: 'jira:PROJ-12.v2_a' } });
+    expect(validateSpawnChildArgs({ ...base, resumeKey: 42 })).toMatchObject({ error: 'resumeKey must be a string' });
     for (const bad of ['x'.repeat(201), 'a b', 'a,b', 'a}b', "a'b", 'a>b', 'naïve']) {
       expect(validateSpawnChildArgs({ ...base, resumeKey: bad })).toMatchObject({ error: expect.stringContaining('resumeKey must be') });
     }
@@ -1061,7 +1062,6 @@ describe('spawn_child resumeKey', () => {
         budget: { tokens: { cap: 1000, used: 0 }, wallClockMs: { cap: 1000, startedAt: Date.now() }, fanOut: { cap: 1, used: 0 }, depth: 2 },
         topicPath: 'coding', subtopic: 'x', brief: { taskBrief: params.taskBrief, topicPath: 'coding' }, briefHash: 'h',
         childMessage: params.taskBrief, reason: 'normal', spawnMode: 'await', resumeKey: params.resumeKey,
-        resumeInstructions: params.resumeKey ? { stable: 'You are a coding agent.', briefContext: '# Domain Knowledge (topic index)\n- parsing' } : undefined,
       }, false);
     };
     const metadata: Array<Record<string, unknown> | undefined> = [];
@@ -1076,13 +1076,8 @@ describe('spawn_child resumeKey', () => {
     expect(received?.resumeKey).toBeUndefined();
     // Scoped by the parent (its role here), so another parent's task can't collide.
     expect(metadata[0]?.resumeKey).toBe('general>coding:parser-fix');
-    // Stable instructions travel as a hash (fingerprinted); the brief-selected
-    // skills as text, re-delivered on a resumed run.
-    expect(metadata[0]?.resumeInstructionsHash).toMatch(/^[0-9a-f]{16}$/);
-    expect(metadata[0]?.resumeBriefContext).toBe('# Domain Knowledge (topic index)\n- parsing');
     // No explicit key → no resume key: children stay cold by default.
     expect(metadata[1]).not.toHaveProperty('resumeKey');
-    expect(metadata[1]).not.toHaveProperty('resumeInstructionsHash');
   });
 });
 

@@ -175,6 +175,20 @@ test('native root, native child and CLI child receive full selected system instr
   }
 });
 
+test('a resumable child takes selected skills into its volatile tail, after VOLATILE_MARKER', async () => {
+  const { AgentManager } = await import('@/core/agent-manager');
+  const { VOLATILE_MARKER } = await import('@/models/providers/prompt-cache');
+  const manager = new AgentManager();
+  await skillSelectionRepository.set(alice, 'selected', 'session', sessionA);
+  const worker = await manager.spawn({ sessionId: sessionA, userId: alice, role: 'coding', model: 'cli/claude', systemPrompt: 'BASE\n\nCURRENT DATE/TIME: now' });
+  const system = (worker as unknown as { messages: import('@/core/types').AgentMessage[] }).messages.filter(message => message.role === 'system');
+  expect(system).toHaveLength(1);
+  const [stable, tail] = system[0].content.split(VOLATILE_MARKER);
+  expect(stable).toBe('BASE');
+  expect(tail).toContain('COMPLETE INSTRUCTIONS');
+  manager.remove(worker.getContext().id);
+});
+
 test('web chat and both TUI gateway clients share selection commands, including before the first message', async () => {
   await import('@/core/commands/skills');
   const { getCommand } = await import('@/core/commands/registry');

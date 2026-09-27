@@ -532,7 +532,7 @@ export function createSpawnChildTool(
         },
         resumeKey: {
           type: 'string',
-          pattern: '^[A-Za-z0-9._:-]{1,200}$',
+          pattern: RESUME_KEY_PATTERN.source,
           description:
             'Optional task id. Pass the same value (with the same role) to continue a previous child\'s CLI session on the same task. Omit for a fresh child.',
         },
@@ -687,6 +687,7 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
     return { error: `invalid plan: ${parsedPlan.error}` };
   }
 
+  if (args.resumeKey != null && typeof args.resumeKey !== 'string') return { error: 'resumeKey must be a string' };
   const resumeKey = typeof args.resumeKey === 'string' ? args.resumeKey.trim() : '';
   if (resumeKey && !RESUME_KEY_PATTERN.test(resumeKey)) {
     return { error: 'resumeKey must be 1-200 characters of letters, digits, ".", "_", ":" or "-"' };

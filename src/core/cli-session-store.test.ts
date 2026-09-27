@@ -48,6 +48,15 @@ describe('cli session store', () => {
       if (value === undefined) delete map[path[1]]; else map[path[1]] = value;
       row.context.cliSessions = map as SessionContext['cliSessions']; store.set(id, row); return true;
     });
+    // Mirrors the real single-statement trim (covered against SQL in session-context-patch.test.ts).
+    vi.spyOn(sessionRepository, 'trimCliSessions').mockImplementation(async (id, prefixes, max) => {
+      const row = store.get(id);
+      const map = { ...row?.context.cliSessions };
+      const matched = Object.entries(map).filter(([key]) => prefixes.some(p => key.startsWith(p)))
+        .sort(([, a], [, b]) => b.lastUsedAt.localeCompare(a.lastUsedAt));
+      for (const [key] of matched.slice(max)) delete map[key];
+      if (row) row.context.cliSessions = map;
+    });
     vi.spyOn(sessionRepository, 'update').mockImplementation(async (id: string, data: { context?: unknown }) => {
       const existing = store.get(id) ?? { context: {} };
       const context = (data.context ?? existing.context) as SessionContext;

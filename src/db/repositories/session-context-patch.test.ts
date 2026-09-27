@@ -159,6 +159,27 @@ describe('non-object intermediates and the compaction filter', () => {
   });
 });
 
+describe('sessionRepository.trimCliSessions', () => {
+  test('keeps the most recently used prefixed entries in one statement, never touching others', async () => {
+    const { sessionRepository } = await import('@/db/repositories/session-repository');
+    const session = await freshSession('ctx-trim');
+    const at = (s: number) => ({ lastUsedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, s)).toISOString() });
+    await sessionRepository.update(session.id, { context: { devMode: true, cliSessions: {
+      'Claude Code': at(0), 'Claude Code::a': at(1), 'Codex CLI::b': at(3), 'Claude Code::c': at(2),
+    } } as never });
+
+    await sessionRepository.trimCliSessions(session.id, ['Claude Code::', 'Codex CLI::'], 2);
+    let ctx = (await sessionRepository.findById(session.id))!.context as Record<string, any>;
+    expect(Object.keys(ctx.cliSessions).sort()).toEqual(['Claude Code', 'Claude Code::c', 'Codex CLI::b']);
+    expect(ctx.devMode).toBe(true);
+
+    // Under the bound: no write at all.
+    await sessionRepository.trimCliSessions(session.id, ['Claude Code::', 'Codex CLI::'], 2);
+    ctx = (await sessionRepository.findById(session.id))!.context as Record<string, any>;
+    expect(Object.keys(ctx.cliSessions)).toHaveLength(3);
+  });
+});
+
 describe('generation and checkpoint persistence', () => {
   test('clear rejects stale checkpoint publication and completed answers', async () => {
     const { sessionRepository } = await import('./session-repository');

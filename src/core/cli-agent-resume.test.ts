@@ -98,6 +98,7 @@ vi.mock('@/db/repositories/session-repository', () => ({
       if (value === undefined) delete map[path[1]]; else map[path[1]] = value;
       row.context.cliSessions = map as SessionContext['cliSessions']; return true;
     },
+    trimCliSessions: async () => {},
     incrementMessageCount: async () => {},
   },
 }));
@@ -475,9 +476,9 @@ describe('child CLI session reuse, keyed per (role, task)', () => {
   const key = childCliSessionKey('Claude Code', 'coding:parser-fix');
   const stored = (sessionId: string) => fixture.sessions.get(sessionId)?.context.cliSessions?.[key];
   // A spawner-built child: not a root, and resumable only with metadata.resumeKey.
-  const makeChild = (sessionId: string, resumeKey?: string, model?: string, metadata: Record<string, unknown> = {}) => {
+  const makeChild = (sessionId: string, resumeKey?: string, model?: string) => {
     const child = makeClaudeWorker({ sessionId, model });
-    Object.assign(child.worker.getContext(), { root: false, role: 'coding', parentAgentId: 'parent', metadata: resumeKey ? { resumeKey, ...metadata } : {} });
+    Object.assign(child.worker.getContext(), { root: false, role: 'coding', parentAgentId: 'parent', metadata: resumeKey ? { resumeKey } : {} });
     return child;
   };
 
@@ -513,30 +514,39 @@ describe('child CLI session reuse, keyed per (role, task)', () => {
     }
   });
 
-  // What the spawner hands a keyed child: the stable-instruction hash, and the
-  // brief-selected skill blocks that are also appended to its system prompt.
-  const skilled = (skills: string, hash = 'role-prompt-v1') => {
-    const child = makeChild('kid', 'coding:parser-fix', undefined, { resumeInstructionsHash: hash, resumeBriefContext: skills });
-    child.worker.addSystemMessage(`You are a coding agent.\n\n${skills}`);
+  // A keyed child's prompt as the spawner and agent-manager build it: stable
+  // instructions, then VOLATILE_MARKER, then brief- and session-selected skills.
+  const skilled = (tail: string, stable = 'You are a coding agent.') => {
+    const child = makeChild('kid', 'coding:parser-fix');
+    child.worker.addSystemMessage(`${stable}\n\nCURRENT DATE/TIME: now\n\n${tail}`);
     return child;
   };
 
-  it('resumes although the follow-up brief and its discovered skills differ, and delivers the new skills', async () => {
-    await skilled('# Domain Knowledge (topic index)\n- parsing: grammar notes').run('fix the parser');
+  it('resumes when the brief- and session-selected skills differ, and re-sends the new ones', async () => {
+    await skilled('# Domain Knowledge (topic index)\n- parsing: grammar notes\n\n# User-selected skills\n- house style A').run('fix the parser');
     const firstId = stored('kid')!.id;
-    const second = skilled('# Domain Knowledge (topic index)\n- testing: vitest conventions');
+    const second = skilled('# Domain Knowledge (topic index)\n- testing: vitest conventions\n\n# User-selected skills\n- house style B');
     expect(await second.run('now add a regression test for empty input')).toContain(firstId);
-    // The vendor keeps the first run's system prompt; the new skills ride in
-    // with the user message, and the stale ones are not re-sent.
+    // The vendor keeps the first run's stable prompt; the tail is re-sent.
     expect(second.lastPrompt).toContain('vitest conventions');
+    expect(second.lastPrompt).toContain('house style B');
     expect(second.lastPrompt).toContain('now add a regression test for empty input');
     expect(second.lastPrompt).not.toContain('grammar notes');
+    expect(second.lastPrompt).not.toContain('You are a coding agent.');
   });
 
   it('starts cold when the stable instructions changed', async () => {
-    await skilled('', 'role-prompt-v1').run('fix the parser');
+    await skilled('').run('fix the parser');
     const firstId = stored('kid')!.id;
-    expect(await skilled('', 'role-prompt-v2').run('fix the parser')).not.toContain(firstId);
+    expect(await skilled('', 'You are a careful coding agent.').run('fix the parser')).not.toContain(firstId);
+  });
+
+  it('starts cold when stable worker guidance outside the prompt changed', async () => {
+    await skilled('').run('fix the parser');
+    const firstId = stored('kid')!.id;
+    const second = skilled('');
+    second.worker.addSystemMessage('Extra stable guidance.');
+    expect(await second.run('fix the parser')).not.toContain(firstId);
   });
 
   it('frees the key at once when the stopped holder never started a process', async () => {
@@ -560,6 +570,19 @@ describe('child CLI session reuse, keyed per (role, task)', () => {
     await running;
     expect(claimCliSession('kid', key, 'retry')).toBe(true);
     releaseCliSessions('retry');
+  });
+
+  it('a stopped keyed child keeps its session for the next run on the task', async () => {
+    writeFileSync(join(fixture.dir, 'hang-marker'), '');
+    const child = makeChild('kid', 'coding:parser-fix');
+    const running = child.worker.run('fix the parser').catch(() => 'stopped');
+    await vi.waitFor(() => expect(fixture.spawnCount).toBe(1));
+    child.worker.stop();
+    await running;
+    const kept = stored('kid');
+    expect(kept?.id).toEqual(expect.any(String));
+    unlinkSync(join(fixture.dir, 'hang-marker'));
+    expect(await makeChild('kid', 'coding:parser-fix').run('carry on')).toContain(kept!.id);
   });
 
   it('starts cold on a fingerprint mismatch', async () => {

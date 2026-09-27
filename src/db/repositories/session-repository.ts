@@ -29,6 +29,19 @@ function contextKeyExpr(path: [string, ...string[]], value: unknown) {
   return sql`${ctx} || ${inner}`;
 }
 
+/** The row is still in `generation` — the predicate every generation-checked write shares. */
+function inGeneration(generation: string) {
+  return sql`coalesce(${sessions.context}->>'conversationGeneration', ${sessions.context}->>'clearedAt', '') = ${generation}`;
+}
+
+/** `context.cliSessions` as an object (`{}` when missing, null or not an object). */
+const cliSessionsMap = sql`CASE WHEN jsonb_typeof(${sessions.context} -> 'cliSessions') = 'object' THEN ${sessions.context} -> 'cliSessions' ELSE '{}'::jsonb END`;
+
+/** `key` starts with one of `prefixes` (bound as a text[]). */
+function startsWithAny(key: ReturnType<typeof sql>, prefixes: string[]) {
+  return sql`EXISTS (SELECT 1 FROM unnest(${jsonPath(prefixes)}) AS p(prefix) WHERE starts_with(${key}, p.prefix))`;
+}
+
 export class SessionRepository {
   private get db() { return getDb(); }
 
@@ -137,7 +150,7 @@ export class SessionRepository {
   async setContextKeyIfGeneration(id: string, generation: string, path: [string, ...string[]], value: unknown): Promise<boolean> {
     const result = await this.db.update(sessions)
       .set({ context: contextKeyExpr(path, value) as never, updatedAt: new Date() })
-      .where(and(eq(sessions.id, id), sql`coalesce(${sessions.context}->>'conversationGeneration', ${sessions.context}->>'clearedAt', '') = ${generation}`))
+      .where(and(eq(sessions.id, id), inGeneration(generation)))
       .returning({ id: sessions.id });
     return result.length > 0;
   }
@@ -162,20 +175,35 @@ export class SessionRepository {
     // Same statement: `cliSessions` keeps only the keys starting with one of
     // these prefixes (child task sessions); every other entry is dropped.
     if (opts?.keepCliSessionPrefixes) {
-      const map = sql`${sessions.context} -> 'cliSessions'`;
-      const prefixes = sql`ARRAY[${sql.join(opts.keepCliSessionPrefixes.map(prefix => sql`${prefix}::text`), sql`, `)}]::text[]`;
       context = sql`${context} || jsonb_build_object('cliSessions', coalesce((
-        SELECT jsonb_object_agg(e.key, e.value)
-        FROM jsonb_each(CASE WHEN jsonb_typeof(${map}) = 'object' THEN ${map} ELSE '{}'::jsonb END) AS e
-        WHERE EXISTS (SELECT 1 FROM unnest(${prefixes}) AS p(prefix) WHERE starts_with(e.key, p.prefix))
+        SELECT jsonb_object_agg(e.key, e.value) FROM jsonb_each(${cliSessionsMap}) AS e
+        WHERE ${startsWithAny(sql`e.key`, opts.keepCliSessionPrefixes)}
       ), '{}'::jsonb))`;
     }
     const result = await this.db.update(sessions).set({
       context,
       updatedAt: new Date(),
-    }).where(and(eq(sessions.id, id), sql`coalesce(${sessions.context}->>'conversationGeneration', ${sessions.context}->>'clearedAt', '') = ${generation}`))
+    }).where(and(eq(sessions.id, id), inGeneration(generation)))
       .returning({ id: sessions.id });
     return result.length > 0;
+  }
+
+  /**
+   * Keeps at most `max` of the `cliSessions` entries whose key starts with one
+   * of `prefixes`, dropping the least recently used (by `lastUsedAt`); other
+   * entries are untouched. One statement, and a no-op while under the bound.
+   */
+  async trimCliSessions(id: string, prefixes: string[], max: number): Promise<void> {
+    const matches = startsWithAny(sql`e.key`, prefixes);
+    await this.db.update(sessions).set({
+      context: sql`coalesce(${sessions.context}, '{}'::jsonb) || jsonb_build_object('cliSessions', (
+        SELECT coalesce(jsonb_object_agg(t.key, t.value), '{}'::jsonb) FROM (
+          SELECT e.key, e.value, ${matches} AS matched,
+            row_number() OVER (PARTITION BY ${matches} ORDER BY e.value->>'lastUsedAt' DESC NULLS LAST, e.key) AS rank
+          FROM jsonb_each(${cliSessionsMap}) AS e
+        ) AS t WHERE NOT t.matched OR t.rank <= ${max}))`,
+      updatedAt: new Date(),
+    }).where(and(eq(sessions.id, id), sql`(SELECT count(*) FROM jsonb_each(${cliSessionsMap}) AS e WHERE ${matches}) > ${max}`));
   }
 
   async clearContext(id: string): Promise<void> {

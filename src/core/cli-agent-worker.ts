@@ -625,8 +625,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
     if (this.resuming) {
       const runContextBlock = this.messages.find(m => m.role === 'user' && m.content.startsWith('Octipus run context:'))?.content;
       const currentUserMessage = [...this.messages].reverse().find(m => m.role === 'user' && !m.content.startsWith('Octipus run context:'))?.content;
-      const briefContext = isRootAgent(this.context) ? undefined : this.context.metadata?.resumeBriefContext;
-      return [...this.resumeDelta, runContextBlock, typeof briefContext === 'string' ? briefContext : undefined, currentUserMessage].filter(Boolean).join('\n\n');
+      return [...this.resumeDelta, runContextBlock, currentUserMessage].filter(Boolean).join('\n\n');
     }
 
     const parts: string[] = [];
@@ -783,21 +782,17 @@ export class CLIAgentWorker extends BaseAgentWorker {
       const model = (adapterKey === 'Claude Code' ? process.env.CLAUDE_MODEL : adapterKey === 'Codex CLI' ? process.env.CODEX_MODEL : undefined) || settings.model;
       const run = { model, permissionMode: settings.permissionMode, planMode: this.connection?.planMode, workingDirectory: workspaceCwd };
       const tools = [...this.toolExecutor.getTools().values()];
-      if (root) {
-        const instructions = this.systemMessages.map(part => part.split(VOLATILE_MARKER)[0]).join('\n\n');
-        const toolSchema = tools.map(tool => [tool.name, tool.description, tool.parameters]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
-        fingerprint = fingerprintRun({ ...run, providerIdentity: JSON.stringify([this.context.model, toolConfig.name, settings.extraArgs, providerEnv, toolSchema]), instructions });
-      } else {
-        // A keyed child's system prompt and tool advertisement are partly
-        // chosen from its brief (discovered skills, the lazy core set and its
-        // discovery tools), and a follow-up brief always differs — so only the
-        // stable inputs count: model, cwd, role, the role's tool ids and the
-        // spawner's hash of the stable instructions (role prompt, critical
-        // rules, delegation guidance), so a prompt change starts cold.
-        const toolIds = [...new Set(tools.filter(tool => tool.toolId !== TOOL_DISCOVERY_TOOL_ID).map(tool => tool.toolId ?? tool.name))].sort();
-        fingerprint = fingerprintRun({ ...run, providerIdentity: JSON.stringify([this.context.model, toolConfig.name, settings.extraArgs, providerEnv, this.context.role, toolIds]),
-          instructions: String(this.context.metadata?.resumeInstructionsHash ?? '') });
-      }
+      // Everything before VOLATILE_MARKER. For a keyed child that is its role
+      // prompt, critical rules and guidance (the spawner puts the brief- and
+      // session-selected skills after the marker), plus the stable worker
+      // guidance; a resumed run re-sends the tail, as for roots.
+      const instructions = this.systemMessages.map(part => part.split(VOLATILE_MARKER)[0]).join('\n\n');
+      // A child's lazy core set and its discovery tools follow its brief, so it
+      // is fingerprinted by tool ids without them rather than full schemas.
+      const toolIdentity = root
+        ? tools.map(tool => [tool.name, tool.description, tool.parameters]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+        : [this.context.role, [...new Set(tools.filter(tool => tool.toolId !== TOOL_DISCOVERY_TOOL_ID).map(tool => tool.toolId ?? tool.name))].sort()];
+      fingerprint = fingerprintRun({ ...run, providerIdentity: JSON.stringify([this.context.model, toolConfig.name, settings.extraArgs, providerEnv, toolIdentity]), instructions });
       const existing = opts?.forceCold ? null : await loadCliSession(this.context.sessionId, storeKey!, fingerprint);
       this.resumeDelta = existing?.acknowledged
         ? (await messageRepository.findContextMessages(this.context.sessionId, this.clearedAt, existing.acknowledged, this.generation))
@@ -823,17 +818,13 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
     // Recovery opens a new persistent conversation and cannot retry recursively.
     this.resuming = !!resume && !resume.isFirstRun;
-    // A resumed child's vendor keeps its FIRST run's system prompt, which the
-    // stable-instruction hash vouches for; the brief-selected skill blocks go
-    // in with the user message (buildPrompt) rather than re-sending the lot.
-    const resumedChild = this.resuming && !root;
     const prompt = this.buildPrompt();
 
     this.launchCleanup?.();
     this.launchCleanup = undefined;
     // Async vendor discovery stays out of the synchronous arg builder (event-loop safe).
     const codexMcpServers = this.connection && adapterKey === 'Codex CLI' ? await discoverCodexMcpServers(workspaceCwd) : undefined;
-    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, resumedChild ? [] : this.systemMessages, resumedChild ? '' : systemPrompt, Math.max(0, this.config.maxTokenBudget - this.billableTokensUsed), this.context.id, this.connection ? { ...this.connection, workingDirectory: workspaceCwd, codexMcpServers, maxIterations: Math.max(1, this.config.maxIterations - this.iteration) } : undefined, resume);
+    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, this.systemMessages, systemPrompt, Math.max(0, this.config.maxTokenBudget - this.billableTokensUsed), this.context.id, this.connection ? { ...this.connection, workingDirectory: workspaceCwd, codexMcpServers, maxIterations: Math.max(1, this.config.maxIterations - this.iteration) } : undefined, resume);
     const { binary, args, stdinPrompt, useShell } = built;
     this.launchCleanup = () => {
       const configIndex = args.indexOf('--mcp-config');
@@ -917,9 +908,9 @@ export class CLIAgentWorker extends BaseAgentWorker {
           if (!this.runError) this.runError = reason;
         },
         // Codex assigns its own thread id (thread.started); this fires once
-        // per run, and is the single write point for the Codex side of
-        // session reuse (Claude's own write point is right after spawn,
-        // below — its id is caller-minted, so there is nothing to capture).
+        // per run and is Codex's early write point. Claude's id is
+        // caller-minted, so there is nothing to capture: the close handler
+        // records it (on a clean close, or when a keyed child is stopped).
         onVendorSession: (id) => {
           capturedVendorId = id;
           // Write it as soon as the vendor announces it, not only on a clean
@@ -1209,6 +1200,17 @@ export class CLIAgentWorker extends BaseAgentWorker {
             this.billableTokensUsed += billableTokens(invocationUsage);
           }
           await recordProviderUsage({ model: this.context.model, modelConfigName: this.accountingModelName, messages: [], userId: this.context.userId, sessionId: this.context.sessionId, agentId: this.context.id, requestType: 'cli' }, 'cli', { model: this.context.model, usage: invocationUsage }, code !== 0 || this.aborted || !!this.runError);
+
+          // A keyed child stopped by its turn limit, budget, timeout or a
+          // cancel still records its vendor session (without a cursor), so its
+          // next run on the task resumes — unless a retry already holds the key.
+          const stoppedVendorId = capturedVendorId || resume?.id;
+          if (!root && (this.aborted || this.budgetExceeded) && ownsStoreKey() && stoppedVendorId) {
+            await saveCliSession(this.context.sessionId, storeKey!, {
+              id: stoppedVendorId, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(),
+              generation: this.generation, ownerAgentId: this.context.id,
+            }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to store stopped CLI session id'));
+          }
 
           if (this.budgetExceeded) {
             reject(new BudgetExceededError({

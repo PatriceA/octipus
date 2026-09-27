@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { getConfig } from '@/config';
 import type { AnyAgentWorker } from '@/core/agent-manager';
 import { getAgentManager } from '@/core/agent-manager';
@@ -154,26 +153,6 @@ export function childResumeKey(parentContext: AgentContext, parent: AgentNode, c
   if (parent.kind === 'root') return `${parent.role}>${childRole}:${taskId}`;
   coreLogger.info({ parentNodeId: parent.id, childRole }, 'resumeKey ignored: an unkeyed non-root parent has no stable scope — child starts cold');
   return undefined;
-}
-
-/**
- * Context metadata that lets a CLI child resume its task session: the scoped
- * key, a hash of the stable instructions (role prompt, critical rules,
- * delegation guidance — a change forces a cold start), and the brief-selected
- * skill blocks, which a resumed run re-delivers with its user message because
- * the vendor keeps the FIRST run's system prompt.
- */
-function childResumeMetadata(opts: {
-  parentContext: AgentContext; parent: AgentNode; childRole: AgentRole;
-  resumeKey?: string; resumeInstructions?: { stable: string; briefContext: string };
-}): Record<string, unknown> {
-  const resumeKey = opts.resumeKey ? childResumeKey(opts.parentContext, opts.parent, opts.childRole, opts.resumeKey) : undefined;
-  if (!resumeKey) return {};
-  return {
-    resumeKey,
-    resumeInstructionsHash: createHash('sha256').update(opts.resumeInstructions?.stable ?? '').digest('hex').slice(0, 16),
-    ...(opts.resumeInstructions?.briefContext ? { resumeBriefContext: opts.resumeInstructions.briefContext } : {}),
-  };
 }
 
 /**
@@ -746,14 +725,14 @@ export class SwarmSpawner {
     });
     // Delegation guidance is static, identical for every depth-1 spawn, so it
     // lives in the (cacheable) system prompt instead of every brief (Phase 4).
-    const childSystemPrompt = canSpawnChildren
-      ? `${systemPrompt ?? ''}\n\n${buildDelegationGuidance()}`.trim()
-      : systemPrompt;
-    // The same prompt minus the brief-selected skill blocks: what a resumed CLI
-    // child's vendor session must still match (see `childResumeMetadata`).
-    const childStablePrompt = canSpawnChildren
-      ? `${stablePrompt ?? ''}\n\n${buildDelegationGuidance()}`.trim()
-      : stablePrompt;
+    //
+    // A keyed (resumable) child puts its brief-selected skills AFTER
+    // VOLATILE_MARKER, as the root does with its per-turn blocks: a resumed CLI
+    // run re-sends only that tail, and the fingerprint covers what precedes it.
+    const delegation = canSpawnChildren ? `\n\n${buildDelegationGuidance()}` : '';
+    const childSystemPrompt = params.resumeKey
+      ? `${stablePrompt ?? ''}${delegation}\n\nCURRENT DATE/TIME: ${formatDateTimeContext(new Date())}${skillContext ? `\n\n${skillContext}` : ''}`.trim()
+      : canSpawnChildren ? `${systemPrompt ?? ''}${delegation}`.trim() : systemPrompt;
 
     // Context-window gate (RC7): warn if the child's first-turn input already
     // approaches the model's context window — it will truncate or fail before
@@ -843,7 +822,6 @@ export class SwarmSpawner {
       scorers: params.scorers,
       childIsSmall: isSmall,
       resumeKey: params.resumeKey,
-      resumeInstructions: params.resumeKey ? { stable: childStablePrompt ?? '', briefContext: skillContext } : undefined,
     })).finally(() => {
       parent.budget.fanOut.used = Math.max(0, parent.budget.fanOut.used - 1);
     });
@@ -935,8 +913,6 @@ export class SwarmSpawner {
     fsBaseline?: WorkspaceSnapshot | null;
     /** Explicit task id from `spawn_child`; scoped by `childResumeKey` before it reaches the child. */
     resumeKey?: string;
-    /** System prompt split for a resumable child: stable part vs brief-selected skill blocks. */
-    resumeInstructions?: { stable: string; briefContext: string };
   }): Promise<ChildResult> {
     // Retry policy (design §Failure Modes):
     //   provider_error → retry once on the SAME spawn attempt (same node).
@@ -1397,7 +1373,7 @@ export class SwarmSpawner {
             ((opts.parentContext.metadata as Record<string, unknown>)?.originalRequest as string) ??
             opts.brief.originalUserRequest,
           ...pipelineMetadata(opts.parentContext.metadata as Record<string, unknown> | undefined),
-          ...childResumeMetadata(opts),
+          ...(opts.resumeKey ? { resumeKey: childResumeKey(opts.parentContext, opts.parent, opts.childRole, opts.resumeKey) } : {}),
         },
       });
     } catch (err) {
