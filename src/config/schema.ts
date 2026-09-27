@@ -372,6 +372,13 @@ export const swarmConfigSchema = z.object({
    * land until the merge. See `src/core/swarm/worktree.ts`.
    */
   worktreeIsolation: z.boolean().default(false),
+  /**
+   * With `worktreeIsolation`: make each worktree's `node_modules` a symlink to
+   * the project's, so builds and tests find installed dependencies. SHARED,
+   * not isolated — an install inside a worktree writes the user's real
+   * `node_modules`. Off = worktrees start with no `node_modules`.
+   */
+  worktreeLinkNodeModules: z.boolean().default(true),
   levelDefaults: z.object({
     root: swarmLevelSchema.default({ tokens: 200_000, wallMs: 36_000_000, fanOut: 6, maxPendingDetached: 6 }),
     agent: swarmLevelSchema.default({ tokens: 80_000, wallMs: 3_600_000, fanOut: 4, maxPendingDetached: 3 }),

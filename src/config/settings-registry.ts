@@ -483,6 +483,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'SWARM_WORKTREE_ISOLATION',
   },
   {
+    key: 'swarm.worktreeLinkNodeModules',
+    category: 'swarm',
+    valueType: 'boolean',
+    defaultValue: true,
+    description:
+      'With worktree isolation: symlink each worktree\'s node_modules to the project\'s so builds and tests work. Shared, not isolated: an install inside a worktree changes the project\'s real node_modules. Off = worktrees have no node_modules.',
+    isSecret: false,
+    envVar: 'SWARM_WORKTREE_LINK_NODE_MODULES',
+  },
+  {
     key: 'swarm.levelDefaults.root.tokens',
     category: 'swarm',
     valueType: 'number',

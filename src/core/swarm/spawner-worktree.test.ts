@@ -7,7 +7,7 @@
  * the production code, against a real temp git repo.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -41,8 +41,58 @@ vi.mock('@/db/repositories/session-repository', async (importOriginal) => {
   };
 });
 
+// The agent boundary, for the tests that drive the REAL `singleSpawnAndRun`:
+// `spawn` records the context metadata the spawner composed for the child and
+// then refuses, which ends that attempt as a plain `tool_error`.
+const captured = vi.hoisted(() => ({ metadata: [] as Array<Record<string, unknown>> }));
+vi.mock('@/core/agent-manager', async (importOriginal) => {
+  if (process.env.INTEGRATION === '1') return await importOriginal<object>();
+  return {
+    getAgentManager: () => ({
+      spawn: async (o: { contextMetadata?: Record<string, unknown> }) => {
+        captured.metadata.push(o.contextMetadata ?? {});
+        throw new Error('spawn captured by test');
+      },
+      getEvents: () => [],
+      stop: () => {},
+    }),
+  };
+});
+
 const { SwarmSpawner } = await import('./spawner');
-const { recordAttemptTree } = await import('./worktree');
+const { createWorktree, recordAttemptTree, removeWorktree } = await import('./worktree');
+
+/** Drive the real `singleSpawnAndRun` for a child of an agent with `parentMetadata`. */
+async function runReal(
+  childModel: string,
+  parentMetadata: Record<string, unknown>,
+  childDepth: 1 | 2 = 2,
+): Promise<ChildResult> {
+  const spawner = new SwarmSpawner({} as never);
+  return (spawner as unknown as { runChildWithRetry: (o: unknown) => Promise<ChildResult> }).runChildWithRetry({
+    parent: { id: 'agent-1', rootSessionId: 's1', signal: new AbortController().signal },
+    parentContext: { userId: 'u1', sessionId: 's1', metadata: parentMetadata },
+    childDepth,
+    childKind: childDepth === 2 ? 'subagent' : 'agent',
+    childRole: 'coding',
+    childModel,
+    childLane: 'coding',
+    childTools: [],
+    budget: {
+      tokens: { cap: 80_000, used: 0 },
+      wallClockMs: { cap: 600_000, startedAt: Date.now() },
+      fanOut: { cap: 0, used: 0 },
+      depth: childDepth,
+    },
+    topicPath: 'coding/sub',
+    subtopic: 'x',
+    brief: { taskBrief: 'edit', topicPath: 'coding/sub', originalUserRequest: 'r', plan: [{ action: 'edit' }] },
+    briefHash: 'h2',
+    childMessage: 'TASK',
+    reason: 'normal',
+    spawnMode: 'await',
+  });
+}
 type ChildResult = import('./types').ChildResult;
 type Handle = import('./worktree').WorktreeHandle;
 
@@ -321,5 +371,62 @@ describe.skipIf(inIntegration)('SwarmSpawner — worktree isolation', () => {
     // Same object: taken once for the project, before the backup wrote b.ts.
     expect(taken[2]!.snap).toBe(taken[1]!.snap);
     expect(final.worktree?.merge).toBe('skipped_other_attempt');
+  });
+
+  describe('descendants of a worktree child (real singleSpawnAndRun)', () => {
+    const worktreeDirs = () =>
+      readdirSync(join(base, 'worktrees'), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+
+    beforeEach(() => {
+      captured.metadata.length = 0;
+      refreshConfigKey('swarm.worktreeIsolation', true);
+    });
+
+    it('a CLI grandchild inherits the worktree as its cwd and gets no worktree of its own', async () => {
+      const parentTree = await createWorktree(projectPath, 'cparent1');
+      const result = await runReal('cli/claude-code', { worktreePath: parentTree.path });
+
+      expect(captured.metadata.length).toBeGreaterThan(0);
+      for (const md of captured.metadata) {
+        expect(md.worktreePath).toBe(parentTree.path);
+        expect(md.projectPath).toBeUndefined();
+      }
+      expect(worktreeDirs()).toEqual(['cparent1']);
+      expect(result.worktree).toBeUndefined();
+      await removeWorktree(parentTree, { merged: true });
+    });
+
+    it('a native grandchild is routed into the worktree through projectPath', async () => {
+      const parentTree = await createWorktree(projectPath, 'cparent2');
+      await runReal('native-model', { worktreePath: parentTree.path });
+
+      expect(captured.metadata.length).toBeGreaterThan(0);
+      for (const md of captured.metadata) {
+        expect(md.worktreePath).toBe(parentTree.path);
+        // The native file/shell tools resolve against this, not the session's project.
+        expect(md.projectPath).toBe(parentTree.path);
+      }
+      expect(worktreeDirs()).toEqual(['cparent2']);
+      await removeWorktree(parentTree, { merged: true });
+    });
+
+    it('a forged worktreePath outside the worktrees root is not inherited', async () => {
+      await runReal('native-model', { worktreePath: projectPath });
+      for (const md of captured.metadata) {
+        expect(md.worktreePath).toBeUndefined();
+        expect(md.projectPath).toBeUndefined();
+      }
+    });
+
+    it('a top-level coding CLI child gets its own worktree, reused by its crash retry', async () => {
+      const result = await runReal('cli/claude-code', {}, 1);
+      const paths = captured.metadata.map((m) => m.worktreePath);
+      expect(paths.length).toBe(2);
+      expect(paths[0]).toMatch(new RegExp(`^${join(base, 'worktrees')}/c[0-9a-f]{20}$`));
+      expect(paths[1]).toBe(paths[0]);
+      // Nothing was done: settled as no_changes and cleaned up.
+      expect(result.worktree?.merge).toBe('no_changes');
+      expect(worktreeDirs()).toEqual([]);
+    });
   });
 });

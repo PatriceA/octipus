@@ -127,6 +127,7 @@ export const defaultConfig: Partial<Config> = {
     orphanReaperIntervalMs: 600_000,
     contractRetries: 1,
     worktreeIsolation: false,
+    worktreeLinkNodeModules: true,
     levelDefaults: {
       root: { tokens: 200_000, wallMs: 36_000_000, fanOut: 6, maxPendingDetached: 6 },
       agent: { tokens: 80_000, wallMs: 3_600_000, fanOut: 4, maxPendingDetached: 3 },

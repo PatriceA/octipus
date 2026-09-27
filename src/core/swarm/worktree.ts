@@ -34,21 +34,28 @@
  * does not isolate a child when the project has tracked uncommitted changes —
  * the merge would be skipped as dirty anyway.
  *
- * Dependencies: a fresh worktree has no `node_modules`. When the repo root has
- * one, `createWorktree` builds a `node_modules` DIRECTORY in the worktree whose
- * entries are symlinks into the root's. A directory (not a single symlink) so
- * the common `node_modules/` ignore pattern — which matches directories only —
- * keeps it out of `git status`; if the repo does not ignore it at all, the shim
- * is removed again rather than risk committing it.
+ * Dependencies: a fresh worktree has no `node_modules`. Unless
+ * `swarm.worktreeLinkNodeModules` is off, `createWorktree` makes
+ * `<wt>/node_modules` a single symlink to the repo's — SHARED, read-mostly:
+ * an install inside the worktree writes into the user's real `node_modules`.
+ * See `linkNodeModules`.
+ *
+ * Descendants: a child spawned by a worktree child inherits that worktree (its
+ * cwd, scorer root and, for a native agent, its file tools' `projectPath`) and
+ * never gets a worktree of its own. See `inheritedTreeMetadata`.
  */
 import {
+  appendFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   statSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
@@ -251,7 +258,7 @@ function assertInside(root: string, p: string): void {
 export async function createWorktree(
   repoRoot: string,
   id: string,
-  opts: { root?: string } = {},
+  opts: { root?: string; linkNodeModules?: boolean } = {},
 ): Promise<WorktreeHandle> {
   if (!isValidWorktreeId(id)) throw new Error(`invalid worktree id: ${JSON.stringify(id)}`);
   const top = await gitTopLevelOf(repoRoot);
@@ -275,50 +282,70 @@ export async function createWorktree(
     releaseWorktree(id);
     throw err;
   }
-  linkNodeModules(top, path);
-  await dropShimIfNotIgnored(path);
+  if (opts.linkNodeModules !== false) await linkNodeModules(top, path);
   coreLogger.info({ id, repoRoot: top, path, branch }, 'Swarm worktree created');
   return { id, repoRoot: top, path, branch, baseSha };
 }
 
 const SHIM = 'node_modules';
+const EXCLUDE_LINE = '/node_modules';
 
-/** Build `<wt>/node_modules/<entry> -> <repo>/node_modules/<entry>` links. */
-function linkNodeModules(repoRoot: string, wt: string): void {
+/**
+ * Make `<wt>/node_modules` a single symlink to `<repo>/node_modules`, so the
+ * child's builds and tests find the dependencies already installed.
+ *
+ * SHARED, not isolated: anything the child installs or deletes there lands in
+ * the user's real `node_modules` — the reason `swarm.worktreeLinkNodeModules`
+ * can turn it off.
+ *
+ * A symlink is not matched by the common `node_modules/` ignore pattern
+ * (trailing slash = directories only), so `/node_modules` is added to the
+ * exclude file git reports for the worktree (`rev-parse --git-path
+ * info/exclude`). Git keeps `info/` in the COMMON dir, so that file is the
+ * repo's own `.git/info/exclude`: the line also applies to the main tree,
+ * where it only ignores an UNTRACKED root `node_modules` (tracked files are
+ * unaffected). Written once, with a comment saying who added it, and only
+ * when the symlink is not already ignored. If it still is not ignored, the
+ * symlink is removed rather than risk committing it.
+ */
+async function linkNodeModules(repoRoot: string, wt: string): Promise<void> {
   const src = join(repoRoot, SHIM);
   const dest = join(wt, SHIM);
   try {
     if (!existsSync(src) || !statSync(src).isDirectory() || existsSync(dest)) return;
-    mkdirSync(dest);
-    for (const entry of readdirSync(src)) {
-      symlinkSync(join(src, entry), join(dest, entry));
+    symlinkSync(src, dest, 'dir');
+    if ((await git(wt, ['check-ignore', '-q', SHIM])).ok) return;
+    const rel = (await mustGit(wt, ['rev-parse', '--git-path', 'info/exclude'])).trim();
+    const excludeFile = resolve(wt, rel);
+    const current = existsSync(excludeFile) ? readFileSync(excludeFile, 'utf-8') : '';
+    if (!current.split('\n').some((l) => l.trim() === EXCLUDE_LINE)) {
+      mkdirSync(dirname(excludeFile), { recursive: true });
+      const lead = current && !current.endsWith('\n') ? '\n' : '';
+      appendFileSync(
+        excludeFile,
+        `${lead}# Added by Octipus swarm worktrees: keeps their node_modules symlink out of git status\n${EXCLUDE_LINE}\n`,
+      );
+    }
+    if (!(await git(wt, ['check-ignore', '-q', SHIM])).ok) {
+      coreLogger.warn({ wt }, 'Swarm worktree: node_modules symlink is not ignored — removed');
+      removeShim(repoRoot, wt);
     }
   } catch (err) {
-    coreLogger.warn({ err, wt }, 'Swarm worktree: node_modules shim not created');
+    coreLogger.warn({ err, wt }, 'Swarm worktree: node_modules symlink not created');
+    removeShim(repoRoot, wt);
   }
 }
 
-async function dropShimIfNotIgnored(wt: string): Promise<void> {
-  if (!existsSync(join(wt, SHIM))) return;
-  const r = await git(wt, ['check-ignore', '-q', SHIM]);
-  if (!r.ok) {
-    coreLogger.warn({ wt }, 'Swarm worktree: node_modules is not git-ignored in this repo — shim removed');
-    removeShim(wt);
-  }
-}
-
-/** Remove the shim: a real dir of symlinks, so `rm -r` never follows into the targets. */
-function removeShim(wt: string): void {
+/** Unlink the shim — only a symlink pointing at the repo's node_modules, never a real directory. */
+function removeShim(repoRoot: string, wt: string): void {
   const dest = join(wt, SHIM);
   try {
-    // Only a shim WE made: a real directory whose every entry is a symlink.
-    const st = statSync(dest, { throwIfNoEntry: false });
-    if (!st?.isDirectory()) return;
-    const entries = readdirSync(dest, { withFileTypes: true });
-    if (!entries.every((e) => e.isSymbolicLink())) return;
-    rmSync(dest, { recursive: true, force: true });
+    const st = lstatSync(dest, { throwIfNoEntry: false });
+    if (!st?.isSymbolicLink()) return;
+    if (resolve(wt, readlinkSync(dest)) !== resolve(repoRoot, SHIM)) return;
+    unlinkSync(dest);
   } catch (err) {
-    coreLogger.warn({ err, wt }, 'Swarm worktree: could not remove node_modules shim');
+    coreLogger.warn({ err, wt }, 'Swarm worktree: could not remove node_modules symlink');
   }
 }
 
@@ -356,7 +383,10 @@ export async function finishWorktree(
   }
 
   if (await hasUncommitted(h.path)) {
-    await mustGit(h.path, ['add', '-A', '--', '.', `:(exclude)${SHIM}`], 'mutate');
+    // The node_modules symlink is excluded by `linkNodeModules` (or was never
+    // made), so a plain `add -A` cannot pick it up. An explicit exclude
+    // pathspec would make git fail on the ignored path instead.
+    await mustGit(h.path, ['add', '-A'], 'mutate');
     const staged = await git(h.path, ['diff', '--cached', '--quiet']);
     if (!staged.ok) {
       await mustGit(
@@ -476,7 +506,7 @@ export async function removeWorktree(
       coreLogger.warn({ path: h.path }, 'Swarm worktree kept: uncommitted changes');
       return { removed: false, branchDeleted: false, keptRef, reason: 'uncommitted changes' };
     }
-    removeShim(h.path);
+    removeShim(h.repoRoot, h.path);
     let r = await git(h.repoRoot, ['worktree', 'remove', h.path], 'mutate');
     if (!r.ok && !(await hasUncommitted(h.path))) {
       r = await git(h.repoRoot, ['worktree', 'remove', '--force', h.path], 'mutate');
@@ -516,6 +546,22 @@ export function worktreeCwdOverride(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Context metadata for a DESCENDANT of a worktree child, so it works in that
+ * worktree instead of the shared project the session names.
+ *
+ * - `worktreePath` for everyone: a CLI descendant's cwd (see
+ *   `worktreeCwdOverride`), and how the next generation inherits it in turn.
+ * - `projectPath` for a native descendant: the native file, shell, data and
+ *   knowledge tools resolve relative paths against it, allow it as their only
+ *   extra sandbox prefix, and default `shell__run`'s cwd to it. With it set to
+ *   the worktree, the user's real project is outside that sandbox, exactly as
+ *   it is for any native swarm child today (they get no `projectPath` at all).
+ */
+export function inheritedTreeMetadata(worktreePath: string, isCli: boolean): Record<string, string> {
+  return isCli ? { worktreePath } : { worktreePath, projectPath: worktreePath };
 }
 
 export interface StaleWorktreeResult {

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -91,29 +91,66 @@ describe('createWorktree', () => {
     expect(branchExists('octipus/taken')).toBe(false);
   });
 
-  it('links node_modules entries into an ignored shim directory', async () => {
+  const excludeLines = () =>
+    readFileSync(join(repo, '.git', 'info', 'exclude'), 'utf-8')
+      .split('\n')
+      .filter((l) => l === '/node_modules');
+
+  it('links node_modules as ONE symlink to the repo’s, kept out of git status', async () => {
     mkdirSync(join(repo, 'node_modules', 'left-pad'), { recursive: true });
     writeFileSync(join(repo, 'node_modules', 'left-pad', 'index.js'), 'module.exports = 1;\n');
     const h = await createWorktree(repo, 'nm', { root });
-    expect(lstatSync(join(h.path, 'node_modules')).isDirectory()).toBe(true);
-    expect(lstatSync(join(h.path, 'node_modules', 'left-pad')).isSymbolicLink()).toBe(true);
-    expect(readFileSync(join(h.path, 'node_modules', 'left-pad', 'index.js'), 'utf-8')).toContain('module.exports');
+    const link = join(h.path, 'node_modules');
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(link)).toBe(join(repo, 'node_modules'));
+    expect(readFileSync(join(link, 'left-pad', 'index.js'), 'utf-8')).toContain('module.exports');
+    // `node_modules/` (directories only) does not match a symlink, so the
+    // exclude line is what keeps it out — in the worktree and the main tree.
     expect(git(h.path, 'status', '--porcelain').trim()).toBe('');
+    expect(git(repo, 'status', '--porcelain').trim()).toBe('');
+    expect(excludeLines()).toHaveLength(1);
+    // A second worktree does not add the line again.
+    const h2 = await createWorktree(repo, 'nm2', { root });
+    expect(excludeLines()).toHaveLength(1);
+
     const report = await finishWorktree(h, { merge: true });
     expect(report.merge).toBe('no_changes');
-    const cleaned = await removeWorktree(h, { merged: true });
-    expect(cleaned.removed).toBe(true);
-    // The shim's symlinks were removed, never their targets.
+    expect((await removeWorktree(h, { merged: true })).removed).toBe(true);
+    await removeWorktree(h2, { merged: true });
+    // The link was removed, never its target.
     expect(existsSync(join(repo, 'node_modules', 'left-pad', 'index.js'))).toBe(true);
   });
 
-  it('drops the shim when the repo does not ignore node_modules', async () => {
+  it('links node_modules in a repo that does not ignore it at all', async () => {
     writeFileSync(join(repo, '.gitignore'), '');
     commitAll(repo, 'no ignore');
     mkdirSync(join(repo, 'node_modules', 'dep'), { recursive: true });
-    const h = await createWorktree(repo, 'nm2', { root });
-    expect(existsSync(join(h.path, 'node_modules'))).toBe(false);
-    await removeWorktree(h, { merged: true });
+    const h = await createWorktree(repo, 'nm3', { root });
+    expect(lstatSync(join(h.path, 'node_modules')).isSymbolicLink()).toBe(true);
+    expect(git(h.path, 'status', '--porcelain').trim()).toBe('');
+    writeFileSync(join(h.path, 'src.ts'), 'x\n');
+    const report = await finishWorktree(h, { merge: false });
+    // Only the child's file was committed, never the symlink.
+    expect(report.filesChanged).toBe(1);
+    expect(git(repo, 'ls-tree', '-r', '--name-only', h.branch)).not.toContain('node_modules');
+    await removeWorktree(h, { merged: false });
+  });
+
+  it('does not link node_modules when turned off, or when the repo tracks it', async () => {
+    mkdirSync(join(repo, 'node_modules', 'dep'), { recursive: true });
+    const off = await createWorktree(repo, 'nmoff', { root, linkNodeModules: false });
+    expect(existsSync(join(off.path, 'node_modules'))).toBe(false);
+    expect(existsSync(join(repo, '.git', 'info', 'exclude')) ? excludeLines() : []).toHaveLength(0);
+    await removeWorktree(off, { merged: true });
+
+    // Vendored dependencies: the checkout already has a real node_modules.
+    writeFileSync(join(repo, '.gitignore'), '');
+    writeFileSync(join(repo, 'node_modules', 'dep', 'index.js'), 'v\n');
+    commitAll(repo, 'vendor');
+    const tracked = await createWorktree(repo, 'nmtracked', { root });
+    expect(lstatSync(join(tracked.path, 'node_modules')).isDirectory()).toBe(true);
+    expect(readFileSync(join(tracked.path, 'node_modules', 'dep', 'index.js'), 'utf-8')).toBe('v\n');
+    await removeWorktree(tracked, { merged: true });
   });
 });
 

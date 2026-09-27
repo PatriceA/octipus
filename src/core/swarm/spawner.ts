@@ -30,10 +30,12 @@ import {
   finishWorktree,
   gitTopLevelOf,
   hasTrackedChanges,
+  inheritedTreeMetadata,
   recordAttemptTree,
   releaseWorktree,
   removeWorktree,
   type WorktreeHandle,
+  worktreeCwdOverride,
 } from './worktree';
 
 /**
@@ -945,6 +947,12 @@ export class SwarmSpawner {
       enabled = false;
     }
     if (!enabled || opts.childRole !== 'coding') return null;
+    // Nested isolation is off: a descendant of a worktree child works in its
+    // ancestor's worktree (see `singleSpawnAndRun`), whose settle captures it.
+    if (inheritedWorktreeOf(opts.parentContext)) {
+      coreLogger.debug({ parentNodeId: opts.parent.id }, 'Swarm worktree skipped — inherits its parent\'s worktree');
+      return null;
+    }
     try {
       if (!(await isCliModel(opts.childModel))) return null;
       const tree = await sharedTreeRoot(opts.parentContext);
@@ -967,7 +975,13 @@ export class SwarmSpawner {
       // Minted here, not the agent id: the agent does not exist yet, and a
       // crash or contract retry runs on a NEW agent that must reuse this tree.
       const id = `c${randomUUID().replace(/-/g, '').slice(0, 20)}`;
-      return await createWorktree(repo, id);
+      let linkNodeModules = true;
+      try {
+        linkNodeModules = getConfig().swarm?.worktreeLinkNodeModules !== false;
+      } catch {
+        linkNodeModules = true;
+      }
+      return await createWorktree(repo, id, { linkNodeModules });
     } catch (err) {
       coreLogger.warn(
         { err: (err as Error).message, parentNodeId: opts.parent.id, model: opts.childModel },
@@ -1381,11 +1395,23 @@ export class SwarmSpawner {
     const agentManager = getAgentManager();
     const startTime = Date.now();
     let worker: AnyAgentWorker;
-    // The child's worktree, for THIS attempt. Only a CLI worker honours
-    // `worktreePath`, so an attempt on a native model (a topic backup) runs
-    // and is judged on the shared tree, like any other native child.
+    // The tree THIS attempt works in, and the metadata that puts it there.
+    //  - A descendant of a worktree child inherits that worktree, CLI or
+    //    native alike (see `inheritedTreeMetadata`): the session still names
+    //    the shared project, and resolving from it would leak the descendant's
+    //    writes into the user's tree.
+    //  - A child with its own worktree uses it only on a CLI attempt: only a
+    //    CLI worker honours `worktreePath`, so a native backup attempt runs
+    //    and is judged on the shared tree, like any other native child.
+    const attemptIsCli = await isCliModel(opts.childModel);
+    const inheritedTree = inheritedWorktreeOf(opts.parentContext);
     const attemptWorktree =
-      opts.worktree && (await isCliModel(opts.childModel)) ? opts.worktree.path : undefined;
+      inheritedTree ?? (opts.worktree && attemptIsCli ? opts.worktree.path : undefined);
+    const treeMetadata = inheritedTree
+      ? inheritedTreeMetadata(inheritedTree, attemptIsCli)
+      : attemptWorktree
+        ? { worktreePath: attemptWorktree }
+        : {};
 
     // Phase 2: for Agents (depth 1), build the child's AgentNode up front
     // so we can register `spawn_child` + `escalate_to_other_lane`
@@ -1499,7 +1525,7 @@ export class SwarmSpawner {
             ((opts.parentContext.metadata as Record<string, unknown>)?.originalRequest as string) ??
             opts.brief.originalUserRequest,
           ...pipelineMetadata(opts.parentContext.metadata as Record<string, unknown> | undefined),
-          ...(attemptWorktree ? { worktreePath: attemptWorktree } : {}),
+          ...treeMetadata,
         },
       });
     } catch (err) {
@@ -1762,7 +1788,7 @@ export class SwarmSpawner {
     };
     // Which tree produced this answer: only a result from an attempt that ran
     // in the worktree may merge it (see `settleWorktree`).
-    if (attemptWorktree) recordAttemptTree(result, attemptWorktree);
+    if (attemptWorktree && !inheritedTree) recordAttemptTree(result, attemptWorktree);
 
     // ── Scorer gates ────────────────────────────────────────────────
     // Deterministic verification of the deliverable, run only on an otherwise
@@ -2452,6 +2478,15 @@ async function sharedTreeRoot(ctx: AgentContext): Promise<{ root: string; devPro
   const project = await devProjectPathForSession(ctx.sessionId);
   if (project) return { root: project, devProject: true };
   return { root: WorkspaceFS.forAgent({ userId: ctx.userId }).root, devProject: false };
+}
+
+/**
+ * The worktree a spawning agent works in, when it is itself a worktree child
+ * or one of its descendants — read from its context the same validated way
+ * the CLI worker reads its cwd, so a stray metadata value cannot redirect.
+ */
+function inheritedWorktreeOf(ctx: AgentContext): string | undefined {
+  return worktreeCwdOverride(ctx?.metadata as Record<string, unknown> | undefined);
 }
 
 /**
