@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CLIAgentWorker } from './cli-agent-worker';
-import { fingerprintRun, loadCliSession } from './cli-session-store';
+import { childCliSessionKey, claimCliSession, fingerprintRun, loadCliSession, releaseCliSessions } from './cli-session-store';
 import type { AgentContext } from './types';
 import type { SessionContext } from '@/db/schema/sessions';
 
@@ -458,6 +458,69 @@ describe('session boundary regressions', () => {
     expect(next.lastPrompt).toContain('NEW CORRECTION');
     expect(next.lastPrompt).toContain('other provider answer');
     expect(next.lastPrompt).not.toContain('first question');
+  });
+});
+
+describe('child CLI session reuse, keyed per (role, task)', () => {
+  const key = childCliSessionKey('Claude Code', 'coding:parser-fix');
+  const stored = (sessionId: string) => fixture.sessions.get(sessionId)?.context.cliSessions?.[key];
+  // A spawner-built child: not a root, and resumable only with metadata.resumeKey.
+  const makeChild = (sessionId: string, resumeKey?: string, model?: string) => {
+    const child = makeClaudeWorker({ sessionId, model });
+    Object.assign(child.worker.getContext(), { root: false, role: 'coding', parentAgentId: 'parent', metadata: resumeKey ? { resumeKey } : {} });
+    return child;
+  };
+
+  it('resumes the previous child session when given the same key', async () => {
+    await makeChild('kid', 'coding:parser-fix').run('fix the parser');
+    const first = stored('kid');
+    expect(first?.id).toEqual(expect.any(String));
+    const answer = await makeChild('kid', 'coding:parser-fix').run('now add the test');
+    expect(answer).toContain(first!.id);
+    expect(stored('kid')!.id).toBe(first!.id);
+    // The root's own vendor session is untouched by a child's.
+    expect(fixture.sessions.get('kid')!.context.cliSessions?.['Claude Code']).toBeUndefined();
+  });
+
+  it('stays cold without a key', async () => {
+    await makeChild('kid').run('fix the parser');
+    // The fake echoes the --session-id/--resume it was handed: none at all.
+    expect(await makeChild('kid').run('fix the parser')).toBe('answer for null');
+    expect(fixture.sessions.get('kid')!.context.cliSessions ?? {}).toEqual({});
+  });
+
+  it('starts cold while another live agent holds the key', async () => {
+    await makeChild('kid', 'coding:parser-fix').run('fix the parser');
+    const first = stored('kid')!;
+    expect(claimCliSession('kid', key, 'still-running')).toBe(true);
+    try {
+      const answer = await makeChild('kid', 'coding:parser-fix').run('fix the parser too');
+      expect(answer).not.toContain(first.id);
+      // The cold one neither resumed nor overwrote the holder's record.
+      expect(stored('kid')).toEqual(first);
+    } finally {
+      releaseCliSessions('still-running');
+    }
+  });
+
+  it('starts cold on a fingerprint mismatch', async () => {
+    await makeChild('kid', 'coding:parser-fix', 'sonnet').run('fix the parser');
+    const first = stored('kid')!;
+    const answer = await makeChild('kid', 'coding:parser-fix', 'opus').run('now add the test');
+    expect(answer).not.toContain(first.id);
+    expect(stored('kid')!.id).not.toBe(first.id);
+  });
+
+  it('does not resume a child key across /clear', async () => {
+    await makeChild('kid', 'coding:parser-fix').run('fix the parser');
+    const first = stored('kid')!;
+    // What sessionRepository.clearContext writes: the whole cliSessions map
+    // goes, child keys included, and a new generation starts.
+    const row = fixture.sessions.get('kid')!;
+    row.context = { ...row.context, cliSessions: undefined, clearedAt: new Date().toISOString() };
+    const answer = await makeChild('kid', 'coding:parser-fix').run('fix the parser');
+    expect(answer).not.toContain(first.id);
+    expect(stored('kid')!.id).not.toBe(first.id);
   });
 });
 

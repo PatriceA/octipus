@@ -73,6 +73,32 @@ export async function dropCliSession(sessionId: string, adapterKey: string): Pro
   await sessionRepository.setContextKey(sessionId, ['cliSessions', adapterKey], undefined);
 }
 
+/**
+ * Store key for a child agent's vendor session, continued per (role, task)
+ * rather than per octipus session. Lives beside the root's adapter keys in
+ * `cliSessions`, so a /clear or compaction that drops the map drops these too.
+ */
+export function childCliSessionKey(adapterKey: string, resumeKey: string): string {
+  return `${adapterKey}::${resumeKey}`;
+}
+
+// Child store keys held by a live agent in this process. Two concurrent
+// children with the same key must never share one vendor session.
+const liveHolders = new Map<string, string>();
+
+/** Claims `key` for `agentId`; false when another live agent already holds it. */
+export function claimCliSession(sessionId: string, key: string, agentId: string): boolean {
+  const slot = `${sessionId}\0${key}`;
+  const holder = liveHolders.get(slot);
+  if (holder && holder !== agentId) return false;
+  liveHolders.set(slot, agentId);
+  return true;
+}
+
+export function releaseCliSessions(agentId: string): void {
+  for (const [slot, holder] of liveHolders) if (holder === agentId) liveHolders.delete(slot);
+}
+
 /** The final persisted Octipus answer is now part of this vendor turn. */
 export async function acknowledgeProviderTurn(sessionId: string, agentId: string, cursor: { id: string; createdAt: Date }): Promise<void> {
   await withSessionConversation(sessionId, async () => {

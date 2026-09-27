@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import type { Session, SessionContext } from '@/db/schema/sessions';
-import { dropCliSession, fingerprintRun, loadCliSession, saveCliSession } from './cli-session-store';
+import { childCliSessionKey, claimCliSession, dropCliSession, fingerprintRun, loadCliSession, releaseCliSessions, saveCliSession } from './cli-session-store';
 
 describe('fingerprintRun', () => {
   it('changes when the model changes', () => {
@@ -104,5 +104,25 @@ describe('cli session store', () => {
     store.set('s1', row0);
     await saveCliSession('s1', 'Claude Code', { id: 'u1', fingerprint: 'fp-a', generation: '2026-01-01T00:00:00.000Z', lastUsedAt: '2026-01-02T00:00:00.000Z' });
     expect(await loadCliSession('s1', 'Claude Code', 'fp-a')).toMatchObject({ id: 'u1' });
+  });
+
+  it('keeps a child task key apart from the root adapter key', async () => {
+    const child = childCliSessionKey('Claude Code', 'coding:parser-fix');
+    await saveCliSession('s1', child, { id: 'c1', fingerprint: 'fp-a', lastUsedAt: new Date().toISOString() });
+    expect(await loadCliSession('s1', 'Claude Code', 'fp-a')).toBeNull();
+    expect(await loadCliSession('s1', child, 'fp-a')).toMatchObject({ id: 'c1' });
+    expect(await loadCliSession('s1', child, 'fp-b')).toBeNull();
+  });
+});
+
+describe('claimCliSession', () => {
+  it('lets one live agent hold a key at a time, per session', () => {
+    expect(claimCliSession('s1', 'k', 'a1')).toBe(true);
+    expect(claimCliSession('s1', 'k', 'a1')).toBe(true);
+    expect(claimCliSession('s1', 'k', 'a2')).toBe(false);
+    expect(claimCliSession('s2', 'k', 'a2')).toBe(true);
+    releaseCliSessions('a1');
+    expect(claimCliSession('s1', 'k', 'a2')).toBe(true);
+    releaseCliSessions('a2');
   });
 });

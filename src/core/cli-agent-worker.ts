@@ -12,6 +12,7 @@ import { agentRepository } from '@/db/repositories/agent-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
+import { sessionGeneration, type SessionContext } from '@/db/schema/sessions';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import type { CLIAgentConfig } from '@/db/schema/models';
 import { getQuotaTracker } from '@/models/quota-tracker';
@@ -20,7 +21,7 @@ import { killProcessTree } from '@/utils/proc';
 import type { AgentWorkerConfig, ToolHandler } from './agent-base';
 import { BaseAgentWorker } from './agent-base';
 import { CLIArgumentBuilder, CLIOutputParser, discoverCodexMcpServers, resolveCliMcpEntry, sweepStaleFiles, type CliRunConnection } from './cli-adapters';
-import { dropCliSession, fingerprintRun, loadCliSession, saveCliSession } from './cli-session-store';
+import { childCliSessionKey, claimCliSession, dropCliSession, fingerprintRun, loadCliSession, releaseCliSessions, saveCliSession } from './cli-session-store';
 import { canResume, CLI_RESUME } from '@/shared/cli-capabilities';
 import { startCliToolBridge, type BridgeResult } from './cli-tool-bridge';
 import { ToolExecutor } from './tool-executor';
@@ -343,6 +344,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
         : this.runInternal(userMessage));
     } finally {
       this.activeRuns--;
+      if (this.activeRuns === 0) releaseCliSessions(this.context.id);
     }
   }
 
@@ -706,6 +708,9 @@ export class CLIAgentWorker extends BaseAgentWorker {
         throw new Error(`CLI agent cwd resolution failed: no session ${this.context.sessionId}`);
       }
       workspaceCwd = resolvePath(WorkspaceFS.forSession(session).root);
+      // A child never loads root history, so it takes the generation here; a
+      // /clear mid-run then rejects its save like any stale root write.
+      if (!isRootAgent(this.context)) this.generation = sessionGeneration(session.context as SessionContext | undefined);
 
       if (!existsSync(workspaceCwd)) {
         // Whether a missing directory is routine or alarming depends on WHOSE
@@ -740,7 +745,18 @@ export class CLIAgentWorker extends BaseAgentWorker {
     // `resume` => the close handler's dead-session branch below cannot fire
     // for it).
     const providerEnv = await toolConfig.buildEnv?.();
-    const reuseSessions = isRootAgent(this.context) && canResume(adapterKey);
+    // Roots continue one vendor session per octipus session. A child only
+    // resumes when its spawner gave it an explicit `resumeKey` (role + task),
+    // and never while another live agent holds the same key — that one
+    // starts cold rather than share a vendor conversation.
+    const childResumeKey = isRootAgent(this.context) ? undefined : this.context.metadata?.resumeKey;
+    let storeKey = isRootAgent(this.context) ? adapterKey : undefined;
+    if (typeof childResumeKey === 'string' && childResumeKey && canResume(adapterKey)) {
+      const key = childCliSessionKey(adapterKey, childResumeKey);
+      if (claimCliSession(this.context.sessionId, key, this.context.id)) storeKey = key;
+      else agentLogger.info({ agentId: this.context.id, resumeKey: childResumeKey }, 'CLI resume key held by a running agent — starting cold');
+    }
+    const reuseSessions = !!storeKey && canResume(adapterKey);
     let resume: { id: string; isFirstRun: boolean } | undefined;
     let fingerprint: string | undefined;
     if (reuseSessions) {
@@ -749,7 +765,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
       fingerprint = fingerprintRun({ model: (adapterKey === 'Claude Code' ? process.env.CLAUDE_MODEL : adapterKey === 'Codex CLI' ? process.env.CODEX_MODEL : undefined) || settings.model,
         permissionMode: settings.permissionMode, planMode: this.connection?.planMode, workingDirectory: workspaceCwd,
         providerIdentity: JSON.stringify([this.context.model, toolConfig.name, settings.extraArgs, providerEnv, toolSchema]), instructions });
-      const existing = opts?.forceCold ? null : await loadCliSession(this.context.sessionId, adapterKey, fingerprint);
+      const existing = opts?.forceCold ? null : await loadCliSession(this.context.sessionId, storeKey!, fingerprint);
       this.resumeDelta = existing?.acknowledged
         ? (await messageRepository.findContextMessages(this.context.sessionId, this.clearedAt, existing.acknowledged, this.generation))
           .filter(row => row.id !== this.userCursor?.id)
@@ -877,7 +893,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
           // cursor; this early row carries no cursor, so a resume off it
           // re-sends the turn rather than skipping it.
           if (!reuseSessions) return;
-          void saveCliSession(this.context.sessionId, adapterKey, {
+          void saveCliSession(this.context.sessionId, storeKey!, {
             id, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(),
             generation: this.generation, ownerAgentId: this.context.id,
           }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to store CLI session id'));
@@ -1192,7 +1208,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
           // says so on both channels, so match both.
           const deadSessionEvidence = `${stderr}\n${this.runError ?? ''}`;
           if (!opts?.forceCold && resume && (this.runError || (code !== 0 && code !== null)) && /no conversation found|session not found/i.test(deadSessionEvidence)) {
-            await dropCliSession(this.context.sessionId, adapterKey);
+            await dropCliSession(this.context.sessionId, storeKey!);
             agentLogger.warn({ agentId: this.context.id, adapterKey, id: resume.id }, 'Vendor CLI session is gone — retrying cold with the full prompt');
             // The dead attempt's error must not outlive it: `runError` is a
             // worker field, and a leftover value makes the cold retry reject on
@@ -1228,7 +1244,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
           );
 
           const vendorId = capturedVendorId || resume?.id;
-          if (reuseSessions && vendorId) await saveCliSession(this.context.sessionId, adapterKey, {
+          if (reuseSessions && vendorId) await saveCliSession(this.context.sessionId, storeKey!, {
             id: vendorId, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(),
             generation: this.generation, ownerAgentId: this.context.id, acknowledged: this.userCursor,
           });

@@ -794,6 +794,7 @@ export class SwarmSpawner {
       spawnMode: params.mode ?? 'await',
       scorers: params.scorers,
       childIsSmall: isSmall,
+      resumeKey: params.resumeKey,
     })).finally(() => {
       parent.budget.fanOut.used = Math.max(0, parent.budget.fanOut.used - 1);
     });
@@ -883,6 +884,8 @@ export class SwarmSpawner {
      * `minFilesChanged` sees the whole child's work, not just its own.
      */
     fsBaseline?: WorkspaceSnapshot | null;
+    /** Explicit task id; keyed with the role so a CLI child continues that task's vendor session. */
+    resumeKey?: string;
   }): Promise<ChildResult> {
     // Retry policy (design §Failure Modes):
     //   provider_error → retry once on the SAME spawn attempt (same node).
@@ -1343,6 +1346,7 @@ export class SwarmSpawner {
             ((opts.parentContext.metadata as Record<string, unknown>)?.originalRequest as string) ??
             opts.brief.originalUserRequest,
           ...pipelineMetadata(opts.parentContext.metadata as Record<string, unknown> | undefined),
+          ...(opts.resumeKey ? { resumeKey: `${opts.childRole}:${opts.resumeKey}` } : {}),
         },
       });
     } catch (err) {

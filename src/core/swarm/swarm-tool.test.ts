@@ -1,7 +1,15 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { applyRoleFit, validateSpawnChildArgs, formatChildResult, createLateBoundSpawnChildHooks, createSpawnChildTool, buildSpawnRoleCatalog, buildDelegationGuidance, parsePlan, MAX_PLAN_STEPS, SPAWN_CHILD_ROLES } from './swarm-tool';
 import { LEVEL_DEFAULT, type AgentNode, type ChildResult, type PendingChild, type SpawnChildParams } from './types';
 import { SwarmSpawner } from './spawner';
+
+// Lets a test capture what the spawner hands AgentManager.spawn; every other
+// test keeps the real manager.
+const agentManagerStub = vi.hoisted(() => ({ spawn: null as null | ((opts: { contextMetadata?: Record<string, unknown> }) => Promise<never>) }));
+vi.mock('@/core/agent-manager', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/core/agent-manager')>();
+  return { ...actual, getAgentManager: () => (agentManagerStub.spawn ? { spawn: agentManagerStub.spawn } : actual.getAgentManager()) };
+});
 
 const handoff = {
   reason: 'The inspected bug spans a separate parser package requiring specialist work.',
@@ -1024,5 +1032,46 @@ describe('bounded delegation handoff validation', () => {
   test('enforces the combined brief limit without truncating findings', () => {
     const result = validateSpawnChildArgs({ role: 'coding', taskBrief: 'x'.repeat(3500), handoff });
     expect(result).toHaveProperty('error', expect.stringContaining('plus handoff exceeds'));
+  });
+});
+
+describe('spawn_child resumeKey', () => {
+  const ctx = { id: 'ctx', sessionId: '00000000-0000-0000-0000-000000000000', userId: 'u', model: '', topic: '', role: 'general' as const, status: 'running' as const, createdAt: new Date(), updatedAt: new Date(), metadata: {} };
+
+  test('is optional, trimmed and bounded', () => {
+    const base = { role: 'coding', taskBrief: 'Fix parser.' };
+    expect(validateSpawnChildArgs(base)).toMatchObject({ params: { resumeKey: undefined } });
+    expect(validateSpawnChildArgs({ ...base, resumeKey: ' parser-fix ' })).toMatchObject({ params: { resumeKey: 'parser-fix' } });
+    expect(validateSpawnChildArgs({ ...base, resumeKey: 'x'.repeat(201) })).toHaveProperty('error');
+  });
+
+  test('flows from the tool call into the child context metadata as role:taskId', async () => {
+    let received: SpawnChildParams | undefined;
+    const spawner = new SwarmSpawner({} as never);
+    // Stand in for the tool-intersection / model-routing half of the spawn and
+    // drive the real child boot with the params the tool actually passed.
+    (spawner as unknown as { spawnChild: unknown }).spawnChild = async (_parent: AgentNode, params: SpawnChildParams) => {
+      received = params;
+      return (spawner as unknown as { singleSpawnAndRun: (o: unknown, crash: boolean) => Promise<ChildResult> }).singleSpawnAndRun({
+        parent: { id: 'parent-1', rootSessionId: 's1' }, parentContext: { userId: 'u1', metadata: {} },
+        childDepth: 2, childKind: 'subagent', childRole: params.role, childModel: 'm1', childLane: 'agents', childTools: [],
+        budget: { tokens: { cap: 1000, used: 0 }, wallClockMs: { cap: 1000, startedAt: Date.now() }, fanOut: { cap: 1, used: 0 }, depth: 2 },
+        topicPath: 'coding', subtopic: 'x', brief: { taskBrief: params.taskBrief, topicPath: 'coding' }, briefHash: 'h',
+        childMessage: params.taskBrief, reason: 'normal', spawnMode: 'await', resumeKey: params.resumeKey,
+      }, false);
+    };
+    const metadata: Array<Record<string, unknown> | undefined> = [];
+    agentManagerStub.spawn = async (opts) => { metadata.push(opts.contextMetadata); throw new Error('stop after capture'); };
+    try {
+      const tool = createSpawnChildTool({ id: 'parent-1', rootSessionId: 's1' } as AgentNode, spawner);
+      await tool.execute({ role: 'coding', topic: 'coding', subtopic: 'x', taskBrief: 'Fix parser.', expectedOutput: { shape: 'summary' }, resumeKey: 'parser-fix' }, ctx);
+      await tool.execute({ role: 'coding', topic: 'coding', subtopic: 'x', taskBrief: 'Fix parser.', expectedOutput: { shape: 'summary' } }, ctx);
+    } finally {
+      agentManagerStub.spawn = null;
+    }
+    expect(received?.resumeKey).toBeUndefined();
+    expect(metadata[0]?.resumeKey).toBe('coding:parser-fix');
+    // No explicit key → no resume key: children stay cold by default.
+    expect(metadata[1]).not.toHaveProperty('resumeKey');
   });
 });
