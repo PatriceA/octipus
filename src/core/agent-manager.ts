@@ -141,6 +141,10 @@ export class AgentManager {
         const { QuotaExceededError } = await import('@/security/quota-error');
         throw new QuotaExceededError({ ...check.reason, userId: options.userId });
       }
+      // Dollar spend budgets: a paused budget refuses the spawn with
+      // SpendBudgetExceededError before any worker exists.
+      const { checkSpend } = await import('@/security/spend-budgets');
+      await checkSpend({ userId: options.userId, role: options.role, workspaceId: options.workspaceId });
     }
 
     const config = getConfig();

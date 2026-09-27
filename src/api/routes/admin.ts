@@ -60,6 +60,8 @@ function publicUser(u: import('@/db/schema/users').User) {
   };
 }
 
+const UUID_PATTERN = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$';
+
 export const adminRoutes = new Elysia({ prefix: '/admin' })
   .use(apiContext)
 
@@ -319,6 +321,131 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
     },
     {
       params: t.Object({ userId: t.String() }),
+      detail: { tags: ['admin'] },
+    },
+  )
+
+  // ── Spend budgets (USD caps) ───────────────────────────────────
+  // GET    /spend-budgets             — list (optionally ?userId=).
+  // PUT    /spend-budgets             — upsert by (user, scope, period);
+  //                                     clears any warning / pause.
+  // DELETE /spend-budgets/:id         — drop a budget.
+  // POST   /spend-budgets/:id/resume  — clear the pause.
+  // Enforcement: src/security/spend-budgets.ts (checkSpend).
+  .get(
+    '/spend-budgets',
+    async (ctx) => {
+      const guard = requireAdmin(ctx);
+      if (!guard.ok) return guard.body;
+      const { listBudgets } = await import('@/security/spend-budgets');
+      return { budgets: await listBudgets(ctx.query.userId) };
+    },
+    {
+      query: t.Object({ userId: t.Optional(t.String({ pattern: UUID_PATTERN })) }),
+      detail: { tags: ['admin'] },
+    },
+  )
+
+  .put(
+    '/spend-budgets',
+    async (ctx) => {
+      const guard = requireAdmin(ctx);
+      if (!guard.ok) return guard.body;
+      const { body, principal, set } = ctx;
+
+      const user = await userRepository.findById(body.userId);
+      if (!user) {
+        set.status = 404;
+        return { error: 'User not found' };
+      }
+      if (!(body.limitUsd > 0)) {
+        set.status = 400;
+        return { error: 'limitUsd must be a positive number' };
+      }
+      if (body.warnRatio !== undefined && !(body.warnRatio > 0 && body.warnRatio <= 1)) {
+        set.status = 400;
+        return { error: 'warnRatio must be in (0, 1]' };
+      }
+      if (body.scopeKind !== 'user' && !body.scopeRef) {
+        set.status = 400;
+        return { error: `scopeRef is required for a ${body.scopeKind} budget` };
+      }
+
+      const { upsertBudget } = await import('@/security/spend-budgets');
+      const budget = await upsertBudget(body);
+      await auditRepository.log({
+        userId: principal.userId,
+        action: 'settings_changed',
+        resourceType: 'spend_budget',
+        resourceId: budget.id,
+        details: { ...body, targetUser: user.username, byAdmin: principal.userId },
+      });
+      return budget;
+    },
+    {
+      body: t.Object({
+        userId: t.String({ pattern: UUID_PATTERN }),
+        scopeKind: t.Union([t.Literal('user'), t.Literal('role'), t.Literal('workspace')]),
+        scopeRef: t.Optional(t.Union([t.String({ minLength: 1 }), t.Null()])),
+        period: t.Union([t.Literal('day'), t.Literal('month')]),
+        limitUsd: t.Number(),
+        warnRatio: t.Optional(t.Number()),
+      }),
+      detail: { tags: ['admin'] },
+    },
+  )
+
+  .delete(
+    '/spend-budgets/:id',
+    async (ctx) => {
+      const guard = requireAdmin(ctx);
+      if (!guard.ok) return guard.body;
+      const { params, principal, set } = ctx;
+
+      const { deleteBudget } = await import('@/security/spend-budgets');
+      if (!(await deleteBudget(params.id))) {
+        set.status = 404;
+        return { error: 'Spend budget not found' };
+      }
+      await auditRepository.log({
+        userId: principal.userId,
+        action: 'settings_changed',
+        resourceType: 'spend_budget',
+        resourceId: params.id,
+        details: { deleted: true, byAdmin: principal.userId },
+      });
+      return { deleted: true };
+    },
+    {
+      params: t.Object({ id: t.String({ pattern: UUID_PATTERN }) }),
+      detail: { tags: ['admin'] },
+    },
+  )
+
+  .post(
+    '/spend-budgets/:id/resume',
+    async (ctx) => {
+      const guard = requireAdmin(ctx);
+      if (!guard.ok) return guard.body;
+      const { params, principal, set } = ctx;
+
+      const { resetPause } = await import('@/security/spend-budgets');
+      const budget = await resetPause(params.id);
+      if (!budget) {
+        set.status = 404;
+        return { error: 'Spend budget not found' };
+      }
+      await auditRepository.log({
+        userId: principal.userId,
+        action: 'settings_changed',
+        resourceType: 'spend_budget',
+        resourceId: params.id,
+        details: { resumed: true, byAdmin: principal.userId },
+      });
+      return budget;
+    },
+    {
+      params: t.Object({ id: t.String({ pattern: UUID_PATTERN }) }),
       detail: { tags: ['admin'] },
     },
   )

@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-403 mounted routes across 61 route files. The path is the full one, group prefix included — what a client actually calls.
+407 mounted routes across 61 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -38,6 +38,10 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | DELETE | `/api/admin/quotas/:userId` | `src/api/routes/admin.ts` |
 | GET | `/api/admin/quotas/:userId` | `src/api/routes/admin.ts` |
 | PATCH | `/api/admin/quotas/:userId` | `src/api/routes/admin.ts` |
+| GET | `/api/admin/spend-budgets` | `src/api/routes/admin.ts` |
+| PUT | `/api/admin/spend-budgets` | `src/api/routes/admin.ts` |
+| DELETE | `/api/admin/spend-budgets/:id` | `src/api/routes/admin.ts` |
+| POST | `/api/admin/spend-budgets/:id/resume` | `src/api/routes/admin.ts` |
 | GET | `/api/admin/users` | `src/api/routes/admin.ts` |
 | POST | `/api/admin/users` | `src/api/routes/admin.ts` |
 | PATCH | `/api/admin/users/:id` | `src/api/routes/admin.ts` |
@@ -438,14 +442,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 7 |
 | `api` | `config` | 20 |
 | `api` | `connectors` | 2 |
-| `api` | `core` | 82 |
-| `api` | `db` | 97 |
+| `api` | `core` | 83 |
+| `api` | `db` | 99 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 5 |
 | `api` | `mcp` | 3 |
 | `api` | `models` | 31 |
 | `api` | `plugins` | 1 |
-| `api` | `security` | 72 |
+| `api` | `security` | 76 |
 | `api` | `services` | 4 |
 | `api` | `shared` | 2 |
 | `api` | `skills` | 4 |
@@ -485,7 +489,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `hooks` | 4 |
 | `core` | `mcp` | 5 |
 | `core` | `models` | 83 |
-| `core` | `security` | 50 |
+| `core` | `security` | 55 |
 | `core` | `services` | 1 |
 | `core` | `shared` | 12 |
 | `core` | `skills` | 8 |
@@ -528,10 +532,10 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `plugins` | `utils` | 3 |
 | `security` | `config` | 12 |
 | `security` | `connectors` | 3 |
-| `security` | `core` | 1 |
-| `security` | `db` | 48 |
+| `security` | `core` | 2 |
+| `security` | `db` | 53 |
 | `security` | `tools` | 1 |
-| `security` | `utils` | 20 |
+| `security` | `utils` | 21 |
 | `services` | `capabilities` | 5 |
 | `services` | `config` | 3 |
 | `services` | `core` | 2 |

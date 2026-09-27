@@ -1089,10 +1089,19 @@ export class AgentWorker extends BaseAgentWorker {
             const { QuotaExceededError } = await import('@/security/quota-error');
             throw new QuotaExceededError({ ...check.reason, userId: this.context.userId });
           }
+          // Dollar spend budgets (user / role / workspace): warns at the
+          // soft ratio, throws SpendBudgetExceededError once paused.
+          const { checkSpend } = await import('@/security/spend-budgets');
+          try {
+            await checkSpend({ userId: this.context.userId, role: this.context.role, workspaceId: this.context.workspaceId });
+          } catch (err) {
+            if (err instanceof Error && err.name === 'SpendBudgetExceededError') this.abortController.abort('spend_budget_exceeded');
+            throw err;
+          }
         }
       } catch (err) {
-        // Don't swallow QuotaExceededError — re-throw it.
-        if (err instanceof Error && err.name === 'QuotaExceededError') throw err;
+        // Don't swallow QuotaExceededError / SpendBudgetExceededError — re-throw them.
+        if (err instanceof Error && (err.name === 'QuotaExceededError' || err.name === 'SpendBudgetExceededError')) throw err;
         // Any other error inside the quota check (DB hiccup) is logged
         // but doesn't abort the agent — the per-agent budget above is
         // the existing safety net.
