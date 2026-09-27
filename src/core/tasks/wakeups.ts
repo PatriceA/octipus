@@ -16,7 +16,9 @@
  * and the tasks page use, so a task is woken exactly when it stops showing
  * as blocked / waiting on sub-tasks. One difference, on purpose: a blocker
  * id that exists but that the owner cannot read (`unknownIds`) counts as an
- * active blocker here — a wakeup must never be a false positive.
+ * active blocker here — a wakeup must never be a false positive. And when
+ * several closes free one task (its last two blockers, a parent's last two
+ * children), only the latest by (updatedAt, id) fires: see `computeWakeups`.
  *
  * Flow: `ScopedTaskRepo.update` / `.delete` (the only ways out of the active
  * set) detect the transition atomically (a guarded UPDATE, DELETE …
@@ -98,7 +100,12 @@ export function emitSafely(event: TaskWakeupEvent): void {
   }
 }
 
-export interface ComputedWakeups<T extends StructuredTask> {
+/** A task row as the wakeup rule reads it: structure plus the close order. */
+export interface WakeupTask extends StructuredTask {
+  updatedAt?: Date | string | null;
+}
+
+export interface ComputedWakeups<T extends WakeupTask> {
   /** Active tasks the close left with no active blocker. */
   unblocked: T[];
   /** The closed task's parent, when it is active and has no active child left. */
@@ -106,15 +113,42 @@ export interface ComputedWakeups<T extends StructuredTask> {
 }
 
 /**
+ * The total order on closes every reader agrees on: (updatedAt, id). Stored
+ * values, so clock skew between writers cannot make two readers disagree.
+ */
+export function closedAfter(a: WakeupTask, b: WakeupTask): boolean {
+  const ta = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+  const tb = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+  return ta !== tb ? ta > tb : a.id > b.id;
+}
+
+/** True when `subject` is the latest of `candidates` that are closed. */
+function isLatestClosed(subject: WakeupTask, candidates: Iterable<WakeupTask | undefined>): boolean {
+  for (const other of candidates) {
+    if (!other || other.id === subject.id || isActiveStatus(other.status)) continue;
+    if (!closedAfter(subject, other)) return false;
+  }
+  return true;
+}
+
+/**
  * Pure: which tasks `closed` leaving the active set woke, given the rows
  * around it. `previousStatus` is the status before the write; anything but
  * an active → closed transition wakes nobody, so re-closing a done task
  * never fires twice. `rows` should hold the dependents, their blockers, the
- * parent and its active children; `closed` (with its new status) overrides
- * any stale copy. `unknownIds` are blocker ids that exist but are unreadable:
- * they count as active. For a delete, pass `closed` with a non-active status.
+ * parent, its active children and its latest-closed child; `closed` (with
+ * its new status) overrides any stale copy. `unknownIds` are blocker ids
+ * that exist but are unreadable: they count as active. For a delete, pass
+ * `closed` with a non-active status and the delete time as `updatedAt`.
+ *
+ * Sibling rule: two blockers of one task (or the last two children of one
+ * parent) can close back to back, and each detached wakeup may read after
+ * both writes, seeing the other already closed. So a close wakes a task only
+ * if it is the latest, by `closedAfter`, of that task's closed blockers (of
+ * the parent's closed children). Every reader that sees both closes agrees
+ * on which one that is, so exactly one of them fires.
  */
-export function computeWakeups<T extends StructuredTask>(
+export function computeWakeups<T extends WakeupTask>(
   closed: T,
   previousStatus: string,
   rows: readonly T[],
@@ -122,21 +156,24 @@ export function computeWakeups<T extends StructuredTask>(
 ): ComputedWakeups<T> {
   const none: ComputedWakeups<T> = { unblocked: [], childrenCompleted: null };
   if (!isActiveStatus(previousStatus) || isActiveStatus(closed.status)) return none;
-  const lookup = toLookup<StructuredTask>(rows);
+  const lookup = toLookup<WakeupTask>(rows);
   for (const id of unknownIds) if (!lookup.has(id)) lookup.set(id, { id, title: '(unknown)', status: 'open' });
   lookup.set(closed.id, closed);
 
   const unblocked: T[] = [];
   for (const row of rows) {
-    if (row.id === closed.id || !isActiveStatus(row.status)) continue;
-    if (!(row.blockedBy ?? []).includes(closed.id)) continue;
-    if (waitingOn(row, lookup).blockers.length === 0 && !unblocked.includes(row)) unblocked.push(row);
+    if (row.id === closed.id || !isActiveStatus(row.status) || unblocked.includes(row)) continue;
+    const blockedBy = row.blockedBy ?? [];
+    if (!blockedBy.includes(closed.id)) continue;
+    if (waitingOn(row, lookup).blockers.length > 0) continue;
+    if (isLatestClosed(closed, blockedBy.map((id) => lookup.get(id)))) unblocked.push(row);
   }
 
   let childrenCompleted: T | null = null;
   const parent = closed.parentId ? rows.find((r) => r.id === closed.parentId) : undefined;
   if (parent && parent.id !== closed.id && isActiveStatus(parent.status) && waitingOn(parent, lookup).openChildren === 0) {
-    childrenCompleted = parent;
+    const siblings = [...lookup.values()].filter((r) => r.parentId === parent.id);
+    if (isLatestClosed(closed, siblings)) childrenCompleted = parent;
   }
   return { unblocked, childrenCompleted };
 }

@@ -3,11 +3,10 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
-import type { StructuredTask } from './structure';
-import { computeWakeups, emitSafely, flushWakeups, onTaskWakeup, type TaskWakeupEvent } from './wakeups';
+import { computeWakeups, dispatchWakeups, emitSafely, flushWakeups, onTaskWakeup, type TaskWakeupEvent, type WakeupTask } from './wakeups';
 
-const t = (id: string, status: string, extra: Partial<StructuredTask> = {}): StructuredTask => ({ id, title: id.toUpperCase(), status, ...extra });
-const ids = (rows: StructuredTask[]) => rows.map((r) => r.id);
+const t = (id: string, status: string, extra: Partial<WakeupTask> = {}): WakeupTask => ({ id, title: id.toUpperCase(), status, ...extra });
+const ids = (rows: WakeupTask[]) => rows.map((r) => r.id);
 
 describe('computeWakeups', () => {
   test('the single blocker resolved wakes the dependent', () => {
@@ -42,10 +41,28 @@ describe('computeWakeups', () => {
   });
 
   test('archived counts as closed, for the closed task and for other blockers', () => {
-    const rows = [t('x', 'archived'), t('b', 'open', { blockedBy: ['a', 'x'] }), t('p', 'open')];
-    const r = computeWakeups(t('a', 'archived', { parentId: 'p' }), 'open', rows);
+    const rows = [t('x', 'archived', { updatedAt: new Date(1) }), t('b', 'open', { blockedBy: ['a', 'x'] }), t('p', 'open')];
+    const r = computeWakeups(t('a', 'archived', { parentId: 'p', updatedAt: new Date(2) }), 'open', rows);
     expect(ids(r.unblocked)).toEqual(['b']);
     expect(r.childrenCompleted?.id).toBe('p');
+  });
+
+  test('sibling closes read after both writes: only the latest by (updatedAt, id) fires', () => {
+    // D blocked by A and B; P's last two children C1 and C2. All four closed before either wakeup reads.
+    const at = new Date(1000);
+    const a = t('a', 'done', { updatedAt: new Date(1) });
+    const b = t('b', 'archived', { updatedAt: new Date(2) });
+    const c1 = t('c1', 'done', { parentId: 'p', updatedAt: at });
+    const c2 = t('c2', 'done', { parentId: 'p', updatedAt: at }); // same instant: id breaks the tie
+    const rows = [a, b, c1, c2, t('d', 'open', { blockedBy: ['a', 'b'] }), t('p', 'open')];
+    const woken = (closed: WakeupTask) => {
+      const r = computeWakeups(closed, 'open', rows);
+      return [...ids(r.unblocked), ...(r.childrenCompleted ? [r.childrenCompleted.id] : [])];
+    };
+    expect(woken(a)).toEqual([]);
+    expect(woken(b)).toEqual(['d']);
+    expect(woken(c1)).toEqual([]);
+    expect(woken(c2)).toEqual(['p']);
   });
 
   test('an unknown (unreadable) blocker still blocks; a deleted one (absent) does not', () => {
@@ -256,6 +273,28 @@ describe('wakeups via /api/tasks (embedded PGlite)', () => {
     expect(events.filter((e) => e.taskId === dep)).toHaveLength(1);
     const notes = (await notesFor(aliceId)).filter((n: any) => n.metadata.taskId === dep);
     expect(notes).toHaveLength(1);
+  });
+
+  test('two blockers (and the last two children) closed before either wakeup reads: one event each', async () => {
+    const { ScopedTaskRepo } = await import('@/db/repositories/scoped');
+    const { principalFromUser } = await import('@/security/principal');
+    const repo = new ScopedTaskRepo(principalFromUser({ id: aliceId, username: 'alice-w', isAdmin: false }));
+    const a = await insertTask(aliceId, 'Blocker A');
+    const b = await insertTask(aliceId, 'Blocker B');
+    const d = await insertTask(aliceId, 'Needs A and B', `blocked_by=ARRAY['${a}','${b}']::uuid[]`);
+    const p = await insertTask(aliceId, 'Phase X');
+    const c1 = await insertTask(aliceId, 'Child 1', `parent_id='${p}'`);
+    const c2 = await insertTask(aliceId, 'Child 2', `parent_id='${p}'`);
+
+    // Both writes first (raw SQL, so no wakeup is scheduled), then both wakeups.
+    for (const id of [a, b, c1, c2]) await queryRaw(`UPDATE tasks SET status = 'done', updated_at = now() WHERE id = '${id}'`);
+    for (const id of [a, b, c1, c2]) {
+      const closed = (await repo.findById(id))!;
+      await dispatchWakeups({ closed, previousStatus: 'open', cause: 'closed', ...(await repo.wakeupContext(closed)) });
+    }
+    expect(events.filter((e) => e.taskId === d)).toHaveLength(1);
+    expect(events.filter((e) => e.taskId === p)).toHaveLength(1);
+    expect(events.map((e) => e.type).sort()).toEqual(['task.children_completed', 'task.unblocked']);
   });
 
   test('an async listener rejection is caught and does not fail the close', async () => {
