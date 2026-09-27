@@ -854,6 +854,8 @@ export interface CLIParserCallbacks {
    * Invoked once per run with the vendor's id for resume support.
    */
   onVendorSession?: (id: string) => void;
+  /** Claude's `system/init`: the vendor has opened (or reopened) the session. */
+  onSessionInit?: () => void;
 }
 
 /**
@@ -1030,6 +1032,7 @@ export class CLIOutputParser {
           status: 'running',
           vendorSessionId: event.session_id,
         });
+        this.callbacks.onSessionInit?.();
       }
       // Shapes read from the claude 2.1.280 binary: task_started carries
       // task_id + tool_use_id, task_notification (terminal) carries task_id and

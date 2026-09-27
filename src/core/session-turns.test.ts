@@ -7,9 +7,13 @@ const fixture = vi.hoisted(() => ({ context: {} as SessionContext, rows: [] as M
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: {
   findById: async () => ({ id: 'session', userId: 'user', context: structuredClone(fixture.context) }),
   incrementMessageCount: async () => {},
-  patchContextIfGeneration: async (_id: string, generation: string, patch: object) => {
-    if ((fixture.context.clearedAt ?? '') !== generation) return false;
-    Object.assign(fixture.context, structuredClone(patch)); return true;
+  // Mirrors the real statement, including its in-SQL `cliSessions` filter.
+  patchContextIfGeneration: async (_id: string, generation: string, patch: object, opts?: { keepCliSessionPrefixes?: string[] }) => {
+    if ((fixture.context.conversationGeneration ?? fixture.context.clearedAt ?? '') !== generation) return false;
+    Object.assign(fixture.context, structuredClone(patch));
+    const prefixes = opts?.keepCliSessionPrefixes;
+    if (prefixes) fixture.context.cliSessions = Object.fromEntries(Object.entries(fixture.context.cliSessions ?? {}).filter(([key]) => prefixes.some(p => key.startsWith(p))));
+    return true;
   },
 } }));
 vi.mock('@/db/repositories/message-repository', () => ({ messageRepository: {
@@ -117,6 +121,14 @@ describe('session lifecycle across ephemeral root workers', () => {
     expect(fixture.context.compactionState?.compactionIneffective).toBe(true);
     await maybeCompactSession('session');
     expect(fixture.summaries).toHaveLength(1);
+  });
+  test('compaction rotates the root vendor sessions but keeps child task sessions', async () => {
+    for (let i = 0; i < 6; i++) await turn(i);
+    const rec = { fingerprint: 'f', lastUsedAt: '', generation: '' };
+    fixture.context.cliSessions = { 'Claude Code': { id: 'root', ...rec }, 'Codex CLI': { id: 'root-codex', ...rec }, 'Claude Code::general>coding:t1': { id: 'child', ...rec } };
+    await maybeCompactSession('session', { force: true });
+    expect(fixture.context.checkpoint).toBeDefined();
+    expect(Object.keys(fixture.context.cliSessions ?? {})).toEqual(['Claude Code::general>coding:t1']);
   });
   test('a clear during summarization prevents checkpoint publication', async () => {
     for (let i = 0; i < 6; i++) await turn(i);

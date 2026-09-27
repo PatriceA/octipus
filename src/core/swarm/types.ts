@@ -285,6 +285,11 @@ export interface SpawnChildParams {
    */
   scorers?: Scorer[];
   /**
+   * Explicit task id: a later child of the same role given the same value
+   * continues this child's vendor CLI session. Omitted → the child starts cold.
+   */
+  resumeKey?: string;
+  /**
    * 'await' (default): parent blocks until child returns, result surfaced
    * inline, parent pausedMs ticks while waiting.
    * 'detach': parent gets { childId, status: 'pending' } immediately and

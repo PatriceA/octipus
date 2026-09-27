@@ -530,6 +530,12 @@ export function createSpawnChildTool(
           type: 'string',
           description: 'Same group in the same LLM turn = parent will Promise.all the calls.',
         },
+        resumeKey: {
+          type: 'string',
+          pattern: RESUME_KEY_PATTERN.source,
+          description:
+            'Optional task id. Pass the same value (with the same role) to continue a previous child\'s CLI session on the same task. Omit for a fresh child.',
+        },
         constraints: {
           type: 'array',
           items: { type: 'string' },
@@ -590,6 +596,8 @@ export function parsePlan(raw: unknown): { plan?: PlanStep[] } | { error: string
   }
   return { plan: steps.length > 0 ? steps : undefined };
 }
+
+const RESUME_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,200}$/;
 
 export function validateSpawnChildArgs(args: Record<string, unknown>): ValidatedSpawn {
   let topic = typeof args.topic === 'string' ? args.topic.trim() : '';
@@ -679,6 +687,12 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
     return { error: `invalid plan: ${parsedPlan.error}` };
   }
 
+  if (args.resumeKey != null && typeof args.resumeKey !== 'string') return { error: 'resumeKey must be a string' };
+  const resumeKey = typeof args.resumeKey === 'string' ? args.resumeKey.trim() : '';
+  if (resumeKey && !RESUME_KEY_PATTERN.test(resumeKey)) {
+    return { error: 'resumeKey must be 1-200 characters of letters, digits, ".", "_", ":" or "-"' };
+  }
+
   // `mode` is no longer LLM-controlled — spawn_child always detaches when the
   // depth has a detach budget, else awaits. The execute path sets params.mode
   // to reflect what actually happened (for spawn_node bookkeeping).
@@ -698,6 +712,7 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
       : undefined,
     scorers: parsedScorers.scorers.length > 0 ? parsedScorers.scorers : undefined,
     plan: parsedPlan.plan,
+    resumeKey: resumeKey || undefined,
   };
 
   return { params };
