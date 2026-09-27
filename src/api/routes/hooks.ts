@@ -5,10 +5,11 @@ import { disableDailyBriefingHook, ensureDailyBriefingHook } from '@/core/briefi
 import { getDb } from '@/db/postgres';
 import { scopedRepos } from '@/db/repositories/scoped';
 import { hookExecutions } from '@/db/schema/hook-executions';
-import { hooks as hooksTable } from '@/db/schema/hooks';
+import { type Hook as HookRow, hooks as hooksTable } from '@/db/schema/hooks';
 import { recurringTasks } from '@/db/schema/recurring-tasks';
 import { getHookManager } from '@/hooks/manager';
 import { getHookSuggestions } from '@/hooks/suggestions';
+import type { TriggerContext } from '@/hooks/triggers';
 import { isAuthenticated } from '@/security/principal';
 
 const VALID_TRIGGERS = ['message_received', 'agent_started', 'agent_completed', 'agent_failed', 'tool_executed', 'permission_requested', 'schedule', 'webhook', 'heartbeat'] as const;
@@ -25,6 +26,83 @@ const VALID_ACTIONS = ['notify', 'spawn_agent', 'webhook', 'n8n_workflow', 'exec
  * "Hook not found" instead of "Not authorized" so attackers can't
  * enumerate hook ids.
  */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+function testMessageText(body: { message?: string; context?: unknown }): string | undefined {
+  if (typeof body.message === 'string') return body.message;
+  const legacy = isPlainObject(body.context) && isPlainObject(body.context.message)
+    ? body.context.message.content
+    : undefined;
+  return typeof legacy === 'string' ? legacy : undefined;
+}
+
+/**
+ * Build the trigger context for a manual test fire. Everything that names a
+ * user or session comes from the hook itself (owner = hook.userId, session =
+ * the hook's own or none); the caller only contributes the message text and,
+ * for webhook hooks, the payload body.
+ */
+function buildTestContext(hook: HookRow, text: string | undefined, data: unknown, now: Date): TriggerContext {
+  const config = hook.triggerConfig ?? {};
+  const context: TriggerContext = {};
+  if (text !== undefined || hook.trigger === 'message_received') {
+    context.message = {
+      id: `hook-test-${hook.id}-${now.getTime()}`,
+      channelType: 'api',
+      channelId: hook.userId,
+      userId: hook.userId,
+      content: text ?? '',
+      timestamp: now,
+    };
+  }
+  switch (hook.trigger) {
+    case 'agent_started':
+    case 'agent_completed':
+    case 'agent_failed':
+      context.agent = {
+        id: `hook-test-${hook.id}`,
+        // Empty: resolveHookSessionId falls through to the hook's own session.
+        sessionId: '',
+        userId: hook.userId,
+        topic: config.sessionFilter?.topics?.[0] ?? 'hook',
+        model: 'default',
+        role: 'general',
+        status: hook.trigger === 'agent_started' ? 'running' : hook.trigger === 'agent_failed' ? 'failed' : 'completed',
+        createdAt: now,
+        updatedAt: now,
+        metadata: {},
+      };
+      break;
+    case 'tool_executed':
+      context.tool = {
+        name: config.toolNames?.[0] ?? 'test',
+        toolId: config.toolIds?.[0] ?? 'test',
+        args: {},
+      };
+      break;
+    case 'webhook':
+      context.webhook = {
+        path: config.webhookPath ?? hook.id,
+        method: 'POST',
+        headers: {},
+        body: isPlainObject(data) && 'body' in data ? data.body : data ?? {},
+      };
+      break;
+    case 'schedule':
+      context.schedule = {
+        cronExpression: (config.cronExpression as string | undefined) ?? '',
+        scheduledTime: now,
+        hookName: hook.name,
+      };
+      break;
+    default:
+      break;
+  }
+  return context;
+}
+
 export const hookRoutes = new Elysia({ prefix: '/hooks' })
   .use(apiContext)
   // List user's hooks
@@ -337,12 +415,21 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
       }
 
       const hookManager = getHookManager();
+      const now = new Date();
       // Fire only this hook (ownership enforced by scopedRepos above). Using
       // trigger() here would fan out to every user's hooks of the same type.
+      // The context is built server-side: caller-supplied message/agent/tool
+      // objects would let the caller pick the acting user or session.
+      // manualTest: no cooldown/maxExecutions, not counted as a real run.
       const results = await hookManager.triggerHook(
         hook.id,
-        { type: hook.trigger, data: body.data || {}, timestamp: new Date() },
-        body.context || {}
+        {
+          type: hook.trigger,
+          data: { ...(isPlainObject(body.data) ? body.data : {}), hookId: hook.id },
+          timestamp: now,
+        },
+        buildTestContext(hook, testMessageText(body), body.data, now),
+        { manualTest: true },
       );
 
       return { results };
@@ -353,6 +440,12 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
       }),
       body: t.Object({
         data: t.Optional(t.Any()),
+        /** Optional text for the server-built test message. */
+        message: t.Optional(t.String()),
+        /**
+         * Deprecated: only `context.message.content` (a string) is read, as
+         * a fallback for `message`. Everything else is ignored.
+         */
         context: t.Optional(t.Any()),
       }),
       detail: { tags: ['hooks'] },

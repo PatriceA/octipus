@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 import type { TriggerType } from '@/core/types';
 import { getDb } from '@/db/postgres';
 import { hookExecutions } from '@/db/schema/hook-executions';
-import { type Hook, hooks, hooks as hooksSchema, type NewHook } from '@/db/schema/hooks';
+import { type Hook, hooks, type NewHook } from '@/db/schema/hooks';
 import { coreLogger } from '@/utils/logger';
 import { type ActionResult, executeAction } from './actions';
 import { checkConditions, matchesTrigger, type TriggerContext, type TriggerEvent } from './triggers';
@@ -15,6 +15,26 @@ export interface HookExecutionResult {
   result?: ActionResult;
   error?: string;
   executionTime: number;
+}
+
+export interface RunHookOptions {
+  /**
+   * A manual test fire (POST /api/hooks/:id/test). It bypasses cooldown and
+   * maxExecutions, does not count as a real run (executionCount /
+   * lastExecutedAt untouched), and is logged with source 'manual_test'.
+   */
+  manualTest?: boolean;
+}
+
+export interface TriggerHookOptions extends RunHookOptions {
+  /**
+   * The hook row the caller has just read from the database and claimed for
+   * this run. Used instead of re-reading, and its isEnabled is not rechecked:
+   * the cron-runner disables a one-shot (scheduledAt) hook *before* firing
+   * it, so a fresh read would wrongly skip the run it just claimed. Must be
+   * the row for `hookId`.
+   */
+  claimedRow?: Hook;
 }
 
 export class HookManager extends EventEmitter {
@@ -72,17 +92,29 @@ export class HookManager extends EventEmitter {
   /**
    * Fire exactly one hook, by id. Applies the same gates as {@link trigger}
    * (trigger match, conditions, cooldown, max executions, owner check) but
-   * never evaluates any other hook. The hook is taken from the cache, falling
-   * back to the database; disabled or unknown hooks produce no result.
+   * never evaluates any other hook. The row is read fresh from the database
+   * (not the cache), so a hook disabled or exhausted directly in the DB —
+   * e.g. a one-shot the cron-runner just switched off — cannot be re-fired
+   * from a stale cache entry. Disabled or unknown hooks produce no result.
    *
    * Callers are responsible for authorising access to `hookId` (the test
    * route loads it through `scopedRepos` first).
    */
-  async triggerHook(hookId: string, event: TriggerEvent, context: TriggerContext): Promise<HookExecutionResult[]> {
-    const hook =
-      (this.hookCache.get(event.type) || []).find((h) => h.id === hookId) ?? (await this.getHook(hookId));
-    if (!hook || !hook.isEnabled) return [];
-    const result = await this.runHook(hook, event, context);
+  async triggerHook(
+    hookId: string,
+    event: TriggerEvent,
+    context: TriggerContext,
+    { claimedRow, ...options }: TriggerHookOptions = {},
+  ): Promise<HookExecutionResult[]> {
+    let hook: Hook | null;
+    if (claimedRow) {
+      if (claimedRow.id !== hookId) return [];
+      hook = claimedRow;
+    } else {
+      hook = await this.getHook(hookId);
+      if (!hook || !hook.isEnabled) return [];
+    }
+    const result = await this.runHook(hook, event, context, options);
     return result ? [result] : [];
   }
 
@@ -94,6 +126,7 @@ export class HookManager extends EventEmitter {
     hook: Hook,
     event: TriggerEvent,
     context: TriggerContext,
+    { manualTest = false }: RunHookOptions = {},
   ): Promise<HookExecutionResult | null> {
     const startTime = Date.now();
 
@@ -113,8 +146,8 @@ export class HookManager extends EventEmitter {
       return null;
     }
 
-    // Check cooldown
-    if (hook.cooldownMs && hook.lastExecutedAt) {
+    // Check cooldown (a manual test is not a real run, so it isn't throttled)
+    if (!manualTest && hook.cooldownMs && hook.lastExecutedAt) {
       const elapsed = Date.now() - new Date(hook.lastExecutedAt).getTime();
       if (elapsed < hook.cooldownMs) {
         coreLogger.debug({ hookId: hook.id, cooldownRemaining: hook.cooldownMs - elapsed }, 'Hook in cooldown');
@@ -123,7 +156,7 @@ export class HookManager extends EventEmitter {
     }
 
     // Check max executions
-    if (hook.maxExecutions && hook.executionCount >= hook.maxExecutions) {
+    if (!manualTest && hook.maxExecutions && hook.executionCount >= hook.maxExecutions) {
       coreLogger.debug({ hookId: hook.id }, 'Hook max executions reached');
       return null;
     }
@@ -133,19 +166,13 @@ export class HookManager extends EventEmitter {
       const result = await executeAction(hook, context);
       const executionTime = Date.now() - startTime;
 
-      // Update execution stats
-      await this.db
-        .update(hooks)
-        .set({
-          executionCount: hook.executionCount + 1,
-          lastExecutedAt: new Date(),
-        })
-        .where(eq(hooks.id, hook.id));
+      // Update execution stats (real runs only)
+      if (!manualTest) await this.recordRun(hook);
 
       // Log execution
       await this.logExecution({
         hookId: hook.id,
-        source: 'hook',
+        source: manualTest ? 'manual_test' : 'hook',
         status: result.success ? 'success' : 'error',
         triggerType: event.type,
         actionType: hook.action,
@@ -175,7 +202,7 @@ export class HookManager extends EventEmitter {
       // Log failed execution
       await this.logExecution({
         hookId: hook.id,
-        source: 'hook',
+        source: manualTest ? 'manual_test' : 'hook',
         status: 'error',
         triggerType: event.type,
         actionType: hook.action,
@@ -248,10 +275,7 @@ export class HookManager extends EventEmitter {
         const actionResult = await executeAction(hook, context);
 
         // Update execution stats
-        await this.db.update(hooksSchema).set({
-          executionCount: hook.executionCount + 1,
-          lastExecutedAt: new Date(),
-        }).where(eq(hooksSchema.id, hook.id));
+        await this.recordRun(hook);
 
         // If the hook action is 'deny' or returns a deny signal, block the tool
         if ((actionResult.data as any)?.deny) {
@@ -263,6 +287,24 @@ export class HookManager extends EventEmitter {
     }
 
     return { decision: 'allow' };
+  }
+
+  /**
+   * Persist one more run of `hook` and mirror the new counters into the
+   * cached copy (and `hook` itself, which may be a fresh DB row), so cooldown
+   * and maxExecutions hold between cache reloads.
+   */
+  private async recordRun(hook: Hook): Promise<void> {
+    const executionCount = hook.executionCount + 1;
+    const lastExecutedAt = new Date();
+    await this.db.update(hooks).set({ executionCount, lastExecutedAt }).where(eq(hooks.id, hook.id));
+    hook.executionCount = executionCount;
+    hook.lastExecutedAt = lastExecutedAt;
+    const cached = (this.hookCache.get(hook.trigger) || []).find((h) => h.id === hook.id);
+    if (cached && cached !== hook) {
+      cached.executionCount = executionCount;
+      cached.lastExecutedAt = lastExecutedAt;
+    }
   }
 
   /**

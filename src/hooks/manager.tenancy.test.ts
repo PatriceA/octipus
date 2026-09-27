@@ -8,13 +8,19 @@
  *  - tool_pre / tool_post hooks only run for their owner's tool calls, while
  *    a user's own tool_pre deny still blocks;
  *  - trigger() skips hooks owned by someone other than the user named in the
- *    context.
+ *    context, and untargeted schedule events fire nothing;
+ *  - a test fire builds its context server-side, can't target another user's
+ *    session, and doesn't count as a real run;
+ *  - cached counters stay current, and triggerHook honours a DB-side disable;
+ *  - path webhooks fire only the hooks whose own signature verifies;
+ *  - execute_tool always runs as the hook owner.
  *
  * executeAction is mocked so no real notifications/agents/webhooks run; the
- * mock records which hooks were executed.
+ * mock records which hooks were executed and with what context. The real
+ * module stays reachable via vi.importActual.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -22,9 +28,12 @@ import { Elysia } from '@/api/http';
 import type { Hook } from '@/db/schema/hooks';
 
 const executed: string[] = [];
-vi.mock('./actions', () => ({
-  executeAction: vi.fn(async (hook: Hook) => {
+const contexts: unknown[] = [];
+vi.mock('./actions', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./actions')>()),
+  executeAction: vi.fn(async (hook: Hook, context: unknown) => {
     executed.push(hook.name);
+    contexts.push(context);
     const deny = (hook.actionConfig as Record<string, unknown> | null)?.deny === true;
     return { success: true, data: deny ? { deny: true, message: `denied by ${hook.name}` } : { ran: hook.name } };
   }),
@@ -44,6 +53,9 @@ const ids: Record<string, string> = {};
 let aliceApp: ElysiaLike;
 let webhookApp: ElysiaLike;
 let manager: import('./manager').HookManager;
+const bobSession = '33333333-3333-3333-3333-333333333333';
+const aliceSecret = 'alice-secret';
+const bobSecret = 'bob-secret';
 
 beforeAll(async () => {
   process.env.STORAGE_MODE = 'embedded';
@@ -71,7 +83,19 @@ beforeAll(async () => {
        ('${aliceId}', 'alice-heartbeat', 'heartbeat', '{}'::jsonb, 'spawn_agent', '{}'::jsonb, true),
        ('${bobId}', 'bob-heartbeat', 'heartbeat', '{}'::jsonb, 'spawn_agent', '{}'::jsonb, true),
        ('${bobId}', 'bob-msg', 'message_received', '{}'::jsonb, 'notify', '{}'::jsonb, true),
-       ('${bobId}', 'bob-webhook-nopath', 'webhook', '{}'::jsonb, 'spawn_agent', '{}'::jsonb, true)`,
+       ('${bobId}', 'bob-webhook-nopath', 'webhook', '{}'::jsonb, 'spawn_agent', '{}'::jsonb, true),
+       ('${aliceId}', 'alice-spawn', 'schedule', '{"cronExpression":"0 0 1 1 *"}'::jsonb, 'spawn_agent', '{}'::jsonb, true),
+       ('${aliceId}', 'alice-shared-path', 'webhook', '{"webhookPath":"shared","webhookSecret":"${aliceSecret}"}'::jsonb, 'notify', '{}'::jsonb, true),
+       ('${bobId}', 'bob-shared-path', 'webhook', '{"webhookPath":"shared","webhookSecret":"${bobSecret}"}'::jsonb, 'notify', '{}'::jsonb, true),
+       ('${aliceId}', 'alice-disabled-later', 'schedule', '{"cronExpression":"0 0 1 1 *"}'::jsonb, 'notify', '{}'::jsonb, true)`,
+  );
+  await executeRaw(
+    `INSERT INTO hooks (user_id, name, trigger, trigger_config, action, action_config, is_enabled, max_executions)
+     VALUES ('${aliceId}', 'alice-once', 'schedule', '{"cronExpression":"0 0 1 1 *"}'::jsonb, 'notify', '{}'::jsonb, true, 1)`,
+  );
+  await executeRaw(
+    `INSERT INTO sessions (id, user_id, channel_type, channel_id, title)
+     VALUES ('${bobSession}', '${bobId}', 'webchat', 'bob-chat', 'bob private chat')`,
   );
   const { rows } = await queryRaw(`SELECT id, name FROM hooks`);
   for (const r of rows as Array<{ id: string; name: string }>) ids[r.name] = r.id;
@@ -116,6 +140,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   executed.length = 0;
+  contexts.length = 0;
 });
 
 async function postTest(hookId: string, body: unknown = {}) {
@@ -137,10 +162,10 @@ describe('POST /api/hooks/:id/test', () => {
     expect(executed).toEqual(['alice-cron']);
   });
 
-  test('data.hookId naming bob’s schedule hook does not run it', async () => {
+  test('data.hookId naming bob’s schedule hook does not run it (the route pins hookId)', async () => {
     const r = await postTest(ids['alice-cron'], { data: { hookId: ids['bob-cron'] } });
-    expect(r.body.results).toEqual([]);
-    expect(executed).not.toContain('bob-cron');
+    expect(r.body.results.map((x: any) => x.hookId)).toEqual([ids['alice-cron']]);
+    expect(executed).toEqual(['alice-cron']);
   });
 
   test('testing alice’s permission hook never runs bob’s', async () => {
@@ -149,10 +174,33 @@ describe('POST /api/hooks/:id/test', () => {
     expect(executed).toEqual(['alice-perm']);
   });
 
-  test('caller-supplied context naming another user is refused', async () => {
-    const r = await postTest(ids['alice-perm'], { context: { agent: { userId: bobId } } });
-    expect(r.body.results).toEqual([]);
-    expect(executed).toEqual([]);
+  test('caller-supplied context is ignored: the hook runs as its owner, in no foreign session', async () => {
+    const r = await postTest(ids['alice-spawn'], {
+      context: {
+        agent: { userId: bobId, sessionId: bobSession, role: 'admin', root: true },
+        message: { userId: bobId, content: 'hello', metadata: { sessionId: bobSession } },
+        tool: { name: 'x', toolId: 'x', args: { secret: 1 } },
+      },
+    });
+    expect(r.body.results.map((x: any) => x.hookId)).toEqual([ids['alice-spawn']]);
+    const ctx = contexts[0] as import('./triggers').TriggerContext;
+    expect(ctx.agent).toBeUndefined();
+    expect(ctx.tool).toBeUndefined();
+    expect(ctx.message?.userId).toBe(aliceId);
+    expect(ctx.message?.content).toBe('hello'); // only the text is carried over
+    expect(JSON.stringify(ctx)).not.toContain(bobSession);
+    expect(JSON.stringify(ctx)).not.toContain(bobId);
+  });
+
+  test('a test fire is not a real run: counters untouched, logged as manual_test', async () => {
+    const { queryRaw } = await import('@/db/postgres');
+    await postTest(ids['alice-once']);
+    await postTest(ids['alice-once']); // maxExecutions 1 does not apply to tests
+    expect(executed).toEqual(['alice-once', 'alice-once']);
+    const { rows } = await queryRaw(`SELECT execution_count FROM hooks WHERE id = '${ids['alice-once']}'`);
+    expect((rows[0] as any).execution_count).toBe(0);
+    const logs = await queryRaw(`SELECT source FROM hook_executions WHERE hook_id = '${ids['alice-once']}'`);
+    expect((logs.rows as any[]).map((l) => l.source)).toEqual(['manual_test', 'manual_test']);
   });
 
   test('heartbeat hooks cannot be test-fired', async () => {
@@ -216,7 +264,115 @@ describe('trigger() owner guard', () => {
   });
 });
 
+describe('schedule targeting and counters', () => {
+  test('an untargeted schedule event fires nothing (fail closed)', async () => {
+    const results = await manager.trigger(
+      { type: 'schedule', data: {}, timestamp: new Date() },
+      { schedule: { cronExpression: '0 0 1 1 *', scheduledTime: new Date() } },
+    );
+    expect(results).toEqual([]);
+    expect(executed).toEqual([]);
+  });
+
+  test('cached counters update in place, so maxExecutions holds between reloads', async () => {
+    const fire = () =>
+      manager.trigger(
+        { type: 'schedule', data: { hookId: ids['alice-once'] }, timestamp: new Date() },
+        { schedule: { cronExpression: '0 0 1 1 *', scheduledTime: new Date() } },
+      );
+    await fire();
+    await fire();
+    expect(executed).toEqual(['alice-once']);
+    // triggerHook reads the DB row, which agrees.
+    expect(await manager.triggerHook(ids['alice-once'], { type: 'schedule', data: { hookId: ids['alice-once'] }, timestamp: new Date() }, {})).toEqual([]);
+  });
+
+  test('triggerHook honours a disable made directly in the DB; a claimed row still fires', async () => {
+    const { executeRaw } = await import('@/db/postgres');
+    await executeRaw(`UPDATE hooks SET is_enabled = false WHERE id = '${ids['alice-disabled-later']}'`);
+    const event = { type: 'schedule' as const, data: { hookId: ids['alice-disabled-later'] }, timestamp: new Date() };
+    expect(await manager.triggerHook(ids['alice-disabled-later'], event, {})).toEqual([]);
+    expect(executed).toEqual([]);
+
+    // The cron-runner disables a one-shot before firing it and passes the row it claimed.
+    const row = await manager.getHook(ids['alice-disabled-later']);
+    const results = await manager.triggerHook(ids['alice-disabled-later'], event, {}, { claimedRow: row! });
+    expect(results.map((r) => r.hookId)).toEqual([ids['alice-disabled-later']]);
+  });
+});
+
+describe('session ownership', () => {
+  test('a hook trigger cannot target another user’s session', async () => {
+    const { resolveOwnedHookSessionId } = await vi.importActual<typeof import('./actions')>('./actions');
+    const hook = (await manager.getHook(ids['alice-spawn']))!;
+    for (const ctx of [
+      { agent: { sessionId: bobSession } },
+      { message: { metadata: { sessionId: bobSession } } },
+    ] as never[]) {
+      const r = await resolveOwnedHookSessionId(ctx, { ...hook, sessionId: null });
+      expect(r.sessionId).not.toBe(bobSession);
+    }
+    // Even a hook row pointing at a foreign session doesn't get it.
+    const r = await resolveOwnedHookSessionId({}, { ...hook, sessionId: bobSession });
+    expect(r.sessionId).not.toBe(bobSession);
+    expect(r.minted).toBe(false);
+  });
+
+  test('resolveSession refuses another user’s session', async () => {
+    const { resolveSession } = await import('@/core/agent/session-resolver');
+    await expect(resolveSession(bobSession, aliceId, 'hook')).rejects.toThrow('Session not found');
+    await expect(resolveSession(bobSession, bobId, 'webchat')).resolves.toBe(bobSession);
+  });
+
+  test('execute_tool runs as the hook owner with a server-built context', async () => {
+    const seen: any[] = [];
+    const registry = await import('@/tools/registry');
+    const spy = vi.spyOn(registry, 'getToolRegistry').mockReturnValue({
+      get: () => ({ getTool: () => ({ execute: async (_p: unknown, ctx: unknown) => { seen.push(ctx); return 'ok'; } }) }),
+    } as never);
+    try {
+      const { executeAction } = await vi.importActual<typeof import('./actions')>('./actions');
+      const hook = {
+        ...(await manager.getHook(ids['alice-cron']))!,
+        action: 'execute_tool',
+        actionConfig: { toolId: 't', toolAction: 'a' },
+        sessionId: bobSession,
+      } as Hook;
+      const r = await executeAction(hook, {
+        agent: { id: 'x', sessionId: bobSession, userId: bobId, role: 'admin', root: true } as never,
+      });
+      expect(r.success).toBe(true);
+      expect(seen[0].userId).toBe(aliceId);
+      expect(seen[0].sessionId).not.toBe(bobSession);
+      expect(seen[0].root).toBeUndefined();
+      expect(seen[0].role).toBe('general');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 describe('POST /api/webhooks/:path (unauthenticated)', () => {
+  const sign = (body: string, secret: string) => `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`;
+  const deliver = (path: string, payload: unknown, secret?: string) => {
+    const body = JSON.stringify(payload);
+    const headers: Record<string, string> = { 'content-type': 'application/json' };
+    if (secret) headers['x-hub-signature-256'] = sign(body, secret);
+    return webhookApp.handle(new Request(`http://localhost/api/webhooks/${path}`, { method: 'POST', headers, body }));
+  };
+
+  test('on a shared path, only the hook whose own secret verifies fires', async () => {
+    const res = await deliver('shared', { n: 1 }, aliceSecret);
+    expect(res.status).toBe(200);
+    expect(executed).toEqual(['alice-shared-path']);
+  });
+
+  test('a delivery no hook verifies is rejected with 401', async () => {
+    const res = await deliver('shared', { n: 2 }, 'wrong');
+    expect(res.status).toBe(401);
+    expect(executed).toEqual([]);
+  });
+
   test('a path no hook claims fires nothing (not every path-less webhook hook)', async () => {
     const res = await webhookApp.handle(
       new Request('http://localhost/api/webhooks/no-such-path', {
