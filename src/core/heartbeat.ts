@@ -13,14 +13,31 @@
  * checklist + the user's standing `HEARTBEAT` note.
  *
  * Silence is the default: an empty probe spends zero tokens.
+ *
+ * Role heartbeats (work board, after Paperclip: "agents wake on a heartbeat,
+ * pick up assigned work, check it out"). A heartbeat hook whose
+ * `triggerConfig.role` names a role (e.g. 'coding') is that role's agent for
+ * its owner. Same gate — quiet hours, daily cap, quota — but the probe is the
+ * owner's tasks assigned to the role that are ready: active, not waiting on
+ * an active blocker or child (`waitingOn`), and not held by a live checkout
+ * lease. A non-empty probe spawns the role's agent (see executeSpawnAgent)
+ * with the ready ids and titles and the check-out / comment / complete
+ * protocol. A task wakeup (core/tasks/wakeups.ts) for a role-assigned task
+ * marks that role's hook due, so the next cron tick runs its gate instead of
+ * waiting out the interval (`startRoleHeartbeatWakeups`). Users with no role
+ * heartbeat hook see none of this.
  */
-import { and, eq, isNotNull, lte } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, lte, or, type SQL, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import type { HeartbeatConfig } from '@/config/schema';
 import { getDb } from '@/db/postgres';
 import { type Hook, hooks } from '@/db/schema/hooks';
 import { notifications } from '@/db/schema/notifications';
 import { tasks } from '@/db/schema/tasks';
+import { TASK_CHECKOUT_TTL_MS } from '@/core/tasks/checkout';
+import { ACTIVE_TASK_STATUSES } from '@/core/tasks/status';
+import { isWaiting, toLookup } from '@/core/tasks/structure';
+import { onTaskWakeup, type TaskWakeupEvent } from '@/core/tasks/wakeups';
 import { coreLogger } from '@/utils/logger';
 import {
   type CalendarProbeDeps,
@@ -224,6 +241,85 @@ export function renderChecklist(p: HeartbeatProbe, tz = 'UTC'): string {
   return lines.join('\n');
 }
 
+// ── Role heartbeats (work board) ────────────────────────────────────────────
+
+/** A role name as stored on `tasks.assignee_ref` and `hooks.trigger_config.role`. */
+const ROLE_NAME = /^[a-z][a-z0-9_-]{0,63}$/;
+
+/** Most role-assigned candidates one probe reads (highest priority, oldest first). */
+const ROLE_PROBE_LIMIT = 100;
+
+/** The role a heartbeat hook works as, or null for the plain per-user heartbeat. */
+export function heartbeatRole(hook: { trigger: string; triggerConfig: Hook['triggerConfig'] | null }): string | null {
+  if (hook.trigger !== 'heartbeat') return null;
+  const role = (hook.triggerConfig ?? {}).role;
+  return typeof role === 'string' && ROLE_NAME.test(role) ? role : null;
+}
+
+/** `trigger_config->>'role'` on the hooks table. */
+const hookRole = sql`${hooks.triggerConfig}->>'role'`;
+
+export interface RoleTask { id: string; title: string }
+
+/**
+ * The owner's tasks assigned to `role` that an agent of it could check out
+ * now: active, not waiting on an active blocker or active child (the
+ * `waitingOn` rule), and not held by a live checkout — nobody holds it or the
+ * lease (TASK_CHECKOUT_TTL_MS, the board's) has lapsed as of `now`. One query
+ * for the candidates, one for the active rows they could be waiting on.
+ * The board's checkout re-checks all of this atomically; this is only the
+ * "anything to do?" gate, so a race here costs one refused checkout, never a
+ * double claim.
+ */
+export async function probeRoleWork(userId: string, role: string, now: Date): Promise<RoleTask[]> {
+  const db = getDb();
+  const active = [...ACTIVE_TASK_STATUSES];
+  const leaseStart = new Date(now.getTime() - TASK_CHECKOUT_TTL_MS);
+  const candidates = await db
+    .select({ id: tasks.id, title: tasks.title, status: tasks.status, parentId: tasks.parentId, blockedBy: tasks.blockedBy })
+    .from(tasks)
+    .where(and(
+      eq(tasks.userId, userId),
+      eq(tasks.assigneeKind, 'role'),
+      eq(tasks.assigneeRef, role),
+      inArray(tasks.status, active),
+      or(isNull(tasks.checkedOutBy), isNull(tasks.checkedOutAt), lt(tasks.checkedOutAt, leaseStart)),
+    ))
+    .orderBy(desc(tasks.priority), asc(tasks.createdAt), asc(tasks.id))
+    .limit(ROLE_PROBE_LIMIT);
+  if (candidates.length === 0) return [];
+
+  const blockerIds = [...new Set(candidates.flatMap((c) => c.blockedBy ?? []))];
+  const related: SQL[] = [inArray(tasks.parentId, candidates.map((c) => c.id))];
+  if (blockerIds.length > 0) related.push(inArray(tasks.id, blockerIds));
+  const waitingOnRows = await db
+    .select({ id: tasks.id, title: tasks.title, status: tasks.status, parentId: tasks.parentId, blockedBy: tasks.blockedBy })
+    .from(tasks)
+    .where(and(eq(tasks.userId, userId), inArray(tasks.status, active), or(...related)));
+  const lookup = toLookup(waitingOnRows);
+  return candidates.filter((c) => !isWaiting(c, lookup)).map((c) => ({ id: c.id, title: c.title }));
+}
+
+/** The role agent's instruction for one heartbeat: the ready tasks and the board protocol. */
+export function renderRoleHeartbeatMessage(role: string, ready: readonly RoleTask[]): string {
+  const shown = ready.slice(0, 20);
+  const lines = [
+    `Role heartbeat: you are the \`${role}\` agent. These tasks are assigned to the ${role} role and ready to work (nothing blocks them, nobody holds them):`,
+    ...shown.map((t) => `- ${t.id} — ${t.title}`),
+  ];
+  if (ready.length > shown.length) lines.push(`(${ready.length - shown.length} more; they will come up on a later heartbeat.)`);
+  lines.push(
+    '',
+    'For each task, in order:',
+    '1. Call `checkout_task` with its id FIRST. If it refuses (another agent holds it — a 409 conflict — or it is blocked), skip that task and go to the next one. Never work a task you did not check out.',
+    '2. Work the task. Call `checkout_task` again on long work to renew the claim (it lapses after 30 minutes).',
+    '3. Record progress with `add_task_comment` as you go, and a short summary of what you did at the end.',
+    '4. When it is done, call `complete_task`. If you cannot finish it, say why in a comment and give it back with `checkout_task` and `release: true`.',
+    'If every task was skipped, end the turn quietly.',
+  );
+  return lines.join('\n');
+}
+
 /** Standing instructions live in the user's pinned `HEARTBEAT` note (best-effort). */
 async function readStandingInstructions(userId: string): Promise<string> {
   try {
@@ -298,6 +394,15 @@ export async function evaluateHeartbeatGate(
     coreLogger.debug({ err }, 'heartbeat: quota check unavailable (not blocking)');
   }
 
+  // A role hook's pending work is the role's ready tasks, nothing else: the
+  // user's own heartbeat covers PRs, meetings and notifications.
+  const role = heartbeatRole(hook);
+  if (role) {
+    const ready = await probeRoleWork(hook.userId, role, now);
+    if (ready.length === 0) return skip('nothing_pending');
+    return { decision: { run: true, message: renderRoleHeartbeatMessage(role, ready) }, runsToday, dayKey, seen: previouslySeen };
+  }
+
   const raw = await probePendingWork(hook.userId, now, config, deps);
 
   // A red PR or a meeting in the window has no "done" the user can click, so
@@ -367,7 +472,7 @@ export async function ensureHeartbeatHook(userId: string, now: Date = new Date()
   const [existing] = await db
     .select()
     .from(hooks)
-    .where(and(eq(hooks.trigger, 'heartbeat'), eq(hooks.userId, userId)))
+    .where(and(eq(hooks.trigger, 'heartbeat'), eq(hooks.userId, userId), sql`${hookRole} IS NULL`))
     .limit(1);
 
   if (existing) {
@@ -394,13 +499,121 @@ export async function ensureHeartbeatHook(userId: string, now: Date = new Date()
   return row.id;
 }
 
-/** Disable the caller's heartbeat hook(s). Idempotent no-op if none exist. */
+/** Disable the caller's heartbeat hook(s) (not role heartbeats). Idempotent no-op if none exist. */
 export async function disableHeartbeatHook(userId: string, now: Date = new Date()): Promise<void> {
   const db = getDb();
   await db
     .update(hooks)
     .set({ isEnabled: false, updatedAt: now })
-    .where(and(eq(hooks.trigger, 'heartbeat'), eq(hooks.userId, userId)));
+    .where(and(eq(hooks.trigger, 'heartbeat'), eq(hooks.userId, userId), sql`${hookRole} IS NULL`));
+}
+
+/** Reload the hook manager's cache so a hook written here fires (best-effort). */
+async function reloadHookCache(): Promise<void> {
+  try {
+    const { getHookManager } = await import('@/hooks/manager');
+    await getHookManager().loadHooks();
+  } catch (err) {
+    coreLogger.warn({ err }, 'heartbeat: hook cache reload failed (the hook fires after the next reload)');
+  }
+}
+
+/**
+ * Ensure `userId` has exactly one enabled heartbeat hook working as `role`
+ * (idempotent), the role counterpart of `ensureHeartbeatHook`. Its turn is
+ * the role's agent (executeSpawnAgent spawns it as that role, with the tasks
+ * tool), so it runs directly rather than through the root agent. The same
+ * row can be written through POST /api/hooks with `trigger: 'heartbeat'` and
+ * `triggerConfig: { role }`. Returns the hook id.
+ */
+export async function ensureRoleHeartbeatHook(userId: string, role: string, now: Date = new Date()): Promise<string> {
+  if (!ROLE_NAME.test(role)) throw new Error(`Invalid role "${role}"`);
+  const db = getDb();
+  const [existing] = await db
+    .select()
+    .from(hooks)
+    .where(and(eq(hooks.trigger, 'heartbeat'), eq(hooks.userId, userId), sql`${hookRole} = ${role}`))
+    .limit(1);
+
+  if (existing) {
+    if (!existing.isEnabled) {
+      await db.update(hooks).set({ isEnabled: true, nextRunAt: now, updatedAt: now }).where(eq(hooks.id, existing.id));
+      await reloadHookCache();
+    }
+    return existing.id;
+  }
+
+  const [row] = await db
+    .insert(hooks)
+    .values({
+      userId,
+      name: `Heartbeat (${role})`,
+      description: `The ${role} agent: wakes on the heartbeat, checks out ready tasks assigned to the ${role} role and works them.`,
+      trigger: 'heartbeat',
+      triggerConfig: { role },
+      action: 'spawn_agent',
+      actionConfig: { orchestrated: false, agentPrompt: '' },
+      isEnabled: true,
+      nextRunAt: now, // due on the next tick
+    })
+    .returning({ id: hooks.id });
+  await reloadHookCache();
+  return row.id;
+}
+
+/** Disable `userId`'s heartbeat hook for `role`. Idempotent. */
+export async function disableRoleHeartbeatHook(userId: string, role: string, now: Date = new Date()): Promise<void> {
+  const db = getDb();
+  await db
+    .update(hooks)
+    .set({ isEnabled: false, updatedAt: now })
+    .where(and(eq(hooks.trigger, 'heartbeat'), eq(hooks.userId, userId), sql`${hookRole} = ${role}`));
+}
+
+/**
+ * A task wakeup for a role-assigned task marks that role's enabled heartbeat
+ * hook for the owner due now (nextRunAt = now), so the next cron tick runs
+ * its gate. It never runs the turn: quiet hours, the daily cap and the quota
+ * stay the gate's, unchanged. One UPDATE; it matches nothing for a task that
+ * is not assigned to a role or an owner with no heartbeat hook for it, and a
+ * hook already due is left alone. Returns the ids of the hooks it marked.
+ */
+export async function markRoleHeartbeatDue(userId: string, taskId: string, now: Date = new Date()): Promise<string[]> {
+  const db = getDb();
+  const assignedRole = sql`(SELECT t.assignee_ref FROM tasks t WHERE t.id = ${taskId}::uuid AND t.user_id = ${userId}::uuid AND t.assignee_kind = 'role')`;
+  const marked = await db
+    .update(hooks)
+    .set({ nextRunAt: now, updatedAt: now })
+    .where(and(
+      eq(hooks.trigger, 'heartbeat'),
+      eq(hooks.isEnabled, true),
+      eq(hooks.userId, userId),
+      sql`${hookRole} = ${assignedRole}`,
+      or(isNull(hooks.nextRunAt), gt(hooks.nextRunAt, now)),
+    ))
+    .returning({ id: hooks.id });
+  return marked.map((m) => m.id);
+}
+
+/** The wakeup listener. A throw is logged by the wakeup bus and reaches nothing else. */
+async function onRoleTaskWakeup(event: TaskWakeupEvent): Promise<void> {
+  const marked = await markRoleHeartbeatDue(event.userId, event.taskId);
+  if (marked.length > 0) {
+    coreLogger.info({ userId: event.userId, taskId: event.taskId, type: event.type, hookIds: marked }, 'Role heartbeat marked due by a task wakeup');
+  }
+}
+
+let unsubscribeRoleWakeups: (() => void) | null = null;
+
+/** Subscribe role heartbeats to task wakeups (called once at startup; idempotent). */
+export function startRoleHeartbeatWakeups(): void {
+  unsubscribeRoleWakeups ??= onTaskWakeup(onRoleTaskWakeup);
+}
+
+/** Undo `startRoleHeartbeatWakeups` (shutdown, tests). Idempotent. */
+export function stopRoleHeartbeatWakeups(): void {
+  unsubscribeRoleWakeups?.();
+  unsubscribeRoleWakeups = null;
 }
 
 // ── Cron entry point ────────────────────────────────────────────────────────

@@ -102,6 +102,13 @@ export interface TriggerConfig {
    * if it comes back.
    */
   heartbeatSeen?: { prs?: string[]; events?: string[] };
+  /**
+   * For heartbeat — a role heartbeat (work board): the hook is that role's
+   * agent for its owner. Its probe is the ready tasks assigned to the role
+   * and its turn runs as the role (core/heartbeat.ts, hooks/actions.ts).
+   * Absent = the plain per-user heartbeat.
+   */
+  role?: string;
 }
 
 export interface ActionConfig {

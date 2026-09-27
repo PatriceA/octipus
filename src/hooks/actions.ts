@@ -236,6 +236,15 @@ async function executeSpawnAgent(
   prompt = withDigest(prompt);
   const message = context.message?.content ? withDigest(context.message.content) : prompt;
 
+  // A role heartbeat (triggerConfig.role) is that role's agent working the
+  // board, so it runs AS the role whatever `orchestrated` says: the root
+  // agent always runs as `general`. See spawnRoleHeartbeat.
+  if (hook?.trigger === 'heartbeat') {
+    const { heartbeatRole } = await import('@/core/heartbeat');
+    const role = heartbeatRole(hook);
+    if (role) return spawnRoleHeartbeat(role, config, sessionId, userId, prompt, message);
+  }
+
   // If orchestrated, route through the root agent instead of bare spawn
   if (config.orchestrated) {
     const { getAgentService } = await import('@/core/agent');
@@ -292,6 +301,49 @@ async function executeSpawnAgent(
   }
 
   return { success: true, data: { agentId: agent.getContext().id } };
+}
+
+/**
+ * Spawn a role heartbeat's turn: an agent whose `role` is `role` (so the
+ * board knows it as `<role>@<hook session>`, a stable identity across runs
+ * because the hook reuses its session), with the role's system prompt and
+ * tools plus the tasks tool it needs to check out, comment on and complete
+ * work. The heartbeat gate already ran; spawning still passes the quota
+ * check in AgentManager.spawn. Fire-and-forget like the direct spawn below.
+ */
+async function spawnRoleHeartbeat(
+  role: string,
+  config: Hook['actionConfig'],
+  sessionId: string,
+  userId: string,
+  prompt: string,
+  message: string,
+): Promise<ActionResult> {
+  const { ROLE_CONFIGS, getRoleConfig, getToolsForRole } = await import('@/core/agent/roles');
+  if (!(role in ROLE_CONFIGS)) return { success: false, error: `Unknown role "${role}" on heartbeat hook` };
+  const agentRole = role as import('@/core/agent/types').AgentRole;
+  const { getToolRegistry } = await import('@/tools/registry');
+  const tools = getToolsForRole(agentRole);
+  const have = new Set(tools.map((t) => t.name));
+  for (const handler of getToolRegistry().getToolHandlersForTools(['tasks'])) {
+    if (!have.has(handler.name)) tools.push(handler);
+  }
+  const { getConfig } = await import('@/config');
+  const hookTimeout = Math.max(getConfig().agent.defaultTimeout * 2, 1800000);
+  const agent = await getAgentManager().spawn({
+    sessionId,
+    userId,
+    role: agentRole,
+    topic: config.agentTopic || role,
+    model: config.agentModel,
+    systemPrompt: [getRoleConfig(agentRole).systemPromptTemplate, prompt].filter(Boolean).join('\n\n'),
+    tools,
+    timeout: hookTimeout,
+  });
+  agent.run(message).catch((error) => {
+    coreLogger.error({ error, agentId: agent.getContext().id, role }, 'Role heartbeat agent failed');
+  });
+  return { success: true, data: { agentId: agent.getContext().id, role } };
 }
 
 async function executeWebhook(
