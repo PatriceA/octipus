@@ -473,6 +473,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'SWARM_CONTRACT_RETRIES',
   },
   {
+    key: 'swarm.worktreeIsolation',
+    category: 'swarm',
+    valueType: 'boolean',
+    defaultValue: false,
+    description:
+      'Run each coding CLI child (Claude Code, Codex) in its own git worktree on an octipus/<id> branch, merged back into the project branch when it finishes cleanly and the project tree is clean. Needs a dev-mode project that is a git repository root.',
+    isSecret: false,
+    envVar: 'SWARM_WORKTREE_ISOLATION',
+  },
+  {
     key: 'swarm.levelDefaults.root.tokens',
     category: 'swarm',
     valueType: 'number',

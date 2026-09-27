@@ -9,6 +9,7 @@
 import type { AgentRole } from '@/core/agent/types';
 import type { SwarmReceipt } from './receipt';
 import type { Scorer, ScorerOutcome } from './scorers';
+import type { WorktreeReport } from './worktree';
 
 export type SwarmNodeKind = 'root' | 'agent' | 'subagent';
 
@@ -223,6 +224,12 @@ export interface ChildResult {
    * hands later siblings tokens that are already spent.
    */
   discardedTokens?: number;
+  /**
+   * Set when the child ran in its own git worktree (`swarm.worktreeIsolation`):
+   * the branch it produced, its head and diff stat, and whether it was merged
+   * back. Also copied onto `receipt.worktree` so both result formatters show it.
+   */
+  worktree?: WorktreeReport;
 }
 
 /**

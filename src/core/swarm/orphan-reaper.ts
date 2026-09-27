@@ -14,6 +14,7 @@
 import { getConfig } from '@/config';
 import { coreLogger } from '@/utils/logger';
 import { type SwarmNodeRepository, swarmNodeRepository } from './node-repository';
+import { reapStaleWorktrees, type StaleWorktreeResult } from './worktree';
 
 export interface ReapResult {
   /** Number of `running` rows flipped to `cancelled`. */
@@ -27,6 +28,11 @@ export interface ReapResult {
    * prompt / behaviour drift, not a crash.
    */
   uncollectedDetached: number;
+  /**
+   * Swarm worktrees (`swarm.worktreeIsolation`) whose child is no longer
+   * running here: merged ones removed, the rest reported and left alone.
+   */
+  staleWorktrees?: StaleWorktreeResult;
 }
 
 /**
@@ -81,6 +87,8 @@ export async function reapOrphanedSwarmNodes(
      * `AgentManager.getAgent(id).getActivity()`.
      */
     getActivity?: (id: string) => { lastActivityAt: number; blockedSince: number | null } | null;
+    /** Worktree sweep options (tests); `false` skips the sweep. */
+    worktrees?: false | Parameters<typeof reapStaleWorktrees>[0];
   } = {},
 ): Promise<ReapResult> {
   const cfg = getConfig();
@@ -193,7 +201,19 @@ export async function reapOrphanedSwarmNodes(
     }
   }
 
-  return { reaped, olderThanMs, uncollectedDetached };
+  // Worktrees left behind by children that are gone (a crash mid-run, or a
+  // clean-up that git refused). Runs whether or not the flag is on now: it may
+  // have been on when they were made. Never deletes unmerged work.
+  let staleWorktrees: StaleWorktreeResult | undefined;
+  if (opts.worktrees !== false) {
+    try {
+      staleWorktrees = await reapStaleWorktrees(opts.worktrees ?? {});
+    } catch (err) {
+      coreLogger.error({ err }, 'Swarm orphan reaper worktree pass failed');
+    }
+  }
+
+  return { reaped, olderThanMs, uncollectedDetached, staleWorktrees };
 }
 
 /**

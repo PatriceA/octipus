@@ -34,6 +34,7 @@ import { BudgetExceededError } from './swarm/errors';
 import { DetachedChildManager } from './agent-worker/detached-child-manager';
 import { formatCollectedResults } from './swarm/collect-tool';
 import { swarmNodeRepository } from './swarm/node-repository';
+import { worktreeCwdOverride } from './swarm/worktree';
 import type { ChildResult, PendingChild } from './swarm/types';
 import { getCLIToolConfig, resolveCliModelEntry } from './cli-agent-factory';
 import { buildChildEnv } from './cli-child-env';
@@ -731,6 +732,19 @@ export class CLIAgentWorker extends BaseAgentWorker {
         }
         mkdirSync(workspaceCwd, { recursive: true });
       }
+    }
+    // Swarm worktree isolation: the spawner created this child a git worktree
+    // of the project (see `swarm/worktree.ts`). Resolved AFTER the session
+    // checks above so a vanished project still fails loud, and accepted only
+    // when it names an existing directory under the worktrees root.
+    const worktreeCwd = worktreeCwdOverride(this.context.metadata as Record<string, unknown> | undefined);
+    if (worktreeCwd) {
+      workspaceCwd = worktreeCwd;
+    } else if (this.context.metadata?.worktreePath !== undefined) {
+      agentLogger.warn(
+        { agentId: this.context.id, worktreePath: this.context.metadata.worktreePath },
+        'CLI agent: ignoring worktreePath outside the worktrees root — using the shared tree',
+      );
     }
 
     // Vendor CLI session reuse — always on for adapters the shared

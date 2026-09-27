@@ -22,6 +22,16 @@ import { getModelRegistry } from '@/models/model-registry';
 import { getTopicConfig } from '@/models/topic-config';
 import { premiseNoteFor } from '@/core/premise';
 import { WorkspaceFS } from '@/security/workspace-fs';
+import { randomUUID } from 'node:crypto';
+import { getCLIToolConfig, isCLIProvider, resolveCliModelEntry } from '@/core/cli-agent-factory';
+import {
+  createWorktree,
+  finishWorktree,
+  gitTopLevelOf,
+  releaseWorktree,
+  removeWorktree,
+  type WorktreeHandle,
+} from './worktree';
 
 /**
  * The directories a premise check may look in for a user's workspace.
@@ -883,7 +893,107 @@ export class SwarmSpawner {
      * `minFilesChanged` sees the whole child's work, not just its own.
      */
     fsBaseline?: WorkspaceSnapshot | null;
+    /** The directory `fsBaseline` was taken of — re-snapshot if an attempt measures another. */
+    fsBaselineRoot?: string;
+    /**
+     * This child's own git worktree (`swarm.worktreeIsolation`), created once
+     * before the first attempt and carried by every retry (they all spread
+     * `opts`), so a retry continues the same tree and the same branch. `null`
+     * = decided: the child shares the tree. `undefined` = not decided yet.
+     */
+    worktree?: WorktreeHandle | null;
   }): Promise<ChildResult> {
+    if (opts.worktree === undefined) opts.worktree = await this.prepareWorktree(opts);
+    const wt = opts.worktree;
+    if (!wt) return this.runChildAttempts(opts);
+    let result: ChildResult | undefined;
+    try {
+      result = await this.runChildAttempts(opts);
+    } finally {
+      // Also on a throw: the child's edits are committed onto its branch
+      // rather than left in a directory nothing will look at again.
+      await this.settleWorktree(wt, result);
+    }
+    return result;
+  }
+
+  /**
+   * Whether this child gets its own worktree, and the worktree if so. Only a
+   * coding-role CLI child whose project directory is a git repository root
+   * qualifies: native file tools write through our own queue to the shared
+   * tree and stay there. Any failure falls back to the shared tree — isolation
+   * is an improvement, never a reason not to run the child.
+   */
+  private async prepareWorktree(
+    opts: Parameters<SwarmSpawner['runChildWithRetry']>[0],
+  ): Promise<WorktreeHandle | null> {
+    let enabled = false;
+    try {
+      enabled = getConfig().swarm?.worktreeIsolation === true;
+    } catch {
+      enabled = false;
+    }
+    if (!enabled || opts.childRole !== 'coding') return null;
+    try {
+      if (!(await isCliModel(opts.childModel))) return null;
+      const root = await childWorkspaceRoot(opts.parentContext);
+      const repo = root ? await gitTopLevelOf(root) : null;
+      if (!repo) {
+        coreLogger.debug({ root, parentNodeId: opts.parent.id }, 'Swarm worktree skipped — project is not a git repository root');
+        return null;
+      }
+      // Minted here, not the agent id: the agent does not exist yet, and a
+      // crash or contract retry runs on a NEW agent that must reuse this tree.
+      const id = `c${randomUUID().replace(/-/g, '').slice(0, 20)}`;
+      return await createWorktree(repo, id);
+    } catch (err) {
+      coreLogger.warn(
+        { err: (err as Error).message, parentNodeId: opts.parent.id, model: opts.childModel },
+        'Swarm worktree could not be created — the child runs on the shared tree',
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Commit, report and (when safe) merge a finished child's worktree, then
+   * clean it up. Never throws: a clean-up failure is reported on the result and
+   * the worktree is left in place for a human.
+   */
+  private async settleWorktree(wt: WorktreeHandle, result: ChildResult | undefined): Promise<void> {
+    try {
+      const report = await finishWorktree(wt, {
+        // Only a child that finished `ok` is merged. A failed or cancelled
+        // child's work is still committed on its branch, for a human to judge.
+        merge: result?.status === 'ok',
+        label: result?.nodeId ? `swarm node ${result.nodeId}` : undefined,
+      });
+      const merged = report.merge === 'merged' || report.merge === 'no_changes';
+      const cleaned = await removeWorktree(wt, { merged });
+      if (!cleaned.removed) releaseWorktree(wt.id);
+      report.branchKept = !cleaned.branchDeleted;
+      coreLogger.info(
+        { branch: wt.branch, merge: report.merge, diffStat: report.diffStat, removed: cleaned.removed },
+        'Swarm worktree settled',
+      );
+      if (!result) return;
+      result.worktree = report;
+      if (result.receipt) result.receipt = { ...result.receipt, worktree: report };
+      if (!merged) {
+        const line = `Work is on branch ${wt.branch} (${report.diffStat || 'no diff'}), NOT merged: ${report.merge}${report.mergeDetail ? ` — ${report.mergeDetail}` : ''}.`;
+        result.notes = result.notes ? `${result.notes}\n${line}` : line;
+      }
+    } catch (err) {
+      releaseWorktree(wt.id);
+      const line = `Worktree ${wt.path} (branch ${wt.branch}) could not be finalised and was left in place: ${(err as Error).message}`;
+      coreLogger.error({ err, path: wt.path, branch: wt.branch }, 'Swarm worktree could not be finalised');
+      if (result) result.notes = result.notes ? `${result.notes}\n${line}` : line;
+    }
+  }
+
+  private async runChildAttempts(
+    opts: Parameters<SwarmSpawner['runChildWithRetry']>[0],
+  ): Promise<ChildResult> {
     // Retry policy (design §Failure Modes):
     //   provider_error → retry once on the SAME spawn attempt (same node).
     //     Cheap: we call `worker.run(childMessage)` again.
@@ -1230,6 +1340,11 @@ export class SwarmSpawner {
     const agentManager = getAgentManager();
     const startTime = Date.now();
     let worker: AnyAgentWorker;
+    // The child's worktree, for THIS attempt. Only a CLI worker honours
+    // `worktreePath`, so an attempt on a native model (a topic backup) runs
+    // and is judged on the shared tree, like any other native child.
+    const attemptWorktree =
+      opts.worktree && (await isCliModel(opts.childModel)) ? opts.worktree.path : undefined;
 
     // Phase 2: for Agents (depth 1), build the child's AgentNode up front
     // so we can register `spawn_child` + `escalate_to_other_lane`
@@ -1343,6 +1458,7 @@ export class SwarmSpawner {
             ((opts.parentContext.metadata as Record<string, unknown>)?.originalRequest as string) ??
             opts.brief.originalUserRequest,
           ...pipelineMetadata(opts.parentContext.metadata as Record<string, unknown> | undefined),
+          ...(attemptWorktree ? { worktreePath: attemptWorktree } : {}),
         },
       });
     } catch (err) {
@@ -1519,15 +1635,25 @@ export class SwarmSpawner {
     // The tree the child actually works in: the dev-mode project when the
     // session has one, else the per-user sandbox — the `file_exists` scorer
     // resolves the same way, so both file-aware scorers judge one directory.
+    // A child with its own worktree works THERE, so that is what is measured.
     const scorerWorkspaceRoot = wantsFileEvidence
-      ? (await devProjectPathForSession(opts.parentContext.sessionId)) ??
+      ? attemptWorktree ??
+        (await devProjectPathForSession(opts.parentContext.sessionId)) ??
         WorkspaceFS.forAgent({ userId: opts.parentContext.userId }).root
       : null;
     // Snapshotted once per child, before its first attempt. A retry re-snapshots
     // AFTER the first attempt committed its work, then measures zero changes and
     // fails `minFilesChanged` on every retry until the pool runs dry.
-    if (scorerWorkspaceRoot && opts.fsBaseline === undefined) {
+    // Retries reuse the worktree, so the root is normally unchanged; it only
+    // differs when an attempt moved between the worktree and the shared tree,
+    // and a baseline of one directory cannot measure another.
+    if (
+      scorerWorkspaceRoot &&
+      (opts.fsBaseline === undefined ||
+        (opts.fsBaselineRoot !== undefined && opts.fsBaselineRoot !== scorerWorkspaceRoot))
+    ) {
       opts.fsBaseline = await snapshotWorkspace(scorerWorkspaceRoot);
+      opts.fsBaselineRoot = scorerWorkspaceRoot;
     }
     const fsBefore = scorerWorkspaceRoot ? opts.fsBaseline ?? null : null;
 
@@ -1648,7 +1774,9 @@ export class SwarmSpawner {
           childTools: opts.childTools,
           childRole: opts.childRole,
           signal: opts.parent.signal,
-          projectPath: await devProjectPathForSession(opts.parentContext.sessionId),
+          // The child's worktree when it has one: evidence gates must check the
+          // tree the child changed, which is not the shared project until merged.
+          projectPath: attemptWorktree ?? (await devProjectPathForSession(opts.parentContext.sessionId)),
         }),
       );
       result.scorerOutcome = outcome;
@@ -2277,6 +2405,29 @@ async function devProjectPathForSession(sessionId?: string): Promise<string | un
     // which is the behaviour that shipped.
     return undefined;
   }
+}
+
+/**
+ * The tree a child works in when it has no worktree: the dev-mode project, else
+ * the per-user sandbox. The same resolution the scorer workspace root uses.
+ */
+async function childWorkspaceRoot(ctx: AgentContext): Promise<string | undefined> {
+  const project = await devProjectPathForSession(ctx.sessionId);
+  if (project) return project;
+  try {
+    return WorkspaceFS.forAgent({ userId: ctx.userId }).root;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether `model` runs as a CLI agent — the same test `AgentManager.spawn` uses
+ * to pick `CLIAgentWorker`, so the worktree decision and the worker agree.
+ */
+async function isCliModel(model: string): Promise<boolean> {
+  const entry = await resolveCliModelEntry(model).catch(() => null);
+  return entry ? isCLIProvider(entry.provider) : !!getCLIToolConfig(model);
 }
 
 export function buildScorerContext(args: {
