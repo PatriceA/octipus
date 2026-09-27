@@ -87,7 +87,13 @@ beforeAll(async () => {
        ('${aliceId}', 'alice-spawn', 'schedule', '{"cronExpression":"0 0 1 1 *"}'::jsonb, 'spawn_agent', '{}'::jsonb, true),
        ('${aliceId}', 'alice-shared-path', 'webhook', '{"webhookPath":"shared","webhookSecret":"${aliceSecret}"}'::jsonb, 'notify', '{}'::jsonb, true),
        ('${bobId}', 'bob-shared-path', 'webhook', '{"webhookPath":"shared","webhookSecret":"${bobSecret}"}'::jsonb, 'notify', '{}'::jsonb, true),
-       ('${aliceId}', 'alice-disabled-later', 'schedule', '{"cronExpression":"0 0 1 1 *"}'::jsonb, 'notify', '{}'::jsonb, true)`,
+       ('${aliceId}', 'alice-disabled-later', 'schedule', '{"cronExpression":"0 0 1 1 *"}'::jsonb, 'notify', '{}'::jsonb, true),
+       ('${aliceId}', 'alice-telegram', 'message_received', '{"channelTypes":["telegram"]}'::jsonb, 'notify', '{}'::jsonb, true)`,
+  );
+  await executeRaw(
+    `INSERT INTO hooks (user_id, name, trigger, trigger_config, action, action_config, is_enabled, conditions)
+     VALUES ('${aliceId}', 'alice-gh-push', 'webhook', '{"webhookPath":"gh"}'::jsonb, 'notify', '{}'::jsonb, true,
+             '[{"field":"webhook.headers.x-github-event","operator":"equals","value":"push"}]'::jsonb)`,
   );
   await executeRaw(
     `INSERT INTO hooks (user_id, name, trigger, trigger_config, action, action_config, is_enabled, max_executions)
@@ -190,6 +196,52 @@ describe('POST /api/hooks/:id/test', () => {
     expect(ctx.message?.content).toBe('hello'); // only the text is carried over
     expect(JSON.stringify(ctx)).not.toContain(bobSession);
     expect(JSON.stringify(ctx)).not.toContain(bobId);
+  });
+
+  test('a channel-filtered message hook can be test-fired; identity fields are still ignored', async () => {
+    const none = await postTest(ids['alice-telegram'], { message: 'hi' });
+    expect(none.body.results).toEqual([]); // defaults to channel 'api'
+
+    const r = await postTest(ids['alice-telegram'], {
+      context: {
+        message: {
+          content: 'hi',
+          channelType: 'telegram',
+          userId: bobId,
+          metadata: { sessionId: bobSession, userId: bobId, chatKind: 'group' },
+        },
+        agent: { userId: bobId, sessionId: bobSession },
+        tool: { name: 'x', toolId: 'x', args: {} },
+      },
+    });
+    expect(r.body.results.map((x: any) => x.hookId)).toEqual([ids['alice-telegram']]);
+    const ctx = contexts[0] as import('./triggers').TriggerContext;
+    expect(ctx.message?.channelType).toBe('telegram');
+    expect(ctx.message?.userId).toBe(aliceId);
+    expect(ctx.message?.metadata).toEqual({ chatKind: 'group' });
+    expect(ctx.agent).toBeUndefined();
+    expect(ctx.tool).toBeUndefined();
+    expect(JSON.stringify(ctx)).not.toContain(bobSession);
+    expect(JSON.stringify(ctx)).not.toContain(bobId);
+  });
+
+  test('the `channel` alias works and an unknown channel type is a 400', async () => {
+    const ok = await postTest(ids['alice-telegram'], { context: { message: { content: 'hi', channel: 'telegram' } } });
+    expect(ok.body.results.map((x: any) => x.hookId)).toEqual([ids['alice-telegram']]);
+    const bad = await postTest(ids['alice-telegram'], { context: { message: { content: 'hi', channelType: 'carrier-pigeon' } } });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error).toMatch(/Invalid channel type/);
+  });
+
+  test('a webhook hook with a header condition can be test-fired', async () => {
+    const miss = await postTest(ids['alice-gh-push'], { context: { webhook: { headers: { 'X-GitHub-Event': 'issues' } } } });
+    expect(miss.body.results).toEqual([]);
+    const r = await postTest(ids['alice-gh-push'], {
+      context: { webhook: { path: 'gh', method: 'post', headers: { 'X-GitHub-Event': 'push' }, body: { ref: 'main' } } },
+    });
+    expect(r.body.results.map((x: any) => x.hookId)).toEqual([ids['alice-gh-push']]);
+    const ctx = contexts[contexts.length - 1] as import('./triggers').TriggerContext;
+    expect(ctx.webhook).toEqual({ path: 'gh', method: 'POST', headers: { 'x-github-event': 'push' }, body: { ref: 'main' } });
   });
 
   test('a test fire is not a real run: counters untouched, logged as manual_test', async () => {
