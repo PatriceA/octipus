@@ -230,3 +230,85 @@ describe('structure: add_tasks, nesting, waiting', () => {
     expect(next.tasks[0]).toMatchObject({ title: 'started thing', bucket: 'doing', reason: 'in progress' });
   });
 });
+
+describe('work board: checkout_task, add_task_comment, assignee', () => {
+  // The board actor is `<role>@<root session>` (or the pipeline stage), not the
+  // per-spawn agent id: `over` builds a context for another agent run.
+  const callAs = (name: string, args: Record<string, unknown>, userId: string, over: Partial<AgentContext>) =>
+    handlers.get(name)!.execute(args, { ...ctx(userId), ...over }) as Promise<any>;
+
+  test('checkout claims for the logical agent; another agent is refused with the holder', async () => {
+    const t = await call('create_task', { title: 'claim me' }, aliceId);
+    const first = await callAs('checkout_task', { id: t.task.id }, aliceId, { id: 'run-1', role: 'coder' });
+    expect(first.checkedOut).toBe(true);
+    expect(first.task).toMatchObject({ status: 'in_progress', checkedOutBy: 'coder@sess-1' });
+    // The same role in the same session, in a later turn (a new agent id), still holds it.
+    const again = await callAs('checkout_task', { id: t.task.id }, aliceId, { id: 'run-2', role: 'coder' });
+    expect(again.checkedOut).toBe(true);
+    const other = await callAs('checkout_task', { id: t.task.id }, aliceId, { id: 'run-3', role: 'coder', sessionId: 'sess-2' });
+    expect(other).toEqual({ error: 'Task is checked out by coder@sess-1', holder: 'coder@sess-1' });
+
+    const released = await callAs('checkout_task', { id: t.task.id, release: true }, aliceId, { id: 'run-4', role: 'coder' });
+    expect(released.task).toMatchObject({ status: 'open', checkedOutBy: null });
+    const reclaimed = await callAs('checkout_task', { id: t.task.id }, aliceId, { role: 'coder', sessionId: 'sess-2' });
+    expect(reclaimed.checkedOut).toBe(true);
+    const done = await callAs('complete_task', { id: t.task.id }, aliceId, { role: 'coder', sessionId: 'sess-2' });
+    expect(done.task).toMatchObject({ status: 'done', checkedOutBy: null });
+  });
+
+  test('a pipeline stage is identified by pipeline and node key', async () => {
+    const t = await call('create_task', { title: 'stage work' }, aliceId);
+    const r = await callAs('checkout_task', { id: t.task.id }, aliceId, { metadata: { pipelineId: 'p1', nodeKey: 'build' } });
+    expect(r.task.checkedOutBy).toBe('pipeline:p1/build');
+  });
+
+  test('update_task and complete_task refuse while another agent holds a live checkout', async () => {
+    const t = await call('create_task', { title: 'held' }, aliceId);
+    await callAs('checkout_task', { id: t.task.id }, aliceId, { role: 'coder' });
+    const refused = { error: 'Task is checked out by coder@sess-1', holder: 'coder@sess-1' };
+    expect(await call('update_task', { id: t.task.id, title: 'mine now' }, aliceId)).toEqual(refused);
+    expect(await call('complete_task', { id: t.task.id }, aliceId)).toEqual(refused);
+    const byHolder = await callAs('update_task', { id: t.task.id, notes: 'progress' }, aliceId, { role: 'coder' });
+    expect(byHolder.updated).toBe(true);
+
+    // A lapsed lease no longer blocks anyone.
+    const { executeRaw } = await import('@/db/postgres');
+    await executeRaw(`UPDATE tasks SET checked_out_at = now() - interval '31 minutes' WHERE id = '${t.task.id}'`);
+    const completed = await call('complete_task', { id: t.task.id }, aliceId);
+    expect(completed.task).toMatchObject({ status: 'done', checkedOutBy: null });
+  });
+
+  test('a blocked task and another user\'s task cannot be checked out', async () => {
+    const blocker = await call('create_task', { title: 'blocker' }, aliceId);
+    const blocked = await call('create_task', { title: 'waits', blockedBy: [blocker.task.id] }, aliceId);
+    const r = await call('checkout_task', { id: blocked.task.id }, aliceId);
+    expect(r).toEqual({ error: 'Task is blocked: blocked by "blocker"', blocked: true });
+    expect(await call('checkout_task', { id: blocker.task.id }, bobId)).toEqual({ error: 'Task not found' });
+  });
+
+  test('add_task_comment records the agent as author; cross-tenant is not found', async () => {
+    const t = await call('create_task', { title: 'discuss' }, aliceId);
+    const c = await call('add_task_comment', { id: t.task.id, body: 'picked this up' }, aliceId);
+    expect(c.commented).toBe(true);
+    expect(await call('add_task_comment', { id: t.task.id, body: 'hi' }, bobId)).toEqual({ error: 'Task not found' });
+    expect(await call('add_task_comment', { id: t.task.id, body: '  ' }, aliceId)).toEqual({ error: 'Comment body is required' });
+    const { scopedRepos } = await import('@/db/repositories/scoped');
+    const { principalFromUser } = await import('@/security/principal');
+    const thread = await scopedRepos(principalFromUser({ id: aliceId, username: 'alice', isAdmin: false })).tasks.listComments(t.task.id);
+    expect(thread?.comments.map((r) => [r.authorKind, r.authorRef, r.body])).toEqual([['agent', 'general@sess-1', 'picked this up']]);
+  });
+
+  test('assignee: create sets it, list filters by it, update clears it', async () => {
+    const t = await call('create_task', { title: 'for the pm', assigneeKind: 'role', assigneeRef: 'pm' }, aliceId);
+    expect(t.task).toMatchObject({ assigneeKind: 'role', assigneeRef: 'pm' });
+    const listed = await call('list_tasks', { assigneeKind: 'role', assigneeRef: 'pm' }, aliceId);
+    expect(listed.tasks.map((x: any) => x.title)).toEqual(['for the pm']);
+    const bad = await call('create_task', { title: 'x', assigneeKind: 'team', assigneeRef: 'a' }, aliceId);
+    expect(bad.error).toContain('Invalid assigneeKind');
+    const refOnly = await call('update_task', { id: t.task.id, assigneeRef: 'coder' }, aliceId);
+    expect(refOnly).toEqual({ error: 'assigneeKind is required with assigneeRef' });
+    const cleared = await call('update_task', { id: t.task.id, assigneeKind: '' }, aliceId);
+    expect(cleared.task).toMatchObject({ assigneeKind: null, assigneeRef: null });
+  });
+});
+

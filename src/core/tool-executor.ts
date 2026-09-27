@@ -767,7 +767,7 @@ export class ToolExecutor {
       try {
         const { getHookManager } = await import('@/hooks/manager');
         const hookManager = getHookManager();
-        const preHookResult = await hookManager.triggerToolHooks('tool_pre', toolCall.name, toolId, toolCall.arguments);
+        const preHookResult = await hookManager.triggerToolHooks(this.context.userId, 'tool_pre', toolCall.name, toolId, toolCall.arguments);
         if (preHookResult.decision === 'deny') {
           this.counters.permissionDenials++;
           results.push({
@@ -884,7 +884,7 @@ export class ToolExecutor {
         try {
           const { getHookManager } = await import('@/hooks/manager');
           const hookManager = getHookManager();
-          hookManager.triggerToolHooks('tool_post', toolCall.name, toolId, toolCall.arguments, {
+          hookManager.triggerToolHooks(this.context.userId, 'tool_post', toolCall.name, toolId, toolCall.arguments, {
             output: resultStr.slice(0, 2000),
           }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in tool-executor'));
         } catch { /* hooks not ready */ }

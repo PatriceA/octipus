@@ -4,7 +4,7 @@
  * The route delegates approval logic to the root agent's ApprovalManager.
  * Phase 1a tightened that manager so:
  *   - getPendingApprovals(forUserId) filters by owner
- *   - peek(requestId) lets callers verify ownership before resolving
+ *   - resolveApprovalDetailed(..., { forUserId }) refuses another owner's request
  *
  * Both checks are pure (no DB, no network) so we exercise them directly
  * here rather than rebuilding a stub root agent service. The
@@ -59,20 +59,18 @@ describe('ApprovalManager.getPendingApprovals(forUserId)', () => {
   });
 });
 
-describe('ApprovalManager.peek', () => {
-  test('returns the pending request with userId so callers can verify ownership', () => {
+describe('ApprovalManager.resolveApprovalDetailed(forUserId)', () => {
+  test('refuses another principal’s answer as not found and leaves the request pending', async () => {
     const m = new ApprovalManager();
     m.requestApproval('a', 'a?', ctx(aliceId), () => {}).catch(() => {});
     const id = m.getPendingApprovals()[0].id;
 
-    const peeked = m.peek(id);
-    expect(peeked).not.toBeNull();
-    expect(peeked!.userId).toBe(aliceId);
-    expect(peeked!.sessionId).toBe(`sess-${aliceId}`);
+    expect(await m.resolveApprovalDetailed(id, true, undefined, { forUserId: bobId })).toEqual({ status: 'not_found' });
+    expect(m.getPendingApprovals(aliceId).map((r) => r.id)).toEqual([id]);
   });
 
-  test('returns null for unknown request ids', () => {
+  test('refuses an unknown request id', async () => {
     const m = new ApprovalManager();
-    expect(m.peek('does-not-exist')).toBeNull();
+    expect(await m.resolveApprovalDetailed('does-not-exist', true)).toEqual({ status: 'not_found' });
   });
 });

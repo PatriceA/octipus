@@ -480,7 +480,8 @@ export async function maybeRunHeartbeats(
       // checklist + standing instructions as the message. `executeSpawnAgent`
       // routes it on the 'heartbeat' channel (via hook.trigger).
       hookManager
-        .trigger(
+        .triggerHook(
+          hook.id,
           { type: 'heartbeat', data: { hookId: hook.id }, timestamp: now },
           {
             // Carry the rendered heartbeat message so executeSpawnAgent uses it
