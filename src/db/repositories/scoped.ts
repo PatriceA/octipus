@@ -36,11 +36,12 @@
  * deployments.
  */
 
-import { and, asc, count, desc, eq, gte, inArray, ne, notExists, or, type SQL, sql } from 'drizzle-orm';
+import { and, arrayContains, asc, count, desc, eq, getTableColumns, gte, inArray, ne, notExists, notInArray, or, type SQL, sql } from 'drizzle-orm';
 import { alias, type AnyPgColumn } from 'drizzle-orm/pg-core';
+import { dispatchWakeups, scheduleWakeup, type WakeupCause } from '@/core/tasks/wakeups';
 import { isAdmin, isAuthenticated, type Principal } from '@/security/principal';
 import { TASK_CHECKOUT_TTL_MS } from '@/core/tasks/checkout';
-import { ACTIVE_TASK_STATUSES, isActiveStatus } from '@/core/tasks/status';
+import { ACTIVE_TASK_STATUSES, isActiveStatus, isTaskStatus } from '@/core/tasks/status';
 import { toLookup, type WaitingOn, waitingOn } from '@/core/tasks/structure';
 import { getDb } from '../postgres';
 import { type AgentRecord, agents, type NewAgentRecord } from '../schema/agents';
@@ -1045,9 +1046,30 @@ export class ScopedTaskRepo {
   /**
    * Update only if owned. `completedAt` is managed by the route/tool. With
    * `asActor` (the tasks tool) the write also requires that no one else holds
-   * a live checkout, in the same UPDATE; a refused write returns null like a
-   * miss, and the caller re-reads to tell which. Without it (the user's
-   * routes) the write overrides any checkout.
+   * a live checkout, in the same UPDATE (every guarded UPDATE below carries
+   * it); a refused write returns null like a miss, and the caller re-reads to
+   * tell which. Without it (the user's routes) the write overrides any
+   * checkout. Leaving the active lanes or going back to open clears the
+   * checkout.
+   *
+   * This and `delete` are the only paths a task leaves the active set by
+   * (the PATCH/DELETE routes, the update/complete tools, anything else
+   * holding a scoped repo), so the dependency wakeups hang off them. A
+   * close (a status in TASK_STATUSES that is not active) runs as guarded
+   * UPDATEs, each atomic because Postgres re-checks the guard under the
+   * row lock:
+   *
+   *   1. `… AND status IN (active)`: a hit is a real active → closed
+   *      transition, and concurrent closes of one task cannot both win it;
+   *   2. on a miss, `… AND status NOT IN (active)`: already closed, a
+   *      plain edit of a closed task, nothing fires;
+   *   3. if both miss (reopened between the two, or not owned), one last
+   *      unguarded UPDATE whose RETURNING subquery reports the pre-update
+   *      status from the statement snapshot; active there fires too.
+   *
+   * `updatedAt` is always set, so (updatedAt, id) orders closes for the
+   * sibling rule in core/tasks/wakeups.ts. The wakeup itself is detached
+   * (`scheduleWakeup`): it never adds latency to, or fails, the write.
    */
   async update(id: string, patch: Partial<NewTask>, opts: { asActor?: string } = {}): Promise<Task | null> {
     if (!isUuid(id)) return null;
@@ -1060,12 +1082,27 @@ export class ScopedTaskRepo {
       ? { checkedOutBy: null, checkedOutAt: null, checkoutRunId: null }
       : {};
     const holderCheck = opts.asActor !== undefined ? [this.leaseFree(opts.asActor)] : [];
-    const result = await this.db
+    const where = (...extra: SQL[]) => this.scopeWhere(id, ...holderCheck, ...extra);
+    const values = { ...safe, ...release, updatedAt: new Date() };
+    const withPrevious = {
+      ...getTableColumns(tasks),
+      previousStatus: sql<string>`(SELECT p.status FROM tasks p WHERE p.id = tasks.id)`,
+    };
+    if (!(isTaskStatus(safe.status) && !isActiveStatus(safe.status))) {
+      const result = await this.db.update(tasks).set(values).where(where()).returning();
+      return result[0] ?? null;
+    }
+    const active = inArray(tasks.status, [...ACTIVE_TASK_STATUSES]);
+    const [won] = await this.db.update(tasks).set(values).where(where(active)).returning(withPrevious);
+    if (won) return this.closedBy(won);
+    const [stillClosed] = await this.db
       .update(tasks)
-      .set({ ...safe, ...release, updatedAt: new Date() })
-      .where(this.scopeWhere(id, ...holderCheck))
+      .set(values)
+      .where(where(notInArray(tasks.status, [...ACTIVE_TASK_STATUSES])))
       .returning();
-    return result[0] ?? null;
+    if (stillClosed) return stillClosed;
+    const [last] = await this.db.update(tasks).set(values).where(where()).returning(withPrevious);
+    return last ? this.closedBy(last) : null;
   }
 
   /**
@@ -1222,13 +1259,87 @@ export class ScopedTaskRepo {
     return { comments: newest.slice(0, limit).reverse(), truncated: newest.length > limit };
   }
 
-  /** Delete only if owned. Returns false on miss / cross-tenant. */
+  /** Strip the RETURNING extra and wake when the row was active before the write. */
+  private closedBy(row: Task & { previousStatus: string }): Task {
+    const { previousStatus, ...closed } = row;
+    this.wakeAfter(closed, previousStatus, 'closed');
+    return closed;
+  }
+
+  /** Run the wakeups for a task that just left the active set, detached. */
+  private wakeAfter(closed: Task, previousStatus: string, cause: WakeupCause): void {
+    if (!isActiveStatus(previousStatus)) return;
+    scheduleWakeup(async () => {
+      const context = await this.wakeupContext(closed);
+      await dispatchWakeups({ closed, previousStatus, cause, ...context });
+    });
+  }
+
+  /**
+   * The rows needed to decide what closing `closed` woke. Tenancy is per
+   * user, so every read is the closed task's owner and nothing else (no
+   * workspace narrowing: a blocker in another of the owner's workspaces
+   * still blocks). Loads, uncapped: active tasks whose `blockedBy` holds it,
+   * every other blocker those tasks name, the parent, the parent's
+   * active children and its latest-closed other child (for the sibling
+   * order). A named blocker the owner does not have is looked up
+   * by id alone: if the row exists (another user's, only reachable by raw
+   * SQL) it is `unknownIds` and counts as blocking; if it is gone it is a
+   * deleted blocker and inert.
+   */
+  async wakeupContext(closed: Task): Promise<{ rows: Task[]; unknownIds: string[] }> {
+    const owner = eq(tasks.userId, closed.userId);
+    const active = inArray(tasks.status, [...ACTIVE_TASK_STATUSES]);
+    const byId = new Map<string, Task>();
+    const dependents = await this.db
+      .select()
+      .from(tasks)
+      .where(and(owner, active, arrayContains(tasks.blockedBy, [closed.id])));
+    for (const row of dependents) byId.set(row.id, row);
+    if (closed.parentId) {
+      const family = await this.db
+        .select()
+        .from(tasks)
+        .where(and(owner, sql`(${tasks.id} = ${closed.parentId} OR (${tasks.parentId} = ${closed.parentId} AND ${active}))`));
+      for (const row of family) byId.set(row.id, row);
+      // The latest-closed sibling (by the (updatedAt, id) order), for the
+      // "last child closes it" rule: one row, whatever the family size.
+      const [latestClosed] = await this.db
+        .select()
+        .from(tasks)
+        .where(and(owner, eq(tasks.parentId, closed.parentId), ne(tasks.id, closed.id), notInArray(tasks.status, [...ACTIVE_TASK_STATUSES])))
+        .orderBy(desc(tasks.updatedAt), desc(tasks.id))
+        .limit(1);
+      if (latestClosed) byId.set(latestClosed.id, latestClosed);
+    }
+    const named = [...new Set(dependents.flatMap((d) => d.blockedBy ?? []))]
+      .filter((b) => b !== closed.id && !byId.has(b) && isUuid(b));
+    let unknownIds: string[] = [];
+    if (named.length > 0) {
+      const found = await this.db.select().from(tasks).where(and(owner, inArray(tasks.id, named)));
+      for (const row of found) byId.set(row.id, row);
+      const missing = named.filter((b) => !byId.has(b));
+      if (missing.length > 0) {
+        // Existence only (ids, never data): a foreign row is unknown, so conservatively blocking.
+        const foreign = await this.db.select({ id: tasks.id }).from(tasks).where(inArray(tasks.id, missing));
+        unknownIds = foreign.map((r) => r.id);
+      }
+    }
+    byId.delete(closed.id);
+    return { rows: [...byId.values()], unknownIds };
+  }
+
+  /**
+   * Delete only if owned. Returns false on miss / cross-tenant. Deleting an
+   * active task can free its dependents or finish its parent just as
+   * closing it does; DELETE … RETURNING hands back the row atomically.
+   */
   async delete(id: string): Promise<boolean> {
     if (!isUuid(id)) return false;
-    const result = await this.db
-      .delete(tasks)
-      .where(this.scopeWhere(id))
-      .returning();
+    const result = await this.db.delete(tasks).where(this.scopeWhere(id)).returning();
+    const gone = result[0];
+    // A delete ranks at the moment it happened in the sibling order.
+    if (gone) this.wakeAfter({ ...gone, updatedAt: new Date() }, gone.status, 'deleted');
     return result.length > 0;
   }
 }
