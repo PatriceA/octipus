@@ -9,6 +9,7 @@ import {
   probeHasWork,
   renderChecklist,
   renderRoleHeartbeatMessage,
+  sanitizeTriggerConfig,
 } from './heartbeat';
 
 const cfg = (over: Partial<HeartbeatConfig> = {}): HeartbeatConfig => ({
@@ -167,5 +168,24 @@ describe('role heartbeats (pure)', () => {
     expect(out).toContain('- id-19 — T19');
     expect(out).not.toContain('- id-20 — T20');
     expect(out).toContain('(5 more;');
+  });
+});
+
+describe('sanitizeTriggerConfig', () => {
+  test('drops the server-held heartbeat state from user input', () => {
+    const out = sanitizeTriggerConfig({
+      role: 'coding', heartbeatDayKey: '2026-07-12', heartbeatRunsToday: 0, heartbeatSeen: { prs: [] }, heartbeatPermissionNotified: true,
+    });
+    expect(out).toEqual({ role: 'coding' });
+  });
+
+  test('an edit keeps the stored state whatever it sends', () => {
+    const stored = { role: 'coding', heartbeatDayKey: '2026-07-12', heartbeatRunsToday: 24 };
+    expect(sanitizeTriggerConfig({ role: 'qa', heartbeatRunsToday: 0 }, stored)).toEqual({ role: 'qa', heartbeatDayKey: '2026-07-12', heartbeatRunsToday: 24 });
+  });
+
+  test('non-object input becomes an empty config', () => {
+    expect(sanitizeTriggerConfig(null)).toEqual({});
+    expect(sanitizeTriggerConfig([1, 2])).toEqual({});
   });
 });

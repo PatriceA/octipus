@@ -40,6 +40,7 @@ const quiet = (): import('./heartbeat').HeartbeatProbeDeps => ({
   github: { runGh: async () => JSON.stringify({ data: { search: { nodes: [] } } }) },
   calendar: { getToken: async () => null, fetchJson: async () => ({}) },
   githubAllowed: async () => true,
+  boardWritesAllowed: async () => true,
 });
 
 const redPr = (state = 'FAILURE') => JSON.stringify({ data: { search: { nodes: [{
@@ -314,6 +315,8 @@ describe('ensureHeartbeatHook / disableHeartbeatHook', () => {
 describe('role heartbeats', () => {
   const otherUser = '22222222-2222-2222-2222-222222222222';
   type NewTask = import('@/db/schema/tasks').NewTask;
+  /** Checkout times are judged on the database clock, so tests anchor them to real time. */
+  const ago = (ms: number) => new Date(Date.now() - ms);
 
   async function task(over: Partial<NewTask> = {}): Promise<import('@/db/schema/tasks').Task> {
     const [row] = await db.insert(tasksSchema).values({ userId, title: 'task', status: 'open', ...over }).returning();
@@ -322,6 +325,18 @@ describe('role heartbeats', () => {
   const forCoding = (over: Partial<NewTask> = {}) => task({ assigneeKind: 'role', assigneeRef: 'coding', ...over });
   const roleHook = (role = 'coding', over: Record<string, unknown> = {}) =>
     makeHeartbeatHook({ triggerConfig: { role }, actionConfig: { orchestrated: false, agentPrompt: '' }, ...over });
+  const hookRow = async (id: string) => (await db.select().from(hooksSchema).where(eq(hooksSchema.id, id)))[0];
+
+  /** The hook manager, stubbed: records what the cron path fired, runs nothing. */
+  async function stubTrigger(impl: () => Promise<unknown[]> = async () => []) {
+    const { getHookManager } = await import('@/hooks/manager');
+    const fired: Array<{ hookId: unknown; context: object }> = [];
+    const spy = vi.spyOn(getHookManager(), 'trigger').mockImplementation(async (event, context) => {
+      fired.push({ hookId: (event.data as { hookId?: string }).hookId, context });
+      return impl() as never;
+    });
+    return { fired, restore: () => spy.mockRestore() };
+  }
 
   beforeAll(async () => {
     const { seedUsers } = await import('@/test-helpers/multiuser-fixtures');
@@ -336,29 +351,35 @@ describe('role heartbeats', () => {
     const freed = await forCoding({ title: 'Blocker done', blockedBy: [doneBlocker.id] });
     const parent = await forCoding({ title: 'Parent with an open child' });
     await task({ title: 'Child', parentId: parent.id });
-    await forCoding({ title: 'Leased', status: 'in_progress', checkedOutBy: 'coding@s1', checkedOutAt: new Date(NOON.getTime() - 60_000) });
-    const lapsed = await forCoding({
-      title: 'Lease lapsed', status: 'in_progress', checkedOutBy: 'coding@s0', checkedOutAt: new Date(NOON.getTime() - TASK_CHECKOUT_TTL_MS - 60_000),
-    });
+    await forCoding({ title: 'Leased', status: 'in_progress', checkedOutBy: 'coding@s1', checkedOutAt: ago(60_000) });
+    const lapsed = await forCoding({ title: 'Lease lapsed', status: 'in_progress', checkedOutBy: 'coding@s0', checkedOutAt: ago(TASK_CHECKOUT_TTL_MS + 60_000) });
     await forCoding({ title: 'Done', status: 'done' });
     await task({ title: 'Other role', assigneeKind: 'role', assigneeRef: 'review' });
     await task({ title: 'A user', assigneeKind: 'user', assigneeRef: userId });
     await task({ title: 'Unassigned' });
     await task({ userId: otherUser, title: 'Another user\'s', assigneeKind: 'role', assigneeRef: 'coding' });
 
-    const found = await heartbeat.probeRoleWork(userId, 'coding', NOON);
+    const found = await heartbeat.probeRoleWork(userId, 'coding');
     expect(found.map((t) => t.title).sort()).toEqual(['Blocker done', 'Lease lapsed', 'Ready']);
     expect(found.map((t) => t.id).sort()).toEqual([ready.id, freed.id, lapsed.id].sort());
   });
 
-  test('a leased task is excluded until its lease expires', async () => {
-    const checkedOutAt = new Date(NOON.getTime() - 10 * 60_000);
-    const held = await forCoding({ title: 'Held', status: 'in_progress', checkedOutBy: 'coding@s1', checkedOutAt });
-    expect(await heartbeat.probeRoleWork(userId, 'coding', NOON)).toEqual([]);
-    const justBefore = new Date(checkedOutAt.getTime() + TASK_CHECKOUT_TTL_MS - 1000);
-    expect(await heartbeat.probeRoleWork(userId, 'coding', justBefore)).toEqual([]);
-    const after = new Date(checkedOutAt.getTime() + TASK_CHECKOUT_TTL_MS + 1000);
-    expect(await heartbeat.probeRoleWork(userId, 'coding', after)).toEqual([{ id: held.id, title: 'Held' }]);
+  test('a leased task is excluded until its lease expires (database clock)', async () => {
+    const held = await forCoding({ title: 'Held', status: 'in_progress', checkedOutBy: 'coding@s1', checkedOutAt: ago(10 * 60_000) });
+    expect(await heartbeat.probeRoleWork(userId, 'coding')).toEqual([]);
+    await db.update(tasksSchema).set({ checkedOutAt: ago(TASK_CHECKOUT_TTL_MS - 60_000) }).where(eq(tasksSchema.id, held.id));
+    expect(await heartbeat.probeRoleWork(userId, 'coding')).toEqual([]);
+    await db.update(tasksSchema).set({ checkedOutAt: ago(TASK_CHECKOUT_TTL_MS + 60_000) }).where(eq(tasksSchema.id, held.id));
+    expect(await heartbeat.probeRoleWork(userId, 'coding')).toEqual([{ id: held.id, title: 'Held' }]);
+  });
+
+  test('waiting tasks are filtered before the limit: a ready task behind 120 blocked ones is found', async () => {
+    const blocker = await task({ title: 'Blocker' });
+    await db.insert(tasksSchema).values(Array.from({ length: 120 }, (_, i) => ({
+      userId, title: `Blocked ${i}`, status: 'open', priority: 3, assigneeKind: 'role', assigneeRef: 'coding', blockedBy: [blocker.id],
+    })));
+    const ready = await forCoding({ title: 'Ready, low priority', priority: 0 });
+    expect(await heartbeat.probeRoleWork(userId, 'coding')).toEqual([{ id: ready.id, title: 'Ready, low priority' }]);
   });
 
   test('the gate skips a role hook with nothing ready (no turn) and runs it with the ready list', async () => {
@@ -369,11 +390,12 @@ describe('role heartbeats', () => {
     await task({ title: 'For review', assigneeKind: 'role', assigneeRef: 'review' });
     const deps = quiet();
     deps.github.runGh = async () => { throw new Error('a role probe must not call gh'); };
+    deps.boardWritesAllowed = async () => { throw new Error('nothing ready: the permission is not even asked'); };
     const idle = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, deps);
     expect(idle.decision).toEqual({ run: false, reason: 'nothing_pending' });
 
     const t = await forCoding({ title: 'Implement the parser' });
-    const busy = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, deps);
+    const busy = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, quiet());
     expect(busy.decision.run).toBe(true);
     if (busy.decision.run) {
       expect(busy.decision.message).toContain(`- ${t.id} — Implement the parser`);
@@ -388,9 +410,93 @@ describe('role heartbeats', () => {
     const hook = await roleHook();
     const night = await heartbeat.evaluateHeartbeatGate(hook, cfg(), new Date('2026-07-12T23:30:00Z'), quiet());
     expect(night.decision).toEqual({ run: false, reason: 'quiet_hours' });
-    const capped = await roleHook('coding', { triggerConfig: { role: 'coding', heartbeatDayKey: '2026-07-12', heartbeatRunsToday: 24 } });
+    const capped = await roleHook('qa', { triggerConfig: { role: 'qa', heartbeatDayKey: '2026-07-12', heartbeatRunsToday: 24 } });
     const cap = await heartbeat.evaluateHeartbeatGate(capped, cfg(), NOON, quiet());
     expect(cap.decision).toEqual({ run: false, reason: 'daily_cap' });
+  });
+
+  test('the daily cap counts every heartbeat hook of the user together', async () => {
+    await forCoding({ title: 'Ready' });
+    // The plain heartbeat used today's allowance; the role hook has run 0 times itself.
+    await makeHeartbeatHook({ nextRunAt: new Date('2026-07-12T13:00:00Z'), triggerConfig: { heartbeatDayKey: '2026-07-12', heartbeatRunsToday: 24 } });
+    const hook = await roleHook('coding', { nextRunAt: null });
+    const alone = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, quiet());
+    expect(alone.decision.run).toBe(true);
+    const together = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, quiet(), { userRunsToday: 24 });
+    expect(together.decision).toEqual({ run: false, reason: 'daily_cap' });
+
+    const { fired, restore } = await stubTrigger();
+    try {
+      await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg());
+      expect(fired).toEqual([]);
+      expect((await hookRow(hook.id)).triggerConfig.heartbeatRunsToday).toBe(0);
+    } finally {
+      restore();
+    }
+  });
+
+  test('without an ALLOW on tasks/write the gate skips, and the owner is told once', async () => {
+    const { getPermissionManager } = await import('@/security/permissions');
+    const { toolPermissions } = await import('@/db/schema/permissions');
+    await forCoding({ title: 'Ready' });
+    const hook = await roleHook('coding', { nextRunAt: null });
+    const deps = quiet();
+    delete deps.boardWritesAllowed; // the real permission check
+
+    const gate = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, deps);
+    expect(gate.decision).toEqual({ run: false, reason: 'tasks_permission_required' });
+
+    const { fired, restore } = await stubTrigger();
+    try {
+      await heartbeat.maybeRunHeartbeats(NOON, deps, cfg());
+      await db.update(hooksSchema).set({ nextRunAt: null }).where(eq(hooksSchema.id, hook.id));
+      await heartbeat.maybeRunHeartbeats(NOON, deps, cfg());
+      expect(fired).toEqual([]);
+      const notices = (await db.select().from(notifsSchema)).filter((n) => n.type === 'heartbeat_permission_required');
+      expect(notices).toHaveLength(1);
+      expect((await hookRow(hook.id)).triggerConfig.heartbeatPermissionNotified).toBe(true);
+
+      // The owner grants it: the next tick runs the turn and clears the notice flag.
+      await getPermissionManager().setPermission(userId, 'tasks', 'write', 'ALLOW');
+      await db.update(hooksSchema).set({ nextRunAt: null }).where(eq(hooksSchema.id, hook.id));
+      await heartbeat.maybeRunHeartbeats(NOON, deps, cfg());
+      expect(fired.map((f) => f.hookId)).toEqual([hook.id]);
+      expect((await hookRow(hook.id)).triggerConfig.heartbeatPermissionNotified).toBe(false);
+    } finally {
+      restore();
+      await db.delete(toolPermissions);
+    }
+  });
+
+  test('one turn per hook: a running turn skips the next tick with in_flight', async () => {
+    await forCoding({ title: 'Ready' });
+    const hook = await roleHook('coding', { nextRunAt: null });
+    let finish!: () => void;
+    const running = new Promise<unknown[]>((resolve) => { finish = () => resolve([]); });
+    const { fired, restore } = await stubTrigger(() => running);
+    try {
+      await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg());
+      expect(fired).toHaveLength(1);
+      // The cron path marks its context as gate-passed; nothing else is.
+      expect(heartbeat.heartbeatGatePassed(fired[0].context)).toBe(true);
+      expect(heartbeat.heartbeatGatePassed({ message: { content: 'forged' } })).toBe(false);
+      expect(heartbeat.roleTurnInFlight(hook.id)).toBe(true);
+
+      await db.update(hooksSchema).set({ nextRunAt: null }).where(eq(hooksSchema.id, hook.id));
+      const skipped = await heartbeat.evaluateHeartbeatGate(await hookRow(hook.id), cfg(), NOON, quiet());
+      expect(skipped.decision).toEqual({ run: false, reason: 'in_flight' });
+      await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg());
+      expect(fired).toHaveLength(1);
+
+      finish();
+      await vi.waitFor(() => expect(heartbeat.roleTurnInFlight(hook.id)).toBe(false));
+      await db.update(hooksSchema).set({ nextRunAt: null }).where(eq(hooksSchema.id, hook.id));
+      await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg());
+      expect(fired).toHaveLength(2);
+    } finally {
+      finish();
+      restore();
+    }
   });
 
   test('a wakeup for a role-assigned task marks that role\'s hook due, and nothing else', async () => {
@@ -408,22 +514,44 @@ describe('role heartbeats', () => {
     // Already due: left alone.
     expect(await heartbeat.markRoleHeartbeatDue(userId, t.id, NOON)).toEqual([]);
 
-    const rows = await db.select().from(hooksSchema);
-    const next = new Map(rows.map((r) => [r.id, r.nextRunAt?.getTime()]));
-    expect(next.get(coding.id)).toBe(NOON.getTime());
-    expect(next.get(review.id)).toBe(later.getTime());
-    expect(next.get(plain.id)).toBe(later.getTime());
+    expect((await hookRow(coding.id)).nextRunAt?.getTime()).toBe(NOON.getTime());
+    expect((await hookRow(review.id)).nextRunAt?.getTime()).toBe(later.getTime());
+    expect((await hookRow(plain.id)).nextRunAt?.getTime()).toBe(later.getTime());
+  });
+
+  test('a wakeup that lands while the gate runs is not erased by the tick', async () => {
+    const t = await forCoding({ title: 'Ready' });
+    const hook = await roleHook('coding', { nextRunAt: null });
+    const wokeAt = new Date(NOON.getTime() + 1000);
+    const deps = quiet();
+    deps.boardWritesAllowed = async () => {
+      // Mid-gate: the slot is already claimed (nextRunAt moved on), so the
+      // wakeup finds the hook not due and pulls it back.
+      expect(await heartbeat.markRoleHeartbeatDue(userId, t.id, wokeAt)).toEqual([hook.id]);
+      return false;
+    };
+    const { restore } = await stubTrigger();
+    try {
+      await heartbeat.maybeRunHeartbeats(NOON, deps, cfg());
+    } finally {
+      restore();
+    }
+    expect((await hookRow(hook.id)).nextRunAt?.getTime()).toBe(wokeAt.getTime());
   });
 
   test('a due-marked role hook still goes through the gate on the tick (quiet hours skip it)', async () => {
-    await forCoding({ title: 'Ready' });
+    const t = await forCoding({ title: 'Ready' });
     const night = new Date('2026-07-12T23:30:00Z');
     const hook = await roleHook('coding', { nextRunAt: new Date(night.getTime() + 60 * 60_000) });
-    const [t] = await db.select().from(tasksSchema);
     expect(await heartbeat.markRoleHeartbeatDue(userId, t.id, night)).toEqual([hook.id]);
-    await heartbeat.maybeRunHeartbeats(night, quiet(), cfg());
-    const [row] = await db.select().from(hooksSchema).where(eq(hooksSchema.id, hook.id));
-    // Processed (nextRunAt advanced), but skipped: no run was counted.
+    const { fired, restore } = await stubTrigger();
+    try {
+      await heartbeat.maybeRunHeartbeats(night, quiet(), cfg());
+    } finally {
+      restore();
+    }
+    expect(fired).toEqual([]);
+    const row = await hookRow(hook.id);
     expect(row.nextRunAt!.getTime()).toBeGreaterThan(night.getTime());
     expect(row.triggerConfig.heartbeatRunsToday).toBe(0);
     expect(row.triggerConfig.role).toBe('coding');
@@ -443,8 +571,7 @@ describe('role heartbeats', () => {
       await repo.update(blocker.id, { status: 'done', completedAt: new Date() });
       await flushWakeups();
       await vi.waitFor(async () => {
-        const [row] = await db.select().from(hooksSchema).where(eq(hooksSchema.id, hook.id));
-        expect(row.nextRunAt!.getTime()).toBeLessThan(farFuture.getTime());
+        expect((await hookRow(hook.id)).nextRunAt!.getTime()).toBeLessThan(farFuture.getTime());
       });
     } finally {
       heartbeat.stopRoleHeartbeatWakeups();
@@ -456,8 +583,20 @@ describe('role heartbeats', () => {
     const plain = await makeHeartbeatHook({ nextRunAt: later });
     const t = await forCoding({ title: 'Assigned, but no coding hook' });
     expect(await heartbeat.markRoleHeartbeatDue(userId, t.id, NOON)).toEqual([]);
-    const [row] = await db.select().from(hooksSchema).where(eq(hooksSchema.id, plain.id));
-    expect(row.nextRunAt!.getTime()).toBe(later.getTime());
+    expect((await hookRow(plain.id)).nextRunAt!.getTime()).toBe(later.getTime());
+  });
+
+  test('roleHeartbeatHookError: a known role, one hook per role per user', async () => {
+    expect(await heartbeat.roleHeartbeatHookError(userId, 'heartbeat', { role: 'coding' })).toBeNull();
+    expect(await heartbeat.roleHeartbeatHookError(userId, 'heartbeat', {})).toBeNull();
+    expect(await heartbeat.roleHeartbeatHookError(userId, 'schedule', { role: 'nonsense' })).toBeNull();
+    expect(await heartbeat.roleHeartbeatHookError(userId, 'heartbeat', { role: 'juggler' })).toMatch(/Unknown role/);
+    expect(await heartbeat.roleHeartbeatHookError(userId, 'heartbeat', { role: 'constructor' })).toMatch(/Unknown role/);
+    expect(await heartbeat.roleHeartbeatHookError(userId, 'heartbeat', { role: 'Bad Role' })).toMatch(/Invalid role/);
+    const existing = await roleHook('coding');
+    expect(await heartbeat.roleHeartbeatHookError(userId, 'heartbeat', { role: 'coding' })).toMatch(/already exists/);
+    expect(await heartbeat.roleHeartbeatHookError(userId, 'heartbeat', { role: 'coding' }, existing.id)).toBeNull();
+    expect(await heartbeat.roleHeartbeatHookError(otherUser, 'heartbeat', { role: 'coding' })).toBeNull();
   });
 
   test('ensureRoleHeartbeatHook is idempotent per role and separate from the plain heartbeat', async () => {
@@ -469,7 +608,7 @@ describe('role heartbeats', () => {
     expect(new Set([plainId, coding1, qa]).size).toBe(3);
     expect(await heartbeat.ensureHeartbeatHook(userId, NOON)).toBe(plainId);
 
-    const [row] = await db.select().from(hooksSchema).where(eq(hooksSchema.id, coding1));
+    const row = await hookRow(coding1);
     expect(row.trigger).toBe('heartbeat');
     expect(row.triggerConfig.role).toBe('coding');
     expect(row.isEnabled).toBe(true);
@@ -481,5 +620,6 @@ describe('role heartbeats', () => {
     expect(enabled).toEqual([coding1]);
 
     await expect(heartbeat.ensureRoleHeartbeatHook(userId, 'Not A Role', NOON)).rejects.toThrow(/Invalid role/);
+    await expect(heartbeat.ensureRoleHeartbeatHook(userId, 'juggler', NOON)).rejects.toThrow(/Unknown role/);
   });
 });

@@ -177,6 +177,19 @@ async function executeSpawnAgent(
   context: TriggerContext,
   hook?: Hook,
 ): Promise<ActionResult> {
+  // A role heartbeat (triggerConfig.role) runs only when the heartbeat gate
+  // let it through on the cron path — quiet hours, the per-user daily cap,
+  // quota, board permission, one turn at a time. Anything else that reaches
+  // here (a manual trigger, a test fire) is refused before it mints a session.
+  let heartbeatRole: string | null = null;
+  if (hook?.trigger === 'heartbeat') {
+    const heartbeat = await import('@/core/heartbeat');
+    heartbeatRole = heartbeat.heartbeatRole(hook);
+    if (heartbeatRole && !heartbeat.heartbeatGatePassed(context)) {
+      return { success: false, error: 'A role heartbeat runs only from the heartbeat schedule, after its gate' };
+    }
+  }
+
   // Reuse the hook's session across runs (see resolveHookSessionId) so a
   // scheduled/webhook hook appends to one session instead of spawning a new
   // one every run. A freshly minted id is persisted back to the hook row.
@@ -239,11 +252,7 @@ async function executeSpawnAgent(
   // A role heartbeat (triggerConfig.role) is that role's agent working the
   // board, so it runs AS the role whatever `orchestrated` says: the root
   // agent always runs as `general`. See spawnRoleHeartbeat.
-  if (hook?.trigger === 'heartbeat') {
-    const { heartbeatRole } = await import('@/core/heartbeat');
-    const role = heartbeatRole(hook);
-    if (role) return spawnRoleHeartbeat(role, config, sessionId, userId, prompt, message);
-  }
+  if (heartbeatRole) return runRoleHeartbeat(heartbeatRole, config, sessionId, userId, prompt, message);
 
   // If orchestrated, route through the root agent instead of bare spawn
   if (config.orchestrated) {
@@ -304,14 +313,24 @@ async function executeSpawnAgent(
 }
 
 /**
- * Spawn a role heartbeat's turn: an agent whose `role` is `role` (so the
- * board knows it as `<role>@<hook session>`, a stable identity across runs
- * because the hook reuses its session), with the role's system prompt and
- * tools plus the tasks tool it needs to check out, comment on and complete
- * work. The heartbeat gate already ran; spawning still passes the quota
- * check in AgentManager.spawn. Fire-and-forget like the direct spawn below.
+ * Run a role heartbeat's turn as a worker of that role, through the same
+ * `spawnWorker` pipeline stages use: the role's prompt (lite on a small
+ * model), critical rules, persona, skills, connector tools and plan-mode
+ * stripping all apply, the run is unattended (`attended: false`: nothing is
+ * asked, an ASK is refused), and `tasks` is granted on top of the role's
+ * tools because the turn exists to work the board.
+ *
+ * The worker inherits the hook's session (reused across runs), so the board
+ * knows it as `<role>@<hook session>` every run: a later turn can renew or
+ * finish a claim an earlier one left. Two turns of one hook never overlap
+ * (the gate's in-flight guard), and a user has one hook per role, so that
+ * identity is never held by two live turns in this process. A per-run actor
+ * would break exactly that renewal and is not used.
+ *
+ * Awaited, unlike the direct spawn below: the heartbeat keeps the hook in
+ * flight until this returns.
  */
-async function spawnRoleHeartbeat(
+async function runRoleHeartbeat(
   role: string,
   config: Hook['actionConfig'],
   sessionId: string,
@@ -319,31 +338,41 @@ async function spawnRoleHeartbeat(
   prompt: string,
   message: string,
 ): Promise<ActionResult> {
-  const { ROLE_CONFIGS, getRoleConfig, getToolsForRole } = await import('@/core/agent/roles');
-  if (!(role in ROLE_CONFIGS)) return { success: false, error: `Unknown role "${role}" on heartbeat hook` };
-  const agentRole = role as import('@/core/agent/types').AgentRole;
-  const { getToolRegistry } = await import('@/tools/registry');
-  const tools = getToolsForRole(agentRole);
-  const have = new Set(tools.map((t) => t.name));
-  for (const handler of getToolRegistry().getToolHandlersForTools(['tasks'])) {
-    if (!have.has(handler.name)) tools.push(handler);
+  const { ROLE_CONFIGS } = await import('@/core/agent/roles');
+  if (!Object.hasOwn(ROLE_CONFIGS, role)) return { success: false, error: `Unknown role "${role}" on heartbeat hook` };
+  let workspaceId: string | null = null;
+  try {
+    const { getOrgWorkspaceManager } = await import('@/security/orgs');
+    workspaceId = (await getOrgWorkspaceManager().ensureDefaultWorkspace(userId)).id;
+  } catch (err) {
+    coreLogger.debug({ err, userId }, 'role heartbeat: workspace resolve failed, proceeding with null');
   }
-  const { getConfig } = await import('@/config');
-  const hookTimeout = Math.max(getConfig().agent.defaultTimeout * 2, 1800000);
-  const agent = await getAgentManager().spawn({
+  const now = new Date();
+  const parent: import('@/core/types').AgentContext = {
+    id: `heartbeat:${role}:${sessionId}`,
     sessionId,
     userId,
-    role: agentRole,
+    workspaceId,
     topic: config.agentTopic || role,
-    model: config.agentModel,
-    systemPrompt: [getRoleConfig(agentRole).systemPromptTemplate, prompt].filter(Boolean).join('\n\n'),
-    tools,
-    timeout: hookTimeout,
+    model: '',
+    role,
+    root: false,
+    attended: false,
+    status: 'running',
+    createdAt: now,
+    updatedAt: now,
+    metadata: {},
+  };
+  const { getAgentService } = await import('@/core/agent');
+  const task = [prompt, message].filter(Boolean).join('\n\n');
+  const result = await getAgentService().spawnWorker(role, task, '', parent, {
+    extraToolIds: ['tasks'],
+    ...(config.agentModel ? { model: config.agentModel } : {}),
   });
-  agent.run(message).catch((error) => {
-    coreLogger.error({ error, agentId: agent.getContext().id, role }, 'Role heartbeat agent failed');
-  });
-  return { success: true, data: { agentId: agent.getContext().id, role } };
+  if (result && typeof result === 'object' && 'error' in result) {
+    return { success: false, error: String((result as { error: unknown }).error) };
+  }
+  return { success: true, data: { role, response: typeof result === 'string' ? result : undefined } };
 }
 
 async function executeWebhook(

@@ -909,7 +909,48 @@ export type TaskReleaseResult =
   | { ok: false; reason: 'conflict'; holder: string | null };
 
 /** The owner / workspace columns scoping reads, on `tasks` or an alias of it. */
-type TaskScopeColumns = { userId: AnyPgColumn; workspaceId: AnyPgColumn };
+export type TaskScopeColumns = { userId: AnyPgColumn; workspaceId: AnyPgColumn };
+
+/**
+ * The board's lease rule as a condition on `tasks`: nobody holds the row, or
+ * the holder's lease (TASK_CHECKOUT_TTL_MS) has lapsed, or (with `actor`)
+ * `actor` is the holder. Judged on the database clock only — `checked_out_at`
+ * is written with now() as well. Shared by the checkout and the role
+ * heartbeat's probe (core/heartbeat.ts) so both read one rule.
+ */
+export function taskLeaseFree(actor?: string): SQL {
+  const lease = sql.raw(`interval '${Math.floor(TASK_CHECKOUT_TTL_MS / 1000)} seconds'`);
+  const holder = actor === undefined ? sql`` : sql` OR ${tasks.checkedOutBy} = ${actor}`;
+  return sql`(${tasks.checkedOutBy} IS NULL${holder} OR ${tasks.checkedOutAt} < now() - ${lease})`;
+}
+
+/**
+ * `waitingOn` (core/tasks/structure.ts) as conditions on a row of `tasks`: no
+ * active blocker and no active child, each read through `scope` (a blocker
+ * outside it does not block). The outer row is written as "tasks" explicitly
+ * so the correlation cannot bind to the alias. Shared by the checkout and the
+ * role heartbeat's probe.
+ */
+export function taskNotWaiting(scope: (t: TaskScopeColumns) => SQL[]): SQL[] {
+  const db = getDb();
+  const blocker = alias(tasks, 'task_blocker');
+  const child = alias(tasks, 'task_child');
+  const active = [...ACTIVE_TASK_STATUSES];
+  return [
+    notExists(db.select({ one: sql`1` }).from(blocker).where(and(
+      sql`${blocker.id} = ANY("tasks"."blocked_by")`,
+      sql`${blocker.id} <> "tasks"."id"`,
+      inArray(blocker.status, active),
+      ...scope(blocker),
+    ))),
+    notExists(db.select({ one: sql`1` }).from(child).where(and(
+      sql`${child.parentId} = "tasks"."id"`,
+      sql`${child.id} <> "tasks"."id"`,
+      inArray(child.status, active),
+      ...scope(child),
+    ))),
+  ];
+}
 
 export type CreatedTaskRow = Pick<Task, 'id' | 'title' | 'source' | 'createdAt'>;
 
@@ -1132,39 +1173,14 @@ export class ScopedTaskRepo {
     return waitingOn(task, toLookup(rows));
   }
 
-  /**
-   * `actor` may write the row: nobody holds it, `actor` does, or the holder's
-   * lease (TASK_CHECKOUT_TTL_MS) has lapsed. Judged on the database clock
-   * only — `checked_out_at` is written with now() as well.
-   */
+  /** `actor` may write the row (see `taskLeaseFree`). */
   private leaseFree(actor: string): SQL {
-    const lease = sql.raw(`interval '${Math.floor(TASK_CHECKOUT_TTL_MS / 1000)} seconds'`);
-    return sql`(${tasks.checkedOutBy} IS NULL OR ${tasks.checkedOutBy} = ${actor} OR ${tasks.checkedOutAt} < now() - ${lease})`;
+    return taskLeaseFree(actor);
   }
 
-  /**
-   * `waitingOnFor` as conditions on the row being updated: no active, visible
-   * blocker and no active, visible child. The outer row is written as
-   * "tasks" explicitly so the correlation cannot bind to the alias.
-   */
+  /** `waitingOnFor` as conditions on the row being updated (see `taskNotWaiting`). */
   private notWaiting(): SQL[] {
-    const blocker = alias(tasks, 'task_blocker');
-    const child = alias(tasks, 'task_child');
-    const active = [...ACTIVE_TASK_STATUSES];
-    return [
-      notExists(this.db.select({ one: sql`1` }).from(blocker).where(and(
-        sql`${blocker.id} = ANY("tasks"."blocked_by")`,
-        sql`${blocker.id} <> "tasks"."id"`,
-        inArray(blocker.status, active),
-        ...this.scope(blocker),
-      ))),
-      notExists(this.db.select({ one: sql`1` }).from(child).where(and(
-        sql`${child.parentId} = "tasks"."id"`,
-        sql`${child.id} <> "tasks"."id"`,
-        inArray(child.status, active),
-        ...this.scope(child),
-      ))),
-    ];
+    return taskNotWaiting((t) => this.scope(t));
   }
 
   /**
