@@ -39,33 +39,40 @@ const GIT_TIMEOUT_MS = 10_000;
 /** Generous stdout cap for `git show` of a large file (bytes). */
 const GIT_MAX_BUFFER = 8 * 1024 * 1024;
 
-interface GitResult {
+export interface GitResult {
   ok: boolean;
   stdout: string;
   stderr: string;
+  /** The process was killed for running past its timeout. */
+  timedOut?: boolean;
 }
 
 /**
  * Run `git` with an argument vector (no shell) inside `cwd`. Never throws for a
  * non-zero exit — expected failures (not a repo, path not in HEAD) are part of
- * normal flow and returned as `{ ok: false }`. Only a spawn-level failure
- * (git missing) rejects, which callers translate into a not-a-repo result.
+ * normal flow and returned as `{ ok: false }`. A missing git binary also
+ * resolves `{ ok: false }` (logged), which callers read as not-a-repo.
+ *
+ * Shared with `swarm/worktree.ts`. `timeoutMs` defaults to the short read-only
+ * budget; a command that MUTATES a user's tree (merge, worktree add) must pass
+ * a long one, since a kill mid-write leaves the tree half-changed. 0 = none.
  */
-function runGit(cwd: string, args: string[]): Promise<GitResult> {
+export function runGit(cwd: string, args: string[], opts: { timeoutMs?: number } = {}): Promise<GitResult> {
   return new Promise((resolve) => {
     execFile(
       'git',
       args,
-      { cwd, timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER, encoding: 'utf-8' },
+      { cwd, timeout: opts.timeoutMs ?? GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER, encoding: 'utf-8' },
       (err, stdout, stderr) => {
         if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
           // git binary not installed — surface as not-a-repo, but log once so a
           // misconfigured host isn't silently degraded (fail-loud spirit).
-          coreLogger.warn('git binary not found; session changes unavailable');
+          coreLogger.warn('git binary not found; git-backed features unavailable');
           resolve({ ok: false, stdout: '', stderr: 'git not found' });
           return;
         }
-        resolve({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' });
+        const timedOut = !!err && (err as { killed?: boolean }).killed === true;
+        resolve({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '', ...(timedOut ? { timedOut } : {}) });
       },
     );
   });
@@ -76,12 +83,12 @@ function runGit(cwd: string, args: string[]): Promise<GitResult> {
  * compared both sides). Returns the canonical repo root, or null when `root`
  * is not a repo or is merely nested inside a parent repo.
  */
-async function repoRootFor(root: string): Promise<string | null> {
+export async function repoRootFor(root: string, gitConfig: string[] = []): Promise<string | null> {
   // Guard directory existence first: a fresh per-user workspace often doesn't
   // exist on disk yet, and spawning git with a missing cwd throws ENOENT —
   // which would otherwise be misread as "git binary not found".
   if (!existsSync(root)) return null;
-  const res = await runGit(root, ['rev-parse', '--show-toplevel']);
+  const res = await runGit(root, [...gitConfig, 'rev-parse', '--show-toplevel']);
   if (!res.ok) return null;
   const topLevel = res.stdout.trim();
   if (!topLevel) return null;

@@ -112,6 +112,13 @@ async function main() {
     } catch (err) {
       logger.warn({ err }, 'Could not release orphaned permission requests');
     }
+    // Same for agent approvals: their waiters died with the previous process.
+    try {
+      const { releaseOrphanedApprovals } = await import('@/core/agent/approval-manager');
+      await releaseOrphanedApprovals();
+    } catch (err) {
+      logger.warn({ err }, 'Could not release orphaned agent approvals');
+    }
 
     // Subscribe to settings changes for hot-reload
     initializeHotReload();

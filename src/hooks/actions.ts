@@ -1,6 +1,6 @@
 import { getUMI } from '@/channels/interface';
 import { getAgentManager } from '@/core/agent-manager';
-import type { Hook } from '@/core/types';
+import type { AgentContext, Hook } from '@/core/types';
 import { coreLogger } from '@/utils/logger';
 import type { TriggerContext } from './triggers';
 import { summarizeWebhookPayload } from './webhook-summary';
@@ -35,7 +35,7 @@ export async function executeAction(
         return await executeN8NWorkflow(config, context);
 
       case 'execute_tool':
-        return await executeTool(config, context);
+        return await executeTool(config, context, hook);
 
       default:
         return { success: false, error: `Unknown action type: ${hook.action}` };
@@ -164,6 +164,45 @@ export function resolveHookSessionId(
   return { sessionId: crypto.randomUUID(), minted: Boolean(hook) };
 }
 
+const SESSION_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * True when `sessionId` names an existing session owned by someone other
+ * than `userId`. Non-UUID ids are channel keys that resolveSession scopes by
+ * user, and a UUID with no row yet becomes a new session owned by `userId`,
+ * so neither can reach another user's session.
+ */
+async function isForeignSession(sessionId: string, userId: string): Promise<boolean> {
+  if (!SESSION_UUID_RE.test(sessionId)) return false;
+  const { sessionRepository } = await import('@/db/repositories/session-repository');
+  const session = await sessionRepository.findById(sessionId);
+  return Boolean(session && session.userId !== userId);
+}
+
+/**
+ * resolveHookSessionId, restricted to sessions the hook owner owns. The
+ * trigger context (message metadata / agent) may name any session id; one
+ * that belongs to another user falls back to the hook's own session, and
+ * failing that to a fresh, unpersisted id. Without this a user's own
+ * spawn_agent hook could be pointed at another user's session and read and
+ * write their transcript.
+ */
+export async function resolveOwnedHookSessionId(
+  context: TriggerContext,
+  hook: Hook,
+): Promise<{ sessionId: string; minted: boolean }> {
+  const resolved = resolveHookSessionId(context, hook);
+  if (resolved.minted || !(await isForeignSession(resolved.sessionId, hook.userId))) return resolved;
+
+  coreLogger.warn(
+    { hookId: hook.id, userId: hook.userId, sessionId: resolved.sessionId },
+    'Hook trigger named a session owned by another user; using the hook session instead',
+  );
+  const own = resolveHookSessionId({}, hook);
+  if (own.minted || !(await isForeignSession(own.sessionId, hook.userId))) return own;
+  return { sessionId: crypto.randomUUID(), minted: false };
+}
+
 /** Persist a freshly-minted session id back to the hook so later runs reuse it. */
 async function persistHookSessionId(hookId: string, sessionId: string): Promise<void> {
   const { getDb } = await import('@/db/postgres');
@@ -193,7 +232,10 @@ async function executeSpawnAgent(
   // Reuse the hook's session across runs (see resolveHookSessionId) so a
   // scheduled/webhook hook appends to one session instead of spawning a new
   // one every run. A freshly minted id is persisted back to the hook row.
-  const { sessionId, minted } = resolveHookSessionId(context, hook);
+  // Only sessions the hook owner owns are accepted (resolveOwnedHookSessionId).
+  const { sessionId, minted } = hook
+    ? await resolveOwnedHookSessionId(context, hook)
+    : resolveHookSessionId(context, hook);
   if (minted && hook) {
     hook.sessionId = sessionId; // keep this run consistent with what we persist
     try {
@@ -459,7 +501,8 @@ async function executeN8NWorkflow(
 
 async function executeTool(
   config: Hook['actionConfig'],
-  context: TriggerContext
+  context: TriggerContext,
+  hook: Hook,
 ): Promise<ActionResult> {
   const { getToolRegistry } = await import('@/tools/registry');
   const registry = getToolRegistry();
@@ -493,11 +536,17 @@ async function executeTool(
     }
   }
 
-  // Create a synthetic agent context
-  const agentContext = context.agent || {
+  // Always run the tool as the hook owner, with a server-built context. Never
+  // reuse the trigger's agent context (caller-supplied on a test fire, and
+  // carrying role/root/workspace/session we must not inherit) and never run
+  // as 'system'. The hook's own session is used when it is the owner's.
+  const ownSession = hook.sessionId && !(await isForeignSession(hook.sessionId, hook.userId))
+    ? hook.sessionId
+    : null;
+  const agentContext: AgentContext = {
     id: crypto.randomUUID(),
-    sessionId: crypto.randomUUID(),
-    userId: context.message?.userId || 'system',
+    sessionId: ownSession ?? crypto.randomUUID(),
+    userId: hook.userId,
     topic: 'hook',
     model: 'default',
     role: 'general',

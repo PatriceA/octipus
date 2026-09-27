@@ -4,6 +4,7 @@ import { getModelRegistry } from '@/models/model-registry';
 import { getGatewayHub } from '@/core/gateway/hub';
 import { compactionEntryRepository } from '@/db/repositories/compaction-entry-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
+import { CHILD_CLI_SESSION_KEY_PREFIXES } from '@/core/cli-session-store';
 import type { CompactionState, } from '@/db/schema/sessions';
 import { calculateTotalTokens, createLLMSummary } from '@/utils/context-compaction';
 import { coreLogger } from '@/utils/logger';
@@ -166,6 +167,9 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
       tokensBefore, tokensAfter, savingsRatio, messagesSummarized: prefix.length,
       triggerReason: manual ? 'force' : decision.allow ? decision.reason : 'force',
     });
+    // Only the ROOT vendor conversations rotate onto the checkpoint, filtered
+    // in this same statement: a child's per-task session never held the root
+    // transcript, and children save outside this lock.
     const published = await sessionRepository.patchContextIfGeneration(sessionId, history.generation, {
       checkpoint: { generation: history.generation, through: { id: last.id, createdAt: last.createdAt.toISOString() },
         summary, fileOps: result.fileOps, entryId: entry.id },
@@ -173,10 +177,9 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
         lastSavingsRatio: savingsRatio, ineffectivePasses: 0, compactionIneffective: false },
       // Both vendors restart from this durable checkpoint. No unscoped vendor
       // maintenance subprocess, extra hidden bill, or concurrent /compact.
-      cliSessions: {},
       nativeConversation: native && nativeTail ? { ...native, checkpointId: entry.id,
         messages: capNativeSnapshot([{ role: 'user', content: `[Conversation checkpoint]\n${summary}`, timestamp: last.createdAt.toISOString() }, ...nativeTail]) } : null,
-    });
+    }, { keepCliSessionPrefixes: CHILD_CLI_SESSION_KEY_PREFIXES });
     if (published && getConfig().memory?.extractionCadence === 'on_compaction') {
       const { updateMemoriesAfterTurn } = await import('@/core/memory');
       void updateMemoriesAfterTurn({ userId: history.session.userId, workspaceId: null, agentScope: null, userMessage: result.summaryText })

@@ -4,6 +4,7 @@ import {
   RECEIPT_NOT_CERTIFIED,
   buildReceipt,
   emptyCounters,
+  formatReceiptBlock,
   mergeCounters,
 } from './receipt';
 
@@ -147,5 +148,34 @@ describe('buildReceipt', () => {
     });
     expect(r.notCertified).toContain('correctness');
     expect(r.notCertified).toContain('security');
+  });
+});
+
+describe('formatReceiptBlock: worktree line', () => {
+  const receipt = () =>
+    buildReceipt({ nodeId: 'n', kind: 'agent', status: 'ok', counters: counters(), usedTokens: 1, tokenCap: 10, durationMs: 1 });
+
+  it('adds nothing when the child shared the tree', () => {
+    expect(formatReceiptBlock(receipt())).not.toContain('<worktree');
+  });
+
+  it('shows branch, merge outcome and diff stat, escaped', () => {
+    const block = formatReceiptBlock({
+      ...receipt(),
+      worktree: {
+        branch: 'octipus/c1',
+        worktreePath: '/w/c1',
+        baseSha: 'a'.repeat(40),
+        headSha: 'b'.repeat(40),
+        diffStat: '1 file changed, 2 insertions(+)',
+        filesChanged: 1,
+        merge: 'conflict',
+        mergeDetail: 'conflict in "a" <b>',
+        branchKept: true,
+      },
+    });
+    expect(block).toContain('<worktree branch="octipus/c1" head="bbbbbbbbbbbb" merge="conflict"');
+    expect(block).toContain('diffStat="1 file changed, 2 insertions(+)"');
+    expect(block).toContain('detail="conflict in &quot;a&quot; &lt;b&gt;"');
   });
 });

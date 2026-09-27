@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import type { Session, SessionContext } from '@/db/schema/sessions';
-import { dropCliSession, fingerprintRun, loadCliSession, saveCliSession } from './cli-session-store';
+import { childCliSessionKey, claimCliSession, cliSessionHolder, dropCliSession, isChildCliSessionKey, fingerprintRun, MAX_CHILD_CLI_SESSIONS, loadCliSession, releaseCliSessions, saveCliSession } from './cli-session-store';
 
 describe('fingerprintRun', () => {
   it('changes when the model changes', () => {
@@ -37,8 +37,26 @@ describe('cli session store', () => {
     });
     vi.spyOn(sessionRepository, 'patchContextIfGeneration').mockImplementation(async (id, generation, patch) => {
       const row = store.get(id) ?? { context: {} as SessionContext };
-      if ((row.context.clearedAt ?? '') !== generation) return false;
+      if ((row.context.conversationGeneration ?? row.context.clearedAt ?? '') !== generation) return false;
       Object.assign(row.context, patch); store.set(id, row); return true;
+    });
+    // Mirrors the real per-key write: one cliSessions entry, generation-checked,
+    // and the in-statement bound (SQL ordering: lastUsedAt DESC NULLS LAST, key;
+    // the SQL itself is covered in session-context-patch.test.ts).
+    vi.spyOn(sessionRepository, 'setContextKeyIfGeneration').mockImplementation(async (id, generation, path, value, opts) => {
+      const row = store.get(id) ?? { context: {} as SessionContext };
+      if ((row.context.conversationGeneration ?? row.context.clearedAt ?? '') !== generation) return false;
+      const map = { ...row.context.cliSessions } as Record<string, { lastUsedAt?: string }>;
+      if (value === undefined) delete map[path[1]]; else map[path[1]] = value as { lastUsedAt?: string };
+      const bound = opts?.boundCliSessions;
+      if (bound) {
+        const matched = Object.entries(map).filter(([key]) => bound.prefixes.some(p => key.startsWith(p)))
+          .sort(([ka, a], [kb, b]) => (a.lastUsedAt === undefined) !== (b.lastUsedAt === undefined)
+            ? (a.lastUsedAt === undefined ? 1 : -1)
+            : (b.lastUsedAt ?? '').localeCompare(a.lastUsedAt ?? '') || (ka < kb ? -1 : ka > kb ? 1 : 0));
+        for (const [key] of matched.slice(bound.max)) delete map[key];
+      }
+      row.context.cliSessions = map as SessionContext['cliSessions']; store.set(id, row); return true;
     });
     vi.spyOn(sessionRepository, 'update').mockImplementation(async (id: string, data: { context?: unknown }) => {
       const existing = store.get(id) ?? { context: {} };
@@ -104,5 +122,72 @@ describe('cli session store', () => {
     store.set('s1', row0);
     await saveCliSession('s1', 'Claude Code', { id: 'u1', fingerprint: 'fp-a', generation: '2026-01-01T00:00:00.000Z', lastUsedAt: '2026-01-02T00:00:00.000Z' });
     expect(await loadCliSession('s1', 'Claude Code', 'fp-a')).toMatchObject({ id: 'u1' });
+  });
+
+  it('keeps a child task key apart from the root adapter key', async () => {
+    const child = childCliSessionKey('Claude Code', 'coding:parser-fix');
+    await saveCliSession('s1', child, { id: 'c1', fingerprint: 'fp-a', lastUsedAt: new Date().toISOString() });
+    expect(await loadCliSession('s1', 'Claude Code', 'fp-a')).toBeNull();
+    expect(await loadCliSession('s1', child, 'fp-a')).toMatchObject({ id: 'c1' });
+    expect(await loadCliSession('s1', child, 'fp-b')).toBeNull();
+    expect(isChildCliSessionKey(child)).toBe(true);
+    expect(isChildCliSessionKey('Claude Code')).toBe(false);
+    // Only a resumable adapter's exact `<adapter>::` prefix makes a child key.
+    expect(isChildCliSessionKey('Some::Adapter')).toBe(false);
+    expect(isChildCliSessionKey('Codex CLI::general>coding:t')).toBe(true);
+  });
+
+  it('evicts the least recently used child keys past the bound, never a root key', async () => {
+    await saveCliSession('s1', 'Claude Code', { id: 'root', fingerprint: 'fp', lastUsedAt: '2000-01-01T00:00:00.000Z' });
+    for (let i = 0; i <= MAX_CHILD_CLI_SESSIONS; i++) {
+      const lastUsedAt = new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString();
+      await saveCliSession('s1', childCliSessionKey('Claude Code', `t${i}`), { id: `c${i}`, fingerprint: 'fp', lastUsedAt });
+    }
+    const keys = Object.keys(store.get('s1')!.context.cliSessions!);
+    expect(keys).toHaveLength(MAX_CHILD_CLI_SESSIONS + 1);
+    expect(keys).toContain('Claude Code');
+    expect(keys).not.toContain('Claude Code::t0');
+    expect(keys).toContain(`Claude Code::t${MAX_CHILD_CLI_SESSIONS}`);
+  });
+
+  it('writes one key at a time, so parallel saves to sibling keys both land', async () => {
+    const lastUsedAt = new Date().toISOString();
+    await Promise.all([
+      saveCliSession('s1', 'Claude Code', { id: 'root', fingerprint: 'fp', lastUsedAt }),
+      saveCliSession('s1', childCliSessionKey('Claude Code', 'a'), { id: 'a', fingerprint: 'fp', lastUsedAt }),
+      saveCliSession('s1', childCliSessionKey('Claude Code', 'b'), { id: 'b', fingerprint: 'fp', lastUsedAt }),
+    ]);
+    expect(sessionRepository.patchContextIfGeneration).not.toHaveBeenCalled();
+    expect(Object.keys(store.get('s1')!.context.cliSessions!).sort()).toEqual(['Claude Code', 'Claude Code::a', 'Claude Code::b']);
+  });
+
+  it('rejects a save from a stale generation', async () => {
+    store.set('s1', { context: { clearedAt: '2026-01-02T00:00:00.000Z' } as SessionContext });
+    await saveCliSession('s1', childCliSessionKey('Claude Code', 'a'), { id: 'a', fingerprint: 'fp', generation: '', lastUsedAt: new Date().toISOString() });
+    expect(store.get('s1')!.context.cliSessions).toBeUndefined();
+  });
+});
+
+describe('claimCliSession', () => {
+  it('lets one live agent hold a key at a time, per session', () => {
+    expect(claimCliSession('s1', 'k', 'a1')).toBe(true);
+    expect(claimCliSession('s1', 'k', 'a1')).toBe(true);
+    expect(claimCliSession('s1', 'k', 'a2')).toBe(false);
+    expect(claimCliSession('s2', 'k', 'a2')).toBe(true);
+    expect(cliSessionHolder('s1', 'k')).toBe('a1');
+    releaseCliSessions('a1');
+    expect(cliSessionHolder('s1', 'k')).toBeUndefined();
+    expect(claimCliSession('s1', 'k', 'a2')).toBe(true);
+    releaseCliSessions('a2');
+  });
+
+  it('releasing one agent leaves another agent\'s claims alone', () => {
+    expect(claimCliSession('s1', 'k1', 'a1')).toBe(true);
+    expect(claimCliSession('s1', 'k2', 'a2')).toBe(true);
+    releaseCliSessions('a1');
+    expect(claimCliSession('s1', 'k2', 'a3')).toBe(false);
+    expect(claimCliSession('s1', 'k1', 'a3')).toBe(true);
+    releaseCliSessions('a2');
+    releaseCliSessions('a3');
   });
 });

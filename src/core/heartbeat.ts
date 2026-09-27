@@ -436,7 +436,7 @@ async function buildHeartbeatMessage(userId: string, checklist: string): Promise
 // ── The gate ────────────────────────────────────────────────────────────────
 
 export type HeartbeatSkipReason =
-  | 'disabled' | 'quiet_hours' | 'daily_cap' | 'quota' | 'nothing_pending'
+  | 'disabled' | 'quiet_hours' | 'daily_cap' | 'quota' | 'spend_budget' | 'nothing_pending'
   | 'in_flight' | 'tasks_permission_required';
 export type HeartbeatDecision =
   | { run: true; message: string }
@@ -499,6 +499,19 @@ export async function evaluateHeartbeatGate(
     if (!q.allowed) return skip('quota');
   } catch (err) {
     coreLogger.debug({ err }, 'heartbeat: quota check unavailable (not blocking)');
+  }
+
+  // A paused dollar spend budget skips the tick (the check stamps the pause
+  // and notifies once); any other failure of the check is not blocking.
+  // Only the user scope is checked: the tick runs an orchestrated turn whose
+  // role and workspace are resolved downstream, not here. Role and workspace
+  // budgets are enforced when that turn spawns its agents (agent-manager).
+  try {
+    const { checkSpend } = await import('@/security/spend-budgets');
+    await checkSpend({ userId: hook.userId }, now);
+  } catch (err) {
+    if (err instanceof Error && err.name === 'SpendBudgetExceededError') return skip('spend_budget');
+    coreLogger.debug({ err }, 'heartbeat: spend budget check unavailable (not blocking)');
   }
 
   // A role hook's pending work is the role's ready tasks, nothing else: the
@@ -836,7 +849,7 @@ export async function maybeRunHeartbeats(
     // Fire-and-forget: the turn can take minutes. A role turn stays in flight
     // until it ends, so the next tick skips its hook with 'in_flight'.
     hookManager
-      .trigger({ type: 'heartbeat', data: { hookId: hook.id }, timestamp: now }, context)
+      .triggerHook(hook.id, { type: 'heartbeat', data: { hookId: hook.id }, timestamp: now }, context)
       .catch((err) => coreLogger.error({ err, hookId: hook.id }, 'Heartbeat run failed'))
       .finally(() => {
         if (role) roleTurnsInFlight.delete(hook.id);

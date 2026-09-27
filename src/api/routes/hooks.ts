@@ -3,13 +3,15 @@ import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { disableDailyBriefingHook, ensureDailyBriefingHook } from '@/core/briefing';
 import { roleHeartbeatHookError, sanitizeTriggerConfig } from '@/core/heartbeat';
+import type { ChannelType } from '@/core/types';
 import { getDb } from '@/db/postgres';
 import { scopedRepos } from '@/db/repositories/scoped';
 import { hookExecutions } from '@/db/schema/hook-executions';
-import { hooks as hooksTable } from '@/db/schema/hooks';
+import { type Hook as HookRow, hooks as hooksTable } from '@/db/schema/hooks';
 import { recurringTasks } from '@/db/schema/recurring-tasks';
 import { getHookManager } from '@/hooks/manager';
 import { getHookSuggestions } from '@/hooks/suggestions';
+import type { TriggerContext } from '@/hooks/triggers';
 import { isAuthenticated } from '@/security/principal';
 
 const VALID_TRIGGERS = ['message_received', 'agent_started', 'agent_completed', 'agent_failed', 'tool_executed', 'permission_requested', 'schedule', 'webhook', 'heartbeat'] as const;
@@ -26,6 +28,124 @@ const VALID_ACTIONS = ['notify', 'spawn_agent', 'webhook', 'n8n_workflow', 'exec
  * "Hook not found" instead of "Not authorized" so attackers can't
  * enumerate hook ids.
  */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** Channel types a test message may claim (mirrors core ChannelType). */
+const TEST_CHANNEL_TYPES = ['telegram', 'teams', 'slack', 'whatsapp', 'webchat', 'api', 'qa-demo'] as const satisfies readonly ChannelType[];
+
+function isChannelType(v: unknown): v is ChannelType {
+  return typeof v === 'string' && (TEST_CHANNEL_TYPES as readonly string[]).includes(v);
+}
+
+/** Metadata keys that carry identity; never taken from the caller. */
+const IDENTITY_METADATA_KEYS = new Set(['sessionId', 'userId']);
+
+function stringRecord(v: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!isPlainObject(v)) return out;
+  for (const [k, val] of Object.entries(v)) {
+    if (typeof val === 'string') out[k.toLowerCase()] = val;
+  }
+  return out;
+}
+
+type TestContextInput = { message?: string; data?: unknown; context?: unknown };
+
+/**
+ * Build the trigger context for a manual test fire.
+ *
+ * Identity is server-controlled: the message's userId is always the hook
+ * owner, there is no sessionId (in metadata or anywhere else), and no
+ * agent/tool objects are accepted from the caller — only synthetic ones built
+ * from the hook config. The caller may supply the non-identity fields a hook
+ * can filter or condition on:
+ *  - message: content (or top-level `message`), channelType / channel
+ *    (validated against the channel enum), metadata minus sessionId/userId;
+ *  - webhook: path, method, headers, body.
+ * Returns an error string for an invalid channel type.
+ */
+function buildTestContext(hook: HookRow, input: TestContextInput, now: Date): TriggerContext | { error: string } {
+  const config = hook.triggerConfig ?? {};
+  const supplied = isPlainObject(input.context) ? input.context : {};
+  const sMessage = isPlainObject(supplied.message) ? supplied.message : undefined;
+  const sWebhook = isPlainObject(supplied.webhook) ? supplied.webhook : undefined;
+  const context: TriggerContext = {};
+
+  const text =
+    typeof input.message === 'string'
+      ? input.message
+      : typeof sMessage?.content === 'string'
+        ? sMessage.content
+        : undefined;
+  if (text !== undefined || sMessage || hook.trigger === 'message_received') {
+    const requestedChannel = sMessage?.channelType ?? sMessage?.channel;
+    if (requestedChannel !== undefined && !isChannelType(requestedChannel)) {
+      return { error: `Invalid channel type. Allowed: ${TEST_CHANNEL_TYPES.join(', ')}` };
+    }
+    const metadata = isPlainObject(sMessage?.metadata)
+      ? Object.fromEntries(Object.entries(sMessage.metadata).filter(([k]) => !IDENTITY_METADATA_KEYS.has(k)))
+      : undefined;
+    context.message = {
+      id: `hook-test-${hook.id}-${now.getTime()}`,
+      channelType: requestedChannel ?? 'api',
+      channelId: hook.userId,
+      userId: hook.userId,
+      content: text ?? '',
+      timestamp: now,
+      ...(metadata ? { metadata } : {}),
+    };
+  }
+  switch (hook.trigger) {
+    case 'agent_started':
+    case 'agent_completed':
+    case 'agent_failed':
+      context.agent = {
+        id: `hook-test-${hook.id}`,
+        // Empty: resolveHookSessionId falls through to the hook's own session.
+        sessionId: '',
+        userId: hook.userId,
+        topic: config.sessionFilter?.topics?.[0] ?? 'hook',
+        model: 'default',
+        role: 'general',
+        status: hook.trigger === 'agent_started' ? 'running' : hook.trigger === 'agent_failed' ? 'failed' : 'completed',
+        createdAt: now,
+        updatedAt: now,
+        metadata: {},
+      };
+      break;
+    case 'tool_executed':
+      context.tool = {
+        name: config.toolNames?.[0] ?? 'test',
+        toolId: config.toolIds?.[0] ?? 'test',
+        args: {},
+      };
+      break;
+    case 'webhook': {
+      const data = input.data;
+      const fallbackBody = isPlainObject(data) && 'body' in data ? data.body : (data ?? {});
+      context.webhook = {
+        path: typeof sWebhook?.path === 'string' ? sWebhook.path : (config.webhookPath ?? hook.id),
+        method: typeof sWebhook?.method === 'string' ? sWebhook.method.toUpperCase() : 'POST',
+        headers: stringRecord(sWebhook?.headers),
+        body: sWebhook && 'body' in sWebhook ? sWebhook.body : fallbackBody,
+      };
+      break;
+    }
+    case 'schedule':
+      context.schedule = {
+        cronExpression: (config.cronExpression as string | undefined) ?? '',
+        scheduledTime: now,
+        hookName: hook.name,
+      };
+      break;
+    default:
+      break;
+  }
+  return context;
+}
+
 export const hookRoutes = new Elysia({ prefix: '/hooks' })
   .use(apiContext)
   // List user's hooks
@@ -344,7 +464,7 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
   // Test hook (trigger manually)
   .post(
     '/:id/test',
-    async ({ user, principal, params, body }) => {
+    async ({ user, principal, params, body, set }) => {
       if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
@@ -354,11 +474,34 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
         return { error: 'Hook not found' };
       }
 
+      // Heartbeat runs are gated by src/core/heartbeat.ts (active hours, daily
+      // cap, change detection); a manual fire would bypass that gate.
+      if (hook.trigger === 'heartbeat') {
+        set.status = 400;
+        return { error: "heartbeat hooks run on their schedule; they can't be test-fired" };
+      }
+
+      const now = new Date();
+      const context = buildTestContext(hook, body, now);
+      if ('error' in context) {
+        set.status = 400;
+        return { error: context.error };
+      }
+
       const hookManager = getHookManager();
-      // Trigger the hook with test context
-      const results = await hookManager.trigger(
-        { type: hook.trigger, data: body.data || {}, timestamp: new Date() },
-        body.context || {}
+      // Fire only this hook (ownership enforced by scopedRepos above). Using
+      // trigger() here would fan out to every user's hooks of the same type.
+      // The context's identity is server-built (see buildTestContext).
+      // manualTest: no cooldown/maxExecutions, not counted as a real run.
+      const results = await hookManager.triggerHook(
+        hook.id,
+        {
+          type: hook.trigger,
+          data: { ...(isPlainObject(body.data) ? body.data : {}), hookId: hook.id },
+          timestamp: now,
+        },
+        context,
+        { manualTest: true },
       );
 
       return { results };
@@ -369,6 +512,13 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
       }),
       body: t.Object({
         data: t.Optional(t.Any()),
+        /** Optional text for the server-built test message. */
+        message: t.Optional(t.String()),
+        /**
+         * Non-identity test fields only: message {content, channelType |
+         * channel, metadata} and webhook {path, method, headers, body}.
+         * userId/sessionId and agent/tool objects are ignored.
+         */
         context: t.Optional(t.Any()),
       }),
       detail: { tags: ['hooks'] },

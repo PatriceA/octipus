@@ -365,6 +365,20 @@ export const swarmConfigSchema = z.object({
    * the previous behaviour exactly.
    */
   contractRetries: z.number().min(0).max(5).default(1),
+  /**
+   * Give each coding-role CLI child (Claude Code / Codex) its own git worktree
+   * on an `octipus/<id>` branch, merged back into the project's current branch
+   * when it finishes cleanly. Off by default: it changes where a child's edits
+   * land until the merge. See `src/core/swarm/worktree.ts`.
+   */
+  worktreeIsolation: z.boolean().default(false),
+  /**
+   * With `worktreeIsolation`: make each worktree's `node_modules` a symlink to
+   * the project's, so builds and tests find installed dependencies. SHARED,
+   * not isolated — an install inside a worktree writes the user's real
+   * `node_modules`. Off = worktrees start with no `node_modules`.
+   */
+  worktreeLinkNodeModules: z.boolean().default(true),
   levelDefaults: z.object({
     root: swarmLevelSchema.default({ tokens: 200_000, wallMs: 36_000_000, fanOut: 6, maxPendingDetached: 6 }),
     agent: swarmLevelSchema.default({ tokens: 80_000, wallMs: 3_600_000, fanOut: 4, maxPendingDetached: 3 }),

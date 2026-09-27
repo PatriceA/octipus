@@ -31,6 +31,7 @@ vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: {
   findById: async () => ({ id: 's', userId: 'u', context: { devMode: true, projectPath: fixture.dir, planMode: false } }),
   incrementMessageCount: async () => {},
   patchContextIfGeneration: async () => true,
+  setContextKeyIfGeneration: async () => true,
 } }));
 vi.mock('@/db/repositories/work-plan-repository', () => ({ workPlanRepository: {
   read: async (sessionId: string, userId: string) => {

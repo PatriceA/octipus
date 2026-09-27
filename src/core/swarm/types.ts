@@ -9,6 +9,7 @@
 import type { AgentRole } from '@/core/agent/types';
 import type { SwarmReceipt } from './receipt';
 import type { Scorer, ScorerOutcome } from './scorers';
+import type { WorktreeReport } from './worktree';
 
 export type SwarmNodeKind = 'root' | 'agent' | 'subagent';
 
@@ -159,6 +160,12 @@ export interface TaskBrief {
   topicPath: string;
   /** Compact summary of parent's context, ≤500 tokens. */
   parentSummary: string;
+  /**
+   * Briefs of the tasks above this one, root-most first, ending with the
+   * direct parent's own brief; each clipped to `ANCESTRY_ENTRY_MAX`. Empty for a
+   * child of the root (the root's task is `originalUserRequest`).
+   */
+  ancestry?: string[];
   /** Primary task description, ≤2000 tokens. */
   taskBrief: string;
   /** Hard constraints the child must respect (e.g. "read-only"). */
@@ -223,6 +230,12 @@ export interface ChildResult {
    * hands later siblings tokens that are already spent.
    */
   discardedTokens?: number;
+  /**
+   * Set when the child ran in its own git worktree (`swarm.worktreeIsolation`):
+   * the branch it produced, its head and diff stat, and whether it was merged
+   * back. Also copied onto `receipt.worktree` so both result formatters show it.
+   */
+  worktree?: WorktreeReport;
 }
 
 /**
@@ -278,6 +291,11 @@ export interface SpawnChildParams {
    * any failure flips the result to `contract_failed`. See `scorers.ts`.
    */
   scorers?: Scorer[];
+  /**
+   * Explicit task id: a later child of the same role given the same value
+   * continues this child's vendor CLI session. Omitted → the child starts cold.
+   */
+  resumeKey?: string;
   /**
    * 'await' (default): parent blocks until child returns, result surfaced
    * inline, parent pausedMs ticks while waiting.

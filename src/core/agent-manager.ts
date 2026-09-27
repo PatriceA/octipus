@@ -6,11 +6,12 @@ import { agentRepository } from '@/db/repositories/agent-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { getModelRegistry } from '@/models/model-registry';
+import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
 import { generateId } from '@/utils/crypto';
 import { usableContextWindow } from '@/utils/context-compaction';
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { type AgentEvent, AgentWorker, type AgentWorkerConfig, type ToolHandler } from './agent-worker';
-import { getCLIToolConfig, isCLIProvider } from './cli-agent-factory';
+import { getCLIToolConfig, isCLIProvider, isResumableCliModel } from './cli-agent-factory';
 import { CLIAgentWorker } from './cli-agent-worker';
 import { getPermissionManager } from '@/security/permissions';
 import { getRouter } from './router';
@@ -140,6 +141,16 @@ export class AgentManager {
       if (!check.allowed) {
         const { QuotaExceededError } = await import('@/security/quota-error');
         throw new QuotaExceededError({ ...check.reason, userId: options.userId });
+      }
+      // Dollar spend budgets: a paused budget refuses the spawn with
+      // SpendBudgetExceededError before any worker exists. Any other failure
+      // of the check (DB hiccup, table not migrated yet) does not block.
+      try {
+        const { checkSpend } = await import('@/security/spend-budgets');
+        await checkSpend({ userId: options.userId, role: options.role || 'general', workspaceId: options.workspaceId });
+      } catch (err) {
+        if (err instanceof Error && err.name === 'SpendBudgetExceededError') throw err;
+        agentLogger.warn({ err, userId: options.userId }, 'spend budget check unavailable (not blocking)');
       }
     }
 
@@ -276,11 +287,17 @@ export class AgentManager {
     // (loadHistory replaces this.messages, so system prompt must come after)
     await worker.loadHistory();
 
-    // Add system prompt if provided
+    // Add system prompt if provided. A keyed swarm child on a resumable CLI
+    // (the spawner split its prompt at VOLATILE_MARKER) takes the
+    // session-selected skills into that volatile tail: a resumed run re-sends
+    // them, and a selection change does not touch the stable part its vendor
+    // session is fingerprinted on. Everyone else keeps them as their own message.
+    const intoTail = !context.root && typeof context.metadata.resumeKey === 'string' && isCLI && isResumableCliModel(routedModel)
+      && !!selectedSkills && !!options.systemPrompt && VOLATILE_MARKER.test(options.systemPrompt);
     if (options.systemPrompt) {
-      worker.addSystemMessage(options.systemPrompt);
+      worker.addSystemMessage(intoTail ? `${options.systemPrompt}${selectedSkills}` : options.systemPrompt);
     }
-    if (selectedSkills) worker.addSystemMessage(selectedSkills);
+    if (selectedSkills && !intoTail) worker.addSystemMessage(selectedSkills);
 
     // Store the worker
     this.agents.set(agentId, worker);
@@ -307,6 +324,8 @@ export class AgentManager {
         id: agentId,
         sessionId: options.sessionId,
         userId: options.userId,
+        // Workspace spend budgets attribute cost_log rows through this column.
+        workspaceId: options.workspaceId ?? null,
         role: options.role || 'general',
         model: routedModel,
         topic: routedTopic,

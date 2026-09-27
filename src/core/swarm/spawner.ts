@@ -1,6 +1,7 @@
 import { getConfig } from '@/config';
 import type { AnyAgentWorker } from '@/core/agent-manager';
 import { getAgentManager } from '@/core/agent-manager';
+import { isResumableCliModel } from '@/core/cli-agent-factory';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { isPlanMode, stripMutatingTools } from '@/core/agent/plan-mode';
 import type { AgentWorker, ToolHandler } from '@/core/agent-worker';
@@ -22,6 +23,21 @@ import { getModelRegistry } from '@/models/model-registry';
 import { getTopicConfig } from '@/models/topic-config';
 import { premiseNoteFor } from '@/core/premise';
 import { WorkspaceFS } from '@/security/workspace-fs';
+import { randomUUID } from 'node:crypto';
+import { getCLIToolConfig, isCLIProvider, resolveCliModelEntry } from '@/core/cli-agent-factory';
+import {
+  attemptTreeOf,
+  createWorktree,
+  finishWorktree,
+  gitTopLevelOf,
+  hasTrackedChanges,
+  inheritedTreeMetadata,
+  recordAttemptTree,
+  releaseWorktree,
+  removeWorktree,
+  type WorktreeHandle,
+  worktreeCwdOverride,
+} from './worktree';
 
 /**
  * The directories a premise check may look in for a user's workspace.
@@ -114,6 +130,27 @@ export const taskFingerprint = _taskFingerprint;
  */
 export const TASK_BRIEF_PREVIEW_MAX = 4000;
 
+/**
+ * Per-entry cap on `TaskBrief.ancestry`. The chain is at most a couple of
+ * levels deep (depth ≤ 2), so this keeps the "why" block a few lines long.
+ */
+export const ANCESTRY_ENTRY_MAX = 300;
+
+function clipAncestryEntry(entry: string): string {
+  const flat = entry.trim().replace(/\s+/g, ' ');
+  return flat.length > ANCESTRY_ENTRY_MAX ? `${flat.slice(0, ANCESTRY_ENTRY_MAX - 1)}…` : flat;
+}
+
+/**
+ * The ancestor task briefs a spawning agent carries in its context metadata
+ * (`taskAncestry`, root-most first). The root has none: its "brief" is the
+ * user request, which the child already sees verbatim.
+ */
+function readTaskAncestry(metadata: Record<string, unknown> | undefined): string[] {
+  const raw = metadata?.taskAncestry;
+  return Array.isArray(raw) ? raw.filter((e): e is string => typeof e === 'string') : [];
+}
+
 /** Options accepted by spawnChild internally — extends the tool params. */
 export interface SpawnChildInternalOpts {
   /** Used by `escalate_to_other_lane` to pick a different expert. */
@@ -132,6 +169,34 @@ export interface SpawnChildInternalOpts {
    */
   rootIsLite?: boolean;
 }
+
+/**
+ * The key a CLI child continues its vendor session under:
+ * `<parent scope>><child role>:<task id>`, or undefined when no scope is safe.
+ *
+ * The parent scope keeps unrelated parents in one root session from resuming
+ * each other's task sessions:
+ *  - a keyed parent (a depth-1 child spawned with its own `resumeKey`) scopes
+ *    by that key, so grandchildren carry the full lineage;
+ *  - a ROOT parent scopes by its role. Never an agent or node id: the root is
+ *    a new worker every turn, and a root re-spawning the same task in a LATER
+ *    turn has to land on the same key;
+ *  - any other parent has no stable identity, and its role alone would let
+ *    unrelated same-role parents collide, so its children do not resume.
+ */
+export function childResumeKey(parentContext: AgentContext, parent: AgentNode, childRole: AgentRole, taskId: string): string | undefined {
+  const parentKey = (parentContext.metadata as Record<string, unknown> | undefined)?.resumeKey;
+  if (typeof parentKey === 'string' && parentKey) return `${parentKey}>${childRole}:${taskId}`;
+  if (parent.kind === 'root') return `${parent.role}>${childRole}:${taskId}`;
+  coreLogger.info({ parentNodeId: parent.id, childRole }, 'resumeKey ignored: an unkeyed non-root parent has no stable scope — child starts cold');
+  return undefined;
+}
+
+/**
+ * Splits a keyed child's system prompt at VOLATILE_MARKER. Deliberately no
+ * timestamp: the stable prefix before it stays byte-identical across runs.
+ */
+const KEYED_CHILD_VOLATILE_MARKER = '\n\nCURRENT DATE/TIME: as stated in the task message.';
 
 /**
  * `SwarmSpawner` — Phase 2 full implementation.
@@ -338,16 +403,18 @@ export class SwarmSpawner {
     // ── Defense-in-depth: guard raw inputs BEFORE composition ───────
     // The composed child message is already guarded downstream, but
     // guarding the inputs here means an injection attempt in
-    // `taskBrief` or the inherited `parentSummary` is rejected at the
+    // `taskBrief`, the inherited `parentSummary` or an ancestry entry is rejected at the
     // boundary — closer to the source, with a more specific error,
     // and before any expensive composition work.
     const rawTaskBrief = params.taskBrief;
     const rawParentSummary =
       ((parentContext.metadata as Record<string, unknown>)?.parentSummary as string) || '';
+    const rawAncestry = readTaskAncestry(parentContext.metadata as Record<string, unknown> | undefined);
 
     for (const [field, value] of [
       ['taskBrief', rawTaskBrief] as const,
       ['parentSummary', rawParentSummary] as const,
+      ...rawAncestry.map((entry, i) => [`ancestry[${i}]`, entry] as const),
     ]) {
       if (!value) continue;
       const guard = guardInput(value);
@@ -367,6 +434,7 @@ export class SwarmSpawner {
         rawTaskBrief,
       topicPath,
       parentSummary: rawParentSummary,
+      ancestry: rawAncestry,
       taskBrief: rawTaskBrief,
       constraints: params.constraints || [],
       inputArtifacts: [],
@@ -556,7 +624,7 @@ export class SwarmSpawner {
     // placeholder id is mutated to the real one before any tool can fire.
 
     // ── Model resolution: the lane is authoritative ──
-    const { model: childModel, lane: childLane, systemPrompt, isSmall } = await releaseOnThrow(() =>
+    const { model: childModel, lane: childLane, systemPrompt, stablePrompt, skillContext, isSmall } = await releaseOnThrow(() =>
       this.resolveChildModel(
         parent.model,
         childRole,
@@ -701,11 +769,24 @@ export class SwarmSpawner {
       // actually binds one (getTopicConfig on the child's resolved lane).
       executorModel: canSpawnChildren ? getTopicConfig(childLane).executorModel ?? undefined : undefined,
     });
+    // A resume key only matters for a child on a resumable CLI whose parent
+    // gives it a stable scope (`childResumeKey`); any other child runs exactly
+    // as an unkeyed one.
+    const resumeKey = params.resumeKey && isResumableCliModel(childModel)
+      ? childResumeKey(parentContext, parent, childRole, params.resumeKey)
+      : undefined;
     // Delegation guidance is static, identical for every depth-1 spawn, so it
     // lives in the (cacheable) system prompt instead of every brief (Phase 4).
-    const childSystemPrompt = canSpawnChildren
-      ? `${systemPrompt ?? ''}\n\n${buildDelegationGuidance()}`.trim()
-      : systemPrompt;
+    //
+    // A keyed child puts its brief-selected skills AFTER VOLATILE_MARKER, as
+    // the root does with its per-turn blocks: a resumed CLI run re-sends only
+    // that tail, and the fingerprint covers what precedes it. The marker line
+    // carries no timestamp (the brief has the date), so the prefix stays stable.
+    const childSystemPrompt = resumeKey
+      ? `${stablePrompt ?? ''}${canSpawnChildren ? `\n\n${buildDelegationGuidance()}` : ''}${KEYED_CHILD_VOLATILE_MARKER}${skillContext ? `\n\n${skillContext}` : ''}`.trim()
+      : canSpawnChildren
+        ? `${systemPrompt ?? ''}\n\n${buildDelegationGuidance()}`.trim()
+        : systemPrompt;
 
     // Context-window gate (RC7): warn if the child's first-turn input already
     // approaches the model's context window — it will truncate or fail before
@@ -794,6 +875,7 @@ export class SwarmSpawner {
       spawnMode: params.mode ?? 'await',
       scorers: params.scorers,
       childIsSmall: isSmall,
+      resumeKey,
     })).finally(() => {
       parent.budget.fanOut.used = Math.max(0, parent.budget.fanOut.used - 1);
     });
@@ -878,12 +960,164 @@ export class SwarmSpawner {
      */
     childIsSmall?: boolean;
     /**
-     * Workspace as it was before the FIRST attempt. Set by that attempt and
-     * carried by every retry (they all spread `opts`), so a retry's
-     * `minFilesChanged` sees the whole child's work, not just its own.
+     * Workspace snapshots keyed by the directory measured, each taken ONCE —
+     * before the first attempt that measured that directory. Created by
+     * `runChildWithRetry` before any attempt and shared by every retry (they
+     * all spread `opts`, and a spread copies the Map reference), so a retry's
+     * `minFilesChanged` sees the whole child's work, not just its own. Keyed by
+     * root because attempts may measure different trees: a CLI attempt its
+     * worktree, a native backup the shared project.
      */
-    fsBaseline?: WorkspaceSnapshot | null;
+    fsBaselines?: Map<string, WorkspaceSnapshot | null>;
+    /**
+     * This child's own git worktree (`swarm.worktreeIsolation`), created once
+     * before the first attempt and carried by every retry (they all spread
+     * `opts`), so a retry continues the same tree and the same branch. `null`
+     * = decided: the child shares the tree. `undefined` = not decided yet.
+     */
+    worktree?: WorktreeHandle | null;
+    /** Resolved `childResumeKey` for a keyed child on a resumable CLI; unset otherwise. */
+    resumeKey?: string;
   }): Promise<ChildResult> {
+    opts.fsBaselines ??= new Map();
+    if (opts.worktree === undefined) opts.worktree = await this.prepareWorktree(opts);
+    const wt = opts.worktree;
+    if (!wt) return this.runChildAttempts(opts);
+    let result: ChildResult | undefined;
+    try {
+      result = await this.runChildAttempts(opts);
+    } finally {
+      // Also on a throw: the child's edits are committed onto its branch
+      // rather than left in a directory nothing will look at again.
+      await this.settleWorktree(wt, result);
+    }
+    return result;
+  }
+
+  /**
+   * Whether this child gets its own worktree, and the worktree if so. Only a
+   * coding-role CLI child in a DEV-MODE project that is a git repository root
+   * qualifies (never the per-user sandbox): native file tools write through
+   * our own queue to the shared tree and stay there. Any failure falls back to
+   * the shared tree — isolation is an improvement, never a reason not to run
+   * the child.
+   *
+   * Also skipped when the project has tracked uncommitted changes: the
+   * worktree starts at HEAD and would not see them, and the merge back would
+   * be skipped as dirty anyway.
+   */
+  private async prepareWorktree(
+    opts: Parameters<SwarmSpawner['runChildWithRetry']>[0],
+  ): Promise<WorktreeHandle | null> {
+    let enabled = false;
+    try {
+      enabled = getConfig().swarm?.worktreeIsolation === true;
+    } catch {
+      enabled = false;
+    }
+    if (!enabled || opts.childRole !== 'coding') return null;
+    // Nested isolation is off: a descendant of a worktree child works in its
+    // ancestor's worktree (see `singleSpawnAndRun`), whose settle captures it.
+    if (inheritedWorktreeOf(opts.parentContext)) {
+      coreLogger.debug({ parentNodeId: opts.parent.id }, 'Swarm worktree skipped — inherits its parent\'s worktree');
+      return null;
+    }
+    try {
+      if (!(await isCliModel(opts.childModel))) return null;
+      const tree = await sharedTreeRoot(opts.parentContext);
+      if (!tree?.devProject) {
+        coreLogger.debug({ parentNodeId: opts.parent.id }, 'Swarm worktree skipped — not a dev-mode project session');
+        return null;
+      }
+      const repo = await gitTopLevelOf(tree.root);
+      if (!repo) {
+        coreLogger.debug({ root: tree.root, parentNodeId: opts.parent.id }, 'Swarm worktree skipped — project is not a git repository root');
+        return null;
+      }
+      if (await hasTrackedChanges(repo)) {
+        coreLogger.info(
+          { repo, parentNodeId: opts.parent.id },
+          'Swarm worktree skipped — the project has uncommitted changes a worktree would not see; the child runs on the shared tree',
+        );
+        return null;
+      }
+      // Minted here, not the agent id: the agent does not exist yet, and a
+      // crash or contract retry runs on a NEW agent that must reuse this tree.
+      const id = `c${randomUUID().replace(/-/g, '').slice(0, 20)}`;
+      let linkNodeModules = true;
+      try {
+        linkNodeModules = getConfig().swarm?.worktreeLinkNodeModules !== false;
+      } catch {
+        linkNodeModules = true;
+      }
+      return await createWorktree(repo, id, { linkNodeModules });
+    } catch (err) {
+      coreLogger.warn(
+        { err: (err as Error).message, parentNodeId: opts.parent.id, model: opts.childModel },
+        'Swarm worktree could not be created — the child runs on the shared tree',
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Commit, report and (when safe) merge a finished child's worktree, then
+   * clean it up. Never throws: a clean-up failure is reported on the result and
+   * the worktree is left in place for a human.
+   */
+  private async settleWorktree(wt: WorktreeHandle, result: ChildResult | undefined): Promise<void> {
+    try {
+      // Merged only when the child finished `ok` AND that answer came from an
+      // attempt that ran in this worktree. A native backup attempt worked on
+      // the shared tree; its `ok` says nothing about what is on the branch. A
+      // failed or cancelled child's work is still committed on its branch, for
+      // a human to judge.
+      const ok = result?.status === 'ok';
+      const fromThisTree = attemptTreeOf(result) === wt.path;
+      const report = await finishWorktree(wt, {
+        merge: ok && fromThisTree,
+        skipReason: ok ? 'skipped_other_attempt' : 'skipped_status',
+        label: result?.nodeId ? `swarm node ${result.nodeId}` : undefined,
+      });
+      const merged = report.merge === 'merged' || report.merge === 'no_changes';
+      const cleaned = await removeWorktree(wt, { merged });
+      if (!cleaned.removed) releaseWorktree(wt.id);
+      report.branchKept = !cleaned.branchDeleted;
+      if (cleaned.keptRef) report.keptRef = cleaned.keptRef;
+      coreLogger.info(
+        { branch: wt.branch, merge: report.merge, diffStat: report.diffStat, removed: cleaned.removed },
+        'Swarm worktree settled',
+      );
+      if (!result) return;
+      result.worktree = report;
+      if (result.receipt) result.receipt = { ...result.receipt, worktree: report };
+      if (!merged) {
+        const where = report.keptRef && report.keptRef !== wt.branch ? `${wt.branch} / ${report.keptRef}` : wt.branch;
+        const kept = cleaned.removed ? '' : ` Worktree left at ${wt.path}${cleaned.reason ? ` (${cleaned.reason})` : ''}.`;
+        const line = `Work is on branch ${where} (${report.diffStat || 'no diff'}), NOT merged: ${report.merge}${report.mergeDetail ? ` — ${report.mergeDetail}` : ''}.${kept}`;
+        result.notes = result.notes ? `${result.notes}\n${line}` : line;
+      }
+    } catch (err) {
+      releaseWorktree(wt.id);
+      const line = `Worktree ${wt.path} (branch ${wt.branch}) could not be finalised and was left in place: ${(err as Error).message}`;
+      coreLogger.error({ err, path: wt.path, branch: wt.branch }, 'Swarm worktree could not be finalised');
+      if (result) result.notes = result.notes ? `${result.notes}\n${line}` : line;
+    }
+  }
+
+  /** The snapshot of `root` taken before the first attempt that measured it. */
+  private async baselineFor(
+    opts: Parameters<SwarmSpawner['runChildWithRetry']>[0],
+    root: string,
+  ): Promise<WorkspaceSnapshot | null> {
+    const baselines = (opts.fsBaselines ??= new Map());
+    if (!baselines.has(root)) baselines.set(root, await snapshotWorkspace(root));
+    return baselines.get(root) ?? null;
+  }
+
+  private async runChildAttempts(
+    opts: Parameters<SwarmSpawner['runChildWithRetry']>[0],
+  ): Promise<ChildResult> {
     // Retry policy (design §Failure Modes):
     //   provider_error → retry once on the SAME spawn attempt (same node).
     //     Cheap: we call `worker.run(childMessage)` again.
@@ -1230,6 +1464,23 @@ export class SwarmSpawner {
     const agentManager = getAgentManager();
     const startTime = Date.now();
     let worker: AnyAgentWorker;
+    // The tree THIS attempt works in, and the metadata that puts it there.
+    //  - A descendant of a worktree child inherits that worktree, CLI or
+    //    native alike (see `inheritedTreeMetadata`): the session still names
+    //    the shared project, and resolving from it would leak the descendant's
+    //    writes into the user's tree.
+    //  - A child with its own worktree uses it only on a CLI attempt: only a
+    //    CLI worker honours `worktreePath`, so a native backup attempt runs
+    //    and is judged on the shared tree, like any other native child.
+    const attemptIsCli = await isCliModel(opts.childModel);
+    const inheritedTree = inheritedWorktreeOf(opts.parentContext);
+    const attemptWorktree =
+      inheritedTree ?? (opts.worktree && attemptIsCli ? opts.worktree.path : undefined);
+    const treeMetadata = inheritedTree
+      ? inheritedTreeMetadata(inheritedTree, attemptIsCli)
+      : attemptWorktree
+        ? { worktreePath: attemptWorktree }
+        : {};
 
     // Phase 2: for Agents (depth 1), build the child's AgentNode up front
     // so we can register `spawn_child` + `escalate_to_other_lane`
@@ -1342,7 +1593,12 @@ export class SwarmSpawner {
           originalRequest:
             ((opts.parentContext.metadata as Record<string, unknown>)?.originalRequest as string) ??
             opts.brief.originalUserRequest,
+          // The child's own ancestry, so its children can say why they exist:
+          // what its parent was asked to do, then what the child itself was.
+          taskAncestry: [...(opts.brief.ancestry ?? []), opts.brief.taskBrief].map(clipAncestryEntry),
           ...pipelineMetadata(opts.parentContext.metadata as Record<string, unknown> | undefined),
+          ...treeMetadata,
+          ...(opts.resumeKey ? { resumeKey: opts.resumeKey } : {}),
         },
       });
     } catch (err) {
@@ -1519,17 +1775,15 @@ export class SwarmSpawner {
     // The tree the child actually works in: the dev-mode project when the
     // session has one, else the per-user sandbox — the `file_exists` scorer
     // resolves the same way, so both file-aware scorers judge one directory.
+    // A child with its own worktree works THERE, so that is what is measured.
     const scorerWorkspaceRoot = wantsFileEvidence
-      ? (await devProjectPathForSession(opts.parentContext.sessionId)) ??
-        WorkspaceFS.forAgent({ userId: opts.parentContext.userId }).root
+      ? attemptWorktree ?? (await sharedTreeRoot(opts.parentContext)).root
       : null;
-    // Snapshotted once per child, before its first attempt. A retry re-snapshots
-    // AFTER the first attempt committed its work, then measures zero changes and
-    // fails `minFilesChanged` on every retry until the pool runs dry.
-    if (scorerWorkspaceRoot && opts.fsBaseline === undefined) {
-      opts.fsBaseline = await snapshotWorkspace(scorerWorkspaceRoot);
-    }
-    const fsBefore = scorerWorkspaceRoot ? opts.fsBaseline ?? null : null;
+    // Snapshotted once per child and directory, before the first attempt that
+    // measures it. A retry re-snapshotting AFTER the first attempt committed its
+    // work measures zero changes and fails `minFilesChanged` on every retry
+    // until the pool runs dry. See `fsBaselines`.
+    const fsBefore = scorerWorkspaceRoot ? await this.baselineFor(opts, scorerWorkspaceRoot) : null;
 
     // ── Run child (with provider_error single retry on same node) ──
     let status: ChildResultStatus = 'ok';
@@ -1605,6 +1859,9 @@ export class SwarmSpawner {
       notes,
       receipt,
     };
+    // Which tree produced this answer: only a result from an attempt that ran
+    // in the worktree may merge it (see `settleWorktree`).
+    if (attemptWorktree && !inheritedTree) recordAttemptTree(result, attemptWorktree);
 
     // ── Scorer gates ────────────────────────────────────────────────
     // Deterministic verification of the deliverable, run only on an otherwise
@@ -1648,7 +1905,11 @@ export class SwarmSpawner {
           childTools: opts.childTools,
           childRole: opts.childRole,
           signal: opts.parent.signal,
-          projectPath: await devProjectPathForSession(opts.parentContext.sessionId),
+          // The child's worktree when it has one: evidence gates must check the
+          // tree the child changed, which is not the shared project until merged.
+          projectPath:
+            attemptWorktree ??
+            (await sharedTreeRoot(opts.parentContext).then((t) => (t.devProject ? t.root : undefined))),
         }),
       );
       result.scorerOutcome = outcome;
@@ -1876,7 +2137,7 @@ export class SwarmSpawner {
      */
     requestedLane?: string,
     userId?: string,
-  ): Promise<{ model: string; lane: string; systemPrompt?: string; isSmall: boolean }> {
+  ): Promise<{ model: string; lane: string; systemPrompt?: string; stablePrompt?: string; skillContext: string; isSmall: boolean }> {
     const registry = getModelRegistry();
 
     // No expert lookup: the row it read carried a model, a lane, a prompt and a
@@ -2106,11 +2367,12 @@ export class SwarmSpawner {
     // — but the role is the copy that cannot be missing.
     systemPrompt += formatCriticalRules(getRoleConfig(childRole).criticalRules ?? []);
 
+    const stablePrompt = systemPrompt;
     if (skillFragments.length > 0) {
       systemPrompt = `${systemPrompt}\n\n${skillFragments.join('\n\n')}`.trim();
     }
 
-    return { model: candidate, lane, systemPrompt, isSmall };
+    return { model: candidate, lane, systemPrompt, stablePrompt, skillContext: skillFragments.join('\n\n'), isSmall };
   }
 
   private emitNodeSpawned(parent: AgentNode, payload: Record<string, unknown>): void {
@@ -2279,6 +2541,37 @@ async function devProjectPathForSession(sessionId?: string): Promise<string | un
   }
 }
 
+/**
+ * The shared tree a child works in when it has no worktree: the dev-mode
+ * project when the session has one, else the per-user sandbox. ONE resolver
+ * for the scorer workspace root, the scorer `projectPath` and the worktree
+ * decision, so they can never judge different directories. `devProject` says
+ * which it is: worktree isolation applies to dev-mode projects only.
+ */
+async function sharedTreeRoot(ctx: AgentContext): Promise<{ root: string; devProject: boolean }> {
+  const project = await devProjectPathForSession(ctx.sessionId);
+  if (project) return { root: project, devProject: true };
+  return { root: WorkspaceFS.forAgent({ userId: ctx.userId }).root, devProject: false };
+}
+
+/**
+ * The worktree a spawning agent works in, when it is itself a worktree child
+ * or one of its descendants — read from its context the same validated way
+ * the CLI worker reads its cwd, so a stray metadata value cannot redirect.
+ */
+function inheritedWorktreeOf(ctx: AgentContext): string | undefined {
+  return worktreeCwdOverride(ctx?.metadata as Record<string, unknown> | undefined);
+}
+
+/**
+ * Whether `model` runs as a CLI agent — the same test `AgentManager.spawn` uses
+ * to pick `CLIAgentWorker`, so the worktree decision and the worker agree.
+ */
+async function isCliModel(model: string): Promise<boolean> {
+  const entry = await resolveCliModelEntry(model).catch(() => null);
+  return entry ? isCLIProvider(entry.provider) : !!getCLIToolConfig(model);
+}
+
 export function buildScorerContext(args: {
   userId?: string;
   filesTouched: number | null;
@@ -2345,6 +2638,17 @@ export function composeChildMessage(
   }
 
   parts.push(`Topic path: ${brief.topicPath}`);
+
+  // Paperclip-style goal ancestry: the briefs of the tasks above this one, so
+  // a grandchild knows what its parent's task was for, not just its own slice.
+  // Entries repeating the request or the parent summary add nothing: dropped.
+  const seen = new Set([brief.originalUserRequest, brief.parentSummary].map(clipAncestryEntry));
+  const ancestry = (brief.ancestry ?? [])
+    .map(clipAncestryEntry)
+    .filter((e) => e && !seen.has(e) && seen.add(e));
+  if (ancestry.length > 0) {
+    parts.push(`Why this task exists (the tasks above yours, top down):\n- ${ancestry.join('\n- ')}`);
+  }
 
   if (brief.parentSummary) {
     parts.push(`Context from parent:\n${brief.parentSummary}`);

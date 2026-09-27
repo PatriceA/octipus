@@ -12,6 +12,7 @@ import { agentRepository } from '@/db/repositories/agent-repository';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
+import { sessionGeneration, type SessionContext } from '@/db/schema/sessions';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import type { CLIAgentConfig } from '@/db/schema/models';
 import { getQuotaTracker } from '@/models/quota-tracker';
@@ -20,7 +21,7 @@ import { killProcessTree } from '@/utils/proc';
 import type { AgentWorkerConfig, ToolHandler } from './agent-base';
 import { BaseAgentWorker } from './agent-base';
 import { CLIArgumentBuilder, CLIOutputParser, discoverCodexMcpServers, resolveCliMcpEntry, sweepStaleFiles, type CliRunConnection } from './cli-adapters';
-import { dropCliSession, fingerprintRun, loadCliSession, saveCliSession } from './cli-session-store';
+import { childCliSessionKey, claimCliSession, cliSessionHolder, dropCliSession, fingerprintRun, loadCliSession, releaseCliSessions, saveCliSession } from './cli-session-store';
 import { canResume, CLI_RESUME } from '@/shared/cli-capabilities';
 import { startCliToolBridge, type BridgeResult } from './cli-tool-bridge';
 import { ToolExecutor } from './tool-executor';
@@ -34,6 +35,7 @@ import { BudgetExceededError } from './swarm/errors';
 import { DetachedChildManager } from './agent-worker/detached-child-manager';
 import { formatCollectedResults } from './swarm/collect-tool';
 import { swarmNodeRepository } from './swarm/node-repository';
+import { worktreeCwdOverride } from './swarm/worktree';
 import type { ChildResult, PendingChild } from './swarm/types';
 import { getCLIToolConfig, resolveCliModelEntry } from './cli-agent-factory';
 import { buildChildEnv } from './cli-child-env';
@@ -42,7 +44,7 @@ import { isRootAgent } from './types';
 import type { AgentContext, AgentMessage } from './types';
 import { readSessionHistory, toContextMessage, withSessionConversation } from './session-history';
 import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
-import { isLongTailHandler } from './agent/tool-split';
+import { isLongTailHandler, TOOL_DISCOVERY_TOOL_ID } from './agent/tool-split';
 
 /**
  * Whether this session's cwd is a directory someone ELSE owns — a dev-mode
@@ -343,6 +345,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
         : this.runInternal(userMessage));
     } finally {
       this.activeRuns--;
+      if (this.activeRuns === 0) releaseCliSessions(this.context.id);
     }
   }
 
@@ -365,6 +368,10 @@ export class CLIAgentWorker extends BaseAgentWorker {
       const session = await sessionRepository.findById(this.context.sessionId);
       if (this.aborted) throw new Error('Agent was aborted before bridge startup');
       if (!session || session.userId !== this.context.userId) throw new Error('CLI session ownership mismatch');
+      // A child never loads root history, so it takes the generation once per
+      // run, here: its cold retries and merge turns reuse it, and a /clear
+      // mid-run then rejects its save like any stale root write.
+      if (!isRootAgent(this.context)) this.generation = sessionGeneration(session.context as SessionContext | undefined);
       this.bridge = await startCliToolBridge({
         tools: () => this.toolExecutor.toolsDisabled ? [] : [...this.toolExecutor.getTools().values()],
         blocked: name => this.toolExecutor.isToolBlocked(name),
@@ -523,6 +530,10 @@ export class CLIAgentWorker extends BaseAgentWorker {
   stop(): void {
     if (this.terminalEmitted) return;
     this.aborted = true;
+    // A resume key is freed once the vendor process has EXITED (its 'exit'
+    // handler), never while it may still be writing the session through the
+    // SIGTERM grace period. With no live process, nothing can still write it.
+    if (!this.process || this.processExited) releaseCliSessions(this.context.id);
     this.abortController.abort('CLI agent stopped');
     this.detached.cancelAll('CLI agent stopped');
     getPermissionManager().cancelWaits(this.context.id);
@@ -667,6 +678,17 @@ export class CLIAgentWorker extends BaseAgentWorker {
     if (quota.exhausted) {
       throw new Error(`Quota exhausted for ${toolConfig.name}. Resets at ${quota.resetsAt?.toISOString() || 'unknown'}`);
     }
+    // Dollar spend budgets, before the CLI process starts. Subscription CLIs
+    // log zero or estimated cost, so they rarely move the needle themselves,
+    // but a budget paused by API spend must stop them too. A failing check
+    // (DB hiccup) does not block the run, as in agent-worker.
+    try {
+      const { checkSpend } = await import('@/security/spend-budgets');
+      await checkSpend({ userId: this.context.userId, role: this.context.role, workspaceId: this.context.workspaceId });
+    } catch (err) {
+      if (err instanceof Error && err.name === 'SpendBudgetExceededError') throw err;
+      agentLogger.debug({ err }, 'spend budget check unavailable (not blocking)');
+    }
 
     const systemPrompt = this.buildSystemPrompt();
     const settings = await this.getCLISettings();
@@ -732,6 +754,19 @@ export class CLIAgentWorker extends BaseAgentWorker {
         mkdirSync(workspaceCwd, { recursive: true });
       }
     }
+    // Swarm worktree isolation: the spawner created this child a git worktree
+    // of the project (see `swarm/worktree.ts`). Resolved AFTER the session
+    // checks above so a vanished project still fails loud, and accepted only
+    // when it names an existing directory under the worktrees root.
+    const worktreeCwd = worktreeCwdOverride(this.context.metadata as Record<string, unknown> | undefined);
+    if (worktreeCwd) {
+      workspaceCwd = worktreeCwd;
+    } else if (this.context.metadata?.worktreePath !== undefined) {
+      agentLogger.warn(
+        { agentId: this.context.id, worktreePath: this.context.metadata.worktreePath },
+        'CLI agent: ignoring worktreePath outside the worktrees root — using the shared tree',
+      );
+    }
 
     // Vendor CLI session reuse — always on for adapters the shared
     // capability table marks resumable (never a hardcoded adapter check
@@ -740,16 +775,50 @@ export class CLIAgentWorker extends BaseAgentWorker {
     // `resume` => the close handler's dead-session branch below cannot fire
     // for it).
     const providerEnv = await toolConfig.buildEnv?.();
-    const reuseSessions = isRootAgent(this.context) && canResume(adapterKey);
+    // Roots continue one vendor session per octipus session. A child only
+    // resumes when its spawner gave it an explicit `resumeKey` (parent scope,
+    // role, task), and never while another live agent holds the same key —
+    // that one starts cold rather than share a vendor conversation.
+    const root = isRootAgent(this.context);
+    let storeKey: string | undefined;
+    if (canResume(adapterKey)) {
+      const childResumeKey = root ? undefined : this.context.metadata?.resumeKey;
+      if (root) storeKey = adapterKey;
+      else if (typeof childResumeKey === 'string' && childResumeKey) {
+        const key = childCliSessionKey(adapterKey, childResumeKey);
+        if (claimCliSession(this.context.sessionId, key, this.context.id)) storeKey = key;
+        else agentLogger.info({ agentId: this.context.id, resumeKey: childResumeKey }, 'CLI resume key held by a running agent — starting cold');
+      }
+    }
+    const reuseSessions = !!storeKey;
+    // A stopped child has released its key (see stop()), and a retry may
+    // already hold it: its late save must not overwrite the new holder's.
+    const ownsStoreKey = () => {
+      if (!reuseSessions) return false;
+      if (root) return true;
+      // Released on exit when stopped, so a turn-limit/budget/timeout stop still
+      // records its id and cursor — unless a retry has taken the key since.
+      const holder = cliSessionHolder(this.context.sessionId, storeKey!);
+      return holder === undefined || holder === this.context.id;
+    };
     let resume: { id: string; isFirstRun: boolean } | undefined;
     let fingerprint: string | undefined;
     if (reuseSessions) {
+      const model = (adapterKey === 'Claude Code' ? process.env.CLAUDE_MODEL : adapterKey === 'Codex CLI' ? process.env.CODEX_MODEL : undefined) || settings.model;
+      const run = { model, permissionMode: settings.permissionMode, planMode: this.connection?.planMode, workingDirectory: workspaceCwd };
+      const tools = [...this.toolExecutor.getTools().values()];
+      // Everything before VOLATILE_MARKER. For a keyed child that is its role
+      // prompt, critical rules and guidance (the spawner puts the brief- and
+      // session-selected skills after the marker), plus the stable worker
+      // guidance; a resumed run re-sends the tail, as for roots.
       const instructions = this.systemMessages.map(part => part.split(VOLATILE_MARKER)[0]).join('\n\n');
-      const toolSchema = [...this.toolExecutor.getTools().values()].map(tool => [tool.name, tool.description, tool.parameters]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
-      fingerprint = fingerprintRun({ model: (adapterKey === 'Claude Code' ? process.env.CLAUDE_MODEL : adapterKey === 'Codex CLI' ? process.env.CODEX_MODEL : undefined) || settings.model,
-        permissionMode: settings.permissionMode, planMode: this.connection?.planMode, workingDirectory: workspaceCwd,
-        providerIdentity: JSON.stringify([this.context.model, toolConfig.name, settings.extraArgs, providerEnv, toolSchema]), instructions });
-      const existing = opts?.forceCold ? null : await loadCliSession(this.context.sessionId, adapterKey, fingerprint);
+      // A child's lazy core set and its discovery tools follow its brief, so it
+      // is fingerprinted by tool ids without them rather than full schemas.
+      const toolIdentity = root
+        ? tools.map(tool => [tool.name, tool.description, tool.parameters]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+        : [this.context.role, [...new Set(tools.filter(tool => tool.toolId !== TOOL_DISCOVERY_TOOL_ID).map(tool => tool.toolId ?? tool.name))].sort()];
+      fingerprint = fingerprintRun({ ...run, providerIdentity: JSON.stringify([this.context.model, toolConfig.name, settings.extraArgs, providerEnv, toolIdentity]), instructions });
+      const existing = opts?.forceCold ? null : await loadCliSession(this.context.sessionId, storeKey!, fingerprint);
       this.resumeDelta = existing?.acknowledged
         ? (await messageRepository.findContextMessages(this.context.sessionId, this.clearedAt, existing.acknowledged, this.generation))
           .filter(row => row.id !== this.userCursor?.id)
@@ -775,12 +844,16 @@ export class CLIAgentWorker extends BaseAgentWorker {
     // Recovery opens a new persistent conversation and cannot retry recursively.
     this.resuming = !!resume && !resume.isFirstRun;
     const prompt = this.buildPrompt();
+    // A resumed keyed child re-sends only the volatile tail of its marker
+    // message: the stable guidance appended after it (vault, bridge) is in the
+    // vendor's first-run snapshot and fingerprinted. Roots are unchanged.
+    const resumedChildSystem = this.resuming && !root ? this.systemMessages.filter(part => VOLATILE_MARKER.test(part)) : undefined;
 
     this.launchCleanup?.();
     this.launchCleanup = undefined;
     // Async vendor discovery stays out of the synchronous arg builder (event-loop safe).
     const codexMcpServers = this.connection && adapterKey === 'Codex CLI' ? await discoverCodexMcpServers(workspaceCwd) : undefined;
-    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, this.systemMessages, systemPrompt, Math.max(0, this.config.maxTokenBudget - this.billableTokensUsed), this.context.id, this.connection ? { ...this.connection, workingDirectory: workspaceCwd, codexMcpServers, maxIterations: Math.max(1, this.config.maxIterations - this.iteration) } : undefined, resume);
+    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, resumedChildSystem ?? this.systemMessages, resumedChildSystem ? resumedChildSystem.join('\n\n') : systemPrompt, Math.max(0, this.config.maxTokenBudget - this.billableTokensUsed), this.context.id, this.connection ? { ...this.connection, workingDirectory: workspaceCwd, codexMcpServers, maxIterations: Math.max(1, this.config.maxIterations - this.iteration) } : undefined, resume);
     const { binary, args, stdinPrompt, useShell } = built;
     this.launchCleanup = () => {
       const configIndex = args.indexOf('--mcp-config');
@@ -802,6 +875,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
     const invocationStartIteration = this.iteration;
     let invocationUsage: import('@/models/litellm-client').CompletionResult['usage'] = { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false };
     let capturedVendorId: string | undefined;
+    let vendorSessionStarted = false;
     const parser = this.parser = new CLIOutputParser(
       this.context.id,
       this.context.model,
@@ -858,15 +932,16 @@ export class CLIAgentWorker extends BaseAgentWorker {
             this.stop();
           }
         },
+        onSessionInit: () => { vendorSessionStarted = true; },
         onRunError: (reason) => {
           // Record the first CLI-reported failure; the close handler rejects
           // with it so the run surfaces as failed, not (no response) success.
           if (!this.runError) this.runError = reason;
         },
         // Codex assigns its own thread id (thread.started); this fires once
-        // per run, and is the single write point for the Codex side of
-        // session reuse (Claude's own write point is right after spawn,
-        // below — its id is caller-minted, so there is nothing to capture).
+        // per run and is Codex's early write point. Claude's id is
+        // caller-minted, so there is nothing to capture: the close handler
+        // records it (on a clean close, or when a keyed child is stopped).
         onVendorSession: (id) => {
           capturedVendorId = id;
           // Write it as soon as the vendor announces it, not only on a clean
@@ -876,8 +951,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
           // The close handler rewrites the record with the acknowledged
           // cursor; this early row carries no cursor, so a resume off it
           // re-sends the turn rather than skipping it.
-          if (!reuseSessions) return;
-          void saveCliSession(this.context.sessionId, adapterKey, {
+          if (!ownsStoreKey()) return;
+          void saveCliSession(this.context.sessionId, storeKey!, {
             id, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(),
             generation: this.generation, ownerAgentId: this.context.id,
           }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to store CLI session id'));
@@ -982,7 +1057,12 @@ export class CLIAgentWorker extends BaseAgentWorker {
         windowsHide: true,
       });
       // 'exit' fires when the process terminates (before streams flush).
-      proc.once('exit', () => { this.processExited = true; });
+      proc.once('exit', () => {
+        this.processExited = true;
+        // Stopped (cancel, timeout, kill): the vendor session is safe to hand
+        // to a retry now, without waiting for the run promise to settle.
+        if (this.aborted) releaseCliSessions(this.context.id);
+      });
 
       // EPIPE guard (low): a child that exits before reading stdin makes the
       // write throw asynchronously — attach the handler BEFORE writing.
@@ -1152,6 +1232,26 @@ export class CLIAgentWorker extends BaseAgentWorker {
           }
           await recordProviderUsage({ model: this.context.model, modelConfigName: this.accountingModelName, messages: [], userId: this.context.userId, sessionId: this.context.sessionId, agentId: this.context.id, requestType: 'cli' }, 'cli', { model: this.context.model, usage: invocationUsage }, code !== 0 || this.aborted || !!this.runError);
 
+          // A keyed child stopped by a turn limit (ours, or Claude's
+          // error_max_turns), a timeout or a cancel still records its vendor
+          // session (without a cursor) so its next run on the task resumes —
+          // only if the vendor confirmed the session this run, and unless a
+          // retry already holds the key. Over budget, it is dropped instead:
+          // the next run starts cold rather than inherit the spent context.
+          if (!root && ownsStoreKey()) {
+            const confirmedId = capturedVendorId || (vendorSessionStarted ? resume?.id : undefined);
+            const hitTurnLimit = /max-turns limit/.test(this.runError ?? '');
+            if (this.budgetExceeded) {
+              await dropCliSession(this.context.sessionId, storeKey!)
+                .catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to drop over-budget CLI session id'));
+            } else if ((this.aborted || hitTurnLimit) && confirmedId) {
+              await saveCliSession(this.context.sessionId, storeKey!, {
+                id: confirmedId, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(),
+                generation: this.generation, ownerAgentId: this.context.id,
+              }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to store stopped CLI session id'));
+            }
+          }
+
           if (this.budgetExceeded) {
             reject(new BudgetExceededError({
               agentId: this.context.id,
@@ -1192,7 +1292,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
           // says so on both channels, so match both.
           const deadSessionEvidence = `${stderr}\n${this.runError ?? ''}`;
           if (!opts?.forceCold && resume && (this.runError || (code !== 0 && code !== null)) && /no conversation found|session not found/i.test(deadSessionEvidence)) {
-            await dropCliSession(this.context.sessionId, adapterKey);
+            await dropCliSession(this.context.sessionId, storeKey!);
             agentLogger.warn({ agentId: this.context.id, adapterKey, id: resume.id }, 'Vendor CLI session is gone — retrying cold with the full prompt');
             // The dead attempt's error must not outlive it: `runError` is a
             // worker field, and a leftover value makes the cold retry reject on
@@ -1228,7 +1328,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
           );
 
           const vendorId = capturedVendorId || resume?.id;
-          if (reuseSessions && vendorId) await saveCliSession(this.context.sessionId, adapterKey, {
+          if (ownsStoreKey() && vendorId) await saveCliSession(this.context.sessionId, storeKey!, {
             id: vendorId, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(),
             generation: this.generation, ownerAgentId: this.context.id, acknowledged: this.userCursor,
           });

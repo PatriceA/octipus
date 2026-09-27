@@ -1,3 +1,4 @@
+import { auditTaskMutation, changedTaskFields, type TaskMutationOp } from '@/core/tasks/audit';
 import { addBacklog, parseBacklog } from '@/core/tasks/backlog';
 import { nextActions } from '@/core/tasks/next';
 import { dateOnlyToEndOfDay } from '@/core/tasks/rank';
@@ -109,7 +110,7 @@ export class TasksTool extends BaseTool {
       async (args, context) => {
         const principal = this.principalFor(context);
         try {
-          const task = await scopedRepos(principal).tasks.create({
+          const values = {
             title: args.title as string,
             notes: (args.notes as string | undefined) ?? null,
             priority: clampPriority(args.priority),
@@ -121,7 +122,9 @@ export class TasksTool extends BaseTool {
             ...assigneePatch(args.assigneeKind, args.assigneeRef),
             source: normalizeSource(args.source),
             sourceRef: context.sessionId ? { sessionId: context.sessionId } : undefined,
-          });
+          };
+          const task = await scopedRepos(principal).tasks.create(values);
+          await auditAgentTaskMutation(context, task.id, 'create', changedTaskFields(values));
           return { created: true, task: summarize(task) };
         } catch (err) {
           return { error: (err as Error).message };
@@ -145,14 +148,20 @@ export class TasksTool extends BaseTool {
         const principal = this.principalFor(context);
         const parsed = parseBacklog(args.items);
         if (!parsed.ok) return { error: parsed.error };
+        // addBacklog writes as it goes, so a failure partway still leaves rows:
+        // collect every create as it lands and audit them all either way.
+        const created: Array<{ taskId: string; change: string[] }> = [];
         try {
           const added = await addBacklog(principal, parsed.items, {
             source: normalizeSource(args.source),
             sourceRef: context.sessionId ? { sessionId: context.sessionId } : undefined,
+            onCreated: (task, values) => created.push({ taskId: task.id, change: changedTaskFields(values) }),
           });
           return { added: added.length, tasks: added.map((a) => ({ index: a.index, ...summarize(a.task) })) };
         } catch (err) {
           return { error: (err as Error).message };
+        } finally {
+          await Promise.all(created.map((c) => auditAgentTaskMutation(context, c.taskId, 'create', c.change)));
         }
       },
       { requiresPermission: true, permissionAction: 'write' },
@@ -182,7 +191,7 @@ export class TasksTool extends BaseTool {
         if (!existing) return { error: 'Task not found' };
         const status = args.status as string | undefined;
         try {
-          const task = await repo.update(args.id as string, {
+          const patch = {
             title: args.title as string | undefined,
             notes: args.notes as string | undefined,
             status,
@@ -196,8 +205,14 @@ export class TasksTool extends BaseTool {
             blockedBy: args.blockedBy !== undefined ? idList(args.blockedBy) : undefined,
             ...assigneePatch(args.assigneeKind, args.assigneeRef),
             ...completionPatch(status, Boolean(existing.completedAt)),
-          }, { asActor: agentActor(context) });
+          };
+          const task = await repo.update(args.id as string, patch, { asActor: agentActor(context) });
           if (!task) return refusal(await repo.findById(args.id as string));
+          const change = changedTaskFields(patch, existing);
+          if (change.length > 0) {
+            const op = status === 'done' && existing.status !== 'done' ? 'complete' : 'update';
+            await auditAgentTaskMutation(context, task.id, op, change);
+          }
           return { updated: true, task: summarize(task) };
         } catch (err) {
           return { error: (err as Error).message };
@@ -218,11 +233,13 @@ export class TasksTool extends BaseTool {
         const existing = await repo.findById(args.id as string);
         if (!existing) return { error: 'Task not found' };
         // Idempotent: keep the original completedAt if already done.
-        const task = await repo.update(args.id as string, {
-          status: 'done',
-          ...completionPatch('done', Boolean(existing.completedAt)),
-        }, { asActor: agentActor(context) });
+        const patch = { status: 'done', ...completionPatch('done', Boolean(existing.completedAt)) };
+        const task = await repo.update(args.id as string, patch, { asActor: agentActor(context) });
         if (!task) return refusal(await repo.findById(args.id as string));
+        // Already done: nothing changed, nothing to audit (same rule as PATCH).
+        if (existing.status !== 'done') {
+          await auditAgentTaskMutation(context, task.id, 'complete', changedTaskFields(patch, existing));
+        }
         return { completed: true, task: summarize(task) };
       },
       { requiresPermission: true, permissionAction: 'write' },
@@ -293,6 +310,21 @@ export class TasksTool extends BaseTool {
       workspaceId: context.workspaceId ?? null,
     };
   }
+}
+
+/**
+ * Audit a task mutation made by an agent. The run is the root session, the
+ * same id `run_events.run_id` carries for this agent's tool calls.
+ */
+function auditAgentTaskMutation(context: AgentContext, taskId: string, op: TaskMutationOp, change: string[]): Promise<void> {
+  return auditTaskMutation({
+    userId: context.userId,
+    taskId,
+    op,
+    change,
+    actor: { kind: 'agent', id: context.id },
+    runId: context.sessionId ?? null,
+  });
 }
 
 /**

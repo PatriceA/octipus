@@ -1,7 +1,7 @@
 import { sessionGeneration } from '@/db/schema/sessions';
 import { createHash } from 'node:crypto';
 import { sessionRepository } from '@/db/repositories/session-repository';
-import { canResume } from '@/shared/cli-capabilities';
+import { canResume, CLI_RESUME } from '@/shared/cli-capabilities';
 import type { SessionContext } from '@/db/schema/sessions';
 import { withSessionConversation } from './session-history';
 
@@ -59,18 +59,74 @@ export async function willResumeCliSession(sessionId: string, adapterKey: string
   return (await loadCliSession(sessionId, adapterKey, fingerprint)) !== null;
 }
 
-/** Awaited publication under the root conversation lock; rejects stale generations. */
+/**
+ * Writes ONE `cliSessions` entry in a single statement, rejected unless the
+ * session is still in `rec.generation`. Children save outside the root
+ * conversation lock, so rebuilding the whole map here would let parallel
+ * children, the root and `acknowledgeProviderTurn` clobber each other.
+ */
 export async function saveCliSession(sessionId: string, adapterKey: string, rec: CliSessionRecord): Promise<void> {
-  const session = await sessionRepository.findById(sessionId);
   const generation = rec.generation ?? '';
-  if (sessionGeneration(session?.context) !== generation) return;
-  await sessionRepository.patchContextIfGeneration(sessionId, generation, {
-    cliSessions: { ...session?.context?.cliSessions, [adapterKey]: { ...rec, generation } },
-  });
+  // A child save also bounds the child task sessions (least recently used go
+  // first) in the same statement; root adapter keys never count.
+  const bound = isChildCliSessionKey(adapterKey) ? { boundCliSessions: { prefixes: CHILD_CLI_SESSION_KEY_PREFIXES, max: MAX_CHILD_CLI_SESSIONS } } : undefined;
+  await sessionRepository.setContextKeyIfGeneration(sessionId, generation, ['cliSessions', adapterKey], { ...rec, generation }, bound);
 }
+
+/** Most child task sessions kept per octipus session. */
+export const MAX_CHILD_CLI_SESSIONS = 50;
 
 export async function dropCliSession(sessionId: string, adapterKey: string): Promise<void> {
   await sessionRepository.setContextKey(sessionId, ['cliSessions', adapterKey], undefined);
+}
+
+const CHILD_KEY_SEPARATOR = '::';
+
+/** `<adapter>::` for every resumable adapter: the only prefixes a child key can have. */
+export const CHILD_CLI_SESSION_KEY_PREFIXES = Object.keys(CLI_RESUME).map(adapterKey => `${adapterKey}${CHILD_KEY_SEPARATOR}`);
+
+/**
+ * Store key for a child agent's vendor session, continued per (parent scope,
+ * role, task) rather than per octipus session. Lives beside the root's adapter
+ * keys in `cliSessions`, so /clear (which drops the map) drops these too;
+ * compaction keeps them (`isChildCliSessionKey`).
+ */
+export function childCliSessionKey(adapterKey: string, resumeKey: string): string {
+  return `${adapterKey}${CHILD_KEY_SEPARATOR}${resumeKey}`;
+}
+
+/** A child task key (`<resumable adapter>::…`), which compaction keeps and eviction bounds. */
+export function isChildCliSessionKey(key: string): boolean {
+  return CHILD_CLI_SESSION_KEY_PREFIXES.some(prefix => key.startsWith(prefix));
+}
+
+// Child store keys held by a live agent. Two concurrent children with the same
+// key must never share one vendor session. In-memory, so this guards agents in
+// ONE server process only — which is where the swarm spawner runs children.
+const liveHolders = new Map<string, string>();
+const claimsByAgent = new Map<string, Set<string>>();
+
+/** Claims `key` for `agentId`; false when another live agent already holds it. */
+export function claimCliSession(sessionId: string, key: string, agentId: string): boolean {
+  const slot = `${sessionId}\0${key}`;
+  const holder = liveHolders.get(slot);
+  if (holder && holder !== agentId) return false;
+  liveHolders.set(slot, agentId);
+  let slots = claimsByAgent.get(agentId);
+  if (!slots) claimsByAgent.set(agentId, slots = new Set());
+  slots.add(slot);
+  return true;
+}
+
+/** The live agent holding `key`, if any. */
+export function cliSessionHolder(sessionId: string, key: string): string | undefined {
+  return liveHolders.get(`${sessionId}\0${key}`);
+}
+
+/** Drops every claim `agentId` holds: when its run settles, or its stopped process exits. */
+export function releaseCliSessions(agentId: string): void {
+  for (const slot of claimsByAgent.get(agentId) ?? []) if (liveHolders.get(slot) === agentId) liveHolders.delete(slot);
+  claimsByAgent.delete(agentId);
 }
 
 /** The final persisted Octipus answer is now part of this vendor turn. */
