@@ -159,6 +159,12 @@ export interface TaskBrief {
   topicPath: string;
   /** Compact summary of parent's context, ≤500 tokens. */
   parentSummary: string;
+  /**
+   * Briefs of the tasks above this one, root-most first, ending with the
+   * direct parent's own brief; each clipped to `ANCESTRY_ENTRY_MAX`. Empty for a
+   * child of the root (the root's task is `originalUserRequest`).
+   */
+  ancestry?: string[];
   /** Primary task description, ≤2000 tokens. */
   taskBrief: string;
   /** Hard constraints the child must respect (e.g. "read-only"). */

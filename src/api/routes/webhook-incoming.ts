@@ -126,7 +126,7 @@ export const webhookIncomingRoutes = new Elysia({ prefix: '/hooks/incoming' })
           },
         };
 
-        const results = await hookManager.trigger(event, context);
+        const results = await hookManager.triggerHook(hookId, event, context);
 
         const executed = results.filter(r => r.triggered).length;
         const succeeded = results.filter(r => r.result?.success).length;

@@ -166,6 +166,12 @@ export interface AddBacklogOptions {
   sourceRef?: TaskSourceRef;
   /** Browser/user zone for bare `YYYY-MM-DD` due dates. */
   tz?: string | null;
+  /**
+   * Called after each task is written, with the fields it was created from
+   * (the item's blockers included). Fires for every row even when a later
+   * write throws, so the caller can audit a partial backlog.
+   */
+  onCreated?: (task: Task, values: object) => void;
 }
 
 export interface AddedBacklogItem {
@@ -193,7 +199,7 @@ export async function addBacklog(principal: Principal, items: BacklogItem[], opt
   const idByIndex = new Map<number, string>();
   const added: AddedBacklogItem[] = [];
   for (const item of items) {
-    const task = await repo.create({
+    const values = {
       title: item.title,
       notes: item.notes,
       category: item.category,
@@ -203,7 +209,9 @@ export async function addBacklog(principal: Principal, items: BacklogItem[], opt
       parentId: item.parentIndex ? (idByIndex.get(item.parentIndex) ?? null) : null,
       source: opts.source ?? 'agent',
       sourceRef: opts.sourceRef,
-    });
+    };
+    const task = await repo.create(values);
+    opts.onCreated?.(task, { ...values, blockedBy: [...item.blockedByIndexes, ...item.blockedByIds] });
     idByIndex.set(item.index, task.id);
     added.push({ index: item.index, task });
   }

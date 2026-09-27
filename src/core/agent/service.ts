@@ -15,7 +15,7 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import { getModelRegistry } from '@/models/model-registry';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
-import type { ApprovalRequest } from './approval-manager';
+import type { ApprovalRequest, ApprovalResolveOutcome } from './approval-manager';
 import { ApprovalManager } from './approval-manager';
 import { classifyMessage } from './classifier';
 import { directResponse } from './direct-response';
@@ -154,7 +154,7 @@ export class AgentService {
         if (control) {
           const response = await handleCommand(message.trim(), resolvedId, userId);
           if (response) return { response, sessionId: resolvedId, classification: { type: 'casual', confidence: 1 } };
-        } else if (approvals[0]?.sessionId === resolvedId && this.approvalManager.tryResolveFromMessage(message, userId)) {
+        } else if (approvals[0]?.sessionId === resolvedId && await this.approvalManager.tryResolveFromMessage(message, userId)) {
           return { response: 'Got it, continuing...', sessionId: resolvedId, classification: { type: 'approval', confidence: 1 } };
         }
       }
@@ -578,7 +578,7 @@ export class AgentService {
       // delegates only when it needs a specialist.
 
       if (classification.type === 'approval') {
-        const resolved = this.approvalManager.tryResolveFromMessage(message, userId);
+        const resolved = await this.approvalManager.tryResolveFromMessage(message, userId);
         if (resolved) {
           return { response: 'Got it, continuing...', sessionId: resolvedSessionId, classification };
         }
@@ -771,13 +771,13 @@ export class AgentService {
     );
   }
 
-  resolveApproval(requestId: string, approved: boolean, response?: string): boolean {
-    return this.approvalManager.resolveApproval(requestId, approved, response);
-  }
-
-  /** Pre-flight lookup so callers (chat route) can verify principal owns the request. */
-  peekApproval(requestId: string): ApprovalRequest | null {
-    return this.approvalManager.peek(requestId);
+  resolveApprovalDetailed(
+    requestId: string,
+    approved: boolean,
+    response?: string,
+    by?: { forUserId?: string; resolvedBy?: string },
+  ): Promise<ApprovalResolveOutcome> {
+    return this.approvalManager.resolveApprovalDetailed(requestId, approved, response, by);
   }
 
   getPendingApprovals(forUserId?: string): ApprovalRequest[] {

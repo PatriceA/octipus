@@ -25,6 +25,35 @@ export function isActiveStatus(status: string): boolean {
   return (ACTIVE_TASK_STATUSES as readonly string[]).includes(status);
 }
 
+/**
+ * Who a task is assigned to on the work board: a user, a role (any agent of
+ * that role may pick it up) or a specific swarm node. `assigneeRef` names it.
+ */
+export const TASK_ASSIGNEE_KINDS = ['user', 'role', 'node'] as const;
+export type TaskAssigneeKind = (typeof TASK_ASSIGNEE_KINDS)[number];
+
+export function isTaskAssigneeKind(value: unknown): value is TaskAssigneeKind {
+  return typeof value === 'string' && (TASK_ASSIGNEE_KINDS as readonly string[]).includes(value);
+}
+
+/**
+ * The assignee columns for a write. Absent both → no change; a null or empty
+ * kind, or a null or empty ref on its own, clears the assignee; otherwise kind
+ * and ref come together. A ref without a kind is refused rather than paired
+ * with the stored kind: "node-7" means something different under 'role'.
+ * Throws with a message fit for the API's 400 / the tool's `error` field.
+ */
+export function assigneePatch(kind: unknown, ref: unknown): { assigneeKind?: TaskAssigneeKind | null; assigneeRef?: string | null } {
+  if (kind === undefined && ref === undefined) return {};
+  const empty = (v: unknown) => v === null || v === '';
+  if (empty(kind) || (kind === undefined && empty(ref))) return { assigneeKind: null, assigneeRef: null };
+  if (kind === undefined) throw new Error('assigneeKind is required with assigneeRef');
+  if (!isTaskAssigneeKind(kind)) throw new Error(`Invalid assigneeKind "${String(kind)}" — expected ${TASK_ASSIGNEE_KINDS.join(' | ')}`);
+  const r = typeof ref === 'string' ? ref.trim().slice(0, 200) : '';
+  if (r === '') throw new Error('assigneeRef is required with assigneeKind');
+  return { assigneeKind: kind, assigneeRef: r };
+}
+
 export const TASK_STATUS_TITLE: Record<TaskStatus, string> = {
   open: 'Open',
   in_progress: 'In progress',

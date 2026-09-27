@@ -59,7 +59,7 @@ export async function appendRunEvent(input: RunEventInput): Promise<void> {
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const isUuid = (s: string | undefined): boolean => !!s && UUID_RE.test(s);
+export const isUuid = (s: string | undefined): boolean => !!s && UUID_RE.test(s);
 
 /** Fire-and-forget helper for call sites that must not await. */
 export function recordRunEvent(input: RunEventInput): void {

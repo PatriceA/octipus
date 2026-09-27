@@ -35,6 +35,8 @@ export const auditActionEnum = pgEnum('audit_action', [
   // Multi-user phase 0 — generic HTTP request audit, written by the
   // shadow-mode audit middleware on every state-changing API call.
   'api_request',
+  // A task was created / updated / completed / deleted, by a user or an agent.
+  'task_mutated',
 ]);
 
 export const auditLog = pgTable('audit_log', {
