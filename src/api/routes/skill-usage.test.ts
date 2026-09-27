@@ -175,18 +175,34 @@ test('native root, native child and CLI child receive full selected system instr
   }
 });
 
-test('a resumable child takes selected skills into its volatile tail, after VOLATILE_MARKER', async () => {
+test('only a keyed child on a resumable CLI takes selected skills into its volatile tail', async () => {
   const { AgentManager } = await import('@/core/agent-manager');
   const { VOLATILE_MARKER } = await import('@/models/providers/prompt-cache');
   const manager = new AgentManager();
   await skillSelectionRepository.set(alice, 'selected', 'session', sessionA);
-  const worker = await manager.spawn({ sessionId: sessionA, userId: alice, role: 'coding', model: 'cli/claude', systemPrompt: 'BASE\n\nCURRENT DATE/TIME: now' });
-  const system = (worker as unknown as { messages: import('@/core/types').AgentMessage[] }).messages.filter(message => message.role === 'system');
-  expect(system).toHaveLength(1);
-  const [stable, tail] = system[0].content.split(VOLATILE_MARKER);
+  const systemOf = async (options: { model: string; contextMetadata?: Record<string, unknown> }) => {
+    const worker = await manager.spawn({ sessionId: sessionA, userId: alice, role: 'coding', systemPrompt: 'BASE\n\nCURRENT DATE/TIME: now', ...options });
+    const system = (worker as unknown as { messages: import('@/core/types').AgentMessage[] }).messages.filter(message => message.role === 'system');
+    manager.remove(worker.getContext().id);
+    return system.map(message => message.content);
+  };
+
+  const keyed = await systemOf({ model: 'cli/claude', contextMetadata: { resumeKey: 'general>coding:t1' } });
+  expect(keyed).toHaveLength(1);
+  const [stable, tail] = keyed[0].split(VOLATILE_MARKER);
   expect(stable).toBe('BASE');
   expect(tail).toContain('COMPLETE INSTRUCTIONS');
-  manager.remove(worker.getContext().id);
+
+  // A native worker-spawner worker (its prompt carries the date marker too), a
+  // native keyed child and an unkeyed CLI child keep the skills as their own
+  // system message, as before.
+  for (const options of [{ model: 'test' }, { model: 'test', contextMetadata: { resumeKey: 'general>coding:t1' } }, { model: 'cli/claude' }]) {
+    const system = await systemOf(options);
+    expect(system).toHaveLength(2);
+    expect(system[0].startsWith('BASE')).toBe(true);
+    expect(system[0]).not.toContain('COMPLETE INSTRUCTIONS');
+    expect(system[1]).toContain('COMPLETE INSTRUCTIONS');
+  }
 });
 
 test('web chat and both TUI gateway clients share selection commands, including before the first message', async () => {

@@ -67,10 +67,10 @@ export async function willResumeCliSession(sessionId: string, adapterKey: string
  */
 export async function saveCliSession(sessionId: string, adapterKey: string, rec: CliSessionRecord): Promise<void> {
   const generation = rec.generation ?? '';
-  const saved = await sessionRepository.setContextKeyIfGeneration(sessionId, generation, ['cliSessions', adapterKey], { ...rec, generation });
-  // Bound the child task sessions (least recently used go first) in one
-  // statement, atomic with concurrent saves; root adapter keys never count.
-  if (saved && isChildCliSessionKey(adapterKey)) await sessionRepository.trimCliSessions(sessionId, CHILD_CLI_SESSION_KEY_PREFIXES, MAX_CHILD_CLI_SESSIONS);
+  // A child save also bounds the child task sessions (least recently used go
+  // first) in the same statement; root adapter keys never count.
+  const bound = isChildCliSessionKey(adapterKey) ? { boundCliSessions: { prefixes: CHILD_CLI_SESSION_KEY_PREFIXES, max: MAX_CHILD_CLI_SESSIONS } } : undefined;
+  await sessionRepository.setContextKeyIfGeneration(sessionId, generation, ['cliSessions', adapterKey], { ...rec, generation }, bound);
 }
 
 /** Most child task sessions kept per octipus session. */

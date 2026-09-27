@@ -98,7 +98,6 @@ vi.mock('@/db/repositories/session-repository', () => ({
       if (value === undefined) delete map[path[1]]; else map[path[1]] = value;
       row.context.cliSessions = map as SessionContext['cliSessions']; return true;
     },
-    trimCliSessions: async () => {},
     incrementMessageCount: async () => {},
   },
 }));
@@ -198,8 +197,20 @@ beforeEach(() => {
       process.stderr.write(text.replace('STDERR-ONLY:', ''));
       process.exit(1);
     }
-    // hang-marker: stay alive until killed, like a vendor mid-turn.
-    if (existsSync(join(process.cwd(), 'hang-marker'))) await new Promise(r => setTimeout(r, 10000));
+    // hang-marker: stay alive until killed, like a vendor mid-turn. Content
+    // 'init' first confirms the session (system/init), 'budget' also reports
+    // usage far past any cap; 'maxturns' ends on Claude's own turn limit.
+    const hang = join(process.cwd(), 'hang-marker');
+    if (existsSync(hang)) {
+      const mode = readFileSync(hang, 'utf-8');
+      if (mode) console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: idArg }));
+      if (mode === 'budget') console.log(JSON.stringify({ type: 'assistant', message: { id: 'm-big', content: [], usage: { input_tokens: 1000000, output_tokens: 1 } } }));
+      if (mode === 'maxturns') {
+        console.log(JSON.stringify({ type: 'result', subtype: 'error_max_turns', is_error: true, num_turns: 5 }));
+        process.exit(1);
+      }
+      await new Promise(r => setTimeout(r, 10000));
+    }
     // Captures the real stream-json 'user' message written to stdin — the
     // actual prompt sent to the vendor, not a value the worker hands the test
     // directly — so the resume/cold assertions verify the real spawn seam.
@@ -518,7 +529,8 @@ describe('child CLI session reuse, keyed per (role, task)', () => {
   // instructions, then VOLATILE_MARKER, then brief- and session-selected skills.
   const skilled = (tail: string, stable = 'You are a coding agent.') => {
     const child = makeChild('kid', 'coding:parser-fix');
-    child.worker.addSystemMessage(`${stable}\n\nCURRENT DATE/TIME: now\n\n${tail}`);
+    child.worker.addSystemMessage(`${stable}\n\nCURRENT DATE/TIME: as stated in the task message.\n\n${tail}`);
+    child.worker.addSystemMessage('Stable worker guidance.');
     return child;
   };
 
@@ -533,6 +545,9 @@ describe('child CLI session reuse, keyed per (role, task)', () => {
     expect(second.lastPrompt).toContain('now add a regression test for empty input');
     expect(second.lastPrompt).not.toContain('grammar notes');
     expect(second.lastPrompt).not.toContain('You are a coding agent.');
+    // Stable guidance after the marker message is in the vendor's snapshot.
+    expect(second.lastPrompt).not.toContain('Stable worker guidance.');
+    expect(second.lastPrompt).not.toContain('You are connected to your Octipus run');
   });
 
   it('starts cold when the stable instructions changed', async () => {
@@ -572,17 +587,47 @@ describe('child CLI session reuse, keyed per (role, task)', () => {
     releaseCliSessions('retry');
   });
 
-  it('a stopped keyed child keeps its session for the next run on the task', async () => {
-    writeFileSync(join(fixture.dir, 'hang-marker'), '');
+  // Starts a keyed child on the hanging fake and resolves once the vendor
+  // confirmed its session (when `mode` makes it) or the process is up.
+  const startHanging = async (mode: string) => {
+    writeFileSync(join(fixture.dir, 'hang-marker'), mode);
     const child = makeChild('kid', 'coding:parser-fix');
+    let confirmed = false;
+    child.worker.onEvent(e => { if (e.type === 'thought' && (e.data as { vendorSessionId?: string }).vendorSessionId) confirmed = true; });
     const running = child.worker.run('fix the parser').catch(() => 'stopped');
-    await vi.waitFor(() => expect(fixture.spawnCount).toBe(1));
+    await vi.waitFor(() => expect(mode ? confirmed : fixture.spawnCount === 1).toBe(true));
+    return { child, running };
+  };
+
+  it('a stopped keyed child keeps a vendor-confirmed session for the next run on the task', async () => {
+    const { child, running } = await startHanging('init');
     child.worker.stop();
     await running;
     const kept = stored('kid');
     expect(kept?.id).toEqual(expect.any(String));
     unlinkSync(join(fixture.dir, 'hang-marker'));
     expect(await makeChild('kid', 'coding:parser-fix').run('carry on')).toContain(kept!.id);
+  });
+
+  it('a stopped keyed child saves nothing when the vendor never confirmed the session', async () => {
+    const { child, running } = await startHanging('');
+    child.worker.stop();
+    await running;
+    expect(stored('kid')).toBeUndefined();
+  });
+
+  it('keeps the session when Claude stops on its own max-turns limit', async () => {
+    writeFileSync(join(fixture.dir, 'hang-marker'), 'maxturns');
+    await expect(makeChild('kid', 'coding:parser-fix').run('fix the parser')).rejects.toThrow(/max-turns/);
+    expect(stored('kid')?.id).toEqual(expect.any(String));
+  });
+
+  it('drops the stored session when a keyed child blows its budget', async () => {
+    await makeChild('kid', 'coding:parser-fix').run('fix the parser');
+    expect(stored('kid')).toBeDefined();
+    writeFileSync(join(fixture.dir, 'hang-marker'), 'budget');
+    await expect(makeChild('kid', 'coding:parser-fix').run('carry on')).rejects.toThrow();
+    expect(stored('kid')).toBeUndefined();
   });
 
   it('starts cold on a fingerprint mismatch', async () => {

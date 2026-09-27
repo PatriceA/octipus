@@ -40,22 +40,23 @@ describe('cli session store', () => {
       if ((row.context.conversationGeneration ?? row.context.clearedAt ?? '') !== generation) return false;
       Object.assign(row.context, patch); store.set(id, row); return true;
     });
-    // Mirrors the real per-key write: one cliSessions entry, generation-checked.
-    vi.spyOn(sessionRepository, 'setContextKeyIfGeneration').mockImplementation(async (id, generation, path, value) => {
+    // Mirrors the real per-key write: one cliSessions entry, generation-checked,
+    // and the in-statement bound (SQL ordering: lastUsedAt DESC NULLS LAST, key;
+    // the SQL itself is covered in session-context-patch.test.ts).
+    vi.spyOn(sessionRepository, 'setContextKeyIfGeneration').mockImplementation(async (id, generation, path, value, opts) => {
       const row = store.get(id) ?? { context: {} as SessionContext };
       if ((row.context.conversationGeneration ?? row.context.clearedAt ?? '') !== generation) return false;
-      const map = { ...row.context.cliSessions } as Record<string, unknown>;
-      if (value === undefined) delete map[path[1]]; else map[path[1]] = value;
+      const map = { ...row.context.cliSessions } as Record<string, { lastUsedAt?: string }>;
+      if (value === undefined) delete map[path[1]]; else map[path[1]] = value as { lastUsedAt?: string };
+      const bound = opts?.boundCliSessions;
+      if (bound) {
+        const matched = Object.entries(map).filter(([key]) => bound.prefixes.some(p => key.startsWith(p)))
+          .sort(([ka, a], [kb, b]) => (a.lastUsedAt === undefined) !== (b.lastUsedAt === undefined)
+            ? (a.lastUsedAt === undefined ? 1 : -1)
+            : (b.lastUsedAt ?? '').localeCompare(a.lastUsedAt ?? '') || (ka < kb ? -1 : ka > kb ? 1 : 0));
+        for (const [key] of matched.slice(bound.max)) delete map[key];
+      }
       row.context.cliSessions = map as SessionContext['cliSessions']; store.set(id, row); return true;
-    });
-    // Mirrors the real single-statement trim (covered against SQL in session-context-patch.test.ts).
-    vi.spyOn(sessionRepository, 'trimCliSessions').mockImplementation(async (id, prefixes, max) => {
-      const row = store.get(id);
-      const map = { ...row?.context.cliSessions };
-      const matched = Object.entries(map).filter(([key]) => prefixes.some(p => key.startsWith(p)))
-        .sort(([, a], [, b]) => b.lastUsedAt.localeCompare(a.lastUsedAt));
-      for (const [key] of matched.slice(max)) delete map[key];
-      if (row) row.context.cliSessions = map;
     });
     vi.spyOn(sessionRepository, 'update').mockImplementation(async (id: string, data: { context?: unknown }) => {
       const existing = store.get(id) ?? { context: {} };

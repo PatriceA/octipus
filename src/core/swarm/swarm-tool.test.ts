@@ -1052,16 +1052,20 @@ describe('spawn_child resumeKey', () => {
   test('flows from the tool call into the child context metadata as role:taskId', async () => {
     let received: SpawnChildParams | undefined;
     const spawner = new SwarmSpawner({} as never);
-    // Stand in for the tool-intersection / model-routing half of the spawn and
-    // drive the real child boot with the params the tool actually passed.
+    // Stand in for the tool-intersection / model-routing half of the spawn
+    // (which resolves the key for a resumable CLI child with childResumeKey)
+    // and drive the real child boot with the params the tool actually passed.
+    const rootParent = { id: 'parent-1', rootSessionId: 's1', role: 'general', kind: 'root' } as AgentNode;
+    const parentContext = { userId: 'u1', metadata: {} } as unknown as Parameters<typeof childResumeKey>[0];
     (spawner as unknown as { spawnChild: unknown }).spawnChild = async (_parent: AgentNode, params: SpawnChildParams) => {
       received = params;
       return (spawner as unknown as { singleSpawnAndRun: (o: unknown, crash: boolean) => Promise<ChildResult> }).singleSpawnAndRun({
-        parent: { id: 'parent-1', rootSessionId: 's1', role: 'general', kind: 'root' }, parentContext: { userId: 'u1', metadata: {} },
+        parent: rootParent, parentContext,
         childDepth: 2, childKind: 'subagent', childRole: params.role, childModel: 'm1', childLane: 'agents', childTools: [],
         budget: { tokens: { cap: 1000, used: 0 }, wallClockMs: { cap: 1000, startedAt: Date.now() }, fanOut: { cap: 1, used: 0 }, depth: 2 },
         topicPath: 'coding', subtopic: 'x', brief: { taskBrief: params.taskBrief, topicPath: 'coding' }, briefHash: 'h',
-        childMessage: params.taskBrief, reason: 'normal', spawnMode: 'await', resumeKey: params.resumeKey,
+        childMessage: params.taskBrief, reason: 'normal', spawnMode: 'await',
+        resumeKey: params.resumeKey ? childResumeKey(parentContext, rootParent, params.role!, params.resumeKey) : undefined,
       }, false);
     };
     const metadata: Array<Record<string, unknown> | undefined> = [];

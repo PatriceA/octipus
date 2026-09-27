@@ -819,12 +819,16 @@ export class CLIAgentWorker extends BaseAgentWorker {
     // Recovery opens a new persistent conversation and cannot retry recursively.
     this.resuming = !!resume && !resume.isFirstRun;
     const prompt = this.buildPrompt();
+    // A resumed keyed child re-sends only the volatile tail of its marker
+    // message: the stable guidance appended after it (vault, bridge) is in the
+    // vendor's first-run snapshot and fingerprinted. Roots are unchanged.
+    const resumedChildSystem = this.resuming && !root ? this.systemMessages.filter(part => VOLATILE_MARKER.test(part)) : undefined;
 
     this.launchCleanup?.();
     this.launchCleanup = undefined;
     // Async vendor discovery stays out of the synchronous arg builder (event-loop safe).
     const codexMcpServers = this.connection && adapterKey === 'Codex CLI' ? await discoverCodexMcpServers(workspaceCwd) : undefined;
-    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, this.systemMessages, systemPrompt, Math.max(0, this.config.maxTokenBudget - this.billableTokensUsed), this.context.id, this.connection ? { ...this.connection, workingDirectory: workspaceCwd, codexMcpServers, maxIterations: Math.max(1, this.config.maxIterations - this.iteration) } : undefined, resume);
+    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, resumedChildSystem ?? this.systemMessages, resumedChildSystem ? resumedChildSystem.join('\n\n') : systemPrompt, Math.max(0, this.config.maxTokenBudget - this.billableTokensUsed), this.context.id, this.connection ? { ...this.connection, workingDirectory: workspaceCwd, codexMcpServers, maxIterations: Math.max(1, this.config.maxIterations - this.iteration) } : undefined, resume);
     const { binary, args, stdinPrompt, useShell } = built;
     this.launchCleanup = () => {
       const configIndex = args.indexOf('--mcp-config');
@@ -846,6 +850,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
     const invocationStartIteration = this.iteration;
     let invocationUsage: import('@/models/litellm-client').CompletionResult['usage'] = { inputTokens: 0, outputTokens: 0, totalTokens: 0, available: false };
     let capturedVendorId: string | undefined;
+    let vendorSessionStarted = false;
     const parser = this.parser = new CLIOutputParser(
       this.context.id,
       this.context.model,
@@ -902,6 +907,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
             this.stop();
           }
         },
+        onSessionInit: () => { vendorSessionStarted = true; },
         onRunError: (reason) => {
           // Record the first CLI-reported failure; the close handler rejects
           // with it so the run surfaces as failed, not (no response) success.
@@ -1201,15 +1207,24 @@ export class CLIAgentWorker extends BaseAgentWorker {
           }
           await recordProviderUsage({ model: this.context.model, modelConfigName: this.accountingModelName, messages: [], userId: this.context.userId, sessionId: this.context.sessionId, agentId: this.context.id, requestType: 'cli' }, 'cli', { model: this.context.model, usage: invocationUsage }, code !== 0 || this.aborted || !!this.runError);
 
-          // A keyed child stopped by its turn limit, budget, timeout or a
-          // cancel still records its vendor session (without a cursor), so its
-          // next run on the task resumes — unless a retry already holds the key.
-          const stoppedVendorId = capturedVendorId || resume?.id;
-          if (!root && (this.aborted || this.budgetExceeded) && ownsStoreKey() && stoppedVendorId) {
-            await saveCliSession(this.context.sessionId, storeKey!, {
-              id: stoppedVendorId, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(),
-              generation: this.generation, ownerAgentId: this.context.id,
-            }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to store stopped CLI session id'));
+          // A keyed child stopped by a turn limit (ours, or Claude's
+          // error_max_turns), a timeout or a cancel still records its vendor
+          // session (without a cursor) so its next run on the task resumes —
+          // only if the vendor confirmed the session this run, and unless a
+          // retry already holds the key. Over budget, it is dropped instead:
+          // the next run starts cold rather than inherit the spent context.
+          if (!root && ownsStoreKey()) {
+            const confirmedId = capturedVendorId || (vendorSessionStarted ? resume?.id : undefined);
+            const hitTurnLimit = /max-turns limit/.test(this.runError ?? '');
+            if (this.budgetExceeded) {
+              await dropCliSession(this.context.sessionId, storeKey!)
+                .catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to drop over-budget CLI session id'));
+            } else if ((this.aborted || hitTurnLimit) && confirmedId) {
+              await saveCliSession(this.context.sessionId, storeKey!, {
+                id: confirmedId, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(),
+                generation: this.generation, ownerAgentId: this.context.id,
+              }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'Failed to store stopped CLI session id'));
+            }
           }
 
           if (this.budgetExceeded) {

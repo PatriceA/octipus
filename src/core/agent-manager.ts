@@ -11,7 +11,7 @@ import { generateId } from '@/utils/crypto';
 import { usableContextWindow } from '@/utils/context-compaction';
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { type AgentEvent, AgentWorker, type AgentWorkerConfig, type ToolHandler } from './agent-worker';
-import { getCLIToolConfig, isCLIProvider } from './cli-agent-factory';
+import { getCLIToolConfig, isCLIProvider, isResumableCliModel } from './cli-agent-factory';
 import { CLIAgentWorker } from './cli-agent-worker';
 import { getPermissionManager } from '@/security/permissions';
 import { getRouter } from './router';
@@ -277,11 +277,13 @@ export class AgentManager {
     // (loadHistory replaces this.messages, so system prompt must come after)
     await worker.loadHistory();
 
-    // Add system prompt if provided. A child whose prompt carries a volatile
-    // tail (a resumable swarm child) takes the session-selected skills into
-    // that tail: a resumed CLI run re-sends them, and a selection change does
-    // not change the stable part its vendor session is fingerprinted on.
-    const intoTail = !context.root && !!selectedSkills && !!options.systemPrompt && VOLATILE_MARKER.test(options.systemPrompt);
+    // Add system prompt if provided. A keyed swarm child on a resumable CLI
+    // (the spawner split its prompt at VOLATILE_MARKER) takes the
+    // session-selected skills into that volatile tail: a resumed run re-sends
+    // them, and a selection change does not touch the stable part its vendor
+    // session is fingerprinted on. Everyone else keeps them as their own message.
+    const intoTail = !context.root && typeof context.metadata.resumeKey === 'string' && isCLI && isResumableCliModel(routedModel)
+      && !!selectedSkills && !!options.systemPrompt && VOLATILE_MARKER.test(options.systemPrompt);
     if (options.systemPrompt) {
       worker.addSystemMessage(intoTail ? `${options.systemPrompt}${selectedSkills}` : options.systemPrompt);
     }

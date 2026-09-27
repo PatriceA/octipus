@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, desc, eq, lt, sql, } from 'drizzle-orm';
+import { and, desc, eq, lt, sql, type SQL } from 'drizzle-orm';
 import { dbLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
 import { type NewSession, type Session, sessions } from '../schema/sessions';
@@ -34,12 +34,30 @@ function inGeneration(generation: string) {
   return sql`coalesce(${sessions.context}->>'conversationGeneration', ${sessions.context}->>'clearedAt', '') = ${generation}`;
 }
 
-/** `context.cliSessions` as an object (`{}` when missing, null or not an object). */
-const cliSessionsMap = sql`CASE WHEN jsonb_typeof(${sessions.context} -> 'cliSessions') = 'object' THEN ${sessions.context} -> 'cliSessions' ELSE '{}'::jsonb END`;
+/** `ctx.cliSessions` as an object (`{}` when missing, null or not an object). */
+function cliSessionsOf(ctx: SQL) {
+  return sql`CASE WHEN jsonb_typeof(${ctx} -> 'cliSessions') = 'object' THEN ${ctx} -> 'cliSessions' ELSE '{}'::jsonb END`;
+}
+const cliSessionsMap = cliSessionsOf(sql`${sessions.context}`);
 
 /** `key` starts with one of `prefixes` (bound as a text[]). */
-function startsWithAny(key: ReturnType<typeof sql>, prefixes: string[]) {
+function startsWithAny(key: SQL, prefixes: string[]) {
   return sql`EXISTS (SELECT 1 FROM unnest(${jsonPath(prefixes)}) AS p(prefix) WHERE starts_with(${key}, p.prefix))`;
+}
+
+/**
+ * `ctx` with at most `max` of the `cliSessions` entries whose key starts with
+ * one of `prefixes`, dropping the least recently used (`lastUsedAt`, missing
+ * last, then key); every other entry is kept as is.
+ */
+function boundCliSessions(ctx: SQL, prefixes: string[], max: number) {
+  const matches = startsWithAny(sql`e.key`, prefixes);
+  return sql`${ctx} || jsonb_build_object('cliSessions', (
+    SELECT coalesce(jsonb_object_agg(t.key, t.value), '{}'::jsonb) FROM (
+      SELECT e.key, e.value, ${matches} AS matched,
+        row_number() OVER (PARTITION BY ${matches} ORDER BY e.value->>'lastUsedAt' DESC NULLS LAST, e.key) AS rank
+      FROM jsonb_each(${cliSessionsOf(ctx)}) AS e
+    ) AS t WHERE NOT t.matched OR t.rank <= ${max}))`;
 }
 
 export class SessionRepository {
@@ -146,10 +164,17 @@ export class SessionRepository {
    * `generation` (the same predicate as `patchContextIfGeneration`), so a
    * write from before a /clear can never land after it. One key, one
    * statement: concurrent writers to sibling keys never clobber each other.
+   * `boundCliSessions` trims the prefixed `cliSessions` entries to `max` in
+   * the same statement (see `boundCliSessions`).
    */
-  async setContextKeyIfGeneration(id: string, generation: string, path: [string, ...string[]], value: unknown): Promise<boolean> {
+  async setContextKeyIfGeneration(
+    id: string, generation: string, path: [string, ...string[]], value: unknown,
+    opts?: { boundCliSessions?: { prefixes: string[]; max: number } },
+  ): Promise<boolean> {
+    const bound = opts?.boundCliSessions;
+    const context = bound ? boundCliSessions(contextKeyExpr(path, value), bound.prefixes, bound.max) : contextKeyExpr(path, value);
     const result = await this.db.update(sessions)
-      .set({ context: contextKeyExpr(path, value) as never, updatedAt: new Date() })
+      .set({ context: context as never, updatedAt: new Date() })
       .where(and(eq(sessions.id, id), inGeneration(generation)))
       .returning({ id: sessions.id });
     return result.length > 0;
@@ -186,24 +211,6 @@ export class SessionRepository {
     }).where(and(eq(sessions.id, id), inGeneration(generation)))
       .returning({ id: sessions.id });
     return result.length > 0;
-  }
-
-  /**
-   * Keeps at most `max` of the `cliSessions` entries whose key starts with one
-   * of `prefixes`, dropping the least recently used (by `lastUsedAt`); other
-   * entries are untouched. One statement, and a no-op while under the bound.
-   */
-  async trimCliSessions(id: string, prefixes: string[], max: number): Promise<void> {
-    const matches = startsWithAny(sql`e.key`, prefixes);
-    await this.db.update(sessions).set({
-      context: sql`coalesce(${sessions.context}, '{}'::jsonb) || jsonb_build_object('cliSessions', (
-        SELECT coalesce(jsonb_object_agg(t.key, t.value), '{}'::jsonb) FROM (
-          SELECT e.key, e.value, ${matches} AS matched,
-            row_number() OVER (PARTITION BY ${matches} ORDER BY e.value->>'lastUsedAt' DESC NULLS LAST, e.key) AS rank
-          FROM jsonb_each(${cliSessionsMap}) AS e
-        ) AS t WHERE NOT t.matched OR t.rank <= ${max}))`,
-      updatedAt: new Date(),
-    }).where(and(eq(sessions.id, id), sql`(SELECT count(*) FROM jsonb_each(${cliSessionsMap}) AS e WHERE ${matches}) > ${max}`));
   }
 
   async clearContext(id: string): Promise<void> {

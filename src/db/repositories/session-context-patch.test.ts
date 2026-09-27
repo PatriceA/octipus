@@ -159,24 +159,28 @@ describe('non-object intermediates and the compaction filter', () => {
   });
 });
 
-describe('sessionRepository.trimCliSessions', () => {
-  test('keeps the most recently used prefixed entries in one statement, never touching others', async () => {
+describe('setContextKeyIfGeneration with boundCliSessions', () => {
+  test('saves and keeps the most recently used prefixed entries in one statement, never touching others', async () => {
     const { sessionRepository } = await import('@/db/repositories/session-repository');
     const session = await freshSession('ctx-trim');
     const at = (s: number) => ({ lastUsedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, s)).toISOString() });
     await sessionRepository.update(session.id, { context: { devMode: true, cliSessions: {
-      'Claude Code': at(0), 'Claude Code::a': at(1), 'Codex CLI::b': at(3), 'Claude Code::c': at(2),
+      'Claude Code': at(0), 'Claude Code::a': at(1), 'Claude Code::c': at(2), 'Claude Code::z': {}, 'Claude Code::y': {},
     } } as never });
+    const bound = { boundCliSessions: { prefixes: ['Claude Code::', 'Codex CLI::'], max: 3 } };
 
-    await sessionRepository.trimCliSessions(session.id, ['Claude Code::', 'Codex CLI::'], 2);
+    // A new key: over the bound, so the least recently used go, missing
+    // lastUsedAt last and then by key (::z after ::y).
+    expect(await sessionRepository.setContextKeyIfGeneration(session.id, '', ['cliSessions', 'Codex CLI::b'], at(3), bound)).toBe(true);
     let ctx = (await sessionRepository.findById(session.id))!.context as Record<string, any>;
-    expect(Object.keys(ctx.cliSessions).sort()).toEqual(['Claude Code', 'Claude Code::c', 'Codex CLI::b']);
+    expect(Object.keys(ctx.cliSessions).sort()).toEqual(['Claude Code', 'Claude Code::a', 'Claude Code::c', 'Codex CLI::b']);
     expect(ctx.devMode).toBe(true);
 
-    // Under the bound: no write at all.
-    await sessionRepository.trimCliSessions(session.id, ['Claude Code::', 'Codex CLI::'], 2);
+    // Re-saving an existing key under the bound keeps everything.
+    expect(await sessionRepository.setContextKeyIfGeneration(session.id, '', ['cliSessions', 'Claude Code::a'], at(4), bound)).toBe(true);
     ctx = (await sessionRepository.findById(session.id))!.context as Record<string, any>;
-    expect(Object.keys(ctx.cliSessions)).toHaveLength(3);
+    expect(Object.keys(ctx.cliSessions)).toHaveLength(4);
+    expect(ctx.cliSessions['Claude Code::a']).toEqual(at(4));
   });
 });
 
