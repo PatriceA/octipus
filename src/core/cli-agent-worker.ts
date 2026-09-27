@@ -43,7 +43,7 @@ import { isRootAgent } from './types';
 import type { AgentContext, AgentMessage } from './types';
 import { readSessionHistory, toContextMessage, withSessionConversation } from './session-history';
 import { VOLATILE_MARKER } from '@/models/providers/prompt-cache';
-import { isLongTailHandler } from './agent/tool-split';
+import { isLongTailHandler, TOOL_DISCOVERY_TOOL_ID } from './agent/tool-split';
 
 /**
  * Whether this session's cwd is a directory someone ELSE owns — a dev-mode
@@ -367,6 +367,10 @@ export class CLIAgentWorker extends BaseAgentWorker {
       const session = await sessionRepository.findById(this.context.sessionId);
       if (this.aborted) throw new Error('Agent was aborted before bridge startup');
       if (!session || session.userId !== this.context.userId) throw new Error('CLI session ownership mismatch');
+      // A child never loads root history, so it takes the generation once per
+      // run, here: its cold retries and merge turns reuse it, and a /clear
+      // mid-run then rejects its save like any stale root write.
+      if (!isRootAgent(this.context)) this.generation = sessionGeneration(session.context as SessionContext | undefined);
       this.bridge = await startCliToolBridge({
         tools: () => this.toolExecutor.toolsDisabled ? [] : [...this.toolExecutor.getTools().values()],
         blocked: name => this.toolExecutor.isToolBlocked(name),
@@ -525,6 +529,9 @@ export class CLIAgentWorker extends BaseAgentWorker {
   stop(): void {
     if (this.terminalEmitted) return;
     this.aborted = true;
+    // Free a resume key now, not when the run promise settles: a timed-out or
+    // cancelled child's retry must be able to take its task session over.
+    releaseCliSessions(this.context.id);
     this.abortController.abort('CLI agent stopped');
     this.detached.cancelAll('CLI agent stopped');
     getPermissionManager().cancelWaits(this.context.id);
@@ -708,9 +715,6 @@ export class CLIAgentWorker extends BaseAgentWorker {
         throw new Error(`CLI agent cwd resolution failed: no session ${this.context.sessionId}`);
       }
       workspaceCwd = resolvePath(WorkspaceFS.forSession(session).root);
-      // A child never loads root history, so it takes the generation here; a
-      // /clear mid-run then rejects its save like any stale root write.
-      if (!isRootAgent(this.context)) this.generation = sessionGeneration(session.context as SessionContext | undefined);
 
       if (!existsSync(workspaceCwd)) {
         // Whether a missing directory is routine or alarming depends on WHOSE
@@ -746,25 +750,42 @@ export class CLIAgentWorker extends BaseAgentWorker {
     // for it).
     const providerEnv = await toolConfig.buildEnv?.();
     // Roots continue one vendor session per octipus session. A child only
-    // resumes when its spawner gave it an explicit `resumeKey` (role + task),
-    // and never while another live agent holds the same key — that one
-    // starts cold rather than share a vendor conversation.
-    const childResumeKey = isRootAgent(this.context) ? undefined : this.context.metadata?.resumeKey;
-    let storeKey = isRootAgent(this.context) ? adapterKey : undefined;
-    if (typeof childResumeKey === 'string' && childResumeKey && canResume(adapterKey)) {
-      const key = childCliSessionKey(adapterKey, childResumeKey);
-      if (claimCliSession(this.context.sessionId, key, this.context.id)) storeKey = key;
-      else agentLogger.info({ agentId: this.context.id, resumeKey: childResumeKey }, 'CLI resume key held by a running agent — starting cold');
+    // resumes when its spawner gave it an explicit `resumeKey` (parent scope,
+    // role, task), and never while another live agent holds the same key —
+    // that one starts cold rather than share a vendor conversation.
+    const root = isRootAgent(this.context);
+    let storeKey: string | undefined;
+    if (canResume(adapterKey)) {
+      const childResumeKey = root ? undefined : this.context.metadata?.resumeKey;
+      if (root) storeKey = adapterKey;
+      else if (typeof childResumeKey === 'string' && childResumeKey) {
+        const key = childCliSessionKey(adapterKey, childResumeKey);
+        if (claimCliSession(this.context.sessionId, key, this.context.id)) storeKey = key;
+        else agentLogger.info({ agentId: this.context.id, resumeKey: childResumeKey }, 'CLI resume key held by a running agent — starting cold');
+      }
     }
-    const reuseSessions = !!storeKey && canResume(adapterKey);
+    const reuseSessions = !!storeKey;
+    // A stopped child has released its key (see stop()), and a retry may
+    // already hold it: its late save must not overwrite the new holder's.
+    const ownsStoreKey = () => reuseSessions && (root || !this.aborted);
     let resume: { id: string; isFirstRun: boolean } | undefined;
     let fingerprint: string | undefined;
     if (reuseSessions) {
-      const instructions = this.systemMessages.map(part => part.split(VOLATILE_MARKER)[0]).join('\n\n');
-      const toolSchema = [...this.toolExecutor.getTools().values()].map(tool => [tool.name, tool.description, tool.parameters]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
-      fingerprint = fingerprintRun({ model: (adapterKey === 'Claude Code' ? process.env.CLAUDE_MODEL : adapterKey === 'Codex CLI' ? process.env.CODEX_MODEL : undefined) || settings.model,
-        permissionMode: settings.permissionMode, planMode: this.connection?.planMode, workingDirectory: workspaceCwd,
-        providerIdentity: JSON.stringify([this.context.model, toolConfig.name, settings.extraArgs, providerEnv, toolSchema]), instructions });
+      const model = (adapterKey === 'Claude Code' ? process.env.CLAUDE_MODEL : adapterKey === 'Codex CLI' ? process.env.CODEX_MODEL : undefined) || settings.model;
+      const run = { model, permissionMode: settings.permissionMode, planMode: this.connection?.planMode, workingDirectory: workspaceCwd };
+      const tools = [...this.toolExecutor.getTools().values()];
+      if (root) {
+        const instructions = this.systemMessages.map(part => part.split(VOLATILE_MARKER)[0]).join('\n\n');
+        const toolSchema = tools.map(tool => [tool.name, tool.description, tool.parameters]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+        fingerprint = fingerprintRun({ ...run, providerIdentity: JSON.stringify([this.context.model, toolConfig.name, settings.extraArgs, providerEnv, toolSchema]), instructions });
+      } else {
+        // A keyed child's system prompt and tool advertisement are partly
+        // chosen from its brief (discovered skills, the lazy core set and its
+        // discovery tools), and a follow-up brief always differs — so only the
+        // stable inputs count: model, cwd, role and the role's tool ids.
+        const toolIds = [...new Set(tools.filter(tool => tool.toolId !== TOOL_DISCOVERY_TOOL_ID).map(tool => tool.toolId ?? tool.name))].sort();
+        fingerprint = fingerprintRun({ ...run, providerIdentity: JSON.stringify([this.context.model, toolConfig.name, settings.extraArgs, providerEnv, this.context.role, toolIds]) });
+      }
       const existing = opts?.forceCold ? null : await loadCliSession(this.context.sessionId, storeKey!, fingerprint);
       this.resumeDelta = existing?.acknowledged
         ? (await messageRepository.findContextMessages(this.context.sessionId, this.clearedAt, existing.acknowledged, this.generation))
@@ -892,7 +913,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
           // The close handler rewrites the record with the acknowledged
           // cursor; this early row carries no cursor, so a resume off it
           // re-sends the turn rather than skipping it.
-          if (!reuseSessions) return;
+          if (!ownsStoreKey()) return;
           void saveCliSession(this.context.sessionId, storeKey!, {
             id, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(),
             generation: this.generation, ownerAgentId: this.context.id,
@@ -1244,7 +1265,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
           );
 
           const vendorId = capturedVendorId || resume?.id;
-          if (reuseSessions && vendorId) await saveCliSession(this.context.sessionId, storeKey!, {
+          if (ownsStoreKey() && vendorId) await saveCliSession(this.context.sessionId, storeKey!, {
             id: vendorId, fingerprint: fingerprint!, lastUsedAt: new Date().toISOString(),
             generation: this.generation, ownerAgentId: this.context.id, acknowledged: this.userCursor,
           });

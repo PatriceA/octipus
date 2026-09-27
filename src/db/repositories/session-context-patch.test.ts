@@ -104,6 +104,27 @@ describe('sessionRepository.setContextKey', () => {
   });
 });
 
+describe('sessionRepository.setContextKeyIfGeneration', () => {
+  test('writes one key only in the current generation, with keys bound as parameters', async () => {
+    const { sessionRepository } = await import('@/db/repositories/session-repository');
+    const session = await freshSession('ctx-gen');
+    await sessionRepository.update(session.id, { context: { clearedAt: '2026-01-01T00:00:00.000Z' } });
+    // Commas, braces, quotes and spaces would break a spliced `{a,b}` array literal.
+    const odd = 'Claude Code::general>coding:a,b}"c';
+
+    expect(await sessionRepository.setContextKeyIfGeneration(session.id, '2026-01-01T00:00:00.000Z', ['cliSessions', 'Claude Code'], { id: 'root' })).toBe(true);
+    expect(await sessionRepository.setContextKeyIfGeneration(session.id, '2026-01-01T00:00:00.000Z', ['cliSessions', odd], { id: 'child' })).toBe(true);
+    expect(await sessionRepository.setContextKeyIfGeneration(session.id, 'stale', ['cliSessions', 'Codex CLI'], { id: 'late' })).toBe(false);
+
+    let ctx = (await sessionRepository.findById(session.id))!.context as Record<string, any>;
+    expect(ctx.cliSessions).toEqual({ 'Claude Code': { id: 'root' }, [odd]: { id: 'child' } });
+
+    await sessionRepository.setContextKey(session.id, ['cliSessions', odd], undefined);
+    ctx = (await sessionRepository.findById(session.id))!.context as Record<string, any>;
+    expect(ctx.cliSessions).toEqual({ 'Claude Code': { id: 'root' } });
+  });
+});
+
 describe('generation and checkpoint persistence', () => {
   test('clear rejects stale checkpoint publication and completed answers', async () => {
     const { sessionRepository } = await import('./session-repository');

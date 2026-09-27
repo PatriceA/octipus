@@ -18,7 +18,10 @@ import type { ToolHandler } from '@/core/agent-base';
  *   a discovery surface — hiding them behind another discovery layer is pointless.
  * - `tool_discovery`: the built-in `list_tools`/`describe_tool` entry points.
  */
-const ALWAYS_CORE_TOOL_IDS: ReadonlySet<string> = new Set(['mcp', 'tool_discovery']);
+/** Group id of the `list_tools`/`describe_tool` handlers `buildToolDiscoveryHandlers` adds. */
+export const TOOL_DISCOVERY_TOOL_ID = 'tool_discovery';
+
+const ALWAYS_CORE_TOOL_IDS: ReadonlySet<string> = new Set(['mcp', TOOL_DISCOVERY_TOOL_ID]);
 
 /**
  * True when a handler belongs in the long tail (NOT advertised upfront) for the

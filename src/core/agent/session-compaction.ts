@@ -4,6 +4,7 @@ import { getModelRegistry } from '@/models/model-registry';
 import { getGatewayHub } from '@/core/gateway/hub';
 import { compactionEntryRepository } from '@/db/repositories/compaction-entry-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
+import { isChildCliSessionKey } from '@/core/cli-session-store';
 import type { CompactionState, } from '@/db/schema/sessions';
 import { calculateTotalTokens, createLLMSummary } from '@/utils/context-compaction';
 import { coreLogger } from '@/utils/logger';
@@ -166,14 +167,21 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
       tokensBefore, tokensAfter, savingsRatio, messagesSummarized: prefix.length,
       triggerReason: manual ? 'force' : decision.allow ? decision.reason : 'force',
     });
+    // Only the ROOT vendor conversations rotate onto the checkpoint. A child's
+    // per-task session (`<adapter>::<key>`) never held the root transcript, and
+    // children write their keys outside this lock — so delete root keys one by
+    // one instead of rewriting the whole map over a child's concurrent save.
+    for (const key of Object.keys(history.session.context?.cliSessions ?? {})) {
+      if (!isChildCliSessionKey(key)) await sessionRepository.setContextKeyIfGeneration(sessionId, history.generation, ['cliSessions', key], undefined);
+    }
     const published = await sessionRepository.patchContextIfGeneration(sessionId, history.generation, {
       checkpoint: { generation: history.generation, through: { id: last.id, createdAt: last.createdAt.toISOString() },
         summary, fileOps: result.fileOps, entryId: entry.id },
       compactionState: { lastCompactedAt: new Date().toISOString(), lastCompactTokens: tokensBefore,
         lastSavingsRatio: savingsRatio, ineffectivePasses: 0, compactionIneffective: false },
-      // Both vendors restart from this durable checkpoint. No unscoped vendor
-      // maintenance subprocess, extra hidden bill, or concurrent /compact.
-      cliSessions: {},
+      // Both vendors restart from this durable checkpoint (root keys dropped
+      // above). No unscoped vendor maintenance subprocess, extra hidden bill,
+      // or concurrent /compact.
       nativeConversation: native && nativeTail ? { ...native, checkpointId: entry.id,
         messages: capNativeSnapshot([{ role: 'user', content: `[Conversation checkpoint]\n${summary}`, timestamp: last.createdAt.toISOString() }, ...nativeTail]) } : null,
     });

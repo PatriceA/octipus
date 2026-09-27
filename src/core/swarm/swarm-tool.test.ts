@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import { applyRoleFit, validateSpawnChildArgs, formatChildResult, createLateBoundSpawnChildHooks, createSpawnChildTool, buildSpawnRoleCatalog, buildDelegationGuidance, parsePlan, MAX_PLAN_STEPS, SPAWN_CHILD_ROLES } from './swarm-tool';
 import { LEVEL_DEFAULT, type AgentNode, type ChildResult, type PendingChild, type SpawnChildParams } from './types';
-import { SwarmSpawner } from './spawner';
+import { SwarmSpawner, childResumeKey } from './spawner';
 
 // Lets a test capture what the spawner hands AgentManager.spawn; every other
 // test keeps the real manager.
@@ -1042,7 +1042,10 @@ describe('spawn_child resumeKey', () => {
     const base = { role: 'coding', taskBrief: 'Fix parser.' };
     expect(validateSpawnChildArgs(base)).toMatchObject({ params: { resumeKey: undefined } });
     expect(validateSpawnChildArgs({ ...base, resumeKey: ' parser-fix ' })).toMatchObject({ params: { resumeKey: 'parser-fix' } });
-    expect(validateSpawnChildArgs({ ...base, resumeKey: 'x'.repeat(201) })).toHaveProperty('error');
+    expect(validateSpawnChildArgs({ ...base, resumeKey: 'jira:PROJ-12.v2_a' })).toMatchObject({ params: { resumeKey: 'jira:PROJ-12.v2_a' } });
+    for (const bad of ['x'.repeat(201), 'a b', 'a,b', 'a}b', "a'b", 'a>b', 'naïve']) {
+      expect(validateSpawnChildArgs({ ...base, resumeKey: bad })).toMatchObject({ error: expect.stringContaining('resumeKey must be') });
+    }
   });
 
   test('flows from the tool call into the child context metadata as role:taskId', async () => {
@@ -1053,7 +1056,7 @@ describe('spawn_child resumeKey', () => {
     (spawner as unknown as { spawnChild: unknown }).spawnChild = async (_parent: AgentNode, params: SpawnChildParams) => {
       received = params;
       return (spawner as unknown as { singleSpawnAndRun: (o: unknown, crash: boolean) => Promise<ChildResult> }).singleSpawnAndRun({
-        parent: { id: 'parent-1', rootSessionId: 's1' }, parentContext: { userId: 'u1', metadata: {} },
+        parent: { id: 'parent-1', rootSessionId: 's1', role: 'general' }, parentContext: { userId: 'u1', metadata: {} },
         childDepth: 2, childKind: 'subagent', childRole: params.role, childModel: 'm1', childLane: 'agents', childTools: [],
         budget: { tokens: { cap: 1000, used: 0 }, wallClockMs: { cap: 1000, startedAt: Date.now() }, fanOut: { cap: 1, used: 0 }, depth: 2 },
         topicPath: 'coding', subtopic: 'x', brief: { taskBrief: params.taskBrief, topicPath: 'coding' }, briefHash: 'h',
@@ -1070,8 +1073,23 @@ describe('spawn_child resumeKey', () => {
       agentManagerStub.spawn = null;
     }
     expect(received?.resumeKey).toBeUndefined();
-    expect(metadata[0]?.resumeKey).toBe('coding:parser-fix');
+    // Scoped by the parent (its role here), so another parent's task can't collide.
+    expect(metadata[0]?.resumeKey).toBe('general>coding:parser-fix');
     // No explicit key → no resume key: children stay cold by default.
     expect(metadata[1]).not.toHaveProperty('resumeKey');
+  });
+});
+
+describe('childResumeKey', () => {
+  const parent = { role: 'general' } as AgentNode;
+  const ctx = (metadata: Record<string, unknown>) => ({ metadata }) as unknown as Parameters<typeof childResumeKey>[0];
+
+  test('scopes by the parent role, so a later turn\'s root lands on the same key', () => {
+    expect(childResumeKey(ctx({}), parent, 'coding', 't1')).toBe('general>coding:t1');
+    expect(childResumeKey(ctx({}), { role: 'research' } as AgentNode, 'coding', 't1')).toBe('research>coding:t1');
+  });
+
+  test('a keyed parent scopes its children by its own key (full lineage)', () => {
+    expect(childResumeKey(ctx({ resumeKey: 'general>coding:t1' }), { role: 'coding' } as AgentNode, 'review', 'r1')).toBe('general>coding:t1>review:r1');
   });
 });

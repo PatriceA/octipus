@@ -90,6 +90,14 @@ vi.mock('@/db/repositories/session-repository', () => ({
       if (!row || (row.context.clearedAt ?? '') !== generation) return false;
       Object.assign(row.context, patch); return true;
     },
+    // Mirrors the real per-key write: one cliSessions entry, generation-checked.
+    setContextKeyIfGeneration: async (id: string, generation: string, path: string[], value: unknown) => {
+      const row = fixture.sessions.get(id);
+      if (!row || (row.context.clearedAt ?? '') !== generation) return false;
+      const map = { ...row.context.cliSessions } as Record<string, unknown>;
+      if (value === undefined) delete map[path[1]]; else map[path[1]] = value;
+      row.context.cliSessions = map as SessionContext['cliSessions']; return true;
+    },
     incrementMessageCount: async () => {},
   },
 }));
@@ -501,6 +509,25 @@ describe('child CLI session reuse, keyed per (role, task)', () => {
     } finally {
       releaseCliSessions('still-running');
     }
+  });
+
+  it('resumes although the follow-up brief and its discovered skills differ', async () => {
+    const first = makeChild('kid', 'coding:parser-fix');
+    first.worker.addSystemMessage('# Domain Knowledge (topic index)\n- parsing: grammar notes');
+    await first.run('fix the parser');
+    const firstId = stored('kid')!.id;
+    const second = makeChild('kid', 'coding:parser-fix');
+    second.worker.addSystemMessage('# Domain Knowledge (topic index)\n- testing: vitest conventions');
+    expect(await second.run('now add a regression test for empty input')).toContain(firstId);
+  });
+
+  it('frees the key as soon as the holder is stopped', async () => {
+    const holder = makeChild('kid', 'coding:parser-fix');
+    expect(claimCliSession('kid', key, holder.worker.getContext().id)).toBe(true);
+    expect(claimCliSession('kid', key, 'retry')).toBe(false);
+    holder.worker.stop();
+    expect(claimCliSession('kid', key, 'retry')).toBe(true);
+    releaseCliSessions('retry');
   });
 
   it('starts cold on a fingerprint mismatch', async () => {

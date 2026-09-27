@@ -532,7 +532,7 @@ export function createSpawnChildTool(
         },
         resumeKey: {
           type: 'string',
-          maxLength: 200,
+          pattern: '^[A-Za-z0-9._:-]{1,200}$',
           description:
             'Optional task id. Pass the same value (with the same role) to continue a previous child\'s CLI session on the same task. Omit for a fresh child.',
         },
@@ -596,6 +596,8 @@ export function parsePlan(raw: unknown): { plan?: PlanStep[] } | { error: string
   }
   return { plan: steps.length > 0 ? steps : undefined };
 }
+
+const RESUME_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,200}$/;
 
 export function validateSpawnChildArgs(args: Record<string, unknown>): ValidatedSpawn {
   let topic = typeof args.topic === 'string' ? args.topic.trim() : '';
@@ -686,7 +688,9 @@ export function validateSpawnChildArgs(args: Record<string, unknown>): Validated
   }
 
   const resumeKey = typeof args.resumeKey === 'string' ? args.resumeKey.trim() : '';
-  if (resumeKey.length > 200) return { error: 'resumeKey exceeds 200-char limit' };
+  if (resumeKey && !RESUME_KEY_PATTERN.test(resumeKey)) {
+    return { error: 'resumeKey must be 1-200 characters of letters, digits, ".", "_", ":" or "-"' };
+  }
 
   // `mode` is no longer LLM-controlled — spawn_child always detaches when the
   // depth has a detach budget, else awaits. The execute path sets params.mode

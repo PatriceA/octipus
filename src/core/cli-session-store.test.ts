@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import type { Session, SessionContext } from '@/db/schema/sessions';
-import { childCliSessionKey, claimCliSession, dropCliSession, fingerprintRun, loadCliSession, releaseCliSessions, saveCliSession } from './cli-session-store';
+import { childCliSessionKey, claimCliSession, dropCliSession, isChildCliSessionKey, fingerprintRun, loadCliSession, releaseCliSessions, saveCliSession } from './cli-session-store';
 
 describe('fingerprintRun', () => {
   it('changes when the model changes', () => {
@@ -39,6 +39,14 @@ describe('cli session store', () => {
       const row = store.get(id) ?? { context: {} as SessionContext };
       if ((row.context.clearedAt ?? '') !== generation) return false;
       Object.assign(row.context, patch); store.set(id, row); return true;
+    });
+    // Mirrors the real per-key write: one cliSessions entry, generation-checked.
+    vi.spyOn(sessionRepository, 'setContextKeyIfGeneration').mockImplementation(async (id, generation, path, value) => {
+      const row = store.get(id) ?? { context: {} as SessionContext };
+      if ((row.context.clearedAt ?? '') !== generation) return false;
+      const map = { ...row.context.cliSessions } as Record<string, unknown>;
+      if (value === undefined) delete map[path[1]]; else map[path[1]] = value;
+      row.context.cliSessions = map as SessionContext['cliSessions']; store.set(id, row); return true;
     });
     vi.spyOn(sessionRepository, 'update').mockImplementation(async (id: string, data: { context?: unknown }) => {
       const existing = store.get(id) ?? { context: {} };
@@ -112,6 +120,25 @@ describe('cli session store', () => {
     expect(await loadCliSession('s1', 'Claude Code', 'fp-a')).toBeNull();
     expect(await loadCliSession('s1', child, 'fp-a')).toMatchObject({ id: 'c1' });
     expect(await loadCliSession('s1', child, 'fp-b')).toBeNull();
+    expect(isChildCliSessionKey(child)).toBe(true);
+    expect(isChildCliSessionKey('Claude Code')).toBe(false);
+  });
+
+  it('writes one key at a time, so parallel saves to sibling keys both land', async () => {
+    const lastUsedAt = new Date().toISOString();
+    await Promise.all([
+      saveCliSession('s1', 'Claude Code', { id: 'root', fingerprint: 'fp', lastUsedAt }),
+      saveCliSession('s1', childCliSessionKey('Claude Code', 'a'), { id: 'a', fingerprint: 'fp', lastUsedAt }),
+      saveCliSession('s1', childCliSessionKey('Claude Code', 'b'), { id: 'b', fingerprint: 'fp', lastUsedAt }),
+    ]);
+    expect(sessionRepository.patchContextIfGeneration).not.toHaveBeenCalled();
+    expect(Object.keys(store.get('s1')!.context.cliSessions!).sort()).toEqual(['Claude Code', 'Claude Code::a', 'Claude Code::b']);
+  });
+
+  it('rejects a save from a stale generation', async () => {
+    store.set('s1', { context: { clearedAt: '2026-01-02T00:00:00.000Z' } as SessionContext });
+    await saveCliSession('s1', childCliSessionKey('Claude Code', 'a'), { id: 'a', fingerprint: 'fp', generation: '', lastUsedAt: new Date().toISOString() });
+    expect(store.get('s1')!.context.cliSessions).toBeUndefined();
   });
 });
 
@@ -124,5 +151,15 @@ describe('claimCliSession', () => {
     releaseCliSessions('a1');
     expect(claimCliSession('s1', 'k', 'a2')).toBe(true);
     releaseCliSessions('a2');
+  });
+
+  it('releasing one agent leaves another agent\'s claims alone', () => {
+    expect(claimCliSession('s1', 'k1', 'a1')).toBe(true);
+    expect(claimCliSession('s1', 'k2', 'a2')).toBe(true);
+    releaseCliSessions('a1');
+    expect(claimCliSession('s1', 'k2', 'a3')).toBe(false);
+    expect(claimCliSession('s1', 'k1', 'a3')).toBe(true);
+    releaseCliSessions('a2');
+    releaseCliSessions('a3');
   });
 });

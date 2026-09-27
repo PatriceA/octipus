@@ -155,6 +155,23 @@ export interface SpawnChildInternalOpts {
  *  - `parentAgentId` + `AbortSignal` chain → AgentManager.spawn.
  *  - Emit `swarm.node_spawned` / `swarm.node_completed`.
  */
+/**
+ * The key a CLI child continues its vendor session under:
+ * `<parent scope>><child role>:<task id>`.
+ *
+ * The parent scope keeps unrelated parents in one root session from resuming
+ * each other's task sessions. It is the parent's OWN resume key when it has one
+ * (a keyed depth-1 child spawning grandchildren — full lineage), else the
+ * parent's role. Never an agent or node id: a root agent is a new worker every
+ * turn, and the point is that a root re-spawning the same task in a LATER turn
+ * lands on the same key.
+ */
+export function childResumeKey(parentContext: AgentContext, parent: AgentNode, childRole: AgentRole, taskId: string): string {
+  const parentKey = (parentContext.metadata as Record<string, unknown> | undefined)?.resumeKey;
+  const scope = typeof parentKey === 'string' && parentKey ? parentKey : parent.role;
+  return `${scope}>${childRole}:${taskId}`;
+}
+
 export class SwarmSpawner {
   private _hub: GatewayHub | null;
   /**
@@ -884,7 +901,7 @@ export class SwarmSpawner {
      * `minFilesChanged` sees the whole child's work, not just its own.
      */
     fsBaseline?: WorkspaceSnapshot | null;
-    /** Explicit task id; keyed with the role so a CLI child continues that task's vendor session. */
+    /** Explicit task id from `spawn_child`; scoped by `childResumeKey` before it reaches the child. */
     resumeKey?: string;
   }): Promise<ChildResult> {
     // Retry policy (design §Failure Modes):
@@ -1346,7 +1363,7 @@ export class SwarmSpawner {
             ((opts.parentContext.metadata as Record<string, unknown>)?.originalRequest as string) ??
             opts.brief.originalUserRequest,
           ...pipelineMetadata(opts.parentContext.metadata as Record<string, unknown> | undefined),
-          ...(opts.resumeKey ? { resumeKey: `${opts.childRole}:${opts.resumeKey}` } : {}),
+          ...(opts.resumeKey ? { resumeKey: childResumeKey(opts.parentContext, opts.parent, opts.childRole, opts.resumeKey) } : {}),
         },
       });
     } catch (err) {

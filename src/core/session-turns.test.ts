@@ -11,6 +11,13 @@ vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: {
     if ((fixture.context.clearedAt ?? '') !== generation) return false;
     Object.assign(fixture.context, structuredClone(patch)); return true;
   },
+  // One `cliSessions` entry, as the real per-key jsonb write does.
+  setContextKeyIfGeneration: async (_id: string, generation: string, path: string[], value: unknown) => {
+    if ((fixture.context.clearedAt ?? '') !== generation) return false;
+    const map = { ...fixture.context.cliSessions } as Record<string, unknown>;
+    if (value === undefined) delete map[path[1]]; else map[path[1]] = structuredClone(value);
+    fixture.context.cliSessions = map as SessionContext['cliSessions']; return true;
+  },
 } }));
 vi.mock('@/db/repositories/message-repository', () => ({ messageRepository: {
   create: async (data: object) => {
@@ -117,6 +124,14 @@ describe('session lifecycle across ephemeral root workers', () => {
     expect(fixture.context.compactionState?.compactionIneffective).toBe(true);
     await maybeCompactSession('session');
     expect(fixture.summaries).toHaveLength(1);
+  });
+  test('compaction rotates the root vendor sessions but keeps child task sessions', async () => {
+    for (let i = 0; i < 6; i++) await turn(i);
+    const rec = { fingerprint: 'f', lastUsedAt: '', generation: '' };
+    fixture.context.cliSessions = { 'Claude Code': { id: 'root', ...rec }, 'Codex CLI': { id: 'root-codex', ...rec }, 'Claude Code::general>coding:t1': { id: 'child', ...rec } };
+    await maybeCompactSession('session', { force: true });
+    expect(fixture.context.checkpoint).toBeDefined();
+    expect(Object.keys(fixture.context.cliSessions ?? {})).toEqual(['Claude Code::general>coding:t1']);
   });
   test('a clear during summarization prevents checkpoint publication', async () => {
     for (let i = 0; i < 6; i++) await turn(i);

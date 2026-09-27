@@ -59,32 +59,43 @@ export async function willResumeCliSession(sessionId: string, adapterKey: string
   return (await loadCliSession(sessionId, adapterKey, fingerprint)) !== null;
 }
 
-/** Awaited publication under the root conversation lock; rejects stale generations. */
+/**
+ * Writes ONE `cliSessions` entry in a single statement, rejected unless the
+ * session is still in `rec.generation`. Children save outside the root
+ * conversation lock, so rebuilding the whole map here would let parallel
+ * children, the root and `acknowledgeProviderTurn` clobber each other.
+ */
 export async function saveCliSession(sessionId: string, adapterKey: string, rec: CliSessionRecord): Promise<void> {
-  const session = await sessionRepository.findById(sessionId);
   const generation = rec.generation ?? '';
-  if (sessionGeneration(session?.context) !== generation) return;
-  await sessionRepository.patchContextIfGeneration(sessionId, generation, {
-    cliSessions: { ...session?.context?.cliSessions, [adapterKey]: { ...rec, generation } },
-  });
+  await sessionRepository.setContextKeyIfGeneration(sessionId, generation, ['cliSessions', adapterKey], { ...rec, generation });
 }
 
 export async function dropCliSession(sessionId: string, adapterKey: string): Promise<void> {
   await sessionRepository.setContextKey(sessionId, ['cliSessions', adapterKey], undefined);
 }
 
+const CHILD_KEY_SEPARATOR = '::';
+
 /**
- * Store key for a child agent's vendor session, continued per (role, task)
- * rather than per octipus session. Lives beside the root's adapter keys in
- * `cliSessions`, so a /clear or compaction that drops the map drops these too.
+ * Store key for a child agent's vendor session, continued per (parent scope,
+ * role, task) rather than per octipus session. Lives beside the root's adapter
+ * keys in `cliSessions`, so /clear (which drops the map) drops these too;
+ * compaction keeps them (`isChildCliSessionKey`).
  */
 export function childCliSessionKey(adapterKey: string, resumeKey: string): string {
-  return `${adapterKey}::${resumeKey}`;
+  return `${adapterKey}${CHILD_KEY_SEPARATOR}${resumeKey}`;
 }
 
-// Child store keys held by a live agent in this process. Two concurrent
-// children with the same key must never share one vendor session.
+/** A child task key, which compaction keeps; root adapter keys have no separator. */
+export function isChildCliSessionKey(key: string): boolean {
+  return key.includes(CHILD_KEY_SEPARATOR);
+}
+
+// Child store keys held by a live agent. Two concurrent children with the same
+// key must never share one vendor session. In-memory, so this guards agents in
+// ONE server process only — which is where the swarm spawner runs children.
 const liveHolders = new Map<string, string>();
+const claimsByAgent = new Map<string, Set<string>>();
 
 /** Claims `key` for `agentId`; false when another live agent already holds it. */
 export function claimCliSession(sessionId: string, key: string, agentId: string): boolean {
@@ -92,11 +103,16 @@ export function claimCliSession(sessionId: string, key: string, agentId: string)
   const holder = liveHolders.get(slot);
   if (holder && holder !== agentId) return false;
   liveHolders.set(slot, agentId);
+  let slots = claimsByAgent.get(agentId);
+  if (!slots) claimsByAgent.set(agentId, slots = new Set());
+  slots.add(slot);
   return true;
 }
 
+/** Drops every claim `agentId` holds: when its run settles and when it is stopped. */
 export function releaseCliSessions(agentId: string): void {
-  for (const [slot, holder] of liveHolders) if (holder === agentId) liveHolders.delete(slot);
+  for (const slot of claimsByAgent.get(agentId) ?? []) if (liveHolders.get(slot) === agentId) liveHolders.delete(slot);
+  claimsByAgent.delete(agentId);
 }
 
 /** The final persisted Octipus answer is now part of this vendor turn. */

@@ -4,6 +4,28 @@ import { dbLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
 import { type NewSession, type Session, sessions } from '../schema/sessions';
 
+/** A jsonb path as a bound text[] — keys are parameters, never spliced into an array literal. */
+function jsonPath(path: string[]) {
+  return sql`ARRAY[${sql.join(path.map(key => sql`${key}::text`), sql`, `)}]::text[]`;
+}
+
+/**
+ * `context` with ONE nested key set (or, with `undefined`, deleted). jsonb_set
+ * can't create missing intermediate objects, so build the nested merge
+ * explicitly: at each level, `existing || {new key}` — which keeps every
+ * sibling and replaces only the addressed branch.
+ */
+function contextKeyExpr(path: [string, ...string[]], value: unknown) {
+  const ctx = sql`coalesce(${sessions.context}, '{}'::jsonb)`;
+  if (value === undefined) return sql`${ctx} #- ${jsonPath(path)}`;
+  // Innermost first, wrapping outwards.
+  let inner = sql`jsonb_build_object(${path[path.length - 1]}::text, ${JSON.stringify(value)}::jsonb)`;
+  for (let i = path.length - 2; i >= 0; i--) {
+    inner = sql`jsonb_build_object(${path[i]}::text, coalesce(${ctx} #> ${jsonPath(path.slice(0, i + 1))}, '{}'::jsonb) || ${inner})`;
+  }
+  return sql`${ctx} || ${inner}`;
+}
+
 export class SessionRepository {
   private get db() { return getDb(); }
 
@@ -97,26 +119,24 @@ export class SessionRepository {
    * intermediate objects are created, and sibling keys at every level survive.
    */
   async setContextKey(id: string, path: [string, ...string[]], value: unknown): Promise<void> {
-    // jsonb_set can't create missing intermediate objects, so build the nested
-    // merge explicitly: at each level, `existing || {new key}` — which keeps
-    // every sibling and replaces only the addressed branch.
-    const ctx = sql`coalesce(${sessions.context}, '{}'::jsonb)`;
-    let expr;
-    if (value === undefined) {
-      expr = sql`${ctx} #- ${`{${path.join(',')}}`}::text[]`;
-    } else {
-      // Innermost first, wrapping outwards.
-      let inner = sql`jsonb_build_object(${path[path.length - 1]}::text, ${JSON.stringify(value)}::jsonb)`;
-      for (let i = path.length - 2; i >= 0; i--) {
-        const prefix = `{${path.slice(0, i + 1).join(',')}}`;
-        inner = sql`jsonb_build_object(${path[i]}::text, coalesce(${ctx} #> ${prefix}::text[], '{}'::jsonb) || ${inner})`;
-      }
-      expr = sql`${ctx} || ${inner}`;
-    }
     await this.db
       .update(sessions)
-      .set({ context: expr as never, updatedAt: new Date() })
+      .set({ context: contextKeyExpr(path, value) as never, updatedAt: new Date() })
       .where(eq(sessions.id, id));
+  }
+
+  /**
+   * `setContextKey`, published only while the session is still in
+   * `generation` (the same predicate as `patchContextIfGeneration`), so a
+   * write from before a /clear can never land after it. One key, one
+   * statement: concurrent writers to sibling keys never clobber each other.
+   */
+  async setContextKeyIfGeneration(id: string, generation: string, path: [string, ...string[]], value: unknown): Promise<boolean> {
+    const result = await this.db.update(sessions)
+      .set({ context: contextKeyExpr(path, value) as never, updatedAt: new Date() })
+      .where(and(eq(sessions.id, id), sql`coalesce(${sessions.context}->>'conversationGeneration', ${sessions.context}->>'clearedAt', '') = ${generation}`))
+      .returning({ id: sessions.id });
+    return result.length > 0;
   }
 
   async incrementMessageCount(id: string, tokenDelta: number = 0): Promise<void> {
