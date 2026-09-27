@@ -482,11 +482,13 @@ async function handleApprovalRespond(
     const { getAgentService } = await import('@/core/agent');
     const rootAgent = getAgentService();
 
+    // Same rule as REST /chat/approve: admins may answer any request.
+    const isAdmin = !!(context.metadata as { isAdmin?: boolean } | undefined)?.isAdmin;
     const outcome = await rootAgent.resolveApprovalDetailed(
       message.requestId, message.approved, message.response,
-      { forUserId: context.userId, resolvedBy: context.userId },
+      { forUserId: isAdmin ? undefined : context.userId, resolvedBy: context.userId },
     );
-    if (outcome.status === 'orphaned') {
+    if ('message' in outcome) {
       hub.connectionManager.sendToConnection(connectionId, {
         type: 'error',
         code: 'APPROVAL_EXPIRED',

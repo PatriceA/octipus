@@ -243,7 +243,7 @@ export const chatRoutes = new Elysia({ prefix: '/chat' })
         { forUserId: user.isAdmin ? undefined : user.id, resolvedBy: user.id },
       );
 
-      if (outcome.status === 'orphaned') {
+      if (outcome.status === 'orphaned' || outcome.status === 'timed_out') {
         return { error: outcome.message };
       }
       if (outcome.status !== 'resolved') {

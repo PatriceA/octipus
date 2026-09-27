@@ -771,15 +771,6 @@ export class AgentService {
     );
   }
 
-  resolveApproval(
-    requestId: string,
-    approved: boolean,
-    response?: string,
-    by?: { forUserId?: string; resolvedBy?: string },
-  ): Promise<boolean> {
-    return this.approvalManager.resolveApproval(requestId, approved, response, by);
-  }
-
   resolveApprovalDetailed(
     requestId: string,
     approved: boolean,
@@ -787,11 +778,6 @@ export class AgentService {
     by?: { forUserId?: string; resolvedBy?: string },
   ): Promise<ApprovalResolveOutcome> {
     return this.approvalManager.resolveApprovalDetailed(requestId, approved, response, by);
-  }
-
-  /** Pre-flight lookup so callers (chat route) can verify principal owns the request. */
-  peekApproval(requestId: string): ApprovalRequest | null {
-    return this.approvalManager.peek(requestId);
   }
 
   getPendingApprovals(forUserId?: string): ApprovalRequest[] {

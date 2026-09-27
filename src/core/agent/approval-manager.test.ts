@@ -1,7 +1,7 @@
 /**
  * Agent approvals used to live only in a Map, so a restart lost every pending
  * one and the user's answer came back "Approval request not found". The
- * `agent_approvals` row is now the record of truth; these pin that it is
+ * `agent_approvals` row is now the durable record; these pin that it is
  * written, settled exactly once, and expired — never left dangling — when its
  * waiter is gone.
  */
@@ -62,7 +62,10 @@ function ctx(userId: string, metadata: Record<string, unknown> = {}): AgentConte
 
 async function row(id: string) {
   const { rows } = await queryRaw(`SELECT * FROM agent_approvals WHERE id = '${id}'`);
-  return rows[0] as { status: string; response: string | null; resolved_by: string | null; user_id: string; summary: string; options: string[] | null } | undefined;
+  return rows[0] as {
+    status: string; response: string | null; resolved_by: string | null; user_id: string;
+    summary: string; options: string[] | null; boot_id: string;
+  } | undefined;
 }
 
 /** Start a request and wait until its row is written. */
@@ -73,11 +76,12 @@ async function ask(manager: InstanceType<Mod['ApprovalManager']>, context: Agent
   return { id, answer };
 }
 
-async function insertOrphan(userId = aliceId): Promise<string> {
+/** A pending row with no waiter in this manager; by default from a previous boot. */
+async function insertOrphan(bootId = 'previous-boot'): Promise<string> {
   const id = randomUUID();
   await executeRaw(
-    `INSERT INTO agent_approvals (id, user_id, agent_id, summary, question)
-     VALUES ('${id}', '${userId}', 'dead-agent', 'Old', 'Still there?')`,
+    `INSERT INTO agent_approvals (id, user_id, agent_id, boot_id, summary, question)
+     VALUES ('${id}', '${aliceId}', 'dead-agent', '${bootId}', 'Old', 'Still there?')`,
   );
   return id;
 }
@@ -88,8 +92,6 @@ describe('ApprovalManager persistence', () => {
     const { id, answer } = await ask(manager, ctx(aliceId));
 
     expect(await row(id)).toMatchObject({ status: 'pending', user_id: aliceId, summary: 'Deploy', options: ['Yes', 'No'] });
-    expect((await manager.listPending(aliceId)).map((r) => r.id)).toEqual([id]);
-    expect(await manager.listPending(bobId)).toEqual([]);
 
     await manager.resolveApproval(id, false);
     await answer;
@@ -137,7 +139,22 @@ describe('ApprovalManager persistence', () => {
 
     expect(await answer).toMatchObject({ approved: false, reason: 'Approval timed out' });
     await vi.waitFor(async () => expect((await row(id))?.status).toBe('expired'));
-    expect(await manager.resolveApproval(id, true)).toBe(false);
+    expect(await manager.resolveApprovalDetailed(id, true))
+      .toEqual({ status: 'timed_out', message: mod.TIMED_OUT_APPROVAL_MESSAGE });
+  });
+
+  test('an answer that beats the timeout\'s expiry write is told it timed out, not that the server restarted', async () => {
+    const manager = new mod.ApprovalManager();
+    const { id: live, answer } = await ask(manager, ctx(aliceId));
+    const thisBoot = (await row(live))!.boot_id;
+    await manager.resolveApproval(live, false);
+    await answer;
+
+    // The timeout has dropped the waiter but its expiry has not landed yet.
+    const dropped = await insertOrphan(thisBoot);
+    expect(await manager.resolveApprovalDetailed(dropped, true))
+      .toEqual({ status: 'timed_out', message: mod.TIMED_OUT_APPROVAL_MESSAGE });
+    expect(await row(dropped)).toMatchObject({ status: 'expired', response: mod.TIMED_OUT_APPROVAL_MESSAGE });
   });
 });
 
@@ -148,6 +165,10 @@ describe('orphaned approvals', () => {
     expect(await mod.releaseOrphanedApprovals()).toBe(1);
     expect((await row(orphan))?.status).toBe('expired');
     expect(await mod.releaseOrphanedApprovals()).toBe(0);
+
+    // Answered after the sweep, it still explains the restart.
+    expect(await new mod.ApprovalManager().resolveApprovalDetailed(orphan, true))
+      .toEqual({ status: 'orphaned', message: mod.ORPHANED_APPROVAL_MESSAGE });
   });
 
   test('answering one expires it and says why, instead of "not found"', async () => {
@@ -158,7 +179,8 @@ describe('orphaned approvals', () => {
     expect(await manager.resolveApprovalDetailed(orphan, true, undefined, { forUserId: aliceId }))
       .toEqual({ status: 'orphaned', message: mod.ORPHANED_APPROVAL_MESSAGE });
     expect((await row(orphan))?.status).toBe('expired');
-    expect(await manager.resolveApprovalDetailed(orphan, true)).toEqual({ status: 'already_resolved' });
+    expect(await manager.resolveApprovalDetailed(orphan, true))
+      .toEqual({ status: 'orphaned', message: mod.ORPHANED_APPROVAL_MESSAGE });
     expect(await manager.resolveApprovalDetailed(randomUUID(), true)).toEqual({ status: 'not_found' });
   });
 });

@@ -1,10 +1,11 @@
 -- Agent approvals were held only in process memory, so a restart lost them and
--- answering one failed with "not found". The row is now the record of truth.
+-- answering one failed with "not found". The row is now the durable record.
 CREATE TABLE IF NOT EXISTS agent_approvals (
   id uuid PRIMARY KEY,
   user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   session_id uuid,
   agent_id text NOT NULL,
+  boot_id text NOT NULL,
   summary text NOT NULL,
   question text NOT NULL,
   options jsonb,
@@ -17,4 +18,4 @@ CREATE TABLE IF NOT EXISTS agent_approvals (
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS agent_approvals_user_status_idx ON agent_approvals(user_id, status);
 --> statement-breakpoint
-CREATE INDEX IF NOT EXISTS agent_approvals_status_idx ON agent_approvals(status);
+CREATE INDEX IF NOT EXISTS agent_approvals_pending_idx ON agent_approvals(status) WHERE status = 'pending';
