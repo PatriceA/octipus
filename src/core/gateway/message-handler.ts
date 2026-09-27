@@ -482,7 +482,17 @@ async function handleApprovalRespond(
     const { getAgentService } = await import('@/core/agent');
     const rootAgent = getAgentService();
 
-    rootAgent.resolveApproval(message.requestId, message.approved, message.response);
+    const outcome = await rootAgent.resolveApprovalDetailed(
+      message.requestId, message.approved, message.response,
+      { forUserId: context.userId, resolvedBy: context.userId },
+    );
+    if (outcome.status === 'orphaned') {
+      hub.connectionManager.sendToConnection(connectionId, {
+        type: 'error',
+        code: 'APPROVAL_EXPIRED',
+        message: outcome.message,
+      });
+    }
   } catch (err) {
     coreLogger.error({ err, connectionId, requestId: message.requestId }, 'Approval respond error');
     hub.connectionManager.sendToConnection(connectionId, {

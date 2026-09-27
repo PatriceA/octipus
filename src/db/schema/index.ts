@@ -58,3 +58,4 @@ export * from './workspace-repos';
 export * from './tool-actions';
 export * from './push-tokens';
 export * from './monitors';
+export * from './agent-approvals';

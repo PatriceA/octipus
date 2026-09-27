@@ -347,15 +347,17 @@ export function setupWebSocket(app: Elysia): void {
           case 'approval_response': {
             // Resolve a pending root agent approval
             const orch = getAgentService();
-            const resolved = orch.resolveApproval(
+            const outcome = await orch.resolveApprovalDetailed(
               parsed.requestId,
               parsed.approved,
               parsed.response,
+              { forUserId: userId, resolvedBy: userId },
             );
             ws.send(JSON.stringify({
               type: 'approval_resolved',
               requestId: parsed.requestId,
-              resolved,
+              resolved: outcome.status === 'resolved',
+              ...(outcome.status === 'orphaned' ? { error: outcome.message } : {}),
             }));
             break;
           }
