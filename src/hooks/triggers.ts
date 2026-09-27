@@ -64,12 +64,11 @@ export function matchesTrigger(hook: Hook, event: TriggerEvent, context: Trigger
     case 'heartbeat': {
       // Only match the specific hook targeted by the cron-runner. Heartbeat is
       // a schedule variant: the cron-runner runs the gate and fires the exact
-      // hook by id, so the match rule is identical.
+      // hook by id, so the match rule is identical. Without a hookId, fail
+      // closed: an untargeted schedule event would otherwise fire every
+      // user's schedule/heartbeat hook at once.
       const scheduleData = event.data as { hookId?: string } | undefined;
-      if (scheduleData?.hookId) {
-        return hook.id === scheduleData.hookId;
-      }
-      return true;
+      return Boolean(scheduleData?.hookId) && hook.id === scheduleData?.hookId;
     }
 
     case 'permission_requested':

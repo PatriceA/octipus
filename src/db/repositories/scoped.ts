@@ -86,7 +86,7 @@ function requireAuth(p: Principal): void {
  * guarded.
  */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-function isUuid(id: string): boolean {
+export function isUuid(id: string): boolean {
   return UUID_RE.test(id);
 }
 

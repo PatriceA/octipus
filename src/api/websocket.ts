@@ -346,16 +346,21 @@ export function setupWebSocket(app: Elysia): void {
 
           case 'approval_response': {
             // Resolve a pending root agent approval
+            // Same rule as REST /chat/approve: admins may answer any request.
             const orch = getAgentService();
-            const resolved = orch.resolveApproval(
+            const { userRepository } = await import('@/db/repositories/user-repository');
+            const isAdmin = !!(await userRepository.findById(userId))?.isAdmin;
+            const outcome = await orch.resolveApprovalDetailed(
               parsed.requestId,
               parsed.approved,
               parsed.response,
+              { forUserId: isAdmin ? undefined : userId, resolvedBy: userId },
             );
             ws.send(JSON.stringify({
               type: 'approval_resolved',
               requestId: parsed.requestId,
-              resolved,
+              resolved: outcome.status === 'resolved',
+              ...('message' in outcome ? { error: outcome.message } : {}),
             }));
             break;
           }
