@@ -129,6 +129,19 @@ describe('POST /api/tasks/:id/checkout', () => {
     expect(takeover.body).toMatchObject({ checkedOutBy: 'node-b', checkoutRunId: 'run-b' });
   });
 
+  test('the holder renews after splitting its task into sub-tasks; others still see it blocked', async () => {
+    const task = await create({ title: 'split me' });
+    await send('POST', `/api/tasks/${task.id}/checkout`, { actor: 'node-a' });
+    await create({ title: 'part 1', parentId: task.id });
+    const { executeRaw } = await import('@/db/postgres');
+    await executeRaw(`UPDATE tasks SET checked_out_at = now() - interval '20 minutes' WHERE id = '${task.id}'`);
+    const renewed = await send('POST', `/api/tasks/${task.id}/checkout`, { actor: 'node-a' });
+    expect(renewed.status).toBe(200);
+    expect(Date.now() - new Date(renewed.body.checkedOutAt).getTime()).toBeLessThan(60_000);
+    const other = await send('POST', `/api/tasks/${task.id}/checkout`, { actor: 'node-b' });
+    expect(other).toMatchObject({ status: 409, body: { reason: 'blocked', waiting: { openChildren: 1 } } });
+  });
+
   test('moving a task back to open ends the checkout; the user overrides a holder', async () => {
     const task = await create({ title: 'reopen me' });
     await send('POST', `/api/tasks/${task.id}/checkout`, { actor: 'node-a' });

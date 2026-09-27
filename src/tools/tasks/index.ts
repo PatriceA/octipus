@@ -1,7 +1,6 @@
 import { addBacklog, parseBacklog } from '@/core/tasks/backlog';
 import { nextActions } from '@/core/tasks/next';
 import { dateOnlyToEndOfDay } from '@/core/tasks/rank';
-import { type CheckoutState, otherHolder } from '@/core/tasks/checkout';
 import { ACTIVE_TASK_STATUSES, assigneePatch, TASK_ASSIGNEE_KINDS, TASK_STATUSES } from '@/core/tasks/status';
 import { type Nested, nestTasks, normalizeEstimate, toLookup, waitingOn, waitingReason } from '@/core/tasks/structure';
 import { resolveUserTimezone } from '@/core/tasks/timezone';
@@ -181,8 +180,6 @@ export class TasksTool extends BaseTool {
         const repo = scopedRepos(principal).tasks;
         const existing = await repo.findById(args.id as string);
         if (!existing) return { error: 'Task not found' };
-        const held = heldElsewhere(existing, context);
-        if (held) return held;
         const status = args.status as string | undefined;
         try {
           const task = await repo.update(args.id as string, {
@@ -199,8 +196,9 @@ export class TasksTool extends BaseTool {
             blockedBy: args.blockedBy !== undefined ? idList(args.blockedBy) : undefined,
             ...assigneePatch(args.assigneeKind, args.assigneeRef),
             ...completionPatch(status, Boolean(existing.completedAt)),
-          });
-          return { updated: true, task: task ? summarize(task) : null };
+          }, { asActor: agentActor(context) });
+          if (!task) return refusal(await repo.findById(args.id as string));
+          return { updated: true, task: summarize(task) };
         } catch (err) {
           return { error: (err as Error).message };
         }
@@ -219,14 +217,12 @@ export class TasksTool extends BaseTool {
         const repo = scopedRepos(principal).tasks;
         const existing = await repo.findById(args.id as string);
         if (!existing) return { error: 'Task not found' };
-        const held = heldElsewhere(existing, context);
-        if (held) return held;
         // Idempotent: keep the original completedAt if already done.
         const task = await repo.update(args.id as string, {
           status: 'done',
           ...completionPatch('done', Boolean(existing.completedAt)),
-        });
-        if (!task) return { error: 'Task not found' };
+        }, { asActor: agentActor(context) });
+        if (!task) return refusal(await repo.findById(args.id as string));
         return { completed: true, task: summarize(task) };
       },
       { requiresPermission: true, permissionAction: 'write' },
@@ -318,12 +314,14 @@ function agentActor(context: AgentContext): string {
 }
 
 /**
- * The refusal when another actor holds a live checkout on `task`, else null.
- * Only the tool enforces this; the user's routes override (the user is the boss).
+ * Why a tool write came back empty: the task is gone, or another agent holds
+ * a live checkout (the repo's UPDATE refused it atomically, see `asActor`).
+ * Only the tool enforces the holder; the user's routes override.
  */
-function heldElsewhere(task: CheckoutState, context: AgentContext): { error: string; holder: string } | null {
-  const holder = otherHolder(task, agentActor(context));
-  return holder ? { error: `Task is checked out by ${holder}`, holder } : null;
+function refusal(current: { checkedOutBy: string | null } | null): { error: string; holder?: string } {
+  if (!current) return { error: 'Task not found' };
+  if (current.checkedOutBy) return { error: `Task is checked out by ${current.checkedOutBy}`, holder: current.checkedOutBy };
+  return { error: 'Task changed while updating; try again' };
 }
 
 function clampPriority(p: unknown): number {

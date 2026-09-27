@@ -36,7 +36,7 @@
  * deployments.
  */
 
-import { and, asc, count, desc, eq, gte, inArray, ne, notExists, type SQL, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, inArray, ne, notExists, or, type SQL, sql } from 'drizzle-orm';
 import { alias, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { isAdmin, isAuthenticated, type Principal } from '@/security/principal';
 import { TASK_CHECKOUT_TTL_MS } from '@/core/tasks/checkout';
@@ -1038,22 +1038,28 @@ export class ScopedTaskRepo {
     return existing;
   }
 
-  /** Update only if owned. `completedAt` is managed by the route/tool. */
-  async update(id: string, patch: Partial<NewTask>): Promise<Task | null> {
+  /**
+   * Update only if owned. `completedAt` is managed by the route/tool. With
+   * `asActor` (the tasks tool) the write also requires that no one else holds
+   * a live checkout, in the same UPDATE; a refused write returns null like a
+   * miss, and the caller re-reads to tell which. Without it (the user's
+   * routes) the write overrides any checkout.
+   */
+  async update(id: string, patch: Partial<NewTask>, opts: { asActor?: string } = {}): Promise<Task | null> {
     if (!isUuid(id)) return null;
     const { userId: _drop, ...safe } = patch;
     void _drop;
     if (safe.parentId !== undefined || safe.blockedBy !== undefined) await this.checkStructure(safe, id);
     // Leaving the active lanes (done, archived) or going back to open ends the
-    // work, so it ends the checkout too. The user's routes rely on this as
-    // their override; the tool refuses first when another agent holds it.
+    // work, so it ends the checkout too.
     const release = safe.status !== undefined && (safe.status === 'open' || !isActiveStatus(safe.status))
       ? { checkedOutBy: null, checkedOutAt: null, checkoutRunId: null }
       : {};
+    const holderCheck = opts.asActor !== undefined ? [this.leaseFree(opts.asActor)] : [];
     const result = await this.db
       .update(tasks)
       .set({ ...safe, ...release, updatedAt: new Date() })
-      .where(this.scopeWhere(id))
+      .where(this.scopeWhere(id, ...holderCheck))
       .returning();
     return result[0] ?? null;
   }
@@ -1087,6 +1093,16 @@ export class ScopedTaskRepo {
       .from(tasks)
       .where(and(sql`(${sql.join(related, sql` OR `)})`, inArray(tasks.status, [...ACTIVE_TASK_STATUSES]), ...this.scope()));
     return waitingOn(task, toLookup(rows));
+  }
+
+  /**
+   * `actor` may write the row: nobody holds it, `actor` does, or the holder's
+   * lease (TASK_CHECKOUT_TTL_MS) has lapsed. Judged on the database clock
+   * only — `checked_out_at` is written with now() as well.
+   */
+  private leaseFree(actor: string): SQL {
+    const lease = sql.raw(`interval '${Math.floor(TASK_CHECKOUT_TTL_MS / 1000)} seconds'`);
+    return sql`(${tasks.checkedOutBy} IS NULL OR ${tasks.checkedOutBy} = ${actor} OR ${tasks.checkedOutAt} < now() - ${lease})`;
   }
 
   /**
@@ -1129,15 +1145,15 @@ export class ScopedTaskRepo {
     const existing = await this.findById(id);
     if (!existing) return { ok: false, reason: 'not_found' };
     if (!isActiveStatus(existing.status)) return { ok: false, reason: 'conflict', holder: existing.checkedOutBy, status: existing.status };
-    const leaseSeconds = Math.floor(TASK_CHECKOUT_TTL_MS / 1000);
+    // The holder renews without the blocked rule (it may have split its own
+    // task into sub-tasks); anyone else claims only a free, unblocked task.
     const [claimed] = await this.db
       .update(tasks)
-      .set({ checkedOutBy: actor, checkedOutAt: new Date(), checkoutRunId: runId, status: 'in_progress', updatedAt: new Date() })
+      .set({ checkedOutBy: actor, checkedOutAt: sql`now()`, checkoutRunId: runId, status: 'in_progress', updatedAt: new Date() })
       .where(this.scopeWhere(
         id,
         inArray(tasks.status, [...ACTIVE_TASK_STATUSES]),
-        sql`(${tasks.checkedOutBy} IS NULL OR ${tasks.checkedOutBy} = ${actor} OR ${tasks.checkedOutAt} < now() - ${sql.raw(`interval '${leaseSeconds} seconds'`)})`,
-        ...this.notWaiting(),
+        or(eq(tasks.checkedOutBy, actor), and(this.leaseFree(actor), ...this.notWaiting())) as SQL,
       ))
       .returning();
     if (claimed) return { ok: true, task: claimed };
