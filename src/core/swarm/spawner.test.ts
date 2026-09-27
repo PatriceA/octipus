@@ -6,6 +6,7 @@ import {
   taskFingerprint,
   SwarmSpawner,
   TASK_BRIEF_PREVIEW_MAX,
+  ANCESTRY_ENTRY_MAX,
   composeChildMessage,
   planToolGaps,
 } from './spawner';
@@ -82,6 +83,44 @@ describe('composeChildMessage — date grounding', () => {
       { availableToolNames: [], canSpawnChildren: false, executorModel: 'gemini-flash-lite' },
     );
     expect(planned).not.toContain('EXECUTOR AVAILABLE');
+  });
+});
+
+// ── composeChildMessage: goal ancestry ────────────────────────────────
+
+describe('composeChildMessage — goal ancestry', () => {
+  const base: TaskBrief = {
+    originalUserRequest: 'Plan the launch.',
+    topicPath: 'research/launch/pricing',
+    parentSummary: 'Parent is comparing competitors.',
+    taskBrief: 'Price out competitor A.',
+    constraints: [],
+    inputArtifacts: [],
+    expectedOutput: { shape: 'summary', maxTokens: 800 },
+    forbidden: [],
+  };
+  const opts = { availableToolNames: [], canSpawnChildren: false };
+
+  test('renders the ancestor briefs, top down, when present', () => {
+    const msg = composeChildMessage({ ...base, ancestry: ['Research the market.', 'Compare competitors.'] }, opts);
+    expect(msg).toContain('Why this task exists');
+    expect(msg).toContain('- Research the market.\n- Compare competitors.');
+  });
+
+  test('omits the section when empty or when every entry repeats the request/parent summary', () => {
+    expect(composeChildMessage(base, opts)).not.toContain('Why this task exists');
+    expect(composeChildMessage({ ...base, ancestry: [] }, opts)).not.toContain('Why this task exists');
+    const dup = composeChildMessage(
+      { ...base, ancestry: ['Plan the launch.', ' Parent is comparing  competitors. '] },
+      opts,
+    );
+    expect(dup).not.toContain('Why this task exists');
+  });
+
+  test('truncates each entry', () => {
+    const msg = composeChildMessage({ ...base, ancestry: ['x'.repeat(1000)] }, opts);
+    expect(msg).toContain(`- ${'x'.repeat(ANCESTRY_ENTRY_MAX - 1)}…`);
+    expect(msg).not.toContain('x'.repeat(ANCESTRY_ENTRY_MAX));
   });
 });
 

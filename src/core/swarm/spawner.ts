@@ -115,6 +115,27 @@ export const taskFingerprint = _taskFingerprint;
  */
 export const TASK_BRIEF_PREVIEW_MAX = 4000;
 
+/**
+ * Per-entry cap on `TaskBrief.ancestry`. The chain is at most a couple of
+ * levels deep (depth ≤ 2), so this keeps the "why" block a few lines long.
+ */
+export const ANCESTRY_ENTRY_MAX = 300;
+
+function clipAncestryEntry(entry: string): string {
+  const flat = entry.trim().replace(/\s+/g, ' ');
+  return flat.length > ANCESTRY_ENTRY_MAX ? `${flat.slice(0, ANCESTRY_ENTRY_MAX - 1)}…` : flat;
+}
+
+/**
+ * The ancestor task briefs a spawning agent carries in its context metadata
+ * (`taskAncestry`, root-most first). The root has none: its "brief" is the
+ * user request, which the child already sees verbatim.
+ */
+function readTaskAncestry(metadata: Record<string, unknown> | undefined): string[] {
+  const raw = metadata?.taskAncestry;
+  return Array.isArray(raw) ? raw.filter((e): e is string => typeof e === 'string') : [];
+}
+
 /** Options accepted by spawnChild internally — extends the tool params. */
 export interface SpawnChildInternalOpts {
   /** Used by `escalate_to_other_lane` to pick a different expert. */
@@ -367,16 +388,18 @@ export class SwarmSpawner {
     // ── Defense-in-depth: guard raw inputs BEFORE composition ───────
     // The composed child message is already guarded downstream, but
     // guarding the inputs here means an injection attempt in
-    // `taskBrief` or the inherited `parentSummary` is rejected at the
+    // `taskBrief`, the inherited `parentSummary` or an ancestry entry is rejected at the
     // boundary — closer to the source, with a more specific error,
     // and before any expensive composition work.
     const rawTaskBrief = params.taskBrief;
     const rawParentSummary =
       ((parentContext.metadata as Record<string, unknown>)?.parentSummary as string) || '';
+    const rawAncestry = readTaskAncestry(parentContext.metadata as Record<string, unknown> | undefined);
 
     for (const [field, value] of [
       ['taskBrief', rawTaskBrief] as const,
       ['parentSummary', rawParentSummary] as const,
+      ...rawAncestry.map((entry, i) => [`ancestry[${i}]`, entry] as const),
     ]) {
       if (!value) continue;
       const guard = guardInput(value);
@@ -396,6 +419,7 @@ export class SwarmSpawner {
         rawTaskBrief,
       topicPath,
       parentSummary: rawParentSummary,
+      ancestry: rawAncestry,
       taskBrief: rawTaskBrief,
       constraints: params.constraints || [],
       inputArtifacts: [],
@@ -1387,6 +1411,9 @@ export class SwarmSpawner {
           originalRequest:
             ((opts.parentContext.metadata as Record<string, unknown>)?.originalRequest as string) ??
             opts.brief.originalUserRequest,
+          // The child's own ancestry, so its children can say why they exist:
+          // what its parent was asked to do, then what the child itself was.
+          taskAncestry: [...(opts.brief.ancestry ?? []), opts.brief.taskBrief].map(clipAncestryEntry),
           ...pipelineMetadata(opts.parentContext.metadata as Record<string, unknown> | undefined),
           ...(opts.resumeKey ? { resumeKey: opts.resumeKey } : {}),
         },
@@ -2392,6 +2419,17 @@ export function composeChildMessage(
   }
 
   parts.push(`Topic path: ${brief.topicPath}`);
+
+  // Paperclip-style goal ancestry: the briefs of the tasks above this one, so
+  // a grandchild knows what its parent's task was for, not just its own slice.
+  // Entries repeating the request or the parent summary add nothing: dropped.
+  const seen = new Set([brief.originalUserRequest, brief.parentSummary].map(clipAncestryEntry));
+  const ancestry = (brief.ancestry ?? [])
+    .map(clipAncestryEntry)
+    .filter((e) => e && !seen.has(e) && seen.add(e));
+  if (ancestry.length > 0) {
+    parts.push(`Why this task exists (the tasks above yours, top down):\n- ${ancestry.join('\n- ')}`);
+  }
 
   if (brief.parentSummary) {
     parts.push(`Context from parent:\n${brief.parentSummary}`);

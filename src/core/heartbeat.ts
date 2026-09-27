@@ -249,7 +249,7 @@ async function buildHeartbeatMessage(userId: string, checklist: string): Promise
 
 // ── The gate ────────────────────────────────────────────────────────────────
 
-export type HeartbeatSkipReason = 'disabled' | 'quiet_hours' | 'daily_cap' | 'quota' | 'nothing_pending';
+export type HeartbeatSkipReason = 'disabled' | 'quiet_hours' | 'daily_cap' | 'quota' | 'spend_budget' | 'nothing_pending';
 export type HeartbeatDecision =
   | { run: true; message: string }
   | { run: false; reason: HeartbeatSkipReason };
@@ -296,6 +296,19 @@ export async function evaluateHeartbeatGate(
     if (!q.allowed) return skip('quota');
   } catch (err) {
     coreLogger.debug({ err }, 'heartbeat: quota check unavailable (not blocking)');
+  }
+
+  // A paused dollar spend budget skips the tick (the check stamps the pause
+  // and notifies once); any other failure of the check is not blocking.
+  // Only the user scope is checked: the tick runs an orchestrated turn whose
+  // role and workspace are resolved downstream, not here. Role and workspace
+  // budgets are enforced when that turn spawns its agents (agent-manager).
+  try {
+    const { checkSpend } = await import('@/security/spend-budgets');
+    await checkSpend({ userId: hook.userId }, now);
+  } catch (err) {
+    if (err instanceof Error && err.name === 'SpendBudgetExceededError') return skip('spend_budget');
+    coreLogger.debug({ err }, 'heartbeat: spend budget check unavailable (not blocking)');
   }
 
   const raw = await probePendingWork(hook.userId, now, config, deps);
@@ -467,7 +480,8 @@ export async function maybeRunHeartbeats(
       // checklist + standing instructions as the message. `executeSpawnAgent`
       // routes it on the 'heartbeat' channel (via hook.trigger).
       hookManager
-        .trigger(
+        .triggerHook(
+          hook.id,
           { type: 'heartbeat', data: { hookId: hook.id }, timestamp: now },
           {
             // Carry the rendered heartbeat message so executeSpawnAgent uses it

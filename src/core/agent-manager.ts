@@ -142,6 +142,16 @@ export class AgentManager {
         const { QuotaExceededError } = await import('@/security/quota-error');
         throw new QuotaExceededError({ ...check.reason, userId: options.userId });
       }
+      // Dollar spend budgets: a paused budget refuses the spawn with
+      // SpendBudgetExceededError before any worker exists. Any other failure
+      // of the check (DB hiccup, table not migrated yet) does not block.
+      try {
+        const { checkSpend } = await import('@/security/spend-budgets');
+        await checkSpend({ userId: options.userId, role: options.role || 'general', workspaceId: options.workspaceId });
+      } catch (err) {
+        if (err instanceof Error && err.name === 'SpendBudgetExceededError') throw err;
+        agentLogger.warn({ err, userId: options.userId }, 'spend budget check unavailable (not blocking)');
+      }
     }
 
     const config = getConfig();
@@ -314,6 +324,8 @@ export class AgentManager {
         id: agentId,
         sessionId: options.sessionId,
         userId: options.userId,
+        // Workspace spend budgets attribute cost_log rows through this column.
+        workspaceId: options.workspaceId ?? null,
         role: options.role || 'general',
         model: routedModel,
         topic: routedTopic,

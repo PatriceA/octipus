@@ -677,6 +677,17 @@ export class CLIAgentWorker extends BaseAgentWorker {
     if (quota.exhausted) {
       throw new Error(`Quota exhausted for ${toolConfig.name}. Resets at ${quota.resetsAt?.toISOString() || 'unknown'}`);
     }
+    // Dollar spend budgets, before the CLI process starts. Subscription CLIs
+    // log zero or estimated cost, so they rarely move the needle themselves,
+    // but a budget paused by API spend must stop them too. A failing check
+    // (DB hiccup) does not block the run, as in agent-worker.
+    try {
+      const { checkSpend } = await import('@/security/spend-budgets');
+      await checkSpend({ userId: this.context.userId, role: this.context.role, workspaceId: this.context.workspaceId });
+    } catch (err) {
+      if (err instanceof Error && err.name === 'SpendBudgetExceededError') throw err;
+      agentLogger.debug({ err }, 'spend budget check unavailable (not blocking)');
+    }
 
     const systemPrompt = this.buildSystemPrompt();
     const settings = await this.getCLISettings();

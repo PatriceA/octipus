@@ -42,9 +42,10 @@ function verifyWebhookSignature(
  * Hooks match on `triggerConfig.webhookPath` against the `:path` param.
  *
  * Signature verification (HMAC-SHA256 via X-Hub-Signature-256):
- *  - If a matching hook has a webhookSecret configured and the signature is
- *    missing or invalid, the request is rejected with 401.
- *  - If no hook has a webhookSecret, the request is rejected with 401.
+ *  - Each path-matched hook is verified against its own webhookSecret; only
+ *    hooks whose signature verifies are fired. Hooks without a secret never fire.
+ *  - If no matching hook verifies, the request is rejected with 401.
+ *  - If no hook matches the path, the request is rejected with 404.
  */
 export const webhookRoutes = new Elysia({ prefix: '/webhooks' })
   .post(
@@ -61,32 +62,42 @@ export const webhookRoutes = new Elysia({ prefix: '/webhooks' })
       const rawBody = JSON.stringify(body);
       const signatureHeader = request.headers.get('x-hub-signature-256');
 
-      for (const hook of matchingHooks) {
-        const secret = hook.triggerConfig?.webhookSecret;
+      // No hook claims this path: nothing was authenticated, so fire nothing.
+      // (Falling through to trigger() used to run every user's webhook hook
+      // that has no webhookPath, unauthenticated.)
+      if (matchingHooks.length === 0) {
+        return new Response(JSON.stringify({ error: 'Webhook not found' }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
 
-        if (secret) {
-          // Secret is configured — signature MUST be present and valid
-          if (!verifyWebhookSignature(rawBody, secret, signatureHeader)) {
-            apiLogger.warn(
-              { webhookPath, hookId: hook.id },
-              'Webhook signature verification failed',
-            );
-            return new Response(JSON.stringify({ error: 'Invalid or missing webhook signature' }), {
-              status: 401,
-              headers: { 'Content-Type': 'application/json' },
-            });
-          }
-        } else {
-          // No secret configured — reject for security
-          apiLogger.warn(
-            { webhookPath, hookId: hook.id },
-            'Webhook rejected: no webhookSecret configured on hook',
-          );
-          return new Response(JSON.stringify({ error: 'Webhook secret not configured. Set a webhookSecret on this hook.' }), {
-            status: 401,
-            headers: { 'Content-Type': 'application/json' },
-          });
+      // Several users may register the same path. Each hook is verified on
+      // its own secret, and only the hooks whose signature verifies fire, so
+      // one user's hook can neither block nor ride along with another user's
+      // correctly signed delivery. Hooks without a secret never fire here.
+      const verifiedHooks = matchingHooks.filter((hook) => {
+        const secret = hook.triggerConfig?.webhookSecret;
+        if (!secret) {
+          apiLogger.warn({ webhookPath, hookId: hook.id }, 'Webhook hook skipped: no webhookSecret configured');
+          return false;
         }
+        if (!verifyWebhookSignature(rawBody, secret, signatureHeader)) {
+          apiLogger.warn({ webhookPath, hookId: hook.id }, 'Webhook signature verification failed');
+          return false;
+        }
+        return true;
+      });
+
+      if (verifiedHooks.length === 0) {
+        const anySecret = matchingHooks.some((hook) => hook.triggerConfig?.webhookSecret);
+        const error = anySecret
+          ? 'Invalid or missing webhook signature'
+          : 'Webhook secret not configured. Set a webhookSecret on this hook.';
+        return new Response(JSON.stringify({ error }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        });
       }
 
       // Build trigger context from the incoming request
@@ -110,7 +121,11 @@ export const webhookRoutes = new Elysia({ prefix: '/webhooks' })
         },
       };
 
-      const results = await hookManager.trigger(event, context);
+      // Fire only the hooks whose signature was verified above.
+      const results = [];
+      for (const hook of verifiedHooks) {
+        results.push(...(await hookManager.triggerHook(hook.id, event, context)));
+      }
 
       const executed = results.filter(r => r.result?.success).length;
       const failed = results.filter(r => r.triggered && !r.result?.success).length;
