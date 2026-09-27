@@ -16,8 +16,8 @@
 
 import type { ToolHandler } from '@/core/agent-base';
 import { rankToolsByQuery } from '@/tools/tool-search';
+import { TOOL_DISCOVERY_TOOL_ID } from '@/core/agent/tool-split';
 
-const TOOL_DISCOVERY_TOOL_ID = 'tool_discovery';
 /** Default number of tools returned by a `list_tools` semantic query. */
 const SEARCH_LIMIT = 15;
 

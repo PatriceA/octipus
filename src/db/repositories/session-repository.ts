@@ -1,8 +1,64 @@
 import { randomUUID } from 'node:crypto';
-import { and, desc, eq, lt, sql, } from 'drizzle-orm';
+import { and, desc, eq, lt, sql, type SQL } from 'drizzle-orm';
 import { dbLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
 import { type NewSession, type Session, sessions } from '../schema/sessions';
+
+/** A jsonb path as a bound text[] — keys are parameters, never spliced into an array literal. */
+function jsonPath(path: string[]) {
+  return sql`ARRAY[${sql.join(path.map(key => sql`${key}::text`), sql`, `)}]::text[]`;
+}
+
+/**
+ * `context` with ONE nested key set (or, with `undefined`, deleted). jsonb_set
+ * can't create missing intermediate objects, so build the nested merge
+ * explicitly: at each level, `existing || {new key}` — which keeps every
+ * sibling and replaces only the addressed branch.
+ */
+function contextKeyExpr(path: [string, ...string[]], value: unknown) {
+  const ctx = sql`coalesce(${sessions.context}, '{}'::jsonb)`;
+  if (value === undefined) return sql`${ctx} #- ${jsonPath(path)}`;
+  // Innermost first, wrapping outwards.
+  let inner = sql`jsonb_build_object(${path[path.length - 1]}::text, ${JSON.stringify(value)}::jsonb)`;
+  for (let i = path.length - 2; i >= 0; i--) {
+    // A missing, null or non-object intermediate becomes `{}`: `null || {…}`
+    // or `"x" || {…}` would build an array, not the nested object.
+    const at = sql`${ctx} #> ${jsonPath(path.slice(0, i + 1))}`;
+    inner = sql`jsonb_build_object(${path[i]}::text, (CASE WHEN jsonb_typeof(${at}) = 'object' THEN ${at} ELSE '{}'::jsonb END) || ${inner})`;
+  }
+  return sql`${ctx} || ${inner}`;
+}
+
+/** The row is still in `generation` — the predicate every generation-checked write shares. */
+function inGeneration(generation: string) {
+  return sql`coalesce(${sessions.context}->>'conversationGeneration', ${sessions.context}->>'clearedAt', '') = ${generation}`;
+}
+
+/** `ctx.cliSessions` as an object (`{}` when missing, null or not an object). */
+function cliSessionsOf(ctx: SQL) {
+  return sql`CASE WHEN jsonb_typeof(${ctx} -> 'cliSessions') = 'object' THEN ${ctx} -> 'cliSessions' ELSE '{}'::jsonb END`;
+}
+const cliSessionsMap = cliSessionsOf(sql`${sessions.context}`);
+
+/** `key` starts with one of `prefixes` (bound as a text[]). */
+function startsWithAny(key: SQL, prefixes: string[]) {
+  return sql`EXISTS (SELECT 1 FROM unnest(${jsonPath(prefixes)}) AS p(prefix) WHERE starts_with(${key}, p.prefix))`;
+}
+
+/**
+ * `ctx` with at most `max` of the `cliSessions` entries whose key starts with
+ * one of `prefixes`, dropping the least recently used (`lastUsedAt`, missing
+ * last, then key); every other entry is kept as is.
+ */
+function boundCliSessions(ctx: SQL, prefixes: string[], max: number) {
+  const matches = startsWithAny(sql`e.key`, prefixes);
+  return sql`${ctx} || jsonb_build_object('cliSessions', (
+    SELECT coalesce(jsonb_object_agg(t.key, t.value), '{}'::jsonb) FROM (
+      SELECT e.key, e.value, ${matches} AS matched,
+        row_number() OVER (PARTITION BY ${matches} ORDER BY e.value->>'lastUsedAt' DESC NULLS LAST, e.key) AS rank
+      FROM jsonb_each(${cliSessionsOf(ctx)}) AS e
+    ) AS t WHERE NOT t.matched OR t.rank <= ${max}))`;
+}
 
 export class SessionRepository {
   private get db() { return getDb(); }
@@ -97,26 +153,31 @@ export class SessionRepository {
    * intermediate objects are created, and sibling keys at every level survive.
    */
   async setContextKey(id: string, path: [string, ...string[]], value: unknown): Promise<void> {
-    // jsonb_set can't create missing intermediate objects, so build the nested
-    // merge explicitly: at each level, `existing || {new key}` — which keeps
-    // every sibling and replaces only the addressed branch.
-    const ctx = sql`coalesce(${sessions.context}, '{}'::jsonb)`;
-    let expr;
-    if (value === undefined) {
-      expr = sql`${ctx} #- ${`{${path.join(',')}}`}::text[]`;
-    } else {
-      // Innermost first, wrapping outwards.
-      let inner = sql`jsonb_build_object(${path[path.length - 1]}::text, ${JSON.stringify(value)}::jsonb)`;
-      for (let i = path.length - 2; i >= 0; i--) {
-        const prefix = `{${path.slice(0, i + 1).join(',')}}`;
-        inner = sql`jsonb_build_object(${path[i]}::text, coalesce(${ctx} #> ${prefix}::text[], '{}'::jsonb) || ${inner})`;
-      }
-      expr = sql`${ctx} || ${inner}`;
-    }
     await this.db
       .update(sessions)
-      .set({ context: expr as never, updatedAt: new Date() })
+      .set({ context: contextKeyExpr(path, value) as never, updatedAt: new Date() })
       .where(eq(sessions.id, id));
+  }
+
+  /**
+   * `setContextKey`, published only while the session is still in
+   * `generation` (the same predicate as `patchContextIfGeneration`), so a
+   * write from before a /clear can never land after it. One key, one
+   * statement: concurrent writers to sibling keys never clobber each other.
+   * `boundCliSessions` trims the prefixed `cliSessions` entries to `max` in
+   * the same statement (see `boundCliSessions`).
+   */
+  async setContextKeyIfGeneration(
+    id: string, generation: string, path: [string, ...string[]], value: unknown,
+    opts?: { boundCliSessions?: { prefixes: string[]; max: number } },
+  ): Promise<boolean> {
+    const bound = opts?.boundCliSessions;
+    const context = bound ? boundCliSessions(contextKeyExpr(path, value), bound.prefixes, bound.max) : contextKeyExpr(path, value);
+    const result = await this.db.update(sessions)
+      .set({ context: context as never, updatedAt: new Date() })
+      .where(and(eq(sessions.id, id), inGeneration(generation)))
+      .returning({ id: sessions.id });
+    return result.length > 0;
   }
 
   async incrementMessageCount(id: string, tokenDelta: number = 0): Promise<void> {
@@ -131,11 +192,23 @@ export class SessionRepository {
   }
 
   /** Atomically publish a checkpoint/session update only in its original generation. */
-  async patchContextIfGeneration(id: string, generation: string, patch: Record<string, unknown>): Promise<boolean> {
+  async patchContextIfGeneration(
+    id: string, generation: string, patch: Record<string, unknown>,
+    opts?: { keepCliSessionPrefixes?: string[] },
+  ): Promise<boolean> {
+    let context = sql`coalesce(${sessions.context}, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb`;
+    // Same statement: `cliSessions` keeps only the keys starting with one of
+    // these prefixes (child task sessions); every other entry is dropped.
+    if (opts?.keepCliSessionPrefixes) {
+      context = sql`${context} || jsonb_build_object('cliSessions', coalesce((
+        SELECT jsonb_object_agg(e.key, e.value) FROM jsonb_each(${cliSessionsMap}) AS e
+        WHERE ${startsWithAny(sql`e.key`, opts.keepCliSessionPrefixes)}
+      ), '{}'::jsonb))`;
+    }
     const result = await this.db.update(sessions).set({
-      context: sql`coalesce(${sessions.context}, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb`,
+      context,
       updatedAt: new Date(),
-    }).where(and(eq(sessions.id, id), sql`coalesce(${sessions.context}->>'conversationGeneration', ${sessions.context}->>'clearedAt', '') = ${generation}`))
+    }).where(and(eq(sessions.id, id), inGeneration(generation)))
       .returning({ id: sessions.id });
     return result.length > 0;
   }

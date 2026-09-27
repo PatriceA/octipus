@@ -12,6 +12,8 @@ export function GlobalPermissionBanner({ inline = false }: { inline?: boolean } 
     denyPermission,
     approveApproval,
     denyApproval,
+    approvalNotice,
+    dismissApprovalNotice,
   } = usePermissions();
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -25,7 +27,7 @@ export function GlobalPermissionBanner({ inline = false }: { inline?: boolean } 
   const shownId = latestApproval?.requestId ?? latestPermission?.requestId;
 
   // Nothing to show
-  if (!latestPermission && !latestApproval) {
+  if (!latestPermission && !latestApproval && !approvalNotice) {
     return null;
   }
 
@@ -37,6 +39,15 @@ export function GlobalPermissionBanner({ inline = false }: { inline?: boolean } 
   return (
     <div className={inline ? 'pointer-events-none' : 'fixed bottom-0 left-0 right-0 z-50 pointer-events-none'}>
       <div className="pointer-events-auto animate-slide-up">
+        {approvalNotice && (
+          <div role="alert" className="mx-4 mb-2 flex items-start justify-between gap-3 rounded-xs border border-error/50 bg-error-container/30 px-4 py-2 text-sm text-on-surface font-mono">
+            <span>{approvalNotice}</span>
+            <button onClick={dismissApprovalNotice} className="text-on-surface-variant hover:text-on-surface cursor-pointer shrink-0" title="Dismiss">
+              <XCircle className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* Queue control — when more than one request is pending, let the user
             review the whole queue and batch-allow permission requests instead
             of accepting the active one blind to see what's behind it. */}

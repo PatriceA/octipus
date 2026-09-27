@@ -7,7 +7,7 @@
  * permission gate is skipped exactly as it is for root agent-spawned workers
  * in production — the realistic agent path.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -104,6 +104,44 @@ describe('scoped create / list / complete', () => {
     expect(cross).toEqual({ error: 'Task not found' });
   });
 
+  test('create and complete are audited with the agent as actor and the root session as run', async () => {
+    const runId = '33333333-3333-4333-8333-333333333333';
+    const agentCtx = { ...ctx(aliceId), id: 'agent-audit', sessionId: runId } as AgentContext;
+    const created = (await handlers.get('create_task')!.execute({ title: 'audited by agent' }, agentCtx)) as any;
+    await handlers.get('complete_task')!.execute({ id: created.task.id }, agentCtx);
+
+    const { auditRepository } = await import('@/db/repositories/audit-repository');
+    const rows = (await auditRepository.findByResource('task', created.task.id)).reverse();
+    expect(rows.map((r) => [r.action, (r.details as any).op])).toEqual([
+      ['task_mutated', 'create'],
+      ['task_mutated', 'complete'],
+    ]);
+    for (const row of rows) {
+      expect(row.sessionId).toBe(runId);
+      expect(row.details).toMatchObject({ taskId: created.task.id, actor: { kind: 'agent', id: 'agent-audit' }, runId });
+    }
+    expect((rows[1].details as any).change).toEqual(['status', 'completedAt']);
+  });
+
+  test('a failing audit write does not fail the mutation', async () => {
+    const { auditRepository } = await import('@/db/repositories/audit-repository');
+    const log = auditRepository.log.bind(auditRepository);
+    let failed = 0;
+    // Only the task audit fails; other audit writes (tool execution) go through.
+    const spy = vi.spyOn(auditRepository, 'log').mockImplementation(async (entry) => {
+      if (entry.action !== 'task_mutated') return log(entry);
+      failed++;
+      throw new Error('audit down');
+    });
+    try {
+      const created = await call('create_task', { title: 'survives audit outage' }, aliceId);
+      expect(created.created).toBe(true);
+      expect(failed).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   test('list dueToday filters by due date', async () => {
     const past = new Date(Date.now() - 86_400_000).toISOString();
     await call('create_task', { title: 'overdue thing', dueAt: past }, aliceId);
@@ -145,6 +183,60 @@ describe('scoped create / list / complete', () => {
     expect(set.task.dueAt).not.toBeNull();
     const cleared = await call('update_task', { id: t.task.id, dueAt: '' }, aliceId);
     expect(cleared.task.dueAt).toBeNull();
+  });
+});
+
+describe('task audit trail', () => {
+  const taskAudits = async (taskId: string) => {
+    const { auditRepository } = await import('@/db/repositories/audit-repository');
+    return (await auditRepository.findByResource('task', taskId)).reverse();
+  };
+
+  test('completing an already-done task, or an update that changes nothing, writes no row', async () => {
+    const created = await call('create_task', { title: 'done twice', priority: 1 }, aliceId);
+    await call('complete_task', { id: created.task.id }, aliceId);
+    await call('complete_task', { id: created.task.id }, aliceId);
+    await call('update_task', { id: created.task.id, title: 'done twice', priority: 1 }, aliceId);
+    expect((await taskAudits(created.task.id)).map((r) => (r.details as any).op)).toEqual(['create', 'complete']);
+  });
+
+  test('add_tasks audits each created task from its input fields', async () => {
+    const r = await call('add_tasks', { items: [{ title: 'phase', estimate: 'L', children: ['step'] }] }, aliceId);
+    const [phase, step] = r.tasks;
+    const [row] = await taskAudits(phase.id);
+    expect((row.details as any).change).toEqual(expect.arrayContaining(['title', 'estimate', 'source']));
+    expect((row.details as any).change).not.toContain('status');
+    expect((await taskAudits(step.id))[0].details).toMatchObject({ op: 'create', change: expect.arrayContaining(['parentId']) });
+  });
+
+  test('add_tasks that fails partway still audits the rows it wrote', async () => {
+    const { ScopedTaskRepo } = await import('@/db/repositories/scoped');
+    const create = ScopedTaskRepo.prototype.create;
+    let calls = 0;
+    const spy = vi.spyOn(ScopedTaskRepo.prototype, 'create').mockImplementation(function (this: InstanceType<typeof ScopedTaskRepo>, data) {
+      if (++calls === 2) throw new Error('disk full');
+      return create.call(this, data);
+    });
+    try {
+      const r = await call('add_tasks', { items: ['partial one', 'partial two'] }, aliceId);
+      expect(r.error).toBe('disk full');
+    } finally {
+      spy.mockRestore();
+    }
+    const list = await call('list_tasks', {}, aliceId);
+    const written = list.tasks.find((t: any) => t.title === 'partial one');
+    expect((await taskAudits(written.id)).map((row) => (row.details as any).op)).toEqual(['create']);
+  });
+
+  test('source ingestion is audited once, with a system actor; a retry writes no second row', async () => {
+    const { createTasksFromSource, backgroundUserPrincipal } = await import('@/core/tasks/sourced');
+    const principal = backgroundUserPrincipal(aliceId);
+    const input = { title: 'reply to Sam', sourceRef: { messageId: 'msg-audit-1' } };
+    const [task] = await createTasksFromSource(principal, 'email', [input]);
+    await createTasksFromSource(principal, 'email', [input]);
+    const rows = await taskAudits(task.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].details).toMatchObject({ op: 'create', actor: { kind: 'system', id: 'email' }, runId: null });
   });
 });
 
@@ -230,3 +322,85 @@ describe('structure: add_tasks, nesting, waiting', () => {
     expect(next.tasks[0]).toMatchObject({ title: 'started thing', bucket: 'doing', reason: 'in progress' });
   });
 });
+
+describe('work board: checkout_task, add_task_comment, assignee', () => {
+  // The board actor is `<role>@<root session>` (or the pipeline stage), not the
+  // per-spawn agent id: `over` builds a context for another agent run.
+  const callAs = (name: string, args: Record<string, unknown>, userId: string, over: Partial<AgentContext>) =>
+    handlers.get(name)!.execute(args, { ...ctx(userId), ...over }) as Promise<any>;
+
+  test('checkout claims for the logical agent; another agent is refused with the holder', async () => {
+    const t = await call('create_task', { title: 'claim me' }, aliceId);
+    const first = await callAs('checkout_task', { id: t.task.id }, aliceId, { id: 'run-1', role: 'coder' });
+    expect(first.checkedOut).toBe(true);
+    expect(first.task).toMatchObject({ status: 'in_progress', checkedOutBy: 'coder@sess-1' });
+    // The same role in the same session, in a later turn (a new agent id), still holds it.
+    const again = await callAs('checkout_task', { id: t.task.id }, aliceId, { id: 'run-2', role: 'coder' });
+    expect(again.checkedOut).toBe(true);
+    const other = await callAs('checkout_task', { id: t.task.id }, aliceId, { id: 'run-3', role: 'coder', sessionId: 'sess-2' });
+    expect(other).toEqual({ error: 'Task is checked out by coder@sess-1', holder: 'coder@sess-1' });
+
+    const released = await callAs('checkout_task', { id: t.task.id, release: true }, aliceId, { id: 'run-4', role: 'coder' });
+    expect(released.task).toMatchObject({ status: 'open', checkedOutBy: null });
+    const reclaimed = await callAs('checkout_task', { id: t.task.id }, aliceId, { role: 'coder', sessionId: 'sess-2' });
+    expect(reclaimed.checkedOut).toBe(true);
+    const done = await callAs('complete_task', { id: t.task.id }, aliceId, { role: 'coder', sessionId: 'sess-2' });
+    expect(done.task).toMatchObject({ status: 'done', checkedOutBy: null });
+  });
+
+  test('a pipeline stage is identified by pipeline and node key', async () => {
+    const t = await call('create_task', { title: 'stage work' }, aliceId);
+    const r = await callAs('checkout_task', { id: t.task.id }, aliceId, { metadata: { pipelineId: 'p1', nodeKey: 'build' } });
+    expect(r.task.checkedOutBy).toBe('pipeline:p1/build');
+  });
+
+  test('update_task and complete_task refuse while another agent holds a live checkout', async () => {
+    const t = await call('create_task', { title: 'held' }, aliceId);
+    await callAs('checkout_task', { id: t.task.id }, aliceId, { role: 'coder' });
+    const refused = { error: 'Task is checked out by coder@sess-1', holder: 'coder@sess-1' };
+    expect(await call('update_task', { id: t.task.id, title: 'mine now' }, aliceId)).toEqual(refused);
+    expect(await call('complete_task', { id: t.task.id }, aliceId)).toEqual(refused);
+    const byHolder = await callAs('update_task', { id: t.task.id, notes: 'progress' }, aliceId, { role: 'coder' });
+    expect(byHolder.updated).toBe(true);
+
+    // A lapsed lease no longer blocks anyone.
+    const { executeRaw } = await import('@/db/postgres');
+    await executeRaw(`UPDATE tasks SET checked_out_at = now() - interval '31 minutes' WHERE id = '${t.task.id}'`);
+    const completed = await call('complete_task', { id: t.task.id }, aliceId);
+    expect(completed.task).toMatchObject({ status: 'done', checkedOutBy: null });
+  });
+
+  test('a blocked task and another user\'s task cannot be checked out', async () => {
+    const blocker = await call('create_task', { title: 'blocker' }, aliceId);
+    const blocked = await call('create_task', { title: 'waits', blockedBy: [blocker.task.id] }, aliceId);
+    const r = await call('checkout_task', { id: blocked.task.id }, aliceId);
+    expect(r).toEqual({ error: 'Task is blocked: blocked by "blocker"', blocked: true });
+    expect(await call('checkout_task', { id: blocker.task.id }, bobId)).toEqual({ error: 'Task not found' });
+  });
+
+  test('add_task_comment records the agent as author; cross-tenant is not found', async () => {
+    const t = await call('create_task', { title: 'discuss' }, aliceId);
+    const c = await call('add_task_comment', { id: t.task.id, body: 'picked this up' }, aliceId);
+    expect(c.commented).toBe(true);
+    expect(await call('add_task_comment', { id: t.task.id, body: 'hi' }, bobId)).toEqual({ error: 'Task not found' });
+    expect(await call('add_task_comment', { id: t.task.id, body: '  ' }, aliceId)).toEqual({ error: 'Comment body is required' });
+    const { scopedRepos } = await import('@/db/repositories/scoped');
+    const { principalFromUser } = await import('@/security/principal');
+    const thread = await scopedRepos(principalFromUser({ id: aliceId, username: 'alice', isAdmin: false })).tasks.listComments(t.task.id);
+    expect(thread?.comments.map((r) => [r.authorKind, r.authorRef, r.body])).toEqual([['agent', 'general@sess-1', 'picked this up']]);
+  });
+
+  test('assignee: create sets it, list filters by it, update clears it', async () => {
+    const t = await call('create_task', { title: 'for the pm', assigneeKind: 'role', assigneeRef: 'pm' }, aliceId);
+    expect(t.task).toMatchObject({ assigneeKind: 'role', assigneeRef: 'pm' });
+    const listed = await call('list_tasks', { assigneeKind: 'role', assigneeRef: 'pm' }, aliceId);
+    expect(listed.tasks.map((x: any) => x.title)).toEqual(['for the pm']);
+    const bad = await call('create_task', { title: 'x', assigneeKind: 'team', assigneeRef: 'a' }, aliceId);
+    expect(bad.error).toContain('Invalid assigneeKind');
+    const refOnly = await call('update_task', { id: t.task.id, assigneeRef: 'coder' }, aliceId);
+    expect(refOnly).toEqual({ error: 'assigneeKind is required with assigneeRef' });
+    const cleared = await call('update_task', { id: t.task.id, assigneeKind: '' }, aliceId);
+    expect(cleared.task).toMatchObject({ assigneeKind: null, assigneeRef: null });
+  });
+});
+

@@ -1,6 +1,7 @@
 import type { ModelConfigEntry } from '@/db/schema/models';
 import { getModelRegistry } from '@/models/model-registry';
 import { CLI_TOOLS, type CLIToolConfig } from '@/models/providers/cli-provider';
+import { canResume } from '@/shared/cli-capabilities';
 
 /**
  * Check if a provider string indicates a CLI model
@@ -34,4 +35,10 @@ export function getCLIToolConfig(modelId: string): CLIToolConfig | null {
       tool.modelPatterns.some((p) => modelId === p || modelId.startsWith(p + '/'))
     ) || null
   );
+}
+
+/** A CLI model whose adapter can resume a vendor session — the only kind a resume key affects. */
+export function isResumableCliModel(modelId: string): boolean {
+  const tool = getCLIToolConfig(modelId);
+  return !!tool && canResume(tool.adapter ?? tool.name);
 }

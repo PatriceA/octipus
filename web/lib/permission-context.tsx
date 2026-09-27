@@ -36,6 +36,9 @@ interface PermissionContextValue {
   pushApproval: (approval: ApprovalRequest) => void;
   /** Push permission from an external WS (e.g. the chat page's /ws connection) */
   pushPermission: (permission: PermissionRequest) => void;
+  /** Why the last approval answer was refused (e.g. the request expired), until dismissed */
+  approvalNotice: string | null;
+  dismissApprovalNotice: () => void;
 }
 
 const PermissionContext = createContext<PermissionContextValue>({
@@ -47,6 +50,8 @@ const PermissionContext = createContext<PermissionContextValue>({
   denyApproval: () => {},
   pushApproval: () => {},
   pushPermission: () => {},
+  approvalNotice: null,
+  dismissApprovalNotice: () => {},
 });
 
 export function usePermissions() {
@@ -57,6 +62,8 @@ export function PermissionProvider({ children }: { children: ReactNode }) {
   const { isAuthenticated } = useAuth();
   const [permissions, setPermissions] = useState<PermissionRequest[]>([]);
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
+  const [approvalNotice, setApprovalNotice] = useState<string | null>(null);
+  const dismissApprovalNotice = useCallback(() => setApprovalNotice(null), []);
 
   // Requests arrive over two sockets. A late duplicate must not resurrect a
   // decision already resolved on either surface. Retain across reconnects.
@@ -87,7 +94,10 @@ export function PermissionProvider({ children }: { children: ReactNode }) {
 
   // Respond to an approval request via HTTP
   const respondApproval = useCallback((requestId: string, approved: boolean, response?: string) => {
-    api.post('/chat/approve', { requestId, approved, response }).catch(console.error);
+    // The route answers 200 with `error` when the request is gone — say why.
+    api.post<{ error?: string }>('/chat/approve', { requestId, approved, response })
+      .then((res) => { if (res?.error) setApprovalNotice(res.error); })
+      .catch(console.error);
     setApprovals(prev => prev.filter(a => a.requestId !== requestId));
   }, []);
 
@@ -242,6 +252,8 @@ export function PermissionProvider({ children }: { children: ReactNode }) {
       denyApproval,
       pushApproval,
       pushPermission,
+      approvalNotice,
+      dismissApprovalNotice,
     }}>
       {children}
     </PermissionContext.Provider>

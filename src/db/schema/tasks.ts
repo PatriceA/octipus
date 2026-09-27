@@ -42,6 +42,19 @@ export const tasks = pgTable('tasks', {
   parentId: uuid('parent_id'),
   blockedBy: uuid('blocked_by').array().default([]).notNull(),
   estimate: text('estimate'),
+  /**
+   * Work board (after Paperclip). `assigneeKind` is 'user' | 'role' | 'node'
+   * (see core/tasks/status.ts) and `assigneeRef` names it: a user id, a role
+   * id, a swarm node id. The checkout fields say who is working the task right
+   * now; they are written only by ScopedTaskRepo.checkout / release (a single
+   * conditional UPDATE, so a second claimer loses) and cleared when the task
+   * is done or archived.
+   */
+  assigneeKind: text('assignee_kind'),
+  assigneeRef: text('assignee_ref'),
+  checkedOutBy: text('checked_out_by'),
+  checkedOutAt: timestamp('checked_out_at', { withTimezone: true }),
+  checkoutRunId: text('checkout_run_id'),
   dueAt: timestamp('due_at', { withTimezone: true }),
   completedAt: timestamp('completed_at', { withTimezone: true }),
   /** Provenance: 'user' | 'agent' | 'reader' | 'research' | 'email'. */
@@ -53,6 +66,7 @@ export const tasks = pgTable('tasks', {
 }, (table) => ({
   userStatusDueIdx: index('tasks_user_status_due_idx').on(table.userId, table.status, table.dueAt),
   parentIdx: index('tasks_parent_idx').on(table.parentId),
+  userAssigneeIdx: index('tasks_user_assignee_idx').on(table.userId, table.assigneeKind, table.assigneeRef, table.status),
 }));
 
 export interface TaskSourceRef {
