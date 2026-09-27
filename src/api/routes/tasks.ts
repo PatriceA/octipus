@@ -184,7 +184,8 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         set.status = 404;
         return { error: 'Task not found' };
       }
-      if (body.status && !isTaskStatus(body.status)) {
+      // `in`, not truthiness: an empty-string status is invalid, not "unchanged".
+      if ('status' in body && !isTaskStatus(body.status)) {
         set.status = 400;
         return { error: `Invalid status "${body.status}"` };
       }
