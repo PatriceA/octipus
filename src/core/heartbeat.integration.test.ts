@@ -331,8 +331,8 @@ describe('role heartbeats', () => {
   async function stubTrigger(impl: () => Promise<unknown[]> = async () => []) {
     const { getHookManager } = await import('@/hooks/manager');
     const fired: Array<{ hookId: unknown; context: object }> = [];
-    const spy = vi.spyOn(getHookManager(), 'trigger').mockImplementation(async (event, context) => {
-      fired.push({ hookId: (event.data as { hookId?: string }).hookId, context });
+    const spy = vi.spyOn(getHookManager(), 'triggerHook').mockImplementation(async (hookId, _event, context) => {
+      fired.push({ hookId, context });
       return impl() as never;
     });
     return { fired, restore: () => spy.mockRestore() };
