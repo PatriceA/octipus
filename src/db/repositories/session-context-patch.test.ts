@@ -125,6 +125,40 @@ describe('sessionRepository.setContextKeyIfGeneration', () => {
   });
 });
 
+describe('non-object intermediates and the compaction filter', () => {
+  test('a null intermediate is replaced by an object, not concatenated into an array', async () => {
+    const { sessionRepository } = await import('@/db/repositories/session-repository');
+    const session = await freshSession('ctx-null');
+    await sessionRepository.update(session.id, { context: { cliSessions: null } as never });
+
+    expect(await sessionRepository.setContextKeyIfGeneration(session.id, '', ['cliSessions', 'Claude Code'], { id: 'a' })).toBe(true);
+
+    const ctx = (await sessionRepository.findById(session.id))!.context as Record<string, any>;
+    expect(ctx.cliSessions).toEqual({ 'Claude Code': { id: 'a' } });
+  });
+
+  test('patchContextIfGeneration keeps only the listed cliSessions prefixes, in the same statement', async () => {
+    const { sessionRepository } = await import('@/db/repositories/session-repository');
+    const session = await freshSession('ctx-keep');
+    await sessionRepository.update(session.id, { context: { cliSessions: {
+      'Claude Code': { id: 'root' }, 'Codex CLI': { id: 'root-codex' },
+      'Claude Code::general>coding:t1': { id: 'child' }, 'Codex CLI::general>review:r1': { id: 'child-codex' },
+    } } as never });
+
+    expect(await sessionRepository.patchContextIfGeneration(session.id, '', { compactedSummary: 's' },
+      { keepCliSessionPrefixes: ['Claude Code::', 'Codex CLI::'] })).toBe(true);
+
+    const ctx = (await sessionRepository.findById(session.id))!.context as Record<string, any>;
+    expect(ctx.compactedSummary).toBe('s');
+    expect(ctx.cliSessions).toEqual({ 'Claude Code::general>coding:t1': { id: 'child' }, 'Codex CLI::general>review:r1': { id: 'child-codex' } });
+
+    // No map at all → an empty one, never an error.
+    await sessionRepository.update(session.id, { context: {} });
+    expect(await sessionRepository.patchContextIfGeneration(session.id, '', {}, { keepCliSessionPrefixes: ['Claude Code::'] })).toBe(true);
+    expect(((await sessionRepository.findById(session.id))!.context as Record<string, any>).cliSessions).toEqual({});
+  });
+});
+
 describe('generation and checkpoint persistence', () => {
   test('clear rejects stale checkpoint publication and completed answers', async () => {
     const { sessionRepository } = await import('./session-repository');

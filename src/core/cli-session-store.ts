@@ -1,7 +1,7 @@
 import { sessionGeneration } from '@/db/schema/sessions';
 import { createHash } from 'node:crypto';
 import { sessionRepository } from '@/db/repositories/session-repository';
-import { canResume } from '@/shared/cli-capabilities';
+import { canResume, CLI_RESUME } from '@/shared/cli-capabilities';
 import type { SessionContext } from '@/db/schema/sessions';
 import { withSessionConversation } from './session-history';
 
@@ -67,7 +67,24 @@ export async function willResumeCliSession(sessionId: string, adapterKey: string
  */
 export async function saveCliSession(sessionId: string, adapterKey: string, rec: CliSessionRecord): Promise<void> {
   const generation = rec.generation ?? '';
-  await sessionRepository.setContextKeyIfGeneration(sessionId, generation, ['cliSessions', adapterKey], { ...rec, generation });
+  const saved = await sessionRepository.setContextKeyIfGeneration(sessionId, generation, ['cliSessions', adapterKey], { ...rec, generation });
+  if (saved && isChildCliSessionKey(adapterKey)) await evictOldChildCliSessions(sessionId);
+}
+
+/** Most child task sessions kept per octipus session; the least recently used go first. */
+export const MAX_CHILD_CLI_SESSIONS = 50;
+
+/**
+ * Cheap follow-up to a child save: over the bound, drop the oldest child keys
+ * by `lastUsedAt`, one per-key delete each (a concurrent save of another key
+ * is never rewritten). Root adapter keys are never evicted.
+ */
+async function evictOldChildCliSessions(sessionId: string): Promise<void> {
+  const session = await sessionRepository.findById(sessionId);
+  const children = Object.entries(session?.context?.cliSessions ?? {}).filter(([key]) => isChildCliSessionKey(key));
+  if (children.length <= MAX_CHILD_CLI_SESSIONS) return;
+  children.sort(([, a], [, b]) => (a.lastUsedAt ?? '').localeCompare(b.lastUsedAt ?? ''));
+  for (const [key] of children.slice(0, children.length - MAX_CHILD_CLI_SESSIONS)) await dropCliSession(sessionId, key);
 }
 
 export async function dropCliSession(sessionId: string, adapterKey: string): Promise<void> {
@@ -75,6 +92,9 @@ export async function dropCliSession(sessionId: string, adapterKey: string): Pro
 }
 
 const CHILD_KEY_SEPARATOR = '::';
+
+/** `<adapter>::` for every resumable adapter: the only prefixes a child key can have. */
+export const CHILD_CLI_SESSION_KEY_PREFIXES = Object.keys(CLI_RESUME).map(adapterKey => `${adapterKey}${CHILD_KEY_SEPARATOR}`);
 
 /**
  * Store key for a child agent's vendor session, continued per (parent scope,
@@ -86,9 +106,9 @@ export function childCliSessionKey(adapterKey: string, resumeKey: string): strin
   return `${adapterKey}${CHILD_KEY_SEPARATOR}${resumeKey}`;
 }
 
-/** A child task key, which compaction keeps; root adapter keys have no separator. */
+/** A child task key (`<resumable adapter>::…`), which compaction keeps and eviction bounds. */
 export function isChildCliSessionKey(key: string): boolean {
-  return key.includes(CHILD_KEY_SEPARATOR);
+  return CHILD_CLI_SESSION_KEY_PREFIXES.some(prefix => key.startsWith(prefix));
 }
 
 // Child store keys held by a live agent. Two concurrent children with the same
@@ -109,7 +129,12 @@ export function claimCliSession(sessionId: string, key: string, agentId: string)
   return true;
 }
 
-/** Drops every claim `agentId` holds: when its run settles and when it is stopped. */
+/** The live agent holding `key`, if any. */
+export function cliSessionHolder(sessionId: string, key: string): string | undefined {
+  return liveHolders.get(`${sessionId}\0${key}`);
+}
+
+/** Drops every claim `agentId` holds: when its run settles, or its stopped process exits. */
 export function releaseCliSessions(agentId: string): void {
   for (const slot of claimsByAgent.get(agentId) ?? []) if (liveHolders.get(slot) === agentId) liveHolders.delete(slot);
   claimsByAgent.delete(agentId);

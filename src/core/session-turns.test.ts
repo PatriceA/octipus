@@ -7,16 +7,13 @@ const fixture = vi.hoisted(() => ({ context: {} as SessionContext, rows: [] as M
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: {
   findById: async () => ({ id: 'session', userId: 'user', context: structuredClone(fixture.context) }),
   incrementMessageCount: async () => {},
-  patchContextIfGeneration: async (_id: string, generation: string, patch: object) => {
-    if ((fixture.context.clearedAt ?? '') !== generation) return false;
-    Object.assign(fixture.context, structuredClone(patch)); return true;
-  },
-  // One `cliSessions` entry, as the real per-key jsonb write does.
-  setContextKeyIfGeneration: async (_id: string, generation: string, path: string[], value: unknown) => {
-    if ((fixture.context.clearedAt ?? '') !== generation) return false;
-    const map = { ...fixture.context.cliSessions } as Record<string, unknown>;
-    if (value === undefined) delete map[path[1]]; else map[path[1]] = structuredClone(value);
-    fixture.context.cliSessions = map as SessionContext['cliSessions']; return true;
+  // Mirrors the real statement, including its in-SQL `cliSessions` filter.
+  patchContextIfGeneration: async (_id: string, generation: string, patch: object, opts?: { keepCliSessionPrefixes?: string[] }) => {
+    if ((fixture.context.conversationGeneration ?? fixture.context.clearedAt ?? '') !== generation) return false;
+    Object.assign(fixture.context, structuredClone(patch));
+    const prefixes = opts?.keepCliSessionPrefixes;
+    if (prefixes) fixture.context.cliSessions = Object.fromEntries(Object.entries(fixture.context.cliSessions ?? {}).filter(([key]) => prefixes.some(p => key.startsWith(p))));
+    return true;
   },
 } }));
 vi.mock('@/db/repositories/message-repository', () => ({ messageRepository: {

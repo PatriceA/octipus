@@ -21,7 +21,10 @@ function contextKeyExpr(path: [string, ...string[]], value: unknown) {
   // Innermost first, wrapping outwards.
   let inner = sql`jsonb_build_object(${path[path.length - 1]}::text, ${JSON.stringify(value)}::jsonb)`;
   for (let i = path.length - 2; i >= 0; i--) {
-    inner = sql`jsonb_build_object(${path[i]}::text, coalesce(${ctx} #> ${jsonPath(path.slice(0, i + 1))}, '{}'::jsonb) || ${inner})`;
+    // A missing, null or non-object intermediate becomes `{}`: `null || {…}`
+    // or `"x" || {…}` would build an array, not the nested object.
+    const at = sql`${ctx} #> ${jsonPath(path.slice(0, i + 1))}`;
+    inner = sql`jsonb_build_object(${path[i]}::text, (CASE WHEN jsonb_typeof(${at}) = 'object' THEN ${at} ELSE '{}'::jsonb END) || ${inner})`;
   }
   return sql`${ctx} || ${inner}`;
 }
@@ -151,9 +154,24 @@ export class SessionRepository {
   }
 
   /** Atomically publish a checkpoint/session update only in its original generation. */
-  async patchContextIfGeneration(id: string, generation: string, patch: Record<string, unknown>): Promise<boolean> {
+  async patchContextIfGeneration(
+    id: string, generation: string, patch: Record<string, unknown>,
+    opts?: { keepCliSessionPrefixes?: string[] },
+  ): Promise<boolean> {
+    let context = sql`coalesce(${sessions.context}, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb`;
+    // Same statement: `cliSessions` keeps only the keys starting with one of
+    // these prefixes (child task sessions); every other entry is dropped.
+    if (opts?.keepCliSessionPrefixes) {
+      const map = sql`${sessions.context} -> 'cliSessions'`;
+      const prefixes = sql`ARRAY[${sql.join(opts.keepCliSessionPrefixes.map(prefix => sql`${prefix}::text`), sql`, `)}]::text[]`;
+      context = sql`${context} || jsonb_build_object('cliSessions', coalesce((
+        SELECT jsonb_object_agg(e.key, e.value)
+        FROM jsonb_each(CASE WHEN jsonb_typeof(${map}) = 'object' THEN ${map} ELSE '{}'::jsonb END) AS e
+        WHERE EXISTS (SELECT 1 FROM unnest(${prefixes}) AS p(prefix) WHERE starts_with(e.key, p.prefix))
+      ), '{}'::jsonb))`;
+    }
     const result = await this.db.update(sessions).set({
-      context: sql`coalesce(${sessions.context}, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb`,
+      context,
       updatedAt: new Date(),
     }).where(and(eq(sessions.id, id), sql`coalesce(${sessions.context}->>'conversationGeneration', ${sessions.context}->>'clearedAt', '') = ${generation}`))
       .returning({ id: sessions.id });

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { getConfig } from '@/config';
 import type { AnyAgentWorker } from '@/core/agent-manager';
 import { getAgentManager } from '@/core/agent-manager';
@@ -134,6 +135,48 @@ export interface SpawnChildInternalOpts {
 }
 
 /**
+ * The key a CLI child continues its vendor session under:
+ * `<parent scope>><child role>:<task id>`, or undefined when no scope is safe.
+ *
+ * The parent scope keeps unrelated parents in one root session from resuming
+ * each other's task sessions:
+ *  - a keyed parent (a depth-1 child spawned with its own `resumeKey`) scopes
+ *    by that key, so grandchildren carry the full lineage;
+ *  - a ROOT parent scopes by its role. Never an agent or node id: the root is
+ *    a new worker every turn, and a root re-spawning the same task in a LATER
+ *    turn has to land on the same key;
+ *  - any other parent has no stable identity, and its role alone would let
+ *    unrelated same-role parents collide, so its children do not resume.
+ */
+export function childResumeKey(parentContext: AgentContext, parent: AgentNode, childRole: AgentRole, taskId: string): string | undefined {
+  const parentKey = (parentContext.metadata as Record<string, unknown> | undefined)?.resumeKey;
+  if (typeof parentKey === 'string' && parentKey) return `${parentKey}>${childRole}:${taskId}`;
+  if (parent.kind === 'root') return `${parent.role}>${childRole}:${taskId}`;
+  coreLogger.info({ parentNodeId: parent.id, childRole }, 'resumeKey ignored: an unkeyed non-root parent has no stable scope — child starts cold');
+  return undefined;
+}
+
+/**
+ * Context metadata that lets a CLI child resume its task session: the scoped
+ * key, a hash of the stable instructions (role prompt, critical rules,
+ * delegation guidance — a change forces a cold start), and the brief-selected
+ * skill blocks, which a resumed run re-delivers with its user message because
+ * the vendor keeps the FIRST run's system prompt.
+ */
+function childResumeMetadata(opts: {
+  parentContext: AgentContext; parent: AgentNode; childRole: AgentRole;
+  resumeKey?: string; resumeInstructions?: { stable: string; briefContext: string };
+}): Record<string, unknown> {
+  const resumeKey = opts.resumeKey ? childResumeKey(opts.parentContext, opts.parent, opts.childRole, opts.resumeKey) : undefined;
+  if (!resumeKey) return {};
+  return {
+    resumeKey,
+    resumeInstructionsHash: createHash('sha256').update(opts.resumeInstructions?.stable ?? '').digest('hex').slice(0, 16),
+    ...(opts.resumeInstructions?.briefContext ? { resumeBriefContext: opts.resumeInstructions.briefContext } : {}),
+  };
+}
+
+/**
  * `SwarmSpawner` — Phase 2 full implementation.
  *
  * Responsibilities:
@@ -155,23 +198,6 @@ export interface SpawnChildInternalOpts {
  *  - `parentAgentId` + `AbortSignal` chain → AgentManager.spawn.
  *  - Emit `swarm.node_spawned` / `swarm.node_completed`.
  */
-/**
- * The key a CLI child continues its vendor session under:
- * `<parent scope>><child role>:<task id>`.
- *
- * The parent scope keeps unrelated parents in one root session from resuming
- * each other's task sessions. It is the parent's OWN resume key when it has one
- * (a keyed depth-1 child spawning grandchildren — full lineage), else the
- * parent's role. Never an agent or node id: a root agent is a new worker every
- * turn, and the point is that a root re-spawning the same task in a LATER turn
- * lands on the same key.
- */
-export function childResumeKey(parentContext: AgentContext, parent: AgentNode, childRole: AgentRole, taskId: string): string {
-  const parentKey = (parentContext.metadata as Record<string, unknown> | undefined)?.resumeKey;
-  const scope = typeof parentKey === 'string' && parentKey ? parentKey : parent.role;
-  return `${scope}>${childRole}:${taskId}`;
-}
-
 export class SwarmSpawner {
   private _hub: GatewayHub | null;
   /**
@@ -573,7 +599,7 @@ export class SwarmSpawner {
     // placeholder id is mutated to the real one before any tool can fire.
 
     // ── Model resolution: the lane is authoritative ──
-    const { model: childModel, lane: childLane, systemPrompt, isSmall } = await releaseOnThrow(() =>
+    const { model: childModel, lane: childLane, systemPrompt, stablePrompt, skillContext, isSmall } = await releaseOnThrow(() =>
       this.resolveChildModel(
         parent.model,
         childRole,
@@ -723,6 +749,11 @@ export class SwarmSpawner {
     const childSystemPrompt = canSpawnChildren
       ? `${systemPrompt ?? ''}\n\n${buildDelegationGuidance()}`.trim()
       : systemPrompt;
+    // The same prompt minus the brief-selected skill blocks: what a resumed CLI
+    // child's vendor session must still match (see `childResumeMetadata`).
+    const childStablePrompt = canSpawnChildren
+      ? `${stablePrompt ?? ''}\n\n${buildDelegationGuidance()}`.trim()
+      : stablePrompt;
 
     // Context-window gate (RC7): warn if the child's first-turn input already
     // approaches the model's context window — it will truncate or fail before
@@ -812,6 +843,7 @@ export class SwarmSpawner {
       scorers: params.scorers,
       childIsSmall: isSmall,
       resumeKey: params.resumeKey,
+      resumeInstructions: params.resumeKey ? { stable: childStablePrompt ?? '', briefContext: skillContext } : undefined,
     })).finally(() => {
       parent.budget.fanOut.used = Math.max(0, parent.budget.fanOut.used - 1);
     });
@@ -903,6 +935,8 @@ export class SwarmSpawner {
     fsBaseline?: WorkspaceSnapshot | null;
     /** Explicit task id from `spawn_child`; scoped by `childResumeKey` before it reaches the child. */
     resumeKey?: string;
+    /** System prompt split for a resumable child: stable part vs brief-selected skill blocks. */
+    resumeInstructions?: { stable: string; briefContext: string };
   }): Promise<ChildResult> {
     // Retry policy (design §Failure Modes):
     //   provider_error → retry once on the SAME spawn attempt (same node).
@@ -1363,7 +1397,7 @@ export class SwarmSpawner {
             ((opts.parentContext.metadata as Record<string, unknown>)?.originalRequest as string) ??
             opts.brief.originalUserRequest,
           ...pipelineMetadata(opts.parentContext.metadata as Record<string, unknown> | undefined),
-          ...(opts.resumeKey ? { resumeKey: childResumeKey(opts.parentContext, opts.parent, opts.childRole, opts.resumeKey) } : {}),
+          ...childResumeMetadata(opts),
         },
       });
     } catch (err) {
@@ -1897,7 +1931,7 @@ export class SwarmSpawner {
      */
     requestedLane?: string,
     userId?: string,
-  ): Promise<{ model: string; lane: string; systemPrompt?: string; isSmall: boolean }> {
+  ): Promise<{ model: string; lane: string; systemPrompt?: string; stablePrompt?: string; skillContext: string; isSmall: boolean }> {
     const registry = getModelRegistry();
 
     // No expert lookup: the row it read carried a model, a lane, a prompt and a
@@ -2127,11 +2161,12 @@ export class SwarmSpawner {
     // — but the role is the copy that cannot be missing.
     systemPrompt += formatCriticalRules(getRoleConfig(childRole).criticalRules ?? []);
 
+    const stablePrompt = systemPrompt;
     if (skillFragments.length > 0) {
       systemPrompt = `${systemPrompt}\n\n${skillFragments.join('\n\n')}`.trim();
     }
 
-    return { model: candidate, lane, systemPrompt, isSmall };
+    return { model: candidate, lane, systemPrompt, stablePrompt, skillContext: skillFragments.join('\n\n'), isSmall };
   }
 
   private emitNodeSpawned(parent: AgentNode, payload: Record<string, unknown>): void {

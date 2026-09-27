@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CLIAgentWorker } from './cli-agent-worker';
-import { childCliSessionKey, claimCliSession, fingerprintRun, loadCliSession, releaseCliSessions } from './cli-session-store';
+import { childCliSessionKey, claimCliSession, cliSessionHolder, fingerprintRun, loadCliSession, releaseCliSessions } from './cli-session-store';
 import type { AgentContext } from './types';
 import type { SessionContext } from '@/db/schema/sessions';
 
@@ -87,13 +87,13 @@ vi.mock('@/db/repositories/session-repository', () => ({
     },
     patchContextIfGeneration: async (id: string, generation: string, patch: Record<string, unknown>) => {
       const row = fixture.sessions.get(id);
-      if (!row || (row.context.clearedAt ?? '') !== generation) return false;
+      if (!row || (row.context.conversationGeneration ?? row.context.clearedAt ?? '') !== generation) return false;
       Object.assign(row.context, patch); return true;
     },
     // Mirrors the real per-key write: one cliSessions entry, generation-checked.
     setContextKeyIfGeneration: async (id: string, generation: string, path: string[], value: unknown) => {
       const row = fixture.sessions.get(id);
-      if (!row || (row.context.clearedAt ?? '') !== generation) return false;
+      if (!row || (row.context.conversationGeneration ?? row.context.clearedAt ?? '') !== generation) return false;
       const map = { ...row.context.cliSessions } as Record<string, unknown>;
       if (value === undefined) delete map[path[1]]; else map[path[1]] = value;
       row.context.cliSessions = map as SessionContext['cliSessions']; return true;
@@ -197,6 +197,8 @@ beforeEach(() => {
       process.stderr.write(text.replace('STDERR-ONLY:', ''));
       process.exit(1);
     }
+    // hang-marker: stay alive until killed, like a vendor mid-turn.
+    if (existsSync(join(process.cwd(), 'hang-marker'))) await new Promise(r => setTimeout(r, 10000));
     // Captures the real stream-json 'user' message written to stdin — the
     // actual prompt sent to the vendor, not a value the worker hands the test
     // directly — so the resume/cold assertions verify the real spawn seam.
@@ -473,9 +475,9 @@ describe('child CLI session reuse, keyed per (role, task)', () => {
   const key = childCliSessionKey('Claude Code', 'coding:parser-fix');
   const stored = (sessionId: string) => fixture.sessions.get(sessionId)?.context.cliSessions?.[key];
   // A spawner-built child: not a root, and resumable only with metadata.resumeKey.
-  const makeChild = (sessionId: string, resumeKey?: string, model?: string) => {
+  const makeChild = (sessionId: string, resumeKey?: string, model?: string, metadata: Record<string, unknown> = {}) => {
     const child = makeClaudeWorker({ sessionId, model });
-    Object.assign(child.worker.getContext(), { root: false, role: 'coding', parentAgentId: 'parent', metadata: resumeKey ? { resumeKey } : {} });
+    Object.assign(child.worker.getContext(), { root: false, role: 'coding', parentAgentId: 'parent', metadata: resumeKey ? { resumeKey, ...metadata } : {} });
     return child;
   };
 
@@ -511,21 +513,51 @@ describe('child CLI session reuse, keyed per (role, task)', () => {
     }
   });
 
-  it('resumes although the follow-up brief and its discovered skills differ', async () => {
-    const first = makeChild('kid', 'coding:parser-fix');
-    first.worker.addSystemMessage('# Domain Knowledge (topic index)\n- parsing: grammar notes');
-    await first.run('fix the parser');
+  // What the spawner hands a keyed child: the stable-instruction hash, and the
+  // brief-selected skill blocks that are also appended to its system prompt.
+  const skilled = (skills: string, hash = 'role-prompt-v1') => {
+    const child = makeChild('kid', 'coding:parser-fix', undefined, { resumeInstructionsHash: hash, resumeBriefContext: skills });
+    child.worker.addSystemMessage(`You are a coding agent.\n\n${skills}`);
+    return child;
+  };
+
+  it('resumes although the follow-up brief and its discovered skills differ, and delivers the new skills', async () => {
+    await skilled('# Domain Knowledge (topic index)\n- parsing: grammar notes').run('fix the parser');
     const firstId = stored('kid')!.id;
-    const second = makeChild('kid', 'coding:parser-fix');
-    second.worker.addSystemMessage('# Domain Knowledge (topic index)\n- testing: vitest conventions');
+    const second = skilled('# Domain Knowledge (topic index)\n- testing: vitest conventions');
     expect(await second.run('now add a regression test for empty input')).toContain(firstId);
+    // The vendor keeps the first run's system prompt; the new skills ride in
+    // with the user message, and the stale ones are not re-sent.
+    expect(second.lastPrompt).toContain('vitest conventions');
+    expect(second.lastPrompt).toContain('now add a regression test for empty input');
+    expect(second.lastPrompt).not.toContain('grammar notes');
   });
 
-  it('frees the key as soon as the holder is stopped', async () => {
+  it('starts cold when the stable instructions changed', async () => {
+    await skilled('', 'role-prompt-v1').run('fix the parser');
+    const firstId = stored('kid')!.id;
+    expect(await skilled('', 'role-prompt-v2').run('fix the parser')).not.toContain(firstId);
+  });
+
+  it('frees the key at once when the stopped holder never started a process', async () => {
     const holder = makeChild('kid', 'coding:parser-fix');
     expect(claimCliSession('kid', key, holder.worker.getContext().id)).toBe(true);
     expect(claimCliSession('kid', key, 'retry')).toBe(false);
     holder.worker.stop();
+    expect(claimCliSession('kid', key, 'retry')).toBe(true);
+    releaseCliSessions('retry');
+  });
+
+  it('holds the key until a stopped child\'s vendor process has exited', async () => {
+    writeFileSync(join(fixture.dir, 'hang-marker'), '');
+    const child = makeChild('kid', 'coding:parser-fix');
+    const running = child.worker.run('fix the parser').catch(() => 'stopped');
+    await vi.waitFor(() => expect(fixture.spawnCount).toBe(1));
+    expect(cliSessionHolder('kid', key)).toBe(child.worker.getContext().id);
+    child.worker.stop();
+    // SIGTERM sent, process not yet gone: a retry must not resume it yet.
+    expect(claimCliSession('kid', key, 'retry')).toBe(false);
+    await running;
     expect(claimCliSession('kid', key, 'retry')).toBe(true);
     releaseCliSessions('retry');
   });

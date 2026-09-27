@@ -21,7 +21,7 @@ import { killProcessTree } from '@/utils/proc';
 import type { AgentWorkerConfig, ToolHandler } from './agent-base';
 import { BaseAgentWorker } from './agent-base';
 import { CLIArgumentBuilder, CLIOutputParser, discoverCodexMcpServers, resolveCliMcpEntry, sweepStaleFiles, type CliRunConnection } from './cli-adapters';
-import { childCliSessionKey, claimCliSession, dropCliSession, fingerprintRun, loadCliSession, releaseCliSessions, saveCliSession } from './cli-session-store';
+import { childCliSessionKey, claimCliSession, cliSessionHolder, dropCliSession, fingerprintRun, loadCliSession, releaseCliSessions, saveCliSession } from './cli-session-store';
 import { canResume, CLI_RESUME } from '@/shared/cli-capabilities';
 import { startCliToolBridge, type BridgeResult } from './cli-tool-bridge';
 import { ToolExecutor } from './tool-executor';
@@ -529,9 +529,10 @@ export class CLIAgentWorker extends BaseAgentWorker {
   stop(): void {
     if (this.terminalEmitted) return;
     this.aborted = true;
-    // Free a resume key now, not when the run promise settles: a timed-out or
-    // cancelled child's retry must be able to take its task session over.
-    releaseCliSessions(this.context.id);
+    // A resume key is freed once the vendor process has EXITED (its 'exit'
+    // handler), never while it may still be writing the session through the
+    // SIGTERM grace period. With no live process, nothing can still write it.
+    if (!this.process || this.processExited) releaseCliSessions(this.context.id);
     this.abortController.abort('CLI agent stopped');
     this.detached.cancelAll('CLI agent stopped');
     getPermissionManager().cancelWaits(this.context.id);
@@ -624,7 +625,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
     if (this.resuming) {
       const runContextBlock = this.messages.find(m => m.role === 'user' && m.content.startsWith('Octipus run context:'))?.content;
       const currentUserMessage = [...this.messages].reverse().find(m => m.role === 'user' && !m.content.startsWith('Octipus run context:'))?.content;
-      return [...this.resumeDelta, runContextBlock, currentUserMessage].filter(Boolean).join('\n\n');
+      const briefContext = isRootAgent(this.context) ? undefined : this.context.metadata?.resumeBriefContext;
+      return [...this.resumeDelta, runContextBlock, typeof briefContext === 'string' ? briefContext : undefined, currentUserMessage].filter(Boolean).join('\n\n');
     }
 
     const parts: string[] = [];
@@ -767,7 +769,14 @@ export class CLIAgentWorker extends BaseAgentWorker {
     const reuseSessions = !!storeKey;
     // A stopped child has released its key (see stop()), and a retry may
     // already hold it: its late save must not overwrite the new holder's.
-    const ownsStoreKey = () => reuseSessions && (root || !this.aborted);
+    const ownsStoreKey = () => {
+      if (!reuseSessions) return false;
+      if (root) return true;
+      // Released on exit when stopped, so a turn-limit/budget/timeout stop still
+      // records its id and cursor — unless a retry has taken the key since.
+      const holder = cliSessionHolder(this.context.sessionId, storeKey!);
+      return holder === undefined || holder === this.context.id;
+    };
     let resume: { id: string; isFirstRun: boolean } | undefined;
     let fingerprint: string | undefined;
     if (reuseSessions) {
@@ -782,9 +791,12 @@ export class CLIAgentWorker extends BaseAgentWorker {
         // A keyed child's system prompt and tool advertisement are partly
         // chosen from its brief (discovered skills, the lazy core set and its
         // discovery tools), and a follow-up brief always differs — so only the
-        // stable inputs count: model, cwd, role and the role's tool ids.
+        // stable inputs count: model, cwd, role, the role's tool ids and the
+        // spawner's hash of the stable instructions (role prompt, critical
+        // rules, delegation guidance), so a prompt change starts cold.
         const toolIds = [...new Set(tools.filter(tool => tool.toolId !== TOOL_DISCOVERY_TOOL_ID).map(tool => tool.toolId ?? tool.name))].sort();
-        fingerprint = fingerprintRun({ ...run, providerIdentity: JSON.stringify([this.context.model, toolConfig.name, settings.extraArgs, providerEnv, this.context.role, toolIds]) });
+        fingerprint = fingerprintRun({ ...run, providerIdentity: JSON.stringify([this.context.model, toolConfig.name, settings.extraArgs, providerEnv, this.context.role, toolIds]),
+          instructions: String(this.context.metadata?.resumeInstructionsHash ?? '') });
       }
       const existing = opts?.forceCold ? null : await loadCliSession(this.context.sessionId, storeKey!, fingerprint);
       this.resumeDelta = existing?.acknowledged
@@ -811,13 +823,17 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
     // Recovery opens a new persistent conversation and cannot retry recursively.
     this.resuming = !!resume && !resume.isFirstRun;
+    // A resumed child's vendor keeps its FIRST run's system prompt, which the
+    // stable-instruction hash vouches for; the brief-selected skill blocks go
+    // in with the user message (buildPrompt) rather than re-sending the lot.
+    const resumedChild = this.resuming && !root;
     const prompt = this.buildPrompt();
 
     this.launchCleanup?.();
     this.launchCleanup = undefined;
     // Async vendor discovery stays out of the synchronous arg builder (event-loop safe).
     const codexMcpServers = this.connection && adapterKey === 'Codex CLI' ? await discoverCodexMcpServers(workspaceCwd) : undefined;
-    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, this.systemMessages, systemPrompt, Math.max(0, this.config.maxTokenBudget - this.billableTokensUsed), this.context.id, this.connection ? { ...this.connection, workingDirectory: workspaceCwd, codexMcpServers, maxIterations: Math.max(1, this.config.maxIterations - this.iteration) } : undefined, resume);
+    const built = this.argBuilder.build(adapterKey, toolConfig.name === 'Mistral Vibe' && systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, settings, resumedChild ? [] : this.systemMessages, resumedChild ? '' : systemPrompt, Math.max(0, this.config.maxTokenBudget - this.billableTokensUsed), this.context.id, this.connection ? { ...this.connection, workingDirectory: workspaceCwd, codexMcpServers, maxIterations: Math.max(1, this.config.maxIterations - this.iteration) } : undefined, resume);
     const { binary, args, stdinPrompt, useShell } = built;
     this.launchCleanup = () => {
       const configIndex = args.indexOf('--mcp-config');
@@ -1019,7 +1035,12 @@ export class CLIAgentWorker extends BaseAgentWorker {
         windowsHide: true,
       });
       // 'exit' fires when the process terminates (before streams flush).
-      proc.once('exit', () => { this.processExited = true; });
+      proc.once('exit', () => {
+        this.processExited = true;
+        // Stopped (cancel, timeout, kill): the vendor session is safe to hand
+        // to a retry now, without waiting for the run promise to settle.
+        if (this.aborted) releaseCliSessions(this.context.id);
+      });
 
       // EPIPE guard (low): a child that exits before reading stdin makes the
       // write throw asynchronously — attach the handler BEFORE writing.
