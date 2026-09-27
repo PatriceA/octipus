@@ -216,6 +216,19 @@ async function executeSpawnAgent(
   context: TriggerContext,
   hook?: Hook,
 ): Promise<ActionResult> {
+  // A role heartbeat (triggerConfig.role) runs only when the heartbeat gate
+  // let it through on the cron path — quiet hours, the per-user daily cap,
+  // quota, board permission, one turn at a time. Anything else that reaches
+  // here (a manual trigger, a test fire) is refused before it mints a session.
+  let heartbeatRole: string | null = null;
+  if (hook?.trigger === 'heartbeat') {
+    const heartbeat = await import('@/core/heartbeat');
+    heartbeatRole = heartbeat.heartbeatRole(hook);
+    if (heartbeatRole && !heartbeat.heartbeatGatePassed(context)) {
+      return { success: false, error: 'A role heartbeat runs only from the heartbeat schedule, after its gate' };
+    }
+  }
+
   // Reuse the hook's session across runs (see resolveHookSessionId) so a
   // scheduled/webhook hook appends to one session instead of spawning a new
   // one every run. A freshly minted id is persisted back to the hook row.
@@ -278,6 +291,11 @@ async function executeSpawnAgent(
   prompt = withDigest(prompt);
   const message = context.message?.content ? withDigest(context.message.content) : prompt;
 
+  // A role heartbeat (triggerConfig.role) is that role's agent working the
+  // board, so it runs AS the role whatever `orchestrated` says: the root
+  // agent always runs as `general`. See spawnRoleHeartbeat.
+  if (heartbeatRole) return runRoleHeartbeat(heartbeatRole, config, sessionId, userId, prompt, message);
+
   // If orchestrated, route through the root agent instead of bare spawn
   if (config.orchestrated) {
     const { getAgentService } = await import('@/core/agent');
@@ -334,6 +352,69 @@ async function executeSpawnAgent(
   }
 
   return { success: true, data: { agentId: agent.getContext().id } };
+}
+
+/**
+ * Run a role heartbeat's turn as a worker of that role, through the same
+ * `spawnWorker` pipeline stages use: the role's prompt (lite on a small
+ * model), critical rules, persona, skills, connector tools and plan-mode
+ * stripping all apply, the run is unattended (`attended: false`: nothing is
+ * asked, an ASK is refused), and `tasks` is granted on top of the role's
+ * tools because the turn exists to work the board.
+ *
+ * The worker inherits the hook's session (reused across runs), so the board
+ * knows it as `<role>@<hook session>` every run: a later turn can renew or
+ * finish a claim an earlier one left. Two turns of one hook never overlap
+ * (the gate's in-flight guard), and a user has one hook per role, so that
+ * identity is never held by two live turns in this process. A per-run actor
+ * would break exactly that renewal and is not used.
+ *
+ * Awaited, unlike the direct spawn below: the heartbeat keeps the hook in
+ * flight until this returns.
+ */
+async function runRoleHeartbeat(
+  role: string,
+  config: Hook['actionConfig'],
+  sessionId: string,
+  userId: string,
+  prompt: string,
+  message: string,
+): Promise<ActionResult> {
+  const { ROLE_CONFIGS } = await import('@/core/agent/roles');
+  if (!Object.hasOwn(ROLE_CONFIGS, role)) return { success: false, error: `Unknown role "${role}" on heartbeat hook` };
+  let workspaceId: string | null = null;
+  try {
+    const { getOrgWorkspaceManager } = await import('@/security/orgs');
+    workspaceId = (await getOrgWorkspaceManager().ensureDefaultWorkspace(userId)).id;
+  } catch (err) {
+    coreLogger.debug({ err, userId }, 'role heartbeat: workspace resolve failed, proceeding with null');
+  }
+  const now = new Date();
+  const parent: import('@/core/types').AgentContext = {
+    id: `heartbeat:${role}:${sessionId}`,
+    sessionId,
+    userId,
+    workspaceId,
+    topic: config.agentTopic || role,
+    model: '',
+    role,
+    root: false,
+    attended: false,
+    status: 'running',
+    createdAt: now,
+    updatedAt: now,
+    metadata: {},
+  };
+  const { getAgentService } = await import('@/core/agent');
+  const task = [prompt, message].filter(Boolean).join('\n\n');
+  const result = await getAgentService().spawnWorker(role, task, '', parent, {
+    extraToolIds: ['tasks'],
+    ...(config.agentModel ? { model: config.agentModel } : {}),
+  });
+  if (result && typeof result === 'object' && 'error' in result) {
+    return { success: false, error: String((result as { error: unknown }).error) };
+  }
+  return { success: true, data: { role, response: typeof result === 'string' ? result : undefined } };
 }
 
 async function executeWebhook(

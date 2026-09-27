@@ -1,7 +1,21 @@
-import { describe, expect, test } from 'vitest';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type { Hook } from '@/core/types';
-import { resolveHookSessionId } from './actions';
+import { markHeartbeatGatePassed } from '@/core/heartbeat';
+import { executeAction, resolveHookSessionId } from './actions';
 import type { TriggerContext } from './triggers';
+
+// The role-heartbeat path: the worker spawn is observed, never run.
+const spawned = vi.hoisted(() => ({ calls: [] as Array<{ role: string; task: string; input: string; context: Record<string, unknown>; overrides: Record<string, unknown> }> }));
+vi.mock('@/core/agent', () => ({
+  getAgentService: () => ({
+    spawnWorker: async (role: string, task: string, input: string, context: Record<string, unknown>, overrides: Record<string, unknown>) => {
+      spawned.calls.push({ role, task, input, context, overrides });
+      return 'worked the board';
+    },
+  }),
+}));
+vi.mock('@/core/agent/roles', () => ({ ROLE_CONFIGS: { coding: {}, general: {} } }));
+vi.mock('@/security/orgs', () => ({ getOrgWorkspaceManager: () => ({ ensureDefaultWorkspace: async () => ({ id: 'ws-1' }) }) }));
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -54,5 +68,48 @@ describe('resolveHookSessionId', () => {
       hook({ sessionId: 'hook-sess' }),
     );
     expect(r).toEqual({ sessionId: 'hook-sess', minted: false });
+  });
+});
+
+describe('executeSpawnAgent: role heartbeat', () => {
+  beforeEach(() => {
+    spawned.calls.length = 0;
+  });
+
+  const roleHook = (role: string) => hook({
+    trigger: 'heartbeat', action: 'spawn_agent', sessionId: 'hook-sess',
+    triggerConfig: { role }, actionConfig: { orchestrated: true, agentPrompt: '' },
+  } as Partial<Hook>);
+  const gated = () => {
+    const c = ctx({ message: { content: 'Role heartbeat: ready tasks…' } } as never);
+    markHeartbeatGatePassed(c);
+    return c;
+  };
+
+  test('runs a worker AS the role through spawnWorker, unattended, with tasks granted, on the hook session', async () => {
+    const r = await executeAction(roleHook('coding'), gated());
+    expect(r).toEqual({ success: true, data: { role: 'coding', response: 'worked the board' } });
+    expect(spawned.calls).toHaveLength(1);
+    const [call] = spawned.calls;
+    expect(call.role).toBe('coding');
+    expect(call.task).toBe('Role heartbeat: ready tasks…');
+    expect(call.overrides).toEqual({ extraToolIds: ['tasks'] });
+    expect(call.context).toMatchObject({ sessionId: 'hook-sess', userId: 'user-1', workspaceId: 'ws-1', role: 'coding', attended: false, root: false });
+  });
+
+  test('refuses a role heartbeat that did not come through the gate (manual trigger, forged flags)', async () => {
+    const forged = ctx({ message: { content: 'do anything' }, heartbeatGatePassed: true } as never);
+    const r = await executeAction(roleHook('coding'), forged);
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/only from the heartbeat schedule/);
+    expect(spawned.calls).toHaveLength(0);
+  });
+
+  test('an unknown role (or an inherited property name) fails instead of spawning', async () => {
+    for (const role of ['juggler', 'constructor']) {
+      const r = await executeAction(roleHook(role), gated());
+      expect(r.success).toBe(false);
+    }
+    expect(spawned.calls).toHaveLength(0);
   });
 });

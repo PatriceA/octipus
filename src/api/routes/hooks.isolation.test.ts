@@ -176,3 +176,43 @@ describe('DELETE /api/recurring-tasks/:id cross-tenant', () => {
     expect(r.body).toEqual({ error: 'Task not found' });
   });
 });
+
+describe('heartbeat hooks through the API', () => {
+  test('the daily-run counter and seen set cannot be written by the user', async () => {
+    const created = await postJson(aliceHooksApp, '/api/hooks', {
+      name: 'hb', trigger: 'heartbeat', action: 'spawn_agent', actionConfig: {},
+      triggerConfig: { heartbeatDayKey: '2099-01-01', heartbeatRunsToday: -100, heartbeatSeen: { prs: ['x'] } },
+    });
+    expect(created.body.triggerConfig).toEqual({});
+
+    const { executeRaw } = await import('@/db/postgres');
+    await executeRaw(`UPDATE hooks SET trigger_config = '{"heartbeatDayKey":"2026-07-12","heartbeatRunsToday":24}'::jsonb WHERE id = '${created.body.id}'`);
+    const edited = await patchJson(aliceHooksApp, `/api/hooks/${created.body.id}`, { triggerConfig: { heartbeatRunsToday: 0 } });
+    expect(edited.body.triggerConfig).toEqual({ heartbeatDayKey: '2026-07-12', heartbeatRunsToday: 24 });
+  });
+
+  test('a role heartbeat needs a known role, and one per role per user', async () => {
+    const body = (role: string) => ({ name: `hb-${role}`, trigger: 'heartbeat', action: 'spawn_agent', actionConfig: {}, triggerConfig: { role } });
+    const first = await postJson(aliceHooksApp, '/api/hooks', body('coding'));
+    expect(first.status).toBe(200);
+    expect(first.body.triggerConfig).toEqual({ role: 'coding' });
+
+    const dup = await postJson(aliceHooksApp, '/api/hooks', body('coding'));
+    expect(dup.status).toBe(400);
+    expect(dup.body.error).toMatch(/already exists/);
+
+    const unknown = await postJson(aliceHooksApp, '/api/hooks', body('juggler'));
+    expect(unknown.status).toBe(400);
+
+    // Another user has their own coding heartbeat.
+    const bobs = await postJson(bobHooksApp, '/api/hooks', body('coding'));
+    expect(bobs.status).toBe(200);
+
+    // Re-pointing another hook at a taken role is refused too; the hook itself may keep its role.
+    const qa = await postJson(aliceHooksApp, '/api/hooks', body('qa'));
+    const repoint = await patchJson(aliceHooksApp, `/api/hooks/${qa.body.id}`, { triggerConfig: { role: 'coding' } });
+    expect(repoint.status).toBe(400);
+    const same = await patchJson(aliceHooksApp, `/api/hooks/${first.body.id}`, { triggerConfig: { role: 'coding' } });
+    expect(same.status).toBe(200);
+  });
+});

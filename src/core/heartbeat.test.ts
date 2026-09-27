@@ -2,11 +2,14 @@ import { describe, expect, test } from 'vitest';
 import type { HeartbeatConfig } from '@/config/schema';
 import {
   type HeartbeatProbe,
+  heartbeatRole,
   isWithinQuietHours,
   localDayKey,
   localHour,
   probeHasWork,
   renderChecklist,
+  renderRoleHeartbeatMessage,
+  sanitizeTriggerConfig,
 } from './heartbeat';
 
 const cfg = (over: Partial<HeartbeatConfig> = {}): HeartbeatConfig => ({
@@ -131,5 +134,58 @@ describe('renderChecklist', () => {
     }), 'America/Los_Angeles');
     expect(out).toContain('Starting soon (1, times in America/Los_Angeles):');
     expect(out).toContain('- 09:30 Client call (until 10:00)');
+  });
+});
+
+describe('role heartbeats (pure)', () => {
+  test('heartbeatRole reads triggerConfig.role on heartbeat hooks only', () => {
+    expect(heartbeatRole({ trigger: 'heartbeat', triggerConfig: { role: 'coding' } })).toBe('coding');
+    expect(heartbeatRole({ trigger: 'heartbeat', triggerConfig: {} })).toBeNull();
+    expect(heartbeatRole({ trigger: 'heartbeat', triggerConfig: null })).toBeNull();
+    expect(heartbeatRole({ trigger: 'schedule', triggerConfig: { role: 'coding' } })).toBeNull();
+    // Not a role name: never reaches a query or a spawn.
+    expect(heartbeatRole({ trigger: 'heartbeat', triggerConfig: { role: "coding' OR 1=1" } })).toBeNull();
+  });
+
+  test('the role message lists ids and titles and the checkout-first protocol', () => {
+    const out = renderRoleHeartbeatMessage('coding', [
+      { id: '00000000-0000-0000-0000-00000000000a', title: 'Fix the login bug' },
+      { id: '00000000-0000-0000-0000-00000000000b', title: 'Add retries' },
+    ]);
+    expect(out).toContain('you are the `coding` agent');
+    expect(out).toContain('- 00000000-0000-0000-0000-00000000000a — Fix the login bug');
+    expect(out).toContain('- 00000000-0000-0000-0000-00000000000b — Add retries');
+    const checkout = out.indexOf('`checkout_task`');
+    expect(checkout).toBeGreaterThan(-1);
+    expect(out).toContain('409');
+    expect(out.indexOf('`add_task_comment`')).toBeGreaterThan(checkout);
+    expect(out.indexOf('`complete_task`')).toBeGreaterThan(checkout);
+  });
+
+  test('the role message caps the list and says how many wait', () => {
+    const many = Array.from({ length: 25 }, (_, i) => ({ id: `id-${i}`, title: `T${i}` }));
+    const out = renderRoleHeartbeatMessage('qa', many);
+    expect(out).toContain('- id-19 — T19');
+    expect(out).not.toContain('- id-20 — T20');
+    expect(out).toContain('(5 more;');
+  });
+});
+
+describe('sanitizeTriggerConfig', () => {
+  test('drops the server-held heartbeat state from user input', () => {
+    const out = sanitizeTriggerConfig({
+      role: 'coding', heartbeatDayKey: '2026-07-12', heartbeatRunsToday: 0, heartbeatSeen: { prs: [] }, heartbeatPermissionNotified: true,
+    });
+    expect(out).toEqual({ role: 'coding' });
+  });
+
+  test('an edit keeps the stored state whatever it sends', () => {
+    const stored = { role: 'coding', heartbeatDayKey: '2026-07-12', heartbeatRunsToday: 24 };
+    expect(sanitizeTriggerConfig({ role: 'qa', heartbeatRunsToday: 0 }, stored)).toEqual({ role: 'qa', heartbeatDayKey: '2026-07-12', heartbeatRunsToday: 24 });
+  });
+
+  test('non-object input becomes an empty config', () => {
+    expect(sanitizeTriggerConfig(null)).toEqual({});
+    expect(sanitizeTriggerConfig([1, 2])).toEqual({});
   });
 });

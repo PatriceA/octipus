@@ -2,6 +2,7 @@ import { desc, eq, or, sql } from 'drizzle-orm';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { disableDailyBriefingHook, ensureDailyBriefingHook } from '@/core/briefing';
+import { roleHeartbeatHookError, sanitizeTriggerConfig } from '@/core/heartbeat';
 import type { ChannelType } from '@/core/types';
 import { getDb } from '@/db/postgres';
 import { scopedRepos } from '@/db/repositories/scoped';
@@ -186,13 +187,22 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
   // Create hook
   .post(
     '/',
-    async ({ user, body }) => {
+    async ({ user, body, set }) => {
       if (!user) {
         return { error: 'Not authenticated' };
       }
 
       if (!VALID_TRIGGERS.includes(body.trigger as any)) return { error: `Invalid trigger type: ${body.trigger}` };
       if (!VALID_ACTIONS.includes(body.action as any)) return { error: `Invalid action type: ${body.action}` };
+
+      // The heartbeat's own state (daily-run counter, surfaced items) is the
+      // server's to write; a role heartbeat needs a known role, one per user.
+      const triggerConfig = sanitizeTriggerConfig(body.triggerConfig);
+      const roleError = await roleHeartbeatHookError(user.id, body.trigger, triggerConfig);
+      if (roleError) {
+        set.status = 400;
+        return { error: roleError };
+      }
 
       const hookManager = getHookManager();
 
@@ -201,7 +211,7 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
         name: body.name,
         description: body.description,
         trigger: body.trigger as any,
-        triggerConfig: body.triggerConfig,
+        triggerConfig,
         action: body.action as any,
         actionConfig: body.actionConfig,
         conditions: body.conditions,
@@ -235,7 +245,7 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
   // Update hook
   .patch(
     '/:id',
-    async ({ user, principal, params, body }) => {
+    async ({ user, principal, params, body, set }) => {
       if (!user || !isAuthenticated(principal)) {
         return { error: 'Not authenticated' };
       }
@@ -245,8 +255,19 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
         return { error: 'Hook not found' };
       }
 
+      const patch = { ...body } as Record<string, unknown>;
+      if (body.triggerConfig !== undefined) {
+        // Keep the stored heartbeat state whatever the edit sends (see POST).
+        patch.triggerConfig = sanitizeTriggerConfig(body.triggerConfig, existing.triggerConfig);
+        const roleError = await roleHeartbeatHookError(existing.userId, existing.trigger, patch.triggerConfig, existing.id);
+        if (roleError) {
+          set.status = 400;
+          return { error: roleError };
+        }
+      }
+
       const hookManager = getHookManager();
-      const hook = await hookManager.updateHook(params.id, body as any);
+      const hook = await hookManager.updateHook(params.id, patch as any);
       return hook;
     },
     {
@@ -385,13 +406,17 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
       if (!(VALID_TRIGGERS as readonly string[]).includes(suggestion.trigger)) return { error: `Invalid trigger type: ${suggestion.trigger}` };
       if (!(VALID_ACTIONS as readonly string[]).includes(suggestion.action)) return { error: `Invalid action type: ${suggestion.action}` };
 
+      const triggerConfig = sanitizeTriggerConfig(suggestion.triggerConfig);
+      const roleError = await roleHeartbeatHookError(user.id, suggestion.trigger, triggerConfig);
+      if (roleError) return { error: roleError };
+
       const hookManager = getHookManager();
       const hook = await hookManager.createHook({
         userId: user.id,
         name: suggestion.name,
         description: suggestion.description,
         trigger: suggestion.trigger as any,
-        triggerConfig: suggestion.triggerConfig,
+        triggerConfig,
         action: suggestion.action as any,
         actionConfig: suggestion.actionConfig,
         isEnabled: false, // Create disabled, user enables manually

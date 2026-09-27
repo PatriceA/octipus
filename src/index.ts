@@ -6,6 +6,7 @@ import { initializeHotReload } from '@/config/hot-reload';
 import { migrateEnvToDb } from '@/config/migrate-env-to-db';
 import { getSettingsService } from '@/config/settings-service';
 import { startCronLoop, stopCronLoop } from '@/core/cron-runner';
+import { startRoleHeartbeatWakeups, stopRoleHeartbeatWakeups } from '@/core/heartbeat';
 import { getGateway } from '@/core/gateway';
 import { connectEventBridge } from '@/core/gateway/event-bridge';
 import { getGatewayHub } from '@/core/gateway/hub';
@@ -370,6 +371,9 @@ async function main() {
     // Start recurring task scheduler
     startCronLoop();
     startMonitors();
+    // Role heartbeats: a task wakeup for a role-assigned task marks that
+    // role's heartbeat hook due for the next tick (no-op without such hooks).
+    startRoleHeartbeatWakeups();
     logger.info('Cron scheduler started');
 
     // Start the task-queue worker loop. Without this, getScheduler().schedule()
@@ -451,6 +455,7 @@ async function main() {
 
       stopCronLoop();
       stopMonitors();
+      stopRoleHeartbeatWakeups();
       try {
         const { getScheduler } = await import('@/core/scheduler');
         await getScheduler().stop();
