@@ -100,6 +100,12 @@ export class ApprovalManager {
   private persisted: Map<string, Promise<boolean>> = new Map();
   /** Claimed by an answer whose UPDATE is still in flight; a racing answer is refused. */
   private settling: Set<string> = new Set();
+  /**
+   * Answered in memory but the row could not be updated, so it is still
+   * `pending`. A later answer must not expire (and "time out") a request the
+   * agent already acted on. Bounded; oldest entries drop first.
+   */
+  private unpersisted: Map<string, { userId: string; status: 'approved' | 'denied' }> = new Map();
 
   private get db() { return getDb(); }
 
@@ -222,6 +228,10 @@ export class ApprovalManager {
           approval.reject('Approval expired');
           return { status: 'already_resolved' };
         }
+        if (updated === null) {
+          this.unpersisted.set(requestId, { userId: approval.userId, status: approved ? 'approved' : 'denied' });
+          if (this.unpersisted.size > 1000) this.unpersisted.delete(this.unpersisted.keys().next().value!);
+        }
       }
 
       if (approved) {
@@ -301,8 +311,10 @@ export class ApprovalManager {
   /**
    * Conditional write of the answer: true if this call settled the row, false
    * if it was no longer pending, null if the DB failed twice. On null the agent
-   * still proceeds in memory, but the row stays pending and the next boot sweep
-   * marks this answered request expired (and notifies) — a known gap.
+   * still proceeds in memory and the id goes into `unpersisted`, so later answers
+   * in this process are refused without touching the row. The row itself stays
+   * pending, and the next boot sweep marks this answered request expired (and
+   * notifies) — a known gap.
    */
   private async markResolved(requestId: string, approved: boolean, response: string, resolvedBy?: string): Promise<boolean | null> {
     const status = approved ? 'approved' : 'denied';
@@ -330,6 +342,8 @@ export class ApprovalManager {
    */
   private async resolveWithoutWaiter(requestId: string, forUserId?: string): Promise<ApprovalResolveOutcome> {
     if (!isUuid(requestId)) return { status: 'not_found' };
+    const answered = this.unpersisted.get(requestId);
+    if (answered) return forUserId && answered.userId !== forUserId ? { status: 'not_found' } : { status: 'already_resolved' };
     try {
       const [row] = await this.db.select().from(agentApprovals).where(eq(agentApprovals.id, requestId)).limit(1);
       if (!row || (forUserId && row.userId !== forUserId)) {

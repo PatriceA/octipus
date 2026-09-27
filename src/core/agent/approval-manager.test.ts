@@ -121,6 +121,33 @@ describe('ApprovalManager persistence', () => {
     expect((await row(id))?.status).toBe('denied');
   });
 
+  test('an answer that could not be recorded is not expired by a second answer', async () => {
+    const manager = new mod.ApprovalManager();
+    const { id, answer } = await ask(manager, ctx(aliceId));
+
+    // Every UPDATE through the manager fails; reads and inserts still work.
+    const { getDb } = await import('@/db/postgres');
+    const real = getDb();
+    Object.defineProperty(manager, 'db', {
+      configurable: true,
+      get: () => new Proxy(real, {
+        get: (target, key) => {
+          if (key === 'update') return () => { throw new Error('db unavailable'); };
+          const value = Reflect.get(target, key);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      }),
+    });
+
+    expect(await manager.resolveApproval(id, true, 'Yes')).toBe(true);
+    expect(await answer).toMatchObject({ approved: true, response: 'Yes' });
+    expect((await row(id))?.status).toBe('pending');
+
+    expect(await manager.resolveApprovalDetailed(id, false, undefined, { forUserId: bobId })).toEqual({ status: 'not_found' });
+    expect(await manager.resolveApprovalDetailed(id, false)).toEqual({ status: 'already_resolved' });
+    expect((await row(id))?.status).toBe('pending');
+  });
+
   test('another user cannot answer it', async () => {
     const manager = new mod.ApprovalManager();
     const { id, answer } = await ask(manager, ctx(aliceId));
