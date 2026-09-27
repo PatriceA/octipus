@@ -1,0 +1,123 @@
+/**
+ * Dollar spend budgets — runtime enforcement.
+ *
+ * agent-manager.spawn() refuses with SpendBudgetExceededError once the
+ * user's budget (or the budget of the role it spawns, 'general' by default)
+ * is spent — before any worker exists — and the heartbeat gate skips its
+ * tick. A check that fails for any other reason does not block the spawn. The per-LLM-call (agent-worker) and CLI-start
+ * (cli-agent-worker) sites call the same checkSpend contract.
+ *
+ * Backed by ephemeral PGlite.
+ */
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { randomBytes } from 'node:crypto';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+const rand = (n: number) => randomBytes(n).toString('hex');
+process.env.MASTER_KEY ??= `test-master-${rand(24)}`;
+process.env.JWT_SECRET ??= `test-jwt-${rand(24)}`;
+process.env.SESSION_SECRET ??= `test-session-${rand(24)}`;
+process.env.LOG_LEVEL ??= 'error';
+
+const aliceId = '11111111-1111-1111-1111-111111111111';
+const bobId = '22222222-2222-2222-2222-222222222222';
+
+beforeAll(async () => {
+  process.env.STORAGE_MODE = 'embedded';
+  process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'octipus-spend-enf-'));
+
+  const { initializeDb } = await import('@/db/postgres');
+  await initializeDb();
+  const { runMigrations } = await import('@/db/migrate');
+  await runMigrations();
+
+  const { seedUsers } = await import('@/test-helpers/multiuser-fixtures');
+  await seedUsers([{ id: aliceId, username: 'alice' }, { id: bobId, username: 'bob' }]);
+  const { _resetQuotaManagerForTests } = await import('@/security/quotas');
+  _resetQuotaManagerForTests();
+
+  const { upsertBudget } = await import('@/security/spend-budgets');
+  await upsertBudget({ userId: aliceId, scopeKind: 'user', period: 'day', limitUsd: 1 });
+  const { getDb } = await import('@/db/postgres');
+  const { costLog } = await import('@/db/schema/models');
+  await getDb().insert(costLog).values({
+    userId: aliceId, modelName: 'test', inputTokens: 1, outputTokens: 1, totalCost: 1.25,
+  });
+});
+
+afterAll(async () => {
+  const { closeDb } = await import('@/db/postgres');
+  await closeDb();
+});
+
+describe('gate: dollar spend budget', () => {
+  test('agent-manager.spawn refuses once the budget is spent', async () => {
+    const { AgentManager } = await import('@/core/agent-manager');
+    const { SpendBudgetExceededError } = await import('@/security/spend-budget-error');
+    const { seedSession } = await import('@/test-helpers/multiuser-fixtures');
+    const sess = await seedSession({ userId: aliceId });
+
+    const err = await new AgentManager().spawn({ sessionId: sess.id, userId: aliceId, role: 'general' })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SpendBudgetExceededError);
+    expect((err as InstanceType<typeof SpendBudgetExceededError>).code).toBe('SPEND_BUDGET_EXCEEDED');
+
+    const { listBudgets } = await import('@/security/spend-budgets');
+    const [row] = await listBudgets(aliceId);
+    expect(row.pausedAt).not.toBeNull();
+  });
+
+  test('spawn applies role budgets to the default role', async () => {
+    const { AgentManager } = await import('@/core/agent-manager');
+    const { SpendBudgetExceededError } = await import('@/security/spend-budget-error');
+    const { seedSession } = await import('@/test-helpers/multiuser-fixtures');
+    const { upsertBudget } = await import('@/security/spend-budgets');
+    const { getDb } = await import('@/db/postgres');
+    const { agents } = await import('@/db/schema/agents');
+    const { costLog } = await import('@/db/schema/models');
+    const sess = await seedSession({ userId: bobId });
+    await getDb().insert(agents).values({
+      id: 'se-general', sessionId: sess.id, userId: bobId, role: 'general', model: 'test', topic: 'test', status: 'completed',
+    });
+    await getDb().insert(costLog).values({
+      userId: bobId, agentId: 'se-general', modelName: 'test', inputTokens: 1, outputTokens: 1, totalCost: 3,
+    });
+    await upsertBudget({ userId: bobId, scopeKind: 'role', scopeRef: 'general', period: 'day', limitUsd: 2 });
+
+    // No role given: the worker runs as 'general', so that budget applies.
+    const err = await new AgentManager().spawn({ sessionId: sess.id, userId: bobId }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SpendBudgetExceededError);
+    expect((err as InstanceType<typeof SpendBudgetExceededError>).reason.scopeKind).toBe('role');
+  });
+
+  test('a failing check does not block the spawn', async () => {
+    // The table missing (e.g. a rolling deploy with SKIP_MIGRATIONS) makes
+    // every check fail; spawns must still go through.
+    const { executeRaw } = await import('@/db/postgres');
+    const { _resetSpendBudgetsForTests } = await import('@/security/spend-budgets');
+    await executeRaw('ALTER TABLE spend_budgets RENAME TO spend_budgets_off');
+    _resetSpendBudgetsForTests();
+    try {
+      const { AgentManager } = await import('@/core/agent-manager');
+      const { seedSession } = await import('@/test-helpers/multiuser-fixtures');
+      const sess = await seedSession({ userId: aliceId });
+      const worker = await new AgentManager().spawn({ sessionId: sess.id, userId: aliceId, model: 'test-model' });
+      expect(worker.getContext().userId).toBe(aliceId);
+    } finally {
+      await executeRaw('ALTER TABLE spend_budgets_off RENAME TO spend_budgets');
+      _resetSpendBudgetsForTests();
+    }
+  });
+
+  test('heartbeat skips its tick while paused', async () => {
+    const { evaluateHeartbeatGate } = await import('@/core/heartbeat');
+    const hook = { userId: aliceId, triggerConfig: {} } as unknown as import('@/db/schema/hooks').Hook;
+    const r = await evaluateHeartbeatGate(hook, {
+      enabled: true, intervalMinutes: 60, quietHoursStart: 22, quietHoursEnd: 7, quietHoursTimezone: 'UTC',
+      maxRunsPerDay: 24, probeGithub: false, probeCalendar: false, calendarLookaheadMinutes: 60,
+    }, new Date(new Date().setUTCHours(12, 0, 0, 0)));
+    expect(r.decision).toEqual({ run: false, reason: 'spend_budget' });
+  });
+});
