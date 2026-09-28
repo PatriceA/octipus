@@ -6,8 +6,8 @@
  *  - delivery-id idempotency, so a sender's redelivery (GitHub retries after
  *    ~10s without a response) doesn't start a second agent run;
  *  - running the hook actions in the background once the request has been
- *    accepted, the way the cron-runner fires scheduled hooks, under a
- *    per-hook and a global concurrency cap.
+ *    accepted, the way the cron-runner fires scheduled hooks, through a
+ *    bounded queue that is FIFO per hook and fair across users.
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Hook } from '@/db/schema/hooks';
@@ -22,14 +22,15 @@ export const DELIVERY_DONE_TTL_SECONDS = 24 * 60 * 60;
 /**
  * How long a claimed-but-unfinished delivery id is held. Short, so a run
  * lost to a crash or shutdown frees the id for the sender's redelivery
- * instead of blocking it for a day. Extended to the done TTL on completion.
+ * instead of blocking it for a day. Restarted when a queued run starts, and
+ * extended to the done TTL on completion.
  */
 export const DELIVERY_IN_PROGRESS_TTL_SECONDS = 15 * 60;
 
 /** Upper bound on the fallback LRU, so a flood of ids can't grow memory. */
 const LRU_MAX_ENTRIES = 10_000;
 
-/** Seconds a sender is asked to wait when the run caps are reached. */
+/** Seconds a sender is asked to wait when a run queue is full (503). */
 export const RETRY_AFTER_SECONDS = 30;
 
 /**
@@ -169,106 +170,317 @@ export async function releaseDelivery(hookId: string, deliveryId: string): Promi
   }
 }
 
+/**
+ * Restart a queued delivery's in_progress TTL as its run starts, so time
+ * spent in the queue doesn't eat into the window that protects the run.
+ */
+export async function refreshDelivery(hookId: string, deliveryId: string): Promise<void> {
+  const key = dedupeKey(hookId, deliveryId);
+  try {
+    await getStorageProvider().setRaw(key, 'in_progress', DELIVERY_IN_PROGRESS_TTL_SECONDS);
+  } catch (err) {
+    apiLogger.warn({ err, hookId }, 'Webhook dedupe store unavailable while refreshing a delivery');
+    fallbackSet(key, DELIVERY_IN_PROGRESS_TTL_SECONDS);
+  }
+}
+
+/**
+ * The queue entry for one claimed hook run: refresh the claim when it
+ * starts, release it if the run is dropped at shutdown.
+ */
+export function webhookRunJob(run: WebhookRun, label: Record<string, unknown>): QueuedRun {
+  const { hook, deliveryId } = run;
+  return {
+    label,
+    run: () => fireWebhookHook(run),
+    onStart: deliveryId ? () => refreshDelivery(hook.id, deliveryId) : undefined,
+    onDrop: deliveryId ? () => releaseDelivery(hook.id, deliveryId) : undefined,
+  };
+}
+
 /** Test helper: clear the fallback LRU. */
 export function _resetDeliveryCache(): void {
   fallback.clear();
 }
 
-// --- Concurrency caps ----------------------------------------------------
+// --- Run queue -----------------------------------------------------------
+//
+// Accepted deliveries are queued, never rejected for being busy: GitHub,
+// GitLab and Gitea don't retry on their own, so turning a delivery away
+// loses the event. The queue runs them under three limits:
+//  - per hook: at most `perHook` running, FIFO;
+//  - per user (hook owner): at most `perUser` running;
+//  - global: at most `global` running, handed out round-robin across users,
+//    so one user's backlog can't hold every slot.
+// Only the queue bounds (`hookPending` per hook, `userPending` per user) turn
+// a delivery away (503), before its delivery id is claimed.
 
-let perHookLimit = 2;
-let globalLimit = 20;
-const runningPerHook = new Map<string, number>();
-let runningTotal = 0;
+const DEFAULT_LIMITS = {
+  perHook: 2,
+  perUser: 4,
+  global: 20,
+  hookPending: 50,
+  userPending: 200,
+};
+let limits = { ...DEFAULT_LIMITS };
 
-export interface RunSlot {
-  hookId: string;
-  /** Idempotent. */
-  release(): void;
+export interface QueuedRun {
+  /** Log fields for a failure. */
+  label: Record<string, unknown>;
+  run: () => Promise<void>;
+  /** Called when the run leaves the queue and starts (e.g. refresh the claim). */
+  onStart?: () => Promise<void>;
+  /** Called when a pending run is dropped at shutdown (e.g. release the claim). */
+  onDrop?: () => Promise<void>;
 }
 
+interface Job extends QueuedRun {
+  hookId: string;
+  userId: string;
+}
+
+export interface QueueTicket {
+  /** Queue the run this ticket reserved room for. Call once. */
+  submit(run: QueuedRun): void;
+  /** Give the reserved room back without queueing anything. */
+  cancel(): void;
+}
+
+/** Queued + reserved (not yet submitted) runs, per hook and per user. */
+const hookPending = new Map<string, number>();
+const userPending = new Map<string, number>();
+const hookRunning = new Map<string, number>();
+const userRunning = new Map<string, number>();
+let globalRunning = 0;
+/** Per-user FIFO of queued jobs. A hook belongs to one user, so this is FIFO per hook too. */
+const userQueues = new Map<string, Job[]>();
+/** Users with queued jobs, in round-robin order. */
+let userOrder: string[] = [];
+let rrNext = 0;
+let accepting = true;
+const running = new Set<Promise<void>>();
+/** Resolvers of callers waiting for the queue to go idle. */
+let idleWaiters: Array<() => void> = [];
+
+const inc = (m: Map<string, number>, k: string, by = 1) => {
+  const v = (m.get(k) ?? 0) + by;
+  if (v > 0) m.set(k, v);
+  else m.delete(k);
+};
+
 /**
- * Take one background-run slot for each hook, all or nothing, synchronously
- * (so two requests can't both pass the check). Returns null when a hook is at
- * its per-hook cap or the global cap would be exceeded — the caller answers
- * 429 so the sender retries later.
+ * Reserve queue room for one run per item, all or nothing, synchronously (so
+ * concurrent requests can't overshoot a bound). Returns null — answer 503 —
+ * when a hook's or a user's queue bound would be exceeded, or while shutting
+ * down. Call before claiming the delivery id.
  */
-export function acquireRunSlots(hookIds: string[]): RunSlot[] | null {
-  if (runningTotal + hookIds.length > globalLimit) return null;
-  const wanted = new Map<string, number>();
-  for (const id of hookIds) wanted.set(id, (wanted.get(id) ?? 0) + 1);
-  for (const [id, n] of wanted) {
-    if ((runningPerHook.get(id) ?? 0) + n > perHookLimit) return null;
+export function reserveQueueSlots(items: Array<{ hookId: string; userId: string }>): QueueTicket[] | null {
+  if (!accepting) return null;
+  const perHook = new Map<string, number>();
+  const perUser = new Map<string, number>();
+  for (const { hookId, userId } of items) {
+    inc(perHook, hookId);
+    inc(perUser, userId);
   }
-  return hookIds.map((hookId) => {
-    runningPerHook.set(hookId, (runningPerHook.get(hookId) ?? 0) + 1);
-    runningTotal++;
-    let released = false;
+  for (const [id, n] of perHook) if ((hookPending.get(id) ?? 0) + n > limits.hookPending) return null;
+  for (const [id, n] of perUser) if ((userPending.get(id) ?? 0) + n > limits.userPending) return null;
+
+  return items.map(({ hookId, userId }) => {
+    inc(hookPending, hookId);
+    inc(userPending, userId);
+    let used = false;
+    const giveBack = () => {
+      inc(hookPending, hookId, -1);
+      inc(userPending, userId, -1);
+    };
     return {
-      hookId,
-      release() {
-        if (released) return;
-        released = true;
-        runningTotal--;
-        const left = (runningPerHook.get(hookId) ?? 1) - 1;
-        if (left > 0) runningPerHook.set(hookId, left);
-        else runningPerHook.delete(hookId);
+      submit(run: QueuedRun) {
+        if (used) return;
+        used = true;
+        if (!accepting) {
+          // Shutdown began after the reservation: drop it like a pending run.
+          giveBack();
+          void run.onDrop?.().catch(() => {});
+          return;
+        }
+        const queue = userQueues.get(userId) ?? [];
+        if (queue.length === 0) {
+          userQueues.set(userId, queue);
+          if (!userOrder.includes(userId)) userOrder.push(userId);
+        }
+        queue.push({ ...run, hookId, userId });
+        pump();
+      },
+      cancel() {
+        if (used) return;
+        used = true;
+        giveBack();
+        notifyIdle();
       },
     };
   });
 }
 
-/** Test helper: override the caps; call with no arguments to restore them. */
-export function _setRunLimits(limits: { perHook?: number; global?: number } = {}): void {
-  perHookLimit = limits.perHook ?? 2;
-  globalLimit = limits.global ?? 20;
+/** Index of the first queued job of `userId` that may start now, or -1. */
+function runnableIndex(userId: string): number {
+  if ((userRunning.get(userId) ?? 0) >= limits.perUser) return -1;
+  const queue = userQueues.get(userId);
+  if (!queue) return -1;
+  const blocked = new Set<string>();
+  for (let i = 0; i < queue.length; i++) {
+    const job = queue[i];
+    if (blocked.has(job.hookId)) continue;
+    if ((hookRunning.get(job.hookId) ?? 0) >= limits.perHook) {
+      // Keep per-hook FIFO: nothing later for this hook may jump ahead.
+      blocked.add(job.hookId);
+      continue;
+    }
+    return i;
+  }
+  return -1;
 }
 
-// --- Background execution ------------------------------------------------
-
-const inFlight = new Set<Promise<void>>();
-
-/**
- * Run a webhook's hook actions after the response has gone out. Errors are
- * caught and logged here; nothing propagates to the request. The slot, if
- * any, is released when the task settles.
- */
-export function runInBackground(
-  label: Record<string, unknown>,
-  task: () => Promise<void>,
-  slot?: RunSlot,
-): void {
-  const p: Promise<void> = Promise.resolve()
-    .then(task)
-    .catch((err: unknown) => apiLogger.error({ err, ...label }, 'Background webhook processing failed'))
-    .finally(() => {
-      slot?.release();
-      inFlight.delete(p);
-    });
-  inFlight.add(p);
+function removeUser(userId: string): void {
+  userQueues.delete(userId);
+  const idx = userOrder.indexOf(userId);
+  if (idx < 0) return;
+  userOrder.splice(idx, 1);
+  if (idx < rrNext) rrNext--;
+  if (rrNext >= userOrder.length) rrNext = 0;
 }
 
 /**
- * Wait for the background webhook tasks started so far. With a timeout,
- * gives up after `timeoutMs` and returns false if any are still running
- * (shutdown uses this to stay inside its exit budget).
+ * Start queued jobs while global slots are free. Each free slot goes to the
+ * user with a runnable job and the fewest runs in progress (fair share);
+ * ties go round-robin from `rrNext`. So a user who already holds slots
+ * yields the next one to a user waiting behind them.
  */
-export async function drainWebhookTasks(timeoutMs?: number): Promise<boolean> {
-  const drain = (async () => {
-    while (inFlight.size > 0) await Promise.allSettled([...inFlight]);
-    return true;
+function pump(): void {
+  while (globalRunning < limits.global && userOrder.length > 0) {
+    const n = userOrder.length;
+    let bestIdx = -1;
+    let bestJob = -1;
+    let bestRunning = Number.POSITIVE_INFINITY;
+    for (let k = 0; k < n; k++) {
+      const idx = (rrNext + k) % n;
+      const userId = userOrder[idx];
+      const jobIdx = runnableIndex(userId);
+      if (jobIdx < 0) continue;
+      const busy = userRunning.get(userId) ?? 0;
+      if (busy < bestRunning) {
+        bestRunning = busy;
+        bestIdx = idx;
+        bestJob = jobIdx;
+      }
+    }
+    if (bestIdx < 0) break;
+    const userId = userOrder[bestIdx];
+    const queue = userQueues.get(userId)!;
+    const [job] = queue.splice(bestJob, 1);
+    // Next tie goes to the user after this one.
+    rrNext = (bestIdx + 1) % n;
+    if (queue.length === 0) removeUser(userId);
+    start(job);
+  }
+  notifyIdle();
+}
+
+function start(job: Job): void {
+  inc(hookPending, job.hookId, -1);
+  inc(userPending, job.userId, -1);
+  inc(hookRunning, job.hookId);
+  inc(userRunning, job.userId);
+  globalRunning++;
+  const p: Promise<void> = (async () => {
+    try {
+      if (job.onStart) {
+        try {
+          await job.onStart();
+        } catch (err) {
+          apiLogger.warn({ err, ...job.label }, 'Webhook run start hook failed');
+        }
+      }
+      await job.run();
+    } catch (err) {
+      apiLogger.error({ err, ...job.label }, 'Background webhook processing failed');
+    }
   })();
-  if (timeoutMs === undefined) return drain;
+  running.add(p);
+  // p never rejects (the body catches everything).
+  void p.then(() => {
+    inc(hookRunning, job.hookId, -1);
+    inc(userRunning, job.userId, -1);
+    globalRunning--;
+    running.delete(p);
+    pump();
+  });
+}
+
+function isIdle(): boolean {
+  return running.size === 0 && userOrder.length === 0 && hookPending.size === 0;
+}
+
+function notifyIdle(): void {
+  if (!isIdle() || idleWaiters.length === 0) return;
+  const waiters = idleWaiters;
+  idleWaiters = [];
+  for (const w of waiters) w();
+}
+
+function withTimeout<T>(p: Promise<T>, timeoutMs: number | undefined, onTimeout: T): Promise<T> {
+  if (timeoutMs === undefined) return p;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<boolean>((resolve) => {
-    timer = setTimeout(() => resolve(false), timeoutMs);
+  const timeout = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(onTimeout), timeoutMs);
     timer.unref?.();
   });
-  try {
-    return await Promise.race([drain, timeout]);
-  } finally {
+  return Promise.race([p, timeout]).finally(() => {
     if (timer) clearTimeout(timer);
+  });
+}
+
+/**
+ * Wait until nothing is queued or running (tests). With a timeout, returns
+ * false if that didn't happen in time.
+ */
+export function drainWebhookTasks(timeoutMs?: number): Promise<boolean> {
+  const idle = isIdle()
+    ? Promise.resolve(true)
+    : new Promise<boolean>((resolve) => idleWaiters.push(() => resolve(true)));
+  return withTimeout(idle, timeoutMs, false);
+}
+
+/**
+ * Shutdown: stop accepting, drop every pending run and release its claim
+ * (so the sender's redelivery runs later), then give the running ones up to
+ * `timeoutMs`. Returns false if runs were still going at the deadline.
+ */
+export async function shutdownWebhookTasks(timeoutMs: number): Promise<boolean> {
+  accepting = false;
+  const deadline = Date.now() + timeoutMs;
+  const dropped: Job[] = [];
+  for (const queue of userQueues.values()) dropped.push(...queue);
+  for (const job of dropped) {
+    inc(hookPending, job.hookId, -1);
+    inc(userPending, job.userId, -1);
   }
+  userQueues.clear();
+  userOrder = [];
+  rrNext = 0;
+  if (dropped.length > 0) apiLogger.warn({ count: dropped.length }, 'Dropping queued webhook runs at shutdown');
+  const releases = Promise.allSettled(dropped.map((job) => job.onDrop?.())).then(() => true);
+  await withTimeout(releases, Math.max(0, deadline - Date.now()), false);
+  const runs = (async () => {
+    while (running.size > 0) await Promise.allSettled([...running]);
+    return true;
+  })();
+  return withTimeout(runs, Math.max(0, deadline - Date.now()), false);
+}
+
+/** Test helper: override limits (no argument restores the defaults) and accept again after a shutdown. */
+export function _setRunLimits(overrides: Partial<typeof DEFAULT_LIMITS> = {}): void {
+  limits = { ...DEFAULT_LIMITS, ...overrides };
+  accepting = true;
 }
 
 // --- One hook run --------------------------------------------------------
@@ -284,7 +496,7 @@ export interface WebhookRun {
 
 /**
  * Fire one verified hook for a webhook delivery; meant to run inside
- * {@link runInBackground}. Settles the delivery claim:
+ * the run queue (see {@link webhookRunJob}). Settles the delivery claim:
  *  - nothing ran (the hook was skipped by its gates, or triggerHook failed
  *    before executing the action) -> release, so a redelivery can retry;
  *  - an action ran, successfully or not -> done, so a redelivery is dropped

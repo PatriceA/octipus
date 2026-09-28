@@ -2,13 +2,12 @@ import { Elysia, t } from '@/api/http';
 import { getHookManager } from '@/hooks';
 import type { TriggerContext, TriggerEvent } from '@/hooks/triggers';
 import {
-  acquireRunSlots,
   claimDelivery,
-  fireWebhookHook,
   getDeliveryId,
   RETRY_AFTER_SECONDS,
-  runInBackground,
+  reserveQueueSlots,
   verifyHmacSha256,
+  webhookRunJob,
 } from '@/hooks/webhook-delivery';
 import { apiLogger } from '@/utils/logger';
 
@@ -62,12 +61,12 @@ function json(status: number, body: unknown, headers: Record<string, string> = {
  *  - If no hook matches the path, the request is rejected with 404.
  *  - The signature is checked over the raw request bytes.
  *
- * Once verified, the request is answered 202 and the hook actions run in the
- * background (results go to the hook's execution log). Each hook runs at
- * most 2 deliveries at once, 20 across all hooks; past that the answer is
- * 429 with Retry-After. A delivery id (X-GitHub-Delivery, Idempotency-Key,
- * ...) is claimed per hook; a repeat is answered 200 `{duplicate: true}`
- * without firing. See docs/WEBHOOKS.md.
+ * Once verified, the request is answered 202 and the hook actions are queued
+ * to run in the background (results go to the hook's execution log). The
+ * queue is FIFO per hook and fair across users; only when a queue bound is
+ * exceeded is the answer 503 with Retry-After. A delivery id
+ * (X-GitHub-Delivery, Idempotency-Key, ...) is claimed per hook; a repeat is
+ * answered 200 `{duplicate: true}` without firing. See docs/WEBHOOKS.md.
  */
 export const webhookRoutes = new Elysia({ prefix: '/webhooks' })
   .post(
@@ -120,15 +119,15 @@ export const webhookRoutes = new Elysia({ prefix: '/webhooks' })
         return json(401, { error });
       }
 
-      // --- Concurrency caps ---
-      // Taken before the delivery id is claimed, so a 429'd delivery is
-      // still new when the sender retries it.
-      const slots = acquireRunSlots(verifiedHooks.map((hook) => hook.id));
-      if (!slots) {
-        apiLogger.warn({ webhookPath }, 'Webhook rejected: too many runs in progress');
+      // --- Queue room ---
+      // Reserved before the delivery id is claimed, so a delivery turned
+      // away (503, queue bound exceeded) is still new when retried.
+      const tickets = reserveQueueSlots(verifiedHooks.map((hook) => ({ hookId: hook.id, userId: hook.userId })));
+      if (!tickets) {
+        apiLogger.warn({ webhookPath }, 'Webhook rejected: run queue full');
         return json(
-          429,
-          { error: 'Too many webhook runs in progress; retry later' },
+          503,
+          { error: 'Webhook run queue is full; retry later' },
           { 'Retry-After': String(RETRY_AFTER_SECONDS) },
         );
       }
@@ -138,16 +137,16 @@ export const webhookRoutes = new Elysia({ prefix: '/webhooks' })
       // "Redeliver") reuses its delivery id. Claim it per hook, after
       // authentication, and fire only the hooks that haven't seen it.
       const deliveryId = getDeliveryId(request.headers);
-      let toFire = verifiedHooks.map((hook, i) => ({ hook, slot: slots[i] }));
+      let toFire = verifiedHooks.map((hook, i) => ({ hook, ticket: tickets[i] }));
       if (deliveryId) {
         let claimed: boolean[];
         try {
           claimed = await Promise.all(verifiedHooks.map((hook) => claimDelivery(hook.id, deliveryId)));
         } catch (err) {
-          for (const slot of slots) slot.release();
+          for (const ticket of tickets) ticket.cancel();
           throw err;
         }
-        for (const [i, { slot }] of toFire.entries()) if (!claimed[i]) slot.release();
+        for (const [i, { ticket }] of toFire.entries()) if (!claimed[i]) ticket.cancel();
         toFire = toFire.filter((_, i) => claimed[i]);
         if (toFire.length === 0) {
           apiLogger.info({ webhookPath, deliveryId }, 'Duplicate webhook delivery ignored');
@@ -178,20 +177,20 @@ export const webhookRoutes = new Elysia({ prefix: '/webhooks' })
         },
       };
 
-      // Respond now and run the actions (possibly a full agent turn) in the
-      // background: senders like GitHub give up after ~10s and redeliver.
-      for (const { hook, slot } of toFire) {
-        runInBackground(
-          { webhookPath, hookId: hook.id, deliveryId },
-          () =>
-            fireWebhookHook({
+      // Respond now and queue the actions (possibly a full agent turn):
+      // senders like GitHub give up after ~10s and redeliver.
+      for (const { hook, ticket } of toFire) {
+        ticket.submit(
+          webhookRunJob(
+            {
               hook,
               event,
               context,
               deliveryId,
               failureContext: { webhook: { path: webhookPath, deliveryId, body: payload } },
-            }),
-          slot,
+            },
+            { webhookPath, hookId: hook.id, deliveryId },
+          ),
         );
       }
 

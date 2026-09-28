@@ -25,7 +25,7 @@ Both webhook endpoints, `POST /api/webhooks/:path` and `POST /api/hooks/incoming
 | `200` | `{ "received": true, "duplicate": true }` (incoming: `{ "status": "duplicate", "duplicate": true, ... }`) | This delivery id was already seen for this hook; nothing fired. |
 | `401` | `{ "error": ... }` | Missing or invalid signature / secret. |
 | `404` | `{ "error": ... }` | No hook for this path (or id). |
-| `429` | `{ "error": ... }` + `Retry-After: 30` | Too many runs in progress; the sender should retry. |
+| `503` | `{ "error": ... }` + `Retry-After: 30` | The run queue is over its bound (overload only, see below); the delivery was not accepted. Also returned while the server is shutting down. |
 
 **Removed response fields.** `/api/hooks/incoming/:hookId` used to wait for the action and return `status: "processed"`, `executed`, `succeeded`, `failed` and a per-hook `results` array. The action hasn't run when the response goes out, so those fields are gone, and an action failure no longer turns into a `500`.
 
@@ -48,11 +48,25 @@ If the sender includes a delivery id, it is remembered per hook, and a repeat is
 - If no action ran (conditions didn't match, cooldown, `maxExecutions` reached, or an error before the action), the claim is released, so a redelivery can try again.
 - Claims live in the shared key-value store, so dedupe works across API processes. If the store is unreachable, dedupe falls back to a per-process cache.
 
-### Concurrency limits
+### Run queue and limits
 
-Each hook runs at most **2** webhook deliveries at once, and all hooks together run at most **20**. Past that, the endpoint answers `429` with `Retry-After` before claiming the delivery id, so the sender's retry is treated as new. Cooldown and `maxExecutions` are enforced when a run starts: the run is reserved in the database first, so concurrent deliveries can't slip past them.
+Accepted deliveries are never turned away for being busy. GitHub, GitLab and Gitea don't retry a failed delivery on their own, so a rejection would lose the event. Instead, each accepted delivery claims its id and joins a queue. It runs when a slot frees up, within these limits:
 
-On shutdown, the server waits up to 1 second for background webhook runs to finish.
+| Limit | Value | Behaviour |
+|-------|-------|-----------|
+| Running per hook | 2 | Further deliveries for that hook wait, first in, first out. |
+| Running per user (hook owner) | 4 | Across all of that user's hooks. |
+| Running in total | 20 | A free slot goes to the user with the fewest runs in progress, round-robin on ties, so one user's backlog can't hold every slot. |
+| Queued per hook | 50 | Past this bound the endpoint answers `503` + `Retry-After`. |
+| Queued per user | 200 | Past this bound the endpoint answers `503` + `Retry-After`. |
+
+The `503` is sent before the delivery id is claimed, so a retry of that delivery is treated as new. **Providers that don't retry lose the event only in this overload case.** Use the provider's redeliver button, or its delivery log, to recover it.
+
+A queued delivery keeps its claim `in_progress`, so a redelivery while it waits is a duplicate. The claim's 15-minute window restarts when the run starts. A queue wait longer than 15 minutes can still let a redelivery through as a second run.
+
+Cooldown and `maxExecutions` are enforced when a run starts: the run is reserved in the database first, so concurrent deliveries can't slip past them. The limits are per API process.
+
+**Shutdown.** Queued runs that haven't started are dropped and their delivery ids released, so a redelivery (manual or by the sender) runs them later. Running actions get up to 1 second to finish. New deliveries during shutdown get `503`.
 
 ## Prerequisites
 
@@ -326,7 +340,8 @@ You can also use template variables in prompts:
 | Hook not firing | Check hook is enabled. Verify `webhookPath` matches. Look at execution log for skipped entries. |
 | 202 but nothing happened | The action runs after the response; check the hook's execution log for an `error` entry. |
 | 200 `duplicate: true` | The delivery id was already processed for this hook (see Idempotency). Send without the id to force a re-run. |
-| 429 on webhook | Too many runs of this hook (2) or overall (20) are in progress; the sender should retry after `Retry-After`. |
+| 503 on webhook | The run queue is over its bound (50 queued per hook, 200 per user), or the server is shutting down. The delivery was not accepted; redeliver it after `Retry-After`. |
+| 202 but the action runs late | The delivery is queued behind other runs of the same hook (2 at a time) or the same user (4 at a time). |
 | Agent runs but no notification | Ensure `notifyOwner: true` is in action config. Verify channel bindings are verified in Settings → Channels. |
 | Agent doesn't see payload | The payload is auto-appended to the prompt. Check execution log → trigger context for the raw data. |
 | 502 from tunnel | Verify the backend is running on port 3005. Check cloudflared/tunnel config has the correct ingress rule. |

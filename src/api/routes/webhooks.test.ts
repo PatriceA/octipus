@@ -6,13 +6,16 @@
  *  - a repeated delivery id fires the hook once (path and id-based routes),
  *    claimed in the shared kv store as in_progress (short TTL) then done
  *    (24h), released only when no action ran;
- *  - per-hook and global caps on background runs answer 429 + Retry-After;
+ *  - the run queue: FIFO per hook, per-user caps, a global ceiling shared
+ *    round-robin across users, 503 + Retry-After only past a queue bound,
+ *    claims refreshed when a queued run starts, and shutdown releasing the
+ *    claims of runs still queued;
  *  - cooldown / maxExecutions hold under concurrency (runs are reserved in
  *    the database before the action starts).
  *
  * The storage provider is the Postgres one, on the embedded database, so the
  * claim SQL is the real thing. executeAction is mocked: it records which
- * hooks ran; `block` waits on a gate the test opens, `fail` returns an
+ * hooks ran; `block` parks until the test releases it, `fail` returns an
  * unsuccessful result and `throw` throws.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -26,13 +29,24 @@ import { sha256 } from '@/utils/crypto';
 
 const executed: string[] = [];
 const bodies: unknown[] = [];
-let gate: Promise<void> = Promise.resolve();
+/** Every action as it starts (before any parking). */
+const started: Array<{ name: string; body: unknown }> = [];
+/** Parked `block` actions, per hook name, released one by one or all at once. */
+const parked = new Map<string, Array<() => void>>();
+let holding = false;
 
 vi.mock('@/hooks/actions', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/hooks/actions')>()),
   executeAction: vi.fn(async (hook: Hook, context: { webhook?: { body?: unknown } }) => {
     const cfg = (hook.actionConfig ?? {}) as Record<string, unknown>;
-    if (cfg.block === true) await gate;
+    started.push({ name: hook.name, body: context.webhook?.body });
+    if (cfg.block === true && holding) {
+      await new Promise<void>((resolve) => {
+        const list = parked.get(hook.name) ?? [];
+        list.push(resolve);
+        parked.set(hook.name, list);
+      });
+    }
     executed.push(hook.name);
     bodies.push(context.webhook?.body);
     if (cfg.throw === true) throw new Error('kaboom');
@@ -51,6 +65,7 @@ process.env.SESSION_SECRET ??= `test-session-${rand(24)}`;
 process.env.LOG_LEVEL ??= 'error';
 
 const userId = '44444444-4444-4444-4444-444444444444';
+const userB = '55555555-5555-5555-5555-555555555555';
 const secret = 'gh-secret';
 const ids: Record<string, string> = {};
 let app: App;
@@ -76,11 +91,20 @@ function deliver(path: string, raw: string, headers: Record<string, string> = {}
   return post(`/webhooks/${path}`, raw, { 'x-hub-signature-256': sign(raw), ...headers });
 }
 
-/** Park every `block` action until the returned function is called. */
+/** Park every `block` action until released; the returned function releases all. */
 function hold(): () => void {
-  let open!: () => void;
-  gate = new Promise<void>((r) => { open = r; });
-  return () => open();
+  holding = true;
+  return releaseAll;
+}
+
+function releaseAll(): void {
+  holding = false;
+  for (const list of parked.values()) for (const resolve of list.splice(0)) resolve();
+}
+
+/** Let the oldest parked run of `name` finish. */
+function releaseOne(name: string): void {
+  parked.get(name)?.shift()?.();
 }
 
 const drain = () => delivery.drainWebhookTasks();
@@ -113,16 +137,18 @@ beforeAll(async () => {
   const { initializeStorage } = await import('@/db/storage');
   initializeStorage({ mode: 'external' });
 
-  const wh = (name: string, path: string | null, action: string, cfg: object, extra = '') => {
+  const wh = (name: string, path: string | null, action: string, cfg: object, extra = '', owner = userId) => {
     const trig = JSON.stringify(path ? { webhookPath: path, webhookSecret: secret } : { webhookSecret: secret });
-    return `('${userId}', '${name}', 'webhook', '${trig}'::jsonb, '${action}', '${JSON.stringify(cfg)}'::jsonb, true${extra})`;
+    return `('${owner}', '${name}', 'webhook', '${trig}'::jsonb, '${action}', '${JSON.stringify(cfg)}'::jsonb, true${extra})`;
   };
-  await pg.executeRaw(`INSERT INTO users (id, username, is_admin) VALUES ('${userId}', 'wh', false) ON CONFLICT DO NOTHING`);
+  await pg.executeRaw(`INSERT INTO users (id, username, is_admin) VALUES ('${userId}', 'wh', false), ('${userB}', 'wh-b', false) ON CONFLICT DO NOTHING`);
   await pg.executeRaw(
     `INSERT INTO hooks (user_id, name, trigger, trigger_config, action, action_config, is_enabled)
      VALUES
        ${wh('gh', 'gh', 'notify', {})},
        ${wh('slow', 'slow', 'spawn_agent', { block: true })},
+       ${wh('slow2', 'slow2', 'spawn_agent', { block: true })},
+       ${wh('b-slow', 'bslow', 'spawn_agent', { block: true }, '', userB)},
        ${wh('failing', 'failing', 'notify', { fail: true })},
        ${wh('throwing', 'throwing', 'notify', { throw: true })},
        ${wh('incoming', null, 'notify', {})},
@@ -154,7 +180,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  gate = Promise.resolve();
+  releaseAll();
   await delivery?.drainWebhookTasks(2000);
   const { closeStorage } = await import('@/db/storage');
   await closeStorage();
@@ -165,7 +191,8 @@ afterAll(async () => {
 beforeEach(() => {
   executed.length = 0;
   bodies.length = 0;
-  gate = Promise.resolve();
+  started.length = 0;
+  releaseAll();
   delivery._setRunLimits();
 });
 
@@ -230,7 +257,7 @@ describe('POST /api/webhooks/:path — background runs', () => {
     try {
       const res = await deliver('slow', '{"slow":true}');
       expect(res.status).toBe(202);
-      expect(executed).toEqual([]); // the action is parked on the gate
+      expect(executed).toEqual([]); // the action is parked
     } finally {
       open();
     }
@@ -245,40 +272,166 @@ describe('POST /api/webhooks/:path — background runs', () => {
     open();
     expect(await delivery.drainWebhookTasks(2000)).toBe(true);
   });
+});
 
-  test('past the per-hook cap: 429 + Retry-After, and the delivery id is not claimed', async () => {
+describe('run queue', () => {
+  const names = () => started.map((s) => s.name);
+
+  test('beyond the per-hook cap, deliveries queue (202) and run later in order', async () => {
     const open = hold();
-    const k3 = `k-${rand(8)}`;
     try {
-      expect((await deliver('slow', '{}', { 'idempotency-key': `k-${rand(8)}` })).status).toBe(202);
-      expect((await deliver('slow', '{}', { 'idempotency-key': `k-${rand(8)}` })).status).toBe(202);
-      const third = await deliver('slow', '{}', { 'idempotency-key': k3 });
-      expect(third.status).toBe(429);
-      expect(third.headers.get('retry-after')).toBe('30');
-      // Another hook still has room.
+      for (let n = 1; n <= 5; n++) expect((await deliver('slow', `{"n":${n}}`)).status).toBe(202);
+      await vi.waitFor(() => expect(names()).toEqual(['slow', 'slow']));
+      // Another hook of the same user isn't held up by this one's queue.
       expect((await deliver('gh', '{}')).status).toBe(202);
+      await vi.waitFor(() => expect(executed).toContain('gh'));
+      for (let i = 0; i < 3; i++) {
+        releaseOne('slow');
+        await vi.waitFor(() => expect(started.filter((s) => s.name === 'slow')).toHaveLength(3 + i));
+      }
     } finally {
       open();
     }
     await drain();
-    // The sender's retry of the 429'd delivery is accepted.
-    expect((await deliver('slow', '{}', { 'idempotency-key': k3 })).status).toBe(202);
-    await drain();
-    expect(executed.filter((n) => n === 'slow')).toHaveLength(3);
+    expect(started.filter((s) => s.name === 'slow').map((s) => s.body)).toEqual(
+      [1, 2, 3, 4, 5].map((n) => ({ n })),
+    );
   });
 
-  test('past the global cap: 429', async () => {
-    delivery._setRunLimits({ global: 1 });
+  test('per-user cap: user A’s backlog doesn’t block user B', async () => {
+    delivery._setRunLimits({ perUser: 2 });
+    const open = hold();
+    try {
+      for (let i = 0; i < 2; i++) expect((await deliver('slow', '{}')).status).toBe(202);
+      for (let i = 0; i < 2; i++) expect((await deliver('slow2', '{}')).status).toBe(202);
+      await vi.waitFor(() => expect(names()).toHaveLength(2)); // A is at its cap
+      expect((await deliver('bslow', '{}')).status).toBe(202);
+      await vi.waitFor(() => expect(names()).toContain('b-slow'));
+      expect(names().filter((n) => n !== 'b-slow')).toHaveLength(2); // A still capped
+    } finally {
+      open();
+    }
+    await drain();
+    expect(executed).toHaveLength(5);
+  });
+
+  test('the global ceiling is handed out round-robin across users', async () => {
+    delivery._setRunLimits({ global: 2 });
+    const open = hold();
+    try {
+      // A queues four runs across two hooks; two start, two wait.
+      for (const path of ['slow', 'slow2', 'slow', 'slow2']) expect((await deliver(path, '{}')).status).toBe(202);
+      await vi.waitFor(() => expect(names()).toEqual(['slow', 'slow2']));
+      // B arrives behind A's backlog.
+      expect((await deliver('bslow', '{}')).status).toBe(202);
+      releaseOne('slow');
+      // The freed slot goes to B, not to A's next queued run.
+      await vi.waitFor(() => expect(names()).toHaveLength(3));
+      expect(names()[2]).toBe('b-slow');
+      releaseOne('slow2');
+      await vi.waitFor(() => expect(names()).toHaveLength(4));
+      expect(names()[3]).toBe('slow');
+    } finally {
+      open();
+    }
+    await drain();
+    expect(executed).toHaveLength(5);
+  });
+
+  test('503 + Retry-After only past the per-hook queue bound; the id is not claimed', async () => {
+    delivery._setRunLimits({ hookPending: 1 });
+    const open = hold();
+    const k = `k-${rand(8)}`;
+    try {
+      expect((await deliver('slow', '{}')).status).toBe(202);
+      expect((await deliver('slow', '{}')).status).toBe(202);
+      await vi.waitFor(() => expect(names()).toHaveLength(2));
+      expect((await deliver('slow', '{}')).status).toBe(202); // queued (1 pending)
+      const over = await deliver('slow', '{}', { 'idempotency-key': k });
+      expect(over.status).toBe(503);
+      expect(over.headers.get('retry-after')).toBe('30');
+    } finally {
+      open();
+    }
+    await drain();
+    expect(executed).toHaveLength(3);
+    // The sender's retry is new, not a duplicate.
+    expect((await deliver('slow', '{}', { 'idempotency-key': k })).status).toBe(202);
+    await drain();
+    expect(executed).toHaveLength(4);
+  });
+
+  test('503 past the per-user queue bound, across that user’s hooks', async () => {
+    delivery._setRunLimits({ perUser: 1, userPending: 1 });
+    const open = hold();
+    try {
+      expect((await deliver('slow', '{}')).status).toBe(202); // runs
+      await vi.waitFor(() => expect(names()).toHaveLength(1));
+      expect((await deliver('slow2', '{}')).status).toBe(202); // queued
+      expect((await deliver('slow', '{}')).status).toBe(503);
+      expect((await deliver('bslow', '{}')).status).toBe(202); // another user is unaffected
+    } finally {
+      open();
+    }
+    await drain();
+  });
+
+  test('a queued delivery keeps its claim, and the 15-minute TTL restarts when it runs', async () => {
+    const id = `d-${rand(8)}`;
+    const key = `webhook-delivery:${ids.slow}:${sha256(id)}`;
+    const claim = async () => {
+      const { rows } = await queryRaw(
+        `SELECT value, expires_at > now() + interval '14 minutes' AS fresh FROM kv_store WHERE key = $1`,
+        [key],
+      );
+      return rows[0] as { value: string; fresh: boolean } | undefined;
+    };
     const open = hold();
     try {
       expect((await deliver('slow', '{}')).status).toBe(202);
-      expect((await deliver('gh', '{}')).status).toBe(429);
+      expect((await deliver('slow', '{}')).status).toBe(202);
+      await vi.waitFor(() => expect(names()).toHaveLength(2));
+      expect((await deliver('slow', '{}', { 'x-github-delivery': id })).status).toBe(202);
+      expect(await claim()).toMatchObject({ value: 'in_progress' });
+      // A redelivery while queued is a duplicate.
+      expect((await deliver('slow', '{}', { 'x-github-delivery': id })).status).toBe(200);
+      // Simulate a long wait in the queue.
+      await queryRaw(`UPDATE kv_store SET expires_at = now() + interval '1 minute' WHERE key = $1`, [key]);
+      expect(await claim()).toMatchObject({ fresh: false });
+      releaseOne('slow');
+      await vi.waitFor(() => expect(names()).toHaveLength(3));
+      await vi.waitFor(async () => expect(await claim()).toEqual({ value: 'in_progress', fresh: true }));
     } finally {
       open();
     }
     await drain();
-    expect((await deliver('gh', '{}')).status).toBe(202);
+    expect(await claim()).toMatchObject({ value: 'done' });
+  });
+
+  test('shutdown drops queued runs and releases their claims; running ones get the bounded wait', async () => {
+    const id = `d-${rand(8)}`;
+    const key = `webhook-delivery:${ids.slow}:${sha256(id)}`;
+    const open = hold();
+    try {
+      expect((await deliver('slow', '{}')).status).toBe(202);
+      expect((await deliver('slow', '{}')).status).toBe(202);
+      await vi.waitFor(() => expect(names()).toHaveLength(2));
+      expect((await deliver('slow', '{}', { 'x-github-delivery': id })).status).toBe(202);
+
+      expect(await delivery.shutdownWebhookTasks(50)).toBe(false); // two still running
+      const { rows } = await queryRaw(`SELECT 1 FROM kv_store WHERE key = $1`, [key]);
+      expect(rows).toHaveLength(0);
+      // New deliveries are turned away while shutting down.
+      expect((await deliver('gh', '{}')).status).toBe(503);
+    } finally {
+      open();
+    }
     await drain();
+    expect(executed).toEqual(['slow', 'slow']); // the queued one never ran
+    delivery._setRunLimits(); // accept again (a restarted process)
+    expect((await deliver('slow', '{}', { 'x-github-delivery': id })).status).toBe(202);
+    await drain();
+    expect(executed).toEqual(['slow', 'slow', 'slow']);
   });
 });
 
@@ -439,7 +592,7 @@ describe('POST /api/hooks/incoming/:hookId', () => {
     expect(res2.status).toBe(401);
   });
 
-  test('responds 202 while the action is still running; 429 past the per-hook cap', async () => {
+  test('responds 202 while the action is still running; queues past the per-hook cap', async () => {
     const open = hold();
     const url = `/hooks/incoming/${ids['incoming-slow']}`;
     const auth = { authorization: `Bearer ${secret}` };
@@ -449,14 +602,13 @@ describe('POST /api/hooks/incoming/:hookId', () => {
       expect(await res.json()).toMatchObject({ accepted: true, hookId: ids['incoming-slow'], hooks: 1 });
       expect(executed).toEqual([]);
       expect((await post(url, '{}', auth)).status).toBe(202);
-      const third = await post(url, '{}', auth);
-      expect(third.status).toBe(429);
-      expect(third.headers.get('retry-after')).toBe('30');
+      expect((await post(url, '{}', auth)).status).toBe(202); // queued
+      await vi.waitFor(() => expect(started).toHaveLength(2));
     } finally {
       open();
     }
     await drain();
-    expect(executed).toEqual(['incoming-slow', 'incoming-slow']);
+    expect(executed).toEqual(['incoming-slow', 'incoming-slow', 'incoming-slow']);
   });
 
   test('a repeated delivery id fires the hook once', async () => {

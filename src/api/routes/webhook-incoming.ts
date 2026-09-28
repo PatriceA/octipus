@@ -3,12 +3,11 @@ import { Elysia, t } from '@/api/http';
 import { getDb } from '@/db/postgres';
 import { hooks } from '@/db/schema/hooks';
 import {
-  acquireRunSlots,
   claimDelivery,
-  fireWebhookHook,
   getDeliveryId,
   RETRY_AFTER_SECONDS,
-  runInBackground,
+  reserveQueueSlots,
+  webhookRunJob,
 } from '@/hooks/webhook-delivery';
 import { secureCompare } from '@/utils/crypto';
 import { apiLogger } from '@/utils/logger';
@@ -45,8 +44,9 @@ function renderTemplate(template: string, data: Record<string, unknown>): string
  * max-execution limits, condition checks, and execution logging all work.
  *
  * The request is answered 202 once authenticated and the action runs in the
- * background (results go to the hook's execution log). Past the concurrency
- * caps (2 runs per hook, 20 overall) the answer is 429 with Retry-After. A
+ * background through the shared run queue (results go to the hook's
+ * execution log). Only when a queue bound is exceeded is the answer 503 with
+ * Retry-After. A
  * delivery id (X-GitHub-Delivery, Idempotency-Key, ...) is claimed per hook;
  * a repeat is answered 200 `{duplicate: true}` without firing. See
  * docs/WEBHOOKS.md.
@@ -103,21 +103,22 @@ export const webhookIncomingRoutes = new Elysia({ prefix: '/hooks/incoming' })
 
       apiLogger.info({ hookId, hookName: hook.name }, 'Incoming webhook received');
 
-      // Concurrency caps, before the delivery id is claimed, so a 429'd
-      // delivery is still new when the sender retries it.
-      const [slot] = acquireRunSlots([hook.id]) ?? [];
-      if (!slot) {
-        apiLogger.warn({ hookId }, 'Incoming webhook rejected: too many runs in progress');
-        set.status = 429;
+      // Queue room, reserved before the delivery id is claimed, so a
+      // delivery turned away (503, queue bound exceeded) is still new when
+      // the sender retries it.
+      const [ticket] = reserveQueueSlots([{ hookId: hook.id, userId: hook.userId }]) ?? [];
+      if (!ticket) {
+        apiLogger.warn({ hookId }, 'Incoming webhook rejected: run queue full');
+        set.status = 503;
         set.headers['Retry-After'] = String(RETRY_AFTER_SECONDS);
-        return { error: 'Too many webhook runs in progress; retry later' };
+        return { error: 'Webhook run queue is full; retry later' };
       }
 
       // Idempotency: a redelivery with the same delivery id is acknowledged
       // without firing the hook again.
       const deliveryId = getDeliveryId(request.headers);
       if (deliveryId && !(await claimDelivery(hook.id, deliveryId))) {
-        slot.release();
+        ticket.cancel();
         apiLogger.info({ hookId, deliveryId }, 'Duplicate incoming webhook delivery ignored');
         return { status: 'duplicate', duplicate: true, hookId: hook.id, hookName: hook.name };
       }
@@ -162,17 +163,17 @@ export const webhookIncomingRoutes = new Elysia({ prefix: '/hooks/incoming' })
       // Trigger through the standard HookManager pipeline, in the background:
       // the action can be a full agent turn, and senders time out (GitHub
       // after ~10s) and redeliver, which would start duplicate runs.
-      runInBackground(
-        { hookId, deliveryId },
-        () =>
-          fireWebhookHook({
+      ticket.submit(
+        webhookRunJob(
+          {
             hook,
             event,
             context,
             deliveryId,
             failureContext: { webhook: { hookId, deliveryId, body: payload } },
-          }),
-        slot,
+          },
+          { hookId, deliveryId },
+        ),
       );
 
       set.status = 202;
