@@ -1,5 +1,6 @@
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
+import { EXTERNAL_CHANNEL_TYPES, EXTERNAL_CHANNELS } from '@/channels/ownership';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { userRepository } from '@/db/repositories/user-repository';
 import { isAdmin, isAuthenticated } from '@/security/principal';
@@ -59,6 +60,7 @@ function publicUser(u: import('@/db/schema/users').User) {
     lastLoginAt: u.lastLoginAt,
   };
 }
+
 
 const UUID_PATTERN = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$';
 
@@ -450,6 +452,105 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
         details: { resumed: true, byAdmin: principal.userId },
       });
       return budget;
+    },
+    {
+      params: t.Object({ id: t.String({ pattern: UUID_PATTERN }) }),
+      detail: { tags: ['admin'] },
+    },
+  )
+
+  // ── Notification destinations ─────────────────────────────────
+  // Shared chats (a Slack #alerts channel, a Telegram group) that hooks,
+  // notifications, monitors and unattended agents may message besides the
+  // owner's own linked chats. orgId null = every user; otherwise that org's
+  // members. Enforcement: src/channels/ownership.ts.
+  // GET    /notification-destinations
+  // POST   /notification-destinations      { channelType, channelId, label?, orgId? }
+  // DELETE /notification-destinations/:id
+  .get(
+    '/notification-destinations',
+    async (ctx) => {
+      const guard = requireAdmin(ctx);
+      if (!guard.ok) return guard.body;
+      const { listDestinations } = await import('@/channels/notification-destinations');
+      return { destinations: await listDestinations(), channelTypes: EXTERNAL_CHANNEL_TYPES };
+    },
+    { detail: { tags: ['admin'] } },
+  )
+
+  .post(
+    '/notification-destinations',
+    async (ctx) => {
+      const guard = requireAdmin(ctx);
+      if (!guard.ok) return guard.body;
+      const { body, principal, set } = ctx;
+      const channelType = body.channelType.trim().toLowerCase();
+      const channelId = body.channelId.trim();
+      if (!EXTERNAL_CHANNELS.has(channelType)) {
+        set.status = 400;
+        return { error: `channelType must be one of ${EXTERNAL_CHANNEL_TYPES.join(', ')}` };
+      }
+      if (!channelId) {
+        set.status = 400;
+        return { error: 'channelId is required' };
+      }
+      const { addDestination } = await import('@/channels/notification-destinations');
+      const result = await addDestination({
+        channelType,
+        channelId,
+        label: body.label?.trim() || null,
+        orgId: body.orgId ?? null,
+        createdBy: principal.userId,
+      });
+      if ('unknownOrg' in result) {
+        set.status = 404;
+        return { error: 'Organization not found' };
+      }
+      if ('conflict' in result) {
+        set.status = 409;
+        return { error: 'This destination is already approved' };
+      }
+      await auditRepository.log({
+        userId: principal.userId,
+        action: 'settings_changed',
+        resourceType: 'notification_destination',
+        resourceId: result.destination.id,
+        details: { channelType, channelId, orgId: body.orgId ?? null, label: body.label ?? null, byAdmin: principal.userId },
+      });
+      set.status = 201;
+      return result.destination;
+    },
+    {
+      body: t.Object({
+        channelType: t.String({ minLength: 1, maxLength: 32 }),
+        channelId: t.String({ minLength: 1, maxLength: 512 }),
+        label: t.Optional(t.Union([t.String({ maxLength: 200 }), t.Null()])),
+        orgId: t.Optional(t.Union([t.String({ pattern: UUID_PATTERN }), t.Null()])),
+      }),
+      detail: { tags: ['admin'] },
+    },
+  )
+
+  .delete(
+    '/notification-destinations/:id',
+    async (ctx) => {
+      const guard = requireAdmin(ctx);
+      if (!guard.ok) return guard.body;
+      const { params, principal, set } = ctx;
+      const { removeDestination } = await import('@/channels/notification-destinations');
+      const removed = await removeDestination(params.id);
+      if (!removed) {
+        set.status = 404;
+        return { error: 'Notification destination not found' };
+      }
+      await auditRepository.log({
+        userId: principal.userId,
+        action: 'settings_changed',
+        resourceType: 'notification_destination',
+        resourceId: params.id,
+        details: { deleted: true, channelType: removed.channelType, channelId: removed.channelId, orgId: removed.orgId, byAdmin: principal.userId },
+      });
+      return { deleted: true };
     },
     {
       params: t.Object({ id: t.String({ pattern: UUID_PATTERN }) }),

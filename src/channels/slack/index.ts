@@ -41,6 +41,8 @@ export class SlackChannel extends BaseChannel {
   readonly name = 'Slack';
 
   private app: App | null = null;
+  /** DM channel id → the Slack user it is with (see dmUser). */
+  private dmUsers = new Map<string, string>();
 
   override isEnabled(config: Config): boolean {
     return Boolean(config.slack?.botToken);
@@ -238,6 +240,8 @@ export class SlackChannel extends BaseChannel {
       }
     }
 
+    if (message.channel_type === 'im' && slackUserId) this.dmUsers.set(channelId, slackUserId);
+
     // Create unified message
     const unifiedMessage = this.createUnifiedMessage(channelId, user.id, message.text || '', {
       userName,
@@ -288,6 +292,29 @@ export class SlackChannel extends BaseChannel {
    */
   getWebClient(): WebClient | null {
     return this.app?.client ?? null;
+  }
+
+  /**
+   * The Slack user a direct-message channel (`D…`) is with, or null for any
+   * other conversation. Learned from inbound DMs, else asked of Slack
+   * (`conversations.info`), so it survives a restart.
+   */
+  async dmUser(channelId: string): Promise<string | null> {
+    const known = this.dmUsers.get(channelId);
+    if (known) return known;
+    const client = this.getWebClient();
+    if (!client) return null;
+    try {
+      const info = await client.conversations.info({ channel: channelId });
+      const ch = info.channel as { is_im?: boolean; user?: string } | undefined;
+      if (ch?.is_im && ch.user) {
+        this.dmUsers.set(channelId, ch.user);
+        return ch.user;
+      }
+    } catch (err) {
+      channelLogger.debug({ err, channelId }, 'Slack conversations.info failed');
+    }
+    return null;
   }
 }
 
