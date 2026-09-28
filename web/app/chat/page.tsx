@@ -297,7 +297,7 @@ export default function ChatPage() {
   // Load messages for a session
   const loadSessionMessages = useCallback(async (sessionId: string) => {
     try {
-      const data = await api.get<{ messages: Array<{ id: string; role: string; content: string; createdAt: string }> }>(
+      const data = await api.get<{ messages: Array<{ id: string; role: string; content: string; createdAt: string; metadata?: { limit?: MessageMetadata['limit'] } | null }> }>(
         `/sessions/${sessionId}/messages?roles=user,assistant,system&limit=10000`
       );
       const msgs = data?.messages?.length
@@ -306,6 +306,8 @@ export default function ChatPage() {
             role: m.role as ChatMessageData['role'],
             content: m.content,
             timestamp: new Date(m.createdAt),
+            // A turn refused by a spend budget keeps its card after a reload.
+            ...(m.metadata?.limit && { metadata: { limit: m.metadata.limit } }),
           }))
         : [welcomeMessage()];
 
@@ -668,6 +670,7 @@ export default function ChatPage() {
           tokens: data.metadata.tokens,
           latencyMs: data.metadata.latencyMs,
           cached: data.metadata.cached,
+          limit: data.metadata.limit,
         } : undefined;
 
         const sid = data.sessionId || activeSessionId;

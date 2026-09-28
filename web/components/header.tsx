@@ -304,7 +304,11 @@ export function Header() {
                           aria-hidden
                           className={cn(
                             'mt-1.5 shrink-0 dot',
-                            !notif.read ? 'dot-ok dot-live text-tertiary' : 'dot-idle'
+                            notif.read ? 'dot-idle'
+                              // Unread spend budgets: red when agents are paused, amber at the warning.
+                              : notif.type === 'spend_budget_paused' ? 'dot-err'
+                              : notif.type === 'spend_budget_warning' ? 'dot-warn'
+                              : 'dot-ok dot-live text-tertiary'
                           )}
                         />
                         <div className="flex-1 min-w-0">

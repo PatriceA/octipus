@@ -21,6 +21,8 @@ export interface SpendBudgetExceededReason {
   period: SpendPeriod;
   spentUsd: number;
   limitUsd: number;
+  /** ISO start of the next period, when the pause lifts on its own. */
+  resetsAt?: string;
 }
 
 export class SpendBudgetExceededError extends Error {
@@ -35,6 +37,7 @@ export class SpendBudgetExceededError extends Error {
   private static formatMessage(r: SpendBudgetExceededReason): string {
     const scope = r.scopeKind === 'user' ? 'user' : `${r.scopeKind} ${r.scopeRef}`;
     return `Spend budget exceeded for ${scope} (per ${r.period}): $${r.spentUsd.toFixed(2)}/$${r.limitUsd.toFixed(2)}. `
-      + 'Agents are paused until the period rolls over. Raise the limit or clear the pause at /api/admin/spend-budgets.';
+      + `Agents are paused until the period rolls over${r.resetsAt ? ` (${r.resetsAt})` : ''}. `
+      + 'Raise the limit or clear the pause at /api/admin/spend-budgets.';
   }
 }

@@ -1,4 +1,5 @@
 import { withProviderUsageContext } from '@/models/providers/instrumented';
+import { limitKindOf } from '@/core/errors/limit-refusal';
 import type { AgentCompletionReason } from '@/shared/agent-completion';
 import { formatWorkPlanContext } from './agent/work-plan-context';
 import { workPlanRepository } from '@/db/repositories/work-plan-repository';
@@ -841,9 +842,22 @@ export class AgentWorker extends BaseAgentWorker {
       // cascaded cancellation surfaces as CascadedCancellationError.
       // Either way the agent should land in 'stopped', not 'failed', so the
       // UI doesn't show a red "failed" after a deliberate cancel.
-      const wasStopped =
+      //
+      // A user cap (spend budget / quota) is checked FIRST: the pre-call gate
+      // aborts this worker's own controller before throwing, so the aborted
+      // signal alone would record a budget refusal as a user stop.
+      //
+      // Unless a stop came first: a user stop (or a parent cascade, which
+      // routes through stop()) that landed while the gate was pending keeps
+      // its stop semantics. stop() aborts with its own reason before the gate
+      // can, so an abort whose reason is not the gate's own means stopped.
+      const abortReason = this.abortController.signal.aborted ? String(this.abortController.signal.reason ?? '') : null;
+      const selfAbort = abortReason === 'spend_budget_exceeded' || !!abortReason?.startsWith('user_quota_exceeded');
+      const stoppedFirst = this.terminalEmitted || (abortReason !== null && !selfAbort);
+      const limitKind = stoppedFirst ? null : limitKindOf(error);
+      const wasStopped = !limitKind && (
         error instanceof CascadedCancellationError ||
-        this.abortController.signal.aborted;
+        this.abortController.signal.aborted);
       const terminalStatus: 'stopped' | 'failed' = wasStopped ? 'stopped' : 'failed';
 
       this.context.status = terminalStatus;
@@ -854,8 +868,8 @@ export class AgentWorker extends BaseAgentWorker {
       // parentSignal abort that never routed through stop(). Guarded so we
       // never double-fire.
       if (!wasStopped) {
-        this.emit('status_change', { status: 'failed' });
-        this.emit('error', { error: (error as Error).message });
+        this.emit('status_change', { status: 'failed', ...(limitKind && { reason: limitKind }) });
+        this.emit('error', { error: (error as Error).message, ...(limitKind && { reason: limitKind }) });
       } else if (!this.terminalEmitted) {
         this.emit('status_change', { status: 'stopped' });
         this.emit('complete', {
@@ -874,14 +888,14 @@ export class AgentWorker extends BaseAgentWorker {
       this.detached.cancelAll((error as Error).message || 'parent failed');
 
       const failDurationMs = Date.now() - this.startTime;
-      const logFn = wasStopped ? agentLogger.info : agentLogger.error;
+      const logFn = wasStopped ? agentLogger.info : limitKind ? agentLogger.warn : agentLogger.error;
       logFn.call(agentLogger, {
         agentId: this.context.id, sessionId: this.context.sessionId,
         iteration: this.iteration, elapsedMs: failDurationMs,
         totalTokensUsed: this.totalTokensUsed,
         model: this.context.model, role: this.context.role,
         error: (error as Error).message,
-      }, wasStopped ? 'Agent stopped' : 'Agent failed');
+      }, wasStopped ? 'Agent stopped' : limitKind ? `Agent refused by ${limitKind}` : 'Agent failed');
 
       // Audit log only for real failures — a stop is not a failure.
       if (!wasStopped) {
@@ -899,6 +913,7 @@ export class AgentWorker extends BaseAgentWorker {
         billableTokens: this.billableTokensUsed,
         durationMs: failDurationMs,
         error: wasStopped ? undefined : (error as Error).message,
+        ...(limitKind && { failureReason: limitKind }),
       }).catch(err => agentLogger.error({ err, agentId: this.context.id }, 'Failed to persist agent terminal status'));
 
       // Close any browser tabs the agent opened via browser-ext.new_tab
