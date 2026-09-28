@@ -2,6 +2,7 @@ import { resolve } from 'path';
 import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
 import { humanizeProviderError } from '@/core/errors/humanize';
+import { type LimitRefusal, limitRefusalOf } from '@/core/errors/limit-refusal';
 import { isCancellationError } from '@/core/swarm/errors';
 import { swarmNodeRepository } from '@/core/swarm/node-repository';
 import { taskFingerprint } from '@/core/swarm/spawner';
@@ -148,7 +149,7 @@ export async function runRootAgent(
   workspaceId: string | null = null,
   /** Chat/work split (Thread 3): inline vs file deliverable directive. */
   outputDirective: { mode: 'inline' | 'file'; forced: boolean } = { mode: 'inline', forced: false },
-): Promise<{ response: string; agentId: string; sources: string[]; outcome: TurnOutcome }> {
+): Promise<{ response: string; agentId: string; sources: string[]; outcome: TurnOutcome; limit?: LimitRefusal }> {
   const emit = deps.emit;
   const agentManager = getAgentManager();
   // One routing decision, used twice: the model comes from the lane, and so do
@@ -815,7 +816,12 @@ export async function runRootAgent(
     deps.setLastWorkerResult(null);
 
     const errMsg = (error as Error).message || '';
-    const wasStopped = errMsg.includes('aborted') || errMsg.includes('stopped') || worker.getStatus() === 'stopped';
+    // A spend budget or quota refusal is neither a failure nor a stop. The
+    // worker aborts itself on a spend pause, so without this check its
+    // 'stopped' status reported the refusal as "Task was stopped".
+    const limit = limitRefusalOf(error);
+    const wasStopped = !limit
+      && (errMsg.includes('aborted') || errMsg.includes('stopped') || worker.getStatus() === 'stopped');
     // Admin cancel / cascaded abort is an intentional outcome — don't log it
     // as `error`. The status downstream is already 'stopped'/'cancelled'.
     if (wasStopped || isCancellationError(error)) {
@@ -874,6 +880,7 @@ export async function runRootAgent(
       coreLogger.debug({ err, agentId }, 'swarm root failure bookkeeping skipped');
     }
 
+    if (limit) return { response: limit.text, agentId, sources: [], outcome: 'failed', limit: limit.refusal };
     const response = wasStopped
       ? 'Task was stopped. Would you like to adjust the request or start something new?'
       : `I encountered an error while processing your request: ${humanizeProviderError(errMsg)}`;

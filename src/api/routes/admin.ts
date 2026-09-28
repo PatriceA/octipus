@@ -340,11 +340,34 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
     async (ctx) => {
       const guard = requireAdmin(ctx);
       if (!guard.ok) return guard.body;
-      const { listBudgets } = await import('@/security/spend-budgets');
-      return { budgets: await listBudgets(ctx.query.userId) };
+      const { listBudgets, budgetStatusesFor } = await import('@/security/spend-budgets');
+      const userId = ctx.query.userId;
+      // With a user, also return each budget's current-period spend and
+      // state — the same view that user sees at /api/spend-budgets/me.
+      if (userId) {
+        const [budgets, statuses] = await Promise.all([listBudgets(userId), budgetStatusesFor(userId)]);
+        return { budgets, statuses };
+      }
+      return { budgets: await listBudgets() };
     },
     {
       query: t.Object({ userId: t.Optional(t.String({ pattern: UUID_PATTERN })) }),
+      detail: { tags: ['admin'] },
+    },
+  )
+
+  // Workspaces a user owns — the scope picker for a workspace budget.
+  .get(
+    '/users/:id/workspaces',
+    async (ctx) => {
+      const guard = requireAdmin(ctx);
+      if (!guard.ok) return guard.body;
+      const { getOrgWorkspaceManager } = await import('@/security/orgs');
+      const items = await getOrgWorkspaceManager().listOwn(ctx.params.id);
+      return { workspaces: items.map(w => ({ id: w.id, name: w.name, slug: w.slug, isDefault: w.isDefault })) };
+    },
+    {
+      params: t.Object({ id: t.String({ pattern: UUID_PATTERN }) }),
       detail: { tags: ['admin'] },
     },
   )

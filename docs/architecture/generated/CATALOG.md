@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-411 mounted routes across 61 route files. The path is the full one, group prefix included — what a client actually calls.
+413 mounted routes across 62 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -45,6 +45,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/admin/users` | `src/api/routes/admin.ts` |
 | POST | `/api/admin/users` | `src/api/routes/admin.ts` |
 | PATCH | `/api/admin/users/:id` | `src/api/routes/admin.ts` |
+| GET | `/api/admin/users/:id/workspaces` | `src/api/routes/admin.ts` |
 | GET | `/api/agents` | `src/api/routes/agents.ts` |
 | POST | `/api/agents` | `src/api/routes/agents.ts` |
 | DELETE | `/api/agents/:id` | `src/api/routes/agents.ts` |
@@ -367,6 +368,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | PATCH | `/api/skills/topics/bulk/:skillId` | `src/api/routes/skill-topic-assignments.ts` |
 | GET | `/api/skills/usage` | `src/api/routes/skills.ts` |
 | PATCH | `/api/skills/usage` | `src/api/routes/skills.ts` |
+| GET | `/api/spend-budgets/me` | `src/api/routes/spend-budgets.ts` |
 | GET | `/api/swarm/nodes` | `src/api/routes/swarm.ts` |
 | GET | `/api/swarm/nodes/:id` | `src/api/routes/swarm.ts` |
 | POST | `/api/swarm/nodes/:id/cancel` | `src/api/routes/swarm.ts` |
@@ -453,7 +455,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `mcp` | 3 |
 | `api` | `models` | 31 |
 | `api` | `plugins` | 1 |
-| `api` | `security` | 76 |
+| `api` | `security` | 79 |
 | `api` | `services` | 4 |
 | `api` | `shared` | 2 |
 | `api` | `skills` | 4 |
@@ -493,7 +495,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 5 |
 | `core` | `models` | 84 |
-| `core` | `security` | 58 |
+| `core` | `security` | 60 |
 | `core` | `services` | 1 |
 | `core` | `shared` | 13 |
 | `core` | `skills` | 8 |
@@ -537,7 +539,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `security` | `config` | 12 |
 | `security` | `connectors` | 3 |
 | `security` | `core` | 2 |
-| `security` | `db` | 53 |
+| `security` | `db` | 54 |
 | `security` | `tools` | 1 |
 | `security` | `utils` | 21 |
 | `services` | `capabilities` | 5 |

@@ -1,3 +1,5 @@
+import type { LimitRefusal } from '@/core/errors/limit-refusal';
+
 /**
  * A specialist arm. There is no `orchestrator` role any more: the root agent
  * of a turn runs as `general` (see `ROOT_ROLE`), and the role that could only
@@ -197,6 +199,12 @@ export interface ResponseMetadata {
    * instrumentation, logs, and offline eval.
    */
   sources?: string[];
+  /**
+   * Set when the turn was refused by a user cap (spend budget or quota). The
+   * response text already says so; this carries the structured reason for
+   * clients that render it (the web chat's budget card).
+   */
+  limit?: LimitRefusal;
 }
 
 /**

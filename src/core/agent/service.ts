@@ -23,6 +23,7 @@ import { VoicePlanGate } from './voice-plan-gate';
 import { guardInput } from './input-guard';
 import { ModelSelector } from './model-selector';
 import { runRootAgent } from './root-runner';
+import { type LimitRefusal, limitRefusalOf } from '@/core/errors/limit-refusal';
 import { guardOutput, stripSwarmScaffolding } from './output-guard';
 import { filterPII } from './pii-filter';
 import { maybeCompactSession } from './session-compaction';
@@ -586,7 +587,7 @@ export class AgentService {
 
       const startTime = Date.now();
       const turnGeneration = sessionGeneration((await sessionRepository.findById(resolvedSessionId))?.context);
-      const { response, agentId, sources, outcome } = await this.runRootAgent(
+      const { response, agentId, sources, outcome, limit } = await this.runRootAgent(
         resolvedSessionId, userId, message, classification, inputGuard.flags, channel,
         turnContext,
         workspaceId,
@@ -640,7 +641,7 @@ export class AgentService {
         agentId,
         outcome,
         classification,
-        metadata: { latencyMs: Date.now() - startTime },
+        metadata: { latencyMs: Date.now() - startTime, ...(limit && { limit }) },
       };
     } catch (error) {
       recordRootRun(channel, undefined, 'error');
@@ -663,6 +664,18 @@ export class AgentService {
           outcome: 'failure',
           failureReason: (error as Error).message,
         }).catch(err => coreLogger.error({ err }, 'Trajectory finalize (failure path) failed'));
+      }
+      // A spend budget or quota refusal at spawn (the budget was already
+      // paused) says which cap, how much, and when it resets — not "error".
+      const limit = limitRefusalOf(error);
+      if (limit) {
+        return {
+          response: limit.text,
+          sessionId,
+          outcome: 'failed',
+          classification: { type: 'casual', confidence: 0 },
+          metadata: { limit: limit.refusal },
+        };
       }
       return {
         response: `I encountered an error processing your message: ${(error as Error).message}`,
@@ -691,7 +704,7 @@ export class AgentService {
     workspaceId: string | null = null,
     /** Chat/work split (Thread 3): inline vs file deliverable directive. */
     outputDirective: { mode: 'inline' | 'file'; forced: boolean } = { mode: 'inline', forced: false },
-  ): Promise<{ response: string; agentId: string; sources: string[]; outcome: TurnOutcome }> {
+  ): Promise<{ response: string; agentId: string; sources: string[]; outcome: TurnOutcome; limit?: LimitRefusal }> {
     return runRootAgent(
       this, this.deps,
       sessionId, userId, message, classification, guardFlags, channel,

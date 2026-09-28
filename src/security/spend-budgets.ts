@@ -72,7 +72,7 @@ const CACHE_MAX = 5_000;
 // Keyed per user / per budget scope (never per period), so a new period
 // overwrites the entry rather than adding one.
 const budgetCache = new Map<string, { rows: SpendBudget[]; expires: number }>();
-const spendCache = new Map<string, { start: number; value: number; expires: number }>();
+const spendCache = new Map<string, { start: number; value: SpendBreakdown; expires: number }>();
 
 function remember<V extends { expires: number }>(cache: Map<string, V>, key: string, value: V): void {
   if (cache.size >= CACHE_MAX) {
@@ -93,6 +93,13 @@ export function periodStart(period: SpendPeriod, now: Date): Date {
     : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 }
 
+/** Start of the next period: when a pause lifts on its own. */
+export function periodEnd(period: SpendPeriod, now: Date): Date {
+  return period === 'day'
+    ? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1))
+    : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+}
+
 async function budgetsOf(userId: string, now: Date): Promise<SpendBudget[]> {
   const hit = budgetCache.get(userId);
   if (hit && hit.expires > now.getTime()) return hit.rows;
@@ -101,28 +108,51 @@ async function budgetsOf(userId: string, now: Date): Promise<SpendBudget[]> {
   return rows;
 }
 
-async function spendSince(budget: SpendBudget, start: Date, now: Date): Promise<number> {
+/** Spend of one budget over a period, split by how the cost was measured. */
+export interface SpendBreakdown {
+  /** SUM(cost_log.total_cost) — what enforcement compares to the limit. */
+  totalUsd: number;
+  /** The part of `totalUsd` computed from model pricing, not reported by the provider. */
+  estimatedUsd: number;
+  /** Calls whose cost is unknown (`costSource` 'unknown'): logged at $0. */
+  unmeasuredCalls: number;
+}
+
+/**
+ * The one spend query for a budget scope. Enforcement (`checkSpend`) and the
+ * read API (`budgetStatusesFor`) both go through it, so a budget card can
+ * never show a figure the pause does not act on.
+ */
+async function spendSince(budget: SpendBudget, start: Date, now: Date): Promise<SpendBreakdown> {
   const key = `${budget.userId}:${budget.scopeKind}:${budget.scopeRef ?? ''}:${budget.period}`;
   const hit = spendCache.get(key);
   if (hit && hit.start === start.getTime() && hit.expires > now.getTime()) return hit.value;
 
   const db = getDb();
-  const total = sql<number>`COALESCE(SUM(${costLog.totalCost}), 0)::float8`;
+  const fields = {
+    s: sql<number>`COALESCE(SUM(${costLog.totalCost}), 0)::float8`,
+    est: sql<number>`COALESCE(SUM(${costLog.totalCost}) FILTER (WHERE COALESCE(${costLog.metadata}->>'costSource', 'estimated') = 'estimated'), 0)::float8`,
+    unk: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'costSource' = 'unknown')::int`,
+  };
   const base = and(eq(costLog.userId, budget.userId), gte(costLog.createdAt, start));
-  let rows: { s: number }[];
+  let rows: { s: number; est: number; unk: number }[];
   if (budget.scopeKind === 'role') {
-    rows = await db.select({ s: total }).from(costLog)
+    rows = await db.select(fields).from(costLog)
       .innerJoin(agents, eq(agents.id, costLog.agentId))
       .where(and(base, eq(agents.role, budget.scopeRef ?? '')));
   } else if (budget.scopeKind === 'workspace') {
-    rows = await db.select({ s: total }).from(costLog)
+    rows = await db.select(fields).from(costLog)
       .leftJoin(agents, eq(agents.id, costLog.agentId))
       .leftJoin(sessions, eq(sessions.id, costLog.sessionId))
       .where(and(base, sql`COALESCE(${agents.workspaceId}, ${sessions.workspaceId})::text = ${budget.scopeRef ?? ''}`));
   } else {
-    rows = await db.select({ s: total }).from(costLog).where(base);
+    rows = await db.select(fields).from(costLog).where(base);
   }
-  const value = Number(rows[0]?.s ?? 0);
+  const value: SpendBreakdown = {
+    totalUsd: Number(rows[0]?.s ?? 0),
+    estimatedUsd: Number(rows[0]?.est ?? 0),
+    unmeasuredCalls: Number(rows[0]?.unk ?? 0),
+  };
   remember(spendCache, key, { start: start.getTime(), value, expires: now.getTime() + CACHE_TTL_MS });
   return value;
 }
@@ -162,10 +192,10 @@ export async function checkSpend(scope: SpendScope, now: Date = new Date()): Pro
   for (const b of budgets) {
     const start = periodStart(b.period, now);
     const limitUsd = Number(b.limitUsd);
-    const spentUsd = await spendSince(b, start, now);
+    const spentUsd = (await spendSince(b, start, now)).totalUsd;
     const reason = {
       budgetId: b.id, userId: b.userId, scopeKind: b.scopeKind, scopeRef: b.scopeRef,
-      period: b.period, spentUsd, limitUsd,
+      period: b.period, spentUsd, limitUsd, resetsAt: periodEnd(b.period, now).toISOString(),
     };
 
     if (b.pausedAt && b.pausedAt >= start) throw new SpendBudgetExceededError(reason);
@@ -200,6 +230,107 @@ export async function checkSpend(scope: SpendScope, now: Date = new Date()): Pro
     } else {
       out.push({ budget: b, spentUsd, limitUsd, state: 'ok' });
     }
+  }
+  return out;
+}
+
+// ── Read view (GET /api/spend-budgets/me, admin list) ───────────────
+
+/** One budget as the user-facing and admin screens show it. */
+export interface SpendBudgetView {
+  id: string;
+  userId: string;
+  scopeKind: SpendScopeKind;
+  scopeRef: string | null;
+  /** Workspace name for a workspace budget; the role name for a role budget. */
+  scopeName: string | null;
+  period: SpendPeriod;
+  limitUsd: number;
+  warnRatio: number;
+  /** Spend this period — the same sum `checkSpend` compares to the limit. */
+  spentUsd: number;
+  /** Part of `spentUsd` computed from model pricing rather than reported. */
+  estimatedUsd: number;
+  /** Calls this period logged at $0 because their cost is unknown. */
+  unmeasuredCalls: number;
+  /**
+   * True when the figure is known to under-count: some calls this period
+   * came from CLI / subscription providers that report no cost.
+   */
+  unmeasured: boolean;
+  /** spent / limit × 100, not capped at 100. */
+  percent: number;
+  /**
+   * Judged against the current period start: `paused` when the pause stamp
+   * is from this period or spend is already at the limit (the next check
+   * would pause), `warned` at or above the warn ratio.
+   */
+  state: 'ok' | 'warned' | 'paused';
+  periodStart: string;
+  /** Start of the next period, when a pause lifts on its own. */
+  resetsAt: string;
+  /** This period's stamps only — a stamp from an earlier period is inert and reported as null. */
+  pausedAt: string | null;
+  warnedAt: string | null;
+  updatedAt: string;
+}
+
+/**
+ * Every budget stored for a user, with its current-period spend and state.
+ * Read-only: unlike `checkSpend` it stamps nothing and sends no notification.
+ * Budget rows are read fresh (an admin's resume shows at once); spend sums
+ * share `checkSpend`'s 30s cache.
+ */
+export async function budgetStatusesFor(userId: string, now: Date = new Date()): Promise<SpendBudgetView[]> {
+  if (!UUID_RE.test(userId)) return [];
+  const rows = await listBudgets(userId);
+  if (rows.length === 0) return [];
+
+  const wsNames = new Map<string, string>();
+  if (rows.some(b => b.scopeKind === 'workspace')) {
+    const { workspaces } = await import('@/db/schema/organizations');
+    const ws = await getDb().select({ id: workspaces.id, name: workspaces.name })
+      .from(workspaces).where(eq(workspaces.userId, userId));
+    for (const w of ws) wsNames.set(w.id.toLowerCase(), w.name);
+  }
+
+  const order: Record<SpendScopeKind, number> = { user: 0, role: 1, workspace: 2 };
+  const sorted = [...rows].sort((a, b) =>
+    order[a.scopeKind] - order[b.scopeKind]
+    || (a.scopeRef ?? '').localeCompare(b.scopeRef ?? '')
+    || a.period.localeCompare(b.period));
+
+  const out: SpendBudgetView[] = [];
+  for (const b of sorted) {
+    const start = periodStart(b.period, now);
+    const spend = await spendSince(b, start, now);
+    const limitUsd = Number(b.limitUsd);
+    const pausedAt = b.pausedAt && b.pausedAt >= start ? b.pausedAt : null;
+    const warnedAt = b.warnedAt && b.warnedAt >= start ? b.warnedAt : null;
+    const state: SpendBudgetView['state'] = pausedAt || spend.totalUsd >= limitUsd ? 'paused'
+      : warnedAt || spend.totalUsd >= limitUsd * b.warnRatio ? 'warned' : 'ok';
+    out.push({
+      id: b.id,
+      userId: b.userId,
+      scopeKind: b.scopeKind,
+      scopeRef: b.scopeRef,
+      scopeName: b.scopeKind === 'workspace' ? (wsNames.get(b.scopeRef ?? '') ?? null)
+        : b.scopeKind === 'role' ? b.scopeRef : null,
+      period: b.period,
+      limitUsd,
+      warnRatio: b.warnRatio,
+      spentUsd: spend.totalUsd,
+      estimatedUsd: spend.estimatedUsd,
+      unmeasuredCalls: spend.unmeasuredCalls,
+      unmeasured: spend.unmeasuredCalls > 0,
+      percent: limitUsd > 0 ? Math.round((spend.totalUsd / limitUsd) * 1000) / 10 : 0,
+      state,
+      periodStart: start.toISOString(),
+      resetsAt: periodEnd(b.period, now).toISOString(),
+      pausedAt: pausedAt?.toISOString() ?? null,
+      warnedAt: warnedAt?.toISOString() ?? null,
+      updatedAt: b.updatedAt.toISOString(),
+    });
   }
   return out;
 }
