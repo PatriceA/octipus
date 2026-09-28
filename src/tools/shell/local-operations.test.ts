@@ -22,7 +22,7 @@ describe('LocalShellOperations.spawnBackground', () => {
 
   it('runs `cd <dir> && <cmd>` as cwd + cmd, quoted or not, without a shell', async () => {
     const dir = process.cwd();
-    for (const cmd of [`cd "${dir}" && pwd`, `cd '${dir}' && pwd`, `cd ${dir} && pwd`]) {
+    for (const cmd of [`cd "${dir}" && node -p "process.cwd()"`, `cd '${dir}' && node -p "process.cwd()"`, `cd ${dir} && node -p "process.cwd()"`]) {
       const r = await ops.exec(cmd, '/', { timeout: 5000 });
       expect(r.stdout.trim()).toBe(dir);
     }
