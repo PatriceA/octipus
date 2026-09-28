@@ -274,6 +274,16 @@ export class ChannelBindingManager {
 
     if (result.length === 0) return false;
 
+    // Drop the legacy JSONB mirror too (redeem writes one). Left behind,
+    // findUserByExternalId's legacy fallback would resolve the chat to this
+    // user again and re-create the row this call just deleted.
+    try {
+      const { userRepository } = await import('@/db/repositories/user-repository');
+      await userRepository.removeChannelBinding(result[0].userId, channelType, externalId);
+    } catch (err) {
+      securityLogger.warn({ err, channelType, externalId }, 'Removing legacy channel binding after unbind failed');
+    }
+
     await auditRepository.log({
       userId,
       action: 'credential_deleted',

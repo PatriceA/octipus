@@ -1,7 +1,10 @@
 import { createHash } from 'crypto';
 import { getUMI } from '@/channels/interface';
+import { deliver, loadNotifyScope, NotifyTargetNotAllowedError, ownerTargets, scopeAllows } from '@/channels/ownership';
 import type { ChannelMessage } from '@/core/channels/messages';
 import type { AgentContext, ToolManifest } from '@/core/types';
+import { canPromptHuman } from '@/security/approval-policy';
+import { toolLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
 // In-process dedup so a fan-out of sibling agents doesn't ping the user N times
@@ -62,12 +65,17 @@ export class MessagingTool extends BaseTool {
         message: { type: 'string', description: 'Message content to send', required: true },
         reply_to: { type: 'string', description: 'Thread or message ID to reply to (optional)' },
       }),
-      async (args) => {
+      async (args, context) => {
         const umi = getUMI();
         const channel = args.channel as string;
         const target = args.target as string;
+        // Unattended (hook, cron, heartbeat, execute_tool): nobody approved
+        // this send, so it may only reach the user's own chats or an
+        // admin-approved shared destination. Attended use is approved per
+        // send through the permission prompt.
+        const unattended = !canPromptHuman(context);
 
-        if (!umi.isChannelAvailable(channel as any)) {
+        if (!unattended && !umi.isChannelAvailable(channel as any)) {
           return { success: false, error: `Channel ${channel} is not connected` };
         }
 
@@ -77,6 +85,16 @@ export class MessagingTool extends BaseTool {
         }
 
         try {
+          if (unattended) {
+            const scope = await loadNotifyScope(context.userId);
+            if (!(await scopeAllows(scope, channel, target))) {
+              toolLogger.warn({ userId: context.userId, agentId: context.id, channel, target }, 'Unattended send_message to a target the user may not notify; refused');
+              return { success: false, error: new NotifyTargetNotAllowedError(`${channel}:${target}`).message };
+            }
+            await deliver(scope, channel, target, { content: args.message as string });
+            markSent(dedupKey);
+            return { success: true, channel, target };
+          }
           const messageId = await umi.send(channel as any, target, {
             content: args.message as string,
           });
@@ -96,17 +114,20 @@ export class MessagingTool extends BaseTool {
         message: { type: 'string', description: 'Message content', required: true },
         channel: { type: 'string', description: 'Specific channel to use (optional — sends to all verified channels if omitted)' },
       }),
-      async (args) => {
+      async (args, context) => {
+        // Unattended runs may only message the calling user themselves.
+        if (!canPromptHuman(context) && args.user_id !== context.userId) {
+          toolLogger.warn({ userId: context.userId, agentId: context.id, target: args.user_id }, 'Unattended send_to_user to another user; refused');
+          return { success: false, error: 'An unattended run can only send_to_user yourself' };
+        }
         const { userRepository } = await import('@/db/repositories/user-repository');
         const user = await userRepository.findById(args.user_id as string);
         if (!user) return { success: false, error: 'User not found' };
 
-        let rawBindings = user.channelBindings as import('@/db/schema/users').ChannelBinding[] | string;
-        if (typeof rawBindings === 'string') {
-          try { rawBindings = JSON.parse(rawBindings); } catch { rawBindings = []; }
-        }
-        const bindings = (rawBindings as import('@/db/schema/users').ChannelBinding[]) || [];
-        const verified = bindings.filter(b => b.isVerified);
+        // The recipient's own verified identities, resolved canonically
+        // (channel_identities first, then the legacy JSON column).
+        const scope = await loadNotifyScope(user.id);
+        const verified = ownerTargets(scope);
 
         if (verified.length === 0) {
           return { success: false, error: 'User has no verified channel bindings' };
@@ -135,7 +156,7 @@ export class MessagingTool extends BaseTool {
               results.push({ channel: binding.channelType, success: false, error: 'Channel not connected' });
               continue;
             }
-            await umi.send(binding.channelType as any, binding.channelUserId, {
+            await deliver(scope, binding.channelType, binding.channelId, {
               content: args.message as string,
             });
             results.push({ channel: binding.channelType, success: true });

@@ -174,6 +174,32 @@ export class TeamsChannel extends BaseChannel {
     }
   }
 
+  /**
+   * The Teams user (aadObjectId, else from.id) of a stored 1:1 ('personal')
+   * conversation. Undefined for an unknown conversation and for group chats
+   * and team channels, which belong to no single user.
+   */
+  personalConversationUser(conversationId: string): string | undefined {
+    const ref = this.conversationReferences.get(conversationId) as
+      | { conversation?: { conversationType?: string }; user?: { aadObjectId?: string; id?: string } }
+      | undefined;
+    if (!ref || ref.conversation?.conversationType !== 'personal') return undefined;
+    return ref.user?.aadObjectId || ref.user?.id || undefined;
+  }
+
+  /**
+   * Conversation ids of the stored 1:1 conversations with a Teams user. Teams
+   * identities are keyed by aadObjectId, but a proactive send needs a
+   * conversation reference; this maps one to the other.
+   */
+  personalConversationsFor(teamsUserId: string): string[] {
+    const out: string[] = [];
+    for (const id of this.conversationReferences.keys()) {
+      if (this.personalConversationUser(id) === teamsUserId) out.push(id);
+    }
+    return out;
+  }
+
   async send(channelId: string, response: ChannelResponse): Promise<string> {
     if (!this.adapter) {
       throw new Error('Teams adapter not connected');

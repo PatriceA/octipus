@@ -74,11 +74,6 @@ export class WebChatChannel extends BaseChannel {
     return connectionId;
   }
 
-  /** The user a live connection belongs to, or undefined when it is unknown. */
-  connectionOwner(connectionId: string): string | undefined {
-    return this.connections.get(connectionId)?.userId;
-  }
-
   /**
    * Unregister a connection
    */

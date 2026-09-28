@@ -68,11 +68,13 @@ export class UserRepository {
     return false;
   }
 
-  private parseBindings(raw: unknown): ChannelBinding[] {
-    if (typeof raw === 'string') {
-      try { return JSON.parse(raw); } catch { return []; }
+  /** The legacy `users.channelBindings` column as an array (it may be stored as a JSON string). */
+  parseBindings(raw: unknown): ChannelBinding[] {
+    let v = raw;
+    if (typeof v === 'string') {
+      try { v = JSON.parse(v); } catch { return []; }
     }
-    return (raw as ChannelBinding[]) || [];
+    return Array.isArray(v) ? (v as ChannelBinding[]) : [];
   }
 
   async addChannelBinding(userId: string, binding: ChannelBinding): Promise<User | null> {

@@ -1,6 +1,7 @@
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { scopedRepos } from '@/db/repositories/scoped';
+import { notifyTargetsError } from '@/hooks/actions';
 import { getHookManager } from '@/hooks/manager';
 import { isAuthenticated } from '@/security/principal';
 
@@ -31,8 +32,15 @@ export const recurringTaskRoutes = new Elysia({ prefix: '/recurring-tasks' })
     return { task: hookToTask(hook) };
   }, { params: t.Object({ id: t.String() }), detail: { tags: ['recurring-tasks'] } })
 
-  .post('/', async ({ user, body }) => {
+  .post('/', async ({ user, body, set }) => {
     if (!user) return { error: 'Not authenticated' };
+    // An execute_tool task on the messaging tool sends unattended: its
+    // literal targets must be the caller's own chats or approved destinations.
+    const targetError = await notifyTargetsError(user.id, body.actionConfig);
+    if (targetError) {
+      set.status = 400;
+      return { error: targetError };
+    }
     const hookManager = getHookManager();
 
     const hook = await hookManager.createHook({

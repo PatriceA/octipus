@@ -59,19 +59,20 @@ export class NotificationService {
       if (deliverTo?.length) {
         try {
           const { getUMI } = await import('@/channels/interface');
-          const { parseChannelTarget, userOwnsChannel } = await import('@/channels/ownership');
+          const { deliver, loadNotifyScope, parseChannelTarget, scopeAllows } = await import('@/channels/ownership');
           const umi = getUMI();
+          const scope = await loadNotifyScope(userId);
           for (const target of deliverTo) {
             const parsed = parseChannelTarget(String(target));
             if (!parsed) continue;
             const { channelType, channelId } = parsed;
-            // Only ever deliver to chats linked to the notified user.
-            if (!(await userOwnsChannel(userId, channelType, channelId))) {
-              coreLogger.warn({ userId, type, target }, 'Notification deliverTo target is not linked to the user; skipping it');
+            // Only the notified user's own chats or approved shared destinations.
+            if (!(await scopeAllows(scope, channelType, channelId))) {
+              coreLogger.warn({ userId, type, target }, 'Notification deliverTo target is not linked to the user nor an approved shared destination; skipping it');
               continue;
             }
             if (umi.isChannelAvailable(channelType as any)) {
-              umi.send(channelType as any, channelId, {
+              deliver(scope, channelType, channelId, {
                 content: `${title}${body ? `\n${body}` : ''}`,
               }).catch(err => coreLogger.error({ err, target }, 'Channel delivery failed'));
             }

@@ -4,7 +4,11 @@ import { turnEventMessage } from '@/api/turn-event-message';
 import { turnEventToGateway } from '@/core/gateway/event-bridge';
 import type { Monitor } from '@/db/schema/monitors';
 import type { TurnEvent, TurnResult } from '@/core/agent/service';
-const fixture = vi.hoisted(() => ({ session: vi.fn(), publish: vi.fn(), send: vi.fn() }));
+const fixture = vi.hoisted(() => ({ session: vi.fn(), publish: vi.fn(), send: vi.fn(), canNotify: vi.fn() }));
+vi.mock('@/channels/ownership', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/channels/ownership')>()),
+  canNotify: fixture.canNotify,
+}));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: { findById: fixture.session } }));
 vi.mock('@/core/agent/service', () => ({ getAgentService: () => ({ publishResponse: fixture.publish }) }));
 vi.mock('@/channels/interface', () => ({ getUMI: () => ({ send: fixture.send }) }));
@@ -13,6 +17,15 @@ const result: TurnResult = { response: 'Pipeline succeeded. Results collected.',
 beforeEach(() => {
   fixture.session.mockReset().mockResolvedValue({ userId: 'owner', context: {}, channelType: 'webchat' });
   fixture.publish.mockReset(); fixture.send.mockReset().mockResolvedValue('sent');
+  fixture.canNotify.mockReset().mockResolvedValue(true);
+});
+test('a session whose chat the owner may not notify gets no channel reply', async () => {
+  fixture.session.mockResolvedValue({ userId: 'owner', context: {}, channelType: 'telegram', channelId: 'someone-else' });
+  fixture.canNotify.mockResolvedValue(false);
+  await expect(deliverMonitorResponse(row, result)).rejects.toThrow('not an approved shared destination');
+  expect(fixture.canNotify).toHaveBeenCalledWith('owner', 'telegram', 'someone-else');
+  expect(fixture.publish).toHaveBeenCalled(); // the in-app reply still lands
+  expect(fixture.send).not.toHaveBeenCalled();
 });
 test('background reply reaches both legacy webchat and gateway wire formats', async () => {
   await deliverMonitorResponse(row, result);

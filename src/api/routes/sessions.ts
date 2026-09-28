@@ -9,6 +9,7 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import { scopedRepos } from '@/db/repositories/scoped';
 import { isAuthenticated } from '@/security/principal';
 import { WorkspaceFS } from '@/security/workspace-fs';
+import { canNotify, IN_APP_CHANNELS, NOT_ALLOWED_MESSAGE } from '@/channels/ownership';
 
 /**
  * Session routes — Phase 1a multi-user conversion.
@@ -152,9 +153,19 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         return { error: 'Not authenticated' };
       }
 
+      // A session's channel is where its replies (monitors, channel turns)
+      // are sent, so an external channel must be one the caller may notify.
+      // In-app sessions (webchat / api) have no outbound address.
+      const channelType = body.channelType || 'api';
+      const channelId = body.channelId || 'api';
+      if (!IN_APP_CHANNELS.has(channelType) && !(await canNotify(user.id, channelType, channelId))) {
+        set.status = 400;
+        return { error: `${channelType}:${channelId} is ${NOT_ALLOWED_MESSAGE}` };
+      }
+
       const session = await scopedRepos(principal).sessions.create({
-        channelType: body.channelType || 'api',
-        channelId: body.channelId || 'api',
+        channelType,
+        channelId,
         title: body.title,
         context: body.context || {},
         metadata: body.metadata || {},
@@ -183,10 +194,13 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         return { error: 'Not authenticated' };
       }
 
-      const updated = await scopedRepos(principal).sessions.update(
-        params.id,
-        body as Partial<import('@/db/schema/sessions').NewSession>,
-      );
+      // Only the declared fields: a session's channelType / channelId is its
+      // outbound address and is fixed at creation (see POST).
+      const { title, status, context, metadata } = body;
+      const patch = Object.fromEntries(
+        Object.entries({ title, status, context, metadata }).filter(([, v]) => v !== undefined),
+      ) as Partial<import('@/db/schema/sessions').NewSession>;
+      const updated = await scopedRepos(principal).sessions.update(params.id, patch);
       if (!updated) {
         set.status = 404;
         return { error: 'Session not found' };

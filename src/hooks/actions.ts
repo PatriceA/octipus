@@ -1,5 +1,11 @@
-import { getUMI } from '@/channels/interface';
-import { parseChannelTarget, userOwnsChannel } from '@/channels/ownership';
+import {
+  deliver,
+  loadNotifyScope,
+  NOT_ALLOWED_MESSAGE,
+  ownerTargets,
+  parseChannelTarget,
+  scopeAllows,
+} from '@/channels/ownership';
 import { getAgentManager } from '@/core/agent-manager';
 import type { AgentContext, Hook } from '@/core/types';
 import { coreLogger } from '@/utils/logger';
@@ -47,8 +53,6 @@ export async function executeAction(
   }
 }
 
-const NOT_OWNED_ERROR = 'Notify targets must be channels linked to your account (Settings → Channels)';
-
 /**
  * The channel targets a notify config names explicitly: every `type:id` in
  * `notifyChannels`, plus the `channelType` / `channelId` pair. Malformed
@@ -70,18 +74,57 @@ export function explicitNotifyTargets(config: unknown): { channelType: string; c
   return targets;
 }
 
+const TEMPLATE_RE = /\{\{[^}]+\}\}/;
+
+/**
+ * The outbound targets an `execute_tool` hook on the messaging tool names
+ * literally. Templated values (`{{…}}`) are only known at run time, where
+ * the messaging tool checks them itself.
+ */
+function messagingToolTargets(
+  userId: string,
+  config: Record<string, unknown>,
+): { targets: { channelType: string; channelId: string }[]; errors: string[] } {
+  const targets: { channelType: string; channelId: string }[] = [];
+  const errors: string[] = [];
+  if (config.toolId !== 'messaging') return { targets, errors };
+  const params = (config.toolParams && typeof config.toolParams === 'object' ? config.toolParams : {}) as Record<string, unknown>;
+  if (config.toolAction === 'send_message') {
+    const channel = params.channel;
+    const target = params.target;
+    if (typeof channel === 'string' && typeof target === 'string' && !TEMPLATE_RE.test(channel) && !TEMPLATE_RE.test(target)) {
+      targets.push({ channelType: channel, channelId: target });
+    }
+  } else if (config.toolAction === 'send_to_user') {
+    const target = params.user_id;
+    if (typeof target === 'string' && !TEMPLATE_RE.test(target) && target !== userId) {
+      errors.push('An unattended send_to_user can only message you; set user_id to your own id or use a notify hook');
+    }
+  }
+  return { targets, errors };
+}
+
 /**
  * Validate a hook action config before it is stored: every explicit notify
- * target must be a channel linked to `userId`. Returns an error message
- * naming the rejected targets, or null when the config is acceptable.
- * executeNotify enforces the same rule again at send time.
+ * target (and every literal messaging-tool target of an execute_tool hook)
+ * must be a chat linked to `userId` or an admin-approved shared destination.
+ * Returns an error message naming the rejected targets, or null when the
+ * config is acceptable. The send paths enforce the same rule at run time.
  */
 export async function notifyTargetsError(userId: string, config: unknown): Promise<string | null> {
+  const c = (config && typeof config === 'object' ? config : {}) as Record<string, unknown>;
+  const messaging = messagingToolTargets(userId, c);
+  const targets = [...explicitNotifyTargets(c), ...messaging.targets];
+  if (targets.length === 0) return messaging.errors[0] ?? null;
+  const scope = await loadNotifyScope(userId);
   const rejected: string[] = [];
-  for (const t of explicitNotifyTargets(config)) {
-    if (!(await userOwnsChannel(userId, t.channelType, t.channelId))) rejected.push(`${t.channelType}:${t.channelId}`);
+  for (const t of targets) {
+    if (!(await scopeAllows(scope, t.channelType, t.channelId))) rejected.push(`${t.channelType}:${t.channelId}`);
   }
-  return rejected.length > 0 ? `${NOT_OWNED_ERROR}. Not linked: ${rejected.join(', ')}` : null;
+  if (rejected.length > 0) {
+    return `${rejected.join(', ')} ${rejected.length > 1 ? 'are' : 'is'} ${NOT_ALLOWED_MESSAGE}`;
+  }
+  return messaging.errors[0] ?? null;
 }
 
 async function executeNotify(
@@ -100,64 +143,54 @@ async function executeNotify(
   }
   const message = interpolateTemplate(messageTemplate, context);
 
+  if (!hook?.userId) return { success: false, error: 'Notify hook has no owner' };
+  // Loaded once: the owner's identities, legacy bindings and approved shared
+  // destinations; every target below is checked against it in memory.
+  const scope = await loadNotifyScope(hook.userId);
+
   // Resolve target channels
   const resolvedChannels: { type: string; id: string; label: string }[] = [];
 
-  // If notifyOwner is set, resolve from the hook owner's channel bindings
-  if (config.notifyOwner && hook?.userId) {
-    const { userRepository } = await import('@/db/repositories/user-repository');
-    const user = await userRepository.findById(hook.userId);
-    let rawBindings = user?.channelBindings as import('@/db/schema/users').ChannelBinding[] | string;
-    if (typeof rawBindings === 'string') {
-      try { rawBindings = JSON.parse(rawBindings); } catch { rawBindings = []; }
-    }
-    const bindings = (rawBindings as import('@/db/schema/users').ChannelBinding[]) || [];
-
-    if (bindings.length === 0) {
+  // notifyOwner: the owner's own verified identities (canonical resolution,
+  // so a channel linked via /api/auth/channel-bindings/redeem counts).
+  if (config.notifyOwner) {
+    const own = ownerTargets(scope);
+    if (own.length === 0) {
       return { success: false, error: 'No channels linked to your account. Link a channel in Settings → Channels.' };
     }
-
-    for (const binding of bindings) {
-      if (binding.isVerified) {
-        resolvedChannels.push({
-          type: binding.channelType,
-          id: binding.channelUserId,
-          label: `${binding.channelType}:${binding.channelUserName || binding.channelUserId}`,
-        });
-      }
-    }
+    for (const t of own) resolvedChannels.push({ type: t.channelType, id: t.channelId, label: t.label });
   }
 
   // Explicitly configured channels (type:id format, and the simple
   // channelType + channelId pair used by incoming webhook hooks) are chosen
-  // by the hook's author, so each must be a chat linked to the hook owner.
+  // by the hook's author: each must be the owner's own chat or an approved
+  // shared destination.
   const skipped: string[] = [];
   for (const target of explicitNotifyTargets(config)) {
     const label = `${target.channelType}:${target.channelId}`;
-    if (hook?.userId && await userOwnsChannel(hook.userId, target.channelType, target.channelId)) {
+    if (await scopeAllows(scope, target.channelType, target.channelId)) {
       resolvedChannels.push({ type: target.channelType, id: target.channelId, label });
     } else {
       skipped.push(label);
       coreLogger.warn(
-        { hookId: hook?.id, userId: hook?.userId, channelType: target.channelType, channelId: target.channelId },
-        'Notify hook target is not a channel linked to the hook owner; skipping it',
+        { hookId: hook.id, userId: hook.userId, channelType: target.channelType, channelId: target.channelId },
+        'Notify hook target is not linked to the hook owner nor an approved shared destination; skipping it',
       );
     }
   }
 
   if (resolvedChannels.length === 0) {
     if (skipped.length > 0) {
-      return { success: false, data: { skipped }, error: `${NOT_OWNED_ERROR}. Not linked: ${skipped.join(', ')}` };
+      return { success: false, data: { skipped }, error: `${skipped.join(', ')} ${skipped.length > 1 ? 'are' : 'is'} ${NOT_ALLOWED_MESSAGE}` };
     }
     return { success: false, error: 'No notification channels configured. Enable "Notify me" or add explicit channels.' };
   }
 
-  const umi = getUMI();
   const results: { channel: string; success: boolean; error?: string }[] = [];
 
   for (const ch of resolvedChannels) {
     try {
-      await umi.send(ch.type as any, ch.id, { content: message });
+      await deliver(scope, ch.type, ch.id, { content: message });
       results.push({ channel: ch.label, success: true });
     } catch (error) {
       results.push({ channel: ch.label, success: false, error: (error as Error).message });
@@ -588,6 +621,9 @@ async function executeTool(
     topic: 'hook',
     model: 'default',
     role: 'general',
+    // Nobody is there to approve anything: an ASK is refused, and tools that
+    // reach outside (messaging) apply their unattended rules.
+    attended: false,
     status: 'running' as const,
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -603,26 +639,18 @@ async function executeTool(
  * Send agent result to the owner's linked channels (Telegram, etc.)
  */
 async function notifyOwnerWithResult(userId: string, result: string): Promise<void> {
-  const { userRepository } = await import('@/db/repositories/user-repository');
-  const user = await userRepository.findById(userId);
-  let rawBindings = user?.channelBindings as import('@/db/schema/users').ChannelBinding[] | string;
-  if (typeof rawBindings === 'string') {
-    try { rawBindings = JSON.parse(rawBindings); } catch { rawBindings = []; }
-  }
-  const bindings = (rawBindings as import('@/db/schema/users').ChannelBinding[]) || [];
-  const verified = bindings.filter(b => b.isVerified);
+  const scope = await loadNotifyScope(userId);
+  const targets = ownerTargets(scope);
+  if (targets.length === 0) return;
 
-  if (verified.length === 0) return;
-
-  const umi = getUMI();
   // Truncate very long results for messaging
   const truncated = result.length > 3000 ? result.slice(0, 3000) + '\n\n…(truncated)' : result;
 
-  for (const binding of verified) {
+  for (const t of targets) {
     try {
-      await umi.send(binding.channelType as any, binding.channelUserId, { content: truncated });
+      await deliver(scope, t.channelType, t.channelId, { content: truncated });
     } catch (err) {
-      coreLogger.warn({ error: err, channel: binding.channelType }, 'Failed to notify owner channel');
+      coreLogger.warn({ error: err, channel: t.channelType }, 'Failed to notify owner channel');
     }
   }
 }
