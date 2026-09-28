@@ -344,9 +344,11 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
       const userId = ctx.query.userId;
       // With a user, also return each budget's current-period spend and
       // state — the same view that user sees at /api/spend-budgets/me.
+      // `budgets` stays the raw rows (the endpoint's existing contract);
+      // `statuses` is derived from the same rows, not a second read.
       if (userId) {
-        const [budgets, statuses] = await Promise.all([listBudgets(userId), budgetStatusesFor(userId)]);
-        return { budgets, statuses };
+        const budgets = await listBudgets(userId);
+        return { budgets, statuses: await budgetStatusesFor(userId, new Date(), budgets) };
       }
       return { budgets: await listBudgets() };
     },

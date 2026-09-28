@@ -42,6 +42,7 @@ import { and, eq, gte, isNull, lt, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { agents } from '@/db/schema/agents';
 import { costLog } from '@/db/schema/models';
+import { costSourceAggregates } from '@/db/cost-source';
 import { sessions } from '@/db/schema/sessions';
 import {
   type SpendBudget,
@@ -129,10 +130,11 @@ async function spendSince(budget: SpendBudget, start: Date, now: Date): Promise<
   if (hit && hit.start === start.getTime() && hit.expires > now.getTime()) return hit.value;
 
   const db = getDb();
+  const { estimatedCost, unknownCostRequests } = costSourceAggregates();
   const fields = {
     s: sql<number>`COALESCE(SUM(${costLog.totalCost}), 0)::float8`,
-    est: sql<number>`COALESCE(SUM(${costLog.totalCost}) FILTER (WHERE COALESCE(${costLog.metadata}->>'costSource', 'estimated') = 'estimated'), 0)::float8`,
-    unk: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'costSource' = 'unknown')::int`,
+    est: estimatedCost,
+    unk: unknownCostRequests,
   };
   const base = and(eq(costLog.userId, budget.userId), gte(costLog.createdAt, start));
   let rows: { s: number; est: number; unk: number }[];
@@ -281,35 +283,39 @@ export interface SpendBudgetView {
  * Budget rows are read fresh (an admin's resume shows at once); spend sums
  * share `checkSpend`'s 30s cache.
  */
-export async function budgetStatusesFor(userId: string, now: Date = new Date()): Promise<SpendBudgetView[]> {
+export async function budgetStatusesFor(
+  userId: string,
+  now: Date = new Date(),
+  /** The user's budget rows when the caller already has them (admin list). */
+  rows?: SpendBudget[],
+): Promise<SpendBudgetView[]> {
   if (!UUID_RE.test(userId)) return [];
-  const rows = await listBudgets(userId);
-  if (rows.length === 0) return [];
+  const budgets = rows ?? await listBudgets(userId);
+  if (budgets.length === 0) return [];
 
   const wsNames = new Map<string, string>();
-  if (rows.some(b => b.scopeKind === 'workspace')) {
-    const { workspaces } = await import('@/db/schema/organizations');
-    const ws = await getDb().select({ id: workspaces.id, name: workspaces.name })
-      .from(workspaces).where(eq(workspaces.userId, userId));
-    for (const w of ws) wsNames.set(w.id.toLowerCase(), w.name);
+  if (budgets.some(b => b.scopeKind === 'workspace')) {
+    const { getOrgWorkspaceManager } = await import('@/security/orgs');
+    for (const w of await getOrgWorkspaceManager().listOwn(userId)) wsNames.set(w.id.toLowerCase(), w.name);
   }
 
   const order: Record<SpendScopeKind, number> = { user: 0, role: 1, workspace: 2 };
-  const sorted = [...rows].sort((a, b) =>
+  const sorted = [...budgets].sort((a, b) =>
     order[a.scopeKind] - order[b.scopeKind]
     || (a.scopeRef ?? '').localeCompare(b.scopeRef ?? '')
     || a.period.localeCompare(b.period));
 
-  const out: SpendBudgetView[] = [];
-  for (const b of sorted) {
+  // One spend query per budget, run concurrently.
+  const spends = await Promise.all(sorted.map(b => spendSince(b, periodStart(b.period, now), now)));
+  return sorted.map((b, i): SpendBudgetView => {
     const start = periodStart(b.period, now);
-    const spend = await spendSince(b, start, now);
+    const spend = spends[i];
     const limitUsd = Number(b.limitUsd);
     const pausedAt = b.pausedAt && b.pausedAt >= start ? b.pausedAt : null;
     const warnedAt = b.warnedAt && b.warnedAt >= start ? b.warnedAt : null;
     const state: SpendBudgetView['state'] = pausedAt || spend.totalUsd >= limitUsd ? 'paused'
       : warnedAt || spend.totalUsd >= limitUsd * b.warnRatio ? 'warned' : 'ok';
-    out.push({
+    return {
       id: b.id,
       userId: b.userId,
       scopeKind: b.scopeKind,
@@ -330,9 +336,8 @@ export async function budgetStatusesFor(userId: string, now: Date = new Date()):
       pausedAt: pausedAt?.toISOString() ?? null,
       warnedAt: warnedAt?.toISOString() ?? null,
       updatedAt: b.updatedAt.toISOString(),
-    });
-  }
-  return out;
+    };
+  });
 }
 
 // ── CRUD (admin routes) ─────────────────────────────────────────────

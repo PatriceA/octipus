@@ -824,7 +824,10 @@ export async function runRootAgent(
       && (errMsg.includes('aborted') || errMsg.includes('stopped') || worker.getStatus() === 'stopped');
     // Admin cancel / cascaded abort is an intentional outcome — don't log it
     // as `error`. The status downstream is already 'stopped'/'cancelled'.
-    if (wasStopped || isCancellationError(error)) {
+    if (limit) {
+      // A user cap is the system working as configured, not a fault.
+      coreLogger.warn({ agentId, code: limit.refusal.code, reason: limit.refusal.reason }, 'Root agent refused by a spend budget or quota');
+    } else if (wasStopped || isCancellationError(error)) {
       coreLogger.info({ agentId, reason: errMsg }, 'Root agent cancelled');
     } else {
       coreLogger.error({ error, agentId }, 'Root agent failed');
@@ -850,7 +853,9 @@ export async function runRootAgent(
     });
     // Swarm: mark root failed/cancelled + emit terminal event.
     try {
-      const rootStatus: 'cancelled' | 'tool_error' = wasStopped ? 'cancelled' : 'tool_error';
+      // 'budget' is the swarm's existing status for a cap (swarm/errors.ts
+      // classifies quota and spend errors the same way).
+      const rootStatus: 'cancelled' | 'budget' | 'tool_error' = wasStopped ? 'cancelled' : limit ? 'budget' : 'tool_error';
       await swarmNodeRepository.updateStatus(agentId, {
         status: rootStatus,
         tokensUsed: worker.getTotalTokens(),

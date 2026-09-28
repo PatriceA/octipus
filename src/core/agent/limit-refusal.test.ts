@@ -5,13 +5,13 @@
  * not "Task was stopped".
  */
 import { beforeEach, describe, expect, test, vi } from 'vitest';
-import { limitRefusalOf, isLimitError } from '@/core/errors/limit-refusal';
+import { limitKindOf, limitRefusalOf } from '@/core/errors/limit-refusal';
 import { QuotaExceededError } from '@/security/quota-error';
 import { SpendBudgetExceededError } from '@/security/spend-budget-error';
 
-const fixture = vi.hoisted(() => ({ root: vi.fn(), persisted: [] as any[] }));
+const fixture = vi.hoisted(() => ({ root: vi.fn(), persisted: [] as any[], created: [] as any[] }));
 vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => ({ getDefaultModel: async () => ({ modelId: 'test-model' }) }) }));
-vi.mock('./session-resolver', () => ({ resolveSession: async (id: string) => id }));
+vi.mock('./session-resolver', () => ({ resolveSession: async (id: string) => (id === 'new' ? 'resolved-session' : id) }));
 vi.mock('@/security/orgs', () => ({ getOrgWorkspaceManager: () => ({ ensureDefaultWorkspace: async () => ({ id: 'workspace' }) }) }));
 vi.mock('@/core/commands', () => ({ handleCommand: async () => null }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: {
@@ -19,7 +19,7 @@ vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: {
   incrementMessageCount: async () => {}, update: async () => {},
 } }));
 vi.mock('@/db/repositories/message-repository', () => ({ messageRepository: {
-  create: async (row: any) => ({ id: 'm', ...row }),
+  create: async (row: any) => { fixture.created.push(row); return { id: 'm', ...row }; },
   createForGeneration: async (row: any) => { fixture.persisted.push(row); return { id: 'm', ...row }; },
 } }));
 vi.mock('@/core/trajectories/recorder', () => ({ TrajectoryRecorder: class { setClassification() {} async finalize() {} } }));
@@ -36,6 +36,7 @@ const reason = {
 
 beforeEach(() => {
   fixture.persisted = [];
+  fixture.created = [];
   fixture.root.mockReset();
 });
 
@@ -61,24 +62,32 @@ describe('limitRefusalOf', () => {
 
   test('matches by name too (errors rethrown across dynamic imports)', () => {
     const err = Object.assign(new Error('x'), { name: 'SpendBudgetExceededError', reason });
-    expect(isLimitError(err)).toBe(true);
+    expect(limitKindOf(err)).toBe('spend_budget');
     expect(limitRefusalOf(err)?.refusal.code).toBe('SPEND_BUDGET_EXCEEDED');
+    expect(limitKindOf(new QuotaExceededError({ kind: 'tokensPerDay', current: 1, max: 1, userId: 'u' }))).toBe('quota');
   });
 
   test('anything else is not a limit', () => {
     expect(limitRefusalOf(new Error('boom'))).toBeNull();
-    expect(isLimitError('nope')).toBe(false);
+    expect(limitKindOf('nope')).toBeNull();
   });
 });
 
 describe('AgentService.handleMessage', () => {
   test('a spend pause at spawn becomes the budget message with a structured reason', async () => {
     fixture.root.mockRejectedValueOnce(new SpendBudgetExceededError(reason));
-    const result = await new AgentService().handleMessage('session', 'user', 'refactor the parser', 'webchat');
+    const result = await new AgentService().handleMessage('new', 'user', 'refactor the parser', 'webchat');
     expect(result.response).toMatch(/^Agents are paused: .*\$10\.00\/day .*\$12\.35 spent.*resets 2026-09-29 00:00 UTC/);
     expect(result.response).not.toMatch(/encountered an error|stopped/i);
     expect(result.outcome).toBe('failed');
     expect(result.metadata?.limit).toEqual({ code: 'SPEND_BUDGET_EXCEEDED', reason });
+    // The resolved session, not the one the client sent.
+    expect(result.sessionId).toBe('resolved-session');
+    // No worker ran: the question and the refusal (with its reason) are stored.
+    expect(fixture.created).toEqual([
+      { sessionId: 'resolved-session', role: 'user', content: 'refactor the parser' },
+      { sessionId: 'resolved-session', role: 'assistant', content: result.response, metadata: { limit: { code: 'SPEND_BUDGET_EXCEEDED', reason } } },
+    ]);
   });
 
   test('a refusal mid-run is persisted and keeps its structured reason', async () => {
@@ -87,7 +96,7 @@ describe('AgentService.handleMessage', () => {
     const result = await new AgentService().handleMessage('session', 'user', 'refactor the parser', 'webchat');
     expect(result.response).toBe(refusal.text);
     expect(result.metadata?.limit?.code).toBe('SPEND_BUDGET_EXCEEDED');
-    expect(fixture.persisted.map((m) => m.content)).toEqual([refusal.text]);
+    expect(fixture.persisted).toEqual([expect.objectContaining({ content: refusal.text, metadata: { limit: refusal.refusal } })]);
   });
 
   test('other failures keep the generic path', async () => {

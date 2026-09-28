@@ -196,25 +196,66 @@ test.describe('admin: spend budgets', () => {
 });
 
 test.describe('user: banner and budgets card', () => {
-  test('a PAUSED budget shows a banner that cannot be dismissed', async ({ authenticatedPage: page }) => {
+  test('a user-scope pause: "Agents are paused", not dismissible', async ({ authenticatedPage: page }) => {
     await stubAllDefaults(page);
     await stubMyBudgets(page, [
-      view({ id: 'p1', scopeKind: 'role', scopeRef: 'coder', scopeName: 'coder', period: 'day', limitUsd: 10, spentUsd: 10.42 }),
-      view({ id: 'p2', scopeKind: 'user', period: 'month', limitUsd: 100, spentUsd: 40 }),
+      view({ id: 'p2', scopeKind: 'user', period: 'day', limitUsd: 10, spentUsd: 10.42 }),
+      view({ id: 'p3', scopeKind: 'role', scopeRef: 'coder', scopeName: 'coder', period: 'day', limitUsd: 5, spentUsd: 6 }),
     ]);
     await page.goto('/');
     const banner = page.getByTestId('spend-budget-banner');
     await expect(banner).toHaveAttribute('data-state', 'paused');
-    await expect(banner).toContainText('Agents are paused:');
-    await expect(banner).toContainText('role "coder" daily budget of $10.00/day reached ($10.42 spent)');
+    await expect(banner).toHaveAttribute('data-scope', 'user');
+    await expect(banner).toContainText('Agents are paused: your daily budget of $10.00/day reached ($10.42 spent).');
     await expect(banner).toContainText('Resets');
     await expect(banner).toContainText('Ask an admin to raise it.');
+    await expect(banner).toContainText('(+1 more paused)');
     await expect(banner.getByRole('button', { name: /dismiss/i })).toHaveCount(0);
+    await expect(page.getByTestId('budgets-card')).toBeVisible();
     await shot(page, 'budget-banner.png');
 
     // Stays on navigation.
     await page.goto('/notifications');
     await expect(page.getByTestId('spend-budget-banner')).toHaveAttribute('data-state', 'paused');
+  });
+
+  test('a role pause names the role and can be dismissed for the session', async ({ authenticatedPage: page }) => {
+    await stubAllDefaults(page);
+    await stubMyBudgets(page, [
+      view({ id: 'r1', scopeKind: 'role', scopeRef: 'coder', scopeName: 'coder', period: 'day', limitUsd: 10, spentUsd: 10.42 }),
+      view({ id: 'u1', scopeKind: 'user', period: 'month', limitUsd: 100, spentUsd: 40 }),
+    ]);
+    await page.goto('/');
+    const banner = page.getByTestId('spend-budget-banner');
+    await expect(banner).toHaveAttribute('data-scope', 'role');
+    await expect(banner).toContainText('Agents in role "coder" are paused: daily budget of $10.00/day reached ($10.42 spent).');
+    await expect(banner).not.toContainText('Agents are paused');
+    await expect(page.getByTestId('budgets-card')).toBeVisible();
+    await shot(page, 'budget-banner-role.png');
+    await banner.getByRole('button', { name: 'Dismiss budget notice' }).click();
+    await expect(page.getByTestId('spend-budget-banner')).toHaveCount(0);
+    await page.goto('/notifications');
+    await expect(page.getByText('inbox').first()).toBeVisible();
+    await expect(page.getByTestId('spend-budget-banner')).toHaveCount(0);
+  });
+
+  test('a workspace pause: dismissible for another workspace, not for the current one', async ({ authenticatedPage: page }) => {
+    await stubAllDefaults(page);
+    // stubWorkspaces makes 'ws-1' ("Default") the active workspace.
+    await stubMyBudgets(page, [
+      view({ id: 'w-other', scopeKind: 'workspace', scopeRef: WS_ID, scopeName: 'Client A', period: 'month', limitUsd: 50, spentUsd: 51 }),
+    ]);
+    await page.goto('/');
+    const banner = page.getByTestId('spend-budget-banner');
+    await expect(banner).toContainText('Agents in workspace "Client A" are paused: monthly budget of $50.00/month reached');
+    await expect(banner.getByRole('button', { name: 'Dismiss budget notice' })).toBeVisible();
+
+    await stubMyBudgets(page, [
+      view({ id: 'w-here', scopeKind: 'workspace', scopeRef: 'ws-1', scopeName: 'Default', period: 'month', limitUsd: 50, spentUsd: 51 }),
+    ]);
+    await page.reload();
+    await expect(banner).toContainText('Agents in workspace "Default" are paused');
+    await expect(banner.getByRole('button', { name: /dismiss/i })).toHaveCount(0);
   });
 
   test('a warned budget shows a softer banner, dismissible for the session', async ({ authenticatedPage: page }) => {
@@ -309,5 +350,30 @@ test.describe('chat: a turn refused by a spend budget', () => {
     await expect(card).toContainText('Resets');
     await expect(card).toContainText('Ask an admin to raise the limit.');
     await expect(page.getByText(/^Error:/)).toHaveCount(0);
+    await expect(card.getByRole('link', { name: 'See your budgets' })).toHaveAttribute('href', '/#budgets');
+  });
+
+  test('the refusal card survives a reload (persisted metadata.limit)', async ({ authenticatedPage: page }) => {
+    await stubAllDefaults(page);
+    const reason = {
+      budgetId: 'p1', userId: ALICE, scopeKind: 'user', scopeRef: null, period: 'month',
+      spentUsd: 51, limitUsd: 50, resetsAt: monthEnd.toISOString(),
+    };
+    await page.route(/\/api\/sessions\/sess-1\/messages/, (route) => json(route, 200, {
+      messages: [
+        { id: 'm1', role: 'user', content: 'refactor the parser', createdAt: new Date().toISOString(), metadata: {} },
+        {
+          id: 'm2', role: 'assistant', createdAt: new Date().toISOString(),
+          content: 'Agents are paused: your monthly spend budget of $50.00/month is reached ($51.00 spent this month).',
+          metadata: { limit: { code: 'SPEND_BUDGET_EXCEEDED', reason } },
+        },
+      ],
+      total: 2,
+    }));
+    await page.goto('/chat');
+    await selectChatSession(page, 'sess-1');
+    const card = page.getByTestId('limit-refusal');
+    await expect(card).toBeVisible();
+    await expect(card).toContainText('Your monthly budget of $50.00/month is reached: $51.00 spent this month.');
   });
 });

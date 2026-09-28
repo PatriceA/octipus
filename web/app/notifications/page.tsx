@@ -265,9 +265,9 @@ export default function NotificationsPage() {
                 data-read={n.read ? 'true' : 'false'}
               >
                 {n.type === 'spend_budget_paused' ? (
-                  <PauseCircle aria-hidden className="mt-0.5 w-4 h-4 shrink-0 text-error" />
+                  <PauseCircle aria-hidden className={cn('mt-0.5 w-4 h-4 shrink-0', n.read ? 'text-outline' : 'text-error')} />
                 ) : n.type === 'spend_budget_warning' ? (
-                  <AlertTriangle aria-hidden className="mt-0.5 w-4 h-4 shrink-0 text-warning" />
+                  <AlertTriangle aria-hidden className={cn('mt-0.5 w-4 h-4 shrink-0', n.read ? 'text-outline' : 'text-warning')} />
                 ) : (
                   <span aria-hidden className={cn('mt-1.5 shrink-0 dot', !n.read ? 'dot-ok dot-live text-tertiary' : 'dot-idle')} />
                 )}

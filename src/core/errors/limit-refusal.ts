@@ -29,9 +29,12 @@ function isQuotaError(err: unknown): err is QuotaExceededError {
     || (err instanceof Error && err.name === 'QuotaExceededError' && 'reason' in err);
 }
 
-/** True when `err` is a user cap, not a failure — callers must not report it as a stop or retry it. */
-export function isLimitError(err: unknown): boolean {
-  return isSpendError(err) || isQuotaError(err);
+/**
+ * Which user cap `err` is, or null. A cap is neither a stop nor a fault:
+ * callers must not report it as a stop, nor retry it.
+ */
+export function limitKindOf(err: unknown): 'spend_budget' | 'quota' | null {
+  return isSpendError(err) ? 'spend_budget' : isQuotaError(err) ? 'quota' : null;
 }
 
 function usd(n: number): string {

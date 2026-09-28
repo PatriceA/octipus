@@ -111,6 +111,39 @@ describe('gate: dollar spend budget', () => {
     }
   });
 
+  test('a mid-run pause fails the worker as spend_budget, not as a user stop', async () => {
+    // The pre-LLM-call gate aborts the worker's own controller before it
+    // throws; the run's catch must still see a refusal, not a stop.
+    const carolId = '33333333-3333-3333-3333-333333333333';
+    const { seedUsers, seedSession } = await import('@/test-helpers/multiuser-fixtures');
+    await seedUsers([{ id: carolId, username: 'carol' }]);
+    const sess = await seedSession({ userId: carolId });
+    const { AgentManager } = await import('@/core/agent-manager');
+    const worker = await new AgentManager().spawn({ sessionId: sess.id, userId: carolId, model: 'test-model' });
+
+    // The budget is spent after the spawn, i.e. mid-run.
+    const { upsertBudget, _resetSpendBudgetsForTests } = await import('@/security/spend-budgets');
+    const { getDb } = await import('@/db/postgres');
+    const { costLog } = await import('@/db/schema/models');
+    await getDb().insert(costLog).values({ userId: carolId, modelName: 'test', inputTokens: 1, outputTokens: 1, totalCost: 2 });
+    await upsertBudget({ userId: carolId, scopeKind: 'user', period: 'day', limitUsd: 1 });
+    _resetSpendBudgetsForTests();
+
+    const statuses: unknown[] = [];
+    worker.onEvent((e) => { if (e.type === 'status_change') statuses.push(e.data); });
+    const err = await worker.run('hello').catch((e: unknown) => e);
+    const { SpendBudgetExceededError } = await import('@/security/spend-budget-error');
+    expect(err).toBeInstanceOf(SpendBudgetExceededError);
+    expect(worker.getStatus()).toBe('failed');
+    expect(statuses).toContainEqual(expect.objectContaining({ status: 'failed', reason: 'spend_budget' }));
+    expect(statuses).not.toContainEqual(expect.objectContaining({ status: 'stopped' }));
+
+    const { agentRepository } = await import('@/db/repositories/agent-repository');
+    await expect.poll(async () => (await agentRepository.findById(worker.getContext().id))?.status).toBe('failed');
+    const row = await agentRepository.findById(worker.getContext().id);
+    expect(row?.metadata).toMatchObject({ failureReason: 'spend_budget' });
+  });
+
   test('heartbeat skips its tick while paused', async () => {
     const { evaluateHeartbeatGate } = await import('@/core/heartbeat');
     const hook = { userId: aliceId, triggerConfig: {} } as unknown as import('@/db/schema/hooks').Hook;

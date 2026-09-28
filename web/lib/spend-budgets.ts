@@ -7,8 +7,6 @@
  * GET /api/spend-budgets/me, /api/admin/spend-budgets.
  */
 import { useQuery } from '@tanstack/react-query';
-import { usePathname } from 'next/navigation';
-import { useEffect } from 'react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
@@ -95,23 +93,20 @@ export function stateVariant(s: SpendState): 'danger' | 'warning' | 'success' {
 export const MY_BUDGETS_KEY = ['spend-budgets', 'me'] as const;
 
 /**
- * The caller's budgets. Polled every 60s and refetched on navigation, so the
- * banner catches a pause that happened while the user was reading a page.
+ * The caller's budgets. One query key, so the banner, the dashboard card and
+ * any other consumer share one fetch: refreshed every 60s, and on mount or
+ * window focus only once the data is older than 30s.
  */
 export function useMyBudgets() {
   const { isAuthenticated } = useAuth();
-  const pathname = usePathname();
-  const query = useQuery({
+  return useQuery({
     queryKey: MY_BUDGETS_KEY,
     queryFn: () => api.get<{ budgets?: SpendBudgetView[] }>('/spend-budgets/me'),
     enabled: isAuthenticated,
+    staleTime: 30_000,
     refetchInterval: 60_000,
-    staleTime: 10_000,
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
     retry: false,
   });
-  const { refetch } = query;
-  useEffect(() => {
-    if (isAuthenticated) void refetch();
-  }, [pathname, isAuthenticated, refetch]);
-  return query;
 }

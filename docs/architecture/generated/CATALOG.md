@@ -528,7 +528,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `mcp` | `utils` | 4 |
 | `models` | `config` | 10 |
 | `models` | `core` | 27 |
-| `models` | `db` | 11 |
+| `models` | `db` | 12 |
 | `models` | `security` | 19 |
 | `models` | `services` | 1 |
 | `models` | `shared` | 4 |

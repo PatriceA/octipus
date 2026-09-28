@@ -16,6 +16,7 @@ import {
   XCircle,
   Zap,
 } from 'lucide-react';
+import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { compareTimelineEntries } from '../../../src/shared/timeline-order';
 import { agentCompletionLabel, type AgentCompletionReason } from '../../../src/shared/agent-completion';
@@ -207,7 +208,7 @@ function LimitRefusalCard({ limit, fallback }: { limit: LimitRefusal; fallback: 
       </p>
       <p className="text-on-surface-variant text-xs">
         {r.resetsAt && <span suppressHydrationWarning>Resets {resetLabel(r.resetsAt)}. </span>}
-        Ask an admin to raise the limit. <a href="/#budgets" className="text-primary underline">See your budgets</a>
+        Ask an admin to raise the limit. <Link href="/#budgets" className="text-primary underline">See your budgets</Link>
       </p>
     </div>
   );
