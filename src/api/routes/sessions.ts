@@ -1,3 +1,9 @@
+import { and, desc, eq, sql } from 'drizzle-orm';
+import { getDb } from '@/db/postgres';
+import { backgroundJobs } from '@/db/schema/background-jobs';
+import { sessions as sessionRows } from '@/db/schema/sessions';
+import { requireScope } from '@/security/principal';
+import { API_SCOPES } from '@/security/scopes';
 import { monitorRepository } from '@/db/repositories/monitor-repository';
 import { monitorService } from '@/core/monitors/service';
 import { addPlanFeedback } from '@/shared/work-plan';
@@ -31,6 +37,38 @@ import { WorkspaceFS } from '@/security/workspace-fs';
  */
 export const sessionRoutes = new Elysia({ prefix: '/sessions' })
   .use(apiContext)
+  .get('/:id/learning', async ({ user, principal, params, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    const session = await scopedRepos(principal).sessions.findById(params.id);
+    if (!session) { set.status = 404; return { error: 'Session not found' }; }
+    const checks = await getDb().select({ id: backgroundJobs.id, title: backgroundJobs.title,
+      status: backgroundJobs.status, stage: backgroundJobs.stage, error: backgroundJobs.error,
+      result: backgroundJobs.result, createdAt: backgroundJobs.createdAt }).from(backgroundJobs)
+      .where(and(eq(backgroundJobs.kind, 'learning'), eq(backgroundJobs.userId, session.userId),
+        sql`${backgroundJobs.payload}->>'sessionId' = ${session.id}`))
+      .orderBy(desc(backgroundJobs.seq)).limit(30);
+    return { checks };
+  })
+  .post('/:id/learning', async ({ user, principal, params, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    if (!requireScope(principal, API_SCOPES.CHAT)) { set.status = 403; return { error: 'Chat scope required' }; }
+    const session = await scopedRepos(principal).sessions.findById(params.id);
+    if (!session) { set.status = 404; return { error: 'Session not found' }; }
+    const job = await getDb().transaction(async tx => {
+      await tx.select({ id: sessionRows.id }).from(sessionRows).where(eq(sessionRows.id, session.id)).for('update');
+      const [pending] = await tx.select().from(backgroundJobs).where(and(eq(backgroundJobs.kind, 'learning'),
+        eq(backgroundJobs.userId, session.userId), sql`${backgroundJobs.payload}->>'sessionId' = ${session.id}`,
+        sql`${backgroundJobs.status} IN ('queued', 'running')`)).limit(1);
+      if (pending) return pending;
+      const [created] = await tx.insert(backgroundJobs).values({ kind: 'learning', userId: session.userId,
+        workspaceId: session.workspaceId, title: 'Learning check: recent session work',
+        payload: { sessionId: session.id, trigger: 'manual', triggerKey: `manual:${crypto.randomUUID()}`,
+          through: new Date().toISOString(), plan: session.metadata?.workPlan } }).returning();
+      return created;
+    });
+    set.status = 202;
+    return { id: job.id, status: job.status };
+  })
   .post('/:id/monitors/events', async ({ user, principal, params, body, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
     const session = await scopedRepos(principal).sessions.findById(params.id);

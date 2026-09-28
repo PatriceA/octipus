@@ -228,6 +228,8 @@ async function main() {
       if (interrupted > 0 || pruned > 0) logger.info({ interrupted, pruned }, 'Background jobs reconciled after restart');
       const { getDocumentQueue } = await import('@/core/documents/queue');
       getDocumentQueue().resume();
+      const { startLearningQueue } = await import('@/core/learning/queue');
+      startLearningQueue();
     }
 
     // Initialize messaging channels (reads config from DB now)

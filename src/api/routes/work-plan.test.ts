@@ -152,3 +152,50 @@ it('gateway commands show the same plan and persist terminal feedback', async ()
   expect((await workPlanRepository.read(sid, alice)).current!.feedback.some(f => f.text === 'Include dates')).toBe(true);
   expect((await registry.execute('/work-plan', { ...ctx, userId: bob }))?.text).not.toContain('Research');
 });
+
+
+describe('durable learning checks', () => {
+  it('queues execution milestones atomically, coalesces final completion, and scopes receipts', async () => {
+    const { executeRaw } = await import('@/db/postgres');
+    const learnSid = randomUUID();
+    await executeRaw(`INSERT INTO sessions (id, user_id, channel_type, channel_id) VALUES ('${learnSid}', '${alice}', 'webchat', 'learn')`);
+    const tool = createWorkPlanTools().find(t => t.name === 'update_work_plan')!;
+    const context = { sessionId: learnSid, userId: alice } as AgentContext;
+    await tool.execute({ revision: 0, title: 'Fix', goal: 'Repair', summary: 'Start', steps: [
+      { id: 'a', title: 'Diagnose', status: 'working', evidence: '' }, { id: 'b', title: 'Verify', status: 'pending', evidence: '' },
+    ] }, context);
+    const view = async (owner = alice) => app.handle(new Request(`http://localhost/api/sessions/${learnSid}/learning`, { headers: { 'x-test-user': owner } }));
+    expect((await (await view()).json()).checks).toHaveLength(0);
+    await tool.execute({ revision: 1, summary: 'Diagnosed', stepUpdates: [{ id: 'a', status: 'done', evidence: 'Reproduced failure' }] }, context);
+    expect((await (await view()).json()).checks).toHaveLength(1);
+    await expect(tool.execute({ revision: 1, summary: 'Stale', stepUpdates: [{ id: 'b', status: 'done' }] }, context)).rejects.toThrow();
+    expect((await (await view()).json()).checks).toHaveLength(1);
+    await tool.execute({ revision: 2, summary: 'Verified', stepUpdates: [{ id: 'b', status: 'done', evidence: 'Tests pass' }] }, context);
+    expect((await (await view()).json()).checks).toHaveLength(2);
+    expect((await view(bob)).status).toBe(404);
+    const { backgroundJobRepository } = await import('@/db/repositories/background-job-repository');
+    const jobs = (await backgroundJobRepository.recentForUser(alice)).filter(j => j.payload.sessionId === learnSid);
+    expect(jobs.map(j => j.payload.trigger)).toEqual(['plan_completed', 'steps_completed']);
+    expect(jobs.every(j => j.status === 'queued')).toBe(true);
+    const manual = (owner = alice) => app.handle(new Request(`http://localhost/api/sessions/${learnSid}/learning`, { method: 'POST', headers: { 'x-test-user': owner } }));
+    expect((await manual(bob)).status).toBe(404);
+    expect((await manual()).status).toBe(202);
+    expect((await (await view()).json()).checks).toHaveLength(2); // Reuses pending work instead of charging twice.
+    const { gatherEvidence } = await import('@/core/learning/evidence');
+    const { agentEventRepository } = await import('@/db/repositories/agent-event-repository');
+    await agentEventRepository.create({ sessionId: learnSid, agentId: 'test', userId: alice, type: 'action', data: { type: 'cli_tool_result', output: 'Observed failure then correction' } });
+    await agentEventRepository.create({ sessionId: learnSid, agentId: 'test', userId: bob, type: 'action', data: { type: 'cli_tool_result', output: 'Foreign evidence' } });
+    const evidence = await gatherEvidence(alice, learnSid, new Date());
+    expect(evidence.some(row => row.kind === 'execution' && row.text.includes('Observed failure'))).toBe(true);
+    expect(evidence.some(row => row.text.includes('Foreign evidence'))).toBe(false);
+    const { enqueueTurnLearning } = await import('@/core/learning/queue');
+    await enqueueTurnLearning(learnSid, alice, 'turn-after-step', new Date(0));
+    expect((await (await view()).json()).checks).toHaveLength(2);
+    for (let i = 0; i < 6; i++) await agentEventRepository.create({ sessionId: learnSid, agentId: 'test', userId: alice,
+      type: 'action', data: { type: 'cli_tool_result', output: `Verified additional work ${i}` } });
+    await enqueueTurnLearning(learnSid, alice, 'turn-after-step', new Date(0));
+    expect((await (await view()).json()).checks).toHaveLength(3);
+    await enqueueTurnLearning(learnSid, alice, 'turn-after-step', new Date(0));
+    expect((await (await view()).json()).checks).toHaveLength(3);
+  });
+});
