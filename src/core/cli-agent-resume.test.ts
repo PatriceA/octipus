@@ -225,7 +225,9 @@ beforeEach(() => {
       console.log(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tu-bg', content: 'Async agent launched' }] } }));
       if (readFileSync(bgMarker, 'utf-8') === 'done') console.log(JSON.stringify({ type: 'system', subtype: 'task_notification', task_id: 'a1', status: 'completed' }));
     }
-    console.log(JSON.stringify({ type: 'result', subtype: 'success', result: 'answer for ' + idArg, num_turns: 1 }));
+    const answerMarker = join(process.cwd(), 'answer-marker');
+    const answer = existsSync(answerMarker) ? readFileSync(answerMarker, 'utf-8') : 'answer for ' + idArg;
+    console.log(JSON.stringify({ type: 'result', subtype: 'success', result: answer, num_turns: 1 }));
   `);
   // Codex mints its own thread id — it never appears as a CLI argument on a
   // first run (no --resume yet), so the fake binary generates one and reports
@@ -671,5 +673,17 @@ describe('native background work lost at CLI exit', () => {
     const { answer, warnings } = await runWithMarker('done');
     expect(warnings).toEqual([]);
     expect(answer).not.toContain('background task');
+  });
+});
+
+describe('CLI quota detection', () => {
+  it('does not treat a successful answer that mentions quota as a quota failure', async () => {
+    // Real incident: the root's final answer quoted "Quota exhausted for
+    // Claude Code" and "rate limit exceeded"; the clean run was rejected as a
+    // quota error and the provider marked exhausted for an hour.
+    const text = 'Arms died: Quota exhausted for Claude Code. The rate limit was exceeded.';
+    writeFileSync(join(fixture.dir, 'answer-marker'), text, 'utf-8');
+    const worker = makeClaudeWorker({ sessionId: 'sq' });
+    await expect(worker.run('status?')).resolves.toContain('Quota exhausted for Claude Code');
   });
 });
