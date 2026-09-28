@@ -5,7 +5,8 @@
  * own chats or admin-approved shared destinations. A permission ALLOW
  * ("always allow") or a client-declared channel means no human necessarily
  * looked at the target. The check runs once, before dedup.
- * send_to_user: only the caller, unless the caller is an admin.
+ * send_to_user: only the caller, unless the caller is an admin in an
+ * attended session; unattended runs only ever reach the caller.
  *
  * The ownership rules themselves are covered against a real database in
  * src/hooks/notify-ownership.test.ts.
@@ -103,8 +104,18 @@ test.each([false, true])('send_to_user by a non-admin may only target the caller
   expect(m.deliver).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'telegram', 'tg-self', expect.anything());
 });
 
-test('an admin may send_to_user another user, on that user’s own chats', async () => {
+test('an admin in an attended session may send_to_user another user, on that user’s own chats', async () => {
   const r = await sendToUser({ user_id: 'user-2', message: msg() }, ctx(true, 'admin-1'));
   expect(r.success).toBe(true);
   expect(m.deliver).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-2' }), 'telegram', 'tg-self', expect.anything());
+});
+
+test('an admin’s unattended run may only send_to_user the admin', async () => {
+  const other = await sendToUser({ user_id: 'user-2', message: msg() }, ctx(false, 'admin-1'));
+  expect(other.success).toBe(false);
+  expect(other.error).toMatch(/unattended/);
+  expect(m.deliver).not.toHaveBeenCalled();
+
+  const self = await sendToUser({ user_id: 'admin-1', message: msg() }, ctx(false, 'admin-1'));
+  expect(self.success).toBe(true);
 });

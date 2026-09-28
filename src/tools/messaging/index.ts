@@ -11,6 +11,7 @@ import {
 } from '@/channels/ownership';
 import type { ChannelMessage } from '@/core/channels/messages';
 import type { AgentContext, ToolManifest } from '@/core/types';
+import { canPromptHuman } from '@/security/approval-policy';
 import { toolLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
@@ -53,7 +54,7 @@ export class MessagingTool extends BaseTool {
       ],
       tools: [
         { name: 'send_message', description: 'Send a message to one of your own linked chats or an admin-approved shared destination', parameters: { channel: { type: 'string', description: 'Channel type', required: true }, target: { type: 'string', description: 'Target ID', required: true }, message: { type: 'string', description: 'Message content', required: true } }, returns: 'Delivery confirmation' },
-        { name: 'send_to_user', description: 'Send a message to yourself on your linked channels (admins: any user)', parameters: { user_id: { type: 'string', description: 'User ID', required: true }, message: { type: 'string', description: 'Message content', required: true } }, returns: 'Per-channel delivery results' },
+        { name: 'send_to_user', description: 'Send a message to yourself on your linked channels (admins, in an attended session: any user)', parameters: { user_id: { type: 'string', description: 'User ID', required: true }, message: { type: 'string', description: 'Message content', required: true } }, returns: 'Per-channel delivery results' },
         { name: 'list_channels', description: 'List connected messaging channels', parameters: {}, returns: 'Channel list with status' },
         { name: 'list_contacts', description: 'List users with their linked channel accounts', parameters: {}, returns: 'User contact list' },
         { name: 'channel_history', description: 'Read recent messages from a channel or chat', parameters: { channel: { type: 'string', description: 'slack or teams', required: true }, target: { type: 'string', description: 'Channel name or id', required: true } }, returns: 'Messages, newest first' },
@@ -106,19 +107,27 @@ export class MessagingTool extends BaseTool {
     this.registerTool(
       'send_to_user',
       'Send a message to a user on their linked channels (all verified ones, or one channel). '
-        + 'You can only message yourself; admins can message any user.',
+        + 'You can only message yourself; admins can message any user, but only from an attended session (never from hooks, cron or heartbeat runs).',
       createParameterSchema({
-        user_id: { type: 'string', description: 'User ID to send to (your own, unless you are an admin)', required: true },
+        user_id: { type: 'string', description: 'User ID to send to (your own, unless you are an admin in an attended session)', required: true },
         message: { type: 'string', description: 'Message content', required: true },
         channel: { type: 'string', description: 'Specific channel to use (optional — sends to all verified channels if omitted)' },
       }),
       async (args, context) => {
         const { userRepository } = await import('@/db/repositories/user-repository');
         if (args.user_id !== context.userId) {
+          // Unattended runs (cron, heartbeat, message hooks, execute_tool)
+          // may only message the caller, admin or not: nobody is there to
+          // approve it. This matches the save-time rule for hooks
+          // (invalidHookTargets in src/hooks/actions.ts).
+          if (!canPromptHuman(context)) {
+            toolLogger.warn({ userId: context.userId, agentId: context.id, target: args.user_id }, 'Unattended send_to_user to another user; refused');
+            return { success: false, error: 'An unattended run can only send_to_user you, admin or not' };
+          }
           const caller = await userRepository.findById(context.userId);
           if (!caller?.isAdmin) {
             toolLogger.warn({ userId: context.userId, agentId: context.id, target: args.user_id }, 'send_to_user to another user by a non-admin; refused');
-            return { success: false, error: 'send_to_user can only message you (admins can message any user)' };
+            return { success: false, error: 'send_to_user can only message you (admins can message any user from an attended session)' };
           }
         }
         const user = await userRepository.findById(args.user_id as string);

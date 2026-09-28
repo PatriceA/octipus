@@ -400,6 +400,15 @@ describe('execute_tool hooks on the messaging tool run unattended', () => {
     expect((self.data as { success: boolean }).success).toBe(true);
     expect(sentTo()).toEqual(['telegram:tg-alice']);
   });
+
+  test('an admin’s execute_tool hook cannot send_to_user another user either (run time and save time agree)', async () => {
+    const { executeAction, notifyTargetsError } = await import('./actions');
+    const cfg = { toolId: 'messaging', toolAction: 'send_to_user', toolParams: { user_id: aliceId, message: 'x' } };
+    const r = await executeAction(hookOf('execute_tool', cfg, adminId), {} as never);
+    expect((r.data as { success: boolean }).success).toBe(false);
+    expect(sent.calls).toHaveLength(0);
+    expect(await notifyTargetsError(adminId, cfg)).toMatch(/can only message you/);
+  });
 });
 
 async function send(app: ElysiaLike, method: string, path: string, body?: unknown) {
