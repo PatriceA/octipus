@@ -1445,7 +1445,7 @@ export default function ChatPage() {
   const sendMessage = async (userInput: string, attachments?: Attachment[]) => {
     let sid = activeSessionId;
     // Snapshot edit-and-continue attachments for this turn; cleared once sent.
-    let fileRefs = attachedFiles.length ? attachedFiles : undefined;
+    let fileRefs: Array<{ path: string; version?: string }> | undefined = attachedFiles.length ? attachedFiles : undefined;
     // Chat/work split override: 'auto' → no override (heuristic decides).
     const outputModeOverride = outputMode === 'auto' ? undefined : outputMode === 'chat' ? 'inline' : 'file';
 

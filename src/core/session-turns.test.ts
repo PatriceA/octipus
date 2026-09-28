@@ -115,7 +115,10 @@ describe('session lifecycle across ephemeral root workers', () => {
   });
   test('does not rotate provider state if summary or audit persistence fails', async () => {
     for (let i = 0; i < 6; i++) await turn(i);
-    fixture.context.cliSessions = { 'Claude Code': { id: 'live', fingerprint: 'f', lastUsedAt: '', generation: '' } };
+    // A root CLI session from an earlier generation: compaction may rotate it,
+    // so a failed compaction must leave it in place. (A live one would stop
+    // compaction before either failure point; see the test below.)
+    fixture.context.cliSessions = { 'Claude Code': { id: 'live', fingerprint: 'f', lastUsedAt: '', generation: 'earlier' } };
     const original = structuredClone(fixture.context.nativeConversation);
     fixture.failSummary = true;
     await expect(maybeCompactSession('session', { force: true })).rejects.toThrow('summary unavailable');
@@ -137,9 +140,18 @@ describe('session lifecycle across ephemeral root workers', () => {
     await maybeCompactSession('session');
     expect(fixture.summaries).toHaveLength(1);
   });
-  test('compaction rotates the root vendor sessions but keeps child task sessions', async () => {
+  test('a live root vendor session is never compacted onto an Octipus checkpoint', async () => {
     for (let i = 0; i < 6; i++) await turn(i);
     const rec = { fingerprint: 'f', lastUsedAt: '', generation: '' };
+    const sessions = { 'Claude Code': { id: 'root', ...rec }, 'Claude Code::general>coding:t1': { id: 'child', ...rec } };
+    fixture.context.cliSessions = structuredClone(sessions);
+    expect(await maybeCompactSession('session', { force: true })).toBe(false);
+    expect(fixture.context.checkpoint).toBeUndefined();
+    expect(fixture.context.cliSessions).toEqual(sessions);
+  });
+  test('compaction rotates stale root vendor sessions but keeps child task sessions', async () => {
+    for (let i = 0; i < 6; i++) await turn(i);
+    const rec = { fingerprint: 'f', lastUsedAt: '', generation: 'earlier' };
     fixture.context.cliSessions = { 'Claude Code': { id: 'root', ...rec }, 'Codex CLI': { id: 'root-codex', ...rec }, 'Claude Code::general>coding:t1': { id: 'child', ...rec } };
     await maybeCompactSession('session', { force: true });
     expect(fixture.context.checkpoint).toBeDefined();
