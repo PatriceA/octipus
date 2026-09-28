@@ -143,7 +143,11 @@ export function buildDelegationGuidance(): string {
     '`spawn_child` — a planned child runs the steps mechanically and, when the ' +
     'topic has an executor model bound, on that cheaper executor instead of a ' +
     'full-price specialist. Reserve plan-less spawns for work that needs the ' +
-    "child's own judgment.\n\n" +
+    "child's own judgment.\n" +
+    '6. Keep coding tasks bounded to one deliverable with explicit file scope and a targeted check. ' +
+    'Prefer one command_exit_zero check for that deliverable. Children run targeted tests; ' +
+    'the parent runs the full gate once after integrating a phase. Repeat checks only after changes or failures, ' +
+    'or when repository instructions require them. Collect a wave together instead of polling each child.\n\n' +
     'Roles you can spawn (`role` — what it does):\n' +
     buildSpawnRoleCatalog() +
     '\n\nHOW SPAWNING WORKS: `spawn_child` returns IMMEDIATELY with a pending ' +

@@ -1,7 +1,32 @@
 import { describe, expect, it } from 'vitest';
-import { emptyWorkPlan, planUpdateSchema, reviseWorkPlan, formatWorkPlan, workPlanStateSchema } from './work-plan';
+import { emptyWorkPlan, planUpdateSchema, planPatchSchema, expandWorkPlanPatch, reviseWorkPlan, formatWorkPlan, workPlanStateSchema } from './work-plan';
 const input = () => planUpdateSchema.parse({ revision: 0, title: 'Review retries', goal: 'Handle timeouts', summary: 'Initial approach', steps: [{ id: 'inspect', title: 'Inspect code', status: 'pending' }] });
 describe('visible work plans', () => {
+  it('patches one step while preserving omitted evidence, other steps and proposal kind', () => {
+    const initial = input();
+    initial.kind = 'proposal';
+    initial.steps[0].evidence = 'Keep this evidence';
+    initial.steps.push({ id: 'check', title: 'Check result', status: 'pending', evidence: '' });
+    const state = reviseWorkPlan(emptyWorkPlan(), initial);
+    const patch = planPatchSchema.parse({ revision: 1, summary: 'Clarify scope', stepUpdates: [{ id: 'inspect', title: 'Inspect retry handling' }] });
+    const next = reviseWorkPlan(state, expandWorkPlanPatch(state, patch));
+    expect(next.current!.kind).toBe('proposal');
+    expect(next.current!.steps[0]).toEqual({ ...initial.steps[0], title: 'Inspect retry handling' });
+    expect(next.current!.steps[1]).toEqual(initial.steps[1]);
+    expect(state.current!.steps[0].title).toBe('Inspect code');
+  });
+
+  it('rejects stale, unknown, duplicate, mixed and completed-step patches', () => {
+    const initial = input(); initial.steps[0].status = 'done';
+    const state = reviseWorkPlan(emptyWorkPlan(), initial);
+    const patch = { revision: 1, summary: 'Progress', stepUpdates: [{ id: 'inspect', status: 'working' }] };
+    expect(() => expandWorkPlanPatch(state, planPatchSchema.parse({ ...patch, revision: 0 }))).toThrow('Plan changed');
+    expect(() => expandWorkPlanPatch(state, planPatchSchema.parse({ ...patch, stepUpdates: [{ id: 'missing' }] }))).toThrow('Unknown plan step');
+    expect(planPatchSchema.safeParse({ ...patch, stepUpdates: [patch.stepUpdates[0], patch.stepUpdates[0]] }).success).toBe(false);
+    expect(planPatchSchema.safeParse({ ...patch, steps: initial.steps }).success).toBe(false);
+    expect(() => reviseWorkPlan(state, expandWorkPlanPatch(state, planPatchSchema.parse(patch)))).toThrow('must stay in the plan as done');
+    expect(() => expandWorkPlanPatch(emptyWorkPlan(), planPatchSchema.parse({ ...patch, revision: 0 }))).toThrow('Publish a full plan');
+  });
   it('rejects duplicate IDs and malformed status', () => {
     const v = input();
     expect(planUpdateSchema.safeParse({ ...v, steps: [v.steps[0], v.steps[0]] }).success).toBe(false);

@@ -75,8 +75,8 @@ describe('plan API and agent handoff', () => {
     const published = await update.execute({
       revision: 0, kind: 'execution', title: 'Mobile platform', goal: 'Build the application',
       summary: 'Published future implementation', steps: implementation,
-    }, context) as Awaited<ReturnType<typeof workPlanRepository.read>>;
-    expect(published.current).toMatchObject({ kind: 'proposal', steps: implementation });
+    }, context);
+    expect(published).toMatchObject({ kind: 'proposal', revision: 1, changedSteps: [{ id: 'api', status: 'pending' }] });
 
     const exit = createMetaTools({} as never).find(t => t.name === 'exit_plan_mode')!;
     const details = '# Mobile platform\n\n## API boundary\nImplement and validate the API.';
@@ -118,6 +118,23 @@ describe('plan API and agent handoff', () => {
     expect(durable.current).toMatchObject({ kind: 'proposal', revision: 1 });
     expect(durable.current!.details).toContain('Implement the API');
     expect(durable.current!.steps[0].status).toBe('pending');
+  });
+
+  it('patches through the real tool with a small receipt and preserves plan-mode restrictions', async () => {
+    const update = createWorkPlanTools().find(t => t.name === 'update_work_plan')!;
+    const context = { sessionId: draftSid, userId: alice } as AgentContext;
+    const current = await workPlanRepository.read(draftSid, alice);
+    const receipt = await update.execute({ revision: current.revision, summary: 'Clarify API',
+      stepUpdates: [{ id: 'api', evidence: 'Specification clarified' }],
+    }, context);
+    expect(receipt).toMatchObject({ revision: current.revision + 1, kind: 'proposal', changedSteps: [{ id: 'api' }] });
+    expect(JSON.stringify(receipt)).not.toContain('Specification clarified');
+    const stored = await workPlanRepository.read(draftSid, alice);
+    expect(stored.current!.details).toBe(current.current!.details);
+    expect(stored.current!.steps[0].evidence).toBe('Specification clarified');
+    await expect(update.execute({ revision: stored.revision, summary: 'Invalid progress',
+      stepUpdates: [{ id: 'api', status: 'done' }],
+    }, context)).rejects.toThrow(/future implementation steps with pending status/i);
   });
 });
 

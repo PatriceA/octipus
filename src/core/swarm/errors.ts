@@ -13,7 +13,10 @@ import {
   ClassifiedError,
   FailoverReason,
   RecoveryAction,
+  isProviderQuotaError,
 } from '@/core/errors/classification';
+import { QuotaExceededError } from '@/security/quota-error';
+import { SpendBudgetExceededError } from '@/security/spend-budget-error';
 import type { ChildResultStatus } from './types';
 
 /** Thrown when a node exceeds its `tokens.cap` before or during an LLM call. */
@@ -123,6 +126,8 @@ export function isCancellationError(err: unknown): boolean {
 
 /** Map any thrown error into a `ChildResult.status` via the `ClassifiedError` taxonomy. */
 export function classifyChildError(err: unknown): ChildResultStatus {
+  if (err instanceof QuotaExceededError || err instanceof SpendBudgetExceededError) return 'budget';
+  if (isProviderQuotaError(err)) return 'provider_error';
   // Direct matches on our own classes (fast path).
   if (err instanceof BudgetExceededError) return 'budget';
   if (err instanceof ChildTimeoutError) return 'timeout';
