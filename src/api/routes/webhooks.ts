@@ -2,9 +2,11 @@ import { Elysia, t } from '@/api/http';
 import { getHookManager } from '@/hooks';
 import type { TriggerContext, TriggerEvent } from '@/hooks/triggers';
 import {
+  acquireRunSlots,
   claimDelivery,
+  fireWebhookHook,
   getDeliveryId,
-  releaseDelivery,
+  RETRY_AFTER_SECONDS,
   runInBackground,
   verifyHmacSha256,
 } from '@/hooks/webhook-delivery';
@@ -40,6 +42,13 @@ function parsePayload(raw: Uint8Array, contentType: string | null, fallback: unk
   }
 }
 
+function json(status: number, body: unknown, headers: Record<string, string> = {}): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json', ...headers },
+  });
+}
+
 /**
  * Webhook receiver — endpoint for external services (GitHub, GitLab, etc.)
  * to trigger hooks.
@@ -54,9 +63,11 @@ function parsePayload(raw: Uint8Array, contentType: string | null, fallback: unk
  *  - The signature is checked over the raw request bytes.
  *
  * Once verified, the request is answered 202 and the hook actions run in the
- * background. A delivery id (X-GitHub-Delivery, Idempotency-Key, ...) is
- * remembered per hook for 24h; a repeat is answered 200 `{duplicate: true}`
- * without firing.
+ * background (results go to the hook's execution log). Each hook runs at
+ * most 2 deliveries at once, 20 across all hooks; past that the answer is
+ * 429 with Retry-After. A delivery id (X-GitHub-Delivery, Idempotency-Key,
+ * ...) is claimed per hook; a repeat is answered 200 `{duplicate: true}`
+ * without firing. See docs/WEBHOOKS.md.
  */
 export const webhookRoutes = new Elysia({ prefix: '/webhooks' })
   .post(
@@ -67,25 +78,22 @@ export const webhookRoutes = new Elysia({ prefix: '/webhooks' })
       apiLogger.info({ webhookPath }, 'Webhook received');
 
       const hookManager = getHookManager();
-
-      // --- Signature verification ---
       const matchingHooks = hookManager.getWebhookHooksByPath(webhookPath);
-      // Verify over the exact bytes the sender signed, never a re-serialised
-      // body: JSON.stringify(JSON.parse(raw)) drops escapes like \u003c and
-      // whitespace, so real GitHub signatures would not match. The framework
-      // parsed a clone, so the original stream is still unread.
-      const rawBytes = await readRawBody(request);
-      const signatureHeader = request.headers.get('x-hub-signature-256');
 
       // No hook claims this path: nothing was authenticated, so fire nothing.
       // (Falling through to trigger() used to run every user's webhook hook
       // that has no webhookPath, unauthenticated.)
       if (matchingHooks.length === 0) {
-        return new Response(JSON.stringify({ error: 'Webhook not found' }), {
-          status: 404,
-          headers: { 'Content-Type': 'application/json' },
-        });
+        return json(404, { error: 'Webhook not found' });
       }
+
+      // --- Signature verification ---
+      // Verify over the exact bytes the sender signed, never a re-serialised
+      // body: JSON.stringify(JSON.parse(raw)) drops escapes like < and
+      // whitespace, so real GitHub signatures would not match. The framework
+      // parsed a clone, so the original stream is still unread.
+      const rawBytes = await readRawBody(request);
+      const signatureHeader = request.headers.get('x-hub-signature-256');
 
       // Several users may register the same path. Each hook is verified on
       // its own secret, and only the hooks whose signature verifies fire, so
@@ -109,22 +117,39 @@ export const webhookRoutes = new Elysia({ prefix: '/webhooks' })
         const error = anySecret
           ? 'Invalid or missing webhook signature'
           : 'Webhook secret not configured. Set a webhookSecret on this hook.';
-        return new Response(JSON.stringify({ error }), {
-          status: 401,
-          headers: { 'Content-Type': 'application/json' },
-        });
+        return json(401, { error });
       }
 
-      // Idempotency: a sender that redelivers (GitHub retries on a slow
-      // response, or on "Redeliver") reuses its delivery id. Claim it per
-      // hook, after authentication, and fire only the hooks that haven't
-      // seen it within the TTL.
+      // --- Concurrency caps ---
+      // Taken before the delivery id is claimed, so a 429'd delivery is
+      // still new when the sender retries it.
+      const slots = acquireRunSlots(verifiedHooks.map((hook) => hook.id));
+      if (!slots) {
+        apiLogger.warn({ webhookPath }, 'Webhook rejected: too many runs in progress');
+        return json(
+          429,
+          { error: 'Too many webhook runs in progress; retry later' },
+          { 'Retry-After': String(RETRY_AFTER_SECONDS) },
+        );
+      }
+
+      // --- Idempotency ---
+      // A sender that redelivers (GitHub retries on a slow response, or on
+      // "Redeliver") reuses its delivery id. Claim it per hook, after
+      // authentication, and fire only the hooks that haven't seen it.
       const deliveryId = getDeliveryId(request.headers);
-      let hooksToFire = verifiedHooks;
+      let toFire = verifiedHooks.map((hook, i) => ({ hook, slot: slots[i] }));
       if (deliveryId) {
-        const claimed = await Promise.all(verifiedHooks.map((hook) => claimDelivery(hook.id, deliveryId)));
-        hooksToFire = verifiedHooks.filter((_, i) => claimed[i]);
-        if (hooksToFire.length === 0) {
+        let claimed: boolean[];
+        try {
+          claimed = await Promise.all(verifiedHooks.map((hook) => claimDelivery(hook.id, deliveryId)));
+        } catch (err) {
+          for (const slot of slots) slot.release();
+          throw err;
+        }
+        for (const [i, { slot }] of toFire.entries()) if (!claimed[i]) slot.release();
+        toFire = toFire.filter((_, i) => claimed[i]);
+        if (toFire.length === 0) {
           apiLogger.info({ webhookPath, deliveryId }, 'Duplicate webhook delivery ignored');
           return { received: true, duplicate: true };
         }
@@ -155,25 +180,23 @@ export const webhookRoutes = new Elysia({ prefix: '/webhooks' })
 
       // Respond now and run the actions (possibly a full agent turn) in the
       // background: senders like GitHub give up after ~10s and redeliver.
-      // Fire only the hooks whose signature was verified above.
-      for (const hook of hooksToFire) {
-        runInBackground({ webhookPath, hookId: hook.id, deliveryId }, async () => {
-          try {
-            const results = await hookManager.triggerHook(hook.id, event, context);
-            const executed = results.filter(r => r.result?.success).length;
-            const failed = results.filter(r => r.triggered && !r.result?.success).length;
-            apiLogger.info({ webhookPath, hookId: hook.id, executed, failed }, 'Webhook processed');
-            // Let a redelivery retry a run that failed.
-            if (failed > 0 && deliveryId) await releaseDelivery(hook.id, deliveryId);
-          } catch (err) {
-            if (deliveryId) await releaseDelivery(hook.id, deliveryId);
-            throw err;
-          }
-        });
+      for (const { hook, slot } of toFire) {
+        runInBackground(
+          { webhookPath, hookId: hook.id, deliveryId },
+          () =>
+            fireWebhookHook({
+              hook,
+              event,
+              context,
+              deliveryId,
+              failureContext: { webhook: { path: webhookPath, deliveryId, body: payload } },
+            }),
+          slot,
+        );
       }
 
       set.status = 202;
-      return { received: true, accepted: true, hooks: hooksToFire.length };
+      return { received: true, accepted: true, hooks: toFire.length };
     },
     {
       params: t.Object({ path: t.String() }),

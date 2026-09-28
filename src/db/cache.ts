@@ -21,6 +21,9 @@ export function rawStore() {
     setex: (key: string, ttlSeconds: number, value: string) =>
       getStorageProvider().setRaw(key, value, ttlSeconds),
     del: (key: string) => getStorageProvider().delRaw(key),
+    /** Atomic set-if-absent with a TTL; true when this call set the key. */
+    setIfAbsent: (key: string, value: string, ttlSeconds: number) =>
+      getStorageProvider().setRawIfAbsent(key, value, ttlSeconds),
   };
 }
 

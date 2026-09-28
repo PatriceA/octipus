@@ -1,16 +1,17 @@
 import { and, eq } from 'drizzle-orm';
 import { Elysia, t } from '@/api/http';
 import { getDb } from '@/db/postgres';
-import { hookExecutions } from '@/db/schema/hook-executions';
 import { hooks } from '@/db/schema/hooks';
 import {
+  acquireRunSlots,
   claimDelivery,
+  fireWebhookHook,
   getDeliveryId,
-  releaseDelivery,
+  RETRY_AFTER_SECONDS,
   runInBackground,
-  safeEqual,
 } from '@/hooks/webhook-delivery';
-import { apiLogger, coreLogger } from '@/utils/logger';
+import { secureCompare } from '@/utils/crypto';
+import { apiLogger } from '@/utils/logger';
 
 /**
  * Simple Mustache-style template rendering.
@@ -44,9 +45,11 @@ function renderTemplate(template: string, data: Record<string, unknown>): string
  * max-execution limits, condition checks, and execution logging all work.
  *
  * The request is answered 202 once authenticated and the action runs in the
- * background. A delivery id (X-GitHub-Delivery, Idempotency-Key, ...) is
- * remembered for 24h; a repeat is answered 200 `{duplicate: true}` without
- * firing.
+ * background (results go to the hook's execution log). Past the concurrency
+ * caps (2 runs per hook, 20 overall) the answer is 429 with Retry-After. A
+ * delivery id (X-GitHub-Delivery, Idempotency-Key, ...) is claimed per hook;
+ * a repeat is answered 200 `{duplicate: true}` without firing. See
+ * docs/WEBHOOKS.md.
  */
 export const webhookIncomingRoutes = new Elysia({ prefix: '/hooks/incoming' })
   .post(
@@ -84,8 +87,8 @@ export const webhookIncomingRoutes = new Elysia({ prefix: '/hooks/incoming' })
 
         // Constant-time compares; evaluate both so timing doesn't reveal which
         // header was tried.
-        const bearerOk = bearerToken !== null && safeEqual(bearerToken, webhookSecret);
-        const headerOk = headerSecret !== null && safeEqual(headerSecret, webhookSecret);
+        const bearerOk = bearerToken !== null && secureCompare(bearerToken, webhookSecret);
+        const headerOk = headerSecret !== null && secureCompare(headerSecret, webhookSecret);
         if (!bearerOk && !headerOk) {
           apiLogger.warn({ hookId }, 'Incoming webhook auth failed');
           set.status = 401;
@@ -100,10 +103,21 @@ export const webhookIncomingRoutes = new Elysia({ prefix: '/hooks/incoming' })
 
       apiLogger.info({ hookId, hookName: hook.name }, 'Incoming webhook received');
 
-      // Idempotency: a redelivery with the same delivery id within the TTL is
-      // acknowledged without firing the hook again.
+      // Concurrency caps, before the delivery id is claimed, so a 429'd
+      // delivery is still new when the sender retries it.
+      const [slot] = acquireRunSlots([hook.id]) ?? [];
+      if (!slot) {
+        apiLogger.warn({ hookId }, 'Incoming webhook rejected: too many runs in progress');
+        set.status = 429;
+        set.headers['Retry-After'] = String(RETRY_AFTER_SECONDS);
+        return { error: 'Too many webhook runs in progress; retry later' };
+      }
+
+      // Idempotency: a redelivery with the same delivery id is acknowledged
+      // without firing the hook again.
       const deliveryId = getDeliveryId(request.headers);
       if (deliveryId && !(await claimDelivery(hook.id, deliveryId))) {
+        slot.release();
         apiLogger.info({ hookId, deliveryId }, 'Duplicate incoming webhook delivery ignored');
         return { status: 'duplicate', duplicate: true, hookId: hook.id, hookName: hook.name };
       }
@@ -148,40 +162,18 @@ export const webhookIncomingRoutes = new Elysia({ prefix: '/hooks/incoming' })
       // Trigger through the standard HookManager pipeline, in the background:
       // the action can be a full agent turn, and senders time out (GitHub
       // after ~10s) and redeliver, which would start duplicate runs.
-      runInBackground({ hookId, deliveryId }, async () => {
-        try {
-          const { getHookManager } = await import('@/hooks/manager');
-          const results = await getHookManager().triggerHook(hookId, event, context);
-
-          const executed = results.filter(r => r.triggered).length;
-          const succeeded = results.filter(r => r.result?.success).length;
-          const failed = results.filter(r => r.triggered && !r.result?.success).length;
-
-          apiLogger.info(
-            { hookId, hookName: hook.name, executed, succeeded, failed },
-            'Incoming webhook processed',
-          );
-          // Let a redelivery retry a run that failed.
-          if (failed > 0 && deliveryId) await releaseDelivery(hook.id, deliveryId);
-        } catch (err: unknown) {
-          const errorMessage = err instanceof Error ? err.message : String(err);
-          apiLogger.error({ err, hookId }, 'Incoming webhook processing failed');
-          if (deliveryId) await releaseDelivery(hook.id, deliveryId);
-
-          // Log failed execution
-          try {
-            await db.insert(hookExecutions).values({
-              hookId: hook.id,
-              source: 'hook',
-              status: 'error',
-              triggerType: 'webhook',
-              actionType: hook.action,
-              error: errorMessage,
-              triggerContext: { webhook: { hookId, body: payload } },
-            });
-          } catch (err) { coreLogger.error({ err }, 'silent failure in webhook-incoming'); }
-        }
-      });
+      runInBackground(
+        { hookId, deliveryId },
+        () =>
+          fireWebhookHook({
+            hook,
+            event,
+            context,
+            deliveryId,
+            failureContext: { webhook: { hookId, deliveryId, body: payload } },
+          }),
+        slot,
+      );
 
       set.status = 202;
       return {

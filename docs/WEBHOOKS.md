@@ -10,10 +10,49 @@ External Service ──POST──▶ /api/webhooks/:path ──▶ Hook Manager 
 ```
 
 1. An external service sends an HTTP POST to `https://<your-domain>/api/webhooks/<path>`
-2. The webhook endpoint verifies the HMAC-SHA256 signature against the hook's `webhookSecret`
-3. All hooks with matching `webhookPath` are triggered
+2. The webhook endpoint verifies the HMAC-SHA256 signature, over the raw request bytes, against each matching hook's `webhookSecret`
+3. The endpoint answers `202 Accepted` straight away; every hook whose signature verified is then triggered in the background
 4. Each hook's action runs — spawn an agent, send a notification, call another webhook, etc.
 5. If `notifyOwner: true` is set on a `spawn_agent` action, the agent's output is automatically sent to the owner's linked channels (Telegram, etc.)
+
+## Responses and Delivery Semantics
+
+Both webhook endpoints, `POST /api/webhooks/:path` and `POST /api/hooks/incoming/:hookId`, authenticate the request, answer at once, and run the hook actions in the background. A `spawn_agent` action can take far longer than a sender waits: GitHub gives up after about 10 seconds and redelivers, which used to start a second agent run.
+
+| Status | Body | Meaning |
+|--------|------|---------|
+| `202` | `/api/webhooks/:path`: `{ "received": true, "accepted": true, "hooks": <n> }`<br>`/api/hooks/incoming/:id`: `{ "status": "accepted", "accepted": true, "hookId", "hookName", "hooks": 1 }` | Authenticated and queued. `hooks` is how many hooks will run. |
+| `200` | `{ "received": true, "duplicate": true }` (incoming: `{ "status": "duplicate", "duplicate": true, ... }`) | This delivery id was already seen for this hook; nothing fired. |
+| `401` | `{ "error": ... }` | Missing or invalid signature / secret. |
+| `404` | `{ "error": ... }` | No hook for this path (or id). |
+| `429` | `{ "error": ... }` + `Retry-After: 30` | Too many runs in progress; the sender should retry. |
+
+**Removed response fields.** `/api/hooks/incoming/:hookId` used to wait for the action and return `status: "processed"`, `executed`, `succeeded`, `failed` and a per-hook `results` array. The action hasn't run when the response goes out, so those fields are gone, and an action failure no longer turns into a `500`.
+
+**Where to see results.** Every run, including failures, is recorded in the hook's execution log:
+
+```bash
+curl http://localhost:3005/api/hooks/<hook-id>/executions \
+  -H "Authorization: Bearer $OCTIPUS_API_TOKEN" | jq '.executions[0]'
+```
+
+A failure before the action started (for example, the database was unavailable) is logged there too, with `status: "error"`.
+
+### Idempotency (duplicate deliveries)
+
+If the sender includes a delivery id, it is remembered per hook, and a repeat is answered `200 {duplicate: true}` without firing. The headers are read in this order: `X-GitHub-Delivery`, `X-Gitea-Delivery`, `X-Gogs-Delivery`, `X-Gitlab-Event-UUID`, `X-Gitlab-Webhook-UUID`, `svix-id`, `webhook-id`, `Idempotency-Key` and `X-Idempotency-Key`. Generic tracing ids such as `X-Request-Id` are not used.
+
+- The id is claimed only after the signature verifies, so an unauthenticated caller can't use up ids.
+- While the run is in progress the claim lasts 15 minutes. If the process dies mid-run, a redelivery can run again after that.
+- Once an action has run, successfully or not, the claim lasts 24 hours. A redelivery, including GitHub's manual **Redeliver**, is dropped then, because the action's side effects may already have happened. To re-run it, send the delivery without its id, or use **Hooks → Test**.
+- If no action ran (conditions didn't match, cooldown, `maxExecutions` reached, or an error before the action), the claim is released, so a redelivery can try again.
+- Claims live in the shared key-value store, so dedupe works across API processes. If the store is unreachable, dedupe falls back to a per-process cache.
+
+### Concurrency limits
+
+Each hook runs at most **2** webhook deliveries at once, and all hooks together run at most **20**. Past that, the endpoint answers `429` with `Retry-After` before claiming the delivery id, so the sender's retry is treated as new. Cooldown and `maxExecutions` are enforced when a run starts: the run is reserved in the database first, so concurrent deliveries can't slip past them.
+
+On shutdown, the server waits up to 1 second for background webhook runs to finish.
 
 ## Prerequisites
 
@@ -274,7 +313,7 @@ You can also use template variables in prompts:
 ## Security
 
 - **HMAC-SHA256 required** — every webhook hook must have a `webhookSecret`. Hooks without one reject all requests with 401.
-- **Signature verification** — uses `X-Hub-Signature-256` header with timing-safe comparison.
+- **Signature verification** — uses `X-Hub-Signature-256` header with timing-safe comparison, computed over the raw request bytes (not re-serialised JSON).
 - **Public endpoint** — `/api/webhooks/*` is excluded from bearer token auth (it uses HMAC instead).
 - **Per-hook secrets** — each hook can have a different secret, so different services get different credentials.
 
@@ -285,6 +324,9 @@ You can also use template variables in prompts:
 | 401 on webhook | Verify the secret matches on both sides. Check `X-Hub-Signature-256` header is present. |
 | 404 on webhook | Ensure the URL path matches `webhookPath` in trigger config (e.g., `/api/webhooks/github` needs `webhookPath: "github"`). |
 | Hook not firing | Check hook is enabled. Verify `webhookPath` matches. Look at execution log for skipped entries. |
+| 202 but nothing happened | The action runs after the response; check the hook's execution log for an `error` entry. |
+| 200 `duplicate: true` | The delivery id was already processed for this hook (see Idempotency). Send without the id to force a re-run. |
+| 429 on webhook | Too many runs of this hook (2) or overall (20) are in progress; the sender should retry after `Retry-After`. |
 | Agent runs but no notification | Ensure `notifyOwner: true` is in action config. Verify channel bindings are verified in Settings → Channels. |
 | Agent doesn't see payload | The payload is auto-appended to the prompt. Check execution log → trigger context for the raw data. |
 | 502 from tunnel | Verify the backend is running on port 3005. Check cloudflared/tunnel config has the correct ingress rule. |

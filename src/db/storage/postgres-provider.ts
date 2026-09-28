@@ -269,6 +269,20 @@ export class PostgresStorageProvider implements StorageProvider {
   async getRaw(key: string): Promise<string | null> { return readKey(key); }
   async setRaw(key: string, value: string, ttlSeconds?: number): Promise<void> { await writeKey(key, value, ttlSeconds ?? 0); }
   async delRaw(key: string): Promise<void> { await deleteKey(key); }
+  async setRawIfAbsent(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+    // One statement: insert, or take over a row whose TTL has lapsed (the
+    // sweep may not have reclaimed it yet). A live row is left alone and
+    // RETURNING yields nothing, so exactly one concurrent caller wins.
+    const { rows } = await queryRaw(
+      `INSERT INTO kv_store (key, value, expires_at)
+       VALUES ($1, $2, CASE WHEN $3::int > 0 THEN now() + make_interval(secs => $3::int) ELSE NULL END)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, expires_at = EXCLUDED.expires_at
+         WHERE kv_store.expires_at IS NOT NULL AND kv_store.expires_at <= now()
+       RETURNING key`,
+      [key, value, ttlSeconds],
+    );
+    return rows.length > 0;
+  }
 
   async ping(): Promise<boolean> {
     await queryRaw('SELECT 1');

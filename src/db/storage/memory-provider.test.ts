@@ -249,6 +249,18 @@ describe('MemoryStorageProvider raw ops', () => {
     expect(await provider.getRaw('k')).toBeNull();
   });
 
+  test('setRawIfAbsent sets only an absent or expired key', async () => {
+    expect(await provider.setRawIfAbsent('claim', 'a', 60)).toBe(true);
+    expect(await provider.setRawIfAbsent('claim', 'b', 60)).toBe(false);
+    expect(await provider.getRaw('claim')).toBe('a');
+
+    const store = (provider as any).store as Map<string, { value: string; expiresAt: number }>;
+    store.get('claim')!.expiresAt = Date.now() - 1;
+    expect(await provider.setRawIfAbsent('claim', 'c', 60)).toBe(true);
+    expect(await provider.getRaw('claim')).toBe('c');
+    expect(store.get('claim')!.expiresAt).toBeGreaterThan(Date.now());
+  });
+
   test('setRaw respects TTL', async () => {
     await provider.setRaw('k', 'v', 60);
     const store = (provider as any).store as Map<string, { value: string; expiresAt: number }>;

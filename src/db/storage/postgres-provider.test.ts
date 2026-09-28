@@ -225,6 +225,19 @@ describe.skipIf(!isIntegration)('PostgresStorageProvider (Integration)', () => {
       await provider.delRaw('plain');
       expect(await provider.getRaw('plain')).toBeNull();
     });
+
+    test('setRawIfAbsent claims once, and takes over an expired row', async () => {
+      const results = await Promise.all(
+        Array.from({ length: 5 }, (_, i) => provider.setRawIfAbsent('claim', `v${i}`, 60)),
+      );
+      expect(results.filter(Boolean)).toHaveLength(1);
+      expect(await provider.setRawIfAbsent('claim', 'again', 60)).toBe(false);
+
+      await queryRaw(`UPDATE kv_store SET expires_at = now() - interval '1 second' WHERE key = 'claim'`);
+      expect(await provider.setRawIfAbsent('claim', 'fresh', 60)).toBe(true);
+      expect(await provider.getRaw('claim')).toBe('fresh');
+      expect(await provider.createCache('').ttl('claim')).toBeGreaterThan(0);
+    });
   });
 
   test('ping succeeds against a live database', async () => {

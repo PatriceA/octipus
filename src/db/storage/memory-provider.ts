@@ -149,6 +149,12 @@ export class MemoryStorageProvider implements StorageProvider {
     });
   }
   async delRaw(key: string): Promise<void> { this.store.delete(key); }
+  async setRawIfAbsent(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+    // Synchronous between the check and the set, so atomic in-process.
+    if (this.getValid(key) !== null) return false;
+    this.store.set(key, { value, expiresAt: ttlSeconds > 0 ? Date.now() + ttlSeconds * 1000 : 0 });
+    return true;
+  }
 
   async ping(): Promise<boolean> { return true; }
 
