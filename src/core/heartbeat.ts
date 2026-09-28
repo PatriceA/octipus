@@ -309,12 +309,21 @@ export async function probeRoleWork(userId: string, role: string): Promise<RoleT
  * would replace (narrow or widen) the owner's own choice for every session.
  */
 async function defaultBoardWritesAllowed(hook: Hook): Promise<boolean> {
+  return boardWritesAllowed(hook.userId, hook.sessionId);
+}
+
+/**
+ * The permission half of `defaultBoardWritesAllowed`, for callers without a
+ * hook row (the tasks page's role-agents panel asks it before a hook exists).
+ * A failed check reads as not allowed.
+ */
+export async function boardWritesAllowed(userId: string, sessionId?: string | null): Promise<boolean> {
   try {
     const { getPermissionManager } = await import('@/security/permissions');
-    const check = await getPermissionManager().check(hook.userId, 'tasks', 'write', {}, { sessionId: hook.sessionId ?? '', workspaceId: null });
+    const check = await getPermissionManager().check(userId, 'tasks', 'write', {}, { sessionId: sessionId ?? '', workspaceId: null });
     return check.level === 'ALLOW' && check.allowed;
   } catch (err) {
-    coreLogger.warn({ err, hookId: hook.id }, 'heartbeat: tasks permission check failed (treating as not allowed)');
+    coreLogger.warn({ err, userId }, 'heartbeat: tasks permission check failed (treating as not allowed)');
     return false;
   }
 }

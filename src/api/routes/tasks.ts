@@ -1,9 +1,11 @@
 import { apiContext } from '@/api/context';
 import { Elysia, t } from '@/api/http';
+import { ROLE_CONFIGS } from '@/core/agent/roles';
+import { boardWritesAllowed, disableRoleHeartbeatHook, ensureRoleHeartbeatHook, heartbeatRole } from '@/core/heartbeat';
 import { auditTaskMutation, changedTaskFields, type TaskMutationOp } from '@/core/tasks/audit';
 import { nextActions } from '@/core/tasks/next';
 import { dateOnlyToEndOfDay } from '@/core/tasks/rank';
-import { assigneePatch, isTaskStatus, TASK_ASSIGNEE_KINDS, TASK_STATUSES } from '@/core/tasks/status';
+import { assigneePatch, isActiveStatus, isTaskStatus, TASK_ASSIGNEE_KINDS, TASK_STATUSES } from '@/core/tasks/status';
 import { normalizeEstimate } from '@/core/tasks/structure';
 import { resolveUserTimezone } from '@/core/tasks/timezone';
 import { scopedRepos } from '@/db/repositories/scoped';
@@ -113,6 +115,84 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         view: t.Optional(t.Literal('next')),
         limit: t.Optional(t.String()),
         tz: t.Optional(t.String({ maxLength: 64 })),
+      }),
+      detail: { tags: ['tasks'] },
+    }
+  )
+
+  // The tasks page's role-agents panel: every role the caller has tasks
+  // assigned to (or already runs a role heartbeat for), with its active task
+  // count and whether its heartbeat agent is enabled, plus whether the board
+  // permission the agent needs (tasks/write = ALLOW) is in place. Static path,
+  // declared before `/:id`.
+  .get(
+    '/role-agents',
+    async ({ user, principal, set }) => {
+      if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
+      const repos = scopedRepos(principal);
+      const [assigned, hooks, allowed] = await Promise.all([
+        repos.tasks.listOwn({ assigneeKind: 'role', limit: 5000 }),
+        repos.hooks.listOwn(),
+        boardWritesAllowed(user.id),
+      ]);
+      const rows = new Map<string, { role: string; activeTasks: number; totalTasks: number; enabled: boolean; hookId: string | null }>();
+      const row = (role: string) => {
+        let r = rows.get(role);
+        if (!r) rows.set(role, (r = { role, activeTasks: 0, totalTasks: 0, enabled: false, hookId: null }));
+        return r;
+      };
+      for (const task of assigned) {
+        if (!task.assigneeRef) continue;
+        const r = row(task.assigneeRef);
+        r.totalTasks += 1;
+        if (isActiveStatus(task.status)) r.activeTasks += 1;
+      }
+      for (const hook of hooks) {
+        const role = heartbeatRole(hook);
+        if (!role) continue;
+        const r = row(role);
+        r.hookId = hook.id;
+        r.enabled = hook.isEnabled;
+      }
+      return {
+        boardWritesAllowed: allowed,
+        roles: [...rows.values()]
+          .map((r) => ({ ...r, known: Object.hasOwn(ROLE_CONFIGS, r.role) }))
+          .sort((a, b) => a.role.localeCompare(b.role)),
+      };
+    },
+    { detail: { tags: ['tasks'] } }
+  )
+
+  // Turn a role's heartbeat agent on or off for the caller (idempotent). On
+  // creates or re-enables the one heartbeat hook for that role; off disables
+  // it. An unknown role is a 400.
+  .put(
+    '/role-agents',
+    async ({ user, principal, body, set }) => {
+      if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
+      try {
+        if (body.enabled) {
+          const hookId = await ensureRoleHeartbeatHook(user.id, body.role);
+          return { role: body.role, enabled: true, hookId };
+        }
+        await disableRoleHeartbeatHook(user.id, body.role);
+        return { role: body.role, enabled: false };
+      } catch (err) {
+        set.status = 400;
+        return { error: (err as Error).message };
+      }
+    },
+    {
+      body: t.Object({
+        role: t.String({ minLength: 1, maxLength: 64 }),
+        enabled: t.Boolean(),
       }),
       detail: { tags: ['tasks'] },
     }
