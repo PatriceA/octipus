@@ -415,7 +415,10 @@ describe('POST /api/webhooks/:path (unauthenticated)', () => {
 
   test('on a shared path, only the hook whose own secret verifies fires', async () => {
     const res = await deliver('shared', { n: 1 }, aliceSecret);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ received: true, accepted: true, hooks: 1 });
+    const { drainWebhookTasks } = await import('./webhook-delivery');
+    await drainWebhookTasks();
     expect(executed).toEqual(['alice-shared-path']);
   });
 

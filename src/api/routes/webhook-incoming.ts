@@ -3,6 +3,13 @@ import { Elysia, t } from '@/api/http';
 import { getDb } from '@/db/postgres';
 import { hookExecutions } from '@/db/schema/hook-executions';
 import { hooks } from '@/db/schema/hooks';
+import {
+  claimDelivery,
+  getDeliveryId,
+  releaseDelivery,
+  runInBackground,
+  safeEqual,
+} from '@/hooks/webhook-delivery';
 import { apiLogger, coreLogger } from '@/utils/logger';
 
 /**
@@ -35,6 +42,11 @@ function renderTemplate(template: string, data: Record<string, unknown>): string
  * The hook's configured action (notify, spawn_agent, etc.) is executed
  * through the standard HookManager trigger pipeline, ensuring cooldown,
  * max-execution limits, condition checks, and execution logging all work.
+ *
+ * The request is answered 202 once authenticated and the action runs in the
+ * background. A delivery id (X-GitHub-Delivery, Idempotency-Key, ...) is
+ * remembered for 24h; a repeat is answered 200 `{duplicate: true}` without
+ * firing.
  */
 export const webhookIncomingRoutes = new Elysia({ prefix: '/hooks/incoming' })
   .post(
@@ -70,7 +82,11 @@ export const webhookIncomingRoutes = new Elysia({ prefix: '/hooks/incoming' })
         const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
         const headerSecret = request.headers.get('x-webhook-secret');
 
-        if (bearerToken !== webhookSecret && headerSecret !== webhookSecret) {
+        // Constant-time compares; evaluate both so timing doesn't reveal which
+        // header was tried.
+        const bearerOk = bearerToken !== null && safeEqual(bearerToken, webhookSecret);
+        const headerOk = headerSecret !== null && safeEqual(headerSecret, webhookSecret);
+        if (!bearerOk && !headerOk) {
           apiLogger.warn({ hookId }, 'Incoming webhook auth failed');
           set.status = 401;
           return { error: 'Invalid webhook secret' };
@@ -83,6 +99,14 @@ export const webhookIncomingRoutes = new Elysia({ prefix: '/hooks/incoming' })
       }
 
       apiLogger.info({ hookId, hookName: hook.name }, 'Incoming webhook received');
+
+      // Idempotency: a redelivery with the same delivery id within the TTL is
+      // acknowledged without firing the hook again.
+      const deliveryId = getDeliveryId(request.headers);
+      if (deliveryId && !(await claimDelivery(hook.id, deliveryId))) {
+        apiLogger.info({ hookId, deliveryId }, 'Duplicate incoming webhook delivery ignored');
+        return { status: 'duplicate', duplicate: true, hookId: hook.id, hookName: hook.name };
+      }
 
       // Build request headers map for context
       const reqHeaders: Record<string, string> = {};
@@ -102,77 +126,71 @@ export const webhookIncomingRoutes = new Elysia({ prefix: '/hooks/incoming' })
         });
       }
 
-      // Trigger through the standard HookManager pipeline.
       // Pass hookId in event.data so matchesTrigger targets only this hook
       // (same pattern as the schedule trigger).
-      try {
-        const { getHookManager } = await import('@/hooks/manager');
-        const hookManager = getHookManager();
+      const event = {
+        type: 'webhook' as const,
+        data: { hookId, body: payload, renderedMessage },
+        timestamp: new Date(),
+      };
 
-        const event = {
-          type: 'webhook' as const,
-          data: { hookId, body: payload, renderedMessage },
-          timestamp: new Date(),
-        };
+      const context = {
+        webhook: {
+          path: triggerConfig.webhookPath || hookId,
+          method: 'POST',
+          headers: reqHeaders,
+          body: renderedMessage
+            ? { ...payload, _renderedMessage: renderedMessage }
+            : payload,
+        },
+      };
 
-        const context = {
-          webhook: {
-            path: triggerConfig.webhookPath || hookId,
-            method: 'POST',
-            headers: reqHeaders,
-            body: renderedMessage
-              ? { ...payload, _renderedMessage: renderedMessage }
-              : payload,
-          },
-        };
-
-        const results = await hookManager.triggerHook(hookId, event, context);
-
-        const executed = results.filter(r => r.triggered).length;
-        const succeeded = results.filter(r => r.result?.success).length;
-        const failed = results.filter(r => r.triggered && !r.result?.success).length;
-
-        apiLogger.info(
-          { hookId, hookName: hook.name, executed, succeeded, failed },
-          'Incoming webhook processed',
-        );
-
-        return {
-          status: 'processed',
-          hookId: hook.id,
-          hookName: hook.name,
-          executed,
-          succeeded,
-          failed,
-          results: results.map(r => ({
-            hookId: r.hookId,
-            hookName: r.hookName,
-            triggered: r.triggered,
-            success: r.result?.success,
-            error: r.error || r.result?.error,
-            executionTime: r.executionTime,
-          })),
-        };
-      } catch (err: unknown) {
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        apiLogger.error({ err, hookId }, 'Incoming webhook processing failed');
-
-        // Log failed execution
+      // Trigger through the standard HookManager pipeline, in the background:
+      // the action can be a full agent turn, and senders time out (GitHub
+      // after ~10s) and redeliver, which would start duplicate runs.
+      runInBackground({ hookId, deliveryId }, async () => {
         try {
-          await db.insert(hookExecutions).values({
-            hookId: hook.id,
-            source: 'hook',
-            status: 'error',
-            triggerType: 'webhook',
-            actionType: hook.action,
-            error: errorMessage,
-            triggerContext: { webhook: { hookId, body: payload } },
-          });
-        } catch (err) { coreLogger.error({ err }, 'silent failure in webhook-incoming'); }
+          const { getHookManager } = await import('@/hooks/manager');
+          const results = await getHookManager().triggerHook(hookId, event, context);
 
-        set.status = 500;
-        return { error: 'Processing failed', message: errorMessage };
-      }
+          const executed = results.filter(r => r.triggered).length;
+          const succeeded = results.filter(r => r.result?.success).length;
+          const failed = results.filter(r => r.triggered && !r.result?.success).length;
+
+          apiLogger.info(
+            { hookId, hookName: hook.name, executed, succeeded, failed },
+            'Incoming webhook processed',
+          );
+          // Let a redelivery retry a run that failed.
+          if (failed > 0 && deliveryId) await releaseDelivery(hook.id, deliveryId);
+        } catch (err: unknown) {
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          apiLogger.error({ err, hookId }, 'Incoming webhook processing failed');
+          if (deliveryId) await releaseDelivery(hook.id, deliveryId);
+
+          // Log failed execution
+          try {
+            await db.insert(hookExecutions).values({
+              hookId: hook.id,
+              source: 'hook',
+              status: 'error',
+              triggerType: 'webhook',
+              actionType: hook.action,
+              error: errorMessage,
+              triggerContext: { webhook: { hookId, body: payload } },
+            });
+          } catch (err) { coreLogger.error({ err }, 'silent failure in webhook-incoming'); }
+        }
+      });
+
+      set.status = 202;
+      return {
+        status: 'accepted',
+        accepted: true,
+        hookId: hook.id,
+        hookName: hook.name,
+        hooks: 1,
+      };
     },
     {
       params: t.Object({ hookId: t.String() }),

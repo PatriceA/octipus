@@ -1,38 +1,43 @@
-import { createHmac, timingSafeEqual } from 'crypto';
 import { Elysia, t } from '@/api/http';
 import { getHookManager } from '@/hooks';
 import type { TriggerContext, TriggerEvent } from '@/hooks/triggers';
+import {
+  claimDelivery,
+  getDeliveryId,
+  releaseDelivery,
+  runInBackground,
+  verifyHmacSha256,
+} from '@/hooks/webhook-delivery';
 import { apiLogger } from '@/utils/logger';
 
+/** The request body exactly as sent. */
+async function readRawBody(request: Request): Promise<Uint8Array> {
+  try {
+    return new Uint8Array(await request.arrayBuffer());
+  } catch {
+    return new Uint8Array();
+  }
+}
+
 /**
- * Verify HMAC-SHA256 signature from the X-Hub-Signature-256 header.
- * Returns true when the signature is valid, false otherwise.
+ * The payload handed to hooks, parsed from the raw bytes that were verified.
+ * JSON bodies are parsed directly; GitHub's form content type carries the JSON
+ * in a `payload` field. Anything else falls back to the framework's parse.
  */
-function verifyWebhookSignature(
-  payload: string,
-  secret: string,
-  signatureHeader: string | null,
-): boolean {
-  if (!signatureHeader) {
-    return false;
+function parsePayload(raw: Uint8Array, contentType: string | null, fallback: unknown): unknown {
+  const text = new TextDecoder().decode(raw);
+  if (text === '') return fallback;
+  const type = contentType ?? '';
+  try {
+    if (type.includes('application/x-www-form-urlencoded')) {
+      const form = new URLSearchParams(text);
+      const inner = form.get('payload');
+      return inner !== null ? JSON.parse(inner) : Object.fromEntries(form);
+    }
+    return JSON.parse(text);
+  } catch {
+    return fallback ?? text;
   }
-
-  // Header format: "sha256=<hex digest>"
-  const parts = signatureHeader.split('=');
-  if (parts.length !== 2 || parts[0] !== 'sha256') {
-    return false;
-  }
-
-  const expected = createHmac('sha256', secret).update(payload).digest('hex');
-
-  const expectedBuf = Buffer.from(expected, 'hex');
-  const receivedBuf = Buffer.from(parts[1], 'hex');
-
-  if (expectedBuf.length !== receivedBuf.length) {
-    return false;
-  }
-
-  return timingSafeEqual(expectedBuf, receivedBuf);
 }
 
 /**
@@ -46,11 +51,17 @@ function verifyWebhookSignature(
  *    hooks whose signature verifies are fired. Hooks without a secret never fire.
  *  - If no matching hook verifies, the request is rejected with 401.
  *  - If no hook matches the path, the request is rejected with 404.
+ *  - The signature is checked over the raw request bytes.
+ *
+ * Once verified, the request is answered 202 and the hook actions run in the
+ * background. A delivery id (X-GitHub-Delivery, Idempotency-Key, ...) is
+ * remembered per hook for 24h; a repeat is answered 200 `{duplicate: true}`
+ * without firing.
  */
 export const webhookRoutes = new Elysia({ prefix: '/webhooks' })
   .post(
     '/:path',
-    async ({ params, body, request }) => {
+    async ({ params, body, request, set }) => {
       const webhookPath = params.path;
 
       apiLogger.info({ webhookPath }, 'Webhook received');
@@ -59,7 +70,11 @@ export const webhookRoutes = new Elysia({ prefix: '/webhooks' })
 
       // --- Signature verification ---
       const matchingHooks = hookManager.getWebhookHooksByPath(webhookPath);
-      const rawBody = JSON.stringify(body);
+      // Verify over the exact bytes the sender signed, never a re-serialised
+      // body: JSON.stringify(JSON.parse(raw)) drops escapes like \u003c and
+      // whitespace, so real GitHub signatures would not match. The framework
+      // parsed a clone, so the original stream is still unread.
+      const rawBytes = await readRawBody(request);
       const signatureHeader = request.headers.get('x-hub-signature-256');
 
       // No hook claims this path: nothing was authenticated, so fire nothing.
@@ -82,7 +97,7 @@ export const webhookRoutes = new Elysia({ prefix: '/webhooks' })
           apiLogger.warn({ webhookPath, hookId: hook.id }, 'Webhook hook skipped: no webhookSecret configured');
           return false;
         }
-        if (!verifyWebhookSignature(rawBody, secret, signatureHeader)) {
+        if (!verifyHmacSha256(rawBytes, secret, signatureHeader)) {
           apiLogger.warn({ webhookPath, hookId: hook.id }, 'Webhook signature verification failed');
           return false;
         }
@@ -100,6 +115,23 @@ export const webhookRoutes = new Elysia({ prefix: '/webhooks' })
         });
       }
 
+      // Idempotency: a sender that redelivers (GitHub retries on a slow
+      // response, or on "Redeliver") reuses its delivery id. Claim it per
+      // hook, after authentication, and fire only the hooks that haven't
+      // seen it within the TTL.
+      const deliveryId = getDeliveryId(request.headers);
+      let hooksToFire = verifiedHooks;
+      if (deliveryId) {
+        const claimed = await Promise.all(verifiedHooks.map((hook) => claimDelivery(hook.id, deliveryId)));
+        hooksToFire = verifiedHooks.filter((_, i) => claimed[i]);
+        if (hooksToFire.length === 0) {
+          apiLogger.info({ webhookPath, deliveryId }, 'Duplicate webhook delivery ignored');
+          return { received: true, duplicate: true };
+        }
+      }
+
+      const payload = parsePayload(rawBytes, request.headers.get('content-type'), body);
+
       // Build trigger context from the incoming request
       const headers: Record<string, string> = {};
       request.headers.forEach((value, key) => {
@@ -108,7 +140,7 @@ export const webhookRoutes = new Elysia({ prefix: '/webhooks' })
 
       const event: TriggerEvent = {
         type: 'webhook',
-        data: { path: webhookPath, body },
+        data: { path: webhookPath, body: payload },
         timestamp: new Date(),
       };
 
@@ -117,22 +149,31 @@ export const webhookRoutes = new Elysia({ prefix: '/webhooks' })
           path: webhookPath,
           method: 'POST',
           headers,
-          body: body as unknown,
+          body: payload,
         },
       };
 
+      // Respond now and run the actions (possibly a full agent turn) in the
+      // background: senders like GitHub give up after ~10s and redeliver.
       // Fire only the hooks whose signature was verified above.
-      const results = [];
-      for (const hook of verifiedHooks) {
-        results.push(...(await hookManager.triggerHook(hook.id, event, context)));
+      for (const hook of hooksToFire) {
+        runInBackground({ webhookPath, hookId: hook.id, deliveryId }, async () => {
+          try {
+            const results = await hookManager.triggerHook(hook.id, event, context);
+            const executed = results.filter(r => r.result?.success).length;
+            const failed = results.filter(r => r.triggered && !r.result?.success).length;
+            apiLogger.info({ webhookPath, hookId: hook.id, executed, failed }, 'Webhook processed');
+            // Let a redelivery retry a run that failed.
+            if (failed > 0 && deliveryId) await releaseDelivery(hook.id, deliveryId);
+          } catch (err) {
+            if (deliveryId) await releaseDelivery(hook.id, deliveryId);
+            throw err;
+          }
+        });
       }
 
-      const executed = results.filter(r => r.result?.success).length;
-      const failed = results.filter(r => r.triggered && !r.result?.success).length;
-
-      apiLogger.info({ webhookPath, executed, failed }, 'Webhook processed');
-
-      return { received: true };
+      set.status = 202;
+      return { received: true, accepted: true, hooks: hooksToFire.length };
     },
     {
       params: t.Object({ path: t.String() }),
