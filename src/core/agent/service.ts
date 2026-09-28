@@ -23,6 +23,7 @@ import { VoicePlanGate } from './voice-plan-gate';
 import { guardInput } from './input-guard';
 import { ModelSelector } from './model-selector';
 import { runRootAgent } from './root-runner';
+import { type LimitRefusal, limitRefusalOf } from '@/core/errors/limit-refusal';
 import { guardOutput, stripSwarmScaffolding } from './output-guard';
 import { filterPII } from './pii-filter';
 import { maybeCompactSession } from './session-compaction';
@@ -201,6 +202,11 @@ export class AgentService {
     // Trajectory recorder — observes this run for later eval/fine-tuning.
     // Constructed early so the sessionId below can overwrite it.
     let trajectory: TrajectoryRecorder | null = null;
+    // The session the turn resolved to, for the failure path below.
+    let turnSessionId: string | undefined;
+    // Whether this turn's user message is already stored (the plan-execute
+    // path saves it before running), so the refusal path does not save it twice.
+    let userMessageSaved = false;
     try {
       const registry = getModelRegistry();
       const defaultModel = await registry.getDefaultModel();
@@ -231,6 +237,7 @@ export class AgentService {
       }
 
       const resolvedSessionId = await resolveSession(sessionId, userId, channel || 'api');
+      turnSessionId = resolvedSessionId;
 
       // Resolve the principal's default workspace once and thread it
       // through every spawn / memory call below. Memory-redesign Phase B
@@ -356,6 +363,7 @@ export class AgentService {
         coreLogger.info({ sessionId: resolvedSessionId }, 'Executing plan via rootAgent');
 
         await messageRepository.create({ sessionId: resolvedSessionId, role: 'user', content: message });
+        userMessageSaved = true;
         await sessionRepository.incrementMessageCount(resolvedSessionId);
 
         // Send immediate feedback before the long-running root agent starts
@@ -393,7 +401,7 @@ export class AgentService {
           coreLogger.warn({ err }, 'memory.retrieveForContext failed on plan path');
         }
 
-        const { response, agentId, sources: _planSources, outcome } = await this.runRootAgent(
+        const { response, agentId, sources: _planSources, outcome, limit: planLimit } = await this.runRootAgent(
           resolvedSessionId, userId, planMessage, classification, inputGuard.flags, channel,
           planMemoryBlock,
           workspaceId,
@@ -401,7 +409,11 @@ export class AgentService {
         void _planSources;
         const outputCheck = guardOutput(response, inputGuard.flags);
         const finalResponse = outputCheck.action === 'replace' ? outputCheck.response : response;
-        await messageRepository.create({ sessionId: resolvedSessionId, role: 'assistant', content: finalResponse });
+        await messageRepository.create({
+          sessionId: resolvedSessionId, role: 'assistant', content: finalResponse,
+          // A refused plan run keeps its structured reason, as on the main path.
+          ...(planLimit && { metadata: { limit: planLimit } }),
+        });
         await sessionRepository.incrementMessageCount(resolvedSessionId);
 
         // Plan-execute path also extracts memory from the original
@@ -416,7 +428,10 @@ export class AgentService {
           userMessage: planState.brief,
         }).catch((err) => coreLogger.warn({ err }, 'memory.updateAfterTurn failed on plan path'));
 
-        return { response: finalResponse, sessionId: resolvedSessionId, agentId, classification, outcome };
+        return {
+          response: finalResponse, sessionId: resolvedSessionId, agentId, classification, outcome,
+          ...(planLimit && { metadata: { limit: planLimit } }),
+        };
       }
 
       // Edit-and-continue (design Thread 2): re-read any files the user
@@ -586,7 +601,7 @@ export class AgentService {
 
       const startTime = Date.now();
       const turnGeneration = sessionGeneration((await sessionRepository.findById(resolvedSessionId))?.context);
-      const { response, agentId, sources, outcome } = await this.runRootAgent(
+      const { response, agentId, sources, outcome, limit } = await this.runRootAgent(
         resolvedSessionId, userId, message, classification, inputGuard.flags, channel,
         turnContext,
         workspaceId,
@@ -611,7 +626,11 @@ export class AgentService {
         finalResponse = appendSources(finalResponse, sources);
       }
 
-      const persistedAnswer = await messageRepository.createForGeneration({ sessionId: resolvedSessionId, role: 'assistant', content: finalResponse, agentId }, turnGeneration);
+      const persistedAnswer = await messageRepository.createForGeneration({
+        sessionId: resolvedSessionId, role: 'assistant', content: finalResponse, agentId,
+        // A refused turn keeps its structured reason so the chat card survives a reload.
+        ...(limit && { metadata: { limit: limit } }),
+      }, turnGeneration);
       if (!persistedAnswer) return { response: 'Conversation was cleared while this turn was running.', sessionId: resolvedSessionId, classification };
       // If the output guard replaced the answer, the vendor must receive the
       // corrected Octipus text on its next turn rather than acknowledging it.
@@ -646,14 +665,19 @@ export class AgentService {
         agentId,
         outcome,
         classification,
-        metadata: { latencyMs: Date.now() - startTime },
+        metadata: { latencyMs: Date.now() - startTime, ...(limit && { limit }) },
       };
     } catch (error) {
       recordRootRun(channel, undefined, 'error');
+      // A spend budget or quota refusal at spawn (the budget was already
+      // paused) says which cap, how much, and when it resets — not "error".
+      const limit = limitRefusalOf(error);
       // Pulled apart explicitly: an Error's `message` and `stack` are
       // non-enumerable, so `{ error }` serialises to `{}` and hides the very
-      // thing the line exists to report.
-      coreLogger.error(
+      // thing the line exists to report. A cap is logged at warn: it is the
+      // system working as configured.
+      (limit ? coreLogger.warn : coreLogger.error).call(
+        coreLogger,
         {
           err: error instanceof Error
             ? { name: error.name, message: error.message, stack: error.stack }
@@ -669,6 +693,31 @@ export class AgentService {
           outcome: 'failure',
           failureReason: (error as Error).message,
         }).catch(err => coreLogger.error({ err }, 'Trajectory finalize (failure path) failed'));
+      }
+      if (limit) {
+        // Refused at spawn: no worker ran, so the answer (and, unless the
+        // path already stored it, the question) was not persisted. Store them
+        // so the transcript and the budget card survive a reload.
+        if (turnSessionId) {
+          try {
+            if (!userMessageSaved) {
+              await messageRepository.create({ sessionId: turnSessionId, role: 'user', content: message });
+            }
+            await messageRepository.create({
+              sessionId: turnSessionId, role: 'assistant', content: limit.text,
+              metadata: { limit: limit.refusal },
+            });
+          } catch (err) {
+            coreLogger.warn({ err, sessionId: turnSessionId }, 'Could not persist the limit refusal');
+          }
+        }
+        return {
+          response: limit.text,
+          sessionId: turnSessionId ?? sessionId,
+          outcome: 'failed',
+          classification: { type: 'casual', confidence: 0 },
+          metadata: { limit: limit.refusal },
+        };
       }
       return {
         response: `I encountered an error processing your message: ${(error as Error).message}`,
@@ -697,7 +746,7 @@ export class AgentService {
     workspaceId: string | null = null,
     /** Chat/work split (Thread 3): inline vs file deliverable directive. */
     outputDirective: { mode: 'inline' | 'file'; forced: boolean } = { mode: 'inline', forced: false },
-  ): Promise<{ response: string; agentId: string; sources: string[]; outcome: TurnOutcome }> {
+  ): Promise<{ response: string; agentId: string; sources: string[]; outcome: TurnOutcome; limit?: LimitRefusal }> {
     return runRootAgent(
       this, this.deps,
       sessionId, userId, message, classification, guardFlags, channel,

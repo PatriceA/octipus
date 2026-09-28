@@ -46,6 +46,7 @@ import { modelRoutes } from './routes/models';
 import { digestRoutes } from './routes/digest';
 import { readerRoutes } from './routes/reader';
 import { notificationRoutes } from './routes/notifications';
+import { spendBudgetRoutes } from './routes/spend-budgets';
 import { permissionRequestRoutes } from './routes/permission-requests';
 import { oauthRoutes } from './routes/oauth';
 import { orgAdminRoutes, orgMeRoutes, workspaceMeRoutes } from './routes/orgs';
@@ -347,6 +348,7 @@ export function createServer() {
         .use(topicRoutes)
         .use(voiceRoutes)
         .use(notificationRoutes)
+        .use(spendBudgetRoutes)
         .use(permissionRequestRoutes)
         .use(workspaceRoutes)
         .use(oauthRoutes)

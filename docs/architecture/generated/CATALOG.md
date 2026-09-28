@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-417 mounted routes across 61 route files. The path is the full one, group prefix included — what a client actually calls.
+421 mounted routes across 62 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -48,6 +48,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/admin/users` | `src/api/routes/admin.ts` |
 | POST | `/api/admin/users` | `src/api/routes/admin.ts` |
 | PATCH | `/api/admin/users/:id` | `src/api/routes/admin.ts` |
+| GET | `/api/admin/users/:id/workspaces` | `src/api/routes/admin.ts` |
 | GET | `/api/agents` | `src/api/routes/agents.ts` |
 | POST | `/api/agents` | `src/api/routes/agents.ts` |
 | DELETE | `/api/agents/:id` | `src/api/routes/agents.ts` |
@@ -373,6 +374,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | PATCH | `/api/skills/topics/bulk/:skillId` | `src/api/routes/skill-topic-assignments.ts` |
 | GET | `/api/skills/usage` | `src/api/routes/skills.ts` |
 | PATCH | `/api/skills/usage` | `src/api/routes/skills.ts` |
+| GET | `/api/spend-budgets/me` | `src/api/routes/spend-budgets.ts` |
 | GET | `/api/swarm/nodes` | `src/api/routes/swarm.ts` |
 | GET | `/api/swarm/nodes/:id` | `src/api/routes/swarm.ts` |
 | POST | `/api/swarm/nodes/:id/cancel` | `src/api/routes/swarm.ts` |
@@ -385,6 +387,8 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/tasks/:id/comments` | `src/api/routes/tasks.ts` |
 | POST | `/api/tasks/:id/comments` | `src/api/routes/tasks.ts` |
 | POST | `/api/tasks/:id/release` | `src/api/routes/tasks.ts` |
+| GET | `/api/tasks/role-agents` | `src/api/routes/tasks.ts` |
+| PUT | `/api/tasks/role-agents` | `src/api/routes/tasks.ts` |
 | GET | `/api/tools` | `src/api/routes/tools.ts` |
 | GET | `/api/tools/:id` | `src/api/routes/tools.ts` |
 | POST | `/api/tools/:toolId/tools/:toolName/execute` | `src/api/routes/tools.ts` |
@@ -452,19 +456,19 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 13 |
 | `api` | `config` | 20 |
 | `api` | `connectors` | 2 |
-| `api` | `core` | 86 |
-| `api` | `db` | 102 |
+| `api` | `core` | 89 |
+| `api` | `db` | 103 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 8 |
 | `api` | `mcp` | 3 |
 | `api` | `models` | 31 |
 | `api` | `plugins` | 1 |
-| `api` | `security` | 78 |
+| `api` | `security` | 81 |
 | `api` | `services` | 4 |
 | `api` | `shared` | 2 |
 | `api` | `skills` | 4 |
 | `api` | `tools` | 3 |
-| `api` | `utils` | 61 |
+| `api` | `utils` | 62 |
 | `api` | `voice` | 24 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 1 |
@@ -492,14 +496,14 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `connectors` | `utils` | 5 |
 | `core` | `capabilities` | 1 |
 | `core` | `channels` | 4 |
-| `core` | `config` | 32 |
+| `core` | `config` | 33 |
 | `core` | `connectors` | 2 |
-| `core` | `db` | 189 |
+| `core` | `db` | 192 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 5 |
 | `core` | `models` | 86 |
-| `core` | `security` | 60 |
+| `core` | `security` | 62 |
 | `core` | `services` | 2 |
 | `core` | `shared` | 13 |
 | `core` | `skills` | 8 |
@@ -532,7 +536,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `mcp` | `utils` | 4 |
 | `models` | `config` | 10 |
 | `models` | `core` | 27 |
-| `models` | `db` | 11 |
+| `models` | `db` | 12 |
 | `models` | `security` | 19 |
 | `models` | `services` | 1 |
 | `models` | `shared` | 4 |
@@ -543,7 +547,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `security` | `config` | 12 |
 | `security` | `connectors` | 3 |
 | `security` | `core` | 2 |
-| `security` | `db` | 54 |
+| `security` | `db` | 55 |
 | `security` | `tools` | 1 |
 | `security` | `utils` | 21 |
 | `services` | `capabilities` | 5 |

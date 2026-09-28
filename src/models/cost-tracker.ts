@@ -3,6 +3,7 @@ import { and, desc, eq, gte, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { Cache } from '@/db/cache';
 import { type CostLogEntry, costLog, modelConfig, type NewCostLogEntry } from '@/db/schema/models';
+import { costSourceAggregates } from '@/db/cost-source';
 import { modelLogger } from '@/utils/logger';
 
 // ponytail: track models we've already warned about to deduplicate warnings.
@@ -203,10 +204,8 @@ export class CostTracker {
         totalCost: sql<number>`COALESCE(SUM(${costLog.totalCost}), 0)::float`,
         requestCount: sql<number>`COUNT(*)::int`,
         estimatedCacheSavings: sql<number>`COALESCE(SUM((${costLog.metadata}->>'estimatedCacheSavings')::float), 0)::float`,
-        reportedCost: sql<number>`COALESCE(SUM(CASE WHEN ${costLog.metadata}->>'costSource' = 'reported' THEN ${costLog.totalCost} ELSE 0 END), 0)::float`,
-        estimatedCost: sql<number>`COALESCE(SUM(CASE WHEN COALESCE(${costLog.metadata}->>'costSource', 'estimated') = 'estimated' THEN ${costLog.totalCost} ELSE 0 END), 0)::float`,
+        ...costSourceAggregates(),
         unknownUsageRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'usageAvailable' = 'false')::int`,
-        unknownCostRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'costSource' = 'unknown')::int`,
         cacheReadTokens: sql<number>`COALESCE(SUM(${costLog.cachedInputTokens}), 0)::bigint`,
         cacheCreationTokens: sql<number>`COALESCE(SUM(${costLog.cacheCreationTokens}), 0)::bigint`,
       })
@@ -241,10 +240,8 @@ export class CostTracker {
         totalCost: sql<number>`COALESCE(SUM(${costLog.totalCost}), 0)::float`,
         requestCount: sql<number>`COUNT(*)::int`,
         estimatedCacheSavings: sql<number>`COALESCE(SUM((${costLog.metadata}->>'estimatedCacheSavings')::float), 0)::float`,
-        reportedCost: sql<number>`COALESCE(SUM(CASE WHEN ${costLog.metadata}->>'costSource' = 'reported' THEN ${costLog.totalCost} ELSE 0 END), 0)::float`,
-        estimatedCost: sql<number>`COALESCE(SUM(CASE WHEN COALESCE(${costLog.metadata}->>'costSource', 'estimated') = 'estimated' THEN ${costLog.totalCost} ELSE 0 END), 0)::float`,
+        ...costSourceAggregates(),
         unknownUsageRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'usageAvailable' = 'false')::int`,
-        unknownCostRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'costSource' = 'unknown')::int`,
         cacheReadTokens: sql<number>`COALESCE(SUM(${costLog.cachedInputTokens}), 0)::bigint`,
         cacheCreationTokens: sql<number>`COALESCE(SUM(${costLog.cacheCreationTokens}), 0)::bigint`,
       })
@@ -290,10 +287,8 @@ export class CostTracker {
         totalCost: sql<number>`COALESCE(SUM(${costLog.totalCost}), 0)::float`,
         requestCount: sql<number>`COUNT(*)::int`,
         estimatedCacheSavings: sql<number>`COALESCE(SUM((${costLog.metadata}->>'estimatedCacheSavings')::float), 0)::float`,
-        reportedCost: sql<number>`COALESCE(SUM(CASE WHEN ${costLog.metadata}->>'costSource' = 'reported' THEN ${costLog.totalCost} ELSE 0 END), 0)::float`,
-        estimatedCost: sql<number>`COALESCE(SUM(CASE WHEN COALESCE(${costLog.metadata}->>'costSource', 'estimated') = 'estimated' THEN ${costLog.totalCost} ELSE 0 END), 0)::float`,
+        ...costSourceAggregates(),
         unknownUsageRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'usageAvailable' = 'false')::int`,
-        unknownCostRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'costSource' = 'unknown')::int`,
         cacheReadTokens: sql<number>`COALESCE(SUM(${costLog.cachedInputTokens}), 0)::bigint`,
         cacheCreationTokens: sql<number>`COALESCE(SUM(${costLog.cacheCreationTokens}), 0)::bigint`,
       })
@@ -321,10 +316,8 @@ export class CostTracker {
         totalCost: sql<number>`COALESCE(SUM(${costLog.totalCost}), 0)::float`,
         requestCount: sql<number>`COUNT(*)::int`,
         estimatedCacheSavings: sql<number>`COALESCE(SUM((${costLog.metadata}->>'estimatedCacheSavings')::float), 0)::float`,
-        reportedCost: sql<number>`COALESCE(SUM(CASE WHEN ${costLog.metadata}->>'costSource' = 'reported' THEN ${costLog.totalCost} ELSE 0 END), 0)::float`,
-        estimatedCost: sql<number>`COALESCE(SUM(CASE WHEN COALESCE(${costLog.metadata}->>'costSource', 'estimated') = 'estimated' THEN ${costLog.totalCost} ELSE 0 END), 0)::float`,
+        ...costSourceAggregates(),
         unknownUsageRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'usageAvailable' = 'false')::int`,
-        unknownCostRequests: sql<number>`COUNT(*) FILTER (WHERE ${costLog.metadata}->>'costSource' = 'unknown')::int`,
         cacheReadTokens: sql<number>`COALESCE(SUM(${costLog.cachedInputTokens}), 0)::bigint`,
         cacheCreationTokens: sql<number>`COALESCE(SUM(${costLog.cacheCreationTokens}), 0)::bigint`,
       })

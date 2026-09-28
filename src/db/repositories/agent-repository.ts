@@ -23,8 +23,14 @@ export class AgentRepository {
       error?: string;
       toolCalls?: Array<{ name: string; count: number }>;
       completionReason?: AgentCompletionReason;
+      /** Why a failed run failed when it was a user cap, not a fault: 'spend_budget' | 'quota'. */
+      failureReason?: 'spend_budget' | 'quota';
     },
   ): Promise<void> {
+    const patch = {
+      ...(update.completionReason && { completionReason: update.completionReason }),
+      ...(update.failureReason && { failureReason: update.failureReason }),
+    };
     await this.db.update(agents).set({
       status: update.status,
       iterations: update.iterations,
@@ -33,8 +39,8 @@ export class AgentRepository {
       durationMs: update.durationMs,
       error: update.error,
       toolCalls: update.toolCalls,
-      metadata: update.completionReason
-        ? sql`coalesce(${agents.metadata}, '{}'::jsonb) || ${JSON.stringify({ completionReason: update.completionReason })}::jsonb`
+      metadata: Object.keys(patch).length > 0
+        ? sql`coalesce(${agents.metadata}, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb`
         : undefined,
       completedAt: new Date(),
     }).where(eq(agents.id, id));
