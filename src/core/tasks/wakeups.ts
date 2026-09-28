@@ -29,9 +29,9 @@
  * caught and logged; nothing here can fail or slow the write. Tests await
  * `flushWakeups()`.
  *
- * Across processes: `dispatchWakeups` emits on this process's bus, hands the
- * events to the publisher, if one is set (`setWakeupPublisher`), then files
- * the notifications. On external Postgres the wakeup bridge
+ * Across processes: `dispatchWakeups` emits on this process's bus, files
+ * the notifications, then hands the events, detached, to the publisher if
+ * one is set (`setWakeupPublisher`). On external Postgres the wakeup bridge
  * (./wakeup-bridge.ts, started with the server) is that publisher: it
  * `pg_notify`s the ids on `octipus_task_wakeups`, and every other server
  * process LISTENing there re-emits them on its own bus with `remote: true`
@@ -250,16 +250,25 @@ export async function dispatchWakeups(input: WakeupInput): Promise<TaskWakeupEve
     events.push({ ...base, type: 'task.children_completed', taskId: childrenCompleted.id, title: childrenCompleted.title });
   }
   for (const event of events) emitSafely(event);
-  // Then to the other server processes (Postgres only; see the header). A
-  // failed NOTIFY is logged and costs only the remote shortcut.
-  if (events.length > 0 && publisher) {
-    try {
-      await publisher(events);
-    } catch (err) {
-      coreLogger.warn({ err, triggeredBy: closed.id }, 'Task wakeup publish to other processes failed');
+  try {
+    await notifyWoken(closed, cause, events);
+  } finally {
+    // Then to the other server processes (Postgres only; see the header),
+    // detached so the local path's latency is unchanged. A failed NOTIFY is
+    // logged and costs only the remote shortcut. `flushWakeups` waits for it.
+    if (events.length > 0 && publisher) {
+      const publish = publisher;
+      scheduleWakeup(() => publish(events).catch((err: unknown) => {
+        coreLogger.warn({ err, triggeredBy: closed.id }, 'Task wakeup publish to other processes failed');
+      }));
     }
   }
+  return events;
+}
 
+/** One notification per woken task (a task woken both ways gets one, combined). */
+async function notifyWoken(closed: Task, cause: WakeupCause, events: TaskWakeupEvent[]): Promise<void> {
+  const workspaceId = closed.workspaceId ?? null;
   const byTask = new Map<string, TaskWakeupEvent[]>();
   for (const event of events) byTask.set(event.taskId, [...(byTask.get(event.taskId) ?? []), event]);
   const notifications = getNotificationService();
@@ -277,8 +286,7 @@ export async function dispatchWakeups(input: WakeupInput): Promise<TaskWakeupEve
       unblockedToo ? 'task_unblocked' : 'task_children_completed',
       message,
       `Triggered by ${cause === 'deleted' ? 'deleting' : 'closing'} “${closed.title}”.`,
-      { taskId, triggeredBy: closed.id, workspaceId: base.workspaceId, wakeups: kinds, cause },
+      { taskId, triggeredBy: closed.id, workspaceId, wakeups: kinds, cause },
     );
   }
-  return events;
 }

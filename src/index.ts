@@ -6,7 +6,13 @@ import { initializeHotReload } from '@/config/hot-reload';
 import { migrateEnvToDb } from '@/config/migrate-env-to-db';
 import { getSettingsService } from '@/config/settings-service';
 import { startCronLoop, stopCronLoop } from '@/core/cron-runner';
-import { startRoleHeartbeatWakeups, stopRoleHeartbeatWakeups } from '@/core/heartbeat';
+import {
+  clearStaleRoleTurnLeases,
+  releaseHeldRoleTurnLeases,
+  startRoleHeartbeatWakeups,
+  stopRoleHeartbeatWakeups,
+  stopRoleTurnLeaseClaims,
+} from '@/core/heartbeat';
 import { getGateway } from '@/core/gateway';
 import { connectEventBridge } from '@/core/gateway/event-bridge';
 import { getGatewayHub } from '@/core/gateway/hub';
@@ -368,6 +374,15 @@ async function main() {
       logger.error({ err }, 'MCP token bootstrap failed (non-fatal)');
     }
 
+    // Role heartbeat leases left by turns that died with a previous run of
+    // this server (all of them on PGlite / OCTIPUS_SINGLE_PROCESS=1; this
+    // instance's older boots otherwise). Before the cron loop can claim.
+    try {
+      await clearStaleRoleTurnLeases();
+    } catch (err) {
+      logger.warn({ err }, 'Clearing stale role heartbeat leases failed (they lapse on their own)');
+    }
+
     // Start recurring task scheduler
     startCronLoop();
     startMonitors();
@@ -434,6 +449,11 @@ async function main() {
       }, 4000);
       forceExit.unref();
 
+      // No new heartbeat tick, and no new role-turn lease, from here on:
+      // otherwise a tick could claim a lease right before exit.
+      stopCronLoop();
+      stopRoleTurnLeaseClaims();
+
       // Stop all running agents (kills CLI child processes)
       try {
         const { getAgentManager } = await import('@/core/agent-manager');
@@ -442,6 +462,15 @@ async function main() {
         logger.info({ stopped, stillRunning }, 'Agents stopped');
       } catch {
         // Agent manager may not be initialized
+      }
+
+      // The role turns are over: free their hooks for the other processes
+      // (or the next boot) now rather than after the lease TTL.
+      try {
+        const released = await releaseHeldRoleTurnLeases();
+        if (released > 0) logger.info({ released }, 'Role heartbeat leases released');
+      } catch (err) {
+        logger.warn({ err }, 'Releasing role heartbeat leases failed (they lapse on their own)');
       }
 
       // Dispose extensions before tearing down the hub they subscribed to
@@ -461,7 +490,6 @@ async function main() {
         // registry may not have been initialized
       }
 
-      stopCronLoop();
       stopMonitors();
       stopRoleHeartbeatWakeups();
       try {

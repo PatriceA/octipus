@@ -6,7 +6,7 @@
  * that alice cannot read, list, mutate, toggle, test, or delete bob's
  * hooks/tasks through any of the route's endpoints.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -205,6 +205,39 @@ describe('heartbeat hooks through the API', () => {
       triggerConfig: { heartbeatInFlightUntil: null, heartbeatInFlightToken: 'theirs' },
     });
     expect(edited.body.triggerConfig).toEqual(lease);
+  });
+
+  test('an edit racing a lease change keeps the change: a lease released after the route read stays released', async () => {
+    const created = await postJson(aliceHooksApp, '/api/hooks', {
+      name: 'hb-race', trigger: 'heartbeat', action: 'spawn_agent', actionConfig: {}, triggerConfig: {},
+    });
+    const id = created.body.id as string;
+    const { executeRaw, queryRaw } = await import('@/db/postgres');
+    const leased = { heartbeatInFlightUntil: '2099-01-01T00:00:00+00:00', heartbeatInFlightToken: 'held', heartbeatRunsToday: 3 };
+    await executeRaw(`UPDATE hooks SET trigger_config = '${JSON.stringify(leased)}'::jsonb WHERE id = '${id}'`);
+
+    // The route has read the row (lease and all); the turn settles and
+    // releases the lease; only then does the route write.
+    const { getHookManager } = await import('@/hooks/manager');
+    const manager = getHookManager();
+    const original = manager.updateHook.bind(manager);
+    const spy = vi.spyOn(manager, 'updateHook').mockImplementation(async (hookId, data) => {
+      await executeRaw(`UPDATE hooks SET trigger_config = trigger_config - 'heartbeatInFlightUntil' - 'heartbeatInFlightToken' WHERE id = '${hookId}'`);
+      return original(hookId, data);
+    });
+    try {
+      const edited = await patchJson(aliceHooksApp, `/api/hooks/${id}`, { triggerConfig: { note: 'edited' } });
+      expect(edited.body.triggerConfig).toEqual({ note: 'edited', heartbeatRunsToday: 3 });
+    } finally {
+      spy.mockRestore();
+    }
+    const { rows } = await queryRaw(`SELECT trigger_config FROM hooks WHERE id = '${id}'`);
+    expect(rows[0].trigger_config).toEqual({ note: 'edited', heartbeatRunsToday: 3 });
+
+    // And the other way: a lease claimed after the read is not erased by the edit.
+    await executeRaw(`UPDATE hooks SET trigger_config = trigger_config || '{"heartbeatInFlightUntil":"2099-01-01T00:00:00+00:00","heartbeatInFlightToken":"new"}'::jsonb WHERE id = '${id}'`);
+    const again = await patchJson(aliceHooksApp, `/api/hooks/${id}`, { triggerConfig: { note: 'again' } });
+    expect(again.body.triggerConfig).toEqual({ note: 'again', heartbeatRunsToday: 3, heartbeatInFlightUntil: '2099-01-01T00:00:00+00:00', heartbeatInFlightToken: 'new' });
   });
 
   test('a role heartbeat needs a known role, and one per role per user', async () => {

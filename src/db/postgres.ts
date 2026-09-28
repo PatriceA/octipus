@@ -23,8 +23,13 @@ let healthCheck: (() => Promise<void>) | null = null;
  */
 let cachedDbKey: string | null = null;
 
+/** The storage mode from `STORAGE_MODE`: 'embedded' (PGlite, one process) or 'external' (Postgres, the default). */
+export function storageMode(): 'embedded' | 'external' {
+  return process.env.STORAGE_MODE === 'embedded' ? 'embedded' : 'external';
+}
+
 function buildDbKey(): string {
-  const mode = (process.env.STORAGE_MODE || 'external') as 'embedded' | 'external';
+  const mode = storageMode();
   if (mode === 'embedded') {
     const config = getConfig();
     const dataDir = process.env.DATA_DIR || config.database?.dataDir || '~/.octipus/data';
@@ -159,7 +164,7 @@ export function getDb(): DrizzleDB {
   if (db) return db;
 
   // Backward compat: synchronous init for external mode only
-  const mode = (process.env.STORAGE_MODE || 'external') as 'embedded' | 'external';
+  const mode = storageMode();
   if (mode === 'external') {
     const config = getConfig();
     // `require` is not defined in an ES module, so this whole fallback threw
@@ -212,7 +217,7 @@ export async function initializeDb(): Promise<DrizzleDB> {
   }
 
   const config = getConfig();
-  const mode = (process.env.STORAGE_MODE || 'external') as 'embedded' | 'external';
+  const mode = storageMode();
 
   if (mode === 'embedded') {
     const dataDir = process.env.DATA_DIR || config.database?.dataDir || '~/.octipus/data';

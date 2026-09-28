@@ -491,7 +491,7 @@ describe('role heartbeats', () => {
       // The running turn holds the lease on the row, for every process to see.
       const leased = (await hookRow(hook.id)).triggerConfig;
       expect(typeof leased.heartbeatInFlightToken).toBe('string');
-      expect(heartbeat.roleTurnLeaseLive(await hookRow(hook.id))).toBe(true);
+      expect(await heartbeat.roleTurnLeaseHeld(hook.id)).toBe(true);
 
       finish();
       await vi.waitFor(() => expect(heartbeat.roleTurnInFlight(hook.id)).toBe(false));
@@ -523,7 +523,7 @@ describe('role heartbeats', () => {
     await db.update(hooksSchema)
       .set({ triggerConfig: { role: 'coding', heartbeatInFlightUntil: ago(1000).toISOString(), heartbeatInFlightToken: first! } })
       .where(eq(hooksSchema.id, hook.id));
-    expect(heartbeat.roleTurnLeaseLive(await hookRow(hook.id))).toBe(false);
+    expect(await heartbeat.roleTurnLeaseHeld(hook.id)).toBe(false);
     const second = await heartbeat.claimRoleTurnLease(hook.id, 60_000);
     expect(second).toEqual(expect.any(String));
     expect(second).not.toBe(first);
@@ -557,32 +557,125 @@ describe('role heartbeats', () => {
     }
   });
 
-  test('the lease is claimed after the gate read: a claim that lands mid-gate wins over the tick', async () => {
+  test('the lease is claimed before the probe: another process cannot claim it mid-gate', async () => {
     await forCoding({ title: 'Ready' });
     const hook = await roleHook('coding', { nextRunAt: null });
     const deps = quiet();
-    let other: string | null = null;
+    let other: string | null | undefined;
     deps.boardWritesAllowed = async () => {
-      // The other process claims between this tick's read and its claim.
+      // Mid-gate, after the probe: the tick already holds the lease.
       other = await heartbeat.claimRoleTurnLease(hook.id, 60_000);
       return true;
     };
-    const { fired, restore } = await stubTrigger();
+    let finish!: () => void;
+    const running = new Promise<unknown[]>((resolve) => { finish = () => resolve([]); });
+    const { fired, restore } = await stubTrigger(() => running);
     try {
       await heartbeat.maybeRunHeartbeats(NOON, deps, cfg());
+      expect(other).toBeNull();
+      expect(fired).toHaveLength(1);
+      expect(await heartbeat.roleTurnLeaseHeld(hook.id)).toBe(true);
     } finally {
+      finish();
       restore();
     }
-    expect(other).toEqual(expect.any(String));
-    expect(fired).toEqual([]);
-    const row = await hookRow(hook.id);
-    expect(row.triggerConfig.heartbeatRunsToday).toBe(0);
-    expect(row.triggerConfig.heartbeatInFlightToken).toBe(other);
+    await vi.waitFor(() => expect(heartbeat.roleTurnInFlight(hook.id)).toBe(false));
+    expect(await heartbeat.roleTurnLeaseHeld(hook.id)).toBe(false);
   });
 
-  test('roleTurnLeaseMs: the worker turn timeout plus the margin', () => {
+  test('a gate that claims and then skips gives the lease back', async () => {
+    const hook = await roleHook('coding');
+    // Nothing ready.
+    const empty = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, quiet(), { claimLease: true });
+    expect(empty.decision).toEqual({ run: false, reason: 'nothing_pending' });
+    expect(empty.leaseToken).toBeUndefined();
+    expect((await hookRow(hook.id)).triggerConfig).toEqual({ role: 'coding' });
+
+    // Ready, but no board permission.
+    await forCoding({ title: 'Ready' });
+    const deps = quiet();
+    deps.boardWritesAllowed = async () => false;
+    const denied = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, deps, { claimLease: true });
+    expect(denied.decision).toEqual({ run: false, reason: 'tasks_permission_required' });
+    expect(await heartbeat.roleTurnLeaseHeld(hook.id)).toBe(false);
+
+    // A throwing probe dependency: given back too.
+    deps.boardWritesAllowed = async () => { throw new Error('boom'); };
+    await expect(heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, deps, { claimLease: true })).rejects.toThrow('boom');
+    expect(await heartbeat.roleTurnLeaseHeld(hook.id)).toBe(false);
+
+    // Runs: the caller gets the token, and the row holds it.
+    const run = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, quiet(), { claimLease: true });
+    expect(run.decision.run).toBe(true);
+    expect((await hookRow(hook.id)).triggerConfig.heartbeatInFlightToken).toBe(run.leaseToken);
+    // Without claimLease the gate only reads: in_flight, and the lease is untouched.
+    const peek = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, quiet());
+    expect(peek.decision).toEqual({ run: false, reason: 'in_flight' });
+    expect(await heartbeat.releaseRoleTurnLease(hook.id, run.leaseToken!)).toBe(true);
+  });
+
+  test('restart: stale leases are cleared at startup (all on PGlite; this instance\'s older boots on Postgres)', async () => {
+    const mine = await roleHook('coding');
+    const qa = await roleHook('qa');
+    const review = await roleHook('review');
+    const until = new Date(Date.now() + 60 * 60_000).toISOString();
+    const instance = heartbeat.leaseInstanceId();
+    const lease = (token: string) => ({ heartbeatInFlightUntil: until, heartbeatInFlightToken: token });
+    const setLease = (id: string, role: string, token: string) =>
+      db.update(hooksSchema).set({ triggerConfig: { role, ...lease(token) } }).where(eq(hooksSchema.id, id));
+
+    // Postgres, several processes: only this instance's previous boots are cleared.
+    await setLease(mine.id, 'coding', `${instance}|previous-boot|x`);
+    await setLease(qa.id, 'qa', `${instance}|${heartbeat.LEASE_BOOT_ID}|y`);
+    await setLease(review.id, 'review', 'other-instance|some-boot|z');
+    expect(await heartbeat.clearStaleRoleTurnLeases({ all: false })).toBe(1);
+    expect((await hookRow(mine.id)).triggerConfig).toEqual({ role: 'coding' });
+    expect(await heartbeat.roleTurnLeaseHeld(qa.id)).toBe(true);
+    expect(await heartbeat.roleTurnLeaseHeld(review.id)).toBe(true);
+
+    // PGlite (the default here): one process, so every lease is stale at startup.
+    expect(await heartbeat.clearStaleRoleTurnLeases()).toBe(2);
+    for (const h of [mine, qa, review]) expect(await heartbeat.roleTurnLeaseHeld(h.id)).toBe(false);
+    expect((await hookRow(review.id)).triggerConfig).toEqual({ role: 'review' });
+  });
+
+  test('graceful shutdown releases the leases this process holds and claims no more', async () => {
+    await forCoding({ title: 'Ready' });
+    const hook = await roleHook('coding', { nextRunAt: null });
+    let finish!: () => void;
+    const running = new Promise<unknown[]>((resolve) => { finish = () => resolve([]); });
+    const { fired, restore } = await stubTrigger(() => running);
+    try {
+      await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg());
+      expect(fired).toHaveLength(1);
+      expect(await heartbeat.roleTurnLeaseHeld(hook.id)).toBe(true);
+
+      heartbeat.stopRoleTurnLeaseClaims();
+      expect(await heartbeat.claimRoleTurnLease((await roleHook('qa')).id)).toBeNull();
+      expect(await heartbeat.releaseHeldRoleTurnLeases()).toBe(1);
+      expect(await heartbeat.roleTurnLeaseHeld(hook.id)).toBe(false);
+
+      // No new turn after shutdown began, even with the hook due and work ready.
+      await db.update(hooksSchema).set({ nextRunAt: null }).where(eq(hooksSchema.id, hook.id));
+      finish();
+      await vi.waitFor(() => expect(heartbeat.roleTurnInFlight(hook.id)).toBe(false));
+      await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg());
+      expect(fired).toHaveLength(1);
+    } finally {
+      finish();
+      restore();
+      // The next boot opens claims again.
+      await heartbeat.clearStaleRoleTurnLeases();
+    }
+    expect(await heartbeat.claimRoleTurnLease(hook.id)).toEqual(expect.any(String));
+  });
+
+  test('roleTurnLeaseMs: the worker turn timeout plus the margin; renewals every third, within [1 min, 10 min]', () => {
     expect(heartbeat.roleTurnLeaseMs({ defaultTimeout: 3_600_000 })).toBe(3_600_000 + heartbeat.ROLE_TURN_LEASE_MARGIN_MS);
     expect(heartbeat.roleTurnLeaseMs({ defaultTimeout: 0 })).toBe(3_600_000 + heartbeat.ROLE_TURN_LEASE_MARGIN_MS);
+    expect(heartbeat.leaseRenewIntervalMs(90_000)).toBe(60_000);
+    expect(heartbeat.leaseRenewIntervalMs(6 * 60_000)).toBe(2 * 60_000);
+    expect(heartbeat.leaseRenewIntervalMs(70 * 60_000)).toBe(10 * 60_000);
   });
 
   test('a wakeup for a role-assigned task marks that role\'s hook due, and nothing else', async () => {

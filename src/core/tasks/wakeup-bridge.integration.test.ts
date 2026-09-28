@@ -14,6 +14,7 @@ import {
   startTaskWakeupBridge,
   stopTaskWakeupBridge,
   TASK_WAKEUP_CHANNEL,
+  titleKey,
 } from './wakeup-bridge';
 import { onTaskWakeup, type TaskWakeupEvent } from './wakeups';
 
@@ -34,7 +35,7 @@ describe.skipIf(!isIntegration)('task wakeup bridge (Integration)', () => {
   });
 
   test('another process\'s NOTIFY is re-emitted here as remote; our own is skipped', async () => {
-    expect(await startTaskWakeupBridge({ resolveTitles: async () => new Map() })).toBe(true);
+    expect(await startTaskWakeupBridge({ resolveTitles: async (refs) => new Map(refs.map((r) => [titleKey(r), 'T'])) })).toBe(true);
     const got: TaskWakeupEvent[] = [];
     const off = onTaskWakeup((e) => { got.push(e); });
     try {
@@ -43,7 +44,7 @@ describe.skipIf(!isIntegration)('task wakeup bridge (Integration)', () => {
       await notify(encodeWakeups('another-process', [event(2)])[0]);
       await vi.waitFor(() => expect(got).toHaveLength(1), { timeout: 3000 });
       await new Promise((r) => setTimeout(r, 200));
-      expect(got).toEqual([{ ...event(2), remote: true }]);
+      expect(got).toEqual([{ ...event(2), title: 'T', remote: true }]);
     } finally {
       off();
     }
