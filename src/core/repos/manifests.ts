@@ -285,7 +285,8 @@ function isTomlTable(value: TomlValue | undefined): value is TomlTable {
   return typeof value === 'object'
     && value !== null
     && !Array.isArray(value)
-    && Object.getPrototypeOf(value) === Object.prototype;
+    // smol-toml >=1.9 builds tables with a null prototype; this still rules out TomlDate
+    && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
