@@ -667,6 +667,7 @@ export default function ChatPage() {
           tokens: data.metadata.tokens,
           latencyMs: data.metadata.latencyMs,
           cached: data.metadata.cached,
+          limit: data.metadata.limit,
         } : undefined;
 
         const sid = data.sessionId || activeSessionId;

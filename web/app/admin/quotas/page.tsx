@@ -1,10 +1,11 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Pencil, RotateCcw, X } from 'lucide-react';
+import { Pencil, RotateCcw, Wallet, X } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '@/lib/api';
 import { Portal } from '@/components/ui/portal';
+import { SpendBudgetsSection } from './spend-budgets-section';
 
 /**
  * Admin: per-user quotas — Phase 3c-1.
@@ -83,6 +84,7 @@ export default function AdminQuotasPage() {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState<QuotaRow | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [budgetUserId, setBudgetUserId] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'quotas'],
@@ -165,6 +167,18 @@ export default function AdminQuotasPage() {
                 <td className="px-4 py-3 text-right">
                   <button
                     type="button"
+                    onClick={() => {
+                      setBudgetUserId(r.userId);
+                      document.getElementById('spend-budgets')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }}
+                    className="p-2 rounded text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface cursor-pointer"
+                    title="Spend budgets"
+                    aria-label={`Spend budgets for ${r.username}`}
+                  >
+                    <Wallet className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => { setEditing(r); setError(null); }}
                     className="p-2 rounded text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface cursor-pointer"
                     title="Edit overrides"
@@ -189,6 +203,12 @@ export default function AdminQuotasPage() {
           </tbody>
         </table>
       </div>
+
+      <SpendBudgetsSection
+        users={rows.map((r) => ({ userId: r.userId, username: r.username }))}
+        userId={budgetUserId}
+        onUserChange={setBudgetUserId}
+      />
 
       {editing && (
         <EditModal

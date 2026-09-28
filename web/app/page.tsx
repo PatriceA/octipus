@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Activity, Bot, MessageSquare, Zap } from 'lucide-react';
 import { ActiveAgents } from '@/components/dashboard/active-agents';
 import { AwayDigestCard } from '@/components/dashboard/away-digest';
+import { BudgetsCard } from '@/components/dashboard/budgets-card';
 import { FeatureStatus } from '@/components/dashboard/feature-status';
 import { HealthStatus } from '@/components/dashboard/health-status';
 import { RecentSessions } from '@/components/dashboard/recent-sessions';
@@ -156,6 +157,8 @@ export default function DashboardPage() {
         </div>
         <p className="text-xs text-on-surface-variant">Savings use known model rates. Historical entries may use older estimates. Provider billing remains authoritative.</p>
       </Card>}
+      <BudgetsCard />
+
       <HealthStatus health={health?.health} isFetching={healthFetching} />
 
       <FeatureStatus />
