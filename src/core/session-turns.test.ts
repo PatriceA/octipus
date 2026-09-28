@@ -47,7 +47,7 @@ vi.mock('@/utils/context-compaction', async original => ({ ...await original<typ
 import { AgentWorker } from './agent-worker';
 import { messageRepository } from '@/db/repositories/message-repository';
 import { acknowledgeProviderTurn } from './cli-session-store';
-import { maybeCompactSession } from './agent/session-compaction';
+import { compactSessionCommand, maybeCompactSession } from './agent/session-compaction';
 import { readSessionHistory } from './session-history';
 import { OpenRouterProvider } from '@/models/providers/openrouter-provider';
 import { estimateTokens } from '@/utils/token-count';
@@ -76,6 +76,21 @@ async function turn(n: number, inspect?: (messages: AgentMessage[]) => void) {
 }
 
 describe('session lifecycle across ephemeral root workers', () => {
+  test('manual compact forces a small session and reports real outcomes', async () => {
+    expect(await compactSessionCommand('session', '')).toContain('was not compacted');
+    for (let i = 0; i < 4; i++) await turn(i);
+    expect(await maybeCompactSession('session')).toBe(false);
+    expect(await compactSessionCommand('session', '')).toContain('Session compacted.');
+    expect(fixture.context.checkpoint).toBeDefined();
+  });
+  test('manual compact reports failures and invalidated checkpoints', async () => {
+    for (let i = 0; i < 4; i++) await turn(i);
+    fixture.failSummary = true;
+    expect(await compactSessionCommand('session', 'keep decisions')).toContain('Compaction failed: summary unavailable');
+    fixture.failSummary = false;
+    fixture.clearInSummary = true;
+    expect(await compactSessionCommand('session', '')).toContain('was not compacted');
+  });
   test('retains native tool evidence and signed state and appends only unseen turns', async () => {
     await turn(1);
     await messageRepository.create({ sessionId: 'session', role: 'user', content: 'CORRECTION from CLI' });

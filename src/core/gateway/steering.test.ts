@@ -51,7 +51,7 @@ describe('trySteerRunningRootAgent', () => {
     incSpy.mockReset();
   });
 
-  test.each(['/stop', '/clear', '/status'])('%s falls through to command dispatch without steering', async command => {
+  test.each(['/stop', '/clear', '/status', '/compact', '/compact keep decisions', '/model', '/unknown'])('%s falls through to command dispatch without steering', async command => {
     const onSteer = vi.fn();
     getBySessionSpy.mockReturnValue([fakeWorker({ role: 'general', root: true, onSteer })] as never);
     expect(await trySteerRunningRootAgent(sid, command)).toBe(false);
