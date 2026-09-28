@@ -488,8 +488,16 @@ describe('role heartbeats', () => {
       await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg());
       expect(fired).toHaveLength(1);
 
+      // The running turn holds the lease on the row, for every process to see.
+      const leased = (await hookRow(hook.id)).triggerConfig;
+      expect(typeof leased.heartbeatInFlightToken).toBe('string');
+      expect(heartbeat.roleTurnLeaseLive(await hookRow(hook.id))).toBe(true);
+
       finish();
       await vi.waitFor(() => expect(heartbeat.roleTurnInFlight(hook.id)).toBe(false));
+      const released = (await hookRow(hook.id)).triggerConfig;
+      expect(released.heartbeatInFlightUntil).toBeUndefined();
+      expect(released.heartbeatInFlightToken).toBeUndefined();
       await db.update(hooksSchema).set({ nextRunAt: null }).where(eq(hooksSchema.id, hook.id));
       await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg());
       expect(fired).toHaveLength(2);
@@ -497,6 +505,84 @@ describe('role heartbeats', () => {
       finish();
       restore();
     }
+  });
+
+  test('the in-flight lease: one claim at a time, free after expiry, cleared only by its holder', async () => {
+    const hook = await roleHook('coding');
+    const first = await heartbeat.claimRoleTurnLease(hook.id, 60_000);
+    expect(first).toEqual(expect.any(String));
+    expect(await heartbeat.claimRoleTurnLease(hook.id, 60_000)).toBeNull();
+
+    // Only the holder's token clears it; a stranger's does nothing.
+    expect(await heartbeat.releaseRoleTurnLease(hook.id, 'not-the-token')).toBe(false);
+    expect(await heartbeat.renewRoleTurnLease(hook.id, 'not-the-token', 60_000)).toBe(false);
+    expect(await heartbeat.renewRoleTurnLease(hook.id, first!, 60_000)).toBe(true);
+    expect((await hookRow(hook.id)).triggerConfig.heartbeatInFlightToken).toBe(first);
+
+    // Expired (the holder died): the next claim wins, and the old holder can no longer clear it.
+    await db.update(hooksSchema)
+      .set({ triggerConfig: { role: 'coding', heartbeatInFlightUntil: ago(1000).toISOString(), heartbeatInFlightToken: first! } })
+      .where(eq(hooksSchema.id, hook.id));
+    expect(heartbeat.roleTurnLeaseLive(await hookRow(hook.id))).toBe(false);
+    const second = await heartbeat.claimRoleTurnLease(hook.id, 60_000);
+    expect(second).toEqual(expect.any(String));
+    expect(second).not.toBe(first);
+    expect(await heartbeat.releaseRoleTurnLease(hook.id, first!)).toBe(false);
+    expect((await hookRow(hook.id)).triggerConfig.heartbeatInFlightToken).toBe(second);
+
+    expect(await heartbeat.releaseRoleTurnLease(hook.id, second!)).toBe(true);
+    const cleared = (await hookRow(hook.id)).triggerConfig;
+    expect(cleared).toEqual({ role: 'coding' });
+    expect(await heartbeat.claimRoleTurnLease(hook.id, 60_000)).toEqual(expect.any(String));
+  });
+
+  test('a live lease held elsewhere: the gate skips in_flight and the tick fires nothing', async () => {
+    await forCoding({ title: 'Ready' });
+    const hook = await roleHook('coding', { nextRunAt: null });
+    // Another process holds the lease: nothing in this process's fast path.
+    const token = await heartbeat.claimRoleTurnLease(hook.id, 60_000);
+    expect(heartbeat.roleTurnInFlight(hook.id)).toBe(false);
+    const gate = await heartbeat.evaluateHeartbeatGate(await hookRow(hook.id), cfg(), NOON, quiet());
+    expect(gate.decision).toEqual({ run: false, reason: 'in_flight' });
+
+    const { fired, restore } = await stubTrigger();
+    try {
+      await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg());
+      expect(fired).toEqual([]);
+      const row = await hookRow(hook.id);
+      expect(row.triggerConfig.heartbeatRunsToday).toBe(0);
+      expect(row.triggerConfig.heartbeatInFlightToken).toBe(token);
+    } finally {
+      restore();
+    }
+  });
+
+  test('the lease is claimed after the gate read: a claim that lands mid-gate wins over the tick', async () => {
+    await forCoding({ title: 'Ready' });
+    const hook = await roleHook('coding', { nextRunAt: null });
+    const deps = quiet();
+    let other: string | null = null;
+    deps.boardWritesAllowed = async () => {
+      // The other process claims between this tick's read and its claim.
+      other = await heartbeat.claimRoleTurnLease(hook.id, 60_000);
+      return true;
+    };
+    const { fired, restore } = await stubTrigger();
+    try {
+      await heartbeat.maybeRunHeartbeats(NOON, deps, cfg());
+    } finally {
+      restore();
+    }
+    expect(other).toEqual(expect.any(String));
+    expect(fired).toEqual([]);
+    const row = await hookRow(hook.id);
+    expect(row.triggerConfig.heartbeatRunsToday).toBe(0);
+    expect(row.triggerConfig.heartbeatInFlightToken).toBe(other);
+  });
+
+  test('roleTurnLeaseMs: the worker turn timeout plus the margin', () => {
+    expect(heartbeat.roleTurnLeaseMs({ defaultTimeout: 3_600_000 })).toBe(3_600_000 + heartbeat.ROLE_TURN_LEASE_MARGIN_MS);
+    expect(heartbeat.roleTurnLeaseMs({ defaultTimeout: 0 })).toBe(3_600_000 + heartbeat.ROLE_TURN_LEASE_MARGIN_MS);
   });
 
   test('a wakeup for a role-assigned task marks that role\'s hook due, and nothing else', async () => {
@@ -570,6 +656,26 @@ describe('role heartbeats', () => {
       const repo = scopedRepos({ kind: 'user', userId, username: 'alice', isAdmin: false, sessionToken: null, roles: ['user'], workspaceId: null }).tasks;
       await repo.update(blocker.id, { status: 'done', completedAt: new Date() });
       await flushWakeups();
+      await vi.waitFor(async () => {
+        expect((await hookRow(hook.id)).nextRunAt!.getTime()).toBeLessThan(farFuture.getTime());
+      });
+    } finally {
+      heartbeat.stopRoleHeartbeatWakeups();
+    }
+  });
+
+  test('a wakeup relayed from another process does not mark the hook again (the origin did)', async () => {
+    const { emitSafely } = await import('@/core/tasks/wakeups');
+    const farFuture = new Date(Date.now() + 24 * 60 * 60_000);
+    const hook = await roleHook('coding', { nextRunAt: farFuture });
+    const t = await forCoding({ title: 'Unblocked elsewhere' });
+    heartbeat.startRoleHeartbeatWakeups();
+    try {
+      const event = { type: 'task.unblocked' as const, userId, workspaceId: null, taskId: t.id, title: t.title, triggeredBy: t.id, cause: 'closed' as const };
+      emitSafely({ ...event, remote: true });
+      await new Promise((r) => setTimeout(r, 50));
+      expect((await hookRow(hook.id)).nextRunAt!.getTime()).toBe(farFuture.getTime());
+      emitSafely(event);
       await vi.waitFor(async () => {
         expect((await hookRow(hook.id)).nextRunAt!.getTime()).toBeLessThan(farFuture.getTime());
       });

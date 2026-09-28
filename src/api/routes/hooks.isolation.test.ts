@@ -191,6 +191,22 @@ describe('heartbeat hooks through the API', () => {
     expect(edited.body.triggerConfig).toEqual({ heartbeatDayKey: '2026-07-12', heartbeatRunsToday: 24 });
   });
 
+  test('a role turn lease cannot be forged or dropped through the API', async () => {
+    const created = await postJson(aliceHooksApp, '/api/hooks', {
+      name: 'hb-lease', trigger: 'heartbeat', action: 'spawn_agent', actionConfig: {},
+      triggerConfig: { heartbeatInFlightUntil: '2099-01-01T00:00:00Z', heartbeatInFlightToken: 'forged' },
+    });
+    expect(created.body.triggerConfig).toEqual({});
+
+    const { executeRaw } = await import('@/db/postgres');
+    const lease = { heartbeatInFlightUntil: '2026-07-12T13:00:00+00:00', heartbeatInFlightToken: 'mine' };
+    await executeRaw(`UPDATE hooks SET trigger_config = '${JSON.stringify(lease)}'::jsonb WHERE id = '${created.body.id}'`);
+    const edited = await patchJson(aliceHooksApp, `/api/hooks/${created.body.id}`, {
+      triggerConfig: { heartbeatInFlightUntil: null, heartbeatInFlightToken: 'theirs' },
+    });
+    expect(edited.body.triggerConfig).toEqual(lease);
+  });
+
   test('a role heartbeat needs a known role, and one per role per user', async () => {
     const body = (role: string) => ({ name: `hb-${role}`, trigger: 'heartbeat', action: 'spawn_agent', actionConfig: {}, triggerConfig: { role } });
     const first = await postJson(aliceHooksApp, '/api/hooks', body('coding'));

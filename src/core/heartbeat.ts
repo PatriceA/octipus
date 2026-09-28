@@ -31,11 +31,23 @@
  *   - the board writes need the owner's ALLOW on tasks/write (the tasks tool
  *     asks otherwise, and an unattended turn cannot be asked): without it the
  *     gate skips with `tasks_permission_required` and notifies the owner once;
- *   - one turn per hook at a time (`in_flight`, in-process);
+ *   - one turn per hook at a time (`in_flight`), across server processes: a
+ *     lease on the hook row (`triggerConfig.heartbeatInFlightUntil` + a
+ *     random `heartbeatInFlightToken`), claimed by a conditional UPDATE
+ *     before the turn fires, renewed while it runs, cleared by its holder
+ *     when it settles, and expiring on its own if the process dies
+ *     (`claimRoleTurnLease`);
  *   - the daily cap counts every heartbeat hook of the user together;
  *   - executeSpawnAgent runs a role turn only for a context this gate marked
- *     (`markHeartbeatGatePassed`), so a manual trigger cannot skip it.
+ *     (`markHeartbeatGatePassed`), so a manual trigger cannot skip it. That
+ *     mark is in-process on purpose: the tick that passes the gate fires the
+ *     action in the same process.
+ *
+ * Task wakeups reach every server process (the wakeup bridge relays them over
+ * Postgres LISTEN/NOTIFY); marking a hook due is a DB write, so only the
+ * process where the close happened does it (remote events are ignored here).
  */
+import { randomUUID } from 'node:crypto';
 import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import { getConfig } from '@/config';
 import type { HeartbeatConfig } from '@/config/schema';
@@ -319,15 +331,84 @@ async function defaultBoardWritesAllowed(hook: Hook): Promise<boolean> {
   }
 }
 
-// In-process state for role turns. Both are per process on purpose: the cron
-// loop runs in one process (see the wakeups module on the same limit).
+// ── One role turn per hook, cluster-wide ────────────────────────────────────
+//
+// The lease on the hook row is the source of truth; the Set is this process's
+// fast path (and what tests watch). Lease times are on the database clock,
+// like task checkouts, and have nothing to do with the tick's `now`.
 
-/** Hook ids whose role turn is still running. */
+/** Hook ids whose role turn is running in this process. */
 const roleTurnsInFlight = new Set<string>();
 
-/** Is a turn of this role hook still running? */
+/** Is a turn of this role hook running in this process? */
 export function roleTurnInFlight(hookId: string): boolean {
   return roleTurnsInFlight.has(hookId);
+}
+
+/** Headroom on top of the turn timeout before an unrenewed lease lapses. */
+export const ROLE_TURN_LEASE_MARGIN_MS = 10 * 60_000;
+
+/**
+ * How long a role-turn lease lasts: the turn's wall clock (a role turn is a
+ * worker, bounded by `agent.defaultTimeout`; an hour when that is 0) plus a
+ * margin. The holder renews it every third of that while the turn runs (a
+ * transient-error retry can outlast one timeout), so the TTL only matters
+ * when the holding process died: the hook is free again after it.
+ */
+export function roleTurnLeaseMs(agent: { defaultTimeout: number } = getConfig().agent): number {
+  const turn = agent.defaultTimeout > 0 ? agent.defaultTimeout : 60 * 60_000;
+  return turn + ROLE_TURN_LEASE_MARGIN_MS;
+}
+
+const inFlightUntil = sql`(${hooks.triggerConfig}->>'heartbeatInFlightUntil')`;
+const inFlightToken = sql`(${hooks.triggerConfig}->>'heartbeatInFlightToken')`;
+const leaseExpiry = (ttlMs: number) => sql`to_jsonb(now() + ${ttlMs}::float8 * interval '1 millisecond')`;
+
+/**
+ * Claim the role-turn lease on `hookId`: one conditional UPDATE that sets
+ * `heartbeatInFlightUntil = now() + ttl` and a fresh token only if no live
+ * lease is there. Returns the token when this caller won, null otherwise.
+ */
+export async function claimRoleTurnLease(hookId: string, ttlMs: number = roleTurnLeaseMs()): Promise<string | null> {
+  const token = randomUUID();
+  const [won] = await getDb()
+    .update(hooks)
+    .set({ triggerConfig: sql`${hooks.triggerConfig} || jsonb_build_object('heartbeatInFlightUntil', ${leaseExpiry(ttlMs)}, 'heartbeatInFlightToken', ${token}::text)` })
+    .where(and(eq(hooks.id, hookId), or(sql`${inFlightUntil} IS NULL`, sql`${inFlightUntil}::timestamptz <= now()`)))
+    .returning({ id: hooks.id });
+  return won ? token : null;
+}
+
+/** Push the lease out by `ttlMs` from now, if `token` still holds it. */
+export async function renewRoleTurnLease(hookId: string, token: string, ttlMs: number = roleTurnLeaseMs()): Promise<boolean> {
+  const rows = await getDb()
+    .update(hooks)
+    .set({ triggerConfig: sql`jsonb_set(${hooks.triggerConfig}, '{heartbeatInFlightUntil}', ${leaseExpiry(ttlMs)})` })
+    .where(and(eq(hooks.id, hookId), sql`${inFlightToken} = ${token}`))
+    .returning({ id: hooks.id });
+  return rows.length > 0;
+}
+
+/** Clear the lease, only if `token` still holds it (a lapsed-and-reclaimed lease is someone else's). */
+export async function releaseRoleTurnLease(hookId: string, token: string): Promise<boolean> {
+  const rows = await getDb()
+    .update(hooks)
+    .set({ triggerConfig: sql`${hooks.triggerConfig} - 'heartbeatInFlightUntil' - 'heartbeatInFlightToken'` })
+    .where(and(eq(hooks.id, hookId), sql`${inFlightToken} = ${token}`))
+    .returning({ id: hooks.id });
+  return rows.length > 0;
+}
+
+/**
+ * Does the hook row, as read, carry a live lease? Wall clock against the
+ * stored database time: a cheap pre-check so the gate skips before probing.
+ * The claim decides.
+ */
+export function roleTurnLeaseLive(hook: Pick<Hook, 'triggerConfig'>, nowMs: number = Date.now()): boolean {
+  const until = (hook.triggerConfig as Record<string, unknown> | null | undefined)?.heartbeatInFlightUntil;
+  if (typeof until !== 'string') return false;
+  const t = Date.parse(until);
+  return Number.isFinite(t) && t > nowMs;
 }
 
 /**
@@ -347,13 +428,17 @@ export function heartbeatGatePassed(context: object): boolean {
 }
 
 /** trigger_config keys only the server writes (the heartbeat's own state). */
-export const SERVER_HEARTBEAT_KEYS = ['heartbeatDayKey', 'heartbeatRunsToday', 'heartbeatSeen', 'heartbeatPermissionNotified'] as const;
+export const SERVER_HEARTBEAT_KEYS = [
+  'heartbeatDayKey', 'heartbeatRunsToday', 'heartbeatSeen', 'heartbeatPermissionNotified',
+  'heartbeatInFlightUntil', 'heartbeatInFlightToken',
+] as const;
 
 /**
  * A user-supplied triggerConfig (POST / PATCH /api/hooks, a suggestion) with
  * the server-held heartbeat state dropped and, on an edit, the stored state
  * carried over. Otherwise a user could reset their daily-run counter or the
- * surfaced-items set by writing the hook.
+ * surfaced-items set, or forge or drop a role turn's lease, by writing the
+ * hook.
  */
 export function sanitizeTriggerConfig(input: unknown, existing?: Hook['triggerConfig'] | null): Hook['triggerConfig'] {
   const clean: Record<string, unknown> = input && typeof input === 'object' && !Array.isArray(input) ? { ...(input as Record<string, unknown>) } : {};
@@ -490,7 +575,7 @@ export async function evaluateHeartbeatGate(
   if (!config.enabled) return skip('disabled');
   if (isWithinQuietHours(config, now)) return skip('quiet_hours');
   if (userRunsToday >= config.maxRunsPerDay) return skip('daily_cap');
-  if (role && roleTurnInFlight(hook.id)) return skip('in_flight');
+  if (role && (roleTurnInFlight(hook.id) || roleTurnLeaseLive(hook))) return skip('in_flight');
 
   // Already out of daily token budget → don't even probe.
   try {
@@ -718,8 +803,14 @@ export async function markRoleHeartbeatDue(userId: string, taskId: string, now: 
   return marked.map((m) => m.id);
 }
 
-/** The wakeup listener. A throw is logged by the wakeup bus and reaches nothing else. */
+/**
+ * The wakeup listener. A throw is logged by the wakeup bus and reaches
+ * nothing else. A remote event (relayed from another server process) is
+ * skipped: the process that closed the task already marked the hook, and
+ * marking it again late could re-open a slot a tick has just claimed.
+ */
 async function onRoleTaskWakeup(event: TaskWakeupEvent): Promise<void> {
+  if (event.remote) return;
   const marked = await markRoleHeartbeatDue(event.userId, event.taskId);
   if (marked.length > 0) {
     coreLogger.info({ userId: event.userId, taskId: event.taskId, type: event.type, hookIds: marked }, 'Role heartbeat marked due by a task wakeup');
@@ -806,8 +897,16 @@ export async function maybeRunHeartbeats(
       return;
     }
 
-    const gate = await evaluateHeartbeatGate(hook, config, now, tickDeps, { userRunsToday: userRuns.get(hook.userId) ?? 0 });
+    let gate = await evaluateHeartbeatGate(hook, config, now, tickDeps, { userRunsToday: userRuns.get(hook.userId) ?? 0 });
     const role = heartbeatRole(hook);
+
+    // A role turn needs the hook's lease, claimed before anything is counted
+    // or fired: another process may be running this hook's turn right now.
+    let leaseToken: string | null = null;
+    if (role && gate.decision.run) {
+      leaseToken = await claimRoleTurnLease(hook.id);
+      if (!leaseToken) gate = { ...gate, decision: { run: false, reason: 'in_flight' } };
+    }
 
     // The gate's own state, merged into the stored config (never replacing
     // it, so a concurrent edit of the hook survives), BEFORE firing, so a long
@@ -817,10 +916,16 @@ export async function maybeRunHeartbeats(
     const state: Record<string, unknown> = { heartbeatDayKey: gate.dayKey, heartbeatRunsToday: runsToday, heartbeatSeen: gate.seen };
     const notifyPermission = gate.boardPermissionMissing === true && hook.triggerConfig?.heartbeatPermissionNotified !== true;
     if (gate.boardPermissionMissing !== undefined) state.heartbeatPermissionNotified = gate.boardPermissionMissing;
-    await db
-      .update(hooks)
-      .set({ triggerConfig: sql`${hooks.triggerConfig} || ${JSON.stringify(state)}::jsonb`, updatedAt: now })
-      .where(eq(hooks.id, hook.id));
+    try {
+      await db
+        .update(hooks)
+        .set({ triggerConfig: sql`${hooks.triggerConfig} || ${JSON.stringify(state)}::jsonb`, updatedAt: now })
+        .where(eq(hooks.id, hook.id));
+    } catch (err) {
+      // Not firing after all: give the lease back rather than let it lapse.
+      if (leaseToken) await releaseRoleTurnLease(hook.id, leaseToken).catch(() => false);
+      throw err;
+    }
 
     if (notifyPermission) await notifyBoardPermissionRequired(hook, role ?? '');
 
@@ -844,16 +949,15 @@ export async function maybeRunHeartbeats(
       },
     };
     markHeartbeatGatePassed(context);
-    if (role) roleTurnsInFlight.add(hook.id);
+    const settle = leaseToken ? holdRoleTurnLease(hook.id, leaseToken) : null;
 
     // Fire-and-forget: the turn can take minutes. A role turn stays in flight
-    // until it ends, so the next tick skips its hook with 'in_flight'.
+    // (its lease held and renewed) until it ends, so the next tick in any
+    // process skips its hook with 'in_flight'.
     hookManager
       .triggerHook(hook.id, { type: 'heartbeat', data: { hookId: hook.id }, timestamp: now }, context)
       .catch((err) => coreLogger.error({ err, hookId: hook.id }, 'Heartbeat run failed'))
-      .finally(() => {
-        if (role) roleTurnsInFlight.delete(hook.id);
-      });
+      .finally(() => settle?.());
 
     coreLogger.info({ hookId: hook.id, userId: hook.userId, role }, 'Heartbeat triggered');
   };
@@ -869,6 +973,32 @@ export async function maybeRunHeartbeats(
       }
     }
   });
+}
+
+/**
+ * Mark `hookId`'s role turn in flight here and keep its lease alive while it
+ * runs. Returns the settle function: stop renewing, clear the lease if it is
+ * still ours, then drop the local mark. Never throws.
+ */
+function holdRoleTurnLease(hookId: string, token: string): () => Promise<void> {
+  roleTurnsInFlight.add(hookId);
+  const ttl = roleTurnLeaseMs();
+  const renew = setInterval(() => {
+    renewRoleTurnLease(hookId, token, ttl)
+      .then((held) => { if (!held) coreLogger.warn({ hookId }, 'Role heartbeat lease lost while the turn runs'); })
+      .catch((err) => coreLogger.warn({ err, hookId }, 'Role heartbeat lease renewal failed'));
+  }, Math.max(60_000, Math.floor(ttl / 3)));
+  renew.unref?.();
+  return async () => {
+    clearInterval(renew);
+    try {
+      await releaseRoleTurnLease(hookId, token);
+    } catch (err) {
+      coreLogger.warn({ err, hookId }, 'Role heartbeat lease release failed (it lapses on its own)');
+    } finally {
+      roleTurnsInFlight.delete(hookId);
+    }
+  };
 }
 
 /** Tell the owner, once, that their role heartbeat is waiting on a grant. */

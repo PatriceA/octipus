@@ -374,6 +374,14 @@ async function main() {
     // Role heartbeats: a task wakeup for a role-assigned task marks that
     // role's heartbeat hook due for the next tick (no-op without such hooks).
     startRoleHeartbeatWakeups();
+    // Relay task wakeups to and from the other server processes on this
+    // Postgres (LISTEN/NOTIFY); does nothing on embedded PGlite.
+    try {
+      const { startTaskWakeupBridge } = await import('@/core/tasks/wakeup-bridge');
+      await startTaskWakeupBridge();
+    } catch (err) {
+      logger.error({ err }, 'Task wakeup bridge failed to start (wakeups stay in this process)');
+    }
     logger.info('Cron scheduler started');
 
     // Start the task-queue worker loop. Without this, getScheduler().schedule()
@@ -456,6 +464,12 @@ async function main() {
       stopCronLoop();
       stopMonitors();
       stopRoleHeartbeatWakeups();
+      try {
+        const { stopTaskWakeupBridge } = await import('@/core/tasks/wakeup-bridge');
+        await stopTaskWakeupBridge();
+      } catch (err) {
+        logger.warn({ err }, 'Task wakeup bridge stop failed');
+      }
       try {
         const { getScheduler } = await import('@/core/scheduler');
         await getScheduler().stop();

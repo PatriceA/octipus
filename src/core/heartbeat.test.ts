@@ -175,6 +175,7 @@ describe('sanitizeTriggerConfig', () => {
   test('drops the server-held heartbeat state from user input', () => {
     const out = sanitizeTriggerConfig({
       role: 'coding', heartbeatDayKey: '2026-07-12', heartbeatRunsToday: 0, heartbeatSeen: { prs: [] }, heartbeatPermissionNotified: true,
+      heartbeatInFlightUntil: '2099-01-01T00:00:00Z', heartbeatInFlightToken: 'forged',
     });
     expect(out).toEqual({ role: 'coding' });
   });
@@ -182,6 +183,8 @@ describe('sanitizeTriggerConfig', () => {
   test('an edit keeps the stored state whatever it sends', () => {
     const stored = { role: 'coding', heartbeatDayKey: '2026-07-12', heartbeatRunsToday: 24 };
     expect(sanitizeTriggerConfig({ role: 'qa', heartbeatRunsToday: 0 }, stored)).toEqual({ role: 'qa', heartbeatDayKey: '2026-07-12', heartbeatRunsToday: 24 });
+    const leased = { role: 'coding', heartbeatInFlightUntil: '2026-07-12T13:00:00Z', heartbeatInFlightToken: 'mine' };
+    expect(sanitizeTriggerConfig({ role: 'coding', heartbeatInFlightToken: 'theirs' }, leased)).toEqual(leased);
   });
 
   test('non-object input becomes an empty config', () => {

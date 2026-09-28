@@ -118,6 +118,15 @@ export interface TriggerConfig {
    * like the counters above: the hooks routes drop user-supplied values.
    */
   heartbeatPermissionNotified?: boolean;
+  /**
+   * For a role heartbeat — the lease of the turn that is running (one per
+   * hook across every server process): until when it holds (an ISO
+   * timestamp on the database clock) and the random token of its holder,
+   * who alone clears it. Server-owned, like the counters above
+   * (claimRoleTurnLease in core/heartbeat.ts).
+   */
+  heartbeatInFlightUntil?: string;
+  heartbeatInFlightToken?: string;
 }
 
 export interface ActionConfig {
