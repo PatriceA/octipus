@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-419 mounted routes across 62 route files. The path is the full one, group prefix included — what a client actually calls.
+421 mounted routes across 62 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -387,6 +387,8 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/tasks/:id/comments` | `src/api/routes/tasks.ts` |
 | POST | `/api/tasks/:id/comments` | `src/api/routes/tasks.ts` |
 | POST | `/api/tasks/:id/release` | `src/api/routes/tasks.ts` |
+| GET | `/api/tasks/role-agents` | `src/api/routes/tasks.ts` |
+| PUT | `/api/tasks/role-agents` | `src/api/routes/tasks.ts` |
 | GET | `/api/tools` | `src/api/routes/tools.ts` |
 | GET | `/api/tools/:id` | `src/api/routes/tools.ts` |
 | POST | `/api/tools/:toolId/tools/:toolName/execute` | `src/api/routes/tools.ts` |
@@ -454,8 +456,8 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 13 |
 | `api` | `config` | 20 |
 | `api` | `connectors` | 2 |
-| `api` | `core` | 86 |
-| `api` | `db` | 103 |
+| `api` | `core` | 89 |
+| `api` | `db` | 104 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 7 |
 | `api` | `mcp` | 3 |
@@ -466,7 +468,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `shared` | 2 |
 | `api` | `skills` | 4 |
 | `api` | `tools` | 3 |
-| `api` | `utils` | 60 |
+| `api` | `utils` | 61 |
 | `api` | `voice` | 24 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 1 |
@@ -494,9 +496,9 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `connectors` | `utils` | 5 |
 | `core` | `capabilities` | 1 |
 | `core` | `channels` | 4 |
-| `core` | `config` | 32 |
+| `core` | `config` | 33 |
 | `core` | `connectors` | 2 |
-| `core` | `db` | 189 |
+| `core` | `db` | 192 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 5 |

@@ -1,14 +1,19 @@
 import { apiContext } from '@/api/context';
 import { Elysia, t } from '@/api/http';
+import { disableRoleHeartbeatHook, ensureRoleHeartbeatHook } from '@/core/heartbeat';
 import { auditTaskMutation, changedTaskFields, type TaskMutationOp } from '@/core/tasks/audit';
+import { TASK_CHECKOUT_TTL_MS } from '@/core/tasks/checkout';
 import { nextActions } from '@/core/tasks/next';
 import { dateOnlyToEndOfDay } from '@/core/tasks/rank';
+import { listRoleAgents, roleAgentToggleError } from '@/core/tasks/role-agents';
 import { assigneePatch, isTaskStatus, TASK_ASSIGNEE_KINDS, TASK_STATUSES } from '@/core/tasks/status';
 import { normalizeEstimate } from '@/core/tasks/structure';
 import { resolveUserTimezone } from '@/core/tasks/timezone';
+import { queryRaw } from '@/db/postgres';
 import { scopedRepos } from '@/db/repositories/scoped';
 import type { NewTask } from '@/db/schema/tasks';
 import { isAuthenticated, type Principal } from '@/security/principal';
+import { apiLogger } from '@/utils/logger';
 
 const STATUSES = TASK_STATUSES;
 const ASSIGNEE_KIND = t.Union(TASK_ASSIGNEE_KINDS.map((k) => t.Literal(k)));
@@ -53,6 +58,32 @@ function auditUserTaskMutation(
   return auditTaskMutation({ userId: task.userId, taskId: task.id, op, change, actor, runId: null });
 }
 
+/**
+ * Stamp list rows with their lease end and the server's clock, so the board
+ * judges "working" vs "claim lapsed" against the database's time rather than
+ * the browser's (the checkout itself is judged on the database clock).
+ * `leaseExpiresAt` is `checked_out_at + TTL`, computed by the database in the
+ * same query that reads its `now()`; null when nobody holds the task.
+ */
+async function withLeases<T extends { id: string; checkedOutAt: Date | null }>(
+  rows: T[],
+): Promise<{ serverNow: string; tasks: (T & { leaseExpiresAt: string | null })[] }> {
+  const held = rows.filter((r) => r.checkedOutAt);
+  const ttl = `${TASK_CHECKOUT_TTL_MS} milliseconds`;
+  const { rows: res } = await queryRaw(
+    `SELECT now() AS now, coalesce(
+       (SELECT json_object_agg(x.id, (x.at::timestamptz + $2::interval))
+          FROM json_to_recordset($1::json) AS x(id text, at text)), '{}'::json) AS leases`,
+    [JSON.stringify(held.map((r) => ({ id: r.id, at: r.checkedOutAt!.toISOString() }))), ttl],
+  );
+  const leases = (res[0]?.leases ?? {}) as Record<string, string>;
+  const serverNow = new Date(res[0]?.now ?? Date.now()).toISOString();
+  return {
+    serverNow,
+    tasks: rows.map((r) => ({ ...r, leaseExpiresAt: leases[r.id] ? new Date(leases[r.id]).toISOString() : null })),
+  };
+}
+
 /** De-duplicate an id list from the body; strings only. */
 function idList(values: string[]): string[] {
   return [...new Set(values.map((v) => v.trim()).filter(Boolean))];
@@ -87,7 +118,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
       if (query?.view === 'next') {
         const limit = query?.limit ? Math.max(1, Math.min(200, Number.parseInt(query.limit, 10) || 200)) : 200;
         const { timezone, ranked } = await nextActions(principal, { category: query?.category, tz: query?.tz, limit });
-        return { timezone, tasks: ranked.map((r) => ({ ...r.task, bucket: r.bucket, reason: r.reason })) };
+        return { timezone, ...(await withLeases(ranked.map((r) => ({ ...r.task, bucket: r.bucket, reason: r.reason })))) };
       }
       let dueBefore: Date | undefined;
       if (query?.due === 'today') {
@@ -101,7 +132,7 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         assigneeKind: query?.assigneeKind,
         assigneeRef: query?.assigneeRef,
       });
-      return { tasks };
+      return withLeases(tasks);
     },
     {
       query: t.Object({
@@ -113,6 +144,62 @@ export const taskRoutes = new Elysia({ prefix: '/tasks' })
         view: t.Optional(t.Literal('next')),
         limit: t.Optional(t.String()),
         tz: t.Optional(t.String({ maxLength: 64 })),
+      }),
+      detail: { tags: ['tasks'] },
+    }
+  )
+
+  // The tasks page's role-agents panel: every role the caller has tasks
+  // assigned to (or already runs a role heartbeat for), with its task counts
+  // and whether its heartbeat agent is enabled, plus what else a role turn
+  // needs: the tasks/write permission and the server's heartbeat switch.
+  // Per user across workspaces, like the hook and its probe (see
+  // core/tasks/role-agents.ts). Static path, declared before `/:id`.
+  .get(
+    '/role-agents',
+    async ({ user, principal, set }) => {
+      if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
+      return listRoleAgents(user.id);
+    },
+    { detail: { tags: ['tasks'] } }
+  )
+
+  // Turn a role's heartbeat agent on or off for the caller (idempotent). On
+  // creates or re-enables the one heartbeat hook for that role; off disables
+  // every hook for it. A malformed or (to turn on) unknown role is a 400;
+  // anything else is a logged 500.
+  .put(
+    '/role-agents',
+    async ({ user, principal, body, set }) => {
+      if (!user || !isAuthenticated(principal)) {
+        set.status = 401;
+        return { error: 'Not authenticated' };
+      }
+      const invalid = await roleAgentToggleError(body.role, body.enabled);
+      if (invalid) {
+        set.status = 400;
+        return { error: invalid };
+      }
+      try {
+        if (body.enabled) {
+          const hookId = await ensureRoleHeartbeatHook(user.id, body.role);
+          return { role: body.role, enabled: true, hookId };
+        }
+        await disableRoleHeartbeatHook(user.id, body.role);
+        return { role: body.role, enabled: false };
+      } catch (err) {
+        apiLogger.error({ err, userId: user.id, role: body.role, enabled: body.enabled }, 'tasks: role agent toggle failed');
+        set.status = 500;
+        return { error: 'Could not update the role agent' };
+      }
+    },
+    {
+      body: t.Object({
+        role: t.String({ minLength: 1, maxLength: 64 }),
+        enabled: t.Boolean(),
       }),
       detail: { tags: ['tasks'] },
     }
