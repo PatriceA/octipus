@@ -112,21 +112,6 @@ export default function PromptInput({
   const showCommands = !disabled && !commandsDismissed && /^\/[^\s]*$/.test(text);
   const matchingCommands = commands.filter(command => command.name.startsWith(text.slice(1).toLowerCase()));
   const selectedCommand = matchingCommands[commandIndex] ?? matchingCommands[0];
-  useEffect(() => {
-    if (!showCommands) return;
-    let cancelled = false;
-    setCommandError(false);
-    api.get<{ commands: Array<{ name: string; description: string }> }>('/chat/commands')
-      .then(result => { if (!cancelled) setCommands(result.commands); })
-      .catch(() => { if (!cancelled) setCommandError(true); });
-    return () => { cancelled = true; };
-  }, [showCommands]);
-  const selectCommand = useCallback((name: string) => {
-    setText(`/${name} `);
-    setBrowsingHistory(false);
-    setHistoryIndex(-1);
-    textareaRef.current?.focus();
-  }, []);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isListening, setIsListening] = useState(false);
@@ -141,6 +126,21 @@ export default function PromptInput({
   const recognitionRef = useRef<any>(null);
   const dragCounterRef = useRef(0);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showCommands) return;
+    let cancelled = false;
+    api.get<{ commands: Array<{ name: string; description: string }> }>('/chat/commands')
+      .then(result => { if (!cancelled) { setCommands(result.commands); setCommandError(false); } })
+      .catch(() => { if (!cancelled) setCommandError(true); });
+    return () => { cancelled = true; };
+  }, [showCommands]);
+  const selectCommand = useCallback((name: string) => {
+    setText(`/${name} `);
+    setBrowsingHistory(false);
+    setHistoryIndex(-1);
+    textareaRef.current?.focus();
+  }, []);
 
   // Auto-resize textarea
   const resizeTextarea = useCallback(() => {
@@ -569,7 +569,6 @@ export default function PromptInput({
           ref={textareaRef}
           value={text}
           aria-controls={showCommands ? commandListId : undefined}
-          aria-expanded={showCommands}
           aria-autocomplete="list"
           aria-activedescendant={showCommands && selectedCommand ? `${commandListId}-${selectedCommand.name}` : undefined}
           onChange={(e) => {
