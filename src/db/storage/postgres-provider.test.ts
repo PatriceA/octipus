@@ -238,6 +238,18 @@ describe.skipIf(!isIntegration)('PostgresStorageProvider (Integration)', () => {
       expect(await provider.getRaw('claim')).toBe('fresh');
       expect(await provider.createCache('').ttl('claim')).toBeGreaterThan(0);
     });
+
+    test('setRawIfAbsentOrEqual renews only its own value, or an absent / expired row', async () => {
+      expect(await provider.setRawIfAbsentOrEqual('renew', 'mine', 60)).toBe(true);
+      expect(await provider.setRawIfAbsentOrEqual('renew', 'mine', 60)).toBe(true);
+      await provider.setRaw('renew', 'done', 60);
+      expect(await provider.setRawIfAbsentOrEqual('renew', 'mine', 60)).toBe(false);
+      expect(await provider.getRaw('renew')).toBe('done');
+
+      await queryRaw(`UPDATE kv_store SET expires_at = now() - interval '1 second' WHERE key = 'renew'`);
+      expect(await provider.setRawIfAbsentOrEqual('renew', 'mine', 60)).toBe(true);
+      expect(await provider.getRaw('renew')).toBe('mine');
+    });
   });
 
   test('ping succeeds against a live database', async () => {

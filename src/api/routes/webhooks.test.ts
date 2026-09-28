@@ -7,9 +7,12 @@
  *    claimed in the shared kv store as in_progress (short TTL) then done
  *    (24h), released only when no action ran;
  *  - the run queue: FIFO per hook, per-user caps, a global ceiling shared
- *    round-robin across users, 503 + Retry-After only past a queue bound,
- *    claims refreshed when a queued run starts, and shutdown releasing the
- *    claims of runs still queued;
+ *    round-robin across users, 503 + Retry-After only past a queue bound or
+ *    at shutdown (including a shutdown that starts mid-request), and
+ *    shutdown releasing the claims of runs still queued;
+ *  - queued claims renewed every 5 minutes (fake clock), and a queued run
+ *    that lost its claim (done elsewhere, or taken over) never runs and
+ *    never overwrites the other claim;
  *  - cooldown / maxExecutions hold under concurrency (runs are reserved in
  *    the database before the action starts).
  *
@@ -18,7 +21,7 @@
  * hooks ran; `block` parks until the test releases it, `fail` returns an
  * unsuccessful result and `throw` throws.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { createHmac, randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -392,7 +395,7 @@ describe('run queue', () => {
       expect((await deliver('slow', '{}')).status).toBe(202);
       await vi.waitFor(() => expect(names()).toHaveLength(2));
       expect((await deliver('slow', '{}', { 'x-github-delivery': id })).status).toBe(202);
-      expect(await claim()).toMatchObject({ value: 'in_progress' });
+      expect(await claim()).toMatchObject({ value: expect.stringMatching(/^in_progress:/) });
       // A redelivery while queued is a duplicate.
       expect((await deliver('slow', '{}', { 'x-github-delivery': id })).status).toBe(200);
       // Simulate a long wait in the queue.
@@ -400,7 +403,7 @@ describe('run queue', () => {
       expect(await claim()).toMatchObject({ fresh: false });
       releaseOne('slow');
       await vi.waitFor(() => expect(names()).toHaveLength(3));
-      await vi.waitFor(async () => expect(await claim()).toEqual({ value: 'in_progress', fresh: true }));
+      await vi.waitFor(async () => expect(await claim()).toEqual({ value: expect.stringMatching(/^in_progress:/), fresh: true }));
     } finally {
       open();
     }
@@ -432,6 +435,134 @@ describe('run queue', () => {
     expect((await deliver('slow', '{}', { 'x-github-delivery': id })).status).toBe(202);
     await drain();
     expect(executed).toEqual(['slow', 'slow', 'slow']);
+  });
+
+  test('shutdown between reserving room and queueing answers 503 and releases the claim', async () => {
+    const { getStorageProvider } = await import('@/db/storage');
+    const provider = getStorageProvider();
+    const original = provider.setRawIfAbsent.bind(provider);
+    // Shutdown starts while the delivery id is being claimed.
+    const spy = vi.spyOn(provider, 'setRawIfAbsent').mockImplementation(async (...args) => {
+      void delivery.shutdownWebhookTasks(1000);
+      return original(...args);
+    });
+    const id = `d-${rand(8)}`;
+    try {
+      const pathRes = await deliver('gh', '{}', { 'x-github-delivery': id });
+      expect(pathRes.status).toBe(503);
+      expect(pathRes.headers.get('retry-after')).toBe('30');
+
+      delivery._setRunLimits();
+      const incRes = await post(`/hooks/incoming/${ids.incoming}`, '{}', {
+        'x-webhook-secret': secret,
+        'idempotency-key': id,
+      });
+      expect(incRes.status).toBe(503);
+      expect(incRes.headers.get('retry-after')).toBe('30');
+    } finally {
+      spy.mockRestore();
+      delivery._setRunLimits();
+    }
+    await drain();
+    expect(executed).toEqual([]);
+    for (const hookId of [ids.gh, ids.incoming]) {
+      await vi.waitFor(async () => {
+        const { rows } = await queryRaw(`SELECT 1 FROM kv_store WHERE key = $1`, [
+          `webhook-delivery:${hookId}:${sha256(id)}`,
+        ]);
+        expect(rows).toHaveLength(0);
+      });
+    }
+    // The sender's retry runs.
+    expect((await deliver('gh', '{}', { 'x-github-delivery': id })).status).toBe(202);
+    await drain();
+    expect(executed).toEqual(['gh']);
+  });
+});
+
+describe('queued claims under a fake clock', () => {
+  const names = () => started.map((s) => s.name);
+  const claimOf = async (id: string) => {
+    const { rows } = await queryRaw(
+      `SELECT value, expires_at > now() + interval '14 minutes' AS fresh FROM kv_store WHERE key = $1`,
+      [`webhook-delivery:${ids.slow}:${sha256(id)}`],
+    );
+    return rows[0] as { value: string; fresh: boolean } | undefined;
+  };
+  const setClaim = (id: string, sqlSet: string) =>
+    queryRaw(`UPDATE kv_store SET ${sqlSet} WHERE key = $1`, [`webhook-delivery:${ids.slow}:${sha256(id)}`]);
+
+  /** Two slow runs occupy the hook; a third delivery, with `id`, waits in the queue. */
+  async function queueBehindTwo(id: string) {
+    expect((await deliver('slow', '{}')).status).toBe(202);
+    expect((await deliver('slow', '{}')).status).toBe(202);
+    await vi.waitFor(() => expect(names()).toHaveLength(2));
+    expect((await deliver('slow', '{}', { 'x-github-delivery': id })).status).toBe(202);
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test('a queued claim is renewed every 5 minutes, so a long wait cannot let it lapse', async () => {
+    const id = `d-${rand(8)}`;
+    const open = hold();
+    try {
+      await queueBehindTwo(id);
+      for (let i = 0; i < 3; i++) {
+        // 10 minutes of the 15 have passed...
+        await setClaim(id, `expires_at = now() + interval '5 minutes'`);
+        expect(await claimOf(id)).toMatchObject({ fresh: false });
+        // ...and the sweep renews it.
+        await vi.advanceTimersByTimeAsync(delivery.QUEUE_REFRESH_INTERVAL_MS);
+        await vi.waitFor(async () => expect(await claimOf(id)).toMatchObject({ fresh: true }));
+      }
+      // A redelivery 30+ minutes in is still a duplicate.
+      expect((await deliver('slow', '{}', { 'x-github-delivery': id })).status).toBe(200);
+    } finally {
+      open();
+    }
+    await drain();
+    expect(executed).toEqual(['slow', 'slow', 'slow']);
+    expect(await claimOf(id)).toMatchObject({ value: 'done' });
+  });
+
+  test('a queued run whose claim became done elsewhere is dropped, and done is not overwritten', async () => {
+    const id = `d-${rand(8)}`;
+    const open = hold();
+    try {
+      await queueBehindTwo(id);
+      // Another process ran this delivery and marked it done.
+      await setClaim(id, `value = 'done', expires_at = now() + interval '24 hours'`);
+      await vi.advanceTimersByTimeAsync(delivery.QUEUE_REFRESH_INTERVAL_MS);
+      await vi.waitFor(() => expect(delivery._queuedCount()).toBe(0));
+    } finally {
+      open();
+    }
+    await drain();
+    expect(executed).toEqual(['slow', 'slow']); // the queued one never ran
+    expect(await claimOf(id)).toMatchObject({ value: 'done' });
+  });
+
+  test('a queued run whose claim was taken over by another delivery does not run when it starts', async () => {
+    const id = `d-${rand(8)}`;
+    const open = hold();
+    try {
+      await queueBehindTwo(id);
+      // The claim lapsed and a redelivery elsewhere claimed it.
+      await setClaim(id, `value = 'in_progress:someone-else'`);
+      releaseOne('slow'); // frees a slot: the queued run starts and must back off
+      await vi.waitFor(() => expect(delivery._queuedCount()).toBe(0));
+    } finally {
+      open();
+    }
+    await drain();
+    expect(executed).toEqual(['slow', 'slow']);
+    expect(await claimOf(id)).toMatchObject({ value: 'in_progress:someone-else' });
   });
 });
 
@@ -493,7 +624,7 @@ describe('POST /api/webhooks/:path — idempotency', () => {
     const open = hold();
     try {
       expect((await deliver('slow', '{}', { 'x-github-delivery': id })).status).toBe(202);
-      expect(await claim()).toEqual([expect.objectContaining({ value: 'in_progress', short: true, long: false })]);
+      expect(await claim()).toEqual([expect.objectContaining({ value: expect.stringMatching(/^in_progress:/), short: true, long: false })]);
     } finally {
       open();
     }

@@ -155,6 +155,12 @@ export class MemoryStorageProvider implements StorageProvider {
     this.store.set(key, { value, expiresAt: ttlSeconds > 0 ? Date.now() + ttlSeconds * 1000 : 0 });
     return true;
   }
+  async setRawIfAbsentOrEqual(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+    const current = this.getValid(key);
+    if (current !== null && current !== value) return false;
+    this.store.set(key, { value, expiresAt: ttlSeconds > 0 ? Date.now() + ttlSeconds * 1000 : 0 });
+    return true;
+  }
 
   async ping(): Promise<boolean> { return true; }
 

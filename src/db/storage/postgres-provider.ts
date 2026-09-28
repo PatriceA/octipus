@@ -283,6 +283,18 @@ export class PostgresStorageProvider implements StorageProvider {
     );
     return rows.length > 0;
   }
+  async setRawIfAbsentOrEqual(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+    const { rows } = await queryRaw(
+      `INSERT INTO kv_store (key, value, expires_at)
+       VALUES ($1, $2, CASE WHEN $3::int > 0 THEN now() + make_interval(secs => $3::int) ELSE NULL END)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, expires_at = EXCLUDED.expires_at
+         WHERE kv_store.value = EXCLUDED.value
+            OR (kv_store.expires_at IS NOT NULL AND kv_store.expires_at <= now())
+       RETURNING key`,
+      [key, value, ttlSeconds],
+    );
+    return rows.length > 0;
+  }
 
   async ping(): Promise<boolean> {
     await queryRaw('SELECT 1');

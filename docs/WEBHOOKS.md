@@ -43,7 +43,7 @@ A failure before the action started (for example, the database was unavailable) 
 If the sender includes a delivery id, it is remembered per hook, and a repeat is answered `200 {duplicate: true}` without firing. The headers are read in this order: `X-GitHub-Delivery`, `X-Gitea-Delivery`, `X-Gogs-Delivery`, `X-Gitlab-Event-UUID`, `X-Gitlab-Webhook-UUID`, `svix-id`, `webhook-id`, `Idempotency-Key` and `X-Idempotency-Key`. Generic tracing ids such as `X-Request-Id` are not used.
 
 - The id is claimed only after the signature verifies, so an unauthenticated caller can't use up ids.
-- While the run is in progress the claim lasts 15 minutes. If the process dies mid-run, a redelivery can run again after that.
+- While the delivery is queued or running, the claim is marked `in_progress` with a 15-minute window. If the process dies, a redelivery can run again after that.
 - Once an action has run, successfully or not, the claim lasts 24 hours. A redelivery, including GitHub's manual **Redeliver**, is dropped then, because the action's side effects may already have happened. To re-run it, send the delivery without its id, or use **Hooks → Test**.
 - If no action ran (conditions didn't match, cooldown, `maxExecutions` reached, or an error before the action), the claim is released, so a redelivery can try again.
 - Claims live in the shared key-value store, so dedupe works across API processes. If the store is unreachable, dedupe falls back to a per-process cache.
@@ -60,13 +60,20 @@ Accepted deliveries are never turned away for being busy. GitHub, GitLab and Git
 | Queued per hook | 50 | Past this bound the endpoint answers `503` + `Retry-After`. |
 | Queued per user | 200 | Past this bound the endpoint answers `503` + `Retry-After`. |
 
-The `503` is sent before the delivery id is claimed, so a retry of that delivery is treated as new. **Providers that don't retry lose the event only in this overload case.** Use the provider's redeliver button, or its delivery log, to recover it.
+A `503` means the delivery was not accepted: the endpoint claims no delivery id before sending it, and releases any id it did claim, so a retry of that delivery is treated as new.
 
-A queued delivery keeps its claim `in_progress`, so a redelivery while it waits is a duplicate. The claim's 15-minute window restarts when the run starts. A queue wait longer than 15 minutes can still let a redelivery through as a second run.
+**When events can be lost.** Providers that don't retry automatically (GitHub, GitLab and Gitea among them) lose an event in two cases:
+
+- **Overload**: a queue is over its bound, and the delivery is answered `503`.
+- **Shutdown or restart**: deliveries still queued are dropped (see below), and deliveries arriving during shutdown get `503`. A crash also loses queued deliveries.
+
+In both cases the delivery id is not left claimed, so redelivering it from the provider's delivery log (GitHub: **Recent Deliveries → Redeliver**) runs it.
+
+A queued delivery keeps its claim `in_progress`, so a redelivery while it waits is a duplicate. Every 5 minutes the server renews the claims of all queued deliveries, and it renews once more when a run starts, so a long queue can't let a claim lapse. A renewal only extends this delivery's own claim. If the claim was taken over in the meantime (another process ran the delivery and marked it `done`, or a redelivery claimed it after a crash), the queued run is dropped without running, and the other claim is left untouched.
 
 Cooldown and `maxExecutions` are enforced when a run starts: the run is reserved in the database first, so concurrent deliveries can't slip past them. The limits are per API process.
 
-**Shutdown.** Queued runs that haven't started are dropped and their delivery ids released, so a redelivery (manual or by the sender) runs them later. Running actions get up to 1 second to finish. New deliveries during shutdown get `503`.
+**Shutdown.** Queued runs that haven't started are dropped and their delivery ids released, so they run only if they are redelivered, manually or by a sender that retries. Running actions get up to 1 second to finish. New deliveries during shutdown get `503`, including one that was mid-way through being accepted when shutdown began.
 
 ## Prerequisites
 

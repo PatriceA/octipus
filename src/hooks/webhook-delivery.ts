@@ -9,7 +9,7 @@
  *    accepted, the way the cron-runner fires scheduled hooks, through a
  *    bounded queue that is FIFO per hook and fair across users.
  */
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Hook } from '@/db/schema/hooks';
 import { getStorageProvider } from '@/db/storage';
 import { sha256 } from '@/utils/crypto';
@@ -22,8 +22,8 @@ export const DELIVERY_DONE_TTL_SECONDS = 24 * 60 * 60;
 /**
  * How long a claimed-but-unfinished delivery id is held. Short, so a run
  * lost to a crash or shutdown frees the id for the sender's redelivery
- * instead of blocking it for a day. Restarted when a queued run starts, and
- * extended to the done TTL on completion.
+ * instead of blocking it for a day. Renewed every few minutes while the run
+ * is queued and again as it starts; replaced by `done` (24h) on completion.
  */
 export const DELIVERY_IN_PROGRESS_TTL_SECONDS = 15 * 60;
 
@@ -120,23 +120,27 @@ function dedupeKey(hookId: string, deliveryId: string): string {
 }
 
 /**
- * Claim a delivery for a hook: true for the first delivery with this id,
- * false for a duplicate. The claim is an atomic set-if-absent marked
- * `in_progress` with a short TTL; {@link completeDelivery} extends it once
- * the run is over, {@link releaseDelivery} frees it if nothing ran.
+ * Claim a delivery for a hook. Returns the claim token (the stored
+ * `in_progress:<uuid>` marker) for the first delivery with this id, or null
+ * for a duplicate. The claim is an atomic set-if-absent with a short TTL;
+ * {@link refreshDelivery} keeps it alive while the run waits in the queue,
+ * {@link completeDelivery} turns it into `done` once an action ran, and
+ * {@link releaseDelivery} frees it if nothing ran.
  *
  * Only call this after the delivery has been authenticated, so an
  * unauthenticated caller can't burn delivery ids.
  */
-export async function claimDelivery(hookId: string, deliveryId: string): Promise<boolean> {
+export async function claimDelivery(hookId: string, deliveryId: string): Promise<string | null> {
   const key = dedupeKey(hookId, deliveryId);
+  const token = `in_progress:${randomUUID()}`;
   try {
-    return await getStorageProvider().setRawIfAbsent(key, 'in_progress', DELIVERY_IN_PROGRESS_TTL_SECONDS);
+    const claimed = await getStorageProvider().setRawIfAbsent(key, token, DELIVERY_IN_PROGRESS_TTL_SECONDS);
+    return claimed ? token : null;
   } catch (err) {
     apiLogger.warn({ err, hookId }, 'Webhook dedupe store unavailable; using in-process dedupe only');
-    if (fallbackHas(key)) return false;
+    if (fallbackHas(key)) return null;
     fallbackSet(key, DELIVERY_IN_PROGRESS_TTL_SECONDS);
-    return true;
+    return token;
   }
 }
 
@@ -171,29 +175,40 @@ export async function releaseDelivery(hookId: string, deliveryId: string): Promi
 }
 
 /**
- * Restart a queued delivery's in_progress TTL as its run starts, so time
- * spent in the queue doesn't eat into the window that protects the run.
+ * Restart a claim's in_progress TTL: periodically while the run waits in the
+ * queue, and once more as it starts. Only this claim's own marker (or a
+ * lapsed / absent row) is renewed, in one atomic step: if another delivery
+ * of the same id has claimed it meanwhile, or it is already `done`, this
+ * returns false and the caller must not run — the event is someone else's.
  */
-export async function refreshDelivery(hookId: string, deliveryId: string): Promise<void> {
+export async function refreshDelivery(hookId: string, deliveryId: string, token: string): Promise<boolean> {
   const key = dedupeKey(hookId, deliveryId);
   try {
-    await getStorageProvider().setRaw(key, 'in_progress', DELIVERY_IN_PROGRESS_TTL_SECONDS);
+    return await getStorageProvider().setRawIfAbsentOrEqual(key, token, DELIVERY_IN_PROGRESS_TTL_SECONDS);
   } catch (err) {
     apiLogger.warn({ err, hookId }, 'Webhook dedupe store unavailable while refreshing a delivery');
     fallbackSet(key, DELIVERY_IN_PROGRESS_TTL_SECONDS);
+    return true;
   }
 }
 
 /**
- * The queue entry for one claimed hook run: refresh the claim when it
- * starts, release it if the run is dropped at shutdown.
+ * The queue entry for one claimed hook run: keep the claim alive while it
+ * waits and as it starts (skipping the run if the claim was lost), release
+ * it if the run is dropped at shutdown.
  */
-export function webhookRunJob(run: WebhookRun, label: Record<string, unknown>): QueuedRun {
+export function webhookRunJob(
+  run: WebhookRun,
+  claimToken: string | null,
+  label: Record<string, unknown>,
+): QueuedRun {
   const { hook, deliveryId } = run;
+  const refresh = deliveryId && claimToken ? () => refreshDelivery(hook.id, deliveryId, claimToken) : undefined;
   return {
     label,
     run: () => fireWebhookHook(run),
-    onStart: deliveryId ? () => refreshDelivery(hook.id, deliveryId) : undefined,
+    onStart: refresh,
+    onRefresh: refresh,
     onDrop: deliveryId ? () => releaseDelivery(hook.id, deliveryId) : undefined,
   };
 }
@@ -228,11 +243,22 @@ export interface QueuedRun {
   /** Log fields for a failure. */
   label: Record<string, unknown>;
   run: () => Promise<void>;
-  /** Called when the run leaves the queue and starts (e.g. refresh the claim). */
-  onStart?: () => Promise<void>;
+  /**
+   * Called when the run leaves the queue, before it starts (e.g. refresh the
+   * claim). Resolving false skips the run.
+   */
+  onStart?: () => Promise<boolean>;
+  /**
+   * Called every {@link QUEUE_REFRESH_INTERVAL_MS} while the run waits in
+   * the queue (e.g. keep the claim alive). Resolving false drops the run.
+   */
+  onRefresh?: () => Promise<boolean>;
   /** Called when a pending run is dropped at shutdown (e.g. release the claim). */
   onDrop?: () => Promise<void>;
 }
+
+/** How often queued runs have their claims renewed; well inside the 15-minute TTL. */
+export const QUEUE_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 
 interface Job extends QueuedRun {
   hookId: string;
@@ -240,8 +266,12 @@ interface Job extends QueuedRun {
 }
 
 export interface QueueTicket {
-  /** Queue the run this ticket reserved room for. Call once. */
-  submit(run: QueuedRun): void;
+  /**
+   * Queue the run this ticket reserved room for. Call once. Returns false if
+   * the run was not queued (shutdown began since the reservation): it has
+   * been dropped (onDrop called), so the caller must not answer 202.
+   */
+  submit(run: QueuedRun): boolean;
   /** Give the reserved room back without queueing anything. */
   cancel(): void;
 }
@@ -294,14 +324,15 @@ export function reserveQueueSlots(items: Array<{ hookId: string; userId: string 
       inc(userPending, userId, -1);
     };
     return {
-      submit(run: QueuedRun) {
-        if (used) return;
+      submit(run: QueuedRun): boolean {
+        if (used) return false;
         used = true;
         if (!accepting) {
           // Shutdown began after the reservation: drop it like a pending run.
           giveBack();
           void run.onDrop?.().catch(() => {});
-          return;
+          notifyIdle();
+          return false;
         }
         const queue = userQueues.get(userId) ?? [];
         if (queue.length === 0) {
@@ -309,7 +340,9 @@ export function reserveQueueSlots(items: Array<{ hookId: string; userId: string 
           if (!userOrder.includes(userId)) userOrder.push(userId);
         }
         queue.push({ ...run, hookId, userId });
+        ensureRefreshTimer();
         pump();
+        return true;
       },
       cancel() {
         if (used) return;
@@ -394,10 +427,15 @@ function start(job: Job): void {
   const p: Promise<void> = (async () => {
     try {
       if (job.onStart) {
+        let proceed = true;
         try {
-          await job.onStart();
+          proceed = await job.onStart();
         } catch (err) {
           apiLogger.warn({ err, ...job.label }, 'Webhook run start hook failed');
+        }
+        if (!proceed) {
+          apiLogger.info(job.label, 'Queued webhook run skipped: its delivery claim was taken over');
+          return;
         }
       }
       await job.run();
@@ -416,11 +454,66 @@ function start(job: Job): void {
   });
 }
 
+let refreshTimer: ReturnType<typeof setInterval> | null = null;
+let sweeping = false;
+
+/** One timer per process, running only while something is queued. */
+function ensureRefreshTimer(): void {
+  if (refreshTimer) return;
+  refreshTimer = setInterval(() => void refreshQueued(), QUEUE_REFRESH_INTERVAL_MS);
+  refreshTimer.unref?.();
+}
+
+function stopRefreshTimer(): void {
+  if (!refreshTimer) return;
+  clearInterval(refreshTimer);
+  refreshTimer = null;
+}
+
+/**
+ * Renew every queued run's claim, so a long wait can't let it lapse (and a
+ * redelivery double-run the event). A run whose claim can't be renewed —
+ * another delivery took it, or it's already done — is dropped without
+ * releasing anything: the event is handled elsewhere.
+ */
+export async function refreshQueued(): Promise<void> {
+  if (sweeping) return;
+  sweeping = true;
+  try {
+    const jobs = [...userQueues.values()].flat().filter((job) => job.onRefresh);
+    const results = await Promise.all(
+      jobs.map(async (job) => {
+        try {
+          return await job.onRefresh!();
+        } catch (err) {
+          apiLogger.warn({ err, ...job.label }, 'Refreshing a queued webhook claim failed');
+          return true;
+        }
+      }),
+    );
+    for (const [i, job] of jobs.entries()) {
+      if (results[i]) continue;
+      const queue = userQueues.get(job.userId);
+      const idx = queue ? queue.indexOf(job) : -1;
+      if (!queue || idx < 0) continue; // started or dropped meanwhile
+      queue.splice(idx, 1);
+      inc(hookPending, job.hookId, -1);
+      inc(userPending, job.userId, -1);
+      if (queue.length === 0) removeUser(job.userId);
+      apiLogger.info(job.label, 'Queued webhook run dropped: its delivery claim was taken over');
+    }
+  } finally {
+    sweeping = false;
+    notifyIdle();
+  }
+}
+
 function isIdle(): boolean {
   return running.size === 0 && userOrder.length === 0 && hookPending.size === 0;
 }
 
 function notifyIdle(): void {
+  if (userOrder.length === 0) stopRefreshTimer();
   if (!isIdle() || idleWaiters.length === 0) return;
   const waiters = idleWaiters;
   idleWaiters = [];
@@ -467,6 +560,7 @@ export async function shutdownWebhookTasks(timeoutMs: number): Promise<boolean> 
   userQueues.clear();
   userOrder = [];
   rrNext = 0;
+  stopRefreshTimer();
   if (dropped.length > 0) apiLogger.warn({ count: dropped.length }, 'Dropping queued webhook runs at shutdown');
   const releases = Promise.allSettled(dropped.map((job) => job.onDrop?.())).then(() => true);
   await withTimeout(releases, Math.max(0, deadline - Date.now()), false);
@@ -475,6 +569,13 @@ export async function shutdownWebhookTasks(timeoutMs: number): Promise<boolean> 
     return true;
   })();
   return withTimeout(runs, Math.max(0, deadline - Date.now()), false);
+}
+
+/** Test helper: how many runs are waiting in the queue. */
+export function _queuedCount(): number {
+  let n = 0;
+  for (const queue of userQueues.values()) n += queue.length;
+  return n;
 }
 
 /** Test helper: override limits (no argument restores the defaults) and accept again after a shutdown. */

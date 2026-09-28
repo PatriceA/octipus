@@ -117,7 +117,8 @@ export const webhookIncomingRoutes = new Elysia({ prefix: '/hooks/incoming' })
       // Idempotency: a redelivery with the same delivery id is acknowledged
       // without firing the hook again.
       const deliveryId = getDeliveryId(request.headers);
-      if (deliveryId && !(await claimDelivery(hook.id, deliveryId))) {
+      const claimToken = deliveryId ? await claimDelivery(hook.id, deliveryId) : null;
+      if (deliveryId && !claimToken) {
         ticket.cancel();
         apiLogger.info({ hookId, deliveryId }, 'Duplicate incoming webhook delivery ignored');
         return { status: 'duplicate', duplicate: true, hookId: hook.id, hookName: hook.name };
@@ -163,7 +164,7 @@ export const webhookIncomingRoutes = new Elysia({ prefix: '/hooks/incoming' })
       // Trigger through the standard HookManager pipeline, in the background:
       // the action can be a full agent turn, and senders time out (GitHub
       // after ~10s) and redeliver, which would start duplicate runs.
-      ticket.submit(
+      const queued = ticket.submit(
         webhookRunJob(
           {
             hook,
@@ -172,9 +173,18 @@ export const webhookIncomingRoutes = new Elysia({ prefix: '/hooks/incoming' })
             deliveryId,
             failureContext: { webhook: { hookId, deliveryId, body: payload } },
           },
+          claimToken,
           { hookId, deliveryId },
         ),
       );
+      if (!queued) {
+        // Shutdown began meanwhile: the run was dropped and its claim
+        // released, so ask the sender to come back.
+        apiLogger.warn({ hookId, deliveryId }, 'Incoming webhook rejected: shutting down');
+        set.status = 503;
+        set.headers['Retry-After'] = String(RETRY_AFTER_SECONDS);
+        return { error: 'Server is shutting down; retry later' };
+      }
 
       set.status = 202;
       return {

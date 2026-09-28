@@ -137,9 +137,9 @@ export const webhookRoutes = new Elysia({ prefix: '/webhooks' })
       // "Redeliver") reuses its delivery id. Claim it per hook, after
       // authentication, and fire only the hooks that haven't seen it.
       const deliveryId = getDeliveryId(request.headers);
-      let toFire = verifiedHooks.map((hook, i) => ({ hook, ticket: tickets[i] }));
+      let toFire = verifiedHooks.map((hook, i) => ({ hook, ticket: tickets[i], claimToken: null as string | null }));
       if (deliveryId) {
-        let claimed: boolean[];
+        let claimed: Array<string | null>;
         try {
           claimed = await Promise.all(verifiedHooks.map((hook) => claimDelivery(hook.id, deliveryId)));
         } catch (err) {
@@ -147,7 +147,9 @@ export const webhookRoutes = new Elysia({ prefix: '/webhooks' })
           throw err;
         }
         for (const [i, { ticket }] of toFire.entries()) if (!claimed[i]) ticket.cancel();
-        toFire = toFire.filter((_, i) => claimed[i]);
+        toFire = toFire
+          .map((entry, i) => ({ ...entry, claimToken: claimed[i] }))
+          .filter((entry) => entry.claimToken !== null);
         if (toFire.length === 0) {
           apiLogger.info({ webhookPath, deliveryId }, 'Duplicate webhook delivery ignored');
           return { received: true, duplicate: true };
@@ -179,8 +181,9 @@ export const webhookRoutes = new Elysia({ prefix: '/webhooks' })
 
       // Respond now and queue the actions (possibly a full agent turn):
       // senders like GitHub give up after ~10s and redeliver.
-      for (const { hook, ticket } of toFire) {
-        ticket.submit(
+      let queued = 0;
+      for (const { hook, ticket, claimToken } of toFire) {
+        const ok = ticket.submit(
           webhookRunJob(
             {
               hook,
@@ -189,13 +192,27 @@ export const webhookRoutes = new Elysia({ prefix: '/webhooks' })
               deliveryId,
               failureContext: { webhook: { path: webhookPath, deliveryId, body: payload } },
             },
+            claimToken,
             { webhookPath, hookId: hook.id, deliveryId },
           ),
+        );
+        if (ok) queued++;
+      }
+
+      // Shutdown began while the delivery id was being claimed: the runs were
+      // dropped and their claims released, so ask the sender to come back
+      // rather than acknowledge an event that will never run.
+      if (queued === 0) {
+        apiLogger.warn({ webhookPath, deliveryId }, 'Webhook rejected: shutting down');
+        return json(
+          503,
+          { error: 'Server is shutting down; retry later' },
+          { 'Retry-After': String(RETRY_AFTER_SECONDS) },
         );
       }
 
       set.status = 202;
-      return { received: true, accepted: true, hooks: toFire.length };
+      return { received: true, accepted: true, hooks: queued };
     },
     {
       params: t.Object({ path: t.String() }),

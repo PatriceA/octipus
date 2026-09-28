@@ -24,6 +24,9 @@ export function rawStore() {
     /** Atomic set-if-absent with a TTL; true when this call set the key. */
     setIfAbsent: (key: string, value: string, ttlSeconds: number) =>
       getStorageProvider().setRawIfAbsent(key, value, ttlSeconds),
+    /** Atomic set when absent, expired, or already equal to `value` (renew a claim). */
+    setIfAbsentOrEqual: (key: string, value: string, ttlSeconds: number) =>
+      getStorageProvider().setRawIfAbsentOrEqual(key, value, ttlSeconds),
   };
 }
 
