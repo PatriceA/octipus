@@ -59,14 +59,26 @@ export class NotificationService {
       if (deliverTo?.length) {
         try {
           const { getUMI } = await import('@/channels/interface');
+          const { deliver, EXTERNAL_CHANNELS, loadNotifyScope, parseChannelTarget } = await import('@/channels/ownership');
           const umi = getUMI();
+          const scope = await loadNotifyScope(userId);
           for (const target of deliverTo) {
-            const [channelType, channelId] = target.split(':');
-            if (channelType && channelId && umi.isChannelAvailable(channelType as any)) {
-              umi.send(channelType as any, channelId, {
-                content: `${title}${body ? `\n${body}` : ''}`,
-              }).catch(err => coreLogger.error({ err, target }, 'Channel delivery failed'));
-            }
+            const parsed = parseChannelTarget(String(target));
+            if (!parsed) continue;
+            const { channelType, channelId } = parsed;
+            if (EXTERNAL_CHANNELS.has(channelType) && !umi.isChannelAvailable(channelType as any)) continue;
+            // deliver() sends only to the notified user's own chats or
+            // approved shared destinations.
+            void deliver(scope, channelType, channelId, {
+              content: `${title}${body ? `\n${body}` : ''}`,
+            }).then((r) => {
+              if (r.ok) return;
+              if (r.reason === 'not_allowed') {
+                coreLogger.warn({ userId, type, target }, 'Notification deliverTo target is not linked to the user nor an approved shared destination; skipped');
+              } else {
+                coreLogger.error({ err: r.error, reason: r.reason, target }, 'Channel delivery failed');
+              }
+            });
           }
         } catch (err) { coreLogger.error({ err }, 'silent failure in notification-service'); }
       }

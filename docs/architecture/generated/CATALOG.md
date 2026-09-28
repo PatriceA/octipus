@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-414 mounted routes across 61 route files. The path is the full one, group prefix included — what a client actually calls.
+417 mounted routes across 61 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -22,6 +22,9 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/admin/impersonate` | `src/api/routes/admin.ts` |
 | POST | `/api/admin/impersonate/:userId` | `src/api/routes/admin.ts` |
 | POST | `/api/admin/impersonate/stop` | `src/api/routes/admin.ts` |
+| GET | `/api/admin/notification-destinations` | `src/api/routes/admin.ts` |
+| POST | `/api/admin/notification-destinations` | `src/api/routes/admin.ts` |
+| DELETE | `/api/admin/notification-destinations/:id` | `src/api/routes/admin.ts` |
 | GET | `/api/admin/orgs` | `src/api/routes/orgs.ts` |
 | POST | `/api/admin/orgs` | `src/api/routes/orgs.ts` |
 | GET | `/api/admin/orgs/:id/members` | `src/api/routes/orgs.ts` |
@@ -438,7 +441,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `core` | 24 |
 | `(root)` | `db` | 11 |
 | `(root)` | `extensions` | 2 |
-| `(root)` | `hooks` | 1 |
+| `(root)` | `hooks` | 2 |
 | `(root)` | `mcp` | 1 |
 | `(root)` | `models` | 2 |
 | `(root)` | `security` | 4 |
@@ -446,13 +449,13 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `(root)` | `tools` | 3 |
 | `(root)` | `utils` | 1 |
 | `api` | `capabilities` | 2 |
-| `api` | `channels` | 7 |
+| `api` | `channels` | 13 |
 | `api` | `config` | 20 |
 | `api` | `connectors` | 2 |
 | `api` | `core` | 86 |
 | `api` | `db` | 103 |
 | `api` | `extensions` | 1 |
-| `api` | `hooks` | 5 |
+| `api` | `hooks` | 7 |
 | `api` | `mcp` | 3 |
 | `api` | `models` | 31 |
 | `api` | `plugins` | 1 |
@@ -470,9 +473,9 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `capabilities` | `utils` | 7 |
 | `channels` | `config` | 6 |
 | `channels` | `core` | 6 |
-| `channels` | `db` | 5 |
+| `channels` | `db` | 18 |
 | `channels` | `models` | 2 |
-| `channels` | `security` | 7 |
+| `channels` | `security` | 8 |
 | `channels` | `utils` | 18 |
 | `channels` | `voice` | 2 |
 | `config` | `channels` | 1 |
@@ -488,7 +491,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `connectors` | `shared` | 1 |
 | `connectors` | `utils` | 5 |
 | `core` | `capabilities` | 1 |
-| `core` | `channels` | 3 |
+| `core` | `channels` | 4 |
 | `core` | `config` | 32 |
 | `core` | `connectors` | 2 |
 | `core` | `db` | 189 |
@@ -501,7 +504,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `shared` | 13 |
 | `core` | `skills` | 8 |
 | `core` | `tools` | 14 |
-| `core` | `utils` | 151 |
+| `core` | `utils` | 152 |
 | `db` | `config` | 3 |
 | `db` | `core` | 10 |
 | `db` | `models` | 1 |
@@ -540,7 +543,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `security` | `config` | 12 |
 | `security` | `connectors` | 3 |
 | `security` | `core` | 2 |
-| `security` | `db` | 53 |
+| `security` | `db` | 54 |
 | `security` | `tools` | 1 |
 | `security` | `utils` | 21 |
 | `services` | `capabilities` | 5 |
@@ -562,7 +565,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `test-helpers` | `config` | 1 |
 | `test-helpers` | `db` | 9 |
 | `tools` | `api` | 2 |
-| `tools` | `channels` | 1 |
+| `tools` | `channels` | 2 |
 | `tools` | `config` | 4 |
 | `tools` | `connectors` | 2 |
 | `tools` | `core` | 70 |
@@ -571,11 +574,11 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `tools` | `mcp` | 2 |
 | `tools` | `models` | 8 |
 | `tools` | `plugins` | 1 |
-| `tools` | `security` | 23 |
+| `tools` | `security` | 24 |
 | `tools` | `services` | 2 |
 | `tools` | `shared` | 2 |
 | `tools` | `skills` | 2 |
-| `tools` | `utils` | 33 |
+| `tools` | `utils` | 34 |
 | `tools` | `visual` | 2 |
 | `tools` | `voice` | 3 |
 | `tui-editor` | `mcp` | 2 |

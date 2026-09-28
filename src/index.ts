@@ -215,6 +215,10 @@ async function main() {
     const hookManager = getHookManager();
     await hookManager.loadHooks();
     logger.info('Hooks loaded');
+    // Report (don't block on) hooks whose saved targets are no longer allowed.
+    import('@/hooks/actions')
+      .then(({ reportInvalidHookTargets }) => reportInvalidHookTargets())
+      .catch((err) => logger.warn({ err }, 'Invalid hook target report failed'));
 
     // Background jobs (research runs, document processing): a job still
     // `running` is a lie after a restart. Mark it interrupted, then let the
