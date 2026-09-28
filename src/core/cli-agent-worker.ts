@@ -29,6 +29,7 @@ import { answerCliPermissionRequest } from './cli-permissions';
 import { getPermissionManager } from '@/security/permissions';
 import { workPlanRepository } from '@/db/repositories/work-plan-repository';
 import { formatWorkPlanContext } from './agent/work-plan-context';
+import { ClassifiedError, FailoverReason, RecoveryAction } from './errors/classification';
 import { isPlanMode } from './agent/plan-mode';
 import { emptyCounters, mergeCounters, type SideEffectCounters } from './swarm/receipt';
 import { BudgetExceededError } from './swarm/errors';
@@ -676,7 +677,9 @@ export class CLIAgentWorker extends BaseAgentWorker {
     const quotaTracker = getQuotaTracker();
     const quota = await quotaTracker.getStatus(toolConfig.quotaProvider);
     if (quota.exhausted) {
-      throw new Error(`Quota exhausted for ${toolConfig.name}. Resets at ${quota.resetsAt?.toISOString() || 'unknown'}`);
+      throw new ClassifiedError({ reason: FailoverReason.QUOTA_EXHAUSTED, recovery: RecoveryAction.FALLBACK_PROVIDER,
+        providerHint: toolConfig.quotaProvider,
+        message: `Quota exhausted for ${toolConfig.name}. Resets at ${quota.resetsAt?.toISOString() || 'unknown'}` });
     }
     // Dollar spend budgets, before the CLI process starts. Subscription CLIs
     // log zero or estimated cost, so they rarely move the needle themselves,
@@ -1280,7 +1283,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
           const failed = (code !== 0 && code !== null) || !!this.runError;
           if (failed && toolConfig.isQuotaError(`${stderr}\n${this.runError ?? ''}`)) {
             await quotaTracker.markExhausted(toolConfig.quotaProvider);
-            reject(new Error(`Quota exhausted for ${toolConfig.name}`));
+            reject(new ClassifiedError({ reason: FailoverReason.QUOTA_EXHAUSTED, recovery: RecoveryAction.FALLBACK_PROVIDER,
+              providerHint: toolConfig.quotaProvider, message: `Quota exhausted for ${toolConfig.name}` }));
             return;
           }
 

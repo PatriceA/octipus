@@ -13,7 +13,10 @@ describe('work plan model context', () => {
     const context = formatWorkPlanContext(completed)!;
     const payload = JSON.parse(context.slice(context.indexOf('\n') + 1));
     expect(payload.pendingFeedbackCount).toBe(0);
-    expect(payload.feedback).toEqual([expect.objectContaining({ id: feedbackId, status: 'applied', text: 'Check that labels are unique', response: 'Added uniqueness check' })]);
+    expect(payload.feedback).toEqual([{ id: feedbackId, status: 'applied' }]);
+    expect(context).not.toContain('Added uniqueness check');
+    expect(context).not.toContain('A, B, C are unique');
+    expect(payload.steps).toEqual([{ id: 'labels', title: 'Check labels', status: 'done' }]);
     expect(context).toContain('No pending feedback means nothing is waiting');
     expect(completed.current!.feedback).toHaveLength(1);
   });

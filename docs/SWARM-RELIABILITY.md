@@ -229,7 +229,42 @@ On startup (`src/index.ts`, after DB init) two passes run in order:
 | `cache_hit` | result served from the per-session cache | — |
 | `contract_failed` | a scorer gate failed (§2) | bounded contract retry when retryable; parent decides after exhaustion |
 | `tool_error` | the child crashed | yes (once, new node) |
+| `provider_error` | transient provider failure | once on the same node, then the configured topic backup if different |
+| `provider_error` | provider quota exhausted | skip primary retry; try the configured topic backup once if different |
+| `budget` | agent budget or user-wide token/spend limit | no retry or backup |
 | `cancelled` | cascade/admin cancel, or ledger reconcile (§3) | — |
+
+---
+
+## Context and validation costs
+
+The recurring work-plan context includes step IDs, titles and statuses. Evidence,
+the detailed artifact and handled-feedback text remain stored and are available
+through `get_work_plan`; pending feedback stays inline. Complete compact snapshots
+are used so a lost bridge response cannot leave subsequent context dependent on a
+missing delta.
+
+For progress updates, `update_work_plan` accepts a patch:
+
+```json
+{
+  "revision": 7,
+  "summary": "Parser checks passed",
+  "stepUpdates": [{ "id": "parser", "status": "done", "evidence": "Targeted parser tests passed" }]
+}
+```
+
+Omitted fields and other steps are preserved. Patches require existing IDs and
+the current revision. Completed steps retain their recorded evidence; proposal
+and plan-mode restrictions still apply. Use a full update to create a plan or
+change its structure. Updates return a small change receipt instead of the full
+plan and its history.
+
+Delegation guidance asks for bounded deliverables and targeted child checks, with
+the full gate owned by the parent once per integrated phase. The root records
+phase handoffs (scope, commit or working-tree state, checks, issues and next task).
+These are workflow instructions, not automatic context resets or a bypass of
+required repository checks. Existing compaction behavior remains in place.
 
 ---
 

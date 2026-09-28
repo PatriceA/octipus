@@ -27,6 +27,7 @@ const fixture = vi.hoisted(() => ({
   dir: '',
   cliAgent: {} as { model?: string; permissionMode?: string },
   spawnCount: 0,
+  quotaExhausted: false,
   sessions: new Map<string, { id: string; userId: string; context: SessionContext }>(),
   history: [] as string[],
 }));
@@ -58,7 +59,10 @@ vi.mock('node:child_process', async importOriginal => mockChildProcess(await imp
 vi.mock('@/models/model-registry', () => ({
   getModelRegistry: () => ({ getModel: async () => ({ metadata: { cliAgent: fixture.cliAgent } }), getModelByModelId: async () => ({}) }),
 }));
-vi.mock('@/models/quota-tracker', () => ({ getQuotaTracker: () => ({ getStatus: async () => ({ exhausted: false }) }) }));
+vi.mock('@/models/quota-tracker', () => ({ getQuotaTracker: () => ({
+  getStatus: async () => ({ exhausted: fixture.quotaExhausted }),
+  markExhausted: async () => { fixture.quotaExhausted = true; },
+}) }));
 vi.mock('@/core/agent-task-recorder', () => ({ recordAgentCompletion: async () => {} }));
 vi.mock('@/db/repositories/session-repository', () => ({
   sessionRepository: {
@@ -176,6 +180,7 @@ beforeEach(() => {
   fixture.codexScript = join(fixture.dir, 'fake-codex.mjs');
   fixture.sessions = new Map();
   fixture.spawnCount = 0;
+  fixture.quotaExhausted = false;
   writeFileSync(fixture.script, `
     import { readFileSync, existsSync, unlinkSync, writeFileSync } from 'node:fs';
     import { join } from 'node:path';
@@ -679,6 +684,18 @@ describe('native background work lost at CLI exit', () => {
 });
 
 describe('CLI quota detection', () => {
+  it('classifies exhausted providers for backup and blocks another CLI launch', async () => {
+    const { ClassifiedError, FailoverReason, RecoveryAction } = await import('./errors/classification');
+    writeFileSync(join(fixture.dir, 'fail-marker'), 'Quota exhausted', 'utf-8');
+    const worker = makeClaudeWorker({ sessionId: 'quota-failed' });
+    await expect(worker.run('work')).rejects.toMatchObject({
+      reason: FailoverReason.QUOTA_EXHAUSTED, recovery: RecoveryAction.FALLBACK_PROVIDER,
+    });
+    expect(fixture.quotaExhausted).toBe(true);
+    expect(fixture.spawnCount).toBe(1);
+    await expect(makeClaudeWorker({ sessionId: 'quota-known' }).run('work')).rejects.toBeInstanceOf(ClassifiedError);
+    expect(fixture.spawnCount).toBe(1);
+  });
   it('does not treat a successful answer that mentions quota as a quota failure', async () => {
     // Real incident: the root's final answer quoted "Quota exhausted for
     // Claude Code" and "rate limit exceeded"; the clean run was rejected as a
