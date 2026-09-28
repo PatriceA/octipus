@@ -1,5 +1,6 @@
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
+import { EXTERNAL_CHANNEL_TYPES, EXTERNAL_CHANNELS } from '@/channels/ownership';
 import { auditRepository } from '@/db/repositories/audit-repository';
 import { userRepository } from '@/db/repositories/user-repository';
 import { isAdmin, isAuthenticated } from '@/security/principal';
@@ -60,8 +61,6 @@ function publicUser(u: import('@/db/schema/users').User) {
   };
 }
 
-/** External channels a shared notification destination can live on (webchat/api are per-user). */
-const SHAREABLE_CHANNEL_TYPES = ['telegram', 'slack', 'teams', 'whatsapp'];
 
 const UUID_PATTERN = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$';
 
@@ -474,7 +473,7 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
       const guard = requireAdmin(ctx);
       if (!guard.ok) return guard.body;
       const { listDestinations } = await import('@/channels/notification-destinations');
-      return { destinations: await listDestinations() };
+      return { destinations: await listDestinations(), channelTypes: EXTERNAL_CHANNEL_TYPES };
     },
     { detail: { tags: ['admin'] } },
   )
@@ -487,9 +486,9 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
       const { body, principal, set } = ctx;
       const channelType = body.channelType.trim().toLowerCase();
       const channelId = body.channelId.trim();
-      if (!SHAREABLE_CHANNEL_TYPES.includes(channelType)) {
+      if (!EXTERNAL_CHANNELS.has(channelType)) {
         set.status = 400;
-        return { error: `channelType must be one of ${SHAREABLE_CHANNEL_TYPES.join(', ')}` };
+        return { error: `channelType must be one of ${EXTERNAL_CHANNEL_TYPES.join(', ')}` };
       }
       if (!channelId) {
         set.status = 400;

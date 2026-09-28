@@ -9,7 +9,8 @@ import { scopedRepos } from '@/db/repositories/scoped';
 import { hookExecutions } from '@/db/schema/hook-executions';
 import { type Hook as HookRow, hooks as hooksTable } from '@/db/schema/hooks';
 import { recurringTasks } from '@/db/schema/recurring-tasks';
-import { notifyTargetsError } from '@/hooks/actions';
+import { loadNotifyScope, type NotifyScope } from '@/channels/ownership';
+import { hookConfigTargets, invalidHookTargets, notifyTargetsError } from '@/hooks/actions';
 import { getHookManager } from '@/hooks/manager';
 import { getHookSuggestions } from '@/hooks/suggestions';
 import type { TriggerContext } from '@/hooks/triggers';
@@ -147,6 +148,23 @@ function buildTestContext(hook: HookRow, input: TestContextInput, now: Date): Tr
   return context;
 }
 
+/**
+ * Annotate hooks with the outbound targets they may no longer send to
+ * (`invalidTargets`: `type:id` strings), e.g. a raw web chat connection id or
+ * another user's chat saved before targets were checked. One scope load per
+ * owner; hooks without literal targets cost nothing.
+ */
+async function withInvalidTargets<T extends HookRow>(rows: T[]): Promise<(T & { invalidTargets: string[] })[]> {
+  const scopes = new Map<string, Promise<NotifyScope>>();
+  return Promise.all(rows.map(async (h) => {
+    if (hookConfigTargets(h.actionConfig).length === 0) return { ...h, invalidTargets: [] };
+    let scope = scopes.get(h.userId);
+    if (!scope) { scope = loadNotifyScope(h.userId); scopes.set(h.userId, scope); }
+    const invalid = await invalidHookTargets(h.userId, h.actionConfig, { scope: await scope });
+    return { ...h, invalidTargets: invalid.map((i) => i.target) };
+  }));
+}
+
 export const hookRoutes = new Elysia({ prefix: '/hooks' })
   .use(apiContext)
   // List user's hooks
@@ -158,7 +176,7 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
       }
 
       const hooks = await scopedRepos(principal).hooks.listOwn();
-      return { hooks };
+      return { hooks: await withInvalidTargets(hooks) };
     },
     { detail: { tags: ['hooks'] } }
   )
@@ -175,7 +193,7 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
       if (!hook) {
         return { error: 'Hook not found' };
       }
-      return hook;
+      return (await withInvalidTargets([hook]))[0];
     },
     {
       params: t.Object({
@@ -274,7 +292,10 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
         }
       }
       if (body.actionConfig !== undefined) {
-        const targetError = await notifyTargetsError(existing.userId, body.actionConfig);
+        // Only targets new in this edit: a hook that already holds a target
+        // that is no longer valid stays editable (it is skipped at send time
+        // and flagged by `invalidTargets` on GET).
+        const targetError = await notifyTargetsError(existing.userId, body.actionConfig, existing.actionConfig);
         if (targetError) {
           set.status = 400;
           return { error: targetError };

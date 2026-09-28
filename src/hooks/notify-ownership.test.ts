@@ -217,11 +217,43 @@ describe('canNotify', () => {
 
   test('legacy JSON counts only through the canonical lookup', async () => {
     const { canNotify } = await import('@/channels/ownership');
-    // no row: the legacy fallback resolves it to alice (and backfills a row)
+    // no row: only alice holds a verified legacy entry, so it is hers
     expect(await canNotify(aliceId, 'slack', 'U-ALICE-LEGACY')).toBe(true);
     // stale: the chat was relinked to bob, alice's JSON entry no longer counts
     expect(await canNotify(aliceId, 'telegram', 'tg-relinked')).toBe(false);
     expect(await canNotify(bobId, 'telegram', 'tg-relinked')).toBe(true);
+  });
+
+  test('resolving targets never writes (no backfill outside the inbound path)', async () => {
+    const { canNotify, loadNotifyScope } = await import('@/channels/ownership');
+    const { queryRaw } = await import('@/db/postgres');
+    await loadNotifyScope(aliceId);
+    expect(await canNotify(aliceId, 'slack', 'U-ALICE-LEGACY')).toBe(true);
+    const { rows } = await queryRaw(`SELECT 1 FROM channel_identities WHERE external_id = 'U-ALICE-LEGACY'`);
+    expect(rows).toHaveLength(0);
+  });
+
+  test('a legacy chat claimed (verified) by two users belongs to neither', async () => {
+    const { executeRaw } = await import('@/db/postgres');
+    const shared = { channelType: 'slack', channelUserId: 'U-SHARED', isVerified: true, createdAt: '2026-01-01' };
+    for (const id of [aliceId, bobId]) {
+      await executeRaw(
+        `UPDATE users SET channel_bindings = channel_bindings || '${JSON.stringify([shared])}'::jsonb WHERE id = '${id}'`,
+      );
+    }
+    const { canNotify } = await import('@/channels/ownership');
+    expect(await canNotify(aliceId, 'slack', 'U-SHARED')).toBe(false);
+    expect(await canNotify(bobId, 'slack', 'U-SHARED')).toBe(false);
+    const { getChannelBindingManager } = await import('@/security/channel-bindings');
+    expect(await getChannelBindingManager().findUserByExternalId('slack', 'U-SHARED')).toBeNull();
+  });
+
+  test('the inbound lookup ignores unverified legacy entries', async () => {
+    const { getChannelBindingManager } = await import('@/security/channel-bindings');
+    expect(await getChannelBindingManager().findUserByExternalId('whatsapp', 'wa-legacy-unverified')).toBeNull();
+    const { queryRaw } = await import('@/db/postgres');
+    const { rows } = await queryRaw(`SELECT 1 FROM channel_identities WHERE external_id = 'wa-legacy-unverified'`);
+    expect(rows).toHaveLength(0);
   });
 
   test('admin-approved shared destinations: instance-wide, and per org for members only', async () => {
@@ -254,6 +286,20 @@ describe('canNotify', () => {
     expect(await canNotify(aliceId, 'teams', alicePersonalConv)).toBe(true);
     expect(await canNotify(aliceId, 'teams', groupConv)).toBe(false);
     expect(await canNotify(bobId, 'teams', alicePersonalConv)).toBe(false);
+  });
+
+  test('Teams conversation references survive a restart (persisted in kv_store)', async () => {
+    const { teamsChannel } = await import('@/channels/teams');
+    await teamsChannel.disconnect(); // drops the in-memory references, as a restart would
+    expect(teamsChannel.hasConversation(alicePersonalConv)).toBe(false);
+    const { canNotify, loadNotifyScope, resolveTarget } = await import('@/channels/ownership');
+    expect(await canNotify(aliceId, 'teams', alicePersonalConv)).toBe(true); // reloaded lazily
+    expect(teamsChannel.personalConversationsFor('aad-alice')).toEqual([alicePersonalConv]);
+    // a conversation the bot has never seen: ownership can't be told yet
+    const r = await resolveTarget(await loadNotifyScope(aliceId), 'teams', 'a:never-seen');
+    expect(r.allowed).toBe(false);
+    expect(!r.allowed && r.reason).toBe('unresolved');
+    expect(!r.allowed && r.error).toMatch(/must message the bot in Teams once/);
   });
 });
 
@@ -413,6 +459,55 @@ describe('save-time validation', () => {
     expect(ok.status).toBe(200);
   });
 
+  test('a hook holding an old invalid target stays editable; only new targets are checked; GET flags it', async () => {
+    const { executeRaw, queryRaw } = await import('@/db/postgres');
+    const { rows } = await queryRaw(
+      `INSERT INTO hooks (user_id, name, trigger, trigger_config, action, action_config, is_enabled)
+       VALUES ('${aliceId}', 'legacy-team-hook', 'message_received', '{}'::jsonb, 'notify',
+               '{"notifyChannels":["slack:general"],"notifyMessage":"old"}'::jsonb, true) RETURNING id`,
+    );
+    const id = (rows[0] as { id: string }).id;
+    try {
+      const got = await send(aliceApp, 'GET', `/api/hooks/${id}`);
+      expect(got.body.invalidTargets).toEqual(['slack:general']);
+      const list = await send(aliceApp, 'GET', '/api/hooks');
+      expect(list.body.hooks.find((h: { id: string }) => h.id === id).invalidTargets).toEqual(['slack:general']);
+
+      // editing the message (target unchanged) is allowed
+      const edit = await send(aliceApp, 'PATCH', `/api/hooks/${id}`, { actionConfig: { notifyChannels: ['slack:general'], notifyMessage: 'new' } });
+      expect(edit.status).toBe(200);
+      // adding another invalid target is not
+      const add = await send(aliceApp, 'PATCH', `/api/hooks/${id}`, { actionConfig: { notifyChannels: ['slack:general', 'telegram:tg-bob'] } });
+      expect(add.status).toBe(400);
+      expect(add.body.error).toContain('telegram:tg-bob');
+      expect(add.body.error).not.toContain('slack:general');
+
+      const { reportInvalidHookTargets } = await import('./actions');
+      const report = await reportInvalidHookTargets();
+      expect(report.find((r) => r.userId === aliceId)).toMatchObject({ hooks: 1, targets: 1 });
+    } finally {
+      await executeRaw(`DELETE FROM hooks WHERE id = '${id}'`);
+    }
+  });
+
+  test('migration 0117 rewrites stored in-app targets to webchat:<ownerId>', async () => {
+    const { executeRaw, queryRaw } = await import('@/db/postgres');
+    const { rows } = await queryRaw(
+      `INSERT INTO hooks (user_id, name, trigger, trigger_config, action, action_config, is_enabled) VALUES
+         ('${aliceId}', 'webchat-conn', 'message_received', '{}'::jsonb, 'notify', '{"notifyChannels":["webchat:conn-123","telegram:tg-alice","api:x"]}'::jsonb, false),
+         ('${aliceId}', 'webchat-pair', 'message_received', '{}'::jsonb, 'notify', '{"channelType":"api","channelId":"whatever"}'::jsonb, false)
+       RETURNING id, name`,
+    );
+    const { readFileSync } = await import('node:fs');
+    const sqlText = readFileSync(join(process.cwd(), 'src/db/migrations/0117_hook_inapp_targets.sql'), 'utf8');
+    for (const stmt of sqlText.split('--> statement-breakpoint')) await executeRaw(stmt);
+    const after = await queryRaw(`SELECT name, action_config FROM hooks WHERE name IN ('webchat-conn', 'webchat-pair')`);
+    const byName = Object.fromEntries(after.rows.map((r: any) => [r.name, r.action_config]));
+    expect([...byName['webchat-conn'].notifyChannels].sort()).toEqual(['telegram:tg-alice', `webchat:${aliceId}`].sort());
+    expect(byName['webchat-pair']).toMatchObject({ channelType: 'webchat', channelId: aliceId });
+    await executeRaw(`DELETE FROM hooks WHERE id IN (${rows.map((r: any) => `'${r.id}'`).join(',')})`);
+  });
+
   test('POST /api/recurring-tasks rejects an execute_tool messaging task aimed at someone else', async () => {
     const r = await send(aliceApp, 'POST', '/api/recurring-tasks', {
       name: 'nightly', cronExpression: '0 3 * * *', actionType: 'execute_tool',
@@ -428,6 +523,12 @@ describe('save-time validation', () => {
     expect(own.status).toBe(200);
     const inApp = await send(aliceApp, 'POST', '/api/sessions', { channelType: 'webchat', channelId: 'chat-123' });
     expect(inApp.status).toBe(200);
+  });
+
+  test.each(['mcp', 'tui', 'acp', 'mobile', 'web'])('POST /api/sessions still creates %s client sessions', async (channelType) => {
+    const r = await send(aliceApp, 'POST', '/api/sessions', { channelType, channelId: `${channelType}-${rand(4)}` });
+    expect(r.status).toBe(200);
+    expect(r.body.channelType).toBe(channelType);
   });
 
   test('PATCH /api/sessions cannot move a session to another chat', async () => {
@@ -504,11 +605,12 @@ describe('admin notification destinations', () => {
 });
 
 describe('unbind', () => {
-  test('removes the legacy JSON mirror so the chat does not come back', async () => {
-    const { executeRaw } = await import('@/db/postgres');
-    await executeRaw(
-      `UPDATE users SET channel_bindings = '[{"channelType":"telegram","channelUserId":"tg-dan","isVerified":true,"createdAt":"2026-01-01"}]'::jsonb WHERE id = '${carolId}'`,
-    );
+  test('removes the legacy JSON entry from every user so the chat does not come back', async () => {
+    const { executeRaw, queryRaw } = await import('@/db/postgres');
+    const entry = '[{"channelType":"telegram","channelUserId":"tg-dan","isVerified":true,"createdAt":"2026-01-01"}]';
+    await executeRaw(`UPDATE users SET channel_bindings = '${entry}'::jsonb WHERE id = '${carolId}'`);
+    // a stale copy on another user (and one stored as a JSON string)
+    await executeRaw(`UPDATE users SET channel_bindings = to_jsonb('${entry}'::text) WHERE id = '${adminId}'`);
     await executeRaw(`INSERT INTO channel_identities (user_id, channel_type, external_id, verified_at) VALUES ('${carolId}', 'telegram', 'tg-dan', now())`);
     const { canNotify } = await import('@/channels/ownership');
     expect(await canNotify(carolId, 'telegram', 'tg-dan')).toBe(true);
@@ -516,5 +618,7 @@ describe('unbind', () => {
     expect(await getChannelBindingManager().unbind(carolId, 'telegram', 'tg-dan')).toBe(true);
     expect(await canNotify(carolId, 'telegram', 'tg-dan')).toBe(false);
     expect(await getChannelBindingManager().findUserByExternalId('telegram', 'tg-dan')).toBeNull();
+    const { rows } = await queryRaw(`SELECT id FROM users WHERE channel_bindings::text LIKE '%tg-dan%'`);
+    expect(rows).toHaveLength(0);
   });
 });

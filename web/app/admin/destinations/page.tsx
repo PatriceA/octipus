@@ -19,8 +19,6 @@ interface AdminOrg {
   name: string;
 }
 
-const CHANNEL_TYPES = ['slack', 'telegram', 'teams', 'whatsapp'] as const;
-
 /**
  * Admin → Notification destinations.
  *
@@ -38,7 +36,8 @@ export default function AdminDestinationsPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'notification-destinations'],
-    queryFn: () => api.get<{ destinations: Destination[] }>('/admin/notification-destinations'),
+    // channelTypes comes from the server (EXTERNAL_CHANNEL_TYPES) so the list has one source.
+    queryFn: () => api.get<{ destinations: Destination[]; channelTypes: string[] }>('/admin/notification-destinations'),
   });
 
   // Orgs are optional (flag-gated); a 404 just means "everyone" is the only scope.
@@ -92,7 +91,7 @@ export default function AdminDestinationsPage() {
           <div>
             <label className={labelCls} htmlFor="dest-type">Channel</label>
             <select id="dest-type" value={channelType} onChange={(e) => setChannelType(e.target.value)} className={inputCls}>
-              {CHANNEL_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+              {(data?.channelTypes ?? [channelType]).map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           </div>
           <div>

@@ -23,6 +23,21 @@ interface Hook {
   lastExecutedAt?: string;
   nextRunAt?: string;
   lastError?: string;
+  /** Saved targets the owner may no longer send to (skipped at send time). */
+  invalidTargets?: string[];
+}
+
+/** Badge for hooks whose saved notify targets are no longer allowed. */
+function InvalidTargetsBadge({ targets }: { targets?: string[] }) {
+  if (!targets?.length) return null;
+  return (
+    <div
+      className="mt-1 inline-block px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded bg-error/10 text-error"
+      title={`Skipped when the hook runs: ${targets.join(', ')}. Use your own linked chats, or ask an admin to approve them under Admin → Notification destinations.`}
+    >
+      {targets.length} invalid target{targets.length > 1 ? 's' : ''}
+    </div>
+  );
 }
 
 interface HookExecution {
@@ -1505,6 +1520,7 @@ export default function HooksPage() {
                         <div className="font-medium text-on-surface">{hook.name}</div>
                         {hook.description && <div className="text-xs text-on-surface-variant mt-0.5">{hook.description}</div>}
                         {hook.lastError && <div className="text-xs text-error mt-0.5">{hook.lastError}</div>}
+                        <InvalidTargetsBadge targets={hook.invalidTargets} />
                       </td>
                       <td className="px-4 py-3 text-xs text-on-surface-variant">
                         {hook.triggerConfig?.scheduledAt ? (
@@ -1627,6 +1643,7 @@ export default function HooksPage() {
                         {hook.description && (
                           <p className="text-sm text-on-surface-variant">{hook.description}</p>
                         )}
+                        <InvalidTargetsBadge targets={hook.invalidTargets} />
                       </div>
                     </td>
                     <td className="px-4 py-3">

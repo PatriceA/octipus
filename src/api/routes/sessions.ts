@@ -9,7 +9,7 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import { scopedRepos } from '@/db/repositories/scoped';
 import { isAuthenticated } from '@/security/principal';
 import { WorkspaceFS } from '@/security/workspace-fs';
-import { canNotify, IN_APP_CHANNELS, NOT_ALLOWED_MESSAGE } from '@/channels/ownership';
+import { EXTERNAL_CHANNELS, loadNotifyScope, resolveTarget } from '@/channels/ownership';
 
 /**
  * Session routes — Phase 1a multi-user conversion.
@@ -153,14 +153,18 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         return { error: 'Not authenticated' };
       }
 
-      // A session's channel is where its replies (monitors, channel turns)
-      // are sent, so an external channel must be one the caller may notify.
-      // In-app sessions (webchat / api) have no outbound address.
+      // A session on an external messaging channel is where replies
+      // (monitors, channel turns) are sent, so its chat must be one the caller
+      // may notify. Every other type (webchat, api, mcp, tui, acp, mobile, …)
+      // has no outbound chat address and is accepted as before.
       const channelType = body.channelType || 'api';
       const channelId = body.channelId || 'api';
-      if (!IN_APP_CHANNELS.has(channelType) && !(await canNotify(user.id, channelType, channelId))) {
-        set.status = 400;
-        return { error: `${channelType}:${channelId} is ${NOT_ALLOWED_MESSAGE}` };
+      if (EXTERNAL_CHANNELS.has(channelType)) {
+        const resolved = await resolveTarget(await loadNotifyScope(user.id), channelType, channelId);
+        if (!resolved.allowed) {
+          set.status = 400;
+          return { error: resolved.error };
+        }
       }
 
       const session = await scopedRepos(principal).sessions.create({

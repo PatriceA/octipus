@@ -20,7 +20,7 @@
  * chars — so a user typing it on a mobile keyboard has minimal
  * ambiguity.
  */
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, ne, or, sql } from 'drizzle-orm';
 import { randomInt } from 'node:crypto';
 import { getDb } from '@/db/postgres';
 import { auditRepository } from '@/db/repositories/audit-repository';
@@ -56,6 +56,62 @@ export function generateLinkCode(): string {
   return code;
 }
 
+export const legacyKey = (channelType: string, externalId: string) => `${channelType}\u0000${externalId}`;
+
+function parseLegacy(raw: unknown): ChannelBinding[] {
+  let v = raw;
+  if (typeof v === 'string') {
+    try { v = JSON.parse(v); } catch { return []; }
+  }
+  return Array.isArray(v) ? (v as ChannelBinding[]) : [];
+}
+
+const likeEscape = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
+
+/**
+ * SQL prefilter: rows whose bindings column text contains `externalId`.
+ * An id JSON would escape (quotes, backslashes, control characters) can't be
+ * found in the text form, so it matches every row and the exact check in JS
+ * decides.
+ */
+function bindingsMayContain(externalId: string) {
+  const jsonEscaped = [...externalId].some((c) => c === '"' || c === '\\' || c.charCodeAt(0) < 0x20);
+  if (jsonEscaped) return sql`true`;
+  return sql`${users.channelBindings}::text LIKE ${`%${likeEscape(externalId)}%`}`;
+}
+
+/**
+ * Read-only: the users whose legacy `users.channelBindings` column holds a
+ * VERIFIED entry for each (channelType, externalId). One query, prefiltered
+ * in SQL on the external ids (the column may hold a JSON string, so the
+ * match is on its text), exact-matched here. Never writes.
+ */
+export async function legacyOwners(
+  pairs: { channelType: string; externalId: string }[],
+  opts?: { excludeUserId?: string },
+): Promise<Map<string, { userId: string; handle?: string }[]>> {
+  const out = new Map<string, { userId: string; handle?: string }[]>();
+  if (pairs.length === 0) return out;
+  const wanted = new Set(pairs.map((p) => legacyKey(p.channelType, p.externalId)));
+  const match = or(...pairs.map((p) => bindingsMayContain(p.externalId)))!;
+  const rows = await getDb()
+    .select({ id: users.id, channelBindings: users.channelBindings })
+    .from(users)
+    .where(opts?.excludeUserId ? and(match, ne(users.id, opts.excludeUserId)) : match);
+  for (const u of rows) {
+    const seen = new Set<string>();
+    for (const b of parseLegacy(u.channelBindings)) {
+      const k = legacyKey(b.channelType, b.channelUserId);
+      if (!b.isVerified || !wanted.has(k) || seen.has(k)) continue;
+      seen.add(k);
+      const list = out.get(k) ?? [];
+      list.push({ userId: u.id, handle: b.channelUserName });
+      out.set(k, list);
+    }
+  }
+  return out;
+}
+
 export class ChannelBindingManager {
   private get db() { return getDb(); }
 
@@ -76,39 +132,33 @@ export class ChannelBindingManager {
       .limit(1);
     if (row) return row.userId;
 
-    // Legacy fallback: scan the JSONB column. This is O(N) over the
-    // user table — acceptable during the transition window because
-    // the new table catches every binding on first read.
-    const allUsers = await this.db.select({
-      id: users.id, channelBindings: users.channelBindings,
-    }).from(users);
+    // Legacy fallback: the JSONB column, verified entries only. Two users
+    // claiming the same chat is ambiguous: nobody gets it.
+    const owners = (await legacyOwners([{ channelType, externalId }])).get(legacyKey(channelType, externalId)) ?? [];
+    if (owners.length === 0) return null;
+    if (owners.length > 1) {
+      securityLogger.warn(
+        { channelType, externalId, userIds: owners.map((o) => o.userId) },
+        'Legacy channel binding claimed by more than one user; treating it as unlinked',
+      );
+      return null;
+    }
+    const [owner] = owners;
 
-    for (const u of allUsers) {
-      let bindings = u.channelBindings as ChannelBinding[] | string | null;
-      if (typeof bindings === 'string') {
-        try { bindings = JSON.parse(bindings); } catch { bindings = []; }
-      }
-      if (!Array.isArray(bindings)) continue;
-      const match = bindings.find((b) => b.channelType === channelType && b.channelUserId === externalId);
-      if (!match) continue;
-
-      // Opportunistic backfill — best-effort, don't fail the lookup.
-      try {
-        await this.db.insert(channelIdentities).values({
-          userId: u.id,
-          channelType,
-          externalId,
-          externalHandle: match.channelUserName ?? null,
-          verifiedAt: match.isVerified ? new Date() : null,
-        }).onConflictDoNothing();
-      } catch (err) {
-        securityLogger.warn({ err, channelType, externalId }, 'Backfill into channel_identities failed');
-      }
-
-      return u.id;
+    // Opportunistic backfill — best-effort, don't fail the lookup.
+    try {
+      await this.db.insert(channelIdentities).values({
+        userId: owner.userId,
+        channelType,
+        externalId,
+        externalHandle: owner.handle ?? null,
+        verifiedAt: new Date(),
+      }).onConflictDoNothing();
+    } catch (err) {
+      securityLogger.warn({ err, channelType, externalId }, 'Backfill into channel_identities failed');
     }
 
-    return null;
+    return owner.userId;
   }
 
   /**
@@ -274,12 +324,21 @@ export class ChannelBindingManager {
 
     if (result.length === 0) return false;
 
-    // Drop the legacy JSONB mirror too (redeem writes one). Left behind,
-    // findUserByExternalId's legacy fallback would resolve the chat to this
-    // user again and re-create the row this call just deleted.
+    // Drop the legacy JSONB entries for this chat too, from EVERY user that
+    // has one (redeem writes a mirror; old installs may hold stale copies).
+    // Left behind, findUserByExternalId's legacy fallback would resolve the
+    // chat to one of them again and re-create the row this call deleted.
     try {
       const { userRepository } = await import('@/db/repositories/user-repository');
-      await userRepository.removeChannelBinding(result[0].userId, channelType, externalId);
+      const holders = await this.db
+        .select({ id: users.id, channelBindings: users.channelBindings })
+        .from(users)
+        .where(bindingsMayContain(externalId));
+      for (const u of holders) {
+        if (parseLegacy(u.channelBindings).some((b) => b.channelType === channelType && b.channelUserId === externalId)) {
+          await userRepository.removeChannelBinding(u.id, channelType, externalId);
+        }
+      }
     } catch (err) {
       securityLogger.warn({ err, channelType, externalId }, 'Removing legacy channel binding after unbind failed');
     }

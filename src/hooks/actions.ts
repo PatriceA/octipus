@@ -1,10 +1,10 @@
 import {
   deliver,
   loadNotifyScope,
-  NOT_ALLOWED_MESSAGE,
+  type NotifyScope,
   ownerTargets,
   parseChannelTarget,
-  scopeAllows,
+  resolveTarget,
 } from '@/channels/ownership';
 import { getAgentManager } from '@/core/agent-manager';
 import type { AgentContext, Hook } from '@/core/types';
@@ -76,18 +76,17 @@ export function explicitNotifyTargets(config: unknown): { channelType: string; c
 
 const TEMPLATE_RE = /\{\{[^}]+\}\}/;
 
+type Target = { channelType: string; channelId: string };
+const targetKey = (t: Target) => `${t.channelType}:${t.channelId}`;
+
 /**
  * The outbound targets an `execute_tool` hook on the messaging tool names
  * literally. Templated values (`{{…}}`) are only known at run time, where
  * the messaging tool checks them itself.
  */
-function messagingToolTargets(
-  userId: string,
-  config: Record<string, unknown>,
-): { targets: { channelType: string; channelId: string }[]; errors: string[] } {
-  const targets: { channelType: string; channelId: string }[] = [];
-  const errors: string[] = [];
-  if (config.toolId !== 'messaging') return { targets, errors };
+function messagingToolTargets(config: Record<string, unknown>): { targets: Target[]; sendToUser?: string } {
+  const targets: Target[] = [];
+  if (config.toolId !== 'messaging') return { targets };
   const params = (config.toolParams && typeof config.toolParams === 'object' ? config.toolParams : {}) as Record<string, unknown>;
   if (config.toolAction === 'send_message') {
     const channel = params.channel;
@@ -95,36 +94,65 @@ function messagingToolTargets(
     if (typeof channel === 'string' && typeof target === 'string' && !TEMPLATE_RE.test(channel) && !TEMPLATE_RE.test(target)) {
       targets.push({ channelType: channel, channelId: target });
     }
-  } else if (config.toolAction === 'send_to_user') {
-    const target = params.user_id;
-    if (typeof target === 'string' && !TEMPLATE_RE.test(target) && target !== userId) {
-      errors.push('An unattended send_to_user can only message you; set user_id to your own id or use a notify hook');
-    }
+    return { targets };
   }
-  return { targets, errors };
+  if (config.toolAction === 'send_to_user' && typeof params.user_id === 'string' && !TEMPLATE_RE.test(params.user_id)) {
+    return { targets, sendToUser: params.user_id };
+  }
+  return { targets };
+}
+
+/** Every literal outbound target a hook action config names. */
+export function hookConfigTargets(config: unknown): Target[] {
+  const c = (config && typeof config === 'object' ? config : {}) as Record<string, unknown>;
+  return [...explicitNotifyTargets(c), ...messagingToolTargets(c).targets];
+}
+
+/**
+ * The targets in `config` the user may not send to, with the reason.
+ * Loads the user's scope once.
+ */
+export async function invalidHookTargets(
+  userId: string,
+  config: unknown,
+  opts?: { scope?: NotifyScope; only?: (t: Target) => boolean },
+): Promise<{ target: string; error: string }[]> {
+  const c = (config && typeof config === 'object' ? config : {}) as Record<string, unknown>;
+  const out: { target: string; error: string }[] = [];
+  const toUser = messagingToolTargets(c).sendToUser;
+  if (toUser !== undefined && toUser !== userId) {
+    out.push({ target: `user:${toUser}`, error: 'A send_to_user hook can only message you; set user_id to your own id or use a notify hook' });
+  }
+  const targets = hookConfigTargets(c).filter((t) => !opts?.only || opts.only(t));
+  if (targets.length === 0) return out;
+  const scope = opts?.scope ?? await loadNotifyScope(userId);
+  for (const t of targets) {
+    const r = await resolveTarget(scope, t.channelType, t.channelId);
+    if (!r.allowed) out.push({ target: r.target, error: r.error });
+  }
+  return out;
 }
 
 /**
  * Validate a hook action config before it is stored: every explicit notify
  * target (and every literal messaging-tool target of an execute_tool hook)
  * must be a chat linked to `userId` or an admin-approved shared destination.
- * Returns an error message naming the rejected targets, or null when the
- * config is acceptable. The send paths enforce the same rule at run time.
+ *
+ * With `previousConfig` (an edit), only targets that are new compared with
+ * the stored config are checked, so a hook that already holds a now-invalid
+ * target stays editable; the send paths skip such targets at run time.
+ *
+ * Returns an error message naming the rejected targets, or null.
  */
-export async function notifyTargetsError(userId: string, config: unknown): Promise<string | null> {
-  const c = (config && typeof config === 'object' ? config : {}) as Record<string, unknown>;
-  const messaging = messagingToolTargets(userId, c);
-  const targets = [...explicitNotifyTargets(c), ...messaging.targets];
-  if (targets.length === 0) return messaging.errors[0] ?? null;
-  const scope = await loadNotifyScope(userId);
-  const rejected: string[] = [];
-  for (const t of targets) {
-    if (!(await scopeAllows(scope, t.channelType, t.channelId))) rejected.push(`${t.channelType}:${t.channelId}`);
-  }
-  if (rejected.length > 0) {
-    return `${rejected.join(', ')} ${rejected.length > 1 ? 'are' : 'is'} ${NOT_ALLOWED_MESSAGE}`;
-  }
-  return messaging.errors[0] ?? null;
+export async function notifyTargetsError(userId: string, config: unknown, previousConfig?: unknown): Promise<string | null> {
+  const before = previousConfig === undefined ? null : new Set(hookConfigTargets(previousConfig).map(targetKey));
+  const prevToUser = previousConfig === undefined
+    ? undefined
+    : messagingToolTargets((previousConfig && typeof previousConfig === 'object' ? previousConfig : {}) as Record<string, unknown>).sendToUser;
+  const invalid = (await invalidHookTargets(userId, config, before ? { only: (t) => !before.has(targetKey(t)) } : undefined))
+    .filter((i) => !(before && i.target === `user:${prevToUser}`));
+  if (invalid.length === 0) return null;
+  return invalid.map((i) => i.error).join('; ');
 }
 
 async function executeNotify(
@@ -145,11 +173,10 @@ async function executeNotify(
 
   if (!hook?.userId) return { success: false, error: 'Notify hook has no owner' };
   // Loaded once: the owner's identities, legacy bindings and approved shared
-  // destinations; every target below is checked against it in memory.
+  // destinations; each target below is resolved against it exactly once.
   const scope = await loadNotifyScope(hook.userId);
 
-  // Resolve target channels
-  const resolvedChannels: { type: string; id: string; label: string }[] = [];
+  const targets: { type: string; id: string; label: string }[] = [];
 
   // notifyOwner: the owner's own verified identities (canonical resolution,
   // so a channel linked via /api/auth/channel-bindings/redeem counts).
@@ -158,47 +185,49 @@ async function executeNotify(
     if (own.length === 0) {
       return { success: false, error: 'No channels linked to your account. Link a channel in Settings → Channels.' };
     }
-    for (const t of own) resolvedChannels.push({ type: t.channelType, id: t.channelId, label: t.label });
+    for (const t of own) targets.push({ type: t.channelType, id: t.channelId, label: t.label });
   }
 
   // Explicitly configured channels (type:id format, and the simple
   // channelType + channelId pair used by incoming webhook hooks) are chosen
-  // by the hook's author: each must be the owner's own chat or an approved
-  // shared destination.
-  const skipped: string[] = [];
-  for (const target of explicitNotifyTargets(config)) {
-    const label = `${target.channelType}:${target.channelId}`;
-    if (await scopeAllows(scope, target.channelType, target.channelId)) {
-      resolvedChannels.push({ type: target.channelType, id: target.channelId, label });
-    } else {
-      skipped.push(label);
-      coreLogger.warn(
-        { hookId: hook.id, userId: hook.userId, channelType: target.channelType, channelId: target.channelId },
-        'Notify hook target is not linked to the hook owner nor an approved shared destination; skipping it',
-      );
-    }
+  // by the hook's author: deliver() sends only to the owner's own chats and
+  // approved shared destinations.
+  for (const t of explicitNotifyTargets(config)) {
+    targets.push({ type: t.channelType, id: t.channelId, label: `${t.channelType}:${t.channelId}` });
   }
 
-  if (resolvedChannels.length === 0) {
-    if (skipped.length > 0) {
-      return { success: false, data: { skipped }, error: `${skipped.join(', ')} ${skipped.length > 1 ? 'are' : 'is'} ${NOT_ALLOWED_MESSAGE}` };
-    }
+  if (targets.length === 0) {
     return { success: false, error: 'No notification channels configured. Enable "Notify me" or add explicit channels.' };
   }
 
   const results: { channel: string; success: boolean; error?: string }[] = [];
+  const skipped: string[] = [];
+  const skipErrors: string[] = [];
 
-  for (const ch of resolvedChannels) {
-    try {
-      await deliver(scope, ch.type, ch.id, { content: message });
+  for (const ch of targets) {
+    const r = await deliver(scope, ch.type, ch.id, { content: message });
+    if (r.ok) {
       results.push({ channel: ch.label, success: true });
-    } catch (error) {
-      results.push({ channel: ch.label, success: false, error: (error as Error).message });
+    } else if (r.reason === 'not_allowed') {
+      skipped.push(ch.label);
+      skipErrors.push(r.error);
+      coreLogger.warn(
+        { hookId: hook.id, userId: hook.userId, channelType: ch.type, channelId: ch.id },
+        'Notify hook target is not linked to the hook owner nor an approved shared destination; skipping it',
+      );
+    } else {
+      results.push({ channel: ch.label, success: false, error: r.error });
     }
   }
 
   const anySuccess = results.some((r) => r.success);
-  const errorSummary = results.filter(r => !r.success).map(r => `${r.channel}: ${r.error}`).join('; ');
+  if (!anySuccess && results.length === 0) {
+    return { success: false, data: { skipped }, error: skipErrors.join('; ') };
+  }
+  const errorSummary = [
+    ...results.filter(r => !r.success).map(r => `${r.channel}: ${r.error}`),
+    ...skipErrors,
+  ].join('; ');
 
   return {
     success: anySuccess,
@@ -647,11 +676,8 @@ async function notifyOwnerWithResult(userId: string, result: string): Promise<vo
   const truncated = result.length > 3000 ? result.slice(0, 3000) + '\n\n…(truncated)' : result;
 
   for (const t of targets) {
-    try {
-      await deliver(scope, t.channelType, t.channelId, { content: truncated });
-    } catch (err) {
-      coreLogger.warn({ error: err, channel: t.channelType }, 'Failed to notify owner channel');
-    }
+    const r = await deliver(scope, t.channelType, t.channelId, { content: truncated });
+    if (!r.ok) coreLogger.warn({ error: r.error, reason: r.reason, channel: t.channelType }, 'Failed to notify owner channel');
   }
 }
 
@@ -679,4 +705,43 @@ function getNestedValue(obj: unknown, path: string): unknown {
   }
 
   return value;
+}
+
+/**
+ * One-time startup report: hooks holding outbound targets their owner may
+ * no longer send to (saved before targets were checked, or unlinked since).
+ * They keep working for their valid targets; the invalid ones are skipped at
+ * send time and flagged in the hooks UI. Logged as counts per user.
+ */
+export async function reportInvalidHookTargets(): Promise<{ userId: string; hooks: number; targets: number }[]> {
+  const { getDb } = await import('@/db/postgres');
+  const { hooks } = await import('@/db/schema/hooks');
+  const { inArray } = await import('drizzle-orm');
+  const rows = await getDb()
+    .select({ id: hooks.id, userId: hooks.userId, actionConfig: hooks.actionConfig })
+    .from(hooks)
+    .where(inArray(hooks.action, ['notify', 'execute_tool']));
+  const byUser = new Map<string, typeof rows>();
+  for (const r of rows) {
+    if (hookConfigTargets(r.actionConfig).length === 0) continue;
+    byUser.set(r.userId, [...(byUser.get(r.userId) ?? []), r]);
+  }
+  const report: { userId: string; hooks: number; targets: number }[] = [];
+  for (const [userId, userHooks] of byUser) {
+    const scope = await loadNotifyScope(userId);
+    let hookCount = 0;
+    let targetCount = 0;
+    for (const h of userHooks) {
+      const invalid = await invalidHookTargets(userId, h.actionConfig, { scope });
+      if (invalid.length > 0) { hookCount++; targetCount += invalid.length; }
+    }
+    if (hookCount > 0) report.push({ userId, hooks: hookCount, targets: targetCount });
+  }
+  if (report.length > 0) {
+    coreLogger.warn(
+      { users: report },
+      'Hooks with notification targets their owner may no longer send to (skipped at send time; ask an admin to approve shared destinations under Admin → Notification destinations)',
+    );
+  }
+  return report;
 }
