@@ -67,8 +67,7 @@ export function decideCompaction(input: CompactionDecisionInput): CompactionDeci
 export interface MaybeCompactSessionOptions {
   /**
    * Free-form `/compact <instructions>` payload. When provided, bypasses the
-   * threshold checks (the user explicitly asked to compact) but still
-   * respects the stall guard unless `force` is set.
+   * threshold and stall checks (the user explicitly asked to compact).
    */
   userInstructions?: string;
   /** Bypass the anti-thrashing stall guard. Used by manual `/compact`. */
@@ -77,15 +76,16 @@ export interface MaybeCompactSessionOptions {
 
 /**
  * Check if a session needs compaction and trigger it if so.
+ * Returns true only when a new checkpoint was committed.
  *
  * Respects the anti-thrashing guard: if the prior pass was ineffective we
  * skip further passes until the session has grown by `growthMultiplier` ×
  * the previous pre-compact size, or the token count hits the hard ceiling.
  */
-export async function maybeCompactSession(sessionId: string, options: MaybeCompactSessionOptions = {}): Promise<void> {
-  await withSessionConversation(sessionId, async () => {
+export async function maybeCompactSession(sessionId: string, options: MaybeCompactSessionOptions = {}): Promise<boolean> {
+  return withSessionConversation(sessionId, async () => {
     const history = await readSessionHistory(sessionId);
-    if (!history.session || history.rows.length < 2) return;
+    if (!history.session || history.rows.length < 2) return false;
     const savedNative = history.session.context?.nativeConversation;
     const acknowledgedIndex = savedNative ? history.rows.findIndex(row => row.id === savedNative.acknowledged.id) : -1;
     const activeMessages = savedNative?.generation === history.generation && savedNative.checkpointId === history.checkpoint?.entryId
@@ -93,20 +93,20 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
       : history.messages;
     const tokensBefore = calculateTotalTokens(activeMessages);
     const manual = Boolean(options.force || options.userInstructions);
-    if (!manual && history.rows.length < COMPACTION_MESSAGE_THRESHOLD && tokensBefore < COMPACTION_TOKEN_THRESHOLD) return;
+    if (!manual && history.rows.length < COMPACTION_MESSAGE_THRESHOLD && tokensBefore < COMPACTION_TOKEN_THRESHOLD) return false;
     const cfg = getConfig().compaction;
     const state = history.session.context?.compactionState;
     const decision = decideCompaction({ currentTokens: tokensBefore, state, config: cfg });
-    if (!manual && !decision.allow) return;
+    if (!manual && !decision.allow) return false;
     // Summarize a contiguous prefix. Retain its exact suffix, never an unrelated
     // original-user anchor that makes coverage ambiguous.
     // Retain complete user/answer pairs so native tool sequences are not split.
     let boundary = Math.max(1, history.rows.length - 6);
     while (boundary < history.rows.length && history.rows[boundary].role !== 'user') boundary++;
-    if (boundary === history.rows.length) return;
+    if (boundary === history.rows.length) return false;
     const keep = history.rows.length - boundary;
     const prefix = history.rows.slice(0, boundary);
-    if (!prefix.length) return;
+    if (!prefix.length) return false;
     const model = await getModelRegistry().getDefaultModel();
     if (!model) throw new Error('No model configured for session compaction');
     let summaryInput = prefix.map(toContextMessage);
@@ -134,7 +134,7 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
       userId: history.session.userId,
       requireSuccess: true,
     });
-    if (!result.summaryText.trim()) return;
+    if (!result.summaryText.trim()) return false;
     const summary = result.message.content;
     const tokensAfter = calculateTotalTokens([
       { role: 'user', content: summary, timestamp: new Date() },
@@ -155,7 +155,7 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
               nextEligibleTokens: Math.ceil(tokensBefore * cfg.growthMultiplier) } });
         } catch (err) { coreLogger.debug({ err, sessionId }, 'Could not publish compaction stall event'); }
       }
-      return;
+      return false;
     }
     const last = prefix[prefix.length - 1];
     // Persist the audit entry before publishing its checkpoint. A failed insert
@@ -186,5 +186,22 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
         .catch(err => coreLogger.warn({ err, sessionId }, 'on-compaction memory update failed'));
     }
     if (published) coreLogger.info({ sessionId, tokensBefore, tokensAfter, savingsRatio }, 'Session checkpoint committed; vendor conversations rotated');
+    return Boolean(published);
   });
+}
+
+/** Shared manual command for gateway and chat clients. */
+export async function compactSessionCommand(sessionId: string | undefined, args: string): Promise<string> {
+  if (!sessionId) return 'No active session to compact.';
+  try {
+    const instructions = args.trim();
+    const compacted = await maybeCompactSession(sessionId, {
+      force: true,
+      userInstructions: instructions || undefined,
+    });
+    if (!compacted) return 'Session was not compacted: no summarizable history, an empty summary, or the session changed. Recent messages are preserved.';
+    return 'Session compacted. Older messages summarized, recent messages preserved.';
+  } catch (err) {
+    return `Compaction failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
 }

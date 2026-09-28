@@ -39,7 +39,8 @@ export async function sessionAccessError(sessionId: string, context: Pick<Connec
 
 /** Exported for unit tests. */
 export async function trySteerRunningRootAgent(sessionId: string, content: string): Promise<boolean> {
-  if (isSessionControlMessage(content)) return false;
+  // Slash commands must reach the command registry, never become model guidance.
+  if (content.trimStart().startsWith('/') || isSessionControlMessage(content)) return false;
   const { getAgentManager } = await import('@/core/agent-manager');
   const mgr = getAgentManager();
   const target = mgr
