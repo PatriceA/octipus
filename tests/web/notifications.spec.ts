@@ -19,17 +19,27 @@ const rows = [
 test.describe('notifications inbox', () => {
   test.beforeEach(async ({ authenticatedPage: page }) => {
     await stubAllDefaults(page);
+    // The page refetches after every mark-read, so the stub keeps the read
+    // state like the server does; a fresh copy per test keeps tests apart.
+    const state = rows.map((r) => ({ ...r }));
     // Playwright matches routes newest-first: the list stub goes FIRST so the
     // two POST stubs below take precedence over it.
     await page.route('**/api/notifications**', (route) => {
       const url = new URL(route.request().url());
       const unread = url.searchParams.get('unread') === '1';
       const type = url.searchParams.get('type');
-      const list = rows.filter((r) => (!unread || !r.read) && (!type || r.type.startsWith(type)));
-      return json(route, 200, { notifications: list, unreadCount: rows.filter((r) => !r.read).length });
+      const list = state.filter((r) => (!unread || !r.read) && (!type || r.type.startsWith(type)));
+      return json(route, 200, { notifications: list, unreadCount: state.filter((r) => !r.read).length });
     });
-    await page.route('**/api/notifications/*/read', (route) => json(route, 200, { success: true }));
-    await page.route('**/api/notifications/read-all', (route) => json(route, 200, { success: true }));
+    await page.route('**/api/notifications/*/read', (route) => {
+      const id = new URL(route.request().url()).pathname.split('/').at(-2);
+      for (const r of state) if (r.id === id) r.read = true;
+      return json(route, 200, { success: true });
+    });
+    await page.route('**/api/notifications/read-all', (route) => {
+      for (const r of state) r.read = true;
+      return json(route, 200, { success: true });
+    });
   });
 
   test('shows unread by default, with links to what happened', async ({ authenticatedPage: page }) => {

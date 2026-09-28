@@ -239,13 +239,15 @@ export function deriveDek(
 }
 
 /**
- * Constant-time string comparison to prevent timing attacks
+ * Constant-time string comparison to prevent timing attacks.
+ *
+ * Compares SHA-256 digests of both sides, so the work done is independent of
+ * the inputs' lengths and contents: neither how much of a secret matched nor
+ * its length leaks. (The previous version short-circuited on a length
+ * mismatch and measured UTF-16 length against a UTF-8 buffer.)
  */
 export function secureCompare(a: string, b: string): boolean {
-  const maxLen = Math.max(a.length, b.length);
-  const bufA = Buffer.alloc(maxLen, 0);
-  const bufB = Buffer.alloc(maxLen, 0);
-  bufA.write(a);
-  bufB.write(b);
-  return a.length === b.length && timingSafeEqual(bufA, bufB);
+  const da = createHash('sha256').update(a, 'utf8').digest();
+  const db = createHash('sha256').update(b, 'utf8').digest();
+  return timingSafeEqual(da, db);
 }

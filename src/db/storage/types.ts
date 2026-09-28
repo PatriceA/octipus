@@ -38,6 +38,19 @@ export interface StorageProvider {
   getRaw(key: string): Promise<string | null>;
   setRaw(key: string, value: string, ttlSeconds?: number): Promise<void>;
   delRaw(key: string): Promise<void>;
+  /**
+   * Set `key` only if it is absent (an expired key counts as absent), with a
+   * TTL, in one atomic step. Returns true when this call set it. The claim
+   * primitive for work that must run once across processes.
+   */
+  setRawIfAbsent(key: string, value: string, ttlSeconds: number): Promise<boolean>;
+  /**
+   * Set `key` (with a TTL) only if it is absent, expired, or already holds
+   * exactly `value`, in one atomic step. Returns true when it was set. Renews
+   * a claim made with {@link setRawIfAbsent} without overwriting anyone
+   * else's value.
+   */
+  setRawIfAbsentOrEqual(key: string, value: string, ttlSeconds: number): Promise<boolean>;
 
   /** Health check */
   ping(): Promise<boolean>;

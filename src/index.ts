@@ -442,6 +442,19 @@ async function main() {
         // Agent manager may not be initialized
       }
 
+      // Webhook runs accepted with 202: drop the queued ones (their delivery
+      // ids are released, so a redelivery runs later) and give the running
+      // ones a moment to finish now that their agents are stopped. Bounded
+      // well inside the 4s watchdog; a run cut off here keeps its delivery
+      // id only for the short in-progress TTL.
+      try {
+        const { shutdownWebhookTasks } = await import('@/hooks/webhook-delivery');
+        const drained = await shutdownWebhookTasks(1000);
+        if (!drained) logger.warn('Background webhook runs still in flight at shutdown');
+      } catch {
+        // module may not have loaded
+      }
+
       // Dispose extensions before tearing down the hub they subscribed to
       try {
         const { getExtensionRegistry } = await import('@/extensions');

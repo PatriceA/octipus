@@ -1,4 +1,4 @@
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { EventEmitter } from 'events';
 import type { TriggerType } from '@/core/types';
 import { getDb } from '@/db/postgres';
@@ -161,13 +161,20 @@ export class HookManager extends EventEmitter {
       return null;
     }
 
+    // Reserve the run before executing: one conditional UPDATE stamps
+    // lastExecutedAt and bumps executionCount only while cooldown and
+    // maxExecutions still allow it, so concurrent triggers (two webhook
+    // deliveries, two API processes) can't both get past the checks above.
+    // A manual test is not a real run and reserves nothing.
+    if (!manualTest && !(await this.reserveRun(hook))) {
+      coreLogger.debug({ hookId: hook.id }, 'Hook run not reserved (cooldown or max executions)');
+      return null;
+    }
+
     // Execute the action
     try {
       const result = await executeAction(hook, context);
       const executionTime = Date.now() - startTime;
-
-      // Update execution stats (real runs only)
-      if (!manualTest) await this.recordRun(hook);
 
       // Log execution
       await this.logExecution({
@@ -211,7 +218,9 @@ export class HookManager extends EventEmitter {
         triggerContext: this.sanitizeContext(context),
       }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in manager')); // Don't fail the hook if logging fails
 
-      this.emit('error', { hook, error, context });
+      // EventEmitter throws on an 'error' event nobody listens to, which
+      // would make triggerHook reject after the action already ran.
+      if (this.listenerCount('error') > 0) this.emit('error', { hook, error, context });
 
       coreLogger.error({ error, hookId: hook.id }, 'Hook execution failed');
 
@@ -298,6 +307,45 @@ export class HookManager extends EventEmitter {
     const executionCount = hook.executionCount + 1;
     const lastExecutedAt = new Date();
     await this.db.update(hooks).set({ executionCount, lastExecutedAt }).where(eq(hooks.id, hook.id));
+    this.mirrorCounters(hook, executionCount, lastExecutedAt);
+  }
+
+  /**
+   * Atomically claim one run of `hook`: bump executionCount and stamp
+   * lastExecutedAt, but only if the row still passes maxExecutions and
+   * cooldown (evaluated by the database, so two concurrent callers can't both
+   * pass). Returns false when another run got there first. Semantics match
+   * the in-memory checks in runHook: a null or 0 maxExecutions / cooldownMs
+   * means unlimited / none.
+   */
+  private async reserveRun(hook: Hook): Promise<boolean> {
+    const rows = await this.db
+      .update(hooks)
+      .set({
+        executionCount: sql`${hooks.executionCount} + 1`,
+        lastExecutedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(hooks.id, hook.id),
+          sql`(${hooks.maxExecutions} IS NULL OR ${hooks.maxExecutions} <= 0 OR ${hooks.executionCount} < ${hooks.maxExecutions})`,
+          sql`(${hooks.cooldownMs} IS NULL OR ${hooks.cooldownMs} <= 0 OR ${hooks.lastExecutedAt} IS NULL
+               OR ${hooks.lastExecutedAt} <= now() - ${hooks.cooldownMs} * interval '1 millisecond')`,
+        ),
+      )
+      .returning({ executionCount: hooks.executionCount, lastExecutedAt: hooks.lastExecutedAt });
+    const row = rows[0];
+    if (!row) return false;
+    this.mirrorCounters(hook, row.executionCount, row.lastExecutedAt ?? new Date());
+    return true;
+  }
+
+  /**
+   * Mirror new counters into `hook` (which may be a fresh DB row) and the
+   * cached copy, so the in-memory cooldown / maxExecutions checks hold
+   * between cache reloads.
+   */
+  private mirrorCounters(hook: Hook, executionCount: number, lastExecutedAt: Date): void {
     hook.executionCount = executionCount;
     hook.lastExecutedAt = lastExecutedAt;
     const cached = (this.hookCache.get(hook.trigger) || []).find((h) => h.id === hook.id);
