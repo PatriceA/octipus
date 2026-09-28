@@ -106,7 +106,14 @@ describe.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('CLI worker with actual subproce
     expect(result.denied.isError).toBe(true);
     expect(JSON.stringify(result.write)).toContain('Also explain your check');
     expect(fixture.plan.current?.feedback[0].status).toBe('applied');
-    expect(JSON.stringify(result.final)).toContain('Check the labels too');
+    // Handled feedback is compacted to { id, status } in the run context (the
+    // text stays available through get_work_plan), so the final context must
+    // carry the feedback as applied, not its text.
+    const finalContext = JSON.stringify(result.final);
+    const feedbackId = fixture.plan.current!.feedback[0].id;
+    expect(finalContext).toContain(feedbackId);
+    expect(finalContext).toMatch(/applied/);
+    expect(finalContext).not.toContain('Check the labels too');
     expect(worker.getSideEffectCounters()).toMatchObject({ filesChanged: 1, permissionDenials: 1 });
     expect(worker.getStatus()).toBe('completed');
     worker.stop();
