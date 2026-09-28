@@ -78,6 +78,20 @@ N8N_URL=http://localhost:5678
 N8N_API_KEY=
 MCP_SERVERS_CONFIG=./mcp-servers.json     # Path to MCP client server config (see MCP-INTEGRATION.md)
 
+# ─── Several server processes on one PostgreSQL (optional) ───
+# Task wakeups reach every process over LISTEN/NOTIFY, and a role heartbeat
+# runs one turn per hook across all processes (a lease on the hook row that
+# lapses after the agent timeout + 10 min if its process died). These only
+# decide which leases a process may clear at startup:
+# OCTIPUS_INSTANCE_ID=node-a           # Unique per process AND stable across its restarts (e.g. a StatefulSet
+#                                      # pod name, never a random or shared value). When set, a restarted process
+#                                      # clears the leases its previous boots left. Unset: nothing is cleared at
+#                                      # startup and a crashed process's leases lapse by TTL. Two processes must
+#                                      # never share one id: each would clear the other's live leases.
+# OCTIPUS_SINGLE_PROCESS=0             # 1 = exactly one server process uses this database: clear every lease at
+#                                      # startup. Never set it when several processes share the database.
+#                                      # (Embedded PGlite always behaves this way.)
+
 # ─── Migrations ──────────────────────────────────────────────
 SKIP_MIGRATIONS=false                  # Use true only if migrations are applied separately before deployment
 

@@ -373,20 +373,29 @@ export function leaseRenewIntervalMs(ttlMs: number): number {
 }
 
 /**
- * Lease tokens are `<instance>|<boot>|<random>`. The instance is stable across
- * restarts of one deployment (OCTIPUS_INSTANCE_ID, else the hostname); the
- * boot id is new every process start. On startup a process clears the leases
- * of its own instance's previous boots (`clearStaleRoleTurnLeases`): those
- * turns died with the old process.
+ * Lease tokens are `<instance>|<boot>|<random>`; the boot id is new every
+ * process start. The instance is OCTIPUS_INSTANCE_ID when set: an id each
+ * server process must hold uniquely and keep across its restarts. Only then
+ * can a process on Postgres tell its own previous boots' leases (their turns
+ * died with it) from a live sibling's, and clear them at startup
+ * (`clearStaleRoleTurnLeases`). Unset, the token names the host for
+ * diagnostics only (`~host:<hostname>`, never matched), and such leases are
+ * left to lapse by TTL: two processes on one host, or an overlapping restart,
+ * share a hostname, so clearing by it would drop a live sibling's lease.
  */
 export const LEASE_BOOT_ID = randomUUID();
 
-export function leaseInstanceId(): string {
-  return (process.env.OCTIPUS_INSTANCE_ID || hostname() || 'octipus').replaceAll('|', '_');
+/** The explicit, stable instance id (OCTIPUS_INSTANCE_ID), or null when unset. */
+export function leaseInstanceId(): string | null {
+  const id = process.env.OCTIPUS_INSTANCE_ID?.trim();
+  // A leading '~' is reserved for the anonymous `~host:` form, so an explicit id never matches one.
+  const clean = id?.replaceAll('|', '_').replace(/^~+/, '');
+  return clean || null;
 }
 
 function newLeaseToken(): string {
-  return `${leaseInstanceId()}|${LEASE_BOOT_ID}|${randomUUID()}`;
+  const instance = leaseInstanceId() ?? `~host:${(hostname() || 'unknown').replaceAll('|', '_')}`;
+  return `${instance}|${LEASE_BOOT_ID}|${randomUUID()}`;
 }
 
 /** Leases this process holds (hook id → token + stop-renewing), for a graceful shutdown. */
@@ -449,19 +458,27 @@ export async function roleTurnLeaseHeld(hookId: string): Promise<boolean> {
 
 /**
  * Startup: clear the leases left by turns that died with a previous run of
- * this server, and open lease claims. With `all` (embedded PGlite, which is
- * one process by nature, or OCTIPUS_SINGLE_PROCESS=1 on Postgres) every
- * lease is cleared. Otherwise only this instance's leases from other boots:
- * other instances' leases are theirs and lapse by TTL if they died. Returns
- * the number cleared.
+ * this server, and open lease claims.
+ *   - `all` (embedded PGlite, one process by nature, or
+ *     OCTIPUS_SINGLE_PROCESS=1 on Postgres): every lease is cleared.
+ *   - Postgres with OCTIPUS_INSTANCE_ID set: this instance's leases from
+ *     other boots only.
+ *   - Postgres without it: nothing; every lease lapses by TTL (see
+ *     `LEASE_BOOT_ID` for why a hostname is not enough).
+ * Other instances' leases are never touched. Returns the number cleared.
  */
 export async function clearStaleRoleTurnLeases(opts: { all?: boolean } = {}): Promise<number> {
   const { storageMode } = await import('@/db/postgres');
   const all = opts.all ?? (storageMode() === 'embedded' || process.env.OCTIPUS_SINGLE_PROCESS === '1');
+  const instance = leaseInstanceId();
+  if (!all && !instance) {
+    leaseClaimsOpen = true;
+    return 0;
+  }
   const filter = all
     ? sql`${inFlightToken} IS NOT NULL OR ${inFlightUntil} IS NOT NULL`
     : and(
-      sql`split_part(${inFlightToken}, '|', 1) = ${leaseInstanceId()}`,
+      sql`split_part(${inFlightToken}, '|', 1) = ${instance}`,
       sql`split_part(${inFlightToken}, '|', 2) <> ${LEASE_BOOT_ID}`,
     );
   const rows = await getDb()

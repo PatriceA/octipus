@@ -619,24 +619,53 @@ describe('role heartbeats', () => {
     const qa = await roleHook('qa');
     const review = await roleHook('review');
     const until = new Date(Date.now() + 60 * 60_000).toISOString();
-    const instance = heartbeat.leaseInstanceId();
     const lease = (token: string) => ({ heartbeatInFlightUntil: until, heartbeatInFlightToken: token });
     const setLease = (id: string, role: string, token: string) =>
       db.update(hooksSchema).set({ triggerConfig: { role, ...lease(token) } }).where(eq(hooksSchema.id, id));
-
-    // Postgres, several processes: only this instance's previous boots are cleared.
-    await setLease(mine.id, 'coding', `${instance}|previous-boot|x`);
-    await setLease(qa.id, 'qa', `${instance}|${heartbeat.LEASE_BOOT_ID}|y`);
-    await setLease(review.id, 'review', 'other-instance|some-boot|z');
-    expect(await heartbeat.clearStaleRoleTurnLeases({ all: false })).toBe(1);
-    expect((await hookRow(mine.id)).triggerConfig).toEqual({ role: 'coding' });
-    expect(await heartbeat.roleTurnLeaseHeld(qa.id)).toBe(true);
-    expect(await heartbeat.roleTurnLeaseHeld(review.id)).toBe(true);
+    const saved = process.env.OCTIPUS_INSTANCE_ID;
+    try {
+      // Postgres with an explicit instance id: only this instance's previous boots are cleared.
+      process.env.OCTIPUS_INSTANCE_ID = 'node-a';
+      expect(heartbeat.leaseInstanceId()).toBe('node-a');
+      await setLease(mine.id, 'coding', 'node-a|previous-boot|x');
+      await setLease(qa.id, 'qa', `node-a|${heartbeat.LEASE_BOOT_ID}|y`);
+      await setLease(review.id, 'review', 'node-b|some-boot|z');
+      expect(await heartbeat.clearStaleRoleTurnLeases({ all: false })).toBe(1);
+      expect((await hookRow(mine.id)).triggerConfig).toEqual({ role: 'coding' });
+      expect(await heartbeat.roleTurnLeaseHeld(qa.id)).toBe(true);
+      expect(await heartbeat.roleTurnLeaseHeld(review.id)).toBe(true);
+    } finally {
+      if (saved === undefined) delete process.env.OCTIPUS_INSTANCE_ID;
+      else process.env.OCTIPUS_INSTANCE_ID = saved;
+    }
 
     // PGlite (the default here): one process, so every lease is stale at startup.
     expect(await heartbeat.clearStaleRoleTurnLeases()).toBe(2);
     for (const h of [mine, qa, review]) expect(await heartbeat.roleTurnLeaseHeld(h.id)).toBe(false);
     expect((await hookRow(review.id)).triggerConfig).toEqual({ role: 'review' });
+  });
+
+  test('restart on Postgres without OCTIPUS_INSTANCE_ID clears nothing: a sibling on the same host keeps its live lease', async () => {
+    const saved = process.env.OCTIPUS_INSTANCE_ID;
+    delete process.env.OCTIPUS_INSTANCE_ID;
+    try {
+      expect(heartbeat.leaseInstanceId()).toBeNull();
+      const hook = await roleHook('coding');
+      // A sibling process on this host (another boot) holds the lease.
+      const sibling = await heartbeat.claimRoleTurnLease(hook.id, 60_000);
+      expect(sibling).toMatch(/^~host:[^|]*\|/);
+      await db.update(hooksSchema)
+        .set({ triggerConfig: { role: 'coding', heartbeatInFlightUntil: new Date(Date.now() + 60_000).toISOString(), heartbeatInFlightToken: sibling!.replace(heartbeat.LEASE_BOOT_ID, 'sibling-boot') } })
+        .where(eq(hooksSchema.id, hook.id));
+      expect(await heartbeat.clearStaleRoleTurnLeases({ all: false })).toBe(0);
+      expect(await heartbeat.roleTurnLeaseHeld(hook.id)).toBe(true);
+      // An anonymous token is never taken for an explicit instance's own either.
+      process.env.OCTIPUS_INSTANCE_ID = sibling!.split('|')[0];
+      expect(heartbeat.leaseInstanceId()).not.toBe(sibling!.split('|')[0]);
+    } finally {
+      if (saved === undefined) delete process.env.OCTIPUS_INSTANCE_ID;
+      else process.env.OCTIPUS_INSTANCE_ID = saved;
+    }
   });
 
   test('graceful shutdown releases the leases this process holds and claims no more', async () => {

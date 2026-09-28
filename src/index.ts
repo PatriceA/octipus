@@ -375,8 +375,9 @@ async function main() {
     }
 
     // Role heartbeat leases left by turns that died with a previous run of
-    // this server (all of them on PGlite / OCTIPUS_SINGLE_PROCESS=1; this
-    // instance's older boots otherwise). Before the cron loop can claim.
+    // this server: all of them on PGlite / OCTIPUS_SINGLE_PROCESS=1; on
+    // Postgres this instance's older boots when OCTIPUS_INSTANCE_ID is set,
+    // none otherwise (they lapse by TTL). Before the cron loop can claim.
     try {
       await clearStaleRoleTurnLeases();
     } catch (err) {
