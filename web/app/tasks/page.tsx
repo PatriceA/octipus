@@ -2,13 +2,26 @@
 
 import { ArrowLeft, ArrowRight, Columns3, CornerDownRight, List, Lock, NotebookPen, Pencil, Plus, RefreshCw, Ruler, Sparkles, Tag, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  AssigneeChip,
+  AssigneeEditor,
+  type AssigneeFilter,
+  type AssigneePatch,
+  type BoardFields,
+  CommentsThread,
+  CommentsToggle,
+  LeaseBadge,
+  matchesAssigneeFilter,
+  ReleaseClaimButton,
+  RoleAgentsPanel,
+} from '@/components/tasks/work-board';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 import { NEXT_BUCKET_ORDER, NEXT_BUCKET_TITLE, type NextBucket } from '../../../src/core/tasks/rank';
 import { isActiveStatus, TASK_STATUS_TITLE, type TaskStatus } from '../../../src/core/tasks/status';
 import { type Nested, nestTasks, toLookup, waitingOn, waitingReason } from '../../../src/core/tasks/structure';
 
-interface Task {
+interface Task extends BoardFields {
   id: string;
   title: string;
   notes?: string | null;
@@ -33,9 +46,11 @@ type View = 'list' | 'board';
 /** The board's lanes, left to right. Archived stays out of the way, as in the list. */
 const BOARD_COLUMNS: readonly TaskStatus[] = ['open', 'in_progress', 'done'];
 const VIEW_KEY = 'octipus.tasks.view';
+/** How often the list re-reads while the page is visible, so agent progress shows up. */
+const REFRESH_MS = 30_000;
 
 /** Patchable fields a row can edit inline (besides notes/status). */
-type TaskPatch = Partial<Pick<Task, 'priority' | 'category' | 'dueAt' | 'estimate'>>;
+type TaskPatch = Partial<Pick<Task, 'priority' | 'category' | 'dueAt' | 'estimate' | 'assigneeKind' | 'assigneeRef'>>;
 
 function readView(): View {
   try {
@@ -173,6 +188,10 @@ export default function TasksPage() {
   const [newPriority, setNewPriority] = useState(0);
   const [newCategory, setNewCategory] = useState('');
   const [newDue, setNewDue] = useState('');
+  const [newRole, setNewRole] = useState('');
+  const [assigneeFilter, setAssigneeFilter] = useState<AssigneeFilter>('all');
+  // Role names for the assignee pickers, from the roles registry.
+  const [roleNames, setRoleNames] = useState<string[]>([]);
   const [groupBy, setGroupBy] = useState<GroupBy>('next');
   const [view, setView] = useState<View>(readView);
   const chooseView = (v: View) => {
@@ -220,6 +239,35 @@ export default function TasksPage() {
     fetchTasks();
   }, [fetchTasks]);
 
+  // Live-ish: agents check out, comment and finish tasks on their own, so the
+  // list re-reads every 30s while the tab is visible, and at once when it
+  // comes back into view.
+  useEffect(() => {
+    const tick = () => {
+      if (document.visibilityState === 'visible') fetchTasks();
+    };
+    const timer = setInterval(tick, REFRESH_MS);
+    document.addEventListener('visibilitychange', tick);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', tick);
+    };
+  }, [fetchTasks]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.get<{ roles: { role: string }[] }>('/roles')
+      .then((data) => {
+        if (!cancelled) setRoleNames((data.roles ?? []).map((r) => r.role));
+      })
+      .catch(() => {
+        /* the pickers fall back to the roles already on tasks */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // `opts.title`/`opts.category` come from a per-group inline add (grouping by
   // category) so the new task lands in that group; the top quick-add passes
   // neither and uses its own inputs (which it then clears).
@@ -232,6 +280,7 @@ export default function TasksPage() {
         priority: opts?.title ? 0 : newPriority,
         category: (opts?.category ?? newCategory).trim() || undefined,
         dueAt: opts?.title ? undefined : newDue || undefined,
+        ...(!opts?.title && newRole ? { assigneeKind: 'role', assigneeRef: newRole } : {}),
         // The date picker sends a bare day; the server ends it in THIS zone.
         tz: browserTimezone(),
       });
@@ -240,6 +289,7 @@ export default function TasksPage() {
         setNewPriority(0);
         setNewCategory('');
         setNewDue('');
+        setNewRole('');
       }
       await fetchTasks();
     } catch (err) {
@@ -250,6 +300,8 @@ export default function TasksPage() {
   // Generic field patch (priority/category/dueAt) used by the inline row editor.
   // Optimistic so the row reflects the change before the request resolves.
   const updateFields = async (task: Task, patch: TaskPatch) => {
+    // An assignee clear sends only the null kind; mirror the server locally.
+    if (patch.assigneeKind === null) patch = { ...patch, assigneeRef: null };
     setTasks((xs) => xs.map((t) => (t.id === task.id ? { ...t, ...patch } : t)));
     try {
       await api.patch(`/tasks/${task.id}`, patch.dueAt !== undefined ? { ...patch, tz: browserTimezone() } : patch);
@@ -287,6 +339,17 @@ export default function TasksPage() {
     }
   };
 
+  // The user is the boss of the board: a forced release frees a claim an
+  // agent holds (or left behind), and the task goes back to open.
+  const releaseClaim = async (task: Task) => {
+    try {
+      await api.post(`/tasks/${task.id}/release`, { force: true });
+      await fetchTasks();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
   const deleteTask = async (id: string) => {
     if (!confirm('Delete this task?')) return;
     try {
@@ -305,8 +368,11 @@ export default function TasksPage() {
     );
   }
 
-  const openTasks = tasks.filter((t) => isActiveStatus(t.status));
-  const done = tasks.filter((t) => t.status === 'done');
+  // The assignee filter narrows what is shown; blockers and parents still
+  // resolve against every task (`lookup` below).
+  const shown = tasks.filter((t) => matchesAssigneeFilter(t, assigneeFilter));
+  const openTasks = shown.filter((t) => isActiveStatus(t.status));
+  const done = shown.filter((t) => t.status === 'done');
   const openGroups = groupOpenTasks(openTasks, groupBy);
   // Blockers and parents are looked up across every task on the page, so a
   // blocked task says so whichever group its blocker sits in.
@@ -317,6 +383,19 @@ export default function TasksPage() {
   const categories = [...new Set(tasks.map((t) => t.category?.trim()).filter((c): c is string => !!c))].sort(
     (a, b) => a.localeCompare(b),
   );
+  const assignedRoles = [...new Set(tasks.filter((t) => t.assigneeKind === 'role' && t.assigneeRef).map((t) => t.assigneeRef!))].sort(
+    (a, b) => a.localeCompare(b),
+  );
+  const pickableRoles = [...new Set([...roleNames, ...assignedRoles])].sort((a, b) => a.localeCompare(b));
+  const assignmentKey = tasks.map((t) => `${t.id}:${t.assigneeKind ?? ''}:${t.assigneeRef ?? ''}:${t.status}`).join('|');
+  const actions: RowActions = {
+    onToggle: toggleDone,
+    onSetStatus: setStatus,
+    onDelete: deleteTask,
+    onUpdateNotes: updateNotes,
+    onUpdateFields: updateFields,
+    onRelease: releaseClaim,
+  };
 
   return (
     <div className="space-y-6">
@@ -331,6 +410,8 @@ export default function TasksPage() {
           <button onClick={() => setError('')} className="ml-2 underline">dismiss</button>
         </div>
       )}
+
+      <RoleAgentsPanel refreshKey={assignmentKey} />
 
       {/* Quick add */}
       <datalist id="task-categories">
@@ -371,6 +452,18 @@ export default function TasksPage() {
             <option key={label} value={i}>{label}</option>
           ))}
         </select>
+        {pickableRoles.length > 0 && (
+          <select
+            value={newRole}
+            onChange={(e) => setNewRole(e.target.value)}
+            aria-label="Assign to role"
+            title="Optional: assign to a role; its agent picks the task up"
+            className="rounded-full border border-outline-variant/20 bg-surface px-3 py-2 text-sm text-on-surface"
+          >
+            <option value="">no assignee</option>
+            {pickableRoles.map((r) => <option key={r} value={r}>{r} role</option>)}
+          </select>
+        )}
         <button
           onClick={() => addTask()}
           className="px-4 py-2 bg-linear-to-r from-primary to-primary-container text-on-primary rounded-full hover:opacity-90 flex items-center gap-2 font-medium"
@@ -409,19 +502,36 @@ export default function TasksPage() {
           </>
         )}
         {view === 'board' && <span className="ml-2 text-xs">columns by status, lanes by category — drag a card, or use its arrows</span>}
+        <label className="ml-auto inline-flex items-center gap-1 text-xs">
+          Assignee
+          <select
+            value={assigneeFilter}
+            onChange={(e) => setAssigneeFilter(e.target.value as AssigneeFilter)}
+            data-testid="assignee-filter"
+            className="rounded-full border border-outline-variant/20 bg-surface px-2 py-1 text-xs text-on-surface"
+          >
+            <option value="all">all</option>
+            <option value="unassigned">unassigned</option>
+            <option value="agents">assigned to agents</option>
+            {assignedRoles.map((r) => <option key={r} value={`role:${r}`}>{r} role</option>)}
+          </select>
+        </label>
       </div>
 
       {view === 'board' ? (
         <TaskBoard
-          tasks={tasks.filter((t) => t.status !== 'archived')}
+          tasks={shown.filter((t) => t.status !== 'archived')}
           lookup={lookup}
           onSetStatus={setStatus}
           onDelete={deleteTask}
+          onRelease={releaseClaim}
         />
       ) : openTasks.length === 0 ? (
         <div className="py-10 text-center font-mono animate-enter">
           <p aria-hidden className="text-2xl text-on-surface-variant/40">[ ]</p>
-          <p className="mt-2 text-sm text-on-surface-variant/70">nothing to do — add a task above, or ask an agent to remind you</p>
+          <p className="mt-2 text-sm text-on-surface-variant/70">
+            {assigneeFilter === 'all' ? 'nothing to do — add a task above, or ask an agent to remind you' : 'no open tasks match this assignee filter'}
+          </p>
         </div>
       ) : (
         openGroups.map((g) => (
@@ -430,11 +540,8 @@ export default function TasksPage() {
             title={g.title}
             tasks={g.tasks}
             lookup={lookup}
-            onToggle={toggleDone}
-            onSetStatus={setStatus}
-            onDelete={deleteTask}
-            onUpdateNotes={updateNotes}
-            onUpdateFields={updateFields}
+            roles={pickableRoles}
+            actions={actions}
             // When grouping by category, a group "+ add" files the new task
             // straight into that category (the QA: "in the groups the user can
             // create todos"). `c:` key prefix → the category text after it.
@@ -444,31 +551,35 @@ export default function TasksPage() {
       )}
 
       {view === 'list' && done.length > 0 && (
-        <TaskGroup title={`Done (${done.length})`} tasks={done} lookup={lookup} onToggle={toggleDone} onSetStatus={setStatus} onDelete={deleteTask} onUpdateNotes={updateNotes} onUpdateFields={updateFields} />
+        <TaskGroup title={`Done (${done.length})`} tasks={done} lookup={lookup} roles={pickableRoles} actions={actions} />
       )}
     </div>
   );
+}
+
+/** What a list row can do to its task; the page owns every request. */
+interface RowActions {
+  onToggle: (t: Task) => void;
+  onSetStatus: (t: Task, status: TaskStatus) => void;
+  onDelete: (id: string) => void;
+  onUpdateNotes: (t: Task, notes: string) => void;
+  onUpdateFields: (t: Task, patch: TaskPatch) => void;
+  onRelease: (t: Task) => void;
 }
 
 function TaskGroup({
   title,
   tasks,
   lookup,
-  onToggle,
-  onSetStatus,
-  onDelete,
-  onUpdateNotes,
-  onUpdateFields,
+  roles,
+  actions,
   onAddToCategory,
 }: {
   title: string;
   tasks: Task[];
   lookup: ReadonlyMap<string, Task>;
-  onToggle: (t: Task) => void;
-  onSetStatus: (t: Task, status: TaskStatus) => void;
-  onDelete: (id: string) => void;
-  onUpdateNotes: (t: Task, notes: string) => void;
-  onUpdateFields: (t: Task, patch: TaskPatch) => void;
+  roles: readonly string[];
+  actions: RowActions;
   onAddToCategory?: (title: string) => void;
 }) {
   const [inlineTitle, setInlineTitle] = useState('');
@@ -488,11 +599,8 @@ function TaskGroup({
         depth={depth}
         waiting={waitingText(node, lookup)}
         subtasks={subtaskProgress(node, [...lookup.values()])}
-        onToggle={onToggle}
-        onSetStatus={onSetStatus}
-        onDelete={onDelete}
-        onUpdateNotes={onUpdateNotes}
-        onUpdateFields={onUpdateFields}
+        roles={roles}
+        {...actions}
       />
       {node.children.length > 0 && <div className="mt-1 space-y-1">{node.children.map((c) => renderTree(c, depth + 1))}</div>}
     </div>
@@ -538,24 +646,23 @@ function TaskRow({
   depth = 0,
   waiting,
   subtasks,
+  roles,
   onToggle,
   onSetStatus,
   onDelete,
   onUpdateNotes,
   onUpdateFields,
+  onRelease,
 }: {
   task: Task;
   depth?: number;
   waiting: string | null;
   subtasks: { done: number; total: number } | null;
-  onToggle: (t: Task) => void;
-  onSetStatus: (t: Task, status: TaskStatus) => void;
-  onDelete: (id: string) => void;
-  onUpdateNotes: (t: Task, notes: string) => void;
-  onUpdateFields: (t: Task, patch: TaskPatch) => void;
-}) {
+  roles: readonly string[];
+} & RowActions) {
   const due = dueLabel(task.dueAt);
   const [editingNotes, setEditingNotes] = useState(false);
+  const [showComments, setShowComments] = useState(false);
   const [editingMeta, setEditingMeta] = useState(false);
   const [draft, setDraft] = useState(task.notes ?? '');
 
@@ -611,6 +718,8 @@ function TaskRow({
                 <Lock className="w-2.5 h-2.5" /> {waiting}
               </span>
             )}
+            <AssigneeChip task={task} />
+            <LeaseBadge task={task} />
             {task.category && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-secondary/10 text-on-surface-variant inline-flex items-center gap-0.5">
                 <Tag className="w-2.5 h-2.5" /> {task.category}
@@ -636,13 +745,15 @@ function TaskRow({
             >
               <NotebookPen className="w-2.5 h-2.5" /> {task.notes ? 'notes' : 'add notes'}
             </button>
+            <CommentsToggle open={showComments} onToggle={() => setShowComments((v) => !v)} />
             <button
               onClick={() => setEditingMeta((v) => !v)}
               className="text-[10px] inline-flex items-center gap-0.5 text-on-surface-variant/70 hover:text-on-surface"
-              title="Set due date, category, priority"
+              title="Set due date, category, priority, assignee"
             >
               <Pencil className="w-2.5 h-2.5" /> edit
             </button>
+            <ReleaseClaimButton task={task} onRelease={() => onRelease(task)} />
           </div>
         </div>
         <button
@@ -676,6 +787,9 @@ function TaskRow({
       ) : task.notes ? (
         <p className="mt-1 pl-8 text-xs text-on-surface-variant whitespace-pre-wrap">{task.notes}</p>
       ) : null}
+
+      {/* Comments — the agents' progress and hand-off log; fetched when opened. */}
+      {showComments && <CommentsThread taskId={task.id} />}
 
       {/* Meta editor — set/clear due date, category, priority (the QA: users
           couldn't set due dates and wanted custom categories). */}
@@ -731,6 +845,7 @@ function TaskRow({
               <option key={st} value={st}>{TASK_STATUS_TITLE[st]}</option>
             ))}
           </select>
+          <AssigneeEditor task={task} roles={roles} onChange={(p: AssigneePatch) => onUpdateFields(task, p)} />
           <button onClick={() => setEditingMeta(false)} className="text-[11px] px-2 py-1 text-on-surface-variant hover:text-on-surface">Done</button>
         </div>
       )}
@@ -749,11 +864,13 @@ function TaskBoard({
   lookup,
   onSetStatus,
   onDelete,
+  onRelease,
 }: {
   tasks: Task[];
   lookup: ReadonlyMap<string, Task>;
   onSetStatus: (t: Task, status: TaskStatus) => void;
   onDelete: (id: string) => void;
+  onRelease: (t: Task) => void;
 }) {
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<TaskStatus | null>(null);
@@ -834,6 +951,7 @@ function TaskBoard({
                             }}
                             onMove={(st) => onSetStatus(task, st)}
                             onDelete={() => onDelete(task.id)}
+                            onRelease={() => onRelease(task)}
                           />
                         ))}
                       </div>
@@ -861,6 +979,7 @@ function BoardCard({
   onDragEnd,
   onMove,
   onDelete,
+  onRelease,
 }: {
   task: Task;
   waiting: string | null;
@@ -873,8 +992,10 @@ function BoardCard({
   onDragEnd: () => void;
   onMove: (status: TaskStatus) => void;
   onDelete: () => void;
+  onRelease: () => void;
 }) {
   const due = dueLabel(task.dueAt);
+  const [showComments, setShowComments] = useState(false);
   return (
     <div
       draggable
@@ -890,6 +1011,8 @@ function BoardCard({
         </p>
       )}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1">
+        <AssigneeChip task={task} />
+        <LeaseBadge task={task} />
         {task.priority > 0 && (
           <span title={PRIORITY[task.priority]} className={`text-[10px] font-mono font-semibold ${priorityClasses(task.priority)}`}>
             P{task.priority}
@@ -937,10 +1060,13 @@ function BoardCard({
           <ArrowRight className="w-3.5 h-3.5" />
         </button>
         <span className="flex-1" />
+        <CommentsToggle open={showComments} onToggle={() => setShowComments((v) => !v)} />
+        <ReleaseClaimButton task={task} onRelease={onRelease} compact />
         <button onClick={onDelete} aria-label="Delete task" className="text-on-surface-variant hover:text-error">
           <Trash2 className="w-3.5 h-3.5" />
         </button>
       </div>
+      {showComments && <CommentsThread taskId={task.id} indent={false} />}
     </div>
   );
 }
