@@ -106,37 +106,16 @@ async function initEmbedded(dataDir: string): Promise<DrizzleDB> {
   // Expand ~ to home directory (HOME may be unset on Windows)
   const resolvedDir = dataDir.replace(/^~/, process.env.HOME || process.env.USERPROFILE || '/tmp');
 
-  // Ensure data directory exists
-  const { mkdirSync, rmSync } = await import('fs');
+  // An initialization error may mean damaged durable data. Never erase the
+  // directory or retry with an empty database, including on first-boot faults.
+  const { mkdirSync } = await import('fs');
   mkdirSync(resolvedDir, { recursive: true });
-
-  // Bounded retry around PGlite instantiation. Under the full test suite —
-  // dozens of throwaway embedded databases created back-to-back in one process
-  // — PGlite's WASM runtime intermittently faults on boot ("PGlite failed to
-  // initialize properly") or when opening a freshly written relation file
-  // (ErrnoError errno 44 / "could not open file"). Both are transient: a clean
-  // datadir + a fresh create succeeds. Wipe any partial datadir between
-  // attempts so the retry starts from empty, and keep the SAME resolved path so
-  // the caller's DATA_DIR / cache key stay consistent. This also hardens a real
-  // first-boot embedded install against the same hiccup.
-  const CREATE_ATTEMPTS = 3;
-  let client: Awaited<ReturnType<typeof PGlite.create>> | undefined;
-  for (let attempt = 1; attempt <= CREATE_ATTEMPTS; attempt++) {
-    try {
-      client = await PGlite.create({ dataDir: resolvedDir, extensions: { vector } });
-      break;
-    } catch (err) {
-      if (attempt >= CREATE_ATTEMPTS || !isTransientPgliteFault(err)) throw err;
-      dbLogger.warn(
-        { attempt, dataDir: resolvedDir, error: (err as Error).message },
-        'Transient PGlite init fault — recreating embedded database',
-      );
-      try { rmSync(resolvedDir, { recursive: true, force: true }); } catch { /* best effort */ }
-      mkdirSync(resolvedDir, { recursive: true });
-      await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
-    }
+  let client: Awaited<ReturnType<typeof PGlite.create>>;
+  try {
+    client = await PGlite.create({ dataDir: resolvedDir, extensions: { vector } });
+  } catch (cause) {
+    throw new Error(`Embedded database could not open at ${resolvedDir}. Data was preserved; do not delete the directory. Back it up before recovery. ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
   }
-  if (!client) throw new Error('PGlite initialization failed after retries');
 
   closeHandle = async () => { await client.close(); };
   rawExec = async (query) => { await client.exec(query); return []; };
