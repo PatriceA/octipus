@@ -708,9 +708,9 @@ function CreateHookModal({ open, onClose, onCreated }: CreateHookModalProps) {
                     value={notifyChannels}
                     onChange={e => setNotifyChannels(e.target.value)}
                     className="w-full bg-surface-container-high border border-outline-variant rounded-md py-3 px-4 text-on-surface text-sm focus:ring-1 focus:ring-primary"
-                    placeholder="telegram:123456, slack:general"
+                    placeholder="telegram:123456, slack:U012ABCDEF"
                   />
-                  <p className="mt-1 text-xs text-on-surface-variant">Comma-separated, format: type:channelId</p>
+                  <p className="mt-1 text-xs text-on-surface-variant">Comma-separated, format: type:channelId. Only chats linked to your account (Settings → Channels) are accepted.</p>
                 </div>
               )}
               <div>
@@ -1050,8 +1050,8 @@ function EditHookModal({ hook, onClose, onSaved }: EditHookModalProps) {
               {!notifyOwner && (
                 <div>
                   <label className="block text-xs font-bold text-on-surface-variant uppercase mb-2">Channels (advanced)</label>
-                  <input type="text" value={notifyChannels} onChange={e => setNotifyChannels(e.target.value)} className={inputCls} placeholder="telegram:123456, slack:general" />
-                  <p className="mt-1 text-xs text-on-surface-variant">Comma-separated, format: type:channelId</p>
+                  <input type="text" value={notifyChannels} onChange={e => setNotifyChannels(e.target.value)} className={inputCls} placeholder="telegram:123456, slack:U012ABCDEF" />
+                  <p className="mt-1 text-xs text-on-surface-variant">Comma-separated, format: type:channelId. Only chats linked to your account (Settings → Channels) are accepted.</p>
                 </div>
               )}
               <div>

@@ -9,6 +9,7 @@ import { scopedRepos } from '@/db/repositories/scoped';
 import { hookExecutions } from '@/db/schema/hook-executions';
 import { type Hook as HookRow, hooks as hooksTable } from '@/db/schema/hooks';
 import { recurringTasks } from '@/db/schema/recurring-tasks';
+import { notifyTargetsError } from '@/hooks/actions';
 import { getHookManager } from '@/hooks/manager';
 import { getHookSuggestions } from '@/hooks/suggestions';
 import type { TriggerContext } from '@/hooks/triggers';
@@ -204,6 +205,13 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
         return { error: roleError };
       }
 
+      // Explicit notify targets must be chats linked to the caller.
+      const targetError = await notifyTargetsError(user.id, body.actionConfig);
+      if (targetError) {
+        set.status = 400;
+        return { error: targetError };
+      }
+
       const hookManager = getHookManager();
 
       const hook = await hookManager.createHook({
@@ -263,6 +271,13 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
         if (roleError) {
           set.status = 400;
           return { error: roleError };
+        }
+      }
+      if (body.actionConfig !== undefined) {
+        const targetError = await notifyTargetsError(existing.userId, body.actionConfig);
+        if (targetError) {
+          set.status = 400;
+          return { error: targetError };
         }
       }
 
@@ -396,7 +411,7 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
   // Apply a hook suggestion (create hook from template)
   .post(
     '/suggestions/:suggestionId/apply',
-    async ({ user, params }) => {
+    async ({ user, params, set }) => {
       if (!user) return { error: 'Not authenticated' };
 
       const suggestions = await getHookSuggestions(user.id);
@@ -409,6 +424,12 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
       const triggerConfig = sanitizeTriggerConfig(suggestion.triggerConfig);
       const roleError = await roleHeartbeatHookError(user.id, suggestion.trigger, triggerConfig);
       if (roleError) return { error: roleError };
+
+      const targetError = await notifyTargetsError(user.id, suggestion.actionConfig);
+      if (targetError) {
+        set.status = 400;
+        return { error: targetError };
+      }
 
       const hookManager = getHookManager();
       const hook = await hookManager.createHook({

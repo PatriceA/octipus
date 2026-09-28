@@ -1,4 +1,5 @@
 import { getUMI } from '@/channels/interface';
+import { parseChannelTarget, userOwnsChannel } from '@/channels/ownership';
 import { getAgentManager } from '@/core/agent-manager';
 import type { AgentContext, Hook } from '@/core/types';
 import { coreLogger } from '@/utils/logger';
@@ -46,6 +47,43 @@ export async function executeAction(
   }
 }
 
+const NOT_OWNED_ERROR = 'Notify targets must be channels linked to your account (Settings → Channels)';
+
+/**
+ * The channel targets a notify config names explicitly: every `type:id` in
+ * `notifyChannels`, plus the `channelType` / `channelId` pair. Malformed
+ * entries (no type or no id) are dropped.
+ */
+export function explicitNotifyTargets(config: unknown): { channelType: string; channelId: string }[] {
+  if (!config || typeof config !== 'object') return [];
+  const c = config as Record<string, unknown>;
+  const targets: { channelType: string; channelId: string }[] = [];
+  if (Array.isArray(c.notifyChannels)) {
+    for (const spec of c.notifyChannels) {
+      const parsed = parseChannelTarget(String(spec));
+      if (parsed) targets.push(parsed);
+    }
+  }
+  if (c.channelType && c.channelId) {
+    targets.push({ channelType: String(c.channelType), channelId: String(c.channelId) });
+  }
+  return targets;
+}
+
+/**
+ * Validate a hook action config before it is stored: every explicit notify
+ * target must be a channel linked to `userId`. Returns an error message
+ * naming the rejected targets, or null when the config is acceptable.
+ * executeNotify enforces the same rule again at send time.
+ */
+export async function notifyTargetsError(userId: string, config: unknown): Promise<string | null> {
+  const rejected: string[] = [];
+  for (const t of explicitNotifyTargets(config)) {
+    if (!(await userOwnsChannel(userId, t.channelType, t.channelId))) rejected.push(`${t.channelType}:${t.channelId}`);
+  }
+  return rejected.length > 0 ? `${NOT_OWNED_ERROR}. Not linked: ${rejected.join(', ')}` : null;
+}
+
 async function executeNotify(
   config: Hook['actionConfig'],
   context: TriggerContext,
@@ -90,27 +128,27 @@ async function executeNotify(
     }
   }
 
-  // Also add explicitly configured channels (type:id format)
-  const explicitChannels = config.notifyChannels || [];
-  if (Array.isArray(explicitChannels)) {
-    for (const channelSpec of explicitChannels) {
-      const [channelType, channelId] = String(channelSpec).split(':');
-      if (channelType && channelId) {
-        resolvedChannels.push({ type: channelType, id: channelId, label: String(channelSpec) });
-      }
+  // Explicitly configured channels (type:id format, and the simple
+  // channelType + channelId pair used by incoming webhook hooks) are chosen
+  // by the hook's author, so each must be a chat linked to the hook owner.
+  const skipped: string[] = [];
+  for (const target of explicitNotifyTargets(config)) {
+    const label = `${target.channelType}:${target.channelId}`;
+    if (hook?.userId && await userOwnsChannel(hook.userId, target.channelType, target.channelId)) {
+      resolvedChannels.push({ type: target.channelType, id: target.channelId, label });
+    } else {
+      skipped.push(label);
+      coreLogger.warn(
+        { hookId: hook?.id, userId: hook?.userId, channelType: target.channelType, channelId: target.channelId },
+        'Notify hook target is not a channel linked to the hook owner; skipping it',
+      );
     }
   }
 
-  // Support simple channelType + channelId pair (e.g. from incoming webhook hooks)
-  if (config.channelType && config.channelId) {
-    resolvedChannels.push({
-      type: config.channelType,
-      id: config.channelId,
-      label: `${config.channelType}:${config.channelId}`,
-    });
-  }
-
   if (resolvedChannels.length === 0) {
+    if (skipped.length > 0) {
+      return { success: false, data: { skipped }, error: `${NOT_OWNED_ERROR}. Not linked: ${skipped.join(', ')}` };
+    }
     return { success: false, error: 'No notification channels configured. Enable "Notify me" or add explicit channels.' };
   }
 
@@ -131,7 +169,7 @@ async function executeNotify(
 
   return {
     success: anySuccess,
-    data: { results },
+    data: skipped.length > 0 ? { results, skipped } : { results },
     error: anySuccess ? undefined : errorSummary || 'All notification channels failed',
   };
 }
