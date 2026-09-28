@@ -1274,8 +1274,11 @@ export class CLIAgentWorker extends BaseAgentWorker {
           // Only a FAILED run can be a quota failure. Matching a clean run's
           // answer text rejected any answer that merely mentioned "quota" or
           // "exceeded", and marked the provider exhausted for an hour.
+          // Match only the vendor's error channels (stderr, the reported run
+          // error), never the agent's own answer text: a run failing on e.g.
+          // max-turns whose answer quoted a quota error re-armed the block.
           const failed = (code !== 0 && code !== null) || !!this.runError;
-          if (failed && toolConfig.isQuotaError(`${stderr}\n${this.runError ?? ''}\n${accumulatedText}`)) {
+          if (failed && toolConfig.isQuotaError(`${stderr}\n${this.runError ?? ''}`)) {
             await quotaTracker.markExhausted(toolConfig.quotaProvider);
             reject(new Error(`Quota exhausted for ${toolConfig.name}`));
             return;

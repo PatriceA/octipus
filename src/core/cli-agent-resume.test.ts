@@ -206,6 +206,8 @@ beforeEach(() => {
       if (mode) console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: idArg }));
       if (mode === 'budget') console.log(JSON.stringify({ type: 'assistant', message: { id: 'm-big', content: [], usage: { input_tokens: 1000000, output_tokens: 1 } } }));
       if (mode === 'maxturns') {
+        const said = join(process.cwd(), 'answer-marker');
+        if (existsSync(said)) console.log(JSON.stringify({ type: 'assistant', message: { id: 'm-said', content: [{ type: 'text', text: readFileSync(said, 'utf-8') }] } }));
         console.log(JSON.stringify({ type: 'result', subtype: 'error_max_turns', is_error: true, num_turns: 5 }));
         process.exit(1);
       }
@@ -685,5 +687,13 @@ describe('CLI quota detection', () => {
     writeFileSync(join(fixture.dir, 'answer-marker'), text, 'utf-8');
     const worker = makeClaudeWorker({ sessionId: 'sq' });
     await expect(worker.run('status?')).resolves.toContain('Quota exhausted for Claude Code');
+  });
+
+  it('does not treat a failed run whose answer mentions quota as a quota failure', async () => {
+    // A run that fails for another reason (here: max-turns) must not be
+    // re-labelled a quota failure because the agent's own text quoted one.
+    writeFileSync(join(fixture.dir, 'answer-marker'), 'Earlier: rate limit exceeded, quota exhausted.', 'utf-8');
+    writeFileSync(join(fixture.dir, 'hang-marker'), 'maxturns');
+    await expect(makeClaudeWorker({ sessionId: 'sq2' }).run('status?')).rejects.toThrow(/max-turns/);
   });
 });
