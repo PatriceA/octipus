@@ -1,5 +1,6 @@
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
+import { getAllCommands } from '@/core/commands';
 import { getAgentService } from '@/core/agent';
 import { scopedRepos } from '@/db/repositories/scoped';
 import { checkProjectPath, devModeAllowed } from '@/security/devmode';
@@ -90,6 +91,17 @@ async function routedRolesForTurn(sessionId: string, since: Date): Promise<strin
  */
 export const chatRoutes = new Elysia({ prefix: '/chat' })
   .use(apiContext)
+  .get('/commands', ({ user, principal, set }) => {
+    if (!user || !isAuthenticated(principal)) {
+      set.status = 401;
+      return { error: 'Not authenticated' };
+    }
+    if (!requireScope(principal, API_SCOPES.CHAT)) {
+      set.status = 403;
+      return { error: `API token missing required scope "${API_SCOPES.CHAT}"` };
+    }
+    return { commands: getAllCommands().map(({ name, description }) => ({ name, description })) };
+  })
 
   // Send a chat message through the root agent
   .post(

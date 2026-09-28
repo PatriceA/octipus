@@ -11,8 +11,9 @@ import {
   Square,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import type { RealtimeState } from '@/hooks/useVoiceRealtime';
+import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { AudioWaveform } from './audio-waveform';
 
@@ -103,6 +104,29 @@ export default function PromptInput({
   voiceAvailable = true,
 }: PromptInputProps) {
   const [text, setText] = useState('');
+  const [commands, setCommands] = useState<Array<{ name: string; description: string }>>([]);
+  const [commandError, setCommandError] = useState(false);
+  const [commandIndex, setCommandIndex] = useState(0);
+  const [commandsDismissed, setCommandsDismissed] = useState(false);
+  const commandListId = useId();
+  const showCommands = !disabled && !commandsDismissed && /^\/[^\s]*$/.test(text);
+  const matchingCommands = commands.filter(command => command.name.startsWith(text.slice(1).toLowerCase()));
+  const selectedCommand = matchingCommands[commandIndex] ?? matchingCommands[0];
+  useEffect(() => {
+    if (!showCommands) return;
+    let cancelled = false;
+    setCommandError(false);
+    api.get<{ commands: Array<{ name: string; description: string }> }>('/chat/commands')
+      .then(result => { if (!cancelled) setCommands(result.commands); })
+      .catch(() => { if (!cancelled) setCommandError(true); });
+    return () => { cancelled = true; };
+  }, [showCommands]);
+  const selectCommand = useCallback((name: string) => {
+    setText(`/${name} `);
+    setBrowsingHistory(false);
+    setHistoryIndex(-1);
+    textareaRef.current?.focus();
+  }, []);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isListening, setIsListening] = useState(false);
@@ -198,6 +222,25 @@ export default function PromptInput({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.nativeEvent.isComposing) return;
+      if (showCommands) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setCommandsDismissed(true);
+          return;
+        }
+        if (matchingCommands.length && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+          e.preventDefault();
+          const index = matchingCommands.indexOf(selectedCommand);
+          setCommandIndex((index + (e.key === 'ArrowDown' ? 1 : -1) + matchingCommands.length) % matchingCommands.length);
+          return;
+        }
+        if (selectedCommand && (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && text !== `/${selectedCommand.name}`))) {
+          e.preventDefault();
+          selectCommand(selectedCommand.name);
+          return;
+        }
+      }
       // Send on Enter (without Shift)
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -236,7 +279,7 @@ export default function PromptInput({
         }
       }
     },
-    [handleSend, history, historyIndex, text, browsingHistory]
+    [handleSend, history, historyIndex, text, browsingHistory, showCommands, matchingCommands, selectedCommand, selectCommand]
   );
 
   // Paste handler for images
@@ -454,6 +497,28 @@ export default function PromptInput({
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
+      {showCommands && (
+        <div className="absolute bottom-full left-0 right-0 z-30 mb-2 rounded-xl bg-surface-container-highest p-2 shadow-lg ring-1 ring-outline-variant/30">
+          <div className="px-2 py-1 text-xs text-on-surface-variant">Commands · ↑↓ choose · Tab complete · Esc close</div>
+          <div id={commandListId} role="listbox" aria-label="Chat commands" className="max-h-64 overflow-y-auto">
+            {matchingCommands.map(command => (
+              <button key={command.name} id={`${commandListId}-${command.name}`} type="button" role="option"
+                aria-selected={command === selectedCommand} tabIndex={-1}
+                ref={element => { if (command === selectedCommand) element?.scrollIntoView({ block: 'nearest' }); }}
+                onMouseDown={event => event.preventDefault()}
+                onClick={() => selectCommand(command.name)}
+                className={cn('flex w-full flex-col rounded-lg px-3 py-2 text-left text-sm', command === selectedCommand && 'bg-primary/10')}
+              >
+                <span className="font-medium text-on-surface">/{command.name}</span>
+                <span className="text-xs text-on-surface-variant">{command.description}</span>
+              </button>
+            ))}
+          </div>
+          {(commandError || !matchingCommands.length) && <p role="status" className="px-3 py-2 text-sm text-on-surface-variant">
+            {commandError ? 'Could not load commands. Type /help or reopen this menu to retry.' : commands.length ? 'No matching commands.' : 'Loading commands…'}
+          </p>}
+        </div>
+      )}
       {/* Drop zone overlay */}
       {isDragging && (
         <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-primary bg-primary/10">
@@ -503,8 +568,14 @@ export default function PromptInput({
         <textarea
           ref={textareaRef}
           value={text}
+          aria-controls={showCommands ? commandListId : undefined}
+          aria-expanded={showCommands}
+          aria-autocomplete="list"
+          aria-activedescendant={showCommands && selectedCommand ? `${commandListId}-${selectedCommand.name}` : undefined}
           onChange={(e) => {
             setText(e.target.value);
+            setCommandIndex(0);
+            setCommandsDismissed(false);
             if (browsingHistory) {
               setBrowsingHistory(false);
               setHistoryIndex(-1);

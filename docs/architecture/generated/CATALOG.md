@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-414 mounted routes across 61 route files. The path is the full one, group prefix included — what a client actually calls.
+415 mounted routes across 61 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -108,6 +108,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | POST | `/api/chat` | `src/api/routes/chat.ts` |
 | GET | `/api/chat/approvals/pending` | `src/api/routes/chat.ts` |
 | POST | `/api/chat/approve` | `src/api/routes/chat.ts` |
+| GET | `/api/chat/commands` | `src/api/routes/chat.ts` |
 | GET | `/api/connectors` | `src/api/routes/connectors.ts` |
 | DELETE | `/api/connectors/:id` | `src/api/routes/connectors.ts` |
 | POST | `/api/connectors/:id/authorize` | `src/api/routes/connectors.ts` |
@@ -449,7 +450,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 13 |
 | `api` | `config` | 20 |
 | `api` | `connectors` | 2 |
-| `api` | `core` | 85 |
+| `api` | `core` | 86 |
 | `api` | `db` | 100 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 7 |
