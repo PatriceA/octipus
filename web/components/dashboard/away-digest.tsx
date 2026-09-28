@@ -65,6 +65,7 @@ function sinceLabel(iso: string): string {
 
 /** Where a finished job's output lives: a research report is saved as a document, a processed document is one — both on the documents page. */
 function jobHref(j: JobBrief): string {
+  if (j.kind === 'learning') return '/chat';
   return j.kind === 'research' && !j.resultRef ? '/research' : '/documents';
 }
 

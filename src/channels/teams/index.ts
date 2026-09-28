@@ -12,12 +12,15 @@ import type { Attachment, ChannelResponse, ChannelType } from '@/core/types';
 import { channelLogger } from '@/utils/logger';
 import { BaseChannel } from '../interface';
 
+const CONVREF_PREFIX = 'teams:convref:';
+
 export class TeamsChannel extends BaseChannel {
   readonly type: ChannelType = 'teams';
   readonly name = 'Microsoft Teams';
 
   private adapter: CloudAdapter | null = null;
   private conversationReferences: Map<string, Partial<Activity>> = new Map();
+  private referencesLoaded: Promise<number> | null = null;
 
   override isEnabled(config: Config): boolean {
     return Boolean(config.teams?.appId);
@@ -47,13 +50,69 @@ export class TeamsChannel extends BaseChannel {
       await context.sendActivity('Sorry, an error occurred. Please try again.');
     };
 
+    await this.ensureReferencesLoaded();
     this.setConnected(true);
     channelLogger.info('Teams adapter initialized');
+  }
+
+  /**
+   * Conversation references are what a proactive send (hooks, monitors,
+   * notifications) needs, and Teams only hands them over on an inbound
+   * activity. They are kept in kv_store under `teams:convref:<id>` so a
+   * restart does not cut every user off until they message the bot again.
+   */
+  private async persistReference(conversationId: string, reference: unknown): Promise<void> {
+    try {
+      const { getDb } = await import('@/db/postgres');
+      const { kvStore } = await import('@/db/schema/kv');
+      const value = JSON.stringify(reference);
+      await getDb()
+        .insert(kvStore)
+        .values({ key: `${CONVREF_PREFIX}${conversationId}`, value })
+        .onConflictDoUpdate({ target: kvStore.key, set: { value } });
+    } catch (err) {
+      channelLogger.warn({ err, conversationId }, 'Could not persist Teams conversation reference');
+    }
+  }
+
+  /** Load persisted conversation references (see persistReference). */
+  async loadConversationReferences(): Promise<number> {
+    try {
+      const { getDb } = await import('@/db/postgres');
+      const { kvStore } = await import('@/db/schema/kv');
+      const { like } = await import('drizzle-orm');
+      const rows = await getDb().select().from(kvStore).where(like(kvStore.key, `${CONVREF_PREFIX}%`));
+      for (const row of rows) {
+        const id = row.key.slice(CONVREF_PREFIX.length);
+        if (this.conversationReferences.has(id)) continue;
+        try {
+          this.conversationReferences.set(id, JSON.parse(row.value) as Partial<Activity>);
+        } catch {
+          channelLogger.warn({ conversationId: id }, 'Skipping unreadable Teams conversation reference');
+        }
+      }
+      return rows.length;
+    } catch (err) {
+      channelLogger.warn({ err }, 'Could not load Teams conversation references');
+      return 0;
+    }
+  }
+
+  /** Load the persisted references once per process (or after a disconnect). */
+  ensureReferencesLoaded(): Promise<number> {
+    this.referencesLoaded ??= this.loadConversationReferences();
+    return this.referencesLoaded;
+  }
+
+  /** True when a conversation reference for this id is known (in memory). */
+  hasConversation(conversationId: string): boolean {
+    return this.conversationReferences.has(conversationId);
   }
 
   async disconnect(): Promise<void> {
     this.adapter = null;
     this.conversationReferences.clear();
+    this.referencesLoaded = null;
     this.setConnected(false);
   }
 
@@ -88,6 +147,7 @@ export class TeamsChannel extends BaseChannel {
       serviceUrl: activity.serviceUrl,
     };
     this.conversationReferences.set(activity.conversation.id, reference as Partial<Activity>);
+    await this.persistReference(activity.conversation.id, reference);
 
     switch (activity.type) {
       case ActivityTypes.Message:
@@ -172,6 +232,32 @@ export class TeamsChannel extends BaseChannel {
         }
       }
     }
+  }
+
+  /**
+   * The Teams user (aadObjectId, else from.id) of a stored 1:1 ('personal')
+   * conversation. Undefined for an unknown conversation and for group chats
+   * and team channels, which belong to no single user.
+   */
+  personalConversationUser(conversationId: string): string | undefined {
+    const ref = this.conversationReferences.get(conversationId) as
+      | { conversation?: { conversationType?: string }; user?: { aadObjectId?: string; id?: string } }
+      | undefined;
+    if (!ref || ref.conversation?.conversationType !== 'personal') return undefined;
+    return ref.user?.aadObjectId || ref.user?.id || undefined;
+  }
+
+  /**
+   * Conversation ids of the stored 1:1 conversations with a Teams user. Teams
+   * identities are keyed by aadObjectId, but a proactive send needs a
+   * conversation reference; this maps one to the other.
+   */
+  personalConversationsFor(teamsUserId: string): string[] {
+    const out: string[] = [];
+    for (const id of this.conversationReferences.keys()) {
+      if (this.personalConversationUser(id) === teamsUserId) out.push(id);
+    }
+    return out;
   }
 
   async send(channelId: string, response: ChannelResponse): Promise<string> {

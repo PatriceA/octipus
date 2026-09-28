@@ -8,13 +8,11 @@ import { workPlanViewSchema, workPlanStateSchema, type WorkPlan, type WorkPlanSt
 interface Props {
   sessionId: string | null;
   running: boolean;
-  files: Array<{ path: string; action: string }>;
-  onOpenFile: (path: string) => void;
   onPlanMode: (enabled: boolean) => void;
 }
 
 /** Persistent work summary; polling also reconciles missed socket events. */
-export default function WorkPlanPanel({ sessionId, running, files, onOpenFile, onPlanMode }: Props) {
+export default function WorkPlanPanel({ sessionId, running, onPlanMode }: Props) {
   const [state, setState] = useState<(WorkPlanState & { planMode?: boolean }) | null>(null);
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
@@ -50,7 +48,6 @@ export default function WorkPlanPanel({ sessionId, running, files, onOpenFile, o
   const plan = state?.current;
   const done = plan?.steps.filter(step => step.status === 'done').length ?? 0;
   const current = plan?.steps.find(step => step.status === 'working' || step.status === 'blocked');
-  const results = Array.from(new Map(files.map(file => [file.path, file])).values());
   async function submitFeedback() {
     if (!sessionId || !plan || !state || !feedback.trim()) return;
     setSending(true); setFeedbackError(''); setNotice(null);
@@ -104,12 +101,6 @@ export default function WorkPlanPanel({ sessionId, running, files, onOpenFile, o
         </div>)}</div>}
         <details className="text-xs text-on-surface-variant"><summary className="cursor-pointer">Revisions · {plan.history.length}</summary><ul className="space-y-2 mt-2">{plan.history.slice().reverse().map(h => <li key={h.revision}>v{h.revision} · {h.summary}</li>)}</ul></details>
       </>}
-      <div className="border-t border-outline-variant pt-4"><h3 className="text-xs uppercase tracking-widest text-primary mb-3">Results</h3>
-        {!results.length && <p className="text-sm text-on-surface-variant">Files will appear here as work produces them. Sources and check outcomes belong with their plan steps.</p>}
-        {results.map(file => <div key={file.path} className="mb-2 min-w-0">
-          {/delete/i.test(file.action) ? <span className="text-sm break-all">{file.path} · Deleted</span> : <button type="button" className="text-sm text-primary text-left break-all hover:underline" onClick={() => onOpenFile(file.path)}>{file.path}</button>}
-        </div>)}
-      </div>
       {!!state?.previous.length && <details className="text-xs text-on-surface-variant"><summary className="cursor-pointer">Previous plans · {state.previous.length}</summary>{state.previous.slice().reverse().map(old => <details className="mt-3" key={old.id}><summary className="cursor-pointer">{old.title}</summary><div className="mt-2"><PlanDetails plan={old} /><PlanSteps plan={old} /></div></details>)}</details>}
     </>}
   </section>;
