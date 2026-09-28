@@ -652,6 +652,12 @@ export class AgentService {
       }
 
       fireMemoryUpdate();
+      if (outcome === 'success' && agentId) {
+        try {
+          const { enqueueTurnLearning } = await import('@/core/learning/queue');
+          await enqueueTurnLearning(resolvedSessionId, userId, agentId, new Date(startTime));
+        } catch (err) { coreLogger.error({ err, sessionId: resolvedSessionId }, 'Could not enqueue learning check'); }
+      }
       recordRootRun(channel, classification?.type, outcome === 'success' ? 'success' : 'error');
       return {
         response: finalResponse,

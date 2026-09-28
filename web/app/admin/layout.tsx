@@ -38,6 +38,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     { href: '/admin/users', label: 'Users' },
     { href: '/admin/orgs', label: 'Orgs' },
     { href: '/admin/quotas', label: 'Quotas & budgets' },
+    { href: '/admin/destinations', label: 'Notification destinations' },
     { href: '/admin/audit', label: 'Audit log' },
   ];
 
