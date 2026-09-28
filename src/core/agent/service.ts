@@ -204,6 +204,9 @@ export class AgentService {
     let trajectory: TrajectoryRecorder | null = null;
     // The session the turn resolved to, for the failure path below.
     let turnSessionId: string | undefined;
+    // Whether this turn's user message is already stored (the plan-execute
+    // path saves it before running), so the refusal path does not save it twice.
+    let userMessageSaved = false;
     try {
       const registry = getModelRegistry();
       const defaultModel = await registry.getDefaultModel();
@@ -360,6 +363,7 @@ export class AgentService {
         coreLogger.info({ sessionId: resolvedSessionId }, 'Executing plan via rootAgent');
 
         await messageRepository.create({ sessionId: resolvedSessionId, role: 'user', content: message });
+        userMessageSaved = true;
         await sessionRepository.incrementMessageCount(resolvedSessionId);
 
         // Send immediate feedback before the long-running root agent starts
@@ -397,7 +401,7 @@ export class AgentService {
           coreLogger.warn({ err }, 'memory.retrieveForContext failed on plan path');
         }
 
-        const { response, agentId, sources: _planSources, outcome } = await this.runRootAgent(
+        const { response, agentId, sources: _planSources, outcome, limit: planLimit } = await this.runRootAgent(
           resolvedSessionId, userId, planMessage, classification, inputGuard.flags, channel,
           planMemoryBlock,
           workspaceId,
@@ -405,7 +409,11 @@ export class AgentService {
         void _planSources;
         const outputCheck = guardOutput(response, inputGuard.flags);
         const finalResponse = outputCheck.action === 'replace' ? outputCheck.response : response;
-        await messageRepository.create({ sessionId: resolvedSessionId, role: 'assistant', content: finalResponse });
+        await messageRepository.create({
+          sessionId: resolvedSessionId, role: 'assistant', content: finalResponse,
+          // A refused plan run keeps its structured reason, as on the main path.
+          ...(planLimit && { metadata: { limit: planLimit } }),
+        });
         await sessionRepository.incrementMessageCount(resolvedSessionId);
 
         // Plan-execute path also extracts memory from the original
@@ -420,7 +428,10 @@ export class AgentService {
           userMessage: planState.brief,
         }).catch((err) => coreLogger.warn({ err }, 'memory.updateAfterTurn failed on plan path'));
 
-        return { response: finalResponse, sessionId: resolvedSessionId, agentId, classification, outcome };
+        return {
+          response: finalResponse, sessionId: resolvedSessionId, agentId, classification, outcome,
+          ...(planLimit && { metadata: { limit: planLimit } }),
+        };
       }
 
       // Edit-and-continue (design Thread 2): re-read any files the user
@@ -678,12 +689,14 @@ export class AgentService {
         }).catch(err => coreLogger.error({ err }, 'Trajectory finalize (failure path) failed'));
       }
       if (limit) {
-        // Refused at spawn: no worker ran, so neither the question nor the
-        // answer was persisted. Store both so the transcript (and the budget
-        // card) survive a reload.
+        // Refused at spawn: no worker ran, so the answer (and, unless the
+        // path already stored it, the question) was not persisted. Store them
+        // so the transcript and the budget card survive a reload.
         if (turnSessionId) {
           try {
-            await messageRepository.create({ sessionId: turnSessionId, role: 'user', content: message });
+            if (!userMessageSaved) {
+              await messageRepository.create({ sessionId: turnSessionId, role: 'user', content: message });
+            }
             await messageRepository.create({
               sessionId: turnSessionId, role: 'assistant', content: limit.text,
               metadata: { limit: limit.refusal },

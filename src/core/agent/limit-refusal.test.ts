@@ -9,13 +9,13 @@ import { limitKindOf, limitRefusalOf } from '@/core/errors/limit-refusal';
 import { QuotaExceededError } from '@/security/quota-error';
 import { SpendBudgetExceededError } from '@/security/spend-budget-error';
 
-const fixture = vi.hoisted(() => ({ root: vi.fn(), persisted: [] as any[], created: [] as any[] }));
+const fixture = vi.hoisted(() => ({ root: vi.fn(), persisted: [] as any[], created: [] as any[], context: {} as Record<string, unknown> }));
 vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => ({ getDefaultModel: async () => ({ modelId: 'test-model' }) }) }));
 vi.mock('./session-resolver', () => ({ resolveSession: async (id: string) => (id === 'new' ? 'resolved-session' : id) }));
 vi.mock('@/security/orgs', () => ({ getOrgWorkspaceManager: () => ({ ensureDefaultWorkspace: async () => ({ id: 'workspace' }) }) }));
 vi.mock('@/core/commands', () => ({ handleCommand: async () => null }));
 vi.mock('@/db/repositories/session-repository', () => ({ sessionRepository: {
-  findById: async (id: string) => ({ id, userId: 'user', title: 'Budget test', tokenCount: 0, context: {}, metadata: { showSources: false } }),
+  findById: async (id: string) => ({ id, userId: 'user', title: 'Budget test', tokenCount: 0, context: fixture.context, metadata: { showSources: false } }),
   incrementMessageCount: async () => {}, update: async () => {},
 } }));
 vi.mock('@/db/repositories/message-repository', () => ({ messageRepository: {
@@ -26,6 +26,7 @@ vi.mock('@/core/trajectories/recorder', () => ({ TrajectoryRecorder: class { set
 vi.mock('@/core/memory', () => ({ retrieveForContext: async () => [], renderMemoriesBlock: () => '', updateMemoriesAfterTurn: async () => {} }));
 vi.mock('@/core/cli-session-store', () => ({ acknowledgeProviderTurn: async () => {} }));
 vi.mock('./session-compaction', () => ({ maybeCompactSession: async () => {} }));
+vi.mock('@/core/agent-manager', () => ({ getAgentManager: () => ({ getBySession: () => [] }) }));
 vi.mock('./root-runner', () => ({ runRootAgent: (...args: any[]) => fixture.root(...args) }));
 import { AgentService } from './service';
 
@@ -37,6 +38,7 @@ const reason = {
 beforeEach(() => {
   fixture.persisted = [];
   fixture.created = [];
+  fixture.context = {};
   fixture.root.mockReset();
 });
 
@@ -97,6 +99,31 @@ describe('AgentService.handleMessage', () => {
     expect(result.response).toBe(refusal.text);
     expect(result.metadata?.limit?.code).toBe('SPEND_BUDGET_EXCEEDED');
     expect(fixture.persisted).toEqual([expect.objectContaining({ content: refusal.text, metadata: { limit: refusal.refusal } })]);
+  });
+
+  describe('plan-execute path ("go")', () => {
+    const plan = { planningState: { brief: 'Build the parser', active: false, executed: false } };
+
+    test('a refusal at spawn does not save the "go" message twice', async () => {
+      fixture.context = plan;
+      fixture.root.mockRejectedValueOnce(new SpendBudgetExceededError(reason));
+      const result = await new AgentService().handleMessage('session', 'user', 'go', 'webchat');
+      expect(result.metadata?.limit?.code).toBe('SPEND_BUDGET_EXCEEDED');
+      const userRows = fixture.created.filter((m) => m.role === 'user');
+      expect(userRows).toEqual([{ sessionId: 'session', role: 'user', content: 'go' }]);
+      expect(fixture.created.at(-1)).toMatchObject({ role: 'assistant', content: result.response, metadata: { limit: { code: 'SPEND_BUDGET_EXCEEDED' } } });
+    });
+
+    test('a mid-run refusal keeps metadata.limit on the saved answer and in the response', async () => {
+      fixture.context = plan;
+      const refusal = limitRefusalOf(new SpendBudgetExceededError(reason))!;
+      fixture.root.mockResolvedValueOnce({ response: refusal.text, agentId: 'agent', sources: [], outcome: 'failed', limit: refusal.refusal });
+      const result = await new AgentService().handleMessage('session', 'user', 'go', 'webchat');
+      expect(result.response).toBe(refusal.text);
+      expect(result.metadata?.limit).toEqual(refusal.refusal);
+      expect(fixture.created.at(-1)).toEqual({ sessionId: 'session', role: 'assistant', content: refusal.text, metadata: { limit: refusal.refusal } });
+      expect(fixture.created.filter((m) => m.role === 'user')).toHaveLength(1);
+    });
   });
 
   test('other failures keep the generic path', async () => {

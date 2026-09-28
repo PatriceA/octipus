@@ -819,7 +819,9 @@ export async function runRootAgent(
     // A spend budget or quota refusal is neither a failure nor a stop. The
     // worker aborts itself on a spend pause, so without this check its
     // 'stopped' status reported the refusal as "Task was stopped".
-    const limit = limitRefusalOf(error);
+    // The worker records a refusal as 'failed'; 'stopped' means the user (or
+    // a cascade) stopped it first, and that stop wins over a late refusal.
+    const limit = worker.getStatus() === 'stopped' ? null : limitRefusalOf(error);
     const wasStopped = !limit
       && (errMsg.includes('aborted') || errMsg.includes('stopped') || worker.getStatus() === 'stopped');
     // Admin cancel / cascaded abort is an intentional outcome — don't log it

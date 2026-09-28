@@ -9,11 +9,31 @@
  *
  * Backed by ephemeral PGlite.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+// Lets one test hold the worker inside its pre-LLM-call spend check. A
+// transparent wrapper otherwise: every other test runs the real checkSpend.
+const gate = vi.hoisted(() => ({
+  hold: null as Promise<void> | null,
+  entered: null as (() => void) | null,
+}));
+vi.mock('@/security/spend-budgets', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/security/spend-budgets')>();
+  return {
+    ...real,
+    checkSpend: async (...args: Parameters<typeof real.checkSpend>) => {
+      if (gate.hold) {
+        gate.entered?.();
+        await gate.hold;
+      }
+      return real.checkSpend(...args);
+    },
+  };
+});
 
 const rand = (n: number) => randomBytes(n).toString('hex');
 process.env.MASTER_KEY ??= `test-master-${rand(24)}`;
@@ -142,6 +162,53 @@ describe('gate: dollar spend budget', () => {
     await expect.poll(async () => (await agentRepository.findById(worker.getContext().id))?.status).toBe('failed');
     const row = await agentRepository.findById(worker.getContext().id);
     expect(row?.metadata).toMatchObject({ failureReason: 'spend_budget' });
+  });
+
+  test('a stop while the spend check is pending stays a stop, even when the check then refuses', async () => {
+    const daveId = '44444444-4444-4444-4444-444444444444';
+    const { seedUsers, seedSession } = await import('@/test-helpers/multiuser-fixtures');
+    await seedUsers([{ id: daveId, username: 'dave' }]);
+    const sess = await seedSession({ userId: daveId });
+    const { AgentManager } = await import('@/core/agent-manager');
+    const worker = await new AgentManager().spawn({ sessionId: sess.id, userId: daveId, model: 'test-model' });
+
+    // Spent, so the check will throw once it is released.
+    const { upsertBudget, _resetSpendBudgetsForTests } = await import('@/security/spend-budgets');
+    const { getDb } = await import('@/db/postgres');
+    const { costLog } = await import('@/db/schema/models');
+    await getDb().insert(costLog).values({ userId: daveId, modelName: 'test', inputTokens: 1, outputTokens: 1, totalCost: 2 });
+    await upsertBudget({ userId: daveId, scopeKind: 'user', period: 'day', limitUsd: 1 });
+    _resetSpendBudgetsForTests();
+
+    let release!: () => void;
+    const entered = new Promise<void>((r) => { gate.entered = r; });
+    gate.hold = new Promise<void>((r) => { release = r; });
+    const statuses: Array<{ status?: string }> = [];
+    const types: string[] = [];
+    worker.onEvent((e) => {
+      types.push(e.type);
+      if (e.type === 'status_change') statuses.push(e.data as { status?: string });
+    });
+    try {
+      const running = worker.run('hello').catch((e: unknown) => e);
+      await entered;
+      worker.stop('user stop');
+      release();
+      const err = await running;
+      const { SpendBudgetExceededError } = await import('@/security/spend-budget-error');
+      expect(err).toBeInstanceOf(SpendBudgetExceededError);
+    } finally {
+      gate.hold = null;
+      gate.entered = null;
+    }
+
+    expect(worker.getStatus()).toBe('stopped');
+    expect(statuses.map((s) => s.status)).toEqual(['running', 'stopped']);
+    expect(types).not.toContain('error');
+    const { agentRepository } = await import('@/db/repositories/agent-repository');
+    await expect.poll(async () => (await agentRepository.findById(worker.getContext().id))?.status).toBe('stopped');
+    const row = await agentRepository.findById(worker.getContext().id);
+    expect(row?.metadata).not.toHaveProperty('failureReason');
   });
 
   test('heartbeat skips its tick while paused', async () => {

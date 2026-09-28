@@ -846,7 +846,15 @@ export class AgentWorker extends BaseAgentWorker {
       // A user cap (spend budget / quota) is checked FIRST: the pre-call gate
       // aborts this worker's own controller before throwing, so the aborted
       // signal alone would record a budget refusal as a user stop.
-      const limitKind = limitKindOf(error);
+      //
+      // Unless a stop came first: a user stop (or a parent cascade, which
+      // routes through stop()) that landed while the gate was pending keeps
+      // its stop semantics. stop() aborts with its own reason before the gate
+      // can, so an abort whose reason is not the gate's own means stopped.
+      const abortReason = this.abortController.signal.aborted ? String(this.abortController.signal.reason ?? '') : null;
+      const selfAbort = abortReason === 'spend_budget_exceeded' || !!abortReason?.startsWith('user_quota_exceeded');
+      const stoppedFirst = this.terminalEmitted || (abortReason !== null && !selfAbort);
+      const limitKind = stoppedFirst ? null : limitKindOf(error);
       const wasStopped = !limitKind && (
         error instanceof CascadedCancellationError ||
         this.abortController.signal.aborted);
