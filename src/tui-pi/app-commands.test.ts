@@ -7,6 +7,9 @@ import { MessagesPane } from './components/messages-pane';
 import type { AgentSessionEvent } from './gateway-adapter';
 import { installOctipusKeybindings } from './keybindings';
 
+const image = vi.hoisted(() => ({ read: vi.fn() }));
+vi.mock('./image-attachments', () => ({ readClipboardImage: image.read, readImageFile: image.read }));
+
 const gateway = vi.hoisted(() => ({
   listener: (_event: AgentSessionEvent) => {},
   sendCommand: vi.fn(),
@@ -170,5 +173,29 @@ test('partial text from a failed turn is dropped, not promoted into history by t
   gateway.listener({ kind: 'delta', delta: 'fresh', iteration: 1 });
   expect(t.text()).not.toContain('half an ans');
   expect(t.text()).toContain('fresh');
+  await t.app.stop();
+});
+
+
+test('clipboard image is acknowledged with a placeholder and sent with its bytes', async () => {
+  image.read.mockResolvedValue({ name: 'clipboard.png', mimeType: 'image/png', data: 'aW1hZ2U=' });
+  const t = mount();
+  t.submit('/attach');
+  await vi.waitFor(() => expect(t.text()).toContain('[image1] received: clipboard.png'));
+  t.submit('What is in [image1]?');
+  expect(gateway.sendChat).toHaveBeenCalledWith(expect.any(String), 'What is in [image1]?', undefined,
+    [{ name: 'clipboard.png', mimeType: 'image/png', data: 'aW1hZ2U=' }]);
+  t.submit('Next message');
+  expect(gateway.sendChat.mock.calls.at(-1)).toHaveLength(3);
+  await t.app.stop();
+});
+
+test('removing the image marker removes it from the outgoing message', async () => {
+  image.read.mockResolvedValue({ name: 'clipboard.png', mimeType: 'image/png', data: 'aW1hZ2U=' });
+  const t = mount();
+  t.submit('/attach');
+  await vi.waitFor(() => expect(t.text()).toContain('[image1] received'));
+  t.submit('Text only');
+  expect(gateway.sendChat.mock.calls.at(-1)).toHaveLength(3);
   await t.app.stop();
 });

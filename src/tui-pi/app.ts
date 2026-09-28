@@ -1,3 +1,5 @@
+import { readClipboardImage, readImageFile } from './image-attachments';
+import type { ChatAttachment } from '@/shared/chat-attachments';
 import { handleTerminalCommand } from '@/tui-pi/terminal-actions';
 import { renderChatFrame } from './components/chat-frame';
 import { DecisionQueue } from '@/tui-pi/decision-queue';
@@ -101,6 +103,9 @@ export class OctipusTuiApp {
   private speakNextReply = false;
   /** Guards the async windows of toggleTalk (init / transcription) against re-entrant key presses. */
   private talkBusy = false;
+  private pendingImages: Array<{ marker: string; attachment: ChatAttachment }> = [];
+  private imageBusy = false;
+  private imageCounter = 0;
 
   constructor(tui: TUI, options: OctipusTuiAppOptions) {
     this.tui = tui;
@@ -154,6 +159,7 @@ export class OctipusTuiApp {
       if (kb.matches(data, 'app.palette.open')) { this.openCommandPalette(); return { consume: true }; }
       if (kb.matches(data, 'app.help.open')) { this.pushMessage('system', this.hotkeysText()); return { consume: true }; }
       if (kb.matches(data, 'app.quit')) { this.quit(); return { consume: true }; }
+      if (kb.matches(data, 'app.image.attach')) { void this.attachImage(); return { consume: true }; }
       if (kb.matches(data, 'app.voice.talk')) { void this.toggleTalk(); return { consume: true }; }
       if (kb.matches(data, 'app.subagents.scrollUp')) { if (this.subagents.scroll(-1)) { this.tui.requestRender(); return { consume: true }; } }
       if (kb.matches(data, 'app.subagents.scrollDown')) { if (this.subagents.scroll(1)) { this.tui.requestRender(); return { consume: true }; } }
@@ -358,7 +364,10 @@ export class OctipusTuiApp {
       this.handleCommand(text.slice(1));
       return;
     }
-    this.adapter.sendChat(this.sessionId, text, this.projectPath);
+    const images = this.pendingImages.filter(image => text.includes(image.marker)).map(image => image.attachment);
+    if (images.length) this.adapter.sendChat(this.sessionId, text, this.projectPath, images);
+    else this.adapter.sendChat(this.sessionId, text, this.projectPath);
+    this.pendingImages = [];
   }
 
   // ── Voice (push-to-talk) ───────────────────────────────────────
@@ -370,6 +379,24 @@ export class OctipusTuiApp {
    * turn is spoken back when TTS is configured.
    * ponytail: half-duplex, one turn per press; barge-in/streaming is Phase 4.
    */
+  private async attachImage(path?: string): Promise<void> {
+    if (this.imageBusy) return;
+    if (this.pendingImages.length >= 10) { this.pushMessage('system', 'Attach at most 10 images per message.'); return; }
+    this.imageBusy = true;
+    const sessionId = this.sessionId;
+    try {
+      const attachment = path ? await readImageFile(path, this.projectPath ?? process.cwd()) : await readClipboardImage();
+      if (this.sessionId !== sessionId) return;
+      const marker = `[image${++this.imageCounter}]`;
+      this.pendingImages.push({ marker, attachment });
+      this.composer.insertTextAtCursor(marker + ' ');
+      this.pushMessage('system', `${marker} received: ${attachment.name}. Send your message to pass it to the agent.`);
+      this.tui.requestRender();
+    } catch (error) {
+      this.pushMessage('system', `Image not attached: ${error instanceof Error ? error.message : String(error)}`);
+    } finally { this.imageBusy = false; }
+  }
+
   private async toggleTalk(): Promise<void> {
     // Ignore presses during an async window (engine build or transcription) so a
     // double-tap can't start-then-instantly-stop a capture. The idle wait BETWEEN
@@ -543,6 +570,8 @@ export class OctipusTuiApp {
     // cost log — the same totals the status bar shows, plus the input/output/
     // request split the old TUI-local counter never had.
     switch (name) {
+      case 'attach':
+        void this.attachImage(value || undefined); return;
       case 'plan-hide':
         this.status.setPlanDetails(null); this.tui.requestRender(); return;
       case 'exit':
@@ -563,6 +592,7 @@ export class OctipusTuiApp {
           return;
         }
         this.sessionBeforeResume = this.sessionId;
+        this.pendingImages = [];
         this.sessionId = id;
         this.session.reset();
         this.adapter.sendCommand('history');

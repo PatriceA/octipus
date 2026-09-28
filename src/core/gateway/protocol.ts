@@ -160,10 +160,10 @@ export const ChatSendSchema = z.object({
   content: z.string().min(1).max(100_000),
   projectPath: z.string().optional(),
   attachments: z.array(z.object({
-    name: z.string(),
-    mimeType: z.string(),
-    data: z.string(),
-  })).optional(),
+    name: z.string().min(1).max(255),
+    mimeType: z.string().min(1).max(128),
+    data: z.string().min(1).max(14 * 1024 * 1024),
+  })).max(10).optional(),
   /** Session files to inline (current version) into this turn's context. */
   fileRefs: z.array(FileRefSchema).max(10).optional(),
   /** Chat/work split (Thread 3): force the deliverable mode for this message. */

@@ -40,6 +40,24 @@ beforeEach(async () => {
   await fs.ensureRoot();
 });
 
+test('image descriptions and exact file paths reach the agent context', async () => {
+  await writeFile(join(root, 'description.png'), Buffer.from([137, 80, 78, 71]));
+  const block = await buildAttachedFilesContext(fs, [{ path: 'description.png' }], async (dataUrl, mimeType) => {
+    expect(dataUrl).toMatch(/^data:image\/png;base64,/);
+    expect(mimeType).toBe('image/png');
+    return 'A diagram with three boxes.';
+  });
+  expect(block).toContain('A diagram with three boxes.');
+  expect(block).toContain(fs.resolve('description.png'));
+});
+
+test('image analysis failure is explicit in the agent context', async () => {
+  await writeFile(join(root, 'failed.png'), Buffer.from([137, 80, 78, 71]));
+  const block = await buildAttachedFilesContext(fs, [{ path: 'failed.png' }], async () => { throw new Error('provider unavailable'); });
+  expect(block).toContain('Image analysis failed');
+  expect(block).toContain('Do not claim to have seen the image');
+});
+
 describe('readSessionFile', () => {
   test('reads a text file with a version and metadata', async () => {
     await writeFile(join(root, 'poem.md'), 'roses are red\nviolets are blue', 'utf-8');
@@ -212,7 +230,9 @@ describe('buildAttachedFilesContext (edit-and-continue)', () => {
     ]);
     expect(block).toContain('adir is a directory');
     expect(block).toContain('b.dat is a binary file');
-    expect(block).toContain('p.png is an image');
+    expect(block).toContain('Image attachment:');
+    expect(block).toContain(fs.resolve('p.png'));
+    expect(block).toContain('image-reading tool');
   });
 
   test('rejects traversal in an attached ref (containment inherited)', async () => {

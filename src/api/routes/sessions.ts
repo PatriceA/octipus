@@ -15,6 +15,7 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import { scopedRepos } from '@/db/repositories/scoped';
 import { isAuthenticated } from '@/security/principal';
 import { WorkspaceFS } from '@/security/workspace-fs';
+import { storeChatUploads } from '@/core/chat-uploads';
 import { EXTERNAL_CHANNELS, loadNotifyScope, resolveTarget } from '@/channels/ownership';
 
 /**
@@ -352,6 +353,18 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
       detail: { tags: ['sessions'] },
     }
   )
+
+  .post('/:id/attachments', async ({ user, principal, params, body, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    const session = await scopedRepos(principal).sessions.findById(params.id);
+    if (!session) { set.status = 404; return { error: 'Session not found' }; }
+    try {
+      return { uploaded: await storeChatUploads(WorkspaceFS.forSession(session), Array.isArray(body.files) ? body.files : [body.files]) };
+    } catch (error) {
+      if (error instanceof SessionFileError) { set.status = error.status; return { error: error.message }; }
+      throw error;
+    }
+  }, { params: t.Object({ id: t.String() }), body: t.Object({ files: t.Union([t.File(), t.Array(t.File())]) }) })
 
   // ── In-chat file view (Thread 2) ─────────────────────────────────
   // Session-scoped file read backed by WorkspaceFS (containment + null-byte

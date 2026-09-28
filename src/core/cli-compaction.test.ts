@@ -1,0 +1,65 @@
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { beforeEach, expect, test, vi } from 'vitest';
+import type { Session } from '@/db/schema/sessions';
+const mock = vi.hoisted(() => ({ exec: vi.fn(), spawn: vi.fn(), owner: vi.fn(), tool: vi.fn(), kill: vi.fn() }));
+vi.mock('node:child_process', () => ({ spawn: mock.spawn }));
+vi.mock('@/utils/proc', () => ({ killProcessTree: mock.kill }));
+vi.mock('@/models/providers/instrumented', () => ({ recordProviderUsage: vi.fn() }));
+vi.mock('@/models/providers/cli-provider', () => ({ acquireCliSlot: async () => () => {}, execCli: mock.exec, windowsShellQuote: (s: string) => s }));
+vi.mock('@/db/repositories/agent-repository', () => ({ agentRepository: { findById: mock.owner } }));
+vi.mock('./cli-agent-factory', () => ({ getCLIToolConfig: mock.tool, resolveCliModelEntry: async () => ({ metadata: {} }) }));
+vi.mock('./cli-adapters', () => ({ discoverCodexMcpServers: async () => [] }));
+vi.mock('./cli-session-store', () => ({ isChildCliSessionKey: (key: string) => key.includes('::') }));
+vi.mock('@/security/workspace-fs', () => ({ WorkspaceFS: { forSession: () => ({ root: '/session-workspace' }) } }));
+import { compactCliConversation, compactCodexThread, rootCliConversation } from './cli-compaction';
+const record = { id: 'vendor-id', fingerprint: 'keep-this', generation: 'g', ownerAgentId: 'root', lastUsedAt: '2026-09-28' };
+const session = () => ({ id: 'session', userId: 'user', context: { conversationGeneration: 'g', cliSessions: { 'Claude Code': { ...record } } } }) as unknown as Session;
+beforeEach(() => {
+  vi.clearAllMocks();
+  mock.owner.mockResolvedValue({ sessionId: 'session', userId: 'user', model: 'claude-model' });
+  mock.tool.mockReturnValue({ name: 'Claude Code', binaryPath: 'claude', modelProvider: 'anthropic' });
+});
+test('Claude compact resumes exact vendor ID and never mutates its record', async () => {
+  const state = session();
+  const before = JSON.stringify(state);
+  mock.exec.mockResolvedValue(JSON.stringify({ type: 'system', subtype: 'compact_boundary', session_id: record.id }));
+  expect(await compactCliConversation(state, 'keep tests')).toContain('same CLI session');
+  const [, args, options] = mock.exec.mock.calls[0];
+  expect(args).toContain('--resume');
+  expect(args[args.indexOf('--resume') + 1]).toBe(record.id);
+  expect(options.stdin).toBe('/compact keep tests');
+  expect(args).not.toContain('--fork-session');
+  expect(JSON.stringify(state)).toBe(before);
+});
+test('ordinary CLI text or success without compaction is not accepted', async () => {
+  mock.exec.mockResolvedValue(JSON.stringify({ type: 'result', result: 'Done', session_id: record.id }));
+  await expect(compactCliConversation(session(), '')).rejects.toThrow('did not confirm');
+});
+test('child and cleared vendor conversations are not compacted', () => {
+  const state = session();
+  state.context!.cliSessions = { 'Claude Code::task': record, 'Claude Code': { ...record, generation: 'old' } };
+  expect(rootCliConversation(state)).toBeUndefined();
+});
+test('Codex waits for the matching completed compaction turn, not the RPC acknowledgement', async () => {
+  const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill: vi.fn(), pid: undefined });
+  mock.spawn.mockReturnValue(child);
+  const sent: any[] = [];
+  child.stdin.on('data', (bytes: Buffer) => sent.push(JSON.parse(bytes.toString())));
+  const running = compactCodexThread('codex', ['app-server'], { cwd: '/project', env: {}, threadId: 'thread' });
+  let done = false;
+  running.then(() => { done = true; });
+  const emit = (message: unknown) => child.stdout.write(JSON.stringify(message) + '\n');
+  emit({ id: 1, result: {} });
+  emit({ id: 2, result: { thread: { id: 'thread' } } });
+  emit({ id: 3, result: {} });
+  await Promise.resolve();
+  expect(done).toBe(false);
+  expect(sent.some(message => message.method === 'thread/compact/start')).toBe(true);
+  expect(sent.some(message => message.method === 'turn/start' || message.method === 'thread/start')).toBe(false);
+  emit({ method: 'turn/started', params: { threadId: 'thread', turn: { id: 'compact' } } });
+  emit({ method: 'item/completed', params: { threadId: 'thread', turnId: 'compact', item: { type: 'contextCompaction' } } });
+  emit({ method: 'turn/completed', params: { threadId: 'thread', turn: { id: 'compact', status: 'completed' } } });
+  await running;
+  expect(mock.kill).toHaveBeenCalled();
+});

@@ -9,6 +9,7 @@
  * `kind` without re-parsing payload shapes.
  */
 import { type ConnectionStatus, GatewayClient, type GatewayClientOptions } from '@/core/gateway/client';
+import type { ChatAttachment } from '@/shared/chat-attachments';
 
 export type Role = 'user' | 'assistant' | 'system';
 export type ToolState = 'pending' | 'executing' | 'completed' | 'error';
@@ -148,8 +149,8 @@ export class GatewayAdapter {
 
   // ── Outgoing messages ───────────────────────────────────────────
 
-  sendChat(sessionId: string, content: string, projectPath?: string): void {
-    this.client.sendChat(sessionId, content, projectPath);
+  sendChat(sessionId: string, content: string, projectPath?: string, attachments?: ChatAttachment[]): void {
+    this.client.sendChat(sessionId, content, projectPath, attachments);
   }
 
   sendCommand(name: string, args?: Record<string, string>): void {

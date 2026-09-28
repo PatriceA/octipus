@@ -8,6 +8,7 @@ import { CHILD_CLI_SESSION_KEY_PREFIXES } from '@/core/cli-session-store';
 import type { CompactionState, } from '@/db/schema/sessions';
 import { calculateTotalTokens, createLLMSummary } from '@/utils/context-compaction';
 import { coreLogger } from '@/utils/logger';
+import { compactCliConversation, rootCliConversation } from '@/core/cli-compaction';
 
 const COMPACTION_MESSAGE_THRESHOLD = 20;
 const COMPACTION_TOKEN_THRESHOLD = 8000;
@@ -84,6 +85,10 @@ export interface MaybeCompactSessionOptions {
  */
 export async function maybeCompactSession(sessionId: string, options: MaybeCompactSessionOptions = {}): Promise<boolean> {
   return withSessionConversation(sessionId, async () => {
+    const session = await sessionRepository.findById(sessionId);
+    // Vendor histories are richer than the Octipus transcript. Automatic
+    // maintenance must never rotate them onto a lossy Octipus checkpoint.
+    if (session && rootCliConversation(session)) return false;
     const history = await readSessionHistory(sessionId);
     if (!history.session || history.rows.length < 2) return false;
     const savedNative = history.session.context?.nativeConversation;
@@ -195,6 +200,11 @@ export async function compactSessionCommand(sessionId: string | undefined, args:
   if (!sessionId) return 'No active session to compact.';
   try {
     const instructions = args.trim();
+    const cliResult = await withSessionConversation(sessionId, async () => {
+      const session = await sessionRepository.findById(sessionId);
+      return session ? compactCliConversation(session, instructions) : null;
+    });
+    if (cliResult) return cliResult;
     const compacted = await maybeCompactSession(sessionId, {
       force: true,
       userInstructions: instructions || undefined,

@@ -1,3 +1,6 @@
+import { decodeChatAttachment, storeChatUploads } from '@/core/chat-uploads';
+import { WorkspaceFS } from '@/security/workspace-fs';
+import { resolveSession } from '@/core/agent/session-resolver';
 import { isSessionControlMessage } from '@/core/session-controls';
 import { coreLogger } from '@/utils/logger';
 import { getCommandRegistry } from './commands';
@@ -143,7 +146,7 @@ async function handleChatSend(
     // If a root agent turn is already running for this session, steer it
     // with this message instead of spawning a concurrent turn. Keeps one live
     // root agent per session; the user can redirect work mid-flight.
-    if (await trySteerRunningRootAgent(message.sessionId, message.content)) {
+    if (!message.attachments?.length && !message.fileRefs?.length && await trySteerRunningRootAgent(message.sessionId, message.content)) {
       hub.publishEvent({
         type: 'chat.message',
         source: `steer:${connectionId}`,
@@ -237,6 +240,17 @@ async function handleChatSend(
         });
         coreLogger.info({ sessionId: message.sessionId, projectPath: message.projectPath, workspaceId }, 'Pre-created session with dev-mode project context');
       }
+    }
+
+    if (message.attachments?.length) {
+      if (message.attachments.length + (message.fileRefs?.length ?? 0) > 10) throw new Error('Attach at most 10 files per message.');
+      const { sessionRepository } = await import('@/db/repositories/session-repository');
+      await resolveSession(message.sessionId, userId, context.clientType);
+      const session = await sessionRepository.findById(message.sessionId);
+      if (!session || session.userId !== userId) throw new Error('Session not found');
+      const uploaded = await storeChatUploads(WorkspaceFS.forSession(session), message.attachments.map(decodeChatAttachment));
+      message.fileRefs = [...(message.fileRefs ?? []), ...uploaded.map(file => ({ path: file.path }))];
+      message.content += '\n\n' + uploaded.map(file => `Attached file: ${file.path}`).join('\n');
     }
 
     // Route through root agent

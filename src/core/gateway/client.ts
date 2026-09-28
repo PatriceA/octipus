@@ -1,6 +1,7 @@
 import { clearCliSession, readCliSession } from '@/core/gateway/cli-session';
 import { ensureLocalToken, readLocalToken } from '@/core/gateway/local-auth';
 import type { ClientMessage, GatewayMessage } from '@/core/gateway/protocol';
+import type { ChatAttachment } from '@/shared/chat-attachments';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'authenticating' | 'connected' | 'error';
 
@@ -144,12 +145,13 @@ export class GatewayClient {
   /**
    * Send a chat message.
    */
-  sendChat(sessionId: string, content: string, projectPath?: string): void {
+  sendChat(sessionId: string, content: string, projectPath?: string, attachments?: ChatAttachment[]): void {
     this.send({
       type: 'chat.send',
       sessionId,
       content,
       ...(projectPath ? { projectPath } : {}),
+      ...(attachments?.length ? { attachments } : {}),
     });
   }
 

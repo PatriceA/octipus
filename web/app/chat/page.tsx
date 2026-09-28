@@ -1,5 +1,6 @@
 'use client';
 
+import { reconcileChatMessages } from '../../../src/shared/chat-reconciliation';
 import { SessionCost } from '@/components/chat/session-cost';
 import { SkillUsage } from '@/components/skills/skill-usage';
 
@@ -147,6 +148,8 @@ export default function ChatPage() {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [sessionListError, setSessionListError] = useState<string | null>(null);
   const [historyErrors, setHistoryErrors] = useState<Record<string, string>>({});
+  const appliedMessageLoadsRef = useRef(new Map<string, number>());
+  const messageLoadsRef = useRef(new Map<string, number>());
   const deletedSessionsRef = useRef<Set<string>>(new Set());
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionStates, setSessionStates] = useState<Map<string, SessionState>>(new Map());
@@ -296,6 +299,8 @@ export default function ChatPage() {
 
   // Load messages for a session
   const loadSessionMessages = useCallback(async (sessionId: string) => {
+    const revision = (messageLoadsRef.current.get(sessionId) ?? 0) + 1;
+    messageLoadsRef.current.set(sessionId, revision);
     try {
       const data = await api.get<{ messages: Array<{ id: string; role: string; content: string; createdAt: string; metadata?: { limit?: MessageMetadata['limit'] } | null }> }>(
         `/sessions/${sessionId}/messages?roles=user,assistant,system&limit=10000`
@@ -310,6 +315,12 @@ export default function ChatPage() {
             ...(m.metadata?.limit && { metadata: { limit: m.metadata.limit } }),
           }))
         : [welcomeMessage()];
+
+      updateSessionState(sessionId, prev => {
+        if (revision < (appliedMessageLoadsRef.current.get(sessionId) ?? 0)) return prev;
+        appliedMessageLoadsRef.current.set(sessionId, revision);
+        return { ...prev, messages: reconcileChatMessages(msgs, prev.messages) };
+      });
 
       // Restore agent activity and file changes for this session
       const restoredAgents = new Map<string, TrackedAgent>();
@@ -438,15 +449,7 @@ export default function ChatPage() {
       } catch {}
 
       updateSessionState(sessionId, (prev) => {
-        // Preserve in-memory `role: 'narration'` messages — they're
-        // emitted from WebSocket events (swarm dispatch + per-tool
-        // stream) and never round-tripped through REST, so a naive
-        // overwrite would wipe them on every 10s poll. Splice them
-        // back into the freshly-loaded message list keyed by id.
-        const liveNarrations = prev.messages.filter((m) => m.role === 'narration');
-        const restoredIds = new Set(msgs.map((m) => m.id));
-        const mergedMessages = [...msgs, ...liveNarrations.filter((m) => !restoredIds.has(m.id))]
-          .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+        if (revision < (appliedMessageLoadsRef.current.get(sessionId) ?? 0)) return prev;
         // Merge by tool-call id. Durable history supplies the complete list;
         // live records overwrite matching fields with the newest status while
         // calls older than AgentManager's 200-event ring remain present.
@@ -484,7 +487,7 @@ export default function ChatPage() {
               !restoredFileChanges.some(r => r.path === fc.path && r.agentId === fc.agentId)
             )]
           : prev.fileChanges;
-        return { ...prev, messages: mergedMessages, trackedAgents: mergedAgents, fileChanges: mergedFileChanges };
+        return { ...prev, messages: prev.messages, trackedAgents: mergedAgents, fileChanges: mergedFileChanges };
       });
       setHistoryErrors(prev => ({ ...prev, [sessionId]: '' }));
     } catch (error) {
@@ -680,6 +683,8 @@ export default function ChatPage() {
         // has already recorded clearedAt on the session so future replies
         // ignore pre-clear history.
         if (sid && typeof data.response === 'string' && data.response.trim() === '[clear]') {
+          messageLoadsRef.current.set(sid, (messageLoadsRef.current.get(sid) ?? 0) + 1);
+          appliedMessageLoadsRef.current.set(sid, messageLoadsRef.current.get(sid)!);
           updateSessionState(sid, () => ({
             messages: [
               welcomeMessage(),
@@ -1440,7 +1445,7 @@ export default function ChatPage() {
   const sendMessage = async (userInput: string, attachments?: Attachment[]) => {
     let sid = activeSessionId;
     // Snapshot edit-and-continue attachments for this turn; cleared once sent.
-    const fileRefs = attachedFiles.length ? attachedFiles : undefined;
+    let fileRefs = attachedFiles.length ? attachedFiles : undefined;
     // Chat/work split override: 'auto' → no override (heuristic decides).
     const outputModeOverride = outputMode === 'auto' ? undefined : outputMode === 'chat' ? 'inline' : 'file';
 
@@ -1473,6 +1478,21 @@ export default function ChatPage() {
     }
 
     if (!sid) return; // Should not happen — session creation above handles this
+
+    if (attachments?.length) {
+      try {
+        if (attachments.length + (fileRefs?.length ?? 0) > 10) throw new Error('Attach at most 10 files per message.');
+        const result = await api.upload<{ uploaded: Array<{ path: string; name: string }> }>(
+          `/sessions/${sid}/attachments`, attachments.map(attachment => attachment.file));
+        fileRefs = [...(fileRefs ?? []), ...result.uploaded.map(file => ({ path: file.path }))];
+        userInput = [userInput, ...result.uploaded.map(file => `Attached file: ${file.path}`)].filter(Boolean).join('\n\n');
+      } catch (error) {
+        updateSessionState(sid, prev => ({ ...prev, messages: [...prev.messages, {
+          id: Date.now().toString(), role: 'system', content: `Attachment upload failed: ${error instanceof Error ? error.message : String(error)}. Please attach the files again.`, timestamp: new Date(),
+        }] }));
+        return;
+      }
+    }
 
     const userMessage: ChatMessageData = {
       id: Date.now().toString(),

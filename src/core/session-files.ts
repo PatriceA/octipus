@@ -151,7 +151,8 @@ export async function readSessionFile(fs: WorkspaceFS, path: string): Promise<Re
     return { type: 'directory', path: resolved, entries };
   }
 
-  if (st.size > MAX_FILE_BYTES) {
+  const image = IMAGE_EXT[extname(resolved).toLowerCase()];
+  if (st.size > (image ? 10 * MAX_FILE_BYTES : MAX_FILE_BYTES)) {
     return { type: 'too-large', path: resolved, size: st.size };
   }
 
@@ -256,6 +257,7 @@ export function fileDisplayName(path: string): string {
 export async function buildAttachedFilesContext(
   fs: WorkspaceFS,
   refs: AttachedFileRef[],
+  describeImage?: (dataUrl: string, mimeType: string) => Promise<string>,
 ): Promise<string> {
   if (refs.length === 0) return '';
   const blocks: string[] = [];
@@ -283,9 +285,15 @@ export async function buildAttachedFilesContext(
       case 'directory':
         blocks.push(`--- ${name} is a directory (${res.entries.length} entr${res.entries.length === 1 ? 'y' : 'ies'}) ---`);
         break;
-      case 'image':
-        blocks.push(`--- ${name} is an image (${res.mimeType}); it is shown in the file view ---`);
+      case 'image': {
+        let description = 'Use your image-reading tool to inspect this file.';
+        if (describeImage) {
+          try { description = await describeImage(res.dataUrl, res.mimeType); }
+          catch { description = 'Image analysis failed. Do not claim to have seen the image; ask the user or use an image-reading tool.'; }
+        }
+        blocks.push(`--- Image attachment: ${res.path} (${res.mimeType}) ---\n${description}`);
         break;
+      }
       case 'too-large':
         blocks.push(`--- ${name} is too large to inline (${res.size} bytes) ---`);
         break;
