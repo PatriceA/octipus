@@ -1,7 +1,18 @@
 import { createHash } from 'crypto';
 import { getUMI } from '@/channels/interface';
+import {
+  deliver,
+  EXTERNAL_CHANNEL_TYPES,
+  EXTERNAL_CHANNELS,
+  loadNotifyScope,
+  ownerTargets,
+  resolveTarget,
+  sendResolved,
+} from '@/channels/ownership';
 import type { ChannelMessage } from '@/core/channels/messages';
 import type { AgentContext, ToolManifest } from '@/core/types';
+import { canPromptHuman } from '@/security/approval-policy';
+import { toolLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema } from '../base-tool';
 
 // In-process dedup so a fan-out of sibling agents doesn't ping the user N times
@@ -42,8 +53,8 @@ export class MessagingTool extends BaseTool {
         { action: 'read', description: 'Read and search the history of channels the account can already see', defaultLevel: 'ALLOW' },
       ],
       tools: [
-        { name: 'send_message', description: 'Send a message to a specific channel + target', parameters: { channel: { type: 'string', description: 'Channel type', required: true }, target: { type: 'string', description: 'Target ID', required: true }, message: { type: 'string', description: 'Message content', required: true } }, returns: 'Delivery confirmation' },
-        { name: 'send_to_user', description: 'Send a message to a user on their linked channels', parameters: { user_id: { type: 'string', description: 'User ID', required: true }, message: { type: 'string', description: 'Message content', required: true } }, returns: 'Per-channel delivery results' },
+        { name: 'send_message', description: 'Send a message to one of your own linked chats or an admin-approved shared destination', parameters: { channel: { type: 'string', description: 'Channel type', required: true }, target: { type: 'string', description: 'Target ID', required: true }, message: { type: 'string', description: 'Message content', required: true } }, returns: 'Delivery confirmation' },
+        { name: 'send_to_user', description: 'Send a message to yourself on your linked channels (admins, in an attended session: any user)', parameters: { user_id: { type: 'string', description: 'User ID', required: true }, message: { type: 'string', description: 'Message content', required: true } }, returns: 'Per-channel delivery results' },
         { name: 'list_channels', description: 'List connected messaging channels', parameters: {}, returns: 'Channel list with status' },
         { name: 'list_contacts', description: 'List users with their linked channel accounts', parameters: {}, returns: 'User contact list' },
         { name: 'channel_history', description: 'Read recent messages from a channel or chat', parameters: { channel: { type: 'string', description: 'slack or teams', required: true }, target: { type: 'string', description: 'Channel name or id', required: true } }, returns: 'Messages, newest first' },
@@ -55,19 +66,29 @@ export class MessagingTool extends BaseTool {
   protected async registerTools(): Promise<void> {
     this.registerTool(
       'send_message',
-      'Send a message to a specific channel and target ID. Use list_channels to see available channels and list_contacts to find user IDs.',
+      'Send a message to a specific channel and target ID. The target must be one of your own linked chats (Settings → Channels), '
+        + '`webchat:<your user id>` for the web app, or a shared destination an admin approved under Admin → Notification destinations; '
+        + 'anything else is refused. Use list_channels to see available channels.',
       createParameterSchema({
-        channel: { type: 'string', description: 'Channel type: telegram, slack, teams, whatsapp, or webchat', required: true },
-        target: { type: 'string', description: 'Target channel/chat/user ID', required: true },
+        channel: { type: 'string', description: `Channel type: ${[...EXTERNAL_CHANNEL_TYPES, 'webchat'].join(', ')}`, required: true },
+        target: { type: 'string', description: 'Target chat id: your own linked chat, your user id for webchat, or an approved shared destination', required: true },
         message: { type: 'string', description: 'Message content to send', required: true },
         reply_to: { type: 'string', description: 'Thread or message ID to reply to (optional)' },
       }),
-      async (args) => {
-        const umi = getUMI();
+      async (args, context) => {
         const channel = args.channel as string;
         const target = args.target as string;
 
-        if (!umi.isChannelAvailable(channel as any)) {
+        // Always enforced, attended or not: a permission ALLOW ("always
+        // allow") or a client-declared channel means no human necessarily
+        // looked at this target. Checked once, before dedup.
+        const scope = await loadNotifyScope(context.userId);
+        const resolved = await resolveTarget(scope, channel, target);
+        if (!resolved.allowed) {
+          toolLogger.warn({ userId: context.userId, agentId: context.id, channel, target, reason: resolved.reason }, 'send_message to a target the user may not notify; refused');
+          return { success: false, error: resolved.error };
+        }
+        if (EXTERNAL_CHANNELS.has(channel) && !getUMI().isChannelAvailable(channel as any)) {
           return { success: false, error: `Channel ${channel} is not connected` };
         }
 
@@ -76,37 +97,46 @@ export class MessagingTool extends BaseTool {
           return { success: true, deduped: true, channel, target, note: 'Identical message already sent to this target moments ago — suppressed to avoid duplicate notifications.' };
         }
 
-        try {
-          const messageId = await umi.send(channel as any, target, {
-            content: args.message as string,
-          });
-          markSent(dedupKey);
-          return { success: true, messageId, channel, target };
-        } catch (err) {
-          return { success: false, error: (err as Error).message };
-        }
+        const r = await sendResolved(resolved, { content: args.message as string });
+        if (!r.ok) return { success: false, error: r.error };
+        markSent(dedupKey);
+        return { success: true, channel, target };
       },
     );
 
     this.registerTool(
       'send_to_user',
-      'Send a message to a user on their linked channels. Looks up the user\'s verified channel bindings and sends to all (or a specific channel).',
+      'Send a message to a user on their linked channels (all verified ones, or one channel). '
+        + 'You can only message yourself; admins can message any user, but only from an attended session (never from hooks, cron or heartbeat runs).',
       createParameterSchema({
-        user_id: { type: 'string', description: 'User ID to send to', required: true },
+        user_id: { type: 'string', description: 'User ID to send to (your own, unless you are an admin in an attended session)', required: true },
         message: { type: 'string', description: 'Message content', required: true },
         channel: { type: 'string', description: 'Specific channel to use (optional — sends to all verified channels if omitted)' },
       }),
-      async (args) => {
+      async (args, context) => {
         const { userRepository } = await import('@/db/repositories/user-repository');
+        if (args.user_id !== context.userId) {
+          // Unattended runs (cron, heartbeat, message hooks, execute_tool)
+          // may only message the caller, admin or not: nobody is there to
+          // approve it. This matches the save-time rule for hooks
+          // (invalidHookTargets in src/hooks/actions.ts).
+          if (!canPromptHuman(context)) {
+            toolLogger.warn({ userId: context.userId, agentId: context.id, target: args.user_id }, 'Unattended send_to_user to another user; refused');
+            return { success: false, error: 'An unattended run can only send_to_user you, admin or not' };
+          }
+          const caller = await userRepository.findById(context.userId);
+          if (!caller?.isAdmin) {
+            toolLogger.warn({ userId: context.userId, agentId: context.id, target: args.user_id }, 'send_to_user to another user by a non-admin; refused');
+            return { success: false, error: 'send_to_user can only message you (admins can message any user from an attended session)' };
+          }
+        }
         const user = await userRepository.findById(args.user_id as string);
         if (!user) return { success: false, error: 'User not found' };
 
-        let rawBindings = user.channelBindings as import('@/db/schema/users').ChannelBinding[] | string;
-        if (typeof rawBindings === 'string') {
-          try { rawBindings = JSON.parse(rawBindings); } catch { rawBindings = []; }
-        }
-        const bindings = (rawBindings as import('@/db/schema/users').ChannelBinding[]) || [];
-        const verified = bindings.filter(b => b.isVerified);
+        // The recipient's own verified identities, resolved canonically
+        // (channel_identities first, then the legacy JSON column).
+        const scope = await loadNotifyScope(user.id);
+        const verified = ownerTargets(scope);
 
         if (verified.length === 0) {
           return { success: false, error: 'User has no verified channel bindings' };
@@ -130,18 +160,14 @@ export class MessagingTool extends BaseTool {
         const results: { channel: string; success: boolean; error?: string }[] = [];
 
         for (const binding of targets) {
-          try {
-            if (!umi.isChannelAvailable(binding.channelType as any)) {
-              results.push({ channel: binding.channelType, success: false, error: 'Channel not connected' });
-              continue;
-            }
-            await umi.send(binding.channelType as any, binding.channelUserId, {
-              content: args.message as string,
-            });
-            results.push({ channel: binding.channelType, success: true });
-          } catch (err) {
-            results.push({ channel: binding.channelType, success: false, error: (err as Error).message });
+          if (!umi.isChannelAvailable(binding.channelType as any)) {
+            results.push({ channel: binding.channelType, success: false, error: 'Channel not connected' });
+            continue;
           }
+          const r = await deliver(scope, binding.channelType, binding.channelId, { content: args.message as string });
+          results.push(r.ok
+            ? { channel: binding.channelType, success: true }
+            : { channel: binding.channelType, success: false, error: r.error });
         }
 
         if (results.some(r => r.success)) markSent(dedupKey); // only after ≥1 channel delivered
