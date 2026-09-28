@@ -96,6 +96,22 @@ describe.skipIf(!isIntegration)('task-state-listener (Integration)', () => {
     expect(_channelsForTest().has(`task_state_${sessionId}`)).toBe(false);
   });
 
+  test('the same handler subscribed twice is called once per notification', async () => {
+    const got: TaskStateNotification[] = [];
+    const handler = (n: TaskStateNotification) => { got.push(n); };
+    const u1 = await subscribeTaskState(sessionId, handler);
+    const u2 = await subscribeTaskState(sessionId, handler);
+    expect(_channelsForTest().get(`task_state_${sessionId}`)?.handlerCount).toBe(1);
+
+    await repo.create({ sessionId, userId, ownerAgent: 'qa', taskKind: 'agent_output', status: 'done' });
+    await waitFor(() => got.length >= 1, 1000);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(got.length).toBe(1);
+    await u1();
+    await u2();
+    expect(_channelsForTest().has(`task_state_${sessionId}`)).toBe(false);
+  });
+
   test('unsubscribe stops further deliveries to that handler', async () => {
     const got: TaskStateNotification[] = [];
     const unsubscribe = await subscribeTaskState(sessionId, (n) => got.push(n));

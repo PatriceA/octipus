@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 import type { TriggerType } from '@/core/types';
 import { getDb } from '@/db/postgres';
 import { hookExecutions } from '@/db/schema/hook-executions';
-import { type Hook, hooks, type NewHook } from '@/db/schema/hooks';
+import { type Hook, hooks, type NewHook, SERVER_TRIGGER_CONFIG_KEYS } from '@/db/schema/hooks';
 import { coreLogger } from '@/utils/logger';
 import { type ActionResult, executeAction } from './actions';
 import { checkConditions, matchesTrigger, type TriggerContext, type TriggerEvent } from './triggers';
@@ -398,9 +398,21 @@ export class HookManager extends EventEmitter {
       const timezone = (data.triggerConfig.timezone as string) || 'UTC';
       (data as any).nextRunAt = getNextCronDate(data.triggerConfig.cronExpression as string, timezone);
     }
+    // triggerConfig: the caller's keys replace the user-editable part; the
+    // server-owned keys are taken from the row in this same statement, never
+    // from the caller (which may have read the row before a lease or counter
+    // changed). See SERVER_TRIGGER_CONFIG_KEYS.
+    const { triggerConfig, ...rest } = data;
+    const set: Record<string, unknown> = { ...rest, updatedAt: new Date() };
+    if (triggerConfig !== undefined) {
+      const userKeys: Record<string, unknown> = { ...(triggerConfig ?? {}) };
+      for (const key of SERVER_TRIGGER_CONFIG_KEYS) delete userKeys[key];
+      const serverKeyList = sql.join(SERVER_TRIGGER_CONFIG_KEYS.map((k) => sql`${k}`), sql`, `);
+      set.triggerConfig = sql`${JSON.stringify(userKeys)}::jsonb || coalesce((SELECT jsonb_object_agg(kv.key, kv.value) FROM jsonb_each(${hooks.triggerConfig}) AS kv WHERE kv.key IN (${serverKeyList})), '{}'::jsonb)`;
+    }
     const result = await this.db
       .update(hooks)
-      .set({ ...data, updatedAt: new Date() })
+      .set(set as Partial<NewHook>)
       .where(eq(hooks.id, id))
       .returning();
 

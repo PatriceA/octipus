@@ -70,6 +70,18 @@ export const hooks = pgTable('hooks', {
   nextRunAtIdx: index('hooks_next_run_at_idx').on(table.nextRunAt),
 }));
 
+/**
+ * trigger_config keys only the server writes (the heartbeat's own state: the
+ * daily counter, the surfaced items, the permission notice, a role turn's
+ * lease). User input never sets them (sanitizeTriggerConfig in
+ * core/heartbeat.ts), and HookManager.updateHook keeps the stored ones in
+ * the same UPDATE, so an edit made from a stale read cannot write them back.
+ */
+export const SERVER_TRIGGER_CONFIG_KEYS = [
+  'heartbeatDayKey', 'heartbeatRunsToday', 'heartbeatSeen', 'heartbeatPermissionNotified',
+  'heartbeatInFlightUntil', 'heartbeatInFlightToken',
+] as const;
+
 export interface TriggerConfig {
   // For message_received
   channelTypes?: string[];
@@ -118,6 +130,15 @@ export interface TriggerConfig {
    * like the counters above: the hooks routes drop user-supplied values.
    */
   heartbeatPermissionNotified?: boolean;
+  /**
+   * For a role heartbeat — the lease of the turn that is running (one per
+   * hook across every server process): until when it holds (an ISO
+   * timestamp on the database clock) and the random token of its holder,
+   * who alone clears it. Server-owned, like the counters above
+   * (claimRoleTurnLease in core/heartbeat.ts).
+   */
+  heartbeatInFlightUntil?: string;
+  heartbeatInFlightToken?: string;
 }
 
 export interface ActionConfig {

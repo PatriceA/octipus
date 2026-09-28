@@ -29,9 +29,19 @@
  * caught and logged; nothing here can fail or slow the write. Tests await
  * `flushWakeups()`.
  *
- * In-process only: this works on embedded PGlite and a single server
- * process. Delivering wakeups across processes would need Postgres
- * LISTEN/NOTIFY, the way db/task-state-listener.ts fans out task_state.
+ * Across processes: `dispatchWakeups` emits on this process's bus, files
+ * the notifications, then hands the events, detached, to the publisher if
+ * one is set (`setWakeupPublisher`). On external Postgres the wakeup bridge
+ * (./wakeup-bridge.ts, started with the server) is that publisher: it
+ * `pg_notify`s the ids on `octipus_task_wakeups`, and every other server
+ * process LISTENing there re-emits them on its own bus with `remote: true`
+ * (a process skips its own notifications). Side effects stay once
+ * cluster-wide: the notification is filed here, in the originating process
+ * only, and a listener that writes the DB acts on local events only (see
+ * `onRoleTaskWakeup` in core/heartbeat.ts). On embedded PGlite (one process)
+ * no publisher is set and nothing changes. A notification sent while a
+ * listener's socket is down is lost for it; wakeups are a shortcut, never
+ * the only way work gets picked up.
  *
  * Consumers (a later slice wakes role agents) subscribe with
  * `taskWakeups.on('task.unblocked' | 'task.children_completed', handler)` or
@@ -64,6 +74,12 @@ export interface TaskWakeupEvent {
   /** The task whose close (or delete) caused the wakeup. */
   triggeredBy: string;
   cause: WakeupCause;
+  /**
+   * True when another server process dispatched the wakeup and it reached
+   * this one over LISTEN/NOTIFY. Its side effects (the notification, the DB
+   * writes of local listeners) already ran there: act on it only in memory.
+   */
+  remote?: boolean;
 }
 
 type WakeupEvents = {
@@ -196,6 +212,18 @@ export async function flushWakeups(): Promise<void> {
   while (pending.size > 0) await Promise.all([...pending]);
 }
 
+// ── Cross-process publishing ───────────────────────────────────────────
+
+/** Sends locally dispatched events to other server processes. */
+export type WakeupPublisher = (events: readonly TaskWakeupEvent[]) => Promise<void>;
+
+let publisher: WakeupPublisher | null = null;
+
+/** Set (or clear, with null) the cross-process publisher. The wakeup bridge owns it. */
+export function setWakeupPublisher(next: WakeupPublisher | null): void {
+  publisher = next;
+}
+
 // ── Dispatch ───────────────────────────────────────────────────────────
 
 export interface WakeupInput {
@@ -222,7 +250,25 @@ export async function dispatchWakeups(input: WakeupInput): Promise<TaskWakeupEve
     events.push({ ...base, type: 'task.children_completed', taskId: childrenCompleted.id, title: childrenCompleted.title });
   }
   for (const event of events) emitSafely(event);
+  try {
+    await notifyWoken(closed, cause, events);
+  } finally {
+    // Then to the other server processes (Postgres only; see the header),
+    // detached so the local path's latency is unchanged. A failed NOTIFY is
+    // logged and costs only the remote shortcut. `flushWakeups` waits for it.
+    if (events.length > 0 && publisher) {
+      const publish = publisher;
+      scheduleWakeup(() => publish(events).catch((err: unknown) => {
+        coreLogger.warn({ err, triggeredBy: closed.id }, 'Task wakeup publish to other processes failed');
+      }));
+    }
+  }
+  return events;
+}
 
+/** One notification per woken task (a task woken both ways gets one, combined). */
+async function notifyWoken(closed: Task, cause: WakeupCause, events: TaskWakeupEvent[]): Promise<void> {
+  const workspaceId = closed.workspaceId ?? null;
   const byTask = new Map<string, TaskWakeupEvent[]>();
   for (const event of events) byTask.set(event.taskId, [...(byTask.get(event.taskId) ?? []), event]);
   const notifications = getNotificationService();
@@ -240,8 +286,7 @@ export async function dispatchWakeups(input: WakeupInput): Promise<TaskWakeupEve
       unblockedToo ? 'task_unblocked' : 'task_children_completed',
       message,
       `Triggered by ${cause === 'deleted' ? 'deleting' : 'closing'} “${closed.title}”.`,
-      { taskId, triggeredBy: closed.id, workspaceId: base.workspaceId, wakeups: kinds, cause },
+      { taskId, triggeredBy: closed.id, workspaceId, wakeups: kinds, cause },
     );
   }
-  return events;
 }

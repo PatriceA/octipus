@@ -14,6 +14,8 @@
  * What it provides
  * ────────────────
  *   subscribeTaskState(sessionId, handler) → unsubscribe()
+ *   subscribeChannel(channel, rawHandler) → unsubscribe() — any channel
+ *     on the same connection (the task wakeup bridge uses it)
  *
  * The handler is called with the JSON payload published by the
  * `task_state_notify` trigger:
@@ -28,10 +30,12 @@
  *
  * Reconnect / failure mode
  * ────────────────────────
- * postgres-js auto-reconnects on the underlying socket, BUT a
- * reconnected connection forgets its prior `LISTEN`s. We track the
- * active channel set in memory and re-issue `LISTEN` for each
- * channel after every reconnect via the `onconnect` hook.
+ * postgres-js auto-reconnects on the underlying socket, and a
+ * reconnected connection forgets its prior `LISTEN`s. postgres-js's
+ * `listen()` keeps its own channel table and re-issues `LISTEN` for
+ * every channel on reconnect (its `onclose` handler), so a
+ * subscription here survives a dropped socket. Notifications sent
+ * while the socket was down are lost: consumers must tolerate a miss.
  *
  * Embedded (PGlite) mode
  * ──────────────────────
@@ -43,6 +47,7 @@
  */
 
 import { getConfig } from '@/config';
+import { storageMode } from '@/db/postgres';
 import { dbLogger } from '@/utils/logger';
 
 export interface TaskStateNotification {
@@ -55,10 +60,15 @@ export interface TaskStateNotification {
 
 export type TaskStateHandler = (note: TaskStateNotification) => void;
 
+/** A raw NOTIFY payload handler (see `subscribeChannel`). */
+export type ChannelHandler = (payload: string) => void;
+
 interface ChannelEntry {
-  handlers: Set<TaskStateHandler>;
+  handlers: Set<ChannelHandler>;
   /** Returned by `sql.listen()`; calling it issues UNLISTEN. */
   cancel: (() => Promise<void>) | null;
+  /** The first subscriber's LISTEN; later subscribers wait on it too. */
+  ready: Promise<void> | null;
 }
 
 type PgClient = {
@@ -74,7 +84,15 @@ let _client: PgClient | null = null;
 const channels = new Map<string, ChannelEntry>();
 
 function isEmbedded(): boolean {
-  return (process.env.STORAGE_MODE || 'external') === 'embedded';
+  return storageMode() === 'embedded';
+}
+
+/**
+ * True when this process can LISTEN (external Postgres). Embedded PGlite
+ * is one process by nature: nothing to hear from, nothing to fan out to.
+ */
+export function listenAvailable(): boolean {
+  return !isEmbedded();
 }
 
 async function getListenClient(): Promise<PgClient | null> {
@@ -103,25 +121,39 @@ function channelName(sessionId: string): string {
   return `task_state_${sessionId}`;
 }
 
-export async function subscribeTaskState(
-  sessionId: string,
-  handler: TaskStateHandler,
-): Promise<() => Promise<void>> {
+/**
+ * Subscribe to any NOTIFY channel with a raw-payload handler, sharing the
+ * dedicated LISTEN connection and its ref-counting. Returns the
+ * unsubscribe function; in embedded mode a no-op one (see module doc).
+ * `subscribeTaskState` is built on it, and so is the cross-process task
+ * wakeup bridge (core/tasks/wakeup-bridge.ts).
+ */
+export async function subscribeChannel(name: string, handler: ChannelHandler): Promise<() => Promise<void>> {
   const client = await getListenClient();
   if (!client) {
-    // Embedded mode — no-op subscriber. Caller should poll.
-    dbLogger.debug({ sessionId }, 'task-state-listener: embedded mode, returning no-op subscription');
+    dbLogger.debug({ channel: name }, 'task-state-listener: embedded mode, returning no-op subscription');
     return async () => {};
   }
-  const name = channelName(sessionId);
   let entry = channels.get(name);
   if (!entry) {
-    entry = { handlers: new Set(), cancel: null };
-    channels.set(name, entry);
-    const sub = await client.listen(name, (payload) => dispatch(name, payload));
-    entry.cancel = sub.unlisten;
+    const created: ChannelEntry = { handlers: new Set(), cancel: null, ready: null };
+    entry = created;
+    channels.set(name, created);
+    created.ready = client.listen(name, (payload) => dispatch(name, payload)).then(
+      (sub) => { created.cancel = sub.unlisten; },
+      (err: unknown) => {
+        if (channels.get(name) === created) channels.delete(name);
+        throw err;
+      },
+    );
   }
   entry.handlers.add(handler);
+  try {
+    await entry.ready;
+  } catch (err) {
+    entry.handlers.delete(handler);
+    throw err;
+  }
 
   let unsubscribed = false;
   return async () => {
@@ -134,12 +166,87 @@ export async function subscribeTaskState(
       // Last subscriber: UNLISTEN and drop the channel record. The
       // dedicated client stays open for future subscribers — see
       // module doc for why we don't close on empty.
+      channels.delete(name);
       try {
         if (e.cancel) await e.cancel();
       } catch (err) {
         dbLogger.warn({ err, channel: name }, 'task-state-listener: UNLISTEN failed (non-fatal)');
       }
-      channels.delete(name);
+    }
+  };
+}
+
+/**
+ * The typed layer for `task_state_*` channels: one raw subscription per
+ * channel, one JSON.parse per notification, then the typed handlers. The
+ * handler set dedupes: subscribing the same function twice registers it once.
+ */
+interface TaskStateEntry {
+  handlers: Set<TaskStateHandler>;
+  /** The raw subscription's unsubscribe, once LISTEN is up. */
+  raw: Promise<() => Promise<void>>;
+}
+
+const taskStateChannels = new Map<string, TaskStateEntry>();
+
+function dispatchTaskState(name: string, payload: string): void {
+  const entry = taskStateChannels.get(name);
+  if (!entry) return;
+  let parsed: TaskStateNotification;
+  try {
+    parsed = JSON.parse(payload) as TaskStateNotification;
+  } catch (err) {
+    dbLogger.warn({ err, channel: name, payload }, 'task-state-listener: dropped malformed payload');
+    return;
+  }
+  for (const h of [...entry.handlers]) {
+    try {
+      h(parsed);
+    } catch (err) {
+      dbLogger.warn({ err, channel: name }, 'task-state-listener: handler threw (non-fatal)');
+    }
+  }
+}
+
+export async function subscribeTaskState(
+  sessionId: string,
+  handler: TaskStateHandler,
+): Promise<() => Promise<void>> {
+  if (isEmbedded()) {
+    // Embedded mode — no-op subscriber. Caller should poll.
+    dbLogger.debug({ sessionId }, 'task-state-listener: embedded mode, returning no-op subscription');
+    return async () => {};
+  }
+  const name = channelName(sessionId);
+  let entry = taskStateChannels.get(name);
+  if (!entry) {
+    const created: TaskStateEntry = {
+      handlers: new Set(),
+      raw: subscribeChannel(name, (payload) => dispatchTaskState(name, payload)),
+    };
+    entry = created;
+    taskStateChannels.set(name, created);
+    created.raw.catch(() => {
+      if (taskStateChannels.get(name) === created) taskStateChannels.delete(name);
+    });
+  }
+  entry.handlers.add(handler);
+  try {
+    await entry.raw;
+  } catch (err) {
+    entry.handlers.delete(handler);
+    throw err;
+  }
+
+  let unsubscribed = false;
+  const current = entry;
+  return async () => {
+    if (unsubscribed) return;
+    unsubscribed = true;
+    current.handlers.delete(handler);
+    if (current.handlers.size === 0 && taskStateChannels.get(name) === current) {
+      taskStateChannels.delete(name);
+      await (await current.raw)();
     }
   };
 }
@@ -147,19 +254,12 @@ export async function subscribeTaskState(
 function dispatch(channel: string, payload: string): void {
   const entry = channels.get(channel);
   if (!entry) return;
-  let parsed: TaskStateNotification;
-  try {
-    parsed = JSON.parse(payload) as TaskStateNotification;
-  } catch (err) {
-    dbLogger.warn({ err, channel, payload }, 'task-state-listener: dropped malformed payload');
-    return;
-  }
   // Snapshot the handlers so a handler that unsubscribes itself
   // mid-dispatch doesn't mutate the set we're iterating.
   const handlers = [...entry.handlers];
   for (const h of handlers) {
     try {
-      h(parsed);
+      h(payload);
     } catch (err) {
       dbLogger.warn({ err, channel }, 'task-state-listener: handler threw (non-fatal)');
     }
@@ -177,6 +277,7 @@ export async function shutdownTaskStateListener(): Promise<void> {
     }
   }
   channels.clear();
+  taskStateChannels.clear();
   if (_client) {
     try { await _client.end(); } catch { /* swallow */ }
     _client = null;
@@ -186,6 +287,6 @@ export async function shutdownTaskStateListener(): Promise<void> {
 /** Test-only: expose the channel bookkeeping. */
 export function _channelsForTest(): ReadonlyMap<string, { handlerCount: number }> {
   const out = new Map<string, { handlerCount: number }>();
-  for (const [k, v] of channels) out.set(k, { handlerCount: v.handlers.size });
+  for (const [k, v] of channels) out.set(k, { handlerCount: taskStateChannels.get(k)?.handlers.size ?? v.handlers.size });
   return out;
 }

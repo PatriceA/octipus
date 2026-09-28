@@ -488,8 +488,16 @@ describe('role heartbeats', () => {
       await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg());
       expect(fired).toHaveLength(1);
 
+      // The running turn holds the lease on the row, for every process to see.
+      const leased = (await hookRow(hook.id)).triggerConfig;
+      expect(typeof leased.heartbeatInFlightToken).toBe('string');
+      expect(await heartbeat.roleTurnLeaseHeld(hook.id)).toBe(true);
+
       finish();
       await vi.waitFor(() => expect(heartbeat.roleTurnInFlight(hook.id)).toBe(false));
+      const released = (await hookRow(hook.id)).triggerConfig;
+      expect(released.heartbeatInFlightUntil).toBeUndefined();
+      expect(released.heartbeatInFlightToken).toBeUndefined();
       await db.update(hooksSchema).set({ nextRunAt: null }).where(eq(hooksSchema.id, hook.id));
       await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg());
       expect(fired).toHaveLength(2);
@@ -497,6 +505,206 @@ describe('role heartbeats', () => {
       finish();
       restore();
     }
+  });
+
+  test('the in-flight lease: one claim at a time, free after expiry, cleared only by its holder', async () => {
+    const hook = await roleHook('coding');
+    const first = await heartbeat.claimRoleTurnLease(hook.id, 60_000);
+    expect(first).toEqual(expect.any(String));
+    expect(await heartbeat.claimRoleTurnLease(hook.id, 60_000)).toBeNull();
+
+    // Only the holder's token clears it; a stranger's does nothing.
+    expect(await heartbeat.releaseRoleTurnLease(hook.id, 'not-the-token')).toBe(false);
+    expect(await heartbeat.renewRoleTurnLease(hook.id, 'not-the-token', 60_000)).toBe(false);
+    expect(await heartbeat.renewRoleTurnLease(hook.id, first!, 60_000)).toBe(true);
+    expect((await hookRow(hook.id)).triggerConfig.heartbeatInFlightToken).toBe(first);
+
+    // Expired (the holder died): the next claim wins, and the old holder can no longer clear it.
+    await db.update(hooksSchema)
+      .set({ triggerConfig: { role: 'coding', heartbeatInFlightUntil: ago(1000).toISOString(), heartbeatInFlightToken: first! } })
+      .where(eq(hooksSchema.id, hook.id));
+    expect(await heartbeat.roleTurnLeaseHeld(hook.id)).toBe(false);
+    const second = await heartbeat.claimRoleTurnLease(hook.id, 60_000);
+    expect(second).toEqual(expect.any(String));
+    expect(second).not.toBe(first);
+    expect(await heartbeat.releaseRoleTurnLease(hook.id, first!)).toBe(false);
+    expect((await hookRow(hook.id)).triggerConfig.heartbeatInFlightToken).toBe(second);
+
+    expect(await heartbeat.releaseRoleTurnLease(hook.id, second!)).toBe(true);
+    const cleared = (await hookRow(hook.id)).triggerConfig;
+    expect(cleared).toEqual({ role: 'coding' });
+    expect(await heartbeat.claimRoleTurnLease(hook.id, 60_000)).toEqual(expect.any(String));
+  });
+
+  test('a live lease held elsewhere: the gate skips in_flight and the tick fires nothing', async () => {
+    await forCoding({ title: 'Ready' });
+    const hook = await roleHook('coding', { nextRunAt: null });
+    // Another process holds the lease: nothing in this process's fast path.
+    const token = await heartbeat.claimRoleTurnLease(hook.id, 60_000);
+    expect(heartbeat.roleTurnInFlight(hook.id)).toBe(false);
+    const gate = await heartbeat.evaluateHeartbeatGate(await hookRow(hook.id), cfg(), NOON, quiet());
+    expect(gate.decision).toEqual({ run: false, reason: 'in_flight' });
+
+    const { fired, restore } = await stubTrigger();
+    try {
+      await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg());
+      expect(fired).toEqual([]);
+      const row = await hookRow(hook.id);
+      expect(row.triggerConfig.heartbeatRunsToday).toBe(0);
+      expect(row.triggerConfig.heartbeatInFlightToken).toBe(token);
+    } finally {
+      restore();
+    }
+  });
+
+  test('the lease is claimed before the probe: another process cannot claim it mid-gate', async () => {
+    await forCoding({ title: 'Ready' });
+    const hook = await roleHook('coding', { nextRunAt: null });
+    const deps = quiet();
+    let other: string | null | undefined;
+    deps.boardWritesAllowed = async () => {
+      // Mid-gate, after the probe: the tick already holds the lease.
+      other = await heartbeat.claimRoleTurnLease(hook.id, 60_000);
+      return true;
+    };
+    let finish!: () => void;
+    const running = new Promise<unknown[]>((resolve) => { finish = () => resolve([]); });
+    const { fired, restore } = await stubTrigger(() => running);
+    try {
+      await heartbeat.maybeRunHeartbeats(NOON, deps, cfg());
+      expect(other).toBeNull();
+      expect(fired).toHaveLength(1);
+      expect(await heartbeat.roleTurnLeaseHeld(hook.id)).toBe(true);
+    } finally {
+      finish();
+      restore();
+    }
+    await vi.waitFor(() => expect(heartbeat.roleTurnInFlight(hook.id)).toBe(false));
+    expect(await heartbeat.roleTurnLeaseHeld(hook.id)).toBe(false);
+  });
+
+  test('a gate that claims and then skips gives the lease back', async () => {
+    const hook = await roleHook('coding');
+    // Nothing ready.
+    const empty = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, quiet(), { claimLease: true });
+    expect(empty.decision).toEqual({ run: false, reason: 'nothing_pending' });
+    expect(empty.leaseToken).toBeUndefined();
+    expect((await hookRow(hook.id)).triggerConfig).toEqual({ role: 'coding' });
+
+    // Ready, but no board permission.
+    await forCoding({ title: 'Ready' });
+    const deps = quiet();
+    deps.boardWritesAllowed = async () => false;
+    const denied = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, deps, { claimLease: true });
+    expect(denied.decision).toEqual({ run: false, reason: 'tasks_permission_required' });
+    expect(await heartbeat.roleTurnLeaseHeld(hook.id)).toBe(false);
+
+    // A throwing probe dependency: given back too.
+    deps.boardWritesAllowed = async () => { throw new Error('boom'); };
+    await expect(heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, deps, { claimLease: true })).rejects.toThrow('boom');
+    expect(await heartbeat.roleTurnLeaseHeld(hook.id)).toBe(false);
+
+    // Runs: the caller gets the token, and the row holds it.
+    const run = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, quiet(), { claimLease: true });
+    expect(run.decision.run).toBe(true);
+    expect((await hookRow(hook.id)).triggerConfig.heartbeatInFlightToken).toBe(run.leaseToken);
+    // Without claimLease the gate only reads: in_flight, and the lease is untouched.
+    const peek = await heartbeat.evaluateHeartbeatGate(hook, cfg(), NOON, quiet());
+    expect(peek.decision).toEqual({ run: false, reason: 'in_flight' });
+    expect(await heartbeat.releaseRoleTurnLease(hook.id, run.leaseToken!)).toBe(true);
+  });
+
+  test('restart: stale leases are cleared at startup (all on PGlite; this instance\'s older boots on Postgres)', async () => {
+    const mine = await roleHook('coding');
+    const qa = await roleHook('qa');
+    const review = await roleHook('review');
+    const until = new Date(Date.now() + 60 * 60_000).toISOString();
+    const lease = (token: string) => ({ heartbeatInFlightUntil: until, heartbeatInFlightToken: token });
+    const setLease = (id: string, role: string, token: string) =>
+      db.update(hooksSchema).set({ triggerConfig: { role, ...lease(token) } }).where(eq(hooksSchema.id, id));
+    const saved = process.env.OCTIPUS_INSTANCE_ID;
+    try {
+      // Postgres with an explicit instance id: only this instance's previous boots are cleared.
+      process.env.OCTIPUS_INSTANCE_ID = 'node-a';
+      expect(heartbeat.leaseInstanceId()).toBe('node-a');
+      await setLease(mine.id, 'coding', 'node-a|previous-boot|x');
+      await setLease(qa.id, 'qa', `node-a|${heartbeat.LEASE_BOOT_ID}|y`);
+      await setLease(review.id, 'review', 'node-b|some-boot|z');
+      expect(await heartbeat.clearStaleRoleTurnLeases({ all: false })).toBe(1);
+      expect((await hookRow(mine.id)).triggerConfig).toEqual({ role: 'coding' });
+      expect(await heartbeat.roleTurnLeaseHeld(qa.id)).toBe(true);
+      expect(await heartbeat.roleTurnLeaseHeld(review.id)).toBe(true);
+    } finally {
+      if (saved === undefined) delete process.env.OCTIPUS_INSTANCE_ID;
+      else process.env.OCTIPUS_INSTANCE_ID = saved;
+    }
+
+    // PGlite (the default here): one process, so every lease is stale at startup.
+    expect(await heartbeat.clearStaleRoleTurnLeases()).toBe(2);
+    for (const h of [mine, qa, review]) expect(await heartbeat.roleTurnLeaseHeld(h.id)).toBe(false);
+    expect((await hookRow(review.id)).triggerConfig).toEqual({ role: 'review' });
+  });
+
+  test('restart on Postgres without OCTIPUS_INSTANCE_ID clears nothing: a sibling on the same host keeps its live lease', async () => {
+    const saved = process.env.OCTIPUS_INSTANCE_ID;
+    delete process.env.OCTIPUS_INSTANCE_ID;
+    try {
+      expect(heartbeat.leaseInstanceId()).toBeNull();
+      const hook = await roleHook('coding');
+      // A sibling process on this host (another boot) holds the lease.
+      const sibling = await heartbeat.claimRoleTurnLease(hook.id, 60_000);
+      expect(sibling).toMatch(/^~host:[^|]*\|/);
+      await db.update(hooksSchema)
+        .set({ triggerConfig: { role: 'coding', heartbeatInFlightUntil: new Date(Date.now() + 60_000).toISOString(), heartbeatInFlightToken: sibling!.replace(heartbeat.LEASE_BOOT_ID, 'sibling-boot') } })
+        .where(eq(hooksSchema.id, hook.id));
+      expect(await heartbeat.clearStaleRoleTurnLeases({ all: false })).toBe(0);
+      expect(await heartbeat.roleTurnLeaseHeld(hook.id)).toBe(true);
+      // An anonymous token is never taken for an explicit instance's own either.
+      process.env.OCTIPUS_INSTANCE_ID = sibling!.split('|')[0];
+      expect(heartbeat.leaseInstanceId()).not.toBe(sibling!.split('|')[0]);
+    } finally {
+      if (saved === undefined) delete process.env.OCTIPUS_INSTANCE_ID;
+      else process.env.OCTIPUS_INSTANCE_ID = saved;
+    }
+  });
+
+  test('graceful shutdown releases the leases this process holds and claims no more', async () => {
+    await forCoding({ title: 'Ready' });
+    const hook = await roleHook('coding', { nextRunAt: null });
+    let finish!: () => void;
+    const running = new Promise<unknown[]>((resolve) => { finish = () => resolve([]); });
+    const { fired, restore } = await stubTrigger(() => running);
+    try {
+      await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg());
+      expect(fired).toHaveLength(1);
+      expect(await heartbeat.roleTurnLeaseHeld(hook.id)).toBe(true);
+
+      heartbeat.stopRoleTurnLeaseClaims();
+      expect(await heartbeat.claimRoleTurnLease((await roleHook('qa')).id)).toBeNull();
+      expect(await heartbeat.releaseHeldRoleTurnLeases()).toBe(1);
+      expect(await heartbeat.roleTurnLeaseHeld(hook.id)).toBe(false);
+
+      // No new turn after shutdown began, even with the hook due and work ready.
+      await db.update(hooksSchema).set({ nextRunAt: null }).where(eq(hooksSchema.id, hook.id));
+      finish();
+      await vi.waitFor(() => expect(heartbeat.roleTurnInFlight(hook.id)).toBe(false));
+      await heartbeat.maybeRunHeartbeats(NOON, quiet(), cfg());
+      expect(fired).toHaveLength(1);
+    } finally {
+      finish();
+      restore();
+      // The next boot opens claims again.
+      await heartbeat.clearStaleRoleTurnLeases();
+    }
+    expect(await heartbeat.claimRoleTurnLease(hook.id)).toEqual(expect.any(String));
+  });
+
+  test('roleTurnLeaseMs: the worker turn timeout plus the margin; renewals every third, within [1 min, 10 min]', () => {
+    expect(heartbeat.roleTurnLeaseMs({ defaultTimeout: 3_600_000 })).toBe(3_600_000 + heartbeat.ROLE_TURN_LEASE_MARGIN_MS);
+    expect(heartbeat.roleTurnLeaseMs({ defaultTimeout: 0 })).toBe(3_600_000 + heartbeat.ROLE_TURN_LEASE_MARGIN_MS);
+    expect(heartbeat.leaseRenewIntervalMs(90_000)).toBe(60_000);
+    expect(heartbeat.leaseRenewIntervalMs(6 * 60_000)).toBe(2 * 60_000);
+    expect(heartbeat.leaseRenewIntervalMs(70 * 60_000)).toBe(10 * 60_000);
   });
 
   test('a wakeup for a role-assigned task marks that role\'s hook due, and nothing else', async () => {
@@ -570,6 +778,26 @@ describe('role heartbeats', () => {
       const repo = scopedRepos({ kind: 'user', userId, username: 'alice', isAdmin: false, sessionToken: null, roles: ['user'], workspaceId: null }).tasks;
       await repo.update(blocker.id, { status: 'done', completedAt: new Date() });
       await flushWakeups();
+      await vi.waitFor(async () => {
+        expect((await hookRow(hook.id)).nextRunAt!.getTime()).toBeLessThan(farFuture.getTime());
+      });
+    } finally {
+      heartbeat.stopRoleHeartbeatWakeups();
+    }
+  });
+
+  test('a wakeup relayed from another process does not mark the hook again (the origin did)', async () => {
+    const { emitSafely } = await import('@/core/tasks/wakeups');
+    const farFuture = new Date(Date.now() + 24 * 60 * 60_000);
+    const hook = await roleHook('coding', { nextRunAt: farFuture });
+    const t = await forCoding({ title: 'Unblocked elsewhere' });
+    heartbeat.startRoleHeartbeatWakeups();
+    try {
+      const event = { type: 'task.unblocked' as const, userId, workspaceId: null, taskId: t.id, title: t.title, triggeredBy: t.id, cause: 'closed' as const };
+      emitSafely({ ...event, remote: true });
+      await new Promise((r) => setTimeout(r, 50));
+      expect((await hookRow(hook.id)).nextRunAt!.getTime()).toBe(farFuture.getTime());
+      emitSafely(event);
       await vi.waitFor(async () => {
         expect((await hookRow(hook.id)).nextRunAt!.getTime()).toBeLessThan(farFuture.getTime());
       });

@@ -283,8 +283,10 @@ export const hookRoutes = new Elysia({ prefix: '/hooks' })
 
       const patch = { ...body } as Record<string, unknown>;
       if (body.triggerConfig !== undefined) {
-        // Keep the stored heartbeat state whatever the edit sends (see POST).
-        patch.triggerConfig = sanitizeTriggerConfig(body.triggerConfig, existing.triggerConfig);
+        // The heartbeat's state is the server's (see POST): drop it from the
+        // edit, and let updateHook keep the stored keys in its one UPDATE, so
+        // a lease or counter that changed since `existing` was read survives.
+        patch.triggerConfig = sanitizeTriggerConfig(body.triggerConfig);
         const roleError = await roleHeartbeatHookError(existing.userId, existing.trigger, patch.triggerConfig, existing.id);
         if (roleError) {
           set.status = 400;

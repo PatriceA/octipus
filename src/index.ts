@@ -6,7 +6,13 @@ import { initializeHotReload } from '@/config/hot-reload';
 import { migrateEnvToDb } from '@/config/migrate-env-to-db';
 import { getSettingsService } from '@/config/settings-service';
 import { startCronLoop, stopCronLoop } from '@/core/cron-runner';
-import { startRoleHeartbeatWakeups, stopRoleHeartbeatWakeups } from '@/core/heartbeat';
+import {
+  clearStaleRoleTurnLeases,
+  releaseHeldRoleTurnLeases,
+  startRoleHeartbeatWakeups,
+  stopRoleHeartbeatWakeups,
+  stopRoleTurnLeaseClaims,
+} from '@/core/heartbeat';
 import { getGateway } from '@/core/gateway';
 import { connectEventBridge } from '@/core/gateway/event-bridge';
 import { getGatewayHub } from '@/core/gateway/hub';
@@ -374,12 +380,30 @@ async function main() {
       logger.error({ err }, 'MCP token bootstrap failed (non-fatal)');
     }
 
+    // Role heartbeat leases left by turns that died with a previous run of
+    // this server: all of them on PGlite / OCTIPUS_SINGLE_PROCESS=1; on
+    // Postgres this instance's older boots when OCTIPUS_INSTANCE_ID is set,
+    // none otherwise (they lapse by TTL). Before the cron loop can claim.
+    try {
+      await clearStaleRoleTurnLeases();
+    } catch (err) {
+      logger.warn({ err }, 'Clearing stale role heartbeat leases failed (they lapse on their own)');
+    }
+
     // Start recurring task scheduler
     startCronLoop();
     startMonitors();
     // Role heartbeats: a task wakeup for a role-assigned task marks that
     // role's heartbeat hook due for the next tick (no-op without such hooks).
     startRoleHeartbeatWakeups();
+    // Relay task wakeups to and from the other server processes on this
+    // Postgres (LISTEN/NOTIFY); does nothing on embedded PGlite.
+    try {
+      const { startTaskWakeupBridge } = await import('@/core/tasks/wakeup-bridge');
+      await startTaskWakeupBridge();
+    } catch (err) {
+      logger.error({ err }, 'Task wakeup bridge failed to start (wakeups stay in this process)');
+    }
     logger.info('Cron scheduler started');
 
     // Start the task-queue worker loop. Without this, getScheduler().schedule()
@@ -432,6 +456,11 @@ async function main() {
       }, 4000);
       forceExit.unref();
 
+      // No new heartbeat tick, and no new role-turn lease, from here on:
+      // otherwise a tick could claim a lease right before exit.
+      stopCronLoop();
+      stopRoleTurnLeaseClaims();
+
       // Stop all running agents (kills CLI child processes)
       try {
         const { getAgentManager } = await import('@/core/agent-manager');
@@ -455,6 +484,15 @@ async function main() {
         // module may not have loaded
       }
 
+      // The role turns are over: free their hooks for the other processes
+      // (or the next boot) now rather than after the lease TTL.
+      try {
+        const released = await releaseHeldRoleTurnLeases();
+        if (released > 0) logger.info({ released }, 'Role heartbeat leases released');
+      } catch (err) {
+        logger.warn({ err }, 'Releasing role heartbeat leases failed (they lapse on their own)');
+      }
+
       // Dispose extensions before tearing down the hub they subscribed to
       try {
         const { getExtensionRegistry } = await import('@/extensions');
@@ -472,9 +510,14 @@ async function main() {
         // registry may not have been initialized
       }
 
-      stopCronLoop();
       stopMonitors();
       stopRoleHeartbeatWakeups();
+      try {
+        const { stopTaskWakeupBridge } = await import('@/core/tasks/wakeup-bridge');
+        await stopTaskWakeupBridge();
+      } catch (err) {
+        logger.warn({ err }, 'Task wakeup bridge stop failed');
+      }
       try {
         const { getScheduler } = await import('@/core/scheduler');
         await getScheduler().stop();
