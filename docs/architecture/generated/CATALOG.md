@@ -496,7 +496,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 5 |
 | `core` | `models` | 84 |
-| `core` | `security` | 56 |
+| `core` | `security` | 58 |
 | `core` | `services` | 1 |
 | `core` | `shared` | 13 |
 | `core` | `skills` | 8 |

@@ -22,6 +22,36 @@ export const planUpdateSchema = z.object({
   })).max(50).default([]),
 }).refine(v => new Set(v.steps.map(s => s.id)).size === v.steps.length, 'Step IDs must be unique');
 export type PlanUpdate = z.infer<typeof planUpdateSchema>;
+/** Patch existing steps only; omitted fields and unrelated steps are preserved. */
+export const planPatchSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  summary: z.string().trim().min(1).max(1000),
+  kind: z.enum(['execution', 'proposal']).optional(),
+  stepUpdates: z.array(z.object({
+    id: planStepSchema.shape.id,
+    title: planStepSchema.shape.title.optional(),
+    status: planStepSchema.shape.status.optional(),
+    evidence: z.string().max(2000).optional(),
+  }).strict()).min(1).max(20),
+  feedbackResponses: z.array(z.object({
+    id: z.string(), status: z.enum(['applied', 'needs_clarification']),
+    response: z.string().trim().min(1).max(1000),
+  })).max(50).default([]),
+}).strict().refine(v => new Set(v.stepUpdates.map(s => s.id)).size === v.stepUpdates.length, 'Step IDs must be unique');
+
+export function expandWorkPlanPatch(state: WorkPlanState, patch: z.infer<typeof planPatchSchema>): PlanUpdate {
+  if (patch.revision !== state.revision) throw new Error('Plan changed. Read the current plan and retry.');
+  const plan = state.current;
+  if (!plan) throw new Error('Publish a full plan before patching steps.');
+  for (const update of patch.stepUpdates) {
+    if (!plan.steps.some(s => s.id === update.id)) throw new Error(`Unknown plan step "${update.id}". Read the plan or submit a full update to add steps.`);
+  }
+  return planUpdateSchema.parse({
+    ...plan, ...patch,
+    kind: patch.kind ?? plan.kind,
+    steps: plan.steps.map(step => ({ ...step, ...patch.stepUpdates.find(s => s.id === step.id) })),
+  });
+}
 export interface PlanFeedback {
   id: string;
   text: string;
