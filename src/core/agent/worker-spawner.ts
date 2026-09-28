@@ -15,6 +15,7 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import type { ProfileFact } from '@/db/schema/profiles';
 import { getModelRegistry } from '@/models/model-registry';
 import { QuotaExceededError } from '@/security/quota-error';
+import { isProviderQuotaError } from '@/core/errors/classification';
 import { SpendBudgetExceededError } from '@/security/spend-budget-error';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { getToolRegistry } from '@/tools/registry';
@@ -1323,7 +1324,7 @@ async function handleWorkerFailure(
     || errorMsg.includes('Unterminated') || errorMsg.includes('rate_limit')
     || errorMsg.includes('overloaded');
 
-  if (isTransient) {
+  if (isTransient && !isProviderQuotaError(error)) {
     coreLogger.info({ workerId, role: agentRole, error: errorMsg }, 'Worker failed with transient error, retrying once');
     try {
       const retryResult = await respawnAndRun(failedModel);

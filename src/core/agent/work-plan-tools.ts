@@ -1,7 +1,7 @@
 import type { ToolHandler } from '@/core/agent-base';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { workPlanRepository } from '@/db/repositories/work-plan-repository';
-import { planUpdateSchema, reviseWorkPlan } from '@/shared/work-plan';
+import { expandWorkPlanPatch, planPatchSchema, planUpdateSchema, reviseWorkPlan } from '@/shared/work-plan';
 
 async function sessionIsInPlanMode(sessionId: string, userId: string): Promise<boolean> {
   const session = await sessionRepository.findById(sessionId);
@@ -70,7 +70,12 @@ export function createWorkPlanTools(): ToolHandler[] {
           type: 'string',
           description: 'Complete markdown plan artifact. Required in practice for a proposal; omit for routine execution progress.',
         },
-        steps: { type: 'array', items: { type: 'object', properties: {
+        stepUpdates: { type: 'array', description: 'Patch existing steps by id. Send only changed fields, revision and summary; optionally kind and feedbackResponses. Do not combine with a full plan. Omitted fields are preserved.', items: { type: 'object', properties: {
+          id: { type: 'string' }, title: { type: 'string' },
+          status: { type: 'string', enum: ['pending', 'working', 'done', 'blocked', 'skipped'] },
+          evidence: { type: 'string' },
+        }, required: ['id'] } },
+        steps: { type: 'array', description: 'Full replacement for creation or structural changes; title and goal are required with this field.', items: { type: 'object', properties: {
           id: { type: 'string' }, title: { type: 'string' },
           status: { type: 'string', enum: ['pending', 'working', 'done', 'blocked', 'skipped'] },
           evidence: { type: 'string', description: 'Observed outcome, checks, sources or file paths; say when checks have not run.' },
@@ -79,10 +84,13 @@ export function createWorkPlanTools(): ToolHandler[] {
           id: { type: 'string' }, status: { type: 'string', enum: ['applied', 'needs_clarification'] }, response: { type: 'string' },
         }, required: ['id', 'status', 'response'] } },
       },
-      required: ['revision', 'kind', 'title', 'goal', 'steps', 'summary'],
+      required: ['revision', 'summary'],
     },
     execute: async (args, context) => {
-      const input = planUpdateSchema.parse(args);
+      const current = await workPlanRepository.read(context.sessionId, context.userId);
+      const input = args.stepUpdates !== undefined
+        ? expandWorkPlanPatch(current, planPatchSchema.parse(args))
+        : planUpdateSchema.parse(args);
       const planMode = await sessionIsInPlanMode(context.sessionId, context.userId);
       const kind = planMode ? 'proposal' : input.kind;
       if (kind === 'proposal' && input.steps.some((step) => step.status !== 'pending')) {
@@ -94,13 +102,19 @@ export function createWorkPlanTools(): ToolHandler[] {
       if (kind === 'proposal' && !planMode && !input.details) {
         throw new Error('A plan-only proposal must include the complete markdown artifact in details.');
       }
-      const current = await workPlanRepository.read(context.sessionId, context.userId);
       const next = reviseWorkPlan(current, {
         ...input,
         kind,
       });
       await workPlanRepository.save(context.sessionId, context.userId, input.revision, next);
-      return next;
+      const plan = next.current!;
+      return {
+        revision: next.revision, planId: plan.id, kind: plan.kind,
+        changedSteps: plan.steps.filter(step => input.newPlan ||
+          JSON.stringify(step) !== JSON.stringify(current.current?.steps.find(s => s.id === step.id)))
+          .map(({ id, title, status }) => ({ id, title, status })),
+        pendingFeedbackCount: plan.feedback.filter(f => f.status === 'pending').length,
+      };
     },
   }];
 }

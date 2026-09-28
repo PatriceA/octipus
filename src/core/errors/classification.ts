@@ -116,6 +116,11 @@ export class ClassifiedError extends Error {
   }
 }
 
+/** Provider exhaustion permits configured failover, never another primary attempt. */
+export function isProviderQuotaError(error: unknown): boolean {
+  return error instanceof ClassifiedError && error.reason === FailoverReason.QUOTA_EXHAUSTED;
+}
+
 // ── Classification helpers ─────────────────────────────────────────
 
 /** Extract an HTTP-like status code from a raw error if present */
