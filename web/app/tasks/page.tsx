@@ -214,39 +214,55 @@ export default function TasksPage() {
   // the 30s poll above all, may carry the server's state from before it, so
   // it is dropped rather than allowed to undo an optimistic edit; the
   // write's own re-read, started after it ended, is the one that lands.
-  const writes = useRef({ pending: 0, version: 0 });
-  const fetchTasks = useCallback(async () => {
-    const seq = ++fetchSeq.current;
-    const version = writes.current.version;
-    try {
-      const tz = browserTimezone();
-      const [data, next] = await Promise.all([
-        api.get<{ tasks: Task[]; serverNow?: string }>('/tasks'),
-        groupBy === 'next' ? api.get<{ tasks: Task[] }>(`/tasks?view=next&tz=${encodeURIComponent(tz)}`) : Promise.resolve(null),
-      ]);
-      if (seq !== fetchSeq.current) return;
-      if (writes.current.pending > 0 || writes.current.version !== version) return;
-      // Leases are judged on the server's clock: remember how far ours is off.
-      const serverMs = data.serverNow ? Date.parse(data.serverNow) : Number.NaN;
-      const serverSkewMs = Number.isNaN(serverMs) ? 0 : serverMs - Date.now();
-      let all = (data.tasks || []).map((t) => ({ ...t, serverSkewMs }));
-      if (next) {
-        const ranked = new Map((next.tasks || []).map((t, i) => [t.id, { ...t, rank: i }]));
-        all = all
-          .map((t) => (ranked.has(t.id) ? { ...t, bucket: ranked.get(t.id)!.bucket, reason: ranked.get(t.id)!.reason } : t))
-          .sort((a, b) => (ranked.get(a.id)?.rank ?? Infinity) - (ranked.get(b.id)?.rank ?? Infinity));
+  // A dropped read is never simply lost: if every write has settled it reads
+  // again at once, else `dropped` makes the last write to settle read again
+  // (even one that would not, like a notes save).
+  const writes = useRef({ pending: 0, version: 0, dropped: false });
+  const fetchTasks = useCallback(() => {
+    const load = async (): Promise<void> => {
+      const seq = ++fetchSeq.current;
+      const version = writes.current.version;
+      try {
+        const tz = browserTimezone();
+        const [data, next] = await Promise.all([
+          api.get<{ tasks: Task[]; serverNow?: string }>('/tasks'),
+          groupBy === 'next' ? api.get<{ tasks: Task[] }>(`/tasks?view=next&tz=${encodeURIComponent(tz)}`) : Promise.resolve(null),
+        ]);
+        if (seq !== fetchSeq.current) return;
+        const w = writes.current;
+        if (w.pending > 0) {
+          w.dropped = true;
+          return;
+        }
+        if (w.version !== version) {
+          // A write started and ended while this read was out; it is stale,
+          // but nothing is in flight now, so a fresh read is safe.
+          void load();
+          return;
+        }
+        // Leases are judged on the server's clock: remember how far ours is off.
+        const serverMs = data.serverNow ? Date.parse(data.serverNow) : Number.NaN;
+        const serverSkewMs = Number.isNaN(serverMs) ? 0 : serverMs - Date.now();
+        let all = (data.tasks || []).map((t) => ({ ...t, serverSkewMs }));
+        if (next) {
+          const ranked = new Map((next.tasks || []).map((t, i) => [t.id, { ...t, rank: i }]));
+          all = all
+            .map((t) => (ranked.has(t.id) ? { ...t, bucket: ranked.get(t.id)!.bucket, reason: ranked.get(t.id)!.reason } : t))
+            .sort((a, b) => (ranked.get(a.id)?.rank ?? Infinity) - (ranked.get(b.id)?.rank ?? Infinity));
+        }
+        setTasks(all);
+        setError('');
+      } catch (err) {
+        if (seq === fetchSeq.current) setError((err as Error).message);
+      } finally {
+        if (seq === fetchSeq.current) setLoading(false);
       }
-      setTasks(all);
-      setError('');
-    } catch (err) {
-      if (seq === fetchSeq.current) setError((err as Error).message);
-    } finally {
-      if (seq === fetchSeq.current) setLoading(false);
-    }
+    };
+    return load();
   }, [groupBy]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- load tasks once on mount; fetchTasks sets state from the server
+    // Load once on mount (and when the grouping changes the query).
     fetchTasks();
   }, [fetchTasks]);
 
@@ -297,7 +313,10 @@ export default function TasksPage() {
       w.pending--;
       w.version++;
     }
-    if (refetch || failed) await fetchTasks();
+    if (refetch || failed || (w.pending === 0 && w.dropped)) {
+      w.dropped = false;
+      await fetchTasks();
+    }
   };
 
   // `opts.title`/`opts.category` come from a per-group inline add (grouping by

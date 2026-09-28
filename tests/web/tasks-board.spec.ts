@@ -114,6 +114,8 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
   let serverOffsetMs: number;
   /** While set, a PATCH waits for it before the stub applies it. */
   let patchGate: Promise<void> | null;
+  /** While set, a plain list read waits for it (its body is taken before the wait). */
+  let listGate: Promise<void> | null;
   const TTL_MS = 30 * 60_000;
   const withLease = (t: Record<string, unknown>) => ({
     ...t,
@@ -125,6 +127,7 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
     calls = [];
     serverOffsetMs = 0;
     patchGate = null;
+    listGate = null;
     rows = [
       { id: 'spec', title: 'Write the spec', status: 'in_progress', priority: 0, category: null, parentId: null, blockedBy: [], source: 'agent', createdAt: created,
         assigneeKind: 'role', assigneeRef: 'pm', checkedOutBy: 'pm@sess-1', checkedOutAt: minutesAgo(5), checkoutRunId: 'run-1' },
@@ -172,7 +175,9 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
           const open = rows.filter((t) => t.status === 'open' || t.status === 'in_progress');
           return json(route, 200, { timezone: 'UTC', tasks: open.map((t) => ({ ...withLease(t), bucket: t.status === 'in_progress' ? 'doing' : 'backlog', reason: '' })) });
         }
-        return json(route, 200, { tasks: rows.map(withLease), serverNow: new Date(Date.now() + serverOffsetMs).toISOString() });
+        const body = { tasks: rows.map(withLease), serverNow: new Date(Date.now() + serverOffsetMs).toISOString() };
+        if (listGate) await listGate;
+        return json(route, 200, body);
       }
       if (path === '/' && method === 'POST') {
         const row = { id: `new-${rows.length}`, status: 'open', priority: 0, blockedBy: [], source: 'user', createdAt: created, checkedOutBy: null, checkedOutAt: null, ...body };
@@ -417,6 +422,33 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
     open();
     await expect.poll(() => rows.find((t) => t.id === 'milk')!.status).toBe('done');
     await expect(milk.getByRole('button', { name: 'Mark open' })).toBeVisible();
+  });
+
+  test('a notes save that overlaps an add\'s re-read still ends with the new task on the page', async ({ authenticatedPage: page }) => {
+    await page.goto('/tasks');
+    const milk = page.getByTestId('task-row').filter({ hasText: 'Buy milk' });
+    await expect(milk).toBeVisible();
+
+    // Hold the list read that follows the add.
+    let release!: () => void;
+    listGate = new Promise<void>((resolve) => { release = resolve; });
+    const readsBefore = calls.filter((c) => c.method === 'GET' && c.path === '/').length;
+    await page.getByPlaceholder('Add a task…').fill('Book the venue');
+    await page.getByRole('button', { name: 'Add', exact: true }).first().click();
+    await expect.poll(() => calls.filter((c) => c.method === 'GET' && c.path === '/').length).toBeGreaterThan(readsBefore);
+
+    // Save notes while that read is out; the save itself does not re-read.
+    await milk.getByRole('button', { name: 'add notes' }).click();
+    await milk.getByPlaceholder('Add details, links, context…').fill('2 litres');
+    await milk.getByRole('button', { name: 'Save' }).click();
+    await expect.poll(() => calls.some((c) => c.method === 'PATCH' && c.body?.notes === '2 litres')).toBe(true);
+
+    // The held read comes back stale (a write happened meanwhile) and is
+    // dropped; the page reads again at once instead of waiting for the poll.
+    listGate = null;
+    release();
+    await expect(page.getByTestId('task-row').filter({ hasText: 'Book the venue' })).toBeVisible({ timeout: 5_000 });
+    await expect(milk).toContainText('2 litres');
   });
 
   test('the assignee editor follows outside changes, and focuses the name field for a person', async ({ authenticatedPage: page }) => {
