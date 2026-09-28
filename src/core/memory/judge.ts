@@ -30,6 +30,8 @@ import { getMemoryRepository } from './repository';
 export type JudgeAction = 'ADD' | 'UPDATE' | 'DELETE' | 'NOOP';
 
 export interface JudgeContext {
+  /** Background receipts must distinguish failed writes from deliberate NOOPs. */
+  failOnError?: boolean;
   userId: string;
   workspaceId?: string | null;
   agentScope?: string | null;
@@ -110,7 +112,7 @@ const JUDGE_ACTIONS: Record<JudgeAction, string> = {
   NOOP: 'the candidate restates the existing fact with no new information',
 };
 
-async function decide(candidate: CandidateFact, closest: Memory | null, userId: string): Promise<JudgeAction> {
+async function decide(candidate: CandidateFact, closest: Memory | null, userId: string, failOnError = false): Promise<JudgeAction> {
   // Empty list shortcut — no LLM call needed.
   if (!closest) return 'ADD';
   const decision = () => askDecisionModel(JUDGE_SITE, {
@@ -119,13 +121,14 @@ async function decide(candidate: CandidateFact, closest: Memory | null, userId: 
   }, {
     action: { type: 'choice', instructions: 'A new candidate fact about the user arrived. What should happen to the stored existing fact?', criteria: JUDGE_ACTIONS },
   }).then((a) => choiceOf(a, 'action') as JudgeAction | null);
-  return preferDecision(JUDGE_SITE, JUDGE_LIVE, decision, () => llmJudge(candidate, closest, userId));
+  return preferDecision(JUDGE_SITE, JUDGE_LIVE, decision, () => llmJudge(candidate, closest, userId, failOnError));
 }
 
-async function llmJudge(candidate: CandidateFact, closest: Memory, userId: string): Promise<JudgeAction> {
+async function llmJudge(candidate: CandidateFact, closest: Memory, userId: string, failOnError = false): Promise<JudgeAction> {
 
   const model = await getModelRegistry().getModelForTopic('background');
   if (!model) {
+    if (failOnError) throw new Error('No background model configured for memory judge');
     // No judge model configured — be conservative and skip.
     coreLogger.debug('memory.judge: no model bound to the "background" topic — defaulting to NOOP');
     return 'NOOP';
@@ -149,8 +152,11 @@ async function llmJudge(candidate: CandidateFact, closest: Memory, userId: strin
       responseFormat: { type: 'json_object' },
       userId,
     });
-    return parseJudgeAction(result.content ?? '') ?? 'NOOP';
+    const action = parseJudgeAction(result.content ?? '');
+    if (!action && failOnError) throw new Error('Memory judge returned invalid output');
+    return action ?? 'NOOP';
   } catch (err) {
+    if (failOnError) throw err;
     coreLogger.warn({ err }, 'memory.judge: LLM call failed — defaulting to NOOP');
     return 'NOOP';
   }
@@ -219,6 +225,7 @@ export async function judgeAndApply(
       // would compare a query-prefixed vector against document-prefixed rows.
       queryVec = await embeddings.generateEmbedding(candidate.content);
     } catch (err) {
+      if (ctx.failOnError) throw err;
       coreLogger.warn({ err, fact: candidate.content.slice(0, 60) }, 'memory.judge: embed failed — skipping');
       continue;
     }
@@ -251,7 +258,7 @@ export async function judgeAndApply(
     const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
     const action = closest && norm(closest.content) === norm(candidate.content)
       ? 'NOOP'
-      : await decide(candidate, closest, ctx.userId);
+      : await decide(candidate, closest, ctx.userId, ctx.failOnError);
     const matchedAgainst = closest
       ? { id: closest.id, content: closest.content, similarity: closest.similarity }
       : undefined;
@@ -292,6 +299,7 @@ export async function judgeAndApply(
         outcomes.push({ action: 'NOOP', candidate, matchedAgainst });
       }
     } catch (err) {
+      if (ctx.failOnError) throw err;
       coreLogger.warn({ err, action, fact: candidate.content.slice(0, 60) }, 'memory.judge: apply failed');
     }
   }

@@ -21,7 +21,7 @@ import { users } from './users';
  * durable thing the run produced (the saved document) for anything that
  * outlives the row. `stage` / `detail` are the worker's progress line.
  */
-export type BackgroundJobKind = 'research' | 'document';
+export type BackgroundJobKind = 'research' | 'document' | 'learning';
 /** `cancelled`: the thing the job was for went away (a document deleted mid-run) — not news, not a failure. */
 export type BackgroundJobStatus = 'queued' | 'running' | 'done' | 'error' | 'interrupted' | 'cancelled';
 
