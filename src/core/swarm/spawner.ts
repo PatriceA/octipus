@@ -106,6 +106,7 @@ import {
 import { asLane } from '@/core/agent/lane-intent';
 import type { ToolAdvertisement } from '@/core/agent-base';
 import { applyRoleFit, buildDelegationGuidance } from './swarm-tool';
+import { isProviderQuotaError } from '@/core/errors/classification';
 import {
   type AgentNode,
   type ChildResult,
@@ -1608,7 +1609,7 @@ export class SwarmSpawner {
       return {
         nodeId: '',
         kind: opts.childKind,
-        status: isCap ? 'concurrency_limit' : 'tool_error',
+        status: isCap ? 'concurrency_limit' : classifyChildError(err),
         output: null,
         usedTokens: 0,
         durationMs: Date.now() - startTime,
@@ -1799,7 +1800,7 @@ export class SwarmSpawner {
       } catch (err) {
         const s = classifyChildError(err);
         const msg = (err as Error).message || '';
-        if (s === 'provider_error' && !providerRetryUsed) {
+        if (s === 'provider_error' && !isProviderQuotaError(err) && !providerRetryUsed) {
           providerRetryUsed = true;
           coreLogger.warn(
             { parentNodeId: opts.parent.id, childId, error: msg },
