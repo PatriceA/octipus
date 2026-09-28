@@ -256,6 +256,11 @@ export function renderChecklist(p: HeartbeatProbe, tz = 'UTC'): string {
 /** A role name as stored on `tasks.assignee_ref` and `hooks.trigger_config.role`. */
 const ROLE_NAME = /^[a-z][a-z0-9_-]{0,63}$/;
 
+/** Is `value` shaped like a role name (not whether the role exists)? */
+export function isRoleName(value: unknown): value is string {
+  return typeof value === 'string' && ROLE_NAME.test(value);
+}
+
 /** Most ready tasks one probe returns (highest priority, oldest first). */
 const ROLE_PROBE_LIMIT = 100;
 
@@ -661,18 +666,23 @@ export async function ensureRoleHeartbeatHook(userId: string, role: string, now:
   const { ROLE_CONFIGS } = await import('@/core/agent/roles');
   if (!Object.hasOwn(ROLE_CONFIGS, role)) throw new Error(`Unknown role "${role}"`);
   const db = getDb();
-  const [existing] = await db
+  // POST /api/hooks checks then writes, so a race can leave two rows for one
+  // role. Keep exactly one of them running: an already enabled row wins (the
+  // oldest, if several are), else the oldest is re-enabled; the others are
+  // left as they are, and a disabled duplicate stays disabled.
+  const existing = await db
     .select()
     .from(hooks)
     .where(and(eq(hooks.trigger, 'heartbeat'), eq(hooks.userId, userId), sql`${hookRole} = ${role}`))
-    .limit(1);
+    .orderBy(desc(hooks.isEnabled), asc(hooks.createdAt), asc(hooks.id));
 
-  if (existing) {
-    if (!existing.isEnabled) {
-      await db.update(hooks).set({ isEnabled: true, nextRunAt: now, updatedAt: now }).where(eq(hooks.id, existing.id));
+  if (existing.length > 0) {
+    const keep = existing[0];
+    if (!keep.isEnabled) {
+      await db.update(hooks).set({ isEnabled: true, nextRunAt: now, updatedAt: now }).where(eq(hooks.id, keep.id));
       await reloadHookCache();
     }
-    return existing.id;
+    return keep.id;
   }
 
   const [row] = await db
@@ -693,7 +703,7 @@ export async function ensureRoleHeartbeatHook(userId: string, role: string, now:
   return row.id;
 }
 
-/** Disable `userId`'s heartbeat hook for `role`. Idempotent. */
+/** Disable every heartbeat hook `userId` has for `role` (duplicates included). Idempotent. */
 export async function disableRoleHeartbeatHook(userId: string, role: string, now: Date = new Date()): Promise<void> {
   const db = getDb();
   await db

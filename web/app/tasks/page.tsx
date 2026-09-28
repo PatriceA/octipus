@@ -209,16 +209,27 @@ export default function TasksPage() {
   // once, and a response from an earlier fetch is dropped so a slow reply
   // cannot overwrite a newer one.
   const fetchSeq = useRef(0);
+  // Local writes (see `write` below): how many are in flight, and a version
+  // bumped as each starts and as each ends. A read that overlapped a write,
+  // the 30s poll above all, may carry the server's state from before it, so
+  // it is dropped rather than allowed to undo an optimistic edit; the
+  // write's own re-read, started after it ended, is the one that lands.
+  const writes = useRef({ pending: 0, version: 0 });
   const fetchTasks = useCallback(async () => {
     const seq = ++fetchSeq.current;
+    const version = writes.current.version;
     try {
       const tz = browserTimezone();
       const [data, next] = await Promise.all([
-        api.get<{ tasks: Task[] }>('/tasks'),
+        api.get<{ tasks: Task[]; serverNow?: string }>('/tasks'),
         groupBy === 'next' ? api.get<{ tasks: Task[] }>(`/tasks?view=next&tz=${encodeURIComponent(tz)}`) : Promise.resolve(null),
       ]);
       if (seq !== fetchSeq.current) return;
-      let all = data.tasks || [];
+      if (writes.current.pending > 0 || writes.current.version !== version) return;
+      // Leases are judged on the server's clock: remember how far ours is off.
+      const serverMs = data.serverNow ? Date.parse(data.serverNow) : Number.NaN;
+      const serverSkewMs = Number.isNaN(serverMs) ? 0 : serverMs - Date.now();
+      let all = (data.tasks || []).map((t) => ({ ...t, serverSkewMs }));
       if (next) {
         const ranked = new Map((next.tasks || []).map((t, i) => [t.id, { ...t, rank: i }]));
         all = all
@@ -268,13 +279,34 @@ export default function TasksPage() {
     };
   }, []);
 
+  // Every task write goes through here: the optimistic local change, the
+  // request, then a fresh read (always after a failure, which also undoes the
+  // optimistic change). See `writes` above for why the counter.
+  const write = async (optimistic: (() => void) | null, request: () => Promise<unknown>, refetch = true) => {
+    const w = writes.current;
+    w.pending++;
+    w.version++;
+    optimistic?.();
+    let failed = false;
+    try {
+      await request();
+    } catch (err) {
+      failed = true;
+      setError((err as Error).message);
+    } finally {
+      w.pending--;
+      w.version++;
+    }
+    if (refetch || failed) await fetchTasks();
+  };
+
   // `opts.title`/`opts.category` come from a per-group inline add (grouping by
   // category) so the new task lands in that group; the top quick-add passes
   // neither and uses its own inputs (which it then clears).
   const addTask = async (opts?: { title?: string; category?: string }) => {
     const title = (opts?.title ?? newTitle).trim();
     if (!title) return;
-    try {
+    await write(null, async () => {
       await api.post('/tasks', {
         title,
         priority: opts?.title ? 0 : newPriority,
@@ -291,10 +323,7 @@ export default function TasksPage() {
         setNewDue('');
         setNewRole('');
       }
-      await fetchTasks();
-    } catch (err) {
-      setError((err as Error).message);
-    }
+    });
   };
 
   // Generic field patch (priority/category/dueAt) used by the inline row editor.
@@ -302,27 +331,20 @@ export default function TasksPage() {
   const updateFields = async (task: Task, patch: TaskPatch) => {
     // An assignee clear sends only the null kind; mirror the server locally.
     if (patch.assigneeKind === null) patch = { ...patch, assigneeRef: null };
-    setTasks((xs) => xs.map((t) => (t.id === task.id ? { ...t, ...patch } : t)));
-    try {
-      await api.patch(`/tasks/${task.id}`, patch.dueAt !== undefined ? { ...patch, tz: browserTimezone() } : patch);
-      await fetchTasks();
-    } catch (err) {
-      setError((err as Error).message);
-    }
+    await write(
+      () => setTasks((xs) => xs.map((t) => (t.id === task.id ? { ...t, ...patch } : t))),
+      () => api.patch(`/tasks/${task.id}`, patch.dueAt !== undefined ? { ...patch, tz: browserTimezone() } : patch),
+    );
   };
 
   // Status moves (the checkbox, the board's drag and arrows, the row's status
   // picker) all go through here. Optimistic so a dragged card lands at once.
   const setStatus = async (task: Task, status: TaskStatus) => {
     if (task.status === status) return;
-    setTasks((xs) => xs.map((t) => (t.id === task.id ? { ...t, status } : t)));
-    try {
-      await api.patch(`/tasks/${task.id}`, { status });
-      await fetchTasks();
-    } catch (err) {
-      setError((err as Error).message);
-      await fetchTasks();
-    }
+    await write(
+      () => setTasks((xs) => xs.map((t) => (t.id === task.id ? { ...t, status } : t))),
+      () => api.patch(`/tasks/${task.id}`, { status }),
+    );
   };
 
   const toggleDone = (task: Task) => setStatus(task, task.status === 'done' ? 'open' : 'done');
@@ -331,33 +353,20 @@ export default function TasksPage() {
     // Optimistic: update local state immediately so the prop reflects the new
     // value before the request resolves. This also makes a redundant second
     // save (e.g. blur + click) a no-op against the saver's own equality guard.
-    setTasks((xs) => xs.map((t) => (t.id === task.id ? { ...t, notes } : t)));
-    try {
-      await api.patch(`/tasks/${task.id}`, { notes });
-    } catch (err) {
-      setError((err as Error).message);
-    }
+    await write(
+      () => setTasks((xs) => xs.map((t) => (t.id === task.id ? { ...t, notes } : t))),
+      () => api.patch(`/tasks/${task.id}`, { notes }),
+      false,
+    );
   };
 
   // The user is the boss of the board: a forced release frees a claim an
   // agent holds (or left behind), and the task goes back to open.
-  const releaseClaim = async (task: Task) => {
-    try {
-      await api.post(`/tasks/${task.id}/release`, { force: true });
-      await fetchTasks();
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
+  const releaseClaim = (task: Task) => write(null, () => api.post(`/tasks/${task.id}/release`, { force: true }));
 
   const deleteTask = async (id: string) => {
     if (!confirm('Delete this task?')) return;
-    try {
-      await api.delete(`/tasks/${id}`);
-      await fetchTasks();
-    } catch (err) {
-      setError((err as Error).message);
-    }
+    await write(null, () => api.delete(`/tasks/${id}`));
   };
 
   if (loading) {
@@ -514,6 +523,11 @@ export default function TasksPage() {
             <option value="unassigned">unassigned</option>
             <option value="agents">assigned to agents</option>
             {assignedRoles.map((r) => <option key={r} value={`role:${r}`}>{r} role</option>)}
+            {/* A chosen role whose last task went elsewhere stays visible (and
+                clearable) rather than filtering silently. */}
+            {assigneeFilter.startsWith('role:') && !assignedRoles.includes(assigneeFilter.slice(5)) && (
+              <option value={assigneeFilter}>{assigneeFilter.slice(5)} role (no tasks)</option>
+            )}
           </select>
         </label>
       </div>
@@ -935,7 +949,7 @@ function TaskBoard({
                             key={task.id}
                             task={task}
                             waiting={waitingText(task, lookup)}
-                            subtasks={subtaskProgress(task, tasks)}
+                            subtasks={subtaskProgress(task, [...lookup.values()])}
                             parentTitle={task.parentId ? (lookup.get(task.parentId)?.title ?? null) : null}
                             dragging={dragging === task.id}
                             prev={col > 0 ? BOARD_COLUMNS[col - 1] : null}
@@ -996,9 +1010,12 @@ function BoardCard({
 }) {
   const due = dueLabel(task.dueAt);
   const [showComments, setShowComments] = useState(false);
+  // Typing in the comment box: the card must not start a drag when the user
+  // selects text there.
+  const [typing, setTyping] = useState(false);
   return (
     <div
-      draggable
+      draggable={!typing}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       data-testid="board-card"
@@ -1066,7 +1083,11 @@ function BoardCard({
           <Trash2 className="w-3.5 h-3.5" />
         </button>
       </div>
-      {showComments && <CommentsThread taskId={task.id} indent={false} />}
+      {showComments && (
+        <div onFocus={() => setTyping(true)} onBlur={() => setTyping(false)}>
+          <CommentsThread taskId={task.id} indent={false} />
+        </div>
+      )}
     </div>
   );
 }

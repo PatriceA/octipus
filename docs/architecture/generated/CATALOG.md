@@ -448,8 +448,8 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `channels` | 7 |
 | `api` | `config` | 20 |
 | `api` | `connectors` | 2 |
-| `api` | `core` | 87 |
-| `api` | `db` | 100 |
+| `api` | `core` | 88 |
+| `api` | `db` | 101 |
 | `api` | `extensions` | 1 |
 | `api` | `hooks` | 5 |
 | `api` | `mcp` | 3 |
@@ -460,7 +460,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `shared` | 2 |
 | `api` | `skills` | 4 |
 | `api` | `tools` | 3 |
-| `api` | `utils` | 60 |
+| `api` | `utils` | 61 |
 | `api` | `voice` | 24 |
 | `capabilities` | `db` | 2 |
 | `capabilities` | `models` | 1 |
@@ -488,9 +488,9 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `connectors` | `utils` | 5 |
 | `core` | `capabilities` | 1 |
 | `core` | `channels` | 3 |
-| `core` | `config` | 31 |
+| `core` | `config` | 32 |
 | `core` | `connectors` | 2 |
-| `core` | `db` | 177 |
+| `core` | `db` | 180 |
 | `core` | `extensions` | 1 |
 | `core` | `hooks` | 5 |
 | `core` | `mcp` | 5 |

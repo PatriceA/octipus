@@ -5,9 +5,10 @@
  * for), with active-task counts, the hook state and whether tasks/write is
  * ALLOW; PUT turns a role's heartbeat hook on or off. Everything is the
  * caller's own: bob's tasks and hooks never show up for alice, and alice's
- * toggle never touches bob's hook.
+ * toggle never touches bob's hook. It is per user across workspaces, like the
+ * hook it toggles and that hook's probe.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -22,7 +23,18 @@ process.env.JWT_SECRET ??= `test-jwt-${rand(24)}`;
 process.env.SESSION_SECRET ??= `test-session-${rand(24)}`;
 process.env.LOG_LEVEL ??= 'error';
 
+// The real heartbeat module, with ensureRoleHeartbeatHook wrapped so one test
+// can make it fail the way a database error would.
+vi.mock('@/core/heartbeat', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/core/heartbeat')>();
+  return { ...real, ensureRoleHeartbeatHook: vi.fn(real.ensureRoleHeartbeatHook) };
+});
+
 let aliceApp: ElysiaLike;
+/** Alice with a workspace selected: the panel is still per user. */
+let aliceInWorkspaceApp: ElysiaLike;
+const workspaceA = '33333333-3333-3333-3333-333333333333';
+const workspaceB = '55555555-5555-5555-5555-555555555555';
 let bobApp: ElysiaLike;
 let anonApp: ElysiaLike;
 const aliceId = '11111111-1111-1111-1111-111111111111';
@@ -53,6 +65,17 @@ beforeAll(async () => {
        ('${bobId}', 'bob review', 'open', 0, 'role', 'review')`,
   );
 
+  await executeRaw(
+    `INSERT INTO workspaces (id, user_id, slug, name) VALUES
+       ('${workspaceA}', '${aliceId}', 'a', 'A'),
+       ('${workspaceB}', '${aliceId}', 'b', 'B')`,
+  );
+  // A qa task filed under workspace B: counted even when alice is in A.
+  await executeRaw(
+    `INSERT INTO tasks (user_id, workspace_id, title, status, priority, assignee_kind, assignee_ref)
+     VALUES ('${aliceId}', '${workspaceB}', 'test it in B', 'in_progress', 0, 'role', 'qa')`,
+  );
+
   const { taskRoutes } = await import('./tasks');
   const { principalFromUser } = await import('@/security/principal');
   const buildApp = (uid: string): ElysiaLike =>
@@ -63,6 +86,12 @@ beforeAll(async () => {
       })
       .group('/api', (a) => a.use(taskRoutes)) as unknown as ElysiaLike;
   aliceApp = buildApp(aliceId);
+  aliceInWorkspaceApp = new Elysia()
+    .derive(() => {
+      const u = { id: aliceId, username: 'u', isAdmin: false };
+      return { user: u, session: null, principal: { ...principalFromUser(u), workspaceId: workspaceA } };
+    })
+    .group('/api', (a) => a.use(taskRoutes)) as unknown as ElysiaLike;
   bobApp = buildApp(bobId);
   anonApp = new Elysia()
     .derive(() => ({ user: null, session: null, principal: null }))
@@ -93,10 +122,29 @@ describe('GET /api/tasks/role-agents', () => {
     const { status, body } = await send(aliceApp, 'GET', '/api/tasks/role-agents');
     expect(status).toBe(200);
     expect(body.boardWritesAllowed).toBe(false);
+    expect(body.heartbeatEnabled).toBe(false);
     expect(body.roles).toEqual([
       { role: 'pm', activeTasks: 2, totalTasks: 3, enabled: false, hookId: null, known: true },
-      { role: 'qa', activeTasks: 1, totalTasks: 1, enabled: false, hookId: null, known: true },
+      { role: 'qa', activeTasks: 2, totalTasks: 2, enabled: false, hookId: null, known: true },
     ]);
+  });
+
+  test('is per user across workspaces: the same counts whichever workspace is selected', async () => {
+    const all = await send(aliceApp, 'GET', '/api/tasks/role-agents');
+    const inA = await send(aliceInWorkspaceApp, 'GET', '/api/tasks/role-agents');
+    expect(inA.body.roles).toEqual(all.body.roles);
+  });
+
+  test('reports the server heartbeat switch', async () => {
+    const { getConfig } = await import('@/config');
+    const hb = getConfig().heartbeat;
+    const was = hb.enabled;
+    hb.enabled = true;
+    try {
+      expect((await send(aliceApp, 'GET', '/api/tasks/role-agents')).body.heartbeatEnabled).toBe(true);
+    } finally {
+      hb.enabled = was;
+    }
   });
 
   test('does not show another user’s roles', async () => {
@@ -145,10 +193,51 @@ describe('PUT /api/tasks/role-agents', () => {
     expect(list.body.roles.find((r: { role: string }) => r.role === 'research')).toMatchObject({ enabled: true, activeTasks: 0, totalTasks: 0 });
   });
 
-  test('refuses an unknown role', async () => {
+  test('refuses an unknown role to turn on, a malformed one either way; an unknown one may be turned off', async () => {
     const r = await send(aliceApp, 'PUT', '/api/tasks/role-agents', { role: 'no-such-role', enabled: true });
     expect(r.status).toBe(400);
     expect(r.body.error).toContain('Unknown role');
+    const bad = await send(aliceApp, 'PUT', '/api/tasks/role-agents', { role: 'Not A Role', enabled: false });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error).toContain('Invalid role');
+    const off = await send(aliceApp, 'PUT', '/api/tasks/role-agents', { role: 'no-such-role', enabled: false });
+    expect(off.status).toBe(200);
+  });
+
+  test('an unexpected failure is a 500 with a generic message, not the error text', async () => {
+    const hb = await import('@/core/heartbeat');
+    vi.mocked(hb.ensureRoleHeartbeatHook).mockRejectedValueOnce(new Error('connection to db lost at 10.0.0.3'));
+    const r = await send(aliceApp, 'PUT', '/api/tasks/role-agents', { role: 'qa', enabled: true });
+    expect(r.status).toBe(500);
+    expect(r.body).toEqual({ error: 'Could not update the role agent' });
+  });
+
+  test('duplicate hooks for a role: any enabled one shows as on, off disables all, on keeps one', async () => {
+    const { executeRaw, queryRaw } = await import('@/db/postgres');
+    // Two rows for "writing", as a racing POST /api/hooks could leave them.
+    await executeRaw(
+      `INSERT INTO hooks (user_id, name, trigger, trigger_config, action, action_config, is_enabled, created_at) VALUES
+         ('${aliceId}', 'hb writing 1', 'heartbeat', '{"role":"writing"}', 'spawn_agent', '{}', false, now() - interval '2 hours'),
+         ('${aliceId}', 'hb writing 2', 'heartbeat', '{"role":"writing"}', 'spawn_agent', '{}', true, now() - interval '1 hour')`,
+    );
+    const ids = async () =>
+      (await queryRaw(`SELECT name, is_enabled FROM hooks WHERE user_id = '${aliceId}' AND trigger_config->>'role' = 'writing' ORDER BY name`)).rows
+        .map((r: { name: string; is_enabled: boolean }) => `${r.name}:${r.is_enabled}`);
+    const row = async () => (await send(aliceApp, 'GET', '/api/tasks/role-agents')).body.roles.find((r: { role: string }) => r.role === 'writing');
+
+    expect(await row()).toMatchObject({ enabled: true });
+    // On while one is already on: nothing else is switched on.
+    await send(aliceApp, 'PUT', '/api/tasks/role-agents', { role: 'writing', enabled: true });
+    expect(await ids()).toEqual(['hb writing 1:false', 'hb writing 2:true']);
+
+    await send(aliceApp, 'PUT', '/api/tasks/role-agents', { role: 'writing', enabled: false });
+    expect(await ids()).toEqual(['hb writing 1:false', 'hb writing 2:false']);
+    expect(await row()).toMatchObject({ enabled: false });
+
+    // On from all-off: exactly one (the oldest) comes back.
+    await send(aliceApp, 'PUT', '/api/tasks/role-agents', { role: 'writing', enabled: true });
+    expect(await ids()).toEqual(['hb writing 1:true', 'hb writing 2:false']);
+    expect(await row()).toMatchObject({ enabled: true });
   });
 
   test('bob turning off his "pm" agent leaves alice’s alone', async () => {

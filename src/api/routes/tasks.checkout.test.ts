@@ -225,3 +225,23 @@ describe('comments', () => {
     expect(thread?.comments.map((c) => c.body)).toEqual(['two', 'three']);
   });
 });
+
+describe('lease end on list responses', () => {
+  test('a held task carries leaseExpiresAt = checkedOutAt + TTL, a free one null, plus the server clock', async () => {
+    const { TASK_CHECKOUT_TTL_MS } = await import('@/core/tasks/checkout');
+    const held = await create({ title: 'leased' });
+    const free = await create({ title: 'free' });
+    const claimed = (await send('POST', `/api/tasks/${held.id}/checkout`, { actor: 'pm@s1' })).body;
+
+    for (const path of ['/api/tasks', '/api/tasks?view=next']) {
+      const { status, body } = await send('GET', path);
+      expect(status).toBe(200);
+      expect(Number.isNaN(Date.parse(body.serverNow))).toBe(false);
+      expect(Math.abs(Date.parse(body.serverNow) - Date.now())).toBeLessThan(60_000);
+      const h = body.tasks.find((t: { id: string }) => t.id === held.id);
+      const f = body.tasks.find((t: { id: string }) => t.id === free.id);
+      expect(Date.parse(h.leaseExpiresAt) - Date.parse(claimed.checkedOutAt)).toBe(TASK_CHECKOUT_TTL_MS);
+      expect(f.leaseExpiresAt).toBeNull();
+    }
+  });
+});

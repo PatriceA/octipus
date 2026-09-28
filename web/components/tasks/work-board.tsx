@@ -1,7 +1,7 @@
 'use client';
 
 import { Bot, ChevronDown, ChevronRight, Lock, LockOpen, MessageSquare, RefreshCw, Send, UserRound, Users } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { TASK_CHECKOUT_TTL_MS } from '../../../src/core/tasks/checkout';
 import type { TaskAssigneeKind } from '../../../src/core/tasks/status';
@@ -20,6 +20,10 @@ export interface BoardFields {
   checkedOutBy?: string | null;
   checkedOutAt?: string | null;
   checkoutRunId?: string | null;
+  /** When the claim lapses: `checkedOutAt` + the TTL, computed by the server. */
+  leaseExpiresAt?: string | null;
+  /** Client-side: the server's clock minus ours when the list was read. */
+  serverSkewMs?: number;
 }
 
 export type AssigneePatch = { assigneeKind: TaskAssigneeKind | null; assigneeRef?: string | null };
@@ -79,6 +83,26 @@ export function AssigneeEditor({
 }) {
   const [kind, setKind] = useState<TaskAssigneeKind | ''>(task.assigneeKind ?? '');
   const [ref, setRef] = useState(task.assigneeRef ?? '');
+  // Mid-edit: a kind picked or text typed that is not saved yet. Until then
+  // an outside change (an agent reassigning, a refetch) must not wipe it;
+  // otherwise the editor follows the task, adjusted during render like the
+  // notes editor.
+  const [dirty, setDirty] = useState(false);
+  const incoming = `${task.assigneeKind ?? ''}:${task.assigneeRef ?? ''}`;
+  const [seeded, setSeeded] = useState(incoming);
+  if (!dirty && seeded !== incoming) {
+    setSeeded(incoming);
+    setKind(task.assigneeKind ?? '');
+    setRef(task.assigneeRef ?? '');
+  }
+  // Picking person or node moves the cursor to the text it needs.
+  const textRef = useRef<HTMLInputElement>(null);
+  const focusText = useRef(false);
+  useEffect(() => {
+    if (!focusText.current) return;
+    focusText.current = false;
+    textRef.current?.focus();
+  }, [kind]);
   const roleOptions = task.assigneeKind === 'role' && task.assigneeRef && !roles.includes(task.assigneeRef)
     ? [...roles, task.assigneeRef]
     : roles;
@@ -86,10 +110,13 @@ export function AssigneeEditor({
   const commit = (k: TaskAssigneeKind | '', r: string) => {
     const value = r.trim();
     if (k === '') {
+      setDirty(false);
       if (task.assigneeKind) onChange({ assigneeKind: null });
       return;
     }
-    if (!value || (k === task.assigneeKind && value === task.assigneeRef)) return;
+    if (!value) return; // still mid-edit: a person or node needs a name
+    setDirty(false);
+    if (k === task.assigneeKind && value === task.assigneeRef) return;
     onChange({ assigneeKind: k, assigneeRef: value });
   };
 
@@ -105,7 +132,9 @@ export function AssigneeEditor({
           // change is enough. Person and node wait for their text.
           const next = k === 'role' ? (roleOptions.includes(ref) ? ref : (roleOptions[0] ?? '')) : k === task.assigneeKind ? ref : '';
           setRef(next);
+          setDirty(true);
           if (k === '' || k === 'role') commit(k, next);
+          else focusText.current = true;
         }}
         className="rounded-xs border border-outline-variant/20 bg-surface px-2 py-1 text-xs text-on-surface"
       >
@@ -128,11 +157,15 @@ export function AssigneeEditor({
         </select>
       ) : kind !== '' ? (
         <input
+          ref={textRef}
           type="text"
           value={ref}
           aria-label={kind === 'node' ? 'Agent node' : 'Person'}
           placeholder={kind === 'node' ? 'node id…' : 'who…'}
-          onChange={(e) => setRef(e.target.value)}
+          onChange={(e) => {
+            setRef(e.target.value);
+            setDirty(true);
+          }}
           onBlur={() => commit(kind, ref)}
           onKeyDown={(e) => e.key === 'Enter' && commit(kind, ref)}
           className="w-28 rounded-xs border border-outline-variant/20 bg-surface px-2 py-1 text-xs text-on-surface"
@@ -166,12 +199,24 @@ export function holderLabel(holder: string): string {
   return holder;
 }
 
-/** The lease on a checked-out task: live within the TTL, lapsed after; null when nobody holds it. */
-export function leaseOf(task: BoardFields, now: number = Date.now()): { live: boolean; holder: string; since: string } | null {
+/**
+ * The lease on a checked-out task: live until `leaseExpiresAt`, lapsed after;
+ * null when nobody holds it. "Now" is the server's (our clock plus the skew
+ * measured when the list was read), so a browser clock that is off does not
+ * turn a live claim into a lapsed one. An older server without
+ * `leaseExpiresAt` falls back to `checkedOutAt` + the TTL.
+ */
+export function leaseOf(
+  task: BoardFields,
+  clientNow: number = Date.now(),
+): { live: boolean; holder: string; since: string; now: number; remainingMs: number } | null {
   if (!task.checkedOutBy || !task.checkedOutAt) return null;
   const at = new Date(task.checkedOutAt).getTime();
   if (Number.isNaN(at)) return null;
-  return { live: now - at < TASK_CHECKOUT_TTL_MS, holder: task.checkedOutBy, since: task.checkedOutAt };
+  const expires = task.leaseExpiresAt ? new Date(task.leaseExpiresAt).getTime() : at + TASK_CHECKOUT_TTL_MS;
+  const now = clientNow + (task.serverSkewMs ?? 0);
+  const remainingMs = expires - now;
+  return { live: remainingMs > 0, holder: task.checkedOutBy, since: task.checkedOutAt, now, remainingMs };
 }
 
 /** The lock badge: "<holder> · working · 4m ago", or "claim lapsed" once the lease ran out. */
@@ -182,16 +227,16 @@ export function LeaseBadge({ task }: { task: BoardFields }) {
     <span
       data-testid="task-lease"
       data-live="true"
-      title={`Checked out by ${lease.holder} at ${new Date(lease.since).toLocaleString()}`}
+      title={`Checked out by ${lease.holder} at ${new Date(lease.since).toLocaleString()}; the claim lapses in ${Math.ceil(lease.remainingMs / 60_000)}m unless renewed`}
       className="text-[10px] inline-flex items-center gap-0.5 text-tertiary"
     >
-      <Lock className="w-2.5 h-2.5" /> {holderLabel(lease.holder)} · working · {ago(lease.since)}
+      <Lock className="w-2.5 h-2.5" /> {holderLabel(lease.holder)} · working · {ago(lease.since, lease.now)}
     </span>
   ) : (
     <span
       data-testid="task-lease"
       data-live="false"
-      title={`${lease.holder} checked this out ${ago(lease.since)} and has not renewed; anyone may take it over`}
+      title={`${lease.holder} checked this out ${ago(lease.since, lease.now)} and has not renewed; anyone may take it over`}
       className="text-[10px] inline-flex items-center gap-0.5 text-on-surface-variant/70"
     >
       <LockOpen className="w-2.5 h-2.5" /> claim lapsed
@@ -332,6 +377,13 @@ export function CommentsToggle({ open, onToggle }: { open: boolean; onToggle: ()
   );
 }
 
+interface RoleAgentsData {
+  roles: RoleAgentRow[];
+  boardWritesAllowed: boolean;
+  /** Older servers leave it out; treat that as on. */
+  heartbeatEnabled?: boolean;
+}
+
 interface RoleAgentRow {
   role: string;
   activeTasks: number;
@@ -350,13 +402,13 @@ interface RoleAgentRow {
  */
 export function RoleAgentsPanel({ refreshKey }: { refreshKey: string }) {
   const [open, setOpen] = useState(false);
-  const [data, setData] = useState<{ roles: RoleAgentRow[]; boardWritesAllowed: boolean } | null>(null);
+  const [data, setData] = useState<RoleAgentsData | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState('');
 
   const load = useCallback(async () => {
     try {
-      setData(await api.get<{ roles: RoleAgentRow[]; boardWritesAllowed: boolean }>('/tasks/role-agents'));
+      setData(await api.get<RoleAgentsData>('/tasks/role-agents'));
       setError('');
     } catch (err) {
       setError((err as Error).message);
@@ -384,6 +436,7 @@ export function RoleAgentsPanel({ refreshKey }: { refreshKey: string }) {
   const rows = (data?.roles ?? []).filter((r) => r.activeTasks > 0 || r.enabled);
   if (!data || rows.length === 0) return error ? <p className="text-xs text-error">{error}</p> : null;
   const running = rows.filter((r) => r.enabled).length;
+  const heartbeatOff = data.heartbeatEnabled === false;
 
   return (
     <section className="rounded-xs border border-outline-variant/10 bg-surface-container-low/40" data-testid="role-agents">
@@ -395,14 +448,26 @@ export function RoleAgentsPanel({ refreshKey }: { refreshKey: string }) {
         {open ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
         <Bot className="w-3.5 h-3.5" />
         <span className="section-label">Role agents</span>
-        <span className="text-xs">{running} of {rows.length} on</span>
-        {!data.boardWritesAllowed && <span className="text-xs text-error ml-auto">needs board permission</span>}
+        <span className="text-xs">{running} of {rows.length} on · across all workspaces</span>
+        {heartbeatOff ? (
+          <span className="text-xs text-error ml-auto">heartbeat off on this server</span>
+        ) : !data.boardWritesAllowed ? (
+          <span className="text-xs text-error ml-auto">needs board permission</span>
+        ) : null}
       </button>
       {open && (
         <div className="px-3 pb-3 space-y-2">
           <p className="text-xs text-on-surface-variant">
             A role agent wakes on the heartbeat, checks out ready tasks assigned to its role, works them and logs progress in the comments.
+            Role agents are yours across all workspaces: each works every task assigned to its role, whichever workspace it is in.
           </p>
+          {heartbeatOff && (
+            <div role="note" data-testid="role-agents-heartbeat-off" className="bg-error/10 border border-error/20 rounded-xs px-3 py-2 text-xs text-on-surface">
+              Heartbeat is disabled on this server; role agents won&apos;t run. An admin can turn it on with the{' '}
+              <span className="font-mono">heartbeat.enabled</span> setting on the{' '}
+              <a href="/settings" className="underline text-primary">settings page</a> (or the <span className="font-mono">HEARTBEAT_ENABLED</span> environment variable).
+            </div>
+          )}
           {!data.boardWritesAllowed && (
             <div role="note" data-testid="role-agents-permission" className="bg-error/10 border border-error/20 rounded-xs px-3 py-2 text-xs text-on-surface">
               Role agents can&apos;t work the board yet: the <span className="font-mono">tasks</span> tool&apos;s <span className="font-mono">write</span> action must be

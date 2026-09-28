@@ -109,11 +109,22 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
   let rows: Record<string, unknown>[];
   let calls: { method: string; path: string; body: any }[];
   let comments: Record<string, unknown>[];
-  let roleAgents: { boardWritesAllowed: boolean; roles: Record<string, unknown>[] };
+  let roleAgents: { boardWritesAllowed: boolean; heartbeatEnabled: boolean; roles: Record<string, unknown>[] };
+  /** The stub server's clock relative to the browser's. */
+  let serverOffsetMs: number;
+  /** While set, a PATCH waits for it before the stub applies it. */
+  let patchGate: Promise<void> | null;
+  const TTL_MS = 30 * 60_000;
+  const withLease = (t: Record<string, unknown>) => ({
+    ...t,
+    leaseExpiresAt: t.checkedOutAt ? new Date(Date.parse(t.checkedOutAt as string) + TTL_MS).toISOString() : null,
+  });
 
   test.beforeEach(async ({ authenticatedPage: page }) => {
     await stubAllDefaults(page);
     calls = [];
+    serverOffsetMs = 0;
+    patchGate = null;
     rows = [
       { id: 'spec', title: 'Write the spec', status: 'in_progress', priority: 0, category: null, parentId: null, blockedBy: [], source: 'agent', createdAt: created,
         assigneeKind: 'role', assigneeRef: 'pm', checkedOutBy: 'pm@sess-1', checkedOutAt: minutesAgo(5), checkoutRunId: 'run-1' },
@@ -121,7 +132,9 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
         assigneeKind: 'role', assigneeRef: 'qa', checkedOutBy: 'qa@sess-2', checkedOutAt: minutesAgo(90), checkoutRunId: 'run-2' },
       { id: 'deploy', title: 'Deploy it', status: 'open', priority: 0, category: null, parentId: null, blockedBy: [], source: 'user', createdAt: created,
         assigneeKind: 'node', assigneeRef: 'node-7', checkedOutBy: null, checkedOutAt: null, checkoutRunId: null },
-      { id: 'milk', title: 'Buy milk', status: 'open', priority: 0, category: null, parentId: null, blockedBy: [], source: 'user', createdAt: created,
+      // A sub-task of "Deploy it", so the board's progress on the parent can be
+      // checked with the child filtered out.
+      { id: 'milk', title: 'Buy milk', status: 'open', priority: 0, category: null, parentId: 'deploy', blockedBy: [], source: 'user', createdAt: created,
         assigneeKind: null, assigneeRef: null, checkedOutBy: null, checkedOutAt: null, checkoutRunId: null },
     ];
     comments = [
@@ -130,6 +143,7 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
     ];
     roleAgents = {
       boardWritesAllowed: false,
+      heartbeatEnabled: true,
       roles: [
         { role: 'pm', activeTasks: 1, totalTasks: 1, enabled: false, hookId: null, known: true },
         { role: 'qa', activeTasks: 1, totalTasks: 1, enabled: false, hookId: null, known: true },
@@ -137,7 +151,7 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
     };
 
     await page.route('**/api/roles', (route) => json(route, 200, { roles: [{ role: 'pm' }, { role: 'qa' }, { role: 'research' }] }));
-    await page.route(/\/api\/tasks(\/|\?|$)/, (route) => {
+    await page.route(/\/api\/tasks(\/|\?|$)/, async (route) => {
       const req = route.request();
       const url = new URL(req.url());
       const path = url.pathname.replace(/^.*\/api\/tasks/, '') || '/';
@@ -156,9 +170,9 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
       if (path === '/' && method === 'GET') {
         if (url.searchParams.get('view') === 'next') {
           const open = rows.filter((t) => t.status === 'open' || t.status === 'in_progress');
-          return json(route, 200, { timezone: 'UTC', tasks: open.map((t) => ({ ...t, bucket: t.status === 'in_progress' ? 'doing' : 'backlog', reason: '' })) });
+          return json(route, 200, { timezone: 'UTC', tasks: open.map((t) => ({ ...withLease(t), bucket: t.status === 'in_progress' ? 'doing' : 'backlog', reason: '' })) });
         }
-        return json(route, 200, { tasks: rows });
+        return json(route, 200, { tasks: rows.map(withLease), serverNow: new Date(Date.now() + serverOffsetMs).toISOString() });
       }
       if (path === '/' && method === 'POST') {
         const row = { id: `new-${rows.length}`, status: 'open', priority: 0, blockedBy: [], source: 'user', createdAt: created, checkedOutBy: null, checkedOutAt: null, ...body };
@@ -181,6 +195,7 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
         return json(route, 200, { comments: comments.filter((c) => c.taskId === id), truncated: id === 'spec' });
       }
       if (method === 'PATCH') {
+        if (patchGate) await patchGate;
         const patch = { ...body };
         if (patch.assigneeKind === null) patch.assigneeRef = null;
         Object.assign(row, patch);
@@ -332,5 +347,95 @@ test.describe('tasks — work board (assignees, claims, comments, role agents)',
     await pm.click();
     await expect(pm).toHaveAttribute('aria-checked', 'false');
     await expect(notice).toHaveCount(0);
+  });
+
+  test('the panel says it spans workspaces, and says so when the server heartbeat is off', async ({ authenticatedPage: page }) => {
+    roleAgents.heartbeatEnabled = false;
+    await page.goto('/tasks');
+    const panel = page.getByTestId('role-agents');
+    await expect(panel).toContainText('across all workspaces');
+    await expect(panel).toContainText('heartbeat off on this server');
+    await panel.getByRole('button', { name: /Role agents/ }).click();
+    const off = panel.getByTestId('role-agents-heartbeat-off');
+    await expect(off).toContainText("Heartbeat is disabled on this server; role agents won't run");
+    await expect(off.getByRole('link', { name: 'settings page' })).toHaveAttribute('href', '/settings');
+  });
+
+  test('leases are judged on the server clock, not the browser clock', async ({ authenticatedPage: page }) => {
+    // The server runs 3h behind the browser. Judged on the browser clock, a
+    // claim taken 5 server-minutes ago would look long lapsed.
+    serverOffsetMs = -3 * 60 * 60_000;
+    const serverMinutesAgo = (m: number) => new Date(Date.now() + serverOffsetMs - m * 60_000).toISOString();
+    rows[0].checkedOutAt = serverMinutesAgo(5);
+    rows[1].checkedOutAt = serverMinutesAgo(45);
+    await page.goto('/tasks');
+    const spec = page.getByTestId('task-row').filter({ hasText: 'Write the spec' });
+    await expect(spec.getByTestId('task-lease')).toHaveText('pm agent · working · 5m ago');
+    await expect(page.getByTestId('task-row').filter({ hasText: 'Write the tests' }).getByTestId('task-lease')).toHaveText('claim lapsed');
+  });
+
+  test('the board counts sub-task progress over every task, not just the filtered ones', async ({ authenticatedPage: page }) => {
+    await page.goto('/tasks');
+    await page.getByTestId('tasks-view-board').click();
+    await page.getByTestId('assignee-filter').selectOption('agents');
+    // "Buy milk" (unassigned) is filtered out, but it is still Deploy's sub-task.
+    await expect(page.getByTestId('board-card').filter({ hasText: 'Buy milk' })).toHaveCount(0);
+    await expect(page.getByTestId('board-card').filter({ hasText: 'Deploy it' })).toContainText('0/1');
+  });
+
+  test('a role filter whose last task moves away stays visible, marked "(no tasks)"', async ({ authenticatedPage: page }) => {
+    await page.goto('/tasks');
+    const filter = page.getByTestId('assignee-filter');
+    await filter.selectOption('role:qa');
+    const row = page.getByTestId('task-row').filter({ hasText: 'Write the tests' });
+    await row.getByRole('button', { name: 'edit' }).click();
+    await row.getByLabel('Assignee role').selectOption('research');
+    await expect(page.getByTestId('task-row')).toHaveCount(0);
+    await expect(filter).toHaveValue('role:qa');
+    await expect(filter.locator('option:checked')).toHaveText('qa role (no tasks)');
+    await expect(page.getByText('no open tasks match this assignee filter')).toBeVisible();
+    await filter.selectOption('all');
+    await expect(filter.locator('option', { hasText: 'qa role' })).toHaveCount(0);
+  });
+
+  test('a poll that lands while an edit is in flight does not undo it', async ({ authenticatedPage: page }) => {
+    await page.clock.install();
+    await page.goto('/tasks');
+    const milk = page.getByTestId('task-row').filter({ hasText: 'Buy milk' });
+    await expect(milk).toBeVisible();
+
+    let open!: () => void;
+    patchGate = new Promise<void>((resolve) => { open = resolve; });
+    await milk.getByRole('button', { name: 'Mark done' }).click();
+    await expect(milk.getByRole('button', { name: 'Mark open' })).toBeVisible();
+    // The 30s poll fires while the PATCH is held: the stub still says "open".
+    const before = calls.filter((c) => c.method === 'GET' && c.path === '/').length;
+    await page.clock.runFor(31_000);
+    await expect.poll(() => calls.filter((c) => c.method === 'GET' && c.path === '/').length).toBeGreaterThan(before);
+    await expect(milk.getByRole('button', { name: 'Mark open' })).toBeVisible();
+
+    open();
+    await expect.poll(() => rows.find((t) => t.id === 'milk')!.status).toBe('done');
+    await expect(milk.getByRole('button', { name: 'Mark open' })).toBeVisible();
+  });
+
+  test('the assignee editor follows outside changes, and focuses the name field for a person', async ({ authenticatedPage: page }) => {
+    await page.clock.install();
+    await page.goto('/tasks');
+    const deploy = page.getByTestId('task-row').filter({ hasText: 'Deploy it' });
+    await deploy.getByRole('button', { name: 'edit' }).click();
+    await expect(deploy.getByLabel('Agent node')).toHaveValue('node-7');
+
+    // An agent reassigns it; the next poll brings the change into the open editor.
+    Object.assign(rows.find((t) => t.id === 'deploy')!, { assigneeKind: 'role', assigneeRef: 'qa' });
+    await page.clock.runFor(31_000);
+    await expect(deploy.getByLabel('Assignee kind')).toHaveValue('role');
+    await expect(deploy.getByLabel('Assignee role')).toHaveValue('qa');
+
+    await deploy.getByLabel('Assignee kind').selectOption('user');
+    await expect(deploy.getByLabel('Person')).toBeFocused();
+    // Mid-edit (nothing typed yet): a poll does not reset the editor.
+    await page.clock.runFor(31_000);
+    await expect(deploy.getByLabel('Assignee kind')).toHaveValue('user');
   });
 });
