@@ -1,15 +1,16 @@
 'use client';
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bell, Check, CheckCheck, Loader2, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Bell, Check, CheckCheck, Loader2, PauseCircle, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 import type { Notification } from '@/lib/types/notifications';
+import { fmtUsd, periodWord, scopeTitle, type SpendPeriod, type SpendScopeKind } from '@/lib/spend-budgets';
 import { cn } from '@/lib/utils';
 
-type Filter = 'unread' | 'all' | 'agents' | 'pipelines' | 'approvals';
+type Filter = 'unread' | 'all' | 'agents' | 'pipelines' | 'approvals' | 'budgets';
 
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'unread', label: 'unread' },
@@ -17,6 +18,7 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: 'agents', label: 'agents' },
   { key: 'pipelines', label: 'pipelines' },
   { key: 'approvals', label: 'approvals' },
+  { key: 'budgets', label: 'budgets' },
 ];
 
 const PAGE_SIZE = 50;
@@ -33,6 +35,7 @@ function queryFor(filter: Filter, offset: number): string {
   else if (filter === 'agents') q.set('type', 'agent');
   else if (filter === 'pipelines') q.set('type', 'pipeline');
   else if (filter === 'approvals') q.set('type', 'approval');
+  else if (filter === 'budgets') q.set('type', 'spend_budget');
   return `/notifications?${q.toString()}`;
 }
 
@@ -43,6 +46,8 @@ function queryFor(filter: Filter, offset: number): string {
  */
 function linkFor(n: Notification): { href: string; label: string } | null {
   const m = n.metadata ?? {};
+  // Spend budgets (src/security/spend-budgets.ts notify): the budgets card.
+  if (typeof m.budgetId === 'string') return { href: '/#budgets', label: 'open budgets' };
   if (typeof m.workerId === 'string') return { href: `/agents/view?id=${encodeURIComponent(m.workerId)}`, label: 'open agent' };
   if (typeof m.pipelineId === 'string') return { href: '/pipelines', label: 'open pipelines' };
   if (typeof m.requestId === 'string') return { href: '/chat', label: 'open chat' };
@@ -51,10 +56,30 @@ function linkFor(n: Notification): { href: string; label: string } | null {
 }
 
 function toneFor(type: string): string {
+  if (type === 'spend_budget_paused') return 'text-error';
+  if (type === 'spend_budget_warning') return 'text-warning';
   if (type.endsWith('_error') || type.endsWith('_failed')) return 'text-error';
   if (type === 'approval_required') return 'text-primary';
   if (type.endsWith('_complete')) return 'text-tertiary';
   return 'text-on-surface-variant';
+}
+
+/** Readable type label; raw type otherwise. */
+const TYPE_LABELS: Record<string, string> = {
+  spend_budget_warning: 'budget warning',
+  spend_budget_paused: 'budget reached · agents paused',
+};
+
+/** Spend-vs-limit line for a spend budget notification, from its metadata. */
+function budgetLine(n: Notification): string | null {
+  const m = n.metadata ?? {};
+  if (typeof m.budgetId !== 'string' || typeof m.spentUsd !== 'number' || typeof m.limitUsd !== 'number') return null;
+  const scope = scopeTitle({
+    scopeKind: (m.scopeKind as SpendScopeKind) ?? 'user',
+    scopeRef: typeof m.scopeRef === 'string' ? m.scopeRef : null,
+  });
+  const period = m.period === 'day' || m.period === 'month' ? (m.period as SpendPeriod) : null;
+  return `${scope}${period ? ` · ${periodWord(period)}` : ''} · ${fmtUsd(m.spentUsd)} of ${fmtUsd(m.limitUsd)}`;
 }
 
 function when(iso: string): string {
@@ -239,14 +264,21 @@ export default function NotificationsPage() {
                 data-testid="notification-row"
                 data-read={n.read ? 'true' : 'false'}
               >
-                <span aria-hidden className={cn('mt-1.5 shrink-0 dot', !n.read ? 'dot-ok dot-live text-tertiary' : 'dot-idle')} />
+                {n.type === 'spend_budget_paused' ? (
+                  <PauseCircle aria-hidden className={cn('mt-0.5 w-4 h-4 shrink-0', n.read ? 'text-outline' : 'text-error')} />
+                ) : n.type === 'spend_budget_warning' ? (
+                  <AlertTriangle aria-hidden className={cn('mt-0.5 w-4 h-4 shrink-0', n.read ? 'text-outline' : 'text-warning')} />
+                ) : (
+                  <span aria-hidden className={cn('mt-1.5 shrink-0 dot', !n.read ? 'dot-ok dot-live text-tertiary' : 'dot-idle')} />
+                )}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-baseline gap-2 flex-wrap">
                     <p className={cn('text-sm', n.read ? 'text-on-surface-variant' : 'text-on-surface font-medium')}>{n.title}</p>
-                    <span className={cn('text-[10px] font-mono', toneFor(n.type))}>{n.type}</span>
+                    <span className={cn('text-[10px] font-mono', toneFor(n.type))}>{TYPE_LABELS[n.type] ?? n.type}</span>
                     <span className="text-[10px] text-outline ml-auto" suppressHydrationWarning>{when(n.createdAt)}</span>
                   </div>
                   {n.body && <p className="text-xs text-on-surface-variant mt-1 whitespace-pre-wrap line-clamp-3">{n.body}</p>}
+                  {budgetLine(n) && <p className="text-[11px] text-on-surface-variant mt-0.5 tabular-nums">{budgetLine(n)}</p>}
                   <div className="flex items-center gap-3 mt-1.5">
                     {link && (
                       // Client-side navigation keeps the mark-read request alive;

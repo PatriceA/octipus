@@ -37,7 +37,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   const tabs = [
     { href: '/admin/users', label: 'Users' },
     { href: '/admin/orgs', label: 'Orgs' },
-    { href: '/admin/quotas', label: 'Quotas' },
+    { href: '/admin/quotas', label: 'Quotas & budgets' },
     { href: '/admin/destinations', label: 'Notification destinations' },
     { href: '/admin/audit', label: 'Audit log' },
   ];
@@ -46,7 +46,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     <div className="space-y-6 max-w-6xl font-mono">
       <PageHeader
         title="admin"
-        description="manage users, orgs, quotas, and inspect the audit log."
+        description="manage users, orgs, quotas and spend budgets, and inspect the audit log."
       />
 
       <div className="flex gap-2 border-b border-outline-variant/60">

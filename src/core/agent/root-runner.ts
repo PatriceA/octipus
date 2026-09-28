@@ -2,6 +2,7 @@ import { resolve } from 'path';
 import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
 import { humanizeProviderError } from '@/core/errors/humanize';
+import { type LimitRefusal, limitRefusalOf } from '@/core/errors/limit-refusal';
 import { isCancellationError } from '@/core/swarm/errors';
 import { swarmNodeRepository } from '@/core/swarm/node-repository';
 import { taskFingerprint } from '@/core/swarm/spawner';
@@ -148,7 +149,7 @@ export async function runRootAgent(
   workspaceId: string | null = null,
   /** Chat/work split (Thread 3): inline vs file deliverable directive. */
   outputDirective: { mode: 'inline' | 'file'; forced: boolean } = { mode: 'inline', forced: false },
-): Promise<{ response: string; agentId: string; sources: string[]; outcome: TurnOutcome }> {
+): Promise<{ response: string; agentId: string; sources: string[]; outcome: TurnOutcome; limit?: LimitRefusal }> {
   const emit = deps.emit;
   const agentManager = getAgentManager();
   // One routing decision, used twice: the model comes from the lane, and so do
@@ -815,10 +816,20 @@ export async function runRootAgent(
     deps.setLastWorkerResult(null);
 
     const errMsg = (error as Error).message || '';
-    const wasStopped = errMsg.includes('aborted') || errMsg.includes('stopped') || worker.getStatus() === 'stopped';
+    // A spend budget or quota refusal is neither a failure nor a stop. The
+    // worker aborts itself on a spend pause, so without this check its
+    // 'stopped' status reported the refusal as "Task was stopped".
+    // The worker records a refusal as 'failed'; 'stopped' means the user (or
+    // a cascade) stopped it first, and that stop wins over a late refusal.
+    const limit = worker.getStatus() === 'stopped' ? null : limitRefusalOf(error);
+    const wasStopped = !limit
+      && (errMsg.includes('aborted') || errMsg.includes('stopped') || worker.getStatus() === 'stopped');
     // Admin cancel / cascaded abort is an intentional outcome — don't log it
     // as `error`. The status downstream is already 'stopped'/'cancelled'.
-    if (wasStopped || isCancellationError(error)) {
+    if (limit) {
+      // A user cap is the system working as configured, not a fault.
+      coreLogger.warn({ agentId, code: limit.refusal.code, reason: limit.refusal.reason }, 'Root agent refused by a spend budget or quota');
+    } else if (wasStopped || isCancellationError(error)) {
       coreLogger.info({ agentId, reason: errMsg }, 'Root agent cancelled');
     } else {
       coreLogger.error({ error, agentId }, 'Root agent failed');
@@ -844,7 +855,9 @@ export async function runRootAgent(
     });
     // Swarm: mark root failed/cancelled + emit terminal event.
     try {
-      const rootStatus: 'cancelled' | 'tool_error' = wasStopped ? 'cancelled' : 'tool_error';
+      // 'budget' is the swarm's existing status for a cap (swarm/errors.ts
+      // classifies quota and spend errors the same way).
+      const rootStatus: 'cancelled' | 'budget' | 'tool_error' = wasStopped ? 'cancelled' : limit ? 'budget' : 'tool_error';
       await swarmNodeRepository.updateStatus(agentId, {
         status: rootStatus,
         tokensUsed: worker.getTotalTokens(),
@@ -874,6 +887,7 @@ export async function runRootAgent(
       coreLogger.debug({ err, agentId }, 'swarm root failure bookkeeping skipped');
     }
 
+    if (limit) return { response: limit.text, agentId, sources: [], outcome: 'failed', limit: limit.refusal };
     const response = wasStopped
       ? 'Task was stopped. Would you like to adjust the request or start something new?'
       : `I encountered an error while processing your request: ${humanizeProviderError(errMsg)}`;

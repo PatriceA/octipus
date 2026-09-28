@@ -196,6 +196,13 @@ describe('Crypto Utils', () => {
     test('returns true for empty equal strings', () => {
       expect(secureCompare('', '')).toBe(true);
     });
+
+    test('compares by bytes, not UTF-16 length', () => {
+      expect(secureCompare('café', 'café')).toBe(true);
+      expect(secureCompare('café', 'cafe')).toBe(false);
+      expect(secureCompare('é', 'é\u0000')).toBe(false);
+      expect(secureCompare('', 'a')).toBe(false);
+    });
   });
 
   describe('encryptWithPassword/decryptWithPassword', () => {

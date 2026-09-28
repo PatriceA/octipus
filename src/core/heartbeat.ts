@@ -271,6 +271,11 @@ export function renderChecklist(p: HeartbeatProbe, tz = 'UTC'): string {
 /** A role name as stored on `tasks.assignee_ref` and `hooks.trigger_config.role`. */
 const ROLE_NAME = /^[a-z][a-z0-9_-]{0,63}$/;
 
+/** Is `value` shaped like a role name (not whether the role exists)? */
+export function isRoleName(value: unknown): value is string {
+  return typeof value === 'string' && ROLE_NAME.test(value);
+}
+
 /** Most ready tasks one probe returns (highest priority, oldest first). */
 const ROLE_PROBE_LIMIT = 100;
 
@@ -324,12 +329,21 @@ export async function probeRoleWork(userId: string, role: string): Promise<RoleT
  * would replace (narrow or widen) the owner's own choice for every session.
  */
 async function defaultBoardWritesAllowed(hook: Hook): Promise<boolean> {
+  return boardWritesAllowed(hook.userId, hook.sessionId);
+}
+
+/**
+ * The permission half of `defaultBoardWritesAllowed`, for callers without a
+ * hook row (the tasks page's role-agents panel asks it before a hook exists).
+ * A failed check reads as not allowed.
+ */
+export async function boardWritesAllowed(userId: string, sessionId?: string | null): Promise<boolean> {
   try {
     const { getPermissionManager } = await import('@/security/permissions');
-    const check = await getPermissionManager().check(hook.userId, 'tasks', 'write', {}, { sessionId: hook.sessionId ?? '', workspaceId: null });
+    const check = await getPermissionManager().check(userId, 'tasks', 'write', {}, { sessionId: sessionId ?? '', workspaceId: null });
     return check.level === 'ALLOW' && check.allowed;
   } catch (err) {
-    coreLogger.warn({ err, hookId: hook.id }, 'heartbeat: tasks permission check failed (treating as not allowed)');
+    coreLogger.warn({ err, userId }, 'heartbeat: tasks permission check failed (treating as not allowed)');
     return false;
   }
 }
@@ -874,18 +888,23 @@ export async function ensureRoleHeartbeatHook(userId: string, role: string, now:
   const { ROLE_CONFIGS } = await import('@/core/agent/roles');
   if (!Object.hasOwn(ROLE_CONFIGS, role)) throw new Error(`Unknown role "${role}"`);
   const db = getDb();
-  const [existing] = await db
+  // POST /api/hooks checks then writes, so a race can leave two rows for one
+  // role. Keep exactly one of them running: an already enabled row wins (the
+  // oldest, if several are), else the oldest is re-enabled; the others are
+  // left as they are, and a disabled duplicate stays disabled.
+  const existing = await db
     .select()
     .from(hooks)
     .where(and(eq(hooks.trigger, 'heartbeat'), eq(hooks.userId, userId), sql`${hookRole} = ${role}`))
-    .limit(1);
+    .orderBy(desc(hooks.isEnabled), asc(hooks.createdAt), asc(hooks.id));
 
-  if (existing) {
-    if (!existing.isEnabled) {
-      await db.update(hooks).set({ isEnabled: true, nextRunAt: now, updatedAt: now }).where(eq(hooks.id, existing.id));
+  if (existing.length > 0) {
+    const keep = existing[0];
+    if (!keep.isEnabled) {
+      await db.update(hooks).set({ isEnabled: true, nextRunAt: now, updatedAt: now }).where(eq(hooks.id, keep.id));
       await reloadHookCache();
     }
-    return existing.id;
+    return keep.id;
   }
 
   const [row] = await db
@@ -906,7 +925,7 @@ export async function ensureRoleHeartbeatHook(userId: string, role: string, now:
   return row.id;
 }
 
-/** Disable `userId`'s heartbeat hook for `role`. Idempotent. */
+/** Disable every heartbeat hook `userId` has for `role` (duplicates included). Idempotent. */
 export async function disableRoleHeartbeatHook(userId: string, role: string, now: Date = new Date()): Promise<void> {
   const db = getDb();
   await db

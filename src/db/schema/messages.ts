@@ -38,6 +38,12 @@ export interface MessageMetadata {
   pipelineId?: string;
   stageId?: string;
   pipelineEvent?: string;
+  /**
+   * The turn was refused by a user cap: `LimitRefusal` from
+   * `src/core/errors/limit-refusal.ts` ({ code, reason }). Typed loosely here
+   * so the schema does not import core. The web chat renders it as a card.
+   */
+  limit?: { code: 'SPEND_BUDGET_EXCEEDED' | 'QUOTA_EXCEEDED'; reason: object };
 }
 
 export interface AttachmentData {

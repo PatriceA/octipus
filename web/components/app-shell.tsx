@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 import { GlobalPermissionBanner } from './global-permission-banner';
 import { Header } from './header';
 import { ImpersonationBanner } from './impersonation-banner';
+import { SpendBudgetBanner } from './spend-budget-banner';
 import { Sidebar } from './sidebar';
 
 const PUBLIC_ROUTES = ['/login', '/register', '/forgot-password', '/setup'];
@@ -48,6 +49,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex flex-col h-screen bg-background text-on-surface overflow-hidden font-sans">
       <ImpersonationBanner />
+      <SpendBudgetBanner />
       <div className="flex flex-1 min-h-0">
         <Sidebar />
         <div className="flex flex-col flex-1 min-w-0 bg-background">

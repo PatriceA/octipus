@@ -16,12 +16,14 @@ import {
   XCircle,
   Zap,
 } from 'lucide-react';
+import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { compareTimelineEntries } from '../../../src/shared/timeline-order';
 import { agentCompletionLabel, type AgentCompletionReason } from '../../../src/shared/agent-completion';
 import type { ToolInputPreview, ToolResultPreview } from '../../../src/shared/work-stream';
 import DiffView from '@/components/chat/diff-view';
 import { Markdown } from '@/components/ui/markdown-renderer';
+import { fmtUsd, type LimitRefusal, periodWord, resetLabel, scopeLabel } from '@/lib/spend-budgets';
 import { cn } from '@/lib/utils';
 
 // ---------------------------------------------------------------------------
@@ -33,6 +35,8 @@ export interface MessageMetadata {
   tokens?: number;
   latencyMs?: number;
   cached?: boolean;
+  /** The turn was refused by a spend budget or quota (backend `ResponseMetadata.limit`). */
+  limit?: LimitRefusal;
 }
 
 export interface ChatMessageData {
@@ -178,6 +182,39 @@ function MessageContent({ content }: { content: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// LimitRefusalCard — a turn refused by a spend budget or quota. Names the
+// budget, the limit, the spend and the reset time instead of a bare error.
+// ---------------------------------------------------------------------------
+
+function LimitRefusalCard({ limit, fallback }: { limit: LimitRefusal; fallback: string }) {
+  if (limit.code !== 'SPEND_BUDGET_EXCEEDED') {
+    return (
+      <div data-testid="limit-refusal" data-code={limit.code} className="border border-warning/50 bg-warning-container/40 rounded-xs px-4 py-3 text-sm text-on-surface">
+        <p className="font-medium text-warning flex items-center gap-1.5"><XCircle className="h-4 w-4" aria-hidden /> Quota reached</p>
+        <p className="mt-1 text-on-surface-variant">{fallback}</p>
+      </div>
+    );
+  }
+  const r = limit.reason;
+  const scope = scopeLabel({ scopeKind: r.scopeKind, scopeRef: r.scopeRef });
+  return (
+    <div data-testid="limit-refusal" data-code={limit.code} className="border border-error/50 bg-error-container/40 rounded-xs px-4 py-3 text-sm text-on-surface space-y-1">
+      <p className="font-medium text-error flex items-center gap-1.5">
+        <XCircle className="h-4 w-4" aria-hidden /> Agents are paused — spend budget reached
+      </p>
+      <p>
+        {scope.charAt(0).toUpperCase() + scope.slice(1)} {periodWord(r.period)} budget of{' '}
+        <strong>{fmtUsd(r.limitUsd)}/{r.period}</strong> is reached: <strong>{fmtUsd(r.spentUsd)}</strong> spent this {r.period}.
+      </p>
+      <p className="text-on-surface-variant text-xs">
+        {r.resetsAt && <span suppressHydrationWarning>Resets {resetLabel(r.resetsAt)}. </span>}
+        Ask an admin to raise the limit. <Link href="/#budgets" className="text-primary underline">See your budgets</Link>
+      </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // MessageBubble
 // ---------------------------------------------------------------------------
 
@@ -236,9 +273,13 @@ function MessageBubble({ message }: { message: ChatMessageData }) {
         </div>
       </div>
       <div className="flex flex-col gap-1 min-w-0 flex-1">
-        <div className="bg-surface-container border border-outline-variant/10 px-4 py-3 rounded-2xl rounded-tl-md shadow-xs text-on-surface">
-          <MessageContent content={content} />
-        </div>
+        {metadata?.limit ? (
+          <LimitRefusalCard limit={metadata.limit} fallback={content} />
+        ) : (
+          <div className="bg-surface-container border border-outline-variant/10 px-4 py-3 rounded-2xl rounded-tl-md shadow-xs text-on-surface">
+            <MessageContent content={content} />
+          </div>
+        )}
 
         {/* Metadata bar */}
         <div className="flex items-center gap-2 px-1 flex-wrap">
