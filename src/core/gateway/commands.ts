@@ -267,19 +267,8 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
     description: 'Compact session context — summarizes history and saves to session folder. Optional: /compact <focus instructions>',
     minTrustLevel: 'user',
     handler: async (ctx) => {
-      if (!ctx.sessionId) return { text: 'No active session to compact.' };
-      try {
-        const { maybeCompactSession } = await import('@/core/agent/session-compaction');
-        const instructions = ctx.rawArgs.trim();
-        await maybeCompactSession(ctx.sessionId, {
-          userInstructions: instructions || undefined,
-          force: instructions.length > 0,
-        });
-        const note = instructions ? ` (focus: ${instructions})` : '';
-        return { text: `Session compacted${note}. Older messages summarized, recent messages preserved.` };
-      } catch (err) {
-        return { text: `Compaction failed: ${(err as Error).message}` };
-      }
+      const { compactSessionCommand } = await import('@/core/agent/session-compaction');
+      return { text: await compactSessionCommand(ctx.sessionId, ctx.rawArgs) };
     },
   });
 

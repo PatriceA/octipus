@@ -3,6 +3,7 @@ import './help';
 import './status';
 import './stop';
 import './clear';
+import './compact';
 import './model';
 import './models';
 import './plan';
