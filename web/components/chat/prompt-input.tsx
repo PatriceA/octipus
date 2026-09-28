@@ -569,7 +569,6 @@ export default function PromptInput({
           ref={textareaRef}
           value={text}
           aria-controls={showCommands ? commandListId : undefined}
-          aria-expanded={showCommands}
           aria-autocomplete="list"
           aria-activedescendant={showCommands && selectedCommand ? `${commandListId}-${selectedCommand.name}` : undefined}
           onChange={(e) => {
