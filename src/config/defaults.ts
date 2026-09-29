@@ -70,6 +70,7 @@ export const defaultConfig: Partial<Config> = {
     maxTokenBudget: 100000,
     streaming: true,
     promptDumps: true,
+    cliShellGuard: true,
     promptTier: 'auto',
     liteMaxIterations: 8,
     smallModelMaxParams: 10_000_000_000,

@@ -213,6 +213,8 @@ export const agentConfigSchema = z.object({
   streaming: z.boolean().default(true),
   /** Write each agent run's full prompt to ~/.octipus/prompts (0600, swept after 7 days). */
   promptDumps: z.boolean().default(true),
+  /** Hook-block network calls from managed CLI agents' shells (curl, fetch one-liners); `# octipus-fallback: <reason>` passes. */
+  cliShellGuard: z.boolean().default(true),
   /**
    * Root-agent prompt tier. 'auto' (default) re-derives it every turn from the
    * current default model's parameter count, so swapping to a smaller model

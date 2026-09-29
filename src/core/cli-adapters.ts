@@ -12,6 +12,7 @@ import { foldCacheCounters } from '@/models/providers/usage';
 import { coreLogger } from '@/utils/logger';
 import type { AgentEvent } from './agent-base';
 import { emptyCounters, type SideEffectCounters } from './swarm/receipt';
+import { SHELL_GUARD_TOOL_MATCHER, getShellGuardScriptPath, shellGuardHookCommand } from './cli-shell-guard';
 
 const IS_WIN = process.platform === 'win32';
 const CLI_BRIDGE_TOOL_TIMEOUT_SECONDS = 7200;
@@ -43,6 +44,8 @@ export interface CliRunConnection {
   workingDirectory?: string;
   /** Codex only: effective MCP servers from `discoverCodexMcpServers`, disabled for the run. */
   codexMcpServers?: Array<{ name: string }>;
+  /** Install the network-shell guard hook (`agent.cliShellGuard`). */
+  shellGuard?: boolean;
 }
 
 /**
@@ -191,6 +194,35 @@ export function getEmptyMcpConfigPath(): string {
   writeFileSync(configPath, JSON.stringify({ mcpServers: {} }), { mode: 0o600 });
   emptyMcpConfigPath = configPath;
   return configPath;
+}
+
+/** Claude `--settings` file registering the shell guard as a PreToolUse hook. */
+export function getClaudeShellGuardSettingsPath(): string {
+  const path = join(dirname(getShellGuardScriptPath()), 'claude-shell-guard.json');
+  writeFileSync(path, JSON.stringify({ hooks: { PreToolUse: [{ matcher: SHELL_GUARD_TOOL_MATCHER, hooks: [{ type: 'command', command: shellGuardHookCommand() }] }] } }));
+  return path;
+}
+
+/** Windows-only `.cmd` wrapper Codex's hook calls by bare path (see the Codex builder for why). */
+export function getCodexShellGuardWrapper(): string {
+  // ponytail: a temp dir path with a space would need quotes again; add a no-space fallback dir if that ever occurs.
+  const path = join(dirname(getShellGuardScriptPath()), 'shell-guard.cmd');
+  writeFileSync(path, `@${shellGuardHookCommand()}\r\n`);
+  return path;
+}
+
+/** Antigravity customization root holding `.agents/hooks.json` for the shell guard. */
+export function getAgyShellGuardDir(): string {
+  const dir = join(dirname(getShellGuardScriptPath()), 'agy-shell-guard');
+  mkdirSync(join(dir, '.agents'), { recursive: true });
+  // agy runs Windows hooks via Go's `cmd /c`, which backslash-escapes every
+  // quote (verified live: cmd then can't find `\"C:\Program Files\...`). A
+  // quote-free relative wrapper sidesteps it; hooks run in the hooks.json dir.
+  // Explicit `.\`: NoDefaultCurrentDirectoryInExePath may be inherited.
+  if (IS_WIN) writeFileSync(join(dir, '.agents', 'shell-guard.cmd'), `@${shellGuardHookCommand()}\r\n`);
+  const command = IS_WIN ? '.\\shell-guard.cmd' : shellGuardHookCommand();
+  writeFileSync(join(dir, '.agents', 'hooks.json'), JSON.stringify({ 'octipus-shell-guard': { PreToolUse: [{ matcher: 'run_command', hooks: [{ type: 'command', command }] }] } }));
+  return dir;
 }
 
 /** Cached path — reseeded only if the dir has gone missing. */
@@ -659,6 +691,9 @@ export class CLIArgumentBuilder {
     const { disallowed, rest } = splitClaudeDisallowedTools(settings.extraArgs ?? []);
     args.push('--disallowedTools', [...new Set([...disallowed, ...CLAUDE_NATIVE_SUBAGENT_TOOLS])].join(','));
 
+    // Per-launch settings layer; merges over the user's, never writes it.
+    if (connection?.shellGuard) args.push('--settings', getClaudeShellGuardSettingsPath());
+
     if (rest.length) {
       args.push(...rest);
     }
@@ -695,6 +730,10 @@ export class CLIArgumentBuilder {
     if (settings.extraArgs?.length) {
       args.push(...settings.extraArgs);
     }
+
+    // agy reads hooks only from customization roots; an added workspace dir
+    // is one, so the guard rides in without touching ~/.gemini or the project.
+    if (connection?.shellGuard) args.push('--add-dir', getAgyShellGuardDir());
 
     // agy has no --system-prompt flag, and text-mode --print takes no stdin
     // (only --input-format stream-json, which forces stream-json output).
@@ -804,6 +843,18 @@ export class CLIArgumentBuilder {
       // CODEX_MODEL/settings.model override) is lost for this run — an
       // acceptable cost for a run with no working tool bridge anyway.
       baseArgs.push('--ignore-user-config');
+    }
+    if (connection?.shellGuard) {
+      // Hooks from -c are untrusted until reviewed in the TUI, and exec skips
+      // untrusted hooks silently (verified live on 0.158.0), hence the bypass.
+      // Windows spawns codex.cmd through cmd.exe, where windowsShellQuote's `\"`
+      // flips quote state and the matcher's `|` became a pipe (exit 255). So the
+      // Windows value carries no `"`, space or `|`: TOML literal strings, no
+      // matcher (the script ignores calls without a command), a .cmd wrapper.
+      const hook = IS_WIN
+        ? `{hooks=[{type='command',command='${getCodexShellGuardWrapper()}'}]}`
+        : `{ matcher = ${JSON.stringify(SHELL_GUARD_TOOL_MATCHER)}, hooks = [{ type = "command", command = ${JSON.stringify(shellGuardHookCommand())} }] }`;
+      baseArgs.push('--dangerously-bypass-hook-trust', '-c', `hooks.PreToolUse=[${hook}]`);
     }
     if (modelOverride) baseArgs.push('-c', `model="${modelOverride}"`);
     if (settings?.extraArgs?.length) baseArgs.push(...settings.extraArgs);

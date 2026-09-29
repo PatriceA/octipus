@@ -127,6 +127,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       maxTokenBudget: parseInt(process.env.AGENT_MAX_TOKEN_BUDGET || '100000', 10),
       streaming: true, // no env form: the `agent.streaming` setting owns it
       promptDumps: true, // same: the `agent.promptDumps` setting owns it
+      cliShellGuard: process.env.AGENT_CLI_SHELL_GUARD !== 'false',
       // The `ORCHESTRATOR_*` names are still read as a fallback: they are set
       // in real .env files, and dropping them would silently reset a tuned
       // install to defaults rather than fail loudly.

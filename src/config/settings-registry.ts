@@ -349,6 +349,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
       'Write every agent run\'s full prompt to ~/.octipus/prompts for post-mortems (owner-only files, swept after 7 days). Off = nothing is written.',
     isSecret: false,
   },
+  {
+    key: 'agent.cliShellGuard',
+    category: 'agent',
+    valueType: 'boolean',
+    defaultValue: true,
+    description:
+      'Block network/API calls from managed CLI agents\' shells (curl, Invoke-RestMethod, python/node fetch one-liners, local MCP endpoints) with a per-launch pre-tool hook, so they use Octipus tools. A command carrying `# octipus-fallback: <reason>` passes. Claude Code, Codex and Antigravity; Mistral Vibe has no hooks.',
+    isSecret: false,
+    envVar: 'AGENT_CLI_SHELL_GUARD',
+  },
 
   {
     key: 'agent.promptTier',
