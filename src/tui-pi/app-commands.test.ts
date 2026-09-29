@@ -146,6 +146,22 @@ test('the thinking line shows model and elapsed seconds', async () => {
   await t.app.stop();
 });
 
+test('progress appears once without ending the turn or clearing a live answer', async () => {
+  const t = mount();
+  gateway.listener({ kind: 'agent.start', role: 'general', model: 'cli/claude' });
+  gateway.listener({ kind: 'delta', delta: 'Answer in progress', iteration: 1 });
+  const update = { kind: 'message', role: 'assistant', content: 'Found the cause.', messageId: 'p1', progress: true } as const;
+  gateway.listener(update);
+  gateway.listener(update);
+  expect(t.text().match(/Found the cause\./g)).toHaveLength(1);
+  expect(t.text()).toContain('Answer in progress');
+  expect(t.activity()).toContain('thinking');
+  gateway.listener({ kind: 'message', role: 'assistant', content: 'Fixed and tested.' });
+  expect(t.text()).not.toContain('Answer in progress');
+  expect(t.text()).toContain('Found the cause.');
+  await t.app.stop();
+});
+
 test('streamed deltas draw live, an iteration change keeps the earlier text, the reply supersedes the live block', async () => {
   const t = mount();
   gateway.listener({ kind: 'delta', delta: 'Let me ', iteration: 1 });

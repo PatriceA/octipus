@@ -575,17 +575,18 @@ export function createMetaTools(
     {
       name: 'send_status_update',
       description:
-        'Send an OPTIONAL progress update to the user during a long-running task. ' +
+        'Send a brief, persistent chat message for a meaningful finding, blocker or change of direction during a task. ' +
+        'Work quietly otherwise: no routine narration, heartbeats or tool-by-tool summaries. Do not repeat an update already sent as public text. ' +
         'DO NOT use this to deliver the final answer — the final answer is your plain-text ' +
         'reply in the next LLM turn after all tool calls return. ' +
         'NEVER call send_status_update as your terminal action: after a child returns, respond directly. ' +
-        'This tool is for mid-flight heartbeat messages only, and must NOT be called more than 2 times per request.',
+        'Use only when the user benefits from hearing the update before the task finishes.',
       parameters: {
         type: 'object',
         properties: {
           message: {
             type: 'string',
-            description: 'Short progress message (e.g., "Spawning research agent…", "Compiling results…"). Not the final answer.',
+            description: 'A concise finding, blocker or change of direction that matters to the user now. Not the final answer.',
           },
           stage: {
             type: 'string',

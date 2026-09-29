@@ -2,6 +2,33 @@ import type { Route, WebSocketRoute } from '@playwright/test';
 import { json, selectChatSession } from './fixtures/api-stubs';
 import { expect, test } from './fixtures/auth';
 
+test('midrun messages appear once, survive reload and keep the active turn running', async ({ authenticatedPage: page }) => {
+  let socket: WebSocketRoute | undefined;
+  let persisted: any[] = [];
+  await page.routeWebSocket(/\/ws\?/, ws => { socket = ws; });
+  await page.route('**/api/sessions/sess-1/messages**', route => json(route, 200, { messages: persisted }));
+  await page.goto('/chat');
+  await selectChatSession(page, 'sess-1');
+  await expect.poll(() => Boolean(socket)).toBe(true);
+  const input = page.getByPlaceholder(/send a message/i).first();
+  await input.fill('Investigate the regression');
+  await input.press('Enter');
+  await expect(page.getByText('Thinking...', { exact: true })).toBeVisible();
+  const createdAt = new Date().toISOString();
+  const update = { type: 'turn_event', event: 'status_update', sessionId: 'sess-1',
+    data: { message: 'Found the cause; verifying the fix.', messageId: 'progress-1', createdAt } };
+  socket!.send(JSON.stringify(update));
+  socket!.send(JSON.stringify(update));
+  await expect(page.getByText(update.data.message, { exact: true })).toHaveCount(1);
+  await expect(page.getByText('Thinking...', { exact: true })).toBeVisible();
+  persisted = [{ id: 'progress-1', role: 'assistant', content: update.data.message, createdAt, metadata: { kind: 'progress' } }];
+  socket!.send(JSON.stringify({ type: 'chat_response', sessionId: 'sess-1', response: 'Fixed and tested.' }));
+  await expect(page.getByText('Fixed and tested.', { exact: true })).toHaveCount(1);
+  await page.reload();
+  await selectChatSession(page, 'sess-1');
+  await expect(page.getByText(update.data.message, { exact: true })).toHaveCount(1);
+});
+
 test('a pasted image is uploaded, referenced in the turn, and survives history reload', async ({ authenticatedPage: page }) => {
   let socket: WebSocketRoute | undefined;
   let sent: any;

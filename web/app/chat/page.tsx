@@ -951,7 +951,16 @@ export default function ChatPage() {
 
     switch (data.event) {
       case 'status_update':
-        setStatusMessage((data.data as any)?.message || null);
+        if (data.data?.messageId && data.data?.message) {
+          const update = data.data;
+          updateSessionState(sessionId, prev => ({
+            ...prev,
+            messages: prev.messages.some(m => m.id === update.messageId) ? prev.messages : [...prev.messages, {
+              id: update.messageId, role: 'assistant', content: update.message,
+              timestamp: new Date(update.createdAt),
+            }],
+          }));
+        } else setStatusMessage((data.data as any)?.message || null);
         break;
 
       case 'approval_required':

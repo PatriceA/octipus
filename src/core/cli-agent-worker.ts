@@ -103,6 +103,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
    */
   private resuming = false;
   private generation = '';
+  private commentaryDelivery: Promise<void> = Promise.resolve();
   private clearedAt?: string;
   private userCursor?: { id: string; createdAt: string };
   private resumeDelta: string[] = [];
@@ -403,6 +404,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
       }
       this.addSystemMessage(`You are connected to your Octipus run through the octipus MCP server. Its tools are your actual registered Octipus tools, including skills, plans and delegation when allowed. Use these tools for Octipus work.
 ` +
+        `Communication: work quietly. Public intermediate text from the root agent is shown in the user's chat. Write only when there is a meaningful finding, blocker or change of direction; skip routine narration, heartbeats and tool-by-tool summaries. Do not repeat the same update in text and send_status_update. Use request_user_approval when a user decision is required, and give a concise final answer when finished.
+` +
         `Tool selection: use available dedicated tools before shell equivalents. For reading, searching and editing files, use your CLI's native file tools or the corresponding Octipus tools; do not substitute shell commands or Python scripts when a suitable tool is available. Use the shell for builds, tests, git and system commands that need it. Explicit user instructions take precedence.
 ` +
         `Before accessing an external service or MCP server, use list_tools and describe_tool to find a suitable registered integration, then call_discovered_tool with its name and arguments. Do not create or reuse curl, Python or other shell clients when a suitable integration tool is available. Tools omitted from the initial tool list may still be discoverable. If no suitable tool exists or it is technically unavailable, use an allowed fallback and briefly state the reason; a permission denial is not technical unavailability.
@@ -516,6 +519,7 @@ export class CLIAgentWorker extends BaseAgentWorker {
 
       throw error;
     } finally {
+      await this.commentaryDelivery;
       permissionCleanup();
       this.launchCleanup?.();
       this.launchCleanup = undefined;
@@ -900,6 +904,14 @@ export class CLIAgentWorker extends BaseAgentWorker {
         this.emit(type, data);
       },
       {
+        onCommentary: text => {
+          if (!isRootAgent(this.context) || this.aborted) return;
+          const generation = this.generation;
+          this.commentaryDelivery = this.commentaryDelivery.then(async () => {
+            const { getAgentService } = await import('./agent/service');
+            await getAgentService().sendStatusUpdate(text, this.context, 'commentary', undefined, generation);
+          }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'CLI commentary delivery failed'));
+        },
         isBridgedTool: name => /^mcp__octipus__|^octipus[_.]|^octipus_run_[a-f0-9]+\./.test(name),
         onTurn: () => {
           // Iteration = model turns (C15). Tool-call count is tracked

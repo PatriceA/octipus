@@ -7,6 +7,11 @@ function single(events: AgentSessionEvent[]): AgentSessionEvent {
 }
 
 describe('decodeGatewayEvent', () => {
+  test('durable progress is an intermediate assistant message, ephemeral status stays out of history', () => {
+    expect(decodeGatewayEvent({ type: 'rootAgent.status', payload: { message: 'Found the cause.', messageId: 'm1' } }))
+      .toEqual([{ kind: 'message', role: 'assistant', content: 'Found the cause.', messageId: 'm1', progress: true }]);
+    expect(decodeGatewayEvent({ type: 'rootAgent.status', payload: { message: 'Connecting' } })).toEqual([]);
+  });
   test('permission.request → detail uses path when available', () => {
     const out = decodeGatewayEvent({
       type: 'permission.request',

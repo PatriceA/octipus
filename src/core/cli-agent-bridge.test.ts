@@ -9,6 +9,10 @@ import { addPlanFeedback, type WorkPlanState } from '@/shared/work-plan';
 
 const fixture = vi.hoisted(() => ({ script: '', dir: '', plan: { revision: 0, current: null, previous: [] } as WorkPlanState,
   check: vi.fn(), execute: vi.fn(), cancel: vi.fn(), readFailure: false, audit: vi.fn(), status: vi.fn(), requestApproval: vi.fn() }));
+const commentary = vi.hoisted(() => vi.fn().mockResolvedValue({ sent: true }));
+vi.mock('./agent/service', () => ({ getAgentService: () => ({ sendStatusUpdate: commentary }) }));
+// These process/bridge fixtures have no database; accounting is tested separately.
+vi.mock('@/models/providers/instrumented', () => ({ recordProviderUsage: async () => {} }));
 vi.mock('@/db/repositories/tool-action-repository', () => ({ toolActionRepository: { pending: async () => [], start: async () => {}, finish: async () => {} } }));
 vi.mock('child_process', async importOriginal => {
   const actual = await importOriginal<typeof import('child_process')>();
@@ -52,6 +56,7 @@ vi.mock('@/security/permissions', () => ({ getPermissionManager: () => ({ check:
 vi.mock('@/hooks/manager', () => ({ getHookManager: () => ({ triggerToolHooks: async () => ({ decision: 'allow' }) }) }));
 
 beforeEach(() => {
+  commentary.mockClear();
   fixture.dir = mkdtempSync(join(tmpdir(), 'octipus-cli-workflow-'));
   fixture.script = join(fixture.dir, 'fake-claude.mjs');
   fixture.plan = { revision: 0, current: null, previous: [] };
@@ -86,6 +91,19 @@ beforeEach(() => {
 afterEach(() => rmSync(fixture.dir, { recursive: true, force: true }));
 
 describe.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('CLI worker with actual subprocess and run bridge', () => {
+  it.each([true, false])('delivers intermediate public text only for a root worker (root=%s)', async root => {
+    writeFileSync(fixture.script, `
+      console.log(JSON.stringify({type:'assistant',message:{id:'one',content:[{type:'text',text:'Found the cause.'},{type:'tool_use',id:'t',name:'Read',input:{}}]}}));
+      console.log(JSON.stringify({type:'assistant',message:{id:'two',content:[{type:'text',text:'Fixed.'}]}}));
+      console.log(JSON.stringify({type:'result',subtype:'success',result:'Fixed.',num_turns:2}));
+    `);
+    const context: AgentContext = { id: 'a', sessionId: 's', userId: 'u', root,
+      model: 'cli/claude-code', role: 'general', topic: 'general', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} };
+    const worker = new CLIAgentWorker(context, { maxIterations: 5, maxTokenBudget: 10000, timeout: 10000, contextWindowSize: 10000 });
+    expect(await worker.run('Check it')).toBe('Fixed.');
+    expect(commentary).toHaveBeenCalledTimes(root ? 1 : 0);
+    if (root) expect(commentary).toHaveBeenCalledWith('Found the cause.', context, 'commentary', undefined, '');
+  });
   it('uses original identity, updates plans, delivers feedback/guidance, and enforces denial', async () => {
     const context: AgentContext = { id: 'a', sessionId: 's', userId: 'u', workspaceId: 'w', root: true,
       model: 'cli/claude-code', role: 'general', topic: 'general', status: 'idle', createdAt: new Date(), updatedAt: new Date(), metadata: {} };

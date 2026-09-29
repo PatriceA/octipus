@@ -17,18 +17,58 @@ function makeParser(cwd = '/work') {
   const tokenReports: Array<{ input: number; output: number; total: number; cacheRead?: number; cacheCreation?: number }> = [];
   const turnCounts: number[] = [];
   const runErrors: string[] = [];
+  const commentary: string[] = [];
   const cbs: CLIParserCallbacks = {
     onTurn: () => turns.push(1),
     onToolCall: () => toolCalls.push(1),
     onTokenUsage: (t) => tokenReports.push(t),
     onTurnCount: (n) => turnCounts.push(n),
     onRunError: (r) => runErrors.push(r),
+    onCommentary: text => commentary.push(text),
   };
   const parser = new CLIOutputParser('agent-1', 'cli/codex', (type, data) => events.push({ type, data }), cbs, cwd);
   const feed = (event: Record<string, unknown>, tool: string) => parser.parse(event, tool);
   const actions = (subtype: string) => events.filter((e) => e.type === 'action' && e.data?.type === subtype).map((e) => e.data);
-  return { parser, events, feed, actions, turns, toolCalls, tokenReports, turnCounts, runErrors };
+  return { parser, events, feed, actions, turns, toolCalls, tokenReports, turnCounts, runErrors, commentary };
 }
+
+describe('public CLI commentary', () => {
+  it('forwards Claude text before tools once, excluding thinking and the final answer', () => {
+    const h = makeParser();
+    const update = { type: 'assistant', message: { id: 'a', content: [
+      { type: 'thinking', thinking: 'private reasoning' },
+      { type: 'text', text: 'Found the cause.' },
+      { type: 'tool_use', id: 't', name: 'Read', input: {} },
+    ] } };
+    h.feed(update, 'Claude Code');
+    h.feed(update, 'Claude Code');
+    const final = h.feed({ type: 'assistant', message: { id: 'b', content: [{ type: 'text', text: 'Fixed.' }] } }, 'Claude Code');
+    h.feed({ type: 'result', result: 'Fixed.' }, 'Claude Code');
+    expect(h.commentary).toEqual(['Found the cause.']);
+    expect(final?.text).toBe('Fixed.');
+  });
+
+  it('holds a standalone Claude message until subsequent work proves it intermediate', () => {
+    const h = makeParser();
+    h.feed({ type: 'assistant', message: { id: 'a', content: [{ type: 'text', text: 'Checking the regression.' }] } }, 'Claude Code');
+    expect(h.commentary).toEqual([]);
+    h.feed({ type: 'assistant', message: { id: 'b', content: [{ type: 'tool_use', id: 't', name: 'Bash', input: {} }] } }, 'Claude Code');
+    expect(h.commentary).toEqual(['Checking the regression.']);
+  });
+
+  it('forwards Codex text when tools follow, deduplicates replays and excludes reasoning/final', () => {
+    const h = makeParser();
+    const update = { type: 'item.completed', item: { id: 'a', type: 'agent_message', text: 'The test exposed a missing case.' } };
+    h.feed(update, 'Codex CLI');
+    h.feed({ type: 'item.completed', item: { id: 'r', type: 'reasoning', text: 'private' } }, 'Codex CLI');
+    h.feed({ type: 'item.started', item: { id: 't', type: 'command_execution', command: 'npm test' } }, 'Codex CLI');
+    h.feed(update, 'Codex CLI');
+    const final = h.feed({ type: 'item.completed', item: { id: 'b', type: 'agent_message', text: 'Done.' } }, 'Codex CLI');
+    h.feed({ type: 'turn.completed', usage: {} }, 'Codex CLI');
+    expect(h.commentary).toEqual(['The test exposed a missing case.']);
+    expect(final?.text).toBe('Done.');
+  });
+});
 
 // ── Codex fixture replay ────────────────────────────────────────────────────
 
@@ -426,4 +466,3 @@ describe('CLIOutputParser — Claude background task tracking', () => {
     expect(parser.getOpenBackgroundTasks()).toEqual([]);
   });
 });
-

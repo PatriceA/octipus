@@ -27,6 +27,8 @@ export interface ToolCallData {
 }
 
 export interface MessageMetadata {
+  /** An intermediate public update, distinct from the completed turn's answer. */
+  kind?: 'progress';
   sessionGeneration?: string;
   /** Immutable context supplied with this user turn, outside the system prefix. */
   promptContext?: string;

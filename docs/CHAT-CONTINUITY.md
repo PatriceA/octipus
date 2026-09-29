@@ -1,5 +1,24 @@
 # Chat continuity
 
+## Midrun messages
+
+Root Claude Code and Codex CLI public assistant text is forwarded to chat once
+subsequent work confirms it is an intermediate message. The last answer keeps
+the normal completion path. Thinking/reasoning blocks, tool output and child
+agent prose are not forwarded as chat messages. Buffered CLI adapters still
+deliver their text at completion.
+
+Both these updates and `send_status_update` are saved as assistant messages
+with progress metadata before being published. WebUI and TUI show them without
+ending the active turn; they remain in history after a reload. Stable message
+IDs prevent duplicate delivery, and generation checks reject updates from a
+conversation cleared while the agent was running.
+
+The instructions ask agents to work quietly and speak only for meaningful
+findings, blockers or changes of direction. There is no timed narration quota.
+User decisions still use `request_user_approval`; a progress message does not
+pause execution or wait for an answer.
+
 ## CLI compaction
 
 For a session with a saved root CLI conversation, `/compact` compacts that vendor

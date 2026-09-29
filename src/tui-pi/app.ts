@@ -269,7 +269,7 @@ export class OctipusTuiApp {
   // ── Event handling ─────────────────────────────────────────────
 
   private handleEvent(event: AgentSessionEvent): void {
-    if (event.kind === 'message' && event.role === 'assistant' && this.speakNextReply) {
+    if (event.kind === 'message' && !event.progress && event.role === 'assistant' && this.speakNextReply) {
       this.speakNextReply = false;
       void this.voice?.say(event.content).catch(() => {});
     }

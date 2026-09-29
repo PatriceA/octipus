@@ -876,6 +876,8 @@ export class CLIArgumentBuilder {
 
 /** Callbacks the worker wires into the parser. */
 export interface CLIParserCallbacks {
+  /** Public assistant text confirmed to precede further work, never reasoning. */
+  onCommentary?: (text: string) => void;
   /**
    * A model turn started (codex `turn.started`, a new Claude assistant
    * message). The worker uses this as the iteration counter — turns, not
@@ -932,6 +934,22 @@ const CLI_COMMAND_TOOLS = new Set(['Bash', 'shell']);
 const CLAUDE_BACKGROUND_TOOLS = new Set(['Agent', 'Task', 'Bash']);
 
 export class CLIOutputParser {
+  private pendingCommentary?: { id: string; text: string };
+  private publishedCommentary = new Set<string>();
+
+  private rememberCommentary(id: string, text: string): void {
+    if (this.publishedCommentary.has(id)) return;
+    if (this.pendingCommentary && this.pendingCommentary.id !== id) this.flushCommentary();
+    if (text.trim() && !this.publishedCommentary.has(id)) this.pendingCommentary = { id, text };
+  }
+
+  private flushCommentary(): void {
+    const pending = this.pendingCommentary;
+    this.pendingCommentary = undefined;
+    if (!pending || this.publishedCommentary.has(pending.id)) return;
+    this.publishedCommentary.add(pending.id);
+    this.callbacks.onCommentary?.(pending.text);
+  }
   /** tool id → tool name, so results can carry the real name (C9). */
   private toolNamesById = new Map<string, string>();
   /** codex item ids we already emitted a cli_tool_use for. */
@@ -1105,6 +1123,9 @@ export class CLIOutputParser {
       // A new assistant message = a new model turn (deduped by message id —
       // stream-json can re-emit the same message across partials).
       const messageId = message?.id as string | undefined;
+      const publicText = content.filter(b => b.type === 'text').map(b => b.text as string).join('');
+      this.rememberCommentary(messageId ?? `claude-${this.seenClaudeMessageIds.size}-${publicText}`, publicText);
+      if (content.some(b => b.type === 'tool_use')) this.flushCommentary();
       if (!messageId || !this.seenClaudeMessageIds.has(messageId)) {
         if (messageId) this.seenClaudeMessageIds.add(messageId);
         this.callbacks.onTurn();
@@ -1363,6 +1384,7 @@ export class CLIOutputParser {
 
       if (itemType === 'agent_message') {
         const text = (item.text || '') as string;
+        this.rememberCommentary(itemId || `codex-${text}`, text);
         return text ? { text, replace: true } : null;
       }
 
@@ -1523,6 +1545,7 @@ export class CLIOutputParser {
   /** Emit the cli_tool_use start row for a codex item (idempotent per item id). */
   private emitCodexItemStart(item: Record<string, unknown>): void {
     const itemType = item.type as string;
+    if (['command_execution', 'file_change', 'mcp_tool_call', 'web_search'].includes(itemType)) this.flushCommentary();
     const itemId = (item.id || '') as string;
     if (itemId && this.startedItemIds.has(itemId)) return;
 

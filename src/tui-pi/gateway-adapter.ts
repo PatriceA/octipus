@@ -40,7 +40,7 @@ export interface SessionStats {
 
 export type AgentSessionEvent =
   | { kind: 'status';         status: ConnectionStatus }
-  | { kind: 'message';        role: Role; content: string }
+  | { kind: 'message';        role: Role; content: string; messageId?: string; progress?: boolean }
   | { kind: 'delta';          delta: string; iteration: number }
   | { kind: 'permission';     requestId: string; toolName: string; detail: string }
   | { kind: 'permission.resolved'; requestId: string; status: 'approved' | 'denied' | 'expired' }
@@ -216,6 +216,12 @@ export function decodeGatewayEvent(event: { type: string; payload?: unknown }): 
   const out: AgentSessionEvent[] = [];
 
   switch (event.type) {
+    case 'rootAgent.status': {
+      const message = pickString(payload, 'message');
+      const messageId = pickString(payload, 'messageId');
+      if (message && messageId) out.push({ kind: 'message', role: 'assistant', content: message, messageId, progress: true });
+      return out;
+    }
     case 'permission.resolved': {
       const requestId = pickString(payload, 'requestId');
       const status = pickString(payload, 'status');

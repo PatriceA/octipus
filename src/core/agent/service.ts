@@ -25,6 +25,7 @@ import { ModelSelector } from './model-selector';
 import { runRootAgent } from './root-runner';
 import { type LimitRefusal, limitRefusalOf } from '@/core/errors/limit-refusal';
 import { guardOutput, stripSwarmScaffolding } from './output-guard';
+import { saveProgressMessage } from './progress-message';
 import { filterPII } from './pii-filter';
 import { maybeCompactSession } from './session-compaction';
 import { resolveSession } from './session-resolver';
@@ -879,15 +880,18 @@ export class AgentService {
     context: AgentContext,
     stage?: string,
     progress?: number,
+    generation?: string,
   ): Promise<unknown> {
+    const saved = await saveProgressMessage(message, context, generation);
+    if (!saved) return { sent: false };
     this.emit({
       type: 'status_update',
       sessionId: context.sessionId,
       userId: context.userId,
-      data: { message, stage, progress, agentId: context.id },
+      data: { ...saved, stage, progress, agentId: context.id },
       timestamp: new Date(),
     });
-    return { sent: true, message };
+    return { sent: true, ...saved };
   }
 
   filterPIIText(text: string): unknown {

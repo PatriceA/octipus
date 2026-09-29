@@ -11,6 +11,7 @@ import type { ToolHandler } from '@/core/agent-base';
 import { type AgentNode, getLevelDefault, LEVEL_DEFAULT, type PendingChild } from '@/core/swarm/types';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { sessionRepository } from '@/db/repositories/session-repository';
+import { sessionGeneration } from '@/db/schema/sessions';
 import { getModelRegistry } from '@/models/model-registry';
 import { coreLogger } from '@/utils/logger';
 import { truncateLinesToTokens } from '@/utils/token-count';
@@ -630,6 +631,8 @@ export async function runRootAgent(
     // user-reported TUI bug where `--project` was effectively ignored.
     contextMetadata: {
       originalRequest: message,
+      sessionGeneration: sessionGeneration(sessionCtx),
+      inputGuardFlags: guardFlags,
       ...(isDevMode ? { projectPath: sessionCtx!.projectPath! } : {}),
     },
   });

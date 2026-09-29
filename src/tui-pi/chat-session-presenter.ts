@@ -18,6 +18,7 @@ export class ChatSessionPresenter {
   private streamText = '';
   private streamIteration = -1;
   private lastStreamedTool: string | null = null;
+  private seenMessageIds = new Set<string>();
   constructor(private readonly tui: TUI, private readonly adapter: GatewayAdapter,
     private readonly messages: MessagesPane, private readonly status: StatusBar,
     private readonly activity: ActivityLine, private readonly subagents: SubagentPanel,
@@ -25,6 +26,7 @@ export class ChatSessionPresenter {
 
   dispose(): void { if (this.planPoll) clearInterval(this.planPoll); this.planPoll = null; this.activity.dispose(); }
   reset(): void {
+    this.seenMessageIds.clear();
     this.refreshingPlan = false;
     this.discoveredPlan = false;
     this.clearStream(); this.subagents.reset(); this.cumulative = { tokens: 0, cost: 0, turns: 0 };
@@ -96,7 +98,9 @@ export class ChatSessionPresenter {
         this.tui.requestRender();
         return true;
       case 'message':
-        if (event.role === 'assistant') this.clearStream();
+        if (event.messageId && this.seenMessageIds.has(event.messageId)) return true;
+        if (event.messageId) this.seenMessageIds.add(event.messageId);
+        if (event.role === 'assistant' && !event.progress) this.clearStream();
         this.pushMessage(event.role, event.content);
         return true;
       case 'agent.start':
