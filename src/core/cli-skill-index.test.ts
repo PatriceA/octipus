@@ -7,13 +7,13 @@ vi.mock('./cli-agent-factory', async importOriginal => ({
   ...(await importOriginal<typeof import('./cli-agent-factory')>()),
   getCLIToolConfig: () => ({ name: fixture.adapter }),
 }));
+vi.mock('@/skills/discovery', () => ({
+  fetchActiveSkillIdsForTopic: async (topic: string) => (topic === 'general'
+    ? ['fintus-release-tagging', 'external:claude-user:fintus-mcp:SKILL', 'external:codex-user:.system:imagegen:SKILL']
+    : []),
+}));
 vi.mock('@/skills/registry', () => ({
   getSkillRegistry: () => ({
-    getAll: async () => [
-      { id: 'fintus-release-tagging' },
-      { id: 'external:claude-user:fintus-mcp:SKILL' },
-      { id: 'external:codex-user:.system:imagegen:SKILL' },
-    ],
     buildPromptSummary: async (ids: string[]) => {
       fixture.ids = ids;
       return ids.length ? `Available skills (call \`get_skill\` with the id to load the full spec):\n${ids.map(id => `- \`${id}\``).join('\n')}` : '';
@@ -31,7 +31,7 @@ const index = (adapter: string) => {
 };
 
 describe('CLI skill index', () => {
-  it('lists Octipus skills with a load-on-match rule, minus the ones the CLI loads natively', async () => {
+  it('lists the skills assigned to the role with a load-on-match rule, minus the ones the CLI loads natively', async () => {
     const text = await index('Claude Code').text();
     expect(text).toContain('fintus-release-tagging');
     expect(text).toContain('load it with get_skill');

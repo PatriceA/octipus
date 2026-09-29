@@ -81,7 +81,7 @@ function isNoEmbeddingModelError(err: unknown): boolean {
  * Both names are matched, which keeps existing lane assignments working without
  * making a lane the unit of expertise.
  */
-async function fetchActiveSkillIdsForTopic(topic: string): Promise<string[]> {
+export async function fetchActiveSkillIdsForTopic(topic: string): Promise<string[]> {
   const db = getDb();
   const names = [...new Set([topic, canonicalTopic(topic)])];
   const rows = await db

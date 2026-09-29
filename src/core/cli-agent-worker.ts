@@ -40,6 +40,7 @@ import { worktreeCwdOverride } from './swarm/worktree';
 import type { ChildResult, PendingChild } from './swarm/types';
 import { getCLIToolConfig, resolveCliModelEntry } from './cli-agent-factory';
 import { getSkillRegistry } from '@/skills/registry';
+import { fetchActiveSkillIdsForTopic } from '@/skills/discovery';
 import { buildChildEnv } from './cli-child-env';
 import { getConfig } from '@/config';
 import { isRootAgent } from './types';
@@ -69,7 +70,7 @@ export function isBorrowedProjectDir(
  * CLIAgentWorker — spawns a CLI binary (Claude Code, Antigravity, Codex, Mistral Vibe)
  * as an autonomous sub-agent.
  */
-/** Skill index per (user, CLI family): skills change rarely, and the lookup must not delay a spawn. */
+/** Skill index per (user, role, CLI family): assignments change rarely, and the lookup must not delay a spawn. */
 const SKILL_INDEX_TTL_MS = 60_000;
 const skillIndexCache = new Map<string, { at: number; value?: string; ready: Promise<void> }>();
 
@@ -133,9 +134,11 @@ export class CLIAgentWorker extends BaseAgentWorker {
   }
 
   /**
-   * Octipus skills as an index (name + one line; bodies via get_skill). A CLI
-   * applies only the skills it loads natively, so without this it never looked
-   * at Octipus ones. Skills the CLI already loads itself are left out.
+   * The skills assigned to this agent's role (skill_topic_assignments) as an
+   * index (name + one line; bodies via get_skill). A CLI applies only the
+   * skills it loads natively, so without this it never looked at Octipus ones.
+   * Spawned children already carry the spawner's index; skills the CLI loads
+   * itself are left out.
    * Optional context: it never holds the spawn back more than 300 ms; a cold
    * registry (a first scan of the skill dirs took ~10 s) serves the next run.
    */
@@ -144,13 +147,14 @@ export class CLIAgentWorker extends BaseAgentWorker {
     const tool = getCLIToolConfig(this.context.model);
     const adapter = tool?.adapter ?? tool?.name;
     const native = adapter === 'Claude Code' ? 'external:claude-user:' : adapter === 'Codex CLI' ? 'external:codex-' : null;
-    const key = `${this.context.userId}|${native}`;
+    const role = this.context.role;
+    const key = `${this.context.userId}|${role}|${native}`;
     let entry = skillIndexCache.get(key);
     if (!entry || Date.now() - entry.at > SKILL_INDEX_TTL_MS) {
       const pending: { at: number; value?: string; ready: Promise<void> } = { at: Date.now(), ready: Promise.resolve() };
       pending.ready = (async () => {
         const registry = getSkillRegistry();
-        const ids = (await registry.getAll(this.context.userId)).map(skill => skill.id).filter(id => !native || !id.startsWith(native));
+        const ids = [...new Set(await fetchActiveSkillIdsForTopic(role))].filter(id => !native || !id.startsWith(native));
         const index = await registry.buildPromptSummary(ids, this.context.userId);
         pending.value = index && `${index}
 When a task matches one of these skills, load it with get_skill before starting and follow it.`;
