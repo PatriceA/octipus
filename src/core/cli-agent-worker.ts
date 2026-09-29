@@ -401,11 +401,15 @@ export class CLIAgentWorker extends BaseAgentWorker {
       if (!this.systemMessages.some(message => message.includes(VAULT_USAGE_GUIDANCE))) {
         this.addSystemMessage(VAULT_USAGE_GUIDANCE);
       }
-      this.addSystemMessage(`You are connected to your Octipus run through the octipus MCP server. Its tools are your actual registered Octipus tools, including skills, plans and delegation when allowed. Prefer these tools for Octipus work.
+      this.addSystemMessage(`You are connected to your Octipus run through the octipus MCP server. Its tools are your actual registered Octipus tools, including skills, plans and delegation when allowed. Use these tools for Octipus work.
+` +
+        `Tool selection: use available dedicated tools before shell equivalents. For reading, searching and editing files, use your CLI's native file tools or the corresponding Octipus tools; do not substitute shell commands or Python scripts when a suitable tool is available. Use the shell for builds, tests, git and system commands that need it. Explicit user instructions take precedence.
+` +
+        `Before accessing an external service or MCP server, use list_tools and describe_tool to find a suitable registered integration, then call_discovered_tool with its name and arguments. Do not create or reuse curl, Python or other shell clients when a suitable integration tool is available. Tools omitted from the initial tool list may still be discoverable. If no suitable tool exists or it is technically unavailable, use an allowed fallback and briefly state the reason; a permission denial is not technical unavailability.
 ` +
         `Call get_cli_run_context before working and before the final answer. Every Octipus tool response also includes fresh plan feedback and queued user guidance. Respect permissions and do not bypass a refused Octipus tool through vendor tools.
 ` +
-        `If your CLI cannot load this MCP server, use its terminal tool to run the bridge helper: ${quote(process.execPath)} ${quote(helper)} tools; or ${quote(process.execPath)} ${quote(helper)} call <tool-name> '<JSON arguments>'. Quote arguments safely. Credentials are supplied by the parent environment; never print them.
+        `Use native MCP calls when supported. Only if your CLI lacks MCP support or loading this MCP server actually fails, use its terminal tool to run the bridge helper: ${quote(process.execPath)} ${quote(helper)} tools; or ${quote(process.execPath)} ${quote(helper)} call <tool-name> '<JSON arguments>'. Quote arguments safely. Credentials are supplied by the parent environment; never print them.
 ` +
         `Use list_tools and describe_tool to discover additional tools, then call_discovered_tool with their name and arguments.
 ` +
