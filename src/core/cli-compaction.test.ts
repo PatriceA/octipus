@@ -6,7 +6,7 @@ const mock = vi.hoisted(() => ({ exec: vi.fn(), spawn: vi.fn(), owner: vi.fn(), 
 vi.mock('node:child_process', () => ({ spawn: mock.spawn }));
 vi.mock('@/utils/proc', () => ({ killProcessTree: mock.kill }));
 vi.mock('@/models/providers/instrumented', () => ({ recordProviderUsage: vi.fn() }));
-vi.mock('@/models/providers/cli-provider', () => ({ acquireCliSlot: async () => () => {}, execCli: mock.exec, windowsShellQuote: (s: string) => s }));
+vi.mock('@/models/providers/cli-provider', () => ({ acquireCliSlot: async () => () => {}, execCli: mock.exec, windowsShellQuote: (s: string) => s, windowsShellQuoter: () => (s: string) => s }));
 vi.mock('@/db/repositories/agent-repository', () => ({ agentRepository: { findById: mock.owner } }));
 vi.mock('./cli-agent-factory', () => ({ getCLIToolConfig: mock.tool, resolveCliModelEntry: async () => ({ metadata: {} }) }));
 vi.mock('./cli-adapters', () => ({ discoverCodexMcpServers: async () => [] }));

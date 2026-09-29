@@ -2,6 +2,8 @@ import { describeCliCapabilities } from '@/shared/cli-capabilities';
 import { buildChildEnv } from '@/core/cli-child-env';
 import { discoverCodexMcpServers, getEmptyMcpConfigPath, getEmptyVibeHome } from '@/core/cli-adapters';
 import { spawn } from 'child_process';
+import { existsSync } from 'fs';
+import { delimiter, extname, join } from 'path';
 import { getConfig } from '@/config';
 import { classifyError } from '@/core/errors/classification';
 import { modelLogger } from '@/utils/logger';
@@ -819,25 +821,62 @@ export function assertWindowsCmdLineFits(binary: string, args: string[], platfor
  * Values with no whitespace or quote pass through unquoted — matches Node's
  * own (unquoted) behavior for the common case and keeps diffs to existing
  * commands minimal.
+ *
+ * cmd.exe reads the line first and knows nothing of `\"`: every `"` flips its
+ * quote state, so after an escaped quote the rest of the value sat "outside"
+ * quotes and a `|` or `&` there became a pipe (every Codex launch died with
+ * exit 255 on a hook argument). Metacharacters cmd sees as unquoted are
+ * `^`-escaped; `batch` escapes them twice, because a `.cmd`/`.bat` shim's
+ * `%*` re-parses the arguments a second time.
+ * ponytail: `%` still expands inside quotes (cmd has no escape for it there); no argument carries one today.
  */
-export function windowsShellQuote(value: string): string {
-  if (!/[\s"]/.test(value)) return value;
-  let result = '"';
-  let backslashes = 0;
-  for (const ch of value) {
-    if (ch === '\\') {
-      backslashes++;
-      continue;
+export function windowsShellQuote(value: string, batch = false): string {
+  let result = value;
+  if (/[\s"]/.test(value)) {
+    result = '"';
+    let backslashes = 0;
+    for (const ch of value) {
+      if (ch === '\\') {
+        backslashes++;
+        continue;
+      }
+      if (ch === '"') {
+        result += '\\'.repeat(backslashes * 2 + 1) + '"';
+      } else {
+        result += '\\'.repeat(backslashes) + ch;
+      }
+      backslashes = 0;
     }
-    if (ch === '"') {
-      result += '\\'.repeat(backslashes * 2 + 1) + '"';
-    } else {
-      result += '\\'.repeat(backslashes) + ch;
-    }
-    backslashes = 0;
+    result += '\\'.repeat(backslashes * 2) + '"';
   }
-  result += '\\'.repeat(backslashes * 2) + '"';
-  return result;
+  const caret = batch ? '^^^' : '^';
+  let inQuote = false;
+  let escaped = '';
+  for (const ch of result) {
+    if (ch === '"') inQuote = !inQuote;
+    escaped += !inQuote && '&|<>()^'.includes(ch) ? caret + ch : ch;
+  }
+  return escaped;
+}
+
+/** Whether `binary` runs as a `.cmd`/`.bat` shim on Windows (npm installs CLIs that way), resolved like cmd does via PATH + PATHEXT. */
+export function isWindowsBatch(binary: string): boolean {
+  const ext = extname(binary).toLowerCase();
+  if (ext) return ext === '.cmd' || ext === '.bat';
+  const exts = (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean);
+  const dirs = /[\\/]/.test(binary) ? [''] : ['', ...(process.env.PATH ?? '').split(delimiter).filter(Boolean)];
+  for (const dir of dirs) {
+    for (const e of exts) {
+      if (existsSync(join(dir, binary + e))) return e.toLowerCase() === '.cmd' || e.toLowerCase() === '.bat';
+    }
+  }
+  return false;
+}
+
+/** The per-argument quoter for a `shell:true` spawn of `binary`: arguments of a batch shim are escaped for both cmd passes. */
+export function windowsShellQuoter(binary: string): (value: string) => string {
+  const batch = isWindowsBatch(binary);
+  return (value) => windowsShellQuote(value, batch);
 }
 
 /**
@@ -875,9 +914,10 @@ export function execCli(binary: string, args: string[], opts?: { timeoutMs?: num
     // [binary, ...args] with plain spaces, quoting nothing — an unquoted
     // prompt with spaces (e.g. `/compact focus on the migration`) is
     // re-tokenized into separate argv. Same fix as cli-agent-worker's spawn.
+    const quoteArg = windowsShellQuoter(binary);
     const shellQuote = (value: string): string => (useShell ? windowsShellQuote(value) : value);
     // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- array-form spawn (no shell interpolation); binary/args come from vetted provider config, not request input
-    const proc = spawn(shellQuote(binary), args.map(shellQuote), {
+    const proc = spawn(shellQuote(binary), useShell ? args.map(quoteArg) : args, {
       // Run in the workspace root, not wherever the server was launched — a
       // CLI completion must not read/write the octipus repo by default. A
       // caller that owns a specific session's workspace passes it explicitly:

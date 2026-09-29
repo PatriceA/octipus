@@ -847,10 +847,10 @@ export class CLIArgumentBuilder {
     if (connection?.shellGuard) {
       // Hooks from -c are untrusted until reviewed in the TUI, and exec skips
       // untrusted hooks silently (verified live on 0.158.0), hence the bypass.
-      // Windows spawns codex.cmd through cmd.exe, where windowsShellQuote's `\"`
-      // flips quote state and the matcher's `|` became a pipe (exit 255). So the
-      // Windows value carries no `"`, space or `|`: TOML literal strings, no
-      // matcher (the script ignores calls without a command), a .cmd wrapper.
+      // Windows: codex.cmd re-parses %* through cmd.exe, so the value stays free
+      // of `"`, spaces and `|` rather than leaning on quoting (it once exited 255):
+      // TOML literal strings, no matcher (the script ignores calls without a
+      // command), a .cmd wrapper.
       const hook = IS_WIN
         ? `{hooks=[{type='command',command='${getCodexShellGuardWrapper()}'}]}`
         : `{ matcher = ${JSON.stringify(SHELL_GUARD_TOOL_MATCHER)}, hooks = [{ type = "command", command = ${JSON.stringify(shellGuardHookCommand())} }] }`;

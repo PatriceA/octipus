@@ -1,7 +1,7 @@
 import { VAULT_USAGE_GUIDANCE } from '@/core/agent/vault-guidance';
 import { recordProviderUsage } from '@/models/providers/instrumented';
 import { billableTokens } from '@/models/billable-tokens';
-import { assertWindowsCmdLineFits, windowsShellQuote } from '@/models/providers/cli-provider';
+import { assertWindowsCmdLineFits, windowsShellQuote, windowsShellQuoter } from '@/models/providers/cli-provider';
 import { randomUUID } from 'crypto';
 import { type ChildProcess, spawn } from 'child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
@@ -1053,7 +1053,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
       // and doubles a trailing backslash run before the closing quote rather
       // than leaving a quote-bearing or backslash-terminated value unquoted.
       const shellQuote = (value: string): string => (useShellForSpawn ? windowsShellQuote(value) : value);
-      const proc = spawn(shellQuote(binary), args.map(shellQuote), {
+      const quoteArg = windowsShellQuoter(binary);
+      const proc = spawn(shellQuote(binary), useShellForSpawn ? args.map(quoteArg) : args, {
         env,
         cwd: workspaceCwd,
         stdio: ['pipe', 'pipe', 'pipe'],

@@ -7,7 +7,7 @@ import { getCLIToolConfig, resolveCliModelEntry } from './cli-agent-factory';
 import { isChildCliSessionKey } from './cli-session-store';
 import { buildChildEnv } from './cli-child-env';
 import { WorkspaceFS } from '@/security/workspace-fs';
-import { acquireCliSlot, execCli, windowsShellQuote } from '@/models/providers/cli-provider';
+import { acquireCliSlot, execCli, windowsShellQuote, windowsShellQuoter } from '@/models/providers/cli-provider';
 import { discoverCodexMcpServers } from './cli-adapters';
 import { killProcessTree } from '@/utils/proc';
 import { recordProviderUsage } from '@/models/providers/instrumented';
@@ -73,7 +73,7 @@ export async function compactCliConversation(session: Session, instructions: str
 export function compactCodexThread(binary: string, args: string[], options: { cwd: string; env: Record<string, string>; threadId: string }): Promise<CompletionResult['usage']> {
   return new Promise((resolvePromise, reject) => {
     const shell = process.platform === 'win32';
-    const child = spawn(shell ? windowsShellQuote(binary) : binary, shell ? args.map(windowsShellQuote) : args,
+    const child = spawn(shell ? windowsShellQuote(binary) : binary, shell ? args.map(windowsShellQuoter(binary)) : args,
       { cwd: options.cwd, env: options.env, shell, detached: !shell, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     let settled = false;
     let buffer = '';
