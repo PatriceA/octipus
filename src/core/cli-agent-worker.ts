@@ -39,6 +39,7 @@ import { swarmNodeRepository } from './swarm/node-repository';
 import { worktreeCwdOverride } from './swarm/worktree';
 import type { ChildResult, PendingChild } from './swarm/types';
 import { getCLIToolConfig, resolveCliModelEntry } from './cli-agent-factory';
+import { getSkillRegistry } from '@/skills/registry';
 import { buildChildEnv } from './cli-child-env';
 import { getConfig } from '@/config';
 import { isRootAgent } from './types';
@@ -68,6 +69,10 @@ export function isBorrowedProjectDir(
  * CLIAgentWorker — spawns a CLI binary (Claude Code, Antigravity, Codex, Mistral Vibe)
  * as an autonomous sub-agent.
  */
+/** Skill index per (user, CLI family): skills change rarely, and the lookup must not delay a spawn. */
+const SKILL_INDEX_TTL_MS = 60_000;
+const skillIndexCache = new Map<string, { at: number; value?: string; ready: Promise<void> }>();
+
 export class CLIAgentWorker extends BaseAgentWorker {
   private systemMessages: string[] = [];
   private readonly toolExecutor: ToolExecutor;
@@ -125,6 +130,45 @@ export class CLIAgentWorker extends BaseAgentWorker {
   steer(message: AgentMessage): void {
     this.steeringQueue.push(message);
     this.emit('thought', { type: 'steering_queued', delivery: 'next Octipus tool response or follow-up turn' });
+  }
+
+  /**
+   * Octipus skills as an index (name + one line; bodies via get_skill). A CLI
+   * applies only the skills it loads natively, so without this it never looked
+   * at Octipus ones. Skills the CLI already loads itself are left out.
+   * Optional context: it never holds the spawn back more than 300 ms; a cold
+   * registry (a first scan of the skill dirs took ~10 s) serves the next run.
+   */
+  private async cliSkillIndex(): Promise<string> {
+    if (this.systemMessages.some(message => message.includes('Available skills (call `get_skill`'))) return '';
+    const tool = getCLIToolConfig(this.context.model);
+    const adapter = tool?.adapter ?? tool?.name;
+    const native = adapter === 'Claude Code' ? 'external:claude-user:' : adapter === 'Codex CLI' ? 'external:codex-' : null;
+    const key = `${this.context.userId}|${native}`;
+    let entry = skillIndexCache.get(key);
+    if (!entry || Date.now() - entry.at > SKILL_INDEX_TTL_MS) {
+      const pending: { at: number; value?: string; ready: Promise<void> } = { at: Date.now(), ready: Promise.resolve() };
+      pending.ready = (async () => {
+        const registry = getSkillRegistry();
+        const ids = (await registry.getAll(this.context.userId)).map(skill => skill.id).filter(id => !native || !id.startsWith(native));
+        const index = await registry.buildPromptSummary(ids, this.context.userId);
+        pending.value = index && `${index}
+When a task matches one of these skills, load it with get_skill before starting and follow it.`;
+      })().catch(err => {
+        pending.value = '';
+        agentLogger.debug({ err, agentId: this.context.id }, 'CLI skill index unavailable');
+      });
+      // A stale value keeps serving until the refresh lands.
+      if (entry?.value !== undefined && pending.value === undefined) void pending.ready.then(() => skillIndexCache.set(key, pending));
+      else skillIndexCache.set(key, pending);
+      entry = entry?.value !== undefined ? entry : pending;
+    }
+    if (entry.value === undefined) {
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([entry.ready, new Promise<void>(resolve => { timer = setTimeout(resolve, 300); })]);
+      clearTimeout(timer);
+    }
+    return entry.value ?? '';
   }
 
   private async controlContext(): Promise<string> {
@@ -417,6 +461,8 @@ export class CLIAgentWorker extends BaseAgentWorker {
         `Use list_tools and describe_tool to discover additional tools, then call_discovered_tool with their name and arguments.
 ` +
         `Delegate only through Octipus spawn_child and collect_children. Your CLI's native subagents are disabled: they live inside this CLI process, and background work is lost when the process exits.`);
+      const skillIndex = await this.cliSkillIndex();
+      if (skillIndex) this.addSystemMessage(skillIndex);
       this.messages.push({ role: 'user', content: `Octipus run context: ${await this.controlContext()}`, timestamp: new Date() });
       let result = await this.executeCLI();
       const checkLateFeedback = async () => {
