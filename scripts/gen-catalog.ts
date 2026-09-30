@@ -425,6 +425,9 @@ export async function collectModuleGraph(): Promise<{ edges: Map<string, Map<str
     metafile: true,
     outdir: '/dev/null',
     format: 'esm',
+    // We only consume the import graph. Share common output instead of
+    // retaining duplicated dependency code for hundreds of source entry points.
+    splitting: true,
     platform: 'node',
     packages: 'external',
     // Role prompts are imported as text; without the loader the graph scan
