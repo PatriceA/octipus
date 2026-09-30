@@ -451,7 +451,7 @@ function TopicAssignmentsPanel({ skillId }: { skillId: string }) {
   const queryClient = useQueryClient();
   const { data, isLoading } = useQuery<{ assignments: TopicAssignment[] }>({
     queryKey: ['skill-topic-assignments', skillId],
-    queryFn: async () => api.get(`/skills/topics?skillId=${skillId}`),
+    queryFn: async () => api.get(`/skills/topics?skillId=${encodeURIComponent(skillId)}`),
   });
   const [pending, setPending] = useState<string | null>(null);
   const topicOptions = useTopicOptions();
@@ -495,7 +495,7 @@ function TopicAssignmentsPanel({ skillId }: { skillId: string }) {
           }
         }
       }
-      await api.patch(`/skills/topics/bulk/${skillId}`, { isActive });
+      await api.patch(`/skills/topics/bulk/${encodeURIComponent(skillId)}`, { isActive });
       queryClient.invalidateQueries({ queryKey: ['skill-topic-assignments', skillId] });
       queryClient.invalidateQueries({ queryKey: ['skill-topic-assignments-all'] });
     } finally {
@@ -507,9 +507,9 @@ function TopicAssignmentsPanel({ skillId }: { skillId: string }) {
     <div>
       <div className="flex items-center justify-between mb-2">
         <label className="block text-sm font-medium text-on-surface/80">
-          Attached Topics
+          Assigned roles
           <span className="ml-2 text-xs font-normal text-on-surface-variant">
-            Active topics auto-inject this skill into worker prompts
+            Active roles include this skill in worker prompts
           </span>
         </label>
         <div className="flex gap-2">
@@ -859,7 +859,7 @@ function SkillCard({
 
         <div className="flex items-center gap-2">
           <span className={cn('px-2 py-0.5 text-xs rounded-full font-medium', getCategoryColor(skill.category))}>
-            {skill.category}
+            Category: {skill.category}
           </span>
           {skill.content?.trim() && (
             <span className="px-2 py-0.5 text-xs rounded-full bg-violet-900/20 text-primary">
@@ -900,6 +900,7 @@ function SkillCard({
 
       {expanded && (
         <div className="border-t border-outline-variant/10 p-4 space-y-4">
+          {skill.mounted && <TopicAssignmentsPanel skillId={skill.id} />}
           {!!skill.sources?.length && <div className="text-xs text-on-surface-variant space-y-1">
             <h4 className="section-label">{skill.sources.length > 1 ? 'Sources (duplicates combined)' : 'Source'}</h4>
             {skill.sources.map(source => <p key={source.id} className="break-all">{source.location}: {source.path}</p>)}

@@ -29,6 +29,17 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+// This suite tests SQL discovery, not disk persistence. Keep the real PGlite
+// engine and migrations in memory to avoid Windows flush costs per statement.
+vi.mock('@electric-sql/pglite', async importOriginal => {
+  const actual = await importOriginal<typeof import('@electric-sql/pglite')>();
+  return { ...actual, PGlite: { create: (options: Record<string, unknown>) => actual.PGlite.create({ ...options, dataDir: undefined }) } };
+});
+vi.mock('@/skills/external-loader', async importOriginal => ({
+  ...await importOriginal<typeof import('@/skills/external-loader')>(),
+  loadExternalSkills: () => [], // Discovery tests must not scan the developer's mounted bundles.
+}));
+
 // ── Required env (must be set before any import that reads config) ──
 const rand = (n: number) => randomBytes(n).toString('hex');
 process.env.MASTER_KEY ??= `test-master-${rand(24)}`;
@@ -97,7 +108,7 @@ beforeAll(async () => {
   await initializeDb();
   const { runMigrations } = await import('@/db/migrate');
   await runMigrations();
-});
+}, 120_000); // Full embedded migration chain can exceed 30s on Windows.
 
 afterAll(async () => {
   // Restore the real embeddings module so this suite's stub doesn't leak into
@@ -465,4 +476,11 @@ describe('buildPromptFragmentForMessage — output varies by message', () => {
     expect(a).toContain('Skill One');
     expect(a).toContain('Skill Two');
   });
+});
+
+test('hybrid discovery includes explicitly assigned mounted skills without a database skill row', async () => {
+  const id = 'external:test:mounted';
+  await getDb().insert(skillTopicAssignments).values({ skillId: id, topic: TEST_TOPIC, isActive: true });
+  const { discoverSkillIds } = await import('@/skills/discovery');
+  expect(await discoverSkillIds({ topic: TEST_TOPIC, message: 'unrelated request' })).toContain(id);
 });

@@ -56,14 +56,23 @@ export default function SecretsPage() {
       />
 
       {/* Provider Quick Setup */}
-      <ProviderCards statuses={statuses} onStatusChange={fetchAll} />
+      <section aria-label="Model provider credentials" className="space-y-3">
+        <h2 className="font-semibold">Model providers</h2>
+        <ProviderCards statuses={statuses} onStatusChange={fetchAll} />
+      </section>
 
       {/* OAuth Credentials */}
-      <OAuthCards statuses={statuses} onStatusChange={fetchAll} />
+      <details className="rounded-lg border border-outline-variant/20 p-4">
+        <summary className="cursor-pointer font-semibold">OAuth integrations</summary>
+        <div className="mt-4"><OAuthCards statuses={statuses} onStatusChange={fetchAll} /></div>
+      </details>
 
       {/* Channel bot tokens — stored system-wide via the settings endpoint
           (hot-reloaded). Admin-only; non-admins get "Admin access required". */}
-      <ProviderCards groups={CHANNEL_KEY_GROUPS} statuses={statuses} onStatusChange={fetchAll} />
+      <section aria-label="Channel credentials" className="space-y-3">
+        <h2 className="font-semibold">Chat channels</h2>
+        <ProviderCards groups={CHANNEL_KEY_GROUPS} statuses={statuses} onStatusChange={fetchAll} />
+      </section>
 
       {/* Divider */}
       <hr className="border-outline-variant/10" />

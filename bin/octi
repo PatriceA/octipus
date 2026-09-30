@@ -1066,6 +1066,7 @@ cmd_help() {
   echo -e "    status           Show running state and service health"
   echo -e "    doctor [--json]  Run environment health checks (what's wired, what's missing)"
   echo -e "    logs [--web]     Tail backend logs (--web for web UI logs)"
+  echo -e "    update [--dry-run] Update this installation from its existing source"
   echo -e "    uninstall        Remove Octipus (keeps data; --purge wipes everything)"
   echo -e "    help             Show this help message"
   echo ""
@@ -1279,6 +1280,7 @@ main() {
   shift || true
 
   case "$command" in
+    update) node "$PROJECT_DIR/scripts/update.mjs" "$@" ;;
     setup)   cmd_setup "$@" ;;
     start)   cmd_start "$@" ;;
     stop)    cmd_stop ;;

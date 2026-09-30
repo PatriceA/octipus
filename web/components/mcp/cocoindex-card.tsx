@@ -3,7 +3,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Code2, Download, Loader2, Unplug } from 'lucide-react';
 import { useState } from 'react';
-import type { CocoIndexStatus } from '../../../src/shared/cocoindex';
+import { COCOINDEX_DEFAULT_EMBEDDING_MODEL, type CocoIndexStatus } from '../../../src/shared/cocoindex';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { CocoIndexWindowsSetup } from './cocoindex-windows-setup';
@@ -20,6 +20,7 @@ export function CocoIndexCard() {
   const queryClient = useQueryClient();
   const [workspacePath, setWorkspacePath] = useState<string | null>(null);
   const [embeddingModel, setEmbeddingModel] = useState<string | null>(null);
+  const [embeddingSource, setEmbeddingSource] = useState<'local' | 'octipus' | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [actionError, setActionError] = useState('');
   const { data, error, isLoading } = useQuery({
@@ -30,7 +31,8 @@ export function CocoIndexCard() {
   });
   const busy = submitting || busyStates.has(data?.status ?? '');
   const folder = workspacePath ?? data?.workspacePath ?? '';
-  const model = embeddingModel ?? data?.embedding.model ?? '';
+  const model = embeddingModel ?? (data?.embedding.provider === 'sentence-transformers' ? data.embedding.model : COCOINDEX_DEFAULT_EMBEDDING_MODEL);
+  const source = embeddingSource ?? (data?.configured && data.embedding.provider === 'sentence-transformers' ? 'local' : 'octipus');
   const refresh = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['cocoindex-connector'] }),
@@ -42,7 +44,8 @@ export function CocoIndexCard() {
     setActionError('');
     try {
       const status = await api.post<CocoIndexStatus>(`${endpoint}/install`, {
-        workspacePath: folder.trim(), embeddingModel: model.trim(),
+        workspacePath: folder.trim(), embeddingSource: source,
+        ...(source === 'local' ? { embeddingModel: model.trim() } : {}),
       });
       queryClient.setQueryData(['cocoindex-connector'], status);
       await refresh();
@@ -74,7 +77,7 @@ export function CocoIndexCard() {
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <h3 id="cocoindex-title" className="font-medium text-on-surface">CocoIndex Code</h3>
-            <span className="text-[10px] rounded-full px-2 py-0.5 bg-surface-container-low text-on-surface-variant">Optional · Local</span>
+            <span className="text-[10px] rounded-full px-2 py-0.5 bg-surface-container-low text-on-surface-variant">Optional · Code index</span>
             {data && <span role="status" className="text-xs text-primary">{statusLabels[data.status]}</span>}
           </div>
           <p className="text-xs text-on-surface-variant mt-1">Find code by meaning through a separate code index. Octipus’s knowledge base stays unchanged.</p>
@@ -101,17 +104,27 @@ export function CocoIndexCard() {
               Folder on the backend
               <input required disabled={busy} value={folder} onChange={event => setWorkspacePath(event.target.value)} placeholder="/path/to/repositories" className="mt-1 block w-full rounded-lg border border-outline-variant/30 bg-surface-container-low p-2 text-sm text-on-surface disabled:opacity-60" />
             </label>
-            <label className="block text-xs text-on-surface-variant">
-              Local embedding model
-              <input required disabled={busy} value={model} onChange={event => setEmbeddingModel(event.target.value)} className="mt-1 block w-full rounded-lg border border-outline-variant/30 bg-surface-container-low p-2 text-sm text-on-surface disabled:opacity-60" />
+            <label className="block text-xs text-on-surface-variant">Embedding source
+              <select disabled={busy} value={source} onChange={event => setEmbeddingSource(event.target.value as 'local' | 'octipus')}
+                className="mt-1 block w-full rounded-lg border border-outline-variant/30 bg-surface-container-low p-2">
+                <option value="octipus">Use Octipus embedding model (Topics)</option>
+                <option value="local">Separate local Sentence-Transformers model</option>
+              </select>
             </label>
+            {source === 'local' && <label className="block text-xs text-on-surface-variant">
+              Local embedding model (Hugging Face ID)
+              <input required disabled={busy} value={model} onChange={event => setEmbeddingModel(event.target.value)} className="mt-1 block w-full rounded-lg border border-outline-variant/30 bg-surface-container-low p-2 text-sm text-on-surface disabled:opacity-60" />
+            </label>}
           </div>
-          <p className="text-xs text-on-surface-variant">Managed setup runs on Linux, macOS and Windows backends. Requires Python 3.11+ and uv or pipx, or an existing CocoIndex installation with local embedding support. Dependencies can use several GB of disk space. Setup downloads the model and builds the initial index, which may take time. Code is embedded locally without an API key.</p>
+          <p className="text-xs text-on-surface-variant">Requires Python 3.11+ and uv or pipx. Start with a repository or a small collection. Initial indexing can take time.</p>
+          <p className="text-xs text-on-surface-variant">{source === 'octipus'
+            ? 'Uses the model, endpoint and credentials assigned to the embedding topic. Octipus sends serial batches of eight. Remote providers receive the indexed code. After changing the embedding configuration, apply these settings again to rebuild the index.'
+            : 'Runs Sentence-Transformers / PyTorch in the CocoIndex Python environment, independently of Ollama. The default Snowflake arctic-embed-xs has about 22 million parameters (~90 MB float32 weights); Python, PyTorch and indexing need additional RAM and disk space. CPU threads are limited to two.'}</p>
           {data.configured && <p className="text-xs text-on-surface-variant">Removing the connector disconnects it from Octipus. The installed package and index files remain on disk.</p>}
           {data.progress && <p role="status" className="text-sm text-primary break-words">{data.progress.message}</p>}
           {(actionError || data.error) && <p role="alert" className="text-sm text-error break-words">{actionError || data.error}</p>}
           <div className="flex gap-2 flex-wrap">
-            <button type="submit" disabled={busy || !folder.trim() || !model.trim()} className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm bg-primary text-on-primary hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer">
+            <button type="submit" disabled={busy || !folder.trim() || (source === 'local' && !model.trim())} className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm bg-primary text-on-primary hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer">
               {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
               {busy ? 'Setting up…' : data.configured ? 'Apply and reconnect' : data.installed ? 'Set up connector' : 'Install and connect'}
             </button>

@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures/auth';
 import { json } from './fixtures/api-stubs';
 
-for (const path of ['/mcp', '/tools']) {
+for (const path of ['/mcp']) {
   test(`MCP permissions persist per tool on ${path}`, async ({ authenticatedPage: page }) => {
     const tools = ['jira_search_jql', 'jira_update_issue'].map(name => ({
       serverId: 'jira-custom', name, description: name, inputSchema: {},
@@ -20,7 +20,7 @@ for (const path of ['/mcp', '/tools']) {
       if (request.method() === 'PUT') {
         const body = request.postDataJSON();
         writes.push(body);
-        permissions = [body];
+        permissions = [...permissions.filter(p => p.action !== body.action), body];
         return json(route, 200, { permission: body });
       }
       if (request.method() === 'DELETE') {
@@ -42,6 +42,8 @@ for (const path of ['/mcp', '/tools']) {
     await expect(search).toHaveValue('ALLOW');
     expect(writes[0]).toEqual({ toolId: 'mcp', action: 'jira-custom.jira_search_jql', level: 'ALLOW' });
     await expect(update).toHaveValue('DEFAULT');
+    await page.getByRole('button', { name: 'All allow', exact: true }).click();
+    await expect(update).toHaveValue('ALLOW');
     await open();
     await expect(search).toHaveValue('ALLOW');
     for (const level of ['ASK', 'DENY', 'DEFAULT']) {
@@ -60,7 +62,10 @@ test('MCP permission save failure is visible and retains the saved value', async
   await page.route('**/api/tools/permissions', route => route.request().method() === 'PUT'
     ? json(route, 403, { error: 'Permission update rejected' })
     : json(route, 200, { permissions: [] }));
-  await page.goto('/tools');
+  await page.route('**/api/mcp/servers', route => json(route, 200, { servers: [{ id: 'jira', name: 'Jira', status: 'connected', toolCount: 1, isEnabled: true }] }));
+  await page.route('**/api/mcp/servers/jira/tools', route => json(route, 200, { tools: [{ name: 'read', description: 'Read' }] }));
+  await page.goto('/mcp');
+  await page.getByRole('button', { name: 'Tools and permissions for Jira', exact: true }).click();
   const select = page.getByRole('combobox', { name: 'Permission for jira / read' });
   await select.selectOption('ALLOW');
   await expect(page.getByRole('alert')).toContainText('Permission update rejected');

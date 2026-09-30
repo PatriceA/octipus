@@ -877,7 +877,9 @@ export default function MessageTimeline({
       timeline.push({
         kind: 'file_changes',
         data: group,
-        sortKey: group.timestamp,
+        // File summaries belong to their agent, not the latest file event.
+        // Live and restored events use different clocks and arrival orders.
+        sortKey: trackedAgents.get(group.agentId)?.startTime ?? group.timestamp,
       });
     }
   }

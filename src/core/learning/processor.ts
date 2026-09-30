@@ -16,6 +16,8 @@ import { getConfig } from '@/config';
 import type { LearningCheckView } from '@/shared/learning';
 import { gatherEvidence } from './evidence';
 import { LEARNING_PROMPT, parseLearningReview } from './review';
+import { DEFAULT_MAX_OUTPUT_TOKENS } from '@/db/schema/models';
+import { estimateTokens } from '@/utils/token-count';
 
 export const learningPayloadSchema = z.object({
   sessionId: z.string().min(1), trigger: z.enum(['plan_completed', 'steps_completed', 'substantial_turn', 'manual']),
@@ -42,14 +44,33 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
     const model = await getModelRegistry().getModelForTopic('background');
     if (!model) throw new Error('No model bound to background; configure one on Topics');
     await backgroundJobRepository.progress(job.id, { stage: 'reviewing', detail: `${evidence.length} bounded evidence excerpts` });
-    const response = await getLiteLLMClient().complete({
-      model: model.modelId, userId: job.userId, temperature: 0, maxTokens: 4000,
+    const systemText = `${SECURITY_PREAMBLE}\n\n${LEARNING_PROMPT}`;
+    const evidenceText = JSON.stringify({ trigger: payload.trigger, evidence });
+    const contextRoom = model.contextWindow == null ? Infinity
+      : model.contextWindow - estimateTokens(systemText) - estimateTokens(evidenceText) - 1024;
+    const ceiling = Math.min(model.maxTokens ?? model.defaultMaxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS, contextRoom);
+    if (ceiling < 1024) throw new Error('Background model context is too small for this learning review. Configure a model with a larger context window.');
+    const initialBudget = Math.min(model.defaultMaxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS, ceiling);
+    const completeReview = (maxTokens: number) => getLiteLLMClient().complete({
+      model: model.modelId, modelConfigName: model.name, userId: job.userId,
+      sessionId: session.id, requestType: 'learning-review', temperature: 0, maxTokens,
       responseFormat: { type: 'json_object' }, messages: [
-        { role: 'system', content: `${SECURITY_PREAMBLE}\n\n${LEARNING_PROMPT}`, timestamp: new Date() },
-        { role: 'user', content: JSON.stringify({ trigger: payload.trigger, evidence }), timestamp: new Date() },
+        { role: 'system', content: systemText, timestamp: new Date() },
+        { role: 'user', content: evidenceText, timestamp: new Date() },
       ],
     });
-    if (response.finishReason === 'length') throw new Error('Learning review truncated at output limit');
+    let budget = initialBudget;
+    let response = await completeReview(budget);
+    // Reasoning shares the output budget. Retry once, before any writes, and
+    // never exceed the provider ceiling or double the per-request budget.
+    if (response.finishReason === 'length' && budget < ceiling) {
+      budget = Math.min(budget * 2, ceiling);
+      await backgroundJobRepository.progress(job.id, { stage: 'reviewing', detail: `Output limit reached; retrying once with ${budget} tokens (initial ${initialBudget})` });
+      response = await completeReview(budget);
+    }
+    if (response.finishReason === 'length') {
+      throw new Error(`Learning review truncated at output limit: ${budget} tokens; model ${model.name ?? model.modelId}; output ${response.usage?.outputTokens ?? 'unknown'}, reasoning ${response.usage?.reasoningTokens ?? 'unknown'}. Increase this model's default output budget or reduce its reasoning setting.`);
+    }
     const review = parseLearningReview(response.content ?? '', evidence);
     const canWrite = async (toolId: string, action: string, args: Record<string, unknown>) => {
       const permission = await getPermissionManager().check(job.userId, toolId, action, args,

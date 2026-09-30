@@ -834,6 +834,13 @@
       "when": 1789601114565,
       "tag": "0117_hook_inapp_targets",
       "breakpoints": true
+    },
+    {
+      "idx": 119,
+      "version": "7",
+      "when": 1789601114566,
+      "tag": "0118_mounted_skill_assignments",
+      "breakpoints": true
     }
   ]
 }

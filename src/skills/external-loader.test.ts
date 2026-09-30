@@ -26,6 +26,21 @@ describe('External Skill Loader (filesystem, agentskills.io spec)', () => {
     expect(skills).toEqual([]);
   });
 
+  test('combines identical complete bundles while keeping distinct supporting scripts separate', () => {
+    for (const vendor of ['.claude', '.codex']) {
+      const dir = join(home, vendor, 'skills', 'pdf', 'scripts');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, '..', 'SKILL.md'), '---\nname: pdf\ndescription: Read PDFs\n---\nUse scripts/read.py');
+      writeFileSync(join(dir, 'read.py'), 'print("same")\n');
+    }
+    const opts = { home, cwd, configuredDirs: [], enabled: true };
+    const skills = loadExternalSkills(opts);
+    expect(skills).toHaveLength(1);
+    expect(skills[0].sources).toHaveLength(2);
+    writeFileSync(join(home, '.codex', 'skills', 'pdf', 'scripts', 'read.py'), 'print("different")\n');
+    expect(loadExternalSkills(opts)).toHaveLength(2);
+  });
+
   test('combines a Claude junction and overlapping configured roots, retaining every old id', () => {
     const source = join(home, '.agents', 'skills', 'shared');
     const claude = join(home, '.claude', 'skills');

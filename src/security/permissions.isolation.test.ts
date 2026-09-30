@@ -18,6 +18,13 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+// Exercise real SQL/migrations without Windows filesystem flushes on every
+// statement. Persistence is covered by the embedded database suites.
+vi.mock('@electric-sql/pglite', async importOriginal => {
+  const actual = await importOriginal<typeof import('@electric-sql/pglite')>();
+  return { ...actual, PGlite: { create: (options: Record<string, unknown>) => actual.PGlite.create({ ...options, dataDir: undefined }) } };
+});
+
 const rand = (n: number) => randomBytes(n).toString('hex');
 process.env.MASTER_KEY ??= `test-master-${rand(24)}`;
 process.env.JWT_SECRET ??= `test-jwt-${rand(24)}`;
@@ -41,7 +48,7 @@ beforeAll(async () => {
     { id: aliceId, username: 'alice' },
     { id: bobId, username: 'bob' },
   ]);
-});
+}, 120_000); // Full embedded migration chain can exceed 30s on Windows.
 
 afterAll(async () => {
   const { closeDb } = await import('@/db/postgres');
@@ -176,6 +183,18 @@ describe('CLI native permission identity compatibility', () => {
     await getDb().delete(toolPermissions);
     const { DEFAULT_PERMISSION_RULES, getPermissionRuleEngine } = await import('./permission-rules');
     getPermissionRuleEngine().load(DEFAULT_PERMISSION_RULES);
+  });
+
+  test('MCP defaults to allow but explicit ask and deny rules still take precedence', async () => {
+    const { getPermissionManager } = await import('./permissions');
+    const { getPermissionRuleEngine } = await import('./permission-rules');
+    const pm = getPermissionManager();
+    expect(await pm.check(aliceId, 'mcp', 'qa.read')).toMatchObject({ allowed: true, level: 'ALLOW' });
+    await pm.setPermission(aliceId, 'mcp', 'qa.read', 'ASK');
+    expect(await pm.check(aliceId, 'mcp', 'qa.read')).toMatchObject({ allowed: false, level: 'ASK' });
+    await pm.setPermission(aliceId, 'mcp', 'qa.read', 'ALLOW');
+    getPermissionRuleEngine().load({ deny: ['mcp(*)'] });
+    expect(await pm.check(aliceId, 'mcp', 'qa.read')).toMatchObject({ allowed: false, level: 'DENY' });
   });
 
   test('legacy stored DENY wins over new read defaults and explicit grants', async () => {

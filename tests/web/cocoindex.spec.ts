@@ -32,14 +32,14 @@ test('optional connector installs, reports progress, and removes without an OAut
   await expect(page.getByRole('heading', { name: 'Atlassian' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Linear' })).toBeVisible();
   const card = page.getByRole('region', { name: 'CocoIndex Code' });
-  await expect(card.getByText('Optional · Local')).toBeVisible();
+  await expect(card.getByText('Optional · Code index')).toBeVisible();
   await expect(card.getByRole('button', { name: 'Install and connect' })).toBeDisabled();
   await card.getByLabel('Folder on the backend').fill('/workspace/mobile and backend');
   await page.screenshot({ path: testInfo.outputPath('cocoindex-connector.png'), fullPage: true });
   await card.getByRole('button', { name: 'Install and connect' }).click();
   await expect(card.getByText('Installing CocoIndex dependencies…')).toBeVisible();
   await expect(card.getByRole('button', { name: 'Setting up…' })).toBeDisabled();
-  expect(installBody).toEqual({ workspacePath: '/workspace/mobile and backend', embeddingModel: 'test/local-embed' });
+  expect(installBody).toEqual({ workspacePath: '/workspace/mobile and backend', embeddingSource: 'octipus' });
   state = { ...state, installed: true, configured: true, status: 'connected', progress: undefined };
   await expect(card.getByRole('status').filter({ hasText: /^Connected$/ })).toBeVisible();
   await card.getByRole('button', { name: 'Remove connector' }).click();

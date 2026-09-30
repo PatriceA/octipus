@@ -88,3 +88,64 @@ test('stale refresh cannot erase a live answer while activity history is loading
   await page.clock.fastForward(10_000);
   await expect(page.getByText('This answer must stay visible.')).toBeVisible();
 });
+
+test('rate-limited history pauses requests, keeps messages and shows an inline explanation', async ({ authenticatedPage: page }) => {
+  let requests = 0;
+  let limited = false;
+  const messages = [{ id: 'kept', role: 'assistant', content: 'Previously loaded answer', createdAt: new Date().toISOString() }];
+  await page.routeWebSocket(/\/ws\?/, () => {});
+  await page.route('**/api/sessions/sess-1/messages**', route => {
+    requests++;
+    return limited ? route.fulfill({ status: 429, contentType: 'application/json', headers: { 'Retry-After': '30' }, body: JSON.stringify({ error: 'Too many requests. Please try again later.' }) })
+      : json(route, 200, { messages });
+  });
+  await page.clock.install();
+  await page.goto('/chat');
+  await selectChatSession(page, 'sess-1');
+  await expect(page.getByText('Previously loaded answer', { exact: true })).toBeVisible();
+  limited = true;
+  await page.clock.fastForward(10_000);
+  const status = page.getByTestId('chat-sync-status');
+  await expect(status).toContainText('Your agent continues working');
+  expect(await status.evaluate(el => getComputedStyle(el).position)).toBe('static');
+  await expect(status.getByRole('button')).toBeDisabled();
+  const before = requests;
+  await page.clock.fastForward(20_000);
+  expect(requests).toBe(before);
+  await expect(page.getByText('Previously loaded answer', { exact: true })).toBeVisible();
+  limited = false;
+  await page.clock.fastForward(10_000);
+  await expect(status).toHaveCount(0);
+  expect(requests).toBeGreaterThan(before);
+});
+
+test('chat bounds event backfill and stops polling completed agents', async ({ authenticatedPage: page }) => {
+  test.setTimeout(60_000);
+  const counts = new Map<string, number>();
+  let messageRequests = 0;
+  const agents = Array.from({ length: 8 }, (_, i) => ({ id: `old-${i}`, sessionId: 'sess-1', role: 'coding', model: 'test', status: 'completed',
+    createdAt: new Date(2026, 8, 29, 12, i).toISOString(), completedAt: new Date(2026, 8, 29, 12, i + 1).toISOString(), iteration: 1 }));
+  await page.routeWebSocket(/\/ws\?/, () => {});
+  await page.route('**/api/sessions/sess-1/messages**', route => { messageRequests++; return json(route, 200, { messages: [] }); });
+  await page.route('**/api/agents?sessionId=sess-1', route => json(route, 200, { agents }));
+  await page.route('**/api/agents/*/events?**', route => {
+    const id = new URL(route.request().url()).pathname.split('/')[3];
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+    return json(route, 200, { events: [], nextCursor: 0, hasMore: false });
+  });
+  await page.clock.install();
+  await page.goto('/chat');
+  await selectChatSession(page, 'sess-1');
+  await expect.poll(() => counts.size).toBe(4);
+  await page.clock.runFor(200);
+  expect([...counts.values()].reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(messageRequests * 4);
+  for (let i = 0; i < 5; i++) {
+    await page.clock.fastForward(10_000);
+    await expect.poll(() => messageRequests).toBeGreaterThan(i + 1);
+    await expect.poll(() => [...counts.values()].reduce((a, b) => a + b, 0)).toBe(Math.min(16, (i + 2) * 4));
+    await page.clock.runFor(200);
+  }
+  await expect.poll(() => [...counts.values()].reduce((a, b) => a + b, 0)).toBe(16);
+  await page.clock.fastForward(20_000);
+  expect([...counts.values()].reduce((a, b) => a + b, 0)).toBe(16);
+});

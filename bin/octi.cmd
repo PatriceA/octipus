@@ -77,6 +77,7 @@ set "COMMAND=%~1"
 if "%COMMAND%"=="" set "COMMAND=help"
 
 if "%COMMAND%"=="setup" goto :cmd_setup
+if "%COMMAND%"=="update" goto :cmd_update
 if "%COMMAND%"=="start" goto :cmd_start
 if "%COMMAND%"=="stop" goto :cmd_stop
 if "%COMMAND%"=="restart" goto :cmd_restart
@@ -103,11 +104,15 @@ set "_RC=%errorlevel%"
 popd
 exit /b %_RC%
 
+:cmd_update
+node "%PROJECT_DIR%\scripts\update.mjs" %2 %3 %4 %5 %6 %7 %8 %9
+exit /b %errorlevel%
+
 :: ─── Banner ──────────────────────────────────────────────────────────────
 :print_banner
 echo.
 echo   %CYAN%%BOLD%+===================================+
-echo   ^|                  O C T I P U S         ^|
+echo   ^|           O C T I P U S           ^|
 echo   +===================================+%NC%
 echo.
 exit /b 0
@@ -888,6 +893,7 @@ echo     stop             Stop all Octipus processes
 echo     status           Show running state and service health
 echo     doctor [--json]  Run environment health checks (what's wired, what's missing)
 echo     logs [--web]     Tail backend logs (--web for web UI)
+echo     update [--dry-run] Update this installation from its existing source
 echo     uninstall        Remove Octipus ^(keeps data; --purge wipes everything^)
 echo     help             Show this help message
 echo.

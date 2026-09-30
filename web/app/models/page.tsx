@@ -145,16 +145,21 @@ export default function ModelsPage() {
 
       <RecommendedModelsPanel onInstalled={fetchModels} />
 
-      <CLIStatusPanel
-        tools={cliTools}
-        registeredModels={models}
-        onAdd={handleAddModel}
-        onUpdate={async (id, patch) => {
-          const m = models.find(mm => mm.id === id);
-          if (!m) return;
-          await handleSaveModel(m.name, patch);
-        }}
-      />
+      <details className="rounded-lg border border-outline-variant/20 p-4">
+        <summary className="cursor-pointer text-sm font-medium">CLI tools · configuration and status</summary>
+        <div className="mt-4">
+          <CLIStatusPanel
+            tools={cliTools}
+            registeredModels={models}
+            onAdd={handleAddModel}
+            onUpdate={async (id, patch) => {
+              const m = models.find(mm => mm.id === id);
+              if (!m) return;
+              await handleSaveModel(m.name, patch);
+            }}
+          />
+        </div>
+      </details>
 
       <div className="stagger grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {models.length === 0 ? (

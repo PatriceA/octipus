@@ -53,9 +53,8 @@ function buildPromptSummary(skill: Skill): string {
  * High-level skill operations. Goes through `skillRepository` for DB rows
  * and `external-loader` for filesystem skills (agentskills.io spec).
  *
- * External skills have ids prefixed `external:` and live in memory only —
- * they do not appear in `skill_topic_assignments` and cannot be edited via
- * the API; they reload from disk via `loadExternal()`.
+ * External skills have ids prefixed `external:`. Their role assignments live
+ * in the database; source content stays read-only and reloads from disk.
  */
 export class SkillRegistry {
   private external: Map<string, ExternalSkill> = new Map();
@@ -179,7 +178,8 @@ export class SkillRegistry {
   }
 
   async getActiveSkillsForTopic(topic: string): Promise<Skill[]> {
-    return skillRepository.findActiveByTopic(topic);
+    const { fetchActiveSkillIdsForTopic } = await import('./discovery');
+    return (await this.getByIds(await fetchActiveSkillIdsForTopic(topic))).filter(skill => !skill.archivedAt);
   }
 
   async buildTopicPromptFragment(topic: string): Promise<string> {

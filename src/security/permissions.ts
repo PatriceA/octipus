@@ -164,7 +164,7 @@ export class PermissionManager {
     }
 
     // Fall back to the tool's default permission level, or ASK if not found
-    let defaultLevel: PermissionLevel = options?.defaultLevel ?? 'ASK';
+    let defaultLevel: PermissionLevel = options?.defaultLevel ?? (toolId === 'mcp' ? 'ALLOW' : 'ASK');
     try {
       const registry = getToolRegistry();
       const toolInstance = registry.get(toolId);

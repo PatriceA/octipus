@@ -4,6 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { MCPServer } from '@/core/types';
 import type { MCPServerConnection } from '@/mcp/bridge';
+vi.mock('./cocoindex-embedding', () => ({ cocoIndexEmbeddingSettings: async () => ({
+  model: 'octipus-test', label: 'Configured embedder', settings: {
+    embedding: { provider: 'litellm', model: 'openai/octipus-test', min_interval_ms: 500 },
+    envs: { OPENAI_API_KEY: 'test-token' },
+  },
+}) }));
 import {
   CocoIndexService,
   ProcessRunError,
@@ -275,6 +281,16 @@ describe.skipIf(process.platform !== 'win32')('CocoIndexService on Windows', () 
       expect.objectContaining({ command: 'uv', args: ['tool', 'install', '--upgrade', 'cocoindex-code[full]'] }),
     ]));
     expect((await f.service.getStatus()).status).toBe('connected');
+  });
+
+  test('shared embeddings need neither a local model probe nor the full Python extra', async () => {
+    const f = windowsFixture(false);
+    await f.service.install('C:\\src\\project', undefined, 'octipus');
+    await f.service.waitForIdle();
+    expect(calls.some(call => call.args.join(' ').includes('sentence_transformers'))).toBe(false);
+    expect(calls.some(call => call.args.includes('cocoindex-code[full]'))).toBe(false);
+    expect([...f.writes.values()].some(content => content.includes('openai/octipus-test'))).toBe(true);
+    expect(await f.service.getStatus()).toMatchObject({ status: 'connected', embedding: { provider: 'octipus', local: false } });
   });
 });
 

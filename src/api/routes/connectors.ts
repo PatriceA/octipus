@@ -10,6 +10,7 @@ import {
   OAuthManager,
 } from '@/security/oauth';
 import { getVault } from '@/security/vault';
+import { embedCocoIndex } from '@/connectors/cocoindex-embedding';
 
 /** Derive the public URL used for OAuth redirect URIs. */
 function getPublicUrl(): string {
@@ -53,6 +54,27 @@ const CALLBACK_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 
 export const connectorRoutes = new Elysia({ prefix: '/connectors' })
   .use(apiContext)
 
+  .post('/cocoindex/:side/embeddings', async ({ user, body, params, set }) => {
+    if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+    if (!user.isAdmin) { set.status = 403; return { error: 'Admin access required' }; }
+    const inputs: string[] = typeof body.input === 'string' ? [body.input] : body.input;
+    if (inputs.reduce((size, text) => size + text.length, 0) > 256_000) {
+      set.status = 413; return { error: 'Embedding batch too large' };
+    }
+    try {
+      const result = await embedCocoIndex(inputs, body.model, params.side === 'query' ? 'query' : 'document', user.id);
+      if (!result) { set.status = 429; return { error: 'Embedding request already active; retry shortly' }; }
+      return result;
+    } catch (error) {
+      set.status = 503;
+      return { error: error instanceof Error ? error.message : 'Embedding failed' };
+    }
+  }, { params: t.Object({ side: t.Union([t.Literal('document'), t.Literal('query')]) }), body: t.Object({
+    model: t.String({ minLength: 1, maxLength: 200 }),
+    input: t.Union([t.String({ maxLength: 64_000 }), t.Array(t.String({ maxLength: 64_000 }), { minItems: 1, maxItems: 64 })]),
+    encoding_format: t.Optional(t.String()),
+  }) })
+
   .get('/cocoindex', async ({ user, set }) => {
     if (!user) {
       set.status = 401;
@@ -79,7 +101,7 @@ export const connectorRoutes = new Elysia({ prefix: '/connectors' })
     }
     try {
       const path = await resolveCocoIndexWorkspacePath(body.workspacePath, user.id);
-      const status = await getCocoIndexService().install(path, body.embeddingModel);
+      const status = await getCocoIndexService().install(path, body.embeddingModel, body.embeddingSource);
       set.status = 202;
       return status;
     } catch (error) {
@@ -91,6 +113,7 @@ export const connectorRoutes = new Elysia({ prefix: '/connectors' })
     body: t.Object({
       workspacePath: t.String({ minLength: 1, maxLength: 4096 }),
       embeddingModel: t.Optional(t.String({ minLength: 1, maxLength: 200 })),
+      embeddingSource: t.Optional(t.Union([t.Literal('local'), t.Literal('octipus')])),
     }),
     detail: { tags: ['connectors'] },
   })

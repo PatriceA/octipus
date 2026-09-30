@@ -56,11 +56,20 @@ const RETRY_BACKOFF_MS = [300, 600, 1200];
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number, readonly retryAfterMs = 0) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
 class ApiClient {
   private token: string | null = null;
   private workspaceSlug: string | null = null;
+  private readPauseUntil = 0;
 
   setToken(token: string | null) {
+    if (token !== this.token) this.readPauseUntil = 0;
     this.token = token;
     if (token) {
       localStorage.setItem('auth_token', token);
@@ -90,6 +99,9 @@ class ApiClient {
     path: string,
     body?: unknown
   ): Promise<T> {
+    if (method === 'GET' && Date.now() < this.readPauseUntil) {
+      throw new ApiError('Automatic refresh is paused briefly.', 429, this.readPauseUntil - Date.now());
+    }
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
@@ -141,7 +153,14 @@ class ApiClient {
           }
         }
         const error = await response.json().catch(() => ({ error: 'Request failed' }));
-        throw new Error(error.error || `HTTP ${response.status}`);
+        const retryHeader = response.headers.get('Retry-After');
+        const seconds = Number(retryHeader ?? error.retryAfter);
+        const retryAfterMs = response.status === 429
+          ? (Number.isFinite(seconds) && seconds > 0 ? seconds * 1000
+            : retryHeader && Number.isFinite(Date.parse(retryHeader)) ? Math.max(1000, Date.parse(retryHeader) - Date.now()) : 30_000)
+          : 0;
+        if (response.status === 429) this.readPauseUntil = Date.now() + retryAfterMs;
+        throw new ApiError(error.error || `HTTP ${response.status}`, response.status, retryAfterMs);
       }
 
       return response.json();

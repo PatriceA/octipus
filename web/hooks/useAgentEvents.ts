@@ -38,22 +38,24 @@ interface EventResponse {
 export async function fetchPersistedAgentEvents(
   agentId: string,
   after = 0,
-): Promise<{ events: AgentEventRecord[]; nextCursor: number }> {
+  maxPages = Infinity,
+): Promise<{ events: AgentEventRecord[]; nextCursor: number; hasMore: boolean }> {
   const events: AgentEventRecord[] = [];
   let cursor = after;
   let hasMore = true;
-  while (hasMore) {
+  let pages = 0;
+  while (hasMore && pages++ < maxPages) {
     const data = await api.get<EventResponse>(
       `/agents/${encodeURIComponent(agentId)}/events?after=${cursor}&source=persisted`,
     );
-    if (!data?.events?.length) break;
+    if (!data?.events?.length) { hasMore = false; break; }
     const nextCursor = data.nextCursor ?? data.events[data.events.length - 1].seq;
     if (nextCursor <= cursor) break;
     events.push(...data.events);
     cursor = nextCursor;
     hasMore = data.hasMore === true;
   }
-  return { events, nextCursor: cursor };
+  return { events, nextCursor: cursor, hasMore };
 }
 
 /**

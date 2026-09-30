@@ -37,6 +37,26 @@ test('reports absent evidence without spending model tokens', async () => {
   expect(mock.complete).not.toHaveBeenCalled();
   expect(mock.finish).toHaveBeenCalledWith('j1', expect.objectContaining({ stage: 'insufficient_evidence' }));
 });
+
+test('uses the configured output budget and retries truncation once before writes', async () => {
+  mock.model.mockResolvedValue({ name: 'reviewer', modelId: 'openrouter/reviewer', defaultMaxTokens: 16384, maxTokens: 131072 });
+  mock.complete.mockResolvedValueOnce({ content: '', finishReason: 'length', usage: { reasoningTokens: 16384 } })
+    .mockResolvedValueOnce({ content: JSON.stringify(empty), finishReason: 'stop' });
+  await processLearningJob(job);
+  expect(mock.complete.mock.calls.map(([options]) => options.maxTokens)).toEqual([16384, 32768]);
+  expect(mock.complete.mock.calls[0][0].modelConfigName).toBe('reviewer');
+  expect(mock.finish).toHaveBeenCalledWith('j1', expect.objectContaining({ status: 'done' }));
+});
+
+test('caps output at the provider ceiling and reports exhausted budget', async () => {
+  mock.model.mockResolvedValue({ name: 'small', modelId: 'small', defaultMaxTokens: 16384, maxTokens: 8192 });
+  mock.complete.mockResolvedValue({ content: '', finishReason: 'length', usage: { outputTokens: 8192, reasoningTokens: 8100 } });
+  await processLearningJob(job);
+  expect(mock.complete).toHaveBeenCalledTimes(1);
+  expect(mock.complete.mock.calls[0][0].maxTokens).toBe(8192);
+  expect(mock.finish.mock.calls[0][1].error).toContain('reasoning 8100');
+  expect(mock.save).not.toHaveBeenCalled();
+});
 test.each(['malformed', 'missing-model', 'truncated'])('reports %s as failure', async mode => {
   if (mode === 'missing-model') mock.model.mockResolvedValue(null);
   else mock.complete.mockResolvedValue({ content: mode === 'malformed' ? 'oops' : JSON.stringify(empty), finishReason: mode === 'truncated' ? 'length' : 'stop' });

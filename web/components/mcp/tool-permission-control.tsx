@@ -5,6 +5,35 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 
 type Level = 'ALLOW' | 'ASK' | 'DENY';
+
+export function McpBulkPermissionControl({ serverId, toolNames }: { serverId: string; toolNames: string[] }) {
+  const client = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState('');
+  async function change(level: Level) {
+    setBusy(true);
+    setResult('');
+    let failed = 0;
+    try {
+      // Bound concurrent requests even for servers with hundreds of tools.
+      for (let i = 0; i < toolNames.length; i += 5) {
+        const results = await Promise.allSettled(toolNames.slice(i, i + 5).map(name =>
+          api.put('/tools/permissions', { toolId: 'mcp', action: `${serverId}.${name}`, level })));
+        failed += results.filter(r => r.status === 'rejected').length;
+      }
+      await client.invalidateQueries({ queryKey: ['tool-permissions'] });
+      setResult(failed ? `${toolNames.length - failed} saved; ${failed} failed. Retry to finish.` : `All ${toolNames.length} tools set to ${level.toLowerCase()}.`);
+    } finally { setBusy(false); }
+  }
+  return <fieldset disabled={busy} className="mb-3 space-y-2 text-xs">
+    <legend className="mb-2">Set all tools on this server</legend>
+    <div className="flex gap-2">{(['ALLOW', 'ASK', 'DENY'] as const).map(level =>
+      <button key={level} className="rounded border border-outline-variant px-3 py-1 disabled:opacity-50"
+        onClick={() => void change(level)}>All {level.toLowerCase()}</button>)}</div>
+    <p className="text-on-surface-variant">Replaces your per-tool settings, including expiry and scope restrictions. Administrative rules still apply.</p>
+    <p role="status">{busy ? 'Saving permissions…' : result}</p>
+  </fieldset>;
+}
 interface Permission {
   toolId: string;
   action: string;
@@ -60,7 +89,7 @@ export function McpToolPermissionControl({ serverId, toolName }: {
         onChange={event => void change(event.target.value as Level | 'DEFAULT')}
         className="rounded border border-outline-variant bg-surface-container px-2 py-1 text-on-surface disabled:opacity-50"
       >
-        <option value="DEFAULT">Default (ask unless a rule applies)</option>
+        <option value="DEFAULT">Default (allow unless a rule applies)</option>
         <option value="ALLOW">Allow — no confirmation</option>
         <option value="ASK">Ask — every call</option>
         <option value="DENY">Deny — block tool</option>

@@ -19,6 +19,7 @@ import { restrictToOwner } from '@/utils/file-acl';
 import { killProcessTree } from '@/utils/proc';
 import { writeFileAt } from '@/utils/fs-file';
 import { coreLogger } from '@/utils/logger';
+import { cocoIndexEmbeddingSettings } from './cocoindex-embedding';
 
 /** The launcher's filename. One constant, because a site that spelled it
  * `'ccc'` on Windows silently never matched. */
@@ -270,6 +271,9 @@ export class CocoIndexService {
       COCOINDEX_CODE_HOST_CWD: '',
       COCOINDEX_CODE_HOST_PATH_MAPPING: '',
       COCOINDEX_CODE_DAEMON_SUPERVISED: '',
+      OMP_NUM_THREADS: '2',
+      MKL_NUM_THREADS: '2',
+      TOKENIZERS_PARALLELISM: 'false',
     };
   }
 
@@ -306,9 +310,9 @@ export class CocoIndexService {
         : configured ? (connection?.status ?? 'disconnected') : 'not_installed',
       ...(connection?.error ? { error: connection.error } : {}),
       embedding: {
-        provider: 'sentence-transformers',
+        provider: server?.env?.OCTIPUS_COCOINDEX_EMBEDDING_SOURCE === 'octipus' ? 'octipus' : 'sentence-transformers',
         model: this.modelFrom(server),
-        local: true,
+        local: server?.env?.OCTIPUS_COCOINDEX_EMBEDDING_SOURCE !== 'octipus',
       },
     };
   }
@@ -340,7 +344,7 @@ export class CocoIndexService {
     return structuredClone(current);
   }
 
-  async install(workspacePath: string, embeddingModel?: string): Promise<CocoIndexStatus> {
+  async install(workspacePath: string, embeddingModel?: string, source: 'local' | 'octipus' = 'local'): Promise<CocoIndexStatus> {
     if (this.removeJob) throw new Error('CocoIndex Code connector removal is still in progress');
     if (this.job) return structuredClone(this.state);
     const conflicting = this.deps.bridge.getServerConfigs().find(
@@ -351,7 +355,11 @@ export class CocoIndexService {
         `An unmanaged MCP server already uses the ID ${COCOINDEX_CONNECTOR_ID}; rename or remove it first`,
       );
     }
-    const model = assertEmbeddingModel(embeddingModel ?? COCOINDEX_DEFAULT_EMBEDDING_MODEL);
+    const shared = source === 'octipus' ? await cocoIndexEmbeddingSettings() : undefined;
+    if (this.removeJob) throw new Error('CocoIndex Code connector removal is still in progress');
+    if (this.job) return structuredClone(this.state);
+    const model = shared?.model ?? assertEmbeddingModel(embeddingModel ?? COCOINDEX_DEFAULT_EMBEDDING_MODEL);
+    const embedding: CocoIndexStatus['embedding'] = { provider: shared ? 'octipus' : 'sentence-transformers', model: shared?.label ?? model, local: !shared };
     const generation = ++this.generation;
     const abort = new AbortController();
     this.activeAbort = abort;
@@ -362,9 +370,9 @@ export class CocoIndexService {
       error: undefined,
       progress: { phase: 'install', message: 'Checking CocoIndex Code installation' },
       workspacePath,
-      embedding: { provider: 'sentence-transformers', model, local: true },
+      embedding,
     };
-    this.job = this.runInstall(generation, workspacePath, model, abort.signal)
+    this.job = this.runInstall(generation, workspacePath, model, abort.signal, shared?.settings, embedding)
       .catch(async (error) => {
         // The CLI starts its indexing daemon in a separate OS session. A
         // process-group kill cannot reach it, so explicitly stop the isolated
@@ -391,14 +399,16 @@ export class CocoIndexService {
     workspacePath: string,
     model: string,
     signal: AbortSignal,
+    sharedSettings?: Record<string, unknown>,
+    embedding: CocoIndexStatus['embedding'] = { provider: 'sentence-transformers', model, local: true },
   ): Promise<void> {
     let command = await this.findInstalledCommand(this.managedServer()?.command);
-    if (!command || !(await this.hasLocalEmbeddingSupport(command, signal))) {
-      this.state.progress = { phase: 'install', message: 'Installing CocoIndex Code and local embeddings' };
-      await this.installPackage(signal);
+    if (!command || (!sharedSettings && !(await this.hasLocalEmbeddingSupport(command, signal)))) {
+      this.state.progress = { phase: 'install', message: sharedSettings ? 'Installing CocoIndex Code' : 'Installing CocoIndex Code and local embeddings' };
+      await this.installPackage(signal, !!sharedSettings);
       command = await this.findInstalledCommand();
       if (!command) throw new Error('Installation finished but the ccc executable could not be found');
-      if (!(await this.hasLocalEmbeddingSupport(command, signal))) {
+      if (!sharedSettings && !(await this.hasLocalEmbeddingSupport(command, signal))) {
         throw new Error('CocoIndex Code was installed without the sentence-transformers local embedding backend');
       }
     }
@@ -425,8 +435,9 @@ export class CocoIndexService {
     } catch {
       // A fresh managed index has no metadata yet.
     }
-    const globalSettings = yaml.dump({
-      embedding: { provider: 'sentence-transformers', model },
+    const globalSettings = yaml.dump(sharedSettings ?? {
+      embedding: { provider: 'sentence-transformers', model, min_interval_ms: 500 },
+      daemon: { idle_timeout_minutes: 10, keep_alive_with_mcp: false },
     }, { noRefs: true, lineWidth: -1 });
     const settingsPath = join(configDir, 'global_settings.yml');
     await this.deps.writeFile(settingsPath, globalSettings);
@@ -457,7 +468,7 @@ export class CocoIndexService {
     }
     this.state.progress = {
       phase: 'initialize',
-      message: 'Downloading the local model and building the initial code index',
+      message: sharedSettings ? 'Building the code index with the Octipus embedding model' : 'Downloading the local model and building the initial code index',
     };
     await this.deps.run(command, ['index'], {
       cwd: workspacePath,
@@ -467,7 +478,7 @@ export class CocoIndexService {
     });
     await this.deps.writeFile(metadataPath, JSON.stringify({
       workspacePath,
-      embeddingProvider: 'sentence-transformers',
+      embeddingProvider: embedding.provider,
       embeddingModel: model,
     }, null, 2));
     this.deps.restrictFile(metadataPath);
@@ -484,7 +495,8 @@ export class CocoIndexService {
       env: {
         ...env,
         OCTIPUS_MANAGED_CONNECTOR: MANAGED_MARKER,
-        OCTIPUS_COCOINDEX_EMBEDDING_MODEL: model,
+        OCTIPUS_COCOINDEX_EMBEDDING_MODEL: embedding.model,
+        OCTIPUS_COCOINDEX_EMBEDDING_SOURCE: sharedSettings ? 'octipus' : 'local',
       },
       isEnabled: true,
       transport: 'stdio',
@@ -517,7 +529,7 @@ export class CocoIndexService {
       configured: true,
       workspacePath,
       status: 'connected',
-      embedding: { provider: 'sentence-transformers', model, local: true },
+      embedding,
     };
   }
 
@@ -619,10 +631,10 @@ export class CocoIndexService {
     return roots;
   }
 
-  private async installPackage(signal: AbortSignal): Promise<void> {
+  private async installPackage(signal: AbortSignal, shared = false): Promise<void> {
     try {
       await this.deps.run('uv', ['--version'], { timeoutMs: COMMAND_TIMEOUT_MS, signal });
-      await this.deps.run('uv', ['tool', 'install', '--upgrade', INSTALL_PACKAGE], {
+      await this.deps.run('uv', ['tool', 'install', '--upgrade', shared ? 'cocoindex-code' : INSTALL_PACKAGE], {
         timeoutMs: INSTALL_TIMEOUT_MS,
         signal,
       });
@@ -647,7 +659,7 @@ export class CocoIndexService {
     }
     try {
       await this.deps.run('pipx', ['--version'], { timeoutMs: COMMAND_TIMEOUT_MS, signal });
-      await this.deps.run('pipx', ['install', '--force', INSTALL_PACKAGE], {
+      await this.deps.run('pipx', ['install', '--force', shared ? 'cocoindex-code' : INSTALL_PACKAGE], {
         timeoutMs: INSTALL_TIMEOUT_MS,
         signal,
       });

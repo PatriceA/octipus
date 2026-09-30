@@ -23,7 +23,7 @@ import { cn } from '@/lib/utils';
 import { PageHeader } from '@/components/ui/page-header';
 import { Portal } from '@/components/ui/portal';
 import { ConnectorsTab } from '@/components/mcp/connectors-tab';
-import { McpToolPermissionControl } from '@/components/mcp/tool-permission-control';
+import { McpBulkPermissionControl, McpToolPermissionControl } from '@/components/mcp/tool-permission-control';
 
 interface MCPServer {
   id: string;
@@ -368,6 +368,7 @@ function ServerToolList({ serverId }: { serverId: string }) {
         Permissions are saved for your account, per server and tool, across sessions.
         Allow skips confirmation; Ask requests it each time. Administrative deny rules still apply.
       </p>
+      <McpBulkPermissionControl serverId={serverId} toolNames={tools.map(tool => tool.name)} />
       {tools.map((tool) => (
         <div key={tool.name} className="flex items-start gap-2 px-2.5 py-1.5 bg-surface-container-low rounded-lg">
           <Wrench className="w-3.5 h-3.5 text-on-surface-variant mt-0.5 shrink-0" />

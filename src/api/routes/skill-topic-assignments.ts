@@ -1,9 +1,10 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getDb } from '@/db/postgres';
 import { skillTopicAssignments } from '@/db/schema/skill-topic-assignments';
 import { skills } from '@/db/schema/skills';
+import { getSkillRegistry } from '@/skills/registry';
 
 export const skillTopicAssignmentRoutes = new Elysia({ prefix: '/skills/topics' })
   .use(apiContext)
@@ -24,16 +25,17 @@ export const skillTopicAssignmentRoutes = new Elysia({ prefix: '/skills/topics' 
           updatedAt: skillTopicAssignments.updatedAt,
         })
         .from(skillTopicAssignments)
-        .innerJoin(skills, eq(skillTopicAssignments.skillId, skills.id));
+        .leftJoin(skills, eq(skillTopicAssignments.skillId, skills.id));
 
-      if (query.topic) {
-        q = q.where(eq(skillTopicAssignments.topic, query.topic)) as typeof q;
-      }
-      if (query.skillId) {
-        q = q.where(eq(skillTopicAssignments.skillId, query.skillId)) as typeof q;
-      }
-
-      return { assignments: await q };
+      const registry = getSkillRegistry();
+      q = q.where(and(
+        query.topic ? eq(skillTopicAssignments.topic, query.topic) : undefined,
+        query.skillId ? inArray(skillTopicAssignments.skillId, registry.sourceIds(query.skillId)) : undefined,
+      )) as typeof q;
+      return { assignments: (await q).map(row => ({ ...row,
+        skillId: registry.canonicalId(row.skillId),
+        skillName: row.skillName ?? registry.getExternalSkills().find(skill => skill.id === registry.canonicalId(row.skillId))?.name ?? row.skillId,
+      })) };
     },
     {
       query: t.Object({
@@ -53,8 +55,9 @@ export const skillTopicAssignmentRoutes = new Elysia({ prefix: '/skills/topics' 
       const db = getDb();
 
       // Check skill exists
-      const [skill] = await db.select({ id: skills.id }).from(skills).where(eq(skills.id, body.skillId)).limit(1);
+      const skill = await getSkillRegistry().get(body.skillId, user.id);
       if (!skill) return { error: 'Skill not found' };
+      body.skillId = skill.id;
 
       // Check for existing assignment
       const [existing] = await db
@@ -62,7 +65,7 @@ export const skillTopicAssignmentRoutes = new Elysia({ prefix: '/skills/topics' 
         .from(skillTopicAssignments)
         .where(
           and(
-            eq(skillTopicAssignments.skillId, body.skillId),
+            inArray(skillTopicAssignments.skillId, getSkillRegistry().sourceIds(body.skillId)),
             eq(skillTopicAssignments.topic, body.topic),
           ),
         )
@@ -128,7 +131,7 @@ export const skillTopicAssignmentRoutes = new Elysia({ prefix: '/skills/topics' 
       const updated = await db
         .update(skillTopicAssignments)
         .set({ isActive: body.isActive, updatedAt: new Date() })
-        .where(eq(skillTopicAssignments.skillId, params.skillId))
+        .where(inArray(skillTopicAssignments.skillId, getSkillRegistry().sourceIds(params.skillId)))
         .returning();
 
       return { updated: updated.length, assignments: updated };

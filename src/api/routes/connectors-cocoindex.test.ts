@@ -4,7 +4,7 @@ import type { CocoIndexStatus } from '@/shared/cocoindex';
 
 const fixture = vi.hoisted(() => ({
   user: { id: 'admin', isAdmin: true } as { id: string; isAdmin: boolean } | null,
-  status: vi.fn(), install: vi.fn(), remove: vi.fn(), resolvePath: vi.fn(),
+  status: vi.fn(), install: vi.fn(), remove: vi.fn(), resolvePath: vi.fn(), embed: vi.fn(),
 }));
 vi.mock('@/api/context', async () => {
   const { App } = await import('@/api/http');
@@ -19,6 +19,7 @@ vi.mock('@/connectors/cocoindex', async importOriginal => {
   };
 });
 import { connectorRoutes } from './connectors';
+vi.mock('@/connectors/cocoindex-embedding', () => ({ embedCocoIndex: fixture.embed }));
 const app = new App().group('/api', group => group.use(connectorRoutes));
 const state: CocoIndexStatus = {
   id: 'cocoindex-code', installed: false, configured: false, workspacePath: '/private/repo',
@@ -71,7 +72,7 @@ test('admin installation starts asynchronously using a validated backend path', 
   const response = await request('POST', '/install', { workspacePath: '/repo', embeddingModel: 'test/local-model' });
   expect(response.status).toBe(202);
   expect(fixture.resolvePath).toHaveBeenCalledWith('/repo', 'admin');
-  expect(fixture.install).toHaveBeenCalledWith('/workspace/repo', 'test/local-model');
+  expect(fixture.install).toHaveBeenCalledWith('/workspace/repo', 'test/local-model', undefined);
   expect(await response.json()).toMatchObject({ status: 'installing' });
 });
 
@@ -108,4 +109,22 @@ test('status inspection failures do not leak private diagnostics to a member', a
   const response = await request('GET');
   expect(response.status).toBe(503);
   expect(await response.json()).toEqual({ error: 'Could not inspect CocoIndex connector' });
+});
+
+test.each([null, { id: 'member', isAdmin: false }])('embedding endpoint requires an administrator', async user => {
+  fixture.user = user;
+  const response = await request('POST', '/document/embeddings', { model: 'model', input: ['code'] });
+  expect(response.status).toBe(user ? 403 : 401);
+  expect(fixture.embed).not.toHaveBeenCalled();
+});
+
+test('embedding endpoint preserves document/query mode and applies backpressure', async () => {
+  fixture.embed.mockResolvedValueOnce({ object: 'list', data: [{ embedding: [1, 2], index: 0 }] }).mockResolvedValueOnce(null);
+  const response = await request('POST', '/query/embeddings', { model: 'configured', input: 'find code' });
+  expect(response.status).toBe(200);
+  expect(fixture.embed).toHaveBeenCalledWith(['find code'], 'configured', 'query', 'admin');
+  const busy = await request('POST', '/document/embeddings', { model: 'configured', input: ['code'] });
+  expect(busy.status).toBe(429);
+  const oversized = await request('POST', '/document/embeddings', { model: 'configured', input: Array(5).fill('x'.repeat(64_000)) });
+  expect(oversized.status).toBe(413);
 });

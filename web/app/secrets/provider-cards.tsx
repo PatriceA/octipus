@@ -13,16 +13,20 @@ interface ProviderCardsProps {
 }
 
 export function ProviderCards({ statuses, onStatusChange, groups = PROVIDER_KEY_GROUPS }: ProviderCardsProps) {
+  const [showUnused, setShowUnused] = useState(false);
+  const unusedCount = groups.flatMap(group => group.keys).filter(key => !statuses[key.vaultName]).length;
   return (
     <div className="space-y-6">
-      {groups.map((group) => (
+      {unusedCount > 0 && <button className="text-sm text-primary underline" aria-expanded={showUnused}
+        onClick={() => setShowUnused(!showUnused)}>{showUnused ? 'Hide unused connections' : `Add connection (${unusedCount} available)`}</button>}
+      {groups.filter(group => showUnused || group.keys.some(key => statuses[key.vaultName])).map((group) => (
         <div key={group.title}>
           <h2 className="text-base font-extrabold tracking-tighter text-on-surface mb-1">
             {group.title}
           </h2>
           <p className="text-sm text-on-surface-variant mb-4">{group.description}</p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {group.keys.map((key) => (
+            {group.keys.filter(key => showUnused || statuses[key.vaultName]).map((key) => (
               <ProviderCard
                 key={key.vaultName}
                 label={key.label}

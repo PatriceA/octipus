@@ -28,6 +28,7 @@ import { skillTopicAssignments } from '@/db/schema/skill-topic-assignments';
 import { skills } from '@/db/schema/skills';
 import { getEmbeddingService } from '@/core/rag/embeddings';
 import { getSkillRegistry } from '@/skills/registry';
+import { isExternalSkillId } from './external-loader';
 import { coreLogger } from '@/utils/logger';
 
 export interface DiscoveryOptions {
@@ -93,7 +94,7 @@ export async function fetchActiveSkillIdsForTopic(topic: string): Promise<string
         eq(skillTopicAssignments.isActive, true),
       ),
     );
-  return rows.map(r => r.skillId);
+  return [...new Set(rows.map(r => getSkillRegistry().canonicalId(r.skillId)))];
 }
 
 /** Always-inject set, filtered to the topic's active assignment ids. */
@@ -250,16 +251,18 @@ export async function discoverSkillIds(opts: DiscoveryOptions): Promise<string[]
     }
   };
 
-  const [alwaysInject, triggerMatches, vectorMatches, staleFallback] = await Promise.all([
+  const [alwaysInject, triggerMatches, vectorMatches, staleFallback, assigned] = await Promise.all([
     safe(() => fetchAlwaysInjectIds(opts.topic), 'always_inject'),
     safe(() => fetchTriggerMatchIds(opts.topic, opts.message), 'triggers'),
     // Vector path has its own loud-fail handling internally; safe() guards
     // against pure DB faults outside the embedding call.
     safe(() => fetchVectorMatchIds(opts.topic, opts.message, maxByVector, minSimilarity), 'vector'),
     safe(() => fetchStaleFallbackIds(opts.topic), 'stale_fallback'),
+    safe(() => fetchActiveSkillIdsForTopic(opts.topic), 'mounted_assignments'),
   ]);
 
   const union = new Set<string>();
+  for (const id of assigned.filter(isExternalSkillId)) union.add(id);
   for (const id of alwaysInject) union.add(id);
   for (const id of triggerMatches) union.add(id);
   for (const id of vectorMatches) union.add(id);

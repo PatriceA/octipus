@@ -49,6 +49,7 @@ Commands:
   persona [show]           Print the resolved persona (use the web UI to edit)
   uninstall [--purge]      Remove Octipus (keeps data unless --purge; --dry-run to preview)
   version                  Print version
+  update [--dry-run]        Update this installation using its existing source
   help                     Print this banner
 `;
 
@@ -294,6 +295,8 @@ async function main(): Promise<void> {
   const cmd = (command || 'help').toLowerCase();
 
   switch (cmd) {
+    case 'update':
+      process.exit(await runInherit(process.execPath, [join(projectOrDie(), 'scripts', 'update.mjs'), ...rest], projectOrDie()));
     case 'help':
     case '--help':
     case '-h':

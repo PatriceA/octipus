@@ -24,7 +24,7 @@ import { GlobalPermissionBanner } from '@/components/global-permission-banner';
 import type { SwarmTreeEvent } from '@/components/swarm-tree';
 import { useVoiceRealtime } from '@/hooks/useVoiceRealtime';
 import { fetchPersistedAgentEvents } from '@/hooks/useAgentEvents';
-import { api, createAuthenticatedWebSocket, getApiUrl } from '@/lib/api';
+import { api, ApiError, createAuthenticatedWebSocket, getApiUrl } from '@/lib/api';
 import { usePermissions } from '@/lib/permission-context';
 import { useWorkspace } from '@/lib/workspace-context';
 import type { ToolInputPreview, ToolResultPreview } from '../../../src/shared/work-stream';
@@ -46,6 +46,8 @@ interface ToolCallInfo {
 
 interface AgentHistoryCache {
   cursor: number;
+  complete?: boolean;
+  fetchedAt?: number;
   toolCalls: ToolCallInfo[];
   fileChanges: FileChange[];
 }
@@ -150,6 +152,8 @@ export default function ChatPage() {
   const [historyErrors, setHistoryErrors] = useState<Record<string, string>>({});
   const appliedMessageLoadsRef = useRef(new Map<string, number>());
   const messageLoadsRef = useRef(new Map<string, number>());
+  const historyInFlightRef = useRef(new Set<string>());
+  const historyPauseUntilRef = useRef(new Map<string, number>());
   const deletedSessionsRef = useRef<Set<string>>(new Set());
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionStates, setSessionStates] = useState<Map<string, SessionState>>(new Map());
@@ -293,12 +297,19 @@ export default function ChatPage() {
 
         return items;
       }
-    } catch (error) { setSessionListError(error instanceof Error ? error.message : 'Could not refresh sessions.'); }
+    } catch (error) {
+      // History shows the shared rate-limit pause; avoid a second overlay.
+      if (!(error instanceof ApiError && error.status === 429)) {
+        setSessionListError('Session list could not refresh. It will retry automatically.');
+      }
+    }
     return [];
   }, [updateSessionState]);
 
   // Load messages for a session
   const loadSessionMessages = useCallback(async (sessionId: string) => {
+    if (historyInFlightRef.current.has(sessionId) || Date.now() < (historyPauseUntilRef.current.get(sessionId) ?? 0)) return;
+    historyInFlightRef.current.add(sessionId);
     const revision = (messageLoadsRef.current.get(sessionId) ?? 0) + 1;
     messageLoadsRef.current.set(sessionId, revision);
     try {
@@ -325,15 +336,25 @@ export default function ChatPage() {
       // Restore agent activity and file changes for this session
       const restoredAgents = new Map<string, TrackedAgent>();
       const restoredFileChanges: FileChange[] = [];
-      try {
+      {
         const agentData = await api.get<{ agents: Array<{ id: string; sessionId: string; role: string; root?: boolean; model: string; status: string; completionReason?: AgentCompletionReason; createdAt: string; completedAt?: string; durationMs?: number; iteration: number }> }>(`/agents?sessionId=${encodeURIComponent(sessionId)}`);
-        const sessionAgents = agentData?.agents || [];
+        const sessionAgents = [...(agentData?.agents || [])].sort((a, b) => {
+          const active = (status: string) => status === 'running' || status === 'idle' ? 0 : 1;
+          return active(a.status) - active(b.status)
+            || (agentHistoryCacheRef.current.get(a.id)?.fetchedAt ?? 0) - (agentHistoryCacheRef.current.get(b.id)?.fetchedAt ?? 0);
+        });
+        let eventRequests = 0;
         for (const a of sessionAgents) {
           const cachedHistory = agentHistoryCacheRef.current.get(a.id);
           const toolCalls: ToolCallInfo[] = cachedHistory?.toolCalls.map((toolCall) => ({ ...toolCall })) ?? [];
           const agentFileChanges: FileChange[] = cachedHistory?.fileChanges.map((change) => ({ ...change })) ?? [];
-          try {
-            const evData = await fetchPersistedAgentEvents(a.id, cachedHistory?.cursor ?? 0);
+          {
+            const finished = a.status !== 'running' && a.status !== 'idle';
+            const fetchHistory = eventRequests < 4 && !(finished && cachedHistory?.complete);
+            if (fetchHistory) eventRequests++;
+            const evData = fetchHistory
+              ? await fetchPersistedAgentEvents(a.id, cachedHistory?.cursor ?? 0, 1)
+              : { events: [], nextCursor: cachedHistory?.cursor ?? 0, hasMore: true };
             for (const rawEvent of evData.events) {
               const ev = { ...rawEvent, data: rawEvent.data as any };
               if (ev.type === 'action') {
@@ -415,12 +436,14 @@ export default function ChatPage() {
                 }
               }
             }
-            agentHistoryCacheRef.current.set(a.id, {
+            if (fetchHistory) agentHistoryCacheRef.current.set(a.id, {
+              fetchedAt: Date.now(),
+              complete: finished && !evData.hasMore && !!cachedHistory,
               cursor: evData.nextCursor,
               toolCalls,
               fileChanges: agentFileChanges,
             });
-          } catch {}
+          }
           restoredFileChanges.push(...agentFileChanges);
           const startTime = new Date(a.createdAt).getTime();
           const isFinished = a.status !== 'running' && a.status !== 'idle';
@@ -446,7 +469,7 @@ export default function ChatPage() {
             iterations: a.iteration || undefined,
           });
         }
-      } catch {}
+      }
 
       updateSessionState(sessionId, (prev) => {
         if (revision < (appliedMessageLoadsRef.current.get(sessionId) ?? 0)) return prev;
@@ -491,8 +514,13 @@ export default function ChatPage() {
       });
       setHistoryErrors(prev => ({ ...prev, [sessionId]: '' }));
     } catch (error) {
-      setHistoryErrors(prev => ({ ...prev, [sessionId]: error instanceof Error ? error.message : 'Could not refresh history.' }));
-    }
+      if (error instanceof ApiError && error.status === 429) {
+        historyPauseUntilRef.current.set(sessionId, Date.now() + error.retryAfterMs);
+        setHistoryErrors(prev => ({ ...prev, [sessionId]: 'Chat sync is taking a short pause because the server limited automatic refreshes. Your agent continues working. Sync resumes automatically.' }));
+      } else {
+        setHistoryErrors(prev => ({ ...prev, [sessionId]: 'Chat sync is temporarily unavailable. Your displayed messages are kept; Octipus will retry automatically.' }));
+      }
+    } finally { historyInFlightRef.current.delete(sessionId); }
   }, [updateSessionState]);
 
   // Initialize
@@ -560,8 +588,9 @@ export default function ChatPage() {
   useEffect(() => {
     if (!activeSessionId) return;
     const interval = setInterval(() => {
-      loadSessionMessages(activeSessionId);
-      loadSessions();
+      if (document.visibilityState === 'hidden') return;
+      void loadSessionMessages(activeSessionId);
+      void loadSessions();
     }, 10_000); // Every 10 seconds
     return () => clearInterval(interval);
   }, [activeSessionId, loadSessionMessages, loadSessions]);
@@ -1762,12 +1791,6 @@ export default function ChatPage() {
       {sessionListError && <div role="status" className="absolute z-20 bottom-2 left-2 rounded border border-warning bg-surface p-3 text-sm">
         Sessions unavailable. {sessionListError} <button className="underline" onClick={() => void loadSessions()}>Retry sessions</button>
       </div>}
-      {activeSessionId && historyErrors[activeSessionId] && (
-        <div role="status" className="absolute z-20 top-2 left-1/4 right-4 rounded border border-warning bg-surface p-3 text-sm">
-          History unavailable. Previously loaded messages may be stale. {historyErrors[activeSessionId]}
-          <button className="ml-2 underline" onClick={() => void loadSessionMessages(activeSessionId)}>Retry history</button>
-        </div>
-      )}
       {/* New session dialog */}
       <NewSessionDialog
         open={showNewSessionDialog}
@@ -1848,6 +1871,12 @@ export default function ChatPage() {
         </div>
         {activeSessionId && <SessionCost sessionId={activeSessionId} />}
         {activeSessionId && <SkillUsage key={activeSessionId} sessionId={activeSessionId} running={isLoading} />}
+        {activeSessionId && historyErrors[activeSessionId] && <div role="status" data-testid="chat-sync-status"
+          className="mx-4 my-2 rounded border border-outline-variant/30 bg-surface-container px-3 py-2 text-xs text-on-surface-variant">
+          <p>{historyErrors[activeSessionId]}</p>
+          <button disabled={historyErrors[activeSessionId].startsWith('Chat sync is taking a short pause')}
+            className="mt-1 text-primary underline disabled:opacity-50" onClick={() => void loadSessionMessages(activeSessionId)}>Retry sync</button>
+        </div>}
         {/* Message timeline */}
         <MessageTimeline
           messages={messages}

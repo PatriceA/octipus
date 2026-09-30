@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
@@ -216,6 +216,35 @@ export interface LoadExternalSkillsOptions {
   enabled?: boolean;
 }
 
+/** Compare the complete bundle, including scripts/assets, not just SKILL.md.
+ * Fail open (keep separate) on links, oversized bundles or unreadable files. */
+function bundleFingerprint(filePath: string, flat: boolean): string | undefined {
+  const hash = createHash('sha256');
+  let bytes = 0;
+  let files = 0;
+  function visit(path: string, key: string, depth: number): void {
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink() || depth > MAX_DEPTH) throw new Error('Unbounded bundle');
+    if (stat.isDirectory()) {
+      for (const name of readdirSync(path).filter(name => !SKIP_DIRS.has(name)).sort()) {
+        visit(join(path, name), `${key}/${name}`, depth + 1);
+      }
+    } else if (stat.isFile()) {
+      bytes += stat.size; files++;
+      if (bytes > 16 * 1024 * 1024 || files > 1000) throw new Error('Large bundle');
+      const raw = readFileSync(path);
+      const data = /\.(md|txt|py|js|ts|json|yaml|yml|sh)$/i.test(key)
+        ? Buffer.from(raw.toString('utf8').replace(/\r\n/g, '\n')) : raw;
+      hash.update(`${key}\0${data.length}\0`).update(data);
+    } else throw new Error('Unsupported bundle entry');
+  }
+  try {
+    if (flat) visit(filePath, '/SKILL.md', 0);
+    else visit(dirname(filePath), '', 0);
+    return `bundle:${hash.digest('hex')}`;
+  } catch { return undefined; }
+}
+
 /**
  * Scan all configured + default locations and return the parsed skills.
  * Pure (no caching) — caller is responsible for caching the result.
@@ -240,6 +269,12 @@ export function loadExternalSkills(opts: LoadExternalSkillsOptions = {}): Extern
 
   const locations = [...defaultLocations(cwd, home), ...configuredLocations(dirs, home)];
   const seen = new Map<string, ExternalSkill>();
+  const documents = new Map<string, Array<{ skill: ExternalSkill; path: string; flat: boolean }>>();
+  const fingerprints = new Map<string, string | undefined>();
+  const fingerprint = (path: string, flat: boolean) => {
+    if (!fingerprints.has(path)) fingerprints.set(path, bundleFingerprint(path, flat));
+    return fingerprints.get(path);
+  };
   const out: ExternalSkill[] = [];
 
   for (const loc of locations) {
@@ -250,23 +285,30 @@ export function loadExternalSkills(opts: LoadExternalSkillsOptions = {}): Extern
       let physical: string;
       try { physical = realpathSync(f.filePath); } catch { continue; }
       if (process.platform === 'win32') physical = physical.toLowerCase();
-      // Identical standalone copies may be combined too. Skills with supporting
-      // files stay separate unless they resolve to the very same physical file:
-      // equal SKILL.md text does not prove that scripts/assets are equivalent.
-      let standalone = false;
-      try { standalone = !f.flat && readdirSync(dirname(f.filePath)).length === 1; } catch { /* keep separate */ }
-      const contentKey = standalone
-        ? 'content:' + createHash('sha256').update(readFileSync(f.filePath, 'utf8').replace(/\r\n/g, '\n').trim()).digest('hex')
-        : undefined;
       const source = { id: skill.id, location: loc.key, path: resolve(f.filePath) };
-      const existing = seen.get(physical) ?? (contentKey ? seen.get(contentKey) : undefined);
+      let existing = seen.get(physical);
+      // Most skills are unique. Read scripts/assets only for candidates whose
+      // SKILL.md is identical; hashing every bundle made first discovery costly.
+      let documentKey = '';
+      if (!existing) {
+        try {
+          documentKey = createHash('sha256')
+            .update(readFileSync(f.filePath, 'utf8').replace(/\r\n/g, '\n')).digest('hex');
+        } catch { continue; } // The source may have disappeared since discovery.
+      }
+      const candidates = documents.get(documentKey) ?? [];
+      if (!existing && candidates.length) {
+        const contentKey = fingerprint(f.filePath, f.flat);
+        if (contentKey) existing = candidates.find(candidate => fingerprint(candidate.path, candidate.flat) === contentKey)?.skill;
+      }
       if (existing) {
         if (!existing.sources.some(item => item.id === source.id)) existing.sources.push(source);
         seen.set(physical, existing);
       } else {
         const entry = { ...skill, sources: [source] };
         seen.set(physical, entry);
-        if (contentKey) seen.set(contentKey, entry);
+        candidates.push({ skill: entry, path: f.filePath, flat: f.flat });
+        documents.set(documentKey, candidates);
         out.push(entry);
       }
     }

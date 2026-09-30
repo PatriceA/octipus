@@ -24,9 +24,9 @@ export interface CocoIndexStatus {
     message: string;
   };
   embedding: {
-    provider: 'sentence-transformers';
+    provider: 'sentence-transformers' | 'octipus';
     model: string;
-    local: true;
+    local: boolean;
   };
 }
 

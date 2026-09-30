@@ -13,3 +13,10 @@ test('older repeated text does not acknowledge a new optimistic message', () => 
 test('an empty poll preserves real messages and removes the welcome placeholder', () => {
   expect(reconcileChatMessages([msg('0')], [msg('stored')]).map(m => m.id)).toEqual(['stored']);
 });
+
+test('server acknowledgement and later polls preserve the visible time anchor', () => {
+  const first = reconcileChatMessages([msg('server-id', 'hello', 5000)], [msg('1000', 'hello', 1000)]);
+  expect(+new Date(first[0].timestamp)).toBe(1000);
+  const later = reconcileChatMessages([msg('server-id', 'hello', 5000)], first);
+  expect(+new Date(later[0].timestamp)).toBe(1000);
+});
