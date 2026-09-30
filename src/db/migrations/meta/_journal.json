@@ -841,6 +841,13 @@
       "when": 1789601114566,
       "tag": "0118_mounted_skill_assignments",
       "breakpoints": true
+    },
+    {
+      "idx": 120,
+      "version": "7",
+      "when": 1789601114567,
+      "tag": "0119_plan_item_acceptance",
+      "breakpoints": true
     }
   ]
 }

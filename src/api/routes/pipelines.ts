@@ -1,4 +1,5 @@
 import { desc, eq, or } from 'drizzle-orm';
+import { normalizeAcceptance } from '@/tools/plan';
 import { Elysia, t } from '@/api/http';
 import { apiContext } from '@/api/context';
 import { getAgentService, getPipelineManager } from '@/core/agent';
@@ -334,6 +335,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
           ordinal: start + i,
           title: item.title,
           detail: item.detail,
+          acceptance: normalizeAcceptance(item.acceptance),
           createdByUserId: user.id === 'system' ? null : user.id,
         })),
       );
@@ -342,7 +344,11 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
     {
       params: t.Object({ id: t.String() }),
       body: t.Object({
-        items: t.Array(t.Object({ title: t.String(), detail: t.Optional(t.String()) })),
+        items: t.Array(t.Object({
+          title: t.String(),
+          detail: t.Optional(t.String()),
+          acceptance: t.Optional(t.Array(t.String())),
+        })),
       }),
       detail: { tags: ['pipelines'] },
     },
@@ -360,7 +366,11 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       const items = await pipelineRepository.getPlanItems(params.id);
       if (!items.some((i) => i.id === params.itemId)) return { error: 'Plan item not found' };
 
-      const updated = await pipelineRepository.updatePlanItem(params.itemId, body);
+      const { acceptance, ...rest } = body;
+      const updated = await pipelineRepository.updatePlanItem(params.itemId, {
+        ...rest,
+        ...(acceptance !== undefined ? { acceptance: normalizeAcceptance(acceptance) ?? null } : {}),
+      });
       return { item: updated };
     },
     {
@@ -368,6 +378,7 @@ export const pipelineRoutes = new Elysia({ prefix: '/pipelines' })
       body: t.Object({
         title: t.Optional(t.String()),
         detail: t.Optional(t.String()),
+        acceptance: t.Optional(t.Array(t.String())),
         ordinal: t.Optional(t.Number()),
         status: t.Optional(
           t.Union([t.Literal('pending'), t.Literal('skipped')]),

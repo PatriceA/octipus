@@ -24,7 +24,7 @@
  * as `deriveCodeDiffScorer`: a wrong guess here is worse than no gate.
  */
 
-import type { QAValidationResult } from './types';
+import type { CriterionVerdict, QAValidationResult } from './types';
 
 /** One completed stage an auditor is accountable for. */
 export interface AuditScopeStage {
@@ -127,6 +127,7 @@ export function unaddressedDoubt(
 export function auditVerdictFailure(
   verdict: QAValidationResult,
   scope: AuditScopeStage[],
+  acceptance: string[] = [],
 ): string | null {
   if (!verdict.passed) return null;
 
@@ -152,6 +153,7 @@ export function auditVerdictFailure(
   }
 
   reasons.push(...thinVerdictReasons(verdict));
+  reasons.push(...criteriaReasons(verdict, acceptance));
 
   // Every fault at once, never one per round. Disclosing them sequentially
   // would let three formatting gaps eat the whole retry budget (default 3)
@@ -200,4 +202,114 @@ export function thinVerdictReasons(verdict: QAValidationResult): string[] {
 export function thinVerdictFailure(verdict: QAValidationResult): string | null {
   const reasons = thinVerdictReasons(verdict);
   return reasons.length > 0 ? reasons.join(' Also: ') : null;
+}
+
+/**
+ * Match each required acceptance criterion to the verdict's entry for it.
+ *
+ * One entry answers at most one criterion. Otherwise a single "npm test: met"
+ * would stand in for "npm test passes" AND "coverage >= 80%", and a criterion
+ * nobody checked would read as checked. Three passes, most specific first:
+ *
+ *  1. an entry labelled by number ("1", "#2", "criterion 3") takes that position;
+ *  2. an entry whose text contains the criterion's text, or the other way round,
+ *     on word boundaries and only for texts of at least MIN_TEXT_MATCH
+ *     characters, so a bare "1" cannot match "GET /users/1";
+ *  3. when the verdict has exactly one entry per criterion, any criterion still
+ *     unmatched takes the unused entry at its own position.
+ *
+ * Loose in wording, like the stage-coverage rule: an auditor that paraphrased
+ * a criterion still checked it.
+ */
+export function matchCriteria(
+  verdict: QAValidationResult,
+  acceptance: string[],
+): Array<{ criterion: string; entry: CriterionVerdict | undefined }> {
+  const entries = verdict.criteria ?? [];
+  const used = new Set<number>();
+  const byCriterion = new Map<number, number>();
+  const take = (c: number, e: number) => { byCriterion.set(c, e); used.add(e); };
+
+  entries.forEach((entry, e) => {
+    const n = numberedLabel(entry.criterion);
+    if (n !== null && n < acceptance.length && !byCriterion.has(n) && !used.has(e)) take(n, e);
+  });
+  acceptance.forEach((criterion, c) => {
+    if (byCriterion.has(c)) return;
+    const needle = normalizeForMatch(criterion);
+    const e = entries.findIndex((entry, i) => !used.has(i) && textMatches(needle, normalizeForMatch(entry.criterion)));
+    if (e >= 0) take(c, e);
+  });
+  if (entries.length === acceptance.length) {
+    acceptance.forEach((_, c) => { if (!byCriterion.has(c) && !used.has(c)) take(c, c); });
+  }
+  return acceptance.map((criterion, c) => {
+    const e = byCriterion.get(c);
+    return { criterion, entry: e === undefined ? undefined : entries[e] };
+  });
+}
+
+const MIN_TEXT_MATCH = 6;
+
+function textMatches(a: string, b: string): boolean {
+  if (a.length < MIN_TEXT_MATCH || b.length < MIN_TEXT_MATCH) return a.length > 0 && a === b;
+  return ` ${a} `.includes(` ${b} `) || ` ${b} `.includes(` ${a} `);
+}
+
+/** 0-based index for "1", "#2", "criterion 3", "c4"; null for anything else. */
+function numberedLabel(text: string): number | null {
+  const m = normalizeForMatch(text).match(/^(?:criterion |c |ac )?(\d{1,2})$/) ?? text.trim().match(/^#(\d{1,2})$/);
+  if (!m) return null;
+  const n = Number(m[1]) - 1;
+  return n >= 0 ? n : null;
+}
+
+/**
+ * Required criteria the verdict reported as NOT met. A pass with any of these
+ * is not a report problem, it is the auditor's own finding that the work falls
+ * short — the caller turns it into a real failure that goes back to the builder.
+ */
+export function unmetCriteria(verdict: QAValidationResult, acceptance: string[]): string[] {
+  return matchCriteria(verdict, acceptance)
+    .filter(({ entry }) => entry && !entry.met)
+    .map(({ criterion }) => criterion);
+}
+
+/**
+ * Report faults for the acceptance criteria of the item under audit: a PASS
+ * must account for every criterion, each with evidence. JSON tier only, like
+ * the thin-verdict rules — a prose verdict was never asked for the list.
+ */
+export function criteriaReasons(verdict: QAValidationResult, acceptance: string[]): string[] {
+  if (!verdict.passed || acceptance.length === 0) return [];
+  // Only the structured block can list criteria. A pass that fell back to the
+  // inline or prose tier (a block that did not parse, say) has accounted for
+  // none of them, so it must not slip through the one tier that is ungated.
+  if (verdict.source !== 'json') {
+    return [
+      `this item has ${acceptance.length} acceptance criteria and the verdict was not a readable ` +
+        `\`json\` block, so none of them is accounted for. Emit the block, with a "criteria" entry per ` +
+        `criterion, as valid JSON.`,
+    ];
+  }
+  const matched = matchCriteria(verdict, acceptance);
+  const reasons: string[] = [];
+  const missing = matched.filter(({ entry }) => !entry).map(({ criterion }) => criterion);
+  if (missing.length > 0) {
+    reasons.push(
+      `the verdict passed without reporting ${missing.length} acceptance criterion/criteria: ` +
+        `${missing.map((c) => `"${c}"`).join(', ')}. Add one "criteria" entry per criterion ` +
+        `with met true/false and the evidence you used.`,
+    );
+  }
+  const unevidenced = matched
+    .filter(({ entry }) => entry && entry.met && entry.evidence.trim().length === 0)
+    .map(({ criterion }) => criterion);
+  if (unevidenced.length > 0) {
+    reasons.push(
+      `${unevidenced.length} criterion/criteria marked met with no evidence: ` +
+        `${unevidenced.map((c) => `"${c}"`).join(', ')}. Say what you ran or read to decide.`,
+    );
+  }
+  return reasons;
 }

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getConfig, refreshConfigKey, resetConfig } from '@/config';
 import { renderContractFeedback } from './scorers';
-import { SwarmSpawner, applyScorerVerdict } from './spawner';
+import { SwarmSpawner, applyScorerVerdict, preferEarlierAttempt } from './spawner';
 import type { ChildResult } from './types';
 
 /**
@@ -145,6 +145,24 @@ describe('SwarmSpawner — contract retry (through runChildWithRetry)', () => {
     );
     // The first attempt is untouched — feedback only exists after a rejection.
     expect(messages[0]).toBe('ORIGINAL TASK BODY');
+  });
+
+  it('keeps the earlier attempt when the retry fails more scorers and changed nothing', async () => {
+    const first = gateFailed();
+    const worse = result({
+      nodeId: 'n2',
+      status: 'contract_failed',
+      scorerOutcome: { passed: false, ran: 2, failures: [{ scorer: 'file_exists', reason: 'missing' }, { scorer: 'json', reason: 'bad' }] },
+      receipt: {
+        schemaVersion: 1, nodeId: 'n2', kind: 'agent', status: 'contract_failed',
+        sideEffects: { toolCalls: 1, filesChanged: 0, commandsRun: 0, approvalsRequired: 0, approvalsDenied: 0, autoApproved: 0, permissionDenials: 0, toolErrors: 0, byName: {} },
+        tokens: { used: 0, cap: 0 }, durationMs: 0, unavailable: [], notCertified: [],
+      } as never,
+    });
+    const { final, calls } = await runWith([first, worse]);
+    expect(calls).toBe(2);
+    expect(final.nodeId).toBe('n1');
+    expect(final.scorerOutcome?.failures).toHaveLength(1);
   });
 
   it('annotates the recovered result so a clean run and a rescued one differ', async () => {
@@ -640,5 +658,33 @@ describe('SwarmSpawner — contract retry keeps the first attempt\'s workspace b
     expect(calls).toBe(2);
     expect(seen).toEqual([baseline, baseline]);
     expect(seen[1]).toBe(baseline);
+  });
+});
+
+describe('keep the better attempt', () => {
+  const effects = (filesChanged: number, commandsRun = 0) => ({
+    schemaVersion: 1 as const, nodeId: 'n', kind: 'agent' as const, status: 'contract_failed' as const,
+    sideEffects: { toolCalls: 0, filesChanged, commandsRun, approvalsRequired: 0, approvalsDenied: 0, autoApproved: 0, permissionDenials: 0, toolErrors: 0, byName: {} },
+    tokens: { used: 0, cap: 0 }, durationMs: 0, unavailable: [], notCertified: [],
+  });
+  const worse = (filesChanged: number, unavailable: string[] = []) => result({
+    status: 'contract_failed',
+    scorerOutcome: {
+      passed: false, ran: 2,
+      failures: [{ scorer: 'file_exists', reason: 'missing' }, { scorer: 'json', reason: 'bad' }],
+    },
+    receipt: { ...effects(filesChanged), unavailable } as never,
+  });
+
+  it('prefers the earlier attempt only when the retry is worse AND touched nothing', () => {
+    expect(preferEarlierAttempt(gateFailed(), worse(0))).toBe(true);
+    // It edited files: the workspace now holds the retry's work.
+    expect(preferEarlierAttempt(gateFailed(), worse(1))).toBe(false);
+    // Unknown side effects are not "none".
+    expect(preferEarlierAttempt(gateFailed(), worse(0, ['counters']))).toBe(false);
+    expect(preferEarlierAttempt(gateFailed(), result({ status: 'contract_failed' }))).toBe(false);
+    // Equal is not worse: the retry saw the feedback.
+    expect(preferEarlierAttempt(gateFailed(), gateFailed('other'))).toBe(false);
+    expect(preferEarlierAttempt(gateFailed(), result())).toBe(false);
   });
 });

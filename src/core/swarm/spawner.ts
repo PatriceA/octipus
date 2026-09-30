@@ -1446,6 +1446,27 @@ export class SwarmSpawner {
         break;
       }
 
+      // A retry that fails MORE of its contract than the attempt it replaces
+      // is not an improvement, and when it touched nothing on disk the earlier
+      // answer is still the true description of the workspace — keep it and
+      // stop retrying.
+      if (preferEarlierAttempt(result, retried)) {
+        coreLogger.info(
+          {
+            parentNodeId: opts.parent.id,
+            attempt,
+            keptFailures: result.scorerOutcome?.failures.length ?? 0,
+            retryFailures: retried.scorerOutcome?.failures.length ?? 0,
+          },
+          'Swarm child contract retry did worse and changed nothing — keeping the earlier attempt',
+        );
+        noteFailure(retried);
+        discardedTokens += retried.usedTokens ?? 0;
+        // Stop here: the next attempt would get the same feedback that just
+        // produced a worse answer, at the price of another full child run.
+        break;
+      }
+
       // The superseded attempt is the one being thrown away now.
       noteFailure(result);
       discardedTokens += result.usedTokens ?? 0;
@@ -2814,4 +2835,27 @@ let instance: SwarmSpawner | null = null;
 export function getSwarmSpawner(): SwarmSpawner {
   if (!instance) instance = new SwarmSpawner();
   return instance;
+}
+
+/**
+ * Should a contract retry be discarded in favour of the attempt it retried?
+ *
+ * Only when BOTH hold:
+ *  - the retry failed its contract on strictly more scorers than the earlier
+ *    attempt — "keep the best", not "keep the first": an equal or better retry
+ *    wins, because it saw the feedback;
+ *  - the retry's receipt shows it changed no files and ran no commands. A
+ *    retry that edited the shared workspace has already replaced the earlier
+ *    attempt's work on disk, and reporting the earlier answer over it would
+ *    describe files that no longer exist. Unknown side effects count as "it
+ *    may have", so no receipt means no swap.
+ */
+export function preferEarlierAttempt(current: ChildResult, retried: ChildResult): boolean {
+  if (current.status !== 'contract_failed' || retried.status !== 'contract_failed') return false;
+  const before = current.scorerOutcome?.failures.length ?? 0;
+  const after = retried.scorerOutcome?.failures.length ?? 0;
+  if (after <= before) return false;
+  const effects = retried.receipt?.sideEffects;
+  if (!effects || (retried.receipt?.unavailable.length ?? 0) > 0) return false;
+  return effects.filesChanged === 0 && effects.commandsRun === 0;
 }

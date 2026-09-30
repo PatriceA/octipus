@@ -26,7 +26,7 @@ import { getModelRegistry, type ModelRegistry } from '@/models/model-registry';
 import { getTopicConfig } from '@/models/topic-config';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
-import { type AuditScopeStage, auditVerdictFailure, coverageScope, unaddressedDoubt, uncoveredStages } from './audit-coverage';
+import { type AuditScopeStage, auditVerdictFailure, coverageScope, unaddressedDoubt, uncoveredStages, unmetCriteria } from './audit-coverage';
 
 import { createHandoffContext, formatHandoffChain, HANDOFF_EMIT_INSTRUCTION, type HandoffContext, parseStructuredHandoff, stripHandoffBlock } from './handoff';
 import {
@@ -42,13 +42,15 @@ import {
 import { paramTemplateVars, resolveRecipeParams } from './recipe-params';
 import { stageContractErrors } from './role-contract';
 import { getAgentService } from './service';
+import { attemptFromVerdict, describeBestAttempt, type QaAttempt, UNMET_CRITERION_PREFIX } from './attempt-ledger';
+import { runGit } from '@/core/session-changes';
 import {
   buildStagesFromTemplate,
   expandPromptTemplate,
   getPipelineTemplate,
   type StageTemplate,
 } from './templates';
-import { appendSources, ROOT_ROLE, type QAValidationResult } from './types';
+import { appendSources, type CriterionVerdict, ROOT_ROLE, type QAValidationResult } from './types';
 import { countChangedFiles, snapshotWorkspace, type WorkspaceSnapshot } from './workspace-snapshot';
 
 /**
@@ -74,6 +76,21 @@ function normalizeStringList(v: unknown): string[] {
   if (typeof v === 'string') return v.trim() ? [v.trim()] : [];
   if (!Array.isArray(v)) return [];
   return v.map((x) => String(x).trim()).filter(Boolean);
+}
+/**
+ * Coerce a verdict's `criteria` field to entries the gate can match. `met`
+ * must be a real boolean — a criterion whose status is unreadable is dropped,
+ * so it counts as unreported rather than silently as met.
+ */
+export function normalizeCriteria(v: unknown): CriterionVerdict[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const list = v.flatMap((x) => {
+    const rec = (x ?? {}) as Record<string, unknown>;
+    const criterion = typeof rec.criterion === 'string' ? rec.criterion.trim() : '';
+    if (!criterion || typeof rec.met !== 'boolean') return [];
+    return [{ criterion, met: rec.met, evidence: typeof rec.evidence === 'string' ? rec.evidence.trim() : '' }];
+  });
+  return list.length > 0 ? list : undefined;
 }
 /** Pull a stated `confidence: high|medium|low` (JSON or prose) from raw text. */
 function parseConfidence(text: string): QAValidationResult['confidence'] {
@@ -194,6 +211,7 @@ export function aliasVerdict(raw: unknown): QAValidationResult | null {
     retryCount: typeof obj.retryCount === 'number' ? obj.retryCount : 0,
     confidence: normalizeConfidence(pick(obj, ['confidence', 'certainty'])),
     whatIDidNotCheck: normalizeStringList(pick(obj, NOT_CHECKED_KEYS)),
+    criteria: normalizeCriteria(pick(obj, ['criteria', 'acceptanceCriteria', 'acceptance'])),
     source: 'json',
   };
 }
@@ -211,7 +229,7 @@ export function aliasVerdict(raw: unknown): QAValidationResult | null {
  * The report is re-attached to the corrected block afterwards, so whatever runs
  * next still reads the full audit rather than a bare verdict.
  */
-export function qaVerdictCorrectionInput(report: string, reason: string, handsOff = false): string {
+export function qaVerdictCorrectionInput(report: string, reason: string, handsOff = false, acceptance: string[] = []): string {
   return (
     `Your audit REPORT below was rejected — not the work you audited, and not your conclusion. ` +
     `The reason:\n\n${reason}\n\n` +
@@ -229,7 +247,8 @@ export function qaVerdictCorrectionInput(report: string, reason: string, handsOf
     // this the reply carries none and the downstream stage inherits the
     // PRE-correction handoff out of the re-attached report.
     (handsOff ? HANDOFF_EMIT_INSTRUCTION : '') +
-    QA_VERDICT_JSON_INSTRUCTION
+    QA_VERDICT_JSON_INSTRUCTION +
+    qaCriteriaInstruction(acceptance)
   );
 }
 
@@ -338,13 +357,33 @@ Your reply MUST END with a fenced \`json\` verdict block. A report without one i
  * implementation retry, auditor-only re-run) so a retried auditor can never be
  * asked for something different from a first-pass one.
  */
-export function withQaVerdictContract(input: string, rejection?: string): string {
+export function withQaVerdictContract(input: string, rejection?: string, acceptance: string[] = []): string {
   return (
     QA_VERDICT_JSON_LEAD +
     (rejection ? `YOUR PREVIOUS VERDICT WAS REJECTED — ${rejection}\n\n---\n\n` : '') +
     input +
-    QA_VERDICT_JSON_INSTRUCTION
+    QA_VERDICT_JSON_INSTRUCTION +
+    qaCriteriaInstruction(acceptance)
   );
+}
+
+/**
+ * The per-item acceptance criteria, as the extra verdict field that accounts
+ * for them. Empty when the item has none, so a pipeline without criteria sees
+ * exactly the contract it always did. Placeholders again, no literal
+ * `"met": true`, for the same anti-echo reason as the main instruction.
+ */
+export function qaCriteriaInstruction(acceptance: string[]): string {
+  if (acceptance.length === 0) return '';
+  return `
+
+ACCEPTANCE CRITERIA for this item — your verdict object MUST also carry a "criteria" array with ONE entry per criterion below, in this order:
+
+    "criteria": [{ "criterion": <the criterion>, "met": <true|false>, "evidence": <what you ran or read to decide: a command and its exit code, a file:line> }]
+
+${acceptance.map((c, i) => `${i + 1}. ${c}`).join('\n')}
+
+A criterion you could not check is "met": false with the reason as its evidence. \`passed\` is false if ANY criterion is not met.`;
 }
 
 /**
@@ -389,6 +428,48 @@ export function handoffConfidenceByStage(chain: HandoffContext[]): Map<number, '
     if (typeof index === 'number' && handoff.confidence) byIndex.set(index, handoff.confidence);
   }
   return byIndex;
+}
+
+/** Which models this run's builders used, and whether the same-model notice has been given. */
+export interface ReviewModelLedger {
+  builders: Set<string>;
+  warned: boolean;
+}
+
+/**
+ * Record a stage's model and decide whether an auditor is reviewing on a
+ * builder's model. Returns that model id the FIRST time it happens in a run
+ * (one notice per run, not one per item), else null. Pure apart from the
+ * ledger it is handed.
+ */
+export function noteReviewModel(
+  ledger: ReviewModelLedger,
+  model: string | undefined,
+  stage: { auditor: boolean; builder: boolean },
+): string | null {
+  if (!model) return null;
+  if (stage.auditor) {
+    if (ledger.warned || !ledger.builders.has(model)) return null;
+    ledger.warned = true;
+    return model;
+  }
+  if (stage.builder) ledger.builders.add(model);
+  return null;
+}
+
+/**
+ * Where an attempt can be found again: the short HEAD, marked when the
+ * judged work was not (all) committed — the commit alone would not bring it
+ * back, and saying otherwise sends a person to the wrong place. Undefined
+ * outside git.
+ */
+async function workspaceHead(root: string | null): Promise<string | undefined> {
+  if (!root) return undefined;
+  const res = await runGit(root, ['rev-parse', '--short', 'HEAD']);
+  const head = res.ok ? res.stdout.trim() : '';
+  if (!head) return undefined;
+  const status = await runGit(root, ['status', '--porcelain', '--untracked-files=no']);
+  return status.ok && status.stdout.trim() ? `${head} plus uncommitted changes` : head;
 }
 
 /**
@@ -918,6 +999,10 @@ export class PipelineManager {
      * answer with what actually happened.
      */
     let unescalatedQaFailure: { node: string; outcome: NodeOutcome } | null = null;
+    /** Every settled QA verdict per auditor node, for the current plan item (`attempt-ledger.ts`). */
+    const qaAttempts = new Map<string, QaAttempt[]>();
+    /** Models the artifact-producing stages ran on, so a QA stage on one of them is flagged once. */
+    const reviewModels: ReviewModelLedger = { builders: new Set<string>(), warned: false };
     const handoffChain: HandoffContext[] = [];
     // Source attribution: every successfully completed node (incl. retries)
     // appends one entry, rendered into the summary as `_Sources: ..._`.
@@ -1142,11 +1227,14 @@ export class PipelineManager {
             graph.nodes.filter((n) => n.parentKey === cursor).map((n) => n.key),
           );
           for (const e of graph.edges) if (bodyKeys.has(e.from)) traversals.delete(edgeId(e));
+          for (const key of bodyKeys) qaAttempts.delete(key);
         }
       } else {
         const b = built[gnode.templateIndex];
         const stageTemplate = template.stages[gnode.templateIndex];
         const isQa = b.stageType === 'qa_validation';
+        // Only a stage inside the plan loop is judging one item.
+        const itemAcceptance = currentItem && gnode.parentKey ? currentItem.acceptance ?? [] : [];
 
         // An auditor-only re-run must re-read the work it judged, not its own
         // previous verdict — otherwise a real retry followed by a rubber stamp
@@ -1165,6 +1253,9 @@ export class PipelineManager {
         if (currentItem && gnode.parentKey) {
           input += `\n\n---\nCURRENT PLAN ITEM (#${currentItem.ordinal + 1}): ${currentItem.title}` +
             (currentItem.detail ? `\n${currentItem.detail}` : '') +
+            (currentItem.acceptance?.length
+              ? `\n\nAcceptance criteria (QA will check each one):\n${currentItem.acceptance.map((c) => `- ${c}`).join('\n')}`
+              : '') +
             `\n\nWork ONLY on this item. Anything else you discover: add it to the plan with ` +
             `\`plan__add_items\` instead of doing it here.`;
         }
@@ -1245,8 +1336,9 @@ export class PipelineManager {
                 reportUnderCorrection as string,
                 pendingRejection as string,
                 graph.edges.some((e) => e.from === cursor),
+                itemAcceptance,
               )
-            : withQaVerdictContract(input, pendingRejection);
+            : withQaVerdictContract(input, pendingRejection, itemAcceptance);
           judgedContext.set(cursor, handoffText || previousOutput);
         }
 
@@ -1278,6 +1370,7 @@ export class PipelineManager {
           workspaceRoot,
           rootAgentId: args.rootAgentId,
           title,
+          reviewModels,
         });
         if (stepResult.stopped) return stepResult.stopped;
 
@@ -1324,7 +1417,14 @@ export class PipelineManager {
             sessionId,
             pipelineId: pipeline.id,
             stageName: node.name,
-          });
+          }, itemAcceptance);
+          // A rejected REPORT says nothing about the work, so only a verdict
+          // the gate let stand is an attempt worth remembering.
+          if (qaResult && !qaResult.auditGateFailed) {
+            const ledger = qaAttempts.get(cursor) ?? [];
+            ledger.push(attemptFromVerdict(qaResult, itemAcceptance, ledger.length + 1, await workspaceHead(workspaceRoot)));
+            qaAttempts.set(cursor, ledger);
+          }
           if (!qaResult || qaResult.passed) {
             outcome = 'qa_pass';
           } else if (qaResult.auditGateFailed) {
@@ -1361,6 +1461,7 @@ export class PipelineManager {
                 node,
                 qaResult,
                 attempts: retryEdge ? (traversals.get(edgeId(retryEdge)) ?? 0) : 0,
+                bestAttemptNote: describeBestAttempt(qaAttempts.get(cursor) ?? []),
                 context,
               });
               if (escalated) return escalated;
@@ -1995,8 +2096,9 @@ export class PipelineManager {
     output: string,
     scope: AuditScopeStage[],
     evidence: { sessionId: string; pipelineId: string; stageName: string },
+    acceptance: string[] = [],
   ): Promise<QAValidationResult | null> {
-    const parsed = this.parseQAResult(output);
+    let parsed = this.parseQAResult(output);
     shadowQaVerdict(output, parsed?.passed ?? null);
     if (!parsed) {
       // A `qa_validation` stage that emits nothing parseable used to mean "no QA
@@ -2032,9 +2134,21 @@ export class PipelineManager {
       return { passed: false, issues: [reason], feedback: reason, retryCount: 0, auditGateFailed: true, auditGateReason: 'unparseable' };
     }
 
+    // A pass that reports one of the item's own criteria as NOT met is the
+    // auditor's finding that the work falls short, not a report fault: it goes
+    // back to the builder like any failed verdict.
+    const unmet = parsed.passed && parsed.source === 'json' ? unmetCriteria(parsed, acceptance) : [];
+    if (unmet.length > 0) {
+      parsed = {
+        ...parsed,
+        passed: false,
+        issues: [...parsed.issues, ...unmet.map((c) => `${UNMET_CRITERION_PREFIX}${c}`)],
+      };
+    }
+
     void this.recordQaEvidence(evidence.sessionId, evidence.pipelineId, evidence.stageName, parsed);
 
-    const failure = auditVerdictFailure(parsed, scope);
+    const failure = auditVerdictFailure(parsed, scope, acceptance);
     if (!parsed.passed) return parsed;
 
     try {
@@ -2052,6 +2166,7 @@ export class PipelineManager {
           unaddressedDoubt: unaddressedDoubt(parsed, scope),
           source: parsed.source ?? 'unknown',
           whatIDidNotCheck: parsed.whatIDidNotCheck ?? [],
+          ...(acceptance.length > 0 ? { acceptance, criteria: parsed.criteria ?? [] } : {}),
           ...(failure ? { reason: failure } : {}),
         },
       });
@@ -2103,7 +2218,12 @@ export class PipelineManager {
         kind: 'qa_verdict',
         passed: qaResult.passed,
         confidence: qaResult.confidence ?? null,
-        detail: { issues: qaResult.issues, feedback: qaResult.feedback, retryCount: qaResult.retryCount },
+        detail: {
+          issues: qaResult.issues,
+          feedback: qaResult.feedback,
+          retryCount: qaResult.retryCount,
+          ...(qaResult.criteria ? { criteria: qaResult.criteria } : {}),
+        },
       });
     } catch (err) {
       coreLogger.warn({ err: (err as Error).message, pipelineId, stage }, 'Failed to record QA verification evidence');
@@ -2134,6 +2254,7 @@ export class PipelineManager {
             retryCount: typeof parsed.retryCount === 'number' ? parsed.retryCount : 0,
             confidence: normalizeConfidence(parsed.confidence),
             whatIDidNotCheck: normalizeStringList(parsed.whatIDidNotCheck),
+            criteria: normalizeCriteria(parsed.criteria),
             source: 'json',
           };
         }
@@ -2283,6 +2404,7 @@ export class PipelineManager {
     workspaceRoot: string | null;
     rootAgentId: string;
     title: string;
+    reviewModels?: ReviewModelLedger;
   }): Promise<{ output: string; raw: string; stopped?: { pipelineId: string; result: string } }> {
     const { pipeline, node, declared, stageTemplate, input, stageContext, context, registry, workspaceRoot, title } = args;
     const rootAgent = getAgentService();
@@ -2309,6 +2431,20 @@ export class PipelineManager {
       // Resolve the model for this node's topic. Node override → a mechanical
       // node's lane executor → topic binding.
       const modelOverride = await resolveStageModel(stageTemplate, node.role, registry);
+      const sameModel = args.reviewModels
+        ? noteReviewModel(args.reviewModels, modelOverride, { auditor: declared.stageType === 'qa_validation', builder: !!declared.producesArtifacts })
+        : null;
+      if (sameModel) {
+        coreLogger.warn({ pipelineId: pipeline.id, stage: node.name, model: sameModel }, 'QA stage runs on the same model as the implementation');
+        messageRepository.create({
+          sessionId,
+          role: 'system',
+          content: `**${node.name}** is reviewing on the same model that wrote the work (${sameModel}). ` +
+            `A second opinion from the same model shares its blind spots — bind a different model to the ` +
+            `**Verify** lane on the Topics page for an independent review.`,
+          metadata: { pipelineId: pipeline.id, stageId: node.id, pipelineEvent: 'qa_same_model' },
+        }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in pipeline-manager'));
+      }
       const before = await this.snapshotStage(declared, workspaceRoot);
 
       let counters: SideEffectCounters | null = null;
@@ -2549,7 +2685,10 @@ export class PipelineManager {
         timestamp: new Date(),
       });
 
-      const list = items.map((i, n) => `${n + 1}. ${i.title}${i.detail ? ` — ${i.detail}` : ''}`).join('\n');
+      const list = items.map((i, n) =>
+        `${n + 1}. ${i.title}${i.detail ? ` — ${i.detail}` : ''}` +
+        (i.acceptance?.length ? `\n   Acceptance: ${i.acceptance.join('; ')}` : ''),
+      ).join('\n');
       const approval = await rootAgent.requestApproval(
         `Pipeline "${title}" — plan (${items.length} item${items.length === 1 ? '' : 's'}):\n\n${list}` +
           `\n\nYou can edit, reorder, or remove items on the pipeline page before approving, and ` +
@@ -2804,9 +2943,12 @@ export class PipelineManager {
     node: PipelineNodeRow;
     qaResult: QAValidationResult;
     attempts: number;
+    /** From the attempt ledger: set when an earlier attempt beat the last one. */
+    bestAttemptNote?: string;
     context: AgentContext;
   }): Promise<{ pipelineId: string; result: string } | null> {
     const { pipeline, node, qaResult, attempts, context } = args;
+    const best = args.bestAttemptNote ? `\n\n${args.bestAttemptNote}` : '';
     const rootAgent = getAgentService();
 
     coreLogger.warn({ pipelineId: pipeline.id, attempts }, 'QA validation exhausted retries, requesting human approval');
@@ -2814,14 +2956,17 @@ export class PipelineManager {
     rootAgent['emit']({
       type: 'pipeline_event',
       sessionId: pipeline.sessionId,
-      data: { event: 'qa_escalation', pipelineId: pipeline.id, qaStageId: node.id, attempts, issues: qaResult.issues },
+      data: {
+        event: 'qa_escalation', pipelineId: pipeline.id, qaStageId: node.id, attempts, issues: qaResult.issues,
+        ...(args.bestAttemptNote ? { bestAttempt: args.bestAttemptNote } : {}),
+      },
       timestamp: new Date(),
     });
 
     await this.updatePipeline(pipeline.id, { status: 'awaiting_approval' });
 
     const escalation = await rootAgent.requestApproval(
-      `QA validation failed after ${attempts} attempts.\n\nRemaining issues:\n${qaResult.issues.join('\n')}\n\nFeedback: ${qaResult.feedback}`,
+      `QA validation failed after ${attempts} attempts.\n\nRemaining issues:\n${qaResult.issues.join('\n')}\n\nFeedback: ${qaResult.feedback}${best}`,
       `Continue pipeline despite QA failures, or abort?`,
       context,
       ['Continue Anyway', 'Abort Pipeline'],
@@ -2830,11 +2975,11 @@ export class PipelineManager {
     if (!escalation.approved || escalation.response === 'Abort Pipeline') {
       await this.updatePipeline(pipeline.id, {
         status: 'failed',
-        summary: `QA failed after ${attempts} attempts. Aborted by user.\n\nIssues:\n${qaResult.issues.join('\n')}`,
+        summary: `QA failed after ${attempts} attempts. Aborted by user.\n\nIssues:\n${qaResult.issues.join('\n')}${best}`,
       });
       return {
         pipelineId: pipeline.id,
-        result: `Pipeline aborted: QA failed after ${attempts} attempts.\n\nUnresolved issues:\n${qaResult.issues.join('\n')}`,
+        result: `Pipeline aborted: QA failed after ${attempts} attempts.\n\nUnresolved issues:\n${qaResult.issues.join('\n')}${best}`,
       };
     }
 

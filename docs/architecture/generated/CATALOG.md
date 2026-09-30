@@ -470,7 +470,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `api` | `services` | 4 |
 | `api` | `shared` | 2 |
 | `api` | `skills` | 5 |
-| `api` | `tools` | 3 |
+| `api` | `tools` | 4 |
 | `api` | `utils` | 62 |
 | `api` | `voice` | 24 |
 | `capabilities` | `db` | 2 |
