@@ -63,9 +63,9 @@ export class SkillRegistry {
 
   /**
    * Scan filesystem locations once and cache. Idempotent — call again to
-   * pick up new files (e.g. from a `/reload` command).
+   * pick up changes from the Skills page's manual reload action.
    */
-  loadExternal(opts: LoadExternalSkillsOptions = {}): void {
+  loadExternal(opts: LoadExternalSkillsOptions = {}, strict = false): void {
     try {
       const skills = loadExternalSkills(opts);
       this.external = new Map(skills.map(s => [s.id, s]));
@@ -76,6 +76,8 @@ export class SkillRegistry {
       }
     } catch (err) {
       logger.warn(`[skills] external skill discovery failed: ${(err as Error).message}`);
+      // Manual refresh must report failure and retain the last usable snapshot.
+      if (strict) throw err;
       this.external = new Map();
       this.aliases.clear();
       this.externalLoaded = true;
@@ -90,6 +92,10 @@ export class SkillRegistry {
   getExternalSkills(): ExternalSkill[] {
     this.ensureLoaded();
     return [...this.external.values()];
+  }
+
+  reloadExternal(): void {
+    this.loadExternal({}, true);
   }
 
   canonicalId(id: string): string {

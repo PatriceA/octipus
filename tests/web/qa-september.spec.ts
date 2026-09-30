@@ -1,6 +1,26 @@
 import { test, expect } from './fixtures/auth';
 import { json } from './fixtures/api-stubs';
 
+test('mounted skills reload only on click and retain the list on reload failure', async ({ authenticatedPage: page }) => {
+  let scans = 0;
+  await page.route('**/api/skills', route => json(route, 200, { skills: [{ id: 'external:sample', name: 'Sample mounted skill',
+    description: scans ? 'Updated instructions' : 'Original instructions', category: 'general', content: '',
+    principles: [], frameworks: [], bestPractices: [], antiPatterns: [], mounted: true, isSystem: true }] }));
+  await page.route('**/api/skills/reload-mounted', route => {
+    scans++;
+    return scans === 1 ? json(route, 200, { reloaded: true }) : json(route, 500, { error: 'Could not reload mounted skills.' });
+  });
+  await page.goto('/skills');
+  await expect(page.getByText('Original instructions', { exact: true })).toBeVisible();
+  expect(scans).toBe(0);
+  await page.getByRole('button', { name: 'Reload mounted skills', exact: true }).click();
+  await expect(page.getByText('Updated instructions', { exact: true })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Mounted skills reloaded.' })).toBeVisible();
+  await page.getByRole('button', { name: 'Reload mounted skills', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('Could not reload mounted skills');
+  await expect(page.getByText('Updated instructions', { exact: true })).toBeVisible();
+});
+
 test('CLI configuration is collapsed until requested', async ({ authenticatedPage: page }) => {
   await page.route('**/api/models/cli/status', route => json(route, 200, { tools: [{ name: 'Claude Code', available: true, modelPatterns: ['claude'], quota: null }] }));
   await page.goto('/models');

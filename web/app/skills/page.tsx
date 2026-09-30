@@ -12,6 +12,7 @@ import {
   Loader2,
   Pencil,
   Plus,
+  RefreshCw,
   Search,
   Sparkles,
   Trash2,
@@ -975,6 +976,23 @@ function SkillCard({
 }
 
 export default function SkillsPage() {
+  const queryClient = useQueryClient();
+  const [reloadingMounted, setReloadingMounted] = useState(false);
+  const [reloadResult, setReloadResult] = useState('');
+  const [reloadError, setReloadError] = useState('');
+  const reloadMounted = async () => {
+    setReloadingMounted(true);
+    setReloadResult('');
+    setReloadError('');
+    try {
+      await api.post('/skills/reload-mounted');
+      await Promise.all(['skills', 'skill-usage', 'skill-topic-assignments', 'skill-topic-assignments-all'].map(key =>
+        queryClient.invalidateQueries({ queryKey: [key] }, { throwOnError: true })));
+      setReloadResult('Mounted skills reloaded. Updated content is available the next time a skill is loaded; existing agent context stays unchanged.');
+    } catch (error) {
+      setReloadError(error instanceof Error ? error.message : 'Could not reload mounted skills.');
+    } finally { setReloadingMounted(false); }
+  };
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [topicFilter, setTopicFilter] = useState<string>('');
@@ -1003,15 +1021,9 @@ export default function SkillsPage() {
   });
   const pendingProposals = proposals?.length ?? 0;
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error: skillsError } = useQuery({
     queryKey: ['skills'],
-    queryFn: async () => {
-      try {
-        return await api.get<{ skills: Skill[] }>('/skills');
-      } catch {
-        return { skills: [] };
-      }
-    },
+    queryFn: () => api.get<{ skills: Skill[] }>('/skills'),
   });
 
   const topicOptions = useTopicOptions();
@@ -1070,6 +1082,12 @@ export default function SkillsPage() {
         }
         actions={
           <>
+          <button type="button" onClick={() => void reloadMounted()} disabled={reloadingMounted}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm rounded-xs border border-outline-variant/30 disabled:opacity-50"
+            title="Read mounted skills from their source folders again">
+            <RefreshCw className={cn('w-4 h-4', reloadingMounted && 'animate-spin')} />
+            {reloadingMounted ? 'Reloading mounted skills…' : 'Reload mounted skills'}
+          </button>
           {/* The distillation pipeline files proposals here and nothing else
               linked to them, so they piled up unseen. */}
           <Link
@@ -1096,6 +1114,8 @@ export default function SkillsPage() {
       />
 
       <SkillUsage />
+      {reloadResult && <p role="status" className="text-sm text-tertiary">{reloadResult}</p>}
+      {(reloadError || skillsError) && <p role="alert" className="text-sm text-error">{reloadError || 'Could not refresh the skill list. Previously loaded skills are kept.'}</p>}
 
       {/* Search + Category filter */}
       <div className="flex gap-3">

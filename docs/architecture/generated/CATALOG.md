@@ -6,7 +6,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 
 ## HTTP surface
 
-423 mounted routes across 62 route files. The path is the full one, group prefix included — what a client actually calls.
+424 mounted routes across 62 route files. The path is the full one, group prefix included — what a client actually calls.
 
 | Method | Path | Defined in |
 |---|---|---|
@@ -369,6 +369,7 @@ Derived from the source by `scripts/gen-catalog.ts`. CI checks that the committe
 | GET | `/api/skills/proposals` | `src/api/routes/skill-proposals.ts` |
 | POST | `/api/skills/proposals/:id/approve` | `src/api/routes/skill-proposals.ts` |
 | POST | `/api/skills/proposals/:id/reject` | `src/api/routes/skill-proposals.ts` |
+| POST | `/api/skills/reload-mounted` | `src/api/routes/skills.ts` |
 | GET | `/api/skills/topics` | `src/api/routes/skill-topic-assignments.ts` |
 | POST | `/api/skills/topics` | `src/api/routes/skill-topic-assignments.ts` |
 | DELETE | `/api/skills/topics/:id` | `src/api/routes/skill-topic-assignments.ts` |

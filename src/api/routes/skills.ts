@@ -24,6 +24,17 @@ import {
 export const skillRoutes = new Elysia({ prefix: '/skills' })
   .use(apiContext)
 
+  .post('/reload-mounted', ({ user, principal, set }) => {
+    if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
+    try {
+      getSkillRegistry().reloadExternal();
+      return { reloaded: true };
+    } catch {
+      set.status = 500;
+      return { error: 'Could not reload mounted skills. Previously loaded skills remain available.' };
+    }
+  }, { detail: { tags: ['skills'] } })
+
   .get('/usage', async ({ user, principal, query, set }) => {
     if (!user || !isAuthenticated(principal)) { set.status = 401; return { error: 'Not authenticated' }; }
     let ownerId = await resolveUserId(user.id);
