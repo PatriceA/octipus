@@ -18,6 +18,11 @@ carries three flags. Once a flag is set, it stays set for the session.
 | `private` | the user's own data | mail, calendar, drive, docs, chat, `data` queries |
 | `secret` | credential material | `.env`, `~/.ssh`, `~/.aws`, `.npmrc`, `.git-credentials`, `.kube`, `/proc/*/environ`, private keys; through the filesystem tool, a shell command, or a CLI `Read`/`Bash` |
 
+Using the vault never sets a flag. A `{{secret:NAME}}` placeholder is resolved
+inside the tool after the guard has run, and the resolved value is masked in the
+output, so the model never sees the credential. The `secret` flag is only set by
+reading raw credential files.
+
 A static contract for each tool decides which flags the call sets, and whether
 the call can send data out ("egress"):
 

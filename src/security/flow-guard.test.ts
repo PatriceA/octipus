@@ -80,6 +80,19 @@ describe('applyFlowGuard', () => {
     expect(guard({ toolId: 'messaging', action: 'send' }, allow, 'off')).toBe(allow);
   });
 
+  it('vault placeholders never taint the session', () => {
+    // The documented vault pattern: the secret rides in env as a placeholder,
+    // resolved inside the tool after this check, and masked in the output.
+    const vaultCall = { toolId: 'shell', action: 'execute',
+      args: { command: 'gh api user', env: { GH_TOKEN: '{{secret:github_token}}' }, network: true } };
+    expect(classifyFlow(vaultCall).taints).toEqual([]);
+    expect(guard(vaultCall)).toBe(allow);
+    observeFlow(S, vaultCall);
+    observeFlow(S, { toolId: 'filesystem', action: 'read', args: { path: 'config.json', token: '{{secret:api_key}}' } });
+    expect(getFlowLabel(S)).toMatchObject({ secret: false, private: false, suspicious: false });
+    expect(guard({ toolId: 'websearch', action: 'fetch' })).toBe(allow);
+  });
+
   it('labels are monotonic, per session, and clearable', () => {
     observeFlow(S, { toolId: 'filesystem', action: 'read', args: { path: '.env' } });
     observeFlow(S, { toolId: 'filesystem', action: 'read', args: { path: 'README.md' } });
