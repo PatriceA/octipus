@@ -165,6 +165,7 @@ test.describe('chat page', () => {
     });
     await page.routeWebSocket(/\/ws\?/, (ws) => { socket = ws; });
 
+    await page.clock.install();
     await page.goto('/chat');
 
     await selectChatSession(page, 'sess-1');
@@ -191,6 +192,9 @@ test.describe('chat page', () => {
     await expect(page.getByTitle('53 tool calls')).toBeVisible();
     await expect(page.getByText('25 model turns')).toBeVisible();
     await expect(page.getByText('Stopped at turn limit')).toBeVisible();
-    expect(requestedCursors.slice(0, 2)).toEqual([0, 200]);
+    // Chat backfills one page per polling cycle; the first page already
+    // contains all tool calls, so rendering them does not imply pagination finished.
+    await page.clock.fastForward(10_000);
+    await expect.poll(() => requestedCursors.slice(0, 2)).toEqual([0, 200]);
   });
 });
