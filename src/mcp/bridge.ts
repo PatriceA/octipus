@@ -319,6 +319,31 @@ export class MCPBridge extends EventEmitter {
   }
 
   /**
+   * On-demand reconnect for an enabled server that is not connected — typically one that restarted
+   * for longer than the backoff lasts (~1 min: a rebuild) and was given up on. One fresh connect when
+   * a caller actually needs the server; an intentional disconnect or a disabled server stays down.
+   */
+  async ensureConnected(serverId: string): Promise<void> {
+    if (this.connections.get(serverId)?.status === 'connected') return;
+    const server = this.serverConfigs.find((s) => s.id === serverId);
+    if (!server || !server.isEnabled || this.intentionalDisconnects.has(serverId)) return;
+    const stale = this.connections.get(serverId);
+    if (stale) {
+      this.connections.delete(serverId);
+      stale.transport.close();
+      stale.protocol.cleanup();
+    }
+    this.clearReconnectTimer(serverId);
+    this.reconnectAttempts.delete(serverId);
+    try {
+      await this.connect(server);
+      getMcpCircuitBreaker().reset(serverId);
+    } catch (err) {
+      coreLogger.warn({ err, serverId }, 'On-demand MCP reconnect failed');
+    }
+  }
+
+  /**
    * Schedule an exponential-backoff reconnect after an unexpected transport
    * close (crash / OS kill). Bounded by MAX_RECONNECT_ATTEMPTS so a
    * permanently-dead server stops retrying instead of spinning forever.
@@ -404,6 +429,7 @@ export class MCPBridge extends EventEmitter {
     // Every caller, including artifact refreshes, reaches this boundary before transport.
     const { authorizeMcpDispatch } = await import('@/security/mcp-authorization');
     await authorizeMcpDispatch(context, `${serverId}.${toolName}`, authorizationArgs);
+    await this.ensureConnected(serverId);
 
     const breaker = getMcpCircuitBreaker();
     if (!breaker.canCall(serverId)) {
@@ -438,6 +464,7 @@ export class MCPBridge extends EventEmitter {
    * Read a resource from an MCP server
    */
   async readResource(serverId: string, uri: string): Promise<unknown> {
+    await this.ensureConnected(serverId);
     const connection = this.connections.get(serverId);
     if (!connection || connection.status !== 'connected') {
       throw new Error(`MCP server not connected: ${serverId}`);
@@ -456,6 +483,7 @@ export class MCPBridge extends EventEmitter {
    * Get a prompt from an MCP server
    */
   async getPrompt(serverId: string, name: string, args?: Record<string, string>): Promise<unknown> {
+    await this.ensureConnected(serverId);
     const connection = this.connections.get(serverId);
     if (!connection || connection.status !== 'connected') {
       throw new Error(`MCP server not connected: ${serverId}`);
@@ -701,6 +729,7 @@ export class MCPBridge extends EventEmitter {
             tools: Array<{ name: string; description: string; parameters?: unknown }>;
           }> = [];
 
+          if (serverId) await bridge.ensureConnected(serverId);
           for (const connection of [...bridge.connections.values()].sort((a, b) => a.id.localeCompare(b.id))) {
             if (connection.status !== 'connected') continue;
             if (serverId && connection.id !== serverId) continue;

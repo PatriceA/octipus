@@ -197,3 +197,30 @@ test('MCP discovery bounds schemas and retrieves an exact tool only on demand', 
   expect(exact[0].tools).toHaveLength(1);
   expect(exact[0].tools[0].parameters.properties.payload.type).toBe('string');
 });
+
+describe('MCPBridge.ensureConnected', () => {
+  test('reconnects an enabled server that gave up retrying, and leaves disabled / intentionally closed ones alone', async () => {
+    const bridge = new MCPBridge();
+    const up = { id: 'editor', name: 'Editor', transport: 'streamable-http', url: 'http://editor.invalid/x', isEnabled: true };
+    (bridge as any).serverConfigs = [up, { ...up, id: 'off', isEnabled: false }, { ...up, id: 'closed' }];
+    (bridge as any).intentionalDisconnects.add('closed');
+    const stale = { id: 'editor', status: 'disconnected', transport: { close: vi.fn() }, protocol: { cleanup: vi.fn() } };
+    (bridge as any).connections.set('editor', stale);
+    (bridge as any).reconnectAttempts.set('editor', 6);
+    const connect = vi.spyOn(bridge, 'connect').mockImplementation(async (s: any) => {
+      const c = { id: s.id, server: s, status: 'connected', tools: [] };
+      (bridge as any).connections.set(s.id, c);
+      return c as any;
+    });
+
+    await bridge.ensureConnected('editor');
+    await bridge.ensureConnected('off');
+    await bridge.ensureConnected('closed');
+    await bridge.ensureConnected('editor'); // already connected: no second connect
+
+    expect(connect.mock.calls.map((c) => (c[0] as any).id)).toEqual(['editor']);
+    expect(stale.transport.close).toHaveBeenCalled();
+    expect(bridge.isConnected('editor')).toBe(true);
+    expect((bridge as any).reconnectAttempts.has('editor')).toBe(false);
+  });
+});
