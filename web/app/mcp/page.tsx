@@ -83,6 +83,14 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
         isEnabled: true,
       };
 
+      const timeout = Number(requestTimeoutSeconds);
+      if (!Number.isFinite(timeout) || timeout < 1 || timeout > 3600) {
+        setError('Request timeout must be between 1 and 3600 seconds');
+        setIsSubmitting(false);
+        return;
+      }
+      body.requestTimeoutMs = Math.round(timeout * 1000);
+
       if (transport === 'stdio') {
         if (!command.trim()) {
           setError('Command is required');
@@ -92,13 +100,6 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
         body.command = command.trim();
         body.args = args.trim() ? args.trim().split(/\s+/) : [];
         if (cwd.trim()) body.cwd = cwd.trim();
-        const timeout = Number(requestTimeoutSeconds);
-        if (!Number.isFinite(timeout) || timeout < 1 || timeout > 3600) {
-          setError('Request timeout must be between 1 and 3600 seconds');
-          setIsSubmitting(false);
-          return;
-        }
-        body.requestTimeoutMs = Math.round(timeout * 1000);
         body.stderrAsError = stderrAsError;
 
         // Parse env vars (KEY=VALUE per line)
@@ -283,10 +284,6 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
               <details className="text-sm text-on-surface-variant">
                 <summary className="cursor-pointer">Process settings</summary>
                 <div className="space-y-3 mt-3">
-                  <label className="block">
-                    Request timeout (seconds)
-                    <input type="number" min="1" max="3600" value={requestTimeoutSeconds} onChange={event => setRequestTimeoutSeconds(event.target.value)} className="mt-1 w-full px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm text-on-surface" />
-                  </label>
                   <label className="flex items-center gap-2">
                     <input type="checkbox" checked={stderrAsError} onChange={event => setStderrAsError(event.target.checked)} />
                     Treat stderr output as an error
@@ -312,6 +309,11 @@ function AddServerModal({ open, onClose, onAdded }: AddServerModalProps) {
               </div>
             </>
           )}
+
+          <label className="block text-sm text-on-surface/80">
+            Request timeout (seconds)
+            <input type="number" min="1" max="3600" value={requestTimeoutSeconds} onChange={event => setRequestTimeoutSeconds(event.target.value)} className="mt-1 w-full px-3 py-2 bg-surface-container-low border border-outline-variant/10 rounded-lg text-sm text-on-surface" />
+          </label>
 
           {error && <p className="text-sm text-error">{error}</p>}
 

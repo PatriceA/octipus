@@ -62,6 +62,8 @@ export function buildServerConfig(args: Record<string, unknown>): { server: MCPS
       transport,
       sseUrl: transport === 'sse' ? url : undefined,
       postUrl: transport === 'streamable-http' ? url : undefined,
+      // Any transport: a slow tool (a UI scenario, a crawl) outlives the 30 s protocol default.
+      requestTimeoutMs: typeof args.requestTimeoutMs === 'number' && args.requestTimeoutMs >= 1 && args.requestTimeoutMs <= 3_600_000 ? args.requestTimeoutMs : undefined,
       isEnabled: true,
     },
   };
@@ -160,6 +162,7 @@ export class McpAdminTool extends BaseTool {
             url: { type: 'string', description: 'Endpoint URL for the http transports' },
             env: { type: 'object', description: 'Environment variables for a stdio server' },
             headers: { type: 'object', description: 'HTTP headers for an http transport' },
+            requestTimeoutMs: { type: 'number', description: 'Per-call timeout in ms (default 30000), any transport' },
           },
           returns: 'The registered server and how many tools it exposed on connect',
         },
@@ -181,6 +184,7 @@ export class McpAdminTool extends BaseTool {
         url: { type: 'string', description: "Endpoint URL when transport is 'sse' or 'streamable-http'" },
         env: { type: 'object', description: 'Environment variables for a stdio server' },
         headers: { type: 'object', description: 'HTTP headers for an http transport' },
+        requestTimeoutMs: { type: 'number', description: 'Per-call timeout in ms, 1..3600000 (default 30000). Raise it for servers with slow tools; works for every transport.' },
       }),
       async (args, context) => addMcpServer(args, context.userId),
       {

@@ -51,6 +51,12 @@ describe('buildServerConfig', () => {
     });
   });
 
+  test('an http server takes a request timeout; an out-of-range one is dropped', () => {
+    const base = { name: 'X', transport: 'streamable-http', url: 'http://127.0.0.1:1/mcp' };
+    expect(buildServerConfig({ ...base, requestTimeoutMs: 600_000 })).toMatchObject({ server: { requestTimeoutMs: 600_000 } });
+    expect(buildServerConfig({ ...base, requestTimeoutMs: 0 })).toMatchObject({ server: { requestTimeoutMs: undefined } });
+  });
+
   test('a stdio server keeps its command and args', () => {
     const built = buildServerConfig({ name: 'files', command: 'npx', args: ['-y', 'server-filesystem'] });
     expect(built).toMatchObject({ server: { command: 'npx', args: ['-y', 'server-filesystem'], transport: 'stdio' } });
