@@ -23,6 +23,15 @@ inside the tool after the guard has run, and the resolved value is masked in the
 output, so the model never sees the credential. The `secret` flag is only set by
 reading raw credential files.
 
+A call that authenticates through the vault is also exempt from the check, even
+in a session that has been tainted. This applies when every `{{secret:NAME}}`
+in the arguments names an active vault entry that the tool is allowed to use.
+Tools leave an unresolved placeholder as plain text, so a made-up name does not
+qualify. Vendor-native CLI tools never resolve placeholders, so they never
+qualify either. The vault is only queried when the guard would otherwise ask,
+and the query checks access without decrypting anything. The trade-off: in a
+tainted session, a vault-authenticated call can send data out without asking.
+
 A static contract for each tool decides which flags the call sets, and whether
 the call can send data out ("egress"):
 

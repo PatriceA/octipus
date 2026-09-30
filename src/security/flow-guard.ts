@@ -78,6 +78,9 @@ const NETWORK_CMD_RE =
 /** MCP tool names that only read. Anything else on an external server may mutate. */
 const MCP_READ_VERB_RE = /^(get|list|search|read|fetch|query|find|describe|lookup|view|show|count|retrieve)(_|-|[A-Z]|$)/;
 
+/** Same shape as `SECRET_PLACEHOLDER_PATTERN` in db/schema/vault.ts. */
+const VAULT_PLACEHOLDER_RE = /\{\{secret:([a-zA-Z0-9_-]+)\}\}/g;
+
 const CLAUDE_READERS = new Set(['Read', 'Grep', 'Glob', 'NotebookRead', 'LS']);
 
 function argText(args: Record<string, unknown> | undefined): string {
@@ -212,6 +215,30 @@ export function flowBlockReason(label: FlowLabel, contract: FlowContract): strin
       + `(${label.sources.suspicious}); sending it out needs approval`;
   }
   return undefined;
+}
+
+/**
+ * Is this an Octipus tool call authenticated through the vault? Such a call
+ * is exempt from the egress check: the credential never enters the session,
+ * and the vault is the sanctioned way to use one. Every `{{secret:NAME}}` in
+ * the arguments must name an active entry this tool may use — tools leave an
+ * unresolved placeholder as plain text, so a made-up one must not buy an
+ * exemption. Vendor-native CLI tools never resolve placeholders, so never
+ * qualify. Only consulted when the guard would otherwise ask: no DB read on
+ * the common path, and no secret is decrypted.
+ */
+export async function isVaultAuthenticated(userId: string, call: FlowCall): Promise<boolean> {
+  if (call.toolId.startsWith('cli-native:')) return false;
+  const names = [...new Set([...argText(call.args).matchAll(VAULT_PLACEHOLDER_RE)].map(m => m[1] as string))];
+  if (names.length === 0) return false;
+  const { getVault } = await import('./vault');
+  const vault = getVault();
+  for (const name of names) {
+    const ok = (userId && userId !== 'system' && await vault.canAccessByName(userId, name, { toolId: call.toolId }))
+      || await vault.canAccessByName('system', name, { toolId: call.toolId });
+    if (!ok) return false;
+  }
+  return true;
 }
 
 /**

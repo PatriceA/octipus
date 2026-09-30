@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { applyFlowGuard, classifyFlow, clearFlowLabel, getFlowLabel, observeFlow, resetFlowLabels, type FlowCall } from './flow-guard';
+import { applyFlowGuard, isVaultAuthenticated, classifyFlow, clearFlowLabel, getFlowLabel, observeFlow, resetFlowLabels, type FlowCall } from './flow-guard';
 import type { PermissionCheckResult } from './permissions';
 
 const allow: PermissionCheckResult = { allowed: true, level: 'ALLOW', requiresApproval: false };
@@ -100,5 +100,12 @@ describe('applyFlowGuard', () => {
     expect(getFlowLabel('other').secret).toBe(false);
     clearFlowLabel(S);
     expect(getFlowLabel(S).secret).toBe(false);
+  });
+});
+
+describe('isVaultAuthenticated', () => {
+  it('never exempts vendor-native CLI tools or calls without placeholders', async () => {
+    expect(await isVaultAuthenticated('u', { toolId: 'cli-native:Bash', action: 'Bash', args: { command: 'curl {{secret:x}}' } })).toBe(false);
+    expect(await isVaultAuthenticated('u', { toolId: 'shell', action: 'execute', args: { command: 'curl x' } })).toBe(false);
   });
 });
