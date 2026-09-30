@@ -61,7 +61,9 @@ MCP configuration. Antigravity can reach the same bridge through a supplied
 terminal helper. The helper supports listing tools and calling a named tool with
 JSON arguments; credentials are inherited privately through the environment.
 
-The working directory remains the session's project or user workspace. System
+The working directory remains the session's project or user workspace, except
+for a coding child given its own git worktree (see
+[Optional git worktree per coding child](#optional-git-worktree-per-coding-child)). System
 instructions are passed with the invocation. Octipus does not temporarily
 rewrite `AGENTS.md` or `GEMINI.md` in a shared project.
 
@@ -213,7 +215,9 @@ participate, for different reasons:
 ### What invalidates a stored session
 
 Vendor reuse belongs to the root conversation. Children have isolated vendor
-conversations and bridge namespaces. A fingerprint covers model, configured
+conversations and bridge namespaces, and start cold unless they are resumed per
+role and task (see
+[Resuming child sessions per role and task](#resuming-child-sessions-per-role-and-task)). A fingerprint covers model, configured
 provider identity, permissions, plan mode, workspace, stable instructions and
 tool schemas. A changed fingerprint starts a new persistent vendor conversation.
 Each record also tracks a clear generation and an acknowledged transcript cursor.
@@ -235,7 +239,8 @@ rotate only after successful checkpoint publication. The next launch carries
 that checkpoint plus its suffix. There is no separate credential-bearing CLI
 maintenance subprocess. A failed, incomplete or ineffective automatic summary
 does not rotate the vendor conversation. Turn execution and maintenance are
-serialized within one server process.
+serialized within one server process. Only root vendor sessions rotate; child
+task sessions are kept, because they never held the root transcript.
 
 ### Cold fallback
 
@@ -245,6 +250,129 @@ error output, drops the stale stored id, and retries that turn exactly once,
 cold, with the full prompt — so a turn is never simply lost because the
 vendor forgot its session. The replacement ID is persisted, so the following
 turn resumes normally.
+
+### Resuming child sessions per role and task
+
+By default a child agent starts a fresh vendor conversation every time it is
+spawned. A child on Claude Code or Codex CLI can instead continue the vendor
+session an earlier child left on the same task, when the parent asks for it.
+
+The parent (the agent calling `spawn_child`, native or CLI) sets it by passing
+an optional `resumeKey`: a task id of 1 to 200 letters, digits, `.`, `_`, `:` or
+`-`. Passing the same key with the same role continues that child's session;
+omitting it gives a fresh child, exactly as before. The key is ignored for
+native children and for CLI adapters that cannot resume.
+
+The spawner scopes the key by the parent, so unrelated parents in one session
+cannot pick up each other's task sessions. The stored key is
+`<parent scope>><child role>:<task id>`, where the parent scope is:
+
+- a root parent's role. Not an agent id, because the root is a new worker every
+  turn and must land on the same key when it re-spawns the task in a later turn;
+- a keyed parent's own resume key, so grandchildren carry the full lineage;
+- nothing for any other parent. A non-root parent spawned without a key has no
+  stable identity, so its children start cold (and the server logs that the
+  key was ignored).
+
+The vendor session is stored in the same per-session record as the root's,
+under `<adapter>::<key>`. A keyed child resumes only when all of these hold:
+
+- the stored record's fingerprint matches. For a keyed child it covers the
+  model, permission and plan mode, working directory, role, tool ids (without
+  the lazy discovery tools) and all stable instructions (role prompt, critical
+  rules, delegation, vault and bridge guidance). Changing any of them starts
+  cold. A different brief, or different brief- or session-selected skills,
+  does not: those follow the prompt's volatile marker and are re-sent on each
+  resumed run, as a root's per-turn blocks are;
+- the session has not been cleared since the record was saved (`/clear` drops
+  every child key along with the root's);
+- no other live agent holds the same key. Two concurrent children with one key
+  never share a vendor conversation: the second starts cold. This claim is kept
+  in memory, so it only guards agents in one server process. A stopped child
+  keeps the key until its vendor process exits.
+
+When the run ends the session id is saved for the next child on the task. A
+child stopped by a cancel, a timeout or a turn limit (including Claude's
+`error_max_turns`) still saves it, but only if the vendor confirmed the session
+during that run and no retry has taken the key since. A child stopped for
+exceeding its token budget drops the key instead, so the next run starts cold
+rather than inherit the spent context. At most 50 child task sessions are kept
+per Octipus session; the least recently used are removed first. Compaction
+keeps them (see [Compaction](#compaction)).
+
+Root CLI fingerprints include the full tool schemas, so any change to a root's
+tools starts its vendor session cold once. Adding `resumeKey` to `spawn_child`
+was such a change: existing root Claude Code and Codex sessions started cold
+once after the upgrade that introduced it.
+
+## Optional git worktree per coding child
+
+Parallel coding children normally share one working tree, and a Claude Code or
+Codex child's edits do not pass through Octipus's own write serialization. An
+operator can give each coding child its own git worktree instead. It is off by
+default; turn it on with `swarm.worktreeIsolation` (env
+`SWARM_WORKTREE_ISOLATION`), described in
+[CONFIGURATION.md](CONFIGURATION.md#swarm-config).
+
+A child gets a worktree only when all of these hold; otherwise it runs on the
+shared tree as before:
+
+- its role is `coding` and its model is a CLI adapter;
+- the session is a dev-mode project (never the per-user sandbox) whose
+  directory is itself a git repository root, not a folder inside a larger
+  repository;
+- the project has no uncommitted tracked changes at spawn time. A worktree
+  starts at `HEAD` and would not see them;
+- the spawning agent is not already working in a worktree. Descendants of a
+  worktree child reuse its worktree rather than creating a nested one.
+
+If the worktree cannot be created, the child also runs on the shared tree.
+
+**Where.** Worktrees are created under `~/.octipus/worktrees/<id>` (the
+absolute path in the `OCTIPUS_WORKTREES_DIR` environment variable relocates
+this directory), on a
+new branch `octipus/<id>` at the project's current `HEAD`. The CLI child uses
+the worktree as its working directory. Crash, backup and contract retries of
+the same child reuse it; a backup attempt on a native model runs on the shared
+tree, and its result is never merged from the worktree. Agents the child spawns work there too, and their
+changes are captured by its commit and merge.
+
+**Cleanup.** When the child finishes, the server commits any uncommitted work
+on its branch and reports the branch, head, diff stat, files changed and merge
+outcome on the child's receipt. It merges the branch into the project's
+current branch only when the child finished `ok` from an attempt that ran in
+the worktree and the project is still safe to merge into; the exact
+conditions and skip reasons are listed in CONFIGURATION.md. A conflict is
+aborted and the branch kept. The worktree directory is then removed, and the
+branch is deleted with `git branch -d` only if it was merged (or had no
+changes). When it was not merged, the child's result notes name the branch
+holding the work. A worktree is never removed while it has uncommitted changes
+or while its `HEAD` commit would become unreachable; if removal is refused, it
+is left in place and the notes say where. While the setting is on, the orphan
+reaper sweeps worktrees whose child is gone (for example after a crash): it
+removes one only if it is clean and merged into the project, reports the rest,
+and skips any whose owning process is still alive.
+
+**node_modules.** A fresh worktree has no dependencies installed. When the
+repository root has `node_modules`, the worktree gets a single symlink
+`node_modules` pointing to it, and `/node_modules` is added once, with a
+comment, to the repository's `.git/info/exclude`. That file is shared with the
+main tree, where the line only affects an untracked root `node_modules`.
+`swarm.worktreeLinkNodeModules` (default `true`) turns the symlink off.
+
+**Limitations.**
+
+- `node_modules` is shared, not isolated: an install or delete inside a
+  worktree changes the project's real dependencies.
+- Only coding-role CLI children are isolated. Native agents write through
+  Octipus's tools to the shared tree.
+- Uncommitted edits in the project are not carried into a worktree; a dirty
+  project disables isolation for that spawn.
+- Unmerged work stays on its `octipus/<id>` branch (or an
+  `octipus/<id>-detached` ref) for a person to review; Octipus never deletes
+  an unmerged branch.
+- Server-side git calls run with repository hooks and fsmonitor disabled, so
+  project hooks do not run on the server's commits and merges.
 
 ## Validation scope
 

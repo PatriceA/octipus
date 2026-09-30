@@ -53,6 +53,10 @@ All external channels (Telegram, Slack, Teams, WhatsApp) use the same account li
 
 Once linked, your channel identity is bound to your web account. This enables shared sessions, unified permissions, and consistent agent access across all channels.
 
+### Outbound notifications
+
+Hooks, scheduled tasks, monitors, notifications and agents (the `messaging` tool) may always message your own linked chats, including your 1:1 conversation with the bot. Shared channels, groups and Teams group chats or channels are different: the bot only posts there when an admin has approved the chat under **Admin → Notification destinations**, for everyone or for your org. Other targets are refused, or skipped when a hook runs. For Teams, the bot must also have received a message from the conversation once (for your personal chat: message the bot in Teams once). See [Who a hook may notify](HOOKS.md#who-a-hook-may-notify).
+
 ---
 
 ## Telegram

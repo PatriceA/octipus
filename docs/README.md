@@ -51,6 +51,8 @@ The current execution reference is [Agent Architecture](AGENT-ARCHITECTURE.md).
 | [ARTIFACTS-COOKBOOK.md](ARTIFACTS-COOKBOOK.md) | Worked examples and recipes for building artifacts. |
 | [HOOKS.md](HOOKS.md) | Event hooks and scheduled / recurring tasks. |
 | [HEARTBEAT.md](HEARTBEAT.md) | Proactive periodic checks for due tasks and notifications, with per-user standing instructions. |
+| [TASK-BOARD.md](TASK-BOARD.md) | The work board on the tasks page: assignees, checkout leases, comments, dependency wakeups, the audit trail, and role agents that work their tasks. |
+| [SPEND-BUDGETS.md](SPEND-BUDGETS.md) | Dollar spend budgets per user, role or workspace: warn and pause, what users see, and the admin screen. |
 | [PLUGINS.md](PLUGINS.md) | Installing and building host-side plugins / extensions. |
 | [MCP-INTEGRATION.md](MCP-INTEGRATION.md) | Connecting external MCP servers (client side) with lazy tool discovery. |
 | [MCP-SERVER.md](MCP-SERVER.md) | The standalone MCP server Octipus exposes to CLI models. |

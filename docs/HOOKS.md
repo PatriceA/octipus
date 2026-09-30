@@ -41,11 +41,72 @@ A hook has three parts:
 ```
 telegram:123456789        # Telegram chat ID
 slack:C0123ABCDEF         # Slack channel ID
-webchat:session-uuid      # WebChat session ID
-teams:channel-id          # Microsoft Teams channel
+webchat:<your-user-id>    # Your own web chat (all your open web chat connections)
+teams:channel-id          # Microsoft Teams conversation
 ```
 
+The type is split on the first colon, so Teams ids that contain colons work as-is. `actionConfig.notifyOwner: true` ("Notify me") sends to every external chat linked to the hook owner instead of naming targets.
+
 To find your Telegram chat ID: send any message to the bot and check backend logs (`~/.octipus/backend.log`).
+
+Not every chat id is accepted: see [Who a hook may notify](#who-a-hook-may-notify).
+
+### Who a hook may notify
+
+Hooks, scheduled tasks, monitors, notifications and agent tools send on behalf of a user, so the bot only messages chats that user may notify. The rule lives in `src/channels/ownership.ts` and is applied to every outbound send: a notify hook's `notifyChannels` / `channelType` + `channelId`, a notification's `deliverTo`, a monitor's reply, and the `messaging` tool.
+
+A target (`channelType`, `channelId`) is allowed when it is one of:
+
+- **Your own linked chat, always.** A chat verified to your account (see [Account Linking](CHANNELS.md#account-linking)), or your 1:1 conversation with the bot on that identity: a Teams personal chat or a Slack DM (`D…`) whose user is you.
+- **An admin-approved shared destination.** Shared channels and groups (a Slack `#alerts` channel, a Telegram group, a Teams channel or group chat) are allowed only when an admin has listed them under **Admin → Notification destinations**, either for everyone or for an org you are a member of.
+
+Anything else is refused with: `<type>:<id> is not linked to you and not an approved shared destination; ask an admin to add it under Admin → Notification destinations`. Only `telegram`, `slack`, `teams` and `whatsapp` have outbound chat ids; any other channel type (apart from `webchat` / `api`, below) is never a target.
+
+**When targets are checked.**
+
+- On save: `POST /api/hooks`, `PATCH /api/hooks/:id`, applying a hook suggestion, and `POST /api/recurring-tasks` return `400` naming each rejected target. An edit only checks targets that are new compared with the stored config, so a hook already holding a now-invalid target stays editable.
+- On send: a notify hook skips each target that is not allowed and logs a warning with the hook id; the other targets still receive the message. If no target is left, the execution fails with the refusal message. Removing a destination in the admin page therefore makes hooks that target it stop sending there.
+
+**Existing hooks with targets that are no longer allowed** (saved before this check, or whose chat was unlinked or whose destination was removed):
+
+- `GET /api/hooks` and `GET /api/hooks/:id` return `invalidTargets`, a list of `type:id` strings. The hooks page shows it as an "N invalid target(s)" badge; its tooltip lists the targets that are skipped when the hook runs.
+- At startup the server logs one warning with, per user, the number of affected hooks and targets (`Hooks with notification targets their owner may no longer send to ...`). Only `notify` and `execute_tool` hooks are scanned.
+
+To fix a flagged hook, replace the target with one of your own linked chats, or ask an admin to approve it.
+
+**Web chat and API targets.** `webchat` and `api` address the in-app surfaces. The only valid target is your own user id, `webchat:<your-user-id>`, which is delivered to all of your live web chat connections. Raw web chat connection ids and any other user's id are refused. Migration `0117_hook_inapp_targets` rewrote stored `webchat:<connection id>` and `api:<anything>` targets (in `notifyChannels` and in `channelType` + `channelId`) to `webchat:<owner id>`.
+
+**Teams.** A proactive Teams send needs a conversation reference, which Teams only provides when a message arrives from that conversation. References are persisted (`kv_store`, key `teams:convref:<id>`) and reloaded after a restart. A Teams target the bot has never seen resolves as "unresolved" rather than "not linked": `the Teams conversation cannot be resolved yet; the user must message the bot in Teams once`. Your own Teams identity (the id stored when you linked Teams) is delivered to your 1:1 conversation(s) with the bot. Teams channels and group chats need an approved destination.
+
+**Monitors and sessions.** A monitor replies to its session's chat only if the monitor's owner may notify that chat; otherwise nothing is sent and the delivery fails with the same error. `POST /api/sessions` only creates a session on an external channel (`telegram`, `slack`, `teams`, `whatsapp`) whose chat the caller may notify; other session types are accepted as before. `PATCH /api/sessions/:id` only updates `title`, `status`, `context` and `metadata`, so a session's chat cannot be changed after creation.
+
+#### Adding a shared destination
+
+Admins manage the allowlist at **Admin → Notification destinations** (`/admin/destinations`):
+
+1. **Channel**: `telegram`, `slack`, `teams` or `whatsapp`.
+2. **Channel / chat id**: the id exactly as a hook would name it after the colon, e.g. `C0123ALERTS` for `slack:C0123ALERTS`.
+3. **Label** (optional): a display name such as `#alerts`.
+4. **For**: `everyone` approves the destination for every user on the instance (stored with no org). Choosing an org approves it only for that org's members. The org list appears only when organizations are enabled; otherwise `everyone` is the only choice.
+
+The same (channel, id, org) can be listed once; adding it again returns `409`. The trash icon removes a destination. Additions and removals are recorded in the audit log (`settings_changed`, resource type `notification_destination`).
+
+The page uses these admin-only endpoints (stored in the `notification_destinations` table, migration `0116`):
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/admin/notification-destinations` | List destinations and the allowed `channelTypes` |
+| POST | `/api/admin/notification-destinations` | Add `{ channelType, channelId, label?, orgId? }`; `orgId` omitted or `null` means everyone. `400` for an unknown channel type, `404` for an unknown org, `409` if already listed |
+| DELETE | `/api/admin/notification-destinations/:id` | Remove a destination |
+
+#### Messaging tool: `send_message` and `send_to_user`
+
+The same rule applies when an agent (or an `execute_tool` hook or task) uses the `messaging` tool:
+
+- **`send_message`** (`channel`, `target`, `message`): the target must be one of your own linked chats, `webchat:<your-user-id>`, or an approved shared destination. This is enforced on every call, attended or not; approving the tool's permission prompt (or "always allow") does not widen it.
+- **`send_to_user`** (`user_id`, `message`, optional `channel`): sends to the recipient's own verified linked chats. You may target only yourself. An admin may target another user only from an attended run that can prompt a human; unattended runs (cron, heartbeat, message hooks, `execute_tool`) may only target the calling user, admin or not.
+
+When an `execute_tool` hook or a recurring task names the messaging tool with literal values, they are checked at save time: a `send_message` `channel` + `target` must pass the rule above, and a `send_to_user` `user_id` must be your own id (`A send_to_user hook can only message you`). Values containing `{{...}}` templates are only known at run time and are checked by the tool when it runs.
 
 ### Template Variables
 
@@ -176,6 +237,8 @@ If no template is provided, the raw JSON payload is forwarded to the agent.
 Results can be routed to a channel via `actionConfig`:
 - `channelType` + `channelId` — direct delivery (e.g., `telegram` + `123456789`)
 - `notifyChannels[]` — standard multi-channel delivery
+
+Both follow [Who a hook may notify](#who-a-hook-may-notify).
 
 ### Example: GitHub → Telegram
 
