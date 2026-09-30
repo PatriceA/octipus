@@ -134,6 +134,7 @@ describe('real middleware and executor authorization', () => {
     connections.set('fixture', { id: 'fixture', status: 'connected', server: { name: 'Fixture' },
       tools: [{ name: 'write', description: 'Write', inputSchema: {} }],
       transport: { send: () => { calls++; } }, protocol: { sendRequest: async () => { calls++; return { ok: true }; } } });
+    await getPermissionManager().setPermission(userId, 'mcp', 'fixture.write', 'ASK');
     await expect(bridge.callTool('fixture', 'write', args(), context())).rejects.toMatchObject({ code: 'approval_required' });
     const executor = new ToolExecutor(context(), () => {});
     executor.registerTool(bridge.getLazyToolHandlers().find(t => t.name === 'mcp_call_tool')!);
@@ -167,7 +168,7 @@ test('cancelling a running shell tool reaches the real subprocess', async () => 
   executor.registerTools(shell.getToolHandlers());
   const started = Date.now();
   const result = await executor.handleToolCalls([{ id: 'cancel-shell', name: 'shell__run', arguments: {
-    command: 'sleep 3', cwd: directory, timeout: 5000,
+    command: 'node -e "setTimeout(() => {}, 3000)"', cwd: directory, timeout: 5000,
   } }]);
   expect(JSON.stringify(result)).toMatch(/cancelled|"aborted"/);
   expect(Date.now() - started).toBeLessThan(2000);
