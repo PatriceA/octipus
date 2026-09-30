@@ -88,8 +88,10 @@ export class PlanTool extends BaseTool {
         items: {
           type: 'array',
           description:
-            'Items to append. Each is `{ "title": string, "detail"?: string }`. A plain string is ' +
-            'accepted and read as the title.',
+            'Items to append. Each is `{ "title": string, "detail"?: string, "acceptance"?: string[] }`. ' +
+            '`acceptance` lists what "done" means for the item, one checkable statement each — the QA ' +
+            'stage must report every one as met or not met, with evidence. A plain string is accepted ' +
+            'and read as the title.',
           required: true,
           items: { type: 'object' },
         },
@@ -101,11 +103,12 @@ export class PlanTool extends BaseTool {
         const raw = Array.isArray(args.items) ? args.items : [];
         const parsed = raw
           .map((item) => {
-            if (typeof item === 'string') return { title: item.trim(), detail: undefined };
+            if (typeof item === 'string') return { title: item.trim(), detail: undefined, acceptance: undefined };
             const rec = (item ?? {}) as Record<string, unknown>;
             return {
               title: String(rec.title ?? '').trim(),
               detail: rec.detail == null ? undefined : String(rec.detail),
+              acceptance: normalizeAcceptance(rec.acceptance),
             };
           })
           .filter((item) => item.title.length > 0);
@@ -119,6 +122,7 @@ export class PlanTool extends BaseTool {
             ordinal: start + i,
             title: item.title,
             detail: item.detail,
+            acceptance: item.acceptance,
             createdByNodeKey: this.nodeKeyOf(context),
           })),
         );
@@ -137,7 +141,11 @@ export class PlanTool extends BaseTool {
         const pipelineId = this.pipelineIdOf(context);
         if (!pipelineId) return { error: 'Not running inside a pipeline — there is no plan to read.' };
         const items = await pipelineRepository.getPlanItems(pipelineId);
-        return items.map((i) => ({ id: i.id, ordinal: i.ordinal, title: i.title, detail: i.detail, status: i.status }));
+        return items.map((i) => ({
+          id: i.id, ordinal: i.ordinal, title: i.title, detail: i.detail,
+          ...(i.acceptance?.length ? { acceptance: i.acceptance } : {}),
+          status: i.status,
+        }));
       },
       { permissionAction: 'read' },
     );
@@ -171,6 +179,9 @@ export class PlanTool extends BaseTool {
         const patch: Record<string, unknown> = {};
         if (typeof args.title === 'string' && args.title.trim()) patch.title = args.title.trim();
         if (typeof args.detail === 'string') patch.detail = args.detail;
+        // Acceptance criteria are deliberately NOT editable here: the worker
+        // being audited could otherwise delete the check on its own work. The
+        // planner sets them with `add_items`; a person edits them via the API.
         // `done` and `failed` are the pipeline's to set — a worker claiming an
         // item is finished is exactly the self-report the evidence gates exist
         // to stop counting as proof.
@@ -184,5 +195,22 @@ export class PlanTool extends BaseTool {
     );
   }
 }
+
+/**
+ * Acceptance criteria as a clean list: a string or an array of strings,
+ * trimmed, empties dropped, capped so a runaway planner cannot turn one item
+ * into a QA checklist longer than the work. Undefined when nothing usable.
+ */
+export function normalizeAcceptance(value: unknown): string[] | undefined {
+  const raw = typeof value === 'string' ? [value] : Array.isArray(value) ? value : [];
+  const list = raw
+    .filter((v): v is string => typeof v === 'string')
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0)
+    .slice(0, MAX_ACCEPTANCE);
+  return list.length > 0 ? list : undefined;
+}
+
+const MAX_ACCEPTANCE = 12;
 
 export default PlanTool;

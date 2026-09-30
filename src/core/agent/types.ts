@@ -86,6 +86,20 @@ export interface QAValidationResult {
    * not be failed for lacking them.
    */
   source?: 'json' | 'inline' | 'prose';
+  /**
+   * The auditor's account of the current plan item's acceptance criteria, one
+   * entry per criterion. Only asked for (and only gated) when the item carries
+   * criteria; `undefined` when the verdict did not report any.
+   */
+  criteria?: CriterionVerdict[];
+}
+
+/** One acceptance criterion as the auditor judged it. */
+export interface CriterionVerdict {
+  criterion: string;
+  met: boolean;
+  /** What the auditor looked at or ran to decide — a command and its exit code, a file:line. */
+  evidence: string;
 }
 
 export interface RoleConfig {

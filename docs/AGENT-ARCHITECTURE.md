@@ -181,6 +181,24 @@ Pipeline step fields for QA retry:
 | `maxRetries` | number | Maximum retry attempts before escalation (default: 3) |
 | `retryTargetStage` | string | Which stage to retry on failure (typically the preceding implementation stage) |
 
+**Acceptance criteria per plan item.** The planning stage can give each plan
+item an `acceptance` list (`plan__add_items`), which is one checkable statement
+per entry. The implementer sees the list with the item. The QA stage has to
+return a `criteria` array in its verdict, marking each criterion `met` true or
+false with evidence. The audit gate then applies three rules:
+
+- A pass that leaves a criterion unreported, or marks one met with no evidence,
+  is sent back to the auditor.
+- A pass that reports a criterion as not met is turned into a real failure and
+  goes back to the builder.
+- Items without criteria are judged exactly as before.
+
+**Best attempt on exhaustion.** Each settled QA verdict for an item is kept, with
+the workspace HEAD it was judged at. When retries run out and an earlier attempt
+did better than the last one (it passed, met more criteria, or had fewer issues),
+the escalation names that attempt and its commit. Nothing is rolled back
+automatically; that is the person's decision.
+
 ### Handoff Context Documents
 
 When work passes between pipeline stages, a structured **handoff document** is automatically generated and forwarded to the next stage's agent. Each handoff contains:

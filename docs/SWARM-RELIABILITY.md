@@ -128,6 +128,11 @@ A failed gate is now **re-dispatched once** with the failures quoted back to the
 child, bounded by `swarm.contractRetries` — see the contract-retry loop in
 `spawner.ts`. Failures the child has no power over (no shell tool, a denied
 permission, a denylisted command) are marked non-retryable and surfaced once.
+A retry that fails **more** scorers than the attempt it replaced, and whose
+receipt shows it changed no files and ran no commands, is discarded, and the
+earlier, better attempt is what the parent receives (`preferEarlierAttempt`).
+A retry that did touch the workspace always wins, because its work is what is on
+disk now.
 
 Explicit scorer specifications are validated at the spawn boundary — a malformed spec is
 rejected loudly (`spawn_child: invalid scorers: …`), not silently dropped.

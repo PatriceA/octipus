@@ -115,7 +115,10 @@ Present this clearly so the user can review and approve before coding begins.
 FINALLY — and this is not optional — call \`plan__add_items\` with the implementation
 plan as a list of items, in the order they should be carried out. Each item is ONE
 independently completable piece of work (\`title\`, plus \`detail\` for the specifics
-the implementer will need). The pipeline runs implementation, testing, review and QA
+the implementer will need, plus \`acceptance\`: 1-5 checkable statements of what "done"
+means for that item — "\`npm test\` passes", "GET /users returns 404 for an unknown id",
+not "works well"). QA reports every criterion as met or not met, with evidence, so write
+ones a reviewer can actually check. The pipeline runs implementation, testing, review and QA
 once PER ITEM, so an item that bundles five unrelated changes cannot be reviewed
 honestly, and an item too small to review on its own wastes a full loop.`,
       },
@@ -508,7 +511,9 @@ Report what was changed and why.`,
       {
         name: 'Verify Fix',
         description: 'Verify the fix resolves the bug without regressions.',
-        topic: 'coding',
+        // The `qa` topic resolves to the `verify` lane: the stage that decides
+        // whether the fix holds should not run on the model that wrote it.
+        topic: 'qa',
         toolIds: ['filesystem', 'shell'],
         requiresApproval: false,
         // Same reason as QA Validation above: this is the stage that decides

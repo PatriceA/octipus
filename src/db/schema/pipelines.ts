@@ -162,6 +162,13 @@ export const planItems = pgTable('plan_items', {
   ordinal: integer('ordinal').notNull(),
   title: text('title').notNull(),
   detail: text('detail'),
+  /**
+   * What "done" means for this item, one checkable statement each. The QA
+   * stage must account for every entry in its verdict (met / not met, with
+   * evidence), and the audit gate rejects a pass that skips one. Null or empty
+   * = no per-item criteria; the item is judged as before.
+   */
+  acceptance: jsonb('acceptance').$type<string[]>(),
   status: planItemStatusEnum('status').default('pending').notNull(),
   /** `nodeKey` of the node that created this item (the planner, or a finder). */
   createdByNodeKey: text('created_by_node_key'),

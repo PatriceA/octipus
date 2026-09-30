@@ -7,6 +7,19 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Stricter build → review loop** (after the "gauntlet loop" pattern):
+  - Plan items can carry `acceptance` criteria. QA has to report each one as
+    met or not met, with evidence, and a pass that skips one or reports one as
+    unmet no longer counts.
+  - When QA runs on the same model as the implementation, the run posts a
+    notice that points at the Verify lane.
+  - The Bug Fix recipe's "Verify Fix" stage now runs on the `qa` topic (the
+    Verify lane).
+  - A swarm contract retry that does worse and touched nothing keeps the
+    earlier attempt.
+  - When a pipeline QA stage runs out of retries, the escalation names the best
+    earlier attempt and its commit.
+
 - **Flow guard** ([docs](docs/FLOW-GUARD.md)): a deterministic
   information-flow check based on OpenAPPA. Each session carries a
   one-way label (`suspicious`, `private`, `secret`) built from the tools it

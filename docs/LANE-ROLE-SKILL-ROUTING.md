@@ -179,7 +179,7 @@ Pipeline stages specify a `topic` field that determines both the role (tools) an
 | Research & Analysis | Analysis & Recommendations | `general` |
 | Bug Fix | Reproduce & Diagnose | `coding` |
 | Bug Fix | Implement Fix | `coding` |
-| Bug Fix | Verify Fix | `coding` |
+| Bug Fix | Verify Fix | `qa` |
 
 ## Model Configuration
 
@@ -190,7 +190,10 @@ page's default-model star is only the fallback for an unbound lane):
 3. Every agent routed to that lane runs on it
 
 Binding a different model to `build` and to `verify` is the point of the split:
-until they differ, routing is provably correct and economically invisible.
+until they differ, routing is provably correct and economically invisible. A
+pipeline says so when it happens: the first QA stage in a run that resolves to
+the model an implementation stage used posts a one-line notice to the session
+(`qa_same_model`) pointing at the **Verify** lane.
 
 **Fail-loud, no default fallback.** `ModelRegistry.getModelForTopic(topic)` is the single authoritative entry point. If a topic has no model bound, the spawner returns null and throws with a message directing the user to the Models page — there is no silent "default model" fallback. Embedding and vision consumers generally use topic resolution: the knowledge base self-check (`/api/knowledge/readiness`) surfaces a 503 if no embedding model is bound. Document image extraction also retains a legacy direct OCR fallback; see [Documents](DOCUMENTS.md#ocr--vision-model). (Default model fallback applies *only* to a root turn; worker agents refuse it.)
 
