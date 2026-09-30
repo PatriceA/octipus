@@ -3,6 +3,7 @@ import type { AgentContext } from './types';
 import type { AgentEvent, ToolHandler } from './agent-base';
 import { getPermissionManager } from '@/security/permissions';
 import { routeApproval } from '@/security/approval-policy';
+import { applyFlowGuard, observeFlow } from '@/security/flow-guard';
 import { getConfig } from '@/config';
 
 const requestSchema = z.object({
@@ -48,7 +49,11 @@ export async function answerCliPermissionRequest(
   const manager = getPermissionManager();
   // One toolId per vendor tool so rules/grants can target `cli-native:Read` vs `cli-native:Bash`.
   const toolId = `cli-native:${request.tool_name}`;
-  const permission = await manager.check(context.userId, toolId, request.tool_name, request.input, context);
+  // Native tools never pass ToolExecutor, so the flow guard runs here: it can
+  // turn ALLOW into ASK, and an allowed call's reads join the session label.
+  const flowCall = { toolId, action: request.tool_name, args: request.input };
+  const permission = applyFlowGuard(getConfig().agent?.flowGuard, context.sessionId, flowCall,
+    await manager.check(context.userId, toolId, request.tool_name, request.input, context));
   const decision = routeApproval({ level: permission.level, role: context.role, root: context.root,
     attended: context.attended, toolId, action: request.tool_name,
     unattendedDenyActions: getConfig().multiuser?.unattendedDenyActions });
@@ -57,7 +62,8 @@ export async function answerCliPermissionRequest(
     const id = await manager.requestApproval(context.userId, context.id, toolId, request.tool_name,
       request.input, context.sessionId, `CLI: ${request.tool_name}`, signal);
     if (context.status !== 'running' || signal?.aborted) manager.cancelWaits(context.id);
-    emit('permission_request', { requestId: id, toolName: `CLI: ${request.tool_name}`, args: request.input, toolId });
+    emit('permission_request', { requestId: id, toolName: `CLI: ${request.tool_name}`, args: request.input, toolId,
+      ...(permission.source === 'flow-guard' ? { reason: permission.reason } : {}) });
     allowed = await manager.waitForApproval(id, { agentId: context.id });
   }
   if (allowed) {
@@ -65,7 +71,11 @@ export async function answerCliPermissionRequest(
     if (current.level === 'DENY') allowed = false;
   }
   if (context.status !== 'running' || signal?.aborted) allowed = false;
+  if (allowed) observeFlow(context.sessionId, flowCall);
+  const denial = decision.route === 'blocked' && permission.source === 'flow-guard'
+    ? `Octipus ${permission.reason}. Do not bypass this decision.`
+    : 'Octipus permission was denied or not granted. Do not bypass this decision.';
   return { type: 'control_response', response: { subtype: 'success', request_id, response: allowed
     ? { behavior: 'allow', updatedInput: request.input, toolUseID: request.tool_use_id }
-    : { behavior: 'deny', message: 'Octipus permission was denied or not granted. Do not bypass this decision.' } } };
+    : { behavior: 'deny', message: denial } } };
 }

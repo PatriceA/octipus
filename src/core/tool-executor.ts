@@ -10,6 +10,7 @@ import { messageRepository } from '@/db/repositories/message-repository';
 import { getConfig } from '@/config';
 import { withDispatchAuthorization } from '@/security/dispatch-authorization';
 import { routeApproval } from '@/security/approval-policy';
+import { applyFlowGuard, observeFlow } from '@/security/flow-guard';
 import { getPermissionManager } from '@/security/permissions';
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { DEFAULT_MAX_LENGTH, sanitizeToolOutput } from '@/utils/sanitize';
@@ -643,7 +644,7 @@ export class ToolExecutor {
         typeof tool.permissionAction === 'function'
           ? tool.permissionAction(toolCall.arguments)
           : tool.permissionAction || bareName;
-      const permResult = await permissionManager.check(
+      const storedPermission = await permissionManager.check(
         this.context.userId,
         toolId,
         permAction,
@@ -659,6 +660,19 @@ export class ToolExecutor {
         // gets the same default a read-only manifest action would.
         { defaultLevel: tool.replaySafety === 'read_only' ? 'ALLOW' : undefined },
       );
+      // Information-flow check (security/flow-guard.ts): an egress call in a
+      // session that read secrets, or mixed private data with outsider text,
+      // needs a human even when the stored level says ALLOW.
+      const flowCall = {
+        toolId,
+        action: permAction,
+        args: toolId === 'mcp' && bareName === 'mcp_call_tool'
+          ? (toolCall.arguments.arguments as Record<string, unknown> | undefined) ?? {} : toolCall.arguments,
+      };
+      const permResult = applyFlowGuard(getConfig().agent?.flowGuard, this.context.sessionId, flowCall, storedPermission);
+      if (permResult !== storedPermission) {
+        agentLogger.info({ agentId: this.context.id, tool: toolCall.name, reason: permResult.reason }, 'Flow guard escalated tool call to approval');
+      }
 
       // ONE policy decision, shared with `base-tool.ts` — see
       // `security/approval-policy.ts`. It answers what to do with the stored
@@ -725,6 +739,7 @@ export class ToolExecutor {
             toolName: toolCall.name,
             args: toolCall.arguments,
             toolId,
+            ...(permResult.source === 'flow-guard' ? { reason: permResult.reason } : {}),
           });
 
           const approved = await permissionManager.waitForApproval(requestId, { agentId: this.context.id });
@@ -826,6 +841,7 @@ export class ToolExecutor {
         results.push({ toolCallId: toolCall.id, result, ...(shellFailed ? { error: sanitizeToolOutput(result) } : {}) });
         if (shellFailed) this.counters.toolErrors++;
         this.recordExecuted(toolCall.name);
+        observeFlow(this.context.sessionId, flowCall);
 
         // Emit file change events for file-modifying operations.
         // Prefer the path the tool actually wrote to (its result), not the

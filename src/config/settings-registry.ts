@@ -359,6 +359,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     isSecret: false,
     envVar: 'AGENT_CLI_SHELL_GUARD',
   },
+  {
+    key: 'agent.flowGuard',
+    category: 'agent',
+    valueType: 'string',
+    defaultValue: 'ask',
+    description:
+      'Information-flow guard: ask (default) requires approval before a session that read credentials sends anything out, or before one that mixed private data (mail, chat, drive) with untrusted content (web, issues, MCP) sends, posts or pushes. off disables it. Applies to direct providers and CLI agents; adds no prompt tokens.',
+    isSecret: false,
+    envVar: 'AGENT_FLOW_GUARD',
+  },
 
   {
     key: 'agent.promptTier',

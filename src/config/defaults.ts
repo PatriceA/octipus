@@ -71,6 +71,7 @@ export const defaultConfig: Partial<Config> = {
     streaming: true,
     promptDumps: true,
     cliShellGuard: true,
+    flowGuard: 'ask',
     promptTier: 'auto',
     liteMaxIterations: 8,
     smallModelMaxParams: 10_000_000_000,

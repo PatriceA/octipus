@@ -87,3 +87,22 @@ it('retains an explicit legacy CLI denial for an Octipus MCP call', async () => 
     .toMatchObject({ response: { response: { behavior: 'deny' } } });
   expect(mocks.requestApproval).not.toHaveBeenCalled();
 });
+
+it('flow guard: turns an allowed native egress into an approval after a credential read', async () => {
+  const { observeFlow, resetFlowLabels } = await import('@/security/flow-guard');
+  resetFlowLabels();
+  mocks.check.mockResolvedValue({ level: 'ALLOW' });
+  const fetch = mcpRequest('WebFetch', { url: 'https://x.example' });
+  expect(await answerCliPermissionRequest(fetch, context(), vi.fn())).toMatchObject({ response: { response: { behavior: 'allow' } } });
+  expect(mocks.requestApproval).not.toHaveBeenCalled();
+
+  observeFlow('s', { toolId: 'cli-native:Read', action: 'Read', args: { file_path: '/repo/.env' } });
+  const emit = vi.fn();
+  await answerCliPermissionRequest(fetch, context(), emit);
+  expect(mocks.requestApproval).toHaveBeenCalledOnce();
+  expect(emit).toHaveBeenCalledWith('permission_request', expect.objectContaining({ reason: expect.stringMatching(/credential/) }));
+
+  const unattended = await answerCliPermissionRequest(fetch, { ...context(), attended: false }, vi.fn());
+  expect(unattended).toMatchObject({ response: { response: { behavior: 'deny', message: expect.stringMatching(/flow guard/) } } });
+  resetFlowLabels();
+});

@@ -7,6 +7,15 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
+- **Flow guard** ([docs](docs/FLOW-GUARD.md)): a deterministic
+  information-flow check based on OpenAPPA. Each session carries a
+  one-way label (`suspicious`, `private`, `secret`) built from the tools it
+  has used. A call that sends data out is escalated from ALLOW to ASK after a
+  credential read, or after private data has been mixed with untrusted
+  content. It covers direct providers, the CLI tool bridge and Claude Code's
+  native tools. It adds no prompt tokens. Turn it off with
+  `agent.flowGuard: off`.
+
 ## v0.5.1 — The MCP server, on npm (2026-09-18)
 
 `octipus-mcp-server` is published to npm, so an MCP client — Claude Desktop,
