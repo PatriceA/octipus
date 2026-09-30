@@ -131,6 +131,17 @@ describe('consecutive failures block only the failing tool', () => {
     expect(String(blocked.content)).toMatch(/blocked for this run/);
   });
 
+  test('a server that is down never blocks the MCP dispatcher', async () => {
+    let up = false;
+    const exec = new ToolExecutor(context(), () => {});
+    exec.registerTools([tool('mcp_call_tool', async () => { if (!up) throw new Error('MCP server not connected: editor'); return 'ok'; })]);
+    for (const id of ['1', '2', '3', '4']) await exec.handleToolCalls([call(id, 'mcp_call_tool')]);
+    expect([...exec.getTools().keys()]).toEqual(['mcp_call_tool']);
+    up = true;
+    const [r] = await exec.handleToolCalls([call('5', 'mcp_call_tool')]);
+    expect(String(r.content)).not.toMatch(/blocked/);
+  });
+
   test('a success resets the streak', async () => {
     let fail = true;
     const exec = new ToolExecutor(context(), () => {});

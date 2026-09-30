@@ -17,6 +17,8 @@ import type { AgentEvent, ToolHandler } from './agent-base';
 import type { AgentContext, AgentMessage, ToolCall, ToolResult } from './types';
 
 const MAX_CONSECUTIVE_TOOL_ERRORS = 3;
+/** Errors that describe a server's momentary state (down, restarting, cooling off), never a failure streak. */
+const TRANSIENT_TOOL_ERROR = /MCP server not connected|MCP server circuit open|MCP request timeout|not found or not connected/;
 
 /**
  * Bounded Levenshtein edit distance. Returns early once the running minimum
@@ -942,6 +944,9 @@ export class ToolExecutor {
       const name = nameOf.get(r.toolCallId);
       if (!name || !this.tools.has(name) || this.blockedTools.has(name)) continue;
       if (!r.error || r.result != null) { this.failStreaks.delete(name); continue; }
+      // A server that is down right now is a state, not a broken tool: blocking the dispatcher
+      // (mcp_call_tool) would cut off EVERY server for the rest of the run, even after this one is back.
+      if (TRANSIENT_TOOL_ERROR.test(r.error)) continue;
       const prev = this.failStreaks.get(name);
       const n = prev?.error === r.error ? prev.n + 1 : 1;
       this.failStreaks.set(name, { error: r.error, n });
