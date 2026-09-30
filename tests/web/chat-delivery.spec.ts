@@ -71,10 +71,13 @@ test('stale refresh cannot erase a live answer while activity history is loading
   let hold = false;
   await page.routeWebSocket(/\/ws\?/, ws => { socket = ws; });
   await page.route('**/api/sessions/sess-1/messages**', route => hold ? void held.push(route) : json(route, 200, { messages: [] }));
+  // Before navigation, so the page's refresh timer is created on the fake
+  // clock; installed later, a timer already scheduled on the real clock can
+  // miss the fast-forward and the held refresh never starts.
+  await page.clock.install();
   await page.goto('/chat');
   await selectChatSession(page, 'sess-1');
   await expect.poll(() => Boolean(socket)).toBe(true);
-  await page.clock.install();
   hold = true;
   await page.clock.fastForward(10_000);
   await expect.poll(() => held.length).toBeGreaterThan(0);
