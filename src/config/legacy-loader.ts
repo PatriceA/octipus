@@ -128,6 +128,7 @@ export function loadFromEnvLegacy(): Partial<Config> {
       streaming: true, // no env form: the `agent.streaming` setting owns it
       promptDumps: true, // same: the `agent.promptDumps` setting owns it
       cliShellGuard: process.env.AGENT_CLI_SHELL_GUARD !== 'false',
+      flowGuard: process.env.AGENT_FLOW_GUARD === 'off' ? 'off' : 'ask',
       // The `ORCHESTRATOR_*` names are still read as a fallback: they are set
       // in real .env files, and dropping them would silently reset a tuned
       // install to defaults rather than fail loudly.

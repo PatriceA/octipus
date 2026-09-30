@@ -216,6 +216,12 @@ export const agentConfigSchema = z.object({
   /** Hook-block network calls from managed CLI agents' shells (curl, fetch one-liners); `# octipus-fallback: <reason>` passes. */
   cliShellGuard: z.boolean().default(true),
   /**
+   * Information-flow guard (security/flow-guard.ts): escalate an egress call
+   * to approval when the session read secrets, or mixed private data with
+   * outsider text. Direct providers and CLI agents. 'off' disables it.
+   */
+  flowGuard: z.enum(['ask', 'off']).default('ask'),
+  /**
    * Root-agent prompt tier. 'auto' (default) re-derives it every turn from the
    * current default model's parameter count, so swapping to a smaller model
    * changes the tier with no restart:

@@ -137,6 +137,12 @@ still bypasses that vendor's prompts; it does not authorize an Octipus tool that
 Octipus denied. Prompt instructions tell the CLI not to work around denials, but
 are not an enforcement boundary for arbitrary vendor-native shell actions.
 
+The [flow guard](FLOW-GUARD.md) runs on top of these rules. If a session has
+read credentials, or has mixed private data with untrusted content, it turns an
+allowed egress call (for example `cli-native:WebFetch`, or a network command in
+`cli-native:Bash`) into an approval. It watches Claude's and Codex's tool-use
+streams, so reads that were auto-allowed still count.
+
 When a Claude Code model row sets no permission mode, managed runs use
 `workspace` (`acceptEdits`): edits inside the workspace proceed, and every other
 native tool raises a permission request that the stdio relay routes through

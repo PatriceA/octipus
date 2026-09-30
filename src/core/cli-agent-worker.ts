@@ -27,6 +27,7 @@ import { startCliToolBridge, type BridgeResult } from './cli-tool-bridge';
 import { ToolExecutor } from './tool-executor';
 import { answerCliPermissionRequest } from './cli-permissions';
 import { getPermissionManager } from '@/security/permissions';
+import { observeFlow } from '@/security/flow-guard';
 import { workPlanRepository } from '@/db/repositories/work-plan-repository';
 import { formatWorkPlanContext } from './agent/work-plan-context';
 import { ClassifiedError, FailoverReason, RecoveryAction } from './errors/classification';
@@ -73,6 +74,9 @@ export function isBorrowedProjectDir(
 /** Skill index per (user, role, CLI family): assignments change rarely, and the lookup must not delay a spawn. */
 const SKILL_INDEX_TTL_MS = 60_000;
 const skillIndexCache = new Map<string, { at: number; value?: string; ready: Promise<void> }>();
+
+/** Octipus tools reached over the run-local MCP bridge, as the vendor CLIs name them. */
+const CLI_BRIDGED_TOOL_RE = /^mcp__octipus__|^octipus[_.]|^octipus_run_[a-f0-9]+\./;
 
 export class CLIAgentWorker extends BaseAgentWorker {
   private systemMessages: string[] = [];
@@ -951,6 +955,12 @@ When a task matches one of these skills, load it with get_skill before starting 
             cacheReadTokens: (claude ? 0 : invocationUsage.cacheReadTokens ?? 0) + (stats.cacheRead ?? 0),
             cacheCreationTokens: stats.cacheCreation, available: stats.totalTokens > 0 };
         }
+        // Native tool uses feed the flow label (security/flow-guard.ts); bridged
+        // Octipus tools are observed by ToolExecutor instead.
+        const use = data as { type?: string; toolName?: string; args?: Record<string, unknown> } | null;
+        if (type === 'action' && use?.type === 'cli_tool_use' && use.toolName && !CLI_BRIDGED_TOOL_RE.test(use.toolName)) {
+          observeFlow(this.context.sessionId, { toolId: `cli-native:${use.toolName}`, action: use.toolName, args: use.args });
+        }
         this.emit(type, data);
       },
       {
@@ -962,7 +972,7 @@ When a task matches one of these skills, load it with get_skill before starting 
             await getAgentService().sendStatusUpdate(text, this.context, 'commentary', undefined, generation);
           }).catch(err => agentLogger.warn({ err, agentId: this.context.id }, 'CLI commentary delivery failed'));
         },
-        isBridgedTool: name => /^mcp__octipus__|^octipus[_.]|^octipus_run_[a-f0-9]+\./.test(name),
+        isBridgedTool: name => CLI_BRIDGED_TOOL_RE.test(name),
         onTurn: () => {
           // Iteration = model turns (C15). Tool-call count is tracked
           // separately by the UI (toolCalls.length); the server owns turns.
