@@ -5,6 +5,7 @@
  * that then works it is the dispatcher's ordinary one, in that session.
  */
 import type { TakeRequest } from '@/core/channels/taken-tasks';
+import { quietText } from '@/core/channels/group-context';
 import type { UnifiedMessage } from '@/core/types';
 import type { GroupChannel } from '@/db/schema/group-channels';
 import { sessionRepository } from '@/db/repositories/session-repository';
@@ -17,7 +18,7 @@ export interface TakenWork {
   title: string;
   /** Whose message the request is, when it is not the requester's own words. */
   author?: string;
-  /** That message's text (only with `author`). */
+  /** The taken message's text, when it is not what the member typed (see `TakeRequest.quoted`). */
   text?: string;
 }
 
@@ -30,6 +31,7 @@ export function takeRequestOf(value: unknown): TakeRequest | undefined {
     text: v.text,
     messageKey: v.messageKey,
     author: typeof v.author === 'string' && v.author ? v.author : undefined,
+    quoted: v.quoted === true || undefined,
     url: typeof v.url === 'string' && /^https:\/\//.test(v.url) ? v.url : undefined,
   };
 }
@@ -58,7 +60,7 @@ export async function startTakenWork(input: {
     request,
   });
   const umi = getUMI();
-  const title = task.title.replaceAll('*', '');
+  const title = quietText(task.title);
   if (!created) {
     const state = task.status === 'done' ? 'done' : task.status === 'archived' ? 'archived' : 'in progress';
     await umi.sendPrivate(message.channelType, message.channelId, message.userId, {
@@ -68,12 +70,13 @@ export async function startTakenWork(input: {
     return null;
   }
   await umi.send(message.channelType, message.channelId, {
-    content: `On it — added *${title}* to ${name}'s tasks.`,
+    content: `On it — added *${title}* to ${quietText(name)}'s tasks.`,
     threadId: message.threadId,
   });
   return {
     taskId: task.id,
     title: task.title,
-    ...(request.author ? { author: request.author, text: request.text } : {}),
+    ...(request.author ? { author: request.author } : {}),
+    ...(request.author || request.quoted ? { text: request.text } : {}),
   };
 }

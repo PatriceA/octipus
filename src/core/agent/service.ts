@@ -324,7 +324,7 @@ export class AgentService {
       // message's metadata, not as its text), on every turn in a group thread:
       // monitors, wake-ups and plan runs too, whose replies land in the thread.
       // Work taken on in this thread (docs/plans/group-chat-bot.md §5): the
-      // open tasks and their newest board comments ride along, and the root
+      // open tasks and the requester's newest board notes ride along, and the root
       // agent gets `complete_taken_task` for them.
       const takenTasks = sharedAudience ? await loadTakenTasks(userId, resolvedSessionId) : { tasks: [], block: '' };
       const groupContextBlock = sharedAudience

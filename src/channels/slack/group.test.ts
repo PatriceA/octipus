@@ -209,6 +209,13 @@ describe('taking work on', () => {
     expect(parseTake('take a look at the logs')).toBeNull();
     expect(parseTake('takeaway from the meeting?')).toBeNull();
     expect(parseTake('take thisx')).toBeNull();
+    // Ordinary phrasing that starts with "take it" is not a command.
+    expect(parseTake('take it easy on the wording, but review this')).toBeNull();
+    expect(parseTake('take this into account: we ship Friday')).toBeNull();
+    expect(parseTake('take this on - write the summary')).toBe('write the summary');
+    expect(parseTake('take this, please draft it')).toBe('please draft it');
+    expect(parseTake('take this\nthe release notes')).toBe('the release notes');
+    expect(parseTake('take this on.')).toBe('');
   });
 
   test("take this — <what>: the member's own words are the request", async () => {
@@ -261,7 +268,7 @@ describe('the 🐙 reaction', () => {
     expect(d.threadTs).toBe('95.5');
     expect(d.message.ts).toBe('95.5'); // progress reactions go on the taken message
     expect(d.take).toEqual({
-      text: 'The staging DB is slow again', author: 'Anna Schmidt', messageKey: 'C1:95.5',
+      text: 'The staging DB is slow again', author: 'Anna Schmidt', quoted: true, messageKey: 'C1:95.5',
       url: 'https://x.slack.com/archives/C1/p955',
     });
     // The taken message is the request, not part of the transcript.
@@ -272,7 +279,10 @@ describe('the 🐙 reaction', () => {
     expect(await handleSlackGroupReaction(react({ item: { type: 'message', channel: 'C1', ts: '96.1' } }), ctx.deps)).toBe('taken');
     expect(ctx.calls.dispatched[0]!.threadTs).toBe('90.0');
     await handleSlackGroupReaction(react({ item: { type: 'message', channel: 'C1', ts: '97.0' } }), ctx.deps);
+    // Not attributed, but still passed on: the turn's own text is only "Take this on."
+    expect(ctx.calls.dispatched[1]!.take).toMatchObject({ quoted: true });
     expect(ctx.calls.dispatched[1]!.take?.author).toBeUndefined();
+    expect(ctx.calls.dispatched[1]!.take?.text).toBeTruthy();
   });
 
   test("other reactions, the bot's own, files and unenrolled channels are ignored, silently", async () => {
@@ -305,6 +315,16 @@ describe("the channel's spend budget", () => {
     expect(ctx.calls.thread).toHaveLength(1);
     expect(ctx.calls.thread[0]!.text).toContain('spend budget is used up until 2026-11-01 00:00 UTC');
     expect(ctx.calls.dispatched).toEqual([]);
+  });
+
+  test('used up: a bare yes/no in a thread still goes through, to answer a prompt raised before', async () => {
+    const ctx = makeDeps({ budgetPause: vi.fn(async () => ({ resetsAt: '2026-11-01T00:00:00.000Z' })) });
+    expect(await handleSlackGroupMessage(msg({ text: `<@${BOT}> yes`, thread_ts: '90.0' }), ctx.deps)).toBe('dispatched');
+    expect(ctx.calls.dispatched[0]!.text).toBe('yes');
+    // Talk in the thread, or a yes at the top level, is still held back.
+    expect(await handleSlackGroupMessage(msg({ text: `<@${BOT}> yes please`, thread_ts: '90.0', ts: '100.2' }), ctx.deps)).toBe('paused');
+    expect(await handleSlackGroupMessage(msg({ text: `<@${BOT}> yes`, ts: '100.3' }), ctx.deps)).toBe('paused');
+    expect(ctx.calls.dispatched).toHaveLength(1);
   });
 });
 

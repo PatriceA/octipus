@@ -17,6 +17,7 @@
  *
  * Platform calls are injected so the rules can be tested without Slack.
  */
+import { bareReply } from '@/core/channels/group-context';
 import type { GroupChannel } from '@/db/schema/group-channels';
 import type { JoinResult, LeaveResult } from '@/channels/group-channels';
 import type { TakeRequest } from '@/core/channels/taken-tasks';
@@ -111,10 +112,12 @@ export const TAKE_REACTION_TEXT = 'Take this on.';
 /**
  * `take this — <what>`, `take it: <what>`, `take this on`, after the bot
  * mention is removed: what follows (possibly empty), or null when the message
- * is not a take command. "take a look at …" is an ordinary request.
+ * is not a take command. The words must be followed by the end, a line break
+ * or a separator (`—`, `:`, …), so "take a look at …" and "take it easy on
+ * the wording" stay ordinary requests.
  */
 export function parseTake(text: string): string | null {
-  const m = /^take\s+(?:this|it)(?:\s+on)?(?=$|[\s:,.;!—–-])([\s\S]*)$/i.exec(text.trim());
+  const m = /^take\s+(?:this|it)(?:\s+on)?[.!]?(?:$|[ \t]*(?:\r?\n|[:—–]|\s-+\s|,(?=\s*please\b))([\s\S]*)$)/i.exec(text.trim());
   if (!m) return null;
   return (m[1] ?? '').replace(/^[\s:,.;!—–-]+/, '').trim();
 }
@@ -198,7 +201,9 @@ export async function handleSlackGroupMessage(msg: SlackGroupMessage, deps: Slac
     return 'hint';
   }
 
-  if (await budgetPaused(group, msg.channel, threadTs, deps)) return 'paused';
+  // A bare yes/no may answer a prompt raised before the budget ran out, so it
+  // still goes through; a new turn it would start is refused by the budget.
+  if (!(msg.thread_ts && bareReply(text)) && await budgetPaused(group, msg.channel, threadTs, deps)) return 'paused';
 
   if (!text && !msg.files?.length) {
     await deps.postEphemeral(msg.channel, slackUser, HINTS.emptyMention, msg.thread_ts);
@@ -221,6 +226,7 @@ export async function handleSlackGroupMessage(msg: SlackGroupMessage, deps: Slac
       take = {
         text: root.text,
         author: root.user === slackUser ? undefined : await authorOf(root, deps),
+        quoted: true,
         messageKey: `${msg.channel}:${msg.thread_ts}`,
         url: await deps.permalink(msg.channel, msg.thread_ts),
       };
@@ -283,6 +289,7 @@ export async function handleSlackGroupReaction(ev: SlackReaction, deps: SlackGro
   const take: TakeRequest = {
     text: taken.text,
     author: taken.user === slackUser ? undefined : await authorOf(taken, deps),
+    quoted: true,
     messageKey: `${channel}:${ts}`,
     url: await deps.permalink(channel, ts),
   };

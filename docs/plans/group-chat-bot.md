@@ -258,9 +258,11 @@ Either one, from a linked member:
    in that thread uses, so every §3/§4 rule holds: the turn runs as the
    member, private reads ask, prompts go to the member in the thread,
    memories stay out, and the reply is posted in the thread. While the task
-   is open, every turn in that thread sees it, with its newest board comments
-   (so a note the member leaves on the board reaches the work without being
-   posted in the channel).
+   is open, every turn in that thread sees it, with the member's newest board
+   comments (so a note the member leaves on the board reaches the work
+   without being posted in the channel). Titles and notes are fenced like the
+   transcript and marked private; agents' comments are left out, and the
+   tool's description lists task ids only.
 4. **Finishes it:** while the thread has an open task, the root agent has one
    more tool, `complete_taken_task(taskId, result)`. It closes that task — and
    only a task taken in this thread — with the result as a board comment. It
@@ -390,7 +392,7 @@ Built:
   → a task on the member's board, linked to their thread session and worked
   there (`src/core/channels/taken-tasks.ts`, `src/channels/take-work.ts`);
   `complete_taken_task` for the root agent while the thread has open tasks.
-- Task → thread: open tasks and their newest board comments reach every turn
+- Task → thread: open tasks and the member's newest board comments reach every turn
   in the thread (and are dropped from replays, like transcripts); closing a
   task by any route posts one line there (`onTaskClosed`,
   `src/channels/taken-task-notices.ts`).

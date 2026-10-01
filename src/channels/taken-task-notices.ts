@@ -5,7 +5,7 @@
  * (docs/plans/group-chat-bot.md §5). Nothing is posted once the channel's
  * enrolment is removed or paused, as for every other message there.
  */
-import { flattenLine } from '@/core/channels/group-context';
+import { quietText } from '@/core/channels/group-context';
 import { onTaskClosed, type TaskClosedEvent } from '@/core/tasks/wakeups';
 import type { ChannelType } from '@/core/types';
 import { isUuid } from '@/db/repositories/scoped';
@@ -21,11 +21,6 @@ export function startTakenTaskNotices(): void {
   stopListening = onTaskClosed((event) => announceTakenTaskClosed(event));
 }
 
-/** A title from members' text, made safe to repeat: no broadcast mentions, no stray bold markers. */
-function quiet(title: string): string {
-  return flattenLine(title).replace(/<!(channel|here|everyone)[^>]*>/gi, '@$1').replaceAll('*', '');
-}
-
 /** Exported for tests; `startTakenTaskNotices` calls it for every close. */
 export async function announceTakenTaskClosed(event: TaskClosedEvent): Promise<void> {
   const { task, cause } = event;
@@ -39,7 +34,7 @@ export async function announceTakenTaskClosed(event: TaskClosedEvent): Promise<v
   const group = await findGroupChannel(session.channelType, session.channelId);
   if (group?.id !== session.groupChannelId || !(await isGroupChannelActive(group))) return;
 
-  const title = quiet(task.title);
+  const title = quietText(task.title);
   const content = cause === 'deleted' ? `Removed from the board: *${title}*.`
     : task.status === 'done' ? `✅ Done: *${title}*`
       : `Archived: *${title}*. Nobody is working on it now.`;

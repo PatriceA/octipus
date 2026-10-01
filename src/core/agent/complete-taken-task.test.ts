@@ -26,9 +26,10 @@ describe('complete_taken_task', () => {
     expect(names(createMetaTools(service, { takenTasks: open, lite: true }))).toContain('complete_taken_task');
   });
 
-  test('names the open tasks, and closes one through completeTakenTask for this session', async () => {
+  test('lists the open task ids (no member text in the schema), and closes one through completeTakenTask for this session', async () => {
     const tool = createMetaTools(service, { takenTasks: open }).find((t) => t.name === 'complete_taken_task')!;
-    expect(tool.description).toContain(`task-1 ("Draft the 'notes'")`);
+    expect(tool.description).toContain('Open task ids: task-1.');
+    expect(tool.description).not.toContain('Draft');
     fx.complete.mockResolvedValue({ ok: true, title: 'Draft the notes' });
     const done = await tool.execute({ taskId: 'task-1', result: 'Posted the draft.' }, context);
     expect(fx.complete).toHaveBeenCalledWith({ userId: 'u-anna', sessionId: 'thread-session', taskId: 'task-1', result: 'Posted the draft.', agentId: 'agent-1' });

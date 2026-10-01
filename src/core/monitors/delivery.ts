@@ -27,10 +27,9 @@ export async function deliverMonitorResponse(row: Monitor, result: TurnResult): 
       let content = result.response;
       const limit = result.metadata?.limit;
       if (limit) {
+        // Named neutrally: the Octipus account name is not what the channel knows them by.
         const { sharedRefusalText } = await import('@/core/errors/limit-refusal');
-        const { userRepository } = await import('@/db/repositories/user-repository');
-        const name = (await userRepository.findById(row.userId))?.username ?? 'this member';
-        content = sharedRefusalText(limit, name) ?? content;
+        content = sharedRefusalText(limit, 'the member who set this up') ?? content;
       }
       const { getUMI } = await import('@/channels/interface');
       await getUMI().send(session.channelType as ChannelType, session.channelId, {

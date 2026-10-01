@@ -642,13 +642,15 @@ export function createMetaTools(
  * those (`completeTakenTask` re-checks); the tasks tool's general write stays
  * behind its ASK.
  */
-export function createCompleteTakenTaskTool(open: ReadonlyArray<{ id: string; title: string }>): ToolHandler {
+export function createCompleteTakenTaskTool(open: ReadonlyArray<{ id: string }>): ToolHandler {
   return {
     name: 'complete_taken_task',
     description:
       "Mark a task you took on in this channel thread as done, with a short result for the requester's board. "
       + 'Call it only when the requested work is complete, not while you still need something from the requester. '
-      + `Open tasks: ${open.map((t) => `${t.id} ("${t.title.replaceAll('"', "'")}")`).join('; ')}.`,
+      // Ids only: titles come from members' messages, which must not reach
+      // the tool schema unfenced (the turn context lists them, fenced).
+      + `Open task ids: ${open.map((t) => t.id).join(', ')}.`,
     parameters: {
       type: 'object',
       properties: {

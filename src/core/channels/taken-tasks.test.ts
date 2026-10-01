@@ -100,16 +100,27 @@ describe('finishing taken work', () => {
     }
   });
 
-  test('the turn context lists open tasks with their newest board comments', async () => {
+  test("the turn context lists open tasks and the requester's newest board notes, fenced", async () => {
     const { task } = await take(annaId, threadA, 'draft the notes');
     const { scopedRepos } = await import('@/db/repositories/scoped');
     const { backgroundUserPrincipal } = await import('@/core/tasks/sourced');
-    await scopedRepos(backgroundUserPrincipal(annaId)).tasks.addComment(task.id, { authorKind: 'user', authorRef: annaId, body: 'use the milestone list' });
-    const block = await tt.takenTasksContext(await tt.openTakenTasks(annaId, threadA));
+    const repo = scopedRepos(backgroundUserPrincipal(annaId)).tasks;
+    await repo.addComment(task.id, { authorKind: 'user', authorRef: annaId, body: 'use the milestone list' });
+    await repo.addComment(task.id, { authorKind: 'agent', authorRef: 'mail-agent', body: 'found the severance figures' });
+    const block = await tt.takenTasksContext(await tt.openTakenTasks(annaId, threadA), 'abc123');
     expect(block).toContain(task.id);
     expect(block).toContain('"Draft the notes" (in progress)');
-    expect(block).toContain('board comment by the requester');
+    expect(block).toContain("requester's board note");
     expect(block).toContain('use the milestone list');
+    expect(block).toContain('do not quote them in the channel');
+    // Agents' comments may carry anything their runs read: left out.
+    expect(block).not.toContain('severance');
+    // Titles and notes sit between the tagged markers.
+    const start = block.indexOf('--- TAKEN TASKS abc123 ---');
+    const end = block.indexOf('--- END TAKEN TASKS abc123 ---');
+    expect(start).toBeGreaterThan(-1);
+    expect(block.indexOf('Draft the notes')).toBeGreaterThan(start);
+    expect(block.indexOf('use the milestone list')).toBeLessThan(end);
     expect(block).toContain('complete_taken_task');
     expect(await tt.takenTasksContext([])).toBe('');
   });

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { ChannelMessage } from '@/core/channels/messages';
-import { bareReply, groupTurnContext, omitGroupTranscripts, renderGroupContext } from './group-context';
+import { bareReply, groupTurnContext, omitGroupTranscripts, quietText, renderGroupContext } from './group-context';
 
 const m = (id: string, author: string, text: string, minute: number, authorId?: string): ChannelMessage => ({
   id, conversationId: 'C1', author, text, authorId,
@@ -134,6 +134,21 @@ describe('taking work on (phase 2)', () => {
     expect(ctx).toContain('member "Anna" asked you to take this on: it is task t1 "Draft the notes" on their board now');
     expect(ctx).toContain('Their message below is the request.');
     expect(ctx).not.toContain('TAKEN MESSAGE');
+  });
+
+  test("the requester's own earlier message (a 🐙 on it) reaches the turn, fenced", () => {
+    const ctx = groupTurnContext({
+      requester: 'Anna', fenceTag: 'abc123',
+      take: { taskId: 't3', title: 'Staging', text: 'Staging is slow.\nPlease check the DB and the cache.' },
+    });
+    expect(ctx).toContain('member "Anna" asked you to take on their own message below');
+    expect(ctx).toContain('--- TAKEN MESSAGE abc123 (by member "Anna") ---');
+    expect(ctx).toContain('Staging is slow. ⏎ Please check the DB and the cache.');
+    expect(ctx).not.toContain('Their message below is the request.');
+  });
+
+  test('quietText: mentions become plain text and nobody is pinged', () => {
+    expect(quietText('<!here> *ship* <@U1> <!subteam^S9|@devs> <!channel|channel>')).toBe('@here ship @U1 @devs @channel');
   });
 
   test("someone else's message is fenced and attributed, and cannot close its fence", () => {

@@ -73,6 +73,21 @@ describe('startTakenWork', () => {
     expect(taken).toMatchObject({ author: 'Bob', text: 'fix it' });
   });
 
+  test("the member's own earlier message (🐙, or take this in its thread) travels too, unattributed", async () => {
+    fx.take.mockResolvedValue({ task: task(), created: true });
+    const taken = await startTakenWork({ message, sessionId: SESSION, group, request: { text: 'line one\nline two', quoted: true, messageKey: 'C1:90.0' } });
+    expect(taken).toEqual({ taskId: 't1', title: 'Draft the *notes*', text: 'line one\nline two' });
+    expect(takeRequestOf({ text: 'x', messageKey: 'C1:1', quoted: true })).toEqual({ text: 'x', messageKey: 'C1:1', quoted: true });
+  });
+
+  test('the announcement pings nobody, whatever the title holds', async () => {
+    fx.take.mockResolvedValue({ task: task({ title: '<!channel> deploy is broken, <@U123> <!subteam^S1|@oncall>' }), created: true });
+    await startTakenWork({ message, sessionId: SESSION, group, request: { text: 'x', messageKey: 'C1:2' } });
+    const content = (send.mock.calls[0]![2] as { content: string }).content;
+    expect(content).not.toMatch(/<[@!]/);
+    expect(content).toContain('@channel deploy is broken, @U123 @oncall');
+  });
+
   test('taken already: told privately, no turn', async () => {
     fx.take.mockResolvedValue({ task: task({ status: 'done' }), created: false });
     expect(await startTakenWork({ message, sessionId: SESSION, group, request: { text: 'x', messageKey: 'C1:1' } })).toBeNull();

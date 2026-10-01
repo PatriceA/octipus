@@ -222,15 +222,20 @@ Once enrolled, the bot:
   becomes a task on the member's own board, the bot says so in the thread
   ("On it — added *Draft the release notes* to Anna's tasks") and starts on it
   there, as the member, under every rule above. While the task is open, each
-  turn in that thread sees it and its newest board comments, so a note added
-  on the board reaches the work without being posted in the channel. The bot
+  turn in that thread sees it and the member's own newest board comments, so
+  a note added on the board reaches the work without being posted in the
+  channel (the turn is told not to quote them; agents' comments are left
+  out). `take this` must be followed by a separator (`—`, `:`, a line break)
+  or nothing, so "take it easy on the wording" stays an ordinary request. The bot
   closes it when the work is done; closing it anywhere posts one line in the
   thread. Taking the same message twice finds the first task. See
   [TASK-BOARD.md](TASK-BOARD.md#tasks-taken-on-in-a-group-channel);
 - **goes quiet when the channel's spend budget is used up** — one notice a day
   in the channel and no turns, until the period resets or an admin raises it
   ([SPEND-BUDGETS.md](SPEND-BUDGETS.md)). A refusal for a member's own budget
-  or quota is posted in the thread without its figures;
+  or quota is posted in the thread without its figures. A bare `yes` / `no`
+  in a thread still goes through, so a prompt raised before the budget ran
+  out can be answered;
 - **keeps document results in the thread** when a member shares a file with it;
 - **runs only session controls** (`/stop`, `/status`, `/clear`, `/cancel`,
   `/help`) in a channel — other commands answer with the member's account
