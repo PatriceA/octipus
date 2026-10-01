@@ -72,8 +72,25 @@ counts. Item 3's fix (a shared session) must keep that property explicitly.
 A channel becomes a **group channel** only after two steps:
 
 1. Someone adds the bot to the channel in the chat platform.
-2. An Octipus admin (or a workspace owner, see open questions) enrols it under
-   **Admin → Group channels**, picking the channel from those the bot can see.
+2. A **workspace owner** enrols it into one of their workspaces under
+   **Workspace settings → Group channels**, picking the channel from those the
+   bot can see.
+
+Workspaces belong to exactly one user today (`workspaces.user_id`,
+`src/db/schema/organizations.ts`), so "workspace owner" means the user who owns
+the workspace the channel is enrolled into. Enrolment rules:
+
+- The enrolling user must have a linked identity on that platform **and be a
+  member of the channel** (checked with `conversations.members` on Slack, the
+  roster on Teams, `getChatMember` on Telegram). This stops anyone from
+  attaching their workspace to a channel they are not in.
+- A channel can be enrolled into one workspace at a time; enrolling a channel
+  that is already taken is refused with the current owner's display name.
+- Instance admins see every enrolment under **Admin → Group channels** and can
+  revoke or transfer one, but do not need to approve it.
+- When the enrolment is created the bot posts one message in the channel:
+  "Octipus joined for *&lt;owner&gt;*'s workspace *&lt;name&gt;* — mention me to
+  ask something." Members know whose workspace answers them.
 
 Until enrolled, the bot stays **silent** in that channel — no replies, no link
 prompts, no reactions. DMs keep today's behaviour.
@@ -88,7 +105,7 @@ group_channels
   channel_id       text          -- platform conversation id
   label            text
   workspace_id     uuid          -- whose knowledge, tasks and roles apply
-  owner_user_id    uuid          -- service owner; budget and fallback identity
+  owner_user_id    uuid          -- the workspace's owner; owns sessions, pays
   mode             text          -- mention | listen | proactive
   guest_access     text          -- none | answer   (unlinked members)
   default_role     text null     -- role used for "take this"
@@ -120,8 +137,8 @@ triggering message's own `ts` (Slack); the reply chain for Teams and Telegram.
 
 ### 3. Shared context
 
-**Session ownership.** A group channel thread maps to one session owned by the
-channel, not by a member:
+**Session ownership.** A group channel thread maps to one shared session,
+owned by the **workspace owner who enrolled the channel**:
 
 - session key `group-<groupChannelId>-<threadId>` (top-level mentions start a
   new thread, hence a new session);
@@ -129,6 +146,29 @@ channel, not by a member:
 - a new `sessions.group_channel_id` column marks it as shared;
 - `resolveSession` gains a group path that skips the per-user lookup and checks
   the sender is allowed in that channel instead of matching `user_id`.
+
+Why the workspace owner and not a dedicated service user: everything a group
+turn needs — knowledge, tasks, roles, skills, budgets — is already scoped to a
+user and that user's workspaces. Owning the session with the workspace owner
+means the existing scoping just works. A service user would need its own user
+row, its own copy of (or a new sharing path to) the workspace's knowledge and
+roles, and its own permission policy, which is the "shared workspaces" feature
+this plan does not build. If shared workspaces arrive later, ownership moves to
+the workspace and `owner_user_id` becomes informational.
+
+Consequences, and how they are handled:
+
+- **Group threads show up in the owner's session list.** They are listed in a
+  separate *Group channels* section (filtered on `group_channel_id`), not mixed
+  into personal chats, and are read-only from the web in phase 1.
+- **The owner pays.** Spend is attributed to the owner, capped per channel by
+  the `group_channel` budget (§8).
+- **The owner's personal data must not leak.** The session belongs to the owner
+  but turns run as the acting member (§4); the owner's personal memories and
+  persona facts are not loaded, same as for everyone else.
+- **The owner leaves or is deactivated.** The enrolment is paused (bot silent,
+  one notice in the channel) until an admin transfers it to another user, who
+  must meet the same membership rule. Sessions and transcript move with it.
 
 **Speaker attribution.** Each message entering a group session is stored and
 sent to the model as `Anna Schmidt: can we ship on Friday?`. The display name
@@ -255,8 +295,10 @@ sessions need the `group_channel_id` attributed (via the session).
 
 ### Phase 1 — Slack, mention mode (fixes today's problems)
 
-- `group_channels` table, admin API and Admin page; enrolment also registers a
-  notification destination.
+- `group_channels` table; enrolment API for workspace owners with the
+  channel-membership check; workspace settings page; admin list with revoke /
+  transfer; enrolment also registers a notification destination and posts the
+  join message.
 - Slack: bot user id on connect; `addressed` detection; silent in unenrolled
   channels; no link prompts in channels (ephemeral hint, rate-limited).
 - Always reply in thread.
@@ -277,6 +319,9 @@ Acceptance:
 - An unlinked member's mention with `guest_access=none` produces no channel
   message.
 - An unenrolled channel produces no output at all.
+- A user who is not a member of the channel cannot enrol it; a channel already
+  enrolled elsewhere cannot be enrolled again.
+- Deactivating the owner pauses the channel; an admin transfer resumes it.
 
 ### Phase 2 — Taking up work
 
@@ -298,14 +343,16 @@ Acceptance:
 
 ## Open questions
 
-1. **Who may enrol a channel** — instance admins only, or workspace owners for
-   their own workspace? Proposal: admins in phase 1, workspace owners later.
-2. **Owner identity** — should the session owner be a real user or a dedicated
-   service user per workspace? A service user avoids a group's history showing
-   up in one person's session list, but needs a user row and permissions of its
-   own.
-3. **Visibility in the web UI** — should group sessions appear in members'
-   session pickers (read-only) so the thread can be continued from the web?
-4. **Transcript retention** — default cap and age for
+1. **Visibility in the web UI** — should group sessions also appear in other
+   members' session pickers (read-only)? Phase 1 shows them to the owner only.
+2. **Transcript retention** — default cap and age for
    `group_channel_messages`, and whether it is indexed into workspace knowledge.
-5. **Guest default** — `none` (safest) or `answer`? Proposal: `none`.
+3. **Guest default** — `none` (safest) or `answer`? Proposal: `none`.
+
+## Decisions
+
+- **2026-10-01 — Who enrols:** workspace owners enrol channels into their own
+  workspaces, provided they are members of the channel; admins can revoke and
+  transfer.
+- **2026-10-01 — Who owns group sessions:** the workspace owner who enrolled
+  the channel, not a service user (see §3 for the reasoning and consequences).
