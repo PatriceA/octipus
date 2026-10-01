@@ -206,9 +206,11 @@ Rules that must hold:
   input guard: its flags drive the output guard, which would let one member
   silence the bot for the whole thread. A prompt only becomes
   answerable once it has been posted. Pipeline approvals are posted the same
-  way (details privately); Slack group messages carry their `ts` as the
-  platform message id, without which the dispatcher posted no approval or
-  progress messages to Slack at all.
+  way (details privately), by a listener keyed by the session
+  (`src/channels/approval-prompts.ts`), so approvals raised by monitors and
+  other background runs in a thread are posted there too. Slack group
+  messages carry their `ts` as the platform message id, which the reactions
+  need.
 - **The request stays as typed.** The group framing (notice, transcript,
   attribution) is handed to `handleMessage` separately (`GroupTurn`) and
   delivered as per-turn context (`groupTurnContext`, stored in the message's
@@ -217,7 +219,8 @@ Rules that must hold:
   member's own text. Every turn in a group-thread session —
   monitors and wake-ups included — gets the shared-audience notice. Pipeline
   approvals, like permission prompts, are answered in a thread only by a bare
-  yes/no (`bareReply`) and only for an approval waiting in that session.
+  yes/no (`bareReply`) and only for an approval posted in that thread or
+  waiting in that session.
 - **No personal context in shared answers.** Group turns neither load nor
   extract the requester's long-term memories, and session learning skips group
   threads (other members' words must not become the requester's facts). The
@@ -365,22 +368,25 @@ Acceptance (each has a test):
   quiet hours; Teams RSC and Telegram privacy-mode docs.
 - ✅ / ❌ feedback recorded for learning.
 
-## Known limitations (after phase 1 review)
+## Fixed after the phase 1 review
 
-Found in review and left for a follow-up, because they are not specific to
-group channels:
+The review found two problems that were not specific to group channels:
 
-- **Approval prompts ride on per-message subscriptions.** The dispatcher
-  posts `approval_required` (and progress) only for a turn started by an
-  inbound message that has a platform message id. Approvals raised by
-  background runs (monitors, wake-ups) are not posted in any chat, and Teams
-  messages carry no message id, so Teams never shows them. A session-keyed
-  announcer, like the permission-request forwarder, would fix both and
-  replace the `announcedApprovals` de-duplication.
-- **"yes" in a DM answers the user's single pending approval, wherever it
-  was raised** (the approval manager's existing rule). For an approval raised
-  by a background run in a group thread that is the only chat route, so it is
-  kept; a "yes" meant for something else can release it.
+- **Approvals rode on per-message subscriptions.** The dispatcher posted
+  `approval_required` only for a turn started by an inbound message with a
+  platform message id, so approvals raised by background runs (monitors,
+  resumed pipelines) reached no chat, and Teams, whose messages carry no
+  message id, never showed them (nor progress messages). Approvals are now
+  posted by one listener keyed by the session
+  (`src/channels/approval-prompts.ts`), like permission prompts: in a group
+  thread by the rules of §4, in any other chat while the user is talking there
+  or when the bot may message it unattended (`resolveTarget`). Progress no
+  longer needs a message id; only reactions do.
+- **"yes" in any chat answered the user's single pending approval, wherever it
+  was raised.** A reply now answers only an approval posted in that chat (and
+  thread), or one waiting in the same session; everything else is answered in
+  its own chat or the web app. An option's exact label chooses it, as the web
+  app's buttons do (1:1 chats; a thread takes only a bare yes/no).
 
 ## Open questions
 

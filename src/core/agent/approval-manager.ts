@@ -20,6 +20,14 @@ export const ORPHANED_APPROVAL_MESSAGE =
 export const TIMED_OUT_APPROVAL_MESSAGE =
   'This approval request has expired: nobody answered in time, so the agent carried on without it.';
 
+/** A typed answer to an approval ("yes", "go ahead", "no", "stop"…), or null. */
+export function approvalAnswer(message: string): 'approve' | 'deny' | null {
+  const normalized = message.trim().toLowerCase();
+  if (/^(approve|yes|go\s*ahead|proceed|confirm|accept|lgtm|ship\s*it)\b/i.test(normalized)) return 'approve';
+  if (/^(deny|reject|no|stop|cancel|abort|don'?t)\b/i.test(normalized)) return 'deny';
+  return null;
+}
+
 export type ApprovalResolveOutcome =
   | { status: 'resolved' }
   /** Unknown id, or one owned by someone else — deliberately indistinguishable. */
@@ -252,19 +260,9 @@ export class ApprovalManager {
     const approvals = this.getPendingApprovals(forUserId);
     if (approvals.length !== 1) return false;
 
-    const approval = approvals[0];
-    const normalized = message.trim().toLowerCase();
-
-    const approvePatterns = /^(approve|yes|go\s*ahead|proceed|confirm|accept|lgtm|ship\s*it)\b/i;
-    const denyPatterns = /^(deny|reject|no|stop|cancel|abort|don'?t)\b/i;
-
-    if (approvePatterns.test(normalized)) {
-      return this.resolveApproval(approval.id, true, message, { forUserId, resolvedBy: forUserId });
-    } else if (denyPatterns.test(normalized)) {
-      return this.resolveApproval(approval.id, false, message, { forUserId, resolvedBy: forUserId });
-    }
-
-    return false;
+    const answer = approvalAnswer(message);
+    if (!answer) return false;
+    return this.resolveApproval(approvals[0].id, answer === 'approve', message, { forUserId, resolvedBy: forUserId });
   }
 
   /**

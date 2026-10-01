@@ -659,17 +659,14 @@ export class AgentService {
       // Every turn now runs the one loop below, which holds real tools and
       // delegates only when it needs a specialist.
 
-      // A group-thread session may only answer an approval waiting in this
-      // same session, and only with a bare yes/no.
-      // In a group thread, only a bare yes/no, and only for an approval
-      // waiting in this same session. (From a DM or the web app the user's
-      // single pending approval can be answered as before — including one
-      // raised by a background run in a group thread, which has no other chat
-      // route.)
+      // A typed reply answers only an approval waiting in this same session
+      // (in a group thread, only a bare yes/no). An approval raised anywhere
+      // else is posted in its own session's chat and answered there
+      // (src/channels/approval-prompts.ts) or in the web app: a "yes" meant
+      // for one thing must not release another.
       const approvalReply = approvalReplyFor(message, sharedAudience);
-      const mayAnswerHere = !sharedAudience
-        || this.approvalManager.getPendingApprovals(userId)[0]?.sessionId === resolvedSessionId;
-      if (classification.type === 'approval' && approvalReply && mayAnswerHere) {
+      const waitingHere = this.approvalManager.getPendingApprovals(userId)[0]?.sessionId === resolvedSessionId;
+      if (classification.type === 'approval' && approvalReply && waitingHere) {
         const resolved = await this.approvalManager.tryResolveFromMessage(approvalReply, userId);
         if (resolved) {
           return { response: 'Got it, continuing...', sessionId: resolvedSessionId, classification };

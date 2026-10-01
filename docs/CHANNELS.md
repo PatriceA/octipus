@@ -450,9 +450,21 @@ WHATSAPP_BUSINESS_ACCOUNT_ID=         # Business Account ID (optional)
 - Ensure the web account is logged in before entering the code
 - Check that the database is reachable (link codes live in the `kv_store` table)
 
-### Permission requests in channels
+### Permission requests and approvals in channels
 
 When an agent needs permission (e.g., to run a shell command), the request is forwarded to the channel where the conversation originated. Reply `yes` or `no` directly in the channel to approve or deny.
+
+Approvals — a pipeline waiting for sign-off before its next stage, a QA
+escalation, or an agent's `request_approval` — are posted in the chat of the
+conversation that raised them, also when nobody is chatting at the time (a
+monitor's wake-up, a resumed pipeline) and on Teams. Reply `yes` or `no` there,
+or type one of the listed options to choose it. A reply only answers an
+approval posted in that same chat: a "yes" typed somewhere else does not
+release it. Without anyone chatting there, the bot posts only to the user's own
+chat or a shared chat an admin approved (see
+[Outbound notifications](#outbound-notifications)); otherwise the approval
+waits in the web app, which shows every approval along with notifications and
+push.
 
 ---
 

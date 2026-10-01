@@ -220,9 +220,7 @@ export class SlackChannel extends BaseChannel {
           metadata: {
             slackUserId: msg.user,
             ts: msg.ts,
-            // The dispatcher keys progress messages, reactions and pipeline
-            // approval prompts on a platform message id; without it a group
-            // thread would never see an approval it has to answer.
+            // The platform message id the dispatcher's reactions (👀, ⏳, ✅) go on.
             messageId: msg.ts,
             channelType: msg.channel_type,
             groupChannelId: group.id,
@@ -423,8 +421,7 @@ export class SlackChannel extends BaseChannel {
       metadata: {
         slackUserId,
         ts: message.ts,
-        // Lets the dispatcher post pipeline approvals and progress here; it
-        // skips them for messages without a platform message id.
+        // The platform message id the dispatcher's reactions (👀, ⏳, ✅) go on.
         messageId: message.ts,
         channelType: message.channel_type,
       },

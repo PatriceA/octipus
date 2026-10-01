@@ -14,6 +14,7 @@ import type { Attachment, ChannelType, UnifiedMessage } from '@/core/types';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { getPermissionManager, type PermissionRequestEvent } from '@/security/permissions';
 import { channelLogger } from '@/utils/logger';
+import { attendChat, startApprovalPrompts, tryResolveApprovalFromChannel } from './approval-prompts';
 import { processChannelAttachments } from './attachment-handler';
 import { getUMI } from './interface';
 import { fileAt, writeFileAt } from '@/utils/fs-file';
@@ -649,17 +650,6 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
   }
 }
 
-/** Approval requests already announced in a chat (bounded). */
-const announcedApprovals = new Set<string>();
-
-/** True the first time an approval id is seen. */
-function firstAnnouncement(requestId: string): boolean {
-  if (announcedApprovals.has(requestId)) return false;
-  announcedApprovals.add(requestId);
-  if (announcedApprovals.size > 1_000) announcedApprovals.delete(announcedApprovals.values().next().value as string);
-  return true;
-}
-
 /**
  * The acting member's own session for a group-channel thread. The adapter
  * only tags messages from enrolled channels; re-check here so a stale or
@@ -718,17 +708,21 @@ export async function initializeChannels(): Promise<void> {
   // Subscribe to permission requests and forward them to the originating channel
   getPermissionManager().onRequest(forwardPermissionRequestToChannel);
   getPermissionManager().onResolved(forgetResolvedChannelPermission);
+  // Agent approvals are posted in their session's chat the same way, whether
+  // or not a chat message started the run (./approval-prompts.ts).
+  await startApprovalPrompts();
 
   // Bridge incoming channel messages → root agent → reply
   umi.on('message', async (message: UnifiedMessage) => {
     // Group channels: every reply goes into the thread the member wrote in.
     const groupChannelId = typeof message.metadata?.groupChannelId === 'string' ? message.metadata.groupChannelId : undefined;
     const replyThread = groupChannelId ? message.threadId : undefined;
+    let leaveChat: (() => void) | undefined;
     try {
       recordChannelMessage(message.channelType, 'inbound');
-      // Check if this is a yes/no reply to a pending permission request
-      const consumed = await tryResolvePermissionFromChannel(message);
-      if (consumed) return;
+      // A yes/no reply to a permission prompt or an approval posted in this chat
+      if (await tryResolvePermissionFromChannel(message)) return;
+      if (await tryResolveApprovalFromChannel(message)) return;
 
       // Process file attachments → document OCR pipeline (fire-and-forget)
       const attachmentDocuments: Promise<string[]> = message.attachments?.length
@@ -753,6 +747,8 @@ export async function initializeChannels(): Promise<void> {
       const resolvedSessionId = groupChannelId
         ? await resolveGroupTurnSession(message, groupChannelId)
         : await (await import('@/core/agent/session-resolver')).resolveSession(channelSessionId, message.userId, message.channelType);
+      // The member is in this chat now: approvals the turn raises are posted here.
+      leaveChat = attendChat(resolvedSessionId);
 
       // Subscribe to root agent events for progress feedback via emoji reactions
       const isExternalChannel = message.channelType !== 'webchat';
@@ -764,8 +760,8 @@ export async function initializeChannels(): Promise<void> {
       let isTerminal = false;
 
       const react = (emoji: string) => {
-        if (isTerminal) return; // Don't overwrite terminal states
-        umi.setReaction(message.channelType, message.channelId, platformMessageId!, emoji).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
+        if (isTerminal || !platformMessageId) return; // Don't overwrite terminal states; Teams messages carry no id
+        umi.setReaction(message.channelType, message.channelId, platformMessageId, emoji).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
       };
 
       const stopTypingAndStall = () => {
@@ -786,7 +782,7 @@ export async function initializeChannels(): Promise<void> {
         }, 15_000);
       };
 
-      if (isExternalChannel && platformMessageId) {
+      if (isExternalChannel) {
         // Acknowledge receipt with 👀
         react('👀');
 
@@ -891,54 +887,9 @@ export async function initializeChannels(): Promise<void> {
             // deprecated spawn_team meta-tool; those have been removed in
             // favor of spawn_child + parallelGroup. No handler needed.
             case 'approval_required': {
-              // Every message of this session waiting behind the turn has its
-              // own subscription; announce each approval once.
-              const approvalId = (event.data as { requestId?: string }).requestId;
-              if (approvalId && !firstAnnouncement(approvalId)) break;
+              // The prompt itself is posted by ./approval-prompts.ts, keyed by
+              // the session, so background runs and Teams get it too.
               react('⏳');
-              const ad = event.data as { requestId?: string; summary?: string; question?: string; options?: string[] };
-              const approvalText = [
-                '⏳ **Approval Required**',
-                ad.summary || '',
-                '',
-                ad.question || 'Proceed?',
-                ad.options?.length ? `\nOptions: ${ad.options.join(' / ')}` : '',
-                '\nReply **yes/approve** to continue, or **no/stop** to cancel.',
-              ].filter(Boolean).join('\n');
-              if (groupChannelId) {
-                // The summary can quote the requester's files, mail or results:
-                // only they see it; the thread gets a prompt without it. In a
-                // removed or paused channel nothing is posted and the step is
-                // declined, as for permission requests (otherwise it would
-                // hold the session until the approval times out).
-                void (async () => {
-                  const { findGroupChannel, isGroupChannelActive } = await import('./group-channels');
-                  const group = await findGroupChannel(message.channelType, message.channelId);
-                  if (group?.id !== groupChannelId || !(await isGroupChannelActive(group))) {
-                    if (approvalId) {
-                      await rootAgent.resolveApprovalDetailed(approvalId, false, 'the group channel was removed or is paused',
-                        { forUserId: message.userId, resolvedBy: message.userId });
-                    }
-                    return;
-                  }
-                  const shown = await umi.sendPrivate(message.channelType, message.channelId, message.userId, {
-                    content: approvalText.replace('Reply **yes/approve** to continue, or **no/stop** to cancel.', 'Reply `yes` or `no` in the thread.'),
-                    threadId: replyThread,
-                  }).catch(() => false);
-                  await umi.send(message.channelType, message.channelId, {
-                    content: `⏳ ${message.userName ?? 'The requester'}: a step needs your approval. ${shown
-                      ? 'I sent you the details privately; only you can see them.'
-                      : 'I could not show you the details privately here; check them in the Octipus web app.'} Reply \`yes\` or \`no\`.`,
-                    threadId: replyThread,
-                  });
-                })().catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
-                break;
-              }
-              umi.send(message.channelType, message.channelId, {
-                content: approvalText,
-                replyTo: platformMessageId,
-                threadId: replyThread,
-              }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
               break;
             }
             case 'status_update': {
@@ -1085,6 +1036,8 @@ export async function initializeChannels(): Promise<void> {
       } catch {
         // Ignore send failure — channel may be disconnected
       }
+    } finally {
+      leaveChat?.();
     }
   });
 }

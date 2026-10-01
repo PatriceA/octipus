@@ -153,13 +153,24 @@ describe('group-channel turns', () => {
     expect(dm.response).not.toMatch(/not available in a shared channel/);
   });
 
-  test('a "yes" in a DM can still answer an approval raised by a background run in a group thread (it has no other chat route)', async () => {
+  test('a "yes" in a DM does not answer an approval waiting in a group thread (it is posted and answered there)', async () => {
     const service = new AgentService();
     const manager = approvals(service);
     vi.spyOn(manager, 'getPendingApprovals').mockReturnValue([{ id: 'a1', sessionId: 'group-session' }] as never);
     const resolve = vi.spyOn(manager, 'tryResolveFromMessage').mockResolvedValue(true);
-    await service.handleMessage('dm-session', 'user', 'yes', 'slack');
-    expect(resolve).toHaveBeenCalledWith('yes', 'user');
+    const result = await service.handleMessage('dm-session', 'user', 'yes', 'slack');
+    expect(resolve).not.toHaveBeenCalled();
+    expect(result.response).toBe('Friday works.'); // an ordinary turn
+  });
+
+  test('a "yes" answers an approval waiting in the same 1:1 session', async () => {
+    const service = new AgentService();
+    const manager = approvals(service);
+    vi.spyOn(manager, 'getPendingApprovals').mockReturnValue([{ id: 'a1', sessionId: 'dm-session' }] as never);
+    const resolve = vi.spyOn(manager, 'tryResolveFromMessage').mockResolvedValue(true);
+    const result = await service.handleMessage('dm-session', 'user', 'yes, go ahead', 'slack');
+    expect(resolve).toHaveBeenCalledWith('yes, go ahead', 'user');
+    expect(result.response).toBe('Got it, continuing...');
   });
 
 });
