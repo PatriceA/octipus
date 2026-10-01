@@ -1,10 +1,22 @@
 # Octipus MCP server
 
 This package exposes an Octipus backend as a Model Context Protocol server. It
-registers 86 tools across 25 groups for chat, search, agents, sessions, models,
+registers 87 tools across 25 groups for chat, search, agents, sessions, models,
 knowledge, documents, tasks, research, and administration. Tool availability
 and results still depend on the connected backend, the authenticated user, and
 that user's permissions.
+
+## v0.6.0
+
+This release adds the `update_skill` alias for `octipus_update_skill` and
+includes skill IDs in listings. Existing `list_skills` and `get_skill` aliases
+remain available for managed agent workflows.
+Update the connected Octipus backend to 0.6.0 for the new update behavior.
+Mounted skills must still be edited at their source and reloaded.
+
+Install this version with `npm install -g octipus-mcp-server@0.6.0`, or use
+`npx -y octipus-mcp-server@0.6.0` in your MCP client. Restart the client after
+updating. See the [full release notes](https://github.com/PatriceA/octipus/releases/tag/v0.6.0).
 
 ## Install
 

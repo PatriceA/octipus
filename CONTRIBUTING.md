@@ -200,7 +200,7 @@ Three things happen *before* the tag, in this order:
 2. **Bump the version.** One command rewrites all six files that declare it:
 
    ```sh
-   npx tsx scripts/sync-version.ts v0.5
+   npx tsx scripts/sync-version.ts v0.6.0
    npm install --package-lock-only          # and the same in mcp-server/ and web/
    (cd web/src-tauri && cargo update -p octipus)
    ```
@@ -215,8 +215,8 @@ Three things happen *before* the tag, in this order:
 Then:
 
 ```sh
-git tag -a v0.5 -m "v0.5 — <title>"
-git push origin v0.5
+git tag -a v0.6.0 -m "v0.6.0 — <title>"
+git push origin v0.6.0
 ```
 
 To re-run a release for an existing tag without moving it — a workflow fix, a

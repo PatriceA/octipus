@@ -1,6 +1,6 @@
 {
   "name": "octipus-mcp-server",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "MCP server bridge for Octipus — exposes skills, agents, search, and chat as MCP tools",
   "keywords": [
     "mcp",

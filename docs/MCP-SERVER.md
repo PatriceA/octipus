@@ -32,7 +32,7 @@ Standalone MCP server (`mcp-server/`) that exposes Octipus capabilities as MCP t
 | `octipus_update_recurring_task` | Update a recurring task |
 | `octipus_delete_recurring_task` | Delete a recurring task |
 
-The table above shows commonly used tools. The server registers 86 tools across 25 groups — see `mcp-server/src/tools/` for the complete list, or ask the running server for `tools/list`.
+The table above shows commonly used tools. The server registers 87 tools across 25 groups — see `mcp-server/src/tools/` for the complete list, or ask the running server for `tools/list`.
 
 Direct execution runs unattended: ASK actions return an approval-required error.
 Configure reviewed permissions before automation; possession of an MCP/API token
