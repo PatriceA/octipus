@@ -1,5 +1,5 @@
 /**
- * Built-in skill loader meta-tools (`list_skills` / `get_skill`).
+ * Built-in skill tools (`list_skills` / `get_skill` / `update_skill`).
  *
  * Worker prompts carry only a skill *index* (name + 1-line description); the
  * full SKILL.md body is loaded on demand. That on-demand step previously
@@ -15,9 +15,31 @@
 
 import type { ToolHandler } from '@/core/agent-base';
 import { getSkillRegistry } from '@/skills/registry';
+import { updateSkill } from '@/skills/update';
 
 export function buildSkillLoaderHandlers(): ToolHandler[] {
   return [
+    {
+      name: 'update_skill',
+      description: 'Update an existing Octipus skill in place. Read it with get_skill first, then send only changed fields. Content replaces the full Markdown body; empty content switches to structured fields. Keeps the skill ID and role assignments. Mounted skills must be edited at their source and reloaded.',
+      parameters: {
+        type: 'object',
+        properties: {
+          skill_id: { type: 'string', description: 'Existing skill ID from list_skills.' },
+          name: { type: 'string' }, description: { type: 'string' }, category: { type: 'string' },
+          content: { type: 'string', description: 'Complete replacement Markdown, not a diff.' },
+          principles: { type: 'array', items: { type: 'string' } },
+          bestPractices: { type: 'array', items: { type: 'string' } },
+          antiPatterns: { type: 'array', items: { type: 'string' } },
+          frameworks: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['skill_id'],
+      },
+      execute: async (args, context) => {
+        const { skill_id, ...fields } = args;
+        return updateSkill(skill_id, fields, context.userId);
+      },
+    },
     {
       name: 'list_skills',
       description:

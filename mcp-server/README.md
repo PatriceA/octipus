@@ -120,3 +120,14 @@ an HTTP transport key.
 HTTP/SSE roundtrips against local fixtures, including concurrent clients,
 rejected requests, and disconnect/shutdown cleanup. These tests do not measure
 live model quality or validate a remote proxy deployment.
+
+### Updating skills
+
+Use `octipus_list_skills` to find the skill ID, read it with `get_skill`, then call
+`update_skill` (also available as `octipus_update_skill`) with `skill_id` and only
+the fields to change. `content` replaces the complete Markdown body; an empty
+string clears it and activates the structured fields. Omitted fields, the skill
+ID, and role assignments are preserved. Custom skills require their owner or an
+administrator. Mounted skills remain read-only: edit the source and use
+**Reload mounted skills** in Octipus. The same `update_skill` tool is available
+to internal agents without an MCP connection.

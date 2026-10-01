@@ -10,7 +10,7 @@ export function registerSkillTools(server: McpServer, client: OctiClient): void 
   const listSkills = async () => {
     try {
       const skills = await client.listSkills();
-      const summary = skills.map((s) => `- **${s.name}** (${s.category}): ${s.description}`).join('\n');
+      const summary = skills.map((s) => `- **${s.name}** (id: ${s.id}; ${s.category}): ${s.description}`).join('\n');
       return {
         content: [{ type: 'text' as const, text: summary || 'No skills found.' }],
       };
@@ -100,9 +100,9 @@ export function registerSkillTools(server: McpServer, client: OctiClient): void 
     },
   );
 
-  server.tool(
-    'octipus_update_skill',
-    'Update an existing domain knowledge skill. Can update markdown content and/or structured fields.',
+  for (const name of ['octipus_update_skill', 'update_skill']) server.tool(
+    name,
+    'Update an existing Octipus skill in place. Read it first with get_skill; send only changed fields. Content replaces the full Markdown body, while omitted fields and role assignments remain unchanged. Mounted skills must be edited at their source and reloaded.',
     {
       skill_id: z.string().describe('Skill ID to update'),
       name: z.string().optional().describe('New skill name'),

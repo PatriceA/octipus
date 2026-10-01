@@ -8,6 +8,7 @@ import { hiddenSkillRepository } from '@/db/repositories/hidden-skill-repository
 import { skillSelections } from '@/db/schema/skill-selections';
 import { isExternalSkillId } from '@/skills/external-loader';
 import { getSkillRegistry } from '@/skills/registry';
+import { updateSkill, SkillUpdateError } from '@/skills/update';
 import { getSkillModes } from '@/skills/selection';
 import { skillSelectionRepository } from '@/db/repositories/skill-selection-repository';
 import { scopedRepos } from '@/db/repositories/scoped';
@@ -338,32 +339,15 @@ export const skillRoutes = new Elysia({ prefix: '/skills' })
 
   .patch(
     '/:id',
-    async ({ user, params, body }) => {
-      if (!user) return { error: 'Not authenticated' };
-
-      const db = getDb();
-      const [existing] = await db.select().from(skills).where(eq(skills.id, params.id)).limit(1);
-
-      if (!existing) return { error: 'Skill not found' };
-      // System skills can be edited by any authenticated user; custom skills only by owner or admin
-      if (!existing.isSystem && !user.isAdmin && existing.userId !== user.id) return { error: 'Not authorized' };
-
-      // Go through the repository so the description-embedding
-      // invalidation hook fires when name or description change
-      // (skill-discovery Phase 2). The repo also stamps updatedAt.
-      const updateData: SkillUpdate = {};
-      if (body.name !== undefined) updateData.name = body.name;
-      if (body.category !== undefined) updateData.category = body.category;
-      if (body.description !== undefined) updateData.description = body.description;
-      if (body.content !== undefined) updateData.content = body.content;
-      if (body.principles !== undefined) updateData.principles = body.principles;
-      if (body.bestPractices !== undefined) updateData.bestPractices = body.bestPractices;
-      if (body.antiPatterns !== undefined) updateData.antiPatterns = body.antiPatterns;
-      if (body.frameworks !== undefined) updateData.frameworks = body.frameworks;
-
-      const updated = await skillRepository.update(params.id, updateData);
-
-      return updated;
+    async ({ user, params, body, set }) => {
+      if (!user) { set.status = 401; return { error: 'Not authenticated' }; }
+      try {
+        return await updateSkill(params.id, body, user.id);
+      } catch (error) {
+        if (!(error instanceof SkillUpdateError)) throw error;
+        set.status = error.status;
+        return { error: error.message };
+      }
     },
     {
       params: t.Object({ id: t.String() }),
