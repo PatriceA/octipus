@@ -1,4 +1,5 @@
 import type { TurnResult } from '@/core/agent/service';
+import type { ChannelType } from '@/core/types';
 import type { Monitor } from '@/db/schema/monitors';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { sessionGeneration } from '@/db/schema/sessions';
@@ -11,6 +12,23 @@ export async function deliverMonitorResponse(row: Monitor, result: TurnResult): 
   const { getAgentService } = await import('@/core/agent/service');
   getAgentService().publishResponse(row.sessionId, row.userId, result);
   if (EXTERNAL_CHANNELS.has(session.channelType) && result.response) {
+    if (session.groupChannelId) {
+      // A monitor set up in a group-channel thread answers in that thread:
+      // its turns ran under the thread's shared-audience rules, and the
+      // enrolment, not a notification destination, is what lets the bot post
+      // there. Nothing is posted once the channel is removed or paused.
+      const { findGroupChannel, isGroupChannelActive } = await import('@/channels/group-channels');
+      const group = await findGroupChannel(session.channelType, session.channelId);
+      if (group?.id !== session.groupChannelId || !(await isGroupChannelActive(group))) {
+        throw new Error('the group channel this conversation belongs to was removed or is paused');
+      }
+      const { getUMI } = await import('@/channels/interface');
+      await getUMI().send(session.channelType as ChannelType, session.channelId, {
+        content: result.response, threadId: session.threadId ?? undefined,
+        metadata: { monitorId: row.id, sessionId: row.sessionId },
+      });
+      return;
+    }
     // The session's chat is only as trustworthy as whoever created the
     // session and the reply goes out unattended: it must be the owner's own
     // chat or an approved shared destination (src/channels/ownership.ts).

@@ -195,10 +195,10 @@ Rules that must hold:
   prompt, and the confirmation names the tool it decided; prompts resolved in
   the web UI or expired are dropped from the queue. In a thread only a bare
   yes/no answers (members also talk to each other there), and nothing is
-  posted once the channel's enrolment is removed or paused, and the request
-  is denied (permission requests do not expire; left pending it would hold
-  the session forever). A thread reply only answers an approval waiting in that
-  thread. Only session controls run as commands
+  posted once the channel's enrolment is removed or paused: a permission
+  request is denied (it does not expire; left pending it would hold the
+  session forever), an approval waits in the web app (it expires after an
+  hour). A thread reply only answers an approval waiting in that thread. Only session controls run as commands
   in a thread. Transcripts of earlier turns are not replayed. The flow
   guard's group rule is checked from the stored session before any tool
   call (`ensureSharedAudienceKnown`), so hook- or API-started runs get it;
@@ -331,8 +331,9 @@ Built:
   skipped; group sessions start `suspicious`; private reads raised to ASK.
 
 Deferred from the first draft: guest answers for unlinked members, and adding
-the channel as a notification destination on enrolment (hooks and monitors
-still need an admin-approved destination to post there).
+the channel as a notification destination on enrolment (hooks still need an
+admin-approved destination to post there; a monitor set up in a thread
+answers in it, see below).
 
 Acceptance (each has a test):
 - In an enrolled channel, an un-mentioned message produces no reply and no
@@ -379,14 +380,24 @@ The review found two problems that were not specific to group channels:
   message id, never showed them (nor progress messages). Approvals are now
   posted by one listener keyed by the session
   (`src/channels/approval-prompts.ts`), like permission prompts: in a group
-  thread by the rules of §4, in any other chat while the user is talking there
-  or when the bot may message it unattended (`resolveTarget`). Progress no
-  longer needs a message id; only reactions do.
+  thread by the rules of §4; with their details where the bot may message the
+  user unattended (`resolveTarget`); as a prompt without details in another
+  shared chat the user is talking in. Progress no longer needs a message id;
+  only reactions do.
 - **"yes" in any chat answered the user's single pending approval, wherever it
   was raised.** A reply now answers only an approval posted in that chat (and
   thread), or one waiting in the same session; everything else is answered in
   its own chat or the web app. An option's exact label chooses it, as the web
-  app's buttons do (1:1 chats; a thread takes only a bare yes/no).
+  app's buttons do (only in the user's own chat). On a go / no-go gate an
+  option worded as a refusal declines; for a pipeline's question
+  (`ApprovalKind 'question'`) the option is the answer.
+
+The review of that fix also tightened what counts as an answer ("Cancel my
+3pm" is a request; a message with a file never answers), made a late reply to
+an expired approval say so instead of starting a turn, answers whichever of a
+permission prompt and an approval was posted last, and lets a monitor set up
+in a group thread answer there (its reply was refused as an unapproved
+destination, so approving its step led nowhere).
 
 ## Open questions
 
@@ -394,8 +405,9 @@ The review found two problems that were not specific to group channels:
    Phase 1: no.
 2. **Transcript retention** — only relevant once listen mode needs a stored
    buffer (§7); phase 1 stores none.
-3. **Shared notifications** — should enrolment also let the owner's hooks and
-   monitors post to the channel without an admin-approved destination?
+3. **Shared notifications** — should enrolment also let members' hooks post
+   to the channel without an admin-approved destination? (A monitor set up in
+   a thread already answers there.)
 
 ## Decisions
 

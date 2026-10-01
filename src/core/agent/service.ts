@@ -17,7 +17,7 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import { getModelRegistry } from '@/models/model-registry';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
-import type { ApprovalRequest, ApprovalResolveOutcome } from './approval-manager';
+import type { ApprovalKind, ApprovalRequest, ApprovalResolveOutcome } from './approval-manager';
 import { ApprovalManager } from './approval-manager';
 import { classifyMessage } from './classifier';
 import { directResponse } from './direct-response';
@@ -178,7 +178,10 @@ export class AgentService {
         if (control) {
           const response = await handleCommand(message.trim(), resolvedId, userId);
           if (response) return { response, sessionId: resolvedId, classification: { type: 'casual', confidence: 1 } };
-        } else if (reply && approvals[0]?.sessionId === resolvedId && await this.approvalManager.tryResolveFromMessage(reply, userId)) {
+        } else if (reply && this.onlyApprovalIs(userId, approvals[0]?.id, resolvedId)
+          && await this.approvalManager.tryResolveFromMessage(reply, userId)) {
+          // Re-read just above, after the awaits: the approval seen at the
+          // start may have been answered elsewhere and another raised since.
           return { response: 'Got it, continuing...', sessionId: resolvedId, classification: { type: 'approval', confidence: 1 } };
         }
       }
@@ -191,6 +194,12 @@ export class AgentService {
         () => this.handleMessageInner(sessionId, userId, message, channel, attachedFiles, forcedOutputMode, false, groupTurn),
       );
     });
+  }
+
+  /** The user's single pending approval is still `id`, waiting in `sessionId` (read now, synchronously). */
+  private onlyApprovalIs(userId: string, id: string | undefined, sessionId: string): boolean {
+    const pending = this.approvalManager.getPendingApprovals(userId);
+    return !!id && pending.length === 1 && pending[0].id === id && pending[0].sessionId === sessionId;
   }
 
   /** Publish a background reply through the same event stream as interactive replies. */
@@ -659,19 +668,11 @@ export class AgentService {
       // Every turn now runs the one loop below, which holds real tools and
       // delegates only when it needs a specialist.
 
-      // A typed reply answers only an approval waiting in this same session
-      // (in a group thread, only a bare yes/no). An approval raised anywhere
-      // else is posted in its own session's chat and answered there
-      // (src/channels/approval-prompts.ts) or in the web app: a "yes" meant
-      // for one thing must not release another.
-      const approvalReply = approvalReplyFor(message, sharedAudience);
-      const waitingHere = this.approvalManager.getPendingApprovals(userId)[0]?.sessionId === resolvedSessionId;
-      if (classification.type === 'approval' && approvalReply && waitingHere) {
-        const resolved = await this.approvalManager.tryResolveFromMessage(approvalReply, userId);
-        if (resolved) {
-          return { response: 'Got it, continuing...', sessionId: resolvedSessionId, classification };
-        }
-      }
+      // Approval replies are answered before the turn queues (`handleMessage`):
+      // only for an approval waiting in this same session (in a group thread,
+      // only a bare yes/no). One raised anywhere else is posted in its own
+      // session's chat and answered there (src/channels/approval-prompts.ts)
+      // or in the web app: a "yes" meant for one thing must not release another.
 
       const startTime = Date.now();
       const turnGeneration = sessionGeneration((await sessionRepository.findById(resolvedSessionId))?.context);
@@ -893,11 +894,13 @@ export class AgentService {
     question: string,
     context: AgentContext,
     options?: string[],
+    kind?: ApprovalKind,
   ): Promise<unknown> {
     return this.approvalManager.requestApproval(
       summary, question, context,
       (event) => this.emit(event),
       options,
+      kind,
     );
   }
 

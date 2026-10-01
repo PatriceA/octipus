@@ -146,7 +146,10 @@ Hooks, scheduled tasks, monitors, notifications and agents (the `messaging` tool
 | `slack.userToken` | `SLACK_USER_TOKEN` | Vault | Optional user token (`xoxp-...`). **Only needed for `channel_search`** — Slack does not expose `search.messages` to bot tokens at all. Add the `search:read` User Token Scope under *OAuth & Permissions*, reinstall, and copy the **User** OAuth Token. Without it, `channel_search` scans one named channel's history instead and says so in its result. |
 
 Optional scopes: `reactions:write` lets the bot mark progress on messages
-with emoji (👀, ✅); without it those calls fail silently.
+with emoji (👀, ✅); without it those calls fail silently. `im:read` lets the
+bot confirm that a DM belongs to you after a restart, before you have written
+to it again; without it, approvals and monitor replies from background runs
+reach your Slack DM only once you have sent it a message since the restart.
 `channels:read` and `groups:read` let the bot read a channel's
 name when it is enrolled as a [group channel](#group-channels) (otherwise the
 settings pages show the channel id).
@@ -198,11 +201,16 @@ Once enrolled, the bot:
   permission prompts and pipeline approvals alike — so talk with colleagues
   ("no, let me check with Dana first") never answers one. A reply cannot
   answer a prompt that has not appeared yet. For a channel that has been
-  removed or paused nothing is posted and the request is denied (requests
-  do not expire, so it would otherwise hold the conversation). A reply in a
-  thread only answers an approval waiting in that thread;
+  removed or paused nothing is posted and a permission request is denied
+  (requests do not expire, so it would otherwise hold the conversation). A
+  reply in a thread only answers an approval waiting in that thread;
 - **posts pipeline approvals in the thread the same way** — a prompt without
-  details, the stage summary privately to the requester;
+  details, the stage summary privately to the requester — including those
+  raised by a monitor or another background run in that thread. In a
+  removed or paused channel they are not posted and wait in the web app
+  (they expire after an hour);
+- **answers in the thread from a monitor** a member set up there, while the
+  channel is enrolled and active;
 - **keeps document results in the thread** when a member shares a file with it;
 - **runs only session controls** (`/stop`, `/status`, `/clear`, `/cancel`,
   `/help`) in a channel — other commands answer with the member's account
@@ -455,16 +463,30 @@ WHATSAPP_BUSINESS_ACCOUNT_ID=         # Business Account ID (optional)
 When an agent needs permission (e.g., to run a shell command), the request is forwarded to the channel where the conversation originated. Reply `yes` or `no` directly in the channel to approve or deny.
 
 Approvals — a pipeline waiting for sign-off before its next stage, a QA
-escalation, or an agent's `request_approval` — are posted in the chat of the
-conversation that raised them, also when nobody is chatting at the time (a
-monitor's wake-up, a resumed pipeline) and on Teams. Reply `yes` or `no` there,
-or type one of the listed options to choose it. A reply only answers an
-approval posted in that same chat: a "yes" typed somewhere else does not
-release it. Without anyone chatting there, the bot posts only to the user's own
-chat or a shared chat an admin approved (see
-[Outbound notifications](#outbound-notifications)); otherwise the approval
-waits in the web app, which shows every approval along with notifications and
-push.
+escalation, or an agent's `request_user_approval` — are posted in the chat of
+the conversation that raised them, also when nobody is chatting at the time (a
+monitor's wake-up, a resumed pipeline) and on Teams:
+
+- in your own chat with the bot, or a shared chat an admin approved (see
+  [Outbound notifications](#outbound-notifications)), with the details. Reply
+  `yes` / `no`, or type one of the listed options to choose it. On a go /
+  no-go step an option worded as a refusal ("No", "Stop Pipeline") declines,
+  as a plain "no" does; when the approval asks a question, the option is the
+  answer;
+- in a shared chat you are talking to the bot in right now (a Telegram group,
+  a Teams group chat or channel), as a prompt without the details, which can
+  quote your files or mail. Only a bare `yes` / `no` from you answers it;
+- in a [group channel](#group-channels) thread, by that section's rules;
+- anywhere else not at all: the approval waits in the web app, which shows
+  every approval along with notifications and push.
+
+A reply answers an approval posted in that chat, or one waiting in that chat's
+own conversation; a "yes" typed somewhere else does not release it. A reply
+that only starts with "cancel" or "stop" ("Cancel my 3pm with Bob") is a
+request, not an answer, and a message with a file is never an answer. A reply
+to an approval that expired or was answered in the web app is told so once.
+When a permission request and an approval wait in the same chat, a reply
+answers the one posted last.
 
 ---
 

@@ -1,8 +1,8 @@
 /**
  * Agent approvals in chat, keyed by the session that raised them: posted
  * whether or not a chat message started the run (background runs, Teams),
- * only where the bot may post, and answered only in the chat they were
- * posted in.
+ * with their details only where the bot may post them, and answered only in
+ * the chat they were posted in.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { TurnEvent } from '@/core/agent/service';
@@ -44,7 +44,10 @@ vi.mock('./ownership', async (importOriginal) => {
 });
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { userRepository } from '@/db/repositories/user-repository';
-import { _resetApprovalPromptsForTests, announceApproval, attendChat, startApprovalPrompts, tryResolveApprovalFromChannel } from './approval-prompts';
+import {
+  _resetApprovalPromptsForTests, announceApproval, attendChat, newestApprovalPostedAt, startApprovalPrompts,
+  tryResolveApprovalFromChannel,
+} from './approval-prompts';
 import { getUMI } from './interface';
 
 const ANNA = 'u-anna';
@@ -79,19 +82,28 @@ beforeEach(() => {
   send = vi.spyOn(getUMI(), 'send').mockResolvedValue('ts');
   sendPrivate = vi.spyOn(getUMI(), 'sendPrivate').mockResolvedValue(true);
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 /** Raise an approval in `sessionId` (it is pending until resolved) and let it be announced. */
-async function raise(sessionId: string, over: { summary?: string; options?: string[] } = {}) {
+async function raise(sessionId: string, over: { summary?: string; options?: string[]; kind?: 'gate' | 'question' } = {}) {
   const requestId = `req-${++n}`;
   fx.pending.push({ id: requestId, userId: ANNA, sessionId });
   const event: TurnEvent = {
     type: 'approval_required', sessionId, userId: ANNA, timestamp: new Date(),
-    data: { requestId, summary: over.summary ?? 'Pipeline "Payroll" — reviewed salaries.csv', question: 'Proceed with next stage: "Pay"?', options: over.options },
+    data: {
+      requestId, summary: over.summary ?? 'Pipeline "Payroll" — reviewed salaries.csv', question: 'Proceed with next stage: "Pay"?',
+      options: over.options, kind: over.kind,
+    },
   };
   await announceApproval(event);
   return requestId;
 }
+
+/** The approval stops waiting without an answer from the chat (web app, timeout). */
+const closeElsewhere = (id: string) => { fx.pending = fx.pending.filter((p) => p.id !== id); };
 
 const reply = (content: string, over: Partial<UnifiedMessage> = {}): UnifiedMessage => ({
   id: 'm', channelType: 'telegram', channelId: '1001', userId: ANNA, content, timestamp: new Date(), ...over,
@@ -99,7 +111,7 @@ const reply = (content: string, over: Partial<UnifiedMessage> = {}): UnifiedMess
 const sentText = (i = 0) => (send.mock.calls[i]![2] as { content: string }).content;
 
 describe('posting approvals in chat', () => {
-  test("an approval from a background run is posted in the session's own chat", async () => {
+  test("an approval from a background run is posted with its details in the user's own chat", async () => {
     await raise(S_DM, { options: ['Approve', 'Skip', 'Stop Pipeline'] });
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]![0]).toBe('telegram');
@@ -114,18 +126,30 @@ describe('posting approvals in chat', () => {
     expect(send).toHaveBeenCalledWith('teams', 'a:teams-conv', expect.objectContaining({ content: expect.stringContaining('Approval Required') }));
   });
 
-  test('a chat the bot may not message unattended gets nothing, unless the user is talking there now', async () => {
+  test('a shared chat gets nothing unattended, and only a prompt without details while the user is in it', async () => {
     await raise(S_GROUPCHAT);
     expect(send).not.toHaveBeenCalled();
 
     const leave = attendChat(S_GROUPCHAT);
     await raise(S_GROUPCHAT);
     expect(send).toHaveBeenCalledTimes(1);
+    expect(sentText()).toContain('anna: a step needs your approval');
+    expect(sentText()).not.toContain('salaries.csv');
+    expect(sendPrivate).toHaveBeenCalledWith('telegram', '-500', ANNA, expect.objectContaining({ content: expect.stringContaining('salaries.csv') }));
     leave();
     leave(); // releasing twice is harmless
 
     await raise(S_GROUPCHAT);
     expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  test('in a shared chat the details stay out even when they cannot be sent privately', async () => {
+    sendPrivate.mockResolvedValue(false);
+    const leave = attendChat(S_GROUPCHAT);
+    await raise(S_GROUPCHAT);
+    leave();
+    expect(sentText()).toContain('web app');
+    expect(sentText()).not.toContain('salaries.csv');
   });
 
   test('sessions without a messaging chat are left to the web app', async () => {
@@ -177,30 +201,75 @@ describe('answering an approval in chat', () => {
     expect(sentText(1)).toBe('Chose "Skip". Continuing...');
   });
 
+  test('on a gate, an option worded as a refusal declines — a typed "no" never approves', async () => {
+    const yesNo = await raise(S_DM, { options: ['Yes', 'No'] });
+    expect(await tryResolveApprovalFromChannel(reply('no'))).toBe(true);
+    expect(fx.resolve).toHaveBeenLastCalledWith(yesNo, false, 'No', expect.anything());
+    expect(sentText(1)).toBe('Chose "No": the step will not run.');
+
+    const stop = await raise(S_DM, { options: ['Approve', 'Skip', 'Stop Pipeline'] });
+    expect(await tryResolveApprovalFromChannel(reply('Stop Pipeline'))).toBe(true);
+    expect(fx.resolve).toHaveBeenLastCalledWith(stop, false, 'Stop Pipeline', expect.anything());
+  });
+
+  test('on a question, any option is the answer, "No" included', async () => {
+    const id = await raise(S_DM, { options: ['Yes', 'No'], kind: 'question' });
+    expect(await tryResolveApprovalFromChannel(reply('No'))).toBe(true);
+    expect(fx.resolve).toHaveBeenCalledWith(id, true, 'No', expect.anything());
+  });
+
   test('"no" declines it', async () => {
     const id = await raise(S_DM);
-    expect(await tryResolveApprovalFromChannel(reply('no, stop'))).toBe(true);
-    expect(fx.resolve).toHaveBeenCalledWith(id, false, 'no, stop', expect.anything());
+    expect(await tryResolveApprovalFromChannel(reply('no, not yet'))).toBe(true);
+    expect(fx.resolve).toHaveBeenCalledWith(id, false, 'no, not yet', expect.anything());
     expect(sentText(1)).toBe('Declined.');
+  });
+
+  test('a request that merely starts with "cancel" or "stop" is not an answer; the bare word is', async () => {
+    await raise(S_DM);
+    expect(await tryResolveApprovalFromChannel(reply('Cancel my 3pm with Bob'))).toBe(false);
+    expect(await tryResolveApprovalFromChannel(reply('stop the deploy on staging first'))).toBe(false);
+    expect(fx.resolve).not.toHaveBeenCalled();
+    expect(await tryResolveApprovalFromChannel(reply('cancel'))).toBe(true);
+    expect(fx.resolve).toHaveBeenCalledWith(expect.any(String), false, 'cancel', expect.anything());
+  });
+
+  test('a message with a file is never taken as an answer', async () => {
+    await raise(S_DM);
+    const withFile = reply('yes', { attachments: [{ type: 'file', url: 'https://x/f.pdf', mimeType: 'application/pdf' }] });
+    expect(await tryResolveApprovalFromChannel(withFile)).toBe(false);
   });
 
   test('the newest posted approval is answered first; one answered in the web app is skipped', async () => {
     const first = await raise(S_DM);
     const second = await raise(S_DM);
+    expect(await newestApprovalPostedAt(reply('x'))).toBeGreaterThan(0);
     expect(await tryResolveApprovalFromChannel(reply('yes'))).toBe(true);
     expect(fx.resolve).toHaveBeenLastCalledWith(second, true, 'yes', expect.anything());
     expect(sentText(2)).toContain('1 more approval waiting here');
 
-    fx.pending = fx.pending.filter((p) => p.id !== first); // answered in the web app
-    expect(await tryResolveApprovalFromChannel(reply('yes'))).toBe(false);
-    expect(fx.resolve).toHaveBeenCalledTimes(1);
+    closeElsewhere(second);
+    closeElsewhere(first); // answered in the web app
+    expect(await newestApprovalPostedAt(reply('x'))).toBe(0);
   });
 
-  test('an approval that expired meanwhile says so and changes nothing', async () => {
-    await raise(S_DM);
+  test('a late reply to an approval that timed out is told so once, then replies go through', async () => {
+    const id = await raise(S_DM);
+    closeElsewhere(id);
     fx.resolve.mockResolvedValueOnce({ status: 'timed_out', message: 'This approval request has expired: nobody answered in time.' });
     expect(await tryResolveApprovalFromChannel(reply('yes'))).toBe(true);
+    expect(fx.resolve).toHaveBeenCalledWith(id, true, 'yes', expect.anything());
     expect(sentText(1)).toContain('has expired');
+    expect(await tryResolveApprovalFromChannel(reply('yes, and also the next one'))).toBe(false);
+  });
+
+  test('the late-reply window closes', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const id = await raise(S_DM);
+    closeElsewhere(id);
+    await raise(S_TEAMS); // any later activity prunes
+    vi.setSystemTime(Date.now() + 7 * 60 * 60 * 1000);
+    expect(await tryResolveApprovalFromChannel(reply('yes'))).toBe(false);
   });
 });
 
@@ -227,9 +296,10 @@ describe('approvals in a group-channel thread', () => {
     expect(sentText()).not.toContain('salaries.csv');
   });
 
-  test('only a bare yes/no from the requester, in that thread, answers it', async () => {
-    const id = await raise(S_THREAD);
+  test('only a bare yes/no from the requester, in that thread, answers it; options do not', async () => {
+    const id = await raise(S_THREAD, { options: ['Approve', 'Skip'] });
     expect(await tryResolveApprovalFromChannel(thread('no, let me check with Dana first'))).toBe(false);
+    expect(await tryResolveApprovalFromChannel(thread('skip'))).toBe(false);
     expect(await tryResolveApprovalFromChannel(thread('yes', { userId: 'u-bob' }))).toBe(false);
     expect(await tryResolveApprovalFromChannel(thread('yes', { threadId: '80.0' }))).toBe(false);
     expect(await tryResolveApprovalFromChannel(reply('yes', { channelType: 'slack', channelId: 'D-ANNA' }))).toBe(false);
@@ -240,16 +310,14 @@ describe('approvals in a group-channel thread', () => {
     expect(send.mock.calls[1]![2]).toMatchObject({ threadId: '90.0' });
   });
 
-  test('in a removed or paused channel nothing is posted and the step is declined', async () => {
+  test('in a removed or paused channel nothing is posted, and the approval waits in the web app', async () => {
     fx.active = false;
-    const paused = await raise(S_THREAD);
+    await raise(S_THREAD);
     fx.active = true;
     fx.group = null;
-    const removed = await raise(S_THREAD);
+    await raise(S_THREAD);
     expect(send).not.toHaveBeenCalled();
     expect(sendPrivate).not.toHaveBeenCalled();
-    for (const id of [paused, removed]) {
-      expect(fx.resolve).toHaveBeenCalledWith(id, false, expect.stringContaining('removed or is paused'), { forUserId: ANNA });
-    }
+    expect(fx.resolve).not.toHaveBeenCalled(); // not declined: it expires on its own after an hour
   });
 });

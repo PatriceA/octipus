@@ -14,7 +14,7 @@ import type { Attachment, ChannelType, UnifiedMessage } from '@/core/types';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { getPermissionManager, type PermissionRequestEvent } from '@/security/permissions';
 import { channelLogger } from '@/utils/logger';
-import { attendChat, startApprovalPrompts, tryResolveApprovalFromChannel } from './approval-prompts';
+import { attendChat, newestApprovalPostedAt, startApprovalPrompts, tryResolveApprovalFromChannel } from './approval-prompts';
 import { processChannelAttachments } from './attachment-handler';
 import { getUMI } from './interface';
 import { fileAt, writeFileAt } from '@/utils/fs-file';
@@ -363,6 +363,8 @@ interface PendingChannelPermission {
    * whose prompt the user has not seen yet.
    */
   announced: boolean;
+  /** When it was posted (ms): a reply answers the newest prompt, permission or approval. */
+  announcedAt?: number;
 }
 
 /**
@@ -426,10 +428,39 @@ export function eventSessionId(event: { sessionId?: string; data?: { context?: {
   return event.sessionId || event.data?.context?.sessionId;
 }
 
+/** The key a reply in this chat (and group thread) is looked up under. */
+function replyPendingKey(message: UnifiedMessage): string {
+  const groupThread = typeof message.metadata?.groupChannelId === 'string' ? message.threadId : undefined;
+  return pendingKey(message.userId, message.channelType, message.channelId, groupThread);
+}
+
+/** When the newest permission prompt waiting in this chat for this user was posted (ms), or 0. */
+function newestPermissionPromptAt(message: UnifiedMessage): number {
+  return pendingChannelPermissions.get(replyPendingKey(message))?.filter(p => p.announced).at(-1)?.announcedAt ?? 0;
+}
+
+/**
+ * A typed yes/no for a prompt posted in this chat: a permission request or
+ * an agent approval. The NEWER of the two is answered first — the one on
+ * screen — and the other only if the reply does not answer that one.
+ * Returns true when the message was consumed.
+ */
+export async function tryResolvePromptReply(message: UnifiedMessage): Promise<boolean> {
+  const attempts = await newestApprovalPostedAt(message) > newestPermissionPromptAt(message)
+    ? [tryResolveApprovalFromChannel, tryResolvePermissionFromChannel]
+    : [tryResolvePermissionFromChannel, tryResolveApprovalFromChannel];
+  for (const attempt of attempts) {
+    if (await attempt(message)) return true;
+  }
+  return false;
+}
+
 /** Exported for the regression test that pins the per-chat / per-thread scoping. */
 export async function tryResolvePermissionFromChannel(message: UnifiedMessage): Promise<boolean> {
+  // A message with a file is something to work on, not an answer.
+  if (message.attachments?.length) return false;
   const groupThread = typeof message.metadata?.groupChannelId === 'string' ? message.threadId : undefined;
-  const key = pendingKey(message.userId, message.channelType, message.channelId, groupThread);
+  const key = replyPendingKey(message);
   const pending = pendingChannelPermissions.get(key)?.filter(p => p.announced).at(-1);
   if (!pending) return false;
 
@@ -579,7 +610,10 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
   ]);
   const announce = () => {
     const entry = pendingChannelPermissions.get(key)?.find(p => p.requestId === request.requestId);
-    if (entry) entry.announced = true;
+    if (entry) {
+      entry.announced = true;
+      entry.announcedAt = Date.now();
+    }
   };
   const args = request.args as Record<string, unknown> | undefined;
   let detail = '';
@@ -718,11 +752,14 @@ export async function initializeChannels(): Promise<void> {
     const groupChannelId = typeof message.metadata?.groupChannelId === 'string' ? message.metadata.groupChannelId : undefined;
     const replyThread = groupChannelId ? message.threadId : undefined;
     let leaveChat: (() => void) | undefined;
+    // Stops this message's event subscriptions, typing and stall timers. Run
+    // in `finally` too: a throw after they start must not leave a session-wide
+    // subscription posting progress for later runs, or typing every 4s.
+    let endFeedback: (() => void) | undefined;
     try {
       recordChannelMessage(message.channelType, 'inbound');
       // A yes/no reply to a permission prompt or an approval posted in this chat
-      if (await tryResolvePermissionFromChannel(message)) return;
-      if (await tryResolveApprovalFromChannel(message)) return;
+      if (await tryResolvePromptReply(message)) return;
 
       // Process file attachments → document OCR pipeline (fire-and-forget)
       const attachmentDocuments: Promise<string[]> = message.attachments?.length
@@ -767,6 +804,11 @@ export async function initializeChannels(): Promise<void> {
       const stopTypingAndStall = () => {
         if (typingInterval) { clearInterval(typingInterval); typingInterval = null; }
         if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
+      };
+      endFeedback = () => {
+        if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+        if (unsubAgentEvents) { unsubAgentEvents(); unsubAgentEvents = null; }
+        stopTypingAndStall();
       };
 
       const resetStallTimer = () => {
@@ -1037,6 +1079,7 @@ export async function initializeChannels(): Promise<void> {
         // Ignore send failure — channel may be disconnected
       }
     } finally {
+      endFeedback?.();
       leaveChat?.();
     }
   });

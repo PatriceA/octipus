@@ -163,6 +163,19 @@ describe('group-channel turns', () => {
     expect(result.response).toBe('Friday works.'); // an ordinary turn
   });
 
+  test('an approval answered elsewhere while the reply was on its way is not swapped for another', async () => {
+    const service = new AgentService();
+    const manager = approvals(service);
+    // Seen first: one approval, in this session. Re-read before answering:
+    // that one is gone and another session's approval waits instead.
+    vi.spyOn(manager, 'getPendingApprovals')
+      .mockReturnValueOnce([{ id: 'a1', sessionId: 'dm-session' }] as never)
+      .mockReturnValue([{ id: 'b2', sessionId: 'other-session' }] as never);
+    const resolve = vi.spyOn(manager, 'tryResolveFromMessage').mockResolvedValue(true);
+    await service.handleMessage('dm-session', 'user', 'yes', 'slack');
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
   test('a "yes" answers an approval waiting in the same 1:1 session', async () => {
     const service = new AgentService();
     const manager = approvals(service);
