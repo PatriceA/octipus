@@ -304,12 +304,16 @@ function subscribeToDocumentResults(
 
 /**
  * Track pending permission requests per user for channel-based approval.
- * Maps userId → { requestId, channelType, channelId }
+ * Maps userId → { requestId, channelType, channelId, threadId? }. A reply only
+ * resolves the request in the chat (and, for a group channel, the thread)
+ * where it was asked, and only from the user it was asked of: in a group
+ * channel other members' "yes" never counts.
  */
 const pendingChannelPermissions = new Map<string, {
   requestId: string;
   channelType: ChannelType;
   channelId: string;
+  threadId?: string;
 }>();
 
 /**
@@ -325,9 +329,12 @@ export function eventSessionId(event: { sessionId?: string; data?: { context?: {
   return event.sessionId || event.data?.context?.sessionId;
 }
 
-async function tryResolvePermissionFromChannel(message: UnifiedMessage): Promise<boolean> {
+/** Exported for the regression test that pins the per-chat / per-thread scoping. */
+export async function tryResolvePermissionFromChannel(message: UnifiedMessage): Promise<boolean> {
   const pending = pendingChannelPermissions.get(message.userId);
   if (!pending) return false;
+  if (pending.channelType !== message.channelType || pending.channelId !== message.channelId) return false;
+  if (pending.threadId && message.threadId !== pending.threadId) return false;
 
   const normalized = message.content.trim().toLowerCase();
   const isYes = /^(yes|y|approve|allow|go|ok|sure|ja|confirm)\b/i.test(normalized);
@@ -344,6 +351,7 @@ async function tryResolvePermissionFromChannel(message: UnifiedMessage): Promise
     try {
       await umi.send(pending.channelType, pending.channelId, {
         content: 'Permission granted. Continuing...',
+        threadId: pending.threadId,
       });
     } catch { /* ignore */ }
   } else {
@@ -351,6 +359,7 @@ async function tryResolvePermissionFromChannel(message: UnifiedMessage): Promise
     try {
       await umi.send(pending.channelType, pending.channelId, {
         content: 'Permission denied.',
+        threadId: pending.threadId,
       });
     } catch { /* ignore */ }
   }
@@ -433,11 +442,21 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
   const channelId = session.channelId;
   if (!channelId) return;
 
+  // A group-channel session asks in its thread, naming who must answer.
+  const threadId = session.groupChannelId ? session.threadId ?? undefined : undefined;
+  let addressee = '';
+  if (session.groupChannelId) {
+    const { userRepository } = await import('@/db/repositories/user-repository');
+    const requester = await userRepository.findById(userId);
+    addressee = `${requester?.username ?? 'Requester'}: only you can answer this. `;
+  }
+
   // Track this pending permission for the user
   pendingChannelPermissions.set(userId, {
     requestId: request.requestId,
     channelType,
     channelId,
+    threadId,
   });
 
   // Send permission request message to the channel — include tool details
@@ -469,7 +488,8 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
   }
   try {
     await umi.send(channelType, channelId, {
-      content: `🔒 Permission required: the agent wants to use "${toolName}".${detail}\n\nReply "yes" to allow or "no" to deny.`,
+      content: `🔒 ${addressee}Permission required: the agent wants to use "${toolName}".${detail}\n\nReply "yes" to allow or "no" to deny.`,
+      threadId,
     });
   } catch (error) {
     // The prompt never reached a human, so leaving the request pending buys
@@ -489,6 +509,27 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
         channelLogger.error({ denyError, channelType }, 'Failed to deny an undeliverable permission request');
       });
   }
+}
+
+/**
+ * The acting member's own session for a group-channel thread. The adapter
+ * only tags messages from enrolled channels; re-check here so a stale or
+ * forged tag cannot attach a turn to another chat's enrolment.
+ */
+async function resolveGroupTurnSession(message: UnifiedMessage, groupChannelId: string): Promise<string> {
+  const { findGroupChannel, resolveGroupSession } = await import('./group-channels');
+  const group = await findGroupChannel(message.channelType, message.channelId);
+  if (!group || group.id !== groupChannelId) throw new Error('Group channel enrolment not found for this chat');
+  if (!message.threadId) throw new Error('Group channel message without a thread');
+  const sessionId = await resolveGroupSession({
+    userId: message.userId,
+    group,
+    threadId: message.threadId,
+    title: message.content.slice(0, 80).replace(/\n/g, ' ').trim() || undefined,
+  });
+  const { markSharedAudience } = await import('@/security/flow-guard');
+  markSharedAudience(sessionId);
+  return sessionId;
 }
 
 /**
@@ -530,6 +571,9 @@ export async function initializeChannels(): Promise<void> {
 
   // Bridge incoming channel messages → root agent → reply
   umi.on('message', async (message: UnifiedMessage) => {
+    // Group channels: every reply goes into the thread the member wrote in.
+    const groupChannelId = typeof message.metadata?.groupChannelId === 'string' ? message.metadata.groupChannelId : undefined;
+    const replyThread = groupChannelId ? message.threadId : undefined;
     try {
       recordChannelMessage(message.channelType, 'inbound');
       // Check if this is a yes/no reply to a pending permission request
@@ -555,8 +599,9 @@ export async function initializeChannels(): Promise<void> {
 
       // Resolve the actual DB session ID so we can match root agent events
       // (resolveSession converts "telegram-12345" → UUID, and events use the UUID)
-      const { resolveSession } = await import('@/core/agent/session-resolver');
-      const resolvedSessionId = await resolveSession(channelSessionId, message.userId, message.channelType);
+      const resolvedSessionId = groupChannelId
+        ? await resolveGroupTurnSession(message, groupChannelId)
+        : await (await import('@/core/agent/session-resolver')).resolveSession(channelSessionId, message.userId, message.channelType);
 
       // Subscribe to root agent events for progress feedback via emoji reactions
       const isExternalChannel = message.channelType !== 'webchat';
@@ -671,6 +716,7 @@ export async function initializeChannels(): Promise<void> {
                   umi.send(message.channelType, message.channelId, {
                     content: `Working on it \u2014 started *${role}* agent${model}.`,
                     replyTo: platformMessageId,
+                    threadId: replyThread,
                   }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
                 }
               } else if (!sentStatuses.has('ack')) {
@@ -707,6 +753,7 @@ export async function initializeChannels(): Promise<void> {
               umi.send(message.channelType, message.channelId, {
                 content: approvalText,
                 replyTo: platformMessageId,
+                threadId: replyThread,
               }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
               break;
             }
@@ -719,6 +766,7 @@ export async function initializeChannels(): Promise<void> {
                 umi.send(message.channelType, message.channelId, {
                   content: d.message,
                   replyTo: platformMessageId,
+                  threadId: replyThread,
                 }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
               }
               break;
@@ -742,6 +790,7 @@ export async function initializeChannels(): Promise<void> {
             await umi.send(message.channelType, message.channelId, {
               content: "Sorry, I couldn't transcribe that voice message. Please try again or type it out.",
               replyTo: platformMessageId,
+              threadId: replyThread,
             });
             if (unsubscribe) unsubscribe(); if (unsubAgentEvents) unsubAgentEvents(); stopTypingAndStall();
             return;
@@ -767,6 +816,7 @@ export async function initializeChannels(): Promise<void> {
             await umi.send(message.channelType, message.channelId, {
               content: `Received ${attachmentNames}. Processing through the document pipeline — I'll send you the summary when it's done.`,
               replyTo: platformMessageId,
+              threadId: replyThread,
             });
             // Subscribe to document queue completions to send summary back
             subscribeToDocumentResults(message, umi, platformMessageId);
@@ -787,12 +837,23 @@ export async function initializeChannels(): Promise<void> {
             await umi.send(message.channelType, message.channelId, {
               content: `Received ${attachmentNames}. Processing — I'll send you the results when done.`,
               replyTo: platformMessageId,
+              threadId: replyThread,
             });
             subscribeToDocumentResults(message, umi, platformMessageId);
             if (unsubscribe) unsubscribe(); if (unsubAgentEvents) unsubAgentEvents(); stopTypingAndStall();
             return;
           }
         }
+      }
+
+      const groupContext = groupChannelId ? await import('./group-context') : null;
+      if (groupContext && !groupContext.isBareControlReply(messageContent)) {
+        const { composeGroupTurn } = groupContext;
+        messageContent = composeGroupTurn({
+          requester: message.userName ?? 'A channel member',
+          request: messageContent,
+          context: typeof message.metadata?.groupContext === 'string' ? message.metadata.groupContext : '',
+        });
       }
 
       const result = await rootAgent.handleMessage(
@@ -820,6 +881,7 @@ export async function initializeChannels(): Promise<void> {
         await umi.send(message.channelType, message.channelId, {
           content,
           replyTo: platformMessageId,
+          threadId: replyThread,
           attachments,
         });
         recordChannelMessage(message.channelType, 'outbound');
@@ -830,6 +892,7 @@ export async function initializeChannels(): Promise<void> {
       try {
         await umi.send(message.channelType, message.channelId, {
           content: 'Sorry, I encountered an error processing your message. Please try again later.',
+          threadId: replyThread,
         });
       } catch {
         // Ignore send failure — channel may be disconnected

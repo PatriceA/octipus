@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, desc, eq, lt, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, isNull, lt, sql, type SQL } from 'drizzle-orm';
 import { dbLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
 import { type NewSession, type Session, sessions } from '../schema/sessions';
@@ -81,13 +81,41 @@ export class SessionRepository {
           eq(sessions.userId, userId),
           eq(sessions.channelType, channelType),
           eq(sessions.channelId, channelId),
-          eq(sessions.status, 'active')
+          eq(sessions.status, 'active'),
+          // Group-thread sessions share the chat id but are separate conversations.
+          isNull(sessions.groupChannelId)
         )
       )
       .orderBy(desc(sessions.createdAt))
       .limit(1);
 
     return result[0] ?? null;
+  }
+
+  /** One member's active session for a group channel thread. */
+  async findGroupThreadSession(userId: string, groupChannelId: string, threadId: string): Promise<Session | null> {
+    const result = await this.db
+      .select()
+      .from(sessions)
+      .where(and(
+        eq(sessions.userId, userId),
+        eq(sessions.groupChannelId, groupChannelId),
+        eq(sessions.threadId, threadId),
+        eq(sessions.status, 'active'),
+      ))
+      .orderBy(desc(sessions.createdAt))
+      .limit(1);
+    return result[0] ?? null;
+  }
+
+  /** Whether any member has talked to the bot in this group thread (any status). */
+  async hasGroupThread(groupChannelId: string, threadId: string): Promise<boolean> {
+    const result = await this.db
+      .select({ id: sessions.id })
+      .from(sessions)
+      .where(and(eq(sessions.groupChannelId, groupChannelId), eq(sessions.threadId, threadId)))
+      .limit(1);
+    return result.length > 0;
   }
 
   /**
@@ -107,7 +135,8 @@ export class SessionRepository {
         and(
           eq(sessions.userId, userId),
           eq(sessions.channelType, channelType),
-          eq(sessions.channelId, channelId)
+          eq(sessions.channelId, channelId),
+          isNull(sessions.groupChannelId)
         )
       )
       .orderBy(desc(sessions.createdAt));

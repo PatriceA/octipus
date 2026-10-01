@@ -14,6 +14,8 @@ import AdminLayout from './app/admin/layout';
 const Home = lazy(() => import('./app/page'));
 const AdminPage = lazy(() => import('./app/admin/page'));
 const AdminAuditPage = lazy(() => import('./app/admin/audit/page'));
+const AdminDestinationsPage = lazy(() => import('./app/admin/destinations/page'));
+const AdminGroupChannelsPage = lazy(() => import('./app/admin/group-channels/page'));
 const AdminOrgsPage = lazy(() => import('./app/admin/orgs/page'));
 const AdminOrgsSsoPage = lazy(() => import('./app/admin/orgs/sso/page'));
 const AdminQuotasPage = lazy(() => import('./app/admin/quotas/page'));
@@ -135,6 +137,8 @@ const router = createBrowserRouter([
         children: [
         { index: true, element: <AdminPage /> },
         { path: 'audit', element: <AdminAuditPage /> },
+        { path: 'destinations', element: <AdminDestinationsPage /> },
+        { path: 'group-channels', element: <AdminGroupChannelsPage /> },
         { path: 'orgs', element: <AdminOrgsPage /> },
         { path: 'orgs/sso', element: <AdminOrgsSsoPage /> },
         { path: 'quotas', element: <AdminQuotasPage /> },

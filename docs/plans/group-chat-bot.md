@@ -1,8 +1,10 @@
 # Group chat bot — Octipus as a member of a team channel
 
-> **Design proposal, 2026-10-01.** Not implemented. Paths and line numbers
-> reflect `main` at v0.6.0. This records the problem, the intended behaviour
-> and the phased work; it is not current architecture documentation.
+> **Design plan, 2026-10-01.** Phase 1 (Slack, mention mode) is implemented;
+> user-facing behaviour is documented in
+> [CHANNELS.md → Group channels](../CHANNELS.md#group-channels). Phases 2–4 are
+> not built. Paths and line numbers in "What breaks today" reflect `main` at
+> v0.6.0, before phase 1.
 
 ## Goal
 
@@ -72,50 +74,49 @@ counts. Item 3's fix (a shared session) must keep that property explicitly.
 A channel becomes a **group channel** only after two steps:
 
 1. Someone adds the bot to the channel in the chat platform.
-2. A **workspace owner** enrols it into one of their workspaces under
-   **Workspace settings → Group channels**, picking the channel from those the
-   bot can see.
+2. A linked member types **`@Octipus join`** in the channel. They become the
+   channel's **owner**, and it is attached to their default workspace.
 
 Workspaces belong to exactly one user today (`workspaces.user_id`,
-`src/db/schema/organizations.ts`), so "workspace owner" means the user who owns
-the workspace the channel is enrolled into. Enrolment rules:
+`src/db/schema/organizations.ts`), so the member who enrols is the owner of the
+workspace the channel is attached to. Enrolling from inside the channel is the
+membership check: only a member can post there, and it needs no extra platform
+scopes (`conversations.members` would need `channels:read` / `groups:read`).
+Enrolment rules:
 
-- The enrolling user must have a linked identity on that platform **and be a
-  member of the channel** (checked with `conversations.members` on Slack, the
-  roster on Teams, `getChatMember` on Telegram). This stops anyone from
-  attaching their workspace to a channel they are not in.
-- A channel can be enrolled into one workspace at a time; enrolling a channel
-  that is already taken is refused with the current owner's display name.
+- A channel belongs to one workspace at a time; `join` on a channel held by an
+  active owner is refused privately, naming the owner.
+- The owner can move it to another of their workspaces or remove it under
+  **Settings → Channels → Group channels**, or type `@Octipus leave`.
 - Instance admins see every enrolment under **Admin → Group channels** and can
-  revoke or transfer one, but do not need to approve it.
-- When the enrolment is created the bot posts one message in the channel:
-  "Octipus joined for *&lt;owner&gt;*'s workspace *&lt;name&gt;* — mention me to
-  ask something." Members know whose workspace answers them.
+  revoke one, but do not approve them.
+- If the owner is deactivated the channel is **paused** (one notice). Any
+  linked member can take it over with `@Octipus join` — the in-channel rule
+  again proves membership, so there is no separate admin transfer.
+- On enrolment the bot posts one message in the thread: whose workspace it
+  joined for, how to address it, and how to remove it.
 
-Until enrolled, the bot stays **silent** in that channel — no replies, no link
-prompts, no reactions. DMs keep today's behaviour.
+Until enrolled, the bot posts nothing in that channel. A member who mentions it
+gets one private (ephemeral) hint a day explaining `join`. DMs keep today's
+behaviour.
 
-Enrolment is a new table rather than overloading notification destinations,
-because it carries more than an allow bit:
+Enrolment is a new table rather than overloading notification destinations
+(migration `0120_group_channels.sql`):
 
 ```
 group_channels
   id               uuid pk
-  channel_type     text          -- slack | teams | telegram
+  channel_type     text          -- slack (teams | telegram later)
   channel_id       text          -- platform conversation id
-  label            text
-  workspace_id     uuid          -- whose knowledge, tasks and roles apply
-  owner_user_id    uuid          -- the workspace's owner; owns sessions, pays
-  mode             text          -- mention | listen | proactive
-  guest_access     text          -- none | answer   (unlinked members)
-  default_role     text null     -- role used for "take this"
-  settings         jsonb         -- rate limits, quiet hours, trigger emoji
-  created_by, created_at, updated_at
+  label            text          -- #name when readable
+  owner_user_id    uuid          -- who enrolled it; controls the enrolment
+  workspace_id     uuid          -- one of the owner's workspaces
+  created_at, updated_at
   unique (channel_type, channel_id)
 ```
 
-Enrolling a channel also adds it as a notification destination for its org, so
-hooks, monitors and task completions can post there without a second approval.
+Columns for later phases (`mode`, `guest_access`, `default_role`, rate-limit
+settings) are added when those phases land, not ahead of them.
 
 ### 2. When the bot speaks — addressing
 
@@ -137,53 +138,35 @@ triggering message's own `ts` (Slack); the reply chain for Teams and Telegram.
 
 ### 3. Shared context
 
-**Session ownership.** A group channel thread maps to one shared session,
-owned by the **workspace owner who enrolled the channel**:
+**Session ownership.** Each member has **their own session per thread**
+(`sessions.group_channel_id` + `sessions.thread_id`), and every turn runs as
+that member. The owner holds the enrolment, not the conversations.
 
-- session key `group-<groupChannelId>-<threadId>` (top-level mentions start a
-  new thread, hence a new session);
-- `sessions.user_id` = the channel's `owner_user_id` (the column is NOT NULL);
-- a new `sessions.group_channel_id` column marks it as shared;
-- `resolveSession` gains a group path that skips the per-user lookup and checks
-  the sender is allowed in that channel instead of matching `user_id`.
+This replaces the first draft, in which the enrolling owner owned one shared
+session per thread. Building it showed why that does not work: sessions,
+permissions, tools, memories, knowledge and spend are all scoped to the session
+owner (`handleMessage` refuses a turn whose user is not the session's owner).
+Running members' requests in the owner's session would give everyone in the
+channel the owner's tools and data. Per-member sessions keep every existing
+boundary as it is.
 
-Why the workspace owner and not a dedicated service user: everything a group
-turn needs — knowledge, tasks, roles, skills, budgets — is already scoped to a
-user and that user's workspaces. Owning the session with the workspace owner
-means the existing scoping just works. A service user would need its own user
-row, its own copy of (or a new sharing path to) the workspace's knowledge and
-roles, and its own permission policy, which is the "shared workspaces" feature
-this plan does not build. If shared workspaces arrive later, ownership moves to
-the workspace and `owner_user_id` becomes informational.
+**Shared context without a shared session.** When a turn starts, the adapter
+reads the thread back from the platform (or the latest channel messages for a
+new top-level mention) and renders it as a fenced transcript — oldest first,
+whole messages only, capped at 6,000 characters, the bot's own replies marked
+as "you" (`src/channels/group-context.ts`). Because the bot's replies to other
+members are in the thread, the second member sees the first member's question
+and the answer. The request itself is attributed: `Anna Schmidt: can we ship on
+Friday?`.
 
-Consequences, and how they are handled:
+No transcript is stored by Octipus in phase 1: reading the thread at turn time
+is accurate, needs no retention policy, and costs one API call per addressed
+message. A buffer becomes necessary only for listen mode (§7).
 
-- **Group threads show up in the owner's session list.** They are listed in a
-  separate *Group channels* section (filtered on `group_channel_id`), not mixed
-  into personal chats, and are read-only from the web in phase 1.
-- **The owner pays.** Spend is attributed to the owner, capped per channel by
-  the `group_channel` budget (§8).
-- **The owner's personal data must not leak.** The session belongs to the owner
-  but turns run as the acting member (§4); the owner's personal memories and
-  persona facts are not loaded, same as for everyone else.
-- **The owner leaves or is deactivated.** The enrolment is paused (bot silent,
-  one notice in the channel) until an admin transfers it to another user, who
-  must meet the same membership rule. Sessions and transcript move with it.
-
-**Speaker attribution.** Each message entering a group session is stored and
-sent to the model as `Anna Schmidt: can we ship on Friday?`. The display name
-comes from the platform; the linked Octipus user id (or `guest`) goes into
-message metadata for permission checks, never into the prompt.
-
-**Channel transcript.** Non-addressed messages in an enrolled channel are
-appended to a rolling, capped `group_channel_messages` buffer (text, author,
-ts, thread) — no model call. When a turn starts, the last *N* messages of that
-thread (and, for a top-level mention, the last *N* of the channel) are injected
-as context, using the same whole-message trimming as `channel_history`. Older
-context stays reachable through `channel_history` / `channel_search`.
-
-Retention follows the workspace's data settings; the buffer is pruned to the
-cap on write, and dropping the enrolment drops the buffer.
+The session indexes: migration 0120 rewrites 0028's one-active-session-per-chat
+index to skip group sessions and adds one active session per
+`(user, group channel, thread)`. The 1:1 session lookup and the transcript
+aggregation in the sessions API exclude group sessions.
 
 ### 4. Who may do what
 
@@ -192,29 +175,31 @@ channel owner:
 
 | Sender | Turn runs as | Tools |
 |---|---|---|
-| Linked member | that user | that user's permissions and role, intersected with the channel's workspace |
-| Unlinked, `guest_access=answer` | `guest` principal | read-only: workspace knowledge search, `channel_history`; no write, shell, browser or outbound tools |
-| Unlinked, `guest_access=none` | — | ignored silently; one ephemeral (Slack) or DM hint per person per day to `link` |
+| Linked member | that user | that user's own permissions, tools and budgets |
+| Unlinked | — | no turn; one private hint per person per day to link (in a DM — never a link code in the channel) |
+
+Guest answers for unlinked members need a guest principal with its own
+read-only tool set; that is deferred until there is a request for it.
 
 Rules that must hold:
 
-- **Approvals stay with the requester.** A permission prompt in a group thread
-  names who it is for ("@Anna, allow `shell`…?") and only that user's reply
-  resolves it. Keying `pendingChannelPermissions` by `(userId, sessionId)`
-  instead of `userId` alone keeps this when several members share a session.
-  Channel admins may *deny* any pending request, never approve on someone's
-  behalf.
-- **No personal context in shared answers.** Group turns do not load the
-  acting user's personal memories, persona facts or private notes. Knowledge
-  retrieval is limited to the channel's workspace.
-- **Flow guard is per session, so it is shared.** Once any member's turn sets
-  `private` (e.g. reads their mail), later outbound calls in that thread need
-  approval — including another member's. That is the conservative behaviour we
-  want. In addition, `private` reads in a group session require ASK even when
-  the user's own policy is ALLOW, because the result is posted to everyone.
-- **The channel is `suspicious` from the start.** Messages from other members
-  are text the acting user does not control, so group sessions start with the
-  `suspicious` flag set.
+- **Approvals stay with the requester.** A permission prompt is posted in the
+  thread, names who must answer, and resolves only on that user's reply in that
+  chat and thread (`tryResolvePermissionFromChannel`); another member's "yes"
+  is ignored.
+- **No personal context in shared answers.** Group turns neither load nor
+  extract the requester's long-term memories, and session learning skips group
+  threads (other members' words must not become the requester's facts). The
+  prompt tells the model the reply is visible to the whole channel. The
+  persona is the requester's (it is the bot's voice, not personal data).
+- **Private reads need approval.** In a group session, a call that reads the
+  requester's private data (mail, drive, chat, `data`) is raised from ALLOW to
+  ASK by the flow guard (`markSharedAudience` / `sharedAudienceReason`),
+  because the result can end up in a reply everyone reads.
+- **The channel is `suspicious` from the start.** The transcript is text the
+  requester does not control, so group sessions start with the `suspicious`
+  flag set; the existing trifecta rule then applies to any private read
+  followed by a write.
 
 ### 5. Taking up work
 
@@ -293,35 +278,43 @@ sessions need the `group_channel_id` attributed (via the session).
 
 ## Phases
 
-### Phase 1 — Slack, mention mode (fixes today's problems)
+### Phase 1 — Slack, mention mode (fixes today's problems) — done
 
-- `group_channels` table; enrolment API for workspace owners with the
-  channel-membership check; workspace settings page; admin list with revoke /
-  transfer; enrolment also registers a notification destination and posts the
-  join message.
-- Slack: bot user id on connect; `addressed` detection; silent in unenrolled
-  channels; no link prompts in channels (ephemeral hint, rate-limited).
-- Always reply in thread.
-- Group sessions: channel-owned session per thread, `sessions.group_channel_id`,
-  group path in `resolveSession`.
-- Speaker attribution and the capped channel transcript buffer.
-- Acting-user permissions; guest principal (read-only); approvals keyed by
-  `(userId, sessionId)` with the requester named in the prompt.
-- Group turns skip personal memory / persona facts; start `suspicious`;
-  `private` reads forced to ASK.
+Built:
+- `group_channels` table and `sessions.group_channel_id` (migration 0120);
+  `src/channels/group-channels.ts`.
+- Enrolment with `@Octipus join` / `@Octipus leave` in the channel; takeover
+  of a paused channel; owner section under Settings → Channels; Admin → Group
+  channels with revoke. Routes `/api/me/group-channels`,
+  `/api/admin/group-channels`.
+- Slack (`src/channels/slack/group.ts`): bot ids from `auth.test`; silent in
+  unenrolled channels; acts only when mentioned or in a thread it is part of;
+  `link` never answered in a channel; private, rate-limited hints.
+- Replies, status messages and permission prompts in the thread.
+- Per-member thread sessions; thread transcript as context
+  (`src/channels/group-context.ts`); attributed request.
+- Approvals only from the requester in that thread; memories and learning
+  skipped; group sessions start `suspicious`; private reads raised to ASK.
 
-Acceptance:
-- In an enrolled channel, an un-mentioned message produces no reply, no
-  reaction and no model call (asserted in the UMI dispatch test).
-- Two linked members mentioning the bot in one thread share a session; the
-  second sees the first's question in context.
-- Member B cannot approve member A's pending permission; A can.
-- An unlinked member's mention with `guest_access=none` produces no channel
-  message.
-- An unenrolled channel produces no output at all.
-- A user who is not a member of the channel cannot enrol it; a channel already
-  enrolled elsewhere cannot be enrolled again.
-- Deactivating the owner pauses the channel; an admin transfer resumes it.
+Deferred from the first draft: guest answers for unlinked members, and adding
+the channel as a notification destination on enrolment (hooks and monitors
+still need an admin-approved destination to post there).
+
+Acceptance (each has a test):
+- In an enrolled channel, an un-mentioned message produces no reply and no
+  turn (`slack/group.test.ts`).
+- Two members in one thread get separate sessions; the second sees the first's
+  question and the bot's answer through the thread transcript
+  (`group-channels.test.ts`, `group-context.test.ts`).
+- Member B cannot approve member A's pending permission; A can, only in that
+  thread (`permission-forward.test.ts`).
+- An unlinked member's mention produces no channel message, only a private
+  hint (`slack/group.test.ts`).
+- An unenrolled channel produces no channel message.
+- A channel enrolled by an active owner cannot be taken; a deactivated owner
+  pauses it and another member's `join` resumes it (`group-channels.test.ts`).
+- Private reads in a group session ask; the same read in a 1:1 session does
+  not (`flow-guard-shared.test.ts`).
 
 ### Phase 2 — Taking up work
 
@@ -343,16 +336,23 @@ Acceptance:
 
 ## Open questions
 
-1. **Visibility in the web UI** — should group sessions also appear in other
-   members' session pickers (read-only)? Phase 1 shows them to the owner only.
-2. **Transcript retention** — default cap and age for
-   `group_channel_messages`, and whether it is indexed into workspace knowledge.
-3. **Guest default** — `none` (safest) or `answer`? Proposal: `none`.
+1. **Guest answers** — should unlinked members ever get read-only answers?
+   Phase 1: no.
+2. **Transcript retention** — only relevant once listen mode needs a stored
+   buffer (§7); phase 1 stores none.
+3. **Shared notifications** — should enrolment also let the owner's hooks and
+   monitors post to the channel without an admin-approved destination?
 
 ## Decisions
 
 - **2026-10-01 — Who enrols:** workspace owners enrol channels into their own
   workspaces, provided they are members of the channel; admins can revoke and
   transfer.
-- **2026-10-01 — Who owns group sessions:** the workspace owner who enrolled
-  the channel, not a service user (see §3 for the reasoning and consequences).
+- **2026-10-01 — Who owns group sessions:** first decided as "the workspace
+  owner who enrolled the channel". **Revised during phase 1:** each member owns
+  their own session per thread and turns run as them; the owner holds only the
+  enrolment. Owner-held sessions would have exposed the owner's tools and data
+  to every member (§3).
+- **2026-10-01 — Enrolment happens in the channel** (`@Octipus join`), which
+  proves membership without extra Slack scopes; takeover of a paused channel
+  uses the same command instead of an admin transfer.

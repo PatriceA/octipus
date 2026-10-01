@@ -20,6 +20,7 @@ import {
   SettingsGroup,
   useSettingActions,
 } from './setting-field';
+import { GroupChannelsSection } from './group-channels-section';
 
 export function ChannelsTab() {
   const [linkCode, setLinkCode] = useState('');
@@ -166,6 +167,8 @@ export function ChannelsTab() {
           )}
         </div>
       </div>
+
+      <GroupChannelsSection />
 
       {/* Channel Status */}
       <div>

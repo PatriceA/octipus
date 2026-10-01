@@ -194,11 +194,42 @@ export function observeFlow(sessionId: string | undefined, call: FlowCall, contr
 
 export function clearFlowLabel(sessionId: string): void {
   labels.delete(sessionId);
+  sharedAudience.delete(sessionId);
 }
 
 /** Test seam. */
 export function resetFlowLabels(): void {
   labels.clear();
+  sharedAudience.clear();
+}
+
+// ── Shared audience (group channels) ────────────────────────────────────────
+
+/**
+ * Sessions whose replies are posted to a group channel. Two extra rules apply:
+ * the session starts `suspicious` (its prompt carries other members' text),
+ * and reading the requester's private data needs approval, because whatever
+ * it returns can end up in a reply everyone in the channel sees.
+ */
+const sharedAudience = new Set<string>();
+
+/** Mark a group-channel session. Called on every group turn, so a restart costs nothing. */
+export function markSharedAudience(sessionId: string): void {
+  sharedAudience.delete(sessionId);
+  sharedAudience.add(sessionId);
+  if (sharedAudience.size > MAX_SESSIONS) sharedAudience.delete(sharedAudience.values().next().value as string);
+  observeFlow(sessionId, { toolId: 'group-channel', action: 'transcript' }, { taints: ['suspicious'] });
+}
+
+export function isSharedAudience(sessionId: string | undefined): boolean {
+  return !!sessionId && sharedAudience.has(sessionId);
+}
+
+/** Why a private read in a shared-audience session needs a human, or undefined. Pure. */
+export function sharedAudienceReason(shared: boolean, call: FlowCall, contract: FlowContract): string | undefined {
+  if (!shared || !contract.taints.includes('private')) return undefined;
+  return `flow guard: this conversation is in a shared group channel and ${call.toolId}:${call.action} reads private data; `
+    + 'anything it returns may be posted where every member can read it, so it needs approval';
 }
 
 // ── Decision ────────────────────────────────────────────────────────────────
@@ -259,7 +290,7 @@ export function applyFlowGuard(
   const label = { ...getFlowLabel(sessionId) };
   label.sources = { ...label.sources };
   for (const t of contract.taints) if (!label[t]) { label[t] = true; label.sources[t] = `${call.toolId}:${call.action}`; }
-  const reason = flowBlockReason(label, contract);
+  const reason = flowBlockReason(label, contract) ?? sharedAudienceReason(isSharedAudience(sessionId), call, contract);
   if (!reason) return permission;
   return { ...permission, level: 'ASK', allowed: false, requiresApproval: true, reason, source: 'flow-guard' };
 }

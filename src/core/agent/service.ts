@@ -263,6 +263,10 @@ export class AgentService {
 
       // Auto-title sessions with generic names
       const session = await sessionRepository.findById(resolvedSessionId);
+      // A group-channel thread: the reply is posted where every member can
+      // read it, so the requester's personal memories are neither injected
+      // nor learned from (docs/plans/group-chat-bot.md §4).
+      const sharedAudience = !!session?.groupChannelId;
       if (session) {
         const genericTitles = ['new chat', 'untitled', 'webchat conversation', 'telegram conversation', 'api conversation', 'slack conversation', 'teams conversation'];
         const currentTitle = (session.title || '').toLowerCase().trim();
@@ -386,7 +390,7 @@ export class AgentService {
         // plan often references the user's preferences ("use my usual
         // stack"); withholding memory here would degrade plan quality.
         let planMemoryBlock = '';
-        try {
+        if (!sharedAudience) try {
           const memories = await retrieveForContext({
             userId,
             agentScope: classification.topic ?? null,
@@ -422,7 +426,7 @@ export class AgentService {
         // executor LLM sees the brief — facts in the brief should
         // get a chance to be extracted. Fire-and-forget like the
         // main path.
-        updateMemoriesAfterTurn({
+        if (!sharedAudience) updateMemoriesAfterTurn({
           userId,
           workspaceId,
           agentScope: classification.topic ?? null,
@@ -536,7 +540,7 @@ export class AgentService {
       // memories without dragging unrelated rows into every turn.
       const memoryScope = classification.topic ?? null;
       let memoryBlock = '';
-      try {
+      if (!sharedAudience) try {
         const memories = await retrieveForContext({
           userId,
           agentScope: memoryScope,
@@ -562,7 +566,7 @@ export class AgentService {
         // Cadence gate. `off` short-circuits before any work; the
         // `on_compaction` path is handled inside session-compaction.ts
         // so the per-turn path skips here.
-        if (memoryCadence !== 'per_turn') return;
+        if (memoryCadence !== 'per_turn' || sharedAudience) return;
         // Best-effort provenance: pick up the just-persisted user
         // message id. Returns undefined when persistence hasn't landed
         // yet (e.g. the worker persists asynchronously) — that's fine,

@@ -31,6 +31,12 @@ export async function processLearningJob(job: Pick<BackgroundJob, 'id' | 'userId
     const payload = learningPayloadSchema.parse(job.payload);
     const session = await sessionRepository.findById(payload.sessionId);
     if (!session || session.userId !== job.userId || session.workspaceId !== job.workspaceId) throw new Error('Learning session ownership or workspace changed');
+    // A group-channel thread carries other members' messages in its prompts;
+    // learning from it could file their words as the requester's facts.
+    if (session.groupChannelId) {
+      await backgroundJobRepository.finish(job.id, { status: 'done', stage: 'skipped_group_channel', result: { reason: 'Group channel conversations are not used for learning.', outputs } });
+      return;
+    }
     let workspaceId = job.workspaceId;
     if (!workspaceId) {
       const { getOrgWorkspaceManager } = await import('@/security/orgs');

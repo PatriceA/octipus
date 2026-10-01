@@ -492,6 +492,40 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
   // GET    /notification-destinations
   // POST   /notification-destinations      { channelType, channelId, label?, orgId? }
   // DELETE /notification-destinations/:id
+  // ── Group channels (docs/plans/group-chat-bot.md) ────────────────────
+  // GET    /group-channels       every enrolment, with owner and workspace
+  // DELETE /group-channels/:id   revoke one (audited; the bot goes quiet there)
+  .get(
+    '/group-channels',
+    async (ctx) => {
+      const guard = requireAdmin(ctx);
+      if (!guard.ok) return guard.body;
+      const { listAllGroupChannels } = await import('@/channels/group-channels');
+      return { groupChannels: await listAllGroupChannels() };
+    },
+    { detail: { tags: ['admin'] } },
+  )
+
+  .delete(
+    '/group-channels/:id',
+    async (ctx) => {
+      const guard = requireAdmin(ctx);
+      if (!guard.ok) return guard.body;
+      const { params, principal, set } = ctx;
+      const { removeGroupChannel } = await import('@/channels/group-channels');
+      const removed = await removeGroupChannel(params.id, { userId: principal.userId, isAdmin: true });
+      if (!removed) {
+        set.status = 404;
+        return { error: 'Group channel not found' };
+      }
+      return { deleted: true };
+    },
+    {
+      params: t.Object({ id: t.String({ pattern: UUID_PATTERN }) }),
+      detail: { tags: ['admin'] },
+    },
+  )
+
   .get(
     '/notification-destinations',
     async (ctx) => {

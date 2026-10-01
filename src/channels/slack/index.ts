@@ -6,6 +6,8 @@ import type { Config } from '@/config/schema';
 import type { Attachment, ChannelResponse, ChannelType } from '@/core/types';
 import { channelLogger } from '@/utils/logger';
 import { BaseChannel } from '../interface';
+import { shouldSendHint } from '../hint-limiter';
+import { type GroupMember, handleSlackGroupMessage, type SlackGroupDeps } from './group';
 
 interface SlackMessage {
   user: string;
@@ -43,6 +45,9 @@ export class SlackChannel extends BaseChannel {
   private app: App | null = null;
   /** DM channel id → the Slack user it is with (see dmUser). */
   private dmUsers = new Map<string, string>();
+  /** The bot's own user and bot ids (`auth.test`), for mention detection in channels. */
+  private botUserId: string | null = null;
+  private botId: string | null = null;
 
   override isEnabled(config: Config): boolean {
     return Boolean(config.slack?.botToken);
@@ -82,6 +87,16 @@ export class SlackChannel extends BaseChannel {
     this.app.message(async ({ message, say, client }) => {
       const msg = message as SlackMessage;
       if (msg.bot_id || msg.subtype === 'bot_message') return; // ignore the bot's own posts
+      // Channels, private channels and group DMs follow the group-channel rules:
+      // silent unless enrolled and addressed. Only 1:1 DMs take the path below.
+      if (msg.channel_type && msg.channel_type !== 'im') {
+        try {
+          await handleSlackGroupMessage(msg, this.groupDeps(client));
+        } catch (err) {
+          channelLogger.error({ err, channel: msg.channel }, 'Slack group message handling failed');
+        }
+        return;
+      }
       // Strip a leading bot @mention so "@octipus hi" reads as "hi".
       const text = (msg.text ?? '').replace(/<@[A-Z0-9]+>/gi, '').trim();
       // `link` keyword shortcut (the `/link` slash command does the same).
@@ -104,9 +119,139 @@ export class SlackChannel extends BaseChannel {
       await this.app.start();
       this.setConnected(true);
       channelLogger.info('Slack app started in socket mode');
+      await this.loadBotIdentity();
     } catch (error) {
       this.emitError(error as Error);
       throw error;
+    }
+  }
+
+  /**
+   * Learn the bot's own ids. Without them no channel message counts as a
+   * mention, so group channels stay silent — say so loudly.
+   */
+  private async loadBotIdentity(): Promise<void> {
+    if (!this.app) return;
+    try {
+      const auth = await this.app.client.auth.test();
+      this.botUserId = (auth.user_id as string | undefined) ?? null;
+      this.botId = (auth.bot_id as string | undefined) ?? null;
+      if (!this.botUserId) channelLogger.error('Slack auth.test returned no user_id — group channels will not respond to mentions');
+    } catch (err) {
+      channelLogger.error({ err }, 'Slack auth.test failed — group channels will not respond to mentions');
+    }
+  }
+
+  /** Platform calls for `handleSlackGroupMessage`. */
+  private groupDeps(client: WebClient): SlackGroupDeps {
+    const logFailure = (what: string) => (err: unknown) => {
+      channelLogger.error({ err }, `Slack group: ${what} failed`);
+    };
+    return {
+      botUserId: this.botUserId,
+      findGroup: async (channelId) => {
+        const { findGroupChannel } = await import('@/channels/group-channels');
+        return findGroupChannel('slack', channelId);
+      },
+      isGroupActive: async (group) => {
+        const { isGroupChannelActive } = await import('@/channels/group-channels');
+        return isGroupChannelActive(group);
+      },
+      isThreadActive: async (groupId, threadTs) => {
+        const { isGroupThreadActive } = await import('@/channels/group-channels');
+        return isGroupThreadActive(groupId, threadTs);
+      },
+      findMember: async (slackUserId): Promise<GroupMember | null> => {
+        const { getChannelBindingManager } = await import('@/security/channel-bindings');
+        const user = await getChannelBindingManager().findUserRecordByExternalId('slack', slackUserId);
+        return user ? { id: user.id, username: user.username, isActive: user.isActive, isAdmin: user.isAdmin } : null;
+      },
+      join: async ({ channelId, label, userId }) => {
+        const { joinGroupChannel } = await import('@/channels/group-channels');
+        return joinGroupChannel({ channelType: 'slack', channelId, label, userId });
+      },
+      leave: async ({ channelId, userId, isAdmin }) => {
+        const { leaveGroupChannel } = await import('@/channels/group-channels');
+        return leaveGroupChannel({ channelType: 'slack', channelId, userId, isAdmin });
+      },
+      channelLabel: async (channelId) => {
+        try {
+          const info = await client.conversations.info({ channel: channelId });
+          const name = (info.channel as { name?: string } | undefined)?.name;
+          return name ? `#${name}` : null;
+        } catch (err) {
+          // Needs channels:read / groups:read; the label is cosmetic.
+          channelLogger.debug({ err, channelId }, 'Slack conversations.info failed — enrolling without a label');
+          return null;
+        }
+      },
+      displayName: async (slackUserId) => {
+        try {
+          const info = await client.users.info({ user: slackUserId });
+          return info.user?.real_name || info.user?.name || slackUserId;
+        } catch (err) {
+          channelLogger.debug({ err, slackUserId }, 'Slack users.info failed — using the raw id');
+          return slackUserId;
+        }
+      },
+      postEphemeral: async (channelId, slackUserId, text, threadTs) => {
+        await client.chat.postEphemeral({ channel: channelId, user: slackUserId, text, thread_ts: threadTs })
+          .catch(logFailure('chat.postEphemeral'));
+      },
+      postInThread: async (channelId, threadTs, text) => {
+        await client.chat.postMessage({ channel: channelId, thread_ts: threadTs, text })
+          .catch(logFailure('chat.postMessage'));
+      },
+      readContext: (input) => this.readGroupContext(input),
+      shouldSendHint,
+      dispatch: ({ channelId, member, userName, text, threadTs, group, context, message }) => {
+        const msg = message as SlackMessage;
+        const attachments = (msg.files ?? []).map((file): Attachment => ({
+          type: this.mapFileType(file.mimetype),
+          url: file.url_private,
+          mimeType: file.mimetype,
+          filename: file.name,
+          size: file.size,
+        }));
+        this.emitMessage(this.createUnifiedMessage(channelId, member.id, text, {
+          userName,
+          threadId: threadTs,
+          attachments: attachments.length > 0 ? attachments : undefined,
+          metadata: {
+            slackUserId: msg.user,
+            ts: msg.ts,
+            channelType: msg.channel_type,
+            groupChannelId: group.id,
+            groupContext: context,
+          },
+        }));
+      },
+    };
+  }
+
+  /** The thread (or the channel's latest messages) as a transcript for the turn. */
+  private async readGroupContext(input: { channelId: string; ts: string; threadTs?: string; label: string | null }): Promise<string> {
+    if (!this.app) return '';
+    const { readSlackHistory } = await import('@/core/channels/slack-read');
+    const { slackBotClient } = await import('@/core/channels/read-clients');
+    const { renderGroupContext } = await import('@/channels/group-context');
+    const reader = await slackBotClient();
+    if (!reader) return '';
+    try {
+      const { messages } = await readSlackHistory(reader, input.threadTs
+        ? { target: input.channelId, limit: 40, thread: input.threadTs }
+        : { target: input.channelId, limit: 15 });
+      const botIds = new Set([this.botUserId, this.botId].filter((id): id is string => !!id));
+      return renderGroupContext(messages, {
+        currentMessageId: input.ts,
+        botIds,
+        conversationName: input.label ?? undefined,
+        scope: input.threadTs ? 'thread' : 'channel',
+      });
+    } catch (err) {
+      // Answering without the transcript beats not answering; the gap is logged.
+      channelLogger.warn({ err, channelId: input.channelId }, 'Slack group: reading channel context failed — answering without it');
+      return '';
     }
   }
 

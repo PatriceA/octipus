@@ -145,15 +145,57 @@ Hooks, scheduled tasks, monitors, notifications and agents (the `messaging` tool
 | `slack.signingSecret` | `SLACK_SIGNING_SECRET` | Vault | Signing secret from app settings (secret, stored in vault) |
 | `slack.userToken` | `SLACK_USER_TOKEN` | Vault | Optional user token (`xoxp-...`). **Only needed for `channel_search`** — Slack does not expose `search.messages` to bot tokens at all. Add the `search:read` User Token Scope under *OAuth & Permissions*, reinstall, and copy the **User** OAuth Token. Without it, `channel_search` scans one named channel's history instead and says so in its result. |
 
+Optional scopes: `channels:read` and `groups:read` let the bot read a channel's
+name when it is enrolled as a [group channel](#group-channels) (otherwise the
+settings pages show the channel id).
+
 ### Features
 
 - Direct messages and @mentions
+- [Group channels](#group-channels): answers in a shared channel only when enrolled and addressed
 - Thread-based conversations
 - File attachments (images, documents)
 - Rich message blocks with Markdown
 - Socket Mode (no public endpoint needed)
 - Account linking via `link` keyword
 - Reading history and searching messages — see [Reading a conversation back](#reading-a-conversation-back)
+
+### Group channels
+
+Invite the bot to a channel and it stays **silent** there until a linked
+member enrols the channel by typing `@Octipus join` in it. Typing it in the
+channel is what proves the member belongs there, so there is no form for it.
+The member who enrols becomes the channel's **owner**: it is attached to their
+default workspace (changeable under **Settings → Channels → Group channels**),
+and they can remove the bot there or with `@Octipus leave`.
+
+Once enrolled, the bot:
+
+- **answers only when addressed** — an @mention, or a reply in a thread it is
+  already part of. Every other message is ignored, and costs nothing;
+- **replies in a thread** on the message that addressed it;
+- **runs each turn as the member who asked**, with that member's permissions,
+  tools, budgets and session — never as the owner. Each member has their own
+  session per thread; what others said reaches the turn as a transcript of the
+  thread (or of the latest channel messages for a new mention), read back with
+  the bot token and marked as untrusted text;
+- **keeps personal context out**: the requester's memories are not loaded, the
+  thread is never used for learning, and reading their private data (mail,
+  drive, chat, `data` queries) asks for approval first, because the answer is
+  posted where everyone can read it ([flow guard](FLOW-GUARD.md));
+- **asks permission in the thread, of the requester only** — another member's
+  "yes" does not count.
+
+Members without a linked account get one private (ephemeral) hint a day to
+link; the bot never answers `link` in a channel, since a link code posted where
+others can read it could be redeemed by someone else — send `link` in a DM.
+
+If the owner's account is deactivated, the channel is paused (one notice) until
+another linked member types `@Octipus join` to take it over. Admins see every
+enrolment under **Admin → Group channels** and can revoke one.
+
+Slack is the only platform with group mode so far; Teams and Telegram groups
+follow ([plan](plans/group-chat-bot.md)).
 
 ---
 

@@ -68,7 +68,7 @@ export const agentRoutes = new Elysia({ prefix: '/agents' })
           return { agents: [], total: 0, limit, offset, hasMore: false };
         }
         const AGGREGATED_CHANNELS = new Set(['telegram', 'slack', 'whatsapp', 'teams', 'discord']);
-        if (AGGREGATED_CHANNELS.has(session.channelType)) {
+        if (AGGREGATED_CHANNELS.has(session.channelType) && !session.groupChannelId) {
           // Siblings share session.userId by definition (the index is on
           // (user_id, channel_type, channel_id)), so they're all in tenant.
           const siblings = await sessionRepository.findAllByUserAndChannel(

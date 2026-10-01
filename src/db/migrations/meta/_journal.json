@@ -848,6 +848,13 @@
       "when": 1789601114567,
       "tag": "0119_plan_item_acceptance",
       "breakpoints": true
+    },
+    {
+      "idx": 121,
+      "version": "7",
+      "when": 1789601114568,
+      "tag": "0120_group_channels",
+      "breakpoints": true
     }
   ]
 }

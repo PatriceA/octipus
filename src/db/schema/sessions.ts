@@ -17,6 +17,13 @@ export const sessions = pgTable('sessions', {
   channelType: text('channel_type').notNull(), // telegram, teams, slack, webchat, api
   channelId: text('channel_id').notNull(),
   threadId: text('thread_id'),
+  /**
+   * Set when the session is one member's conversation in a group channel
+   * thread (`group_channels`). Such sessions are keyed by thread, not by
+   * chat, and never aggregated with the member's other sessions for the
+   * same chat. FK in migration 0120 (ON DELETE SET NULL).
+   */
+  groupChannelId: uuid('group_channel_id'),
   title: text('title'),
   status: sessionStatusEnum('status').default('active').notNull(),
   context: jsonb('context').$type<SessionContext>().default({}),
