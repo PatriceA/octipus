@@ -75,33 +75,32 @@ A channel becomes a **group channel** only after two steps:
 
 1. Someone adds the bot to the channel in the chat platform.
 2. A linked member types **`@Octipus join`** in the channel. They become the
-   channel's **owner**, and it is attached to their default workspace.
+   channel's **owner**.
 
-Workspaces belong to exactly one user today (`workspaces.user_id`,
-`src/db/schema/organizations.ts`), so the member who enrols is the owner of the
-workspace the channel is attached to. Enrolling from inside the channel is the
-membership check: only a member can post there, and it needs no extra platform
-scopes (`conversations.members` would need `channels:read` / `groups:read`).
-Enrolment rules:
+Enrolling from inside the channel is the membership check: only a member can
+post there, and it needs no extra platform scopes (`conversations.members`
+would need `channels:read` / `groups:read`). The channel is not attached to a
+workspace: every request runs in the asking member's own default workspace
+(§3), so a channel-level workspace would have had no effect. Enrolment rules:
 
-- A channel belongs to one workspace at a time; `join` on a channel held by an
-  active owner is refused privately, naming the owner.
-- The owner can move it to another of their workspaces or remove it under
-  **Settings → Channels → Group channels**, or type `@Octipus leave`.
+- A channel has one owner at a time; `join` on a channel held by an active
+  owner is refused privately, naming the owner.
+- The owner can remove it under **Settings → Channels → Group channels**, or
+  type `@Octipus leave`.
 - Instance admins see every enrolment under **Admin → Group channels** and can
   revoke one, but do not approve them.
 - If the owner is deactivated the channel is **paused** (one notice). Any
   linked member can take it over with `@Octipus join` — the in-channel rule
   again proves membership, so there is no separate admin transfer.
-- On enrolment the bot posts one message in the thread: whose workspace it
-  joined for, how to address it, and how to remove it.
+- On enrolment the bot posts one message in the thread: who enrolled it, how
+  to address it, and how to remove it.
 
 Until enrolled, the bot posts nothing in that channel. A member who mentions it
 gets one private (ephemeral) hint a day explaining `join`. DMs keep today's
 behaviour.
 
 Enrolment is a new table rather than overloading notification destinations
-(migration `0120_group_channels.sql`):
+(migrations `0120_group_channels.sql`, `0121_group_channels_unlink.sql`):
 
 ```
 group_channels
@@ -110,7 +109,6 @@ group_channels
   channel_id       text          -- platform conversation id
   label            text          -- #name when readable
   owner_user_id    uuid          -- who enrolled it; controls the enrolment
-  workspace_id     uuid          -- one of the owner's workspaces
   created_at, updated_at
   unique (channel_type, channel_id)
 ```
@@ -167,6 +165,10 @@ The session indexes: migration 0120 rewrites 0028's one-active-session-per-chat
 index to skip group sessions and adds one active session per
 `(user, group channel, thread)`. The 1:1 session lookup and the transcript
 aggregation in the sessions API exclude group sessions.
+`sessions.group_channel_id` has no foreign key on purpose (0121 drops the one
+0120 created): when an enrolment is removed, the members' thread sessions must
+stay group sessions. With `ON DELETE SET NULL`, several thread sessions of one
+member became colliding 1:1 rows and the delete failed.
 
 ### 4. Who may do what
 
@@ -183,10 +185,31 @@ read-only tool set; that is deferred until there is a request for it.
 
 Rules that must hold:
 
-- **Approvals stay with the requester.** A permission prompt is posted in the
-  thread, names who must answer, and resolves only on that user's reply in that
-  chat and thread (`tryResolvePermissionFromChannel`); another member's "yes"
-  is ignored.
+- **Approvals stay with the requester.** The thread gets a prompt naming who
+  must answer, without the tool arguments; the arguments (a path, a command,
+  an email body) go to the requester as an ephemeral message
+  (`BaseChannel.sendPrivate`), and are never posted publicly even when that
+  fails. A reply resolves only prompts asked of that user in that chat and
+  thread; prompts are queued per user + chat + thread, so waiting prompts in
+  two threads or a DM do not displace each other. A reply answers the newest
+  prompt, and the confirmation names the tool it decided; prompts resolved in
+  the web UI or expired are dropped from the queue. In a thread only a bare
+  yes/no answers (members also talk to each other there), and nothing is
+  posted once the channel's enrolment is removed or paused — the request is
+  denied instead, so the turn does not stall. A prompt only becomes
+  answerable once it has been posted. Pipeline approvals are posted the same
+  way (details privately); Slack group messages carry their `ts` as the
+  platform message id, without which the dispatcher posted no approval or
+  progress messages to Slack at all.
+- **The request stays as typed.** The group framing (notice, transcript,
+  attribution) is handed to `handleMessage` separately (`GroupTurn`) and
+  delivered as per-turn context (`groupTurnContext`, stored in the message's
+  `metadata.promptContext` like the memory block), so the stored message,
+  commands, plan `go`, approval replies and the input guard all see the
+  member's own text. Every turn in a group-thread session —
+  monitors and wake-ups included — gets the shared-audience notice. Pipeline
+  approvals, like permission prompts, are answered in a thread only by a bare
+  yes/no (`bareReply`) and only for an approval waiting in that session.
 - **No personal context in shared answers.** Group turns neither load nor
   extract the requester's long-term memories, and session learning skips group
   threads (other members' words must not become the requester's facts). The
@@ -214,7 +237,7 @@ Either creates a task on the board:
 - title / description from the message (and its thread, summarised if long);
 - `assigneeKind=role`, `assigneeRef` = the role the request names or the
   channel's `default_role`;
-- requester = the acting user; workspace = the channel's;
+- requester = the acting user; workspace = the requester's (a channel-level workspace may come back with this phase);
 - a back-reference to `(groupChannelId, threadId)` in task metadata.
 
 The bot replies in the thread: "Took it — task #142, assigned to *writer*."
@@ -281,7 +304,7 @@ sessions need the `group_channel_id` attributed (via the session).
 ### Phase 1 — Slack, mention mode (fixes today's problems) — done
 
 Built:
-- `group_channels` table and `sessions.group_channel_id` (migration 0120);
+- `group_channels` table and `sessions.group_channel_id` (migrations 0120, 0121);
   `src/channels/group-channels.ts`.
 - Enrolment with `@Octipus join` / `@Octipus leave` in the channel; takeover
   of a paused channel; owner section under Settings → Channels; Admin → Group
@@ -345,8 +368,9 @@ Acceptance (each has a test):
 
 ## Decisions
 
-- **2026-10-01 — Who enrols:** workspace owners enrol channels into their own
-  workspaces, provided they are members of the channel; admins can revoke and
+- **2026-10-01 — Who enrols:** any linked member of the channel (originally
+  "workspace owners into their own workspaces"; the workspace link was dropped
+  after review, see §1); admins can revoke and
   transfer.
 - **2026-10-01 — Who owns group sessions:** first decided as "the workspace
   owner who enrolled the channel". **Revised during phase 1:** each member owns

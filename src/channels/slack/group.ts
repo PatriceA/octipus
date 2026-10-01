@@ -76,19 +76,19 @@ const SPOKEN_SUBTYPES = new Set(['file_share', 'thread_broadcast']);
 
 export const HINTS = {
   linkInChannel: 'For your security I never post link codes in a channel. Send me `link` in a direct message instead.',
-  notEnrolled: (bot: string) => `I'm not active in this channel. A workspace owner can enrol it by typing \`${bot} join\` here.`,
+  notEnrolled: (bot: string) => `I'm not active in this channel. Any linked member can enrol it by typing \`${bot} join\` here.`,
   linkFirst: 'Link your Slack account to Octipus first: send me `link` in a direct message and enter the code under Settings → Channels.',
   emptyMention: 'Ask me something after the mention, e.g. `@Octipus what did we decide about the release?`',
-  alreadyYours: 'This channel is already enrolled into your workspace.',
+  alreadyYours: 'You already enrolled this channel.',
   taken: (owner: string) => `This channel is already enrolled by *${owner}*. Ask them, or an admin, if it should change.`,
   notOwner: 'Only the member who enrolled me here, or an Octipus admin, can remove me.',
   notEnrolledLeave: "I'm not enrolled in this channel, so there is nothing to leave.",
 };
 
-function joinedText(bot: string, member: string, workspace: string, previousOwner?: string): string {
+function joinedText(bot: string, member: string, previousOwner?: string): string {
   const head = previousOwner
-    ? `*${member}* took over this channel from *${previousOwner}* (deactivated). I answer for *${member}*'s workspace *${workspace}* now.`
-    : `Octipus joined this channel for *${member}*'s workspace *${workspace}*.`;
+    ? `*${member}* took over this channel from *${previousOwner}* (deactivated).`
+    : `Octipus joined this channel; *${member}* enrolled it.`;
   return `${head}\nMention me (\`${bot}\`) to ask something; I reply in a thread and keep following it. `
     + `I act with the permissions of whoever asks, and members need a linked Octipus account. `
     + `*${member}* can remove me with \`${bot} leave\`.`;
@@ -149,6 +149,8 @@ export async function handleSlackGroupMessage(msg: SlackGroupMessage, deps: Slac
     return 'hint';
   }
 
+  // Read even for a short "yes": whether it answers a prompt is decided later,
+  // and if it does not, the model needs the thread to know what it refers to.
   const context = await deps.readContext({ channelId: msg.channel, ts: msg.ts, threadTs: msg.thread_ts, label: group.label });
   deps.dispatch({
     channelId: msg.channel,
@@ -172,10 +174,10 @@ async function join(msg: SlackGroupMessage, slackUser: string, threadTs: string,
   const result = await deps.join({ channelId: msg.channel, label: await deps.channelLabel(msg.channel), userId: member.id });
   switch (result.status) {
     case 'enrolled':
-      await deps.postInThread(msg.channel, threadTs, joinedText(bot, member.username, result.workspaceName));
+      await deps.postInThread(msg.channel, threadTs, joinedText(bot, member.username));
       return 'joined';
     case 'took_over':
-      await deps.postInThread(msg.channel, threadTs, joinedText(bot, member.username, result.workspaceName, result.previousOwner));
+      await deps.postInThread(msg.channel, threadTs, joinedText(bot, member.username, result.previousOwner));
       return 'joined';
     case 'already_yours':
       await deps.postEphemeral(msg.channel, slackUser, HINTS.alreadyYours, msg.thread_ts);

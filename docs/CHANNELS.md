@@ -165,9 +165,8 @@ settings pages show the channel id).
 Invite the bot to a channel and it stays **silent** there until a linked
 member enrols the channel by typing `@Octipus join` in it. Typing it in the
 channel is what proves the member belongs there, so there is no form for it.
-The member who enrols becomes the channel's **owner**: it is attached to their
-default workspace (changeable under **Settings → Channels → Group channels**),
-and they can remove the bot there or with `@Octipus leave`.
+The member who enrols becomes the channel's **owner**: they can remove the bot
+under **Settings → Channels → Group channels** or with `@Octipus leave`.
 
 Once enrolled, the bot:
 
@@ -175,16 +174,32 @@ Once enrolled, the bot:
   already part of. Every other message is ignored, and costs nothing;
 - **replies in a thread** on the message that addressed it;
 - **runs each turn as the member who asked**, with that member's permissions,
-  tools, budgets and session — never as the owner. Each member has their own
-  session per thread; what others said reaches the turn as a transcript of the
-  thread (or of the latest channel messages for a new mention), read back with
-  the bot token and marked as untrusted text;
-- **keeps personal context out**: the requester's memories are not loaded, the
-  thread is never used for learning, and reading their private data (mail,
-  drive, chat, `data` queries) asks for approval first, because the answer is
-  posted where everyone can read it ([flow guard](FLOW-GUARD.md));
-- **asks permission in the thread, of the requester only** — another member's
-  "yes" does not count.
+  tools, budgets, workspace and session — never as the owner. Each member has
+  their own session per thread; what others said reaches the turn as a
+  transcript of the thread (or of the latest channel messages for a new
+  mention), read back with the bot token, one message per line inside a
+  tagged block that members' text and display names cannot close or imitate.
+  The member's own text is passed on — and stored — unchanged, so commands
+  (`/stop`), plan `go` and approval replies work in threads as in a DM; the
+  framing and transcript travel beside it as turn context;
+- **keeps personal context out**: the requester's memories are neither loaded
+  nor extracted (also not on compaction), the thread is never used for
+  learning, and reading their private data (mail, drive, chat, `data`
+  queries) asks for approval first, because the answer is posted where
+  everyone can read it ([flow guard](FLOW-GUARD.md));
+- **asks permission of the requester only** — the thread gets a prompt without
+  details, the details (file, command, recipient, message) go to the requester
+  as an ephemeral message only they can see, and another member's "yes" does
+  not count. Prompts waiting in different threads or chats are answered where
+  they were asked; a reply answers the newest one, and the confirmation names
+  the tool it decided. In a thread only a bare `yes` / `no` counts — for
+  permission prompts and pipeline approvals alike — so talk with colleagues
+  ("no, let me check with Dana first") never answers one. A reply cannot
+  answer a prompt that has not appeared yet. For a channel that has been
+  removed or paused nothing is posted and the request is denied;
+- **posts pipeline approvals in the thread the same way** — a prompt without
+  details, the stage summary privately to the requester;
+- **keeps document results in the thread** when a member shares a file with it.
 
 Members without a linked account get one private (ephemeral) hint a day to
 link; the bot never answers `link` in a channel, since a link code posted where

@@ -283,6 +283,10 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         return { error: 'Session not found' };
       }
       const deleted = await sessionRepository.delete(params.id);
+      if (deleted && owned.groupChannelId && owned.threadId) {
+        const { forgetGroupThread } = await import('@/channels/group-channels');
+        forgetGroupThread(owned.groupChannelId, owned.threadId);
+      }
       return { deleted };
     },
     {

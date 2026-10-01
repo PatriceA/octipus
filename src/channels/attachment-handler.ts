@@ -49,11 +49,13 @@ function isProcessable(attachment: Attachment): boolean {
  * Process attachments from a channel message:
  * download files, create DB records, enqueue for OCR/categorization.
  */
-export async function processChannelAttachments(message: UnifiedMessage): Promise<void> {
-  if (!message.attachments?.length) return;
+/** Returns the ids of the documents enqueued for this message, for result routing. */
+export async function processChannelAttachments(message: UnifiedMessage): Promise<string[]> {
+  const enqueued: string[] = [];
+  if (!message.attachments?.length) return enqueued;
 
   const processable = message.attachments.filter(isProcessable);
-  if (processable.length === 0) return;
+  if (processable.length === 0) return enqueued;
 
   const config = getConfig();
   const documentsPath = resolve(config.workspace.documentsPath || './workspace/documents');
@@ -86,6 +88,7 @@ export async function processChannelAttachments(message: UnifiedMessage): Promis
       });
 
       await getDocumentQueue().enqueue(doc.id, message.userId, { title: originalName, workspaceId: doc.workspaceId });
+      enqueued.push(doc.id);
 
       channelLogger.info(
         { documentId: doc.id, filename: originalName, channel: message.channelType, size: fileBuffer.length },
@@ -98,6 +101,7 @@ export async function processChannelAttachments(message: UnifiedMessage): Promis
       );
     }
   }
+  return enqueued;
 }
 
 export async function downloadAttachment(attachment: Attachment, message: UnifiedMessage): Promise<Buffer | null> {

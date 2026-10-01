@@ -12,7 +12,7 @@ import { type GroupMember, HINTS, handleSlackGroupMessage, type SlackGroupDeps, 
 const BOT = 'UBOT';
 const group: GroupChannel = {
   id: 'g1', channelType: 'slack', channelId: 'C1', label: '#release',
-  ownerUserId: 'owner', workspaceId: 'w1', createdAt: new Date(), updatedAt: new Date(),
+  ownerUserId: 'owner', createdAt: new Date(), updatedAt: new Date(),
 };
 const anna: GroupMember = { id: 'u-anna', username: 'anna', isActive: true, isAdmin: false };
 
@@ -29,7 +29,7 @@ function makeDeps(over: Partial<SlackGroupDeps> = {}) {
     isGroupActive: vi.fn(async () => true),
     isThreadActive: vi.fn(async () => false),
     findMember: vi.fn(async (id: string) => (id === 'U-ANNA' ? anna : null)),
-    join: vi.fn(async (): Promise<JoinResult> => ({ status: 'enrolled', group, workspaceName: 'Default' })),
+    join: vi.fn(async (): Promise<JoinResult> => ({ status: 'enrolled', group })),
     leave: vi.fn(async () => 'left' as const),
     channelLabel: vi.fn(async () => '#release'),
     displayName: vi.fn(async () => 'Anna Schmidt'),
@@ -129,7 +129,7 @@ describe('handleSlackGroupMessage', () => {
     ctx = makeDeps({ findGroup: vi.fn(async () => null) });
     expect(await handleSlackGroupMessage(msg({ text: `<@${BOT}> join` }), ctx.deps)).toBe('joined');
     expect(ctx.deps.join).toHaveBeenCalledWith({ channelId: 'C1', label: '#release', userId: 'u-anna' });
-    expect(ctx.calls.thread[0]!.text).toContain("*anna*'s workspace *Default*");
+    expect(ctx.calls.thread[0]!.text).toContain('*anna* enrolled it');
   });
 
   test('join from an unlinked member does not enrol', async () => {
@@ -148,7 +148,7 @@ describe('handleSlackGroupMessage', () => {
   test('a member can take over a paused channel with join', async () => {
     ctx = makeDeps({
       isGroupActive: vi.fn(async () => false),
-      join: vi.fn(async (): Promise<JoinResult> => ({ status: 'took_over', group, workspaceName: 'Default', previousOwner: 'bob' })),
+      join: vi.fn(async (): Promise<JoinResult> => ({ status: 'took_over', group, previousOwner: 'bob' })),
     });
     expect(await handleSlackGroupMessage(msg({ text: `<@${BOT}> join` }), ctx.deps)).toBe('joined');
     expect(ctx.calls.thread[0]!.text).toContain('took over this channel from *bob*');

@@ -212,12 +212,21 @@ export function resetFlowLabels(): void {
  * it returns can end up in a reply everyone in the channel sees.
  */
 const sharedAudience = new Set<string>();
+/**
+ * Far above `MAX_SESSIONS`: losing a mark mid-turn would silently drop the
+ * approval this rule promises, while each entry is one id (~10 MB at the cap).
+ */
+const MAX_SHARED_SESSIONS = 100_000;
 
-/** Mark a group-channel session. Called on every group turn, so a restart costs nothing. */
+/**
+ * Mark a group-channel session. The root agent service calls this at the start
+ * of every turn in a session with `group_channel_id` set (the durable source
+ * of truth), so a restart or another entry point costs nothing.
+ */
 export function markSharedAudience(sessionId: string): void {
   sharedAudience.delete(sessionId);
   sharedAudience.add(sessionId);
-  if (sharedAudience.size > MAX_SESSIONS) sharedAudience.delete(sharedAudience.values().next().value as string);
+  if (sharedAudience.size > MAX_SHARED_SESSIONS) sharedAudience.delete(sharedAudience.values().next().value as string);
   observeFlow(sessionId, { toolId: 'group-channel', action: 'transcript' }, { taints: ['suspicious'] });
 }
 

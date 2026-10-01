@@ -86,12 +86,11 @@ const enrol = (channelId: string, userId: string) =>
   gc.joinGroupChannel({ channelType: 'slack', channelId, label: '#release', userId });
 
 describe('enrolment', () => {
-  test('first join enrols into the member\'s default workspace; a repeat is a no-op', async () => {
+  test('first join enrols the channel; a repeat is a no-op', async () => {
     const first = await enrol('C1', annaId);
     expect(first.status).toBe('enrolled');
     if (first.status !== 'enrolled') return;
     expect(first.group).toMatchObject({ channelId: 'C1', ownerUserId: annaId, label: '#release' });
-    expect(first.workspaceName).toBeTruthy();
     expect((await enrol('C1', annaId)).status).toBe('already_yours');
     expect(await gc.findGroupChannel('slack', 'C1')).toMatchObject({ ownerUserId: annaId });
     expect(await gc.findGroupChannel('slack', 'C-OTHER')).toBeNull();
@@ -107,6 +106,7 @@ describe('enrolment', () => {
     const group = (await gc.findGroupChannel('slack', 'C1'))!;
     expect(await gc.isGroupChannelActive(group)).toBe(true);
     await executeRaw(`UPDATE users SET is_active = false WHERE id = '${carolId}'`);
+    // Not cached: a deactivation pauses the channel immediately.
     expect(await gc.isGroupChannelActive(group)).toBe(false);
 
     const taken = await enrol('C1', bobId);
@@ -156,17 +156,46 @@ describe('group thread sessions', () => {
     expect(await gc.isGroupThreadActive(r.group.id, '99.9')).toBe(false);
   });
 
-  test('removing the enrolment leaves the members\' sessions but detaches them', async () => {
+  test('removing an enrolment keeps every thread session a group session, even several per member', async () => {
     const r = await enrol('C1', annaId);
     if (r.status !== 'enrolled') throw new Error('setup');
-    const s = await gc.resolveGroupSession({ userId: bobId, group: r.group, threadId: '90.0' });
-    await gc.removeGroupChannel(r.group.id, { userId: annaId, isAdmin: false });
-    expect(await sessionRepository.findById(s)).toMatchObject({ userId: bobId, groupChannelId: null });
+    // bob has two active threads in the same channel (two rows for user/slack/C1).
+    const t1 = await gc.resolveGroupSession({ userId: bobId, group: r.group, threadId: '90.0' });
+    const t2 = await gc.resolveGroupSession({ userId: bobId, group: r.group, threadId: '95.0' });
+    expect(await gc.removeGroupChannel(r.group.id, { userId: annaId, isAdmin: false })).not.toBeNull();
+    for (const id of [t1, t2]) {
+      expect(await sessionRepository.findById(id)).toMatchObject({ userId: bobId, groupChannelId: r.group.id, status: 'active' });
+    }
+    // still never mistaken for bob's 1:1 chat with the bot
+    expect(await sessionRepository.findByUserAndChannel(bobId, 'slack', 'C1')).toBeNull();
+  });
+
+  test('deleting the owner removes the enrolment without touching members\' sessions', async () => {
+    await executeRaw(`INSERT INTO users (id, username) VALUES ('aaaaaaaa-0000-4000-8000-000000000009', 'dave')`);
+    const daveId = 'aaaaaaaa-0000-4000-8000-000000000009';
+    const r = await enrol('C3', daveId);
+    if (r.status !== 'enrolled') throw new Error('setup');
+    const s1 = await gc.resolveGroupSession({ userId: bobId, group: r.group, threadId: '1.0' });
+    const s2 = await gc.resolveGroupSession({ userId: bobId, group: r.group, threadId: '2.0' });
+    await executeRaw(`DELETE FROM users WHERE id = '${daveId}'`);
+    gc.clearGroupChannelCache();
+    expect(await gc.findGroupChannel('slack', 'C3')).toBeNull();
+    for (const id of [s1, s2]) {
+      expect(await sessionRepository.findById(id)).toMatchObject({ userId: bobId, groupChannelId: r.group.id, status: 'active' });
+    }
+  });
+
+  test('thread activity: a new thread session is visible at once, through the cache', async () => {
+    const r = await enrol('C1', annaId);
+    if (r.status !== 'enrolled') throw new Error('setup');
+    expect(await gc.isGroupThreadActive(r.group.id, '70.0')).toBe(false); // caches "no"
+    await gc.resolveGroupSession({ userId: annaId, group: r.group, threadId: '70.0' });
+    expect(await gc.isGroupThreadActive(r.group.id, '70.0')).toBe(true);
   });
 });
 
 describe('routes', () => {
-  test('owner lists, moves and removes their own; others get 404', async () => {
+  test('owner lists and removes their own; others get 404', async () => {
     const r = await enrol('C1', annaId);
     if (r.status !== 'enrolled') throw new Error('setup');
     const anna = appFor(annaId, false);
@@ -177,14 +206,7 @@ describe('routes', () => {
     expect(list.json.groupChannels).toEqual([expect.objectContaining({ id: r.group.id, ownerName: 'anna', ownerActive: true })]);
     expect((await call(bob, 'GET', '/me/group-channels')).json.groupChannels).toEqual([]);
 
-    // bob cannot move or remove anna's enrolment, nor move it into his own workspace
-    const { getOrgWorkspaceManager } = await import('@/security/orgs');
-    const bobWs = await getOrgWorkspaceManager().ensureDefaultWorkspace(bobId);
-    expect((await call(bob, 'PATCH', `/me/group-channels/${r.group.id}`, { workspaceId: bobWs.id })).status).toBe(404);
-    expect((await call(anna, 'PATCH', `/me/group-channels/${r.group.id}`, { workspaceId: bobWs.id })).status).toBe(404);
     expect((await call(bob, 'DELETE', `/me/group-channels/${r.group.id}`)).status).toBe(404);
-
-    expect((await call(anna, 'PATCH', `/me/group-channels/${r.group.id}`, { workspaceId: r.group.workspaceId })).status).toBe(200);
     expect((await call(anna, 'DELETE', `/me/group-channels/${r.group.id}`)).json).toEqual({ deleted: true });
     expect(await gc.findGroupChannel('slack', 'C1')).toBeNull();
   });

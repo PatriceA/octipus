@@ -8,7 +8,7 @@ import type { GroupChannelSummary } from '../../../../src/shared/types';
 /**
  * Admin → Group channels.
  *
- * Every shared chat a workspace owner enrolled Octipus into. Owners enrol from
+ * Every shared chat a linked member enrolled Octipus into. Owners enrol from
  * inside the channel; admins do not approve, but can revoke. A channel whose
  * owner is deactivated is paused until a member types `@Octipus join`.
  */
@@ -51,7 +51,7 @@ export default function AdminGroupChannelsPage() {
                 {g.label && <span className="text-on-surface-variant"> · {g.channelId}</span>}
               </span>
               <span className="text-xs text-on-surface-variant">
-                {g.ownerName} · {g.workspaceName}
+                enrolled by {g.ownerName}
                 {!g.ownerActive && <span className="text-warning"> · paused (owner deactivated)</span>}
               </span>
               <button

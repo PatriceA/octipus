@@ -220,6 +220,10 @@ export class SlackChannel extends BaseChannel {
           metadata: {
             slackUserId: msg.user,
             ts: msg.ts,
+            // The dispatcher keys progress messages, reactions and pipeline
+            // approval prompts on a platform message id; without it a group
+            // thread would never see an approval it has to answer.
+            messageId: msg.ts,
             channelType: msg.channel_type,
             groupChannelId: group.id,
             groupContext: context,
@@ -234,7 +238,7 @@ export class SlackChannel extends BaseChannel {
     if (!this.app) return '';
     const { readSlackHistory } = await import('@/core/channels/slack-read');
     const { slackBotClient } = await import('@/core/channels/read-clients');
-    const { renderGroupContext } = await import('@/channels/group-context');
+    const { renderGroupContext } = await import('@/core/channels/group-context');
     const reader = await slackBotClient();
     if (!reader) return '';
     try {
@@ -309,6 +313,30 @@ export class SlackChannel extends BaseChannel {
     const result = await this.app.client.chat.postMessage(options as unknown as Parameters<WebClient['chat']['postMessage']>[0]);
 
     return result.ts || '';
+  }
+
+  /** An ephemeral message to the Slack identities linked to `userId` (only they see it). */
+  override async sendPrivate(channelId: string, userId: string, response: ChannelResponse): Promise<boolean> {
+    if (!this.app) return false;
+    const { getChannelBindingManager } = await import('@/security/channel-bindings');
+    const identities = (await getChannelBindingManager().listForUser(userId))
+      .filter(i => i.channelType === 'slack' && i.verifiedAt);
+    let delivered = false;
+    for (const identity of identities) {
+      try {
+        await this.app.client.chat.postEphemeral({
+          channel: channelId,
+          user: identity.externalId,
+          text: response.content,
+          thread_ts: response.threadId,
+        });
+        delivered = true;
+      } catch (err) {
+        // Not in this channel, or a stale identity: try the next one.
+        channelLogger.warn({ err, channelId }, 'Slack ephemeral message failed for one identity');
+      }
+    }
+    return delivered;
   }
 
   override async setReaction(channelId: string, messageId: string, emoji: string): Promise<void> {

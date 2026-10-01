@@ -1,7 +1,7 @@
 /**
  * Group channels — Octipus as a member of a shared chat.
  *
- * A workspace owner enrols a channel by typing `@octipus join` in it, which
+ * A linked member enrols a channel by typing `@octipus join` in it, which
  * proves they are a member without any extra platform scopes. Until then the
  * bot stays silent in that channel. Once enrolled, the bot answers when it is
  * addressed (mentioned, or replied to in a thread it is already in).
@@ -19,7 +19,6 @@ import { auditRepository } from '@/db/repositories/audit-repository';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { getDb } from '@/db/postgres';
 import { type GroupChannel, groupChannels } from '@/db/schema/group-channels';
-import { workspaces } from '@/db/schema/organizations';
 import { users } from '@/db/schema/users';
 import { channelLogger } from '@/utils/logger';
 
@@ -31,7 +30,6 @@ export type GroupChannelType = (typeof GROUP_CHANNEL_TYPES)[number];
 export interface GroupChannelView extends GroupChannel {
   ownerName: string;
   ownerActive: boolean;
-  workspaceName: string;
 }
 
 // ── Lookup (hot path: every message in every channel the bot is in) ─────────
@@ -54,12 +52,28 @@ export async function findGroupChannel(channelType: string, channelId: string): 
   return row ?? null;
 }
 
-/** Test seam, and called after every write in this module. */
+/** Test seam: forget every cached enrolment and thread state. */
 export function clearGroupChannelCache(): void {
   cache.clear();
+  threadActive.clear();
 }
 
-/** An enrolment is paused while its owner's account is deactivated. */
+/** After a write: forget this chat's enrolment lookup only. */
+function invalidateChannel(channelType: string, channelId: string): void {
+  cache.delete(cacheKey(channelType, channelId));
+}
+
+/** After a removal: the group's threads are gone with it. */
+function forgetThreads(groupChannelId: string): void {
+  const prefix = `${groupChannelId}:`;
+  for (const key of [...threadActive.keys()]) if (key.startsWith(prefix)) threadActive.delete(key);
+}
+
+/**
+ * An enrolment is paused while its owner's account is deactivated. Not
+ * cached: it is read only for messages addressed to the bot (one primary-key
+ * lookup next to an agent turn), and a deactivation must take effect at once.
+ */
 export async function isGroupChannelActive(group: GroupChannel): Promise<boolean> {
   const [owner] = await getDb()
     .select({ isActive: users.isActive })
@@ -72,8 +86,8 @@ export async function isGroupChannelActive(group: GroupChannel): Promise<boolean
 // ── Enrolment from inside the channel ───────────────────────────────────────
 
 export type JoinResult =
-  | { status: 'enrolled'; group: GroupChannel; workspaceName: string }
-  | { status: 'took_over'; group: GroupChannel; workspaceName: string; previousOwner: string }
+  | { status: 'enrolled'; group: GroupChannel }
+  | { status: 'took_over'; group: GroupChannel; previousOwner: string }
   | { status: 'already_yours'; group: GroupChannel }
   | { status: 'taken'; ownerName: string };
 
@@ -87,9 +101,9 @@ async function ownerSummary(userId: string): Promise<{ name: string; active: boo
 }
 
 /**
- * `@octipus join` from a linked member. Enrols the channel into the member's
- * default workspace, or takes it over when the current owner is deactivated.
- * The caller has already established that `userId` posted in the channel.
+ * `@octipus join` from a linked member. Enrols the channel, or takes it over
+ * when the current owner is deactivated. The caller has already established
+ * that `userId` posted in the channel.
  */
 export async function joinGroupChannel(input: {
   channelType: GroupChannelType;
@@ -97,29 +111,26 @@ export async function joinGroupChannel(input: {
   label?: string | null;
   userId: string;
 }): Promise<JoinResult> {
-  const { getOrgWorkspaceManager } = await import('@/security/orgs');
   const db = getDb();
-  clearGroupChannelCache();
+  invalidateChannel(input.channelType, input.channelId);
   const existing = await findGroupChannel(input.channelType, input.channelId);
 
   if (existing) {
     if (existing.ownerUserId === input.userId) return { status: 'already_yours', group: existing };
     const owner = await ownerSummary(existing.ownerUserId);
     if (owner.active) return { status: 'taken', ownerName: owner.name };
-    const workspace = await getOrgWorkspaceManager().ensureDefaultWorkspace(input.userId);
     const [updated] = await db
       .update(groupChannels)
-      .set({ ownerUserId: input.userId, workspaceId: workspace.id, updatedAt: new Date() })
+      .set({ ownerUserId: input.userId, updatedAt: new Date() })
       // Guard on the previous owner so two members taking over at once cannot both win.
       .where(and(eq(groupChannels.id, existing.id), eq(groupChannels.ownerUserId, existing.ownerUserId)))
       .returning();
-    clearGroupChannelCache();
+    invalidateChannel(input.channelType, input.channelId);
     if (!updated) return joinGroupChannel(input);
     await audit(input.userId, updated, { takenOverFrom: existing.ownerUserId });
-    return { status: 'took_over', group: updated, workspaceName: workspace.name, previousOwner: owner.name };
+    return { status: 'took_over', group: updated, previousOwner: owner.name };
   }
 
-  const workspace = await getOrgWorkspaceManager().ensureDefaultWorkspace(input.userId);
   const [created] = await db
     .insert(groupChannels)
     .values({
@@ -127,15 +138,14 @@ export async function joinGroupChannel(input: {
       channelId: input.channelId,
       label: input.label ?? null,
       ownerUserId: input.userId,
-      workspaceId: workspace.id,
     })
     .onConflictDoNothing()
     .returning();
-  clearGroupChannelCache();
+  invalidateChannel(input.channelType, input.channelId);
   // Lost a race with another member's join: report whoever won.
   if (!created) return joinGroupChannel(input);
   await audit(input.userId, created, { enrolled: true });
-  return { status: 'enrolled', group: created, workspaceName: workspace.name };
+  return { status: 'enrolled', group: created };
 }
 
 export type LeaveResult = 'left' | 'not_enrolled' | 'not_owner';
@@ -147,7 +157,7 @@ export async function leaveGroupChannel(input: {
   userId: string;
   isAdmin: boolean;
 }): Promise<LeaveResult> {
-  clearGroupChannelCache();
+  invalidateChannel(input.channelType, input.channelId);
   const existing = await findGroupChannel(input.channelType, input.channelId);
   if (!existing) return 'not_enrolled';
   if (existing.ownerUserId !== input.userId && !input.isAdmin) return 'not_owner';
@@ -163,14 +173,12 @@ async function listViews(ownerUserId?: string): Promise<GroupChannelView[]> {
       group: groupChannels,
       ownerName: users.username,
       ownerActive: users.isActive,
-      workspaceName: workspaces.name,
     })
     .from(groupChannels)
     .innerJoin(users, eq(users.id, groupChannels.ownerUserId))
-    .innerJoin(workspaces, eq(workspaces.id, groupChannels.workspaceId))
     .where(ownerUserId ? eq(groupChannels.ownerUserId, ownerUserId) : undefined)
     .orderBy(groupChannels.createdAt);
-  return rows.map(r => ({ ...r.group, ownerName: r.ownerName, ownerActive: r.ownerActive, workspaceName: r.workspaceName }));
+  return rows.map(r => ({ ...r.group, ownerName: r.ownerName, ownerActive: r.ownerActive }));
 }
 
 export function listGroupChannelsForOwner(userId: string): Promise<GroupChannelView[]> {
@@ -181,31 +189,16 @@ export function listAllGroupChannels(): Promise<GroupChannelView[]> {
   return listViews();
 }
 
-/**
- * Move an enrolment to another of the owner's workspaces. Null when the
- * channel is not the caller's or the workspace is not theirs.
- */
-export async function setGroupChannelWorkspace(id: string, userId: string, workspaceId: string): Promise<GroupChannel | null> {
-  const { getOrgWorkspaceManager } = await import('@/security/orgs');
-  const workspace = await getOrgWorkspaceManager().findOwnedById(userId, workspaceId);
-  if (!workspace) return null;
-  const [updated] = await getDb()
-    .update(groupChannels)
-    .set({ workspaceId: workspace.id, updatedAt: new Date() })
-    .where(and(eq(groupChannels.id, id), eq(groupChannels.ownerUserId, userId)))
-    .returning();
-  clearGroupChannelCache();
-  if (updated) await audit(userId, updated, { workspaceId: workspace.id });
-  return updated ?? null;
-}
-
 /** Remove an enrolment: the owner's own, or any for an admin. Null when not found / not allowed. */
 export async function removeGroupChannel(id: string, actor: { userId: string; isAdmin: boolean }): Promise<GroupChannel | null> {
   const where = actor.isAdmin
     ? eq(groupChannels.id, id)
     : and(eq(groupChannels.id, id), eq(groupChannels.ownerUserId, actor.userId));
   const [removed] = await getDb().delete(groupChannels).where(where).returning();
-  clearGroupChannelCache();
+  if (removed) {
+    invalidateChannel(removed.channelType, removed.channelId);
+    forgetThreads(removed.id);
+  }
   if (removed) await audit(actor.userId, removed, { deleted: true, byAdmin: actor.isAdmin && removed.ownerUserId !== actor.userId });
   return removed ?? null;
 }
@@ -227,14 +220,46 @@ async function audit(userId: string, group: GroupChannel, details: Record<string
 
 // ── Sessions ────────────────────────────────────────────────────────────────
 
+/**
+ * `groupId:threadTs` → known state. Asked for every threaded reply in an
+ * enrolled channel, including ones between people that never involve the
+ * bot, so both answers are cached: "no" for 30 s, "yes" for 10 min (a thread
+ * session can be deleted, after which the bot must stop following the
+ * thread). This process creates the thread sessions, and
+ * `resolveGroupSession` records the "yes" straight away.
+ */
+const threadActive = new Map<string, { active: boolean; at: number }>();
+const THREAD_ACTIVE_TTL_MS = 10 * 60_000;
+const MAX_THREAD_KEYS = 10_000;
+
+function rememberThread(key: string, active: boolean): void {
+  threadActive.delete(key);
+  threadActive.set(key, { active, at: Date.now() });
+  if (threadActive.size > MAX_THREAD_KEYS) threadActive.delete(threadActive.keys().next().value as string);
+}
+
+/**
+ * A member deleted their session for this thread: re-check it next time, so
+ * the bot stops following a thread nobody has a session in any more.
+ */
+export function forgetGroupThread(groupChannelId: string, threadId: string): void {
+  threadActive.delete(`${groupChannelId}:${threadId}`);
+}
+
 /** Whether the bot is already part of this thread (some member talked to it there). */
-export function isGroupThreadActive(groupChannelId: string, threadId: string): Promise<boolean> {
-  return sessionRepository.hasGroupThread(groupChannelId, threadId);
+export async function isGroupThreadActive(groupChannelId: string, threadId: string): Promise<boolean> {
+  const key = `${groupChannelId}:${threadId}`;
+  const hit = threadActive.get(key);
+  if (hit && Date.now() - hit.at < (hit.active ? THREAD_ACTIVE_TTL_MS : CACHE_TTL_MS)) return hit.active;
+  const active = await sessionRepository.hasGroupThread(groupChannelId, threadId);
+  rememberThread(key, active);
+  return active;
 }
 
 /**
  * The acting member's session for a group thread, created on first use in the
- * member's own default workspace. Never another user's session.
+ * member's own default workspace — turns run with the member's own data and
+ * permissions. Never another user's session.
  */
 export async function resolveGroupSession(input: {
   userId: string;
@@ -242,8 +267,12 @@ export async function resolveGroupSession(input: {
   threadId: string;
   title?: string;
 }): Promise<string> {
+  const threadKey = `${input.group.id}:${input.threadId}`;
   const existing = await sessionRepository.findGroupThreadSession(input.userId, input.group.id, input.threadId);
-  if (existing) return existing.id;
+  if (existing) {
+    rememberThread(threadKey, true);
+    return existing.id;
+  }
   const { getOrgWorkspaceManager } = await import('@/security/orgs');
   const workspace = await getOrgWorkspaceManager().ensureDefaultWorkspace(input.userId);
   try {
@@ -257,12 +286,16 @@ export async function resolveGroupSession(input: {
       title: input.title ?? `${input.group.label ?? input.group.channelId} thread`,
       status: 'active',
     });
+    rememberThread(threadKey, true);
     return session.id;
   } catch (err) {
     // Two messages from the same member raced to create the row; the unique
     // index let one through.
     const raced = await sessionRepository.findGroupThreadSession(input.userId, input.group.id, input.threadId);
-    if (raced) return raced.id;
+    if (raced) {
+      rememberThread(threadKey, true);
+      return raced.id;
+    }
     throw err;
   }
 }

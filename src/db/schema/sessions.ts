@@ -21,7 +21,8 @@ export const sessions = pgTable('sessions', {
    * Set when the session is one member's conversation in a group channel
    * thread (`group_channels`). Such sessions are keyed by thread, not by
    * chat, and never aggregated with the member's other sessions for the
-   * same chat. FK in migration 0120 (ON DELETE SET NULL).
+   * same chat. No foreign key (dropped in 0121): the marking outlives the
+   * enrolment, so a removed channel's threads stay group sessions.
    */
   groupChannelId: uuid('group_channel_id'),
   title: text('title'),

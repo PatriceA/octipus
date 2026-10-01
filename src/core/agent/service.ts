@@ -5,6 +5,8 @@ import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
 import { handleCommand } from '@/core/commands';
 import { renderMemoriesBlock, retrieveForContext, updateMemoriesAfterTurn } from '@/core/memory';
+import { markSharedAudience } from '@/security/flow-guard';
+import { bareReply, type GroupTurn, groupTurnContext } from '@/core/channels/group-context';
 import { generateRunId, runWithContext } from '@/core/run-context';
 import { type AttachedFileRef, buildAttachedFilesContext } from '@/core/session-files';
 import { recordClassification, recordRootRun } from '@/core/telemetry';
@@ -59,6 +61,17 @@ export interface TurnEvent {
 export type TurnOutcome = 'success' | 'failed' | 'cancelled';
 export interface TurnResult {
   response: string; sessionId?: string; agentId?: string; classification: MessageClassification; metadata?: ResponseMetadata; outcome?: TurnOutcome;
+}
+
+/**
+ * The text to hand to `ApprovalManager.tryResolveFromMessage`, or null when
+ * this message must not answer an approval. In a group-thread session only a
+ * bare yes/no counts, passed on as the canonical word so every form `bareReply`
+ * accepts is understood.
+ */
+function approvalReplyFor(message: string, groupThread: boolean): string | null {
+  if (!groupThread) return message;
+  return bareReply(message);
 }
 
 export class AgentService {
@@ -143,6 +156,12 @@ export class AgentService {
     forcedOutputMode?: 'inline' | 'file',
     /** Durable background wake-ups claim delivery only after prior turns finish. */
     beforeStart?: () => Promise<void>,
+    /**
+     * A turn from a group channel: who asked, and the thread transcript. The
+     * message itself stays as typed (commands, plan "go" and approval replies
+     * are recognised on it); only the model sees it framed.
+     */
+    groupTurn?: GroupTurn,
   ): Promise<TurnResult> {
     // Controls must reach a running turn; queuing /stop behind it defeats cancellation.
     // Background wake-ups always take the normal queue and cannot invoke this path.
@@ -153,10 +172,13 @@ export class AgentService {
         const resolvedId = await resolveSession(sessionId, userId, channel ?? 'api');
         const session = await sessionRepository.findById(resolvedId);
         if (!session || session.userId !== userId) throw new Error('Session not found');
+        // In a group-thread session members also talk to each other: only a
+        // bare yes/no answers an approval there, whatever the entry point.
+        const reply = approvalReplyFor(message, !!session.groupChannelId);
         if (control) {
           const response = await handleCommand(message.trim(), resolvedId, userId);
           if (response) return { response, sessionId: resolvedId, classification: { type: 'casual', confidence: 1 } };
-        } else if (approvals[0]?.sessionId === resolvedId && await this.approvalManager.tryResolveFromMessage(message, userId)) {
+        } else if (reply && approvals[0]?.sessionId === resolvedId && await this.approvalManager.tryResolveFromMessage(reply, userId)) {
           return { response: 'Got it, continuing...', sessionId: resolvedId, classification: { type: 'approval', confidence: 1 } };
         }
       }
@@ -166,7 +188,7 @@ export class AgentService {
       const runId = generateRunId();
       return runWithContext(
         { runId, sessionId, userId, channel: channel ?? 'api', origin: channel ?? 'api' },
-        () => this.handleMessageInner(sessionId, userId, message, channel, attachedFiles, forcedOutputMode),
+        () => this.handleMessageInner(sessionId, userId, message, channel, attachedFiles, forcedOutputMode, false, groupTurn),
       );
     });
   }
@@ -199,6 +221,8 @@ export class AgentService {
      * normal way instead of being re-proposed.
      */
     bypassVoiceGate = false,
+    /** See `handleMessage`. */
+    groupTurn?: GroupTurn,
   ): Promise<TurnResult> {
     // Trajectory recorder — observes this run for later eval/fine-tuning.
     // Constructed early so the sessionId below can overwrite it.
@@ -267,6 +291,16 @@ export class AgentService {
       // read it, so the requester's personal memories are neither injected
       // nor learned from (docs/plans/group-chat-bot.md §4).
       const sharedAudience = !!session?.groupChannelId;
+      // The flow guard's group rule keys on the session; set it from the stored
+      // session on every turn, whichever entry point (channel, web chat,
+      // background wake-up) the turn came through, and after any restart.
+      if (sharedAudience) markSharedAudience(resolvedSessionId);
+      // Delivered as per-turn context beside the message (stored in the
+      // message's metadata, not as its text), on every turn in a group thread:
+      // monitors, wake-ups and plan runs too, whose replies land in the thread.
+      const groupContextBlock = sharedAudience
+        ? groupTurnContext({ requester: groupTurn?.requester, context: groupTurn?.context })
+        : '';
       if (session) {
         const genericTitles = ['new chat', 'untitled', 'webchat conversation', 'telegram conversation', 'api conversation', 'slack conversation', 'teams conversation'];
         const currentTitle = (session.title || '').toLowerCase().trim();
@@ -408,7 +442,7 @@ export class AgentService {
 
         const { response, agentId, sources: _planSources, outcome, limit: planLimit } = await this.runRootAgent(
           resolvedSessionId, userId, planMessage, classification, inputGuard.flags, channel,
-          planMemoryBlock,
+          planMemoryBlock + groupContextBlock,
           workspaceId,
         );
         void _planSources;
@@ -503,7 +537,7 @@ export class AgentService {
           // once here — cosmetic transcript dup. Thread a skip-persist flag through
           // runRootAgent if it ever bloats context enough to matter.
           return this.handleMessageInner(
-            resolvedSessionId, userId, action.workMessage, channel, action.attachedFiles, forcedOutputMode, true,
+            resolvedSessionId, userId, action.workMessage, channel, action.attachedFiles, forcedOutputMode, true, groupTurn,
           );
         }
         if (action.kind === 'propose') {
@@ -608,8 +642,13 @@ export class AgentService {
       // Every turn now runs the one loop below, which holds real tools and
       // delegates only when it needs a specialist.
 
-      if (classification.type === 'approval') {
-        const resolved = await this.approvalManager.tryResolveFromMessage(message, userId);
+      // A group-thread session may only answer an approval waiting in this
+      // same session, and only with a bare yes/no.
+      const approvalReply = approvalReplyFor(message, sharedAudience);
+      const mayAnswerHere = !sharedAudience
+        || this.approvalManager.getPendingApprovals(userId)[0]?.sessionId === resolvedSessionId;
+      if (classification.type === 'approval' && approvalReply && mayAnswerHere) {
+        const resolved = await this.approvalManager.tryResolveFromMessage(approvalReply, userId);
         if (resolved) {
           return { response: 'Got it, continuing...', sessionId: resolvedSessionId, classification };
         }
@@ -619,7 +658,7 @@ export class AgentService {
       const turnGeneration = sessionGeneration((await sessionRepository.findById(resolvedSessionId))?.context);
       const { response, agentId, sources, outcome, limit } = await this.runRootAgent(
         resolvedSessionId, userId, message, classification, inputGuard.flags, channel,
-        turnContext,
+        turnContext + groupContextBlock,
         workspaceId,
         { mode: effectiveOutputMode, forced: outputForced },
       );
@@ -668,7 +707,8 @@ export class AgentService {
       }
 
       fireMemoryUpdate();
-      if (outcome === 'success' && agentId) {
+      // Group threads are never learned from (the processor refuses them too).
+      if (outcome === 'success' && agentId && !sharedAudience) {
         try {
           const { enqueueTurnLearning } = await import('@/core/learning/queue');
           await enqueueTurnLearning(resolvedSessionId, userId, agentId, new Date(startTime));

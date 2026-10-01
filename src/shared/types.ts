@@ -40,8 +40,6 @@ export interface GroupChannelSummary {
   ownerName: string;
   /** False while the owner's account is deactivated: the bot is paused there. */
   ownerActive: boolean;
-  workspaceId: string;
-  workspaceName: string;
   createdAt: string;
   updatedAt: string;
 }

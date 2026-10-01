@@ -246,18 +246,39 @@ async function synthesizeVoiceReply(text: string): Promise<Attachment[] | undefi
  * Subscribe to document queue completions for a single channel message's attachments.
  * Sends each document's summary back to the channel as it completes.
  */
-function subscribeToDocumentResults(
+export function subscribeToDocumentResults(
   message: UnifiedMessage,
   umi: import('./interface').UnifiedMessageInterface,
+  /**
+   * The documents this message's attachments became. Only their results are
+   * reported here: another document of the same user finishing meanwhile
+   * (a DM upload, the web app) must never be summarised into this chat —
+   * least of all into a group thread.
+   */
+  documentIds: Promise<string[]>,
   replyTo?: string,
+  /** Group channels: summaries go into the member's thread, not the channel. */
+  threadId?: string,
+  /** Test seam: the queue to listen on. */
+  queue: Pick<import('node:events').EventEmitter, 'on' | 'removeListener'> =
+    (require('@/core/documents/queue') as typeof import('@/core/documents/queue')).getDocumentQueue(),
 ): void {
-  const { getDocumentQueue } = require('@/core/documents/queue') as typeof import('@/core/documents/queue');
-  const queue = getDocumentQueue();
-  const expectedCount = message.attachments?.length || 0;
   let sent = 0;
+  // Each document is reported once, whether by its event or by the status
+  // check below for one that finished before the listeners were attached.
+  const reported = new Set<string>();
+  const ours = async (documentId: string) => {
+    const ids = await documentIds;
+    // Check and mark with no await in between, so two reports cannot both pass.
+    if (!ids.includes(documentId) || reported.has(documentId)) return false;
+    reported.add(documentId);
+    return true;
+  };
 
   const onCompleted = async (documentId: string, userId?: string) => {
     if (userId && userId !== message.userId) return;
+    if (!(await ours(documentId))) return;
+    sent++; // counted whether or not the row can still be read, so cleanup always happens
 
     try {
       const { documentRepository } = await import('@/db/repositories/document-repository');
@@ -269,24 +290,26 @@ function subscribeToDocumentResults(
         umi.send(message.channelType, message.channelId, {
           content: `**${name}**${category}\n${summary}`,
           replyTo,
+          threadId,
         }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
-        sent++;
       }
     } catch (err) {
       channelLogger.warn({ err, documentId }, 'Failed to fetch document result');
     }
 
-    if (sent >= expectedCount) cleanup();
+    if (sent >= (await documentIds).length) cleanup();
   };
 
-  const onFailed = (documentId: string, error: string, userId?: string) => {
+  const onFailed = async (documentId: string, error: string, userId?: string) => {
     if (userId && userId !== message.userId) return;
+    if (!(await ours(documentId))) return;
     sent++;
     umi.send(message.channelType, message.channelId, {
       content: `Document processing failed: ${error}`,
       replyTo,
+      threadId,
     }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
-    if (sent >= expectedCount) cleanup();
+    if (sent >= (await documentIds).length) cleanup();
   };
 
   const cleanup = () => {
@@ -298,23 +321,96 @@ function subscribeToDocumentResults(
   queue.on('completed', onCompleted);
   queue.on('failed', onFailed);
 
+  // Nothing was enqueued (download failed, nothing processable): say so now
+  // instead of leaving the "I'll send you the summary" promise hanging. And a
+  // document may already have finished before the listeners above were
+  // attached (processing starts before this subscription): report those from
+  // their stored status.
+  void documentIds.then(async (ids) => {
+    if (ids.length > 0) {
+      const { documentRepository } = await import('@/db/repositories/document-repository');
+      for (const id of ids) {
+        const doc = await documentRepository.findById(id).catch(() => null);
+        if (doc?.status === 'completed') await onCompleted(id, message.userId);
+        else if (doc?.status === 'failed') await onFailed(id, 'processing failed', message.userId);
+      }
+      return;
+    }
+    cleanup();
+    umi.send(message.channelType, message.channelId, {
+      content: 'I could not process that attachment (download failed or the file type is not supported).',
+      replyTo,
+      threadId,
+    }).catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
+  });
+
   // Safety timeout
   const timeout = setTimeout(cleanup, 10 * 60 * 1000);
 }
 
-/**
- * Track pending permission requests per user for channel-based approval.
- * Maps userId → { requestId, channelType, channelId, threadId? }. A reply only
- * resolves the request in the chat (and, for a group channel, the thread)
- * where it was asked, and only from the user it was asked of: in a group
- * channel other members' "yes" never counts.
- */
-const pendingChannelPermissions = new Map<string, {
+interface PendingChannelPermission {
   requestId: string;
   channelType: ChannelType;
   channelId: string;
+  /** Group channels only: the thread the prompt was posted in. */
   threadId?: string;
-}>();
+  /** Named in the confirmation, so the user sees what their reply decided. */
+  toolName: string;
+  /**
+   * Set once the prompt has been posted. Until then a reply cannot answer it:
+   * a "yes" typed for the prompt on screen must not approve a newer request
+   * whose prompt the user has not seen yet.
+   */
+  announced: boolean;
+}
+
+/**
+ * Pending permission prompts awaiting a "yes"/"no" typed in a chat. Keyed by
+ * the user AND the chat (plus the thread, for a group channel): a reply only
+ * answers prompts asked of that user in that place, so another member's
+ * "yes" never counts, and prompts waiting in two threads (or a thread and a
+ * DM) do not displace each other. A reply answers the NEWEST prompt for its
+ * key — the one on screen — and the confirmation names its tool. Entries are
+ * dropped when the permission manager resolves them by any route (web UI,
+ * expiry; `forgetResolvedChannelPermission`), so queues do not grow.
+ */
+const pendingChannelPermissions = new Map<string, PendingChannelPermission[]>();
+
+function pendingKey(userId: string, channelType: string, channelId: string, threadId?: string): string {
+  return [userId, channelType, channelId, threadId ?? ''].join('\u0000');
+}
+
+/**
+ * Requests resolved before their prompt was recorded (the forwarder awaits a
+ * session lookup first): they must not be queued afterwards.
+ */
+const recentlyResolved = new Set<string>();
+
+/** Test seam. */
+export function _resetPendingChannelPermissionsForTests(): void {
+  pendingChannelPermissions.clear();
+  recentlyResolved.clear();
+}
+
+function removePending(key: string, requestId: string): void {
+  const queue = (pendingChannelPermissions.get(key) ?? []).filter(p => p.requestId !== requestId);
+  if (queue.length > 0) pendingChannelPermissions.set(key, queue);
+  else pendingChannelPermissions.delete(key);
+}
+
+/**
+ * `PermissionManager.onResolved` listener: a prompt answered in the web UI,
+ * expired or released is no longer waiting for a typed reply.
+ */
+export function forgetResolvedChannelPermission(event: { userId: string; requestId: string }): void {
+  recentlyResolved.delete(event.requestId);
+  recentlyResolved.add(event.requestId);
+  if (recentlyResolved.size > 1_000) recentlyResolved.delete(recentlyResolved.values().next().value as string);
+  const prefix = `${event.userId}\u0000`;
+  for (const key of [...pendingChannelPermissions.keys()]) {
+    if (key.startsWith(prefix)) removePending(key, event.requestId);
+  }
+}
 
 /**
  * Check if a message is a yes/no reply to a pending permission request.
@@ -331,39 +427,48 @@ export function eventSessionId(event: { sessionId?: string; data?: { context?: {
 
 /** Exported for the regression test that pins the per-chat / per-thread scoping. */
 export async function tryResolvePermissionFromChannel(message: UnifiedMessage): Promise<boolean> {
-  const pending = pendingChannelPermissions.get(message.userId);
+  const groupThread = typeof message.metadata?.groupChannelId === 'string' ? message.threadId : undefined;
+  const key = pendingKey(message.userId, message.channelType, message.channelId, groupThread);
+  const pending = pendingChannelPermissions.get(key)?.filter(p => p.announced).at(-1);
   if (!pending) return false;
-  if (pending.channelType !== message.channelType || pending.channelId !== message.channelId) return false;
-  if (pending.threadId && message.threadId !== pending.threadId) return false;
 
-  const normalized = message.content.trim().toLowerCase();
-  const isYes = /^(yes|y|approve|allow|go|ok|sure|ja|confirm)\b/i.test(normalized);
-  const isNo = /^(no|n|deny|reject|stop|cancel|nein|abort)\b/i.test(normalized);
-
-  if (!isYes && !isNo) return false;
-
-  const permissionManager = getPermissionManager();
-  pendingChannelPermissions.delete(message.userId);
-
-  const umi = getUMI();
-  if (isYes) {
-    await permissionManager.approve(pending.requestId, message.userId);
-    try {
-      await umi.send(pending.channelType, pending.channelId, {
-        content: 'Permission granted. Continuing...',
-        threadId: pending.threadId,
-      });
-    } catch { /* ignore */ }
+  // In a group thread the requester also talks to colleagues ("ok, I'll ask
+  // Dana first"), so only a bare yes/no answers there. A 1:1 chat keeps the
+  // looser prefix match.
+  let answer: 'yes' | 'no' | null;
+  if (groupThread) {
+    const { bareReply } = await import('@/core/channels/group-context');
+    answer = bareReply(message.content);
   } else {
-    await permissionManager.deny(pending.requestId, message.userId);
-    try {
-      await umi.send(pending.channelType, pending.channelId, {
-        content: 'Permission denied.',
-        threadId: pending.threadId,
-      });
-    } catch { /* ignore */ }
+    const normalized = message.content.trim().toLowerCase();
+    answer = /^(yes|y|approve|allow|go|ok|sure|ja|confirm)\b/i.test(normalized) ? 'yes'
+      : /^(no|n|deny|reject|stop|cancel|nein|abort)\b/i.test(normalized) ? 'no'
+      : null;
   }
+  if (!answer) return false;
 
+  // Only the newest prompt — the one the user is looking at — is answered.
+  // The entry is dropped only after a definite result: if approve/deny
+  // throws, it stays so the user can retry.
+  const permissionManager = getPermissionManager();
+  const resolved = answer === 'yes'
+    ? await permissionManager.approve(pending.requestId, message.userId)
+    : await permissionManager.deny(pending.requestId, message.userId);
+  removePending(key, pending.requestId);
+
+  const stillWaiting = pendingChannelPermissions.get(key)?.filter(p => p.announced).length ?? 0;
+  const more = stillWaiting > 0 ? ` (${stillWaiting} more permission request${stillWaiting === 1 ? '' : 's'} waiting.)` : '';
+  // Never let a reply meant for one prompt fall through to an older one.
+  const content = !resolved
+    ? `That permission request for "${pending.toolName}" was already answered elsewhere or has expired; nothing was changed.${more}`
+    : answer === 'yes'
+      ? `Permission granted for "${pending.toolName}". Continuing...${more}`
+      : `Permission denied for "${pending.toolName}".${more}`;
+  try {
+    await getUMI().send(pending.channelType, pending.channelId, { content, threadId: pending.threadId });
+  } catch (err) {
+    channelLogger.warn({ err, channelType: pending.channelType }, 'Could not confirm a permission reply in the chat');
+  }
   return true;
 }
 
@@ -442,25 +547,39 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
   const channelId = session.channelId;
   if (!channelId) return;
 
-  // A group-channel session asks in its thread, naming who must answer.
-  const threadId = session.groupChannelId ? session.threadId ?? undefined : undefined;
-  let addressee = '';
+  // A group-channel session asks in its thread — but only while the channel
+  // is still enrolled: after `leave` the bot stays silent there, and the
+  // request can still be answered in the web app.
   if (session.groupChannelId) {
-    const { userRepository } = await import('@/db/repositories/user-repository');
-    const requester = await userRepository.findById(userId);
-    addressee = `${requester?.username ?? 'Requester'}: only you can answer this. `;
+    const { findGroupChannel, isGroupChannelActive } = await import('./group-channels');
+    const group = await findGroupChannel(channelType, channelId);
+    if (group?.id !== session.groupChannelId || !(await isGroupChannelActive(group))) {
+      // Not posted (the bot is silent there), and denied rather than left
+      // pending: nothing would ever answer it, and the turn would hold the
+      // session until then.
+      channelLogger.info({ sessionId, channelId }, 'Permission request from a group thread whose channel is removed or paused — denying it');
+      await permissionManager
+        .deny(request.requestId, userId, 'the group channel this conversation belongs to was removed or is paused')
+        .catch((err: unknown) => channelLogger.error({ err }, 'Failed to deny a permission request for a removed group channel'));
+      return;
+    }
   }
-
-  // Track this pending permission for the user
-  pendingChannelPermissions.set(userId, {
-    requestId: request.requestId,
-    channelType,
-    channelId,
-    threadId,
-  });
+  if (recentlyResolved.has(request.requestId)) return;
+  const threadId = session.groupChannelId ? session.threadId ?? undefined : undefined;
+  const key = pendingKey(userId, channelType, channelId, threadId);
 
   // Send permission request message to the channel — include tool details
   const toolName = request.toolName || request.action || 'unknown';
+
+  // Track this pending permission for the user, in this chat (and thread)
+  pendingChannelPermissions.set(key, [
+    ...(pendingChannelPermissions.get(key) ?? []),
+    { requestId: request.requestId, channelType, channelId, threadId, toolName, announced: false },
+  ]);
+  const announce = () => {
+    const entry = pendingChannelPermissions.get(key)?.find(p => p.requestId === request.requestId);
+    if (entry) entry.announced = true;
+  };
   const args = request.args as Record<string, unknown> | undefined;
   let detail = '';
   if (args) {
@@ -486,23 +605,42 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
       detail = `\nTo: ${target}\nMessage: ${msg.length > 100 ? msg.slice(0, 100) + '…' : msg}`;
     }
   }
+  const fullPrompt = `🔒 Permission required: the agent wants to use "${toolName}".${detail}\n\nReply "yes" to allow or "no" to deny.`;
   try {
-    await umi.send(channelType, channelId, {
-      content: `🔒 ${addressee}Permission required: the agent wants to use "${toolName}".${detail}\n\nReply "yes" to allow or "no" to deny.`,
-      threadId,
-    });
+    if (session.groupChannelId) {
+      // Everyone in the channel reads the thread, and the tool arguments are
+      // the requester's (a file path, a command, an email body). Only the
+      // requester sees them; the thread gets a prompt without details.
+      const { userRepository } = await import('@/db/repositories/user-repository');
+      const name = (await userRepository.findById(userId))?.username ?? 'The requester';
+      const shownPrivately = await umi.sendPrivate(channelType, channelId, userId, {
+        content: `🔒 Permission required: the agent wants to use "${toolName}".${detail}\n\nReply "yes" or "no" in the thread.`,
+        threadId,
+      }).catch((err: unknown) => {
+        channelLogger.warn({ err, channelType }, 'Private permission details could not be delivered');
+        return false;
+      });
+      // Answered in the web app while the details were going out: say nothing more.
+      if (recentlyResolved.has(request.requestId)) return;
+      const where = shownPrivately
+        ? 'I sent you the details privately; only you can see them.'
+        : 'I could not show you the details privately here; check the request in the Octipus web app, or reply "no".';
+      await umi.send(channelType, channelId, {
+        content: `🔒 ${name}: Octipus needs your permission to use "${toolName}". ${where}\n\nOnly ${name} can reply "yes" to allow or "no" to deny.`,
+        threadId,
+      });
+    } else {
+      await umi.send(channelType, channelId, { content: fullPrompt });
+    }
+    announce();
   } catch (error) {
     // The prompt never reached a human, so leaving the request pending buys
     // nothing but a stall until it expires — the run blocks for the whole TTL
     // and then fails anyway. Deny it now, with the delivery failure as the
     // reason, so the agent gets an answer it can report.
     channelLogger.error({ error, channelType }, 'Failed to forward permission request to channel — denying it');
-    // Keyed by user, so only clear it if it is still OUR request: a second
-    // request arriving between the `set` above and this failure would
-    // otherwise lose its entry and become unanswerable.
-    if (pendingChannelPermissions.get(userId)?.requestId === request.requestId) {
-      pendingChannelPermissions.delete(userId);
-    }
+    // Remove only OUR entry: other prompts queued for this chat stay answerable.
+    removePending(key, request.requestId);
     await permissionManager
       .deny(request.requestId, userId, `could not be delivered to the ${channelType} channel`)
       .catch((denyError) => {
@@ -527,8 +665,8 @@ async function resolveGroupTurnSession(message: UnifiedMessage, groupChannelId: 
     threadId: message.threadId,
     title: message.content.slice(0, 80).replace(/\n/g, ' ').trim() || undefined,
   });
-  const { markSharedAudience } = await import('@/security/flow-guard');
-  markSharedAudience(sessionId);
+  // The flow guard's shared-audience mark is set by AgentService.handleMessage
+  // from the stored session, for every entry point.
   return sessionId;
 }
 
@@ -568,6 +706,7 @@ export async function initializeChannels(): Promise<void> {
 
   // Subscribe to permission requests and forward them to the originating channel
   getPermissionManager().onRequest(forwardPermissionRequestToChannel);
+  getPermissionManager().onResolved(forgetResolvedChannelPermission);
 
   // Bridge incoming channel messages → root agent → reply
   umi.on('message', async (message: UnifiedMessage) => {
@@ -581,11 +720,12 @@ export async function initializeChannels(): Promise<void> {
       if (consumed) return;
 
       // Process file attachments → document OCR pipeline (fire-and-forget)
-      if (message.attachments?.length) {
-        processChannelAttachments(message).catch((err) => {
+      const attachmentDocuments: Promise<string[]> = message.attachments?.length
+        ? processChannelAttachments(message).catch((err) => {
           channelLogger.error({ err, channelType: message.channelType }, 'Attachment processing failed');
-        });
-      }
+          return [];
+        })
+        : Promise.resolve([]);
 
       const { getAgentService } = await import('@/core/agent');
       const rootAgent = getAgentService();
@@ -750,6 +890,23 @@ export async function initializeChannels(): Promise<void> {
                 ad.options?.length ? `\nOptions: ${ad.options.join(' / ')}` : '',
                 '\nReply **yes/approve** to continue, or **no/stop** to cancel.',
               ].filter(Boolean).join('\n');
+              if (groupChannelId) {
+                // The summary can quote the requester's files, mail or results:
+                // only they see it; the thread gets a prompt without it.
+                void (async () => {
+                  const shown = await umi.sendPrivate(message.channelType, message.channelId, message.userId, {
+                    content: approvalText.replace('Reply **yes/approve** to continue, or **no/stop** to cancel.', 'Reply `yes` or `no` in the thread.'),
+                    threadId: replyThread,
+                  }).catch(() => false);
+                  await umi.send(message.channelType, message.channelId, {
+                    content: `⏳ ${message.userName ?? 'The requester'}: a step needs your approval. ${shown
+                      ? 'I sent you the details privately; only you can see them.'
+                      : 'I could not show you the details privately here; check them in the Octipus web app.'} Reply \`yes\` or \`no\`.`,
+                    threadId: replyThread,
+                  });
+                })().catch((err: unknown) => coreLogger.error({ err }, 'background task failed in index'));
+                break;
+              }
               umi.send(message.channelType, message.channelId, {
                 content: approvalText,
                 replyTo: platformMessageId,
@@ -819,7 +976,7 @@ export async function initializeChannels(): Promise<void> {
               threadId: replyThread,
             });
             // Subscribe to document queue completions to send summary back
-            subscribeToDocumentResults(message, umi, platformMessageId);
+            subscribeToDocumentResults(message, umi, attachmentDocuments, platformMessageId, replyThread);
             if (unsubscribe) unsubscribe(); if (unsubAgentEvents) unsubAgentEvents(); stopTypingAndStall();
             return;
           }
@@ -839,28 +996,32 @@ export async function initializeChannels(): Promise<void> {
               replyTo: platformMessageId,
               threadId: replyThread,
             });
-            subscribeToDocumentResults(message, umi, platformMessageId);
+            subscribeToDocumentResults(message, umi, attachmentDocuments, platformMessageId, replyThread);
             if (unsubscribe) unsubscribe(); if (unsubAgentEvents) unsubAgentEvents(); stopTypingAndStall();
             return;
           }
         }
       }
 
-      const groupContext = groupChannelId ? await import('./group-context') : null;
-      if (groupContext && !groupContext.isBareControlReply(messageContent)) {
-        const { composeGroupTurn } = groupContext;
-        messageContent = composeGroupTurn({
+      // Group channels: the member's text goes in unchanged, so commands,
+      // plan "go" and approval replies are still recognised; only the model
+      // sees it framed with the shared-audience notice and the transcript.
+      const groupTurn = groupChannelId
+        ? {
           requester: message.userName ?? 'A channel member',
-          request: messageContent,
           context: typeof message.metadata?.groupContext === 'string' ? message.metadata.groupContext : '',
-        });
-      }
+        }
+        : undefined;
 
       const result = await rootAgent.handleMessage(
         resolvedSessionId,
         message.userId,
         messageContent,
         message.channelType,
+        [],
+        undefined,
+        undefined,
+        groupTurn,
       );
 
       // Unsubscribe from events

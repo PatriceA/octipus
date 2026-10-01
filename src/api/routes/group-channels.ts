@@ -9,8 +9,8 @@ const UUID_PATTERN = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{
  *
  * Mounted at `/api/me/group-channels`. Enrolment itself only happens from
  * inside the channel — that is what proves the owner is a member — so there
- * is no POST. Owners can move an enrolment to another of their workspaces or
- * remove it; admins see and remove all of them under `/api/admin/group-channels`.
+ * is no POST. Owners can remove an enrolment; admins see and remove all of
+ * them under `/api/admin/group-channels`.
  * Other users' rows answer 404, the same as missing ones.
  */
 export const groupChannelRoutes = new Elysia({ prefix: '/me/group-channels' })
@@ -27,28 +27,6 @@ export const groupChannelRoutes = new Elysia({ prefix: '/me/group-channels' })
       return { groupChannels: await listGroupChannelsForOwner(principal.userId) };
     },
     { detail: { tags: ['channels'] } },
-  )
-
-  .patch(
-    '/:id',
-    async ({ user, principal, params, body, set }) => {
-      if (!user || !isAuthenticated(principal)) {
-        set.status = 401;
-        return { error: 'Authentication required' };
-      }
-      const { setGroupChannelWorkspace } = await import('@/channels/group-channels');
-      const updated = await setGroupChannelWorkspace(params.id, principal.userId, body.workspaceId);
-      if (!updated) {
-        set.status = 404;
-        return { error: 'Group channel or workspace not found' };
-      }
-      return updated;
-    },
-    {
-      params: t.Object({ id: t.String({ pattern: UUID_PATTERN }) }),
-      body: t.Object({ workspaceId: t.String({ pattern: UUID_PATTERN }) }),
-      detail: { tags: ['channels'] },
-    },
   )
 
   .delete(
