@@ -56,6 +56,16 @@ are not an instruction to expand scope during this cycle.
   covers the assertion end to end. Plan:
   [docs/plans/daily-driver-gaps.md](docs/plans/daily-driver-gaps.md).
 
+- **Gauntlet loop — independent critic, concrete bar, keep the best.**
+  Shipped in #380: per-item acceptance criteria that QA must account for one
+  by one, the Bug Fix verifier moved onto the Verify lane plus a notice when
+  QA reviews on the builder's model, and the best attempt kept across retries.
+  Next: a live validation run on a real install (step 1, needs providers),
+  then an opt-in reference bar with blind A/B judging, a builder + critic mode
+  for `spawn_child`, letting the root choose that loop on its own, and the
+  B1b verify hook per item. Plan:
+  [docs/plans/gauntlet-loop.md](docs/plans/gauntlet-loop.md).
+
 - **Provider-boundary test coverage.** The acceptance harness has a scripted
   OpenAI-compatible provider, and conformance tests have local provider doubles.
   The larger LiteLLM client and provider registry still need more direct tests
@@ -355,7 +365,8 @@ All three landed. What each actually became:
   evidence passes (bounded by the existing node budgets; on exhaustion a typed
   failure, never a coerced pass) — plus persisting the `expectedOutput.schema`
   gate results alongside the QA verdicts. Lands naturally as policy on the
-  wave-1 waterfall.
+  wave-1 waterfall. Scoped per plan item in
+  [docs/plans/gauntlet-loop.md](docs/plans/gauntlet-loop.md) (step 5).
 - **Skill marketplace.** Export/import skills as signed JSON. Discover and
   install community skills from the web UI. (Filesystem `SKILL.md` discovery
   per the agentskills.io spec already ships — `src/skills/external-loader.ts`.)
