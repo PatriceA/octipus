@@ -6,7 +6,7 @@
 
 A self-hosted AI workspace for projects, knowledge, and connected tools.
 
-> **v0.5 · alpha · building in public.** A working, opinionated platform — not a finished product. Breaking changes happen; migration notes ship with them. Treat it as a foundation to build on.
+> **v0.6.0 · alpha · building in public.** A working, opinionated platform — not a finished product. Breaking changes happen; migration notes ship with them. Treat it as a foundation to build on.
 
 **Website:** [https://octipus.cc](https://octipus.cc)
 
@@ -83,7 +83,7 @@ CLI execution can reuse vendor logins where permitted. See [CLI agents](docs/CLI
 Channels → Gateway (WebSocket, typed Zod protocol)
           → Root agent (answers with its own tools; spawns when a specialist is needed)
             → Agents (3-level Swarm: root → Agent → Subagent)
-              → Tools / Skills / Experts / Pipelines
+              → Tools / Skills / Roles / Pipelines
                 → Models (Ollama, OpenAI, Anthropic, Gemini, OpenRouter, LiteLLM, CLI)
                   → Postgres + pgvector (or embedded PGlite)
 ```
@@ -92,7 +92,18 @@ Channels → Gateway (WebSocket, typed Zod protocol)
 
 Deep dive: [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md) · [.octipus/swarm-design.md](.octipus/swarm-design.md).
 
-## Key points covered in v0.5
+## New in v0.6.0
+
+- **Shared task board** — assign work to people or roles, claim tasks with expiring leases, and keep progress in comment threads. Role agents can wake on the heartbeat and when dependencies finish.
+- **Dollar spend budgets** — configure daily or monthly caps per user, role, or workspace, with warnings and pauses visible in the dashboard and chat. Unknown provider costs are shown as unmeasured; limits are based on recorded spend.
+- **Stronger review** — give plan items acceptance criteria that QA must check with evidence. Review notices flag a shared implementation/review model, and retry escalation identifies the best earlier attempt.
+- **More reliable CLI work** — preserve sessions and image attachments, resume child work by task, optionally isolate coding children in Git worktrees, and retain mid-run guidance and progress messages.
+- **Skills and MCP** — pin skills, reload mounted skills, and update editable skills through agents or MCP with shared authorization. The npm bridge is now `octipus-mcp-server@0.6.0`.
+- **Flow guard** — qualifying outbound calls require approval after sensitive reads, on top of existing permissions. Coverage and limitations are documented in the release notes.
+
+**[Release notes and upgrade instructions](https://github.com/PatriceA/octipus/releases/tag/v0.6.0)** · [Task board](docs/TASK-BOARD.md) · [Spend budgets](docs/SPEND-BUDGETS.md) · [Flow guard](docs/FLOW-GUARD.md)
+
+## Earlier: key points covered in v0.5
 
 - **One model per kind of work** — a request is routed to a lane (`build`, `everyday`, `verify`, `research`, `background`) before the turn starts, and each lane binds its own model on the Topics page. `verify` exists to be a *different* model from the one that wrote the code. Retired topic names still resolve, so existing bindings keep working.
 - **Roles replace experts, and you can write your own** — the expert layer is gone; a role carries the tools, the permission boundary, the prompt and the standing rules. Roles are editable data now: add, edit or delete one from the Topics page and it is spawnable immediately, no restart.
@@ -139,9 +150,9 @@ Deep dive: [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md) · [.octipus
 
 | Area | What's there |
 |---|---|
-| **Agents** | 3-level Swarm, 16 roles, 18 seeded expert definitions, 22 seeded skills |
+| **Agents** | 3-level Swarm, 16 built-in roles, editable custom roles, and seeded or mounted skills |
 | **Models** | Ollama, OpenAI, Anthropic, Gemini, Grok, DeepSeek, Mistral, Z.AI (GLM), Moonshot (Kimi), OpenRouter, Voyage, custom OpenAI/Gemini-compat, LiteLLM, CLI (Claude Code / Codex / Antigravity / Vibe / GLM / Kimi) |
-| **Tools** | Filesystem, shell (local/SSH/Docker), git, browser (Playwright + extension), web search, Docker, knowledge base, scheduling, voice, M365, GitHub/GitLab, and external MCP bridges. The standalone MCP server exposes 86 tools across 25 groups, published as [`octipus-mcp-server`](https://www.npmjs.com/package/octipus-mcp-server). |
+| **Tools** | Filesystem, shell (local/SSH/Docker), git, browser (Playwright + extension), web search, Docker, knowledge base, scheduling, voice, M365, GitHub/GitLab, and external MCP bridges. The standalone MCP server exposes 87 tools across 25 groups, published as [`octipus-mcp-server`](https://www.npmjs.com/package/octipus-mcp-server). |
 | **Channels** | Telegram, Slack, Teams, WhatsApp, web UI, TUI (chat shell + editor, built on [pi-tui](https://www.npmjs.com/package/@mariozechner/pi-tui)), voice (Twilio), MCP server |
 | **Knowledge** | Hybrid search (BM25 + vector), tiered content, auto-indexing, document ingest + OCR, authored knowledge graph (notes, `[[wikilinks]]`, Obsidian vault + Canvas) |
 | **Enrichment** | Reader (fetch + extract), Deep Research (report with source references → Documents + knowledge base when available), To-Do list, Email triage, Hardware-aware onboarding |
@@ -212,9 +223,9 @@ Open directions (later): federation between Octipus instances, local-first sync 
 
 | | |
 |---|---|
-| **[Agent Architecture](docs/AGENT-ARCHITECTURE.md)** | Tools, skills, experts, agents, swarm |
+| **[Agent Architecture](docs/AGENT-ARCHITECTURE.md)** | Tools, skills, roles, agents, swarm |
 | **[Swarm Reliability & Verification](docs/SWARM-RELIABILITY.md)** | Receipts, scorer gates, crash-resume ledger |
-| **[Tool & Expert Routing](docs/TOOL-ROUTING.md)** | What triggers which tool, role, expert |
+| **[Tool & Role Routing](docs/TOOL-ROUTING.md)** | What triggers which tool or role |
 | **[Channels](docs/CHANNELS.md)** | Telegram, Slack, Teams, WhatsApp, WebChat, Voice, MCP |
 | **[Visible Work Plans](docs/WORK-PLANS.md)** | Follow progress and give feedback in web and terminal conversations |
 | **[Chat Commands](docs/CHAT-COMMANDS.md)** | Slash commands and channel availability |

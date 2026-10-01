@@ -1,6 +1,6 @@
 {
   "name": "octipus",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Autonomous development assistant with multi-channel support",
   "type": "module",
   "private": true,

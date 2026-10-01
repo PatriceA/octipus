@@ -75,7 +75,7 @@ Use `node bin/octi.mjs` instead of `octi` unless you install a PATH launcher. `n
 
 Review reported fixes in the affected package. Do not blindly use `npm audit fix --force`: it can downgrade or break tooling. The current backend audit includes a development-only esbuild advisory through drizzle-kit for which npm suggests a breaking downgrade. Web and MCP receive compatible lockfile fixes when available.
 
-The installer is also the update path for installations in `~/.octipus/app` (Windows: `%USERPROFILE%\.octipus\app`). There is currently no `octi update` command. On an existing checkout it fetches and fast-forwards the selected branch, reinstalls locked dependencies, and rebuilds the installed surfaces. It refuses local changes or a divergent branch rather than discarding them.
+The installer is also the update path for installations in `~/.octipus/app` (Windows: `%USERPROFILE%\.octipus\app`). From v0.6.0, `octi update` can also update a clean source checkout from its configured upstream and rebuild the backend, CLI, web, and MCP packages; `octi update --dry-run` previews the steps. Older installations should use the installer path below to obtain that command. On an existing checkout the installer fetches and fast-forwards the selected branch, reinstalls locked dependencies, and rebuilds the installed surfaces. It refuses local changes or a divergent branch rather than discarding them.
 
 Back up `.env` together with your configured database/data directory before updating: `MASTER_KEY` is needed to decrypt the vault. Stop the running instance before replacing dependencies. For a normal update, skip setup so your existing configuration and accounts remain in use:
 

@@ -7,27 +7,104 @@ labels reflect blast radius, not contract guarantees.
 
 ## Unreleased
 
-- **Stricter build → review loop** (after the "gauntlet loop" pattern):
-  - Plan items can carry `acceptance` criteria. QA has to report each one as
-    met or not met, with evidence, and a pass that skips one or reports one as
-    unmet no longer counts.
-  - When QA runs on the same model as the implementation, the run posts a
-    notice that points at the Verify lane.
-  - The Bug Fix recipe's "Verify Fix" stage now runs on the `qa` topic (the
-    Verify lane).
-  - A swarm contract retry that does worse and touched nothing keeps the
-    earlier attempt.
-  - When a pipeline QA stage runs out of retries, the escalation names the best
-    earlier attempt and its commit.
+## v0.6.0 — Shared work, budgets, and stronger review (2026-10-01)
 
-- **Flow guard** ([docs](docs/FLOW-GUARD.md)): a deterministic
-  information-flow check based on OpenAPPA. Each session carries a
-  one-way label (`suspicious`, `private`, `secret`) built from the tools it
-  has used. A call that sends data out is escalated from ALLOW to ASK after a
-  credential read, or after private data has been mixed with untrusted
-  content. It covers direct providers, the CLI tool bridge and Claude Code's
-  native tools. It adds no prompt tokens. Turn it off with
-  `agent.flowGuard: off`.
+Octipus 0.6.0 brings a shared task board for people and role agents, dollar
+spend budgets, and explicit acceptance criteria for pipeline review. It also
+improves long-running CLI work, skill management, and MCP connections. This
+release includes 95 commits since v0.5.1, before release preparation.
+
+### Shared tasks and background work
+
+- **Task board:** assign tasks to users, roles, or swarm nodes; claim work with
+  atomic, expiring leases; and leave progress comments. The tasks page adds
+  assignee filters, claim controls, and a role-agent panel.
+- **Role agents and wakeups:** enabled roles work assigned tasks on the
+  heartbeat. Completing a blocker or the last child task wakes dependent work;
+  PostgreSQL notifications carry wakeups across processes and a database lease
+  coordinates role turns. Child briefs include goal ancestry, and task
+  mutations enter the audit trail.
+- **Persistent session monitors** track follow-up work. Agent approvals are
+  stored in the database rather than only in process memory.
+
+### Spending, permissions, and data flow
+
+- **Dollar spend budgets:** admins can set daily or monthly limits per user,
+  role, or workspace. The default warning is 80%; reaching 100% pauses agents
+  and refuses further runs until reset or a limit increase. Budget settings,
+  dashboard cards, banners, and chat refusals show the same recorded spend.
+  Budgets are opt-in. Unknown CLI/subscription costs count as $0, and an
+  in-flight call can cross the limit, so these are not exact billing caps.
+- **Flow guard:** sessions track reads of untrusted content, private data, and
+  raw credentials. Qualifying outbound calls escalate from ALLOW to ASK,
+  without an extra model call. It defaults to `agent.flowGuard: ask`; unattended
+  calls that need approval are blocked. Labels are in memory and reset on
+  restart. Bridged tools are checked, but Codex native tools have no per-call
+  relay; vault-authenticated calls have a documented exemption. See
+  [Flow guard](https://github.com/PatriceA/octipus/blob/v0.6.0/docs/FLOW-GUARD.md)
+  for the coverage and limits.
+- **Authorization fixes:** enforce ownership for mid-run guidance, hooks, and
+  notification destinations; verify webhook signatures against raw bytes,
+  deduplicate redeliveries, and queue accepted events fairly.
+
+### Review and execution reliability
+
+- **Acceptance criteria:** plan items can name criteria that QA must check with
+  evidence. An unmet or omitted criterion prevents a pass. Using the same model
+  for implementation and review produces a notice pointing to the Verify lane;
+  the Bug Fix recipe now uses that lane for verification.
+- **Attempt tracking:** retries compare changes against the original baseline.
+  A worse swarm retry that changed no files retains the earlier attempt, and
+  pipeline escalation identifies the best earlier attempt and its commit.
+- **CLI continuity:** preserve parent and child sessions, support explicit
+  child `resumeKey` values and opt-in Git worktrees, deliver image attachments,
+  and keep meaningful mid-run messages visible after reload. Long tool calls
+  and child collection survive bridge delays more reliably.
+- **CLI controls and portability:** expose the role's assigned skill index,
+  direct delegation through `spawn_child`, add shell-network hook checks, and
+  fix Windows command resolution and metacharacter escaping. Quota detection
+  now uses failed vendor runs rather than matching ordinary output.
+
+### Skills, models, and MCP
+
+- **Skills:** pin skills per chat or as defaults, deduplicate imports, hide
+  personal entries, and reload mounted skills without restarting. Agents and
+  MCP clients can update editable skills through shared authorization;
+  mounted skills remain editable at their source.
+- **MCP package:** `octipus-mcp-server@0.6.0` adds an `update_skill` alias,
+  includes skill IDs in listings, and documents shared authorization and
+  mounted-skill restrictions for updates. Existing skill tools and loading
+  aliases remain available; the server now advertises 87 tools across 25 groups.
+  The backend adds MCP permission controls, reconnects dropped servers on demand, applies HTTP request
+  timeouts, and keeps an unavailable server from blocking tool dispatch.
+- **Optional decision models:** a decision lane supports TypeSafe Jev and a
+  local Ollama stand-in, with shadow evaluation for routing, retrieval,
+  categorization, and review. Privacy and retention checks gate remote use;
+  this is an optional capability, not a new required provider.
+- **Everyday fixes:** configurable email-triage categories and mailbox labels,
+  chat slash-command suggestions, reduced history polling, corrected settings
+  toggles, and preservation of embedded data when initialization fails.
+
+### Upgrade notes
+
+- Back up the database/data directory and `.env` (including `MASTER_KEY`) and
+  stop Octipus before updating. Node.js **24.19.0 or newer** remains required
+  for the full application. Reinstall locked dependencies and rebuild the
+  backend, web app, CLI, and MCP server; database migrations **0108–0119** run
+  during normal backend startup.
+- New source installations support `octi update` (`--dry-run` previews it).
+  Existing v0.5.1 installations should first use the installer update path in
+  the [installation guide](https://github.com/PatriceA/octipus/blob/v0.6.0/docs/INSTALLATION.md).
+- Update a global MCP installation with
+  `npm install -g octipus-mcp-server@0.6.0`, or pin your MCP client's npx
+  arguments to `["-y", "octipus-mcp-server@0.6.0"]`, then restart that client.
+  The npm package is the bridge; update the connected backend too to use the
+  new skill-update behavior.
+- Review unattended workflows affected by the default flow guard. Spend limits
+  need admin configuration; role agents and child worktrees also require
+  explicit setup.
+
+[Full comparison](https://github.com/PatriceA/octipus/compare/v0.5.1...v0.6.0)
 
 ## v0.5.1 — The MCP server, on npm (2026-09-18)
 
