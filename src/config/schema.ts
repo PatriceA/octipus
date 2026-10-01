@@ -475,12 +475,6 @@ export const vaultSyncConfigSchema = z.object({
 });
 
 // Full configuration schema
-/**
- * WS2 — heartbeat loop. A periodic per-user agent turn that reviews standing
- * context and acts or stays silent. Off by default; a cheap deterministic gate
- * (quiet hours, daily cap, quota, "anything pending?" probe) runs before any
- * LLM tokens are spent. See src/core/heartbeat.ts.
- */
 export const sessionsConfigSchema = z.object({
   /**
    * Days a session may sit idle (no new activity) before the hourly sweep in
@@ -490,6 +484,12 @@ export const sessionsConfigSchema = z.object({
   retentionDays: z.number().int().min(0).max(3650).default(14),
 });
 
+/**
+ * WS2 — heartbeat loop. A periodic per-user agent turn that reviews standing
+ * context and acts or stays silent. Off by default; a cheap deterministic gate
+ * (quiet hours, daily cap, quota, "anything pending?" probe) runs before any
+ * LLM tokens are spent. See src/core/heartbeat.ts.
+ */
 export const heartbeatConfigSchema = z.object({
   /** Master switch. When false the cron-runner never processes heartbeat hooks. */
   enabled: z.boolean().default(false),

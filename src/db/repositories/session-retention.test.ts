@@ -83,6 +83,22 @@ describe('sessionRepository.deleteExpired', () => {
     expect(await sessionRepository.findById(busy.id)).not.toBeNull();
   });
 
+  test('skips a session still waiting on a monitor', async () => {
+    const { sessionRepository } = await import('@/db/repositories/session-repository');
+    const { getDb } = await import('@/db/postgres');
+    const { monitors } = await import('@/db/schema/monitors');
+
+    const waiting = await sessionAged('ret-monitor', 30);
+    await getDb().insert(monitors).values({
+      userId, sessionId: waiting.id, role: 'general', name: 'ci', continuation: 'resume',
+      source: {} as typeof monitors.$inferInsert['source'], intervalSeconds: 60,
+      deadline: new Date(Date.now() + DAY),
+    });
+
+    await sessionRepository.deleteExpired(new Date(Date.now() - 14 * DAY));
+    expect(await sessionRepository.findById(waiting.id)).not.toBeNull();
+  });
+
   test('the webchat auto-archive leaves pinned sessions active', async () => {
     const { sessionRepository } = await import('@/db/repositories/session-repository');
     const kept = await sessionAged('ret-archive', 10, true);
