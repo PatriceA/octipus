@@ -1125,6 +1125,18 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     envVar: 'ARTIFACT_BUNDLES_DIR',
   },
 
+  // ── Sessions ──
+  {
+    key: 'sessions.retentionDays',
+    category: 'sessions',
+    valueType: 'number',
+    defaultValue: 14,
+    description:
+      'Delete chat sessions idle for more than this many days (0 = keep forever). Sessions marked "keep" are never deleted.',
+    isSecret: false,
+    envVar: 'SESSION_RETENTION_DAYS',
+  },
+
   // ── Heartbeat (WS2) ──
   {
     key: 'heartbeat.enabled',

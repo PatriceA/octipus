@@ -481,6 +481,15 @@ export const vaultSyncConfigSchema = z.object({
  * (quiet hours, daily cap, quota, "anything pending?" probe) runs before any
  * LLM tokens are spent. See src/core/heartbeat.ts.
  */
+export const sessionsConfigSchema = z.object({
+  /**
+   * Days a session may sit idle (no new activity) before the hourly sweep in
+   * `cron-runner.ts` deletes it with its messages. Sessions the user pinned
+   * ("keep") are never swept. 0 disables automatic deletion.
+   */
+  retentionDays: z.number().int().min(0).max(3650).default(14),
+});
+
 export const heartbeatConfigSchema = z.object({
   /** Master switch. When false the cron-runner never processes heartbeat hooks. */
   enabled: z.boolean().default(false),
@@ -613,10 +622,12 @@ export const configSchema = z.object({
   swarm: swarmConfigSchema.prefault({}),
   skills: skillsConfigSchema.prefault({}),
   heartbeat: heartbeatConfigSchema.prefault({}),
+  sessions: sessionsConfigSchema.prefault({}),
 });
 
 export type Config = z.infer<typeof configSchema>;
 export type HeartbeatConfig = z.infer<typeof heartbeatConfigSchema>;
+export type SessionsConfig = z.infer<typeof sessionsConfigSchema>;
 export type StorageMode = z.infer<typeof storageModeSchema>;
 export type DatabaseConfig = z.infer<typeof databaseConfigSchema>;
 export type LiteLLMConfig = z.infer<typeof litellmConfigSchema>;

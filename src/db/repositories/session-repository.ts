@@ -296,6 +296,7 @@ export class SessionRepository {
         and(
           eq(sessions.status, 'active'),
           eq(sessions.channelType, 'webchat'),
+          eq(sessions.pinned, false),
           lt(sessions.updatedAt, cutoff),
         )
       )
@@ -305,6 +306,34 @@ export class SessionRepository {
       dbLogger.info({ count: result.length, days }, 'Archived old webchat sessions');
     }
     return result.length;
+  }
+
+  /**
+   * Delete sessions idle since before `cutoff`, except pinned ones and any
+   * with an agent still running. Goes through `delete()` so messages,
+   * pipelines and agents go with each row. At most `limit` per call; the
+   * hourly sweep picks up the rest. Returns the number deleted.
+   */
+  async deleteExpired(cutoff: Date, limit = 500): Promise<number> {
+    const { agents } = await import('../schema/agents');
+    const expired = await this.db
+      .select({ id: sessions.id })
+      .from(sessions)
+      .where(
+        and(
+          eq(sessions.pinned, false),
+          lt(sessions.updatedAt, cutoff),
+          sql`NOT EXISTS (SELECT 1 FROM ${agents} WHERE ${agents.sessionId} = ${sessions.id} AND ${agents.status} = 'running')`,
+        )
+      )
+      .orderBy(sessions.updatedAt)
+      .limit(limit);
+
+    let deleted = 0;
+    for (const { id } of expired) {
+      if (await this.delete(id)) deleted++;
+    }
+    return deleted;
   }
 
   async countActive(): Promise<number> {
