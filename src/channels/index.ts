@@ -548,15 +548,15 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
   if (!channelId) return;
 
   // A group-channel session asks in its thread — but only while the channel
-  // is still enrolled: after `leave` the bot stays silent there, and the
-  // request can still be answered in the web app.
+  // is enrolled and active: after `leave` or a pause the bot stays silent
+  // there, and the request is denied (see below).
   if (session.groupChannelId) {
     const { findGroupChannel, isGroupChannelActive } = await import('./group-channels');
     const group = await findGroupChannel(channelType, channelId);
     if (group?.id !== session.groupChannelId || !(await isGroupChannelActive(group))) {
-      // Not posted (the bot is silent there), and denied rather than left
-      // pending: nothing would ever answer it, and the turn would hold the
-      // session until then.
+      // Not posted: the bot is silent in a removed or paused channel. Denied,
+      // not left pending: permission requests do not expire, so nothing would
+      // ever release the turn (and the session lock it holds).
       channelLogger.info({ sessionId, channelId }, 'Permission request from a group thread whose channel is removed or paused — denying it');
       await permissionManager
         .deny(request.requestId, userId, 'the group channel this conversation belongs to was removed or is paused')
@@ -647,6 +647,17 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
         channelLogger.error({ denyError, channelType }, 'Failed to deny an undeliverable permission request');
       });
   }
+}
+
+/** Approval requests already announced in a chat (bounded). */
+const announcedApprovals = new Set<string>();
+
+/** True the first time an approval id is seen. */
+function firstAnnouncement(requestId: string): boolean {
+  if (announcedApprovals.has(requestId)) return false;
+  announcedApprovals.add(requestId);
+  if (announcedApprovals.size > 1_000) announcedApprovals.delete(announcedApprovals.values().next().value as string);
+  return true;
 }
 
 /**
@@ -880,6 +891,10 @@ export async function initializeChannels(): Promise<void> {
             // deprecated spawn_team meta-tool; those have been removed in
             // favor of spawn_child + parallelGroup. No handler needed.
             case 'approval_required': {
+              // Every message of this session waiting behind the turn has its
+              // own subscription; announce each approval once.
+              const approvalId = (event.data as { requestId?: string }).requestId;
+              if (approvalId && !firstAnnouncement(approvalId)) break;
               react('⏳');
               const ad = event.data as { requestId?: string; summary?: string; question?: string; options?: string[] };
               const approvalText = [
@@ -892,8 +907,20 @@ export async function initializeChannels(): Promise<void> {
               ].filter(Boolean).join('\n');
               if (groupChannelId) {
                 // The summary can quote the requester's files, mail or results:
-                // only they see it; the thread gets a prompt without it.
+                // only they see it; the thread gets a prompt without it. In a
+                // removed or paused channel nothing is posted and the step is
+                // declined, as for permission requests (otherwise it would
+                // hold the session until the approval times out).
                 void (async () => {
+                  const { findGroupChannel, isGroupChannelActive } = await import('./group-channels');
+                  const group = await findGroupChannel(message.channelType, message.channelId);
+                  if (group?.id !== groupChannelId || !(await isGroupChannelActive(group))) {
+                    if (approvalId) {
+                      await rootAgent.resolveApprovalDetailed(approvalId, false, 'the group channel was removed or is paused',
+                        { forUserId: message.userId, resolvedBy: message.userId });
+                    }
+                    return;
+                  }
                   const shown = await umi.sendPrivate(message.channelType, message.channelId, message.userId, {
                     content: approvalText.replace('Reply **yes/approve** to continue, or **no/stop** to cancel.', 'Reply `yes` or `no` in the thread.'),
                     threadId: replyThread,

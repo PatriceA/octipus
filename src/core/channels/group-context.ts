@@ -113,6 +113,18 @@ export function groupTurnContext(input: { requester?: string; context?: string }
   return input.context ? `${notice}\n\n${input.context}` : notice;
 }
 
+/** One fenced transcript block, as `renderGroupContext` writes it. */
+const TRANSCRIPT_BLOCK = /--- GROUP CHANNEL CONTEXT ([0-9a-f]+):[\s\S]*?--- END GROUP CHANNEL CONTEXT \1 ---/g;
+
+/**
+ * For replaying an earlier turn: its transcript is dropped. Every new turn
+ * reads the thread afresh, so old copies only repeat it (and overlap), and a
+ * long thread would otherwise replay one copy per turn.
+ */
+export function omitGroupTranscripts(promptContext: string): string {
+  return promptContext.replace(TRANSCRIPT_BLOCK, '[channel transcript of that turn omitted]');
+}
+
 /**
  * A bare yes/no as the whole message, or null. In a group thread this is the
  * only form that answers a permission prompt or a pipeline approval: members

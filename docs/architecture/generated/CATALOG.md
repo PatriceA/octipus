@@ -555,7 +555,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `security` | `config` | 12 |
 | `security` | `connectors` | 3 |
 | `security` | `core` | 2 |
-| `security` | `db` | 55 |
+| `security` | `db` | 57 |
 | `security` | `tools` | 1 |
 | `security` | `utils` | 21 |
 | `services` | `capabilities` | 5 |

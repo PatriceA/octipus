@@ -225,14 +225,16 @@ describe('permission prompts in a group channel thread', () => {
     expect(approve).toHaveBeenCalledWith('r-unseen', 'u-anna');
   });
 
-  test('a removed or paused channel denies the request instead of leaving it pending', async () => {
+  test('a removed or paused channel: nothing posted, and the request is denied so the turn does not hang', async () => {
     const deny = vi.spyOn(getPermissionManager(), 'deny').mockResolvedValue(true);
     enrolment.group = null;
     const removed = await ask();
-    expect(deny).toHaveBeenCalledWith(removed.requestId, 'u-anna', expect.stringContaining('removed or is paused'));
     enrolment.group = { id: 'g1' };
     enrolment.active = false;
     const paused = await ask();
+    expect(removed.send).not.toHaveBeenCalled();
+    expect(paused.send).not.toHaveBeenCalled();
+    expect(deny).toHaveBeenCalledWith(removed.requestId, 'u-anna', expect.stringContaining('removed or is paused'));
     expect(deny).toHaveBeenCalledWith(paused.requestId, 'u-anna', expect.stringContaining('removed or is paused'));
   });
 });

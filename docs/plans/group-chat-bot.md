@@ -195,8 +195,16 @@ Rules that must hold:
   prompt, and the confirmation names the tool it decided; prompts resolved in
   the web UI or expired are dropped from the queue. In a thread only a bare
   yes/no answers (members also talk to each other there), and nothing is
-  posted once the channel's enrolment is removed or paused — the request is
-  denied instead, so the turn does not stall. A prompt only becomes
+  posted once the channel's enrolment is removed or paused, and the request
+  is denied (permission requests do not expire; left pending it would hold
+  the session forever). A thread reply only answers an approval waiting in that
+  thread. Only session controls run as commands
+  in a thread. Transcripts of earlier turns are not replayed. The flow
+  guard's group rule is checked from the stored session before any tool
+  call (`ensureSharedAudienceKnown`), so hook- or API-started runs get it;
+  a failed lookup fails closed. The transcript is not passed through the
+  input guard: its flags drive the output guard, which would let one member
+  silence the bot for the whole thread. A prompt only becomes
   answerable once it has been posted. Pipeline approvals are posted the same
   way (details privately); Slack group messages carry their `ts` as the
   platform message id, without which the dispatcher posted no approval or
@@ -356,6 +364,23 @@ Acceptance (each has a test):
 - Heartbeat-style probe and background-lane check; per-channel rate limits and
   quiet hours; Teams RSC and Telegram privacy-mode docs.
 - ✅ / ❌ feedback recorded for learning.
+
+## Known limitations (after phase 1 review)
+
+Found in review and left for a follow-up, because they are not specific to
+group channels:
+
+- **Approval prompts ride on per-message subscriptions.** The dispatcher
+  posts `approval_required` (and progress) only for a turn started by an
+  inbound message that has a platform message id. Approvals raised by
+  background runs (monitors, wake-ups) are not posted in any chat, and Teams
+  messages carry no message id, so Teams never shows them. A session-keyed
+  announcer, like the permission-request forwarder, would fix both and
+  replace the `announcedApprovals` de-duplication.
+- **"yes" in a DM answers the user's single pending approval, wherever it
+  was raised** (the approval manager's existing rule). For an approval raised
+  by a background run in a group thread that is the only chat route, so it is
+  kept; a "yes" meant for something else can release it.
 
 ## Open questions
 

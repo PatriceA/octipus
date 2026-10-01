@@ -423,6 +423,9 @@ export class SlackChannel extends BaseChannel {
       metadata: {
         slackUserId,
         ts: message.ts,
+        // Lets the dispatcher post pipeline approvals and progress here; it
+        // skips them for messages without a platform message id.
+        messageId: message.ts,
         channelType: message.channel_type,
       },
     });

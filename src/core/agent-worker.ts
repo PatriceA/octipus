@@ -46,6 +46,7 @@ import { DriftDetector } from './agent-worker/drift-detector';
 import { ToolLoopDetector } from './agent-worker/tool-loop-detector';
 import { isRootAgent } from './types';
 import type { AgentMessage, ToolCall } from './types';
+import { omitGroupTranscripts } from '@/core/channels/group-context';
 
 // Re-export types for backward compatibility
 export type { AgentEvent, AgentEventHandler, AgentWorkerConfig, ToolHandler } from './agent-base';
@@ -763,7 +764,9 @@ export class AgentWorker extends BaseAgentWorker {
         await sessionRepository.patchContextIfGeneration(this.context.sessionId, this.cacheGeneration, {
           nativeConversation: { generation: this.cacheGeneration, model: this.context.model,
             ownerAgentId: this.context.id, checkpointId: this.checkpointId, acknowledged: this.userCursor,
-            messages: capNativeSnapshot(this.messages.filter(m => m.role !== 'system' || m.content.startsWith('[Context Summary')).map(m => ({ ...m, role: m.role === 'system' ? 'user' : m.role, timestamp: m.timestamp.toISOString() }))) },
+            // Group-thread transcripts are per turn: the next turn reads the
+            // thread afresh, so the snapshot keeps none (omitGroupTranscripts).
+            messages: capNativeSnapshot(this.messages.filter(m => m.role !== 'system' || m.content.startsWith('[Context Summary')).map(m => ({ ...m, role: m.role === 'system' ? 'user' : m.role, content: m.role === 'user' ? omitGroupTranscripts(m.content) : m.content, timestamp: m.timestamp.toISOString() }))) },
         });
       }
       this.context.completedAt = new Date();

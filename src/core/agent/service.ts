@@ -5,7 +5,7 @@ import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
 import { handleCommand } from '@/core/commands';
 import { renderMemoriesBlock, retrieveForContext, updateMemoriesAfterTurn } from '@/core/memory';
-import { markSharedAudience } from '@/security/flow-guard';
+import { markNotSharedAudience, markSharedAudience } from '@/security/flow-guard';
 import { bareReply, type GroupTurn, groupTurnContext } from '@/core/channels/group-context';
 import { generateRunId, runWithContext } from '@/core/run-context';
 import { type AttachedFileRef, buildAttachedFilesContext } from '@/core/session-files';
@@ -295,6 +295,7 @@ export class AgentService {
       // session on every turn, whichever entry point (channel, web chat,
       // background wake-up) the turn came through, and after any restart.
       if (sharedAudience) markSharedAudience(resolvedSessionId);
+      else markNotSharedAudience(resolvedSessionId);
       // Delivered as per-turn context beside the message (stored in the
       // message's metadata, not as its text), on every turn in a group thread:
       // monitors, wake-ups and plan runs too, whose replies land in the thread.
@@ -350,6 +351,22 @@ export class AgentService {
       }
       if (inputGuard.action === 'warn') {
         coreLogger.info({ flags: inputGuard.flags, sessionId }, 'Input guard flagged message');
+      }
+      // The group transcript is deliberately NOT run through the input guard:
+      // its flags drive the output guard, which replaces whole replies, so one
+      // member's message would silence the bot for everyone in the thread. It
+      // is fenced as untrusted text and the session starts `suspicious` in the
+      // flow guard instead.
+
+      // In a shared channel only the session controls (/stop, /status, …)
+      // run: other commands answer with the member's own account data
+      // (skills, cost, model settings), which would be posted to everyone.
+      if (sharedAudience && message.trim().startsWith('/') && !isSessionControlMessage(message)) {
+        return {
+          response: 'That command is not available in a shared channel, because its answer would be visible to everyone. Send it to me in a direct message.',
+          sessionId: resolvedSessionId,
+          classification: { type: 'casual' as const, confidence: 1 },
+        };
       }
 
       // Command interception (works across all channels)
@@ -644,6 +661,11 @@ export class AgentService {
 
       // A group-thread session may only answer an approval waiting in this
       // same session, and only with a bare yes/no.
+      // In a group thread, only a bare yes/no, and only for an approval
+      // waiting in this same session. (From a DM or the web app the user's
+      // single pending approval can be answered as before — including one
+      // raised by a background run in a group thread, which has no other chat
+      // route.)
       const approvalReply = approvalReplyFor(message, sharedAudience);
       const mayAnswerHere = !sharedAudience
         || this.approvalManager.getPendingApprovals(userId)[0]?.sessionId === resolvedSessionId;

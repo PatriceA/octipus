@@ -145,7 +145,9 @@ Hooks, scheduled tasks, monitors, notifications and agents (the `messaging` tool
 | `slack.signingSecret` | `SLACK_SIGNING_SECRET` | Vault | Signing secret from app settings (secret, stored in vault) |
 | `slack.userToken` | `SLACK_USER_TOKEN` | Vault | Optional user token (`xoxp-...`). **Only needed for `channel_search`** — Slack does not expose `search.messages` to bot tokens at all. Add the `search:read` User Token Scope under *OAuth & Permissions*, reinstall, and copy the **User** OAuth Token. Without it, `channel_search` scans one named channel's history instead and says so in its result. |
 
-Optional scopes: `channels:read` and `groups:read` let the bot read a channel's
+Optional scopes: `reactions:write` lets the bot mark progress on messages
+with emoji (👀, ✅); without it those calls fail silently.
+`channels:read` and `groups:read` let the bot read a channel's
 name when it is enrolled as a [group channel](#group-channels) (otherwise the
 settings pages show the channel id).
 
@@ -196,10 +198,21 @@ Once enrolled, the bot:
   permission prompts and pipeline approvals alike — so talk with colleagues
   ("no, let me check with Dana first") never answers one. A reply cannot
   answer a prompt that has not appeared yet. For a channel that has been
-  removed or paused nothing is posted and the request is denied;
+  removed or paused nothing is posted and the request is denied (requests
+  do not expire, so it would otherwise hold the conversation). A reply in a
+  thread only answers an approval waiting in that thread;
 - **posts pipeline approvals in the thread the same way** — a prompt without
   details, the stage summary privately to the requester;
-- **keeps document results in the thread** when a member shares a file with it.
+- **keeps document results in the thread** when a member shares a file with it;
+- **runs only session controls** (`/stop`, `/status`, `/clear`, `/cancel`,
+  `/help`) in a channel — other commands answer with the member's account
+  data and must be sent in a DM.
+
+Other members' messages are not run through the input guard (its flags make
+the output guard replace replies, which would let one member silence the bot
+for everyone); they are fenced as untrusted text and the session starts
+`suspicious` in the flow guard. Earlier turns' transcripts are not replayed
+into later ones; each turn reads the thread afresh.
 
 Members without a linked account get one private (ephemeral) hint a day to
 link; the bot never answers `link` in a channel, since a link code posted where
