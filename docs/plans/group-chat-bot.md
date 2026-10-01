@@ -100,7 +100,7 @@ gets one private (ephemeral) hint a day explaining `join`. DMs keep today's
 behaviour.
 
 Enrolment is a new table rather than overloading notification destinations
-(migrations `0120_group_channels.sql`, `0121_group_channels_unlink.sql`):
+(migrations `0121_group_channels.sql`, `0122_group_channels_unlink.sql`):
 
 ```
 group_channels
@@ -161,12 +161,12 @@ No transcript is stored by Octipus in phase 1: reading the thread at turn time
 is accurate, needs no retention policy, and costs one API call per addressed
 message. A buffer becomes necessary only for listen mode (§7).
 
-The session indexes: migration 0120 rewrites 0028's one-active-session-per-chat
+The session indexes: migration 0121 rewrites 0028's one-active-session-per-chat
 index to skip group sessions and adds one active session per
 `(user, group channel, thread)`. The 1:1 session lookup and the transcript
 aggregation in the sessions API exclude group sessions.
-`sessions.group_channel_id` has no foreign key on purpose (0121 drops the one
-0120 created): when an enrolment is removed, the members' thread sessions must
+`sessions.group_channel_id` has no foreign key on purpose (0122 drops the one
+0121 created): when an enrolment is removed, the members' thread sessions must
 stay group sessions. With `ON DELETE SET NULL`, several thread sessions of one
 member became colliding 1:1 rows and the delete failed.
 
@@ -315,7 +315,7 @@ sessions need the `group_channel_id` attributed (via the session).
 ### Phase 1 — Slack, mention mode (fixes today's problems) — done
 
 Built:
-- `group_channels` table and `sessions.group_channel_id` (migrations 0120, 0121);
+- `group_channels` table and `sessions.group_channel_id` (migrations 0121, 0122);
   `src/channels/group-channels.ts`.
 - Enrolment with `@Octipus join` / `@Octipus leave` in the channel; takeover
   of a paused channel; owner section under Settings → Channels; Admin → Group

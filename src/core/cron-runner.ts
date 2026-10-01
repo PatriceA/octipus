@@ -1,4 +1,5 @@
 import { and, eq, isNotNull, lte } from 'drizzle-orm';
+import { getConfig } from '@/config';
 import { getEmbeddingService } from '@/core/rag/embeddings';
 import { maybeRunHeartbeats } from '@/core/heartbeat';
 import { getDb } from '@/db/postgres';
@@ -125,6 +126,17 @@ async function maybeCleanupSessions(): Promise<void> {
     const archived = await sessionRepository.cleanupOldWebchatSessions(7);
     if (archived > 0) {
       coreLogger.info({ archived }, 'Session cleanup: archived old webchat sessions');
+    }
+
+    // Retention: delete sessions idle past the configured window (0 = never).
+    // Pinned ("keep") sessions are exempt — see SessionRepository.deleteExpired.
+    const retentionDays = getConfig().sessions.retentionDays;
+    if (retentionDays > 0) {
+      const cutoff = new Date(now - retentionDays * 24 * 3600_000);
+      const deleted = await sessionRepository.deleteExpired(cutoff);
+      if (deleted > 0) {
+        coreLogger.info({ deleted, retentionDays }, 'Session cleanup: deleted sessions past retention');
+      }
     }
   } catch (err) {
     coreLogger.error({ err }, 'Session cleanup failed');

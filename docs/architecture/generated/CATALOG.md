@@ -504,7 +504,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `connectors` | `utils` | 5 |
 | `core` | `capabilities` | 1 |
 | `core` | `channels` | 6 |
-| `core` | `config` | 33 |
+| `core` | `config` | 34 |
 | `core` | `connectors` | 2 |
 | `core` | `db` | 207 |
 | `core` | `extensions` | 1 |

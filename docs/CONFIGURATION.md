@@ -70,6 +70,9 @@ AGENT_MAX_TOKEN_BUDGET=100000         # Per-agent token limit (0 = unlimited)
 AGENT_DEFAULT_TIMEOUT=900000          # Per-agent timeout in ms (default: 15min)
 AGENT_MAX_ITERATIONS=50               # Max iterations per agent loop
 
+# ─── Sessions ────────────────────────────────────────────────
+SESSION_RETENTION_DAYS=14             # Delete sessions idle this many days (0 = never); "keep"-marked sessions are exempt
+
 WORKSPACE_PATH=./workspace
 SEARXNG_URL=http://localhost:8888         # SearXNG meta-search (optional)
 

@@ -115,7 +115,13 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
 
       const { getConfig } = await import('@/config');
       const config = getConfig();
-      return { sessions, total, maxTokenBudget: config.agent.maxTokenBudget };
+      return {
+        sessions,
+        total,
+        maxTokenBudget: config.agent.maxTokenBudget,
+        // Idle days before an unpinned session is auto-deleted (0 = never).
+        retentionDays: config.sessions.retentionDays,
+      };
     },
     {
       query: t.Object({
@@ -239,9 +245,10 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
 
       // Only the declared fields: a session's channelType / channelId is its
       // outbound address and is fixed at creation (see POST).
-      const { title, status, context, metadata } = body;
+      // `pinned` marks the session to keep: exempt from the retention sweep.
+      const { title, status, context, metadata, pinned } = body;
       const patch = Object.fromEntries(
-        Object.entries({ title, status, context, metadata }).filter(([, v]) => v !== undefined),
+        Object.entries({ title, status, context, metadata, pinned }).filter(([, v]) => v !== undefined),
       ) as Partial<import('@/db/schema/sessions').NewSession>;
       const updated = await scopedRepos(principal).sessions.update(params.id, patch);
       if (!updated) {
@@ -259,6 +266,7 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         status: t.Optional(t.String()),
         context: t.Optional(t.Any()),
         metadata: t.Optional(t.Any()),
+        pinned: t.Optional(t.Boolean()),
       }),
       detail: { tags: ['sessions'] },
     }

@@ -1,6 +1,6 @@
 /**
  * Group channel enrolment, per-member thread sessions and the owner/admin
- * routes, against embedded Postgres (migration 0120 included).
+ * routes, against embedded Postgres (migrations 0121 and 0122 included).
  *
  * Seeds: anna (owner-to-be), bob (another member), carol (deactivated),
  * admin. Each gets a default workspace on first use.

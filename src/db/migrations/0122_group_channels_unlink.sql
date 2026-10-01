@@ -1,4 +1,4 @@
--- Follow-up to 0120 (found in review before release):
+-- Follow-up to 0121 (found in review before release):
 --  - sessions.group_channel_id loses its foreign key. With ON DELETE SET NULL,
 --    removing an enrolment turned a member's several thread sessions in one
 --    channel into colliding 1:1 rows (sessions_user_channel_active_uniq_idx),

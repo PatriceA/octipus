@@ -1,4 +1,4 @@
-import { integer, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, integer, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { users } from './users';
 
 export const sessionStatusEnum = pgEnum('session_status', ['active', 'paused', 'completed', 'failed']);
@@ -21,7 +21,7 @@ export const sessions = pgTable('sessions', {
    * Set when the session is one member's conversation in a group channel
    * thread (`group_channels`). Such sessions are keyed by thread, not by
    * chat, and never aggregated with the member's other sessions for the
-   * same chat. No foreign key (dropped in 0121): the marking outlives the
+   * same chat. No foreign key (dropped in 0122): the marking outlives the
    * enrolment, so a removed channel's threads stay group sessions.
    */
   groupChannelId: uuid('group_channel_id'),
@@ -31,6 +31,12 @@ export const sessions = pgTable('sessions', {
   metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}),
   messageCount: integer('message_count').default(0).notNull(),
   tokenCount: integer('token_count').default(0).notNull(),
+  /**
+   * Kept by the user (pin / favourite). A pinned session is exempt from the
+   * automatic retention sweep (`sessions.retentionDays`) and from the webchat
+   * auto-archive, so it lives until someone deletes it by hand.
+   */
+  pinned: boolean('pinned').default(false).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   completedAt: timestamp('completed_at', { withTimezone: true }),

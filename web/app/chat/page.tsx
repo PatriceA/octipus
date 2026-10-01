@@ -204,6 +204,7 @@ export default function ChatPage() {
   }, [openFilePath]);
   const [showNewSessionDialog, setShowNewSessionDialog] = useState(false);
   const [maxTokenBudget, setMaxTokenBudget] = useState(0);
+  const [retentionDays, setRetentionDays] = useState<number | undefined>(undefined);
   // Append-only queue of swarm events from the WS stream. We used to hold the
   // single "latest" event in state, but React 18 batches multiple state
   // updates inside an onmessage burst — when two swarm events arrived in the
@@ -263,10 +264,11 @@ export default function ChatPage() {
   // Load sessions from backend
   const loadSessions = useCallback(async () => {
     try {
-      const data = await api.get<{ sessions: Array<{ id: string; title: string; updatedAt: string; messageCount: number; tokenCount?: number; status: string; channelType?: string; context?: { devMode?: boolean; projectName?: string } }>; maxTokenBudget?: number }>('/sessions');
+      const data = await api.get<{ sessions: Array<{ id: string; title: string; updatedAt: string; messageCount: number; tokenCount?: number; status: string; channelType?: string; pinned?: boolean; context?: { devMode?: boolean; projectName?: string } }>; maxTokenBudget?: number; retentionDays?: number }>('/sessions');
       setSessionListError(null);
       if (data?.sessions?.length === 0) setSessions([]);
       if (data?.maxTokenBudget != null) setMaxTokenBudget(data.maxTokenBudget);
+      if (data?.retentionDays != null) setRetentionDays(data.retentionDays);
       if (data?.sessions?.length) {
         const items: SessionInfo[] = data.sessions
           .filter(s => s.status === 'active')
@@ -282,6 +284,7 @@ export default function ChatPage() {
             devMode: s.context?.devMode,
             projectName: s.context?.projectName,
             channelType: s.channelType,
+            pinned: s.pinned,
           }));
         setSessions(items);
 
@@ -1479,6 +1482,15 @@ export default function ChatPage() {
     } catch {}
   };
 
+  const togglePinSession = async (id: string, pinned: boolean) => {
+    try {
+      await api.patch(`/sessions/${id}`, { pinned });
+      setSessions(prev => prev.map(s => s.id === id ? { ...s, pinned } : s));
+    } catch (err) {
+      console.error('Failed to update keep flag:', err);
+    }
+  };
+
   // Send message
   const sendMessage = async (userInput: string, attachments?: Attachment[]) => {
     let sid = activeSessionId;
@@ -1807,6 +1819,8 @@ export default function ChatPage() {
           onCreate={createSession}
           onDelete={deleteSession}
           onRename={renameSession}
+          onTogglePin={togglePinSession}
+          retentionDays={retentionDays}
         />
       </div>
 
@@ -1839,6 +1853,8 @@ export default function ChatPage() {
               }}
               onDelete={deleteSession}
               onRename={renameSession}
+              onTogglePin={togglePinSession}
+              retentionDays={retentionDays}
               onClose={closeCompactSessions}
             />
           </div>
