@@ -1,6 +1,6 @@
 'use client';
 
-import { Code2, Globe, Hash, MessageSquare, MoreHorizontal, Pencil, Plus, Search, Smartphone, Trash2, X } from 'lucide-react';
+import { Code2, Globe, Hash, MessageSquare, MoreHorizontal, Pencil, Pin, PinOff, Plus, Search, Smartphone, Trash2, X } from 'lucide-react';
 import { useEffect, useRef, useState, } from 'react';
 import { cn } from '@/lib/utils';
 
@@ -14,6 +14,8 @@ export interface SessionInfo {
   devMode?: boolean;
   projectName?: string;
   channelType?: string;
+  /** Kept by the user — never auto-deleted by the retention sweep. */
+  pinned?: boolean;
 }
 
 interface SessionListProps {
@@ -23,6 +25,9 @@ interface SessionListProps {
   onCreate: () => void;
   onDelete: (id: string) => void;
   onRename: (id: string, title: string) => void;
+  onTogglePin?: (id: string, pinned: boolean) => void;
+  /** Idle days before an unkept session is auto-deleted (0 = never). */
+  retentionDays?: number;
   onClose?: () => void;
 }
 
@@ -60,7 +65,8 @@ function timeAgo(dateStr: string): string {
   return `${Math.floor(diffDay / 365)}y`;
 }
 
-const GROUP_ORDER = ['Today', 'Yesterday', 'This Week', 'Older'];
+const KEPT_GROUP = 'Kept';
+const GROUP_ORDER = [KEPT_GROUP, 'Today', 'Yesterday', 'This Week', 'Older'];
 
 export function SessionList({
   sessions,
@@ -69,6 +75,8 @@ export function SessionList({
   onCreate,
   onDelete,
   onRename,
+  onTogglePin,
+  retentionDays,
   onClose,
 }: SessionListProps) {
   const [search, setSearch] = useState('');
@@ -104,7 +112,9 @@ export function SessionList({
   );
 
   const grouped = GROUP_ORDER.reduce<Record<string, SessionInfo[]>>((acc, group) => {
-    const items = filtered.filter((s) => getTimeGroup(s.updatedAt) === group);
+    const items = filtered.filter((s) =>
+      group === KEPT_GROUP ? s.pinned : !s.pinned && getTimeGroup(s.updatedAt) === group
+    );
     if (items.length > 0) acc[group] = items;
     return acc;
   }, {});
@@ -173,6 +183,12 @@ export function SessionList({
           />
         </div>
       </div>
+
+      {retentionDays != null && retentionDays > 0 && (
+        <div className="px-3 py-1 border-b border-outline-variant/60 text-[10px] text-outline">
+          idle sessions are deleted after {retentionDays}d · <Pin className="inline h-2.5 w-2.5" /> keep to save
+        </div>
+      )}
 
       {/* Session list */}
       <div className="flex-1 overflow-y-auto px-2 pb-2">
@@ -263,6 +279,11 @@ export function SessionList({
                             {session.messageCount}
                           </span>
                           <span>· {timeAgo(session.updatedAt)}</span>
+                          {session.pinned && (
+                            <span className="inline-flex items-center text-primary" title="Kept — never auto-deleted">
+                              <Pin className="h-2.5 w-2.5" />
+                            </span>
+                          )}
                           </div>
                         </button>
                       )}
@@ -301,6 +322,20 @@ export function SessionList({
                           <Pencil className="h-3 w-3" />
                           rename
                         </button>
+                        {onTogglePin && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onTogglePin(session.id, !session.pinned);
+                              setMenuOpenId(null);
+                            }}
+                            title={session.pinned ? 'Allow automatic deletion again' : 'Never delete this session automatically'}
+                            className="flex w-full items-center gap-2 px-2.5 py-1 text-[12px] text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface cursor-pointer"
+                          >
+                            {session.pinned ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
+                            {session.pinned ? 'unkeep' : 'keep'}
+                          </button>
+                        )}
                         <button
                           onClick={(e) => {
                             e.stopPropagation();

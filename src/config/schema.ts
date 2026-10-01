@@ -475,6 +475,15 @@ export const vaultSyncConfigSchema = z.object({
 });
 
 // Full configuration schema
+export const sessionsConfigSchema = z.object({
+  /**
+   * Days a session may sit idle (no new activity) before the hourly sweep in
+   * `cron-runner.ts` deletes it with its messages. Sessions the user pinned
+   * ("keep") are never swept. 0 disables automatic deletion.
+   */
+  retentionDays: z.number().int().min(0).max(3650).default(14),
+});
+
 /**
  * WS2 — heartbeat loop. A periodic per-user agent turn that reviews standing
  * context and acts or stays silent. Off by default; a cheap deterministic gate
@@ -613,10 +622,12 @@ export const configSchema = z.object({
   swarm: swarmConfigSchema.prefault({}),
   skills: skillsConfigSchema.prefault({}),
   heartbeat: heartbeatConfigSchema.prefault({}),
+  sessions: sessionsConfigSchema.prefault({}),
 });
 
 export type Config = z.infer<typeof configSchema>;
 export type HeartbeatConfig = z.infer<typeof heartbeatConfigSchema>;
+export type SessionsConfig = z.infer<typeof sessionsConfigSchema>;
 export type StorageMode = z.infer<typeof storageModeSchema>;
 export type DatabaseConfig = z.infer<typeof databaseConfigSchema>;
 export type LiteLLMConfig = z.infer<typeof litellmConfigSchema>;

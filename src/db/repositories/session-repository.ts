@@ -296,6 +296,7 @@ export class SessionRepository {
         and(
           eq(sessions.status, 'active'),
           eq(sessions.channelType, 'webchat'),
+          eq(sessions.pinned, false),
           lt(sessions.updatedAt, cutoff),
         )
       )
@@ -305,6 +306,44 @@ export class SessionRepository {
       dbLogger.info({ count: result.length, days }, 'Archived old webchat sessions');
     }
     return result.length;
+  }
+
+  /**
+   * Delete sessions idle since before `cutoff`, except pinned ones and any
+   * with an agent still running or a monitor still pending. Goes through
+   * `delete()` so messages, pipelines and agents go with each row. At most `limit` per call; the
+   * hourly sweep picks up the rest. Returns the number deleted.
+   */
+  async deleteExpired(cutoff: Date, limit = 500): Promise<number> {
+    const { agents } = await import('../schema/agents');
+    const { monitors } = await import('../schema/monitors');
+    // A session still waiting on a monitor (armed, or fired and about to
+    // resume) is not idle even though nothing has touched its row; deleting it
+    // would cascade the monitor away and silently drop the continuation.
+    const expiredFilter = (id?: string) => and(
+      id ? eq(sessions.id, id) : undefined,
+      eq(sessions.pinned, false),
+      lt(sessions.updatedAt, cutoff),
+      sql`NOT EXISTS (SELECT 1 FROM ${agents} WHERE ${agents.sessionId} = ${sessions.id} AND ${agents.status} = 'running')`,
+      sql`NOT EXISTS (SELECT 1 FROM ${monitors} WHERE ${monitors.sessionId} = ${sessions.id} AND ${monitors.status} IN ('armed', 'paused', 'ready', 'delivering'))`,
+    );
+    const expired = await this.db
+      .select({ id: sessions.id })
+      .from(sessions)
+      .where(expiredFilter())
+      .orderBy(sessions.updatedAt)
+      .limit(limit);
+
+    let deleted = 0;
+    for (const { id } of expired) {
+      // Re-check right before deleting: the batch is selected up front and
+      // deleted one by one, so a session pinned, resumed or given a running
+      // agent meanwhile must not be swept with a stale verdict.
+      const still = await this.db.select({ id: sessions.id }).from(sessions).where(expiredFilter(id)).limit(1);
+      if (still.length === 0) continue;
+      if (await this.delete(id)) deleted++;
+    }
+    return deleted;
   }
 
   async countActive(): Promise<number> {
