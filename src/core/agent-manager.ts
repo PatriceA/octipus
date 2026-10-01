@@ -147,7 +147,7 @@ export class AgentManager {
       // of the check (DB hiccup, table not migrated yet) does not block.
       try {
         const { checkSpend } = await import('@/security/spend-budgets');
-        await checkSpend({ userId: options.userId, role: options.role || 'general', workspaceId: options.workspaceId });
+        await checkSpend({ userId: options.userId, role: options.role || 'general', workspaceId: options.workspaceId, sessionId: options.sessionId });
       } catch (err) {
         if (err instanceof Error && err.name === 'SpendBudgetExceededError') throw err;
         agentLogger.warn({ err, userId: options.userId }, 'spend budget check unavailable (not blocking)');

@@ -81,3 +81,17 @@ test('a removed or paused group channel gets no monitor reply, and the monitor s
   await expect(deliverMonitorResponse(row, result)).rejects.toThrow('removed or is paused');
   expect(fixture.send).not.toHaveBeenCalled();
 });
+test("a monitor's refusal for the member's own budget is posted in the thread without its figures", async () => {
+  fixture.session.mockResolvedValue({ userId: 'owner', context: {}, channelType: 'slack', channelId: 'C1', threadId: '90.0', groupChannelId: 'g1' });
+  const { userRepository } = await import('@/db/repositories/user-repository');
+  const spy = vi.spyOn(userRepository, 'findById').mockResolvedValue({ id: 'owner', username: 'anna' } as never);
+  const refused: TurnResult = {
+    ...result, response: 'Agents are paused: your monthly spend budget of $25.00/month is reached ($25.40 spent this month).',
+    metadata: { limit: { code: 'SPEND_BUDGET_EXCEEDED', reason: { budgetId: 'b', userId: 'owner', scopeKind: 'user', scopeRef: null, period: 'month', spentUsd: 25.4, limitUsd: 25 } } },
+  };
+  await deliverMonitorResponse(row, refused);
+  const content = (fixture.send.mock.calls[0]![2] as { content: string }).content;
+  expect(content).toContain('for anna');
+  expect(content).not.toContain('$');
+  spy.mockRestore();
+});

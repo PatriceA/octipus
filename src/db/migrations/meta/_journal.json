@@ -869,6 +869,13 @@
       "when": 1789601114570,
       "tag": "0122_group_channels_unlink",
       "breakpoints": true
+    },
+    {
+      "idx": 124,
+      "version": "7",
+      "when": 1789601114571,
+      "tag": "0123_group_channel_budgets",
+      "breakpoints": true
     }
   ]
 }

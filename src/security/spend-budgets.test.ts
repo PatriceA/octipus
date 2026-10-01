@@ -250,3 +250,87 @@ describe('checkSpend', () => {
     expect(await checkSpend({ userId: 'system' })).toEqual([]);
   });
 });
+
+describe('group channel budgets', () => {
+  async function newGroup(ownerUserId: string) {
+    const { getDb } = await import('@/db/postgres');
+    const { groupChannels } = await import('@/db/schema/group-channels');
+    const [g] = await getDb().insert(groupChannels)
+      .values({ channelType: 'slack', channelId: `C${rand(4)}`, label: '#release', ownerUserId })
+      .returning();
+    return g;
+  }
+  /** A member's session for one thread of the channel. */
+  async function groupSession(userId: string, groupChannelId: string): Promise<string> {
+    const { seedSession } = await import('@/test-helpers/multiuser-fixtures');
+    const { getDb } = await import('@/db/postgres');
+    const { sessions } = await import('@/db/schema/sessions');
+    const { id } = await seedSession({ userId, channelType: 'slack', channelId: 'C1' });
+    await getDb().update(sessions).set({ groupChannelId, threadId: `t-${rand(3)}` }).where(eq(sessions.id, id));
+    return id;
+  }
+  async function logInSession(userId: string, sessionId: string, totalCost: number) {
+    const { getDb } = await import('@/db/postgres');
+    const { costLog } = await import('@/db/schema/models');
+    await getDb().insert(costLog).values({
+      userId, sessionId, modelName: 'test', inputTokens: 1, outputTokens: 1, totalCost, createdAt: EARLIER,
+    });
+  }
+
+  test("counts every member's spend in the channel and refuses any member's run there once used up", async () => {
+    const { checkSpend, groupChannelPause, upsertBudget, _resetSpendBudgetsForTests } = await import('@/security/spend-budgets');
+    const { SpendBudgetExceededError } = await import('@/security/spend-budget-error');
+    const { seedSession } = await import('@/test-helpers/multiuser-fixtures');
+    const owner = await newUser();
+    const member = await newUser();
+    const g = await newGroup(owner);
+    const ownerThread = await groupSession(owner, g.id);
+    const memberThread = await groupSession(member, g.id);
+    const memberDm = (await seedSession({ userId: member })).id;
+    await upsertBudget({ userId: owner, scopeKind: 'group_channel', scopeRef: g.id, period: 'day', limitUsd: 10 });
+    await logInSession(owner, ownerThread, 4);
+    await logInSession(member, memberThread, 3);
+    await logInSession(member, memberDm, 50); // the member's own chat is not the channel's
+
+    const [status] = await checkSpend({ userId: member, sessionId: memberThread }, NOON);
+    expect(status.budget.scopeKind).toBe('group_channel');
+    expect(status.spentUsd).toBeCloseTo(7);
+    expect(await checkSpend({ userId: member, sessionId: memberDm }, NOON)).toEqual([]);
+    expect(await groupChannelPause(g.id, NOON)).toBeNull();
+
+    await logInSession(member, memberThread, 5);
+    _resetSpendBudgetsForTests();
+    await expect(checkSpend({ userId: member, sessionId: memberThread }, NOON)).rejects.toBeInstanceOf(SpendBudgetExceededError);
+    // The owner is told, not the member whose run crossed it.
+    expect(await notificationsOf(owner, 'spend_budget_paused')).toHaveLength(1);
+    expect(await notificationsOf(member, 'spend_budget_paused')).toHaveLength(0);
+    expect(await groupChannelPause(g.id, NOON)).toEqual({ resetsAt: '2026-07-13T00:00:00.000Z' });
+    // The owner's own runs elsewhere are not capped by it.
+    expect(await checkSpend({ userId: owner }, NOON)).toEqual([]);
+  });
+
+  test('one budget per channel and period; it follows the owner and goes with the enrolment', async () => {
+    const { deleteGroupChannelBudgets, listBudgets, moveGroupChannelBudgets, upsertBudget } = await import('@/security/spend-budgets');
+    const owner = await newUser();
+    const next = await newUser();
+    const g = await newGroup(owner);
+    const first = await upsertBudget({ userId: owner, scopeKind: 'group_channel', scopeRef: g.id, period: 'month', limitUsd: 10 });
+    const second = await upsertBudget({ userId: next, scopeKind: 'group_channel', scopeRef: g.id, period: 'month', limitUsd: 20 });
+    expect(second.id).toBe(first.id);
+    expect(second).toMatchObject({ userId: next, limitUsd: '20' });
+
+    await moveGroupChannelBudgets(g.id, owner);
+    expect((await listBudgets(owner)).map((b) => b.id)).toEqual([first.id]);
+    await deleteGroupChannelBudgets(g.id);
+    expect(await listBudgets(owner)).toEqual([]);
+  });
+
+  test('its status names the channel', async () => {
+    const { groupChannelBudgetStatuses, upsertBudget } = await import('@/security/spend-budgets');
+    const owner = await newUser();
+    const g = await newGroup(owner);
+    await upsertBudget({ userId: owner, scopeKind: 'group_channel', scopeRef: g.id, period: 'day', limitUsd: 10 });
+    const [view] = await groupChannelBudgetStatuses(g.id, NOON);
+    expect(view).toMatchObject({ scopeKind: 'group_channel', scopeRef: g.id, scopeName: '#release', state: 'ok' });
+  });
+});

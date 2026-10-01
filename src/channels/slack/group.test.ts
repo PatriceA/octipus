@@ -7,7 +7,10 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type { JoinResult } from '@/channels/group-channels';
 import type { GroupChannel } from '@/db/schema/group-channels';
-import { type GroupMember, HINTS, handleSlackGroupMessage, type SlackGroupDeps, type SlackGroupMessage } from './group';
+import {
+  type GroupMember, HINTS, handleSlackGroupMessage, handleSlackGroupReaction, parseTake, type SlackGroupDeps,
+  type SlackGroupMessage, type SlackPost, type SlackReaction, TAKE_REACTION, TAKE_REACTION_TEXT,
+} from './group';
 
 const BOT = 'UBOT';
 const group: GroupChannel = {
@@ -15,6 +18,13 @@ const group: GroupChannel = {
   ownerUserId: 'owner', createdAt: new Date(), updatedAt: new Date(),
 };
 const anna: GroupMember = { id: 'u-anna', username: 'anna', isActive: true, isAdmin: false };
+/** Messages `readMessage` finds, by ts. */
+const posts: Record<string, SlackPost> = {
+  '90.0': { text: 'Can someone fix the flaky deploy test?\nIt failed twice today.', user: 'U-BOB', botId: null },
+  '95.5': { text: 'The staging DB is slow again', user: 'U-BOB', botId: null },
+  '96.1': { text: 'and the cache too', user: 'U-BOB', botId: null, threadTs: '90.0' },
+  '97.0': { text: 'I will look at the cache', user: 'U-ANNA', botId: null },
+};
 
 function makeDeps(over: Partial<SlackGroupDeps> = {}) {
   const calls = {
@@ -36,6 +46,9 @@ function makeDeps(over: Partial<SlackGroupDeps> = {}) {
     postEphemeral: vi.fn(async (_c: string, user: string, text: string) => { calls.ephemeral.push({ user, text }); }),
     postInThread: vi.fn(async (_c: string, threadTs: string, text: string) => { calls.thread.push({ threadTs, text }); }),
     readContext: vi.fn(async () => '--- GROUP CHANNEL CONTEXT ---'),
+    readMessage: vi.fn(async (_c: string, ts: string): Promise<SlackPost | null> => posts[ts] ?? null),
+    permalink: vi.fn(async (_c: string, ts: string) => `https://x.slack.com/archives/C1/p${ts.replace('.', '')}`),
+    budgetPause: vi.fn(async () => null),
     shouldSendHint: (key: string) => (hints.has(key) ? false : (hints.add(key), true)),
     dispatch: (input) => { calls.dispatched.push(input); },
     ...over,
@@ -183,3 +196,115 @@ describe('handleSlackGroupMessage', () => {
     expect(ctx.calls.dispatched).toEqual([]);
   });
 });
+
+describe('taking work on', () => {
+  let ctx: ReturnType<typeof makeDeps>;
+  beforeEach(() => { ctx = makeDeps(); });
+
+  test('parseTake: "take this — …", "take it: …", "take this on"; not "take a look"', () => {
+    expect(parseTake('take this — draft the notes')).toBe('draft the notes');
+    expect(parseTake('Take it: fix the flaky test')).toBe('fix the flaky test');
+    expect(parseTake('take this on')).toBe('');
+    expect(parseTake('take this')).toBe('');
+    expect(parseTake('take a look at the logs')).toBeNull();
+    expect(parseTake('takeaway from the meeting?')).toBeNull();
+    expect(parseTake('take thisx')).toBeNull();
+  });
+
+  test("take this — <what>: the member's own words are the request", async () => {
+    expect(await handleSlackGroupMessage(msg({ text: `<@${BOT}> take this — draft the release notes` }), ctx.deps)).toBe('taken');
+    const d = ctx.calls.dispatched[0]!;
+    expect(d.text).toBe('take this — draft the release notes'); // stored as typed
+    expect(d.take).toEqual({ text: 'draft the release notes', messageKey: 'C1:100.1', url: 'https://x.slack.com/archives/C1/p1001' });
+    expect(d.threadTs).toBe('100.1');
+  });
+
+  test("take this alone in a thread takes the thread's first message, attributed to its author", async () => {
+    expect(await handleSlackGroupMessage(msg({ text: `<@${BOT}> take this`, thread_ts: '90.0', ts: '100.2' }), ctx.deps)).toBe('taken');
+    const d = ctx.calls.dispatched[0]!;
+    expect(d.take).toMatchObject({ text: posts['90.0']!.text, author: 'Anna Schmidt', messageKey: 'C1:90.0' });
+    expect(ctx.deps.displayName).toHaveBeenCalledWith('U-BOB');
+    expect(d.threadTs).toBe('90.0');
+  });
+
+  test('take this alone at the top level, or an unreadable first message: a private hint, no task', async () => {
+    expect(await handleSlackGroupMessage(msg({ text: `<@${BOT}> take this` }), ctx.deps)).toBe('hint');
+    expect(ctx.calls.ephemeral[0]!.text).toBe(HINTS.takeWhat);
+    expect(await handleSlackGroupMessage(msg({ text: `<@${BOT}> take it`, thread_ts: '11.1', ts: '100.4' }), ctx.deps)).toBe('hint');
+    expect(ctx.calls.ephemeral[1]!.text).toBe(HINTS.takeUnreadable);
+    expect(ctx.calls.dispatched).toEqual([]);
+  });
+
+  test('without a mention, "take this" in a bot thread is an ordinary message', async () => {
+    ctx = makeDeps({ isThreadActive: vi.fn(async () => true) });
+    expect(await handleSlackGroupMessage(msg({ text: 'take this — whatever', thread_ts: '90.0', ts: '100.3' }), ctx.deps)).toBe('dispatched');
+    expect(ctx.calls.dispatched[0]!.take).toBeUndefined();
+  });
+
+  test('an unlinked member cannot take work on', async () => {
+    expect(await handleSlackGroupMessage(msg({ user: 'U-STRANGER', text: `<@${BOT}> take this — x` }), ctx.deps)).toBe('hint');
+    expect(ctx.calls.dispatched).toEqual([]);
+  });
+});
+
+describe('the 🐙 reaction', () => {
+  let ctx: ReturnType<typeof makeDeps>;
+  beforeEach(() => { ctx = makeDeps(); });
+  const react = (over: Partial<SlackReaction> = {}): SlackReaction =>
+    ({ user: 'U-ANNA', reaction: TAKE_REACTION, item: { type: 'message', channel: 'C1', ts: '95.5' }, ...over });
+
+  test('takes the reacted message on, in its own thread, as the member who reacted', async () => {
+    expect(await handleSlackGroupReaction(react(), ctx.deps)).toBe('taken');
+    const d = ctx.calls.dispatched[0]!;
+    expect(d.member.id).toBe('u-anna');
+    expect(d.text).toBe(TAKE_REACTION_TEXT);
+    expect(d.threadTs).toBe('95.5');
+    expect(d.message.ts).toBe('95.5'); // progress reactions go on the taken message
+    expect(d.take).toEqual({
+      text: 'The staging DB is slow again', author: 'Anna Schmidt', messageKey: 'C1:95.5',
+      url: 'https://x.slack.com/archives/C1/p955',
+    });
+    // The taken message is the request, not part of the transcript.
+    expect(ctx.deps.readContext).toHaveBeenCalledWith({ channelId: 'C1', ts: '95.5', threadTs: undefined, label: '#release' });
+  });
+
+  test('a reply in a thread is taken on in that thread; your own message is not attributed', async () => {
+    expect(await handleSlackGroupReaction(react({ item: { type: 'message', channel: 'C1', ts: '96.1' } }), ctx.deps)).toBe('taken');
+    expect(ctx.calls.dispatched[0]!.threadTs).toBe('90.0');
+    await handleSlackGroupReaction(react({ item: { type: 'message', channel: 'C1', ts: '97.0' } }), ctx.deps);
+    expect(ctx.calls.dispatched[1]!.take?.author).toBeUndefined();
+  });
+
+  test("other reactions, the bot's own, files and unenrolled channels are ignored, silently", async () => {
+    expect(await handleSlackGroupReaction(react({ reaction: 'eyes' }), ctx.deps)).toBe('ignored');
+    expect(await handleSlackGroupReaction(react({ user: BOT }), ctx.deps)).toBe('ignored');
+    expect(await handleSlackGroupReaction(react({ item: { type: 'file', channel: 'C1', ts: '95.5' } }), ctx.deps)).toBe('ignored');
+    ctx = makeDeps({ findGroup: vi.fn(async () => null) });
+    expect(await handleSlackGroupReaction(react(), ctx.deps)).toBe('ignored');
+    expect(ctx.calls).toEqual({ ephemeral: [], thread: [], dispatched: [] });
+  });
+
+  test('an unlinked member gets one private hint; a paused channel one public notice', async () => {
+    expect(await handleSlackGroupReaction(react({ user: 'U-STRANGER' }), ctx.deps)).toBe('hint');
+    expect(await handleSlackGroupReaction(react({ user: 'U-STRANGER' }), ctx.deps)).toBe('hint');
+    expect(ctx.calls.ephemeral).toEqual([{ user: 'U-STRANGER', text: HINTS.linkFirst }]);
+
+    ctx = makeDeps({ isGroupActive: vi.fn(async () => false) });
+    expect(await handleSlackGroupReaction(react(), ctx.deps)).toBe('paused');
+    expect(ctx.calls.thread[0]!.text).toContain('paused');
+    expect(ctx.calls.dispatched).toEqual([]);
+  });
+});
+
+describe("the channel's spend budget", () => {
+  test('used up: one notice a day in the thread, no turn and no task', async () => {
+    const ctx = makeDeps({ budgetPause: vi.fn(async () => ({ resetsAt: '2026-11-01T00:00:00.000Z' })) });
+    expect(await handleSlackGroupMessage(msg(), ctx.deps)).toBe('paused');
+    expect(await handleSlackGroupMessage(msg({ text: `<@${BOT}> take this — x`, ts: '100.9' }), ctx.deps)).toBe('paused');
+    expect(await handleSlackGroupReaction({ user: 'U-ANNA', reaction: TAKE_REACTION, item: { type: 'message', channel: 'C1', ts: '95.5' } }, ctx.deps)).toBe('paused');
+    expect(ctx.calls.thread).toHaveLength(1);
+    expect(ctx.calls.thread[0]!.text).toContain('spend budget is used up until 2026-11-01 00:00 UTC');
+    expect(ctx.calls.dispatched).toEqual([]);
+  });
+});
+

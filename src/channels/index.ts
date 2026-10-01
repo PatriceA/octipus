@@ -9,13 +9,17 @@ export { WebChatChannel, type WebChatConnection, type WebChatMessage, webChatCha
 export { WhatsAppChannel, whatsappChannel } from './whatsapp';
 
 import { getConfig } from '@/config';
+import { sharedRefusalText } from '@/core/errors/limit-refusal';
 import { recordChannelMessage } from '@/core/telemetry';
 import type { Attachment, ChannelType, UnifiedMessage } from '@/core/types';
+import type { GroupChannel } from '@/db/schema/group-channels';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { getPermissionManager, type PermissionRequestEvent } from '@/security/permissions';
 import { channelLogger } from '@/utils/logger';
 import { attendChat, newestApprovalPostedAt, startApprovalPrompts, tryResolveApprovalFromChannel } from './approval-prompts';
 import { processChannelAttachments } from './attachment-handler';
+import { startTakenWork, type TakenWork, takeRequestOf } from './take-work';
+import { startTakenTaskNotices } from './taken-task-notices';
 import { getUMI } from './interface';
 import { fileAt, writeFileAt } from '@/utils/fs-file';
 import { whichSync } from '@/utils/proc';
@@ -689,7 +693,7 @@ export async function forwardPermissionRequestToChannel(request: PermissionReque
  * only tags messages from enrolled channels; re-check here so a stale or
  * forged tag cannot attach a turn to another chat's enrolment.
  */
-async function resolveGroupTurnSession(message: UnifiedMessage, groupChannelId: string): Promise<string> {
+async function resolveGroupTurnSession(message: UnifiedMessage, groupChannelId: string): Promise<{ sessionId: string; group: GroupChannel }> {
   const { findGroupChannel, resolveGroupSession } = await import('./group-channels');
   const group = await findGroupChannel(message.channelType, message.channelId);
   if (!group || group.id !== groupChannelId) throw new Error('Group channel enrolment not found for this chat');
@@ -702,7 +706,7 @@ async function resolveGroupTurnSession(message: UnifiedMessage, groupChannelId: 
   });
   // The flow guard's shared-audience mark is set by AgentService.handleMessage
   // from the stored session, for every entry point.
-  return sessionId;
+  return { sessionId, group };
 }
 
 /**
@@ -745,6 +749,8 @@ export async function initializeChannels(): Promise<void> {
   // Agent approvals are posted in their session's chat the same way, whether
   // or not a chat message started the run (./approval-prompts.ts).
   await startApprovalPrompts();
+  // A task taken up in a group channel says in its thread when it closes.
+  startTakenTaskNotices();
 
   // Bridge incoming channel messages → root agent → reply
   umi.on('message', async (message: UnifiedMessage) => {
@@ -781,11 +787,21 @@ export async function initializeChannels(): Promise<void> {
 
       // Resolve the actual DB session ID so we can match root agent events
       // (resolveSession converts "telegram-12345" → UUID, and events use the UUID)
-      const resolvedSessionId = groupChannelId
-        ? await resolveGroupTurnSession(message, groupChannelId)
+      const groupTarget = groupChannelId ? await resolveGroupTurnSession(message, groupChannelId) : undefined;
+      const resolvedSessionId = groupTarget
+        ? groupTarget.sessionId
         : await (await import('@/core/agent/session-resolver')).resolveSession(channelSessionId, message.userId, message.channelType);
       // The member is in this chat now: approvals the turn raises are posted here.
       leaveChat = attendChat(resolvedSessionId);
+
+      // "Take this on": the task goes on the member's board, linked to this
+      // thread session, before the turn below works it (./take-work.ts).
+      const takeRequest = groupTarget ? takeRequestOf(message.metadata?.take) : undefined;
+      let taken: TakenWork | null = null;
+      if (groupTarget && takeRequest) {
+        taken = await startTakenWork({ message, sessionId: resolvedSessionId, group: groupTarget.group, request: takeRequest });
+        if (!taken) return; // already on their board; told privately
+      }
 
       // Subscribe to root agent events for progress feedback via emoji reactions
       const isExternalChannel = message.channelType !== 'webchat';
@@ -1030,6 +1046,7 @@ export async function initializeChannels(): Promise<void> {
         ? {
           requester: message.userName ?? 'A channel member',
           context: typeof message.metadata?.groupContext === 'string' ? message.metadata.groupContext : '',
+          ...(taken ? { take: taken } : {}),
         }
         : undefined;
 
@@ -1049,9 +1066,14 @@ export async function initializeChannels(): Promise<void> {
 
       // Send final reply back through the same channel
       if (result.response) {
-        const content = isExternalChannel
+        // A refusal for the member's own limits is posted in a shared thread
+        // without its figures (the channel's own budget is posted as it is).
+        const refusal = groupChannelId && result.metadata?.limit
+          ? sharedRefusalText(result.metadata.limit, message.userName ?? 'this member')
+          : null;
+        const content = refusal ?? (isExternalChannel
           ? summarizeForChannel(result.response)
-          : result.response;
+          : result.response);
 
         // Voice-in on Telegram → speak the reply back (Telegram sends the audio
         // clip before the text). Best-effort; undefined leaves a text-only reply.

@@ -68,7 +68,13 @@ export interface RootSwarmRefs {
  */
 export function createMetaTools(
   rootAgent: AgentService,
-  options?: { parentNode?: AgentNode; swarmRefs?: RootSwarmRefs; lite?: boolean },
+  options?: {
+    parentNode?: AgentNode;
+    swarmRefs?: RootSwarmRefs;
+    lite?: boolean;
+    /** Open tasks taken on in this group-channel thread: adds `complete_taken_task`. */
+    takenTasks?: ReadonlyArray<{ id: string; title: string }>;
+  },
 ): ToolHandler[] {
   // Lite mode (small models): expose only `spawn_child` (flat schema) +
   // `remember_this`. Detach/collect/pipeline/pii/reflect/status are dropped —
@@ -619,10 +625,51 @@ export function createMetaTools(
     },
   );
 
+  if (options?.takenTasks?.length) tools.push(createCompleteTakenTaskTool(options.takenTasks));
+
   if (lite) {
     return tools.filter(
-      (t) => t.name === 'spawn_child' || t.name === 'collect_children' || t.name === 'remember_this' || t.name === 'get_work_plan' || t.name === 'update_work_plan' || t.name === 'exit_plan_mode',
+      (t) => t.name === 'spawn_child' || t.name === 'collect_children' || t.name === 'remember_this' || t.name === 'get_work_plan' || t.name === 'update_work_plan' || t.name === 'exit_plan_mode' || t.name === 'complete_taken_task',
     );
   }
   return tools;
+}
+
+/**
+ * `complete_taken_task`: close a task the member took on in this group
+ * thread, with the result as a board comment (docs/plans/group-chat-bot.md
+ * §5). Only offered while the thread has open tasks, and it reaches only
+ * those (`completeTakenTask` re-checks); the tasks tool's general write stays
+ * behind its ASK.
+ */
+export function createCompleteTakenTaskTool(open: ReadonlyArray<{ id: string; title: string }>): ToolHandler {
+  return {
+    name: 'complete_taken_task',
+    description:
+      "Mark a task you took on in this channel thread as done, with a short result for the requester's board. "
+      + 'Call it only when the requested work is complete, not while you still need something from the requester. '
+      + `Open tasks: ${open.map((t) => `${t.id} ("${t.title.replaceAll('"', "'")}")`).join('; ')}.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        taskId: { type: 'string', description: 'The id of the task to close' },
+        result: { type: 'string', description: 'What was done, in a few sentences; kept as a comment on the task' },
+      },
+      required: ['taskId', 'result'],
+    },
+    replaySafety: 'mutation',
+    execute: async (args, context) => {
+      const { completeTakenTask } = await import('@/core/channels/taken-tasks');
+      const outcome = await completeTakenTask({
+        userId: context.userId,
+        sessionId: context.sessionId,
+        taskId: String(args.taskId ?? ''),
+        result: String(args.result ?? ''),
+        agentId: context.id,
+      });
+      return outcome.ok
+        ? { completed: true, note: `"${outcome.title}" is closed on the requester's board, and a ✅ line is posted in the thread. Now give your final reply.` }
+        : { error: outcome.error };
+    },
+  };
 }

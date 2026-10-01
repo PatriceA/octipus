@@ -66,7 +66,7 @@ export interface RankOptions {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const INBOUND_SOURCES = new Set(['email', 'research', 'reader']);
+const INBOUND_SOURCES = new Set(['email', 'research', 'reader', 'channel']);
 const INBOUND_WINDOW_MS = 48 * 60 * 60 * 1000;
 const UPCOMING_WINDOW_DAYS = 7;
 
@@ -150,6 +150,7 @@ function describeSource(source: string | undefined): string {
     case 'email': return 'an email';
     case 'research': return 'a research report';
     case 'reader': return 'an article';
+    case 'channel': return 'a group channel';
     default: return 'elsewhere';
   }
 }

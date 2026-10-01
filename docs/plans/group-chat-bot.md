@@ -1,10 +1,10 @@
 # Group chat bot — Octipus as a member of a team channel
 
-> **Design plan, 2026-10-01.** Phase 1 (Slack, mention mode) is implemented;
-> user-facing behaviour is documented in
-> [CHANNELS.md → Group channels](../CHANNELS.md#group-channels). Phases 2–4 are
-> not built. Paths and line numbers in "What breaks today" reflect `main` at
-> v0.6.0, before phase 1.
+> **Design plan, 2026-10-01.** Phase 1 (Slack, mention mode) and phase 2
+> (taking up work, channel budgets) are implemented; user-facing behaviour is
+> documented in [CHANNELS.md → Group channels](../CHANNELS.md#group-channels).
+> Phases 3–4 are not built. Paths and line numbers in "What breaks today"
+> reflect `main` at v0.6.0, before phase 1.
 
 ## Goal
 
@@ -237,27 +237,49 @@ Rules that must hold:
 
 ### 5. Taking up work
 
-Two ways to hand the bot work:
+Two ways to hand the bot work in an enrolled channel:
 
-- **Ask:** "@octipus take this — draft the release notes for 0.6.1".
-- **Emoji:** add the channel's trigger emoji (default `:octipus:` / 🐙) to any
-  message.
+- **Ask:** `@Octipus take this — draft the release notes for 0.6.1`. Alone in
+  a thread, `@Octipus take this` takes the thread's first message.
+- **React:** add 🐙 (`:octopus:`) to any message; that message is the request.
 
-Either creates a task on the board:
+Either one, from a linked member:
 
-- title / description from the message (and its thread, summarised if long);
-- `assigneeKind=role`, `assigneeRef` = the role the request names or the
-  channel's `default_role`;
-- requester = the acting user; workspace = the requester's (a channel-level workspace may come back with this phase);
-- a back-reference to `(groupChannelId, threadId)` in task metadata.
+1. **Puts a task on the member's own board** (their default workspace): the
+   title from the request, notes naming who asked, where, and whose message
+   it was, with a link back. `source = 'channel'`, and `sourceRef.sessionId`
+   is the member's session for that thread — that is the task ↔ thread link,
+   so no new column is needed. The member typed the command, so the task is
+   created without the tasks tool's ASK, as in the web app. Taking the same
+   message twice finds the first task.
+2. **Says so in the thread:** "On it — added *Draft the release notes* to
+   Anna's tasks."
+3. **Works it now, in the member's thread session** — the session a mention
+   in that thread uses, so every §3/§4 rule holds: the turn runs as the
+   member, private reads ask, prompts go to the member in the thread,
+   memories stay out, and the reply is posted in the thread. While the task
+   is open, every turn in that thread sees it, with its newest board comments
+   (so a note the member leaves on the board reaches the work without being
+   posted in the channel).
+4. **Finishes it:** while the thread has an open task, the root agent has one
+   more tool, `complete_taken_task(taskId, result)`. It closes that task — and
+   only a task taken in this thread — with the result as a board comment. It
+   is not the tasks tool's general write, which stays ASK. When the agent
+   needs input it asks in its reply and the task stays open; the member
+   answers in the thread.
 
-The bot replies in the thread: "Took it — task #142, assigned to *writer*."
-Comments on the task (progress, hand-off, the result) are mirrored into the
-thread; replies in the thread from the requester are added as task comments.
-Closing the task posts the outcome and any artifact links.
+Closing the task by any route (that tool, the board, the tasks tool) posts one
+line in the thread: "✅ Done: *title*", or that it was archived or removed.
+Nothing is posted once the enrolment is removed or paused.
 
-This reuses checkout leases, wake-on-close and role agents from the task board.
-New code is the task ↔ thread link and the mirroring hook.
+**Why not role agents** (the first draft assigned the task to a role and
+mirrored the role agent's comments into the thread): a role agent works the
+board unattended, in its own session, with all of the owner's tools. Posting
+its comments in the channel would publish whatever it read for other tasks in
+the same run, and the flow guard would not know the audience is shared.
+Working the task in the member's thread session reuses every phase 1
+protection instead. A member can still hand the task to a role on the board;
+those comments are not posted in the channel.
 
 ### 6. Reactions
 
@@ -285,11 +307,21 @@ message in between).
 
 ### 8. Cost
 
-A new budget scope `group_channel` (scopeRef = `group_channels.id`) counts all
-spend attributed to the channel's sessions regardless of acting user, and is
-checked alongside the acting user's own budgets. At the cap the bot replies
-once that it is paused for the period and goes quiet. `cost_log` rows for group
-sessions need the `group_channel_id` attributed (via the session).
+A spend budget with scope `group_channel` (`scopeRef` = the enrolment id)
+counts every `cost_log` row whose session belongs to the channel, whoever the
+acting member is (`cost_log.session_id` → `sessions.group_channel_id`; no new
+column, migration 0123 adds the index). Admins set it on **Admin → Group
+channels**. It is filed under the channel's owner, who gets the warning and
+pause notifications, and it moves with the enrolment on takeover; removing the
+enrolment removes it.
+
+- `checkSpend` applies it to every invocation in one of the channel's
+  sessions (agent spawn, each LLM call, CLI start), next to the member's own
+  budgets.
+- Before starting a turn the channel checks it; while it is paused the bot
+  posts one notice a day in the channel and starts no turns.
+- A refusal posted in a thread names the channel's budget. A refusal for the
+  member's own budget names no amounts there; the details are in the web app.
 
 ## Platform notes
 
@@ -351,11 +383,41 @@ Acceptance (each has a test):
 - Private reads in a group session ask; the same read in a 1:1 session does
   not (`flow-guard-shared.test.ts`).
 
-### Phase 2 — Taking up work
+### Phase 2 — Taking up work — done
 
-- "take this" intent and emoji trigger → task creation with thread link.
-- Task comment ↔ thread mirroring; completion post.
-- `group_channel` budget scope and attribution.
+Built:
+- `@Octipus take this …` and the 🐙 reaction (`src/channels/slack/group.ts`)
+  → a task on the member's board, linked to their thread session and worked
+  there (`src/core/channels/taken-tasks.ts`, `src/channels/take-work.ts`);
+  `complete_taken_task` for the root agent while the thread has open tasks.
+- Task → thread: open tasks and their newest board comments reach every turn
+  in the thread (and are dropped from replays, like transcripts); closing a
+  task by any route posts one line there (`onTaskClosed`,
+  `src/channels/taken-task-notices.ts`).
+- `group_channel` spend budget (migration 0123): counted through the
+  sessions, checked on every run in the channel, one notice a day in the
+  channel while paused; set on Admin → Group channels; follows the owner.
+- A refusal for a member's own budget or quota is posted in a thread without
+  its figures.
+
+Slack needs the `reactions:read` scope and the `reaction_added` event for the
+🐙 trigger.
+
+Acceptance (each has a test):
+- `take this — x` creates the task on the member's board in progress, linked
+  to their thread session, and announces it; taking the same message twice
+  does not (`taken-tasks.test.ts`, `take-work.test.ts`).
+- `take this` alone in a thread takes its first message, attributed; the 🐙
+  reaction takes the reacted message, in its thread, as the reacting member;
+  unenrolled channels stay silent and unlinked members get a private hint
+  (`slack/group.test.ts`).
+- Only tasks taken in that thread can be closed by `complete_taken_task`
+  (`taken-tasks.test.ts`, `complete-taken-task.test.ts`).
+- Closing a taken task by any route posts one line in its thread, not in a
+  removed or paused channel (`take-work.test.ts`, `taken-tasks.test.ts`).
+- A group channel budget counts every member's spend in the channel only, is
+  enforced for members' runs there, notifies the owner, and stops turns with
+  one notice (`spend-budgets.test.ts`, `slack/group.test.ts`).
 
 ### Phase 3 — Teams and Telegram groups
 
@@ -423,3 +485,6 @@ destination, so approving its step led nowhere).
 - **2026-10-01 — Enrolment happens in the channel** (`@Octipus join`), which
   proves membership without extra Slack scopes; takeover of a paused channel
   uses the same command instead of an admin transfer.
+- **2026-10-01 — Taken work runs in the member's thread session**, not as a
+  role assignment (§5): role agents work unattended with all of the owner's
+  tools, so their comments could not be posted in a shared channel safely.

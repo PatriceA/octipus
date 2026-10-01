@@ -212,6 +212,41 @@ export async function flushWakeups(): Promise<void> {
   while (pending.size > 0) await Promise.all([...pending]);
 }
 
+// ── Close listeners ────────────────────────────────────────────────────
+
+/** A task that just left the active set: closed (done, archived) or deleted. */
+export interface TaskClosedEvent {
+  task: Task;
+  previousStatus: string;
+  cause: WakeupCause;
+}
+
+const closeListeners = new Set<(event: TaskClosedEvent) => unknown>();
+
+/**
+ * Called once for every task that leaves the active set, detached from the
+ * write, in the process that wrote it (no cross-process copy): a listener may
+ * act on the outside world, e.g. post a line in the chat the task came from.
+ * Returns an unsubscribe function.
+ */
+export function onTaskClosed(handler: (event: TaskClosedEvent) => unknown): () => void {
+  closeListeners.add(handler);
+  return () => {
+    closeListeners.delete(handler);
+  };
+}
+
+/** Run the close listeners; one failing never reaches the others or the write. */
+export async function notifyTaskClosed(event: TaskClosedEvent): Promise<void> {
+  for (const listener of closeListeners) {
+    try {
+      await listener(event);
+    } catch (err) {
+      coreLogger.error({ err, taskId: event.task.id }, 'Task close listener failed');
+    }
+  }
+}
+
 // ── Cross-process publishing ───────────────────────────────────────────
 
 /** Sends locally dispatched events to other server processes. */

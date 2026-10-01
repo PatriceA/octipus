@@ -19,9 +19,32 @@ Saving a budget with the same user, scope and period replaces the existing one.
 | `user` | none | every `cost_log` row of the user ("All agents") |
 | `role` | role name, trimmed | the user's rows whose agent has that role |
 | `workspace` | workspace id (UUID, lowercased) | the user's rows attributed to that workspace |
+| `group_channel` | the group channel's enrolment id | every member's rows in the channel's sessions |
 
 A role or workspace budget narrows one user's spend; it is not shared across
-the users of that role or workspace.
+the users of that role or workspace. A group channel budget is the exception:
+it caps what a [group channel](CHANNELS.md#group-channels) costs, whoever asks.
+
+### Group channel budgets
+
+- **Set** on **Admin → Group channels**, per channel: period, limit and warn
+  %. One per channel and period.
+- **Filed under the channel's owner**, who gets the warning and pause
+  notifications. It moves to the new owner when a member takes the channel
+  over, and is deleted with the enrolment.
+- **Counted** from `cost_log` rows whose session is one of the channel's
+  thread sessions (`sessions.group_channel_id`), for every member. A thread
+  session deleted by the retention sweep (idle past `sessions.retentionDays`,
+  14 days by default) no longer counts, so a monthly channel budget can
+  under-count threads that went quiet earlier in the month. A thread with a
+  taken task still open is never swept.
+- **Checked** for every agent run in one of those sessions, next to the
+  member's own budgets (`checkSpend` gets the run's `sessionId`). Before it
+  starts a turn the channel checks it too: while it is paused the bot posts
+  one notice a day in the channel and starts no turns there.
+- **Refusals** in a thread name the channel's budget ("this channel's monthly
+  spend budget …"). A refusal for the member's own budget or quota is posted
+  there without its figures; the full text stays in their conversation.
 
 | Field | Meaning |
 |---|---|
@@ -154,7 +177,7 @@ Both are per-user caps set on the same admin screen, but they are separate.
 |---|---|---|
 | Measures | tokens per day, concurrent agents, API calls per minute | USD from `cost_log` |
 | Error | `QuotaExceededError` (`QUOTA_EXCEEDED`) | `SpendBudgetExceededError` (`SPEND_BUDGET_EXCEEDED`) |
-| Scope | the user | user, role or workspace, per day or month |
+| Scope | the user | user, role, workspace or group channel, per day or month |
 | Chat | "Quota reached" card | "Agents are paused" card |
 
 Both are also distinct from an agent's own per-spawn `maxTokenBudget`.
@@ -173,4 +196,8 @@ Both are also distinct from an agent's own per-spawn `maxTokenBudget`.
 The PUT body is `{ userId, scopeKind, scopeRef?, period, limitUsd, warnRatio? }`.
 It returns 400 when `limitUsd` is not positive, `warnRatio` is outside (0, 1],
 `scopeRef` is missing for a role or workspace budget, or a workspace `scopeRef`
-is not a UUID; 404 when the user does not exist.
+is not a UUID; 404 when the user does not exist. For `group_channel` the
+`scopeRef` is the enrolment id (404 when there is none) and the budget is filed
+under the channel's current owner whatever `userId` says.
+`GET /api/admin/group-channels` returns each channel's `budgets` with their
+spend and state.

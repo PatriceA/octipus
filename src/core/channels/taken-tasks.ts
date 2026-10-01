@@ -1,0 +1,168 @@
+/**
+ * Work taken up in a group channel (docs/plans/group-chat-bot.md §5).
+ *
+ * `@Octipus take this …`, or the 🐙 reaction on a message, puts a task on the
+ * asking member's own board, linked to their session for that thread
+ * (`source = 'channel'`, `sourceRef.sessionId`). The work then runs in that
+ * session, so it keeps every group-thread rule: the shared-audience flow
+ * guard, prompts asked of the member in the thread, no memories. While the
+ * task is open, each turn in the thread sees it with its newest board comments
+ * (`takenTasksContext`), and the root agent can close it (`completeTakenTask`,
+ * behind the `complete_taken_task` meta-tool). Closing it by any route posts
+ * one line in the thread (src/channels/taken-task-notices.ts).
+ */
+import { createHash } from 'node:crypto';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { flattenLine, TAKEN_TASKS_CLOSE, TAKEN_TASKS_OPEN } from '@/core/channels/group-context';
+import { auditTaskMutation } from '@/core/tasks/audit';
+import { backgroundUserPrincipal, normalizeTaskTitle } from '@/core/tasks/sourced';
+import { ACTIVE_TASK_STATUSES } from '@/core/tasks/status';
+import { getDb } from '@/db/postgres';
+import { isUuid, scopedRepos } from '@/db/repositories/scoped';
+import { type Task, tasks } from '@/db/schema/tasks';
+
+/** A request to take work on, as the channel adapter read it. */
+export interface TakeRequest {
+  /** What to do: the member's words after "take this", or the taken message's text. */
+  text: string;
+  /** Who wrote the taken message, when it is not the requester's own words. */
+  author?: string;
+  /** A link to the message on the platform. */
+  url?: string;
+  /** The message the request came from (`<channel>:<ts>`): taking it twice gives the same task. */
+  messageKey: string;
+}
+
+const TITLE_MAX = 120;
+const COMMENT_MAX = 300;
+const NOTES_MAX = 4_000;
+
+/** The task title: the request's first line, capitalised and capped. */
+export function takeTitle(text: string): string {
+  const first = text.split(/\r?\n/).map((l) => l.trim()).find(Boolean) ?? '';
+  const t = normalizeTaskTitle(first);
+  const capped = t.length > TITLE_MAX ? `${t.slice(0, TITLE_MAX - 1)}…` : t;
+  return capped.charAt(0).toUpperCase() + capped.slice(1);
+}
+
+/** A stable task id per member and message, so a second take finds the first task. */
+function takeId(userId: string, messageKey: string): string {
+  const h = createHash('sha256').update(JSON.stringify([userId, 'channel', messageKey])).digest('hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}
+
+/**
+ * Put the request on the member's board, in progress and linked to their
+ * thread session. The member typed the command, so this is their own write:
+ * no ASK, as when they add a task in the web app. Taking the same message
+ * twice returns the first task (`created: false`).
+ */
+export async function takeChannelTask(input: {
+  userId: string;
+  workspaceId: string | null;
+  sessionId: string;
+  /** Display name of the member who asked. */
+  requester: string;
+  /** Where: the channel's label, or its id. */
+  where: string;
+  request: TakeRequest;
+}): Promise<{ task: Task; created: boolean }> {
+  const { request } = input;
+  const notes = [
+    `Taken on in ${input.where} for ${input.requester}.`,
+    request.author ? `From ${request.author}'s message:` : 'Request:',
+    request.text.trim().slice(0, NOTES_MAX),
+    ...(request.url ? ['', request.url] : []),
+  ].join('\n');
+  const repo = scopedRepos(backgroundUserPrincipal(input.userId, input.workspaceId)).tasks;
+  const once = await repo.createOnce({
+    id: takeId(input.userId, request.messageKey),
+    title: takeTitle(request.text) || 'Request from the channel',
+    notes,
+    status: 'in_progress',
+    priority: 1,
+    source: 'channel',
+    sourceRef: { sessionId: input.sessionId, label: input.where, url: request.url, messageId: request.messageKey },
+  });
+  if (once.created) {
+    await auditTaskMutation({
+      userId: input.userId,
+      taskId: once.task.id,
+      op: 'create',
+      change: ['title', 'notes', 'status', 'priority', 'source', 'sourceRef'],
+      actor: { kind: 'system', id: 'channel' },
+      runId: input.sessionId,
+    });
+  }
+  return once;
+}
+
+/** The member's open tasks taken in this thread session, newest first. */
+export async function openTakenTasks(userId: string, sessionId: string): Promise<Task[]> {
+  if (!isUuid(userId) || !isUuid(sessionId)) return [];
+  return getDb().select().from(tasks).where(and(
+    eq(tasks.userId, userId),
+    eq(tasks.source, 'channel'),
+    inArray(tasks.status, [...ACTIVE_TASK_STATUSES]),
+    sql`${tasks.sourceRef}->>'sessionId' = ${sessionId}`,
+  )).orderBy(desc(tasks.createdAt)).limit(10);
+}
+
+/**
+ * Turn context for a thread with open taken tasks: what they are, their
+ * newest board comments (so a note the member leaves on the board reaches
+ * the work without being posted in the channel), and how to finish one.
+ * Empty when there are none.
+ */
+export async function takenTasksContext(open: readonly Task[]): Promise<string> {
+  if (open.length === 0) return '';
+  const lines = [`${TAKEN_TASKS_OPEN} They are on the requester's board:`];
+  for (const task of open) {
+    lines.push(`- ${task.id}: "${flattenLine(task.title)}" (${task.status.replace('_', ' ')})`);
+    const repo = scopedRepos(backgroundUserPrincipal(task.userId, task.workspaceId)).tasks;
+    const thread = await repo.listComments(task.id, 3).catch(() => null);
+    for (const c of thread?.comments ?? []) {
+      const who = c.authorKind === 'user' ? 'the requester' : `an agent (${c.authorRef})`;
+      const body = flattenLine(c.body);
+      const at = c.createdAt.toISOString().slice(0, 16).replace('T', ' ');
+      lines.push(`  board comment by ${who}, ${at} UTC: ${body.length > COMMENT_MAX ? `${body.slice(0, COMMENT_MAX)} […]` : body}`);
+    }
+  }
+  lines.push('Do the work here, in this thread. When a task is done, call complete_taken_task with its id and a short result '
+    + `for the board. If you need something from the requester first, ask in your reply and ${TAKEN_TASKS_CLOSE}`);
+  return `\n\n${lines.join('\n')}`;
+}
+
+/**
+ * Close one of this thread's taken tasks as done, with the agent's result as
+ * a board comment. Only a task the member took in THIS session: the agent
+ * cannot reach any other task of theirs this way (the tasks tool, which can,
+ * stays behind its ASK).
+ */
+export async function completeTakenTask(input: {
+  userId: string;
+  sessionId: string;
+  taskId: string;
+  result: string;
+  /** The agent that finished it, for the audit row. */
+  agentId: string;
+}): Promise<{ ok: true; title: string } | { ok: false; error: string }> {
+  const task = (await openTakenTasks(input.userId, input.sessionId)).find((t) => t.id === input.taskId);
+  if (!task) return { ok: false, error: 'No open task with that id was taken on in this thread.' };
+  const repo = scopedRepos(backgroundUserPrincipal(task.userId, task.workspaceId)).tasks;
+  const result = input.result.trim().slice(0, 10_000);
+  if (result) {
+    await repo.addComment(task.id, { authorKind: 'agent', authorRef: `octipus@${input.sessionId}`, body: result });
+  }
+  const done = await repo.update(task.id, { status: 'done', completedAt: new Date() });
+  if (!done) return { ok: false, error: 'The task could not be updated; it may have been deleted meanwhile.' };
+  await auditTaskMutation({
+    userId: task.userId,
+    taskId: task.id,
+    op: 'complete',
+    change: ['status', 'completedAt'],
+    actor: { kind: 'agent', id: input.agentId },
+    runId: input.sessionId,
+  });
+  return { ok: true, title: task.title };
+}

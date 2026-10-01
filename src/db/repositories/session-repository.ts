@@ -346,15 +346,19 @@ export class SessionRepository {
   async deleteExpired(cutoff: Date, limit = 500): Promise<number> {
     const { agents } = await import('../schema/agents');
     const { monitors } = await import('../schema/monitors');
+    const { tasks } = await import('../schema/tasks');
     // A session still waiting on a monitor (armed, or fired and about to
     // resume) is not idle even though nothing has touched its row; deleting it
     // would cascade the monitor away and silently drop the continuation.
+    // Nor is a group-channel thread session with work still taken on in it:
+    // the open task is linked to it (src/core/channels/taken-tasks.ts).
     const expiredFilter = (id?: string) => and(
       id ? eq(sessions.id, id) : undefined,
       eq(sessions.pinned, false),
       lt(sessions.updatedAt, cutoff),
       sql`NOT EXISTS (SELECT 1 FROM ${agents} WHERE ${agents.sessionId} = ${sessions.id} AND ${agents.status} = 'running')`,
       sql`NOT EXISTS (SELECT 1 FROM ${monitors} WHERE ${monitors.sessionId} = ${sessions.id} AND ${monitors.status} IN ('armed', 'paused', 'ready', 'delivering'))`,
+      sql`NOT EXISTS (SELECT 1 FROM ${tasks} WHERE ${tasks.source} = 'channel' AND ${tasks.status} IN ('open', 'in_progress') AND ${tasks.sourceRef}->>'sessionId' = ${sessions.id}::text)`,
     );
     const expired = await this.db
       .select({ id: sessions.id })

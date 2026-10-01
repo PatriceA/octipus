@@ -292,6 +292,8 @@ function BudgetModal({
                 <option value="user">All of the user&apos;s agents</option>
                 <option value="role">One agent role</option>
                 <option value="workspace">One workspace</option>
+                {/* Set on Admin → Group channels; shown here for the channel's owner. */}
+                {existing && d.scopeKind === 'group_channel' && <option value="group_channel">One group channel</option>}
               </select>
             </Labeled>
 

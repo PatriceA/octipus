@@ -16,6 +16,7 @@
  */
 import { and, eq } from 'drizzle-orm';
 import { auditRepository } from '@/db/repositories/audit-repository';
+import { isUuid } from '@/db/repositories/scoped';
 import { sessionRepository } from '@/db/repositories/session-repository';
 import { getDb } from '@/db/postgres';
 import { type GroupChannel, groupChannels } from '@/db/schema/group-channels';
@@ -49,6 +50,13 @@ export async function findGroupChannel(channelType: string, channelId: string): 
     .where(and(eq(groupChannels.channelType, channelType), eq(groupChannels.channelId, channelId)))
     .limit(1);
   cache.set(key, { row: row ?? null, at: Date.now() });
+  return row ?? null;
+}
+
+/** An enrolment by its id (admin pages), or null. Not cached. */
+export async function findGroupChannelById(id: string): Promise<GroupChannel | null> {
+  if (!isUuid(id)) return null;
+  const [row] = await getDb().select().from(groupChannels).where(eq(groupChannels.id, id)).limit(1);
   return row ?? null;
 }
 
@@ -128,6 +136,10 @@ export async function joinGroupChannel(input: {
     invalidateChannel(input.channelType, input.channelId);
     if (!updated) return joinGroupChannel(input);
     await audit(input.userId, updated, { takenOverFrom: existing.ownerUserId });
+    // The channel's spend budget is filed under its owner, who is notified.
+    await import('@/security/spend-budgets')
+      .then(({ moveGroupChannelBudgets }) => moveGroupChannelBudgets(updated.id, input.userId))
+      .catch((err: unknown) => channelLogger.error({ err, groupChannelId: updated.id }, 'Could not move the channel\'s spend budget to its new owner'));
     return { status: 'took_over', group: updated, previousOwner: owner.name };
   }
 
@@ -198,6 +210,10 @@ export async function removeGroupChannel(id: string, actor: { userId: string; is
   if (removed) {
     invalidateChannel(removed.channelType, removed.channelId);
     forgetThreads(removed.id);
+    // Its spend budget goes with it (the budget names the enrolment, not a FK).
+    await import('@/security/spend-budgets')
+      .then(({ deleteGroupChannelBudgets }) => deleteGroupChannelBudgets(removed.id))
+      .catch((err: unknown) => channelLogger.error({ err, groupChannelId: removed.id }, 'Could not delete the removed channel\'s spend budget'));
   }
   if (removed) await audit(actor.userId, removed, { deleted: true, byAdmin: actor.isAdmin && removed.ownerUserId !== actor.userId });
   return removed ?? null;

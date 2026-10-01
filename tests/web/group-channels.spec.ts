@@ -5,7 +5,8 @@ import { json, stubAllDefaults } from './fixtures/api-stubs';
 /**
  * Group channels in the web UI, every /api call stubbed:
  *   - Settings → Channels: the owner's enrolments, remove one (no workspace picker);
- *   - Admin → Group channels: every enrolment with owner, paused state, revoke.
+ *   - Admin → Group channels: every enrolment with owner, paused state, revoke,
+ *     and a channel's spend budget.
  *
  * Screenshots go to $GROUP_CHANNEL_SHOTS when set.
  */
@@ -90,6 +91,39 @@ test.describe('group channels', () => {
     page.once('dialog', (d) => d.accept());
     await page.getByRole('button', { name: 'Revoke #legacy' }).click();
     await expect(page.getByText('#legacy')).toHaveCount(0);
+  });
+
+  test('admin sets a spend budget for a channel', async ({ authenticatedPage: page }) => {
+    let budgets: Array<Record<string, unknown>> = [];
+    const puts: Array<Record<string, unknown>> = [];
+    await stubAllDefaults(page);
+    await page.route(/\/api\/admin\/group-channels/, (route: Route) => json(route, 200, {
+      groupChannels: [row({ id: 'g-release', channelId: 'C0RELEASE', label: '#release', ownerName: 'anna', budgets })],
+    }));
+    await page.route('**/api/admin/spend-budgets', async (route: Route) => {
+      const req = route.request();
+      if (req.method() !== 'PUT') return json(route, 404, { error: 'unexpected' });
+      const body = req.postDataJSON() as Record<string, unknown>;
+      puts.push(body);
+      budgets = [{
+        id: 'b1', userId: 'e2e-user-id', scopeKind: 'group_channel', scopeRef: 'g-release', scopeName: '#release',
+        period: body.period, limitUsd: body.limitUsd, warnRatio: body.warnRatio, spentUsd: 12.5, estimatedUsd: 0,
+        unmeasuredCalls: 0, unmeasured: false, percent: 25, state: 'ok', periodStart: '2026-10-01T00:00:00Z',
+        resetsAt: '2026-11-01T00:00:00Z', pausedAt: null, warnedAt: null, updatedAt: '2026-10-01T10:00:00Z',
+      }];
+      return json(route, 200, budgets[0]);
+    });
+
+    await page.goto('/admin/group-channels');
+    await expect(page.getByText('no spend budget')).toBeVisible();
+    await page.getByRole('button', { name: 'Set a spend budget for #release' }).click();
+    await page.getByLabel('Limit in USD').fill('50');
+    await page.getByRole('button', { name: 'Save' }).click();
+    await expect.poll(() => puts.length).toBe(1);
+    expect(puts[0]).toMatchObject({ scopeKind: 'group_channel', scopeRef: 'g-release', period: 'month', limitUsd: 50, warnRatio: 0.8 });
+    await expect(page.getByTestId('spend-budget')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Remove the spend budget for #release' })).toBeVisible();
+    if (SHOTS) await page.screenshot({ path: `${SHOTS}/admin-group-channel-budget.png`, fullPage: true });
   });
 
   test('the notification destinations tab loads (it was missing from the router)', async ({ authenticatedPage: page }) => {

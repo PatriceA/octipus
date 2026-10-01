@@ -152,7 +152,9 @@ to it again; without it, approvals and monitor replies from background runs
 reach your Slack DM only once you have sent it a message since the restart.
 `channels:read` and `groups:read` let the bot read a channel's
 name when it is enrolled as a [group channel](#group-channels) (otherwise the
-settings pages show the channel id).
+settings pages show the channel id). `reactions:read`, with the
+`reaction_added` bot event, lets members of a group channel hand the bot work
+with the 🐙 reaction; without them only `@Octipus take this` does.
 
 ### Features
 
@@ -176,7 +178,10 @@ under **Settings → Channels → Group channels** or with `@Octipus leave`.
 Once enrolled, the bot:
 
 - **answers only when addressed** — an @mention, or a reply in a thread it is
-  already part of. Every other message is ignored, and costs nothing;
+  already part of. Every other message is ignored, and costs nothing. A
+  thread idle past the session retention window (`sessions.retentionDays`,
+  14 days by default) is forgotten, unless it has a taken task still open:
+  mention the bot to pick it up again;
 - **replies in a thread** on the message that addressed it;
 - **runs each turn as the member who asked**, with that member's permissions,
   tools, budgets, workspace and session — never as the owner. Each member has
@@ -211,6 +216,21 @@ Once enrolled, the bot:
   (they expire after an hour);
 - **answers in the thread from a monitor** a member set up there, while the
   channel is enrolled and active;
+- **takes work on** when asked: `@Octipus take this — draft the release
+  notes` (alone in a thread, `@Octipus take this` takes the thread's first
+  message), or a 🐙 (`:octopus:`) reaction on any message. The request
+  becomes a task on the member's own board, the bot says so in the thread
+  ("On it — added *Draft the release notes* to Anna's tasks") and starts on it
+  there, as the member, under every rule above. While the task is open, each
+  turn in that thread sees it and its newest board comments, so a note added
+  on the board reaches the work without being posted in the channel. The bot
+  closes it when the work is done; closing it anywhere posts one line in the
+  thread. Taking the same message twice finds the first task. See
+  [TASK-BOARD.md](TASK-BOARD.md#tasks-taken-on-in-a-group-channel);
+- **goes quiet when the channel's spend budget is used up** — one notice a day
+  in the channel and no turns, until the period resets or an admin raises it
+  ([SPEND-BUDGETS.md](SPEND-BUDGETS.md)). A refusal for a member's own budget
+  or quota is posted in the thread without its figures;
 - **keeps document results in the thread** when a member shares a file with it;
 - **runs only session controls** (`/stop`, `/status`, `/clear`, `/cancel`,
   `/help`) in a channel — other commands answer with the member's account

@@ -50,7 +50,21 @@ export function spendScopeLabel(r: Pick<SpendBudgetExceededReason, 'scopeKind' |
   const every = r.period === 'day' ? 'daily' : 'monthly';
   if (r.scopeKind === 'user') return `your ${every} spend budget`;
   if (r.scopeKind === 'role') return `the ${every} spend budget for the "${r.scopeRef}" role`;
+  if (r.scopeKind === 'group_channel') return `this channel's ${every} spend budget`;
   return `the ${every} spend budget for workspace ${r.scopeRef}`;
+}
+
+/**
+ * The text a shared group-channel thread is shown instead of a refusal, or
+ * null to post it as it is. Everyone in the channel reads the thread, so a
+ * member's own budget or quota is mentioned without its figures (the full
+ * text stays in their session, where they can read it). The channel's own
+ * budget is the channel's business and is posted as it is.
+ */
+export function sharedRefusalText(refusal: LimitRefusal, requester: string): string | null {
+  if (refusal.code === 'SPEND_BUDGET_EXCEEDED' && refusal.reason.scopeKind === 'group_channel') return null;
+  return `I can't work on this for ${requester} right now: one of their Octipus limits (a spend budget or a usage quota) `
+    + 'is reached. The details are in their Octipus conversation.';
 }
 
 /** The chat text and structured payload for a limit error; null for anything else. */

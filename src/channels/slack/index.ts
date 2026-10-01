@@ -7,7 +7,7 @@ import type { Attachment, ChannelResponse, ChannelType } from '@/core/types';
 import { channelLogger } from '@/utils/logger';
 import { BaseChannel } from '../interface';
 import { shouldSendHint } from '../hint-limiter';
-import { type GroupMember, handleSlackGroupMessage, type SlackGroupDeps } from './group';
+import { type GroupMember, handleSlackGroupMessage, handleSlackGroupReaction, type SlackGroupDeps, type SlackReaction } from './group';
 
 interface SlackMessage {
   user: string;
@@ -107,6 +107,17 @@ export class SlackChannel extends BaseChannel {
       await this.handleMessage({ ...msg, text }, say as SayFn, client);
     });
 
+    // 🐙 on a message in an enrolled channel takes it on as a task (group
+    // channels, phase 2). Needs the `reactions:read` scope and the
+    // `reaction_added` bot event; without them this never fires.
+    this.app.event('reaction_added', async ({ event, client }) => {
+      try {
+        await handleSlackGroupReaction(event as SlackReaction, this.groupDeps(client));
+      } catch (err) {
+        channelLogger.error({ err }, 'Slack group reaction handling failed');
+      }
+    });
+
     // `/link` slash command — Slack intercepts messages starting with `/`, so a
     // user who types `/link` never reaches the message listener above. Delivered
     // over Socket Mode (no Request URL). Requires the `commands` scope.
@@ -203,8 +214,42 @@ export class SlackChannel extends BaseChannel {
           .catch(logFailure('chat.postMessage'));
       },
       readContext: (input) => this.readGroupContext(input),
+      readMessage: async (channelId, ts) => {
+        try {
+          // Works for a top-level message and for a reply (Slack returns the
+          // thread from its parent); the parent may come first, so find it by ts.
+          const res = await client.conversations.replies({ channel: channelId, ts, oldest: ts, inclusive: true, limit: 2 });
+          const m = (res.messages ?? []).find((x) => x.ts === ts);
+          if (!m) return null;
+          return {
+            text: m.text ?? '',
+            user: m.user ?? null,
+            botId: m.bot_id ?? null,
+            threadTs: m.thread_ts && m.thread_ts !== m.ts ? m.thread_ts : undefined,
+          };
+        } catch (err) {
+          channelLogger.warn({ err, channelId, ts }, 'Slack conversations.replies failed — cannot read the message');
+          return null;
+        }
+      },
+      permalink: async (channelId, ts) => {
+        try {
+          return (await client.chat.getPermalink({ channel: channelId, message_ts: ts })).permalink ?? undefined;
+        } catch (err) {
+          channelLogger.debug({ err, channelId, ts }, 'Slack chat.getPermalink failed — the task has no link back');
+          return undefined;
+        }
+      },
+      budgetPause: async (group) => {
+        const { groupChannelPause } = await import('@/security/spend-budgets');
+        return groupChannelPause(group.id).catch((err: unknown) => {
+          // Not blocking: checkSpend still refuses each run once the budget is spent.
+          channelLogger.warn({ err, groupId: group.id }, 'Group channel budget check failed — not pausing');
+          return null;
+        });
+      },
       shouldSendHint,
-      dispatch: ({ channelId, member, userName, text, threadTs, group, context, message }) => {
+      dispatch: ({ channelId, member, userName, text, threadTs, group, context, message, take }) => {
         const msg = message as SlackMessage;
         const attachments = (msg.files ?? []).map((file): Attachment => ({
           type: this.mapFileType(file.mimetype),
@@ -225,6 +270,7 @@ export class SlackChannel extends BaseChannel {
             channelType: msg.channel_type,
             groupChannelId: group.id,
             groupContext: context,
+            ...(take ? { take } : {}),
           },
         }));
       },

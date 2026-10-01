@@ -24,7 +24,7 @@ import { directResponse } from './direct-response';
 import { VoicePlanGate } from './voice-plan-gate';
 import { guardInput } from './input-guard';
 import { ModelSelector } from './model-selector';
-import { runRootAgent } from './root-runner';
+import { type RootRunExtras, runRootAgent } from './root-runner';
 import { type LimitRefusal, limitRefusalOf } from '@/core/errors/limit-refusal';
 import { guardOutput, stripSwarmScaffolding } from './output-guard';
 import { saveProgressMessage } from './progress-message';
@@ -72,6 +72,21 @@ export interface TurnResult {
 function approvalReplyFor(message: string, groupThread: boolean): string | null {
   if (!groupThread) return message;
   return bareReply(message);
+}
+
+/**
+ * The open tasks taken on in a group thread, and their turn-context block.
+ * A failed read costs the context, never the turn.
+ */
+async function loadTakenTasks(userId: string, sessionId: string): Promise<{ tasks: Array<{ id: string; title: string }>; block: string }> {
+  try {
+    const { openTakenTasks, takenTasksContext } = await import('@/core/channels/taken-tasks');
+    const open = await openTakenTasks(userId, sessionId);
+    return { tasks: open.map((t) => ({ id: t.id, title: t.title })), block: await takenTasksContext(open) };
+  } catch (err) {
+    coreLogger.warn({ err, sessionId }, 'Could not read the tasks taken on in this thread');
+    return { tasks: [], block: '' };
+  }
 }
 
 export class AgentService {
@@ -308,8 +323,12 @@ export class AgentService {
       // Delivered as per-turn context beside the message (stored in the
       // message's metadata, not as its text), on every turn in a group thread:
       // monitors, wake-ups and plan runs too, whose replies land in the thread.
+      // Work taken on in this thread (docs/plans/group-chat-bot.md §5): the
+      // open tasks and their newest board comments ride along, and the root
+      // agent gets `complete_taken_task` for them.
+      const takenTasks = sharedAudience ? await loadTakenTasks(userId, resolvedSessionId) : { tasks: [], block: '' };
       const groupContextBlock = sharedAudience
-        ? groupTurnContext({ requester: groupTurn?.requester, context: groupTurn?.context })
+        ? groupTurnContext({ requester: groupTurn?.requester, context: groupTurn?.context, take: groupTurn?.take }) + takenTasks.block
         : '';
       if (session) {
         const genericTitles = ['new chat', 'untitled', 'webchat conversation', 'telegram conversation', 'api conversation', 'slack conversation', 'teams conversation'];
@@ -470,6 +489,8 @@ export class AgentService {
           resolvedSessionId, userId, planMessage, classification, inputGuard.flags, channel,
           planMemoryBlock + groupContextBlock,
           workspaceId,
+          undefined,
+          { takenTasks: takenTasks.tasks },
         );
         void _planSources;
         const outputCheck = guardOutput(response, inputGuard.flags);
@@ -681,6 +702,7 @@ export class AgentService {
         turnContext + groupContextBlock,
         workspaceId,
         { mode: effectiveOutputMode, forced: outputForced },
+        { takenTasks: takenTasks.tasks },
       );
 
       const outputCheck = guardOutput(response, inputGuard.flags);
@@ -822,11 +844,12 @@ export class AgentService {
     workspaceId: string | null = null,
     /** Chat/work split (Thread 3): inline vs file deliverable directive. */
     outputDirective: { mode: 'inline' | 'file'; forced: boolean } = { mode: 'inline', forced: false },
+    extras: RootRunExtras = {},
   ): Promise<{ response: string; agentId: string; sources: string[]; outcome: TurnOutcome; limit?: LimitRefusal }> {
     return runRootAgent(
       this, this.deps,
       sessionId, userId, message, classification, guardFlags, channel,
-      extraSystemContext, workspaceId, outputDirective,
+      extraSystemContext, workspaceId, outputDirective, extras,
     );
   }
 

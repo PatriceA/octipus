@@ -13,6 +13,7 @@ const fx = vi.hoisted(() => ({
   update: vi.fn(async () => {}),
   enqueue: vi.fn(async () => {}),
   context: {} as Record<string, unknown>,
+  taken: [] as Array<{ id: string; title: string }>,
 }));
 vi.mock('@/models/model-registry', () => ({ getModelRegistry: () => ({ getDefaultModel: async () => ({ modelId: 'test-model' }) }) }));
 vi.mock('./session-resolver', () => ({ resolveSession: async (id: string) => id }));
@@ -37,6 +38,11 @@ vi.mock('@/core/cli-session-store', () => ({ acknowledgeProviderTurn: async () =
 vi.mock('./session-compaction', () => ({ maybeCompactSession: async () => {} }));
 vi.mock('@/core/agent-manager', () => ({ getAgentManager: () => ({ getBySession: () => [] }) }));
 vi.mock('./root-runner', () => ({ runRootAgent: (...args: unknown[]) => fx.root(...args) }));
+vi.mock('@/core/channels/taken-tasks', () => ({
+  openTakenTasks: async (_userId: string, sessionId: string) => (sessionId === 'group-session' ? fx.taken : []),
+  takenTasksContext: async (open: Array<{ id: string; title: string }>) =>
+    (open.length ? `\n\n[Tasks you took on in this thread: ${open.map((t) => t.id).join(', ')} … leave the task open.]` : ''),
+}));
 import { isSharedAudience, resetFlowLabels } from '@/security/flow-guard';
 import type { ApprovalManager } from './approval-manager';
 import { AgentService } from './service';
@@ -45,6 +51,7 @@ beforeEach(() => {
   resetFlowLabels();
   for (const f of [fx.root, fx.retrieve, fx.update, fx.enqueue]) f.mockClear();
   fx.context = {};
+  fx.taken = [];
   fx.root.mockResolvedValue({ response: 'Friday works.', agentId: 'agent', sources: [], outcome: 'success' });
 });
 
@@ -186,4 +193,19 @@ describe('group-channel turns', () => {
     expect(result.response).toBe('Got it, continuing...');
   });
 
+  test("a thread with work taken on: the task rides in the turn's context and the root agent can close it", async () => {
+    fx.taken = [{ id: 'task-1', title: 'Draft the notes' }];
+    const group = { requester: 'Anna', context: '', take: { taskId: 'task-1', title: 'Draft the notes' } };
+    await new AgentService().handleMessage('group-session', 'user', 'take this — draft the notes', 'slack', [], undefined, undefined, group);
+    expect(turnContextArg()).toContain('asked you to take this on: it is task task-1 "Draft the notes"');
+    expect(turnContextArg()).toContain('Tasks you took on in this thread: task-1');
+    // runRootAgent(…, extraSystemContext, workspaceId, outputDirective, extras)
+    expect(fx.root.mock.calls[0]![11]).toEqual({ takenTasks: [{ id: 'task-1', title: 'Draft the notes' }] });
+  });
+
+  test('a 1:1 session never looks for taken tasks', async () => {
+    fx.taken = [{ id: 'task-1', title: 'x' }];
+    await new AgentService().handleMessage('dm-session', 'user', 'hello there friend, summarise my week', 'slack');
+    expect(fx.root.mock.calls[0]![11]).toEqual({ takenTasks: [] });
+  });
 });

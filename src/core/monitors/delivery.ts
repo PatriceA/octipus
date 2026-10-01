@@ -22,9 +22,19 @@ export async function deliverMonitorResponse(row: Monitor, result: TurnResult): 
       if (group?.id !== session.groupChannelId || !(await isGroupChannelActive(group))) {
         throw new Error('the group channel this conversation belongs to was removed or is paused');
       }
+      // Everyone there reads it: a refusal for the member's own limits goes
+      // without its figures, as in the dispatcher.
+      let content = result.response;
+      const limit = result.metadata?.limit;
+      if (limit) {
+        const { sharedRefusalText } = await import('@/core/errors/limit-refusal');
+        const { userRepository } = await import('@/db/repositories/user-repository');
+        const name = (await userRepository.findById(row.userId))?.username ?? 'this member';
+        content = sharedRefusalText(limit, name) ?? content;
+      }
       const { getUMI } = await import('@/channels/interface');
       await getUMI().send(session.channelType as ChannelType, session.channelId, {
-        content: result.response, threadId: session.threadId ?? undefined,
+        content, threadId: session.threadId ?? undefined,
         metadata: { monitorId: row.id, sessionId: row.sessionId },
       });
       return;

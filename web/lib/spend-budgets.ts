@@ -10,7 +10,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
-export type SpendScopeKind = 'user' | 'role' | 'workspace';
+export type SpendScopeKind = 'user' | 'role' | 'workspace' | 'group_channel';
 export type SpendPeriod = 'day' | 'month';
 export type SpendState = 'ok' | 'warned' | 'paused';
 
@@ -57,11 +57,12 @@ export function fmtUsd(n: number): string {
   return `$${n.toFixed(2)}`;
 }
 
-/** "Your monthly", "Role coder daily", "Workspace Client A monthly". */
+/** "Your monthly", "Role coder daily", "Workspace Client A monthly", "Channel #release monthly". */
 export function scopeLabel(b: { scopeKind: SpendScopeKind; scopeRef: string | null; scopeName?: string | null }): string {
   if (b.scopeKind === 'user') return 'your';
   if (b.scopeKind === 'role') return `role "${b.scopeName ?? b.scopeRef}"`;
   const ref = b.scopeName ?? (b.scopeRef ? `${b.scopeRef.slice(0, 8)}…` : '?');
+  if (b.scopeKind === 'group_channel') return `channel "${ref}"`;
   return `workspace "${ref}"`;
 }
 
