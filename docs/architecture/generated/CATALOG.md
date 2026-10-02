@@ -484,7 +484,7 @@ Imports between top-level `src/` modules, with the number of import sites on eac
 | `capabilities` | `utils` | 7 |
 | `channels` | `config` | 6 |
 | `channels` | `core` | 21 |
-| `channels` | `db` | 32 |
+| `channels` | `db` | 33 |
 | `channels` | `models` | 2 |
 | `channels` | `security` | 20 |
 | `channels` | `utils` | 22 |
