@@ -34,8 +34,9 @@ function warningKey(warned: SpendBudgetView[]): string {
 function pausedWho(b: SpendBudgetView): string {
   if (b.scopeKind === 'user') return 'Agents are paused';
   if (b.scopeKind === 'role') return `Agents in role "${b.scopeName ?? b.scopeRef}" are paused`;
-  const ws = b.scopeName ?? (b.scopeRef ? `${b.scopeRef.slice(0, 8)}…` : '?');
-  return `Agents in workspace "${ws}" are paused`;
+  const ref = b.scopeName ?? (b.scopeRef ? `${b.scopeRef.slice(0, 8)}…` : '?');
+  if (b.scopeKind === 'group_channel') return `Octipus is paused in the channel "${ref}" you enrolled`;
+  return `Agents in workspace "${ref}" are paused`;
 }
 
 function budgetPhrase(b: SpendBudgetView): string {

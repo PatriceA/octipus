@@ -185,7 +185,7 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
       nativeConversation: native && nativeTail ? { ...native, checkpointId: entry.id,
         messages: capNativeSnapshot([{ role: 'user', content: `[Conversation checkpoint]\n${summary}`, timestamp: last.createdAt.toISOString() }, ...nativeTail]) } : null,
     }, { keepCliSessionPrefixes: CHILD_CLI_SESSION_KEY_PREFIXES });
-    if (published && getConfig().memory?.extractionCadence === 'on_compaction') {
+    if (published && extractsMemoryOnCompaction(getConfig().memory?.extractionCadence, history.session)) {
       const { updateMemoriesAfterTurn } = await import('@/core/memory');
       void updateMemoriesAfterTurn({ userId: history.session.userId, workspaceId: null, agentScope: null, userMessage: result.summaryText })
         .catch(err => coreLogger.warn({ err, sessionId }, 'on-compaction memory update failed'));
@@ -193,6 +193,18 @@ export async function maybeCompactSession(sessionId: string, options: MaybeCompa
     if (published) coreLogger.info({ sessionId, tokensBefore, tokensAfter, savingsRatio }, 'Session checkpoint committed; vendor conversations rotated');
     return Boolean(published);
   });
+}
+
+/**
+ * Whether a published checkpoint feeds memory extraction. Never for a
+ * group-channel thread: its summary carries other members' words, which must
+ * not become the requester's personal memories.
+ */
+export function extractsMemoryOnCompaction(
+  cadence: string | undefined,
+  session: { groupChannelId?: string | null },
+): boolean {
+  return cadence === 'on_compaction' && !session.groupChannelId;
 }
 
 /** Shared manual command for gateway and chat clients. */

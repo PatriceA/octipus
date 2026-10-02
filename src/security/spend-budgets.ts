@@ -8,6 +8,11 @@
  *
  *   - user      — every cost_log row of the user.
  *   - role      — rows whose agent_id joins `agents` with that `role`.
+ *   - group_channel — every member's rows in the channel's sessions
+ *                 (`cost_log.session_id` → `sessions.group_channel_id`), not
+ *                 only the user's the budget is filed under (the channel's
+ *                 owner, who is notified). Applied to an invocation through
+ *                 its session (`SpendScope.sessionId`).
  *   - workspace — rows attributed to that workspace by
  *                 COALESCE(agents.workspace_id, sessions.workspace_id):
  *                 the agent row carries the workspace the agent ran under
@@ -38,11 +43,12 @@
  * is acceptable for a dollar cap. A pause is never missed: a stale row
  * without the stamp still sees spend ≥ limit and refuses.
  */
-import { and, eq, gte, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/postgres';
 import { agents } from '@/db/schema/agents';
 import { costLog } from '@/db/schema/models';
 import { costSourceAggregates } from '@/db/cost-source';
+import { groupChannels } from '@/db/schema/group-channels';
 import { sessions } from '@/db/schema/sessions';
 import {
   type SpendBudget,
@@ -57,6 +63,8 @@ export interface SpendScope {
   userId: string;
   role?: string;
   workspaceId?: string | null;
+  /** The session the invocation runs in: a group channel's budget covers its sessions. */
+  sessionId?: string | null;
 }
 
 export interface SpendStatus {
@@ -74,6 +82,13 @@ const CACHE_MAX = 5_000;
 // overwrites the entry rather than adding one.
 const budgetCache = new Map<string, { rows: SpendBudget[]; expires: number }>();
 const spendCache = new Map<string, { start: number; value: SpendBreakdown; expires: number }>();
+// Group channel budgets by channel id, and whether there is any at all: an
+// install without one never looks a session up.
+const groupBudgetCache = new Map<string, { rows: SpendBudget[]; expires: number }>();
+let groupBudgetsExistCache: { value: boolean; expires: number } | null = null;
+// A session's group channel is set when the session is created and never
+// changes, so it is cached without expiry (bounded).
+const sessionGroupCache = new Map<string, string | null>();
 
 function remember<V extends { expires: number }>(cache: Map<string, V>, key: string, value: V): void {
   if (cache.size >= CACHE_MAX) {
@@ -86,6 +101,15 @@ function remember<V extends { expires: number }>(cache: Map<string, V>, key: str
 
 function invalidate(userId: string): void {
   budgetCache.delete(userId);
+}
+
+/** After a write to `b`: the rows cached for it are stale. */
+function invalidateBudget(b: Pick<SpendBudget, 'userId' | 'scopeKind' | 'scopeRef'>): void {
+  invalidate(b.userId);
+  if (b.scopeKind === 'group_channel') {
+    groupBudgetCache.delete(b.scopeRef ?? '');
+    groupBudgetsExistCache = null;
+  }
 }
 
 export function periodStart(period: SpendPeriod, now: Date): Date {
@@ -109,6 +133,35 @@ async function budgetsOf(userId: string, now: Date): Promise<SpendBudget[]> {
   return rows;
 }
 
+async function groupBudgetsExist(now: Date): Promise<boolean> {
+  if (groupBudgetsExistCache && groupBudgetsExistCache.expires > now.getTime()) return groupBudgetsExistCache.value;
+  const [row] = await getDb().select({ id: spendBudgets.id }).from(spendBudgets)
+    .where(eq(spendBudgets.scopeKind, 'group_channel')).limit(1);
+  groupBudgetsExistCache = { value: !!row, expires: now.getTime() + CACHE_TTL_MS };
+  return !!row;
+}
+
+async function groupBudgetsOf(groupChannelId: string, now: Date): Promise<SpendBudget[]> {
+  const hit = groupBudgetCache.get(groupChannelId);
+  if (hit && hit.expires > now.getTime()) return hit.rows;
+  const rows = await getDb().select().from(spendBudgets)
+    .where(and(eq(spendBudgets.scopeKind, 'group_channel'), eq(spendBudgets.scopeRef, groupChannelId)));
+  remember(groupBudgetCache, groupChannelId, { rows, expires: now.getTime() + CACHE_TTL_MS });
+  return rows;
+}
+
+/** The group channel a session belongs to, or null (a 1:1 session, or no such session). */
+async function groupChannelOfSession(sessionId: string): Promise<string | null> {
+  if (!UUID_RE.test(sessionId)) return null;
+  if (sessionGroupCache.has(sessionId)) return sessionGroupCache.get(sessionId) ?? null;
+  const [row] = await getDb().select({ groupChannelId: sessions.groupChannelId }).from(sessions)
+    .where(eq(sessions.id, sessionId)).limit(1);
+  if (!row) return null; // not cached: the session may not be written yet
+  if (sessionGroupCache.size >= CACHE_MAX) sessionGroupCache.clear();
+  sessionGroupCache.set(sessionId, row.groupChannelId ?? null);
+  return row.groupChannelId ?? null;
+}
+
 /** Spend of one budget over a period, split by how the cost was measured. */
 export interface SpendBreakdown {
   /** SUM(cost_log.total_cost) — what enforcement compares to the limit. */
@@ -125,7 +178,10 @@ export interface SpendBreakdown {
  * never show a figure the pause does not act on.
  */
 async function spendSince(budget: SpendBudget, start: Date, now: Date): Promise<SpendBreakdown> {
-  const key = `${budget.userId}:${budget.scopeKind}:${budget.scopeRef ?? ''}:${budget.period}`;
+  // A group channel's spend is the channel's, whoever the budget is filed under.
+  const key = budget.scopeKind === 'group_channel'
+    ? `group:${budget.scopeRef ?? ''}:${budget.period}`
+    : `${budget.userId}:${budget.scopeKind}:${budget.scopeRef ?? ''}:${budget.period}`;
   const hit = spendCache.get(key);
   if (hit && hit.start === start.getTime() && hit.expires > now.getTime()) return hit.value;
 
@@ -138,7 +194,14 @@ async function spendSince(budget: SpendBudget, start: Date, now: Date): Promise<
   };
   const base = and(eq(costLog.userId, budget.userId), gte(costLog.createdAt, start));
   let rows: { s: number; est: number; unk: number }[];
-  if (budget.scopeKind === 'role') {
+  if (budget.scopeKind === 'group_channel') {
+    // Every member's calls in the channel's sessions, not the owner's alone.
+    rows = UUID_RE.test(budget.scopeRef ?? '')
+      ? await db.select(fields).from(costLog)
+        .innerJoin(sessions, eq(sessions.id, costLog.sessionId))
+        .where(and(gte(costLog.createdAt, start), eq(sessions.groupChannelId, budget.scopeRef as string)))
+      : [];
+  } else if (budget.scopeKind === 'role') {
     rows = await db.select(fields).from(costLog)
       .innerJoin(agents, eq(agents.id, costLog.agentId))
       .where(and(base, eq(agents.role, budget.scopeRef ?? '')));
@@ -159,15 +222,31 @@ async function spendSince(budget: SpendBudget, start: Date, now: Date): Promise<
   return value;
 }
 
+/** Whether `b`, one of the user's own budgets, covers this invocation (group budgets are matched by session). */
 function applies(b: SpendBudget, scope: SpendScope): boolean {
   if (b.scopeKind === 'user') return true;
   if (b.scopeKind === 'role') return !!scope.role && b.scopeRef === scope.role;
+  if (b.scopeKind === 'group_channel') return false;
   return !!scope.workspaceId && b.scopeRef === scope.workspaceId.toLowerCase();
 }
 
-function scopeLabel(b: SpendBudget): string {
+/** `#release`, or the channel id, for each group channel id. */
+async function groupLabels(ids: string[]): Promise<Map<string, string>> {
+  const valid = ids.filter((id) => UUID_RE.test(id));
+  if (valid.length === 0) return new Map();
+  const rows = await getDb().select({ id: groupChannels.id, label: groupChannels.label, channelId: groupChannels.channelId })
+    .from(groupChannels).where(inArray(groupChannels.id, valid));
+  return new Map(rows.map((r) => [r.id, r.label ?? r.channelId]));
+}
+
+async function scopeLabel(b: SpendBudget): Promise<string> {
   const every = b.period === 'day' ? 'daily' : 'monthly';
-  return b.scopeKind === 'user' ? `Your ${every}` : `The ${b.scopeKind} "${b.scopeRef}" ${every}`;
+  if (b.scopeKind === 'user') return `Your ${every}`;
+  if (b.scopeKind === 'group_channel') {
+    const label = (await groupLabels([b.scopeRef ?? ''])).get(b.scopeRef ?? '');
+    return `The group channel ${label ?? b.scopeRef}'s ${every}`;
+  }
+  return `The ${b.scopeKind} "${b.scopeRef}" ${every}`;
 }
 
 async function notify(b: SpendBudget, type: string, title: string, body: string, spentUsd: number): Promise<void> {
@@ -186,7 +265,12 @@ async function notify(b: SpendBudget, type: string, title: string, body: string,
  */
 export async function checkSpend(scope: SpendScope, now: Date = new Date()): Promise<SpendStatus[]> {
   if (!UUID_RE.test(scope.userId)) return [];
-  const budgets = (await budgetsOf(scope.userId, now)).filter(b => applies(b, scope));
+  const own = (await budgetsOf(scope.userId, now)).filter(b => applies(b, scope));
+  // A group channel's budget, for an invocation in one of its sessions.
+  const groupChannelId = scope.sessionId && await groupBudgetsExist(now)
+    ? await groupChannelOfSession(scope.sessionId)
+    : null;
+  const budgets = groupChannelId ? [...own, ...await groupBudgetsOf(groupChannelId, now)] : own;
   if (budgets.length === 0) return [];
 
   const db = getDb();
@@ -207,11 +291,11 @@ export async function checkSpend(scope: SpendScope, now: Date = new Date()): Pro
         .set({ pausedAt: now, updatedAt: now })
         .where(and(eq(spendBudgets.id, b.id), or(isNull(spendBudgets.pausedAt), lt(spendBudgets.pausedAt, start))))
         .returning({ id: spendBudgets.id });
-      invalidate(b.userId);
+      invalidateBudget(b);
       if (claimed.length > 0) {
         securityLogger.warn(reason, 'Spend budget exhausted, pausing');
         await notify(b, 'spend_budget_paused', 'Spend budget reached — agents paused',
-          `${scopeLabel(b)} budget of $${limitUsd.toFixed(2)} is spent ($${spentUsd.toFixed(2)}).`, spentUsd);
+          `${await scopeLabel(b)} budget of $${limitUsd.toFixed(2)} is spent ($${spentUsd.toFixed(2)}).`, spentUsd);
       }
       throw new SpendBudgetExceededError(reason);
     }
@@ -222,10 +306,10 @@ export async function checkSpend(scope: SpendScope, now: Date = new Date()): Pro
           .set({ warnedAt: now, updatedAt: now })
           .where(and(eq(spendBudgets.id, b.id), or(isNull(spendBudgets.warnedAt), lt(spendBudgets.warnedAt, start))))
           .returning({ id: spendBudgets.id });
-        invalidate(b.userId);
+        invalidateBudget(b);
         if (claimed.length > 0) {
           await notify(b, 'spend_budget_warning', 'Spend budget almost reached',
-            `${scopeLabel(b)} spend is $${spentUsd.toFixed(2)} of $${limitUsd.toFixed(2)}.`, spentUsd);
+            `${await scopeLabel(b)} spend is $${spentUsd.toFixed(2)} of $${limitUsd.toFixed(2)}.`, spentUsd);
         }
       }
       out.push({ budget: b, spentUsd, limitUsd, state: 'warn' });
@@ -244,7 +328,7 @@ export interface SpendBudgetView {
   userId: string;
   scopeKind: SpendScopeKind;
   scopeRef: string | null;
-  /** Workspace name for a workspace budget; the role name for a role budget. */
+  /** Workspace name for a workspace budget; the role name for a role budget; the channel's label for a group channel budget. */
   scopeName: string | null;
   period: SpendPeriod;
   limitUsd: number;
@@ -299,7 +383,11 @@ export async function budgetStatusesFor(
     for (const w of await getOrgWorkspaceManager().listOwn(userId)) wsNames.set(w.id.toLowerCase(), w.name);
   }
 
-  const order: Record<SpendScopeKind, number> = { user: 0, role: 1, workspace: 2 };
+  const groupNames = budgets.some(b => b.scopeKind === 'group_channel')
+    ? await groupLabels(budgets.filter(b => b.scopeKind === 'group_channel').map(b => b.scopeRef ?? ''))
+    : new Map<string, string>();
+
+  const order: Record<SpendScopeKind, number> = { user: 0, role: 1, workspace: 2, group_channel: 3 };
   const sorted = [...budgets].sort((a, b) =>
     order[a.scopeKind] - order[b.scopeKind]
     || (a.scopeRef ?? '').localeCompare(b.scopeRef ?? '')
@@ -321,7 +409,8 @@ export async function budgetStatusesFor(
       scopeKind: b.scopeKind,
       scopeRef: b.scopeRef,
       scopeName: b.scopeKind === 'workspace' ? (wsNames.get(b.scopeRef ?? '') ?? null)
-        : b.scopeKind === 'role' ? b.scopeRef : null,
+        : b.scopeKind === 'group_channel' ? (groupNames.get(b.scopeRef ?? '') ?? null)
+          : b.scopeKind === 'role' ? b.scopeRef : null,
       period: b.period,
       limitUsd,
       warnRatio: b.warnRatio,
@@ -372,24 +461,76 @@ export async function upsertBudget(input: {
     pausedAt: null,
     updatedAt: new Date(),
   };
-  // The unique index is NULLS NOT DISTINCT, so the conflict target also
-  // catches the user-scope row whose scope_ref is NULL.
-  const [row] = await getDb().insert(spendBudgets)
-    .values({ userId: input.userId, scopeKind: input.scopeKind, scopeRef, period: input.period, ...values })
-    .onConflictDoUpdate({
+  const insert = getDb().insert(spendBudgets)
+    .values({ userId: input.userId, scopeKind: input.scopeKind, scopeRef, period: input.period, ...values });
+  // A group channel has one budget per period whoever it is filed under
+  // (migration 0123's partial index): a new owner takes the existing row.
+  // Otherwise the unique index is NULLS NOT DISTINCT, so the conflict target
+  // also catches the user-scope row whose scope_ref is NULL.
+  const [row] = input.scopeKind === 'group_channel'
+    ? await insert.onConflictDoUpdate({
+      target: [spendBudgets.scopeRef, spendBudgets.period],
+      targetWhere: sql`${spendBudgets.scopeKind} = 'group_channel'`,
+      set: { ...values, userId: input.userId },
+    }).returning()
+    : await insert.onConflictDoUpdate({
       target: [spendBudgets.userId, spendBudgets.scopeKind, spendBudgets.scopeRef, spendBudgets.period],
       set: values,
-    })
-    .returning();
-  invalidate(input.userId);
+    }).returning();
+  invalidateBudget(row);
   return row;
 }
 
 export async function deleteBudget(id: string): Promise<boolean> {
   const rows = await getDb().delete(spendBudgets).where(eq(spendBudgets.id, id))
-    .returning({ userId: spendBudgets.userId });
-  for (const r of rows) invalidate(r.userId);
+    .returning({ userId: spendBudgets.userId, scopeKind: spendBudgets.scopeKind, scopeRef: spendBudgets.scopeRef });
+  for (const r of rows) invalidateBudget(r);
   return rows.length > 0;
+}
+
+// ── Group channels ──────────────────────────────────────────────────
+
+/**
+ * Whether a group channel's spend budget is used up, for the channel's own
+ * gate before it starts a turn: when the last pause lifts, or null. Read-only;
+ * the pause is stamped, and its notification sent, by `checkSpend` on a run.
+ */
+export async function groupChannelPause(groupChannelId: string, now: Date = new Date()): Promise<{ resetsAt: string } | null> {
+  if (!UUID_RE.test(groupChannelId) || !(await groupBudgetsExist(now))) return null;
+  let resetsAt: Date | null = null;
+  for (const b of await groupBudgetsOf(groupChannelId, now)) {
+    const start = periodStart(b.period, now);
+    const used = (b.pausedAt && b.pausedAt >= start) || (await spendSince(b, start, now)).totalUsd >= Number(b.limitUsd);
+    const end = periodEnd(b.period, now);
+    if (used && (!resetsAt || end > resetsAt)) resetsAt = end;
+  }
+  return resetsAt ? { resetsAt: resetsAt.toISOString() } : null;
+}
+
+/** A group channel's budgets with their spend and state (Admin → Group channels). */
+export async function groupChannelBudgetStatuses(groupChannelId: string, now: Date = new Date()): Promise<SpendBudgetView[]> {
+  if (!UUID_RE.test(groupChannelId)) return [];
+  const rows = await getDb().select().from(spendBudgets)
+    .where(and(eq(spendBudgets.scopeKind, 'group_channel'), eq(spendBudgets.scopeRef, groupChannelId)));
+  return rows.length > 0 ? budgetStatusesFor(rows[0].userId, now, rows) : [];
+}
+
+/** File a channel's budgets under its new owner (takeover), who is notified from then on. */
+export async function moveGroupChannelBudgets(groupChannelId: string, ownerUserId: string): Promise<void> {
+  const moved = await getDb().update(spendBudgets)
+    .set({ userId: ownerUserId, updatedAt: new Date() })
+    .where(and(eq(spendBudgets.scopeKind, 'group_channel'), eq(spendBudgets.scopeRef, groupChannelId)))
+    .returning({ userId: spendBudgets.userId, scopeKind: spendBudgets.scopeKind, scopeRef: spendBudgets.scopeRef });
+  for (const r of moved) invalidateBudget(r);
+  budgetCache.clear(); // the previous owner's cached rows still hold them
+}
+
+/** Drop a channel's budgets with its enrolment. */
+export async function deleteGroupChannelBudgets(groupChannelId: string): Promise<void> {
+  const gone = await getDb().delete(spendBudgets)
+    .where(and(eq(spendBudgets.scopeKind, 'group_channel'), eq(spendBudgets.scopeRef, groupChannelId)))
+    .returning({ userId: spendBudgets.userId, scopeKind: spendBudgets.scopeKind, scopeRef: spendBudgets.scopeRef });
+  for (const r of gone) invalidateBudget(r);
 }
 
 /**
@@ -402,13 +543,16 @@ export async function resetPause(id: string): Promise<SpendBudget | null> {
     .set({ pausedAt: null, updatedAt: new Date() })
     .where(eq(spendBudgets.id, id))
     .returning();
-  if (row) invalidate(row.userId);
+  if (row) invalidateBudget(row);
   return row ?? null;
 }
 
 export function _resetSpendBudgetsForTests(): void {
   budgetCache.clear();
   spendCache.clear();
+  groupBudgetCache.clear();
+  groupBudgetsExistCache = null;
+  sessionGroupCache.clear();
 }
 
 export function _spendCacheSizeForTests(): number {

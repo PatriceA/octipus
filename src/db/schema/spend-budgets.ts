@@ -1,14 +1,17 @@
 import { numeric, pgTable, real, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { users } from './users';
 
-export type SpendScopeKind = 'user' | 'role' | 'workspace';
+export type SpendScopeKind = 'user' | 'role' | 'workspace' | 'group_channel';
 export type SpendPeriod = 'day' | 'month';
 
 /**
  * Dollar spend budgets — a USD cap summed from `cost_log.total_cost` over a
- * UTC day or month, scoped to the whole user, one agent role, or one
- * workspace. `scope_ref` is NULL for the user scope, the role name or the
- * workspace id otherwise.
+ * UTC day or month, scoped to the whole user, one agent role, one workspace,
+ * or one group channel. `scope_ref` is NULL for the user scope, the role
+ * name, the workspace id or the group channel's id otherwise. A group
+ * channel budget counts every member's spend in the channel's sessions; it
+ * is filed under the channel's owner (who is notified), one per channel and
+ * period (migration 0123).
  *
  * `warned_at` / `paused_at` are compared against the current period's start,
  * so a stamp from a previous period is inert and the budget rolls over on its

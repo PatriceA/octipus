@@ -20,6 +20,43 @@ export const ORPHANED_APPROVAL_MESSAGE =
 export const TIMED_OUT_APPROVAL_MESSAGE =
   'This approval request has expired: nobody answered in time, so the agent carried on without it.';
 
+/**
+ * Whether a phrase reads as yes or no ("go ahead", "Stop Pipeline"), or null.
+ * Used to read an approval's option labels; a typed reply goes through the
+ * stricter `replyAnswer`.
+ */
+export function approvalAnswer(message: string): 'approve' | 'deny' | null {
+  const normalized = message.trim().toLowerCase();
+  if (/^(approve|yes|go\s*ahead|proceed|confirm|accept|lgtm|ship\s*it)\b/i.test(normalized)) return 'approve';
+  if (/^(deny|reject|no|stop|cancel|abort|don'?t)\b/i.test(normalized)) return 'deny';
+  return null;
+}
+
+/**
+ * A typed reply as an answer to an approval, or null. The whole message may
+ * be any approve / deny word ("yes", "stop", "go ahead"); a longer message
+ * only counts when it opens with one that cannot start a request ("yes,
+ * ship it", "no, not yet"). "Cancel my 3pm with Bob" or "stop the staging
+ * server" are requests, and answering them would decide a step by accident.
+ */
+export function replyAnswer(message: string): 'approve' | 'deny' | null {
+  const t = message.trim().replace(/[.!]+$/, '').trim();
+  if (/^(approve|approved|yes|y|go\s*ahead|proceed|confirm|accept|lgtm|ship\s*it)$/i.test(t)) return 'approve';
+  if (/^(deny|denied|reject|rejected|no|n|stop|cancel|abort|don'?t)$/i.test(t)) return 'deny';
+  if (/^(yes|yep|yeah|approve|approved|lgtm|go\s*ahead|proceed)\b/i.test(t)) return 'approve';
+  if (/^(no|nope|deny|denied|reject|rejected|don'?t)\b/i.test(t)) return 'deny';
+  return null;
+}
+
+/**
+ * What an approval asks. A `gate` is a go / no-go on a step: a typed "no",
+ * "stop" or "abort" declines it, and so does choosing an option worded that
+ * way ("Stop Pipeline"). A `question` asks for an answer (a pipeline's
+ * human-input node): choosing any option is the answer, even one that reads
+ * "No".
+ */
+export type ApprovalKind = 'gate' | 'question';
+
 export type ApprovalResolveOutcome =
   | { status: 'resolved' }
   /** Unknown id, or one owned by someone else — deliberately indistinguishable. */
@@ -118,6 +155,7 @@ export class ApprovalManager {
     context: AgentContext,
     emitFn: (event: TurnEvent) => void,
     options?: string[],
+    kind: ApprovalKind = 'gate',
   ): Promise<unknown> {
     const requestId = randomUUID();
 
@@ -125,7 +163,7 @@ export class ApprovalManager {
       type: 'approval_required',
       sessionId: context.sessionId,
       userId: context.userId,
-      data: { requestId, summary, question, options },
+      data: { requestId, summary, question, options, kind },
       timestamp: new Date(),
     });
 
@@ -252,19 +290,9 @@ export class ApprovalManager {
     const approvals = this.getPendingApprovals(forUserId);
     if (approvals.length !== 1) return false;
 
-    const approval = approvals[0];
-    const normalized = message.trim().toLowerCase();
-
-    const approvePatterns = /^(approve|yes|go\s*ahead|proceed|confirm|accept|lgtm|ship\s*it)\b/i;
-    const denyPatterns = /^(deny|reject|no|stop|cancel|abort|don'?t)\b/i;
-
-    if (approvePatterns.test(normalized)) {
-      return this.resolveApproval(approval.id, true, message, { forUserId, resolvedBy: forUserId });
-    } else if (denyPatterns.test(normalized)) {
-      return this.resolveApproval(approval.id, false, message, { forUserId, resolvedBy: forUserId });
-    }
-
-    return false;
+    const answer = replyAnswer(message);
+    if (!answer) return false;
+    return this.resolveApproval(approvals[0].id, answer === 'approve', message, { forUserId, resolvedBy: forUserId });
   }
 
   /**

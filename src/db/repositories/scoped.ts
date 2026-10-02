@@ -38,7 +38,7 @@
 
 import { and, arrayContains, asc, count, desc, eq, getTableColumns, gte, inArray, ne, notExists, notInArray, or, type SQL, sql } from 'drizzle-orm';
 import { alias, type AnyPgColumn } from 'drizzle-orm/pg-core';
-import { dispatchWakeups, scheduleWakeup, type WakeupCause } from '@/core/tasks/wakeups';
+import { dispatchWakeups, notifyTaskClosed, scheduleWakeup, type WakeupCause } from '@/core/tasks/wakeups';
 import { isAdmin, isAuthenticated, type Principal } from '@/security/principal';
 import { TASK_CHECKOUT_TTL_MS } from '@/core/tasks/checkout';
 import { ACTIVE_TASK_STATUSES, isActiveStatus, isTaskStatus } from '@/core/tasks/status';
@@ -1282,10 +1282,11 @@ export class ScopedTaskRepo {
     return closed;
   }
 
-  /** Run the wakeups for a task that just left the active set, detached. */
+  /** Run the close listeners and the wakeups for a task that just left the active set, detached. */
   private wakeAfter(closed: Task, previousStatus: string, cause: WakeupCause): void {
     if (!isActiveStatus(previousStatus)) return;
     scheduleWakeup(async () => {
+      await notifyTaskClosed({ task: closed, previousStatus, cause });
       const context = await this.wakeupContext(closed);
       await dispatchWakeups({ closed, previousStatus, cause, ...context });
     });

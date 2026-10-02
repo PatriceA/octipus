@@ -145,6 +145,28 @@ request or the parent summary are dropped, and each entry goes through the
 same input guard as the task brief. See `composeChildMessage` in
 `src/core/swarm/spawner.ts`.
 
+## Tasks taken on in a group channel
+
+A member of a [group channel](CHANNELS.md#group-channels) can hand the bot
+work: `@Octipus take this — <what>`, or a 🐙 reaction on a message. That puts
+a task on the member's own board (their default workspace), created in
+progress and without the tasks tool's ASK, since the member asked for it:
+
+- `source = channel`, and `sourceRef` holds the member's session for that
+  thread (`sessionId`, the link to the thread), the channel's name (`label`),
+  a link to the message (`url`) and its platform id (`messageId`; taking the
+  same message twice finds the first task);
+- the notes say who asked, where, and whose message it was.
+
+The work runs in that thread session, with the group channel's rules. While
+the task is open, each turn in the thread sees it with its newest board
+comments, and the root agent can close it with `complete_taken_task`, which
+reaches only the tasks taken in that thread and adds its result as a comment.
+Closing, archiving or deleting the task by any route posts one line in the
+thread (`onTaskClosed` in `src/core/tasks/wakeups.ts`). Board comments are not
+posted in the channel. While the task is open its thread session is kept by
+the session retention sweep. The code is in `src/core/channels/taken-tasks.ts`.
+
 ## Audit trail
 
 Task mutations write an audit row with action `task_mutated` (migration
@@ -157,6 +179,7 @@ Task mutations write an audit row with action `task_mutated` (migration
 | `/api/tasks` routes (create, update, complete, delete) | `user`; `onBehalfOf` names the owner when an admin acts on someone else's task | null |
 | `tasks` tool: `create_task`, `add_tasks`, `update_task`, `complete_task` | `agent`, identified by the spawned agent's id | root session id |
 | Source ingestion (email, reader, research) | `system` | null |
+| A task taken on in a group channel | `system` (`channel`) on create; `agent` when `complete_taken_task` closes it | the thread session |
 
 An update that changes nothing, and `complete_task` on a task already done,
 write no row. Checkout, release and comments are not audited. The write is

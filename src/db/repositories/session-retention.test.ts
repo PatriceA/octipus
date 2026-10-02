@@ -99,6 +99,23 @@ describe('sessionRepository.deleteExpired', () => {
     expect(await sessionRepository.findById(waiting.id)).not.toBeNull();
   });
 
+  test('skips a group-channel thread session with work still taken on in it', async () => {
+    const { sessionRepository } = await import('@/db/repositories/session-repository');
+    const { getDb } = await import('@/db/postgres');
+    const { tasks } = await import('@/db/schema/tasks');
+
+    const working = await sessionAged('ret-taken', 30);
+    const finished = await sessionAged('ret-taken-done', 30);
+    await getDb().insert(tasks).values([
+      { userId, title: 'Draft the notes', status: 'in_progress', source: 'channel', sourceRef: { sessionId: working.id } },
+      { userId, title: 'Done already', status: 'done', source: 'channel', sourceRef: { sessionId: finished.id } },
+    ]);
+
+    await sessionRepository.deleteExpired(new Date(Date.now() - 14 * DAY));
+    expect(await sessionRepository.findById(working.id)).not.toBeNull();
+    expect(await sessionRepository.findById(finished.id)).toBeNull();
+  });
+
   test('the webchat auto-archive leaves pinned sessions active', async () => {
     const { sessionRepository } = await import('@/db/repositories/session-repository');
     const kept = await sessionAged('ret-archive', 10, true);

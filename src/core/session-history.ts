@@ -4,6 +4,7 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import type { Message } from '@/db/schema/messages';
 import type { SessionContext } from '@/db/schema/sessions';
 import type { AgentMessage } from './types';
+import { omitGroupTranscripts } from '@/core/channels/group-context';
 
 /** One ordering and boundary contract for cold launches and compaction. */
 export async function readSessionHistory(sessionId: string) {
@@ -19,8 +20,11 @@ export async function readSessionHistory(sessionId: string) {
 }
 
 export function toContextMessage(row: Message): AgentMessage {
+  const promptContext = typeof row.metadata?.promptContext === 'string'
+    ? omitGroupTranscripts(row.metadata.promptContext)
+    : row.metadata?.promptContext;
   return { sourceMessageId: row.id, role: row.role as AgentMessage['role'],
-    content: [row.metadata?.promptContext, row.content].filter(Boolean).join('\n\n'), timestamp: row.createdAt };
+    content: [promptContext, row.content].filter(Boolean).join('\n\n'), timestamp: row.createdAt };
 }
 
 /**

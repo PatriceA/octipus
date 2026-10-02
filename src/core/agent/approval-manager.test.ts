@@ -211,3 +211,19 @@ describe('orphaned approvals', () => {
     expect(await manager.resolveApprovalDetailed(randomUUID(), true)).toEqual({ status: 'not_found' });
   });
 });
+
+describe('typed answers', () => {
+  test('a bare word answers; a request that starts like one does not', () => {
+    for (const yes of ['yes', 'Yes!', 'go ahead', 'lgtm', 'proceed', 'yes, ship it', 'yeah sure']) expect(mod.replyAnswer(yes)).toBe('approve');
+    for (const no of ['no', 'stop', 'Cancel.', 'abort', 'no, not yet', "don't"]) expect(mod.replyAnswer(no)).toBe('deny');
+    for (const request of ['Cancel my 3pm with Bob', 'stop the staging server', 'confirm the booking for Friday', 'accept the invite', 'what next?']) {
+      expect(mod.replyAnswer(request)).toBeNull();
+    }
+  });
+
+  test('option labels still read as a refusal when worded as one', () => {
+    expect(mod.approvalAnswer('Stop Pipeline')).toBe('deny');
+    expect(mod.approvalAnswer('Abort Pipeline')).toBe('deny');
+    expect(mod.approvalAnswer('Continue Anyway')).toBeNull();
+  });
+});

@@ -19,6 +19,7 @@ export * from './embeddings';
 export * from './evaluations';
 export * from './hook-executions';
 export * from './hooks';
+export * from './group-channels';
 export * from './impersonation-sessions';
 export * from './knowledge-links';
 export * from './kv';

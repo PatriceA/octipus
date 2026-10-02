@@ -330,7 +330,10 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
   // ── Spend budgets (USD caps) ───────────────────────────────────
   // GET    /spend-budgets             — list (optionally ?userId=).
   // PUT    /spend-budgets             — upsert by (user, scope, period);
-  //                                     clears any warning / pause.
+  //                                     clears any warning / pause. A
+  //                                     group_channel budget (scopeRef = the
+  //                                     enrolment id) is filed under the
+  //                                     channel's owner, one per period.
   // DELETE /spend-budgets/:id         — drop a budget.
   // POST   /spend-budgets/:id/resume  — clear the pause.
   // Enforcement: src/security/spend-budgets.ts (checkSpend).
@@ -381,7 +384,20 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
     async (ctx) => {
       const guard = requireAdmin(ctx);
       if (!guard.ok) return guard.body;
-      const { body, principal, set } = ctx;
+      const { body: input, principal, set } = ctx;
+
+      // A group channel's budget is filed under the channel's current owner,
+      // whatever user the request names.
+      let body = input;
+      if (input.scopeKind === 'group_channel') {
+        const { findGroupChannelById } = await import('@/channels/group-channels');
+        const group = await findGroupChannelById(input.scopeRef?.trim() ?? '');
+        if (!group) {
+          set.status = 404;
+          return { error: 'Group channel not found' };
+        }
+        body = { ...input, userId: group.ownerUserId, scopeRef: group.id };
+      }
 
       const user = await userRepository.findById(body.userId);
       if (!user) {
@@ -419,7 +435,7 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
     {
       body: t.Object({
         userId: t.String({ pattern: UUID_PATTERN }),
-        scopeKind: t.Union([t.Literal('user'), t.Literal('role'), t.Literal('workspace')]),
+        scopeKind: t.Union([t.Literal('user'), t.Literal('role'), t.Literal('workspace'), t.Literal('group_channel')]),
         scopeRef: t.Optional(t.Union([t.String({ minLength: 1 }), t.Null()])),
         period: t.Union([t.Literal('day'), t.Literal('month')]),
         limitUsd: t.Number(),
@@ -492,6 +508,46 @@ export const adminRoutes = new Elysia({ prefix: '/admin' })
   // GET    /notification-destinations
   // POST   /notification-destinations      { channelType, channelId, label?, orgId? }
   // DELETE /notification-destinations/:id
+  // ── Group channels (docs/plans/group-chat-bot.md) ────────────────────
+  // GET    /group-channels       every enrolment, with owner and workspace
+  // DELETE /group-channels/:id   revoke one (audited; the bot goes quiet there)
+  .get(
+    '/group-channels',
+    async (ctx) => {
+      const guard = requireAdmin(ctx);
+      if (!guard.ok) return guard.body;
+      const { listAllGroupChannels } = await import('@/channels/group-channels');
+      const { groupChannelBudgetStatuses } = await import('@/security/spend-budgets');
+      const groups = await listAllGroupChannels();
+      // Each channel's spend budget, with this period's spend (Admin → Group channels).
+      const now = new Date();
+      return {
+        groupChannels: await Promise.all(groups.map(async (g) => ({ ...g, budgets: await groupChannelBudgetStatuses(g.id, now) }))),
+      };
+    },
+    { detail: { tags: ['admin'] } },
+  )
+
+  .delete(
+    '/group-channels/:id',
+    async (ctx) => {
+      const guard = requireAdmin(ctx);
+      if (!guard.ok) return guard.body;
+      const { params, principal, set } = ctx;
+      const { removeGroupChannel } = await import('@/channels/group-channels');
+      const removed = await removeGroupChannel(params.id, { userId: principal.userId, isAdmin: true });
+      if (!removed) {
+        set.status = 404;
+        return { error: 'Group channel not found' };
+      }
+      return { deleted: true };
+    },
+    {
+      params: t.Object({ id: t.String({ pattern: UUID_PATTERN }) }),
+      detail: { tags: ['admin'] },
+    },
+  )
+
   .get(
     '/notification-destinations',
     async (ctx) => {

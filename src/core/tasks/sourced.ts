@@ -16,7 +16,8 @@ import { scopedRepos } from '@/db/repositories/scoped';
 import type { Task, TaskSourceRef } from '@/db/schema/tasks';
 import type { Principal } from '@/security/principal';
 
-export type TaskSource = 'user' | 'agent' | 'reader' | 'research' | 'email';
+/** `channel`: taken on in a group channel (src/core/channels/taken-tasks.ts). */
+export type TaskSource = 'user' | 'agent' | 'reader' | 'research' | 'email' | 'channel';
 
 export interface SourcedTaskInput {
   title: string;

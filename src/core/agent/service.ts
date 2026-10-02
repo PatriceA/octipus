@@ -5,6 +5,8 @@ import { getConfig } from '@/config';
 import { getAgentManager } from '@/core/agent-manager';
 import { handleCommand } from '@/core/commands';
 import { renderMemoriesBlock, retrieveForContext, updateMemoriesAfterTurn } from '@/core/memory';
+import { markNotSharedAudience, markSharedAudience } from '@/security/flow-guard';
+import { bareReply, type GroupTurn, groupTurnContext } from '@/core/channels/group-context';
 import { generateRunId, runWithContext } from '@/core/run-context';
 import { type AttachedFileRef, buildAttachedFilesContext } from '@/core/session-files';
 import { recordClassification, recordRootRun } from '@/core/telemetry';
@@ -15,14 +17,14 @@ import { sessionRepository } from '@/db/repositories/session-repository';
 import { getModelRegistry } from '@/models/model-registry';
 import { WorkspaceFS } from '@/security/workspace-fs';
 import { coreLogger } from '@/utils/logger';
-import type { ApprovalRequest, ApprovalResolveOutcome } from './approval-manager';
+import type { ApprovalKind, ApprovalRequest, ApprovalResolveOutcome } from './approval-manager';
 import { ApprovalManager } from './approval-manager';
 import { classifyMessage } from './classifier';
 import { directResponse } from './direct-response';
 import { VoicePlanGate } from './voice-plan-gate';
 import { guardInput } from './input-guard';
 import { ModelSelector } from './model-selector';
-import { runRootAgent } from './root-runner';
+import { type RootRunExtras, runRootAgent } from './root-runner';
 import { type LimitRefusal, limitRefusalOf } from '@/core/errors/limit-refusal';
 import { guardOutput, stripSwarmScaffolding } from './output-guard';
 import { saveProgressMessage } from './progress-message';
@@ -59,6 +61,32 @@ export interface TurnEvent {
 export type TurnOutcome = 'success' | 'failed' | 'cancelled';
 export interface TurnResult {
   response: string; sessionId?: string; agentId?: string; classification: MessageClassification; metadata?: ResponseMetadata; outcome?: TurnOutcome;
+}
+
+/**
+ * The text to hand to `ApprovalManager.tryResolveFromMessage`, or null when
+ * this message must not answer an approval. In a group-thread session only a
+ * bare yes/no counts, passed on as the canonical word so every form `bareReply`
+ * accepts is understood.
+ */
+function approvalReplyFor(message: string, groupThread: boolean): string | null {
+  if (!groupThread) return message;
+  return bareReply(message);
+}
+
+/**
+ * The open tasks taken on in a group thread, and their turn-context block.
+ * A failed read costs the context, never the turn.
+ */
+async function loadTakenTasks(userId: string, sessionId: string): Promise<{ tasks: Array<{ id: string; title: string }>; block: string }> {
+  try {
+    const { openTakenTasks, takenTasksContext } = await import('@/core/channels/taken-tasks');
+    const open = await openTakenTasks(userId, sessionId);
+    return { tasks: open.map((t) => ({ id: t.id, title: t.title })), block: await takenTasksContext(open) };
+  } catch (err) {
+    coreLogger.warn({ err, sessionId }, 'Could not read the tasks taken on in this thread');
+    return { tasks: [], block: '' };
+  }
 }
 
 export class AgentService {
@@ -143,6 +171,12 @@ export class AgentService {
     forcedOutputMode?: 'inline' | 'file',
     /** Durable background wake-ups claim delivery only after prior turns finish. */
     beforeStart?: () => Promise<void>,
+    /**
+     * A turn from a group channel: who asked, and the thread transcript. The
+     * message itself stays as typed (commands, plan "go" and approval replies
+     * are recognised on it); only the model sees it framed.
+     */
+    groupTurn?: GroupTurn,
   ): Promise<TurnResult> {
     // Controls must reach a running turn; queuing /stop behind it defeats cancellation.
     // Background wake-ups always take the normal queue and cannot invoke this path.
@@ -153,10 +187,16 @@ export class AgentService {
         const resolvedId = await resolveSession(sessionId, userId, channel ?? 'api');
         const session = await sessionRepository.findById(resolvedId);
         if (!session || session.userId !== userId) throw new Error('Session not found');
+        // In a group-thread session members also talk to each other: only a
+        // bare yes/no answers an approval there, whatever the entry point.
+        const reply = approvalReplyFor(message, !!session.groupChannelId);
         if (control) {
           const response = await handleCommand(message.trim(), resolvedId, userId);
           if (response) return { response, sessionId: resolvedId, classification: { type: 'casual', confidence: 1 } };
-        } else if (approvals[0]?.sessionId === resolvedId && await this.approvalManager.tryResolveFromMessage(message, userId)) {
+        } else if (reply && this.onlyApprovalIs(userId, approvals[0]?.id, resolvedId)
+          && await this.approvalManager.tryResolveFromMessage(reply, userId)) {
+          // Re-read just above, after the awaits: the approval seen at the
+          // start may have been answered elsewhere and another raised since.
           return { response: 'Got it, continuing...', sessionId: resolvedId, classification: { type: 'approval', confidence: 1 } };
         }
       }
@@ -166,9 +206,15 @@ export class AgentService {
       const runId = generateRunId();
       return runWithContext(
         { runId, sessionId, userId, channel: channel ?? 'api', origin: channel ?? 'api' },
-        () => this.handleMessageInner(sessionId, userId, message, channel, attachedFiles, forcedOutputMode),
+        () => this.handleMessageInner(sessionId, userId, message, channel, attachedFiles, forcedOutputMode, false, groupTurn),
       );
     });
+  }
+
+  /** The user's single pending approval is still `id`, waiting in `sessionId` (read now, synchronously). */
+  private onlyApprovalIs(userId: string, id: string | undefined, sessionId: string): boolean {
+    const pending = this.approvalManager.getPendingApprovals(userId);
+    return !!id && pending.length === 1 && pending[0].id === id && pending[0].sessionId === sessionId;
   }
 
   /** Publish a background reply through the same event stream as interactive replies. */
@@ -199,6 +245,8 @@ export class AgentService {
      * normal way instead of being re-proposed.
      */
     bypassVoiceGate = false,
+    /** See `handleMessage`. */
+    groupTurn?: GroupTurn,
   ): Promise<TurnResult> {
     // Trajectory recorder — observes this run for later eval/fine-tuning.
     // Constructed early so the sessionId below can overwrite it.
@@ -263,6 +311,25 @@ export class AgentService {
 
       // Auto-title sessions with generic names
       const session = await sessionRepository.findById(resolvedSessionId);
+      // A group-channel thread: the reply is posted where every member can
+      // read it, so the requester's personal memories are neither injected
+      // nor learned from (docs/plans/group-chat-bot.md §4).
+      const sharedAudience = !!session?.groupChannelId;
+      // The flow guard's group rule keys on the session; set it from the stored
+      // session on every turn, whichever entry point (channel, web chat,
+      // background wake-up) the turn came through, and after any restart.
+      if (sharedAudience) markSharedAudience(resolvedSessionId);
+      else markNotSharedAudience(resolvedSessionId);
+      // Delivered as per-turn context beside the message (stored in the
+      // message's metadata, not as its text), on every turn in a group thread:
+      // monitors, wake-ups and plan runs too, whose replies land in the thread.
+      // Work taken on in this thread (docs/plans/group-chat-bot.md §5): the
+      // open tasks and the requester's newest board notes ride along, and the root
+      // agent gets `complete_taken_task` for them.
+      const takenTasks = sharedAudience ? await loadTakenTasks(userId, resolvedSessionId) : { tasks: [], block: '' };
+      const groupContextBlock = sharedAudience
+        ? groupTurnContext({ requester: groupTurn?.requester, context: groupTurn?.context, take: groupTurn?.take }) + takenTasks.block
+        : '';
       if (session) {
         const genericTitles = ['new chat', 'untitled', 'webchat conversation', 'telegram conversation', 'api conversation', 'slack conversation', 'teams conversation'];
         const currentTitle = (session.title || '').toLowerCase().trim();
@@ -312,6 +379,22 @@ export class AgentService {
       }
       if (inputGuard.action === 'warn') {
         coreLogger.info({ flags: inputGuard.flags, sessionId }, 'Input guard flagged message');
+      }
+      // The group transcript is deliberately NOT run through the input guard:
+      // its flags drive the output guard, which replaces whole replies, so one
+      // member's message would silence the bot for everyone in the thread. It
+      // is fenced as untrusted text and the session starts `suspicious` in the
+      // flow guard instead.
+
+      // In a shared channel only the session controls (/stop, /status, …)
+      // run: other commands answer with the member's own account data
+      // (skills, cost, model settings), which would be posted to everyone.
+      if (sharedAudience && message.trim().startsWith('/') && !isSessionControlMessage(message)) {
+        return {
+          response: 'That command is not available in a shared channel, because its answer would be visible to everyone. Send it to me in a direct message.',
+          sessionId: resolvedSessionId,
+          classification: { type: 'casual' as const, confidence: 1 },
+        };
       }
 
       // Command interception (works across all channels)
@@ -386,7 +469,7 @@ export class AgentService {
         // plan often references the user's preferences ("use my usual
         // stack"); withholding memory here would degrade plan quality.
         let planMemoryBlock = '';
-        try {
+        if (!sharedAudience) try {
           const memories = await retrieveForContext({
             userId,
             agentScope: classification.topic ?? null,
@@ -404,8 +487,10 @@ export class AgentService {
 
         const { response, agentId, sources: _planSources, outcome, limit: planLimit } = await this.runRootAgent(
           resolvedSessionId, userId, planMessage, classification, inputGuard.flags, channel,
-          planMemoryBlock,
+          planMemoryBlock + groupContextBlock,
           workspaceId,
+          undefined,
+          { takenTasks: takenTasks.tasks },
         );
         void _planSources;
         const outputCheck = guardOutput(response, inputGuard.flags);
@@ -422,7 +507,7 @@ export class AgentService {
         // executor LLM sees the brief — facts in the brief should
         // get a chance to be extracted. Fire-and-forget like the
         // main path.
-        updateMemoriesAfterTurn({
+        if (!sharedAudience) updateMemoriesAfterTurn({
           userId,
           workspaceId,
           agentScope: classification.topic ?? null,
@@ -499,7 +584,7 @@ export class AgentService {
           // once here — cosmetic transcript dup. Thread a skip-persist flag through
           // runRootAgent if it ever bloats context enough to matter.
           return this.handleMessageInner(
-            resolvedSessionId, userId, action.workMessage, channel, action.attachedFiles, forcedOutputMode, true,
+            resolvedSessionId, userId, action.workMessage, channel, action.attachedFiles, forcedOutputMode, true, groupTurn,
           );
         }
         if (action.kind === 'propose') {
@@ -536,7 +621,7 @@ export class AgentService {
       // memories without dragging unrelated rows into every turn.
       const memoryScope = classification.topic ?? null;
       let memoryBlock = '';
-      try {
+      if (!sharedAudience) try {
         const memories = await retrieveForContext({
           userId,
           agentScope: memoryScope,
@@ -562,7 +647,7 @@ export class AgentService {
         // Cadence gate. `off` short-circuits before any work; the
         // `on_compaction` path is handled inside session-compaction.ts
         // so the per-turn path skips here.
-        if (memoryCadence !== 'per_turn') return;
+        if (memoryCadence !== 'per_turn' || sharedAudience) return;
         // Best-effort provenance: pick up the just-persisted user
         // message id. Returns undefined when persistence hasn't landed
         // yet (e.g. the worker persists asynchronously) — that's fine,
@@ -604,20 +689,20 @@ export class AgentService {
       // Every turn now runs the one loop below, which holds real tools and
       // delegates only when it needs a specialist.
 
-      if (classification.type === 'approval') {
-        const resolved = await this.approvalManager.tryResolveFromMessage(message, userId);
-        if (resolved) {
-          return { response: 'Got it, continuing...', sessionId: resolvedSessionId, classification };
-        }
-      }
+      // Approval replies are answered before the turn queues (`handleMessage`):
+      // only for an approval waiting in this same session (in a group thread,
+      // only a bare yes/no). One raised anywhere else is posted in its own
+      // session's chat and answered there (src/channels/approval-prompts.ts)
+      // or in the web app: a "yes" meant for one thing must not release another.
 
       const startTime = Date.now();
       const turnGeneration = sessionGeneration((await sessionRepository.findById(resolvedSessionId))?.context);
       const { response, agentId, sources, outcome, limit } = await this.runRootAgent(
         resolvedSessionId, userId, message, classification, inputGuard.flags, channel,
-        turnContext,
+        turnContext + groupContextBlock,
         workspaceId,
         { mode: effectiveOutputMode, forced: outputForced },
+        { takenTasks: takenTasks.tasks },
       );
 
       const outputCheck = guardOutput(response, inputGuard.flags);
@@ -664,7 +749,8 @@ export class AgentService {
       }
 
       fireMemoryUpdate();
-      if (outcome === 'success' && agentId) {
+      // Group threads are never learned from (the processor refuses them too).
+      if (outcome === 'success' && agentId && !sharedAudience) {
         try {
           const { enqueueTurnLearning } = await import('@/core/learning/queue');
           await enqueueTurnLearning(resolvedSessionId, userId, agentId, new Date(startTime));
@@ -758,11 +844,12 @@ export class AgentService {
     workspaceId: string | null = null,
     /** Chat/work split (Thread 3): inline vs file deliverable directive. */
     outputDirective: { mode: 'inline' | 'file'; forced: boolean } = { mode: 'inline', forced: false },
+    extras: RootRunExtras = {},
   ): Promise<{ response: string; agentId: string; sources: string[]; outcome: TurnOutcome; limit?: LimitRefusal }> {
     return runRootAgent(
       this, this.deps,
       sessionId, userId, message, classification, guardFlags, channel,
-      extraSystemContext, workspaceId, outputDirective,
+      extraSystemContext, workspaceId, outputDirective, extras,
     );
   }
 
@@ -830,11 +917,13 @@ export class AgentService {
     question: string,
     context: AgentContext,
     options?: string[],
+    kind?: ApprovalKind,
   ): Promise<unknown> {
     return this.approvalManager.requestApproval(
       summary, question, context,
       (event) => this.emit(event),
       options,
+      kind,
     );
   }
 

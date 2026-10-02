@@ -57,7 +57,7 @@ export const tasks = pgTable('tasks', {
   checkoutRunId: text('checkout_run_id'),
   dueAt: timestamp('due_at', { withTimezone: true }),
   completedAt: timestamp('completed_at', { withTimezone: true }),
-  /** Provenance: 'user' | 'agent' | 'reader' | 'research' | 'email'. */
+  /** Provenance: 'user' | 'agent' | 'reader' | 'research' | 'email' | 'channel'. */
   source: text('source').default('user').notNull(),
   /** Optional link back to the origin (sessionId, url, messageId, …). */
   sourceRef: jsonb('source_ref').$type<TaskSourceRef>(),

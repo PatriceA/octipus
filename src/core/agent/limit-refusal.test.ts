@@ -5,7 +5,7 @@
  * not "Task was stopped".
  */
 import { beforeEach, describe, expect, test, vi } from 'vitest';
-import { limitKindOf, limitRefusalOf } from '@/core/errors/limit-refusal';
+import { limitKindOf, limitRefusalOf, sharedRefusalText } from '@/core/errors/limit-refusal';
 import { QuotaExceededError } from '@/security/quota-error';
 import { SpendBudgetExceededError } from '@/security/spend-budget-error';
 
@@ -72,6 +72,27 @@ describe('limitRefusalOf', () => {
   test('anything else is not a limit', () => {
     expect(limitRefusalOf(new Error('boom'))).toBeNull();
     expect(limitKindOf('nope')).toBeNull();
+  });
+
+  test("a group channel's budget reads as the channel's", () => {
+    const r = limitRefusalOf(new SpendBudgetExceededError({ ...reason, scopeKind: 'group_channel', scopeRef: 'g1', period: 'month' }))!;
+    expect(r.text).toMatch(/^Agents are paused: this channel's monthly spend budget of \$10\.00\/month is reached/);
+  });
+});
+
+describe('sharedRefusalText (a refusal posted in a group-channel thread)', () => {
+  test("a member's own budget or quota is not posted with its figures", () => {
+    const own = limitRefusalOf(new SpendBudgetExceededError(reason))!.refusal;
+    const text = sharedRefusalText(own, 'Anna')!;
+    expect(text).toContain('for Anna');
+    expect(text).not.toMatch(/\$|coder/);
+    const quota = limitRefusalOf(new QuotaExceededError({ kind: 'tokensPerDay', current: 11, max: 10, userId: 'user' }))!.refusal;
+    expect(sharedRefusalText(quota, 'Anna')).not.toMatch(/11|10/);
+  });
+
+  test("the channel's own budget is posted as it is", () => {
+    const channel = limitRefusalOf(new SpendBudgetExceededError({ ...reason, scopeKind: 'group_channel', scopeRef: 'g1' }))!.refusal;
+    expect(sharedRefusalText(channel, 'Anna')).toBeNull();
   });
 });
 

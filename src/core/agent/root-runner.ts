@@ -130,6 +130,15 @@ export function buildPreHookVolatileParts(extraSystemContext: string, guardFlags
   return parts;
 }
 
+/** Per-turn additions to the root agent's own tools. */
+export interface RootRunExtras {
+  /**
+   * Open tasks taken on in this group-channel thread: the root agent gets
+   * `complete_taken_task` for them (docs/plans/group-chat-bot.md §5).
+   */
+  takenTasks?: ReadonlyArray<{ id: string; title: string }>;
+}
+
 export async function runRootAgent(
   service: AgentService,
   deps: RootRunnerDeps,
@@ -150,6 +159,7 @@ export async function runRootAgent(
   workspaceId: string | null = null,
   /** Chat/work split (Thread 3): inline vs file deliverable directive. */
   outputDirective: { mode: 'inline' | 'file'; forced: boolean } = { mode: 'inline', forced: false },
+  extras: RootRunExtras = {},
 ): Promise<{ response: string; agentId: string; sources: string[]; outcome: TurnOutcome; limit?: LimitRefusal }> {
   const emit = deps.emit;
   const agentManager = getAgentManager();
@@ -254,6 +264,7 @@ export async function runRootAgent(
       workerRef: rootWorkerRef,
     },
     lite: isLite,
+    takenTasks: extras.takenTasks,
   });
 
   // The root's own tools. `getToolsForRole` is the same gate every worker goes

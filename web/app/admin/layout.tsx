@@ -39,6 +39,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     { href: '/admin/orgs', label: 'Orgs' },
     { href: '/admin/quotas', label: 'Quotas & budgets' },
     { href: '/admin/destinations', label: 'Notification destinations' },
+    { href: '/admin/group-channels', label: 'Group channels' },
     { href: '/admin/audit', label: 'Audit log' },
   ];
 

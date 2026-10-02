@@ -4,7 +4,11 @@ import { turnEventMessage } from '@/api/turn-event-message';
 import { turnEventToGateway } from '@/core/gateway/event-bridge';
 import type { Monitor } from '@/db/schema/monitors';
 import type { TurnEvent, TurnResult } from '@/core/agent/service';
-const fixture = vi.hoisted(() => ({ session: vi.fn(), publish: vi.fn(), send: vi.fn(), resolve: vi.fn() }));
+const fixture = vi.hoisted(() => ({ session: vi.fn(), publish: vi.fn(), send: vi.fn(), resolve: vi.fn(), group: { id: 'g1' } as { id: string } | null, active: true }));
+vi.mock('@/channels/group-channels', () => ({
+  findGroupChannel: async () => fixture.group,
+  isGroupChannelActive: async () => fixture.active,
+}));
 vi.mock('@/channels/ownership', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/channels/ownership')>()),
   loadNotifyScope: async (userId: string) => ({ userId }),
@@ -19,6 +23,8 @@ vi.mock('@/channels/interface', () => ({ getUMI: () => ({ send: fixture.send }) 
 const row = { id: 'monitor', sessionId: 'session', userId: 'owner', generation: '' } as Monitor;
 const result: TurnResult = { response: 'Pipeline succeeded. Results collected.', sessionId: 'session', agentId: 'agent', outcome: 'success', classification: { type: 'casual', confidence: 1 } };
 beforeEach(() => {
+  fixture.group = { id: 'g1' };
+  fixture.active = true;
   fixture.session.mockReset().mockResolvedValue({ userId: 'owner', context: {}, channelType: 'webchat' });
   fixture.publish.mockReset(); fixture.send.mockReset().mockResolvedValue('sent');
   fixture.resolve.mockReset().mockImplementation(async (...a: [unknown, string, string]) => allowed(...a));
@@ -59,4 +65,31 @@ test('channel delivery errors propagate so the monitor can surface needs-review'
   fixture.session.mockResolvedValue({ userId: 'owner', context: {}, channelType: 'telegram', channelId: 'chat' });
   fixture.send.mockRejectedValue(new Error('Channel disconnected'));
   await expect(deliverMonitorResponse(row, result)).rejects.toThrow('Channel disconnected');
+});
+test('a monitor in a group-channel thread answers in that thread while the channel is enrolled', async () => {
+  fixture.session.mockResolvedValue({ userId: 'owner', context: {}, channelType: 'slack', channelId: 'C1', threadId: '90.0', groupChannelId: 'g1' });
+  await deliverMonitorResponse(row, result);
+  expect(fixture.resolve).not.toHaveBeenCalled(); // the enrolment, not a notification destination
+  expect(fixture.send).toHaveBeenCalledWith('slack', 'C1', expect.objectContaining({ content: result.response, threadId: '90.0' }));
+});
+test('a removed or paused group channel gets no monitor reply, and the monitor says why', async () => {
+  fixture.session.mockResolvedValue({ userId: 'owner', context: {}, channelType: 'slack', channelId: 'C1', threadId: '90.0', groupChannelId: 'g1' });
+  fixture.active = false;
+  await expect(deliverMonitorResponse(row, result)).rejects.toThrow('removed or is paused');
+  fixture.active = true;
+  fixture.group = null;
+  await expect(deliverMonitorResponse(row, result)).rejects.toThrow('removed or is paused');
+  expect(fixture.send).not.toHaveBeenCalled();
+});
+test("a monitor's refusal for the member's own budget is posted in the thread without its figures", async () => {
+  fixture.session.mockResolvedValue({ userId: 'owner', context: {}, channelType: 'slack', channelId: 'C1', threadId: '90.0', groupChannelId: 'g1' });
+  const refused: TurnResult = {
+    ...result, response: 'Agents are paused: your monthly spend budget of $25.00/month is reached ($25.40 spent this month).',
+    metadata: { limit: { code: 'SPEND_BUDGET_EXCEEDED', reason: { budgetId: 'b', userId: 'owner', scopeKind: 'user', scopeRef: null, period: 'month', spentUsd: 25.4, limitUsd: 25 } } },
+  };
+  await deliverMonitorResponse(row, refused);
+  const content = (fixture.send.mock.calls[0]![2] as { content: string }).content;
+  // Named neutrally, not by the Octipus account name.
+  expect(content).toContain('for the member who set this up');
+  expect(content).not.toContain('$');
 });

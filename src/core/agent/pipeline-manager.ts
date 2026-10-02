@@ -2835,6 +2835,8 @@ export class PipelineManager {
       // Buttons only when a single choice IS the answer; anything richer is
       // free text, which the approval channel already carries.
       fields.length === 1 && fields[0].options?.length ? fields[0].options : undefined,
+      // An answer, not a go / no-go: choosing "No" answers "No".
+      'question',
     ) as { approved: boolean; response?: string };
 
     if (!answer.approved) {

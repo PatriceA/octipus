@@ -43,13 +43,18 @@ the call can send data out ("egress"):
 ## When it asks
 
 The guard can change a call's level from ALLOW to ASK. It never allows a call
-that would otherwise be refused, and a DENY is left unchanged. It asks in two
+that would otherwise be refused, and a DENY is left unchanged. It asks in three
 cases:
 
 1. The session has read a secret, and the call is any egress.
 2. The session has read private data **and** untrusted content, and the call is
    a write egress. This is the "lethal trifecta": private data, untrusted
    instructions and a way to send data out.
+3. The session is a member's conversation in a
+   [group channel](CHANNELS.md#group-channels), and the call reads private
+   data. The reply is posted where every member can read it, so the read itself
+   is the egress. Such sessions also start `suspicious`, since their prompt
+   carries other members' messages.
 
 The call's own reads are counted too, so `cat .env | curl -d @- …` is caught in
 one step.

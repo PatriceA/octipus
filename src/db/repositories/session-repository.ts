@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, desc, eq, lt, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, isNull, lt, sql, type SQL } from 'drizzle-orm';
 import { dbLogger } from '@/utils/logger';
 import { getDb } from '../postgres';
 import { type NewSession, type Session, sessions } from '../schema/sessions';
@@ -81,13 +81,41 @@ export class SessionRepository {
           eq(sessions.userId, userId),
           eq(sessions.channelType, channelType),
           eq(sessions.channelId, channelId),
-          eq(sessions.status, 'active')
+          eq(sessions.status, 'active'),
+          // Group-thread sessions share the chat id but are separate conversations.
+          isNull(sessions.groupChannelId)
         )
       )
       .orderBy(desc(sessions.createdAt))
       .limit(1);
 
     return result[0] ?? null;
+  }
+
+  /** One member's active session for a group channel thread. */
+  async findGroupThreadSession(userId: string, groupChannelId: string, threadId: string): Promise<Session | null> {
+    const result = await this.db
+      .select()
+      .from(sessions)
+      .where(and(
+        eq(sessions.userId, userId),
+        eq(sessions.groupChannelId, groupChannelId),
+        eq(sessions.threadId, threadId),
+        eq(sessions.status, 'active'),
+      ))
+      .orderBy(desc(sessions.createdAt))
+      .limit(1);
+    return result[0] ?? null;
+  }
+
+  /** Whether any member has talked to the bot in this group thread (any status). */
+  async hasGroupThread(groupChannelId: string, threadId: string): Promise<boolean> {
+    const result = await this.db
+      .select({ id: sessions.id })
+      .from(sessions)
+      .where(and(eq(sessions.groupChannelId, groupChannelId), eq(sessions.threadId, threadId)))
+      .limit(1);
+    return result.length > 0;
   }
 
   /**
@@ -107,7 +135,8 @@ export class SessionRepository {
         and(
           eq(sessions.userId, userId),
           eq(sessions.channelType, channelType),
-          eq(sessions.channelId, channelId)
+          eq(sessions.channelId, channelId),
+          isNull(sessions.groupChannelId)
         )
       )
       .orderBy(desc(sessions.createdAt));
@@ -317,15 +346,19 @@ export class SessionRepository {
   async deleteExpired(cutoff: Date, limit = 500): Promise<number> {
     const { agents } = await import('../schema/agents');
     const { monitors } = await import('../schema/monitors');
+    const { tasks } = await import('../schema/tasks');
     // A session still waiting on a monitor (armed, or fired and about to
     // resume) is not idle even though nothing has touched its row; deleting it
     // would cascade the monitor away and silently drop the continuation.
+    // Nor is a group-channel thread session with work still taken on in it:
+    // the open task is linked to it (src/core/channels/taken-tasks.ts).
     const expiredFilter = (id?: string) => and(
       id ? eq(sessions.id, id) : undefined,
       eq(sessions.pinned, false),
       lt(sessions.updatedAt, cutoff),
       sql`NOT EXISTS (SELECT 1 FROM ${agents} WHERE ${agents.sessionId} = ${sessions.id} AND ${agents.status} = 'running')`,
       sql`NOT EXISTS (SELECT 1 FROM ${monitors} WHERE ${monitors.sessionId} = ${sessions.id} AND ${monitors.status} IN ('armed', 'paused', 'ready', 'delivering'))`,
+      sql`NOT EXISTS (SELECT 1 FROM ${tasks} WHERE ${tasks.source} = 'channel' AND ${tasks.status} IN ('open', 'in_progress') AND ${tasks.sourceRef}->>'sessionId' = ${sessions.id}::text)`,
     );
     const expired = await this.db
       .select({ id: sessions.id })

@@ -3,7 +3,7 @@ import type { AgentContext } from './types';
 import type { AgentEvent, ToolHandler } from './agent-base';
 import { getPermissionManager } from '@/security/permissions';
 import { routeApproval } from '@/security/approval-policy';
-import { applyFlowGuard, observeFlow } from '@/security/flow-guard';
+import { applyFlowGuard, ensureSharedAudienceKnown, observeFlow } from '@/security/flow-guard';
 import { getConfig } from '@/config';
 
 const requestSchema = z.object({
@@ -52,6 +52,7 @@ export async function answerCliPermissionRequest(
   // Native tools never pass ToolExecutor, so the flow guard runs here: it can
   // turn ALLOW into ASK, and an allowed call's reads join the session label.
   const flowCall = { toolId, action: request.tool_name, args: request.input };
+  await ensureSharedAudienceKnown(context.sessionId);
   const permission = applyFlowGuard(getConfig().agent?.flowGuard, context.sessionId, flowCall,
     await manager.check(context.userId, toolId, request.tool_name, request.input, context));
   const decision = routeApproval({ level: permission.level, role: context.role, root: context.root,

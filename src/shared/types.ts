@@ -25,3 +25,21 @@ export interface ChannelBinding {
   isVerified: boolean;
   createdAt: string;
 }
+
+/**
+ * A group channel enrolment as the API returns it (`/api/me/group-channels`,
+ * `/api/admin/group-channels`). See `src/channels/group-channels.ts`.
+ */
+export interface GroupChannelSummary {
+  id: string;
+  channelType: string;
+  channelId: string;
+  /** e.g. `#release`; null when the bot could not read the channel name. */
+  label: string | null;
+  ownerUserId: string;
+  ownerName: string;
+  /** False while the owner's account is deactivated: the bot is paused there. */
+  ownerActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}

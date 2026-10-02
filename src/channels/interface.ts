@@ -83,6 +83,16 @@ export abstract class BaseChannel extends EventEmitter {
   }
 
   /**
+   * Show a message in a shared chat to one Octipus user only (Slack: an
+   * ephemeral message). Returns false when the channel cannot do that or the
+   * user has no linked identity on it — callers must then NOT fall back to a
+   * normal send, since the point is that others in the chat cannot read it.
+   */
+  async sendPrivate(_channelId: string, _userId: string, _response: ChannelResponse): Promise<boolean> {
+    return false;
+  }
+
+  /**
    * Split a long response into chunks no larger than `maxLen` characters,
    * preferring paragraph (`\n\n`) and line (`\n`) boundaries before falling
    * back to a hard cut. Used by channels with platform-imposed size limits
@@ -318,6 +328,13 @@ export class UnifiedMessageInterface extends EventEmitter {
     if (channel?.isConnected()) {
       await channel.setReaction(channelId, messageId, emoji);
     }
+  }
+
+  /** See `BaseChannel.sendPrivate`. False when the channel is missing or offline. */
+  async sendPrivate(channelType: ChannelType, channelId: string, userId: string, response: ChannelResponse): Promise<boolean> {
+    const channel = this.channels.get(channelType);
+    if (!channel?.isConnected()) return false;
+    return channel.sendPrivate(channelId, userId, response);
   }
 
   /**

@@ -10,7 +10,7 @@ import { messageRepository } from '@/db/repositories/message-repository';
 import { getConfig } from '@/config';
 import { withDispatchAuthorization } from '@/security/dispatch-authorization';
 import { routeApproval } from '@/security/approval-policy';
-import { applyFlowGuard, isVaultAuthenticated, observeFlow } from '@/security/flow-guard';
+import { applyFlowGuard, ensureSharedAudienceKnown, isVaultAuthenticated, observeFlow } from '@/security/flow-guard';
 import { getPermissionManager } from '@/security/permissions';
 import { agentLogger, coreLogger } from '@/utils/logger';
 import { DEFAULT_MAX_LENGTH, sanitizeToolOutput } from '@/utils/sanitize';
@@ -669,6 +669,7 @@ export class ToolExecutor {
         args: toolId === 'mcp' && bareName === 'mcp_call_tool'
           ? (toolCall.arguments.arguments as Record<string, unknown> | undefined) ?? {} : toolCall.arguments,
       };
+      await ensureSharedAudienceKnown(this.context.sessionId);
       let permResult = applyFlowGuard(getConfig().agent?.flowGuard, this.context.sessionId, flowCall, storedPermission);
       // Vault-authenticated calls ({{secret:NAME}}) are the sanctioned way to use credentials.
       if (permResult !== storedPermission && await isVaultAuthenticated(this.context.userId, flowCall)) permResult = storedPermission;

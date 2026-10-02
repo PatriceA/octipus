@@ -291,6 +291,10 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
         return { error: 'Session not found' };
       }
       const deleted = await sessionRepository.delete(params.id);
+      if (deleted && owned.groupChannelId && owned.threadId) {
+        const { forgetGroupThread } = await import('@/channels/group-channels');
+        forgetGroupThread(owned.groupChannelId, owned.threadId);
+      }
       return { deleted };
     },
     {
@@ -325,7 +329,8 @@ export const sessionRoutes = new Elysia({ prefix: '/sessions' })
       // Channel restarts or /clear can create new session rows for the same
       // (user, channelType, channelId); users expect one continuous transcript.
       const AGGREGATED_CHANNELS = new Set(['telegram', 'slack', 'whatsapp', 'teams', 'discord']);
-      const aggregate = query.aggregate !== 'false' && AGGREGATED_CHANNELS.has(session.channelType);
+      // A group-thread session is its own conversation, never merged with the chat's 1:1 sessions.
+      const aggregate = query.aggregate !== 'false' && AGGREGATED_CHANNELS.has(session.channelType) && !session.groupChannelId;
 
       let messages;
       let total;

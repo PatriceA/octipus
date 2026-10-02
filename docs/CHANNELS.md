@@ -145,15 +145,118 @@ Hooks, scheduled tasks, monitors, notifications and agents (the `messaging` tool
 | `slack.signingSecret` | `SLACK_SIGNING_SECRET` | Vault | Signing secret from app settings (secret, stored in vault) |
 | `slack.userToken` | `SLACK_USER_TOKEN` | Vault | Optional user token (`xoxp-...`). **Only needed for `channel_search`** — Slack does not expose `search.messages` to bot tokens at all. Add the `search:read` User Token Scope under *OAuth & Permissions*, reinstall, and copy the **User** OAuth Token. Without it, `channel_search` scans one named channel's history instead and says so in its result. |
 
+Optional scopes: `reactions:write` lets the bot mark progress on messages
+with emoji (👀, ✅); without it those calls fail silently. `im:read` lets the
+bot confirm that a DM belongs to you after a restart, before you have written
+to it again; without it, approvals and monitor replies from background runs
+reach your Slack DM only once you have sent it a message since the restart.
+`channels:read` and `groups:read` let the bot read a channel's
+name when it is enrolled as a [group channel](#group-channels) (otherwise the
+settings pages show the channel id). `reactions:read`, with the
+`reaction_added` bot event, lets members of a group channel hand the bot work
+with the 🐙 reaction; without them only `@Octipus take this` does.
+
 ### Features
 
 - Direct messages and @mentions
+- [Group channels](#group-channels): answers in a shared channel only when enrolled and addressed
 - Thread-based conversations
 - File attachments (images, documents)
 - Rich message blocks with Markdown
 - Socket Mode (no public endpoint needed)
 - Account linking via `link` keyword
 - Reading history and searching messages — see [Reading a conversation back](#reading-a-conversation-back)
+
+### Group channels
+
+Invite the bot to a channel and it stays **silent** there until a linked
+member enrols the channel by typing `@Octipus join` in it. Typing it in the
+channel is what proves the member belongs there, so there is no form for it.
+The member who enrols becomes the channel's **owner**: they can remove the bot
+under **Settings → Channels → Group channels** or with `@Octipus leave`.
+
+Once enrolled, the bot:
+
+- **answers only when addressed** — an @mention, or a reply in a thread it is
+  already part of. Every other message is ignored, and costs nothing. A
+  thread idle past the session retention window (`sessions.retentionDays`,
+  14 days by default) is forgotten, unless it has a taken task still open:
+  mention the bot to pick it up again;
+- **replies in a thread** on the message that addressed it;
+- **runs each turn as the member who asked**, with that member's permissions,
+  tools, budgets, workspace and session — never as the owner. Each member has
+  their own session per thread; what others said reaches the turn as a
+  transcript of the thread (or of the latest channel messages for a new
+  mention), read back with the bot token, one message per line inside a
+  tagged block that members' text and display names cannot close or imitate.
+  The member's own text is passed on — and stored — unchanged, so commands
+  (`/stop`), plan `go` and approval replies work in threads as in a DM; the
+  framing and transcript travel beside it as turn context;
+- **keeps personal context out**: the requester's memories are neither loaded
+  nor extracted (also not on compaction), the thread is never used for
+  learning, and reading their private data (mail, drive, chat, `data`
+  queries) asks for approval first, because the answer is posted where
+  everyone can read it ([flow guard](FLOW-GUARD.md));
+- **asks permission of the requester only** — the thread gets a prompt without
+  details, the details (file, command, recipient, message) go to the requester
+  as an ephemeral message only they can see, and another member's "yes" does
+  not count. Prompts waiting in different threads or chats are answered where
+  they were asked; a reply answers the newest one, and the confirmation names
+  the tool it decided. In a thread only a bare `yes` / `no` counts — for
+  permission prompts and pipeline approvals alike — so talk with colleagues
+  ("no, let me check with Dana first") never answers one. A reply cannot
+  answer a prompt that has not appeared yet. For a channel that has been
+  removed or paused nothing is posted and a permission request is denied
+  (requests do not expire, so it would otherwise hold the conversation). A
+  reply in a thread only answers an approval waiting in that thread;
+- **posts pipeline approvals in the thread the same way** — a prompt without
+  details, the stage summary privately to the requester — including those
+  raised by a monitor or another background run in that thread. In a
+  removed or paused channel they are not posted and wait in the web app
+  (they expire after an hour);
+- **answers in the thread from a monitor** a member set up there, while the
+  channel is enrolled and active;
+- **takes work on** when asked: `@Octipus take this — draft the release
+  notes` (alone in a thread, `@Octipus take this` takes the thread's first
+  message), or a 🐙 (`:octopus:`) reaction on any message. The request
+  becomes a task on the member's own board, the bot says so in the thread
+  ("On it — added *Draft the release notes* to Anna's tasks") and starts on it
+  there, as the member, under every rule above. While the task is open, each
+  turn in that thread sees it and the member's own newest board comments, so
+  a note added on the board reaches the work without being posted in the
+  channel (the turn is told not to quote them; agents' comments are left
+  out). `take this` must be followed by a separator (`—`, `:`, a line break)
+  or nothing, so "take it easy on the wording" stays an ordinary request. The bot
+  closes it when the work is done; closing it anywhere posts one line in the
+  thread. Taking the same message twice finds the first task. See
+  [TASK-BOARD.md](TASK-BOARD.md#tasks-taken-on-in-a-group-channel);
+- **goes quiet when the channel's spend budget is used up** — one notice a day
+  in the channel and no turns, until the period resets or an admin raises it
+  ([SPEND-BUDGETS.md](SPEND-BUDGETS.md)). A refusal for a member's own budget
+  or quota is posted in the thread without its figures. A bare `yes` / `no`
+  in a thread still goes through, so a prompt raised before the budget ran
+  out can be answered;
+- **keeps document results in the thread** when a member shares a file with it;
+- **runs only session controls** (`/stop`, `/status`, `/clear`, `/cancel`,
+  `/help`) in a channel — other commands answer with the member's account
+  data and must be sent in a DM.
+
+Other members' messages are not run through the input guard (its flags make
+the output guard replace replies, which would let one member silence the bot
+for everyone); they are fenced as untrusted text and the session starts
+`suspicious` in the flow guard. Earlier turns' transcripts are not replayed
+into later ones; each turn reads the thread afresh.
+
+Members without a linked account get one private (ephemeral) hint a day to
+link; the bot never answers `link` in a channel, since a link code posted where
+others can read it could be redeemed by someone else — send `link` in a DM.
+
+If the owner's account is deactivated, the channel is paused (one notice) until
+another linked member types `@Octipus join` to take it over. Admins see every
+enrolment under **Admin → Group channels** and can revoke one.
+
+Slack is the only platform with group mode so far; Teams and Telegram groups
+follow ([plan](plans/group-chat-bot.md)).
 
 ---
 
@@ -380,9 +483,35 @@ WHATSAPP_BUSINESS_ACCOUNT_ID=         # Business Account ID (optional)
 - Ensure the web account is logged in before entering the code
 - Check that the database is reachable (link codes live in the `kv_store` table)
 
-### Permission requests in channels
+### Permission requests and approvals in channels
 
 When an agent needs permission (e.g., to run a shell command), the request is forwarded to the channel where the conversation originated. Reply `yes` or `no` directly in the channel to approve or deny.
+
+Approvals — a pipeline waiting for sign-off before its next stage, a QA
+escalation, or an agent's `request_user_approval` — are posted in the chat of
+the conversation that raised them, also when nobody is chatting at the time (a
+monitor's wake-up, a resumed pipeline) and on Teams:
+
+- in your own chat with the bot, or a shared chat an admin approved (see
+  [Outbound notifications](#outbound-notifications)), with the details. Reply
+  `yes` / `no`, or type one of the listed options to choose it. On a go /
+  no-go step an option worded as a refusal ("No", "Stop Pipeline") declines,
+  as a plain "no" does; when the approval asks a question, the option is the
+  answer;
+- in a shared chat you are talking to the bot in right now (a Telegram group,
+  a Teams group chat or channel), as a prompt without the details, which can
+  quote your files or mail. Only a bare `yes` / `no` from you answers it;
+- in a [group channel](#group-channels) thread, by that section's rules;
+- anywhere else not at all: the approval waits in the web app, which shows
+  every approval along with notifications and push.
+
+A reply answers an approval posted in that chat, or one waiting in that chat's
+own conversation; a "yes" typed somewhere else does not release it. A reply
+that only starts with "cancel" or "stop" ("Cancel my 3pm with Bob") is a
+request, not an answer, and a message with a file is never an answer. A reply
+to an approval that expired or was answered in the web app is told so once.
+When a permission request and an approval wait in the same chat, a reply
+answers the one posted last.
 
 ---
 
