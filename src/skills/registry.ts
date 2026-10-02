@@ -180,7 +180,16 @@ export class SkillRegistry {
     const skill = await this.get(skillId, userId);
     if (!skill) return null;
     if (!isExternalSkillId(skill.id)) recordSkillUsage([skill.id]);
-    return buildPromptFragment(skill);
+    const content = buildPromptFragment(skill);
+    const external = this.external.get(skill.id);
+    if (!external) return content;
+    return `${content}
+
+## Octipus skill bundle access
+Use read_skill_resource with skill_id=${JSON.stringify(skill.id)} and a relative path to read supporting files or list directories. Do not read the external skill directory through filesystem tools.
+For packaged scripts, use run_skill_script with this skill_id, the relative script path, and a string-array args. For a command such as node bin/render.mjs input.json output.html, pass script="bin/render.mjs", args=["/workspace/input.json","/workspace/output.html"]. Use your actual session workspace paths. Script execution requires an active assignment to your role; it is offline, receives no injected credentials, and cannot modify the installed skill.
+`;
+
   }
 
   async getActiveSkillsForTopic(topic: string): Promise<Skill[]> {

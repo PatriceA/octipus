@@ -1,4 +1,5 @@
 import type { Browser, } from 'playwright';
+import { extractPageText, apiDocumentUrl, fetchApiDocument } from './page-content';
 import type { ToolManifest } from '@/core/types';
 import { coreLogger, toolLogger } from '@/utils/logger';
 import { BaseTool, createParameterSchema } from '../base-tool';
@@ -348,19 +349,20 @@ export class WebSearchTool extends BaseTool {
       await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
       await page.waitForTimeout(500);
 
-      // Extract text content
-      const text = await page.evaluate(() => {
-        // Remove unwanted elements
-        const removeSelectors = ['script', 'style', 'nav', 'header', 'footer', 'iframe', '.cookie-banner', '#cookie-consent'];
-        for (const sel of removeSelectors) {
-          document.querySelectorAll(sel).forEach(el => el.remove());
+      let text = await page.evaluate(extractPageText);
+      let sourceUrl: string | undefined;
+      let extractionWarning: string | undefined;
+      if (text.trim().length < 80) {
+        const schemaUrl = apiDocumentUrl(await page.content(), page.url());
+        if (schemaUrl) {
+          try {
+            text = await fetchApiDocument(schemaUrl);
+            sourceUrl = schemaUrl;
+          } catch (error) {
+            extractionWarning = `The API documentation UI did not render; its linked schema could not be read: ${(error as Error).message}`;
+          }
         }
-
-        // Try to find main content first
-        const main = document.querySelector('main, article, [role="main"], .content, #content');
-        const target = (main || document.body) as HTMLElement;
-        return target.innerText || target.textContent || '';
-      });
+      }
 
       const trimmedText = text
         .replace(/\n{3,}/g, '\n\n')
@@ -379,9 +381,9 @@ export class WebSearchTool extends BaseTool {
       // "cloudflare" is legitimate content, not a wall. Interstitials are short.
       const botWall = trimmedText.length < 800
         && /enable javascript|verify (you'?re|that you'?re|you are).*(human|robot)|are you a robot|complete the captcha|access denied|just a moment/i.test(text.slice(0, 2000));
-      let warning: string | undefined;
+      let warning: string | undefined = extractionWarning;
       if (trimmedText.length === 0) {
-        warning = 'Page rendered no extractable text (JS-heavy SPA, empty render, or bot-wall). This is NOT confirmation the information is absent — try another source.';
+        warning = extractionWarning ?? 'Page rendered no extractable text (JS-heavy SPA, empty render, or bot-wall). This is NOT confirmation the information is absent — try another source.';
       } else if (botWall) {
         warning = 'Page looks like a bot-wall / CAPTCHA / "enable JavaScript" interstitial, not real content — treat this text as unreliable and try another source.';
       }
@@ -393,6 +395,7 @@ export class WebSearchTool extends BaseTool {
         title,
         textLength: trimmedText.length,
         text: trimmedText,
+        ...(sourceUrl ? { sourceUrl, extraction: 'linked-openapi-schema' } : {}),
         ...(warning ? { warning } : {}),
       };
     } catch (error) {

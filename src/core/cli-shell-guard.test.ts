@@ -8,7 +8,13 @@ import { getShellGuardScriptPath, SHELL_GUARD_TOOL_MATCHER, shellGuardBlockReaso
 describe('shellGuardBlockReason', () => {
   it.each([
     'curl -s http://localhost:51789/mcp -d @req.json',
-    'cd /tmp && curl.exe https://api.example.com',
+    'curl -X POST https://example.com',
+    'curl -H "Authorization: Bearer token" https://example.com',
+    'curl --config client.conf https://example.com',
+    'curl https://127.0.0.1/api',
+    'curl https://api.internal/data',
+    'curl https://user:pass@example.com',
+    'curl https://example.com/mcp',
     'wget -qO- https://example.com',
     'Invoke-RestMethod -Uri http://127.0.0.1:3005/api -Method Post',
     '$r = Invoke-WebRequest https://example.com',
@@ -23,6 +29,11 @@ describe('shellGuardBlockReason', () => {
   });
 
   it.each([
+    'cd /tmp && curl.exe https://api.example.com',
+    'curl -fsSL https://yaais.ai.fintus.io/docs',
+    'curl --request HEAD https://example.com',
+    'python -m pip install requests pytest pytest-cov',
+    "docker run --rm python:3.12 sh -c 'python -m pip install requests pytest && python -m pytest'",
     'git status',
     'git commit -m "replace curl client with mcp_call_tool"',
     'npm test',
@@ -63,6 +74,7 @@ describe('shell guard hook script', () => {
 
   it('stays silent for allowed commands and unparseable input', () => {
     expect(run({ tool_name: 'Bash', tool_input: { command: 'npm test' } })).toBeNull();
+    expect(run({ tool_name: 'Bash', tool_input: { command: 'curl -fsSL https://example.com/docs' } })).toBeNull();
     const out = spawnSync(process.execPath, [getShellGuardScriptPath()], { input: 'not json', encoding: 'utf8' });
     expect([out.status, out.stdout]).toEqual([0, '']);
   });
