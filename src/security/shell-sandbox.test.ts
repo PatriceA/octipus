@@ -15,8 +15,8 @@
  */
 import { afterEach, beforeAll, describe, expect, test } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const BWRAP_PATHS = ['/usr/bin/bwrap', '/usr/local/bin/bwrap', '/bin/bwrap'];
@@ -117,6 +117,34 @@ describe.skipIf(!hasBwrap)('wrapCommand — mode "auto" with bwrap installed', (
     expect(out.argv.slice(-2)).toEqual(['ls', '-l']);
     out.cleanup();
     getConfig().security.shellSandbox = 'off';
+  });
+
+  test('mounts user executables and Python packages read-only and adds their bin to PATH', async () => {
+    const { getConfig } = await import('@/config');
+    getConfig().security.shellSandbox = 'auto';
+    const { wrapCommand } = await import('@/security/shell-sandbox');
+    const out = wrapCommand(['pytest', '--version'], { workspaceRoot: workspace, path: '/usr/bin:/bin' });
+    try {
+      const argv = out.argv.join('\n');
+      for (const dir of ['bin', 'lib']) {
+        const path = join(homedir(), '.local', dir);
+        expect(argv).toContain(`--ro-bind-try\n${path}\n${path}`);
+      }
+      expect(argv).toContain(`--setenv\nPATH\n/usr/bin:/bin:${join(homedir(), '.local', 'bin')}`);
+      expect(out.argv).not.toContain(homedir());
+    } finally { out.cleanup(); getConfig().security.shellSandbox = 'off'; }
+  });
+
+  test('prefers a project virtual environment when present', async () => {
+    const { getConfig } = await import('@/config');
+    getConfig().security.shellSandbox = 'auto';
+    const { wrapCommand } = await import('@/security/shell-sandbox');
+    const root = mkdtempSync(join(tmpdir(), 'octipus-venv-'));
+    const bin = join(root, '.venv', 'bin');
+    mkdirSync(bin, { recursive: true });
+    const out = wrapCommand(['pytest'], { workspaceRoot: root, path: '/usr/bin' });
+    try { expect(out.argv.join('\n')).toContain(`--setenv\nPATH\n${bin}:/usr/bin:`); }
+    finally { out.cleanup(); rmSync(root, { recursive: true }); getConfig().security.shellSandbox = 'off'; }
   });
 
   test('allowNetwork drops the --unshare-net flag', async () => {

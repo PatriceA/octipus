@@ -1138,7 +1138,7 @@ If a repo has no AGENTS.md and you have mapped it out, you may create one at its
             depth: 1,
             topicPath: stageNode.topicPath,
             role: agentRole,
-            status: 'failed',
+            status: errMsg.includes('Permission denied') ? 'denied' : 'tool_error',
             error: errMsg.slice(0, 200),
           },
         });

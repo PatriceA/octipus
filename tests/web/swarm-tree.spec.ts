@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures/auth';
-import { stubAllDefaults, json } from './fixtures/api-stubs';
+import type { WebSocketRoute } from '@playwright/test';
+import { stubAllDefaults, json, selectChatSession } from './fixtures/api-stubs';
 
 test.describe('swarm tree', () => {
   test.beforeEach(async ({ authenticatedPage }) => {
@@ -43,3 +44,23 @@ test.describe('swarm tree', () => {
     await expect(page.locator('body')).toBeVisible();
   });
 });
+
+for (const status of ['failed', 'tool_error']) {
+  test(`a live ${status} completion shows error without reload`, async ({ authenticatedPage: page }) => {
+    const node = { id: 'qa-failure', rootSessionId: 'sess-1', parentNodeId: null, kind: 'agent', depth: 1,
+      role: 'qa', topicPath: 'qa', model: 'qa-model', status: 'running', createdAt: new Date().toISOString() };
+    // Keep REST stale so only the pushed event can make this test pass.
+    await page.route('**/api/swarm/nodes?*', route => json(route, 200, { nodes: [node] }));
+    let socket: WebSocketRoute | undefined;
+    await page.routeWebSocket(/\/ws\?/, ws => { socket = ws; });
+    await page.goto('/chat');
+    await selectChatSession(page, 'sess-1');
+    await expect.poll(() => !!socket).toBe(true);
+    const row = page.getByText('Swarm Tree (1)', { exact: true }).locator('..').getByText('qa-model', { exact: true }).locator('../..');
+    await expect(row).toContainText('running');
+    socket!.send(JSON.stringify({ type: 'swarm_event', event: 'swarm.node_completed', sessionId: 'sess-1',
+      payload: { ...node, nodeId: node.id, status, error: 'QA exited' } }));
+    await expect(row).toContainText('error');
+    await expect(row).not.toContainText('running');
+  });
+}

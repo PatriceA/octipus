@@ -1,3 +1,6 @@
+import { sessions } from '../schema/sessions';
+import { emptyWorkPlan, workPlanStateSchema } from '@/shared/work-plan';
+import { projectPipelinePlan } from './pipeline-work-plan';
 import { and, asc, desc, eq, gt, sql } from 'drizzle-orm';
 import { getDb } from '../postgres';
 import {
@@ -36,6 +39,14 @@ export class PipelineRepository {
   async create(data: NewPipeline): Promise<Pipeline> {
     const [row] = await this.db.insert(pipelines).values(data).returning();
     return row;
+  }
+
+  /** Keep the visible plan in step with failures and resumed execution too. */
+  async updatePipeline(id: string, data: Partial<NewPipeline>): Promise<void> {
+    await this.db.transaction(async tx => {
+      await tx.update(pipelines).set({ ...data, updatedAt: new Date() }).where(eq(pipelines.id, id));
+      await this.syncWorkPlan(tx, id);
+    });
   }
 
   async createNodes(rows: NewPipelineNode[]): Promise<PipelineNodeRow[]> {
@@ -110,20 +121,48 @@ export class PipelineRepository {
 
   async addPlanItems(rows: NewPlanItem[]): Promise<PlanItemRow[]> {
     if (rows.length === 0) return [];
-    return this.db.insert(planItems).values(rows).returning();
+    return this.db.transaction(async tx => {
+      const created = await tx.insert(planItems).values(rows).returning();
+      for (const id of [...new Set(rows.map(row => row.pipelineId))].sort()) await this.syncWorkPlan(tx, id);
+      return created;
+    });
   }
 
   async updatePlanItem(id: string, data: Partial<NewPlanItem>): Promise<PlanItemRow | null> {
-    const [row] = await this.db
-      .update(planItems)
-      .set({ ...data, updatedAt: new Date() })
-      .where(eq(planItems.id, id))
-      .returning();
-    return row ?? null;
+    return this.db.transaction(async tx => {
+      const [row] = await tx.update(planItems).set({ ...data, updatedAt: new Date() })
+        .where(eq(planItems.id, id)).returning();
+      if (row) await this.syncWorkPlan(tx, row.pipelineId);
+      return row ?? null;
+    });
+  }
+
+  private async syncWorkPlan(tx: Parameters<Parameters<ReturnType<typeof getDb>['transaction']>[0]>[0], pipelineId: string): Promise<void> {
+    const [pipeline] = await tx.select().from(pipelines).where(eq(pipelines.id, pipelineId));
+    if (!pipeline) return;
+    const [session] = await tx.select().from(sessions)
+      .where(and(eq(sessions.id, pipeline.sessionId), eq(sessions.userId, pipeline.userId))).for('update');
+    if (!session || session.context?.planMode) return;
+    const state = session.metadata?.workPlan === undefined ? emptyWorkPlan() : workPlanStateSchema.parse(session.metadata.workPlan);
+    const items = await tx.select().from(planItems).where(eq(planItems.pipelineId, pipelineId))
+      .orderBy(asc(planItems.ordinal), asc(planItems.createdAt));
+    const previousId = state.current?.sourcePipelineId;
+    const [previousPipeline] = previousId && previousId !== pipelineId
+      ? await tx.select().from(pipelines).where(and(eq(pipelines.id, previousId), eq(pipelines.sessionId, pipeline.sessionId)))
+      : [];
+    const next = projectPipelinePlan(state, pipeline, items, previousPipeline);
+    if (next === state) return;
+    await tx.update(sessions).set({
+      metadata: sql`jsonb_set(COALESCE(${sessions.metadata}, '{}'::jsonb), '{workPlan}', ${JSON.stringify(next)}::jsonb)`,
+      updatedAt: new Date(),
+    }).where(eq(sessions.id, pipeline.sessionId));
   }
 
   async deletePlanItem(id: string): Promise<void> {
-    await this.db.delete(planItems).where(eq(planItems.id, id));
+    await this.db.transaction(async tx => {
+      const [removed] = await tx.delete(planItems).where(eq(planItems.id, id)).returning();
+      if (removed) await this.syncWorkPlan(tx, removed.pipelineId);
+    });
   }
 
   // ── Checkpoints ──────────────────────────────────────────────────

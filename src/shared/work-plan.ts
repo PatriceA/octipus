@@ -67,6 +67,8 @@ export interface WorkPlan {
   goal: string;
   /** Complete submitted proposal. Structured steps remain the progress source. */
   details?: string;
+  /** Present only while pipeline execution owns automatic plan updates. */
+  sourcePipelineId?: string;
   steps: z.infer<typeof planStepSchema>[];
   updatedAt: string;
   feedback: PlanFeedback[];
@@ -80,6 +82,7 @@ export interface WorkPlanState {
 const storedPlanSchema = z.object({
   id: z.string(), revision: z.number().int().nonnegative(),
   kind: z.enum(['execution', 'proposal']).default('execution'),
+  sourcePipelineId: z.string().optional(),
   title: z.string(), goal: z.string(), details: z.string().max(50_000).optional(),
   steps: z.array(planStepSchema).max(20), updatedAt: z.string(),
   feedback: z.array(z.object({ id: z.string(), text: z.string(), createdAt: z.string(),
@@ -120,6 +123,8 @@ export function reviseWorkPlan(state: WorkPlanState, input: PlanUpdate): WorkPla
     if (!item || item.status !== 'pending') throw new Error('Feedback is missing or already handled.');
     Object.assign(item, { status: reply.status, response: reply.response });
   }
+  // Explicit coordinator revisions take ownership: sourcePipelineId is not
+  // copied. Automatic projection sets it again after applying its update.
   const revision = state.revision + 1;
   const at = new Date().toISOString();
   return {

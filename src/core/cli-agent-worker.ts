@@ -20,7 +20,7 @@ import { agentLogger } from '@/utils/logger';
 import { killProcessTree } from '@/utils/proc';
 import type { AgentWorkerConfig, ToolHandler } from './agent-base';
 import { BaseAgentWorker } from './agent-base';
-import { CLIArgumentBuilder, CLIOutputParser, discoverCodexMcpServers, resolveCliMcpEntry, sweepStaleFiles, type CliRunConnection } from './cli-adapters';
+import { CLIArgumentBuilder, CLIOutputParser, isCodexHookTrustWarning, discoverCodexMcpServers, resolveCliMcpEntry, sweepStaleFiles, type CliRunConnection } from './cli-adapters';
 import { childCliSessionKey, claimCliSession, cliSessionHolder, dropCliSession, fingerprintRun, loadCliSession, releaseCliSessions, saveCliSession } from './cli-session-store';
 import { canResume, CLI_RESUME } from '@/shared/cli-capabilities';
 import { startCliToolBridge, type BridgeResult } from './cli-tool-bridge';
@@ -193,6 +193,11 @@ When a task matches one of these skills, load it with get_skill before starting 
       } : {}),
       guidanceDelivery: 'Review this guidance before further affected work. Pending feedback must be acknowledged through update_work_plan.',
     });
+  }
+
+  private availableBridgeTools(): ToolHandler[] {
+    return [...this.toolExecutor.getTools().values()].filter(tool =>
+      !this.toolExecutor.toolsDisabled || tool.name === 'get_work_plan' || tool.name === 'update_work_plan' || tool.name === 'get_cli_run_context');
   }
 
   private async executeBridgedTool(name: string, args: Record<string, unknown>): Promise<BridgeResult> {
@@ -427,11 +432,10 @@ When a task matches one of these skills, load it with get_skill before starting 
       // mid-run then rejects its save like any stale root write.
       if (!isRootAgent(this.context)) this.generation = sessionGeneration(session.context as SessionContext | undefined);
       this.bridge = await startCliToolBridge({
-        tools: () => this.toolExecutor.toolsDisabled ? [] : [...this.toolExecutor.getTools().values()],
+        tools: () => this.availableBridgeTools(),
         blocked: name => this.toolExecutor.isToolBlocked(name),
         advertisedTools: () => {
-          if (this.toolExecutor.toolsDisabled) return [];
-          const tools = [...this.toolExecutor.getTools().values()];
+          const tools = this.availableBridgeTools();
           const advertisement = this.config.toolAdvertisement;
           return advertisement?.mode === 'lazy' ? tools.filter(t => !isLongTailHandler(t, advertisement.coreToolIds)) : tools;
         },
@@ -1202,7 +1206,7 @@ When a task matches one of these skills, load it with get_skill before starting 
             const event = JSON.parse(line);
             if (built.keepStdinOpen && event.type === 'control_request') {
               void answerCliPermissionRequest(event, this.context, (type, data) => this.emit(type, data), this.abortController.signal,
-                this.bridge ? () => this.toolExecutor.toolsDisabled ? [] : [...this.toolExecutor.getTools().values()] : undefined,
+                this.bridge ? () => this.availableBridgeTools() : undefined,
               ).then(response => {
                 if (!this.aborted && proc.stdin?.writable) proc.stdin.write(JSON.stringify(response) + '\n');
               }).catch((err: unknown) => {
@@ -1244,7 +1248,7 @@ When a task matches one of these skills, load it with get_skill before starting 
         if (stderr.length > STDERR_TAIL) stderr = stderr.slice(-STDERR_TAIL);
       });
 
-      proc.on('close', async (code) => {
+      proc.on('close', async (code, signal) => {
         clearInterval(hardTimeout);
         this.process = null;
         // C5: any throw in this async handler used to leave the executeCLI
@@ -1357,7 +1361,7 @@ When a task matches one of these skills, load it with get_skill before starting 
           // Match only the vendor's error channels (stderr, the reported run
           // error), never the agent's own answer text: a run failing on e.g.
           // max-turns whose answer quoted a quota error re-armed the block.
-          const failed = (code !== 0 && code !== null) || !!this.runError;
+          const failed = code !== 0 || !!signal || !!this.runError;
           if (failed && toolConfig.isQuotaError(`${stderr}\n${this.runError ?? ''}`)) {
             await quotaTracker.markExhausted(toolConfig.quotaProvider);
             reject(new ClassifiedError({ reason: FailoverReason.QUOTA_EXHAUSTED, recovery: RecoveryAction.FALLBACK_PROVIDER,
@@ -1401,9 +1405,14 @@ When a task matches one of these skills, load it with get_skill before starting 
           // Non-zero exit — fail with the code + stderr tail, even when there
           // was partial stdout. Resolving success on a crashed run hid real
           // failures (C4).
-          if (code !== 0 && code !== null) {
-            const tail = stderr.trim().slice(-1000) || accumulatedText.slice(-500) || 'no output';
-            reject(new Error(`CLI ${binary} exited with code ${code}: ${tail}`));
+          if (code !== 0 || signal) {
+            const diagnostic = stderr.split('\n')
+              .filter(line => !isCodexHookTrustWarning(line))
+              .join('\n').trim().slice(-1000);
+            const reason = signal ? `signal ${signal}` : `code ${code ?? 'unknown'}`;
+            const message = `CLI ${binary} exited with ${reason}: ${diagnostic || 'no failure diagnostic reported'}`;
+            agentLogger.error({ agentId: this.context.id, exitCode: code, signal, stderrTail: stderr.slice(-4000) }, message);
+            reject(new Error(message));
             return;
           }
 

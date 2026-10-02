@@ -129,7 +129,7 @@ export class LocalShellOperations implements ShellOperations {
     const { wrapCommand } = await import('@/security/shell-sandbox');
     let wrap: ReturnType<typeof wrapCommand>;
     try {
-      wrap = wrapCommand(baseArgv, { workspaceRoot: cwd, allowNetwork: resolveAllowNetwork(options) });
+      wrap = wrapCommand(baseArgv, { workspaceRoot: cwd, allowNetwork: resolveAllowNetwork(options), path: options.env?.PATH });
     } catch (error) {
       throw new ToolNotExecutedError('shell', error instanceof Error ? error.message : String(error), { cause: error });
     }

@@ -340,3 +340,36 @@ it.skipIf(!!process.env.OCTIPUS_LIVE_CLI).each(['ALLOW', 'DENY', 'ASK'] as const
     expect(fixture.check).toHaveBeenCalledWith('u', 'profiles', 'manage', { query: 'wife' }, expect.objectContaining({ sessionId: 's' }), expect.anything());
     expect(fixture.execute).toHaveBeenCalledTimes(level === 'ALLOW' ? 1 : 0);
   });
+
+it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('keeps plan reporting available after final delegation, with action tools disabled', async () => {
+  writeFileSync(fixture.script, `
+    async function call(name, args = {}) {
+      const r = await fetch(process.env.OCTIPUS_AGENT_URL + '/call', {method:'POST', headers:{Authorization:'Bearer '+process.env.OCTIPUS_AGENT_KEY},body:JSON.stringify({name,arguments:args})});
+      return {status:r.status, body:await r.json()};
+    }
+    await call('final_sample');
+    const plan = await call('update_work_plan', {revision:0,title:'Pipeline',goal:'Check',summary:'Finished',steps:[{id:'one',title:'Check result',status:'done',evidence:'Observed result'}]});
+    const denied = await call('action_sample');
+    console.log(JSON.stringify({type:'result',subtype:'success',result:JSON.stringify({plan,denied}),num_turns:1}));
+  `);
+  const worker = sampleWorker();
+  worker.registerTool({ name:'final_sample',description:'',parameters:{type:'object'},final:true,execute:async()=>({done:true}) });
+  const action = vi.fn();
+  worker.registerTool({ name:'action_sample',description:'',parameters:{type:'object'},execute:action });
+  for (const tool of createWorkPlanTools()) worker.registerTool(tool);
+  const result = JSON.parse(await worker.run('sample'));
+  expect(result.plan.status).toBe(200);
+  expect(fixture.plan.current?.steps[0].status).toBe('done');
+  expect(result.denied.status).toBe(400);
+  expect(action).not.toHaveBeenCalled();
+});
+
+it.skipIf(!!process.env.OCTIPUS_LIVE_CLI)('reports an unexplained exit without treating the hook trust warning as its cause', async () => {
+  writeFileSync(fixture.script, `process.stderr.write('WARNING: --dangerously-bypass-hook-trust is enabled. Enabled hooks may run without review for this invocation.\\n'); process.exit(7);`);
+  await expect(sampleWorker().run('sample')).rejects.toThrow('exited with code 7: no failure diagnostic reported');
+});
+
+it.skipIf(!!process.env.OCTIPUS_LIVE_CLI || process.platform === 'win32')('reports a signal exit as failure', async () => {
+  writeFileSync(fixture.script, `process.kill(process.pid, 'SIGTERM');`);
+  await expect(sampleWorker().run('sample')).rejects.toThrow('signal SIGTERM');
+});
